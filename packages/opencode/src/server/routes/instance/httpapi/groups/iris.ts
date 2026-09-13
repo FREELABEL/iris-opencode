@@ -206,6 +206,37 @@ const AuthResponse = Schema.Struct({
   ),
 }).annotate({ identifier: "IrisAuthResponse" })
 
+const AgentTasksResponse = Schema.Struct({
+  ...Measured,
+  counts: Schema.Struct({
+    itemTasks: Schema.Finite,
+    leadTasks: Schema.Finite,
+    scheduledJobs: Schema.Finite,
+    heartbeatBloqs: Schema.Finite,
+    total: described(Schema.Finite, "Counts the rows in `tasks`, INCLUDING heartbeat boards, which the upstream total omits."),
+  }),
+  tasks: Schema.Array(
+    Schema.Struct({
+      source: described(
+        Schema.Literals(["bloq_item_task", "lead_task", "scheduled_job", "heartbeat_bloq"]),
+        "Four kinds of work in one list. heartbeat_bloq is a whole board the agent runs on, and the one most likely to be forgotten because nothing about the board mentions it.",
+      ),
+      id: Schema.Finite,
+      title: Schema.String,
+      status: Schema.optional(Schema.String),
+      done: Schema.Boolean,
+      dueDate: Schema.optional(Schema.String),
+      itemId: Schema.optional(Schema.Finite),
+      itemTitle: Schema.optional(Schema.String),
+      bloqId: Schema.optional(Schema.Finite),
+      listId: Schema.optional(Schema.Finite),
+      leadId: Schema.optional(Schema.Finite),
+      nextRunAt: Schema.optional(Schema.String),
+      frequency: Schema.optional(Schema.String),
+    }).annotate({ identifier: "IrisAgentTask" }),
+  ),
+}).annotate({ identifier: "IrisAgentTasksResponse" })
+
 const SitesResponse = Schema.Struct({
   ...Measured,
   ...Paged,
@@ -322,6 +353,7 @@ export const IrisPaths = {
   integrations: `${root}/integrations`,
   records: `${root}/records/:slug`,
   sites: `${root}/sites`,
+  agentTasks: `${root}/agents/:agentID/tasks`,
   hive: `${root}/hive`,
 } as const
 
@@ -434,6 +466,18 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "List playbooks",
           description:
             "BOTH the board's attached playbooks and the account's full set, each flagged. Never one or the other — the TUI shipped either/or and each half hid something.",
+        }),
+      ),
+      HttpApiEndpoint.get("agentTasks", IrisPaths.agentTasks, {
+        params: { agentID: Schema.NumberFromString },
+        query: Schema.Struct({ includeDone: Schema.optional(Schema.String) }),
+        success: described(AgentTasksResponse, "What this agent has actually been given"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.agentTasks",
+          summary: "What an agent is holding",
+          description:
+            "ATTACHMENT IS NOT ASSIGNMENT. `bloq_agents.bloq_id` says which agent belongs to a board; this says what it is supposed to DO. An agent attached to a 400-item board is attached to all of it and assigned none of it, and those two states looked identical from every surface until now.",
         }),
       ),
       HttpApiEndpoint.get("sites", IrisPaths.sites, {

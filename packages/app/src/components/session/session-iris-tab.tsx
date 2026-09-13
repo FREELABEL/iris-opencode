@@ -371,6 +371,10 @@ const DETAIL_TABS: Record<string, readonly DetailTab[]> = {
   ],
   agents: [
     { id: "info", label: "Info" },
+    // ATTACHMENT IS NOT ASSIGNMENT. The Info tab shows which board an agent belongs to; this
+    // shows what it has actually been given. An agent attached to a 400-item board is attached
+    // to all of it and assigned none of it, and those looked identical from every surface.
+    { id: "tasks", label: "Tasks" },
     { id: "json", label: "JSON" },
   ],
   integrations: [
@@ -507,6 +511,19 @@ export function SessionIrisTab() {
   /** Which renderer draws the rows, and which array key they arrive under. */
   const pane = createMemo(() => resolved().pane)
 
+  /**
+   * Accumulated pages. Reset whenever the surface or board changes — see the effect below.
+   *
+   * DECLARED ABOVE THE RESOURCE THAT READS IT, and that is load-bearing. `createResource`
+   * evaluates its source function IMMEDIATELY, and that source calls `page()`. This signal used
+   * to sit 160 lines further down, which survived only because the source short-circuits when
+   * `activeBloq()` is undefined — true on a first-ever visit, false for anyone whose board is
+   * remembered in localStorage. So the panel was one reload away from a TDZ crash that takes the
+   * whole app down with it, for every returning user, and the only reason nobody had hit it is
+   * that the crash needs a remembered board to reach the `page()` call at all.
+   */
+  const [page, setPage] = createSignal(1)
+
   const [data] = createResource(
     () => {
       const id = activeBloq()
@@ -616,6 +633,36 @@ export function SessionIrisTab() {
     openRow()
     setRecordPage(1)
   })
+  /** What the open agent is holding. Fetched only when the tab is on, like the records table. */
+  const [agentTasks] = createResource(
+    () => {
+      const r = openRow()
+      return r?.pane === "agents" && detailTab() === "tasks" && r.raw?.id
+        ? ([base(), Number(r.raw.id)] as const)
+        : undefined
+    },
+    async ([, agentID]) => {
+      const res = await doFetch(`/iris/agents/${agentID}/tasks`)
+      return (await res.json()) as Measured & {
+        counts: { itemTasks: number; leadTasks: number; scheduledJobs: number; heartbeatBloqs: number; total: number }
+        tasks: {
+          source: string
+          id: number
+          title: string
+          status?: string
+          done: boolean
+          dueDate?: string
+          itemId?: number
+          itemTitle?: string
+          bloqId?: number
+          leadId?: number
+          nextRunAt?: string
+          frequency?: string
+        }[]
+      }
+    },
+  )
+
   const [records] = createResource(
     () => {
       const r = openRow()
@@ -638,9 +685,6 @@ export function SessionIrisTab() {
 
   /** The item being read, if any. Opening one replaces the list; there is no second panel. */
   const [openItem, setOpenItem] = createSignal<AtlasItem | null>(null)
-
-  /** Accumulated pages. Reset whenever the surface or board changes — see the effect below. */
-  const [page, setPage] = createSignal(1)
 
   // Leaving the surface or the board must close the reader — otherwise you switch to Leads and
   // are still looking at an Atlas item.
@@ -896,6 +940,68 @@ export function SessionIrisTab() {
                     sandbox="allow-scripts allow-same-origin"
                   />
                 </Show>
+              </Match>
+
+              {/* WHAT THIS AGENT IS HOLDING. Four sources in one list — a task on a bloq item,
+                  a task on a lead, a scheduled job, or a whole board it heartbeats. The last is
+                  the one most likely to be forgotten, because nothing about the board mentions
+                  it, so it is shown alongside the rest rather than inferred. */}
+              <Match when={detailTab() === "tasks"}>
+                <Switch>
+                  <Match when={agentTasks.loading && !agentTasks.latest}>
+                    <p class="text-12-regular text-text-weak py-2">Loading tasks…</p>
+                  </Match>
+                  <Match when={agentTasks.latest && !agentTasks.latest!.measured}>
+                    <p class="text-12-regular text-text-weak py-2">
+                      Could not load tasks — {agentTasks.latest!.reason ?? "unknown"}.
+                    </p>
+                  </Match>
+                  <Match when={(agentTasks.latest?.tasks?.length ?? 0) === 0}>
+                    {/* A GENUINE zero, and it says what it means: attached to a board is not
+                        the same as given something to do. */}
+                    <p class="text-12-regular text-text-weak py-2">
+                      Nothing assigned. This agent belongs to a board but has not been handed any
+                      work — assign an item with{" "}
+                      <span class="font-mono text-11-regular">iris agents assign</span>.
+                    </p>
+                  </Match>
+                  <Match when={agentTasks.latest}>
+                    <div class="flex items-baseline gap-2 pb-2 text-11-regular text-text-weaker">
+                      <span class="font-mono tabular-nums">{agentTasks.latest!.counts.total} assigned</span>
+                      <Show when={agentTasks.latest!.counts.heartbeatBloqs > 0}>
+                        <span>· {agentTasks.latest!.counts.heartbeatBloqs} board heartbeat</span>
+                      </Show>
+                    </div>
+                    <For each={agentTasks.latest!.tasks}>
+                      {(t) => (
+                        <div class="flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0">
+                          <span class="shrink-0" classList={{ "text-text-weaker": t.done, "text-text-base": !t.done }}>
+                            {t.done ? "✓" : "·"}
+                          </span>
+                          <div class="min-w-0 flex-1">
+                            <p class="text-12-regular" classList={{ "text-text-weak": t.done, "text-text-base": !t.done }}>
+                              {t.title}
+                            </p>
+                            {/* WHERE the work lives. A task title with no context is the same
+                                problem as an attached agent with no assignment. */}
+                            <p class="text-11-regular text-text-weaker truncate">
+                              {t.source === "bloq_item_task" && t.itemTitle ? `on ${t.itemTitle}` : ""}
+                              {t.source === "lead_task" ? `lead #${t.leadId}` : ""}
+                              {t.source === "scheduled_job"
+                                ? `${t.frequency ?? "scheduled"}${t.nextRunAt ? ` · next ${relativeAge(t.nextRunAt) ?? t.nextRunAt}` : ""}`
+                                : ""}
+                              {t.source === "heartbeat_bloq" ? "runs on this whole board" : ""}
+                              {t.dueDate ? ` · due ${t.dueDate}` : ""}
+                            </p>
+                          </div>
+                          <span class="shrink-0 font-mono text-11-regular text-text-weaker">
+                            {t.status ?? t.source.replace(/_/g, " ")}
+                          </span>
+                        </div>
+                      )}
+                    </For>
+                  </Match>
+                </Switch>
               </Match>
 
               {/* The site's navigation, as links you can actually open. Each entry is a

@@ -1063,6 +1063,131 @@ export async function fetchSites(): Promise<PlatformResult<{ sites: Site[] }>> {
   }
 }
 
+export interface AgentTask {
+  /** Which kind of work this is. The four sources answer different questions. */
+  source: "bloq_item_task" | "lead_task" | "scheduled_job" | "heartbeat_bloq"
+  id: number
+  title: string
+  status?: string
+  done: boolean
+  dueDate?: string
+  /** Where it lives, when it lives somewhere. */
+  itemId?: number
+  itemTitle?: string
+  bloqId?: number
+  listId?: number
+  leadId?: number
+  nextRunAt?: string
+  frequency?: string
+}
+
+export interface AgentTaskState {
+  counts: { itemTasks: number; leadTasks: number; scheduledJobs: number; heartbeatBloqs: number; total: number }
+  tasks: AgentTask[]
+}
+
+/**
+ * What an agent has actually been given.
+ *
+ * ATTACHMENT IS NOT ASSIGNMENT. `bloq_agents.bloq_id` says which agent belongs to a board;
+ * this says what it is supposed to do. An agent attached to a 400-item board is attached to all
+ * of it and assigned none of it, and from every surface we had, those two states looked the
+ * same.
+ *
+ * FOUR SOURCES, one list. An agent can hold a task on a bloq item, a task on a lead, a
+ * scheduled job, or a whole board it heartbeats. The last is the one most likely to be
+ * forgotten, because nothing about the board mentions it. Flattening them here — with `source`
+ * kept — means the panel shows "what is this agent holding" as one answer rather than four
+ * lists the reader has to add up.
+ *
+ * The endpoint is NOT bloq-scoped and NOT under /users/{id}: it is `/api/v1/agents/{id}/tasks`.
+ */
+export async function fetchAgentTasks(
+  agentId: number,
+  opts: { includeDone?: boolean } = {},
+): Promise<PlatformResult<AgentTaskState>> {
+  const empty: AgentTaskState = {
+    counts: { itemTasks: 0, leadTasks: 0, scheduledJobs: 0, heartbeatBloqs: 0, total: 0 },
+    tasks: [],
+  }
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: empty }
+
+  try {
+    const q = opts.includeDone ? "?include_done=1" : ""
+    const res = await irisFetch(`/api/v1/agents/${agentId}/tasks${q}`)
+    if (!res.ok) return { measured: false, reason: `fl-api ${res.status}`, data: empty }
+    const json = (await res.json()) as any
+    const d = json?.data ?? {}
+
+    const tasks: AgentTask[] = []
+    for (const t of Array.isArray(d.item_tasks) ? d.item_tasks : []) {
+      tasks.push({
+        source: "bloq_item_task",
+        id: Number(t.task_id),
+        title: String(t.title ?? "untitled"),
+        status: t.status ?? undefined,
+        done: Boolean(t.is_completed),
+        dueDate: t.due_date ?? undefined,
+        itemId: t.item_id ?? undefined,
+        itemTitle: t.item_title ?? undefined,
+        bloqId: t.bloq_id ?? undefined,
+        listId: t.list_id ?? undefined,
+      })
+    }
+    for (const t of Array.isArray(d.lead_tasks) ? d.lead_tasks : []) {
+      tasks.push({
+        source: "lead_task",
+        id: Number(t.task_id),
+        title: String(t.title ?? "untitled"),
+        done: Boolean(t.is_completed),
+        dueDate: t.due_date ?? undefined,
+        leadId: t.lead_id ?? undefined,
+      })
+    }
+    for (const j of Array.isArray(d.scheduled_jobs) ? d.scheduled_jobs : []) {
+      tasks.push({
+        source: "scheduled_job",
+        id: Number(j.task_id),
+        title: String(j.title ?? "untitled"),
+        status: j.status ?? undefined,
+        done: false,
+        nextRunAt: j.next_run_at ?? undefined,
+        frequency: j.frequency ?? undefined,
+      })
+    }
+    for (const b of Array.isArray(d.heartbeat_bloqs) ? d.heartbeat_bloqs : []) {
+      tasks.push({
+        source: "heartbeat_bloq",
+        id: Number(b.bloq_id),
+        title: String(b.name ?? `bloq ${b.bloq_id}`),
+        done: false,
+        bloqId: b.bloq_id ?? undefined,
+      })
+    }
+
+    const c = d.counts ?? {}
+    return {
+      measured: true,
+      data: {
+        counts: {
+          itemTasks: Number(c.item_tasks ?? 0),
+          leadTasks: Number(c.lead_tasks ?? 0),
+          scheduledJobs: Number(c.scheduled_jobs ?? 0),
+          heartbeatBloqs: Number(c.heartbeat_bloqs ?? 0),
+          // The API's `total` deliberately omits heartbeat boards. Recomputed here so the
+          // number over the list counts the rows IN the list — a total that does not match
+          // what is on screen is worse than no total.
+          total: tasks.length,
+        },
+        tasks,
+      },
+    }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: empty }
+  }
+}
+
 export interface Integration {
   id: string
   name: string

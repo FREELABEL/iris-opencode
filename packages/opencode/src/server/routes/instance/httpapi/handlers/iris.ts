@@ -1,7 +1,7 @@
 import { Effect } from "effect"
 import { paginate } from "@/iris/pagination"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
-import { checkAuth, fetchAgents, fetchAtlas, fetchBloqs, fetchHiveNodes, fetchInbox, fetchLeads, fetchIntegrations, fetchPages, fetchPlaybooks, fetchRecords, fetchSchemas, fetchSites } from "@/iris/platform"
+import { checkAuth, fetchAgents, fetchAtlas, fetchBloqs, fetchHiveNodes, fetchInbox, fetchLeads, fetchIntegrations, fetchPages, fetchPlaybooks, fetchRecords, fetchSchemas, fetchSites, fetchAgentTasks } from "@/iris/platform"
 import { RootHttpApi } from "../api"
 
 /**
@@ -174,6 +174,15 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
      * slice a 25-row page down to a 25-row page and report `total` as 25 — a number that looks
      * right and says the dataset has 25 rows in it.
      */
+    /** Not paged: an agent holding more than a screenful of work is the exception, and the
+     *  four sources are already capped upstream (500 item tasks, 200 each of the rest). */
+    const agentTasks = Effect.fn("IrisHttpApi.agentTasks")(
+      (ctx: { params: { agentID: number }; query: { includeDone?: string } }) =>
+        Effect.promise(() => fetchAgentTasks(ctx.params.agentID, { includeDone: ctx.query.includeDone === "1" })).pipe(
+          Effect.map((r) => ({ measured: r.measured, reason: r.reason, counts: r.data.counts, tasks: r.data.tasks })),
+        ),
+    )
+
     const sites = Effect.fn("IrisHttpApi.sites")(
       (ctx: { query: { page?: number; perPage?: number } }) =>
         Effect.promise(() => fetchSites()).pipe(
@@ -222,6 +231,6 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
         ),
     )
 
-    return handlers.handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("sites", sites).handle("records", records).handle("integrations", integrations).handle("hive", hive)
+    return handlers.handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("agentTasks", agentTasks).handle("sites", sites).handle("records", records).handle("integrations", integrations).handle("hive", hive)
   }),
 )
