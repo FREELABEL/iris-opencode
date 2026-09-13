@@ -88,6 +88,10 @@ const AgentsResponse = Schema.Struct({
       heartbeat: Schema.Boolean,
       schedule: Schema.optional(Schema.String),
       lastRun: Schema.optional(Schema.String),
+      description: Schema.optional(Schema.String),
+      active: Schema.optional(Schema.Boolean),
+      failures: Schema.optional(Schema.Finite),
+      createdAt: Schema.optional(Schema.String),
     }).annotate({ identifier: "IrisAgent" }),
   ),
 }).annotate({ identifier: "IrisAgentsResponse" })
@@ -102,6 +106,13 @@ const LeadsResponse = Schema.Struct({
       company: Schema.optional(Schema.String),
       email: Schema.optional(Schema.String),
       hot: Schema.Boolean,
+      score: Schema.optional(Schema.Finite),
+      type: Schema.optional(Schema.String),
+      city: Schema.optional(Schema.String),
+      country: Schema.optional(Schema.String),
+      createdAt: Schema.optional(Schema.String),
+      repliedAt: Schema.optional(Schema.Boolean),
+      keywords: Schema.optional(Schema.String),
     }).annotate({ identifier: "IrisLead" }),
   ),
 }).annotate({ identifier: "IrisLeadsResponse" })
@@ -116,6 +127,11 @@ const PagesResponse = Schema.Struct({
       status: Schema.String,
       url: Schema.optional(Schema.String),
       updatedAt: Schema.optional(Schema.String),
+      version: Schema.optional(Schema.Finite),
+      publishedAt: Schema.optional(Schema.String),
+      visibility: Schema.optional(Schema.String),
+      requiresAuth: Schema.optional(Schema.Boolean),
+      category: Schema.optional(Schema.String),
     }).annotate({ identifier: "IrisPage" }),
   ),
 }).annotate({ identifier: "IrisPagesResponse" })
@@ -133,6 +149,47 @@ const AuthResponse = Schema.Struct({
   ),
 }).annotate({ identifier: "IrisAuthResponse" })
 
+const SchemasResponse = Schema.Struct({
+  ...Measured,
+  schemas: Schema.Array(
+    Schema.Struct({
+      id: Schema.Finite,
+      name: Schema.String,
+      slug: Schema.String,
+      version: Schema.optional(Schema.Finite),
+      isSystem: Schema.Boolean,
+      scope: Schema.Literals(["board", "account"]),
+      fields: Schema.Array(Schema.Struct({ name: Schema.String, type: Schema.String })),
+    }).annotate({ identifier: "IrisSchema" }),
+  ),
+}).annotate({ identifier: "IrisSchemasResponse" })
+
+const IntegrationsResponse = Schema.Struct({
+  ...Measured,
+  integrations: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      name: Schema.String,
+      provider: Schema.optional(Schema.String),
+      category: Schema.optional(Schema.String),
+      status: Schema.String,
+      connected: Schema.Boolean,
+      account: Schema.optional(Schema.String),
+    }).annotate({ identifier: "IrisIntegration" }),
+  ),
+}).annotate({ identifier: "IrisIntegrationsResponse" })
+
+const PlaybooksResponse = Schema.Struct({
+  ...Measured,
+  playbooks: Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      description: Schema.optional(Schema.String),
+      attached: described(Schema.Boolean, "True when attached to THIS board."),
+    }).annotate({ identifier: "IrisPlaybook" }),
+  ),
+}).annotate({ identifier: "IrisPlaybooksResponse" })
+
 const root = "/iris"
 
 export const IrisPaths = {
@@ -143,6 +200,9 @@ export const IrisPaths = {
   agents: `${root}/agents/:bloqID`,
   leads: `${root}/leads/:bloqID`,
   pages: `${root}/pages/:bloqID`,
+  schemas: `${root}/schemas/:bloqID`,
+  playbooks: `${root}/playbooks/:bloqID`,
+  integrations: `${root}/integrations`,
   hive: `${root}/hive`,
 } as const
 
@@ -219,6 +279,37 @@ export const IrisApi = HttpApi.make("iris").add(
           identifier: "iris.pages",
           summary: "List pages",
           description: "Pages owned by one bloq. Narrowed by owner_type/owner_id, not filtered client-side.",
+        }),
+      ),
+      HttpApiEndpoint.get("schemas", IrisPaths.schemas, {
+        params: { bloqID: Schema.NumberFromString },
+        success: described(SchemasResponse, "Atlas dataset schemas on this board"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.schemas",
+          summary: "List Atlas schemas",
+          description:
+            "Dataset schemas for one board. fl-api returns every schema on the ACCOUNT with no board filter, so the narrowing happens server-side here — an unfiltered list under a board heading is the same bug Pages already had once.",
+        }),
+      ),
+      HttpApiEndpoint.get("playbooks", IrisPaths.playbooks, {
+        params: { bloqID: Schema.NumberFromString },
+        success: described(PlaybooksResponse, "Playbooks, board-attached first then the account set"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.playbooks",
+          summary: "List playbooks",
+          description:
+            "BOTH the board's attached playbooks and the account's full set, each flagged. Never one or the other — the TUI shipped either/or and each half hid something.",
+        }),
+      ),
+      HttpApiEndpoint.get("integrations", IrisPaths.integrations, {
+        success: described(IntegrationsResponse, "The account's integrations, connected first"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.integrations",
+          summary: "List integrations",
+          description: "Not board-scoped — a connected account is connected for the whole account. Connected ones sort first.",
         }),
       ),
       HttpApiEndpoint.get("hive", IrisPaths.hive, {

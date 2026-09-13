@@ -96,6 +96,9 @@ const SURFACES = [
   // ignores the argument. Kept in the same list anyway so the switcher stays one mechanism;
   // a second code path for one surface is how surfaces drift apart.
   { id: "hive", label: "Hive", path: (_b: number) => `/iris/hive` },
+  { id: "playbooks", label: "Playbooks", path: (b: number) => `/iris/playbooks/${b}` },
+  { id: "integrations", label: "Integrations", path: (_b: number) => `/iris/integrations` },
+  { id: "schemas", label: "Schemas", path: (b: number) => `/iris/schemas/${b}` },
 ] as const
 
 type SurfaceId = (typeof SURFACES)[number]["id"]
@@ -433,6 +436,66 @@ export function SessionIrisTab() {
                       <span class="font-mono tabular-nums text-11-regular text-text-weaker shrink-0">
                         {n.activeTasks}/{n.maxConcurrent}
                       </span>
+                    </div>
+                  )}
+                </For>
+              </Match>
+
+              <Match when={surface() === "playbooks"}>
+                <For each={rows()}>
+                  {(pb) => (
+                    <div class="px-2 py-1.5 border-b border-border-weaker-base last:border-0">
+                      <div class="flex items-baseline gap-2">
+                        <span class="shrink-0" classList={{ "text-text-base": pb.attached, "text-text-weaker": !pb.attached }}>
+                          {pb.attached ? "★" : "·"}
+                        </span>
+                        <span class="text-12-regular text-text-base min-w-0 flex-1">{pb.name}</span>
+                        <Show when={pb.attached}>
+                          <span class="font-mono text-11-regular text-text-weaker shrink-0">this board</span>
+                        </Show>
+                      </div>
+                      <Show when={pb.description}>
+                        <p class="text-11-regular text-text-weak ps-4 pt-0.5 line-clamp-2">{pb.description}</p>
+                      </Show>
+                    </div>
+                  )}
+                </For>
+              </Match>
+
+              <Match when={surface() === "integrations"}>
+                <For each={rows()}>
+                  {(i) => (
+                    <div class="flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0">
+                      <span class="shrink-0" classList={{ "text-text-base": i.connected, "text-text-weak": !i.connected }}>
+                        {i.connected ? "●" : "○"}
+                      </span>
+                      <span class="text-12-regular text-text-base min-w-0 flex-1">{i.name}</span>
+                      <span class="font-mono text-11-regular text-text-weaker shrink-0">
+                        {i.account || i.category || i.status}
+                      </span>
+                    </div>
+                  )}
+                </For>
+              </Match>
+
+              <Match when={surface() === "schemas"}>
+                <For each={rows()}>
+                  {(sc) => (
+                    <div class="px-2 py-1.5 border-b border-border-weaker-base last:border-0">
+                      <div class="flex items-baseline gap-2">
+                        <span class="text-12-regular text-text-base min-w-0 flex-1">{sc.name}</span>
+                        {/* Scope is shown because 40 of these belong to the account, not the
+                            board — hiding that would put account-wide schemas under a board
+                            heading, which is the Pages bug again. */}
+                        <span class="font-mono text-11-regular text-text-weaker shrink-0">
+                          {sc.scope === "account" ? "account" : "board"} · {sc.fields.length}f
+                        </span>
+                      </div>
+                      <Show when={sc.fields.length}>
+                        <p class="font-mono text-11-regular text-text-weak ps-2 pt-0.5 truncate">
+                          {sc.fields.map((f: any) => f.name).join(" · ")}
+                        </p>
+                      </Show>
                     </div>
                   )}
                 </For>

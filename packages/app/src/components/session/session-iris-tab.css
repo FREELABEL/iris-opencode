@@ -222,3 +222,27 @@
 .iris-surfaces [data-slot="segmented-control-v2-item-label"] {
   line-height: 1.45;
 }
+
+
+/*
+ * Eight surfaces do not fit as equal pills.
+ *
+ * The control divides its width evenly (`flex: 1 1 0`), so at eight items in a ~500px panel
+ * each label gets about 60px — "Integrations" and "Playbooks" would ellipsize, which is how
+ * this panel already lost "Agents" and "Pages" once. Items now size to their CONTENT and the
+ * strip scrolls, so a label is never truncated; what falls off the end is reachable instead of
+ * invisible.
+ *
+ * Scrollbar hidden to match the strip above it, which is a deliberate trade: the row is short
+ * enough that the cut-off pill at the edge is itself the affordance.
+ */
+.iris-surfaces[data-slot="segmented-control-v2"] {
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.iris-surfaces[data-slot="segmented-control-v2"]::-webkit-scrollbar { display: none; }
+
+.iris-surfaces [data-slot="segmented-control-v2-item"] {
+  flex: 0 0 auto;
+  padding: 0 10px;
+}

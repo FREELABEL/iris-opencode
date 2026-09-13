@@ -433,6 +433,10 @@ export interface Agent {
   heartbeat: boolean
   schedule?: string
   lastRun?: string
+  description?: string
+  active?: boolean
+  failures?: number
+  createdAt?: string
 }
 
 /**
@@ -483,6 +487,10 @@ export async function fetchAgents(bloqId: number): Promise<PlatformResult<{ agen
         heartbeat: hb,
         schedule: job?.interval_minutes ? `${job.interval_minutes}m` : undefined,
         lastRun: job?.last_run_at ?? undefined,
+        description: a.description || undefined,
+        active: typeof a.active === "boolean" ? a.active : undefined,
+        failures: typeof a.consecutive_failures === "number" ? a.consecutive_failures : undefined,
+        createdAt: a.created_at ?? undefined,
       }
     })
     return {
@@ -502,6 +510,14 @@ export interface Lead {
   company?: string
   email?: string
   hot: boolean
+  /** Everything the detail view shows. Optional throughout — fl-api omits empties. */
+  score?: number
+  type?: string
+  city?: string
+  country?: string
+  createdAt?: string
+  repliedAt?: boolean
+  keywords?: string
 }
 
 export async function fetchLeads(bloqId: number): Promise<PlatformResult<{ leads: Lead[] }>> {
@@ -524,6 +540,13 @@ export async function fetchLeads(bloqId: number): Promise<PlatformResult<{ leads
       company: l.company ?? undefined,
       email: l.email ?? undefined,
       hot: Number(l.lead_score ?? l.leadScore ?? 0) >= 70,
+      score: typeof l.lead_score === "number" ? l.lead_score : undefined,
+      type: l.lead_type ?? undefined,
+      city: l.city ?? undefined,
+      country: l.country ?? undefined,
+      createdAt: l.created_at ?? undefined,
+      repliedAt: typeof l.has_replied === "boolean" ? l.has_replied : undefined,
+      keywords: Array.isArray(l.keywords) ? l.keywords.join(", ") : (l.keywords ?? undefined),
     }))
     return { measured: true, data: { leads } }
   } catch (e) {
@@ -538,6 +561,11 @@ export interface Page {
   status: string
   url?: string
   updatedAt?: string
+  version?: number
+  publishedAt?: string
+  visibility?: string
+  requiresAuth?: boolean
+  category?: string
 }
 
 export async function fetchPages(bloqId: number): Promise<PlatformResult<{ pages: Page[] }>> {
@@ -565,6 +593,11 @@ export async function fetchPages(bloqId: number): Promise<PlatformResult<{ pages
       status: String(p.status ?? "draft"),
       url: p.public_url || undefined,
       updatedAt: p.updated_at ?? undefined,
+      version: typeof p.current_version === "number" ? p.current_version : undefined,
+      publishedAt: p.published_at ?? undefined,
+      visibility: p.visibility ?? undefined,
+      requiresAuth: typeof p.requires_auth === "boolean" ? p.requires_auth : undefined,
+      category: p.category ?? undefined,
     }))
     return { measured: true, data: { pages } }
   } catch (e) {
@@ -631,4 +664,168 @@ export function checkAuth(): AuthState {
     source: tokenSource(),
     envKey: process.env.IRIS_API_KEY,
   })
+}
+
+
+export interface Schema {
+  id: number
+  name: string
+  slug: string
+  version?: number
+  isSystem: boolean
+  /** board = defined on this board · account = available everywhere. */
+  scope: "board" | "account"
+  fields: { name: string; type: string }[]
+}
+
+/**
+ * The Atlas dataset schemas for one board.
+ *
+ * The endpoint returns every schema on the account (76 of them here) with no server-side board
+ * filter, so the narrowing happens here. That is worth stating out loud: a "schemas for this
+ * board" view built on an unfiltered list is one forgotten filter away from showing someone
+ * every schema they own under a board heading — the same shape as the Pages bug this panel
+ * already fixed once.
+ */
+export async function fetchSchemas(bloqId: number): Promise<PlatformResult<{ schemas: Schema[] }>> {
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { schemas: [] } }
+
+  const unknown = await unknownBloq(bloqId)
+  if (unknown) return { measured: false, reason: unknown, data: { schemas: [] } }
+
+  try {
+    const res = await irisFetch(`/api/v1/atlas/schemas`)
+    if (!res.ok) return { measured: false, reason: `fl-api ${res.status}`, data: { schemas: [] } }
+    const json = (await res.json()) as any
+    const raw = json?.schemas ?? json?.data ?? json
+    const rows = Array.isArray(raw) ? raw : []
+    // Board schemas AND account-level ones (bloq_id null). 40 of the 76 on this account have no
+    // board, so filtering strictly by board hid more than half of a person's data sources and
+    // showed an empty panel on most boards. They are flagged so the scope is still visible.
+    const schemas: Schema[] = rows
+      .filter((r: any) => Number(r.bloq_id) === bloqId || r.bloq_id == null)
+      .map((r: any) => ({
+        id: Number(r.id),
+        name: String(r.name ?? r.slug ?? "unnamed"),
+        slug: String(r.slug ?? ""),
+        version: typeof r.version === "number" ? r.version : undefined,
+        isSystem: Boolean(r.is_system),
+        scope: r.bloq_id == null ? ("account" as const) : ("board" as const),
+        fields: Object.entries(r.fields ?? {}).map(([name, def]: [string, any]) => ({
+          name,
+          type: String(def?.type ?? def ?? "?"),
+        })),
+      }))
+    return { measured: true, data: { schemas } }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { schemas: [] } }
+  }
+}
+
+
+export interface Integration {
+  id: string
+  name: string
+  provider?: string
+  category?: string
+  status: string
+  connected: boolean
+  account?: string
+}
+
+/**
+ * The account's integrations.
+ *
+ * NOT bloq-scoped — a connected Gmail is connected for the account, not for a board — so this
+ * takes no id. 97 of them here, which is why the UI sorts connected ones first: a list that
+ * long is only useful if the answer to "what is actually wired up" is at the top.
+ */
+export async function fetchIntegrations(): Promise<PlatformResult<{ integrations: Integration[] }>> {
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { integrations: [] } }
+
+  try {
+    const res = await irisFetch(`/api/v1/users/${userId}/integrations`)
+    if (!res.ok) return { measured: false, reason: `fl-api ${res.status}`, data: { integrations: [] } }
+    const json = (await res.json()) as any
+    const raw = json?.integrations ?? json?.data ?? json
+    const rows = Array.isArray(raw) ? raw : []
+    const integrations: Integration[] = rows.map((r: any) => {
+      const status = String(r.status ?? r.local_status ?? "unknown")
+      return {
+        id: String(r.id ?? r.name ?? ""),
+        name: String(r.name ?? r.provider ?? "unnamed"),
+        provider: r.provider ?? undefined,
+        category: r.category ?? undefined,
+        status,
+        connected: status === "connected" || status === "active" || Boolean(r.connected_account_id),
+        account: r.account_email ?? undefined,
+      }
+    })
+    // Connected first, then by name. The interesting half of 97 rows is the connected half.
+    integrations.sort((a, b) => (a.connected === b.connected ? a.name.localeCompare(b.name) : a.connected ? -1 : 1))
+    return { measured: true, data: { integrations } }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { integrations: [] } }
+  }
+}
+
+export interface Playbook {
+  name: string
+  description?: string
+  /** True when attached to THIS board; false when it is one of the account-wide set. */
+  attached: boolean
+}
+
+/**
+ * Playbooks for a board, and the account's full set.
+ *
+ * BOTH, flagged, never one or the other. The TUI shipped this as either/or — attached
+ * playbooks, or the global list as a fallback when none were attached — and both halves were
+ * wrong the same way: with attachments you could not reach your own or the marketplace ones at
+ * all, and without them a board-scoped panel listed every global under a one-line disclaimer.
+ */
+export async function fetchPlaybooks(bloqId: number): Promise<PlatformResult<{ playbooks: Playbook[] }>> {
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { playbooks: [] } }
+
+  const unknown = await unknownBloq(bloqId)
+  if (unknown) return { measured: false, reason: unknown, data: { playbooks: [] } }
+
+  try {
+    const [attachedRes, allRes] = await Promise.all([
+      irisFetch(`/api/v1/bloqs/${bloqId}/playbooks`),
+      irisFetch(`/api/v1/playbooks`, IRIS_API),
+    ])
+
+    const unwrap = async (res: Response) => {
+      if (!res.ok) return []
+      const j = (await res.json()) as any
+      const d = j?.playbooks ?? j?.data ?? j
+      return Array.isArray(d) ? d : (d?.data ?? [])
+    }
+
+    const attached = (await unwrap(attachedRes)).map((x: any) => ({
+      name: String(x?.name ?? "unknown"),
+      description: x?.description || undefined,
+      attached: true,
+    }))
+    const names = new Set(attached.map((p: Playbook) => p.name))
+    const others = (await unwrap(allRes))
+      .map((x: any) => ({
+        name: String(x?.name ?? "unknown"),
+        description: x?.description || undefined,
+        attached: false,
+      }))
+      .filter((p: Playbook) => !names.has(p.name))
+
+    return {
+      measured: attachedRes.ok || allRes.ok,
+      reason: attachedRes.ok ? undefined : `board playbooks unavailable (fl-api ${attachedRes.status})`,
+      data: { playbooks: [...attached, ...others] },
+    }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { playbooks: [] } }
+  }
 }

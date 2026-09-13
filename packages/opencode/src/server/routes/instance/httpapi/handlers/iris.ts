@@ -1,6 +1,6 @@
 import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
-import { checkAuth, fetchAgents, fetchAtlas, fetchBloqs, fetchHiveNodes, fetchInbox, fetchLeads, fetchPages } from "@/iris/platform"
+import { checkAuth, fetchAgents, fetchAtlas, fetchBloqs, fetchHiveNodes, fetchInbox, fetchLeads, fetchIntegrations, fetchPages, fetchPlaybooks, fetchSchemas } from "@/iris/platform"
 import { RootHttpApi } from "../api"
 
 /**
@@ -53,12 +53,30 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
       ),
     )
 
+    const schemas = Effect.fn("IrisHttpApi.schemas")((ctx: { params: { bloqID: number } }) =>
+      Effect.promise(() => fetchSchemas(ctx.params.bloqID)).pipe(
+        Effect.map((r) => ({ measured: r.measured, reason: r.reason, schemas: r.data.schemas })),
+      ),
+    )
+
+    const playbooks = Effect.fn("IrisHttpApi.playbooks")((ctx: { params: { bloqID: number } }) =>
+      Effect.promise(() => fetchPlaybooks(ctx.params.bloqID)).pipe(
+        Effect.map((r) => ({ measured: r.measured, reason: r.reason, playbooks: r.data.playbooks })),
+      ),
+    )
+
+    const integrations = Effect.fn("IrisHttpApi.integrations")(() =>
+      Effect.promise(() => fetchIntegrations()).pipe(
+        Effect.map((r) => ({ measured: r.measured, reason: r.reason, integrations: r.data.integrations })),
+      ),
+    )
+
     const hive = Effect.fn("IrisHttpApi.hive")(() =>
       Effect.promise(() => fetchHiveNodes()).pipe(
         Effect.map((r) => ({ measured: r.measured, reason: r.reason, nodes: r.data.nodes })),
       ),
     )
 
-    return handlers.handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("hive", hive)
+    return handlers.handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("integrations", integrations).handle("hive", hive)
   }),
 )
