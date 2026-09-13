@@ -3144,6 +3144,10 @@ const LeadsPulseCommand = cmd({
           attention: `${UI.Style.TEXT_WARNING}${ps}/100  attention${UI.Style.TEXT_NORMAL}`,
           at_risk: `${UI.Style.TEXT_WARNING}${ps}/100  at risk${UI.Style.TEXT_NORMAL}`,
           failing: `${UI.Style.TEXT_DANGER}${ps}/100  failing${UI.Style.TEXT_NORMAL}`,
+          // Not a colour on the danger scale, deliberately. The server sends this
+          // band when it measured too little of the model to render a verdict, so
+          // painting it red would put back the exact claim it withheld.
+          insufficient_data: `${UI.Style.TEXT_DIM}${ps}/100  not enough measured${UI.Style.TEXT_NORMAL}`,
         }
         printKV("Pulse", bandLabel[band] ?? `${ps}/100  ${band}`)
 
@@ -7845,6 +7849,9 @@ const LeadsPulseAllCommand = cmd({
         console.log()
         console.log(dim("  " + "-".repeat(100)))
         const avgPulse = rows.length > 0 ? Math.round(rows.reduce((s, r) => s + r.pulse, 0) / rows.length) : 0
+        // `insufficient_data` deliberately excluded: an account nobody could measure
+        // is not an account that is failing, and counting it as one is how a fleet
+        // summary manufactures bad news out of missing data.
         const failing = rows.filter((r) => r.band === "failing").length
         const totalOverdue = rows.reduce((s, r) => s + r.tasksOverdue, 0)
         const totalPending = rows.reduce((s, r) => s + r.tasksPending, 0)
@@ -12736,7 +12743,11 @@ const PulseAlertsAddCommand = cmd({
       .option("below", { type: "number", describe: "alert when signal drops below this value" })
       .option("above", { type: "number", describe: "alert when signal rises above this value" })
       .option("for", { type: "number", default: 1, describe: "consecutive snapshots required" })
-      .option("channel", { alias: "c", type: "string", default: "discord", describe: "notification channel (discord|imessage|log)" }),
+      // `imessage` used to be offered here and had no implementation on the server —
+      // it validated, saved, displayed as ON, and fell through to a log line. The
+      // list below is exactly what PulseAlertDispatcher::TARGETS can deliver.
+      .option("target", { alias: ["c", "channel"], type: "string", default: "discord", describe: "where to send it — comma-separated: discord,slack,email,text,log" })
+      .option("sendemail", { type: "boolean", default: false, describe: "shorthand for --target=email (email is never a default)" }),
   async handler(args) {
     if (!(await requireAuth())) return
 
@@ -12756,7 +12767,11 @@ const PulseAlertsAddCommand = cmd({
         operator,
         threshold,
         consecutive: args.for,
-        notify_channel: args.channel,
+        // --sendemail is additive, not a replacement: `--target=discord --sendemail`
+        // means both. Email still only goes out because it was asked for by name.
+        notify_channel: args.sendemail
+          ? Array.from(new Set([...String(args.target).split(","), "email"].map((t) => t.trim()).filter(Boolean))).join(",")
+          : args.target,
       }),
     })
     if (!res.ok) {
@@ -12825,7 +12840,12 @@ export const PlatformPulseCommand = productCommand({
         return
       }
 
-      const spinner = prompts.spinner()
+      // The spinner writes to stdout, so under --json it is part of the payload as
+      // far as `jq` is concerned. Nothing but JSON may reach stdout.
+      const quiet = !!args.json
+      const spinner = quiet
+        ? { start: (_?: string) => {}, stop: (_?: string) => {}, message: (_?: string) => {} }
+        : prompts.spinner()
       spinner.start("Loading your account health...")
 
       try {
@@ -12847,9 +12867,17 @@ export const PlatformPulseCommand = productCommand({
         const bandLabel: Record<string, string> = { healthy: "Healthy", attention: "Attention", at_risk: "At Risk", failing: "Failing" }
         const bandColor = (b: string, s: number) => b === "healthy" ? success(`${s}/100`) : b === "attention" ? highlight(`${s}/100`) : `${s}/100`
 
-        console.log()
-        console.log(`  ${bold("IRIS Health")}                              Score: ${bandColor(band, score)} [${bandLabel[band] || band}]`)
-        console.log(dim("  ─────────────────────────────────────────────"))
+        // `--json` is a machine contract. This block used to print the formatted
+        // table to stdout and then append the JSON after it, so `iris pulse --json |
+        // jq .score` failed with "Invalid numeric literal" — the flag advertised
+        // machine output and emitted a human report with JSON stapled to the end.
+        const render = !args.json
+
+        if (render) {
+          console.log()
+          console.log(`  ${bold("IRIS Health")}                              Score: ${bandColor(band, score)} [${bandLabel[band] || band}]`)
+          console.log(dim("  ─────────────────────────────────────────────"))
+        }
 
         const signals = data.signals ?? {}
         const signalLabels: Record<string, string> = {
@@ -12867,57 +12895,85 @@ export const PlatformPulseCommand = productCommand({
           referral_network: "Network",
           deliverable_completeness: "Deliverables",
           opportunities: "Opportunities",
+          // Added when user scope went from 7 signals to 20 (P-08). Before this,
+          // six signals rendered as raw snake_case keys next to human labels,
+          // because the map was written when user scope could only return seven
+          // things and nothing failed loudly when it started returning twenty.
+          revenue_performance: "Revenue",
+          inbox_health: "Inbox",
+          conversion_funnel: "Pipeline",
+          outreach_velocity: "Outreach Steps",
+          credential_health: "Connections",
+          affiliate_health: "Referrals",
         }
+
+        // A null score means the scorer had nothing to measure — 0 leads scored, no
+        // tasks on record, no comms table. It is NOT a zero. `s.score ?? 0` used to
+        // turn "we did not look" into a red 0/100 next to an instruction ("Review
+        // billing — run `iris payments`") about an account nobody had measured.
+        const measured = (v: any) => v !== null && v !== undefined
 
         const lines: string[] = []
         for (const [name, signal] of Object.entries(signals)) {
           if (!signal || typeof signal !== "object") continue
           const s = signal as any
           const label = (signalLabels[name] || name).padEnd(18)
-          const sigScore = s.score ?? 0
           const copy = s.client_copy || s.admin_copy || ""
+
+          if (!measured(s.score)) {
+            if (render) console.log(`  ${label} ${copy.padEnd(45)} ${dim("  —/100")}`)
+            lines.push(`${signalLabels[name] || name}: not measured — ${copy}`)
+            continue
+          }
+
+          const sigScore = s.score as number
           const scoreStr = String(sigScore).padStart(3)
           const emoji = sigScore >= 70 ? success(scoreStr) : sigScore >= 40 ? highlight(scoreStr) : scoreStr
-          console.log(`  ${label} ${copy.padEnd(45)} ${emoji}/100`)
+          if (render) console.log(`  ${label} ${copy.padEnd(45)} ${emoji}/100`)
           lines.push(`${signalLabels[name] || name}: ${sigScore}/100 — ${copy}`)
         }
 
-        console.log()
+        if (render) console.log()
 
-        // Next step suggestion
+        // Next step suggestion — only ever from a signal that was actually measured.
+        // The old filter used `score !== undefined`, which lets null through, and
+        // then sorted it as `?? 100`. The same null was therefore worth 0 in the
+        // table above and 100 here, two screens apart.
         const worstSignal = Object.entries(signals)
-          .filter(([, v]) => v && typeof v === "object" && (v as any).score !== undefined)
-          .sort(([, a], [, b]) => ((a as any).score ?? 100) - ((b as any).score ?? 100))[0]
+          .filter(([, v]) => v && typeof v === "object" && measured((v as any).score))
+          .sort(([, a], [, b]) => (a as any).score - (b as any).score)[0]
 
-        if (worstSignal) {
+        if (render && worstSignal) {
           const ws = worstSignal[1] as any
-          if ((ws.score ?? 100) < 60 && ws.client_copy) {
+          if (ws.score < 60 && ws.client_copy) {
             console.log(`  ${bold("Next step:")} ${ws.client_copy}`)
             console.log()
           }
         }
 
         // Init progress hint
-        try {
-          const { existsSync: ex, readFileSync: rf } = await import("fs")
-          const { join: pj } = await import("path")
-          const { homedir: hd } = await import("os")
-          const initPath = pj(hd(), ".iris", "init-progress.json")
-          if (ex(initPath)) {
-            const initData = JSON.parse(rf(initPath, "utf8"))
-            const steps = initData?.steps ?? {}
-            const done = Object.values(steps).filter((s: any) => s?.completed).length
-            if (done < 8) {
-              console.log(`  ${dim("Setup:")} ${done}/8 steps — run ${highlight("iris init")} to continue`)
+        if (render) {
+          try {
+            const { existsSync: ex, readFileSync: rf } = await import("fs")
+            const { join: pj } = await import("path")
+            const { homedir: hd } = await import("os")
+            const initPath = pj(hd(), ".iris", "init-progress.json")
+            if (ex(initPath)) {
+              const initData = JSON.parse(rf(initPath, "utf8"))
+              const steps = initData?.steps ?? {}
+              const done = Object.values(steps).filter((s: any) => s?.completed).length
+              if (done < 8) {
+                console.log(`  ${dim("Setup:")} ${done}/8 steps — run ${highlight("iris init")} to continue`)
+                console.log()
+              }
+            } else {
+              console.log(`  ${dim("Tip:")} Run ${highlight("iris init")} to complete your setup checklist`)
               console.log()
             }
-          } else {
-            console.log(`  ${dim("Tip:")} Run ${highlight("iris init")} to complete your setup checklist`)
-            console.log()
-          }
-        } catch { /* ignore */ }
+          } catch { /* ignore */ }
 
-        console.log(`  ${dim("Agency view:")} Run ${highlight("iris pulse --admin")} to see your clients`)
+          console.log(`  ${dim("Agency view:")} Run ${highlight("iris pulse --admin")} to see your clients`)
+        }
 
         // --notify
         if (args.notify && lines.length > 0) {
