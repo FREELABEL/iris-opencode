@@ -1,7 +1,7 @@
 import { Effect } from "effect"
 import { paginate } from "@/iris/pagination"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
-import { checkAuth, fetchAgents, fetchAtlas, fetchBloqs, fetchHiveNodes, fetchInbox, fetchLeads, fetchIntegrations, fetchPages, fetchPlaybooks, fetchRecords, fetchSchemas, fetchSites, fetchAgentTasks } from "@/iris/platform"
+import { checkAuth, fetchAgents, fetchAtlas, fetchBloqs, fetchHiveNodes, fetchInbox, fetchLeads, fetchIntegrations, fetchPages, fetchPlaybooks, fetchRecords, fetchSchemas, fetchSites, fetchAgentTasks, readPlaybookDoc } from "@/iris/platform"
 import { RootHttpApi } from "../api"
 
 /**
@@ -176,6 +176,13 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
      */
     /** Not paged: an agent holding more than a screenful of work is the exception, and the
      *  four sources are already capped upstream (500 item tasks, 200 each of the rest). */
+    const playbookDoc = Effect.fn("IrisHttpApi.playbookDoc")((ctx: { params: { name: string } }) =>
+      Effect.sync(() => {
+        const r = readPlaybookDoc(ctx.params.name)
+        return { found: r.found, name: ctx.params.name, path: r.path, content: r.content }
+      }),
+    )
+
     const agentTasks = Effect.fn("IrisHttpApi.agentTasks")(
       (ctx: { params: { agentID: number }; query: { includeDone?: string } }) =>
         Effect.promise(() => fetchAgentTasks(ctx.params.agentID, { includeDone: ctx.query.includeDone === "1" })).pipe(
@@ -184,8 +191,8 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
     )
 
     const sites = Effect.fn("IrisHttpApi.sites")(
-      (ctx: { query: { page?: number; perPage?: number } }) =>
-        Effect.promise(() => fetchSites()).pipe(
+      (ctx: { params: { bloqID: number }; query: { page?: number; perPage?: number } }) =>
+        Effect.promise(() => fetchSites(ctx.params.bloqID)).pipe(
           Effect.map((r) => {
             const { items, meta } = pageOf(r, r.data.sites, ctx.query)
             return { ...meta, sites: items }
@@ -231,6 +238,6 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
         ),
     )
 
-    return handlers.handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("agentTasks", agentTasks).handle("sites", sites).handle("records", records).handle("integrations", integrations).handle("hive", hive)
+    return handlers.handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("playbookDoc", playbookDoc).handle("agentTasks", agentTasks).handle("sites", sites).handle("records", records).handle("integrations", integrations).handle("hive", hive)
   }),
 )

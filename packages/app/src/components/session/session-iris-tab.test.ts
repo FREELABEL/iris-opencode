@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { cellText, detailTabsFor, normalizeSurface, resolvePane, surfaceView } from "./session-iris-tab"
+import { cellText, detailTabsFor, highlightJson, normalizeSurface, resolvePane, surfaceView } from "./session-iris-tab"
 
 describe("surfaceView", () => {
   test("a failed fetch is never rendered as an empty surface", () => {
@@ -158,5 +158,41 @@ describe("cellText", () => {
     // shows a blank for every record where the answer is no.
     expect(cellText(false)).toBe("no")
     expect(cellText(0)).toBe("0")
+  })
+})
+
+describe("highlightJson", () => {
+  test("escapes markup before adding its own", () => {
+    // The raw view is exactly where hostile-looking content gets inspected, so it is the last
+    // place that should execute it.
+    const out = highlightJson({ title: "<script>alert(1)</script>" })
+    expect(out).not.toContain("<script>")
+    expect(out).toContain("&lt;script&gt;")
+  })
+
+  test("a key and a string value are told apart", () => {
+    const out = highlightJson({ name: "value" })
+    expect(out).toContain("iris-json__key")
+    expect(out).toContain("iris-json__str")
+  })
+
+  test("null, booleans and numbers each get their own role", () => {
+    const out = highlightJson({ a: null, b: true, c: 42 })
+    expect(out).toContain("iris-json__null")
+    expect(out).toContain("iris-json__bool")
+    expect(out).toContain("iris-json__num")
+  })
+
+  test("a value that cannot be stringified returns empty rather than throwing", () => {
+    const cyclic: any = {}
+    cyclic.self = cyclic
+    expect(highlightJson(cyclic)).toBe("")
+  })
+})
+
+describe("detailTabsFor — playbooks", () => {
+  test("a playbook offers its steps and its local document", () => {
+    const ids = detailTabsFor("playbooks").map((t) => t.id)
+    expect(ids).toEqual(["info", "steps", "doc", "json"])
   })
 })

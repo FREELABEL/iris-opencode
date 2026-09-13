@@ -852,8 +852,16 @@ export async function fetchSchemas(bloqId: number): Promise<PlatformResult<{ sch
     // Board schemas AND account-level ones (bloq_id null). 40 of the 76 on this account have no
     // board, so filtering strictly by board hid more than half of a person's data sources and
     // showed an empty panel on most boards. They are flagged so the scope is still visible.
+    // THIS BOARD ONLY.
+    //
+    // It used to include account-level schemas (bloq_id null) because filtering strictly by
+    // board hid 40 of 76 and most boards looked empty. That was a correct diagnosis and the
+    // wrong remedy: the answer to "the board filter returns little" is not "show everything".
+    // Every board rendered the same 40 account schemas under its own heading, which is both a
+    // lie about where the data lives and an exposure of records that board has no claim to.
+    // An empty board is an honest answer.
     const schemas: Schema[] = rows
-      .filter((r: any) => Number(r.bloq_id) === bloqId || r.bloq_id == null)
+      .filter((r: any) => Number(r.bloq_id) === bloqId)
       .map((r: any) => ({
         id: Number(r.id),
         name: String(r.name ?? r.slug ?? "unnamed"),
@@ -1022,7 +1030,7 @@ export interface Site {
  * both, so filtering by board would hide every account-level site behind an empty panel — the
  * same mistake the schemas list already made once. The owner is labelled instead.
  */
-export async function fetchSites(): Promise<PlatformResult<{ sites: Site[] }>> {
+export async function fetchSites(bloqId: number): Promise<PlatformResult<{ sites: Site[] }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { sites: [] } }
 
@@ -1032,7 +1040,23 @@ export async function fetchSites(): Promise<PlatformResult<{ sites: Site[] }>> {
     const json = (await res.json()) as any
     const rows = Array.isArray(json?.data) ? json.data : Array.isArray(json) ? json : []
 
-    const sites: Site[] = rows.map((r: any) => ({
+    // THIS BOARD ONLY.
+    //
+    // Shipped account-wide with a laboured justification — sites are owned by a user OR a bloq
+    // and the endpoint mixes both, so I showed all 13 and labelled the owner. That renders one
+    // board's heading over another board's sites, which is the same defect as the schemas list
+    // and the one Pages already avoids by asking the API to narrow.
+    //
+    // A site belongs to this board when the board OWNS it, or when it is filed against the
+    // board as a project. Both are checked: owner_type/owner_id is the older relation and
+    // projects_bloq_id the newer one, and rows in the wild carry one or the other.
+    const mine = rows.filter(
+      (r: any) =>
+        (String(r.owner_type) === "bloq" && Number(r.owner_id) === bloqId) ||
+        Number(r.projects_bloq_id) === bloqId,
+    )
+
+    const sites: Site[] = mine.map((r: any) => ({
       id: Number(r.id),
       name: String(r.name ?? r.slug ?? "unnamed"),
       slug: String(r.slug ?? ""),
@@ -1235,11 +1259,101 @@ export async function fetchIntegrations(): Promise<PlatformResult<{ integrations
   }
 }
 
+export interface PlaybookStep {
+  id: string
+  title: string
+  /** "shell" runs a command, "prompt" asks a model. The difference is the whole playbook. */
+  mode?: string
+  integrations?: string[]
+}
+
+export interface PlaybookArg {
+  name: string
+  type?: string
+  required?: boolean
+  default?: string
+  description?: string
+}
+
 export interface Playbook {
   name: string
   description?: string
   /** True when attached to THIS board; false when it is one of the account-wide set. */
   attached: boolean
+  steps: PlaybookStep[]
+  args: PlaybookArg[]
+  version?: number
+  scope?: string
+  accessType?: string
+  active?: boolean
+  publishedAt?: string
+  /** The landing page. 66 of 127 have one. */
+  publicUrl?: string
+  installs?: number
+  views?: number
+  /**
+   * Whether ~/.iris/playbooks/<name>/PLAYBOOK.md exists on THIS machine.
+   *
+   * Playbook content never leaves the machine, so the local document is both richer than the
+   * API summary and the only place the actual instructions live. The flag is here so the UI
+   * can offer the document tab without a second round trip per row.
+   */
+  hasLocal: boolean
+}
+
+/** One playbook's local document, when this machine has it. */
+export function readPlaybookDoc(name: string): { found: boolean; content: string; path: string } {
+  // The name comes off a list WE produced, but it still lands in a filesystem path, so it is
+  // constrained here rather than trusted: a slug, nothing else. `..` in a playbook name would
+  // otherwise read any file the sidecar can reach.
+  const safe = /^[a-zA-Z0-9._-]+$/.test(name) ? name : ""
+  const file = path.join(homedir(), ".iris", "playbooks", safe, "PLAYBOOK.md")
+  if (!safe || !existsSync(file)) return { found: false, content: "", path: file }
+  try {
+    return { found: true, content: readFileSync(file, "utf-8"), path: file }
+  } catch {
+    return { found: false, content: "", path: file }
+  }
+}
+
+/** Shared shape for both halves of the playbook list — attached and account-wide. */
+function toPlaybook(x: any, attached: boolean): Playbook {
+  const name = String(x?.name ?? "unknown")
+  return {
+    name,
+    description: x?.description || undefined,
+    attached,
+    steps: (Array.isArray(x?.steps_summary) ? x.steps_summary : []).map((s: any) => ({
+      id: String(s?.id ?? ""),
+      title: String(s?.title ?? s?.id ?? "step"),
+      mode: s?.mode || undefined,
+      integrations: Array.isArray(s?.integrations) ? s.integrations.map(String) : undefined,
+    })),
+    // args_schema is an OBJECT keyed by arg name, not an array — the one place this payload
+    // changes shape. Reading it as a list gives every playbook zero arguments, silently.
+    args: (() => {
+      const a = x?.args_schema
+      if (Array.isArray(a)) return a.map((v: any) => ({ name: String(v?.name ?? "arg"), ...v }))
+      if (a && typeof a === "object")
+        return Object.entries(a).map(([k, v]: [string, any]) => ({
+          name: k,
+          type: v?.type || undefined,
+          required: v?.required === true,
+          default: v?.default != null ? String(v.default) : undefined,
+          description: v?.description || undefined,
+        }))
+      return []
+    })(),
+    version: typeof x?.version === "number" ? x.version : undefined,
+    scope: x?.scope || undefined,
+    accessType: x?.access_type || undefined,
+    active: typeof x?.is_active === "boolean" ? x.is_active : undefined,
+    publishedAt: x?.published_at || undefined,
+    publicUrl: x?.public_url || x?.canonical_url || undefined,
+    installs: typeof x?.reach?.installs === "number" ? x.reach.installs : undefined,
+    views: typeof x?.reach?.views === "number" ? x.reach.views : undefined,
+    hasLocal: existsSync(path.join(homedir(), ".iris", "playbooks", name, "PLAYBOOK.md")),
+  }
 }
 
 /**
@@ -1270,18 +1384,10 @@ export async function fetchPlaybooks(bloqId: number): Promise<PlatformResult<{ p
       return Array.isArray(d) ? d : (d?.data ?? [])
     }
 
-    const attached = (await unwrap(attachedRes)).map((x: any) => ({
-      name: String(x?.name ?? "unknown"),
-      description: x?.description || undefined,
-      attached: true,
-    }))
+    const attached = (await unwrap(attachedRes)).map((x: any) => toPlaybook(x, true))
     const names = new Set(attached.map((p: Playbook) => p.name))
     const others = (await unwrap(allRes))
-      .map((x: any) => ({
-        name: String(x?.name ?? "unknown"),
-        description: x?.description || undefined,
-        attached: false,
-      }))
+      .map((x: any) => toPlaybook(x, false))
       .filter((p: Playbook) => !names.has(p.name))
 
     return {

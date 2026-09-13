@@ -334,6 +334,35 @@ const PlaybooksResponse = Schema.Struct({
       name: Schema.String,
       description: Schema.optional(Schema.String),
       attached: described(Schema.Boolean, "True when attached to THIS board."),
+      steps: Schema.Array(
+        Schema.Struct({
+          id: Schema.String,
+          title: Schema.String,
+          mode: described(Schema.optional(Schema.String), "\"shell\" runs a command, \"prompt\" asks a model."),
+          integrations: Schema.optional(Schema.Array(Schema.String)),
+        }).annotate({ identifier: "IrisPlaybookStep" }),
+      ),
+      args: Schema.Array(
+        Schema.Struct({
+          name: Schema.String,
+          type: Schema.optional(Schema.String),
+          required: Schema.optional(Schema.Boolean),
+          default: Schema.optional(Schema.String),
+          description: Schema.optional(Schema.String),
+        }).annotate({ identifier: "IrisPlaybookArg" }),
+      ),
+      version: Schema.optional(Schema.Finite),
+      scope: Schema.optional(Schema.String),
+      accessType: Schema.optional(Schema.String),
+      active: Schema.optional(Schema.Boolean),
+      publishedAt: Schema.optional(Schema.String),
+      publicUrl: Schema.optional(Schema.String),
+      installs: Schema.optional(Schema.Finite),
+      views: Schema.optional(Schema.Finite),
+      hasLocal: described(
+        Schema.Boolean,
+        "~/.iris/playbooks/<name>/PLAYBOOK.md exists on THIS machine. Playbook content never leaves the machine, so the local document is richer than anything the API has.",
+      ),
     }).annotate({ identifier: "IrisPlaybook" }),
   ),
 }).annotate({ identifier: "IrisPlaybooksResponse" })
@@ -352,8 +381,9 @@ export const IrisPaths = {
   playbooks: `${root}/playbooks/:bloqID`,
   integrations: `${root}/integrations`,
   records: `${root}/records/:slug`,
-  sites: `${root}/sites`,
+  sites: `${root}/sites/:bloqID`,
   agentTasks: `${root}/agents/:agentID/tasks`,
+  playbookDoc: `${root}/playbooks/doc/:name`,
   hive: `${root}/hive`,
 } as const
 
@@ -468,6 +498,25 @@ export const IrisApi = HttpApi.make("iris").add(
             "BOTH the board's attached playbooks and the account's full set, each flagged. Never one or the other — the TUI shipped either/or and each half hid something.",
         }),
       ),
+      HttpApiEndpoint.get("playbookDoc", IrisPaths.playbookDoc, {
+        params: { name: Schema.String },
+        success: described(
+          Schema.Struct({
+            found: Schema.Boolean,
+            name: Schema.String,
+            path: Schema.String,
+            content: described(Schema.String, "The PLAYBOOK.md, as markdown. Empty when not installed here."),
+          }).annotate({ identifier: "IrisPlaybookDoc" }),
+          "One playbook's local document",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.playbookDoc",
+          summary: "Read a playbook's local document",
+          description:
+            "A FILE READ, not a request — which is exactly why it must come through the sidecar: playbook content never leaves the machine, and the webview cannot read the user's home directory. `found: false` means this machine does not have it installed, which is not an error.",
+        }),
+      ),
       HttpApiEndpoint.get("agentTasks", IrisPaths.agentTasks, {
         params: { agentID: Schema.NumberFromString },
         query: Schema.Struct({ includeDone: Schema.optional(Schema.String) }),
@@ -482,7 +531,8 @@ export const IrisApi = HttpApi.make("iris").add(
       ),
       HttpApiEndpoint.get("sites", IrisPaths.sites, {
         query: PageQuery,
-        success: described(SitesResponse, "The account's sites, published first"),
+        params: { bloqID: Schema.NumberFromString },
+        success: described(SitesResponse, "This board's sites, published first"),
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "iris.sites",

@@ -458,3 +458,58 @@
   border-radius: 4px;
   background: #fff;
 }
+
+/*
+ * The copyable command (#185121).
+ *
+ * It was a button that looked like stray text — nothing said it could be clicked, and nothing
+ * separated it from the field list under it. A filled slab, because that is what this design
+ * system uses for "a thing you act on" everywhere else in the panel.
+ */
+.iris-command {
+  display: block;
+  width: 100%;
+  text-align: start;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 7px 9px;
+  margin-bottom: 12px;
+  border-radius: 5px;
+  border: 1px solid var(--border-weaker-base);
+  background: var(--background-element);
+  color: var(--text-base);
+  cursor: pointer;
+  word-break: break-all;
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+.iris-command:hover {
+  color: var(--text-strong);
+  border-color: var(--border-weak-base);
+}
+
+/*
+ * JSON syntax colour (#185120).
+ *
+ * The markdown reader spends ONE accent on purpose. This is the opposite case and the reason is
+ * worth stating: there, hue was decoration and taught nothing; here hue encodes the TYPE of the
+ * value, which is the thing you are reading raw JSON to find out. Four roles, no more.
+ */
+.iris-json__key {
+  color: var(--text-strong);
+}
+.iris-json__str {
+  color: var(--text-interactive-base);
+}
+.iris-json__num {
+  color: var(--text-base);
+  font-weight: 500;
+}
+.iris-json__bool {
+  color: var(--text-base);
+  font-weight: 600;
+}
+.iris-json__null {
+  color: var(--text-weaker);
+  font-style: italic;
+}

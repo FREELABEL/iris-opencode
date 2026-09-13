@@ -188,7 +188,17 @@ function describeFields(surface: string, r: any): { title: string; fields: [stri
   if (surface === "playbooks")
     return {
       title: r.name,
-      fields: fieldsOf([["attached to this board", r.attached], ["description", r.description]]),
+      fields: fieldsOf([
+        ["attached to this board", r.attached],
+        ["scope", r.scope], ["access", r.accessType], ["version", r.version],
+        ["active", r.active],
+        ["steps", (r.steps ?? []).length || undefined],
+        ["arguments", (r.args ?? []).length || undefined],
+        ["installed here", r.hasLocal],
+        ["installs", r.installs], ["views", r.views],
+        ["published", r.publishedAt], ["landing page", r.publicUrl],
+        ["description", r.description],
+      ]),
       command: `iris playbook run ${r.name}`,
     }
   if (surface === "integrations")
@@ -214,6 +224,38 @@ function describeFields(surface: string, r: any): { title: string; fields: [stri
       command: r.slug ? `iris atlas:datasets records list --schema ${r.slug}` : undefined,
     }
   return null
+}
+
+/**
+ * JSON with the TYPE carried in the colour.
+ *
+ * Unlike the markdown reader — which deliberately spends one accent on links, because five hues
+ * in a paragraph taught the reader nothing — hue here IS information: it says what kind of value
+ * you are looking at. Still drawn from the existing token ramp rather than a new palette.
+ *
+ * Escaped before it is marked up. This renders a record fetched through the user's own sidecar,
+ * but a title or description containing "<script>" would otherwise execute, and the raw view is
+ * exactly where hostile-looking content ends up being inspected.
+ */
+export function highlightJson(value: unknown): string {
+  const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+  let json: string
+  try {
+    json = JSON.stringify(value, null, 2) ?? "null"
+  } catch {
+    return ""
+  }
+  return esc(json).replace(
+    // A string (key or value), then the other literals. Key vs value is decided by the colon.
+    /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?)/g,
+    (m) => {
+      let cls = "iris-json__num"
+      if (m.startsWith('"')) cls = m.trimEnd().endsWith(":") ? "iris-json__key" : "iris-json__str"
+      else if (m === "true" || m === "false") cls = "iris-json__bool"
+      else if (m === "null") cls = "iris-json__null"
+      return `<span class="${cls}">${m}</span>`
+    },
+  )
 }
 
 function renderMarkdown(md: string): string {
@@ -321,7 +363,7 @@ const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
     // contact-form inbox and a comms thread that a page does not have at all. Showing only
     // pages made every one of those invisible and made a nine-page site look like nine
     // unrelated rows. Not board-scoped — sites are owned by a user OR a bloq.
-    { id: "sites", label: "Sites", pane: "sites", path: () => `/iris/sites` },
+    { id: "sites", label: "Sites", pane: "sites", path: (b) => `/iris/sites/${b}` },
   ],
   hive: [
     { id: "machines", label: "Machines", pane: "hive", path: () => `/iris/hive` },
@@ -358,6 +400,14 @@ const DETAIL_TABS: Record<string, readonly DetailTab[]> = {
   pages: [
     { id: "info", label: "Info" },
     { id: "preview", label: "Preview" },
+    { id: "json", label: "JSON" },
+  ],
+  playbooks: [
+    { id: "info", label: "Info" },
+    { id: "steps", label: "Steps" },
+    // The real document, read off THIS machine. Playbook content never leaves the machine, so
+    // this is both richer than the API summary and the only place the instructions live.
+    { id: "doc", label: "Document" },
     { id: "json", label: "JSON" },
   ],
   sites: [
@@ -663,6 +713,20 @@ export function SessionIrisTab() {
     },
   )
 
+  /** The open playbook's local PLAYBOOK.md. A file read through the sidecar, not a fetch. */
+  const [playbookDoc] = createResource(
+    () => {
+      const r = openRow()
+      return r?.pane === "playbooks" && detailTab() === "doc" && r.raw?.name
+        ? ([base(), String(r.raw.name)] as const)
+        : undefined
+    },
+    async ([, name]) => {
+      const res = await doFetch(`/iris/playbooks/doc/${encodeURIComponent(name)}`)
+      return (await res.json()) as { found: boolean; name: string; path: string; content: string }
+    },
+  )
+
   const [records] = createResource(
     () => {
       const r = openRow()
@@ -728,6 +792,8 @@ export function SessionIrisTab() {
     const sv = resolved().sub
     return sv ? `${s.label} › ${sv.label}` : s.label
   })
+  // Hive machines and Integrations belong to the ACCOUNT. Everything else, Sites included
+  // since it was narrowed, is this board.
   const boardScoped = createMemo(() => surface() !== "hive" && surface() !== "integrations")
 
   function choose(id: number) {
@@ -879,7 +945,7 @@ export function SessionIrisTab() {
                 <Show when={openRow()!.command}>
                   <button
                     type="button"
-                    class="w-full text-start font-mono text-11-regular px-2 py-1.5 mb-3 rounded bg-background-element text-text-base cursor-pointer hover:text-text-strong"
+                    class="iris-command"
                     title="Click to copy"
                     onClick={() => navigator.clipboard?.writeText(openRow()!.command!)}
                   >
@@ -909,7 +975,7 @@ export function SessionIrisTab() {
                 >
                   Copy JSON
                 </button>
-                <pre class="iris-json text-11-regular">{JSON.stringify(openRow()!.raw, null, 2)}</pre>
+                <pre class="iris-json text-11-regular" innerHTML={highlightJson(openRow()!.raw)} />
               </Match>
 
               {/* The page itself. An unpublished page has no URL to show, and saying so beats
@@ -940,6 +1006,96 @@ export function SessionIrisTab() {
                     sandbox="allow-scripts allow-same-origin"
                   />
                 </Show>
+              </Match>
+
+              {/* THE STEPS. What the playbook will actually do, and what it needs from you. */}
+              <Match when={detailTab() === "steps"}>
+                <Show
+                  when={(openRow()!.raw?.steps?.length ?? 0) > 0 || (openRow()!.raw?.args?.length ?? 0) > 0}
+                  fallback={
+                    <p class="text-12-regular text-text-weak py-2">
+                      This playbook publishes no step summary. The Document tab has the real thing when it
+                      is installed on this machine.
+                    </p>
+                  }
+                >
+                  <Show when={(openRow()!.raw?.args?.length ?? 0) > 0}>
+                    <h4 class="text-11-regular text-text-weaker pb-1">Arguments</h4>
+                    <For each={openRow()!.raw.args}>
+                      {(a: any) => (
+                        <div class="flex items-baseline gap-2 px-2 py-1 border-b border-border-weaker-base last:border-0">
+                          <span class="font-mono text-11-regular text-text-base shrink-0">{a.name}</span>
+                          <span class="font-mono text-11-regular text-text-weaker shrink-0">{a.type ?? "?"}</span>
+                          {/* Required is said out loud — a missing required arg is the most
+                              common reason a run dies on its first step. */}
+                          <Show when={a.required}>
+                            <span class="iris-table__phi shrink-0">required</span>
+                          </Show>
+                          <span class="text-11-regular text-text-weak min-w-0 flex-1 truncate" title={a.description}>
+                            {a.description}
+                          </span>
+                        </div>
+                      )}
+                    </For>
+                  </Show>
+                  <Show when={(openRow()!.raw?.steps?.length ?? 0) > 0}>
+                    <h4 class="text-11-regular text-text-weaker pt-3 pb-1">
+                      Steps · {openRow()!.raw.steps.length}
+                    </h4>
+                    <For each={openRow()!.raw.steps}>
+                      {(st: any, i) => (
+                        <div class="flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0">
+                          <span class="font-mono tabular-nums text-11-regular text-text-weaker shrink-0">
+                            {i() + 1}
+                          </span>
+                          <div class="min-w-0 flex-1">
+                            <p class="text-12-regular text-text-base">{st.title}</p>
+                            <p class="font-mono text-11-regular text-text-weaker truncate">
+                              {st.id}
+                              {st.integrations?.length ? ` · ${st.integrations.join(", ")}` : ""}
+                            </p>
+                          </div>
+                          {/* shell vs prompt is the difference between running a command and
+                              asking a model, which is the whole character of a step. */}
+                          <span class="shrink-0 font-mono text-11-regular text-text-weaker">{st.mode ?? "?"}</span>
+                        </div>
+                      )}
+                    </For>
+                  </Show>
+                </Show>
+              </Match>
+
+              {/* THE DOCUMENT itself, rendered. */}
+              <Match when={detailTab() === "doc"}>
+                <Switch>
+                  <Match when={playbookDoc.loading && !playbookDoc.latest}>
+                    <p class="text-12-regular text-text-weak py-2">Reading…</p>
+                  </Match>
+                  <Match when={playbookDoc.latest && !playbookDoc.latest!.found}>
+                    {/* NOT an error. It means this machine does not have it installed. */}
+                    <p class="text-12-regular text-text-weak py-2">
+                      Not installed on this machine, so there is no local document to read.
+                      <br />
+                      <span class="font-mono text-11-regular">iris playbook install {openRow()!.raw?.name}</span>
+                    </p>
+                    <Show when={openRow()!.raw?.publicUrl}>
+                      <a
+                        href={openRow()!.raw.publicUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        class="text-11-regular text-text-interactive-base hover:underline"
+                      >
+                        Open the landing page instead
+                      </a>
+                    </Show>
+                  </Match>
+                  <Match when={playbookDoc.latest?.found}>
+                    <p class="font-mono text-11-regular text-text-weaker pb-2 truncate" title={playbookDoc.latest!.path}>
+                      {playbookDoc.latest!.path}
+                    </p>
+                    <div class="iris-markdown text-12-regular" innerHTML={renderMarkdown(playbookDoc.latest!.content)} />
+                  </Match>
+                </Switch>
               </Match>
 
               {/* WHAT THIS AGENT IS HOLDING. Four sources in one list — a task on a bloq item,
@@ -1354,7 +1510,11 @@ export function SessionIrisTab() {
                       </div>
                       <Show when={sc.fields.length}>
                         <p class="font-mono text-11-regular text-text-weak ps-2 pt-0.5 truncate">
-                          {sc.fields.map((f: any) => f.name).join(" · ")}
+                          {/* `key`, not `name`. The server parse was fixed so fields arrive as
+                              {key,label,type,visibility}; this line still read f.name, and
+                              undefined joined by " · " is a row of separators with nothing
+                              between them. The fix and the regression were the same change. */}
+                          {sc.fields.map((f: any) => f.label || f.key).join(" · ")}
                         </p>
                       </Show>
                     </button>
