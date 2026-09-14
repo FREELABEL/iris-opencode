@@ -206,6 +206,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   generate: "core",
   debug: "core",
   auth: "core",
+  login: "core",
   agent: "core",
   upgrade: "core",
   uninstall: "core",
