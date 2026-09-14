@@ -4,7 +4,18 @@ import { UI } from "../ui"
 import { printDivider, printKV, dim, bold, success, BRIDGE_URL, bridgeFetch, writeJson } from "./iris-api"
 import { probeWithHeal, type BridgeProbe, type BridgeHealth } from "./bridge-health"
 import { mailRows } from "./mail-response"
-import { routerSend, describeSend, recordDirectSend } from "./comms-send"
+import {
+  routerSend,
+  describeSend,
+  recordDirectSend,
+  resolveLeadForHandle,
+  spoolUnlogged,
+  type LeadResolution,
+  readUnlogged,
+  clearUnlogged,
+  logComm,
+  unloggedSpoolPath,
+} from "./comms-send"
 
 // macOS Apple Mail integration via the IRIS Bridge (BRIDGE_URL, default localhost:3200)
 // Bridge endpoint: GET /api/mail/search?from=X&subject=X&days=N&limit=N&include_body=1&max_body=N
@@ -233,6 +244,17 @@ const MailSendCommand = cmd({
         type: "boolean",
         default: false,
         describe: "compose and open the message in Mail.app WITHOUT sending it",
+      })
+      // WHO the message is for, stated rather than guessed. Required in effect: without it the
+      // address must resolve to exactly one lead, and a tie is refused rather than broken.
+      .option("lead", {
+        type: "number",
+        describe: "CRM lead id this send belongs to — required when the address is ambiguous",
+      })
+      .option("force", {
+        type: "boolean",
+        default: false,
+        describe: "send to someone who is NOT a lead — recorded as unattributed, never silent",
       }),
   async handler(args) {
     UI.empty()
@@ -243,6 +265,53 @@ const MailSendCommand = cmd({
       prompts.log.error(bridge.message)
       prompts.outro("Done")
       return
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // WHO IS THIS FOR — answered before anything is sent, and allowed to refuse.
+    //
+    // This used to be answered AFTER the send, separately, by whichever of two code paths the
+    // flags happened to select, and both ended in an unordered first-match. On 2026-09-14 a
+    // client email attached to a Stripe-created duplicate of the client and nothing warned
+    // (#185438). Resolving here means the branch below cannot be wrong on its own: the router
+    // is given to_lead_id so it never runs its own resolver, and the bridge path is given the
+    // same id rather than looking one up.
+    // ─────────────────────────────────────────────────────────────────────────
+    let leadId: number | undefined
+    let resolution: LeadResolution | undefined
+
+    if (args.lead != null) {
+      leadId = Number(args.lead)
+    } else {
+      resolution = await resolveLeadForHandle(args.to)
+
+      if (resolution.reason === "ambiguous") {
+        prompts.log.error(`${args.to} matches ${resolution.matches.length} leads — say which one with --lead <id>:`)
+        for (const m of resolution.matches) {
+          prompts.log.warn(`  --lead ${m.id}   ${m.name ?? "(no name)"}${m.source ? `  ·  from ${m.source}` : ""}`)
+        }
+        // --force does NOT break a tie. It means "not a lead at all"; guessing between two real
+        // people is a different question and the operator is the only one who can answer it.
+        prompts.log.info("--force does not resolve this: it is for recipients who are not leads.")
+        prompts.outro("Not sent")
+        process.exitCode = 1
+        return
+      }
+
+      if (resolution.reason === "ok") {
+        leadId = resolution.leadId
+      } else if (!args.force) {
+        const why = resolution.reason === "none" ? `no lead has the address ${args.to}` : resolution.error
+        prompts.log.error(`Refusing to send: ${why}.`)
+        prompts.log.warn(`Attach it to a lead with --lead <id>, or send unattributed with --force.`)
+        prompts.outro("Not sent")
+        process.exitCode = 1
+        return
+      }
+    }
+
+    if (!leadId && args.force) {
+      prompts.log.warn("--force: sending with NO lead attribution. This will be spooled for `iris mail audit`.")
     }
 
     // ROUTE THROUGH THE COMMS ROUTER (CR-8) so the send lands in lead_comms. This used to POST
@@ -277,7 +346,10 @@ const MailSendCommand = cmd({
 
     if (!needsDirectBridge) {
       const result = await routerSend({
-        toHandle: args.to,
+        // The id when we have it — this is what stops the API running its own
+        // findDuplicate()->first(), which shares the exact defect this command just fixed.
+        toLeadId: leadId,
+        toHandle: leadId ? undefined : args.to,
         channel: "apple_mail",
         subject: args.subject,
         message: args.body,
@@ -287,6 +359,21 @@ const MailSendCommand = cmd({
 
       if (result.ok && result.sent) {
         prompts.log.info(describeSend(result))
+        // "Sent" and "sent AND on the record" are different states, and the router can report the
+        // first without the second. A send with no comm id is exactly what the sweeper exists for.
+        if (!result.commId) {
+          const spooled = await spoolUnlogged({
+            at: new Date().toISOString(),
+            channel: "apple_mail",
+            to: args.to,
+            subject: args.subject,
+            message: args.body,
+            leadId,
+            reason: "router sent but returned no comm id",
+            origin: "cli.mail.router",
+          })
+          prompts.log.error(`SENT BUT NOT LOGGED — spooled${spooled ? ` to ${spooled}` : ""}; run: iris mail audit`)
+        }
         prompts.outro(`${success("✓")} Email sent to ${args.to}`)
         return
       }
@@ -338,21 +425,34 @@ const MailSendCommand = cmd({
     // draft has not gone anywhere, and logging one would put a message on a lead's record that
     // they never received.
     if (!drafted) {
-      const logged = await recordDirectSend({
-        toHandle: args.to,
-        channel: "apple_mail",
-        subject: args.subject,
-        message: args.body,
-        origin: "cli.mail.direct",
-      })
+      const logged = leadId
+        ? await recordDirectSend({
+            toHandle: args.to,
+            leadId,
+            channel: "apple_mail",
+            subject: args.subject,
+            message: args.body,
+            origin: "cli.mail.direct",
+          })
+        : { ok: false as const, error: "sent with --force and no lead to attach it to" }
 
       if (logged.ok) {
-        prompts.log.info(`Recorded to comms${logged.commId ? ` as comm #${logged.commId}` : ""} on lead #${logged.leadId}`)
+        prompts.log.info(`Recorded to comms${logged.commId ? ` as comm #${logged.commId}` : ""} on lead #${leadId}`)
       } else {
-        // Loud, and with the reason. The whole point of this path is that a send nobody
-        // recorded must never again look like a send that went fine.
+        // Loud, with the reason, AND durable. Printing it was not enough: the line scrolls past
+        // and the send is then missing from the ledger with nothing anywhere that remembers.
+        const spooled = await spoolUnlogged({
+          at: new Date().toISOString(),
+          channel: "apple_mail",
+          to: args.to,
+          subject: args.subject,
+          message: args.body,
+          leadId,
+          reason: logged.error ?? "unknown",
+          origin: "cli.mail.direct",
+        })
         prompts.log.error(`SENT BUT NOT LOGGED — ${logged.error}`)
-        prompts.log.warn(`Record it by hand:  iris atlas:comms log <lead> --channel apple_mail --direction outbound --message "..." --subject "${args.subject}"`)
+        prompts.log.warn(spooled ? `Spooled to ${spooled} — recover it with: iris mail audit --backfill` : "Could not spool it either — record it by hand.")
       }
     }
 
@@ -361,6 +461,87 @@ const MailSendCommand = cmd({
         ? `${success("✓")} Draft opened in Mail.app for ${args.to}${attachments.length ? ` with ${attachments.length} attachment(s)` : ""} — nothing sent`
         : `${success("✓")} Email sent to ${args.to}${attachments.length ? ` with ${attachments.length} attachment(s)` : ""}`,
     )
+  },
+})
+
+
+/**
+ * What went out that the ledger never heard about — and put it back.
+ *
+ * Every other check in this area answers "did THIS send get logged?", one send at a time, at the
+ * moment it happens, in a line that scrolls past. None of them could answer the question that
+ * actually matters after the fact: *how much have we sent that is not on anyone's record?* An
+ * unknown gap in an audit trail is indistinguishable from no gap, and that is the state this
+ * command ends.
+ *
+ * It reads the spool every failed send now writes. It is complete going forward and silent about
+ * the past, which is honest — sends made before the spool existed left no trace to find, and a
+ * sweep that implied otherwise would be the same false assurance in a new place.
+ */
+const MailAuditCommand = cmd({
+  command: "audit",
+  describe: "list sends that never reached the comms log — and backfill them",
+  builder: (yargs) =>
+    yargs
+      .option("backfill", { type: "boolean", default: false, describe: "write the spooled sends to their leads and clear them" })
+      .option("lead", { type: "number", describe: "attach every unattributed entry to this lead id" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    const entries = await readUnlogged()
+
+    if (args.json) {
+      console.log(JSON.stringify({ ok: true, spool: unloggedSpoolPath(), count: entries.length, entries }, null, 2))
+      return
+    }
+
+    UI.empty()
+    prompts.intro("◈  Comms audit — sends with no ledger row")
+
+    if (entries.length === 0) {
+      prompts.log.info(`Nothing unlogged. Spool: ${unloggedSpoolPath()}`)
+      prompts.outro("Clean")
+      return
+    }
+
+    for (const e of entries) {
+      const who = e.leadId ? `lead #${e.leadId}` : dim("UNATTRIBUTED")
+      prompts.log.warn(`${e.at}  ${e.channel}  ${e.to}  ${who}`)
+      prompts.log.info(`   subject: ${e.subject ?? "(none)"}`)
+      prompts.log.info(`   why:     ${e.reason}`)
+    }
+
+    if (!args.backfill) {
+      prompts.log.info(`${entries.length} unlogged send(s). Backfill with: iris mail audit --backfill${entries.some((e) => !e.leadId) ? " --lead <id>" : ""}`)
+      prompts.outro("Done")
+      process.exitCode = 1
+      return
+    }
+
+    const done: string[] = []
+    let failed = 0
+
+    for (const e of entries) {
+      const target = e.leadId ?? (args.lead != null ? Number(args.lead) : undefined)
+      if (!target) {
+        // Refusing beats guessing — the entry stays in the spool where the next run will
+        // surface it again, which is the correct behaviour for something nobody has placed.
+        prompts.log.error(`  skipped ${e.to} @ ${e.at} — no lead. Re-run with --lead <id>.`)
+        failed++
+        continue
+      }
+      const r = await logComm({ leadId: target, channel: e.channel, subject: e.subject, message: e.message, sentAt: e.at })
+      if (r.ok) {
+        prompts.log.info(`  ✓ ${e.to} → lead #${target}${r.commId ? ` as comm #${r.commId}` : ""}`)
+        done.push(e.at)
+      } else {
+        prompts.log.error(`  ✗ ${e.to} — ${r.error}`)
+        failed++
+      }
+    }
+
+    if (done.length) await clearUnlogged(done)
+    prompts.outro(`${success("✓")} Backfilled ${done.length}${failed ? `, ${failed} still unlogged` : ""}`)
+    if (failed) process.exitCode = 1
   },
 })
 
@@ -433,6 +614,7 @@ export const PlatformMailCommand = cmd({
       .command(MailReadCommand)
       .command(MailSendCommand)
       .command(MailAccountsCommand)
+      .command(MailAuditCommand)
       .demandCommand(),
   async handler() {},
 })
