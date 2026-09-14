@@ -1,7 +1,7 @@
 import { Effect } from "effect"
 import { paginate } from "@/iris/pagination"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
-import { filterAtlas, checkAuth, fetchAgents, fetchAtlas, fetchBloqs, fetchHiveNodes, fetchInbox, fetchLeads, fetchIntegrations, fetchPages, fetchPlaybooks, fetchRecords, fetchSchemas, fetchSites, fetchAgentTasks, fetchPlaybookDoc, fetchPageDoc, savePageDoc, fetchCatalog } from "@/iris/platform"
+import { filterAtlas, checkAuth, fetchAgents, fetchAtlas, fetchBloqs, fetchHiveNodes, fetchInbox, fetchLeads, fetchIntegrations, fetchPages, fetchPlaybooks, fetchRecords, fetchSchemas, fetchSites, fetchAgentTasks, fetchPlaybookDoc, fetchPageDoc, savePageDoc, fetchCatalog, fetchBloqGraph, graphRows } from "@/iris/platform"
 import { RootHttpApi } from "../api"
 
 /**
@@ -181,6 +181,15 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
      */
     /** Not paged: an agent holding more than a screenful of work is the exception, and the
      *  four sources are already capped upstream (500 item tasks, 200 each of the rest). */
+    const graph = Effect.fn("IrisHttpApi.graph")((ctx: { query: { page?: number; perPage?: number } }) =>
+      Effect.promise(() => fetchBloqGraph()).pipe(
+        Effect.map((r) => {
+          const { items, meta } = pageOf(r, graphRows(r.data), ctx.query)
+          return { ...meta, summary: r.data.summary, rows: items }
+        }),
+      ),
+    )
+
     const catalog = Effect.fn("IrisHttpApi.catalog")(
       (ctx: { query: { page?: number; perPage?: number } }) =>
         Effect.promise(() => fetchCatalog()).pipe(
@@ -269,6 +278,6 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
         ),
     )
 
-    return handlers.handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("catalog", catalog).handle("pageDoc", pageDoc).handle("pageSave", pageSave).handle("playbookDoc", playbookDoc).handle("agentTasks", agentTasks).handle("sites", sites).handle("records", records).handle("integrations", integrations).handle("hive", hive)
+    return handlers.handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("graph", graph).handle("catalog", catalog).handle("pageDoc", pageDoc).handle("pageSave", pageSave).handle("playbookDoc", playbookDoc).handle("agentTasks", agentTasks).handle("sites", sites).handle("records", records).handle("integrations", integrations).handle("hive", hive)
   }),
 )

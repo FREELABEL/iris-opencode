@@ -286,7 +286,23 @@ export async function fetchAtlas(bloqId: number): Promise<PlatformResult<{ lists
   if (unknown) return { measured: false, reason: unknown, data: { lists: [] } }
 
   try {
-    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}`)
+    /*
+     * ?no_searchable_content=1 — drop the duplicate, keep the bodies.
+     *
+     * `searchable_content` is an $appends accessor that ships a near-copy of `content` on every
+     * item. Measured on board 174: 3.42 MB total, of which content is 1,468 KB and its
+     * duplicate 1,397 KB. Nothing here reads the duplicate.
+     *
+     * NOT `?light=1`, which also drops `content` and would be 0.60 MB — 83% off — because two
+     * things in this panel read the body: the reader renders it, and the search filters on it.
+     * Taking the cheaper number would break search into a title-only match and call it a
+     * performance win. That version needs a per-item fetch on open first.
+     *
+     *   default                     3,590,030 bytes
+     *   no_searchable_content=1     2,139,422 bytes   <- here
+     *   light=1                       625,237 bytes   <- once the reader fetches bodies
+     */
+    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}?no_searchable_content=1`)
     if (!res.ok) return { measured: false, reason: `fl-api ${res.status}`, data: { lists: [] } }
     const json = (await res.json()) as any
     const raw = json?.data ?? json
@@ -1440,6 +1456,122 @@ export async function savePageDoc(input: {
   } catch (e) {
     return { ok: false, reason: e instanceof Error ? e.message : String(e) }
   }
+}
+
+export interface GraphNode {
+  id: number
+  name: string
+  /** How many edges touch it. 0 means isolated, which is most of them. */
+  degree: number
+}
+
+export interface GraphEdge {
+  id: number
+  from: number
+  to: number
+  /** "sibling" | "feeds_into" | "affiliated" — the relation is typed and directional. */
+  type: string
+}
+
+export interface BloqGraph {
+  nodes: GraphNode[]
+  edges: GraphEdge[]
+  summary: { nodes: number; edges: number; isolated: number; isolatedPct: number; largestDegree: number }
+}
+
+/**
+ * The board-to-board relationship graph.
+ *
+ * THIS IS A REAL ENDPOINT, which is worth saying because the obvious place to look says
+ * otherwise: Elon's RelationshipGraph.vue is fed by a computed property in Board.vue that
+ * assembles one board's contents client-side. That one has no endpoint. This is a different
+ * graph — bloq to bloq, across the account — and fl-api serves it whole at 12 KB, already
+ * carrying degree per node and a summary.
+ *
+ * The summary is the useful part and the panel leads with it: measured on this account, 123 of
+ * 160 boards have no relation to anything at all. A drawing would spend its whole area on that
+ * fact; a sentence states it.
+ */
+export async function fetchBloqGraph(): Promise<PlatformResult<BloqGraph>> {
+  const empty: BloqGraph = {
+    nodes: [],
+    edges: [],
+    summary: { nodes: 0, edges: 0, isolated: 0, isolatedPct: 0, largestDegree: 0 },
+  }
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: empty }
+
+  try {
+    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/graph`)
+    if (!res.ok) return { measured: false, reason: `fl-api ${res.status}`, data: empty }
+    const j = (await res.json()) as any
+    const d = j?.data ?? j
+    const s = d?.summary ?? {}
+    return {
+      measured: true,
+      data: {
+        nodes: (Array.isArray(d?.nodes) ? d.nodes : []).map((n: any) => ({
+          id: Number(n?.id),
+          name: String(n?.name ?? `bloq ${n?.id}`),
+          degree: Number(n?.degree ?? 0),
+        })),
+        edges: (Array.isArray(d?.edges) ? d.edges : []).map((e: any) => ({
+          id: Number(e?.id),
+          from: Number(e?.from),
+          to: Number(e?.to),
+          type: String(e?.type ?? "related"),
+        })),
+        summary: {
+          nodes: Number(s?.nodes ?? 0),
+          edges: Number(s?.edges ?? 0),
+          isolated: Number(s?.isolated ?? 0),
+          isolatedPct: Number(s?.isolated_pct ?? 0),
+          largestDegree: Number(s?.largest_degree ?? 0),
+        },
+      },
+    }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: empty }
+  }
+}
+
+/**
+ * The graph as rows: every CONNECTED board, most-connected first, with what it links to.
+ *
+ * Not a force layout. 160 nodes and 41 edges in a 500px column is a hairball that answers
+ * nothing, and 77% of the nodes have no edge at all — a drawing would spend its whole area
+ * rendering that. Sorted by degree, the same data answers "what is central here" in one glance.
+ *
+ * Edges are directional and both ends are shown, because `feeds_into` read from the wrong end
+ * is a different claim.
+ */
+export function graphRows(g: BloqGraph): {
+  id: number
+  name: string
+  degree: number
+  links: { id: number; name: string; type: string; direction: "out" | "in" }[]
+}[] {
+  const byId = new Map(g.nodes.map((n) => [n.id, n]))
+  const rows = g.nodes
+    .filter((n) => n.degree > 0)
+    .map((n) => ({
+      id: n.id,
+      name: n.name,
+      degree: n.degree,
+      links: g.edges
+        .filter((e) => e.from === n.id || e.to === n.id)
+        .map((e) => {
+          const otherId = e.from === n.id ? e.to : e.from
+          return {
+            id: otherId,
+            name: byId.get(otherId)?.name ?? `bloq ${otherId}`,
+            type: e.type,
+            direction: (e.from === n.id ? "out" : "in") as "out" | "in",
+          }
+        }),
+    }))
+  rows.sort((a, b) => b.degree - a.degree || a.name.localeCompare(b.name))
+  return rows
 }
 
 export interface Integration {

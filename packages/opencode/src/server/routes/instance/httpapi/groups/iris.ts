@@ -431,6 +431,7 @@ export const IrisPaths = {
   agentTasks: `${root}/agents/:agentID/tasks`,
   playbookDoc: `${root}/playbooks/doc/:name`,
   catalog: `${root}/catalog`,
+  graph: `${root}/graph`,
   pageDoc: `${root}/page/:pageID`,
   pageSave: `${root}/page/:pageID/save`,
   hive: `${root}/hive`,
@@ -557,6 +558,48 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "List playbooks",
           description:
             "BOTH the board's attached playbooks and the account's full set, each flagged. Never one or the other — the TUI shipped either/or and each half hid something.",
+        }),
+      ),
+      HttpApiEndpoint.get("graph", IrisPaths.graph, {
+        query: PageQuery,
+        success: described(
+          Schema.Struct({
+            ...Measured,
+            ...Paged,
+            summary: Schema.Struct({
+              nodes: Schema.Finite,
+              edges: Schema.Finite,
+              isolated: described(Schema.Finite, "Boards with no relation to anything. Most of them."),
+              isolatedPct: Schema.Finite,
+              largestDegree: Schema.Finite,
+            }),
+            rows: Schema.Array(
+              Schema.Struct({
+                id: Schema.Finite,
+                name: Schema.String,
+                degree: Schema.Finite,
+                links: Schema.Array(
+                  Schema.Struct({
+                    id: Schema.Finite,
+                    name: Schema.String,
+                    type: Schema.String,
+                    direction: described(
+                      Schema.Literals(["out", "in"]),
+                      "Edges are directional — `feeds_into` read from the wrong end is a different claim.",
+                    ),
+                  }),
+                ),
+              }).annotate({ identifier: "IrisGraphRow" }),
+            ),
+          }).annotate({ identifier: "IrisGraphResponse" }),
+          "Board-to-board relations, connected boards first",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.graph",
+          summary: "The bloq relationship graph",
+          description:
+            "A REAL endpoint, worth saying because the obvious place to look says otherwise: Elon's RelationshipGraph is fed by a computed property that assembles one board's contents client-side and has no endpoint. This is a different graph — bloq to bloq across the account — served whole at 12 KB with degree per node.",
         }),
       ),
       HttpApiEndpoint.get("catalog", IrisPaths.catalog, {

@@ -60,6 +60,7 @@ interface Measured {
  * read `d["atlas"]` for the schemas pane and found nothing, which renders as an empty board.
  */
 function arrayKeyFor(pane: string): string {
+  if (pane === "graph") return "rows"
   if (pane === "catalog") return "catalog"
   if (pane === "atlas") return "lists"
   if (pane === "hive") return "nodes"
@@ -404,6 +405,9 @@ const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
   atlas: [
     { id: "lists", label: "Lists", pane: "atlas", path: (b) => `/iris/atlas/${b}` },
     { id: "schemas", label: "Schemas", pane: "schemas", path: (b) => `/iris/schemas/${b}` },
+    // Board-to-board relations. Account-wide rather than this board, which the empty state
+    // says out loud so it is not read as "this board has no relations".
+    { id: "graph", label: "Graph", pane: "graph", path: () => `/iris/graph` },
   ],
   agents: [
     { id: "all", label: "All", pane: "agents", path: (b) => `/iris/agents/${b}` },
@@ -1040,7 +1044,9 @@ export function SessionIrisTab() {
   })
   // Hive machines and Integrations belong to the ACCOUNT. Everything else, Sites included
   // since it was narrowed, is this board.
-  const boardScoped = createMemo(() => surface() !== "hive" && surface() !== "integrations")
+  const boardScoped = createMemo(
+    () => surface() !== "hive" && surface() !== "integrations" && pane() !== "graph" && pane() !== "catalog",
+  )
 
   function choose(id: number) {
     setSelected(id)
@@ -1825,6 +1831,46 @@ export function SessionIrisTab() {
 
               {/* WHAT YOU COULD ADD. Same mark treatment as the connected list, greyed —
                   these are real services you do not have yet, not a different kind of thing. */}
+              {/* THE GRAPH, as rows rather than a drawing.
+                  160 nodes and 41 edges in a 500px column is a hairball that answers nothing,
+                  and 123 of those nodes have no edge at all — a force layout would spend its
+                  whole area rendering that fact. Sorted by degree, the same data answers "what
+                  is central here" at a glance, and the isolated count is stated instead. */}
+              <Match when={pane() === "graph"}>
+                <Show when={(current() as any)?.summary}>
+                  {(sum) => (
+                    <p class="px-2 pb-2 text-11-regular text-text-weaker">
+                      <span class="font-mono tabular-nums">{sum().edges}</span> relations across{" "}
+                      <span class="font-mono tabular-nums">{sum().nodes - sum().isolated}</span> boards ·{" "}
+                      <span class="font-mono tabular-nums">{sum().isolated}</span> boards ({sum().isolatedPct}%)
+                      connect to nothing
+                    </p>
+                  )}
+                </Show>
+                <For each={rows()}>
+                  {(n) => (
+                    <div class="px-2 py-1.5 border-b border-border-weaker-base last:border-0">
+                      <div class="flex items-baseline gap-2">
+                        <span class="text-12-regular text-text-base min-w-0 flex-1 truncate">{n.name}</span>
+                        <span class="shrink-0 font-mono tabular-nums text-11-regular text-text-weaker">
+                          {n.degree}
+                        </span>
+                      </div>
+                      <For each={n.links}>
+                        {(l: any) => (
+                          <p class="text-11-regular text-text-weaker ps-3 pt-0.5 truncate">
+                            {/* Direction is drawn, because feeds_into read backwards is a
+                                different claim about the same pair. */}
+                            <span class="font-mono">{l.direction === "out" ? "→" : "←"}</span> {l.name}
+                            <span class="font-mono"> · {l.type}</span>
+                          </p>
+                        )}
+                      </For>
+                    </div>
+                  )}
+                </For>
+              </Match>
+
               <Match when={pane() === "catalog"}>
                 <For each={rows()}>
                   {(c) => (
