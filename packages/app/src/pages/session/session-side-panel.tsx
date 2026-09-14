@@ -365,26 +365,22 @@ export function SessionSidePanel(props: {
                                   </div>
                                 </Tabs.Trigger>
                               </Show>
-                              <Show when={irisOpen()}>
-                                <Tabs.Trigger
-                                  value="iris"
-                                  closeButton={
-                                    <IconButton
-                                      icon="close-small"
-                                      variant="ghost"
-                                      class="h-5 w-5"
-                                      onClick={() => tabs().close("iris")}
-                                      aria-label={language.t("common.closeTab")}
-                                    />
-                                  }
-                                  hideCloseButton
-                                  onMiddleClick={() => tabs().close("iris")}
-                                >
-                                  <div class="flex items-center gap-2">
-                                    <div>IRIS</div>
-                                  </div>
-                                </Tabs.Trigger>
-                              </Show>
+                              {/* PERSISTENT. No <Show>, no close button, no middle-click close.
+                                  IRIS is the platform surface, not a document you opened — the
+                                  same standing as the file tree, and closing it left people
+                                  with no way back except a header button they had to know
+                                  about.
+
+                                  Note what is NOT changed: `irisOpen` still means "the user
+                                  opened it" and still drives the active-tab fallback. Flipping
+                                  that to always-true would make IRIS beat Review as the default
+                                  tab for every session with no files open — a behaviour change
+                                  nobody asked for, smuggled in behind a cosmetic one. */}
+                              <Tabs.Trigger value="iris">
+                                <div class="flex items-center gap-2">
+                                  <div>IRIS</div>
+                                </div>
+                              </Tabs.Trigger>
                               <Show when={contextOpen()}>
                                 <Tabs.Trigger
                                   value="context"
@@ -606,26 +602,11 @@ export function SessionSidePanel(props: {
                                 one of them is a bug that typechecks, unit-tests green and shows
                                 nothing on screen; it cost a browser run to find, twice, because
                                 the session HEADER has the same shape. */}
-                            <Show when={irisOpen()}>
-                              <Tabs.Trigger
-                                value="iris"
-                                closeButton={
-                                  <IconButton
-                                    icon="close-small"
-                                    variant="ghost"
-                                    class="h-5 w-5"
-                                    onClick={() => tabs().close("iris")}
-                                    aria-label={language.t("common.closeTab")}
-                                  />
-                                }
-                                hideCloseButton
-                                onMiddleClick={() => tabs().close("iris")}
-                              >
-                                <div class="flex items-center gap-2">
-                                  <div>IRIS</div>
-                                </div>
-                              </Tabs.Trigger>
-                            </Show>
+                            <Tabs.Trigger value="iris">
+                              <div class="flex items-center gap-2">
+                                <div>IRIS</div>
+                              </div>
+                            </Tabs.Trigger>
                             <Show when={contextOpen()}>
                               <Tabs.Trigger
                                 value="context"

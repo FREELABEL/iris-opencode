@@ -40,6 +40,20 @@ const PageQuery = Schema.Struct({
   perPage: Schema.optional(Schema.NumberFromString),
 })
 
+/**
+ * Paging plus a filter, for the surfaces that have one.
+ *
+ * `q` is declared in ONE place so every surface means the same thing by it: matched before
+ * paging, against the fields that surface considers searchable.
+ */
+const SearchQuery = Schema.Struct({
+  ...PageQuery.fields,
+  q: described(
+    Schema.optional(Schema.String),
+    "Filter before paging, so the count describes the matches and not a page.",
+  ),
+})
+
 const Measured = {
   measured: described(Schema.Boolean, "False means NOT MEASURED. Do not render the data as an empty result."),
   reason: Schema.optional(described(Schema.String, "Why it could not be measured — an HTTP status, or that nobody is signed in.")),
@@ -492,7 +506,7 @@ export const IrisApi = HttpApi.make("iris").add(
       ),
       HttpApiEndpoint.get("agents", IrisPaths.agents, {
         query: Schema.Struct({
-          ...PageQuery.fields,
+          ...SearchQuery.fields,
           mode: described(
             Schema.optional(Schema.Literals(["all", "scheduled", "ondemand"])),
             "Narrowed SERVER-SIDE, before paging — so `total` counts the agents in this mode, not all of them. Filtering a page on the client would report the page's leftovers as the whole set.",
@@ -509,7 +523,7 @@ export const IrisApi = HttpApi.make("iris").add(
         }),
       ),
       HttpApiEndpoint.get("leads", IrisPaths.leads, {
-        query: PageQuery,
+        query: SearchQuery,
         params: { bloqID: Schema.NumberFromString },
         success: described(LeadsResponse, "Leads on this bloq"),
       }).annotateMerge(
@@ -520,7 +534,7 @@ export const IrisApi = HttpApi.make("iris").add(
         }),
       ),
       HttpApiEndpoint.get("pages", IrisPaths.pages, {
-        query: PageQuery,
+        query: SearchQuery,
         params: { bloqID: Schema.NumberFromString },
         success: described(PagesResponse, "Pages owned by this bloq"),
       }).annotateMerge(
@@ -531,7 +545,7 @@ export const IrisApi = HttpApi.make("iris").add(
         }),
       ),
       HttpApiEndpoint.get("schemas", IrisPaths.schemas, {
-        query: PageQuery,
+        query: SearchQuery,
         params: { bloqID: Schema.NumberFromString },
         success: described(SchemasResponse, "Atlas dataset schemas on this board"),
       }).annotateMerge(
@@ -544,7 +558,7 @@ export const IrisApi = HttpApi.make("iris").add(
       ),
       HttpApiEndpoint.get("playbooks", IrisPaths.playbooks, {
         query: Schema.Struct({
-          ...PageQuery.fields,
+          ...SearchQuery.fields,
           view: described(
             Schema.optional(Schema.Literals(["all", "project", "marketplace"])),
             "project = attached to this board or filed against it. marketplace = actually published (public or unlisted). `private` is neither: yours and unshared.",
@@ -603,7 +617,7 @@ export const IrisApi = HttpApi.make("iris").add(
         }),
       ),
       HttpApiEndpoint.get("catalog", IrisPaths.catalog, {
-        query: PageQuery,
+        query: SearchQuery,
         success: described(
           Schema.Struct({
             ...Measured,
@@ -746,7 +760,7 @@ export const IrisApi = HttpApi.make("iris").add(
       HttpApiEndpoint.get("integrations", IrisPaths.integrations, {
         params: { bloqID: Schema.NumberFromString },
         query: Schema.Struct({
-          ...PageQuery.fields,
+          ...SearchQuery.fields,
           scope: described(
             Schema.optional(Schema.Literals(["all", "project", "organization", "user"])),
             "Narrowed SERVER-side, before paging, so total counts the scope you are looking at.",

@@ -79,3 +79,23 @@ export function readUpstreamTotal(json: unknown): number | null {
   for (const c of candidates) if (typeof c === "number" && Number.isFinite(c)) return c
   return null
 }
+
+/**
+ * One filter for every list surface.
+ *
+ * Search was built for Atlas first and lived inside its fetch. A second surface asking for it
+ * is the moment that becomes a pattern or becomes duplication — and duplicated search means
+ * two ideas of what "matches" is, which is how one tab searches bodies and another silently
+ * searches titles only.
+ *
+ * APPLIED BEFORE PAGING, always. Every /iris list holds its full set server-side and slices
+ * afterwards, so filtering here searches everything and the count over the results is a true
+ * count. Filtering a page would report "3 of 40" about a set it never looked at.
+ */
+export function filterRows<T>(rows: T[], query: string | undefined, fields: (row: T) => unknown[]): T[] {
+  const q = (query ?? "").trim().toLowerCase()
+  if (!q) return rows
+  return rows.filter((r) =>
+    fields(r).some((v) => typeof v === "string" && v.toLowerCase().includes(q)),
+  )
+}

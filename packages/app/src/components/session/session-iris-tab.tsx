@@ -569,6 +569,28 @@ export function integrationHealth(i: { status: string; connected: boolean }): "l
   return i.connected ? "live" : "off"
 }
 
+/**
+ * Which panes have a search box, and what it says.
+ *
+ * ONE control, declared once. Search arrived on Atlas first and lived inside it; the second
+ * surface asking for it is the moment that becomes a pattern or becomes duplication, and
+ * duplicated search means two ideas of what "matches" is — one tab searching bodies while
+ * another silently searches titles.
+ *
+ * A pane is in here only when the SERVER filters it before paging. Adding a placeholder
+ * without that would give a box that quietly searches the current page.
+ */
+const SEARCH_PLACEHOLDER: Record<string, string> = {
+  atlas: "Search this board's lists and items…",
+  playbooks: "Search playbooks by name, description or step…",
+  schemas: "Search schemas and their fields…",
+  agents: "Search agents…",
+  leads: "Search leads…",
+  pages: "Search pages…",
+  integrations: "Search integrations…",
+  catalog: "Search what you could add…",
+}
+
 /** A cell value, rendered so an empty one is visibly empty rather than the string "undefined". */
 export function cellText(v: unknown): string {
   if (v === null || v === undefined || v === "") return "—"
@@ -749,7 +771,8 @@ export function SessionIrisTab() {
       const sep = url.includes("?") ? "&" : "?"
       // The query goes to the SERVER, which filters the whole board before paging. Filtering
       // the rows already on screen would leave the footer counting a set it never searched.
-      const search = which === "atlas" && q ? `&q=${encodeURIComponent(q)}` : ""
+      // Sent for any pane the server filters — see SEARCH_PLACEHOLDER.
+      const search = q && SEARCH_PLACEHOLDER[which] ? `&q=${encodeURIComponent(q)}` : ""
       /*
        * A GRAPH CANNOT BE PAGED.
        *
@@ -1210,12 +1233,12 @@ export function SessionIrisTab() {
 
       {/* SEARCH, for the pane that has enough in it to need one: a board's lists run to
           hundreds of items and the reader is the only way in. Server-side — see the `q` param. */}
-      <Show when={pane() === "atlas" && !openItem() && !openRow()}>
+      <Show when={SEARCH_PLACEHOLDER[pane()] && !openItem() && !openRow()}>
         <div class="iris-search shrink-0">
           <input
             class="iris-search__input"
             type="search"
-            placeholder="Search this board's lists and items…"
+            placeholder={SEARCH_PLACEHOLDER[pane()]}
             value={query()}
             onInput={(e) => setQuery(e.currentTarget.value)}
           />
@@ -2155,10 +2178,10 @@ export function SessionIrisTab() {
               {/* "This board is empty" and "your search matched nothing" are different facts,
                   and the first one is alarming when it is not true. */}
               <Show
-                when={pane() === "atlas" && applied()}
+                when={applied() && SEARCH_PLACEHOLDER[pane()]}
                 fallback={`Nothing in ${paneLabel()}${boardScoped() ? " on this board" : ""}.`}
               >
-                No list or item on this board matches “{applied()}”.
+                Nothing in {paneLabel()} matches “{applied()}”.
               </Show>
             </p>
           </Match>

@@ -1,5 +1,5 @@
 import { Effect } from "effect"
-import { paginate } from "@/iris/pagination"
+import { filterRows, paginate } from "@/iris/pagination"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { filterAtlas, checkAuth, fetchAgents, fetchAtlas, fetchBloqs, fetchHiveNodes, fetchInbox, fetchLeads, fetchIntegrations, fetchPages, fetchPlaybooks, fetchRecords, fetchSchemas, fetchSites, fetchAgentTasks, fetchPlaybookDoc, fetchPageDoc, savePageDoc, fetchCatalog, fetchBloqGraph, graphRows } from "@/iris/platform"
 import { RootHttpApi } from "../api"
@@ -111,7 +111,7 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
     const agents = Effect.fn("IrisHttpApi.agents")(
       (ctx: {
         params: { bloqID: number }
-        query: { page?: number; perPage?: number; mode?: "all" | "scheduled" | "ondemand" }
+        query: { page?: number; perPage?: number; q?: string; mode?: "all" | "scheduled" | "ondemand" }
       }) =>
         Effect.promise(() => fetchAgents(ctx.params.bloqID)).pipe(
           Effect.map((r) => {
@@ -122,37 +122,47 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
                 : mode === "ondemand"
                   ? r.data.agents.filter((a) => !a.heartbeat)
                   : r.data.agents
-            const { items, meta } = pageOf(r, all, ctx.query)
+            const rows = filterRows(all, ctx.query.q, (a) => [a.name, a.status, a.model, a.description, a.schedule])
+            const { items, meta } = pageOf(r, rows, ctx.query)
             return { ...meta, agents: items }
           }),
         ),
     )
 
     const leads = Effect.fn("IrisHttpApi.leads")(
-      (ctx: { params: { bloqID: number }; query: { page?: number; perPage?: number } }) =>
+      (ctx: { params: { bloqID: number }; query: { page?: number; perPage?: number; q?: string } }) =>
         Effect.promise(() => fetchLeads(ctx.params.bloqID)).pipe(
           Effect.map((r) => {
-            const { items, meta } = pageOf(r, r.data.leads, ctx.query)
+            const rows = filterRows(r.data.leads, ctx.query.q, (l) => [l.name, l.company, l.email, l.status, l.city])
+            const { items, meta } = pageOf(r, rows, ctx.query)
             return { ...meta, leads: items }
           }),
         ),
     )
 
     const pages = Effect.fn("IrisHttpApi.pages")(
-      (ctx: { params: { bloqID: number }; query: { page?: number; perPage?: number } }) =>
+      (ctx: { params: { bloqID: number }; query: { page?: number; perPage?: number; q?: string } }) =>
         Effect.promise(() => fetchPages(ctx.params.bloqID)).pipe(
           Effect.map((r) => {
-            const { items, meta } = pageOf(r, r.data.pages, ctx.query)
+            const rows = filterRows(r.data.pages, ctx.query.q, (p) => [p.title, p.slug, p.status, p.category])
+            const { items, meta } = pageOf(r, rows, ctx.query)
             return { ...meta, pages: items }
           }),
         ),
     )
 
     const schemas = Effect.fn("IrisHttpApi.schemas")(
-      (ctx: { params: { bloqID: number }; query: { page?: number; perPage?: number } }) =>
+      (ctx: { params: { bloqID: number }; query: { page?: number; perPage?: number; q?: string } }) =>
         Effect.promise(() => fetchSchemas(ctx.params.bloqID)).pipe(
           Effect.map((r) => {
-            const { items, meta } = pageOf(r, r.data.schemas, ctx.query)
+            // Field names too: "which dataset has patient_name" is a real question.
+            const rows = filterRows(r.data.schemas, ctx.query.q, (s) => [
+              s.name,
+              s.slug,
+              ...s.fields.map((f) => f.key),
+              ...s.fields.map((f) => f.label),
+            ])
+            const { items, meta } = pageOf(r, rows, ctx.query)
             return { ...meta, schemas: items }
           }),
         ),
@@ -161,11 +171,19 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
     const playbooks = Effect.fn("IrisHttpApi.playbooks")(
       (ctx: {
         params: { bloqID: number }
-        query: { page?: number; perPage?: number; view?: "all" | "project" | "marketplace" }
+        query: { page?: number; perPage?: number; q?: string; view?: "all" | "project" | "marketplace" }
       }) =>
         Effect.promise(() => fetchPlaybooks(ctx.params.bloqID, ctx.query.view)).pipe(
           Effect.map((r) => {
-            const { items, meta } = pageOf(r, r.data.playbooks, ctx.query)
+            // Description as well as name: playbooks are FOUND by what they do, and the name is
+            // a slug. "restaurant-booking-cancel" is not how anyone looks for it.
+            const rows = filterRows(r.data.playbooks, ctx.query.q, (p) => [
+              p.name,
+              p.description,
+              p.scope,
+              ...p.steps.map((s) => s.title),
+            ])
+            const { items, meta } = pageOf(r, rows, ctx.query)
             return { ...meta, playbooks: items }
           }),
         ),
@@ -191,10 +209,11 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
     )
 
     const catalog = Effect.fn("IrisHttpApi.catalog")(
-      (ctx: { query: { page?: number; perPage?: number } }) =>
+      (ctx: { query: { page?: number; perPage?: number; q?: string } }) =>
         Effect.promise(() => fetchCatalog()).pipe(
           Effect.map((r) => {
-            const { items, meta } = pageOf(r, r.data.catalog, ctx.query)
+            const rows = filterRows(r.data.catalog, ctx.query.q, (c) => [c.name, c.type, c.category, c.description])
+            const { items, meta } = pageOf(r, rows, ctx.query)
             return { ...meta, catalog: items, attribution: r.data.attribution }
           }),
         ),
@@ -258,11 +277,12 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
     const integrations = Effect.fn("IrisHttpApi.integrations")(
       (ctx: {
         params: { bloqID: number }
-        query: { page?: number; perPage?: number; scope?: "all" | "project" | "organization" | "user" }
+        query: { page?: number; perPage?: number; q?: string; scope?: "all" | "project" | "organization" | "user" }
       }) =>
         Effect.promise(() => fetchIntegrations({ bloqId: ctx.params.bloqID, scope: ctx.query.scope })).pipe(
           Effect.map((r) => {
-            const { items, meta } = pageOf(r, r.data.integrations, ctx.query)
+            const rows = filterRows(r.data.integrations, ctx.query.q, (i) => [i.name, i.type, i.category, i.account])
+            const { items, meta } = pageOf(r, rows, ctx.query)
             return { ...meta, integrations: items, attribution: r.data.attribution }
           }),
         ),
