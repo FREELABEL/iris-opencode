@@ -733,6 +733,70 @@ download_and_install() {
         codesign --force --deep --sign - "${INSTALL_DIR}/iris" 2>/dev/null || true
     fi
     rm -rf "$tmp_dir"
+    # Ask the path what it is now. See verify_installed_cli above for why a copy that
+    # exited 0 is not evidence that the product is installed.
+    verify_installed_cli || exit 1
+}
+
+# ─── Post-install read-back: did we install THE PRODUCT, or just a file? ──────
+#
+# A GREEN EXIT IS NOT A LANDING. Until 2026-09-13 nothing in this script ever ran the
+# binary it had just written, so "IRIS CLI installed" was a claim about a copy operation,
+# not about a working CLI. Three ways that goes wrong, none of which the old checks could
+# see:
+#
+#   1. `codesign ... || true` above. If ad-hoc signing fails on macOS, Gatekeeper SIGKILLs
+#      the binary on every run (exit 137) — and the `|| true` is deliberate, so the failure
+#      is invisible. The user gets an `iris` that dies instantly and an installer that said
+#      it succeeded.
+#   2. The release can serve the WRONG binary. Nothing published is checksummed (there are
+#      zero sha/sig assets on the release), so a complete download of the wrong build
+#      installs silently. This is not hypothetical: the desktop app shipped its own
+#      opencode sidecar as `iris` for two weeks (#183738, #184861).
+#   3. `check_version()` tests `[ -f "$INSTALL_DIR/iris" ]`. A 216-module platform CLI and a
+#      core-only sidecar are the same answer to that question.
+#
+# The desktop app grew exactly this read-back in cli.rs (`cli_state()`) when the sidecar bug
+# was fixed. The installer — which is what EVERY new user runs — did not get it. This closes
+# that asymmetry.
+#
+# Matched on stdout AND stderr joined, on purpose: the real CLI prints help to stdout and
+# the upstream sidecar prints it to stderr, so a stdout-only check would pass today for a
+# reason unrelated to what is being asked.
+verify_installed_cli() {
+    local bin="${INSTALL_DIR}/iris"
+
+    if [ ! -x "$bin" ]; then
+        echo -e "${RED}Install failed:${NC} nothing executable at $bin"
+        echo -e "${MUTED}  The copy step reported success but left no runnable binary.${NC}"
+        return 1
+    fi
+
+    local help rc
+    help="$("$bin" --help 2>&1 </dev/null || true)"
+    rc=$?
+
+    # 137 = SIGKILL, which on macOS is Gatekeeper rejecting an unsigned binary. Name it,
+    # because "it just quits" sends people to the wrong place entirely.
+    if [ -z "$help" ]; then
+        echo -e "${RED}Install failed:${NC} the installed binary produced no output at all."
+        if [ "$(uname -s)" = "Darwin" ]; then
+            echo -e "${MUTED}  On macOS this is usually Gatekeeper killing an unsigned binary (SIGKILL/137).${NC}"
+            echo -e "${MUTED}  Try: codesign --force --deep --sign - \"$bin\"${NC}"
+        fi
+        return 1
+    fi
+
+    # Two independent markers, so renaming one command group cannot condemn a healthy install.
+    if echo "$help" | grep -qi atlas && echo "$help" | grep -qi bloq; then
+        return 0
+    fi
+
+    echo -e "${RED}Install failed:${NC} the binary at $bin runs, but it is NOT the IRIS platform CLI."
+    echo -e "${MUTED}  It is missing the platform command surface (no atlas, no bloq).${NC}"
+    echo -e "${MUTED}  This is almost always the desktop app's bundled sidecar written over your CLI.${NC}"
+    echo -e "${MUTED}  Report it against bug #183738 and do not use this binary.${NC}"
+    return 1
 }
 
 install_from_binary() {
@@ -743,6 +807,12 @@ install_from_binary() {
     if [ "$(uname -s)" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then
         codesign --force --deep --sign - "${INSTALL_DIR}/iris" 2>/dev/null || true
     fi
+
+    # --binary is the flag that caused #183738: the desktop app pointed it at its own
+    # opencode sidecar and overwrote the product on every launch. The app no longer passes
+    # it, but the flag still exists and anyone can hand it the wrong file — so this path
+    # needs the read-back MORE than the download path, not less.
+    verify_installed_cli || exit 1
 }
 
 if [ "$only_docs_mode" = "true" ]; then

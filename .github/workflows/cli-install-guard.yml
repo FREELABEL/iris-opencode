@@ -1,0 +1,82 @@
+name: CLI install guard
+
+# Refuses the reintroduction of #183738 — the defect where opening IRIS Desktop
+# UNINSTALLED the product: the app ran its installer with `--binary <its own bundled
+# opencode sidecar>`, behind a gate that compared the CLI's version (v1.3.x) to the app's
+# (desktop-v1.18.x). Two independent release series, so `1.3.252 >= 1.18.60` was false
+# forever and the overwrite ran on EVERY LAUNCH, on client machines, for two weeks.
+#
+# It was filed three times (#182922, #183738, #184861) before anyone found it, because
+# every signal available said the app was healthy — it booted, it served, it reported a
+# version, and the file it had clobbered existed at the expected path.
+#
+# WHY A SOURCE GUARD AND NOT A BUILD TEST: the artifact audit needs a macOS runner and a
+# 40-minute Tauri build, which is the wrong shape for a PR gate — so it lives on the
+# release path instead (see release-desktop.yml). This job needs no build, no network and
+# no macOS host, finishes in seconds, and answers the one question that matters at review
+# time: could this diff bring the bug back?
+#
+# Deliberately NOT filtered by paths. It runs on every PR so that "passed" and "not run"
+# can never look the same in the checks list — the same confusion that let the original
+# bug survive three filings.
+
+on:
+  push:
+    branches:
+      - 'iris/**'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    name: install path cannot reintroduce #183738
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # The falsification step below checks out a historical commit, so the guard is
+          # proven able to FAIL on this runner and not merely to pass on a healthy tree.
+          fetch-depth: 0
+
+      - name: Guard the install path
+        run: ./scripts/guard-cli-install-path.sh
+
+      - name: Prove the guard can FAIL — run it against the commit that shipped the bug
+        # A guard that has only ever been observed passing is indistinguishable from a
+        # guard that cannot fail. a5533e106 is the real pre-fix cli.rs: it carries
+        # `.arg("--binary")` and `if cli_version >= app_version`. If this step does NOT
+        # fail, the guard has stopped discriminating and the job above means nothing.
+        run: |
+          set -uo pipefail
+          PREFIX_COMMIT=a5533e106
+          if ! git cat-file -e "${PREFIX_COMMIT}^{commit}" 2>/dev/null; then
+            echo "::error::cannot reach ${PREFIX_COMMIT} — the falsification target is gone."
+            echo "Pick another pre-fix commit that contains .arg(\"--binary\") in cli.rs and update this step."
+            exit 1
+          fi
+          rm -rf /tmp/prefix && mkdir -p /tmp/prefix
+          git archive "$PREFIX_COMMIT" \
+            packages/desktop/src-tauri/src/cli.rs \
+            packages/desktop/src-tauri/src/login.rs \
+            install | tar x -C /tmp/prefix
+
+          if ./scripts/guard-cli-install-path.sh --root /tmp/prefix >/tmp/prefix.log 2>&1; then
+            echo "::error::THE GUARD PASSED ON THE BUGGY TREE. It is no longer detecting #183738."
+            cat /tmp/prefix.log
+            exit 1
+          fi
+          echo "Guard correctly rejected ${PREFIX_COMMIT}:"
+          grep -E '✗' /tmp/prefix.log || true
+
+      - name: Machine-readable result
+        if: always()
+        run: ./scripts/guard-cli-install-path.sh --json || true
