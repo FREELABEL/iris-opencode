@@ -157,9 +157,25 @@ export function resolveFfmpeg(): FfmpegResolution {
  * Throws on missing deps / conversion / transcription failure. Writes only to
  * a tmp dir and cleans up (callers decide where, if anywhere, to persist).
  */
+/**
+ * One timed span of speech. whisper.cpp computes these for every transcription; until
+ * 2026-09-14 we asked for `-otxt` only and threw them away, which is why a transcript could
+ * tell you WHAT was said and never WHEN. A span needs both.
+ */
+export type TranscriptSegment = { t0: number; t1: number; text: string }
+
 export async function transcribeLocal(
   audioPath: string,
-  opts: { language?: string; prompt?: string } = {},
+  opts: {
+    language?: string
+    prompt?: string
+    /**
+     * Receives timed segments when whisper produced them. A callback rather than a changed
+     * return type: transcribeLocal() promises a string to a dozen callers and this must not
+     * break any of them to add timings for one.
+     */
+    onSegments?: (segments: TranscriptSegment[]) => void
+  } = {},
 ): Promise<string> {
   const abs = resolve(audioPath)
   if (!existsSync(abs)) throw new Error(`File not found: ${abs}`)
@@ -206,7 +222,9 @@ export async function transcribeLocal(
     }
 
     const outBase = join(work, "transcript")
-    const args = ["-m", modelPath, "-otxt", "-of", outBase]
+    // -oj as well as -otxt: whisper has already done the work of timing every segment, and the
+    // only reason a transcript arrived as undated prose was that we never asked for the JSON.
+    const args = ["-m", modelPath, "-otxt", "-oj", "-of", outBase]
     if (opts.language) args.push("-l", opts.language)
     // Domain vocabulary. whisper.cpp caps the initial prompt at n_text_ctx/2 tokens and silently
     // truncates past that, so keep it to the same 2000 chars the server leg allows rather than
@@ -221,6 +239,31 @@ export async function transcribeLocal(
 
     const txtPath = `${outBase}.txt`
     const text = existsSync(txtPath) ? readFileSync(txtPath, "utf8") : ""
+
+    // Read the timings HERE — `work` is removed in the finally block, so anything not parsed
+    // before we return is gone. Failure to parse must not fail the transcription: the text is
+    // the contract, the segments are an enrichment.
+    if (opts.onSegments) {
+      try {
+        const jsonPath = `${outBase}.json`
+        if (existsSync(jsonPath)) {
+          const raw = JSON.parse(readFileSync(jsonPath, "utf8"))
+          const rows: any[] = raw?.transcription ?? []
+          const segments: TranscriptSegment[] = rows
+            .map((r) => ({
+              // whisper.cpp offsets are MILLISECONDS. Emitting them as seconds without
+              // dividing would put every span 1000x down the timeline.
+              t0: Math.round(((r?.offsets?.from ?? 0) / 1000) * 10) / 10,
+              t1: Math.round(((r?.offsets?.to ?? 0) / 1000) * 10) / 10,
+              text: String(r?.text ?? "").trim(),
+            }))
+            .filter((x) => x.text.length > 0)
+          if (segments.length) opts.onSegments(segments)
+        }
+      } catch {
+        /* timings are a bonus; never let them cost us the transcript */
+      }
+    }
     auditTranscription({
       provider: "whisper-local",
       policy: resolveSttPolicy(),

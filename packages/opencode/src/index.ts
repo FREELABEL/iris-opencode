@@ -114,6 +114,7 @@ import { PlatformCampaignCommand } from "./cli/cmd/platform-campaign"
 import { PlatformDaemonCommand } from "./cli/cmd/platform-daemon"
 import { PlatformChannelsCommand } from "./cli/cmd/platform-channels"
 import { PlatformObsCommand } from "./cli/cmd/platform-obs"
+import { VideoCommand } from "./cli/cmd/platform-video"
 import { PlatformDoctorCommand } from "./cli/cmd/platform-doctor"
 import { PlatformSessionsCommand } from "./cli/cmd/platform-sessions"
 import { PlatformProdCommand } from "./cli/cmd/platform-prod"
@@ -423,6 +424,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformSystemAppsScanCommand))
   .command(reg(PlatformIdeasCommand))
   .command(reg(PlatformObsCommand))
+  .command(reg(VideoCommand))
   .command(reg(PlatformCameraCommand))
   .command(reg(PlatformOnboardCommand))
   .command(reg(PlatformInitCommand))
