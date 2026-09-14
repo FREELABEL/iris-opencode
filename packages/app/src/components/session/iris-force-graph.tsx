@@ -87,7 +87,14 @@ export function IrisForceGraph(props: {
   let sim: Simulation<ForceNode, ForceEdge> | undefined
   let raf = 0
 
-  const H = () => props.height ?? 420
+  /**
+   * Height is MEASURED, not assumed.
+   *
+   * A fixed height makes the graph a slab sitting in a scroller; filling the pane makes it the
+   * pane. `props.height` stays as an override for anywhere that genuinely wants a fixed box.
+   */
+  const [height, setHeight] = createSignal(0)
+  const H = () => props.height ?? height() ?? 420
 
   /**
    * The measured width, as a signal.
@@ -104,9 +111,13 @@ export function IrisForceGraph(props: {
     if (!svgEl) return
     const ro = new ResizeObserver(([entry]) => {
       const w = Math.round(entry.contentRect.width)
+      const h = Math.round(entry.contentRect.height)
       if (w > 0) setWidth(w)
+      if (h > 0) setHeight(h)
     })
-    ro.observe(svgEl)
+    // The WRAPPER is measured, not the svg: the svg is sized from this measurement, so
+    // observing it would be a loop that settles at whatever it happened to start on.
+    ro.observe(svgEl.parentElement ?? svgEl)
     onCleanup(() => ro.disconnect())
   })
 
@@ -252,7 +263,7 @@ export function IrisForceGraph(props: {
       <svg
         ref={svgEl}
         class="iris-graph__svg"
-        height={H()}
+        height={props.height ? String(props.height) : "100%"}
         onPointerDown={(e) => onPointerDown(e)}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -321,7 +332,9 @@ export function IrisForceGraph(props: {
                   text-anchor="middle"
                   font-size="11"
                   font-weight="600"
-                  fill="#e5e7eb"
+                  /* A token, not #e5e7eb. The panel is light or dark depending on the viewer,
+                     and a hardcoded near-white label is invisible on half of them. */
+                  fill="var(--text-base)"
                   style={{ "pointer-events": "none" }}
                 >
                   {n.name.length > 18 ? n.name.slice(0, 16) + "…" : n.name}

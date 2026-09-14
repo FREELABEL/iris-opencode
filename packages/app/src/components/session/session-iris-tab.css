@@ -719,18 +719,32 @@
   color: var(--text-base);
 }
 
-/* The force graph. Its own dark ground so the node strokes read at 15% fill in either theme. */
+/*
+ * The force graph — FULL BLEED.
+ *
+ * It was a bordered, rounded, dark slab with a margin, floating inside a scrolling column. That
+ * reads as a widget embedded in a page; the graph IS the page. No border, no radius, no margin,
+ * and it takes the height its container gives it.
+ *
+ * The ground is a token, not a hardcoded near-black. This panel is light or dark depending on
+ * the viewer, and a dark slab in a light panel is the opposite of seamless.
+ */
 .iris-graph {
   position: relative;
-  margin: 0 8px 8px;
-  border: 1px solid var(--border-weaker-base);
-  border-radius: 5px;
+  flex: 1 1 auto;
+  min-height: 240px;
   overflow: hidden;
-  background: #0b0d12;
+  /* Cancel the panel's own 8px side padding. Full bleed means edge to edge, and the wrapper
+     it lives in is padded for text — which the canvas is not. */
+  margin-inline: -8px;
+  background: var(--background-panel, var(--background-base));
+  /* One hairline where it meets the strip above, so the canvas has an edge without a frame. */
+  border-top: 1px solid var(--border-weaker-base);
 }
 .iris-graph__svg {
   display: block;
   width: 100%;
+  height: 100%;
   touch-action: none; /* pointer events drive pan/zoom; let them */
   cursor: grab;
 }
@@ -743,8 +757,46 @@
   bottom: 8px;
   padding: 3px 7px;
   border-radius: 4px;
-  background: rgba(0, 0, 0, 0.72);
-  color: #e5e7eb;
+  background: var(--background-element);
+  border: 1px solid var(--border-weaker-base);
+  color: var(--text-base);
   font-size: 11px;
   pointer-events: none;
+}
+
+/*
+ * The row list, folded away.
+ *
+ * It used to run to hundreds of lines under the canvas and was the first thing your eye landed
+ * on. Closed by default: the graph is the view, the list is the reference — and it is the only
+ * thing that can show the 121 boards with no edge, so it is kept rather than dropped.
+ */
+.iris-rows {
+  margin-inline: -8px;
+  border-top: 1px solid var(--border-weaker-base);
+  max-height: 45%;
+  overflow-y: auto;
+}
+.iris-rows__summary {
+  cursor: pointer;
+  padding-inline: 16px;
+  list-style: none;
+  padding: 6px 8px;
+  font-size: 11px;
+  color: var(--text-weaker);
+  position: sticky;
+  top: 0;
+  background: var(--background-panel, var(--background-base));
+}
+.iris-rows__summary::-webkit-details-marker {
+  display: none;
+}
+.iris-rows__summary::before {
+  content: "▸ ";
+}
+.iris-rows[open] > .iris-rows__summary::before {
+  content: "▾ ";
+}
+.iris-rows__summary:hover {
+  color: var(--text-base);
 }

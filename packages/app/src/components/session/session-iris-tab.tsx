@@ -1744,7 +1744,16 @@ export function SessionIrisTab() {
         </div>
       </Show>
 
-      <div class="flex-1 min-h-0 overflow-y-auto" classList={{ hidden: !!openItem() || !!openRow() }}>
+      {/* The graph OWNS the pane: a column that does not scroll, so the canvas can take the
+          height instead of sitting in a box inside a scroller. Everything else scrolls as before. */}
+      <div
+        class="flex-1 min-h-0"
+        classList={{
+          hidden: !!openItem() || !!openRow(),
+          "overflow-y-auto": pane() !== "graph",
+          "flex flex-col overflow-hidden": pane() === "graph",
+        }}
+      >
         <Switch>
           <Match when={view() === "loading"}>
             <p class="px-2 py-2 text-12-regular text-text-weak">Loading…</p>
@@ -1896,35 +1905,41 @@ export function SessionIrisTab() {
                     connected boards cluster, and the list is the only thing that can show a
                     board with no edges — 76% of them — which a force graph renders as absence. */}
                 <Show when={rows().length}>
-                  <IrisForceGraph
-                    nodes={graphNodes()}
-                    edges={graphEdges()}
-                    height={360}
-                    onNodeClick={(n) => choose(n.id)}
-                  />
+                  <IrisForceGraph nodes={graphNodes()} edges={graphEdges()} onNodeClick={(n) => choose(n.id)} />
                 </Show>
-                <For each={rows()}>
-                  {(n) => (
-                    <div class="px-2 py-1.5 border-b border-border-weaker-base last:border-0">
-                      <div class="flex items-baseline gap-2">
-                        <span class="text-12-regular text-text-base min-w-0 flex-1 truncate">{n.name}</span>
-                        <span class="shrink-0 font-mono tabular-nums text-11-regular text-text-weaker">
-                          {n.degree}
-                        </span>
-                      </div>
-                      <For each={n.links}>
-                        {(l: any) => (
-                          <p class="text-11-regular text-text-weaker ps-3 pt-0.5 truncate">
-                            {/* Direction is drawn, because feeds_into read backwards is a
-                                different claim about the same pair. */}
-                            <span class="font-mono">{l.direction === "out" ? "→" : "←"}</span> {l.name}
-                            <span class="font-mono"> · {l.type}</span>
-                          </p>
-                        )}
-                      </For>
-                    </div>
-                  )}
-                </For>
+                {/* The list, folded away.
+                    Kept rather than dropped because 121 of 160 boards have no edge at all and a
+                    force layout renders that as absence — but it is the reference, not the view,
+                    so it is closed by default and the graph gets the room. */}
+                <details class="iris-rows shrink-0">
+                  <summary class="iris-rows__summary">
+                    {rows().length} connected {rows().length === 1 ? "board" : "boards"}, as a list
+                  </summary>
+                  <div class="iris-rows__body">
+                    <For each={rows()}>
+                      {(n) => (
+                        <div class="px-2 py-1.5 border-b border-border-weaker-base last:border-0">
+                          <div class="flex items-baseline gap-2">
+                            <span class="text-12-regular text-text-base min-w-0 flex-1 truncate">{n.name}</span>
+                            <span class="shrink-0 font-mono tabular-nums text-11-regular text-text-weaker">
+                              {n.degree}
+                            </span>
+                          </div>
+                          <For each={n.links}>
+                            {(l: any) => (
+                              <p class="text-11-regular text-text-weaker ps-3 pt-0.5 truncate">
+                                {/* Direction is drawn, because feeds_into read backwards is a
+                                    different claim about the same pair. */}
+                                <span class="font-mono">{l.direction === "out" ? "→" : "←"}</span> {l.name}
+                                <span class="font-mono"> · {l.type}</span>
+                              </p>
+                            )}
+                          </For>
+                        </div>
+                      )}
+                    </For>
+                  </div>
+                </details>
               </Match>
 
               <Match when={pane() === "catalog"}>

@@ -68,6 +68,26 @@ test("the graph is a real force layout — nodes settle, edges connect them", as
   console.log(`edges stuck at origin: ${atOrigin}`)
   expect(atOrigin).toBe(0)
 
+  /*
+   * FULL BLEED. The canvas has to use the pane, not sit in a box inside it. Measured against
+   * the panel's own width, because "it got bigger" is not "it fills the space".
+   */
+  const panel = (await page.locator("[data-slot='tabs-content']").boundingBox())!
+  console.log(`panel ${Math.round(panel.width)} | canvas ${Math.round(box.width)}x${Math.round(box.height)}`)
+  expect(box.width).toBeGreaterThan(panel.width - 4)
+  expect(box.height).toBeGreaterThan(240)
+
+  // The DEFAULT state is what people see; capture it before opening anything.
   await page.screenshot({ path: "e2e/test-results/forcegraph.png" })
+
+  // The list is FOLDED, not gone: closed by default, and still reachable.
+  const rows = page.locator(".iris-rows")
+  await expect(rows).toBeVisible()
+  expect(await rows.evaluate((el) => (el as HTMLDetailsElement).open)).toBe(false)
+  await rows.locator("summary").click()
+  expect(await rows.evaluate((el) => (el as HTMLDetailsElement).open)).toBe(true)
+  await expect(rows).toContainText("feeds_into")
+
+  await page.screenshot({ path: "e2e/test-results/forcegraph-open.png" })
   expect(errs).toEqual([])
 })
