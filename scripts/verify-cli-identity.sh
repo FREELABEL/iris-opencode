@@ -177,14 +177,26 @@ else
   # `grep -aoF cli_health IRIS` returned 1 on the same file. A symbol reported absent by
   # macOS strings is not evidence of absence, and reading it that way nearly produced the
   # conclusion that a shipped fix was missing.
+  # Match the RUST MANGLED form, not the bare word. A bare substring grep over a 30MB
+  # binary is the anti-pattern the production debugging guide warns about: it reports
+  # "present" for any incidental occurrence. Demonstrated by this very check — it PASSED
+  # against a 54-byte file whose entire content was the sentence
+  #   "not a real app, no cli_state here, no cli_health either"
+  # because that sentence contains both words. A check that a paragraph of English can
+  # satisfy is not measuring the binary.
+  #
+  # Rust mangles identifiers with a LENGTH PREFIX, so a real symbol appears as
+  # `10cli_health` / `9cli_state` (observed in situ as `de_lib3cli10cli_health`). Prose
+  # cannot produce that by accident, and it was verified to score 0 on the same sentence
+  # above while scoring 1 on the shipped binary.
   FOUND=0
-  for sym in cli_state cli_health; do
+  for sym in 9cli_state 10cli_health; do
     grep -aqF "$sym" "$APP_BIN" 2>/dev/null && FOUND=$((FOUND + 1))
   done
   if [ "$FOUND" -eq 2 ]; then
-    pass app_has_identity_gate "the shipped binary contains cli_state and cli_health — it gates on IDENTITY, not on a version comparison across two release series"
+    pass app_has_identity_gate "the shipped binary carries the Rust symbols cli_state and cli_health — it gates on IDENTITY, not on a version comparison across two release series"
   else
-    fail app_has_identity_gate "found $FOUND of 2 identity-gate symbols (cli_state, cli_health) in the shipped binary. This build predates the #184861 fix and will overwrite the CLI on every launch."
+    fail app_has_identity_gate "found $FOUND of 2 identity-gate symbols (Rust-mangled 9cli_state / 10cli_health) in the shipped binary. This build predates the #184861 fix and will overwrite the CLI on every launch."
   fi
 fi
 
