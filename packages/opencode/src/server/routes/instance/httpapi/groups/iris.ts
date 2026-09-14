@@ -430,6 +430,7 @@ export const IrisPaths = {
   sites: `${root}/sites/:bloqID`,
   agentTasks: `${root}/agents/:agentID/tasks`,
   playbookDoc: `${root}/playbooks/doc/:name`,
+  catalog: `${root}/catalog`,
   pageDoc: `${root}/page/:pageID`,
   pageSave: `${root}/page/:pageID/save`,
   hive: `${root}/hive`,
@@ -550,6 +551,41 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "List playbooks",
           description:
             "BOTH the board's attached playbooks and the account's full set, each flagged. Never one or the other — the TUI shipped either/or and each half hid something.",
+        }),
+      ),
+      HttpApiEndpoint.get("catalog", IrisPaths.catalog, {
+        query: PageQuery,
+        success: described(
+          Schema.Struct({
+            ...Measured,
+            ...Paged,
+            catalog: Schema.Array(
+              Schema.Struct({
+                type: Schema.String,
+                name: Schema.String,
+                category: Schema.optional(Schema.String),
+                description: Schema.optional(Schema.String),
+                mode: described(
+                  Schema.optional(Schema.String),
+                  "brokered | key | bridge | oauth — what connecting actually involves. A key integration wants a credential you hold; brokered and oauth open a browser round trip; bridge talks to an app on this Mac rather than a service.",
+                ),
+                oauthRequired: Schema.Boolean,
+                functionsCount: Schema.optional(Schema.Finite),
+                connected: Schema.Boolean,
+                logoUrl: Schema.optional(Schema.String),
+                command: Schema.String,
+              }).annotate({ identifier: "IrisCatalogEntry" }),
+            ),
+            attribution: Schema.optional(Schema.String),
+          }).annotate({ identifier: "IrisCatalogResponse" }),
+          "Integrations you could add, and what adding each one takes",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.catalog",
+          summary: "Integrations available to add",
+          description:
+            "Already-connected rows are dropped — this answers \"what can I add\", and the ones you have are the other tabs.",
         }),
       ),
       HttpApiEndpoint.get("pageDoc", IrisPaths.pageDoc, {

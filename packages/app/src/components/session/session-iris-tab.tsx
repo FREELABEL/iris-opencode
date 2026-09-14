@@ -60,6 +60,7 @@ interface Measured {
  * read `d["atlas"]` for the schemas pane and found nothing, which renders as an empty board.
  */
 function arrayKeyFor(pane: string): string {
+  if (pane === "catalog") return "catalog"
   if (pane === "atlas") return "lists"
   if (pane === "hive") return "nodes"
   if (pane === "inbox") return "items"
@@ -188,6 +189,17 @@ function describeFields(surface: string, r: any): { title: string; fields: [stri
         ["description", r.description], ["updated", r.updatedAt],
       ]),
       command: r.slug ? `iris pages sites show ${r.slug}` : undefined,
+    }
+  if (surface === "catalog")
+    return {
+      title: r.name,
+      fields: fieldsOf([
+        ["type", r.type], ["category", r.category],
+        // The MODE is the thing worth knowing before you start: these are not the same job.
+        ["connect by", r.mode], ["opens a browser", r.oauthRequired],
+        ["functions", r.functionsCount], ["about", r.description],
+      ]),
+      command: r.command,
     }
   if (surface === "inbox")
     return {
@@ -418,6 +430,9 @@ const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
     { id: "project", label: "Project", pane: "integrations", path: (b) => `/iris/integrations/${b}?scope=project` },
     { id: "organization", label: "Org", pane: "integrations", path: (b) => `/iris/integrations/${b}?scope=organization` },
     { id: "user", label: "Personal", pane: "integrations", path: (b) => `/iris/integrations/${b}?scope=user` },
+    // "What can I add" is a different question from "what do I have", so it is a view rather
+    // than a "+" that opens a modal over the list you were reading.
+    { id: "add", label: "+ Add", pane: "catalog", path: () => `/iris/catalog` },
   ],
   hive: [
     { id: "machines", label: "Machines", pane: "hive", path: () => `/iris/hive` },
@@ -1753,6 +1768,33 @@ export function SessionIrisTab() {
                         {st.owner ? ` · ${st.owner}` : ""}
                         {st.requiresAuth ? " · gated" : ""}
                       </p>
+                    </button>
+                  )}
+                </For>
+              </Match>
+
+              {/* WHAT YOU COULD ADD. Same mark treatment as the connected list, greyed —
+                  these are real services you do not have yet, not a different kind of thing. */}
+              <Match when={pane() === "catalog"}>
+                <For each={rows()}>
+                  {(c) => (
+                    <button type="button" class="w-full text-start flex items-center gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow("catalog", c))}>
+                      <span class="iris-int__mark iris-int__mark--off shrink-0" title={c.type}>
+                        <Show when={c.logoUrl}>
+                          <img class="iris-int__logo" src={c.logoUrl} alt="" aria-hidden="true" loading="lazy" decoding="async" onError={(e) => e.currentTarget.remove()} />
+                        </Show>
+                        {providerMark(c.type, c.name)}
+                      </span>
+                      <span class="min-w-0 flex-1">
+                        <span class="block text-12-regular text-text-base truncate">{c.name}</span>
+                        <span class="block text-11-regular text-text-weaker truncate">
+                          {c.category}
+                          {/* Says what connecting involves, because a key and an OAuth round
+                              trip are different jobs and only one of them needs a browser. */}
+                          {c.mode ? ` · ${c.mode}` : ""}
+                          {c.functionsCount ? ` · ${c.functionsCount} functions` : ""}
+                        </span>
+                      </span>
                     </button>
                   )}
                 </For>

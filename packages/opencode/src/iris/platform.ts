@@ -1237,6 +1237,86 @@ export async function fetchAgentTasks(
 
 export type IntegrationScope = "project" | "organization" | "user"
 
+export interface CatalogEntry {
+  type: string
+  name: string
+  category?: string
+  description?: string
+  /** "brokered" | "key" | "bridge" | "oauth" — what connecting it actually involves. */
+  mode?: string
+  oauthRequired: boolean
+  functionsCount?: number
+  connected: boolean
+  logoUrl?: string
+  /** What to type. Built from the mode, because the steps genuinely differ. */
+  command: string
+}
+
+/**
+ * Everything you COULD connect, and what connecting each one takes.
+ *
+ * The connect step is not uniform and pretending it is would send people down the wrong path:
+ * a `key` integration wants a credential you already hold, `brokered` and `oauth` open a browser
+ * round trip, and `bridge` talks to an app on this Mac rather than to a service at all. The mode
+ * is on the row for that reason.
+ *
+ * Already-connected rows are dropped: this list answers "what can I add", and the ones you have
+ * are the other tabs.
+ */
+export async function fetchCatalog(): Promise<PlatformResult<{ catalog: CatalogEntry[]; attribution?: string }>> {
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { catalog: [] } }
+
+  const logoMap = await fetchIntegrationLogos()
+  if (!_catalogCache.items.length) return { measured: false, reason: "integration catalogue unavailable", data: { catalog: [] } }
+
+  /*
+   * WHAT YOU HAVE, asked of your own account — not read off the catalogue.
+   *
+   * The catalogue carries an `is_connected` flag and it is false for all 79 rows regardless,
+   * so trusting it offered five integrations this account already has: courtlistener, gmail,
+   * google-calendar, google-drive, servis-ai. A field that is present, plausible and always
+   * the same value is worse than a missing one — it looks like an answer.
+   *
+   * A failure to read the connected set is NOT treated as "nothing is connected": that would
+   * silently restore the same wrong list. The catalogue is returned unfiltered with a reason
+   * saying so, which is visible rather than reassuring.
+   */
+  const mine = await fetchIntegrations({ scope: "all" })
+  const connected = new Set(mine.data.integrations.map((i) => i.type).filter(Boolean) as string[])
+
+  const catalog: CatalogEntry[] = _catalogCache.items
+    .filter((x: any) => !connected.has(String(x?.type)))
+    .map((x: any) => {
+      const type = String(x?.type ?? "")
+      const mode = _catalogCache.modes[type]
+      return {
+        type,
+        name: String(x?.name ?? type),
+        category: x?.category ?? undefined,
+        description: x?.description ?? undefined,
+        mode,
+        oauthRequired: Boolean(x?.oauth_required),
+        functionsCount: typeof x?.functions_count === "number" ? x.functions_count : undefined,
+        connected: false,
+        logoUrl: logoFor(logoMap.logos, type),
+        // `iris connect <type>` is the real command — checked against the CLI, not invented.
+        // It handles the OAuth and key paths itself, which is why there is one command and not
+        // four; the mode is shown so you know what it is about to do.
+        command: `iris connect ${type}`,
+      }
+    })
+    .sort((a, b) => (a.category ?? "").localeCompare(b.category ?? "") || a.name.localeCompare(b.name))
+
+  return {
+    measured: true,
+    reason: mine.measured
+      ? undefined
+      : "could not read your existing integrations, so this list may offer things you already have",
+    data: { catalog, attribution: logoMap.attribution },
+  }
+}
+
 export interface PageDoc {
   id: number
   title: string
@@ -1380,11 +1460,13 @@ export interface Integration {
  * 404 on raichu.
  */
 /** Health, usage and function counts from the same catalogue call — one request, not three. */
-let _catalogCache: { health: Record<string, any>; usage: Record<string, any>; functions: Record<string, number> } = {
-  health: {},
-  usage: {},
-  functions: {},
-}
+let _catalogCache: {
+  health: Record<string, any>
+  usage: Record<string, any>
+  functions: Record<string, number>
+  items: any[]
+  modes: Record<string, string>
+} = { health: {}, usage: {}, functions: {}, items: [], modes: {} }
 
 let _logoCache: { logos: Record<string, string>; attribution?: string } | null = null
 export async function fetchIntegrationLogos(): Promise<{ logos: Record<string, string>; attribution?: string }> {
@@ -1400,6 +1482,8 @@ export async function fetchIntegrationLogos(): Promise<{ logos: Record<string, s
       functions: Object.fromEntries(
         (Array.isArray(j?.data) ? j.data : []).map((x: any) => [String(x?.type), Number(x?.functions_count ?? 0)]),
       ),
+      items: Array.isArray(j?.data) ? j.data : [],
+      modes: j?.modes && typeof j.modes === "object" ? j.modes : {},
     }
     // CACHE ONLY A SUCCESS.
     //
