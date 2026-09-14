@@ -6,6 +6,7 @@ import { Dialog } from "@opencode-ai/ui/dialog"
 import { List } from "@opencode-ai/ui/list"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { SegmentedControlV2, SegmentedControlItemV2 } from "@opencode-ai/ui/v2/segmented-control-v2"
+import { IrisForceGraph, type ForceEdge, type ForceNode } from "./iris-force-graph"
 import { useServerSDK } from "@/context/server-sdk"
 import { usePlatform } from "@/context/platform"
 
@@ -808,6 +809,49 @@ export function SessionIrisTab() {
       pane: pane(),
     }),
   )
+
+  /**
+   * The graph rows, turned back into nodes and edges.
+   *
+   * Derived rather than fetched separately: the /iris/graph payload already carries every link
+   * from both ends, so a second call would be a second source of truth about the same 45 edges.
+   * Deduplicated on the unordered pair, because an edge appears on both of its endpoints' rows
+   * and drawing it twice doubles its apparent weight.
+   */
+  const graphNodes = createMemo<ForceNode[]>(() =>
+    (rows() as any[]).map((r) => ({
+      id: r.id,
+      name: r.name,
+      degree: r.degree,
+      // Elon sizes by meaning; degree is the signal we have. Clamped so a hub of 10 does not
+      // swallow its neighbours and a single link is still a target you can hit.
+      size: Math.max(12, Math.min(26, 11 + r.degree * 1.5)),
+    })),
+  )
+
+  const graphEdges = createMemo<ForceEdge[]>(() => {
+    const known = new Set((rows() as any[]).map((r) => r.id))
+    const seen = new Set<string>()
+    const out: ForceEdge[] = []
+    for (const r of rows() as any[]) {
+      for (const l of r.links ?? []) {
+        // Only edges whose BOTH ends are on screen. A link to a board on the next page would
+        // otherwise anchor at the origin and read as a real relation to nothing.
+        if (!known.has(l.id)) continue
+        const [a, b] = r.id < l.id ? [r.id, l.id] : [l.id, r.id]
+        const key = `${a}-${b}-${l.type}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        // Direction preserved from the row that owns the outbound end.
+        out.push(
+          l.direction === "out"
+            ? { source: r.id, target: l.id, type: l.type }
+            : { source: l.id, target: r.id, type: l.type },
+        )
+      }
+    }
+    return out
+  })
 
   const activeBloqName = createMemo(
     () => (bloqs.latest ?? bloqs())?.bloqs?.find((b) => b.id === activeBloq())?.name ?? "Select a board",
@@ -1846,6 +1890,18 @@ export function SessionIrisTab() {
                       connect to nothing
                     </p>
                   )}
+                </Show>
+                {/* THE PICTURE, then the list.
+                    Both, because they answer different halves: the layout shows how the
+                    connected boards cluster, and the list is the only thing that can show a
+                    board with no edges — 76% of them — which a force graph renders as absence. */}
+                <Show when={rows().length}>
+                  <IrisForceGraph
+                    nodes={graphNodes()}
+                    edges={graphEdges()}
+                    height={360}
+                    onNodeClick={(n) => choose(n.id)}
+                  />
                 </Show>
                 <For each={rows()}>
                   {(n) => (

@@ -718,3 +718,33 @@
 .iris-search__clear:hover {
   color: var(--text-base);
 }
+
+/* The force graph. Its own dark ground so the node strokes read at 15% fill in either theme. */
+.iris-graph {
+  position: relative;
+  margin: 0 8px 8px;
+  border: 1px solid var(--border-weaker-base);
+  border-radius: 5px;
+  overflow: hidden;
+  background: #0b0d12;
+}
+.iris-graph__svg {
+  display: block;
+  width: 100%;
+  touch-action: none; /* pointer events drive pan/zoom; let them */
+  cursor: grab;
+}
+.iris-graph__svg:active {
+  cursor: grabbing;
+}
+.iris-graph__tip {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  padding: 3px 7px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.72);
+  color: #e5e7eb;
+  font-size: 11px;
+  pointer-events: none;
+}
