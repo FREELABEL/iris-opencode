@@ -1,6 +1,6 @@
 ﻿# Load Install-IrisDaemonSource FROM install.ps1 — testing a copy proves nothing
 # about what ships.
-$ps1  = Join-Path $PSScriptRoot ".." "install.ps1"
+$ps1  = Join-Path (Join-Path $PSScriptRoot "..") "install.ps1"   # 3-arg Join-Path is pwsh 7 only
 $text = Get-Content -Raw $ps1
 $start = $text.IndexOf("function Install-IrisDaemonSource")
 if ($start -lt 0) { "  ✗ Install-IrisDaemonSource not found in install.ps1"; exit 1 }
