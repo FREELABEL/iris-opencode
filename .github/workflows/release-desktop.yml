@@ -539,6 +539,41 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Audit CLI identity in the published bundle
+        # verify-shipped-app.sh above proves the app BOOTS AND SERVES. That is necessary and
+        # it is STRUCTURALLY BLIND to #183738, because upstream opencode boots and serves
+        # too: HTTP 200, a healthy engine, a provider list, a version string — the wrong
+        # binary produces every one of those identically. This step asks the one question
+        # none of them can answer: WHICH BINARY IS IT.
+        #
+        # #183738 is the defect where opening IRIS Desktop uninstalled the product. The app
+        # ran its installer with `--binary <its own bundled opencode sidecar>`, behind a gate
+        # comparing the CLI's version (v1.3.x) to the app's (desktop-v1.18.x) — independent
+        # series, so the comparison could never be satisfied and the overwrite ran on EVERY
+        # LAUNCH, on client machines, for two weeks. Filed three times before anyone found it.
+        #
+        # Placed HERE, not in the build job, on purpose: `macos` and `windows` are
+        # continue-on-error and `publish` runs `if: always()`, so a failure in either is
+        # advisory. This job is the only fail-closed gate — a release that does not pass
+        # stays a prerelease and never reaches the front page.
+        run: |
+          set -uo pipefail
+          chmod +x scripts/verify-cli-identity.sh
+          WORK="$(mktemp -d)"
+          TAG="${{ steps.version.outputs.tag }}"
+          URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/IRIS-tauri-darwin-arm64.zip"
+          echo "auditing $URL"
+          curl -sL -o "$WORK/app.zip" "$URL" || { echo "::error::could not download the published bundle"; exit 1; }
+          # A 404 page is a few KB and unzips to nothing; catch that before blaming the audit.
+          SIZE=$(( $(stat -f%z "$WORK/app.zip" 2>/dev/null || stat -c%s "$WORK/app.zip") / 1000000 ))
+          [ "$SIZE" -gt 10 ] || { echo "::error::published zip is only ${SIZE}MB — not an app bundle"; exit 1; }
+          unzip -q -o "$WORK/app.zip" -d "$WORK/x" || { echo "::error::published zip will not unzip"; exit 1; }
+          APP="$(find "$WORK/x" -maxdepth 2 -name '*.app' | head -1)"
+          [ -n "$APP" ] || { echo "::error::no .app bundle inside the published zip"; exit 1; }
+          IRIS_APP="$APP" ./scripts/verify-cli-identity.sh --bundle-only
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Promote — it passed
         # Only reached when the step above exits 0.
         run: |
