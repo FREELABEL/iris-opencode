@@ -472,7 +472,13 @@ export const IrisApi = HttpApi.make("iris").add(
         }),
       ),
       HttpApiEndpoint.get("atlas", IrisPaths.atlas, {
-        query: PageQuery,
+        query: Schema.Struct({
+          ...PageQuery.fields,
+          q: described(
+            Schema.optional(Schema.String),
+            "Filter this board's lists and items by title, description or BODY. Applied to the whole board before paging, so the count describes the matches and not a page. NOT the platform's global search, which is account-wide and would put another board's items under this board's heading.",
+          ),
+        }),
         params: { bloqID: Schema.NumberFromString },
         success: described(AtlasResponse, "Atlas lists and items for one bloq"),
       }).annotateMerge(

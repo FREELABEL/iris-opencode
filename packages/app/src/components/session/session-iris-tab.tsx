@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createResource, createSignal, For, Match, Show, Switch } from "solid-js"
+import { createEffect, createMemo, createResource, createSignal, For, Match, onCleanup, Show, Switch } from "solid-js"
 import { marked } from "marked"
 import "./session-iris-tab.css"
 import { pageSummary, type PageEnvelope } from "./use-paged-surface"
@@ -697,6 +697,23 @@ export function SessionIrisTab() {
     })(),
   )
 
+  /**
+   * The Atlas search box.
+   *
+   * `query` is what is typed; `applied` is what has been asked for. Separating them is what
+   * stops a keystroke becoming a request: the resource keys off `applied`, which trails the
+   * input by a debounce, so typing "accounting" fetches once rather than ten times.
+   */
+  const [query, setQuery] = createSignal("")
+  const [applied, setApplied] = createSignal("")
+  let debounce: ReturnType<typeof setTimeout> | undefined
+  createEffect(() => {
+    const q = query()
+    clearTimeout(debounce)
+    debounce = setTimeout(() => setApplied(q), 250)
+  })
+  onCleanup(() => clearTimeout(debounce))
+
   const resolved = createMemo(() => resolvePane(surface(), subviews()[surface()]))
   /** Which renderer draws the rows, and which array key they arrive under. */
   const pane = createMemo(() => resolved().pane)
@@ -719,13 +736,16 @@ export function SessionIrisTab() {
       const id = activeBloq()
       // The sub-view is IN the key. Without it, switching Atlas › Lists to Atlas › Schemas
       // changes nothing the resource can see and the old rows stay on screen under the new tab.
-      return id ? ([base(), id, surface(), resolved().sub?.id ?? "", page()] as const) : undefined
+      return id ? ([base(), id, surface(), resolved().sub?.id ?? "", page(), applied()] as const) : undefined
     },
-    async ([, id, , , pageNo], info): Promise<SurfacePayload> => {
+    async ([, id, , , pageNo, q], info): Promise<SurfacePayload> => {
       const { pane: which, path } = resolved()
       const url = path(id)
       const sep = url.includes("?") ? "&" : "?"
-      const res = await doFetch(`${url}${sep}page=${pageNo}&perPage=25`)
+      // The query goes to the SERVER, which filters the whole board before paging. Filtering
+      // the rows already on screen would leave the footer counting a set it never searched.
+      const search = which === "atlas" && q ? `&q=${encodeURIComponent(q)}` : ""
+      const res = await doFetch(`${url}${sep}page=${pageNo}&perPage=25${search}`)
       // Stamped with the pane it was fetched FOR, so a held payload can be told apart from an
       // answer about what is currently on screen. See surfaceView.
       const next = { ...((await res.json()) as SurfacePayload), __pane: which } as SurfacePayload
@@ -983,6 +1003,9 @@ export function SessionIrisTab() {
     lastSubject = subject
     setOpenItem(null)
     setOpenRow(null)
+    // A query for one board is not a query for the next.
+    setQuery("")
+    setApplied("")
     // Paging resets with the thing being paged. Without this, switching surface while on page 3
     // asks the next surface for ITS page 3 and silently skips its first rows.
     setPage(1)
@@ -1122,6 +1145,33 @@ export function SessionIrisTab() {
             </For>
           </div>
         )}
+      </Show>
+
+      {/* SEARCH, for the pane that has enough in it to need one: a board's lists run to
+          hundreds of items and the reader is the only way in. Server-side — see the `q` param. */}
+      <Show when={pane() === "atlas" && !openItem() && !openRow()}>
+        <div class="iris-search shrink-0">
+          <input
+            class="iris-search__input"
+            type="search"
+            placeholder="Search this board's lists and items…"
+            value={query()}
+            onInput={(e) => setQuery(e.currentTarget.value)}
+          />
+          <Show when={applied()}>
+            <button
+              type="button"
+              class="iris-search__clear"
+              title="Clear"
+              onClick={() => {
+                setQuery("")
+                setApplied("")
+              }}
+            >
+              clear
+            </button>
+          </Show>
+        </div>
       </Show>
 
       {/* THE RECORD PANEL — for the surfaces whose rows are records rather than prose.
@@ -1974,7 +2024,14 @@ export function SessionIrisTab() {
           {/* Only reachable when measured===true — a genuine empty surface. */}
           <Match when={view() === "empty"}>
             <p class="px-2 py-2 text-12-regular text-text-weak">
-              Nothing in {paneLabel()}{boardScoped() ? " on this board" : ""}.
+              {/* "This board is empty" and "your search matched nothing" are different facts,
+                  and the first one is alarming when it is not true. */}
+              <Show
+                when={pane() === "atlas" && applied()}
+                fallback={`Nothing in ${paneLabel()}${boardScoped() ? " on this board" : ""}.`}
+              >
+                No list or item on this board matches “{applied()}”.
+              </Show>
             </p>
           </Match>
         </Switch>

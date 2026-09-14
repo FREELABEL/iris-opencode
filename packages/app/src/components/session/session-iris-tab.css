@@ -680,3 +680,41 @@
   outline: none;
   border-color: var(--border-weak-base);
 }
+
+/* Search, under the sub-nav. Borderless to match the strips above it; the ground does the work. */
+.iris-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px 6px;
+}
+.iris-search__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  appearance: none;
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 4px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--border-weaker-base);
+  background: var(--background-element);
+  color: var(--text-base);
+}
+.iris-search__input::placeholder {
+  color: var(--text-weaker);
+}
+.iris-search__input:focus {
+  outline: none;
+  border-color: var(--border-weak-base);
+}
+.iris-search__clear {
+  appearance: none;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-weaker);
+}
+.iris-search__clear:hover {
+  color: var(--text-base);
+}

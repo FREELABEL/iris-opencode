@@ -243,6 +243,41 @@ export interface AtlasList {
   items: AtlasItem[]
 }
 
+/**
+ * Filter a board's Atlas by a query.
+ *
+ * APPLIED TO THE WHOLE BOARD, not to a page. fetchAtlas pulls every list and item in one call
+ * and pagination slices afterwards, so filtering here searches everything and the count over
+ * the results is a true count — filtering the 25 rows a client happens to hold would report
+ * "3 of 40" about a set it never looked at.
+ *
+ * Deliberately NOT the platform's global search: that is Typesense across the whole account
+ * and would put another board's items under this board's heading, which is the exposure three
+ * separate surfaces were fixed for today (#185117, #185118, #185137).
+ *
+ * A list matches on its own name OR on any item. When the LIST matched, its items are kept
+ * whole — you asked for the list. When only items matched, the list is narrowed to them, so
+ * what is on screen is the reason it is on screen.
+ */
+export function filterAtlas(lists: AtlasList[], query: string): AtlasList[] {
+  const q = query.trim().toLowerCase()
+  if (!q) return lists
+  const hit = (s: unknown) => typeof s === "string" && s.toLowerCase().includes(q)
+
+  const out: AtlasList[] = []
+  for (const l of lists) {
+    if (hit(l.name)) {
+      out.push(l)
+      continue
+    }
+    // Body as well as title: "the item that mentions Servis" is the search people actually run,
+    // and a title-only match cannot answer it.
+    const items = (l.items ?? []).filter((i) => hit(i.title) || hit(i.content) || hit(i.description))
+    if (items.length) out.push({ ...l, items })
+  }
+  return out
+}
+
 export async function fetchAtlas(bloqId: number): Promise<PlatformResult<{ lists: AtlasList[] }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { lists: [] } }

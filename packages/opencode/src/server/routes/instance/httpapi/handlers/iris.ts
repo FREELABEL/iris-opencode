@@ -1,7 +1,7 @@
 import { Effect } from "effect"
 import { paginate } from "@/iris/pagination"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
-import { checkAuth, fetchAgents, fetchAtlas, fetchBloqs, fetchHiveNodes, fetchInbox, fetchLeads, fetchIntegrations, fetchPages, fetchPlaybooks, fetchRecords, fetchSchemas, fetchSites, fetchAgentTasks, fetchPlaybookDoc, fetchPageDoc, savePageDoc, fetchCatalog } from "@/iris/platform"
+import { filterAtlas, checkAuth, fetchAgents, fetchAtlas, fetchBloqs, fetchHiveNodes, fetchInbox, fetchLeads, fetchIntegrations, fetchPages, fetchPlaybooks, fetchRecords, fetchSchemas, fetchSites, fetchAgentTasks, fetchPlaybookDoc, fetchPageDoc, savePageDoc, fetchCatalog } from "@/iris/platform"
 import { RootHttpApi } from "../api"
 
 /**
@@ -90,10 +90,12 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
     )
 
     const atlas = Effect.fn("IrisHttpApi.atlas")(
-      (ctx: { params: { bloqID: number }; query: { page?: number; perPage?: number } }) =>
+      (ctx: { params: { bloqID: number }; query: { page?: number; perPage?: number; q?: string } }) =>
         Effect.promise(() => fetchAtlas(ctx.params.bloqID)).pipe(
           Effect.map((r) => {
-            const { items, meta } = pageOf(r, r.data.lists, ctx.query)
+            // Filter BEFORE paging — see filterAtlas. Filtering after would count a page.
+            const lists = ctx.query.q ? filterAtlas(r.data.lists, ctx.query.q) : r.data.lists
+            const { items, meta } = pageOf(r, lists, ctx.query)
             return { ...meta, lists: items }
           }),
         ),
