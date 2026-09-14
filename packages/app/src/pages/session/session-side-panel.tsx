@@ -36,6 +36,7 @@ import { SessionIrisTab } from "@/components/session/session-iris-tab"
 const reviewTabID = "session-side-panel-review-tab"
 const reviewTabPanelID = "session-side-panel-review-tabpanel"
 const fileBrowserTabPanelID = "session-side-panel-file-browser-tabpanel"
+const irisTabPanelID = "session-side-panel-iris-tabpanel"
 import { SessionContextTab, SortableTab, SortableTabV2, FileVisual } from "@/components/session"
 import { OpenInAppV2 } from "@/components/session/open-in-app-v2"
 import { useCommand } from "@/context/command"
@@ -242,6 +243,19 @@ export function SessionSidePanel(props: {
     const active = activeTab()
     return active !== "review" && active !== "context" && active !== "empty"
   })
+  // Same shape as fileBrowserMounted above, for the same reason and one more.
+  //
+  // IRIS used to render under `<Show when={activeTab() === "iris"}>`, so switching away
+  // DISPOSED the whole panel and switching back built it again from nothing: every
+  // resource refetched, the d3 simulation re-seeded from phyllotaxis, scroll and search
+  // reset. That rebuild is the black flash — an empty panel on the dark ground, held for
+  // as long as the round trip takes.
+  //
+  // Latches on first visit rather than mounting with the panel: the IRIS tab is permanent
+  // now, and mounting it eagerly would fire every platform fetch at startup for people who
+  // never open it. Once opened it stays, and is hidden with `hidden`/`inert` instead.
+  const irisMounted = createMemo<boolean>((prev) => prev || activeTab() === "iris", false)
+  const irisVisible = createMemo(() => activeTab() === "iris")
   const openFileKeybind = createMemo(() => command.keybindParts("file.open"))
   const closeTabKeybind = createMemo(() => command.keybindParts("tab.close"))
   const [store, setStore] = createStore({
@@ -508,12 +522,19 @@ export function SessionSidePanel(props: {
                             </Tabs.Content>
                           </Show>
 
-                          <Show when={activeTab() === "iris"}>
-                            <Tabs.Content value="iris" class="flex flex-col h-full overflow-hidden contain-strict">
+                          <Show when={irisMounted()}>
+                            <div
+                              id={irisTabPanelID}
+                              role="tabpanel"
+                              data-slot="tabs-content"
+                              class="flex flex-col h-full overflow-hidden contain-strict"
+                              classList={{ hidden: !irisVisible() }}
+                              inert={!irisVisible() || undefined}
+                            >
                               <div class="relative pt-2 flex-1 min-h-0 overflow-hidden">
                                 <SessionIrisTab />
                               </div>
-                            </Tabs.Content>
+                            </div>
                           </Show>
 
                           <Show when={activeTab() === "context"}>
@@ -754,12 +775,19 @@ export function SessionSidePanel(props: {
                           </Tabs.Content>
                         </Show>
 
-                        <Show when={activeTab() === "iris"}>
-                          <Tabs.Content value="iris" class="flex flex-col h-full overflow-hidden contain-strict">
+                        <Show when={irisMounted()}>
+                          <div
+                            id={irisTabPanelID}
+                            role="tabpanel"
+                            data-slot="tabs-content"
+                            class="flex flex-col h-full overflow-hidden contain-strict"
+                            classList={{ hidden: !irisVisible() }}
+                            inert={!irisVisible() || undefined}
+                          >
                             <div class="relative pt-2 flex-1 min-h-0 overflow-hidden">
                               <SessionIrisTab />
                             </div>
-                          </Tabs.Content>
+                          </div>
                         </Show>
 
                         <Show when={activeTab() === "context"}>
