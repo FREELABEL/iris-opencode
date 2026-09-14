@@ -1,6 +1,8 @@
 import { describeListScope } from "./leads-scope"
 import { cmd } from "./cmd"
 import { PulseCheckCommand } from "./platform-pulse-check"
+import { summariseOutgoing, collectOutgoing, healOutgoing, type OutgoingReport } from "./comms-outgoing-health"
+import { probeBridge } from "./platform-mail"
 import { productCommand } from "./product-command"
 import * as prompts from "./clack"
 import { UI } from "../ui"
@@ -13382,6 +13384,11 @@ export const PlatformPulseCommand = productCommand({
       .option("status", { describe: "filter by lead status (admin mode)", type: "string", default: "Won,Active,In Negotiation,Negotiating" })
       .option("bloq", { alias: "b", describe: "filter by bloq ID (admin mode)", type: "number" })
       .option("notify", { describe: "send pulse summary to yourself via iMessage", type: "boolean", default: false })
+      // Outgoing health repairs itself by default. The only thing it repairs is a send we
+      // ALREADY know the lead for — putting a row back where the record says it belongs —
+      // so leaving it manual would mean the audit trail stays wrong until someone reads a
+      // line of output, which is precisely how it stayed wrong before.
+      .option("heal", { describe: "repair unlogged sends that already name their lead", type: "boolean", default: true })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     if (!(await requireAuth())) return
@@ -13489,6 +13496,37 @@ export const PlatformPulseCommand = productCommand({
 
         if (render) console.log()
 
+        // ── OUTGOING CHANNELS ────────────────────────────────────────────────
+        // Everything above measures what came IN or what sits in the CRM. Nothing measured
+        // whether we can still SEND, or whether what we sent reached the record — so a
+        // misattributed client email on 2026-09-14 was found only by reading CLI output
+        // after the fact (EPIC #185439). Cheapest question first: the local spool is free.
+        let outgoing: OutgoingReport | null = null
+        try {
+          outgoing = summariseOutgoing(await collectOutgoing(probeBridge))
+
+          if (outgoing.healable.length && args.heal) {
+            const healed = await healOutgoing(outgoing)
+            if (render && healed.repaired) {
+              console.log(`  ${bold("Outgoing")}           ${success(`repaired ${healed.repaired} unlogged send(s)`)}`)
+            }
+            for (const m of healed.messages) lines.push(`Outgoing: ${m}`)
+            // Re-read so the printed state is what is true AFTER the repair, not before it.
+            outgoing = summariseOutgoing(await collectOutgoing(probeBridge))
+          }
+
+          if (render) {
+            for (const l of outgoing.lines) console.log(`  ${l.startsWith("Unlogged sends") && !outgoing.ok ? highlight(l) : dim(l)}`)
+            if (outgoing.needsLead.length) {
+              console.log(`  ${dim("→ say who they were for:")} ${highlight("iris mail audit --backfill --lead <id>")}`)
+            }
+            console.log()
+          }
+          for (const l of outgoing.lines) lines.push(l)
+        } catch {
+          // A health check that crashes reports nothing, which is worse than reporting less.
+        }
+
         // Next step suggestion — only ever from a signal that was actually measured.
         // The old filter used `score !== undefined`, which lets null through, and
         // then sorted it as `?? 100`. The same null was therefore worth 0 in the
@@ -13552,7 +13590,25 @@ export const PlatformPulseCommand = productCommand({
         }
 
         if (args.json) {
-          await writeJson({ scope: "user", user_id: userId, score, band, signals, timestamp: new Date().toISOString() })
+          await writeJson({
+            scope: "user",
+            user_id: userId,
+            score,
+            band,
+            signals,
+            // The machine contract gets the outbound half too — a monitor that can read the
+            // score but not "two sends never reached the ledger" is reading half the health.
+            outgoing: outgoing
+              ? {
+                  ok: outgoing.ok,
+                  unlogged: outgoing.healable.length + outgoing.needsLead.length,
+                  needs_lead: outgoing.needsLead.length,
+                  bridge_ok: outgoing.bridgeOk,
+                  senders_usable: outgoing.sendersKnown ? outgoing.sendersUsable : null,
+                }
+              : null,
+            timestamp: new Date().toISOString(),
+          })
         }
         return
       } catch (err: any) {
