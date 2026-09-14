@@ -668,6 +668,47 @@ export interface Lead {
   keywords?: string
 }
 
+/**
+ * Anything fl-api hands us, as a string the wire schema will accept — or nothing.
+ *
+ * ## The outage this exists to end
+ *
+ * Every board that had leads returned HTTP 400 and rendered an empty pane:
+ *
+ *   Expected string | undefined, got {"source":null} at ["leads"][0]["keywords"]
+ *
+ * `keywords` came back as an OBJECT on some rows. The mapper handled arrays and scalars and
+ * passed everything else through untouched, the response schema rejected the payload, and
+ * Effect failed the WHOLE request — 50 leads lost to one field on one row.
+ *
+ * It survived because of how it failed. The 21 boards with no leads returned a valid empty
+ * 200, so the surface looked healthy everywhere anyone happened to click; the four boards that
+ * actually had leads — Richard's Signal, KMG, ReachR, Pathways Engagement — were the only ones
+ * that broke. An empty list is indistinguishable from a working empty list.
+ *
+ * So this coerces rather than trusts, and it is applied to EVERY string field, not just the one
+ * that was caught: the other six are passed through with the same `?? undefined` that let this
+ * one through, and there is nothing special about `keywords` except that someone loaded a board
+ * that exercised it.
+ */
+export function str(v: unknown): string | undefined {
+  if (v === null || v === undefined) return undefined
+  if (typeof v === "string") return v || undefined
+  if (typeof v === "number" || typeof v === "boolean") return String(v)
+  if (Array.isArray(v)) {
+    const parts = v.map((x) => str(x)).filter((x): x is string => !!x)
+    return parts.length ? parts.join(", ") : undefined
+  }
+  if (typeof v === "object") {
+    // `{"source": null}` carries no information — say nothing rather than print "[object Object]".
+    const parts = Object.values(v as Record<string, unknown>)
+      .map((x) => str(x))
+      .filter((x): x is string => !!x)
+    return parts.length ? parts.join(", ") : undefined
+  }
+  return undefined
+}
+
 export async function fetchLeads(bloqId: number): Promise<PlatformResult<{ leads: Lead[] }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { leads: [] } }
@@ -684,17 +725,17 @@ export async function fetchLeads(bloqId: number): Promise<PlatformResult<{ leads
     const leads: Lead[] = rows.map((l: any) => ({
       id: Number(l.id),
       name: String(l.name ?? l.full_name ?? "unnamed"),
-      status: l.status ?? undefined,
-      company: l.company ?? undefined,
-      email: l.email ?? undefined,
+      status: str(l.status),
+      company: str(l.company),
+      email: str(l.email),
       hot: Number(l.lead_score ?? l.leadScore ?? 0) >= 70,
       score: typeof l.lead_score === "number" ? l.lead_score : undefined,
-      type: l.lead_type ?? undefined,
-      city: l.city ?? undefined,
-      country: l.country ?? undefined,
-      createdAt: l.created_at ?? undefined,
+      type: str(l.lead_type),
+      city: str(l.city),
+      country: str(l.country),
+      createdAt: str(l.created_at),
       repliedAt: typeof l.has_replied === "boolean" ? l.has_replied : undefined,
-      keywords: Array.isArray(l.keywords) ? l.keywords.join(", ") : (l.keywords ?? undefined),
+      keywords: str(l.keywords),
     }))
     return { measured: true, data: { leads } }
   } catch (e) {
