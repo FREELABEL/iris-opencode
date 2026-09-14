@@ -66,20 +66,30 @@ jobs:
         run: |
           # 3-argument Join-Path works in pwsh 7 and fails at RUNTIME on 5.1 with
           # "A positional parameter cannot be found that accepts argument ...". It is
-          # valid SYNTAX, so the parser is happy and the failure only appears when the
-          # line executes -- which is why this is a separate check from the parse step.
+          # valid SYNTAX, so the parser is happy and it only fails when the line runs --
+          # which is why this is separate from the parse step.
+          #
+          # ASK THE PARSER, do not pattern-match lines. The first version of this check
+          # used a regex and counted a closing paren plus the next argument as a third
+          # arg, so the CORRECT nested form `Join-Path (Join-Path $a "..") "b"` tripped
+          # it -- it flagged every correct line in the repo, including the ones it had
+          # just been added to protect. A guard that cries wolf gets muted, and then it
+          # catches nothing at all.
           $hits = @()
           foreach ($f in @('./install.ps1','./script/test-install-fetch.ps1','./script/test-install-autostart.ps1')) {
-            $n = 0
-            foreach ($line in (Get-Content $f)) {
-              $n++
-              if ($line.TrimStart().StartsWith('#')) { continue }
-              # Join-Path followed by three bare arguments (not -Path/-ChildPath form).
-              if ($line -match 'Join-Path\s+(?!-)\S+\s+(?!-)\S+\s+(?!-)\S') { $hits += "${f}:${n}: $($line.Trim())" }
+            $e = $null; $t = $null
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f).Path, [ref]$t, [ref]$e)
+            if ($e.Count -gt 0) { $hits += ($f + ": does not parse"); continue }
+            $cmds = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true)
+            foreach ($c in $cmds) {
+              if ($c.GetCommandName() -ne 'Join-Path') { continue }
+              $positional = @($c.CommandElements | Select-Object -Skip 1 |
+                Where-Object { $_ -isnot [System.Management.Automation.Language.CommandParameterAst] })
+              if ($positional.Count -ge 3) { $hits += ($f + ":" + $c.Extent.StartLineNumber + ": " + $c.Extent.Text) }
             }
           }
-          if ($hits.Count -gt 0) { $hits | ForEach-Object { "  $_" }; throw "3-argument Join-Path is pwsh 7 only and breaks on Windows PowerShell 5.1" }
-          "no pwsh-7-only syntax found"
+          if ($hits.Count -gt 0) { $hits | ForEach-Object { "  " + $_ }; throw "3-argument Join-Path is pwsh 7 only and fails at runtime on Windows PowerShell 5.1" }
+          "no 3-argument Join-Path found"
 
       - name: install.ps1 parses under 5.1
         shell: powershell
