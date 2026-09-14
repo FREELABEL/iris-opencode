@@ -155,11 +155,37 @@ export const UpgradeCommand = {
           // untracked runtime files (sessions, .som-campaigns-cache.json) survive.
           execSync("git fetch origin --quiet && git checkout -B main origin/main --quiet && npm install --production --silent 2>/dev/null", { cwd: bridgeDir, timeout: 60000, stdio: "pipe" })
           prompts.log.info("Bridge updated (pinned to main)")
-          // Restart daemon so it picks up new bridge code
+          // Restart the daemon so it picks up new bridge code - UNLESS the daemon is what is
+          // running us.
+          //
+          // `iris hive run <node> "iris upgrade"` is executed BY the daemon's task executor, as
+          // its child. Restarting the daemon from inside that child kills the process that is
+          // supposed to report the task result. Measured on AlexMaysnow1063, 2026-09-14: the
+          // upgrade SUCCEEDED - 1.3.253 to 1.3.259, verified afterwards at 5/5 platform commands
+          // - and the task came back `failed`, "Process exited with code 1", with an ENTIRELY
+          // EMPTY error block, after 23s. Nothing had gone wrong; the reporter had been shot.
+          //
+          // That is expensive out of proportion to the cause. A fleet upgrade script sees a
+          // non-zero result and will retry, roll back, or mark the node bad - on a machine that
+          // is already correctly upgraded. It also teaches people to ignore this command's
+          // status, so the day it fails for real nobody believes it. A second run then reports
+          // "Already on latest" and exits 0, which makes the whole thing look transient.
+          //
+          // TASK_ID is set by the executor in every dispatched child's env, so it is a reliable
+          // "you are a task" marker. The restart is DEFERRED rather than skipped silently: the
+          // new bridge code is on disk and the operator is told to make the restart that loads
+          // it.
           const daemonCtl = `${home}/.iris/bin/iris-daemon`
           if (existsSync(daemonCtl)) {
-            execSync(`"${daemonCtl}" restart`, { timeout: 10000, stdio: "pipe" })
-            prompts.log.info("Daemon restarted")
+            if (process.env["TASK_ID"]) {
+              prompts.log.warn("Bridge code updated but the daemon was NOT restarted.")
+              prompts.log.info("  This upgrade is running as a dispatched task, so the daemon is its parent -")
+              prompts.log.info("  restarting it here would kill the process reporting this task result.")
+              prompts.log.info("  Run `iris-daemon restart` on that machine to load the new bridge code.")
+            } else {
+              execSync(`"${daemonCtl}" restart`, { timeout: 10000, stdio: "pipe" })
+              prompts.log.info("Daemon restarted")
+            }
           }
         }
       } catch { /* bridge update is non-critical */ }
