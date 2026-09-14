@@ -136,13 +136,17 @@ jobs:
         run: |
           # The unit tests mock the cmdlets. This asserts the REAL thing landed -- the
           # one claim that has never been made on an actual Windows machine.
-          $text = Get-Content -Raw ./install.ps1
-          $start = $text.IndexOf("function Register-IrisAutostart")
-          if ($start -lt 0) { throw "Register-IrisAutostart not found in install.ps1" }
-          $rest = $text.Substring($start)
-          $end = $rest.IndexOf("`n$HasNode")   # ASCII anchor: a box-drawing char would break under 5.1
-          if ($end -lt 0) { $end = $rest.Length }
-          Invoke-Expression $rest.Substring(0, $end)
+          # Extract via the AST. The string-index version here was worse than the one
+          # in the test scripts: its "ASCII anchor" was "`n$HasNode", and $HasNode
+          # INTERPOLATES to an empty string -- so the anchor collapsed to a bare newline,
+          # matched at once, and extracted nothing. A missing function is fatal.
+          $e = $null; $t = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path ./install.ps1).Path, [ref]$t, [ref]$e)
+          if ($e.Count -gt 0) { throw "install.ps1 does not parse: $($e[0].Message)" }
+          $fn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) |
+                Where-Object { $_.Name -eq 'Register-IrisAutostart' } | Select-Object -First 1
+          if (-not $fn) { throw "Register-IrisAutostart not found in install.ps1 -- refusing to guess" }
+          Invoke-Expression $fn.Extent.Text
 
           $cmd = Join-Path $env:TEMP "iris-daemon.cmd"
           Set-Content -Path $cmd -Value "@echo off`r`necho fake daemon" -Encoding ASCII

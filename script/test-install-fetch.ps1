@@ -1,13 +1,28 @@
-﻿# Load Install-IrisDaemonSource FROM install.ps1 — testing a copy proves nothing
-# about what ships.
-$ps1  = Join-Path (Join-Path $PSScriptRoot "..") "install.ps1"   # 3-arg Join-Path is pwsh 7 only
-$text = Get-Content -Raw $ps1
-$start = $text.IndexOf("function Install-IrisDaemonSource")
-if ($start -lt 0) { "  ✗ Install-IrisDaemonSource not found in install.ps1"; exit 1 }
-$rest = $text.Substring($start)
-$end  = $rest.IndexOf("`n# ─── Autostart")
-if ($end -lt 0) { $end = $rest.Length }
-Invoke-Expression $rest.Substring(0, $end)
+﻿# Pull ONE function out of install.ps1 by asking the parser for it.
+#
+# This used to find the function by string index and then look for a comment banner to
+# mark the end -- and those banners contain box-drawing characters. install.ps1 has no
+# BOM, so Windows PowerShell 5.1 reads it as ANSI, the banner arrives as mojibake, the
+# anchor does not match, and the code FELL BACK to "the rest of the file". It then
+# Invoke-Expression'd the whole installer tail and died on `Write-Step` -- a failure
+# three concepts away from the cause.
+#
+# The AST does not care about encoding or banners, and a missing function is now FATAL
+# rather than silently meaning "take everything".
+function Get-InstallFunction {
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Name)
+    $e = $null; $t = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $Path).Path, [ref]$t, [ref]$e)
+    if ($e.Count -gt 0) { throw "install.ps1 does not parse: $($e[0].Message)" }
+    $fn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) |
+          Where-Object { $_.Name -eq $Name } | Select-Object -First 1
+    if (-not $fn) { throw "$Name not found in $Path -- refusing to guess" }
+    return $fn.Extent.Text
+}
+
+$ps1 = Join-Path (Join-Path $PSScriptRoot "..") "install.ps1"
+Invoke-Expression (Get-InstallFunction -Path $ps1 -Name "Install-IrisDaemonSource")
+
 $pass=0; $fail=0
 function check($n,$c){ if($c){"  ✓ $n";$script:pass++}else{"  ✗ $n";$script:fail++} }
 
