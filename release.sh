@@ -221,12 +221,35 @@ if ! grep -q "\"version\": \"$TARGET\"" "$PKG"; then
 fi
 echo "Wrote $PKG = $TARGET"
 
+# 1b. Re-resolve the lockfile against the version we just wrote.
+#
+# bun.lock records the workspace package version, so bumping package.json makes it stale by
+# construction — and a pre-push hook refuses the push for it. That failed THREE consecutive
+# releases (1.3.256, 1.3.257, 1.3.260): each aborted AFTER committing and tagging, leaving a
+# local tag pointing at a commit that could not be pushed, to be repaired by hand every time.
+# A step that is guaranteed to be needed is the script's job, not the operator's.
+#
+# --lockfile-only resolves nothing from the network and takes well under a second.
+if [ -f bun.lock ]; then
+  if bun install --lockfile-only >/dev/null 2>&1; then
+    echo "Re-resolved bun.lock for $TARGET"
+    LOCK_PATHSPEC="bun.lock"
+  else
+    # Do not tag a release whose lockfile the push will reject. Failing here costs nothing;
+    # failing after the tag is what created the mess above.
+    echo "Error: bun install --lockfile-only failed — nothing tagged."
+    echo "       Fix that first, or the pre-push hook will reject this release anyway."
+    git checkout -- "$PKG" 2>/dev/null || true
+    exit 1
+  fi
+fi
+
 # 2. Commit + tag — EXPLICIT PATHSPEC.
 #
 # `git add "$PKG"` followed by a bare `git commit` commits the whole INDEX, and in
 # a checkout several sessions share that has repeatedly swept other people's staged
 # work into an unrelated commit. Naming the path confines it to this file.
-git commit -q -m "v$TARGET" -- "$PKG"
+git commit -q -m "v$TARGET" -- "$PKG" ${LOCK_PATHSPEC:+$LOCK_PATHSPEC}
 git tag "v$TARGET"
 echo "Created commit + tag v$TARGET"
 
