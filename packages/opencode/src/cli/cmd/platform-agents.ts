@@ -8,6 +8,7 @@ import { matchesSearchQuery } from "./bloq-item-format"
 import { executeChat } from "./platform-chat"
 import { AgentsBenchCommand } from "./platform-agents-bench"
 import { AgentsExportCommand } from "./platform-agents-export"
+import { AgentsJoinCommand, AgentsLeaveCommand } from "./platform-agents-rooms"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join } from "path"
 import { firstArray } from "../../util/array"
@@ -1842,6 +1843,8 @@ export const PlatformAgentsCommand = cmd({
       .command(AgentsMessageCommand)
       .command(AgentsInboxCommand)
       .command(AgentsThreadCommand)
+      .command(AgentsJoinCommand)
+      .command(AgentsLeaveCommand)
       .command(AgentsExportCommand)
       .command(AgentsBenchCommand)
       .demandCommand(),
