@@ -45,7 +45,11 @@
     "typescript": "catalog:",
     "vite": "catalog:",
     "vite-plugin-icons-spritesheet": "3.0.1",
-    "vite-plugin-solid": "catalog:"
+    "vite-plugin-solid": "catalog:",
+    "@types/d3-force": "^3.0.10",
+    "@types/d3-dispatch": "^3.0.6",
+    "@types/d3-quadtree": "^3.0.6",
+    "@types/d3-timer": "^3.0.2"
   },
   "dependencies": {
     "@corvu/drawer": "catalog:",

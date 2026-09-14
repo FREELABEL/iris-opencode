@@ -32,6 +32,24 @@ export interface ForceNode extends SimulationNodeDatum {
   degree: number
   /** Radius. Elon sizes by meaning; here degree is the only signal we have. */
   size: number
+  /*
+   * d3 WRITES THESE, and they are redeclared here on purpose.
+   *
+   * They come from SimulationNodeDatum, so this block is redundant — right up until
+   * @types/d3-force is missing, at which point `extends SimulationNodeDatum` silently resolves
+   * to nothing and every `n.x` becomes "Property 'x' does not exist". That is exactly how this
+   * file broke a release build: the types were installed by hand into node_modules and never
+   * declared in package.json, so the local typecheck passed against an artifact CI did not have.
+   *
+   * Declaring them here means the file describes its own contract instead of borrowing one.
+   */
+  x?: number
+  y?: number
+  vx?: number
+  vy?: number
+  /** Non-null pins the node; null hands it back to the simulation. */
+  fx?: number | null
+  fy?: number | null
 }
 
 export interface ForceEdge extends SimulationLinkDatum<ForceNode> {
@@ -142,7 +160,7 @@ export function IrisForceGraph(props: {
       .force(
         "link",
         forceLink<ForceNode, ForceEdge>(edges)
-          .id((d) => d.id)
+          .id((d: ForceNode) => d.id)
           .distance(120),
       )
       .force("charge", forceManyBody().strength(-300))
