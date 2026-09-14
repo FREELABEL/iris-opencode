@@ -1,7 +1,7 @@
 import { Effect } from "effect"
 import { paginate } from "@/iris/pagination"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
-import { checkAuth, fetchAgents, fetchAtlas, fetchBloqs, fetchHiveNodes, fetchInbox, fetchLeads, fetchIntegrations, fetchPages, fetchPlaybooks, fetchRecords, fetchSchemas, fetchSites, fetchAgentTasks, fetchPlaybookDoc } from "@/iris/platform"
+import { checkAuth, fetchAgents, fetchAtlas, fetchBloqs, fetchHiveNodes, fetchInbox, fetchLeads, fetchIntegrations, fetchPages, fetchPlaybooks, fetchRecords, fetchSchemas, fetchSites, fetchAgentTasks, fetchPlaybookDoc, fetchPageDoc, savePageDoc } from "@/iris/platform"
 import { RootHttpApi } from "../api"
 
 /**
@@ -179,6 +179,20 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
      */
     /** Not paged: an agent holding more than a screenful of work is the exception, and the
      *  four sources are already capped upstream (500 item tasks, 200 each of the rest). */
+    const pageDoc = Effect.fn("IrisHttpApi.pageDoc")((ctx: { params: { pageID: number } }) =>
+      Effect.promise(() => fetchPageDoc(ctx.params.pageID)).pipe(
+        Effect.map((r) => ({ measured: r.measured, reason: r.reason, ...r.data })),
+      ),
+    )
+
+    /** The only WRITE in this group. Pinned to a version; see the endpoint description. */
+    const pageSave = Effect.fn("IrisHttpApi.pageSave")(
+      (ctx: { params: { pageID: number }; payload: { json: string; expectedVersion?: number } }) =>
+        Effect.promise(() =>
+          savePageDoc({ id: ctx.params.pageID, json: ctx.payload.json, expectedVersion: ctx.payload.expectedVersion }),
+        ),
+    )
+
     const playbookDoc = Effect.fn("IrisHttpApi.playbookDoc")((ctx: { params: { name: string } }) =>
       Effect.promise(() => fetchPlaybookDoc(ctx.params.name)).pipe(
         Effect.map((r) => ({ found: r.found, name: ctx.params.name, path: r.path, source: r.source, content: r.content })),
@@ -243,6 +257,6 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
         ),
     )
 
-    return handlers.handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("playbookDoc", playbookDoc).handle("agentTasks", agentTasks).handle("sites", sites).handle("records", records).handle("integrations", integrations).handle("hive", hive)
+    return handlers.handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("pageDoc", pageDoc).handle("pageSave", pageSave).handle("playbookDoc", playbookDoc).handle("agentTasks", agentTasks).handle("sites", sites).handle("records", records).handle("integrations", integrations).handle("hive", hive)
   }),
 )

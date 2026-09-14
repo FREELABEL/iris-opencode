@@ -430,6 +430,8 @@ export const IrisPaths = {
   sites: `${root}/sites/:bloqID`,
   agentTasks: `${root}/agents/:agentID/tasks`,
   playbookDoc: `${root}/playbooks/doc/:name`,
+  pageDoc: `${root}/page/:pageID`,
+  pageSave: `${root}/page/:pageID/save`,
   hive: `${root}/hive`,
 } as const
 
@@ -548,6 +550,53 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "List playbooks",
           description:
             "BOTH the board's attached playbooks and the account's full set, each flagged. Never one or the other — the TUI shipped either/or and each half hid something.",
+        }),
+      ),
+      HttpApiEndpoint.get("pageDoc", IrisPaths.pageDoc, {
+        params: { pageID: Schema.NumberFromString },
+        success: described(
+          Schema.Struct({
+            ...Measured,
+            id: Schema.Finite,
+            title: Schema.String,
+            slug: Schema.optional(Schema.String),
+            status: Schema.String,
+            visibility: Schema.optional(Schema.String),
+            currentVersion: described(
+              Schema.optional(Schema.Finite),
+              "Send this back as expected_version. Without it a save is a blind overwrite.",
+            ),
+            publicUrl: Schema.optional(Schema.String),
+            json: described(Schema.String, "json_content, pretty-printed, for editing."),
+          }).annotate({ identifier: "IrisPageDoc" }),
+          "One Genesis page's JSON, for editing",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.pageDoc",
+          summary: "Read a page for editing",
+        }),
+      ),
+      HttpApiEndpoint.post("pageSave", IrisPaths.pageSave, {
+        params: { pageID: Schema.NumberFromString },
+        payload: Schema.Struct({
+          json: Schema.String,
+          expectedVersion: Schema.optional(Schema.Finite),
+        }),
+        success: described(
+          Schema.Struct({
+            ok: Schema.Boolean,
+            reason: Schema.optional(Schema.String),
+            version: Schema.optional(Schema.Finite),
+          }).annotate({ identifier: "IrisPageSaveResult" }),
+          "Whether the save landed, and the new version",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.pageSave",
+          summary: "Save a page's JSON",
+          description:
+            "PINNED to the version it was read at. fl-api refuses the write if the page moved since, which is the whole difference between saving and clobbering — `iris pages push` has no divergence check (#183600) and has overwritten other people's work. A stale save comes back as a refusal naming the conflict, never as a success that quietly won.",
         }),
       ),
       HttpApiEndpoint.get("playbookDoc", IrisPaths.playbookDoc, {

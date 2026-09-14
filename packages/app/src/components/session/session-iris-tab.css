@@ -652,3 +652,31 @@
 .iris-bars__bar--down {
   background: color-mix(in srgb, #f0836a 75%, var(--border-weaker-base));
 }
+
+/*
+ * The page JSON editor.
+ *
+ * A textarea, deliberately. A syntax-highlighting editor here would mean shipping CodeMirror
+ * into a 500px side panel for a document people mostly come to tweak a string in; the parse
+ * error on save is the feedback that actually matters, and that is handled server-side before
+ * anything is written.
+ */
+.iris-editor {
+  width: 100%;
+  min-height: 380px;
+  height: 60vh;
+  resize: vertical;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  line-height: 1.5;
+  tab-size: 2;
+  padding: 8px;
+  border-radius: 5px;
+  border: 1px solid var(--border-weaker-base);
+  background: var(--background-element);
+  color: var(--text-base);
+}
+.iris-editor:focus {
+  outline: none;
+  border-color: var(--border-weak-base);
+}

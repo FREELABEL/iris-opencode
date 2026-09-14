@@ -340,7 +340,17 @@ const SURFACES = [
   { id: "atlas", label: "Atlas", path: (b: number) => `/iris/atlas/${b}` },
   { id: "agents", label: "Agents", path: (b: number) => `/iris/agents/${b}` },
   { id: "leads", label: "Leads", path: (b: number) => `/iris/leads/${b}` },
-  { id: "pages", label: "Pages", path: (b: number) => `/iris/pages/${b}` },
+  /*
+   * GENESIS, not "Pages".
+   *
+   * The surface holds pages AND sites, and a site is not a page — it groups them under shared
+   * navigation and owns settings, a form inbox and a comms thread. Labelling the pair after one
+   * of its halves made the other half look like a sub-kind of the first.
+   *
+   * The ID stays `pages`. It is the localStorage key and the route segment; renaming it would
+   * strand everyone whose panel remembers the old value for the sake of a word on screen.
+   */
+  { id: "pages", label: "Genesis", path: (b: number) => `/iris/pages/${b}` },
   // Hive is NOT bloq-scoped — machines belong to the account, not to a board — so its path
   // ignores the argument. Kept in the same list anyway so the switcher stays one mechanism;
   // a second code path for one surface is how surfaces drift apart.
@@ -444,6 +454,10 @@ const DETAIL_TABS: Record<string, readonly DetailTab[]> = {
   pages: [
     { id: "info", label: "Info" },
     { id: "preview", label: "Preview" },
+    // The page's own document, editable. Separate from the JSON tab, which shows the RECORD
+    // (id, slug, status) rather than the content — two different things that both look like
+    // "the json".
+    { id: "edit", label: "Edit" },
     { id: "json", label: "JSON" },
   ],
   playbooks: [
@@ -609,7 +623,9 @@ export function SessionIrisTab() {
   const platform = usePlatform()
 
   const base = createMemo(() => serverSDK().url.replace(/\/$/, ""))
-  const doFetch = (path: string) => (platform.fetch ?? globalThis.fetch)(`${base()}${path}`)
+  /** Every request to the sidecar. `init` exists because this panel now WRITES (page saves). */
+  const doFetch = (path: string, init?: RequestInit) =>
+    (platform.fetch ?? globalThis.fetch)(`${base()}${path}`, init)
 
   const [bloqs] = createResource(base, async () => {
     /*
@@ -841,6 +857,65 @@ export function SessionIrisTab() {
       }
     },
   )
+
+  /** The open page's json_content, and the version to pin a save to. */
+  const [pageDoc, { mutate: mutatePageDoc }] = createResource(
+    () => {
+      const r = openRow()
+      return r?.pane === "pages" && detailTab() === "edit" && r.raw?.id ? ([base(), Number(r.raw.id)] as const) : undefined
+    },
+    async ([, id]) => {
+      const res = await doFetch(`/iris/page/${id}`)
+      return (await res.json()) as Measured & {
+        id: number
+        title: string
+        status: string
+        currentVersion?: number
+        publicUrl?: string
+        json: string
+      }
+    },
+  )
+
+  /** The editor buffer. Null means "not touched" — the loaded document is the value. */
+  const [draft, setDraft] = createSignal<string | null>(null)
+  const [saving, setSaving] = createSignal(false)
+  const [saveNote, setSaveNote] = createSignal<{ ok: boolean; text: string } | null>(null)
+  createEffect(() => {
+    openRow()
+    detailTab()
+    setDraft(null)
+    setSaveNote(null)
+  })
+
+  async function savePage() {
+    const doc = pageDoc.latest
+    const body = draft()
+    if (!doc || body == null || saving()) return
+    setSaving(true)
+    setSaveNote(null)
+    try {
+      const res = await doFetch(`/iris/page/${doc.id}/save`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ json: body, expectedVersion: doc.currentVersion }),
+      })
+      const out = (await res.json()) as { ok: boolean; reason?: string; version?: number }
+      if (out.ok) {
+        // Adopt the new version so a SECOND save is pinned to what we just wrote, rather than
+        // to the version we opened — otherwise the save after a save always conflicts.
+        mutatePageDoc((d) => (d ? { ...d, json: body, currentVersion: out.version ?? d.currentVersion } : d))
+        setDraft(null)
+        setSaveNote({ ok: true, text: `Saved${out.version != null ? ` · version ${out.version}` : ""}` })
+      } else {
+        setSaveNote({ ok: false, text: out.reason ?? "save failed" })
+      }
+    } catch (e) {
+      setSaveNote({ ok: false, text: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setSaving(false)
+    }
+  }
 
   const [records] = createResource(
     () => {
@@ -1168,6 +1243,64 @@ export function SessionIrisTab() {
                     sandbox="allow-scripts allow-same-origin"
                   />
                 </Show>
+              </Match>
+
+              {/* EDIT THE PAGE. The document itself, saved back pinned to the version it was
+                  read at — see /iris/page/:id/save. */}
+              <Match when={detailTab() === "edit"}>
+                <Switch>
+                  <Match when={pageDoc.loading && !pageDoc.latest}>
+                    <p class="text-12-regular text-text-weak py-2">Loading page…</p>
+                  </Match>
+                  <Match when={pageDoc.latest && !pageDoc.latest!.measured}>
+                    <p class="text-12-regular text-text-weak py-2">
+                      Could not load this page — {pageDoc.latest!.reason ?? "unknown"}.
+                    </p>
+                  </Match>
+                  <Match when={pageDoc.latest}>
+                    <div class="flex items-baseline gap-2 pb-2">
+                      <span class="font-mono text-11-regular text-text-weaker">
+                        {pageDoc.latest!.status}
+                        {pageDoc.latest!.currentVersion != null ? ` · v${pageDoc.latest!.currentVersion}` : ""}
+                      </span>
+                      {/* The save is PINNED. Said on screen, because "why did my save fail" is
+                          otherwise a mystery and the answer is a good one. */}
+                      <Show when={pageDoc.latest!.currentVersion == null}>
+                        <span class="text-11-regular text-text-weaker">
+                          no version — a save here cannot detect a conflict
+                        </span>
+                      </Show>
+                      <button
+                        type="button"
+                        class="ms-auto px-2 py-0.5 rounded text-11-regular cursor-pointer disabled:cursor-default"
+                        classList={{
+                          "text-text-weaker": draft() == null || saving(),
+                          "text-text-strong hover:bg-background-element": draft() != null && !saving(),
+                        }}
+                        disabled={draft() == null || saving()}
+                        onClick={savePage}
+                      >
+                        {saving() ? "Saving…" : draft() == null ? "No changes" : "Save"}
+                      </button>
+                    </div>
+                    <Show when={saveNote()}>
+                      {(n) => (
+                        <p
+                          class="text-11-regular pb-2"
+                          classList={{ "text-text-base": n().ok, "text-text-weak": !n().ok }}
+                        >
+                          {n().text}
+                        </p>
+                      )}
+                    </Show>
+                    <textarea
+                      class="iris-editor"
+                      spellcheck={false}
+                      value={draft() ?? pageDoc.latest!.json}
+                      onInput={(e) => setDraft(e.currentTarget.value)}
+                    />
+                  </Match>
+                </Switch>
               </Match>
 
               {/* THE STEPS. What the playbook will actually do, and what it needs from you. */}

@@ -1237,6 +1237,96 @@ export async function fetchAgentTasks(
 
 export type IntegrationScope = "project" | "organization" | "user"
 
+export interface PageDoc {
+  id: number
+  title: string
+  slug?: string
+  status: string
+  visibility?: string
+  /** Feeds `expected_version` on the way back. Without it a save is a blind overwrite. */
+  currentVersion?: number
+  publicUrl?: string
+  json: string
+}
+
+/** One page's JSON, for editing. */
+export async function fetchPageDoc(id: number): Promise<PlatformResult<PageDoc>> {
+  const empty: PageDoc = { id, title: "", status: "unknown", json: "" }
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: empty }
+  try {
+    const res = await irisFetch(`/api/v1/pages/${id}?include_json=true`)
+    if (!res.ok) return { measured: false, reason: `fl-api ${res.status}`, data: empty }
+    const j = (await res.json()) as any
+    const p = j?.data ?? j
+    return {
+      measured: true,
+      data: {
+        id: Number(p?.id ?? id),
+        title: String(p?.title ?? ""),
+        slug: p?.slug ?? undefined,
+        status: String(p?.status ?? "unknown"),
+        visibility: p?.visibility ?? undefined,
+        currentVersion: typeof p?.current_version === "number" ? p.current_version : undefined,
+        publicUrl: p?.public_url ?? undefined,
+        json: JSON.stringify(p?.json_content ?? {}, null, 2),
+      },
+    }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: empty }
+  }
+}
+
+/**
+ * Save a page's JSON.
+ *
+ * PINNED TO THE VERSION IT WAS READ AT. fl-api accepts `expected_version` and refuses the write
+ * if the page has moved since — which is the whole difference between saving and clobbering.
+ * `iris pages push` has no divergence check (#183600) and has overwritten other people's work;
+ * this path does not repeat that, and a stale save comes back as a REFUSAL naming the conflict
+ * rather than as a success that quietly won.
+ *
+ * The JSON is parsed here, not sent as a string: a malformed document should fail in the editor
+ * with a parse error, not reach the server and be stored as a broken page.
+ */
+export async function savePageDoc(input: {
+  id: number
+  json: string
+  expectedVersion?: number
+}): Promise<{ ok: boolean; reason?: string; version?: number }> {
+  const userId = await resolveUserId()
+  if (!userId) return { ok: false, reason: `not signed in (token: ${tokenSource()})` }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(input.json)
+  } catch (e) {
+    return { ok: false, reason: `that is not valid JSON — ${e instanceof Error ? e.message : String(e)}` }
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { ok: false, reason: "a page's json_content must be an object" }
+  }
+
+  try {
+    const body: Record<string, unknown> = { json_content: parsed }
+    if (input.expectedVersion != null) body.expected_version = input.expectedVersion
+    const res = await irisFetch(`/api/v1/pages/${input.id}`, FL_API, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    })
+    const j = (await res.json().catch(() => ({}))) as any
+    if (!res.ok) {
+      // 409 is the good failure: someone else saved while this was open.
+      const why = j?.message ?? `fl-api ${res.status}`
+      return { ok: false, reason: res.status === 409 ? `${why} — reload before saving again` : String(why) }
+    }
+    const p = j?.data ?? j
+    return { ok: true, version: typeof p?.current_version === "number" ? p.current_version : undefined }
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) }
+  }
+}
+
 export interface Integration {
   id: string
   name: string

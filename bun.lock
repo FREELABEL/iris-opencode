@@ -381,7 +381,7 @@
     },
     "packages/desktop": {
       "name": "@iris/desktop",
-      "version": "1.18.23-iris.3.207",
+      "version": "1.18.23-iris.3.2037",
       "dependencies": {
         "@opencode-ai/app": "workspace:*",
         "@solid-primitives/storage": "catalog:",
@@ -533,7 +533,7 @@
     },
     "packages/opencode": {
       "name": "opencode",
-      "version": "1.18.23-iris.3.207",
+      "version": "1.18.23-iris.3.2037",
       "bin": {
         "iris": "./bin/iris",
       },
