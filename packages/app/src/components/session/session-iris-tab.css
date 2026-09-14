@@ -790,10 +790,15 @@
   padding: 6px 8px;
   font-size: 11px;
   color: var(--text-weaker);
-  position: sticky;
-  top: 0;
-  /* It is sticky, so it does need a ground — but the panel's own, not a different one. */
-  background: var(--background-base);
+  /*
+   * NO GROUND HERE EITHER.
+   *
+   * It was sticky, and sticky needs a ground or text scrolls under text — so it painted one,
+   * and that ground was a different shade from the panel, making the row read as a bar. The
+   * fix is not a better colour, it is not needing one: the summary scrolls with the list like
+   * any other line. The accordion is short; nothing is lost by letting it move.
+   */
+  background: transparent;
 }
 .iris-rows__summary::-webkit-details-marker {
   display: none;
