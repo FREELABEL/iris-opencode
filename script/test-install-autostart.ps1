@@ -66,7 +66,13 @@ check "scoped to the current user"        ($script:calls['register'].User -eq $e
 $script:calls = @{}
 function Register-ScheduledTask { throw "Access is denied. (0x80070005)" }
 $fellBack = $null
-function Test-Path { param($Path,$ErrorAction) if ("$Path".StartsWith("HKCU:")) { return $true } return (Microsoft.PowerShell.Management\Test-Path $Path) }
+# A function named Test-Path SHADOWS the cmdlet for the rest of the script, not just
+# for the case that needed it. All 18 assertions passed and then the run still failed,
+# because something on the way out called Test-Path with no argument and the mock
+# forwarded a null straight into the real cmdlet. Guard the null, and remove the mock
+# as soon as the case is done -- a mock that outlives its test is a trap for whatever
+# runs next.
+function Test-Path { param($Path,$ErrorAction) if ($null -eq $Path) { return $false } if ("$Path".StartsWith("HKCU:")) { return $true } return (Microsoft.PowerShell.Management\Test-Path $Path) }
 function Set-ItemProperty { param($Path,$Name,$Value,$ErrorAction) $script:calls['runkey'] = $PSBoundParameters }
 $r2 = Register-IrisAutostart -DaemonCmd $daemon
 
@@ -76,6 +82,10 @@ check "still succeeds"                        ($r2.Ok -eq $true)
 check "reports the WEAKER method honestly"    ($r2.Method -eq 'run-key')
 check "writes to HKCU, never HKLM"            ($script:calls['runkey'].Path -like 'HKCU:*')
 check "command includes 'start'"              ("$($script:calls['runkey'].Value)" -like '*start*')
+
+# Mocks are done: restore the real cmdlets before anything else runs.
+Remove-Item function:Test-Path -ErrorAction SilentlyContinue
+Remove-Item function:Set-ItemProperty -ErrorAction SilentlyContinue
 
 # ── Case 3: nothing to start → refuses, with a reason ────────────────────────
 $r3 = Register-IrisAutostart -DaemonCmd (Join-Path ([System.IO.Path]::GetTempPath()) "does-not-exist-at-all.cmd")
