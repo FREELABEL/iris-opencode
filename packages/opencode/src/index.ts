@@ -534,22 +534,71 @@ if (hasHelp) {
   }
 }
 
-// Auto-start bridge+daemon if not running (silent, non-blocking)
-// Prefers iris-bridge (full bridge: express + Discord + iMessage + embedded daemon)
-// Falls back to iris-daemon (daemon only, no messaging bots)
+// The daemon is started and kept alive by the OS supervisor the installer sets up —
+// launchd on macOS (RunAtLoad + KeepAlive + ThrottleInterval=10), a scheduled task on
+// Windows. This block used to ALSO start it, and that was the cause of #185150.
+//
+// WHAT IT DID: probe /health with a 500ms budget and, if no answer came back, spawn
+// `iris-bridge start` detached — which is `nohup node index.js &` (bridgectl:46). That
+// bridge seizes :3200 and runs an EMBEDDED task executor (index.js autoStartDaemon,
+// "embedded mode — one process"), so the supervisor's own daemon can never bind the port,
+// and two executors then claim work for the same node id.
+//
+// IT COULD NOT EVEN HELP THE COMMAND THAT PAID FOR IT. Measured 2026-09-13:
+//
+//     iris --version finished in        1.16s
+//     the bridge it spawned served at   7.24s
+//
+// The spawn is detached and unref'd, so the triggering invocation exits ~6 seconds before
+// its own bridge can answer. V(spawn) for that invocation is 0 in every state. Any LATER
+// invocation is already covered by the supervisor, which restarts a dead daemon within
+// ThrottleInterval — so the part bought nothing anywhere.
+//
+// AND IT WAS NEGATIVE DURING A DAEMON BOOT. The 500ms budget is far shorter than the
+// 10-30s the daemon spends blocking its own event loop on startup scans (Obsidian vault,
+// sessions, Discord auto-start) — measured again the same night: /health first answered at
+// t+20s after a clean launchd start. So every single boot had a ~20s window in which any
+// iris command created a competitor. Not an edge case: the normal path. One machine's
+// stderr showed three in a row, with different pids, in one boot.
+//
+// WORSE THAN THE RACE: it converted a VISIBLE failure into an invisible one. When the
+// launchd job was found fully unloaded on 2026-09-13, the orphan this block had spawned
+// kept answering /health 200, so every liveness check said the system was fine while
+// nothing supervised it. A process the supervisor does not own cannot be restarted or
+// replaced, and it dies at reboot without coming back.
+//
+// SO THE SPAWN IS DELETED, NOT REROUTED THROUGH launchctl. Rerouting would keep a second
+// automation layer racing the supervisor that already does this job, and keep the ~141ms
+// every command paid to ask a question it should not act on.
+//
+// WHAT SURVIVES IS THE DETECTION, AS A MESSAGE. A message cannot create a split-brain.
+// It uses a TCP connect rather than an HTTP fetch, because the only state worth reporting
+// is "nothing is listening", which connect() answers in ~10ms. A socket that is open but
+// slow to answer /health means the daemon is BOOTING — not a problem, and it must not be
+// reported as one. The old `!health?.ok` collapsed those two opposite states into one,
+// which is precisely why it acted during every boot.
 try {
-  const { join: pathJoin } = await import("path")
-  const { homedir: osHome } = await import("os")
-  const { existsSync } = await import("fs")
-  const bridgeCtl = pathJoin(osHome(), ".iris", "bin", "iris-bridge")
-  const daemonCtl = pathJoin(osHome(), ".iris", "bin", "iris-daemon")
-  const ctl = existsSync(bridgeCtl) ? bridgeCtl : existsSync(daemonCtl) ? daemonCtl : null
-  if (ctl) {
-    const health = await fetch("http://localhost:3200/health", { signal: AbortSignal.timeout(500) }).catch(() => null)
-    if (!health?.ok) {
-      const { spawn } = await import("child_process")
-      spawn(ctl, ["start"], { detached: true, stdio: "ignore" }).unref()
+  const bridgePort = Number(process.env.IRIS_BRIDGE_PORT || 3200)
+  const { connect } = await import("net")
+  const listening = await new Promise<boolean>((resolve) => {
+    const sock = connect({ host: "127.0.0.1", port: bridgePort })
+    const settle = (v: boolean) => {
+      sock.destroy()
+      resolve(v)
     }
+    // Open-but-silent counts as LISTENING. Being slow to answer is what booting looks like.
+    sock.setTimeout(150, () => settle(true))
+    sock.once("connect", () => settle(true))
+    sock.once("error", () => settle(false))
+  })
+  // Only on a TTY. In a script or a cron job nobody reads this, and printing would turn a
+  // hint into noise on every invocation of an automated loop.
+  if (!listening && process.stderr.isTTY) {
+    process.stderr.write(
+      "iris: the local daemon is not running, so anything needing the bridge will fail.\n" +
+        "      start it:   iris-daemon start\n" +
+        "      diagnose:   iris-daemon doctor\n",
+    )
   }
 } catch {}
 

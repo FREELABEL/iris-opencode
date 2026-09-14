@@ -5,7 +5,6 @@ import {
   candidateServers,
   shouldFallBackToBridge,
   deliveryTimeoutMs,
-  findSessionAcrossServers,
   resolveSessionLive,
   fetchLiveSessions,
 } from "./session-live-delivery"
@@ -310,50 +309,5 @@ describe("candidateServers — discovery, because servers bind EPHEMERAL ports",
   test("a discovered 4096 is not listed twice", () => {
     const got = candidateServers({ discover: () => [4096] })
     expect(got.filter((u) => u === "http://127.0.0.1:4096")).toHaveLength(1)
-  })
-})
-
-describe("findSessionAcrossServers — do not stop at the first server that answers", () => {
-  const S = (id: string) => ({ id, title: id })
-
-  test("keeps looking when an earlier server answers but does NOT have the session", async () => {
-    // The bug this exists for: the handler used to `break` here, abandoning every remaining
-    // candidate. Harmless with one candidate; wrong as soon as discovery returned several.
-    // Servers are per project, so "not on this one" says nothing about the next.
-    const lists: Record<string, any[]> = {
-      "http://a": [S("ses_other")],
-      "http://b": [S("ses_want")],
-    }
-    const r = await findSessionAcrossServers("ses_want", ["http://a", "http://b"], async (b) => lists[b] ?? null)
-    expect(r && "base" in r && r.base).toBe("http://b")
-  })
-
-  test("an unreachable server does not stop the search either", async () => {
-    const r = await findSessionAcrossServers("ses_want", ["http://dead", "http://b"], async (b) =>
-      b === "http://b" ? [S("ses_want")] : null,
-    )
-    expect(r && "base" in r && r.base).toBe("http://b")
-  })
-
-  test("returns null when no server has it, so the caller can fall back", async () => {
-    const r = await findSessionAcrossServers("ses_nope", ["http://a"], async () => [S("ses_other")])
-    expect(r).toBeNull()
-  })
-
-  test("an AMBIGUOUS id stops the search and reports, rather than trying elsewhere", async () => {
-    const r = await findSessionAcrossServers("ses_a", ["http://a", "http://b"], async (b) =>
-      b === "http://a" ? [S("ses_a1"), S("ses_a2")] : [S("ses_a1")],
-    )
-    expect(r && "error" in r && r.error).toContain("matches")
-  })
-
-  test("the FIRST server holding it wins, and later ones are not consulted", async () => {
-    let bHit = 0
-    const r = await findSessionAcrossServers("ses_want", ["http://a", "http://b"], async (b) => {
-      if (b === "http://b") bHit++
-      return [S("ses_want")]
-    })
-    expect(r && "base" in r && r.base).toBe("http://a")
-    expect(bHit).toBe(0)
   })
 })

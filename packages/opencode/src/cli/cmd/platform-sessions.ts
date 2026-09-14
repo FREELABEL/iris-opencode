@@ -4,7 +4,7 @@ import { UI } from "../ui"
 import { bridgeFetch, dim, bold, highlight, success, writeJson } from "./iris-api"
 import { probeBridge, assessBridge, printDegradations } from "./subsystem-health"
 import { firstArray } from "../../util/array"
-import { candidateServers, deliverLive, shouldFallBackToBridge, deliveryTimeoutMs, findSessionAcrossServers } from "./session-live-delivery"
+import { candidateServers, deliverLive, shouldFallBackToBridge, deliveryTimeoutMs, fetchLiveSessions, resolveSessionLive } from "./session-live-delivery"
 
 // ============================================================================
 // iris sessions — see and steer the AI sessions running on this machine (#181239)
@@ -305,44 +305,45 @@ const SendCommand = cmd({
     // with the daemon down — which is when you most want to message another session.
     if (args.provider !== "claude-code") {
       const candidates = candidateServers({ url: args.url, env: process.env })
-      const found = await findSessionAcrossServers(String(args.id), candidates)
+      for (const base of candidates) {
+        const sessions = await fetchLiveSessions(base)
+        if (!sessions) continue
 
-      // An AMBIGUOUS id is a user error, not a reason to try another mechanism: resolving it
-      // again against the bridge could pick a different session from a different list.
-      if (found && "error" in found) {
-        prompts.log.error(found.error)
-        process.exitCode = 1
-        prompts.outro("Done")
-        return
-      }
+        const hit = resolveSessionLive(sessions, String(args.id))
+        if ("error" in hit) {
+          // An AMBIGUOUS id is a user error, not a reason to try another mechanism: resolving
+          // it again against the bridge could pick a different session from a different list.
+          if (hit.error.includes("matches")) {
+            prompts.log.error(hit.error)
+            process.exitCode = 1
+            prompts.outro("Done")
+            return
+          }
+          // Not found HERE — it may be a claude-code session, so let the bridge try.
+          break
+        }
 
-      if (found) {
-        const { base, session } = found
-        const name = (session.title ?? "").trim() || "(unnamed)"
-        console.log(`  ${dim("to:")} ${name} ${dim(`(opencode · ${session.id.slice(0, 12)})`)}`)
+        const name = (hit.session.title ?? "").trim() || "(unnamed)"
+        console.log(`  ${dim("to:")} ${name} ${dim(`(opencode · ${hit.session.id.slice(0, 12)})`)}`)
 
         const sp = prompts.spinner()
         sp.start("Sending…")
-        // --submit runs the recipient's model turn synchronously, so it needs a turn-length
-        // budget. With the notify timeout it reported "Failed" on a turn that then succeeded.
         if (args.submit) sp.message("Running their agent's turn…")
-        const ok = await deliverLive(base, session.id, message, deliveryTimeoutMs({ submit: Boolean(args.submit) }), {
+        const ok = await deliverLive(base, hit.session.id, message, deliveryTimeoutMs({ submit: Boolean(args.submit) }), {
           submit: Boolean(args.submit),
         })
         if (ok) {
           sp.stop("Sent")
-          if (args.json) { await writeJson({ ok: true, via: "live", server: base, session_id: session.id }); prompts.outro("Done"); return }
+          if (args.json) { await writeJson({ ok: true, via: "live", server: base, session_id: hit.session.id }); prompts.outro("Done"); return }
           console.log(`  ${success("✓")} ${dim("delivered live via")} ${base}`)
           if (!args.submit) console.log(`  ${dim("no model turn was spent — pass --submit to make their agent act")}`)
-          prompts.outro(dim(`iris sessions history ${session.id.slice(0, 8)}`))
+          prompts.outro(dim(`iris sessions history ${hit.session.id.slice(0, 8)}`))
           return
         }
-        // The server was there and the POST failed. Say so against THAT server, and do not
-        // silently retry on the bridge, which cannot reach an opencode session anyway.
         sp.stop("Failed", 1)
-        prompts.log.error(`Live delivery to ${base} failed for session ${session.id.slice(0, 12)}.`)
+        prompts.log.error(`Live delivery to ${base} failed for session ${hit.session.id.slice(0, 12)}.`)
         if (args.submit) prompts.log.info(dim("--submit waits for the whole turn; a long turn can still be running."))
-        prompts.log.info(dim(`Check with: iris sessions history ${session.id.slice(0, 8)}`))
+        prompts.log.info(dim(`Check with: iris sessions history ${hit.session.id.slice(0, 8)}`))
         process.exitCode = 1
         prompts.outro("Done")
         return

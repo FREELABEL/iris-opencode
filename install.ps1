@@ -227,11 +227,11 @@ try {
 
 Remove-Item -Recurse -Force $TmpDir -ErrorAction SilentlyContinue
 
-# ─── Post-install read-back: did we install THE PRODUCT, or just a file? ─────
+# --- Post-install read-back: did we install THE PRODUCT, or just a file? -----
 #
 # A GREEN EXIT IS NOT A LANDING. Until now nothing in this script ever ran the binary it
 # had just written, so "IRIS Code installed" was a claim about Copy-Item, not about a
-# working CLI. Its only check was `Test-Path "$INSTALL_DIR\iris.exe"` — the same
+# working CLI. Its only check was `Test-Path "$INSTALL_DIR\iris.exe"`  -  the same
 # path.exists() that cli.rs documents as unable to fail, because a 216-module platform CLI
 # and a core-only sidecar are the same answer to it.
 #
