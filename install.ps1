@@ -132,7 +132,7 @@ if ($RequestedVersion) {
         }
         if (-not $Chosen) {
             Write-Host "No published release contains $Filename yet." -ForegroundColor Red
-            Write-Host "A release may still be uploading — try again shortly." -ForegroundColor DarkGray
+            Write-Host "A release may still be uploading  -  try again shortly." -ForegroundColor DarkGray
             exit 1
         }
         $SpecificVersion = $Chosen.tag_name -replace "^v", ""
@@ -374,7 +374,7 @@ function Install-IrisDaemonSource {
         # Refuse an archive that is not the daemon rather than overwriting a working
         # install with whatever was served. A 200 that returns an error page is still a 200.
         if (-not (Test-Path (Join-Path $root.FullName "daemon.js"))) {
-            throw "the downloaded archive has no daemon.js — refusing to overwrite the install"
+            throw "the downloaded archive has no daemon.js  -  refusing to overwrite the install"
         }
 
         $result.Updated = Test-Path (Join-Path $BridgeDir "daemon.js")
@@ -630,7 +630,7 @@ echo Usage: iris-daemon {start^|stop^|status^|share^|unshare^|register^|logs}
 # ─── iris-login.cmd ──────────────────────────────────────────────────────────
 
 $LoginScript = @'
-<# IRIS Login — Windows #>
+<# IRIS Login  -  Windows #>
 param(
     [string]$Token = "",
     [string]$UserId = "",

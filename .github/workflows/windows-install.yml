@@ -27,13 +27,39 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ASCII ONLY in every inline run: block below.
+      #
+      # The runner writes each `run:` into a .ps1 file with no BOM, and Windows
+      # PowerShell 5.1 reads a BOM-less file as ANSI, not UTF-8. An em-dash therefore
+      # arrives as mojibake and the parse dies with "Unexpected token" pointing at an
+      # innocent word. This job failed exactly that way on its first run -- which is
+      # the sort of thing pwsh 7 on macOS will never show you.
       - name: Which PowerShell is this, really?
-        shell: powershell           # Windows PowerShell 5.1 — NOT pwsh 7
+        shell: powershell           # Windows PowerShell 5.1 -- NOT pwsh 7
         run: |
           "edition: $($PSVersionTable.PSEdition)  version: $($PSVersionTable.PSVersion)"
           if ($PSVersionTable.PSVersion.Major -ne 5) {
-            throw "expected Windows PowerShell 5.1 — this job exists to test THAT engine, got $($PSVersionTable.PSVersion)"
+            throw "expected Windows PowerShell 5.1 -- this job exists to test THAT engine, got $($PSVersionTable.PSVersion)"
           }
+
+      - name: No non-ASCII in executable lines (the thing that broke this job first time)
+        shell: powershell
+        run: |
+          # Windows PowerShell 5.1 reads a BOM-less file as ANSI. A UTF-8 em-dash
+          # (E2 80 94) then decodes with a trailing 0x94, which is a CURLY CLOSING
+          # QUOTE in cp1252 -- it terminates the string and the parse dies pointing at
+          # an innocent word. Same for a check mark (E2 9C 93 -> ends in a left quote).
+          # Comments are safe at any byte; executable lines are not.
+          $bad = @()
+          foreach ($line in (Get-Content ./install.ps1)) {
+            if ($line.TrimStart().StartsWith('#')) { continue }
+            if ($line -cmatch '[^\x00-\x7F]') { $bad += $line.Trim() }
+          }
+          if ($bad.Count -gt 0) {
+            $bad | Select-Object -First 5 | ForEach-Object { "  $_" }
+            throw "$($bad.Count) executable line(s) in install.ps1 contain non-ASCII -- they will break on Windows PowerShell 5.1 when the file is saved without a BOM"
+          }
+          "install.ps1 executable lines are ASCII"
 
       - name: install.ps1 parses under 5.1
         shell: powershell
@@ -49,20 +75,20 @@ jobs:
         run: |
           # Strip every PATH entry containing git, then confirm the command cannot be
           # resolved. Without this assertion the whole job could pass with Git present
-          # and tell us nothing — the failure mode these tests exist to catch.
+          # and tell us nothing -- the failure mode these tests exist to catch.
           $clean = ($env:PATH -split ';' | Where-Object { $_ -and $_ -notmatch '(?i)git' }) -join ';'
           "PATH entries: $((($env:PATH -split ';').Count)) -> $((($clean -split ';').Count))"
           echo "PATH=$clean" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Confirm the client condition — no Git
+      - name: Confirm the client condition -- no Git
         shell: powershell
         run: |
           $git = Get-Command git -ErrorAction SilentlyContinue
-          if ($git) { throw "Git is STILL on PATH ($($git.Source)) — this job would be testing the easy case" }
-          "git is not available — this is the client condition"
+          if ($git) { throw "Git is STILL on PATH ($($git.Source)) -- this job would be testing the easy case" }
+          "git is not available -- this is the client condition"
           # Node must still be here: the daemon needs it, and that is a separate problem.
           $node = Get-Command node -ErrorAction SilentlyContinue
-          if (-not $node) { throw "node missing — the runner image changed; this test needs it" }
+          if (-not $node) { throw "node missing -- the runner image changed; this test needs it" }
           "node: $((node --version))"
 
       - name: Fetch the daemon with no Git at all
@@ -78,13 +104,13 @@ jobs:
       - name: The task really exists in Task Scheduler
         shell: powershell
         run: |
-          # The unit tests mock the cmdlets. This asserts the REAL thing landed — the
+          # The unit tests mock the cmdlets. This asserts the REAL thing landed -- the
           # one claim that has never been made on an actual Windows machine.
           $text = Get-Content -Raw ./install.ps1
           $start = $text.IndexOf("function Register-IrisAutostart")
           if ($start -lt 0) { throw "Register-IrisAutostart not found in install.ps1" }
           $rest = $text.Substring($start)
-          $end = $rest.IndexOf("`n# ─── Step 5")
+          $end = $rest.IndexOf("`n$HasNode")   # ASCII anchor: a box-drawing char would break under 5.1
           if ($end -lt 0) { $end = $rest.Length }
           Invoke-Expression $rest.Substring(0, $end)
 
@@ -97,13 +123,13 @@ jobs:
           if ($r.Method -eq 'scheduled-task') {
             $task = Get-ScheduledTask -TaskName "IRIS Hive Node (CI)" -ErrorAction Stop
             "state: $($task.State)"
-            if ($task.Triggers.Count -lt 1) { throw "the task registered with no trigger — it would never start" }
+            if ($task.Triggers.Count -lt 1) { throw "the task registered with no trigger -- it would never start" }
             # The security property, asserted against the REAL registered task rather
             # than a mock's parameter bag.
-            if ($task.Principal.RunLevel -eq 'Highest') { throw "the task registered ELEVATED — it must run as the user" }
+            if ($task.Principal.RunLevel -eq 'Highest') { throw "the task registered ELEVATED -- it must run as the user" }
             "trigger: $($task.Triggers[0].CimClass.CimClassName)  runlevel: $($task.Principal.RunLevel)"
             Unregister-ScheduledTask -TaskName "IRIS Hive Node (CI)" -Confirm:$false
             "cleaned up"
           } else {
-            "fell back to $($r.Method) — acceptable, but the scheduled task is the wanted path"
+            "fell back to $($r.Method) -- acceptable, but the scheduled task is the wanted path"
           }

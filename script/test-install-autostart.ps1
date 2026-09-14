@@ -1,4 +1,4 @@
-# Unit tests for Register-IrisAutostart (#184597 FIX 3), run under pwsh on ANY
+﻿# Unit tests for Register-IrisAutostart (#184597 FIX 3), run under pwsh on ANY
 # platform with the Windows-only cmdlets mocked. This cannot prove the task appears in Task Scheduler — only a
 # Windows box can — but it DOES prove the control flow, the never-elevate rule, and
 # that a failure is reported rather than swallowed, which is the defect class that

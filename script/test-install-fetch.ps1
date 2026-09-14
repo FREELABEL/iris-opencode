@@ -1,4 +1,4 @@
-# Load Install-IrisDaemonSource FROM install.ps1 — testing a copy proves nothing
+﻿# Load Install-IrisDaemonSource FROM install.ps1 — testing a copy proves nothing
 # about what ships.
 $ps1  = Join-Path $PSScriptRoot ".." "install.ps1"
 $text = Get-Content -Raw $ps1
