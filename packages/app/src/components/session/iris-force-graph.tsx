@@ -176,6 +176,48 @@ export function IrisForceGraph(props: {
       })
     })
 
+    /*
+     * FIT ONCE THE LAYOUT SETTLES.
+     *
+     * A force layout spreads to whatever the forces dictate, not to the box it is drawn in:
+     * measured 945x1419 of content in an 800x388 canvas, which puts a third of the boards past
+     * the bottom edge where you would only find them by panning at random.
+     *
+     * On `end` rather than on a timer, because `end` is the simulation telling us it has
+     * stopped moving — a timer would either fit too early, on a layout still expanding, or sit
+     * there after it settled.
+     *
+     * Only if the view is untouched: re-framing someone who has already panned or zoomed is
+     * the graph taking the wheel back.
+     */
+    sim.on("end", () => {
+      if (touched) return
+      const pad = 28
+      const xs = nodes.map((n) => n.x ?? 0)
+      const ys = nodes.map((n) => n.y ?? 0)
+      if (!xs.length) return
+      const minX = Math.min(...xs) - pad
+      const maxX = Math.max(...xs) + pad
+      const minY = Math.min(...ys) - pad
+      const maxY = Math.max(...ys) + pad
+      const w = width()
+      const h = H()
+      if (!w || !h) return
+      /*
+       * CLAMPED BOTH WAYS, and the lower bound is the interesting one.
+       *
+       * A true fit of this account's graph lands at k≈0.27 — everything on screen and every
+       * label too small to read, which is a different way of not being able to see it. 0.5 is
+       * where an 11px label is still legible. Above that we fit; below it we stop shrinking and
+       * let the remainder be reached by panning, because a graph you can read and pan beats one
+       * you can see all of and cannot read.
+       *
+       * Never zoom IN past 1 either: a three-node graph blown up to fill the pane looks broken.
+       */
+      const k = Math.min(1, Math.max(0.5, Math.min(w / (maxX - minX), h / (maxY - minY))))
+      setView({ k, x: w / 2 - ((minX + maxX) / 2) * k, y: h / 2 - ((minY + maxY) / 2) * k })
+    })
+
     live = { nodes, edges }
     snapshot()
   })
@@ -195,11 +237,15 @@ export function IrisForceGraph(props: {
     return { x: (e.clientX - r.left - v.x) / v.k, y: (e.clientY - r.top - v.y) / v.k }
   }
 
+  /** Set the moment anyone pans, zooms or drags — after which the graph stops re-framing. */
+  let touched = false
+
   let dragging: ForceNode | null = null
   let panning: { x: number; y: number; vx: number; vy: number } | null = null
 
   function onPointerDown(e: PointerEvent, n?: ForceNode) {
     ;(e.currentTarget as Element).setPointerCapture?.(e.pointerId)
+    touched = true
     if (n) {
       dragging = n
       // alphaTarget keeps the simulation warm while you hold a node, which is what makes the
@@ -247,6 +293,7 @@ export function IrisForceGraph(props: {
 
   function onWheel(e: WheelEvent) {
     e.preventDefault()
+    touched = true
     const r = svgEl!.getBoundingClientRect()
     const mx = e.clientX - r.left
     const my = e.clientY - r.top

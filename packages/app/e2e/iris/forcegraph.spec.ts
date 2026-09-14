@@ -22,12 +22,24 @@ test("the graph is a real force layout — nodes settle, edges connect them", as
 
   const svg = page.locator(".iris-graph__svg")
   await expect(svg).toBeVisible({ timeout: 40_000 })
-  await page.waitForTimeout(3500) // let the simulation settle
+  await page.waitForTimeout(6000) // let the simulation settle AND fit
+
+  /*
+   * THE WHOLE GRAPH, not a page.
+   *
+   * It used to render 25 of 39 connected boards and drop every edge to the other 14 — a
+   * truncated node list becomes a truncated picture that looks complete. The summary line is
+   * the control: whatever it says is connected must be what is drawn.
+   */
+  const summary = await page.locator("[data-slot='tabs-content']").innerText()
+  const connected = Number(summary.match(/across (\d+) boards/)?.[1] ?? 0)
+  expect(connected).toBeGreaterThan(0)
+  await expect(page.getByRole("button", { name: "Load more" })).toHaveCount(0)
 
   const circles = await svg.locator("circle").count()
   const lines = await svg.locator("line").count()
   console.log(`NODES ${circles} | EDGES ${lines}`)
-  expect(circles).toBeGreaterThan(10)
+  expect(circles).toBe(connected)
   expect(lines).toBeGreaterThan(5)
 
   /*
@@ -53,9 +65,43 @@ test("the graph is a real force layout — nodes settle, edges connect them", as
   console.log(
     `canvas ${Math.round(box.width)}x${Math.round(box.height)} | spread ${Math.round(spreadX)}x${Math.round(spreadY)}`,
   )
-  // Half the canvas in each axis. A corner-cluster is ~10%.
-  expect(spreadX).toBeGreaterThan(box.width * 0.5)
-  expect(spreadY).toBeGreaterThan(box.height * 0.5)
+  /*
+   * It must USE the canvas on at least one axis.
+   *
+   * Not both: once the layout is fitted, the axis that is not binding legitimately has slack —
+   * a tall narrow graph fitted by height leaves horizontal room, and demanding 50% on both
+   * would fail a correct render. A corner-cluster is ~10% on BOTH, which this still catches.
+   */
+  const fill = Math.max(spreadX / box.width, spreadY / box.height)
+  console.log(`fill ${(fill * 100).toFixed(0)}% of the binding axis`)
+  expect(fill).toBeGreaterThan(0.5)
+
+  /*
+   * AND IT MUST FIT. A force layout spreads to whatever the forces dictate, not to the box:
+   * before the fit, 945x1419 of content sat in an 800x388 canvas and a third of the boards
+   * were past the bottom edge. Spreading is necessary and not sufficient.
+   */
+  const outside = pts.filter(
+    (p) => p.x < box.x - 2 || p.x > box.x + box.width + 2 || p.y < box.y - 2 || p.y > box.y + box.height + 2,
+  ).length
+  /*
+   * MOST visible, and the cluster centred. Not all.
+   *
+   * There is a real trade-off here and the test should state it rather than hide it: 39 nodes
+   * at link-distance 120 span ~1400px, and a canvas 388px tall cannot show that AND keep an
+   * 11px label legible. The fit stops shrinking at k=0.5 for legibility, so the remainder is
+   * reached by panning.
+   *
+   * This viewport is deliberately short — 720px window, 388px canvas. The real panel at full
+   * height is roughly double that, where the same clamp fits nearly everything. So the bound
+   * here is loose ON PURPOSE, and the assertion that carries the weight is the centring below:
+   * an off-centre cluster is the bug, a tall graph needing a scroll is not.
+   */
+  console.log(`nodes outside the canvas: ${outside} of ${pts.length}`)
+  expect(outside).toBeLessThan(pts.length * 0.4)
+
+  const cy = ys.reduce((a, b) => a + b, 0) / ys.length
+  expect(Math.abs(cy - (box.y + box.height / 2))).toBeLessThan(box.height * 0.3)
 
   // And the cluster must be roughly centred, not pinned to an edge.
   const cx = xs.reduce((a, b) => a + b, 0) / xs.length

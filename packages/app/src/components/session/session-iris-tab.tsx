@@ -750,7 +750,18 @@ export function SessionIrisTab() {
       // The query goes to the SERVER, which filters the whole board before paging. Filtering
       // the rows already on screen would leave the footer counting a set it never searched.
       const search = which === "atlas" && q ? `&q=${encodeURIComponent(q)}` : ""
-      const res = await doFetch(`${url}${sep}page=${pageNo}&perPage=25${search}`)
+      /*
+       * A GRAPH CANNOT BE PAGED.
+       *
+       * At 25 a page it drew 25 of 39 connected boards and silently dropped every edge whose
+       * other end was on page 2 — the edge filter below keeps only links with both ends on
+       * screen, so a truncated node list becomes a truncated PICTURE that looks complete. The
+       * footer said "25 of 39"; the graph said nothing.
+       *
+       * The whole set is 39 rows and 45 edges. There is nothing to page.
+       */
+      const perPage = which === "graph" ? 500 : 25
+      const res = await doFetch(`${url}${sep}page=${pageNo}&perPage=${perPage}${search}`)
       // Stamped with the pane it was fetched FOR, so a held payload can be told apart from an
       // answer about what is currently on screen. See surfaceView.
       const next = { ...((await res.json()) as SurfacePayload), __pane: which } as SurfacePayload
@@ -2165,7 +2176,9 @@ export function SessionIrisTab() {
 
         {/* The shared footer. Says how many of how many, and offers the next page only when the
             server said there is one — never as a permanent button that sometimes does nothing. */}
-        <Show when={view() === "rows"}>
+        {/* No footer on the graph: it is never partial, so "39 of 39" and a dead Load more
+            would both be noise. */}
+        <Show when={view() === "rows" && pane() !== "graph"}>
           <div class="flex items-center gap-2 px-2 py-2 text-11-regular text-text-weaker">
             <Show when={pageSummary({ shown: rows().length, env: current() as PageEnvelope | undefined })}>
               {(text) => <span class="font-mono tabular-nums">{text()}</span>}
