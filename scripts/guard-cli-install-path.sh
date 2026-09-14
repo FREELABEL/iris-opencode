@@ -161,6 +161,20 @@ if [ "$RAN" -lt 1 ]; then
   [ "$JSON" -eq 1 ] || printf '  \033[31m✗\033[0m guard_actually_ran\n    \033[91mno assertion produced a verdict — this run checked nothing\033[0m\n'
 fi
 
+# ── 7. The download must be checksum-verified ───────────────────────────────
+# Nothing published was checksummed until #185158, so between the release and the user
+# there was nothing that could distinguish the intended build from a different one
+# published by mistake, a corrupt transfer, or a substituted asset. `set -euo pipefail`
+# catches only what makes a tool exit non-zero; a complete transfer of the wrong bytes
+# exits 0 everywhere.
+if [ -f "$INSTALL_SH" ]; then
+  if grep -qE 'CHECKSUM MISMATCH' "$INSTALL_SH" && grep -qE '\.sha256' "$INSTALL_SH"; then
+    pass installer_verifies_checksum "install fetches the published .sha256 and refuses to install on a mismatch"
+  else
+    fail installer_verifies_checksum "install does not verify the downloaded archive against a published checksum. The empty-file and HTML-error-page guards cannot see a complete download of the WRONG bytes (#185158)."
+  fi
+fi
+
 # ── 7. Windows needs the read-back too ──────────────────────────────────────
 # install.ps1 had exactly the same gap as install: its only check was
 # `Test-Path "$INSTALL_DIR\iris.exe"`, and it never executed what it wrote. Windows has

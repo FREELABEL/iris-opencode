@@ -649,6 +649,61 @@ jobs:
             fi
           done
 
+      # Publish a checksum next to every asset.
+      #
+      # Until now NOTHING published was checksummed or signed (#185158), so between the
+      # release and the user there was nothing that could distinguish the intended build
+      # from a different one published by mistake, a corrupted transfer, or a substituted
+      # asset. `set -euo pipefail` in the installer catches whatever makes a TOOL exit
+      # non-zero -- verified: on an undersized volume unzip returns 50 and nothing
+      # installs -- but a download that succeeds and unzips cleanly and is simply the
+      # wrong bytes exits 0 everywhere.
+      #
+      # That is not hypothetical here: the desktop app shipped its own opencode sidecar as
+      # `iris` for two weeks (#183738, #184861), and the only thing that would have caught
+      # it was asking what the bytes were.
+      #
+      # The digest is computed in the SAME job that uploads the files, from the files being
+      # uploaded. Computing it anywhere else would let it describe a different artifact
+      # than the one served, which is worse than having none.
+      #
+      # Each file holds the BASENAME, not artifacts/<name>, so a downloader can run
+      #   shasum -a 256 -c iris-darwin-arm64.zip.sha256
+      # in whatever directory they downloaded into.
+      - name: Generate checksums for every published asset
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          cd artifacts
+          files=(*.zip *.tar.gz)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::no assets to checksum - the release would publish nothing"
+            exit 1
+          fi
+          for f in "${files[@]}"; do
+            # shasum on macOS, sha256sum on Linux; this job is ubuntu but do not depend on it.
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "$f" > "$f.sha256"
+            else
+              shasum -a 256 "$f" > "$f.sha256"
+            fi
+          done
+          # Verify what we just wrote actually validates, here, before anyone downloads it.
+          # A checksum file that does not verify its own artifact is worse than none: it
+          # turns a real integrity failure into a false alarm people learn to skip.
+          for f in "${files[@]}"; do
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum -c "$f.sha256" >/dev/null
+            else
+              shasum -a 256 -c "$f.sha256" >/dev/null
+            fi
+          done
+          echo "### Checksums" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat *.sha256 >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "checksummed ${#files[@]} asset(s), and verified each digest against its own file"
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -675,6 +730,7 @@ jobs:
           files: |
             artifacts/*.tar.gz
             artifacts/*.zip
+            artifacts/*.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

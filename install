@@ -720,6 +720,57 @@ download_and_install() {
         exit 1
     fi
 
+    # Verify the download against the checksum published beside it (#185158).
+    #
+    # The two guards above catch an EMPTY file and an HTML error page. Neither can see a
+    # download that succeeded and is simply the wrong or altered bytes, and `set -euo
+    # pipefail` cannot either: it only catches what makes a tool exit non-zero. Measured
+    # on a deliberately undersized volume, unzip returns 50 and nothing installs -- that
+    # path is fine. A complete transfer of the wrong build exits 0 everywhere.
+    #
+    # Not hypothetical in this repo: the desktop app shipped its own opencode sidecar as
+    # `iris` for two weeks (#183738), and nothing between the release and the user asked
+    # what the bytes were.
+    #
+    # A MISSING checksum is reported, not silently skipped. Releases before this existed
+    # have none, so failing closed would break every install of an older version -- but a
+    # skip nobody is told about is how "verified" quietly becomes decorative. Say which
+    # one happened.
+    checksum_url="${url}.sha256"
+    if curl -fsSL --max-time 30 -o "$tmp_dir/$filename.sha256" "$checksum_url" 2>/dev/null \
+       && [ -s "$tmp_dir/$filename.sha256" ]; then
+        _sum_cmd=""
+        if command -v sha256sum >/dev/null 2>&1; then _sum_cmd="sha256sum"
+        elif command -v shasum >/dev/null 2>&1; then _sum_cmd="shasum -a 256"; fi
+    
+        if [ -z "$_sum_cmd" ]; then
+            echo -e "${ORANGE}Warning: a checksum was published but neither sha256sum nor shasum is installed.${NC}"
+            echo -e "${MUTED}  The download was NOT verified. Install coreutils to enable this check.${NC}"
+        else
+            # The published file holds the basename, so verify from inside tmp_dir.
+            _want=$(cut -d" " -f1 < "$tmp_dir/$filename.sha256" | tr -d "[:space:]")
+            _got=$(cd "$tmp_dir" && $_sum_cmd "$filename" | cut -d" " -f1 | tr -d "[:space:]")
+            if [ -z "$_want" ] || [ -z "$_got" ]; then
+                echo -e "${RED}Error: could not compute or read a checksum (want='${_want}' got='${_got}').${NC}"
+                echo -e "${MUTED}  Refusing to install unverified bytes. Re-run to try again.${NC}"
+                rm -rf "$tmp_dir"
+                exit 1
+            fi
+            if [ "$_want" != "$_got" ]; then
+                echo -e "${RED}Error: CHECKSUM MISMATCH - refusing to install.${NC}"
+                echo -e "${MUTED}  expected ${_want}${NC}"
+                echo -e "${MUTED}  actual   ${_got}${NC}"
+                echo -e "${MUTED}  These bytes are not the ones this release published. Do not use them.${NC}"
+                echo -e "${MUTED}  Retry the install; if it persists, report it with the two digests above.${NC}"
+                rm -rf "$tmp_dir"
+                exit 1
+            fi
+            echo -e "${MUTED}  checksum verified (sha256 ${_got})${NC}"
+        fi
+    else
+        echo -e "${MUTED}  no checksum published for this release - integrity NOT verified${NC}"
+    fi
+
     if [ "$os" = "linux" ]; then
         tar -xzf "$tmp_dir/$filename" -C "$tmp_dir"
     else
