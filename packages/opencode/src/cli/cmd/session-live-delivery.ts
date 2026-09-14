@@ -252,3 +252,39 @@ export function resolveSessionLive(
   }
   return { session: matches[0] }
 }
+
+/**
+ * Walk the candidate servers and return the first that actually holds this session.
+ *
+ * WHY THIS IS A FUNCTION AND NOT A LOOP IN THE HANDLER. The handler's loop used to `break` when
+ * a server answered but did not have the session — correct when there was one candidate, and
+ * wrong the moment discovery started returning several: it abandoned the search after the FIRST
+ * server that answered, so a session open on any later one was never found. The command then
+ * fell through to the bridge and reported "No session matching <id>" about a session that was
+ * open, healthy and one port away.
+ *
+ * Servers do NOT all share a session list — they are per project — so "not on this one" says
+ * nothing about the next one. Keep going.
+ *
+ * Returns the ambiguity error instead of a match when an id matches several sessions ON ONE
+ * server: that is a user error, and resolving it again somewhere else could pick a different
+ * session.
+ */
+export async function findSessionAcrossServers(
+  idPrefix: string,
+  candidates: string[],
+  fetchList: (base: string) => Promise<LiveSession[] | null> = fetchLiveSessions,
+): Promise<{ base: string; session: LiveSession } | { error: string } | null> {
+  for (const base of candidates) {
+    const sessions = await fetchList(base)
+    if (!sessions) continue
+
+    const hit = resolveSessionLive(sessions, idPrefix)
+    if ("error" in hit) {
+      if (hit.error.includes("matches")) return { error: hit.error }
+      continue
+    }
+    return { base, session: hit.session }
+  }
+  return null
+}
