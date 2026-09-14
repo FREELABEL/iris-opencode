@@ -737,9 +737,15 @@
   /* Cancel the panel's own 8px side padding. Full bleed means edge to edge, and the wrapper
      it lives in is padded for text — which the canvas is not. */
   margin-inline: -8px;
-  background: var(--background-panel, var(--background-base));
-  /* One hairline where it meets the strip above, so the canvas has an edge without a frame. */
-  border-top: 1px solid var(--border-weaker-base);
+  /*
+   * NO GROUND OF ITS OWN.
+   *
+   * It carried `--background-panel`, which resolves to a different shade from the surface it
+   * sits on — so the canvas read as a slab with a visible rectangle around it. Transparent
+   * lets it be the panel rather than sit on it, and the nodes float on whatever the viewer's
+   * theme is. No border either: a frame is the thing being removed.
+   */
+  background: transparent;
 }
 .iris-graph__svg {
   display: block;
@@ -786,7 +792,8 @@
   color: var(--text-weaker);
   position: sticky;
   top: 0;
-  background: var(--background-panel, var(--background-base));
+  /* It is sticky, so it does need a ground — but the panel's own, not a different one. */
+  background: var(--background-base);
 }
 .iris-rows__summary::-webkit-details-marker {
   display: none;
