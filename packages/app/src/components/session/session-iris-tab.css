@@ -625,3 +625,30 @@
 .iris-attr a:hover {
   color: var(--text-base);
 }
+
+/*
+ * The provider uptime strip.
+ *
+ * One bar per window, in order. "Has this been flapping" is a SHAPE — a column of dates cannot
+ * answer it and a single state word cannot either. Grey is not-checked, which is a third state
+ * and deliberately not drawn as either up or down.
+ */
+.iris-bars {
+  display: flex;
+  gap: 2px;
+  align-items: flex-end;
+  height: 16px;
+}
+.iris-bars__bar {
+  flex: 1 1 0;
+  min-width: 3px;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--border-weaker-base);
+}
+.iris-bars__bar--up {
+  background: color-mix(in srgb, #3fb950 70%, var(--border-weaker-base));
+}
+.iris-bars__bar--down {
+  background: color-mix(in srgb, #f0836a 75%, var(--border-weaker-base));
+}

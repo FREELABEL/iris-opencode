@@ -223,8 +223,20 @@ function describeFields(surface: string, r: any): { title: string; fields: [stri
       title: r.name,
       fields: fieldsOf([
         ["id", r.id], ["provider", r.provider], ["type", r.type], ["category", r.category],
-        ["scope", r.scope], ["status", r.status], ["connected", r.connected],
-        ["account", r.account], ["last tested", r.lastTested],
+        ["scope", r.scope], ["brand", r.brandId], ["auth", r.authMode],
+        ["your connection", r.status], ["connected", r.connected],
+        // TWO DIFFERENT QUESTIONS, said separately. "Is the provider up" and "does your
+        // credential work" get confused constantly, and the confusion always resolves in the
+        // reassuring direction — people read an operational provider as a working connection.
+        ["provider status", r.health?.state],
+        ["provider checked", r.health?.lastVerifiedAt ? relativeAge(r.health.lastVerifiedAt) : undefined],
+        ["checked by", r.health?.basis],
+        ["account", r.account],
+        ["last tested", r.lastTested ? relativeAge(r.lastTested) : undefined],
+        // An untested credential's `status` is a claim, not a measurement. Worth saying.
+        ["never tested", r.needsTesting === true ? "yes — status is unverified" : undefined],
+        ["functions", r.functionsCount],
+        ["usage (30d)", r.usage?.band],
         ["last error", r.lastError],
       ]),
       command: r.provider ? `iris connect ${r.provider}` : undefined,
@@ -1063,6 +1075,35 @@ export function SessionIrisTab() {
           <div class="flex-1 min-h-0 overflow-auto px-2 pb-4">
             <Switch>
               <Match when={detailTab() === "info"}>
+                {/* THE UPTIME STRIP — the provider's recent history, one bar per window.
+                    Shown above the fields because "has this been flapping" is a shape, not a
+                    value, and a column of dates cannot answer it. */}
+                <Show when={openRow()!.raw?.health?.bars?.length}>
+                  <div class="pb-3">
+                    <div class="iris-bars">
+                      <For each={openRow()!.raw.health.bars}>
+                        {(b: any) => (
+                          <span
+                            class="iris-bars__bar"
+                            classList={{
+                              "iris-bars__bar--up": b.state === "up",
+                              "iris-bars__bar--down": b.state === "down",
+                            }}
+                            title={`${b.state}${b.from ? ` · from ${b.from}` : ""}`}
+                          />
+                        )}
+                      </For>
+                    </div>
+                    <p class="text-11-regular text-text-weaker pt-1">
+                      Provider {openRow()!.raw.health.state}
+                      {openRow()!.raw.health.basis ? ` · by ${openRow()!.raw.health.basis}` : ""}
+                      {/* Said plainly, because this is the sentence people get wrong. */}
+                      {openRow()!.raw.status === "error" && openRow()!.raw.health.state === "operational"
+                        ? " — the service is fine; it is your credential that is failing"
+                        : ""}
+                    </p>
+                  </div>
+                </Show>
                 <Show when={openRow()!.command}>
                   <button
                     type="button"

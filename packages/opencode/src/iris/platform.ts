@@ -1260,6 +1260,23 @@ export interface Integration {
   lastError?: string
   /** The brand mark, from the platform's own Logo.dev catalogue. Absent is normal. */
   logoUrl?: string
+  /** Which brand owns it, when a brand does. 16 of 25 on this account do. */
+  brandId?: number
+  authMode?: string
+  /** The platform has never tested it, so `status` is a guess rather than a measurement. */
+  needsTesting?: boolean
+  recentlyTested?: boolean
+  functionsCount?: number
+  /**
+   * PLATFORM health for the provider — not your credential.
+   *
+   * Two different questions that look like one: "is Slack up" and "does your Slack token
+   * work". `state` answers the first, `status`/`lastError` the second. A row can be
+   * operational and still broken for you, which is most of what people actually hit.
+   */
+  health?: { state: string; basis?: string; lastVerifiedAt?: string; bars: { state: string; from?: string }[] }
+  /** 30 days of call counts, for a sparkline. `band` is the platform's own summary. */
+  usage?: { band?: string; series: { day: string; v: number }[] }
 }
 
 /**
@@ -1272,6 +1289,13 @@ export interface Integration {
  * Fetched from IRIS_API, not FL_API: /api/v1/integrations/catalog is 200 on freelabel.net and
  * 404 on raichu.
  */
+/** Health, usage and function counts from the same catalogue call — one request, not three. */
+let _catalogCache: { health: Record<string, any>; usage: Record<string, any>; functions: Record<string, number> } = {
+  health: {},
+  usage: {},
+  functions: {},
+}
+
 let _logoCache: { logos: Record<string, string>; attribution?: string } | null = null
 export async function fetchIntegrationLogos(): Promise<{ logos: Record<string, string>; attribution?: string }> {
   if (_logoCache) return _logoCache
@@ -1280,6 +1304,13 @@ export async function fetchIntegrationLogos(): Promise<{ logos: Record<string, s
     if (!res.ok) return { logos: {} }
     const j = (await res.json()) as any
     const logos = j?.logos && typeof j.logos === "object" ? (j.logos as Record<string, string>) : {}
+    _catalogCache = {
+      health: j?.health && typeof j.health === "object" ? j.health : {},
+      usage: j?.usage && typeof j.usage === "object" ? j.usage : {},
+      functions: Object.fromEntries(
+        (Array.isArray(j?.data) ? j.data : []).map((x: any) => [String(x?.type), Number(x?.functions_count ?? 0)]),
+      ),
+    }
     // CACHE ONLY A SUCCESS.
     //
     // The first version cached the failure too, so a single unlucky call at boot — the network
@@ -1357,6 +1388,35 @@ export async function fetchIntegrations(
         lastTested: r.last_tested ?? undefined,
         lastError: r.last_error ? String(r.last_error).slice(0, 400) : undefined,
         logoUrl: logoFor(logoMap.logos, r.type ?? undefined),
+        brandId: typeof r.brand_id === "number" ? r.brand_id : undefined,
+        authMode: r.auth_mode ?? undefined,
+        needsTesting: typeof r.needs_testing === "boolean" ? r.needs_testing : undefined,
+        recentlyTested: typeof r.recently_tested === "boolean" ? r.recently_tested : undefined,
+        functionsCount: _catalogCache.functions[String(r.type)] ?? undefined,
+        health: (() => {
+          const h = _catalogCache.health[String(r.type)]
+          if (!h) return undefined
+          return {
+            state: String(h.state ?? "unknown"),
+            basis: h.basis ?? undefined,
+            lastVerifiedAt: h.last_verified_at ?? undefined,
+            bars: (Array.isArray(h.bars) ? h.bars : []).map((b: any) => ({
+              state: String(b?.state ?? "unknown"),
+              from: b?.from ?? undefined,
+            })),
+          }
+        })(),
+        usage: (() => {
+          const u = _catalogCache.usage[String(r.type)]
+          if (!u) return undefined
+          return {
+            band: u.band ?? undefined,
+            series: (Array.isArray(u.series) ? u.series : []).map((p: any) => ({
+              day: String(p?.day ?? ""),
+              v: Number(p?.v ?? 0),
+            })),
+          }
+        })(),
       }
     })
 

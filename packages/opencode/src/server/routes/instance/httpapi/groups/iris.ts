@@ -330,6 +330,34 @@ const IntegrationsResponse = Schema.Struct({
       lastTested: Schema.optional(Schema.String),
       lastError: described(Schema.optional(Schema.String), "Why it is failing. A red dot with no reason is not actionable."),
       logoUrl: described(Schema.optional(Schema.String), "Brand mark from the platform's Logo.dev catalogue. Absent is normal."),
+      brandId: described(Schema.optional(Schema.Finite), "Which brand owns it. 16 of 25 on this account do — see #185160."),
+      authMode: Schema.optional(Schema.String),
+      needsTesting: described(
+        Schema.optional(Schema.Boolean),
+        "The platform has never tested it, so `status` is a guess rather than a measurement.",
+      ),
+      recentlyTested: Schema.optional(Schema.Boolean),
+      functionsCount: Schema.optional(Schema.Finite),
+      health: described(
+        Schema.optional(
+          Schema.Struct({
+            state: Schema.String,
+            basis: Schema.optional(Schema.String),
+            lastVerifiedAt: Schema.optional(Schema.String),
+            bars: Schema.Array(Schema.Struct({ state: Schema.String, from: Schema.optional(Schema.String) })),
+          }),
+        ),
+        "PLATFORM health for the provider, NOT your credential. \"Is Slack up\" and \"does your Slack token work\" are different questions; a provider can be operational while your connection is broken, which is most of what people actually hit.",
+      ),
+      usage: described(
+        Schema.optional(
+          Schema.Struct({
+            band: Schema.optional(Schema.String),
+            series: Schema.Array(Schema.Struct({ day: Schema.String, v: Schema.Finite })),
+          }),
+        ),
+        "30 days of call counts, for a sparkline.",
+      ),
     }).annotate({ identifier: "IrisIntegration" }),
   ),
   attribution: described(
