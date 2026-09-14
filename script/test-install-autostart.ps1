@@ -44,7 +44,10 @@ function New-ScheduledTaskTrigger { param([switch]$AtLogOn,$User) $script:calls[
 function New-ScheduledTaskSettingsSet { param([switch]$AllowStartIfOnBatteries,[switch]$DontStopIfGoingOnBatteries,[switch]$StartWhenAvailable,$RestartCount,$RestartInterval,$ExecutionTimeLimit)
   $script:calls['settings'] = $PSBoundParameters; return "settings" }
 
-$daemon = "/tmp/fake-iris-daemon.cmd"; Set-Content $daemon "rem"
+# GetTempPath(), not "/tmp" -- on Windows a leading slash resolves against the current
+# DRIVE, so "/tmp/x" became "D:\tmp\x" and Set-Content failed with DirectoryNotFound.
+# The tests were written on macOS where /tmp is real.
+$daemon = Join-Path ([System.IO.Path]::GetTempPath()) "fake-iris-daemon.cmd"; Set-Content $daemon "rem"
 $r = Register-IrisAutostart -DaemonCmd $daemon
 
 "CASE 1 — scheduled task available"
@@ -75,7 +78,7 @@ check "writes to HKCU, never HKLM"            ($script:calls['runkey'].Path -lik
 check "command includes 'start'"              ("$($script:calls['runkey'].Value)" -like '*start*')
 
 # ── Case 3: nothing to start → refuses, with a reason ────────────────────────
-$r3 = Register-IrisAutostart -DaemonCmd "/tmp/does-not-exist-at-all.cmd"
+$r3 = Register-IrisAutostart -DaemonCmd (Join-Path ([System.IO.Path]::GetTempPath()) "does-not-exist-at-all.cmd")
 ""
 "CASE 3 — daemon launcher missing"
 check "does not claim success"            ($r3.Ok -eq $false)
