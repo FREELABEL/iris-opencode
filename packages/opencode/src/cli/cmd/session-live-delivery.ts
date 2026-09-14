@@ -33,6 +33,8 @@ export const DEFAULT_SERVER = "http://127.0.0.1:4096"
 export function candidateServers(input: {
   url?: string | null
   env?: Record<string, string | undefined>
+  /** Injectable for tests; defaults to enumerating loopback listeners. */
+  discover?: () => number[]
 }): string[] {
   const env = input.env ?? {}
   // An explicit --url is EXCLUSIVE. If the default stayed in the list, a typo
@@ -40,17 +42,64 @@ export function candidateServers(input: {
   // in whatever is running there. Mis-delivery is worse than non-delivery, so an explicit
   // target is the ONLY target and a wrong one fails loudly.
   if (input.url) return [input.url.replace(/\/+$/, "")]
-  const raw = [env.IRIS_SERVER, env.OPENCODE_SERVER, DEFAULT_SERVER]
   const seen = new Set<string>()
   const out: string[] = []
-  for (const u of raw) {
-    if (!u) continue
+  const add = (u?: string | null) => {
+    if (!u) return
     const trimmed = u.replace(/\/+$/, "")
-    if (seen.has(trimmed)) continue
+    if (seen.has(trimmed)) return
     seen.add(trimmed)
     out.push(trimmed)
   }
+
+  add(env.IRIS_SERVER)
+  add(env.OPENCODE_SERVER)
+
+  // DISCOVER the ports iris is actually listening on, BEFORE falling back to the documented
+  // default. Session servers bind an EPHEMERAL port (:60824, :51477 — different every start)
+  // unless someone ran `iris serve --port 4096`. Probing only the default meant this command
+  // failed on most machines with "No session matching <id>" — it had fallen through to the
+  // bridge resolver, whose list is the heartbeat's, so the message named the session rather
+  // than the real problem. The same call with an explicit --url delivered.
+  //
+  // Discovery failing is not an error: the default still stands behind it.
+  try {
+    for (const port of (input.discover ?? discoverLocalServerPorts)()) {
+      add(`http://127.0.0.1:${port}`)
+    }
+  } catch {
+    /* no lsof, or nothing listening */
+  }
+
+  add(DEFAULT_SERVER)
   return out
+}
+
+/**
+ * Loopback ports an `iris` process is listening on.
+ *
+ * A subprocess, which is what this module exists to avoid on the DELIVERY path — but discovery
+ * has no portable in-process equivalent, and the alternative is a registry file with its own
+ * format, lifecycle and staleness. It runs once per send, costs ~50ms, and its failure is
+ * non-fatal.
+ */
+function discoverLocalServerPorts(): number[] {
+  const proc = Bun.spawnSync([
+    "sh",
+    "-c",
+    "lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | grep -i iris | awk '{print $9}'",
+  ])
+  if (!proc.success) return []
+  return [
+    ...new Set(
+      new TextDecoder()
+        .decode(proc.stdout)
+        .split("\n")
+        .map((l) => l.trim().split(":").pop() ?? "")
+        .filter((p) => /^\d+$/.test(p))
+        .map(Number),
+    ),
+  ]
 }
 
 /**

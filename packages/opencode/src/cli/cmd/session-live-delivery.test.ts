@@ -281,3 +281,33 @@ describe("fetchLiveSessions — reads the server, never the bridge", () => {
     expect(await fetchLiveSessions("http://127.0.0.1:1", 300)).toBeNull()
   })
 })
+
+describe("candidateServers — discovery, because servers bind EPHEMERAL ports", () => {
+  test("discovered ports are probed, and come BEFORE the documented default", () => {
+    // Measured 2026-09-13: a session server was on :60824 and `iris sessions send` failed with
+    // "No session matching <id>" — it only ever probed :4096. The same command with
+    // `--url http://127.0.0.1:60824` delivered. The port is ephemeral unless someone ran
+    // `iris serve --port 4096`, so the default alone is wrong on most machines.
+    const got = candidateServers({ discover: () => [60824, 51477] })
+    expect(got).toContain("http://127.0.0.1:60824")
+    expect(got).toContain("http://127.0.0.1:51477")
+    expect(got.indexOf("http://127.0.0.1:60824")).toBeLessThan(got.indexOf("http://127.0.0.1:4096"))
+  })
+
+  test("an explicit --url still wins outright and skips discovery entirely", () => {
+    let called = false
+    const got = candidateServers({ url: "http://127.0.0.1:9999", discover: () => { called = true; return [1] } })
+    expect(got).toEqual(["http://127.0.0.1:9999"])
+    expect(called).toBe(false)
+  })
+
+  test("discovery throwing does not break the command — the default still stands", () => {
+    const got = candidateServers({ discover: () => { throw new Error("no lsof") } })
+    expect(got).toContain("http://127.0.0.1:4096")
+  })
+
+  test("a discovered 4096 is not listed twice", () => {
+    const got = candidateServers({ discover: () => [4096] })
+    expect(got.filter((u) => u === "http://127.0.0.1:4096")).toHaveLength(1)
+  })
+})
