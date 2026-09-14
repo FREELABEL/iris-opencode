@@ -7,6 +7,7 @@ import { List } from "@opencode-ai/ui/list"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { SegmentedControlV2, SegmentedControlItemV2 } from "@opencode-ai/ui/v2/segmented-control-v2"
 import { IrisForceGraph, type ForceEdge, type ForceNode } from "./iris-force-graph"
+import { graphBoardIsIsolated, scopeGraphRows, type GraphScope } from "./iris-graph-scope"
 import { useServerSDK } from "@/context/server-sdk"
 import { usePlatform } from "@/context/platform"
 
@@ -337,6 +338,27 @@ const LAST_SURFACE_KEY = "iris.panel.surface"
  * expect from a tab you left open.
  */
 const LAST_SUBVIEW_KEY = "iris.panel.subviews"
+
+/**
+ * WHOSE graph you are looking at.
+ *
+ * The graph endpoint is account-wide — `/user/{id}/bloqs/graph`, every board you own — so it
+ * drew the same picture no matter which board was selected. Everything else in this panel is
+ * scoped to the board in the picker; the graph silently was not, which makes the board picker
+ * look broken on this one pane.
+ */
+const GRAPH_SCOPE_KEY = "iris.panel.graphScope"
+
+const GRAPH_SCOPES = [
+  // Default. The reason the pane exists is "what does THIS project touch".
+  { id: "project", label: "Project", hint: "this board and what it links to" },
+  { id: "connected", label: "Connected", hint: "everything reachable from this board" },
+  { id: "full", label: "Full atlas", hint: "every board in the account" },
+] as const
+
+function normalizeGraphScope(v: unknown): GraphScope {
+  return GRAPH_SCOPES.some((g) => g.id === v) ? (v as GraphScope) : "project"
+}
 
 /**
  * FOUR SURFACES, ONE TAB — and that is a width decision, not a shortcut.
@@ -724,6 +746,22 @@ export function SessionIrisTab() {
     })(),
   )
 
+  const [graphScope, setGraphScope] = createSignal<GraphScope>(
+    (() => {
+      try {
+        return normalizeGraphScope(localStorage.getItem(GRAPH_SCOPE_KEY))
+      } catch {
+        return "project" as GraphScope
+      }
+    })(),
+  )
+  const chooseGraphScope = (id: GraphScope) => {
+    setGraphScope(id)
+    try {
+      localStorage.setItem(GRAPH_SCOPE_KEY, id)
+    } catch {}
+  }
+
   /**
    * The Atlas search box.
    *
@@ -852,8 +890,28 @@ export function SessionIrisTab() {
    * Deduplicated on the unordered pair, because an edge appears on both of its endpoints' rows
    * and drawing it twice doubles its apparent weight.
    */
+  /**
+   * The rows the graph actually draws, narrowed to the selected board.
+   *
+   * A LENS over the payload, not a second request, and the template's rule 1 ("a sub-view is a
+   * different endpoint, never a filter over rows already on screen") is argued rather than
+   * ignored here. That rule exists because filtering a PAGE leaves the footer counting the
+   * unfiltered set. This payload is not paged — the graph pane asks for 500 and the account has
+   * 40 connected boards — so every board and every edge is already in hand, and the count under
+   * the drawing is recomputed from the same narrowed set below. Nothing can describe a set it
+   * did not search.
+   *
+   * `project` is radius 1: the board and its direct relations. `connected` walks the whole
+   * component, which is the honest answer to "what is this project part of" when the link is
+   * two hops away.
+   */
+  const graphScopedRows = createMemo<any[]>(() => scopeGraphRows(rows() as any[], activeBloq(), graphScope()))
+
+  /** True when the selected board has no relation to anything — the common case, not an error. */
+  const graphBoardIsolated = createMemo(() => graphBoardIsIsolated(rows() as any[], activeBloq(), graphScope()))
+
   const graphNodes = createMemo<ForceNode[]>(() =>
-    (rows() as any[]).map((r) => ({
+    graphScopedRows().map((r) => ({
       id: r.id,
       name: r.name,
       degree: r.degree,
@@ -864,10 +922,10 @@ export function SessionIrisTab() {
   )
 
   const graphEdges = createMemo<ForceEdge[]>(() => {
-    const known = new Set((rows() as any[]).map((r) => r.id))
+    const known = new Set(graphScopedRows().map((r) => r.id))
     const seen = new Set<string>()
     const out: ForceEdge[] = []
-    for (const r of rows() as any[]) {
+    for (const r of graphScopedRows()) {
       for (const l of r.links ?? []) {
         // Only edges whose BOTH ends are on screen. A link to a board on the next page would
         // otherwise anchor at the origin and read as a real relation to nothing.
@@ -1924,33 +1982,84 @@ export function SessionIrisTab() {
                   whole area rendering that fact. Sorted by degree, the same data answers "what
                   is central here" at a glance, and the isolated count is stated instead. */}
               <Match when={pane() === "graph"}>
-                <Show when={(current() as any)?.summary}>
-                  {(sum) => (
-                    <p class="px-2 pb-2 text-11-regular text-text-weaker">
-                      <span class="font-mono tabular-nums">{sum().edges}</span> relations across{" "}
-                      <span class="font-mono tabular-nums">{sum().nodes - sum().isolated}</span> boards ·{" "}
-                      <span class="font-mono tabular-nums">{sum().isolated}</span> boards ({sum().isolatedPct}%)
-                      connect to nothing
-                    </p>
-                  )}
-                </Show>
+                {/* WHOSE graph. Chips, not a plate: this narrows the pane you are already on,
+                    it does not change the subject — the same reason sub-views get a rule and
+                    surfaces get a plate. */}
+                <div class="iris-scope shrink-0" role="tablist" aria-label="Graph scope">
+                  <For each={GRAPH_SCOPES}>
+                    {(sc) => (
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={graphScope() === sc.id}
+                        title={sc.hint}
+                        class="iris-detailnav__item"
+                        classList={{ "iris-detailnav__item--active": graphScope() === sc.id }}
+                        onClick={() => chooseGraphScope(sc.id)}
+                      >
+                        {sc.label}
+                      </button>
+                    )}
+                  </For>
+                </div>
+
+                {/* The count describes THE DRAWING BELOW IT, never the account.
+                    The server summary is about all 160 boards; printing it over a two-node
+                    project view would be a sentence about a set the picture never showed. */}
+                <p class="px-2 pb-2 text-11-regular text-text-weaker">
+                  <Switch>
+                    <Match when={graphScope() === "full"}>
+                      <Show when={(current() as any)?.summary}>
+                        {(sum) => (
+                          <>
+                            <span class="font-mono tabular-nums">{sum().edges}</span> relations across{" "}
+                            <span class="font-mono tabular-nums">{sum().nodes - sum().isolated}</span> boards ·{" "}
+                            <span class="font-mono tabular-nums">{sum().isolated}</span> boards ({sum().isolatedPct}%)
+                            connect to nothing
+                          </>
+                        )}
+                      </Show>
+                    </Match>
+                    <Match when={graphBoardIsolated()}>
+                      {/* Not an error and not an empty state: it is a measurement, and it is
+                          true of three boards in four on this account. */}
+                      {activeBloqName()} has no relation to any other board
+                    </Match>
+                    <Match when={graphScope() === "project"}>
+                      <span class="font-mono tabular-nums">{Math.max(0, graphScopedRows().length - 1)}</span> boards
+                      linked directly to {activeBloqName()} ·{" "}
+                      <span class="font-mono tabular-nums">{graphEdges().length}</span> relations
+                    </Match>
+                    <Match when={true}>
+                      <span class="font-mono tabular-nums">{graphScopedRows().length}</span> boards reachable from{" "}
+                      {activeBloqName()} · <span class="font-mono tabular-nums">{graphEdges().length}</span> relations
+                    </Match>
+                  </Switch>
+                </p>
                 {/* THE PICTURE, then the list.
                     Both, because they answer different halves: the layout shows how the
                     connected boards cluster, and the list is the only thing that can show a
                     board with no edges — 76% of them — which a force graph renders as absence. */}
-                <Show when={rows().length}>
+                <Show when={graphScopedRows().length}>
                   <IrisForceGraph nodes={graphNodes()} edges={graphEdges()} onNodeClick={(n) => choose(n.id)} />
                 </Show>
-                {/* The list, folded away.
-                    Kept rather than dropped because 121 of 160 boards have no edge at all and a
-                    force layout renders that as absence — but it is the reference, not the view,
-                    so it is closed by default and the graph gets the room. */}
+                {/* An isolated board would otherwise leave the canvas blank, which reads as a
+                    failed load rather than the finding it is. Offer the way out instead. */}
+                <Show when={graphBoardIsolated()}>
+                  <div class="flex-1 min-h-0 flex flex-col items-center justify-center gap-2 px-6 text-center">
+                    <p class="text-12-regular text-text-weak">Nothing links to this board yet.</p>
+                    <button type="button" class="iris-detailnav__item" onClick={() => chooseGraphScope("full")}>
+                      Show the full atlas
+                    </button>
+                  </div>
+                </Show>
                 <details class="iris-rows shrink-0">
                   <summary class="iris-rows__summary">
-                    {rows().length} connected {rows().length === 1 ? "board" : "boards"}, as a list
+                    {graphScopedRows().length} connected{" "}
+                    {graphScopedRows().length === 1 ? "board" : "boards"}, as a list
                   </summary>
                   <div class="iris-rows__body">
-                    <For each={rows()}>
+                    <For each={graphScopedRows()}>
                       {(n) => (
                         <div class="px-2 py-1.5 border-b border-border-weaker-base last:border-0">
                           <div class="flex items-baseline gap-2">

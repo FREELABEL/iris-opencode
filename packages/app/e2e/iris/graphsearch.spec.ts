@@ -11,6 +11,10 @@ async function open(page: Page, sub: string) {
       )
       localStorage.setItem("iris.panel.bloq", "174")
       localStorage.setItem("iris.panel.surface", "atlas")
+      // The graph is scoped to the selected board by default now. This test is about the
+      // FULL atlas — the force layout across every connected board — so it says so rather
+      // than inheriting whatever the default happens to be.
+      localStorage.setItem("iris.panel.graphScope", "full")
       localStorage.setItem("iris.panel.subviews", JSON.stringify({ atlas: sv }))
     },
     [directory, sub],

@@ -812,3 +812,22 @@
 .iris-rows__summary:hover {
   color: var(--text-base);
 }
+
+/*
+ * GRAPH SCOPE — the same chips as .iris-detailnav, in their own strip.
+ *
+ * Shares the item styling deliberately: both are the lightest level of navigation, and drawing
+ * them differently would imply a hierarchy that is not there. Separate class because this one
+ * scopes a PANE, not a record, and a selector that lies about what it holds is how the detail
+ * chips end up restyled by accident.
+ */
+.iris-scope {
+  display: flex;
+  gap: 4px;
+  padding: 0 8px 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.iris-scope::-webkit-scrollbar {
+  display: none;
+}
