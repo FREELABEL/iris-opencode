@@ -8,6 +8,8 @@ import {
   participantPathSegment,
   isNodeParticipant,
   nodeIdFromParticipant,
+  isSessionParticipant,
+  sessionIdFromParticipant,
   ROLES,
 } from "./rooms-participants"
 
@@ -45,6 +47,7 @@ async function changeMembership(
   const who = resolveParticipant({
     agent: args.agent,
     node: args.node,
+    session: args.session,
     thisNode: Boolean(args["this-node"]),
   })
   if ("error" in who) return fail(who.error)
@@ -87,11 +90,21 @@ async function changeMembership(
   const body = await res.json().catch(() => ({}))
   if (args.json) { await writeJson(body ?? { ok: true }); return }
 
-  const kind = isNodeParticipant(who.id) ? `machine ${nodeIdFromParticipant(who.id)}` : `agent ${who.id}`
+  const kind = isSessionParticipant(who.id)
+    ? `session ${sessionIdFromParticipant(who.id).slice(0, 12)}`
+    : isNodeParticipant(who.id)
+      ? `machine ${nodeIdFromParticipant(who.id)}`
+      : `agent ${who.id}`
   if (isJoin) {
     console.log(`  ${success("✓")} ${dim("added")} ${kind} ${dim(`as ${args.role}`)}`)
     if (!args["auto-respond"]) {
       console.log(`  ${dim("@mention it in the room to reach it — pass --auto-respond for always-on")}`)
+    }
+    if (isNodeParticipant(who.id)) {
+      // Say this HERE, at the moment someone would otherwise wait for a message that never
+      // arrives. A machine can be a member; it cannot be a delivery target, because nothing can
+      // tell which of its sessions a person is watching.
+      console.log(`  ${dim("note: a machine is a member, not an inbox — join with --session <id> to RECEIVE messages")}`)
     }
   } else {
     console.log(`  ${success("✓")} ${dim("removed")} ${kind}`)
@@ -103,6 +116,10 @@ const selectors = (yargs: any) =>
   yargs
     .positional("thread", { describe: "thread (room) ID", type: "string" })
     .option("agent", { describe: "bloq agent ID", type: "string" })
+    .option("session", {
+      describe: "session ID — the terminal that should RECEIVE the room's messages",
+      type: "string",
+    })
     .option("node", { describe: "node ID, added as a machine participant", type: "string" })
     .option("this-node", { describe: "this machine", type: "boolean", default: false })
     .option("json", { describe: "JSON output", type: "boolean", default: false })

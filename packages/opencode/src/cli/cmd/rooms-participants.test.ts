@@ -11,6 +11,9 @@ import {
   isValidRole,
   localNodeId,
   resolveParticipant,
+  sessionParticipantId,
+  isSessionParticipant,
+  sessionIdFromParticipant,
 } from "./rooms-participants"
 
 /**
@@ -125,5 +128,53 @@ describe("resolveParticipant — exactly one selector, or refuse", () => {
   test("--this-node on an un-enrolled machine explains the fix", () => {
     const r = resolveParticipant({ thisNode: true, localNode: () => null })
     expect("error" in r && r.error).toContain("iris hive connect")
+  })
+})
+
+describe("session: participants — the only unambiguous delivery target", () => {
+  test("prefixes a bare session id", () => {
+    expect(sessionParticipantId("ses_abc")).toBe("session:ses_abc")
+  })
+
+  test("is idempotent", () => {
+    expect(sessionParticipantId("session:ses_abc")).toBe("session:ses_abc")
+  })
+
+  test("refuses an empty id", () => {
+    expect(() => sessionParticipantId("")).toThrow()
+  })
+
+  test("a session is not a node, and a node is not a session", () => {
+    // Both are agent-typed participants in the same free-string column, so the prefixes are the
+    // only thing keeping the two id spaces apart.
+    expect(isSessionParticipant("session:ses_a")).toBe(true)
+    expect(isSessionParticipant("node:01a0")).toBe(false)
+    expect(isNodeParticipant("session:ses_a")).toBe(false)
+    expect(isSessionParticipant("243")).toBe(false)
+  })
+
+  test("round-trips back to the bare session id", () => {
+    expect(sessionIdFromParticipant("session:ses_abc")).toBe("ses_abc")
+    expect(sessionIdFromParticipant("243")).toBe("243")
+  })
+
+  test("--session resolves", () => {
+    const r = resolveParticipant({ session: "ses_abc" })
+    expect("id" in r && r.id).toBe("session:ses_abc")
+  })
+
+  test("--session and --this-node together REFUSE", () => {
+    const r = resolveParticipant({ session: "ses_abc", thisNode: true })
+    expect("error" in r).toBe(true)
+    if ("error" in r) { expect(r.error).toContain("--session"); expect(r.error).toContain("--this-node") }
+  })
+
+  test("the no-selector error mentions --session first, since it is the one that receives", () => {
+    const r = resolveParticipant({})
+    expect("error" in r && r.error).toContain("--session")
+  })
+
+  test("the colon still survives a URL path", () => {
+    expect(participantPathSegment("session:ses_abc")).toBe("session%3Ases_abc")
   })
 })

@@ -24,11 +24,44 @@ import { join } from "path"
  */
 export const NODE_PREFIX = "node:"
 
+/**
+ * A participant that is ONE SESSION, not a whole machine.
+ *
+ * WHY THIS EXISTS. `node:` says which machine is in the room, and that is the right unit for
+ * membership — machines persist, sessions come and go. It is the wrong unit for DELIVERY.
+ * Measured 2026-09-14: one real node's heartbeat listed 25 opencode sessions (15 idle, 10 stale,
+ * 0 "active") while two servers were demonstrably listening on loopback, and `GET /session` on a
+ * live server returns every session in shared storage rather than the open ones. Neither the
+ * server nor the daemon can tell which of those 25 a person is looking at, and a message sent to
+ * all of them is 25 injections into dead transcripts.
+ *
+ * Nothing can infer it, so the person names it. A `session:` participant is unambiguous: exactly
+ * one transcript, the one they chose.
+ */
+export const SESSION_PREFIX = "session:"
+
 /** The participant id for a machine. */
 export function nodeParticipantId(nodeId: string): string {
   const id = (nodeId ?? "").trim()
   if (!id) throw new Error("nodeParticipantId: empty node id")
   return id.startsWith(NODE_PREFIX) ? id : `${NODE_PREFIX}${id}`
+}
+
+/** The participant id for one session. */
+export function sessionParticipantId(sessionId: string): string {
+  const id = (sessionId ?? "").trim()
+  if (!id) throw new Error("sessionParticipantId: empty session id")
+  return id.startsWith(SESSION_PREFIX) ? id : `${SESSION_PREFIX}${id}`
+}
+
+/** Is this participant a single session? */
+export function isSessionParticipant(agentId: string | null | undefined): boolean {
+  return typeof agentId === "string" && agentId.startsWith(SESSION_PREFIX)
+}
+
+/** The bare session id behind a participant id. */
+export function sessionIdFromParticipant(agentId: string): string {
+  return agentId.startsWith(SESSION_PREFIX) ? agentId.slice(SESSION_PREFIX.length) : agentId
 }
 
 /** Is this participant a machine rather than a bloq agent? */
@@ -82,23 +115,28 @@ export function localNodeId(configPath = join(homedir(), ".iris", "config.json")
 export function resolveParticipant(input: {
   agent?: string | null
   node?: string | null
+  session?: string | null
   thisNode?: boolean
   localNode?: () => string | null
 }): { id: string } | { error: string } {
   const picked = [
     input.agent ? "--agent" : null,
     input.node ? "--node" : null,
+    input.session ? "--session" : null,
     input.thisNode ? "--this-node" : null,
   ].filter(Boolean) as string[]
 
   if (picked.length === 0) {
-    return { error: "Name who is joining: --agent <id>, --node <id>, or --this-node." }
+    return {
+      error: "Name who is joining: --session <id> (a terminal), --agent <id>, --node <id>, or --this-node.",
+    }
   }
   if (picked.length > 1) {
     return { error: `Pick one of ${picked.join(", ")} — not several.` }
   }
 
   if (input.agent) return { id: String(input.agent).trim() }
+  if (input.session) return { id: sessionParticipantId(String(input.session)) }
   if (input.node) return { id: nodeParticipantId(String(input.node)) }
 
   const local = (input.localNode ?? localNodeId)()
