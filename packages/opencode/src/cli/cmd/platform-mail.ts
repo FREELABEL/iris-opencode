@@ -350,6 +350,10 @@ const MailSendCommand = cmd({
         // findDuplicate()->first(), which shares the exact defect this command just fixed.
         toLeadId: leadId,
         toHandle: leadId ? undefined : args.to,
+        // LOAD-BEARING, and more so now that a lead id is sent. The router picks a channel from
+        // the LEAD's own order when none is pinned, and a lead with a phone plans to imessage:
+        // measured 2026-09-14, lead #10394 plans `imessage` with no channel and `apple_mail`
+        // with this line. Remove it and `iris mail send` starts sending text messages.
         channel: "apple_mail",
         subject: args.subject,
         message: args.body,
