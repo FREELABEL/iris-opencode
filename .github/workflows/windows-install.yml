@@ -1,0 +1,109 @@
+# Does the Windows installer work on a machine with no Git?
+#
+# That question had no answer until now. The installer's PowerShell was written and
+# tested against pwsh 7 on macOS — a DIFFERENT ENGINE from the Windows PowerShell 5.1
+# that actually runs on a client's machine — and the only real Windows box in reach was
+# a client's production QuickBooks server, which is not where a first run belongs.
+#
+# GitHub's windows-latest runner is free on public repos, disposable, and real.
+#
+# THE POINT IS THE `git` REMOVAL. A runner ships with Git and Node pre-installed, so a
+# plain run here proves nothing about the clients who kept hitting "Agent Bridge skipped
+# (Git not found)" — it would be the convenient test rather than the real one. The job
+# takes Git off PATH first and asserts it is genuinely gone before testing anything.
+name: windows-install
+
+on:
+  push:
+    branches: [main]
+    paths: ['install.ps1', 'script/test-install-*.ps1', '.github/workflows/windows-install.yml']
+  pull_request:
+    paths: ['install.ps1', 'script/test-install-*.ps1', '.github/workflows/windows-install.yml']
+  workflow_dispatch:
+
+jobs:
+  no-git:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Which PowerShell is this, really?
+        shell: powershell           # Windows PowerShell 5.1 — NOT pwsh 7
+        run: |
+          "edition: $($PSVersionTable.PSEdition)  version: $($PSVersionTable.PSVersion)"
+          if ($PSVersionTable.PSVersion.Major -ne 5) {
+            throw "expected Windows PowerShell 5.1 — this job exists to test THAT engine, got $($PSVersionTable.PSVersion)"
+          }
+
+      - name: install.ps1 parses under 5.1
+        shell: powershell
+        run: |
+          $errors = $null; $tokens = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path ./install.ps1), [ref]$tokens, [ref]$errors)
+          if ($errors.Count -gt 0) { $errors | ForEach-Object { $_.Message }; throw "install.ps1 does not parse under Windows PowerShell 5.1" }
+          "parsed OK"
+
+      - name: Remove Git from PATH, and PROVE it is gone
+        shell: powershell
+        run: |
+          # Strip every PATH entry containing git, then confirm the command cannot be
+          # resolved. Without this assertion the whole job could pass with Git present
+          # and tell us nothing — the failure mode these tests exist to catch.
+          $clean = ($env:PATH -split ';' | Where-Object { $_ -and $_ -notmatch '(?i)git' }) -join ';'
+          "PATH entries: $((($env:PATH -split ';').Count)) -> $((($clean -split ';').Count))"
+          echo "PATH=$clean" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Confirm the client condition — no Git
+        shell: powershell
+        run: |
+          $git = Get-Command git -ErrorAction SilentlyContinue
+          if ($git) { throw "Git is STILL on PATH ($($git.Source)) — this job would be testing the easy case" }
+          "git is not available — this is the client condition"
+          # Node must still be here: the daemon needs it, and that is a separate problem.
+          $node = Get-Command node -ErrorAction SilentlyContinue
+          if (-not $node) { throw "node missing — the runner image changed; this test needs it" }
+          "node: $((node --version))"
+
+      - name: Fetch the daemon with no Git at all
+        shell: powershell
+        run: |
+          . ./script/test-install-fetch.ps1
+
+      - name: Autostart registers a real scheduled task
+        shell: powershell
+        run: |
+          . ./script/test-install-autostart.ps1
+
+      - name: The task really exists in Task Scheduler
+        shell: powershell
+        run: |
+          # The unit tests mock the cmdlets. This asserts the REAL thing landed — the
+          # one claim that has never been made on an actual Windows machine.
+          $text = Get-Content -Raw ./install.ps1
+          $start = $text.IndexOf("function Register-IrisAutostart")
+          if ($start -lt 0) { throw "Register-IrisAutostart not found in install.ps1" }
+          $rest = $text.Substring($start)
+          $end = $rest.IndexOf("`n# ─── Step 5")
+          if ($end -lt 0) { $end = $rest.Length }
+          Invoke-Expression $rest.Substring(0, $end)
+
+          $cmd = Join-Path $env:TEMP "iris-daemon.cmd"
+          Set-Content -Path $cmd -Value "@echo off`r`necho fake daemon" -Encoding ASCII
+          $r = Register-IrisAutostart -DaemonCmd $cmd -TaskName "IRIS Hive Node (CI)"
+          if (-not $r.Ok) { throw "registration failed: $($r.Reason)" }
+          "method: $($r.Method)"
+
+          if ($r.Method -eq 'scheduled-task') {
+            $task = Get-ScheduledTask -TaskName "IRIS Hive Node (CI)" -ErrorAction Stop
+            "state: $($task.State)"
+            if ($task.Triggers.Count -lt 1) { throw "the task registered with no trigger — it would never start" }
+            # The security property, asserted against the REAL registered task rather
+            # than a mock's parameter bag.
+            if ($task.Principal.RunLevel -eq 'Highest') { throw "the task registered ELEVATED — it must run as the user" }
+            "trigger: $($task.Triggers[0].CimClass.CimClassName)  runlevel: $($task.Principal.RunLevel)"
+            Unregister-ScheduledTask -TaskName "IRIS Hive Node (CI)" -Confirm:$false
+            "cleaned up"
+          } else {
+            "fell back to $($r.Method) — acceptable, but the scheduled task is the wanted path"
+          }
