@@ -227,6 +227,63 @@ try {
 
 Remove-Item -Recurse -Force $TmpDir -ErrorAction SilentlyContinue
 
+# ─── Post-install read-back: did we install THE PRODUCT, or just a file? ─────
+#
+# A GREEN EXIT IS NOT A LANDING. Until now nothing in this script ever ran the binary it
+# had just written, so "IRIS Code installed" was a claim about Copy-Item, not about a
+# working CLI. Its only check was `Test-Path "$INSTALL_DIR\iris.exe"` — the same
+# path.exists() that cli.rs documents as unable to fail, because a 216-module platform CLI
+# and a core-only sidecar are the same answer to it.
+#
+# The bash installer grew this check as #185159 (42e196d31). This is the same check for
+# Windows, which had the same gap and less coverage: the desktop app overwrote the user's
+# CLI with its own bundled opencode sidecar for two weeks (#183738) and nothing in either
+# installer could have told the difference.
+#
+# Matched on stdout AND stderr joined (Out-String over 2>&1), deliberately: the real CLI
+# prints help to stdout and the upstream sidecar prints it to stderr, so a stdout-only
+# check would pass today for a reason unrelated to what is being asked.
+function Test-InstalledCli {
+    param([Parameter(Mandatory = $true)][string]$BinPath)
+
+    if (-not (Test-Path $BinPath)) {
+        Write-Host "Install failed: nothing at $BinPath" -ForegroundColor Red
+        Write-Host "  The copy step reported success but left no binary." -ForegroundColor DarkGray
+        return $false
+    }
+
+    $help = ""
+    try {
+        $help = (& $BinPath --help 2>&1 | Out-String)
+    } catch {
+        $help = ""
+    }
+
+    if ([string]::IsNullOrWhiteSpace($help)) {
+        Write-Host "Install failed: the installed binary produced no output at all." -ForegroundColor Red
+        Write-Host "  It is present but will not run. A truncated download, a blocked" -ForegroundColor DarkGray
+        Write-Host "  executable, or a missing runtime all look like this." -ForegroundColor DarkGray
+        return $false
+    }
+
+    # Two independent markers, so renaming one command group cannot condemn a healthy install.
+    if (($help -match '(?i)atlas') -and ($help -match '(?i)bloq')) {
+        return $true
+    }
+
+    Write-Host "Install failed: the binary at $BinPath runs, but it is NOT the IRIS platform CLI." -ForegroundColor Red
+    Write-Host "  It is missing the platform command surface (no atlas, no bloq)." -ForegroundColor DarkGray
+    Write-Host "  This is almost always the desktop app's bundled sidecar written over your CLI." -ForegroundColor DarkGray
+    Write-Host "  Report it against bug #183738 and do not use this binary." -ForegroundColor DarkGray
+    return $false
+}
+
+# Ask the path what it is now, BEFORE telling the user it is installed.
+if (-not (Test-InstalledCli -BinPath $Dest)) {
+    Send-InstallBeacon -EventType "install_failed" -Step "verify_installed_cli" -Reason "post-install read-back rejected the binary at $Dest"
+    exit 1
+}
+
 Write-Step "1/5" "IRIS Code" "installed"
 
 # ─── Step 2: SDK (built-in) ──────────────────────────────────────────────────

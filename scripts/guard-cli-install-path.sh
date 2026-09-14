@@ -161,6 +161,23 @@ if [ "$RAN" -lt 1 ]; then
   [ "$JSON" -eq 1 ] || printf '  \033[31m✗\033[0m guard_actually_ran\n    \033[91mno assertion produced a verdict — this run checked nothing\033[0m\n'
 fi
 
+# ── 7. Windows needs the read-back too ──────────────────────────────────────
+# install.ps1 had exactly the same gap as install: its only check was
+# `Test-Path "$INSTALL_DIR\iris.exe"`, and it never executed what it wrote. Windows has
+# the least verification coverage of any platform here, so it needs this most.
+INSTALL_PS1="$ROOT/install.ps1"
+if [ ! -f "$INSTALL_PS1" ]; then
+  RESULTS+=("windows_installer_reads_back|skipped|no install.ps1 under $ROOT")
+  [ "$JSON" -eq 1 ] || printf '  \033[90m-\033[0m windows_installer_reads_back\n    \033[90mnot applicable: no install.ps1 under this tree\033[0m\n'
+else
+  if grep -qE '^\s*function\s+Test-InstalledCli' "$INSTALL_PS1" \
+     && grep -qE 'Test-InstalledCli\s+-BinPath' "$INSTALL_PS1"; then
+    pass windows_installer_reads_back "install.ps1 defines Test-InstalledCli and calls it before reporting the install"
+  else
+    fail windows_installer_reads_back "install.ps1 never verifies the binary it installed. Its only check is Test-Path on the destination — the same path.exists() that cannot distinguish the platform CLI from the app's bundled sidecar. Mirror the bash verify_installed_cli (#185159)."
+  fi
+fi
+
 if [ "$JSON" -eq 1 ]; then
   printf '{"ok":%s,"exitCode":%d,"checks":[' "$([ $FAIL -eq 0 ] && echo true || echo false)" "$FAIL"
   first=1
