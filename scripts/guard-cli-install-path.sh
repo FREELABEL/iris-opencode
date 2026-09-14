@@ -65,8 +65,17 @@ rust_code() {
   sed -e 's://.*::' "$1" | perl -0777 -pe 's{/\*.*?\*/}{}gs'
 }
 
+# The desktop app lives only on the iris/1.18.x line; `main` owns the CLI and its `install`.
+# Both branches carry this script, so the desktop assertions are reported as NOT APPLICABLE
+# on a tree with no desktop package rather than failing it — an always-red gate is one
+# people learn to ignore, which is worse than not having it.
+#
+# The installer assertion below still runs on BOTH, deliberately: main's `install` is what
+# every curl-pipe user gets, and it is the copy that was missing the read-back (#185159).
+# A floor at the end refuses to report success if nothing was actually asserted.
 if [ ! -f "$CLI_RS" ]; then
-  fail cli_rs_present "no packages/desktop/src-tauri/src/cli.rs under $ROOT — this guard belongs on the desktop branch"
+  RESULTS+=("desktop_checks|skipped|no packages/desktop under $ROOT — this tree does not build the app, so the five cli.rs assertions do not apply here. They run on the iris/1.18.x branch, where CI enforces them.")
+  [ "$JSON" -eq 1 ] || printf '  \033[90m-\033[0m desktop_checks\n    \033[90mnot applicable: no packages/desktop under this tree; the cli.rs assertions run on the iris/1.18.x branch\033[0m\n' 
 else
   CODE="$(rust_code "$CLI_RS")"
 
@@ -137,6 +146,35 @@ else
     fi
   else
     fail installer_reads_back "./install never verifies the binary it installed. Its only existence check was [ -f \"\$INSTALL_DIR/iris\" ] — the same path.exists() cli.rs documents as unable to fail. A codesign failure is swallowed by '|| true', and on macOS an unsigned binary is SIGKILLed on every run (#185159)."
+  fi
+fi
+
+# A run where everything was skipped would exit 0 and assert nothing.
+RAN=0
+for r in "${RESULTS[@]}"; do
+  st="${r#*|}"; st="${st%%|*}"
+  case "$st" in pass|fail) RAN=$((RAN + 1)) ;; esac
+done
+if [ "$RAN" -lt 1 ]; then
+  FAIL=1
+  RESULTS+=("guard_actually_ran|fail|no assertion produced a verdict — this run checked nothing and must not read as a pass")
+  [ "$JSON" -eq 1 ] || printf '  \033[31m✗\033[0m guard_actually_ran\n    \033[91mno assertion produced a verdict — this run checked nothing\033[0m\n'
+fi
+
+# ── 7. Windows needs the read-back too ──────────────────────────────────────
+# install.ps1 had exactly the same gap as install: its only check was
+# `Test-Path "$INSTALL_DIR\iris.exe"`, and it never executed what it wrote. Windows has
+# the least verification coverage of any platform here, so it needs this most.
+INSTALL_PS1="$ROOT/install.ps1"
+if [ ! -f "$INSTALL_PS1" ]; then
+  RESULTS+=("windows_installer_reads_back|skipped|no install.ps1 under $ROOT")
+  [ "$JSON" -eq 1 ] || printf '  \033[90m-\033[0m windows_installer_reads_back\n    \033[90mnot applicable: no install.ps1 under this tree\033[0m\n'
+else
+  if grep -qE '^\s*function\s+Test-InstalledCli' "$INSTALL_PS1" \
+     && grep -qE 'Test-InstalledCli\s+-BinPath' "$INSTALL_PS1"; then
+    pass windows_installer_reads_back "install.ps1 defines Test-InstalledCli and calls it before reporting the install"
+  else
+    fail windows_installer_reads_back "install.ps1 never verifies the binary it installed. Its only check is Test-Path on the destination — the same path.exists() that cannot distinguish the platform CLI from the app's bundled sidecar. Mirror the bash verify_installed_cli (#185159)."
   fi
 fi
 
