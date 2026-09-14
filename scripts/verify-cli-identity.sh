@@ -41,10 +41,16 @@ PLATFORM_CMDS=(atlas bloqs hive playbook brands)
 
 DEEP=0
 JSON=0
+BUNDLE_ONLY=0
 for a in "$@"; do
   case "$a" in
     --deep) DEEP=1 ;;
     --json) JSON=1 ;;
+    # Release-path mode: audit a freshly BUILT bundle on a CI runner, where there is no
+    # ~/.iris/bin/iris to compare against. The machine-local checks are named as skipped
+    # rather than quietly dropped — a check that vanishes in CI is how a gate becomes
+    # decorative without anyone deciding to remove it.
+    --bundle-only) BUNDLE_ONLY=1 ;;
     -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
   esac
 done
@@ -57,6 +63,7 @@ _json_escape() { python3 -c 'import json,sys;print(json.dumps(sys.stdin.read().r
 record() { RESULTS+=("$1|$2|$3"); }
 pass() { record "$1" pass "$2"; [ "$JSON" -eq 1 ] || printf '  \033[32m✓\033[0m %s\n    \033[90m%s\033[0m\n' "$1" "$2"; }
 fail() { record "$1" fail "$2"; FAIL=1; [ "$JSON" -eq 1 ] || printf '  \033[31m✗\033[0m %s\n    \033[91m%s\033[0m\n' "$1" "$2"; }
+skip() { record "$1" skipped "$2"; [ "$JSON" -eq 1 ] || printf '  \033[90m-\033[0m %s\n    \033[90mnot applicable: %s\033[0m\n' "$1" "$2"; }
 warn() { record "$1" unknown "$2"; FAIL=1; [ "$JSON" -eq 1 ] || printf '  \033[33m?\033[0m %s\n    \033[33m%s\033[0m\n' "$1" "$2"; }
 step() { [ "$JSON" -eq 1 ] || printf '\n\033[1m%s\033[0m\n' "$*"; }
 
@@ -98,13 +105,36 @@ platform_cmd_count() {
   echo "$n"
 }
 
-# Report whether the twice-probe can discriminate at all on this binary. If a binary
-# returns EMPTY for everything, "differs" is meaningless and the count would read 0 —
-# indistinguishable from upstream. Say so rather than concluding.
+# Can this binary be executed here AT ALL?
+#
+# This matters because an unrunnable binary scores ZERO platform commands — the same
+# number upstream scores — so "0" reads as "upstream, as expected" for a bundle that was
+# never actually run. On the release path that is a live case: an x86_64 sidecar cannot
+# execute on an arm64 runner, and Rosetta does not help, because Bun's x64 builds use AVX2
+# which Rosetta 2 does not implement (SIGILL).
+#
+# A FIRST ATTEMPT AT THIS WAS ITSELF WRONG and passed the falsification test it was meant
+# to fail: it asked whether the control probe produced any output, but the probe captures
+# 2>&1, so the shell's own "cannot execute" message made the output non-empty and the
+# check concluded the probe was fine. Asking "did something come back" cannot distinguish
+# an answer from an error about not being able to ask.
+#
+# So: compare the binary's architecture to the host's (deterministic, no execution — the
+# same approach verify-shipped-app.sh already takes), and separately require that the
+# process actually starts. 126 = cannot execute, 127 = not found/not a valid executable.
 probe_is_meaningful() {
-  local bin="$1" control
-  control="$(HOME="$WORK/probe-home" perl -e 'alarm 25; exec @ARGV' "$bin" "$NONSENSE_CMD" --help 2>&1 | head -40)"
-  [ -n "$control" ]
+  local bin="$1" barch harch rc
+  barch="$(file "$bin" 2>/dev/null | grep -oE 'x86_64|arm64' | head -1)"
+  harch="$(uname -m)"
+  case "$harch" in aarch64) harch=arm64 ;; amd64) harch=x86_64 ;; esac
+
+  # Not a recognisable native binary for this host.
+  [ -n "$barch" ] || return 1
+  [ "$barch" = "$harch" ] || return 1
+
+  HOME="$WORK/probe-home" perl -e 'alarm 25; exec @ARGV' "$bin" --version >/dev/null 2>&1
+  rc=$?
+  [ "$rc" -ne 126 ] && [ "$rc" -ne 127 ]
 }
 
 sha() { shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1; }
@@ -113,7 +143,11 @@ mkdir -p "$WORK/probe-home"
 TOTAL=${#PLATFORM_CMDS[@]}
 
 step "1. The CLI on this machine — is it ours?"
-if [ ! -x "$INSTALLED_CLI" ]; then
+if [ "$BUNDLE_ONLY" -eq 1 ]; then
+  skip installed_cli_identity "no CLI is installed on a CI runner; this check is for a real machine (or --deep, which installs into an isolated HOME)"
+  skip cli_version_series "same — needs an installed CLI to read a version from"
+  skip cli_is_not_the_sidecar "same — needs an installed CLI to hash against the bundled sidecar"
+elif [ ! -x "$INSTALLED_CLI" ]; then
   warn installed_cli_present "no executable at $INSTALLED_CLI — nothing to audit; install the CLI first"
 else
   N="$(platform_cmd_count "$INSTALLED_CLI")"
@@ -145,6 +179,16 @@ fi
 if [ -z "$SIDECAR" ]; then
   warn sidecar_present "no sidecar found under $APP/Contents/MacOS — is the app installed?"
 else
+  # A binary that CANNOT BE EXECUTED scores 0 platform commands, which is the same number
+  # upstream scores — so "0" would read as "upstream, as expected" for a bundle that was
+  # simply never run. That happens for real on the release path: an x86_64 sidecar cannot
+  # execute on an arm64 runner (and Rosetta does not help — Bun's x64 builds use AVX2,
+  # which Rosetta 2 does not implement, so it dies with SIGILL). Establish that the probe
+  # can speak at all before believing what it says.
+  if ! probe_is_meaningful "$SIDECAR"; then
+    warn sidecar_is_upstream "the sidecar produced NO output for any probe, including the unknown-command control — it could not be executed here (wrong architecture, or not runnable). Its command surface was NOT measured. A count of 0 from an unrunnable binary is indistinguishable from upstream and must not be reported as such."
+    SN=""
+  else
   SN="$(platform_cmd_count "$SIDECAR")"
   SV="$(perl -e 'alarm 25; exec @ARGV' "$SIDECAR" --version 2>/dev/null | head -1 | tr -d '\r')"
   # This is DOCUMENTED expected state, not a defect: the app bundles upstream for its own
@@ -155,9 +199,12 @@ else
   else
     warn sidecar_is_upstream "bundled sidecar now resolves $SN platform commands (version $SV). That assumption changed; re-read cli.rs before trusting any check below."
   fi
+  fi
 
   # The check that cannot be fooled by a version string: the same bytes.
-  if [ -x "$INSTALLED_CLI" ]; then
+  if [ "$BUNDLE_ONLY" -eq 1 ]; then
+    :
+  elif [ -x "$INSTALLED_CLI" ]; then
     A="$(sha "$INSTALLED_CLI")"; B="$(sha "$SIDECAR")"
     if [ -n "$A" ] && [ "$A" = "$B" ]; then
       fail cli_is_not_the_sidecar "$INSTALLED_CLI and the bundled sidecar are BYTE-IDENTICAL (sha256 ${A:0:12}…). The app has copied its sidecar over the product CLI."
@@ -283,6 +330,19 @@ else
   else
     warn fresh_install_yields_product "could not fetch install.sh from $REPO main"
   fi
+fi
+
+# A mode that skips everything would exit 0 and mean nothing. Require that at least two
+# checks actually produced a verdict.
+RAN=0
+for r in "${RESULTS[@]}"; do
+  st="${r#*|}"; st="${st%%|*}"
+  case "$st" in pass|fail) RAN=$((RAN + 1)) ;; esac
+done
+if [ "$RAN" -lt 2 ]; then
+  FAIL=1
+  RESULTS+=("audit_actually_ran|fail|only $RAN check(s) produced a verdict — this run measured nothing and must not read as a pass")
+  [ "$JSON" -eq 1 ] || printf '  \033[31m✗\033[0m audit_actually_ran\n    \033[91monly %s check(s) produced a verdict — this run measured nothing\033[0m\n' "$RAN"
 fi
 
 if [ "$JSON" -eq 1 ]; then
