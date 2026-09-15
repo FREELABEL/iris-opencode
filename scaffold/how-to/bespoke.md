@@ -149,3 +149,15 @@ Scoping is *not* required on this lane (no shell to collide with), which is the 
   Full detail: `iris how-to view genesis-verify-pages`.
 - **Two caches.** After publishing, clear BOTH `iris pages cache-clear <slug>` and
   `iris pages cache-clear <uuid>`. The fan-out only works when the alias map is warm (#177872).
+- **A bespoke page CAN read Atlas — since 2026-09-15.** It has no components, so it declares its
+  bindings once at the top of `json_content`:
+  `"bindings": { "packages": "iris-labs-packages" }` — then reads them with
+  `iris.data.rows('packages')` (synchronous: the server puts page 1 in the DOM before the SDK
+  loads, so the first paint carries real rows) and `iris.data.fetch(name, {page:2})` for more.
+  Needs SDK **1.0.4+**; a page that pins an older `iris-sdk` in its own `head` wins, and
+  `iris.data` is then `undefined`.
+  **`iris.data.has(name) === false` is a REFUSAL, not an empty dataset** — the dataset is not
+  public and the visitor did not pass a gate. Render "sign in", never "no records".
+  Before this existed, data-backed bespoke pages were generated snapshots re-rendered by a build
+  script; that generator no longer has to be the sync loop.
+  Full detail: `iris playbook run genesis-sdk` §3b.
