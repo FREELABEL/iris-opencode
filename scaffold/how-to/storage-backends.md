@@ -40,6 +40,80 @@ Artisan rather than an `iris` verb for two reasons: the noun `workspace` was alr
 something unrelated, and this is the shape that works in production over `railway ssh` with clean
 argv.
 
+## Three modes, and which one you actually want
+
+Atlas core data has three configurations. They are not a ladder — mode 3 is not "more" than
+mode 2, it is a different question — and choosing by vibe is how a client ends up with the
+wrong one.
+
+| | mode | where the records live | when |
+|---|---|---|---|
+| 1 | **default** | shared IRIS store | everything, unless there is a reason not to |
+| 2 | **external** | the client's own Postgres / S3 | data residency: their infrastructure, their region, their retention policy |
+| 3 | **parallel** | shared IRIS **and** a continuous feed out to their warehouse | they want to ANALYSE the data elsewhere, not host it |
+
+**The question that separates 2 from 3:** does the client want to *hold* the data, or *query*
+it? "Put it in our Supabase so we can run BI on it" is mode 3 — answering it with mode 2 moves
+their operational store onto their infrastructure to solve a reporting problem, and now every
+read path depends on their database being up.
+
+Modes 1 and 2 are exclusive: `storage_driver` resolves to exactly one backend. Mode 3 is not a
+third driver — it sits alongside whichever of 1 or 2 is in force.
+
+### Mode 3 — the parallel feed
+
+The dataset read becomes a change feed with `updated_since`:
+
+```
+GET /api/v1/atlas/datasets/<slug>?updated_since=<iso8601>&include_deleted=1
+```
+
+- ordered `(updated_at ASC, id ASC)` — a cursor feed ordered any other way drops rows that move
+  across a page boundary mid-scan
+- the cursor is **strictly greater-than**, so a consumer that advances to `next_cursor` does not
+  re-read its boundary row forever
+- `include_deleted` emits soft-deleted rows so the replica can tombstone them. Without it a feed
+  cannot express a delete at all, and the downstream copy silently keeps every row it has ever
+  seen while both sides report success
+- tombstones are **staff-only and never served on a public read**. `meta.include_deleted_refused`
+  says so explicitly, because "refused" and "there were no deletes" must not look alike
+- `meta.next_cursor` is where to resume, emitted rather than left to the caller — a caller
+  deriving it from an empty page has nothing to derive from
+
+**Writes still go through Atlas.** If the client's own pipeline needs to create rows, it posts to
+the dataset API and Atlas remains the single writer. That is what keeps mode 3 free of conflict
+resolution: there is one authority, and the warehouse is downstream of it.
+
+## What you keep when the data leaves (the question every client asks)
+
+Mode 2 does **not** hand the processing to the client. The record body moves to their backend and
+the shared row is redacted to a pointer, but the **MySQL sidecar index is built from the full
+data on the initial save and stays** — so `list`, `filter` and `sort` keep working against shared
+infrastructure while the data itself sits on theirs.
+
+One deliberate exception, and it is worth saying out loud to a client rather than discovering it
+together: a field marked **`sensitive`** is kept OUT of the shared index on a residency-bound
+workspace (#163741). `value_text` lives in shared IRIS MySQL regardless of where the body went,
+so indexing a sensitive field would move PHI into shared infrastructure by the side door.
+**The price is that index-based search does not work on that one field.** That is the trade, and
+it is the right way round.
+
+Both halves are asserted in `tests/Feature/Workspace/ExternalStorageFieldIndexTest.php` — the
+claim used to live only in a docblock, and it is order-dependent (the indexer runs on `saved`,
+redaction happens after), so it is tested rather than trusted.
+
+### Which mode is a workspace on right now?
+
+```
+$ php artisan storage:atlas-mode            # only workspaces NOT on the shared store
+$ php artisan storage:atlas-mode 42         # one workspace, in full
+$ php artisan storage:atlas-mode 42 --json
+```
+
+It prints **configured vs resolved** and **exits non-zero when they disagree** — which is the
+only thing that detects the silent fallback described below. Read-only: it names the commands
+that change a mode rather than running them, because binding moves customer data.
+
 ## Prerequisites
 
 - The workspace id (`workspaces.id`)
@@ -110,6 +184,10 @@ indefinitely, and nothing surfaces.
 
 That is why `storage:bind-workspace` refuses to save a binding it cannot build, and re-resolves
 afterwards to confirm. If you ever bind by editing the database directly, you lose both checks.
+
+**To detect one that is already live**, `php artisan storage:atlas-mode` compares configured
+against resolved and exits 1 when they differ — run it on a schedule and a fallback alarms
+instead of sitting there behaving perfectly.
 
 ## What the refusals mean
 
