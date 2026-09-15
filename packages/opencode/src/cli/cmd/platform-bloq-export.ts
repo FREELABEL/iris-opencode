@@ -181,6 +181,65 @@ async function exportOneBloq(
     }
   }
 
+  // ── DATASET RECORDS ───────────────────────────────────────────────────────────────────
+  // Atlas datasets (atlas_schemas + atlas_records) are the STRUCTURED half of a bloq, and
+  // until now no exporter reached them: this command walked lists, items and attachments and
+  // called the result "a full workspace backup". Measured on bloq 570 — 135 items exported,
+  // 402 dataset records omitted, including every row of the client's catalogue. (#185521)
+  //
+  // Same shape as the attachments bug above it, and the same discipline applies: record
+  // whether we could ASK separately from how many there were, so "0 datasets" from a bloq
+  // with none is distinguishable from "0 datasets" because the listing 401'd.
+  progress?.("Fetching datasets…")
+  const datasets: { slug: string; records: number; total: number; complete: boolean }[] = []
+  let datasetsListingOk = false
+  let datasetsListingError: string | null = null
+  let datasetRecordsTotal = 0
+  try {
+    const schemasRes = await irisFetch(`/api/v1/atlas/schemas?bloq_id=${bloqId}&per_page=200`)
+    if (schemasRes.ok) {
+      datasetsListingOk = true
+      const sb = (await schemasRes.json()) as any
+      const schemas: any[] = firstArray(sb?.data?.schemas?.data, sb?.data?.schemas, sb?.data)
+      for (const sc of schemas) {
+        const slug = sc?.slug
+        if (!slug) continue
+        // Page to completion. A partial dataset in a file called a backup is the failure this
+        // whole change exists to remove, so `complete` is recorded per dataset and surfaced.
+        const rows: any[] = []
+        let total = 0
+        let page = 1
+        try {
+          while (true) {
+            const rr = await irisFetch(`/api/v1/atlas/datasets/${slug}?bloq_id=${bloqId}&per_page=200&page=${page}`)
+            if (!rr.ok) break
+            const rb = (await rr.json()) as any
+            const batch: any[] = firstArray(rb?.data?.records?.data, rb?.data?.records)
+            total = rb?.data?.records?.total ?? batch.length
+            if (batch.length === 0) break
+            rows.push(...batch)
+            if (rows.length >= total) break
+            page += 1
+          }
+        } catch { /* fall through with what we have; `complete` reports the shortfall */ }
+
+        // IMPORT SHAPE — external_id alongside the data fields, so this file can be fed
+        // straight back to `iris datasets import` and MERGE rather than duplicate.
+        const shaped = rows.map((r: any) => ({ external_id: r?.external_id ?? null, ...(r?.data ?? {}) }))
+        const dsDir = path.join(outDir, "datasets")
+        fs.mkdirSync(dsDir, { recursive: true })
+        fs.writeFileSync(path.join(dsDir, `${slug}.json`), JSON.stringify(shaped, null, 2))
+        fs.writeFileSync(path.join(dsDir, `${slug}.schema.json`), JSON.stringify(sc, null, 2))
+        datasets.push({ slug, records: shaped.length, total, complete: shaped.length >= total })
+        datasetRecordsTotal += shaped.length
+      }
+    } else {
+      datasetsListingError = `HTTP ${schemasRes.status}`
+    }
+  } catch (e: any) {
+    datasetsListingError = String(e?.message ?? e).slice(0, 160)
+  }
+
   const manifest = {
     format_version: EXPORT_FORMAT_VERSION,
     exported_at: new Date().toISOString(),
@@ -200,7 +259,17 @@ async function exportOneBloq(
       attachments_downloaded: filesDownloaded,
       attachments_failed: filesFailed,
       attachment_bytes: bytesDownloaded,
+      // Could we ask, and what did we get. Both, for the reason stated above the attachment
+      // pair: a bare zero cannot tell a bloq with no datasets from a listing that failed.
+      datasets_listing_ok: datasetsListingOk,
+      ...(datasetsListingError ? { datasets_listing_error: datasetsListingError } : {}),
+      datasets: datasets.length,
+      dataset_records: datasetRecordsTotal,
+      // Named per dataset so a shortfall is attributable rather than a number that is merely
+      // lower than someone remembered.
+      datasets_incomplete: datasets.filter((d) => !d.complete).map((d) => `${d.slug} (${d.records}/${d.total})`),
     },
+    dataset_index: datasets,
     includes_attachments: opts.attachments,
     notes: opts.attachments ? undefined : "Attachment BYTES were not downloaded (re-run with --attachments). files.json lists them.",
     output_dir: outDir,
@@ -211,11 +280,11 @@ async function exportOneBloq(
 
 export const BloqsExportCommand = cmd({
   command: "export [id]",
-  describe: "export a bloq (lists, items, attachments) to a local folder — your data, off our servers",
+  describe: "export a bloq — lists, items, attachments AND dataset records — to a local folder. Your data, off our servers.",
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "bloq ID or name (omit with --all)", type: "string" })
-      .option("all", { describe: "export EVERY bloq you own — a full workspace backup", type: "boolean", default: false })
+      .option("all", { describe: "export EVERY bloq you own — a full workspace backup (datasets included; re-importable)", type: "boolean", default: false })
       .option("out", { alias: "o", describe: "output directory (default: ./iris-export)", type: "string" })
       .option("attachments", { describe: "also download attached files (can be large)", type: "boolean", default: false })
       .option("no-markdown", { describe: "skip the human-readable markdown tree, JSON only", type: "boolean", default: false })

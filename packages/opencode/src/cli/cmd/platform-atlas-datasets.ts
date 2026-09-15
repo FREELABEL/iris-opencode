@@ -352,6 +352,11 @@ const RecordsListCommand = cmd({
       .option("search", { type: "string", alias: "q", describe: "full-text search over record data" })
       .option("sort", { type: "string", default: "created_at" })
       .option("limit", { type: "number", default: 25 })
+      // The server caps per_page at 200, so --limit alone could never reach record 201 and a
+      // dataset over 200 rows had NO complete read path in the CLI — which also meant no
+      // backup could be taken before `schemas update`, the operation that has orphaned records
+      // (#181628). --all pages until the total is satisfied. (#185503)
+      .option("all", { type: "boolean", default: false, describe: "fetch EVERY record, paging past the 200-row server cap" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
@@ -370,13 +375,37 @@ const RecordsListCommand = cmd({
         if (key && rest.length) p.set(`filter[${key}]`, rest.join("="))
       }
 
+      const PER_PAGE_CAP = 200
+      if (args.all) p.set("per_page", String(PER_PAGE_CAP))
+
       const res = await irisFetch(`/api/v1/atlas/datasets/${args.schema}?${p}`)
       const ok = await handleApiError(res, "List records"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       const body = (await res.json()) as any
       const records: any[] = firstArray(body?.data?.records?.data, body?.data?.records)
       const total = body?.data?.records?.total ?? records.length
       const schema = body?.data?.schema
-      spinner.stop(`${records.length} of ${total} record(s)`)
+
+      // Page until we have the lot. Guarded on PROGRESS, not on a page counter: if a page ever
+      // comes back empty or the total is wrong, this stops rather than looping forever.
+      if (args.all && records.length < total) {
+        let page = 2
+        while (records.length < total) {
+          spinner.message(`Loading… ${records.length} of ${total}`)
+          p.set("page", String(page))
+          const more = await irisFetch(`/api/v1/atlas/datasets/${args.schema}?${p}`)
+          if (!more.ok) break
+          const mb = (await more.json()) as any
+          const batch: any[] = firstArray(mb?.data?.records?.data, mb?.data?.records)
+          if (batch.length === 0) break
+          records.push(...batch)
+          page += 1
+        }
+      }
+
+      // Say which of the two it is. "56 of 56" and "200 of 306" read the same at a glance, and
+      // the second one silently truncated a backup (#185503).
+      const complete = records.length >= total
+      spinner.stop(`${records.length} of ${total} record(s)${complete ? "" : `  — TRUNCATED, pass --all for the remaining ${total - records.length}`}`)
       // Which same-slug schema actually answered — the ambiguity #182063 was about, made
       // visible instead of silent. Only worth printing once there IS ambiguity to resolve.
       if (schema?.id != null && args.bloq == null) {
@@ -586,7 +615,7 @@ async function fetchDatasetRecords(
 
 const ExportCommand = cmd({
   command: "export",
-  describe: "export dataset to CSV",
+  describe: "export dataset to CSV or JSON — keyed by external_id, so it can be re-imported",
   builder: (y) =>
     y
       .option("schema", { type: "string", demandOption: true, alias: "s" })
@@ -626,7 +655,15 @@ const ExportCommand = cmd({
       const selectedFields = allFields.filter((f: { key: string }) => selectedKeys.includes(f.key))
 
       if (args.format === "json") {
-        const output = JSON.stringify(records.map((r: any) => r.data), null, 2)
+        // EMIT THE IMPORT SHAPE: external_id alongside the data fields, which is exactly what
+        // `datasets import` consumes. Previously this was `r.data` alone — so the export
+        // dropped the only key import dedups on, and re-importing a "backup" CREATED every row
+        // again instead of merging it. A backup you cannot restore is not a backup. (#185503)
+        const output = JSON.stringify(
+          records.map((r: any) => ({ external_id: r.external_id ?? null, ...(r.data ?? {}) })),
+          null,
+          2,
+        )
         if (args.out) {
           fs.writeFileSync(args.out, output)
           prompts.outro(`Written to ${args.out}`)
@@ -640,8 +677,10 @@ const ExportCommand = cmd({
       // CSV export
       // Flatten nested objects/arrays for CSV
       const csvRows: string[] = []
-      // Header
-      csvRows.push(selectedFields.map((f: { label: string }) => `"${f.label}"`).join(","))
+      // Header — external_id FIRST, for the same reason as the JSON branch: without it the file
+      // cannot be re-imported, because import dedups on external_id and an unkeyed row is
+      // always a create. (#185503)
+      csvRows.push(['"external_id"', ...selectedFields.map((f: { label: string }) => `"${f.label}"`)].join(","))
       // Rows
       for (const r of records) {
         const d = r.data ?? {}
@@ -662,7 +701,7 @@ const ExportCommand = cmd({
           }
           return `"${String(val).replace(/"/g, '""')}"`
         })
-        csvRows.push(row.join(","))
+        csvRows.push([`"${String(r.external_id ?? "").replace(/"/g, '""')}"`, ...row].join(","))
       }
 
       const csvOutput = csvRows.join("\n")
