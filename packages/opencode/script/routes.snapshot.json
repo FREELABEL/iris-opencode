@@ -272,6 +272,16 @@
 "service": "iris-api"
 },
 {
+"method": "POST",
+"uri": "/api/internal/newsroom/evaluate",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/internal/newsroom/source-material",
+"service": "fl-api"
+},
+{
 "method": "GET",
 "uri": "/api/iris/metrics/{}",
 "service": "fl-api"
@@ -1784,6 +1794,11 @@
 {
 "method": "POST",
 "uri": "/api/v1/atlas/staff/{}/send-contract",
+"service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/atlas/storage/mode",
 "service": "fl-api"
 },
 {
@@ -10487,6 +10502,16 @@
 "service": "fl-api"
 },
 {
+"method": "GET",
+"uri": "/api/v1/user/bloqs/list/item/{}/events",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/user/bloqs/list/item/{}/events",
+"service": "fl-api"
+},
+{
 "method": "POST",
 "uri": "/api/v1/user/bloqs/list/item/{}/restore",
 "service": "fl-api"
@@ -11199,6 +11224,16 @@
 {
 "method": "POST",
 "uri": "/api/v1/user/{}/bloqs/list/item/{}/chat/messages",
+"service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/user/{}/bloqs/list/item/{}/events",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/user/{}/bloqs/list/item/{}/events",
 "service": "fl-api"
 },
 {

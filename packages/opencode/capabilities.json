@@ -1366,6 +1366,34 @@
     },
     {
       "kind": "command",
+      "name": "atlas:storage",
+      "describe": "where your Atlas data lives (shared, your own database, or streamed to your warehouse)",
+      "aliases": [
+        "atlas-storage"
+      ],
+      "run": "iris atlas:storage",
+      "haystack": "atlas:storage atlas-storage where your atlas data lives shared your own database streamed to your warehouse status show feed data residency provider proxy postgres supabase external storage backend change feed cdc replication warehouse sync bring your own database"
+    },
+    {
+      "kind": "command",
+      "name": "atlas:storage status",
+      "describe": "which storage mode your data is on, and whether it is actually working",
+      "aliases": [
+        "show"
+      ],
+      "run": "iris atlas:storage status",
+      "haystack": "atlas:storage status show which storage mode your data is on default external parallel silent fallback data residency"
+    },
+    {
+      "kind": "command",
+      "name": "atlas:storage feed",
+      "describe": "stream changed records since a cursor — the parallel feed (mode 3)",
+      "aliases": [],
+      "run": "iris atlas:storage feed",
+      "haystack": "atlas:storage feed stream changed records since a cursor parallel feed mode 3 cdc change data capture updated_since tombstones include-deleted warehouse supabase incremental sync"
+    },
+    {
+      "kind": "command",
       "name": "atlas:ledger",
       "describe": "Atlas transactions + chart of accounts",
       "aliases": [
