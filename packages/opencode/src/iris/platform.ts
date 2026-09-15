@@ -2424,8 +2424,13 @@ export async function fetchEvents(itemId: number): Promise<PlatformResult<{ even
 export async function addEvent(itemId: number, input: { title: string; startsAt: string; endsAt?: string }): Promise<Ok> {
   const userId = await resolveUserId()
   if (!userId) return { ok: false, reason: notSignedIn() }
-  const body: Record<string, unknown> = { title: input.title.trim(), start_date: input.startsAt, event_type: "deadline" }
-  if (input.endsAt) body.end_date = input.endsAt
+  // MySQL's own format, UTC. fl-api ead6675c parses ISO too; an older build refuses the Z.
+  const sql = (iso: string) => {
+    const d = new Date(iso)
+    return Number.isNaN(d.getTime()) ? iso : d.toISOString().slice(0, 19).replace("T", " ")
+  }
+  const body: Record<string, unknown> = { title: input.title.trim(), start_date: sql(input.startsAt), event_type: "deadline" }
+  if (input.endsAt) body.end_date = sql(input.endsAt)
   const r = await postJson(`/api/v1/user/bloqs/list/item/${itemId}/events`, body)
   return { ok: r.ok, reason: r.reason }
 }
