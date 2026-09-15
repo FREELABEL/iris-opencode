@@ -52,6 +52,24 @@ function notFound() {
   return HttpServerResponse.jsonUnsafe({ error: "Not Found" }, { status: 404 })
 }
 
+/**
+ * Path prefixes that are API surface and never documents.
+ *
+ * Anything under one of these that reaches the UI catch-all matched no route, and the only
+ * honest answer is 404. Add a prefix here when you add an API root; a missing entry does not
+ * break a working route, it only lets a MISSING one keep pretending to exist.
+ */
+const API_ROOTS = ["/iris/"] as const
+
+export function isApiPath(path: string) {
+  return API_ROOTS.some((root) => path.startsWith(root))
+}
+
+/** Did the caller ask for JSON? Then index.html is never a valid answer to give it. */
+function acceptsJson(request: HttpServerRequest.HttpServerRequest) {
+  return (request.headers["accept"] ?? "").includes("application/json")
+}
+
 function embeddedUIResponse(file: string, body: Uint8Array) {
   const mime = FSUtil.mimeType(file)
   const headers = new Headers({ "content-type": mime })
@@ -65,8 +83,15 @@ export function serveEmbeddedUIEffect(
   requestPath: string,
   fs: FSUtil.Interface,
   embeddedWebUI: Record<string, string>,
+  wantsJson = false,
 ) {
-  const file = embeddedWebUI[requestPath.replace(/^\//, "")] ?? embeddedWebUI["index.html"] ?? null
+  // An EXACT file is served whatever the caller's Accept header says — a real asset is a real
+  // asset. Only the index.html FALLBACK is refused for a JSON caller, because that fallback is
+  // the step that turns "no such path" into "here is a web page, status 200".
+  const exact = embeddedWebUI[requestPath.replace(/^\//, "")]
+  if (!exact && wantsJson) return Effect.succeed(notFound())
+
+  const file = exact ?? embeddedWebUI["index.html"] ?? null
   if (!file) return Effect.succeed(notFound())
 
   return fs.readFile(file).pipe(
@@ -83,7 +108,28 @@ export function serveUIEffect(
     const embeddedWebUI = yield* Effect.promise(() => embeddedUI(services.disableEmbeddedWebUi))
     const path = new URL(request.url, "http://localhost").pathname
 
-    if (embeddedWebUI) return yield* serveEmbeddedUIEffect(path, services.fs, embeddedWebUI)
+    /*
+     * AN UNIMPLEMENTED API ROUTE MUST 404, NOT RETURN A WEB PAGE.
+     *
+     * This handler is mounted as router.add("*", "/*"), so every request no API router claimed
+     * lands here and is answered with index.html. For a browser NAVIGATION that is exactly
+     * right — the SPA owns its own paths and index.html boots it. For an API call it is a lie
+     * with real cost: the caller asked for JSON and got 200 plus a web page, so a route that
+     * does not exist is indistinguishable from one that does.
+     *
+     * Measured 2026-09-15 on the card editor (#185485/#185506): GET /iris/item/185442/share is
+     * not implemented, returned 200 and `<!doctype html>`, the client ran JSON.parse on it and
+     * threw `SyntaxError: Unexpected token '<'`, and the error boundary took down the ENTIRE
+     * session view. Not the one section — the app. The ticket expected unwired sections to read
+     * "Not connected"; nothing got far enough to render that.
+     *
+     * Both halves of the condition matter. The prefix catches our own API whatever the caller
+     * sends, and the Accept header catches every other fetch that wanted JSON, including ones
+     * under roots nobody has listed yet.
+     */
+    if (isApiPath(path)) return notFound()
+
+    if (embeddedWebUI) return yield* serveEmbeddedUIEffect(path, services.fs, embeddedWebUI, acceptsJson(request))
 
     const response = yield* services.client.execute(
       HttpClientRequest.make(request.method)(upstreamURL(path), {
@@ -92,6 +138,13 @@ export function serveUIEffect(
       }),
     )
     const headers = proxyResponseHeaders(response.headers)
+
+    // Same hole on the dev path: vite also answers an unknown path with index.html, so a JSON
+    // caller proxied upstream gets the same 200-and-a-web-page. Judged on the way back because
+    // upstream is the only thing that knows whether the path was real.
+    if (acceptsJson(request) && response.headers["content-type"]?.includes("text/html")) {
+      return notFound()
+    }
 
     if (response.headers["content-type"]?.includes("text/html")) {
       const body = yield* response.text
