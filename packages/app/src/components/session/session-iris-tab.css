@@ -1090,3 +1090,171 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
   font-size: 11px;
   color: var(--text-weak);
 }
+
+/* ── Card editor, second pass: Sharing · Labels · Attachments · Events · Asks · Chat ── */
+
+/* A section head inside the side column: small caps, count in mono, an action on the right. */
+.iris-card__section {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 14px 0 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-weaker-base);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-weaker);
+}
+.iris-card__section .ms-auto { text-transform: none; letter-spacing: 0; }
+
+/* "Not connected" — in place, above the controls it describes. Not a toast, not a modal. */
+.iris-card__unwired {
+  margin: 0 0 6px;
+  padding: 5px 8px;
+  border-radius: 4px;
+  border: 1px dashed var(--border-weak-base);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-weak);
+}
+.iris-card__warn {
+  margin: 0 0 6px;
+  padding: 5px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: #f0836a;
+  border: 1px solid color-mix(in srgb, #f0836a 45%, var(--border-weaker-base));
+  background: color-mix(in srgb, #f0836a 8%, transparent);
+}
+.iris-card__pub {
+  padding: 0 5px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, #f0836a 55%, var(--border-weaker-base));
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #f0836a;
+}
+
+.iris-card__chips { display: flex; flex-wrap: wrap; gap: 4px; padding-bottom: 6px; min-height: 18px; }
+.iris-card__chipx {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  margin-inline-start: 3px;
+  padding: 0 2px;
+  color: var(--text-weaker);
+  font-size: 11px;
+  line-height: 1;
+}
+.iris-card__chipx:hover { color: var(--text-strong); }
+
+/* An inline add-form: input(s) then the action. Variants by column count. */
+.iris-card__inline {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+  align-items: center;
+  padding-bottom: 4px;
+}
+.iris-card__inline--3 { grid-template-columns: 1fr auto auto; }
+.iris-card__inline--ask { grid-template-columns: 1fr 1.4fr auto auto; }
+.iris-card__inline input[type="datetime-local"],
+.iris-card__inline input[type="date"] { max-width: 150px; }
+.iris-card__perm { width: auto; max-width: 84px; }
+
+.iris-card__rows { list-style: none; margin: 0; padding: 0; }
+.iris-card__row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border-weaker-base);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-base);
+}
+.iris-card__row--off { opacity: 0.5; }
+.iris-card__rowtext { flex: 1; min-width: 0; word-break: break-word; }
+
+/* Attachments: a drop target that is also the list, so the empty state IS the target. */
+.iris-card__drop {
+  min-height: 34px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  border: 1px dashed var(--border-weaker-base);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  justify-content: center;
+}
+.iris-card__file { display: flex; align-items: center; gap: 7px; font-size: 12px; min-width: 0; }
+.iris-card__file--missing .iris-card__filename { color: #f0836a; }
+.iris-card__filetype {
+  flex-shrink: 0;
+  padding: 0 4px;
+  border-radius: 3px;
+  border: 1px solid var(--border-weaker-base);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 9px;
+  text-transform: uppercase;
+  color: var(--text-weaker);
+}
+.iris-card__filename { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-base); }
+
+/* Sharing: visibility as a two-way plate, the URL as a copyable row. */
+.iris-card__seg {
+  display: inline-flex;
+  border: 1px solid var(--border-weaker-base);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.iris-card__segitem {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--text-weak);
+}
+.iris-card__segitem + .iris-card__segitem { border-inline-start: 1px solid var(--border-weaker-base); }
+.iris-card__segitem--on { background: var(--background-element); color: var(--text-strong); }
+.iris-card__segitem:disabled { cursor: default; }
+.iris-card__url {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: var(--background-element);
+  color: var(--text-base);
+  min-width: 0;
+}
+.iris-card__url > span { flex: 1; min-width: 0; }
+
+/* Chat: the side column becomes a column of messages with the composer pinned under. */
+.iris-card__chat { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.iris-card__chathead { padding-bottom: 6px; flex-shrink: 0; }
+.iris-card__msgs { flex: 1; min-height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 2px 0 8px; }
+.iris-card__msg { display: flex; flex-direction: column; gap: 2px; max-width: 92%; align-self: flex-start; }
+.iris-card__msg--me { align-self: flex-end; align-items: flex-end; }
+.iris-card__msgwho { font-size: 10px; letter-spacing: 0.03em; text-transform: uppercase; color: var(--text-weaker); }
+.iris-card__msgtext {
+  padding: 6px 9px;
+  border-radius: 8px;
+  background: var(--background-element);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-base);
+  word-break: break-word;
+}
+.iris-card__msg--me .iris-card__msgtext { border: 1px solid var(--border-weak-base); background: transparent; }
+.iris-card__compose { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: end; flex-shrink: 0; padding-top: 6px; border-top: 1px solid var(--border-weaker-base); }
+.iris-card__composetext { resize: none; font-family: inherit; }
+.iris-card__sidebody:has(> .iris-card__chat) { display: flex; flex-direction: column; }

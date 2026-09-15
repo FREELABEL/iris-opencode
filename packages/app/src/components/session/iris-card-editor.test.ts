@@ -64,3 +64,34 @@ describe("card editor — the status picker", () => {
     expect(statusOptions(schema, "todo").filter((o) => o.id === "todo")).toHaveLength(1)
   })
 })
+
+import { allowListSummary, fileSize, parseAllowEntries } from "./iris-card-editor"
+
+describe("card editor — sharing allow-list", () => {
+  test("parses emails and @domains, lower-cased, de-duplicated against what is there", () => {
+    expect(parseAllowEntries("Alex@Freelabel.net, @heyiris.io\nbob@x.co bob@x.co", ["alex@freelabel.net"])).toEqual([
+      "@heyiris.io",
+      "bob@x.co",
+    ])
+  })
+
+  test("drops what is neither an email nor a domain", () => {
+    expect(parseAllowEntries("hello world, not-an-email")).toEqual([])
+  })
+
+  test("says out loud that an EMPTY list on a public item admits anyone", () => {
+    // never-empty-a-gate-allowlist: this is the sentence that has to be on screen.
+    expect(allowListSummary(true, [])).toMatch(/ANYONE with the link/)
+    expect(allowListSummary(true, ["a@b.co"])).toMatch(/Only 1 allowed entry/)
+    expect(allowListSummary(false, [])).toMatch(/Private/)
+  })
+})
+
+describe("card editor — attachment sizes", () => {
+  test("bytes, KB, MB", () => {
+    expect(fileSize(900)).toBe("900 B")
+    expect(fileSize(4 * 1024)).toBe("4.0 KB")
+    expect(fileSize(42 * 1024 * 1024)).toBe("42.0 MB")
+    expect(fileSize(undefined)).toBe("")
+  })
+})

@@ -79,6 +79,42 @@ test("a row opens the card editor, and it shows the card", async ({ page }) => {
 
   await page.screenshot({ path: "e2e/test-results/card-editor.png" })
 
+  // Sharing: the visibility plate, the allow-list sentence, and — until #185506 lands — the
+  // "Not connected" line IN PLACE with its controls still visible beneath it.
+  await card.getByRole("tab", { name: "Sharing" }).click()
+  await expect(card.getByRole("radio", { name: "Private" })).toBeVisible()
+  await expect(card.getByRole("radio", { name: "Public link" })).toBeVisible()
+  await expect(card.locator("input[aria-label='Allow email or domain']")).toBeVisible()
+  await expect(card.locator("input[aria-label='Invite email']")).toBeVisible()
+  await expect(card.getByRole("button", { name: "New link" })).toBeVisible()
+  const sharingText = await card.locator(".iris-card__sidebody").innerText()
+  console.log("SHARING: " + JSON.stringify(sharingText.slice(0, 160)))
+  expect(sharingText).toMatch(/Private —|ANYONE with the link|Only \d+ allowed/)
+  // Either the route is wired and the section is measured, or it says so IN PLACE. A missing
+  // route answers 200 + index.html here, and rendering that as "no members, no links" is the
+  // confident lie this panel keeps paying to relearn. Never a silent blank.
+  const unwired = card.locator(".iris-card__unwired")
+  const measuredCount = card.locator(".iris-card__section .iris-card__count").first()
+  await expect(unwired.or(measuredCount.filter({ hasNotText: "—" })).first()).toBeVisible({ timeout: 30_000 })
+  console.log("SHARING WIRED: " + ((await unwired.count()) === 0))
+  await page.screenshot({ path: "e2e/test-results/card-editor-sharing.png" })
+
+  // Details, second half: labels, attachments, events, asks — each with its add control.
+  await card.getByRole("tab", { name: "Details" }).click()
+  await expect(card.locator("input[aria-label='New label']")).toBeVisible()
+  await expect(card.locator("input[aria-label='Event title']")).toBeVisible()
+  await expect(card.locator("input[aria-label='Ask: what']")).toBeVisible()
+  await expect(card.locator(".iris-card__drop")).toBeVisible()
+  await card.locator(".iris-card__drop").scrollIntoViewIfNeeded()
+  await page.screenshot({ path: "e2e/test-results/card-editor-details-2.png" })
+
+  // Chat: an agent picker, a message column, a composer that will not send without an agent.
+  await card.getByRole("tab", { name: "Chat" }).click()
+  await expect(card.locator("select[aria-label='Chat with agent']")).toBeVisible()
+  await expect(card.locator("textarea[aria-label='Message']")).toBeVisible()
+  await expect(card.getByRole("button", { name: "Send" })).toBeDisabled()
+  await page.screenshot({ path: "e2e/test-results/card-editor-chat.png" })
+
   // Close returns to the row: the list is still there, nothing navigated.
   await page.keyboard.press("Escape")
   await expect(card).toHaveCount(0)
