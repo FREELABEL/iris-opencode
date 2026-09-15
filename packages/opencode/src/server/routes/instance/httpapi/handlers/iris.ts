@@ -1,7 +1,7 @@
 import { Effect } from "effect"
 import { filterRows, paginate } from "@/iris/pagination"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
-import { filterAtlas, checkAuth, fetchAgents, fetchAtlas, fetchBloqs, fetchHiveNodes, fetchInbox, fetchLeads, fetchIntegrations, fetchPages, fetchPlaybooks, fetchRecords, fetchSchemas, fetchSites, fetchAgentTasks, fetchPlaybookDoc, fetchPageDoc, savePageDoc, fetchItem, saveItem, addItemTask, saveItemTask, deleteItemTask, fetchCardSchema, fetchCatalog, fetchBloqGraph, graphRows } from "@/iris/platform"
+import { filterAtlas, checkAuth, fetchAgents, fetchAtlas, fetchBloqs, fetchHiveNodes, fetchInbox, fetchLeads, fetchIntegrations, fetchPages, fetchPlaybooks, fetchRecords, fetchSchemas, fetchSites, fetchAgentTasks, fetchPlaybookDoc, fetchPageDoc, savePageDoc, fetchItem, saveItem, addItemTask, saveItemTask, deleteItemTask, fetchCardSchema, fetchShareState, setShareVisibility, setShareAllowlist, inviteMember, setMemberPermission, revokeMember, createShareLink, revokeShareLink, setItemLabels, fetchAttachments, uploadAttachment, deleteAttachment, fetchEvents, addEvent, fetchAsks, addAsk, answerAsk, fetchItemChat, sendItemChat, fetchCatalog, fetchBloqGraph, graphRows } from "@/iris/platform"
 import { RootHttpApi } from "../api"
 
 /**
@@ -277,6 +277,78 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
       ),
     )
 
+    // ── Card editor, second pass (#185506) ──
+    const itemShare = Effect.fn("IrisHttpApi.itemShare")((ctx: { params: { itemID: number }; query: { bloq?: number } }) =>
+      Effect.promise(() => fetchShareState(ctx.params.itemID, ctx.query.bloq)).pipe(
+        Effect.map((r) => ({ measured: r.measured, reason: r.reason, ...r.data })),
+      ),
+    )
+    const itemShareVisibility = Effect.fn("IrisHttpApi.itemShareVisibility")((ctx: { params: { itemID: number }; payload: { public: boolean } }) =>
+      Effect.promise(() => setShareVisibility(ctx.params.itemID, ctx.payload.public)),
+    )
+    const itemShareAllowlist = Effect.fn("IrisHttpApi.itemShareAllowlist")((ctx: { params: { itemID: number }; payload: { emails: readonly string[] } }) =>
+      Effect.promise(() => setShareAllowlist(ctx.params.itemID, [...ctx.payload.emails])),
+    )
+    const itemShareInvite = Effect.fn("IrisHttpApi.itemShareInvite")((ctx: { payload: { email: string; permission: string; bloq: number } }) =>
+      Effect.promise(() => inviteMember(ctx.payload.bloq, ctx.payload.email, ctx.payload.permission)),
+    )
+    const itemSharePermission = Effect.fn("IrisHttpApi.itemSharePermission")((ctx: { payload: { userId: number; permission: string; bloq: number } }) =>
+      Effect.promise(() => setMemberPermission(ctx.payload.bloq, ctx.payload.userId, ctx.payload.permission)),
+    )
+    const itemShareRevoke = Effect.fn("IrisHttpApi.itemShareRevoke")((ctx: { payload: { userId: number; bloq: number } }) =>
+      Effect.promise(() => revokeMember(ctx.payload.bloq, ctx.payload.userId)),
+    )
+    const itemShareLink = Effect.fn("IrisHttpApi.itemShareLink")((ctx: { payload: { bloq: number; expiresInDays?: number } }) =>
+      Effect.promise(() => createShareLink(ctx.payload.bloq, ctx.payload.expiresInDays)),
+    )
+    const itemShareLinkRevoke = Effect.fn("IrisHttpApi.itemShareLinkRevoke")((ctx: { params: { linkID: string }; payload: { bloq: number } }) =>
+      Effect.promise(() => revokeShareLink(ctx.payload.bloq, ctx.params.linkID)),
+    )
+    const itemLabels = Effect.fn("IrisHttpApi.itemLabels")((ctx: { params: { itemID: number }; payload: { labels: readonly string[] } }) =>
+      Effect.promise(() => setItemLabels(ctx.params.itemID, [...ctx.payload.labels])).pipe(
+        Effect.map((r) => ({ measured: r.measured, reason: r.reason, labels: r.data.labels })),
+      ),
+    )
+    const itemAttachments = Effect.fn("IrisHttpApi.itemAttachments")((ctx: { params: { itemID: number } }) =>
+      Effect.promise(() => fetchAttachments(ctx.params.itemID)).pipe(
+        Effect.map((r) => ({ measured: r.measured, reason: r.reason, files: r.data.files })),
+      ),
+    )
+    const itemAttachmentUpload = Effect.fn("IrisHttpApi.itemAttachmentUpload")(
+      (ctx: { params: { itemID: number }; payload: { name: string; type?: string; data: string; bloq?: number } }) =>
+        Effect.promise(() => uploadAttachment(ctx.params.itemID, { name: ctx.payload.name, type: ctx.payload.type, data: ctx.payload.data, bloqId: ctx.payload.bloq })),
+    )
+    const itemAttachmentDelete = Effect.fn("IrisHttpApi.itemAttachmentDelete")((ctx: { params: { itemID: number; fileID: string } }) =>
+      Effect.promise(() => deleteAttachment(ctx.params.itemID, ctx.params.fileID)),
+    )
+    const itemEvents = Effect.fn("IrisHttpApi.itemEvents")((ctx: { params: { itemID: number } }) =>
+      Effect.promise(() => fetchEvents(ctx.params.itemID)).pipe(
+        Effect.map((r) => ({ measured: r.measured, reason: r.reason, events: r.data.events })),
+      ),
+    )
+    const itemEventAdd = Effect.fn("IrisHttpApi.itemEventAdd")((ctx: { params: { itemID: number }; payload: { title: string; startsAt: string; endsAt?: string } }) =>
+      Effect.promise(() => addEvent(ctx.params.itemID, ctx.payload)),
+    )
+    const itemAsks = Effect.fn("IrisHttpApi.itemAsks")((ctx: { params: { itemID: number } }) =>
+      Effect.promise(() => fetchAsks(ctx.params.itemID)).pipe(
+        Effect.map((r) => ({ measured: r.measured, reason: r.reason, asks: r.data.asks })),
+      ),
+    )
+    const itemAskAdd = Effect.fn("IrisHttpApi.itemAskAdd")((ctx: { params: { itemID: number }; payload: { to: string; what: string; dueAt?: string } }) =>
+      Effect.promise(() => addAsk(ctx.params.itemID, ctx.payload)),
+    )
+    const itemAskAnswer = Effect.fn("IrisHttpApi.itemAskAnswer")((ctx: { params: { itemID: number; askID: number }; payload: { answer?: string } }) =>
+      Effect.promise(() => answerAsk(ctx.params.itemID, ctx.params.askID, ctx.payload.answer)),
+    )
+    const itemChat = Effect.fn("IrisHttpApi.itemChat")((ctx: { params: { itemID: number }; query: { bloq?: number } }) =>
+      Effect.promise(() => fetchItemChat(ctx.params.itemID)).pipe(
+        Effect.map((r) => ({ measured: r.measured, reason: r.reason, agentId: r.data.agentId, messages: r.data.messages })),
+      ),
+    )
+    const itemChatSend = Effect.fn("IrisHttpApi.itemChatSend")((ctx: { params: { itemID: number }; payload: { agentId: number; text: string; bloq?: number } }) =>
+      Effect.promise(() => sendItemChat(ctx.params.itemID, { agentId: ctx.payload.agentId, text: ctx.payload.text, bloqId: ctx.payload.bloq })),
+    )
+
     const playbookDoc = Effect.fn("IrisHttpApi.playbookDoc")((ctx: { params: { name: string } }) =>
       Effect.promise(() => fetchPlaybookDoc(ctx.params.name)).pipe(
         Effect.map((r) => ({ found: r.found, name: ctx.params.name, path: r.path, source: r.source, content: r.content })),
@@ -342,6 +414,6 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
         ),
     )
 
-    return handlers.handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("graph", graph).handle("catalog", catalog).handle("pageDoc", pageDoc).handle("pageSave", pageSave).handle("item", item).handle("itemSave", itemSave).handle("itemTaskAdd", itemTaskAdd).handle("itemTaskSave", itemTaskSave).handle("itemTaskDelete", itemTaskDelete).handle("cardSchema", cardSchema).handle("playbookDoc", playbookDoc).handle("agentTasks", agentTasks).handle("sites", sites).handle("records", records).handle("integrations", integrations).handle("hive", hive)
+    return handlers.handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("graph", graph).handle("catalog", catalog).handle("pageDoc", pageDoc).handle("pageSave", pageSave).handle("item", item).handle("itemSave", itemSave).handle("itemTaskAdd", itemTaskAdd).handle("itemTaskSave", itemTaskSave).handle("itemTaskDelete", itemTaskDelete).handle("cardSchema", cardSchema).handle("itemShare", itemShare).handle("itemShareVisibility", itemShareVisibility).handle("itemShareAllowlist", itemShareAllowlist).handle("itemShareInvite", itemShareInvite).handle("itemSharePermission", itemSharePermission).handle("itemShareRevoke", itemShareRevoke).handle("itemShareLink", itemShareLink).handle("itemShareLinkRevoke", itemShareLinkRevoke).handle("itemLabels", itemLabels).handle("itemAttachments", itemAttachments).handle("itemAttachmentUpload", itemAttachmentUpload).handle("itemAttachmentDelete", itemAttachmentDelete).handle("itemEvents", itemEvents).handle("itemEventAdd", itemEventAdd).handle("itemAsks", itemAsks).handle("itemAskAdd", itemAskAdd).handle("itemAskAnswer", itemAskAnswer).handle("itemChat", itemChat).handle("itemChatSend", itemChatSend).handle("playbookDoc", playbookDoc).handle("agentTasks", agentTasks).handle("sites", sites).handle("records", records).handle("integrations", integrations).handle("hive", hive)
   }),
 )

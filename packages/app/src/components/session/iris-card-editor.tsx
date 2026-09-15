@@ -170,6 +170,9 @@ export interface ShareState {
   reason?: string
   isPublic: boolean
   publicUrl?: string
+  accessLevel?: string
+  /** False: this fl-api build cannot show the list. Not the same as an empty list. */
+  allowKnown: boolean
   allowedEmails: string[]
   boardDefaults: { allowedEmails: string[] }
   members: ShareMember[]
@@ -199,8 +202,9 @@ export function parseAllowEntries(text: string, existing: string[] = []): string
  * the link — that is the gate's real behaviour (never-empty-a-gate-allowlist), and a UI that
  * renders an empty list as a quiet blank is how it leaked three times.
  */
-export function allowListSummary(isPublic: boolean, allowed: string[]): string {
+export function allowListSummary(isPublic: boolean, allowed: string[], allowKnown = true): string {
   if (!isPublic) return "Private — only people on this board can open it."
+  if (!allowKnown) return "Public. The allow-list cannot be read from this fl-api build — what you set here is stored, but not shown."
   if (allowed.length === 0) return "ANYONE with the link can open it. Add an email or @domain to restrict."
   return `Only ${allowed.length} allowed ${allowed.length === 1 ? "entry" : "entries"} can open the link.`
 }
@@ -459,9 +463,18 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
     let okCount = 0
     let lastReason: string | undefined
     for (const f of Array.from(list)) {
-      const fd = new FormData()
-      fd.append("file", f, f.name)
-      const out = await post(`/iris/item/${d.id}/attachments`, fd)
+      // Base64 in JSON: the sidecar route is plain JSON and forwards multipart to fl-api itself.
+      const data = await new Promise<string>((resolve, reject) => {
+        const r = new FileReader()
+        r.onload = () => resolve(String(r.result ?? ""))
+        r.onerror = () => reject(r.error ?? new Error("could not read file"))
+        r.readAsDataURL(f)
+      }).catch((e) => {
+        lastReason = e instanceof Error ? e.message : String(e)
+        return ""
+      })
+      if (!data) continue
+      const out = await post(`/iris/item/${d.id}/attachments`, { name: f.name, type: f.type || undefined, data, bloq: props.bloqId })
       if (out.ok) okCount++
       else lastReason = out.reason
     }
@@ -536,6 +549,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
       wire<Omit<ShareState, "measured" | "reason">>(`/iris/item/${id}/share?bloq=${props.bloqId}`, {
         isPublic: doc.latest?.isPublic ?? false,
         publicUrl: doc.latest?.publicUrl,
+        allowKnown: false,
         allowedEmails: [],
         boardDefaults: { allowedEmails: [] },
         members: [],
@@ -546,7 +560,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
   const [shareBusy, setShareBusy] = createSignal(false)
   const [allowText, setAllowText] = createSignal("")
   const [inviteEmail, setInviteEmail] = createSignal("")
-  const [invitePerm, setInvitePerm] = createSignal("view")
+  const [invitePerm, setInvitePerm] = createSignal("viewer")
   const [linkDays, setLinkDays] = createSignal("")
   const [armedRevoke, setArmedRevoke] = createSignal<string | null>(null)
 
@@ -1206,11 +1220,11 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                       <p
                         class="text-11-regular pt-2"
                         classList={{
-                          "iris-card__warn": (share.latest?.isPublic ?? doc.latest!.isPublic) && (share.latest?.allowedEmails.length ?? 0) === 0,
-                          "text-text-weak": !((share.latest?.isPublic ?? doc.latest!.isPublic) && (share.latest?.allowedEmails.length ?? 0) === 0),
+                          "iris-card__warn": (share.latest?.isPublic ?? doc.latest!.isPublic) && share.latest?.allowKnown === true && share.latest.allowedEmails.length === 0,
+                          "text-text-weak": !((share.latest?.isPublic ?? doc.latest!.isPublic) && share.latest?.allowKnown === true && share.latest.allowedEmails.length === 0),
                         }}
                       >
-                        {allowListSummary(share.latest?.isPublic ?? doc.latest!.isPublic, share.latest?.allowedEmails ?? [])}
+                        {allowListSummary(share.latest?.isPublic ?? doc.latest!.isPublic, share.latest?.allowedEmails ?? [], share.latest?.allowKnown ?? false)}
                       </p>
                       <Show when={share.latest?.publicUrl ?? doc.latest!.publicUrl}>
                         {(url) => (
@@ -1270,9 +1284,9 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                                 </Show>
                               </span>
                               <select class="iris-field__input iris-card__perm" aria-label={`Permission for ${m.email}`} value={m.permission} onChange={(e) => void setPermission(m, e.currentTarget.value)}>
-                                <option value="view">view</option>
-                                <option value="edit">edit</option>
-                                <option value="admin">admin</option>
+                                <option value="viewer">viewer</option>
+                                <option value="editor">editor</option>
+                                <option value="owner">owner</option>
                               </select>
                               <button type="button" class="iris-card__x" classList={{ "iris-card__x--armed": armedRevoke() === `m${m.userId}` }} onClick={() => revokeMember(m)}>
                                 {armedRevoke() === `m${m.userId}` ? "sure?" : "×"}
@@ -1290,9 +1304,9 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                       >
                         <input class="iris-field__input" type="email" placeholder="Invite by email…" aria-label="Invite email" value={inviteEmail()} onInput={(e) => setInviteEmail(e.currentTarget.value)} />
                         <select class="iris-field__input iris-card__perm" aria-label="Invite permission" value={invitePerm()} onChange={(e) => setInvitePerm(e.currentTarget.value)}>
-                          <option value="view">view</option>
-                          <option value="edit">edit</option>
-                          <option value="admin">admin</option>
+                          <option value="viewer">viewer</option>
+                          <option value="editor">editor</option>
+                          <option value="owner">owner</option>
                         </select>
                         <button type="submit" class="iris-card__linkbtn iris-card__linkbtn--primary" disabled={!inviteEmail().trim() || shareBusy()}>
                           Invite
