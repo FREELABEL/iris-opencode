@@ -1,7 +1,7 @@
 import { Effect } from "effect"
 import { filterRows, paginate } from "@/iris/pagination"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
-import { filterAtlas, checkAuth, fetchAgents, fetchAtlas, fetchBloqs, fetchHiveNodes, fetchInbox, fetchLeads, fetchIntegrations, fetchPages, fetchPlaybooks, fetchRecords, fetchSchemas, fetchSites, fetchAgentTasks, fetchPlaybookDoc, fetchPageDoc, savePageDoc, fetchCatalog, fetchBloqGraph, graphRows } from "@/iris/platform"
+import { filterAtlas, checkAuth, fetchAgents, fetchAtlas, fetchBloqs, fetchHiveNodes, fetchInbox, fetchLeads, fetchIntegrations, fetchPages, fetchPlaybooks, fetchRecords, fetchSchemas, fetchSites, fetchAgentTasks, fetchPlaybookDoc, fetchPageDoc, savePageDoc, fetchItem, saveItem, addItemTask, saveItemTask, deleteItemTask, fetchCardSchema, fetchCatalog, fetchBloqGraph, graphRows } from "@/iris/platform"
 import { RootHttpApi } from "../api"
 
 /**
@@ -233,6 +233,50 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
         ),
     )
 
+    const item = Effect.fn("IrisHttpApi.item")((ctx: { params: { itemID: number } }) =>
+      Effect.promise(() => fetchItem(ctx.params.itemID)).pipe(
+        Effect.map((r) => ({ measured: r.measured, reason: r.reason, ...r.data })),
+      ),
+    )
+
+    /** The card editor's writes. Field-scoped, so a title save cannot blank a body. */
+    const itemSave = Effect.fn("IrisHttpApi.itemSave")(
+      (ctx: {
+        params: { itemID: number }
+        payload: {
+          title?: string
+          body?: string
+          bodyMode?: "replace" | "merge"
+          status?: string
+          priority?: string | null
+          cardType?: string | null
+          dueDate?: string | null
+          listId?: number
+        }
+      }) => Effect.promise(() => saveItem(ctx.params.itemID, ctx.payload)),
+    )
+
+    const itemTaskAdd = Effect.fn("IrisHttpApi.itemTaskAdd")(
+      (ctx: { params: { itemID: number }; payload: { title: string; agentId?: number; dueDate?: string } }) =>
+        Effect.promise(() => addItemTask(ctx.params.itemID, ctx.payload)),
+    )
+
+    const itemTaskSave = Effect.fn("IrisHttpApi.itemTaskSave")(
+      (ctx: { params: { itemID: number; taskID: number }; payload: { done?: boolean; title?: string } }) =>
+        Effect.promise(() => saveItemTask(ctx.params.itemID, ctx.params.taskID, ctx.payload)),
+    )
+
+    const itemTaskDelete = Effect.fn("IrisHttpApi.itemTaskDelete")(
+      (ctx: { params: { itemID: number; taskID: number } }) =>
+        Effect.promise(() => deleteItemTask(ctx.params.itemID, ctx.params.taskID)),
+    )
+
+    const cardSchema = Effect.fn("IrisHttpApi.cardSchema")((ctx: { params: { bloqID: number } }) =>
+      Effect.promise(() => fetchCardSchema(ctx.params.bloqID)).pipe(
+        Effect.map((r) => ({ measured: r.measured, reason: r.reason, ...r.data })),
+      ),
+    )
+
     const playbookDoc = Effect.fn("IrisHttpApi.playbookDoc")((ctx: { params: { name: string } }) =>
       Effect.promise(() => fetchPlaybookDoc(ctx.params.name)).pipe(
         Effect.map((r) => ({ found: r.found, name: ctx.params.name, path: r.path, source: r.source, content: r.content })),
@@ -298,6 +342,6 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
         ),
     )
 
-    return handlers.handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("graph", graph).handle("catalog", catalog).handle("pageDoc", pageDoc).handle("pageSave", pageSave).handle("playbookDoc", playbookDoc).handle("agentTasks", agentTasks).handle("sites", sites).handle("records", records).handle("integrations", integrations).handle("hive", hive)
+    return handlers.handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("graph", graph).handle("catalog", catalog).handle("pageDoc", pageDoc).handle("pageSave", pageSave).handle("item", item).handle("itemSave", itemSave).handle("itemTaskAdd", itemTaskAdd).handle("itemTaskSave", itemTaskSave).handle("itemTaskDelete", itemTaskDelete).handle("cardSchema", cardSchema).handle("playbookDoc", playbookDoc).handle("agentTasks", agentTasks).handle("sites", sites).handle("records", records).handle("integrations", integrations).handle("hive", hive)
   }),
 )

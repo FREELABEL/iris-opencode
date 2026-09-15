@@ -1615,6 +1615,375 @@ export function graphRows(g: BloqGraph): {
   return rows
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// One item, for EDITING — the card editor (#185485)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The statuses fl-api will accept on an item write (BloqItemController::VALID_ITEM_STATUSES,
+ * mirrored by the CLI's BLOQ_ITEM_STATUS_CHOICES). Anything else is refused server-side with a
+ * 422, so the editor offers exactly this set rather than a free-text field that fails on save.
+ *
+ * NOT the same list as the board's card schema: `active` is in the column's enum and absent
+ * from the schema vocabulary, and a per-board schema can declare a status id the enum will
+ * refuse. The editor shows the schema's labels and writes only what this set allows.
+ */
+export const ITEM_STATUSES = ["active", "pending", "approved", "rejected", "todo", "in_progress", "done"] as const
+export type ItemStatus = (typeof ITEM_STATUSES)[number]
+
+export interface ItemTask {
+  id: number
+  title: string
+  description?: string
+  done: boolean
+  status?: string
+  /** The agent the task is assigned to, if any. Assignment on an item IS a task carrying an agent. */
+  agentId?: number
+  agentName?: string
+  dueDate?: string
+  completedAt?: string
+  source?: string
+  /** Nesting depth from getTasks' tree, flattened so the list reads top to bottom. */
+  depth: number
+}
+
+/**
+ * How a body is stored, which decides how it is SAVED.
+ *
+ * fl-api's `content` is either a markdown string or a JSON object — Elon writes
+ * `{text, body, labels, assignedAgents, attachments, …}`. Replacing a structured body with the
+ * string from a textarea would silently drop every one of those keys, so a structured body is
+ * saved with `content_merge` (only `text`/`body` change) and a string body with `content`.
+ */
+export type ContentKind = "markdown" | "structured"
+
+export interface ItemDoc {
+  id: number
+  title: string
+  /** The readable body: the string itself, or a structured body's text. */
+  content: string
+  contentKind: ContentKind
+  description?: string
+  /** Elon's "Type" pill — the `card_type` column, NOT the `type` enum (default/research/diary…). */
+  cardType?: string
+  priority?: string
+  status?: string
+  dueDate?: string
+  listId?: number
+  listName?: string
+  /** Label names from a structured body, read-only here — labels live inside `content`. */
+  labels: string[]
+  isPublic: boolean
+  publicUrl?: string
+  updatedAt?: string
+  tasks: ItemTask[]
+  /** `tasks` is empty for two reasons; this says which. */
+  tasksMeasured: boolean
+  tasksReason?: string
+}
+
+/**
+ * Strip a task row to what the editor shows.
+ *
+ * fl-api returns each task with its FULL agent embedded — config, system prompt, heartbeat
+ * settings, Stripe ids — roughly 10KB per task, and the system prompt is not something a task
+ * list should carry to a webview. The editor needs the agent's id and name.
+ */
+export function readItemTask(t: any, depth = 0): ItemTask {
+  return {
+    id: Number(t.id),
+    title: String(t.title ?? "untitled"),
+    description: t.description || undefined,
+    done: Boolean(t.is_completed),
+    status: t.status ?? undefined,
+    agentId: t.agent_id != null ? Number(t.agent_id) : t.agent?.id != null ? Number(t.agent.id) : undefined,
+    agentName: t.agent?.name ?? undefined,
+    dueDate: t.due_date ? String(t.due_date).slice(0, 10) : undefined,
+    completedAt: t.completed_at ?? undefined,
+    source: t.source ?? undefined,
+    depth,
+  }
+}
+
+/** getTasks nests children under `children[]`; the editor lists them flat with a depth. */
+export function flattenTasks(rows: any[], depth = 0, out: ItemTask[] = []): ItemTask[] {
+  for (const t of Array.isArray(rows) ? rows : []) {
+    out.push(readItemTask(t, depth))
+    if (Array.isArray(t.children) && t.children.length) flattenTasks(t.children, depth + 1, out)
+  }
+  return out
+}
+
+/** `content` as stored: a string, a JSON string of an object, or (from some routes) the object. */
+function parseContent(raw: unknown): { kind: ContentKind; text: string; obj?: Record<string, any> } {
+  if (raw == null) return { kind: "markdown", text: "" }
+  let obj: unknown = raw
+  if (typeof raw === "string") {
+    const s = raw.trim()
+    if (!(s.startsWith("{") && s.endsWith("}"))) return { kind: "markdown", text: raw }
+    try {
+      obj = JSON.parse(s)
+    } catch {
+      return { kind: "markdown", text: raw }
+    }
+  }
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return { kind: "markdown", text: String(raw) }
+  const o = obj as Record<string, any>
+  const text = typeof o.text === "string" ? o.text : typeof o.body === "string" ? o.body : ""
+  return { kind: "structured", text, obj: o }
+}
+
+export function readItemDoc(raw: any): Omit<ItemDoc, "tasks" | "tasksMeasured" | "tasksReason"> {
+  const c = parseContent(raw.content)
+  const labels: string[] = Array.isArray(c.obj?.labels)
+    ? c.obj!.labels.map((l: any) => (typeof l === "string" ? l : String(l?.name ?? l?.label ?? l?.id ?? ""))).filter(Boolean)
+    : []
+  return {
+    id: Number(raw.id),
+    title: String(raw.title ?? "Untitled"),
+    content: c.text,
+    contentKind: c.kind,
+    description: raw.description || undefined,
+    cardType: raw.card_type || undefined,
+    priority: raw.priority || undefined,
+    status: raw.status || undefined,
+    dueDate: raw.due_date ? String(raw.due_date).slice(0, 10) : undefined,
+    listId: raw.bloq_list_id != null ? Number(raw.bloq_list_id) : undefined,
+    listName: raw.list_name || undefined,
+    labels,
+    isPublic: Boolean(raw.is_public),
+    publicUrl: raw.public_url || undefined,
+    updatedAt: raw.updated_at || undefined,
+  }
+}
+
+/** fl-api's 422 names the fields; say those rather than the status code. */
+function apiFailure(j: any, status: number): string {
+  const errs = j?.errors && typeof j.errors === "object" ? Object.values(j.errors).flat().join("; ") : ""
+  return String(errs || j?.message || `fl-api ${status}`)
+}
+
+/**
+ * The item and its tasks, in one reply.
+ *
+ * Two upstream calls because fl-api keeps them on two routes. They fail independently, and the
+ * reply says so: an item whose tasks could not be read is still an item you can edit, with
+ * `tasksMeasured: false` rather than a tasks list that claims to be empty.
+ */
+export async function fetchItem(id: number): Promise<PlatformResult<ItemDoc>> {
+  const empty: ItemDoc = {
+    id,
+    title: "",
+    content: "",
+    contentKind: "markdown",
+    labels: [],
+    isPublic: false,
+    tasks: [],
+    tasksMeasured: false,
+  }
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: empty }
+
+  try {
+    const res = await irisFetch(`/api/v1/user/bloqs/list/item/${id}`)
+    if (!res.ok) {
+      const reason = res.status === 404 ? `no item ${id} visible to this account` : `fl-api ${res.status}`
+      return { measured: false, reason, data: empty }
+    }
+    const json = (await res.json()) as any
+    const doc = readItemDoc(json?.data ?? json)
+
+    let tasks: ItemTask[] = []
+    let tasksMeasured = false
+    let tasksReason: string | undefined
+    try {
+      const tr = await irisFetch(`/api/v1/user/bloqs/list/item/${id}/tasks`)
+      if (tr.ok) {
+        const tj = (await tr.json()) as any
+        tasks = flattenTasks(tj?.data?.tasks ?? tj?.tasks ?? [])
+        tasksMeasured = true
+      } else {
+        tasksReason = `tasks: fl-api ${tr.status}`
+      }
+    } catch (e) {
+      tasksReason = `tasks: ${e instanceof Error ? e.message : String(e)}`
+    }
+
+    return { measured: true, reason: tasksReason, data: { ...doc, tasks, tasksMeasured, tasksReason } }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: empty }
+  }
+}
+
+export interface ItemPatch {
+  title?: string
+  /** The new body text. HOW it lands depends on `bodyMode` — see ContentKind. */
+  body?: string
+  bodyMode?: "replace" | "merge"
+  status?: string
+  priority?: string | null
+  cardType?: string | null
+  /** YYYY-MM-DD, or null to clear. */
+  dueDate?: string | null
+  /** Move to another list on the same board. */
+  listId?: number
+}
+
+/**
+ * Build the fl-api body from the editor's patch. Exported so the mapping is testable without
+ * the network: a field the editor sets that never reaches the wire is a save that reports
+ * success and changes nothing — and `cardType` → `card_type` (not `type`) is exactly the kind
+ * of rename that fails that way.
+ */
+export function itemPatchBody(patch: ItemPatch): Record<string, unknown> {
+  const body: Record<string, unknown> = {}
+  if (patch.title !== undefined) body.title = patch.title
+  if (patch.body !== undefined) {
+    if (patch.bodyMode === "merge") body.content_merge = { text: patch.body, body: patch.body }
+    else body.content = patch.body
+  }
+  if (patch.status !== undefined) body.status = patch.status
+  if (patch.priority !== undefined) body.priority = patch.priority
+  if (patch.cardType !== undefined) body.card_type = patch.cardType
+  if (patch.dueDate !== undefined) body.due_date = patch.dueDate
+  if (patch.listId !== undefined) body.bloq_list_id = patch.listId
+  return body
+}
+
+export async function saveItem(id: number, patch: ItemPatch): Promise<{ ok: boolean; reason?: string }> {
+  const userId = await resolveUserId()
+  if (!userId) return { ok: false, reason: `not signed in (token: ${tokenSource()})` }
+
+  if (patch.status !== undefined && !(ITEM_STATUSES as readonly string[]).includes(patch.status)) {
+    return { ok: false, reason: `"${patch.status}" is not a status fl-api accepts (${ITEM_STATUSES.join(", ")})` }
+  }
+  const body = itemPatchBody(patch)
+  if (Object.keys(body).length === 0) return { ok: false, reason: "nothing to save" }
+
+  try {
+    const res = await irisFetch(`/api/v1/user/bloqs/list/item/${id}`, FL_API, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    })
+    const j = (await res.json().catch(() => ({}))) as any
+    if (!res.ok) return { ok: false, reason: apiFailure(j, res.status) }
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+/**
+ * Add a task to an item. With `agentId` this IS "assign an agent to this card" — there is
+ * deliberately no agent column on items; assignment is a task carrying the agent, which is
+ * what `iris agents tasks` and the Tasks tab both read back.
+ */
+export async function addItemTask(
+  itemId: number,
+  input: { title: string; agentId?: number; dueDate?: string },
+): Promise<{ ok: boolean; reason?: string; task?: ItemTask }> {
+  const userId = await resolveUserId()
+  if (!userId) return { ok: false, reason: `not signed in (token: ${tokenSource()})` }
+  const title = input.title.trim()
+  if (!title) return { ok: false, reason: "a task needs a title" }
+
+  try {
+    const body: Record<string, unknown> = { title, status: "todo" }
+    if (input.agentId != null) body.agent_id = input.agentId
+    if (input.dueDate) body.due_date = input.dueDate
+    const res = await irisFetch(`/api/v1/user/bloqs/list/item/${itemId}/tasks`, FL_API, {
+      method: "POST",
+      body: JSON.stringify(body),
+    })
+    const j = (await res.json().catch(() => ({}))) as any
+    if (!res.ok) return { ok: false, reason: apiFailure(j, res.status) }
+    const raw = j?.data ?? j
+    return { ok: true, task: raw && raw.id != null ? readItemTask(raw) : undefined }
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+export async function saveItemTask(
+  itemId: number,
+  taskId: number,
+  patch: { done?: boolean; title?: string },
+): Promise<{ ok: boolean; reason?: string }> {
+  const userId = await resolveUserId()
+  if (!userId) return { ok: false, reason: `not signed in (token: ${tokenSource()})` }
+  const body: Record<string, unknown> = {}
+  if (patch.done !== undefined) body.is_completed = patch.done
+  if (patch.title !== undefined) body.title = patch.title
+  if (Object.keys(body).length === 0) return { ok: false, reason: "nothing to save" }
+  try {
+    const res = await irisFetch(`/api/v1/user/bloqs/list/item/${itemId}/tasks/${taskId}`, FL_API, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    })
+    const j = (await res.json().catch(() => ({}))) as any
+    if (!res.ok) return { ok: false, reason: apiFailure(j, res.status) }
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+export async function deleteItemTask(itemId: number, taskId: number): Promise<{ ok: boolean; reason?: string }> {
+  const userId = await resolveUserId()
+  if (!userId) return { ok: false, reason: `not signed in (token: ${tokenSource()})` }
+  try {
+    const res = await irisFetch(`/api/v1/user/bloqs/list/item/${itemId}/tasks/${taskId}`, FL_API, { method: "DELETE" })
+    const j = (await res.json().catch(() => ({}))) as any
+    if (!res.ok) return { ok: false, reason: apiFailure(j, res.status) }
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+export interface SchemaOption {
+  id: string
+  label: string
+  color?: string
+}
+export interface CardSchema {
+  type: SchemaOption[]
+  priority: SchemaOption[]
+  status: SchemaOption[]
+}
+
+function readOptions(v: unknown): SchemaOption[] {
+  if (!Array.isArray(v)) return []
+  return v
+    .map((o: any) => (typeof o === "string" ? { id: o, label: o } : { id: String(o?.id ?? ""), label: String(o?.label ?? o?.name ?? o?.id ?? ""), color: o?.color || undefined }))
+    .filter((o) => o.id)
+}
+
+/**
+ * The board's card vocabulary — what the Type, Priority and Status pickers offer.
+ *
+ * Served by fl-api's CardSchemaService: defaults merged with the board's overrides, which is the
+ * same `effective` set Elon's Board.vue reads. Hardcoding the defaults here would be the second
+ * copy that drifts; Elon's CardEditor already is that copy.
+ */
+export async function fetchCardSchema(bloqId: number): Promise<PlatformResult<CardSchema>> {
+  const empty: CardSchema = { type: [], priority: [], status: [] }
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: empty }
+  try {
+    const res = await irisFetch(`/api/v1/bloqs/${bloqId}/card-schema`)
+    if (!res.ok) return { measured: false, reason: `fl-api ${res.status}`, data: empty }
+    const j = (await res.json()) as any
+    const eff = j?.data?.effective ?? j?.effective ?? j?.data ?? {}
+    return {
+      measured: true,
+      data: { type: readOptions(eff.type), priority: readOptions(eff.priority), status: readOptions(eff.status) },
+    }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: empty }
+  }
+}
+
 export interface Integration {
   id: string
   name: string
