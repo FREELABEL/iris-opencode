@@ -855,7 +855,13 @@
  * the body, .iris-editor for the textarea. New rules here are layout, plus the one form
  * control family the panel did not have yet (.iris-field).
  */
-.iris-card [data-slot="dialog-content"] {
+/* Dialog puts `class` on its CONTENT slot, so .iris-card IS [data-slot="dialog-content"] — a
+   descendant selector here matched nothing, and the first cut shipped that way. The container
+   is 600px tall; the content box is not unless told: it sizes to its children, so a two-line
+   card rendered as a short strip and a long one as a full window. An editor keeps one shape. */
+.iris-card[data-slot="dialog-content"] {
+  height: 100%;
+  min-height: 0;
   overflow: hidden;
 }
 .iris-card__crumb {
