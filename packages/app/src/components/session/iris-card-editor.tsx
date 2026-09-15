@@ -170,6 +170,9 @@ export interface ShareState {
   reason?: string
   isPublic: boolean
   publicUrl?: string
+  accessLevel?: string
+  /** False: this fl-api build cannot show the list. Not the same as an empty list. */
+  allowKnown: boolean
   allowedEmails: string[]
   boardDefaults: { allowedEmails: string[] }
   members: ShareMember[]
@@ -199,8 +202,9 @@ export function parseAllowEntries(text: string, existing: string[] = []): string
  * the link — that is the gate's real behaviour (never-empty-a-gate-allowlist), and a UI that
  * renders an empty list as a quiet blank is how it leaked three times.
  */
-export function allowListSummary(isPublic: boolean, allowed: string[]): string {
+export function allowListSummary(isPublic: boolean, allowed: string[], allowKnown = true): string {
   if (!isPublic) return "Private — only people on this board can open it."
+  if (!allowKnown) return "Public. The allow-list cannot be read from this fl-api build — what you set here is stored, but not shown."
   if (allowed.length === 0) return "ANYONE with the link can open it. Add an email or @domain to restrict."
   return `Only ${allowed.length} allowed ${allowed.length === 1 ? "entry" : "entries"} can open the link.`
 }
@@ -536,6 +540,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
       wire<Omit<ShareState, "measured" | "reason">>(`/iris/item/${id}/share?bloq=${props.bloqId}`, {
         isPublic: doc.latest?.isPublic ?? false,
         publicUrl: doc.latest?.publicUrl,
+        allowKnown: false,
         allowedEmails: [],
         boardDefaults: { allowedEmails: [] },
         members: [],
@@ -1206,11 +1211,11 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                       <p
                         class="text-11-regular pt-2"
                         classList={{
-                          "iris-card__warn": (share.latest?.isPublic ?? doc.latest!.isPublic) && (share.latest?.allowedEmails.length ?? 0) === 0,
-                          "text-text-weak": !((share.latest?.isPublic ?? doc.latest!.isPublic) && (share.latest?.allowedEmails.length ?? 0) === 0),
+                          "iris-card__warn": (share.latest?.isPublic ?? doc.latest!.isPublic) && share.latest?.allowKnown === true && share.latest.allowedEmails.length === 0,
+                          "text-text-weak": !((share.latest?.isPublic ?? doc.latest!.isPublic) && share.latest?.allowKnown === true && share.latest.allowedEmails.length === 0),
                         }}
                       >
-                        {allowListSummary(share.latest?.isPublic ?? doc.latest!.isPublic, share.latest?.allowedEmails ?? [])}
+                        {allowListSummary(share.latest?.isPublic ?? doc.latest!.isPublic, share.latest?.allowedEmails ?? [], share.latest?.allowKnown ?? false)}
                       </p>
                       <Show when={share.latest?.publicUrl ?? doc.latest!.publicUrl}>
                         {(url) => (

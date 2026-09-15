@@ -1995,6 +1995,14 @@ export interface ShareLink {
 export interface ShareState {
   isPublic: boolean
   publicUrl?: string
+  /** private | public | gated | password | expiring — fl-api's ladder label, when it returns one. */
+  accessLevel?: string
+  /**
+   * False when this fl-api build does not return the item's allow-list (showById gained it
+   * in fl-api 462c8a5a). An empty `allowedEmails` with this false is NOT "anyone with the
+   * link" — it is "cannot see the list from here", and the UI says that instead.
+   */
+  allowKnown: boolean
   allowedEmails: string[]
   boardDefaults: { allowedEmails: string[] }
   members: ShareMember[]
@@ -2050,7 +2058,7 @@ export function readShareLink(r: any): ShareLink {
  * different sentences.
  */
 export async function fetchShareState(itemId: number, bloqId?: number): Promise<PlatformResult<ShareState>> {
-  const empty: ShareState = { isPublic: false, allowedEmails: [], boardDefaults: { allowedEmails: [] }, members: [], links: [] }
+  const empty: ShareState = { isPublic: false, allowKnown: false, allowedEmails: [], boardDefaults: { allowedEmails: [] }, members: [], links: [] }
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: notSignedIn(), data: empty }
   const item = await rawItem(itemId)
@@ -2060,6 +2068,8 @@ export async function fetchShareState(itemId: number, bloqId?: number): Promise<
     ...empty,
     isPublic: Boolean(item.raw.is_public),
     publicUrl: item.raw.public_url || undefined,
+    accessLevel: item.raw.access_level || undefined,
+    allowKnown: "share_allowed_emails" in item.raw || "share_allowed_domains" in item.raw,
     allowedEmails: [
       ...readEmailList(item.raw.share_allowed_emails),
       ...readEmailList(item.raw.share_allowed_domains).map((x) => (x.startsWith("@") ? x : `@${x}`)),
@@ -2168,13 +2178,12 @@ export async function setShareAllowlist(itemId: number, entries: string[]): Prom
   const { emails, domains } = splitAllowList(entries)
   const r = await postJson(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/make-public`, { allowed_emails: emails, allowed_domains: domains })
   if (!r.ok) return r
-  // Read back. The write path is indirect enough that "accepted" and "stored" can differ.
-  const back = await rawItem(itemId)
-  if (back.ok) {
-    const stored = [...readEmailList(back.raw.share_allowed_emails), ...readEmailList(back.raw.share_allowed_domains)]
-    const want = [...emails, ...domains]
-    const same = stored.length === want.length && want.every((e) => stored.includes(e))
-    if (!same) return { ok: false, reason: `fl-api accepted the write but the stored list differs (stored ${stored.length}, sent ${want.length})` }
+  // Read back from the reply's own ladder label: make-public answers access_level, and it is
+  // "gated" exactly when a list is stored. "Accepted" and "stored" have differed here before.
+  const level = r.data?.access_level
+  const want = emails.length + domains.length > 0
+  if (level && (level === "gated") !== want) {
+    return { ok: false, reason: `fl-api accepted the write but reports access_level "${level}" (expected ${want ? "gated" : "public"})` }
   }
   return { ok: true }
 }

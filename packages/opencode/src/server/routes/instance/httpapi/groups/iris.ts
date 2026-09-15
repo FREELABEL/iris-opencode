@@ -468,6 +468,11 @@ const ShareStateResponse = Schema.Struct({
   ...Measured,
   isPublic: Schema.Boolean,
   publicUrl: Schema.optional(Schema.String),
+  accessLevel: described(Schema.optional(Schema.String), "fl-api's ladder label: private | public | gated | password | expiring"),
+  allowKnown: described(
+    Schema.Boolean,
+    "False means this fl-api build does not return the allow-list. An empty list with this false is NOT 'anyone with the link'.",
+  ),
   allowedEmails: Schema.Array(Schema.String),
   boardDefaults: Schema.Struct({ allowedEmails: Schema.Array(Schema.String) }),
   members: Schema.Array(ShareMemberSchema),
