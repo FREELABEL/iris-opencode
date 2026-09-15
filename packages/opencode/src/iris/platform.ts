@@ -2239,8 +2239,10 @@ export async function setItemLabels(itemId: number, labels: string[]): Promise<P
   if (!item.ok) return { measured: false, reason: item.reason, data: { labels: [] } }
   const clean = [...new Set(labels.map((l) => String(l).trim()).filter(Boolean))]
   const c = parseContent(item.raw.content)
+  // The WHOLE object, not content_merge: fl-api merges with array_replace_recursive, which
+  // cannot shrink an array — {labels: [a]} over [a, b] stores [a, b]. Measured on #185518.
   const body: Record<string, unknown> = {}
-  if (c.kind === "structured") body.content_merge = { labels: clean }
+  if (c.kind === "structured") body.content = JSON.stringify({ ...c.obj, labels: clean })
   else body.content = JSON.stringify({ text: c.text, body: c.text, labels: clean })
   if (item.raw.card_type) body.card_type = item.raw.card_type
   if (item.raw.priority) body.priority = item.raw.priority
@@ -2298,9 +2300,11 @@ export async function deleteAttachment(itemId: number, fileId: string): Promise<
   // The stored file first, then the reference — Elon does it in this order too.
   if (gone.cloud_file_id) {
     const del = await postJson(`/api/v1/cloud-files/${gone.cloud_file_id}`, undefined, "DELETE")
-    if (!del.ok && !/not found|404/i.test(del.reason ?? "")) return { ok: false, reason: `cloud file: ${del.reason}` }
+    // Already gone is fine — the reference is what is being removed. Laravel says it three ways.
+    if (!del.ok && !/not found|404|no query results/i.test(del.reason ?? "")) return { ok: false, reason: `cloud file: ${del.reason}` }
   }
-  const r = await postJson(`/api/v1/user/bloqs/list/item/${itemId}`, { content_merge: { attachments: keep } }, "PUT")
+  // Whole object: content_merge cannot remove an array element (array_replace_recursive).
+  const r = await postJson(`/api/v1/user/bloqs/list/item/${itemId}`, { content: JSON.stringify({ ...c.obj, attachments: keep }) }, "PUT")
   return { ok: r.ok, reason: r.reason }
 }
 
