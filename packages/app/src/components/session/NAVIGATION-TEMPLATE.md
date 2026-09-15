@@ -143,3 +143,23 @@ worked, with a paragraph explaining why the app was at fault; the defect was tha
 about to assert had persisted, because `addInitScript` re-runs on every navigation — a harness
 that could not tell "persistence is broken" from "I broke it", reporting the first while doing
 the second.
+
+
+---
+
+## The one modal, and why it is not a fourth level (#185485)
+
+The card editor opens in a modal. Everything above says the panel navigates in place, and it
+does — this is the exception, and the argument for it is **width**, not familiarity. Details
+beside a body is two columns; the panel is ~500px with the sidebar open, and 500px cannot hold
+that honestly. It would be Elon's editor with its sidebar amputated.
+
+What keeps it a detail view rather than a second navigation model:
+
+- it opens FROM a row and returns TO it — Escape lands you where you were
+- it has no surface switcher of its own; inside it, level 3 chips (Details · Tasks) are the
+  same chips the panel uses, drawn the same way
+- nothing is lost on close: every write was explicit, and the row behind it re-reads on save
+
+The fallback if this turns out wrong is **not** "squeeze it into 500px". It is leave editing in
+Elon and keep the copy-a-command chips, which at least does not lie about what the panel can do.

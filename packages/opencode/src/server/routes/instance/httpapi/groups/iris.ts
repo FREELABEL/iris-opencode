@@ -427,6 +427,27 @@ const PlaybooksResponse = Schema.Struct({
   ),
 }).annotate({ identifier: "IrisPlaybooksResponse" })
 
+const SchemaOption = Schema.Struct({
+  id: Schema.String,
+  label: Schema.String,
+  color: Schema.optional(Schema.String),
+}).annotate({ identifier: "IrisSchemaOption" })
+
+/** A task on a card. Agent as id + name only — see iris.item. */
+const ItemTask = Schema.Struct({
+  id: Schema.Finite,
+  title: Schema.String,
+  description: Schema.optional(Schema.String),
+  done: Schema.Boolean,
+  status: Schema.optional(Schema.String),
+  agentId: Schema.optional(Schema.Finite),
+  agentName: Schema.optional(Schema.String),
+  dueDate: Schema.optional(Schema.String),
+  completedAt: Schema.optional(Schema.String),
+  source: Schema.optional(Schema.String),
+  depth: described(Schema.Finite, "Nesting depth; getTasks returns a tree and this list is it flattened."),
+}).annotate({ identifier: "IrisItemTask" })
+
 const root = "/iris"
 
 export const IrisPaths = {
@@ -448,6 +469,12 @@ export const IrisPaths = {
   graph: `${root}/graph`,
   pageDoc: `${root}/page/:pageID`,
   pageSave: `${root}/page/:pageID/save`,
+  item: `${root}/item/:itemID`,
+  itemSave: `${root}/item/:itemID/save`,
+  itemTaskAdd: `${root}/item/:itemID/tasks`,
+  itemTaskSave: `${root}/item/:itemID/tasks/:taskID/save`,
+  itemTaskDelete: `${root}/item/:itemID/tasks/:taskID/delete`,
+  cardSchema: `${root}/card-schema/:bloqID`,
   hive: `${root}/hive`,
 } as const
 
@@ -696,6 +723,136 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Save a page's JSON",
           description:
             "PINNED to the version it was read at. fl-api refuses the write if the page moved since, which is the whole difference between saving and clobbering — `iris pages push` has no divergence check (#183600) and has overwritten other people's work. A stale save comes back as a refusal naming the conflict, never as a success that quietly won.",
+        }),
+      ),
+      HttpApiEndpoint.get("item", IrisPaths.item, {
+        params: { itemID: Schema.NumberFromString },
+        success: described(
+          Schema.Struct({
+            ...Measured,
+            id: Schema.Finite,
+            title: Schema.String,
+            content: described(Schema.String, "The readable body: the markdown itself, or a structured body's text."),
+            contentKind: described(
+              Schema.Literals(["markdown", "structured"]),
+              "How the body is stored. STRUCTURED means fl-api holds a JSON object (Elon's {text, labels, assignedAgents, …}); saving its text goes through content_merge so the other keys survive.",
+            ),
+            description: Schema.optional(Schema.String),
+            cardType: described(Schema.optional(Schema.String), "Elon's Type pill — the card_type column, not the type enum."),
+            priority: Schema.optional(Schema.String),
+            status: Schema.optional(Schema.String),
+            dueDate: described(Schema.optional(Schema.String), "YYYY-MM-DD"),
+            listId: Schema.optional(Schema.Finite),
+            listName: Schema.optional(Schema.String),
+            labels: described(Schema.Array(Schema.String), "Label names from a structured body. Read-only here; they live inside content."),
+            isPublic: Schema.Boolean,
+            publicUrl: Schema.optional(Schema.String),
+            updatedAt: Schema.optional(Schema.String),
+            tasks: Schema.Array(ItemTask),
+            tasksMeasured: described(
+              Schema.Boolean,
+              "False means the tasks could NOT be read. An empty list with this false is not an item with no tasks.",
+            ),
+            tasksReason: Schema.optional(Schema.String),
+          }).annotate({ identifier: "IrisItemDoc" }),
+          "One board item with its tasks, for editing",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.item",
+          summary: "Read a card for editing",
+          description:
+            "The item and its tasks in one reply, from two fl-api routes that fail independently — so `measured` covers the item and `tasksMeasured` covers the tasks. Each task carries its agent's id and name only: fl-api embeds the whole agent, system prompt included, and that has no business in a task list.",
+        }),
+      ),
+      HttpApiEndpoint.post("itemSave", IrisPaths.itemSave, {
+        params: { itemID: Schema.NumberFromString },
+        payload: Schema.Struct({
+          title: Schema.optional(Schema.String),
+          body: Schema.optional(Schema.String),
+          bodyMode: described(
+            Schema.optional(Schema.Literals(["replace", "merge"])),
+            "REPLACE sends `content`; MERGE sends `content_merge {text, body}`. Use merge for a structured body or its labels and agents are gone.",
+          ),
+          status: Schema.optional(Schema.String),
+          priority: Schema.optional(Schema.NullOr(Schema.String)),
+          cardType: Schema.optional(Schema.NullOr(Schema.String)),
+          dueDate: described(Schema.optional(Schema.NullOr(Schema.String)), "YYYY-MM-DD, or null to clear"),
+          listId: described(Schema.optional(Schema.Finite), "Move the item to this list on the same board"),
+        }),
+        success: described(
+          Schema.Struct({
+            ok: Schema.Boolean,
+            reason: Schema.optional(Schema.String),
+          }).annotate({ identifier: "IrisItemSaveResult" }),
+          "Whether the save landed",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.itemSave",
+          summary: "Save a card's fields",
+          description:
+            "A PATCH in spirit: only the fields present are sent to fl-api's PUT /user/bloqs/list/item/{id}, so saving a title cannot blank the body. Status is checked against the set fl-api accepts before the request is made, and a 422 comes back as the field errors it named, not as a status code.",
+        }),
+      ),
+      HttpApiEndpoint.post("itemTaskAdd", IrisPaths.itemTaskAdd, {
+        params: { itemID: Schema.NumberFromString },
+        payload: Schema.Struct({
+          title: Schema.String,
+          agentId: described(Schema.optional(Schema.Finite), "Assign the task to this agent. This is how an agent is put on a card."),
+          dueDate: Schema.optional(Schema.String),
+        }),
+        success: described(
+          Schema.Struct({
+            ok: Schema.Boolean,
+            reason: Schema.optional(Schema.String),
+            task: Schema.optional(ItemTask),
+          }).annotate({ identifier: "IrisItemTaskAddResult" }),
+          "The task as fl-api stored it",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.itemTaskAdd",
+          summary: "Add a task to a card",
+          description:
+            "With `agentId` this IS assignment: there is deliberately no agent column on items, so \"this agent is on that card\" is a task carrying the agent — the primitive `iris agents assign --item` writes and `iris agents tasks` reads back.",
+        }),
+      ),
+      HttpApiEndpoint.post("itemTaskSave", IrisPaths.itemTaskSave, {
+        params: { itemID: Schema.NumberFromString, taskID: Schema.NumberFromString },
+        payload: Schema.Struct({
+          done: Schema.optional(Schema.Boolean),
+          title: Schema.optional(Schema.String),
+        }),
+        success: described(
+          Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String) }).annotate({ identifier: "IrisOk" }),
+          "Whether it landed",
+        ),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.itemTaskSave", summary: "Complete, reopen or retitle a task" })),
+      HttpApiEndpoint.post("itemTaskDelete", IrisPaths.itemTaskDelete, {
+        params: { itemID: Schema.NumberFromString, taskID: Schema.NumberFromString },
+        success: described(
+          Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String) }).annotate({ identifier: "IrisOk" }),
+          "Whether it landed",
+        ),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.itemTaskDelete", summary: "Delete a task" })),
+      HttpApiEndpoint.get("cardSchema", IrisPaths.cardSchema, {
+        params: { bloqID: Schema.NumberFromString },
+        success: described(
+          Schema.Struct({
+            ...Measured,
+            type: Schema.Array(SchemaOption),
+            priority: Schema.Array(SchemaOption),
+            status: Schema.Array(SchemaOption),
+          }).annotate({ identifier: "IrisCardSchema" }),
+          "The board's card vocabulary",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.cardSchema",
+          summary: "What Type, Priority and Status can be on this board",
+          description:
+            "fl-api's effective card schema: defaults merged with the board's overrides, the same set Elon's Board.vue reads. Note the status list is a vocabulary, not the column's enum — `active` is a legal stored status the schema does not name, and the editor keeps whatever the item already has.",
         }),
       ),
       HttpApiEndpoint.get("playbookDoc", IrisPaths.playbookDoc, {
