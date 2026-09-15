@@ -448,6 +448,98 @@ const ItemTask = Schema.Struct({
   depth: described(Schema.Finite, "Nesting depth; getTasks returns a tree and this list is it flattened."),
 }).annotate({ identifier: "IrisItemTask" })
 
+const ShareMemberSchema = Schema.Struct({
+  userId: Schema.Finite,
+  name: Schema.String,
+  email: Schema.String,
+  permission: Schema.String,
+}).annotate({ identifier: "IrisShareMember" })
+
+const ShareLinkSchema = Schema.Struct({
+  id: Schema.String,
+  url: Schema.String,
+  createdAt: Schema.String,
+  expiresAt: Schema.optional(Schema.String),
+  uses: Schema.Finite,
+  revoked: Schema.Boolean,
+}).annotate({ identifier: "IrisShareLink" })
+
+const ShareStateResponse = Schema.Struct({
+  ...Measured,
+  isPublic: Schema.Boolean,
+  publicUrl: Schema.optional(Schema.String),
+  allowedEmails: Schema.Array(Schema.String),
+  boardDefaults: Schema.Struct({ allowedEmails: Schema.Array(Schema.String) }),
+  members: Schema.Array(ShareMemberSchema),
+  links: Schema.Array(ShareLinkSchema),
+}).annotate({ identifier: "IrisShareStateResponse" })
+
+const LabelsResponse = Schema.Struct({
+  ...Measured,
+  labels: Schema.Array(Schema.String),
+}).annotate({ identifier: "IrisLabelsResponse" })
+
+const CardFileSchema = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  size: Schema.optional(Schema.Finite),
+  type: Schema.optional(Schema.String),
+  url: Schema.optional(Schema.String),
+  stored: Schema.Boolean,
+}).annotate({ identifier: "IrisCardFile" })
+
+const AttachmentsResponse = Schema.Struct({
+  ...Measured,
+  files: Schema.Array(CardFileSchema),
+}).annotate({ identifier: "IrisAttachmentsResponse" })
+
+const CardEventSchema = Schema.Struct({
+  id: Schema.String,
+  title: Schema.String,
+  startsAt: Schema.String,
+  endsAt: Schema.optional(Schema.String),
+  kind: Schema.optional(Schema.String),
+}).annotate({ identifier: "IrisCardEvent" })
+
+const EventsResponse = Schema.Struct({
+  ...Measured,
+  events: Schema.Array(CardEventSchema),
+}).annotate({ identifier: "IrisEventsResponse" })
+
+const CardAskSchema = Schema.Struct({
+  id: Schema.String,
+  to: Schema.String,
+  what: Schema.String,
+  dueAt: Schema.optional(Schema.String),
+  status: Schema.Literals(["open", "answered"]),
+  answer: Schema.optional(Schema.String),
+}).annotate({ identifier: "IrisCardAsk" })
+
+const AsksResponse = Schema.Struct({
+  ...Measured,
+  asks: Schema.Array(CardAskSchema),
+}).annotate({ identifier: "IrisAsksResponse" })
+
+const ChatMessageSchema = Schema.Struct({
+  id: Schema.String,
+  role: Schema.Literals(["user", "agent"]),
+  text: Schema.String,
+  at: Schema.String,
+  agentName: Schema.optional(Schema.String),
+}).annotate({ identifier: "IrisChatMessage" })
+
+const ChatResponse = Schema.Struct({
+  ...Measured,
+  agentId: Schema.optional(Schema.Finite),
+  messages: Schema.Array(ChatMessageSchema),
+}).annotate({ identifier: "IrisChatResponse" })
+
+const ChatSendResponse = Schema.Struct({
+  ok: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  message: Schema.optional(ChatMessageSchema),
+}).annotate({ identifier: "IrisChatSendResponse" })
+
 const root = "/iris"
 
 export const IrisPaths = {
@@ -475,6 +567,21 @@ export const IrisPaths = {
   itemTaskSave: `${root}/item/:itemID/tasks/:taskID/save`,
   itemTaskDelete: `${root}/item/:itemID/tasks/:taskID/delete`,
   cardSchema: `${root}/card-schema/:bloqID`,
+  itemShare: `${root}/item/:itemID/share`,
+  itemShareVisibility: `${root}/item/:itemID/share/visibility`,
+  itemShareAllowlist: `${root}/item/:itemID/share/allowlist`,
+  itemShareInvite: `${root}/item/:itemID/share/invite`,
+  itemSharePermission: `${root}/item/:itemID/share/permission`,
+  itemShareRevoke: `${root}/item/:itemID/share/revoke`,
+  itemShareLink: `${root}/item/:itemID/share/link`,
+  itemShareLinkRevoke: `${root}/item/:itemID/share/link/:linkID/revoke`,
+  itemLabels: `${root}/item/:itemID/labels`,
+  itemAttachments: `${root}/item/:itemID/attachments`,
+  itemAttachmentDelete: `${root}/item/:itemID/attachments/:fileID/delete`,
+  itemEvents: `${root}/item/:itemID/events`,
+  itemAsks: `${root}/item/:itemID/asks`,
+  itemAskAnswer: `${root}/item/:itemID/asks/:askID/answer`,
+  itemChat: `${root}/item/:itemID/chat`,
   hive: `${root}/hive`,
 } as const
 
@@ -855,6 +962,122 @@ export const IrisApi = HttpApi.make("iris").add(
             "fl-api's effective card schema: defaults merged with the board's overrides, the same set Elon's Board.vue reads. Note the status list is a vocabulary, not the column's enum — `active` is a legal stored status the schema does not name, and the editor keeps whatever the item already has.",
         }),
       ),
+      // ── The card editor's second pass (#185506). Sharing · Labels · Attachments · Events · Asks · Chat ──
+      HttpApiEndpoint.get("itemShare", IrisPaths.itemShare, {
+        params: { itemID: Schema.NumberFromString },
+        query: Schema.Struct({ bloq: Schema.optional(Schema.NumberFromString) }),
+        success: described(ShareStateResponse, "Who can open this card, and how"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.itemShare",
+          summary: "The card's sharing state",
+          description:
+            "Four fl-api reads folded into one: the item's is_public / public_url / share_allowed_emails, the board's share-defaults, the board's shared users, and the board's share links. `measured` is false only when the ITEM could not be read; a board read that fails leaves its list empty and says so in `reason`. An EMPTY allow-list on a public item admits anyone with the link — the UI says that out loud; this route never rewrites an empty list into something else.",
+        }),
+      ),
+      HttpApiEndpoint.post("itemShareVisibility", IrisPaths.itemShareVisibility, {
+        params: { itemID: Schema.NumberFromString },
+        payload: Schema.Struct({ public: Schema.Boolean }),
+        success: Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String) }).annotate({ identifier: "IrisOk" }),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.itemShareVisibility", summary: "Make a card public or private (make-public / make-private)" })),
+      HttpApiEndpoint.post("itemShareAllowlist", IrisPaths.itemShareAllowlist, {
+        params: { itemID: Schema.NumberFromString },
+        payload: Schema.Struct({ emails: Schema.Array(Schema.String) }),
+        success: Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String) }).annotate({ identifier: "IrisOk" }),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.itemShareAllowlist", summary: "Who can open the public link — emails and @domains" })),
+      HttpApiEndpoint.post("itemShareInvite", IrisPaths.itemShareInvite, {
+        params: { itemID: Schema.NumberFromString },
+        payload: Schema.Struct({ email: Schema.String, permission: Schema.String, bloq: Schema.Finite }),
+        success: Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String) }).annotate({ identifier: "IrisOk" }),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.itemShareInvite", summary: "Invite someone to the BOARD (there is no per-item membership)" })),
+      HttpApiEndpoint.post("itemSharePermission", IrisPaths.itemSharePermission, {
+        params: { itemID: Schema.NumberFromString },
+        payload: Schema.Struct({ userId: Schema.Finite, permission: Schema.String, bloq: Schema.Finite }),
+        success: Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String) }).annotate({ identifier: "IrisOk" }),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.itemSharePermission", summary: "Change a board member's permission" })),
+      HttpApiEndpoint.post("itemShareRevoke", IrisPaths.itemShareRevoke, {
+        params: { itemID: Schema.NumberFromString },
+        payload: Schema.Struct({ userId: Schema.Finite, bloq: Schema.Finite }),
+        success: Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String) }).annotate({ identifier: "IrisOk" }),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.itemShareRevoke", summary: "Remove a board member" })),
+      HttpApiEndpoint.post("itemShareLink", IrisPaths.itemShareLink, {
+        params: { itemID: Schema.NumberFromString },
+        payload: Schema.Struct({ bloq: Schema.Finite, expiresInDays: Schema.optional(Schema.Finite) }),
+        success: described(
+          Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String), link: Schema.optional(ShareLinkSchema) }).annotate({ identifier: "IrisShareLinkCreated" }),
+          "The new link. It is a BEARER link: whoever holds the URL is in.",
+        ),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.itemShareLink", summary: "Create a board share link" })),
+      HttpApiEndpoint.post("itemShareLinkRevoke", IrisPaths.itemShareLinkRevoke, {
+        params: { itemID: Schema.NumberFromString, linkID: Schema.String },
+        payload: Schema.Struct({ bloq: Schema.Finite }),
+        success: Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String) }).annotate({ identifier: "IrisOk" }),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.itemShareLinkRevoke", summary: "Revoke a board share link" })),
+      HttpApiEndpoint.post("itemLabels", IrisPaths.itemLabels, {
+        params: { itemID: Schema.NumberFromString },
+        payload: Schema.Struct({ labels: Schema.Array(Schema.String) }),
+        success: described(LabelsResponse, "The labels as stored, after the write"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.itemLabels",
+          summary: "Set a card's labels",
+          description:
+            "Labels live INSIDE content JSON. A structured body gets content_merge {labels}; a markdown body is converted to {text: <the markdown>, labels} because there is nowhere else to keep them — the readable body is unchanged. The item's current card_type and priority are sent back explicitly so fl-api's label-derivation does not silently rewrite them.",
+        }),
+      ),
+      HttpApiEndpoint.get("itemAttachments", IrisPaths.itemAttachments, {
+        params: { itemID: Schema.NumberFromString },
+        success: described(AttachmentsResponse, "content.attachments, with `stored` per file"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.itemAttachments", summary: "A card's attachments" })),
+      HttpApiEndpoint.post("itemAttachmentUpload", IrisPaths.itemAttachments, {
+        params: { itemID: Schema.NumberFromString },
+        payload: Schema.Any,
+        success: Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String) }).annotate({ identifier: "IrisOk" }),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.itemAttachmentUpload", summary: "Upload one file to a card (multipart, field `file`)" })),
+      HttpApiEndpoint.post("itemAttachmentDelete", IrisPaths.itemAttachmentDelete, {
+        params: { itemID: Schema.NumberFromString, fileID: Schema.String },
+        success: Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String) }).annotate({ identifier: "IrisOk" }),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.itemAttachmentDelete", summary: "Remove an attachment from a card" })),
+      HttpApiEndpoint.get("itemEvents", IrisPaths.itemEvents, {
+        params: { itemID: Schema.NumberFromString },
+        success: described(EventsResponse, "Events and deadlines tied to this card"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.itemEvents", summary: "A card's events" })),
+      HttpApiEndpoint.post("itemEventAdd", IrisPaths.itemEvents, {
+        params: { itemID: Schema.NumberFromString },
+        payload: Schema.Struct({ title: Schema.String, startsAt: Schema.String, endsAt: Schema.optional(Schema.String) }),
+        success: Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String) }).annotate({ identifier: "IrisOk" }),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.itemEventAdd", summary: "Add an event or deadline to a card" })),
+      HttpApiEndpoint.get("itemAsks", IrisPaths.itemAsks, {
+        params: { itemID: Schema.NumberFromString },
+        success: described(AsksResponse, "Open and answered asks on this card"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.itemAsks",
+          summary: "A card's asks",
+          description:
+            "An ask is \"I need X from Y by Z\". There is no primitive for it, so it is a bloq_item_task whose description carries {ask: {to}} and whose title is the X; answered = the task completed. Same table `iris agents tasks` reads, so an ask is visible everywhere a task is.",
+        }),
+      ),
+      HttpApiEndpoint.post("itemAskAdd", IrisPaths.itemAsks, {
+        params: { itemID: Schema.NumberFromString },
+        payload: Schema.Struct({ to: Schema.String, what: Schema.String, dueAt: Schema.optional(Schema.String) }),
+        success: Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String) }).annotate({ identifier: "IrisOk" }),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.itemAskAdd", summary: "Record an ask" })),
+      HttpApiEndpoint.post("itemAskAnswer", IrisPaths.itemAskAnswer, {
+        params: { itemID: Schema.NumberFromString, askID: Schema.NumberFromString },
+        payload: Schema.Struct({ answer: Schema.optional(Schema.String) }),
+        success: Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String) }).annotate({ identifier: "IrisOk" }),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.itemAskAnswer", summary: "Mark an ask answered" })),
+      HttpApiEndpoint.get("itemChat", IrisPaths.itemChat, {
+        params: { itemID: Schema.NumberFromString },
+        query: Schema.Struct({ bloq: Schema.optional(Schema.NumberFromString) }),
+        success: described(ChatResponse, "The conversation about this card"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.itemChat", summary: "A card's chat" })),
+      HttpApiEndpoint.post("itemChatSend", IrisPaths.itemChat, {
+        params: { itemID: Schema.NumberFromString },
+        payload: Schema.Struct({ agentId: Schema.Finite, text: Schema.String, bloq: Schema.optional(Schema.Finite) }),
+        success: described(ChatSendResponse, "The agent's reply"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.itemChatSend", summary: "Send one message to an agent about this card" })),
       HttpApiEndpoint.get("playbookDoc", IrisPaths.playbookDoc, {
         params: { name: Schema.String },
         success: described(

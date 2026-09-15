@@ -1941,6 +1941,552 @@ export async function deleteItemTask(itemId: number, taskId: number): Promise<{ 
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Card editor, second pass (#185506): Sharing · Labels · Attachments · Events · Asks · Chat
+// ─────────────────────────────────────────────────────────────────────────────
+
+type Ok = { ok: boolean; reason?: string }
+
+/** One raw item read, shared by the writers below that need the current content or columns. */
+async function rawItem(id: number): Promise<{ ok: true; raw: any } | { ok: false; reason: string }> {
+  try {
+    const res = await irisFetch(`/api/v1/user/bloqs/list/item/${id}`)
+    if (!res.ok) return { ok: false, reason: res.status === 404 ? `no item ${id} visible to this account` : `fl-api ${res.status}` }
+    const j = (await res.json()) as any
+    return { ok: true, raw: j?.data ?? j }
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+async function postJson(path: string, body: unknown, method = "POST"): Promise<Ok & { data?: any }> {
+  try {
+    const res = await irisFetch(path, FL_API, { method, body: body === undefined ? undefined : JSON.stringify(body) })
+    const j = (await res.json().catch(() => ({}))) as any
+    if (!res.ok) return { ok: false, reason: apiFailure(j, res.status) }
+    return { ok: true, data: j?.data ?? j }
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+function notSignedIn(): string {
+  return `not signed in (token: ${tokenSource()})`
+}
+
+// ── Sharing ─────────────────────────────────────────────────────────────────
+
+export interface ShareMember {
+  userId: number
+  name: string
+  email: string
+  permission: string
+}
+export interface ShareLink {
+  id: string
+  url: string
+  createdAt: string
+  expiresAt?: string
+  uses: number
+  revoked: boolean
+}
+export interface ShareState {
+  isPublic: boolean
+  publicUrl?: string
+  allowedEmails: string[]
+  boardDefaults: { allowedEmails: string[] }
+  members: ShareMember[]
+  links: ShareLink[]
+}
+
+/** fl-api stores the allow-list as an array, or as a JSON/CSV string on older rows. One reader. */
+export function readEmailList(v: unknown): string[] {
+  if (Array.isArray(v)) return v.map((x) => String(x).trim().toLowerCase()).filter(Boolean)
+  if (typeof v === "string") {
+    const s = v.trim()
+    if (!s) return []
+    if (s.startsWith("[")) {
+      try {
+        return readEmailList(JSON.parse(s))
+      } catch {}
+    }
+    return s.split(/[\s,;]+/).map((x) => x.trim().toLowerCase()).filter(Boolean)
+  }
+  return []
+}
+
+export function readShareMember(r: any): ShareMember {
+  const u = r?.user ?? r
+  return {
+    userId: Number(r?.user_id ?? u?.id ?? r?.id),
+    name: String(u?.name ?? u?.full_name ?? u?.user_name ?? r?.name ?? ""),
+    email: String(u?.email ?? r?.email ?? ""),
+    permission: String(r?.permission ?? r?.role ?? r?.access_level ?? "view"),
+  }
+}
+
+export function readShareLink(r: any): ShareLink {
+  return {
+    id: String(r?.id ?? r?.token ?? ""),
+    url: String(r?.url ?? r?.share_url ?? r?.link ?? (r?.token ? `${IRIS_API}/bloq/share/${r.token}` : "")),
+    createdAt: String(r?.created_at ?? ""),
+    expiresAt: r?.expires_at ?? undefined,
+    uses: Number(r?.uses ?? r?.redeem_count ?? r?.redeemed_count ?? r?.use_count ?? 0),
+    revoked: Boolean(r?.revoked ?? r?.revoked_at ?? (r?.is_active === false || r?.active === false)),
+  }
+}
+
+/**
+ * Four reads folded into one. The ITEM decides `measured`; each board read that fails leaves
+ * its list empty and is named in `reason`, so "no members" and "could not list members" stay
+ * different sentences.
+ */
+export async function fetchShareState(itemId: number, bloqId?: number): Promise<PlatformResult<ShareState>> {
+  const empty: ShareState = { isPublic: false, allowedEmails: [], boardDefaults: { allowedEmails: [] }, members: [], links: [] }
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: notSignedIn(), data: empty }
+  const item = await rawItem(itemId)
+  if (!item.ok) return { measured: false, reason: item.reason, data: empty }
+
+  const state: ShareState = {
+    ...empty,
+    isPublic: Boolean(item.raw.is_public),
+    publicUrl: item.raw.public_url || undefined,
+    allowedEmails: readEmailList(item.raw.share_allowed_emails),
+  }
+  const b = bloqId ?? (item.raw.bloq_id != null ? Number(item.raw.bloq_id) : undefined)
+  const problems: string[] = []
+  if (b == null) {
+    problems.push("board unknown — members, defaults and links not read")
+    return { measured: true, reason: problems.join("; "), data: state }
+  }
+
+  const reads: [string, string, (d: any) => void][] = [
+    [
+      "share-defaults",
+      `/api/v1/user/${userId}/bloqs/${b}/share-defaults`,
+      (d) => {
+        state.boardDefaults = { allowedEmails: readEmailList(d?.share_allowed_emails ?? d?.allowed_emails ?? d?.emails ?? d) }
+      },
+    ],
+    [
+      "shared-users",
+      `/api/v1/user/${userId}/bloqs/${b}/shared-users`,
+      (d) => {
+        const rows = Array.isArray(d) ? d : (d?.users ?? d?.shared_users ?? d?.members ?? [])
+        state.members = (Array.isArray(rows) ? rows : []).map(readShareMember).filter((m) => m.userId)
+      },
+    ],
+    [
+      "share-links",
+      `/api/v1/user/${userId}/bloqs/${b}/share-links`,
+      (d) => {
+        const rows = Array.isArray(d) ? d : (d?.links ?? d?.share_links ?? [])
+        state.links = (Array.isArray(rows) ? rows : []).map(readShareLink).filter((l) => l.id)
+      },
+    ],
+  ]
+  await Promise.all(
+    reads.map(async ([name, path, apply]) => {
+      try {
+        const res = await irisFetch(path)
+        if (!res.ok) {
+          problems.push(`${name}: fl-api ${res.status}`)
+          return
+        }
+        const j = (await res.json()) as any
+        apply(j?.data ?? j)
+      } catch (e) {
+        problems.push(`${name}: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    }),
+  )
+  return { measured: true, reason: problems.length ? problems.join("; ") : undefined, data: state }
+}
+
+export async function setShareVisibility(itemId: number, pub: boolean): Promise<Ok> {
+  const userId = await resolveUserId()
+  if (!userId) return { ok: false, reason: notSignedIn() }
+  const r = await postJson(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/${pub ? "make-public" : "make-private"}`, {})
+  return { ok: r.ok, reason: r.reason }
+}
+
+/**
+ * The item's allow-list. An EMPTY list is a legal write and means "anyone with the link";
+ * it is sent as `[]`, never dropped, so the server cannot mistake it for "unchanged".
+ */
+export async function setShareAllowlist(itemId: number, emails: string[]): Promise<Ok> {
+  const userId = await resolveUserId()
+  if (!userId) return { ok: false, reason: notSignedIn() }
+  const list = readEmailList(emails)
+  const r = await postJson(`/api/v1/user/bloqs/list/item/${itemId}`, { share_allowed_emails: list }, "PUT")
+  if (!r.ok) return r
+  // fl-api's update() assigns only the fields it knows. Read back: a write that "succeeded"
+  // and changed nothing is the failure this whole panel is built to catch.
+  const back = await rawItem(itemId)
+  if (back.ok) {
+    const stored = readEmailList(back.raw.share_allowed_emails)
+    const same = stored.length === list.length && stored.every((e) => list.includes(e))
+    if (!same) return { ok: false, reason: `fl-api accepted the write but share_allowed_emails did not change (stored: ${stored.length}) — the item update route does not assign it (#185506)` }
+  }
+  return { ok: true }
+}
+
+export async function inviteMember(bloqId: number, email: string, permission: string): Promise<Ok> {
+  const userId = await resolveUserId()
+  if (!userId) return { ok: false, reason: notSignedIn() }
+  const r = await postJson(`/api/v1/user/${userId}/bloqs/${bloqId}/share`, { email, permission })
+  return { ok: r.ok, reason: r.reason }
+}
+export async function setMemberPermission(bloqId: number, memberUserId: number, permission: string): Promise<Ok> {
+  const userId = await resolveUserId()
+  if (!userId) return { ok: false, reason: notSignedIn() }
+  const r = await postJson(`/api/v1/user/${userId}/bloqs/${bloqId}/share/${memberUserId}`, { permission }, "PUT")
+  return { ok: r.ok, reason: r.reason }
+}
+export async function revokeMember(bloqId: number, memberUserId: number): Promise<Ok> {
+  const userId = await resolveUserId()
+  if (!userId) return { ok: false, reason: notSignedIn() }
+  const r = await postJson(`/api/v1/user/${userId}/bloqs/${bloqId}/share/${memberUserId}`, undefined, "DELETE")
+  return { ok: r.ok, reason: r.reason }
+}
+export async function createShareLink(bloqId: number, expiresInDays?: number): Promise<Ok & { link?: ShareLink }> {
+  const userId = await resolveUserId()
+  if (!userId) return { ok: false, reason: notSignedIn() }
+  const body: Record<string, unknown> = {}
+  if (expiresInDays != null && expiresInDays > 0) {
+    body.expires_in_days = expiresInDays
+    body.expires_at = new Date(Date.now() + expiresInDays * 86400_000).toISOString()
+  }
+  const r = await postJson(`/api/v1/user/${userId}/bloqs/${bloqId}/share-link`, body)
+  if (!r.ok) return { ok: false, reason: r.reason }
+  const link = readShareLink(r.data?.link ?? r.data)
+  return { ok: true, link: link.id ? link : undefined }
+}
+export async function revokeShareLink(bloqId: number, linkId: string): Promise<Ok> {
+  const userId = await resolveUserId()
+  if (!userId) return { ok: false, reason: notSignedIn() }
+  const r = await postJson(`/api/v1/user/${userId}/bloqs/${bloqId}/share-link/${encodeURIComponent(linkId)}`, undefined, "DELETE")
+  return { ok: r.ok, reason: r.reason }
+}
+
+// ── Labels ──────────────────────────────────────────────────────────────────
+
+/**
+ * Labels live inside content. Structured body → content_merge {labels}. Markdown body → the
+ * body becomes {text: <markdown>, labels} — the readable text is unchanged and readItemDoc
+ * reads it back as structured. card_type and priority are pinned from the current columns,
+ * because fl-api derives both from labels when they are not sent.
+ */
+export async function setItemLabels(itemId: number, labels: string[]): Promise<PlatformResult<{ labels: string[] }>> {
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: notSignedIn(), data: { labels: [] } }
+  const item = await rawItem(itemId)
+  if (!item.ok) return { measured: false, reason: item.reason, data: { labels: [] } }
+  const clean = [...new Set(labels.map((l) => String(l).trim()).filter(Boolean))]
+  const c = parseContent(item.raw.content)
+  const body: Record<string, unknown> = {}
+  if (c.kind === "structured") body.content_merge = { labels: clean }
+  else body.content = JSON.stringify({ text: c.text, body: c.text, labels: clean })
+  if (item.raw.card_type) body.card_type = item.raw.card_type
+  if (item.raw.priority) body.priority = item.raw.priority
+  const r = await postJson(`/api/v1/user/bloqs/list/item/${itemId}`, body, "PUT")
+  if (!r.ok) return { measured: false, reason: r.reason, data: { labels: [] } }
+  const back = await rawItem(itemId)
+  const stored = back.ok ? readItemDoc(back.raw).labels : clean
+  return { measured: true, data: { labels: stored } }
+}
+
+// ── Attachments ─────────────────────────────────────────────────────────────
+
+export interface CardFile {
+  id: string
+  name: string
+  size?: number
+  type?: string
+  url?: string
+  stored: boolean
+}
+
+export function readAttachment(a: any, i: number): CardFile {
+  const url = a?.url ?? a?.public_url ?? a?.file_url ?? a?.cloud_file?.url ?? a?.cloud_file?.public_url
+  return {
+    id: String(a?.cloud_file_id ?? a?.id ?? a?.cloud_file?.id ?? `${i}:${a?.name ?? a?.filename ?? ""}`),
+    name: String(a?.name ?? a?.filename ?? a?.original_name ?? "file"),
+    size: a?.size != null ? Number(a.size) : a?.file_size != null ? Number(a.file_size) : undefined,
+    type: a?.type ?? a?.mime_type ?? a?.mime ?? undefined,
+    url: url || undefined,
+    // Referenced in content but no URL and no cloud file id: Elon's "Missing Files Detected".
+    stored: Boolean(url || a?.cloud_file_id || a?.cloud_file?.id),
+  }
+}
+
+export async function fetchAttachments(itemId: number): Promise<PlatformResult<{ files: CardFile[] }>> {
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: notSignedIn(), data: { files: [] } }
+  const item = await rawItem(itemId)
+  if (!item.ok) return { measured: false, reason: item.reason, data: { files: [] } }
+  const c = parseContent(item.raw.content)
+  const list = Array.isArray(c.obj?.attachments) ? c.obj!.attachments : Array.isArray(item.raw.attachments) ? item.raw.attachments : []
+  return { measured: true, data: { files: list.map(readAttachment) } }
+}
+
+export async function deleteAttachment(itemId: number, fileId: string): Promise<Ok> {
+  const userId = await resolveUserId()
+  if (!userId) return { ok: false, reason: notSignedIn() }
+  const item = await rawItem(itemId)
+  if (!item.ok) return { ok: false, reason: item.reason }
+  const c = parseContent(item.raw.content)
+  const list: any[] = Array.isArray(c.obj?.attachments) ? c.obj!.attachments : []
+  const keep = list.filter((a, i) => readAttachment(a, i).id !== fileId)
+  if (keep.length === list.length) return { ok: false, reason: `no attachment ${fileId} on this card` }
+  const r = await postJson(`/api/v1/user/bloqs/list/item/${itemId}`, { content_merge: { attachments: keep } }, "PUT")
+  return { ok: r.ok, reason: r.reason }
+}
+
+/** Upload is the one write the sidecar cannot do yet: no cloud-file route is wired here. Says so. */
+export async function uploadAttachment(itemId: number): Promise<Ok> {
+  void itemId
+  return { ok: false, reason: "Upload is not wired yet — the sidecar has no cloud-file upload route (#185506). Attach from Elon for now." }
+}
+
+// ── Events ──────────────────────────────────────────────────────────────────
+
+export interface CardEvent {
+  id: string
+  title: string
+  startsAt: string
+  endsAt?: string
+  kind?: string
+}
+
+export async function fetchEvents(itemId: number): Promise<PlatformResult<{ events: CardEvent[] }>> {
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: notSignedIn(), data: { events: [] } }
+  const item = await rawItem(itemId)
+  if (!item.ok) return { measured: false, reason: item.reason, data: { events: [] } }
+  // Events written by this editor live in content.events on the item — fl-api's events table
+  // has no link back to a card, so an event posted there is unfindable from here.
+  const c = parseContent(item.raw.content)
+  const list: any[] = Array.isArray(c.obj?.events) ? c.obj!.events : []
+  const events: CardEvent[] = list.map((e, i) => ({
+    id: String(e?.id ?? i),
+    title: String(e?.title ?? "event"),
+    startsAt: String(e?.startsAt ?? e?.starts_at ?? e?.date ?? ""),
+    endsAt: e?.endsAt ?? e?.ends_at ?? undefined,
+    kind: e?.kind ?? undefined,
+  }))
+  if (item.raw.due_date) events.push({ id: "due", title: "Due", startsAt: String(item.raw.due_date), kind: "due" })
+  events.sort((a, b) => a.startsAt.localeCompare(b.startsAt))
+  return { measured: true, data: { events } }
+}
+
+export async function addEvent(itemId: number, input: { title: string; startsAt: string; endsAt?: string }): Promise<Ok> {
+  const userId = await resolveUserId()
+  if (!userId) return { ok: false, reason: notSignedIn() }
+  const item = await rawItem(itemId)
+  if (!item.ok) return { ok: false, reason: item.reason }
+  const c = parseContent(item.raw.content)
+  const list: any[] = Array.isArray(c.obj?.events) ? c.obj!.events : []
+  const ev = { id: `ev-${Date.now()}`, title: input.title.trim(), startsAt: input.startsAt, endsAt: input.endsAt, createdBy: userId }
+  const body: Record<string, unknown> =
+    c.kind === "structured"
+      ? { content_merge: { events: [...list, ev] } }
+      : { content: JSON.stringify({ text: c.text, body: c.text, events: [ev] }) }
+  const r = await postJson(`/api/v1/user/bloqs/list/item/${itemId}`, body, "PUT")
+  return { ok: r.ok, reason: r.reason }
+}
+
+// ── Asks ────────────────────────────────────────────────────────────────────
+
+export interface CardAsk {
+  id: string
+  to: string
+  what: string
+  dueAt?: string
+  status: "open" | "answered"
+  answer?: string
+}
+
+const ASK_MARK = "ask:"
+
+/** A task IS an ask when its description carries the marker. Exported for the reader test. */
+export function readAsk(t: any): CardAsk | null {
+  const d = typeof t?.description === "string" ? t.description : ""
+  if (!d.startsWith(ASK_MARK)) return null
+  let meta: any = {}
+  try {
+    meta = JSON.parse(d.slice(ASK_MARK.length))
+  } catch {
+    return null
+  }
+  return {
+    id: String(t.id),
+    to: String(meta?.to ?? ""),
+    what: String(t.title ?? ""),
+    dueAt: t.due_date ? String(t.due_date).slice(0, 10) : undefined,
+    status: t.is_completed ? "answered" : "open",
+    answer: meta?.answer || undefined,
+  }
+}
+
+export async function fetchAsks(itemId: number): Promise<PlatformResult<{ asks: CardAsk[] }>> {
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: notSignedIn(), data: { asks: [] } }
+  try {
+    const res = await irisFetch(`/api/v1/user/bloqs/list/item/${itemId}/tasks`)
+    if (!res.ok) return { measured: false, reason: `fl-api ${res.status}`, data: { asks: [] } }
+    const j = (await res.json()) as any
+    const flat: any[] = []
+    const walk = (rows: any[]) => {
+      for (const t of Array.isArray(rows) ? rows : []) {
+        flat.push(t)
+        if (Array.isArray(t.children)) walk(t.children)
+      }
+    }
+    walk(j?.data?.tasks ?? j?.tasks ?? [])
+    return { measured: true, data: { asks: flat.map(readAsk).filter((a): a is CardAsk => !!a) } }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { asks: [] } }
+  }
+}
+
+export async function addAsk(itemId: number, input: { to: string; what: string; dueAt?: string }): Promise<Ok> {
+  const userId = await resolveUserId()
+  if (!userId) return { ok: false, reason: notSignedIn() }
+  const body: Record<string, unknown> = {
+    title: input.what.trim(),
+    description: `${ASK_MARK}${JSON.stringify({ to: input.to.trim() })}`,
+    status: "todo",
+    source: "ask",
+  }
+  if (input.dueAt) body.due_date = input.dueAt
+  const r = await postJson(`/api/v1/user/bloqs/list/item/${itemId}/tasks`, body)
+  return { ok: r.ok, reason: r.reason }
+}
+
+export async function answerAsk(itemId: number, askId: number, answer?: string): Promise<Ok> {
+  const userId = await resolveUserId()
+  if (!userId) return { ok: false, reason: notSignedIn() }
+  const body: Record<string, unknown> = { is_completed: true }
+  if (answer) {
+    // Keep the marker: the description is what makes it an ask on the next read.
+    const res = await irisFetch(`/api/v1/user/bloqs/list/item/${itemId}/tasks`)
+    const j = res.ok ? ((await res.json()) as any) : null
+    const rows: any[] = j?.data?.tasks ?? []
+    const t = rows.find((x) => Number(x.id) === askId)
+    const cur = readAsk(t)
+    body.description = `${ASK_MARK}${JSON.stringify({ to: cur?.to ?? "", answer })}`
+  }
+  const r = await postJson(`/api/v1/user/bloqs/list/item/${itemId}/tasks/${askId}`, body, "PUT")
+  return { ok: r.ok, reason: r.reason }
+}
+
+// ── Chat ────────────────────────────────────────────────────────────────────
+
+export interface ChatMessage {
+  id: string
+  role: "user" | "agent"
+  text: string
+  at: string
+  agentName?: string
+}
+
+export async function fetchItemChat(itemId: number): Promise<PlatformResult<{ agentId?: number; messages: ChatMessage[] }>> {
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: notSignedIn(), data: { messages: [] } }
+  const item = await rawItem(itemId)
+  if (!item.ok) return { measured: false, reason: item.reason, data: { messages: [] } }
+  // The conversation lives on the card: content.chat. Nothing else in fl-api keys a
+  // conversation by item, and a thread you cannot find again from the card is not the card's.
+  const c = parseContent(item.raw.content)
+  const list: any[] = Array.isArray(c.obj?.chat) ? c.obj!.chat : []
+  const messages: ChatMessage[] = list
+    .map((m, i) => ({
+      id: String(m?.id ?? i),
+      role: (m?.role === "agent" ? "agent" : "user") as "user" | "agent",
+      text: String(m?.text ?? ""),
+      at: String(m?.at ?? ""),
+      agentName: m?.agentName ?? undefined,
+    }))
+    .filter((m) => m.text)
+  const agentId = c.obj?.chatAgentId != null ? Number(c.obj.chatAgentId) : undefined
+  return { measured: true, data: { agentId, messages } }
+}
+
+/**
+ * One turn with an agent about this card. The reply comes from fl-api's agent chat route and
+ * both messages are appended to content.chat so the next open shows the thread.
+ */
+export async function sendItemChat(
+  itemId: number,
+  input: { agentId: number; text: string; bloqId?: number },
+): Promise<Ok & { message?: ChatMessage }> {
+  const userId = await resolveUserId()
+  if (!userId) return { ok: false, reason: notSignedIn() }
+  const item = await rawItem(itemId)
+  if (!item.ok) return { ok: false, reason: item.reason }
+  const c = parseContent(item.raw.content)
+  const prior: any[] = Array.isArray(c.obj?.chat) ? c.obj!.chat : []
+
+  const context = [
+    `You are being asked about board card #${itemId}: "${item.raw.title ?? ""}".`,
+    `Card body:\n${c.text.slice(0, 6000)}`,
+    prior.length ? `Earlier in this thread:\n${prior.slice(-8).map((m) => `${m.role}: ${m.text}`).join("\n")}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n")
+
+  const reply = await agentReply(input.agentId, input.text, context, input.bloqId)
+  if (!reply.ok) return { ok: false, reason: reply.reason }
+
+  const now = new Date().toISOString()
+  const mine = { id: `u-${Date.now()}`, role: "user", text: input.text, at: now }
+  const theirs = { id: `a-${Date.now()}`, role: "agent", text: reply.text, at: new Date().toISOString(), agentName: reply.agentName }
+  const body: Record<string, unknown> =
+    c.kind === "structured"
+      ? { content_merge: { chat: [...prior, mine, theirs], chatAgentId: input.agentId } }
+      : { content: JSON.stringify({ text: c.text, body: c.text, chat: [mine, theirs], chatAgentId: input.agentId }) }
+  const saved = await postJson(`/api/v1/user/bloqs/list/item/${itemId}`, body, "PUT")
+  return {
+    ok: true,
+    reason: saved.ok ? undefined : `reply received but the thread was not saved to the card: ${saved.reason}`,
+    message: { id: theirs.id, role: "agent", text: theirs.text, at: theirs.at, agentName: theirs.agentName },
+  }
+}
+
+/**
+ * The agent chat call. Tries the routes fl-api has had for agent chat, first one that answers
+ * wins; the reply text is looked for in the places each of them has put it.
+ */
+async function agentReply(agentId: number, text: string, context: string, bloqId?: number): Promise<Ok & { text: string; agentName?: string }> {
+  const userId = await resolveUserId()
+  const attempts: { path: string; body: Record<string, unknown> }[] = [
+    { path: `/api/v1/bloqs/agents/${agentId}/chat`, body: { message: text, context, bloq_id: bloqId } },
+    { path: `/api/v1/users/${userId}/bloqs/agents/${agentId}/chat`, body: { message: text, context, bloq_id: bloqId } },
+    { path: `/api/v1/bloqs/agents/chat`, body: { agent_id: agentId, message: text, context, bloq_id: bloqId } },
+  ]
+  let last = "no agent chat route answered"
+  for (const a of attempts) {
+    try {
+      const res = await irisFetch(a.path, FL_API, { method: "POST", body: JSON.stringify(a.body) })
+      if (res.status === 404 || res.status === 405) {
+        last = `${a.path}: ${res.status}`
+        continue
+      }
+      const j = (await res.json().catch(() => ({}))) as any
+      if (!res.ok) return { ok: false, reason: apiFailure(j, res.status), text: "" }
+      const d = j?.data ?? j
+      const reply = d?.response ?? d?.reply ?? d?.message ?? d?.content ?? d?.text ?? d?.output ?? (typeof d === "string" ? d : "")
+      if (!reply || typeof reply !== "string") return { ok: false, reason: `${a.path} answered without a reply text`, text: "" }
+      return { ok: true, text: reply, agentName: d?.agent?.name ?? d?.agent_name ?? undefined }
+    } catch (e) {
+      last = e instanceof Error ? e.message : String(e)
+    }
+  }
+  return { ok: false, reason: `${last} (#185506)`, text: "" }
+}
+
 export interface SchemaOption {
   id: string
   label: string
