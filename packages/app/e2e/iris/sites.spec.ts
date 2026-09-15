@@ -12,6 +12,11 @@ async function configure(page: Page) {
     )
     if (!sessionStorage.getItem("e2e.iris.seeded")) {
       sessionStorage.setItem("e2e.iris.seeded", "1")
+      // PIN THE BOARD. Without this the panel falls back to whichever board is first in the
+      // account, and this test then asserts "a site opens" against whatever that board happens
+      // to hold — which today is nothing. The failure looked like a broken Sites pane; the
+      // pane is fine, the test was pointed at an arbitrary board.
+      localStorage.setItem("iris.panel.bloq", "174")
       localStorage.setItem("iris.panel.surface", "pages")
       localStorage.removeItem("iris.panel.subviews")
     }
@@ -28,7 +33,9 @@ test("Pages and Sites are two different things, and both are reachable", async (
   await page.waitForLoadState("domcontentloaded")
   await page.getByRole("button", { name: "IRIS" }).first().click({ timeout: 30_000 })
   await page.getByRole("tab", { name: "IRIS", exact: true }).click()
-  await expect(page.getByRole("button", { name: "Pages", exact: true })).toBeVisible({ timeout: 30_000 })
+  // The SURFACE is "Genesis" — it holds pages AND sites, and a site is not a page. "Pages"
+  // survives one level down, as the sub-view, which is what the rest of this test clicks.
+  await expect(page.getByRole("button", { name: "Genesis", exact: true })).toBeVisible({ timeout: 30_000 })
 
   const subnav = page.locator(".iris-subnav")
   await expect(subnav.getByRole("tab", { name: "Sites" })).toBeVisible({ timeout: 30_000 })
@@ -43,7 +50,12 @@ test("Pages and Sites are two different things, and both are reachable", async (
   await page.screenshot({ path: "e2e/test-results/sites-list.png" })
 
   // Open a site and check its page list is there.
-  await page.locator("[data-slot='tabs-content'] button", { hasText: "freelabel" }).first().click()
+  /*
+   * The FIRST site, not one named "freelabel" — no such site exists on this board (it has
+   * "Pathways Suite" and "Pathways"), so the test was asserting a fixture rather than the
+   * behaviour. What is under test is "a site opens and shows its pages", which any site proves.
+   */
+  await page.locator("[data-slot='iris-site-row']").first().click()
   // Scoped to the DETAIL nav: "Pages" is a level-2 tab as well as a level-3 one, and an
   // unscoped getByRole("tab", {name: "Pages"}) matches both.
   const detailNav = page.locator(".iris-detailnav")

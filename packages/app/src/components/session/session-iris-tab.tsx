@@ -1952,7 +1952,7 @@ export function SessionIrisTab() {
               <Match when={pane() === "sites"}>
                 <For each={rows()}>
                   {(st) => (
-                    <button type="button" class="w-full text-start px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow("sites", st))}>
+                    <button type="button" data-slot="iris-site-row" class="w-full text-start px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow("sites", st))}>
                       <div class="flex items-baseline gap-2">
                         <span class="shrink-0" classList={{ "text-text-base": st.status === "published", "text-text-weak": st.status !== "published" }}>
                           {st.status === "published" ? "●" : "○"}

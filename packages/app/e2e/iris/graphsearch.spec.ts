@@ -60,5 +60,14 @@ test("search filters the board, and an empty result says so", async ({ page }) =
   // NOT "this board is empty" — a different fact.
   await expect(page.locator("[data-slot='tabs-content']")).toContainText("matches", { timeout: 40_000 })
   const t = await page.locator("[data-slot='tabs-content']").innerText()
-  expect(t).not.toContain("Nothing in Atlas")
+  /*
+   * The two messages are "Nothing in Atlas on this board." and "Nothing in Atlas matches
+   * “q”." — and the second CONTAINS the first as a substring, so `not.toContain("Nothing in
+   * Atlas")` could never pass no matter how correct the panel was. It failed against a panel
+   * that was saying exactly the right thing.
+   *
+   * Assert the distinction itself: the searched message present, the unsearched one absent.
+   */
+  expect(t).toContain("matches")
+  expect(t).not.toContain("Nothing in Atlas on this board.")
 })

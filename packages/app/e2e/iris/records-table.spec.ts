@@ -12,6 +12,10 @@ async function configure(page: Page) {
     )
     if (!sessionStorage.getItem("e2e.iris.seeded")) {
       sessionStorage.setItem("e2e.iris.seeded", "1")
+      // Pin the board. Unpinned, this lands on whichever board is first in the account and
+      // then waits 180s for a schema table that board may not have — the timeout reads as a
+      // broken Records pane rather than as a test with no fixture.
+      localStorage.setItem("iris.panel.bloq", "174")
       localStorage.setItem("iris.panel.surface", "atlas")
       localStorage.removeItem("iris.panel.subviews")
     }
