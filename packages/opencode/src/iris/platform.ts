@@ -59,6 +59,8 @@ function dataDir(): string {
  */
 export const FL_API = process.env.IRIS_FL_API_URL ?? "https://raichu.heyiris.io"
 export const IRIS_API = process.env.IRIS_API_URL ?? "https://freelabel.net"
+/** Where a board share link is REDEEMED — Elon's /invite/{token}. fl-api returns the token, never the URL. */
+export const ELON_WEB = process.env.IRIS_ELON_URL ?? "https://elon.freelabel.net"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Token
@@ -2015,24 +2017,30 @@ export function readEmailList(v: unknown): string[] {
   return []
 }
 
+/** BloqUserController@index rows: {id, name, email, username, permission: viewer|editor|owner, status, …}. */
 export function readShareMember(r: any): ShareMember {
-  const u = r?.user ?? r
   return {
-    userId: Number(r?.user_id ?? u?.id ?? r?.id),
-    name: String(u?.name ?? u?.full_name ?? u?.user_name ?? r?.name ?? ""),
-    email: String(u?.email ?? r?.email ?? ""),
-    permission: String(r?.permission ?? r?.role ?? r?.access_level ?? "view"),
+    userId: Number(r?.id ?? r?.user_id),
+    name: String(r?.name ?? r?.username ?? ""),
+    email: String(r?.email ?? ""),
+    permission: String(r?.permission ?? "viewer"),
   }
 }
 
+/**
+ * BloqShareLinkController rows: {id, token, permission, expires_at, max_uses, use_count,
+ * is_active, is_usable, created_at}. No url — the server's own convention is
+ * `<frontend_origin>/invite/<token>`, so that is built here. Revoked = is_active false.
+ */
 export function readShareLink(r: any): ShareLink {
+  const token = r?.token ? String(r.token) : ""
   return {
-    id: String(r?.id ?? r?.token ?? ""),
-    url: String(r?.url ?? r?.share_url ?? r?.link ?? (r?.token ? `${IRIS_API}/bloq/share/${r.token}` : "")),
+    id: String(r?.id ?? ""),
+    url: token ? `${ELON_WEB}/invite/${token}` : "",
     createdAt: String(r?.created_at ?? ""),
     expiresAt: r?.expires_at ?? undefined,
-    uses: Number(r?.uses ?? r?.redeem_count ?? r?.redeemed_count ?? r?.use_count ?? 0),
-    revoked: Boolean(r?.revoked ?? r?.revoked_at ?? (r?.is_active === false || r?.active === false)),
+    uses: Number(r?.use_count ?? 0),
+    revoked: r?.is_active === false,
   }
 }
 
@@ -2052,7 +2060,10 @@ export async function fetchShareState(itemId: number, bloqId?: number): Promise<
     ...empty,
     isPublic: Boolean(item.raw.is_public),
     publicUrl: item.raw.public_url || undefined,
-    allowedEmails: readEmailList(item.raw.share_allowed_emails),
+    allowedEmails: [
+      ...readEmailList(item.raw.share_allowed_emails),
+      ...readEmailList(item.raw.share_allowed_domains).map((x) => (x.startsWith("@") ? x : `@${x}`)),
+    ],
   }
   const b = bloqId ?? (item.raw.bloq_id != null ? Number(item.raw.bloq_id) : undefined)
   const problems: string[] = []
@@ -2064,24 +2075,28 @@ export async function fetchShareState(itemId: number, bloqId?: number): Promise<
   const reads: [string, string, (d: any) => void][] = [
     [
       "share-defaults",
-      `/api/v1/user/${userId}/bloqs/${b}/share-defaults`,
+      `/api/v1/user/bloqs/${b}/share-defaults`,
       (d) => {
-        state.boardDefaults = { allowedEmails: readEmailList(d?.share_allowed_emails ?? d?.allowed_emails ?? d?.emails ?? d) }
+        // {allowed_emails: [], allowed_domains: []} — domains shown with a leading @ so a
+        // reader can tell "anyone at heyiris.io" from one address at a glance.
+        state.boardDefaults = {
+          allowedEmails: [...readEmailList(d?.allowed_emails), ...readEmailList(d?.allowed_domains).map((x) => (x.startsWith("@") ? x : `@${x}`))],
+        }
       },
     ],
     [
       "shared-users",
-      `/api/v1/user/${userId}/bloqs/${b}/shared-users`,
+      `/api/v1/user/bloqs/${b}/shared-users`,
       (d) => {
-        const rows = Array.isArray(d) ? d : (d?.users ?? d?.shared_users ?? d?.members ?? [])
+        const rows = Array.isArray(d) ? d : (d?.shared_users ?? [])
         state.members = (Array.isArray(rows) ? rows : []).map(readShareMember).filter((m) => m.userId)
       },
     ],
     [
       "share-links",
-      `/api/v1/user/${userId}/bloqs/${b}/share-links`,
+      `/api/v1/user/bloqs/${b}/share-links`,
       (d) => {
-        const rows = Array.isArray(d) ? d : (d?.links ?? d?.share_links ?? [])
+        const rows = Array.isArray(d) ? d : []
         state.links = (Array.isArray(rows) ? rows : []).map(readShareLink).filter((l) => l.id)
       },
     ],
@@ -2104,30 +2119,62 @@ export async function fetchShareState(itemId: number, bloqId?: number): Promise<
   return { measured: true, reason: problems.length ? problems.join("; ") : undefined, data: state }
 }
 
+/** Split the UI's one list into fl-api's two: addresses, and domains (with or without the @). */
+export function splitAllowList(entries: string[]): { emails: string[]; domains: string[] } {
+  const emails: string[] = []
+  const domains: string[] = []
+  for (const e of readEmailList(entries)) {
+    if (e.includes("@") && !e.startsWith("@")) emails.push(e)
+    else domains.push(e.replace(/^@/, ""))
+  }
+  return { emails, domains }
+}
+
+/**
+ * Public or private. fl-api's make-public is ALSO where the item's allow-list is written
+ * (BloqItem::makePublic reads allowed_emails / allowed_domains; nothing else assigns the
+ * column), so going public re-sends the list the item already has — otherwise a toggle would
+ * silently empty the gate, which is the leak this whole tab is about.
+ */
 export async function setShareVisibility(itemId: number, pub: boolean): Promise<Ok> {
   const userId = await resolveUserId()
   if (!userId) return { ok: false, reason: notSignedIn() }
-  const r = await postJson(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/${pub ? "make-public" : "make-private"}`, {})
+  if (!pub) {
+    const r = await postJson(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/make-private`, {})
+    return { ok: r.ok, reason: r.reason }
+  }
+  const item = await rawItem(itemId)
+  if (!item.ok) return { ok: false, reason: item.reason }
+  const body: Record<string, unknown> = {}
+  const emails = readEmailList(item.raw.share_allowed_emails)
+  const domains = readEmailList(item.raw.share_allowed_domains)
+  if (emails.length) body.allowed_emails = emails
+  if (domains.length) body.allowed_domains = domains
+  const r = await postJson(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/make-public`, body)
   return { ok: r.ok, reason: r.reason }
 }
 
 /**
- * The item's allow-list. An EMPTY list is a legal write and means "anyone with the link";
- * it is sent as `[]`, never dropped, so the server cannot mistake it for "unchanged".
+ * The item's allow-list. Stored ONLY by make-public, so the card must be public — a private
+ * card has no link for the list to guard, and the route says so rather than pretending.
+ * An empty list is a legal write: it is sent as [] and means "anyone with the link".
  */
-export async function setShareAllowlist(itemId: number, emails: string[]): Promise<Ok> {
+export async function setShareAllowlist(itemId: number, entries: string[]): Promise<Ok> {
   const userId = await resolveUserId()
   if (!userId) return { ok: false, reason: notSignedIn() }
-  const list = readEmailList(emails)
-  const r = await postJson(`/api/v1/user/bloqs/list/item/${itemId}`, { share_allowed_emails: list }, "PUT")
+  const item = await rawItem(itemId)
+  if (!item.ok) return { ok: false, reason: item.reason }
+  if (!item.raw.is_public) return { ok: false, reason: "Make the card public first — fl-api stores the allow-list on publish, a private card has no link to guard." }
+  const { emails, domains } = splitAllowList(entries)
+  const r = await postJson(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/make-public`, { allowed_emails: emails, allowed_domains: domains })
   if (!r.ok) return r
-  // fl-api's update() assigns only the fields it knows. Read back: a write that "succeeded"
-  // and changed nothing is the failure this whole panel is built to catch.
+  // Read back. The write path is indirect enough that "accepted" and "stored" can differ.
   const back = await rawItem(itemId)
   if (back.ok) {
-    const stored = readEmailList(back.raw.share_allowed_emails)
-    const same = stored.length === list.length && stored.every((e) => list.includes(e))
-    if (!same) return { ok: false, reason: `fl-api accepted the write but share_allowed_emails did not change (stored: ${stored.length}) — the item update route does not assign it (#185506)` }
+    const stored = [...readEmailList(back.raw.share_allowed_emails), ...readEmailList(back.raw.share_allowed_domains)]
+    const want = [...emails, ...domains]
+    const same = stored.length === want.length && want.every((e) => stored.includes(e))
+    if (!same) return { ok: false, reason: `fl-api accepted the write but the stored list differs (stored ${stored.length}, sent ${want.length})` }
   }
   return { ok: true }
 }
@@ -2135,38 +2182,36 @@ export async function setShareAllowlist(itemId: number, emails: string[]): Promi
 export async function inviteMember(bloqId: number, email: string, permission: string): Promise<Ok> {
   const userId = await resolveUserId()
   if (!userId) return { ok: false, reason: notSignedIn() }
-  const r = await postJson(`/api/v1/user/${userId}/bloqs/${bloqId}/share`, { email, permission })
+  // /share wants a user_id; /invite takes an email and creates the account if needed.
+  const r = await postJson(`/api/v1/user/bloqs/${bloqId}/invite`, { email, permission, send_notification_email: true })
   return { ok: r.ok, reason: r.reason }
 }
 export async function setMemberPermission(bloqId: number, memberUserId: number, permission: string): Promise<Ok> {
   const userId = await resolveUserId()
   if (!userId) return { ok: false, reason: notSignedIn() }
-  const r = await postJson(`/api/v1/user/${userId}/bloqs/${bloqId}/share/${memberUserId}`, { permission }, "PUT")
+  const r = await postJson(`/api/v1/user/bloqs/${bloqId}/share/${memberUserId}`, { permission }, "PUT")
   return { ok: r.ok, reason: r.reason }
 }
 export async function revokeMember(bloqId: number, memberUserId: number): Promise<Ok> {
   const userId = await resolveUserId()
   if (!userId) return { ok: false, reason: notSignedIn() }
-  const r = await postJson(`/api/v1/user/${userId}/bloqs/${bloqId}/share/${memberUserId}`, undefined, "DELETE")
+  const r = await postJson(`/api/v1/user/bloqs/${bloqId}/share/${memberUserId}`, undefined, "DELETE")
   return { ok: r.ok, reason: r.reason }
 }
 export async function createShareLink(bloqId: number, expiresInDays?: number): Promise<Ok & { link?: ShareLink }> {
   const userId = await resolveUserId()
   if (!userId) return { ok: false, reason: notSignedIn() }
-  const body: Record<string, unknown> = {}
-  if (expiresInDays != null && expiresInDays > 0) {
-    body.expires_in_days = expiresInDays
-    body.expires_at = new Date(Date.now() + expiresInDays * 86400_000).toISOString()
-  }
-  const r = await postJson(`/api/v1/user/${userId}/bloqs/${bloqId}/share-link`, body)
+  const body: Record<string, unknown> = { permission: "viewer" }
+  if (expiresInDays != null && expiresInDays > 0) body.expires_at = new Date(Date.now() + expiresInDays * 86400_000).toISOString()
+  const r = await postJson(`/api/v1/user/bloqs/${bloqId}/share-link`, body)
   if (!r.ok) return { ok: false, reason: r.reason }
-  const link = readShareLink(r.data?.link ?? r.data)
+  const link = readShareLink(r.data)
   return { ok: true, link: link.id ? link : undefined }
 }
 export async function revokeShareLink(bloqId: number, linkId: string): Promise<Ok> {
   const userId = await resolveUserId()
   if (!userId) return { ok: false, reason: notSignedIn() }
-  const r = await postJson(`/api/v1/user/${userId}/bloqs/${bloqId}/share-link/${encodeURIComponent(linkId)}`, undefined, "DELETE")
+  const r = await postJson(`/api/v1/user/bloqs/${bloqId}/share-link/${encodeURIComponent(linkId)}`, undefined, "DELETE")
   return { ok: r.ok, reason: r.reason }
 }
 
@@ -2238,8 +2283,14 @@ export async function deleteAttachment(itemId: number, fileId: string): Promise<
   if (!item.ok) return { ok: false, reason: item.reason }
   const c = parseContent(item.raw.content)
   const list: any[] = Array.isArray(c.obj?.attachments) ? c.obj!.attachments : []
+  const gone = list.find((a, i) => readAttachment(a, i).id === fileId)
   const keep = list.filter((a, i) => readAttachment(a, i).id !== fileId)
-  if (keep.length === list.length) return { ok: false, reason: `no attachment ${fileId} on this card` }
+  if (!gone) return { ok: false, reason: `no attachment ${fileId} on this card` }
+  // The stored file first, then the reference — Elon does it in this order too.
+  if (gone.cloud_file_id) {
+    const del = await postJson(`/api/v1/cloud-files/${gone.cloud_file_id}`, undefined, "DELETE")
+    if (!del.ok && !/not found|404/i.test(del.reason ?? "")) return { ok: false, reason: `cloud file: ${del.reason}` }
+  }
   const r = await postJson(`/api/v1/user/bloqs/list/item/${itemId}`, { content_merge: { attachments: keep } }, "PUT")
   return { ok: r.ok, reason: r.reason }
 }
@@ -2247,7 +2298,7 @@ export async function deleteAttachment(itemId: number, fileId: string): Promise<
 /** Upload is the one write the sidecar cannot do yet: no cloud-file route is wired here. Says so. */
 export async function uploadAttachment(itemId: number): Promise<Ok> {
   void itemId
-  return { ok: false, reason: "Upload is not wired yet — the sidecar has no cloud-file upload route (#185506). Attach from Elon for now." }
+  return { ok: false, reason: "Upload is not wired yet: fl-api takes multipart at POST /cloud-files/upload (field `file`, plus bloq_item_id) and this sidecar route does not forward multipart (#185506). Attach from Elon for now." }
 }
 
 // ── Events ──────────────────────────────────────────────────────────────────
@@ -2392,31 +2443,45 @@ export interface ChatMessage {
   agentName?: string
 }
 
-export async function fetchItemChat(itemId: number): Promise<PlatformResult<{ agentId?: number; messages: ChatMessage[] }>> {
-  const userId = await resolveUserId()
-  if (!userId) return { measured: false, reason: notSignedIn(), data: { messages: [] } }
-  const item = await rawItem(itemId)
-  if (!item.ok) return { measured: false, reason: item.reason, data: { messages: [] } }
-  // The conversation lives on the card: content.chat. Nothing else in fl-api keys a
-  // conversation by item, and a thread you cannot find again from the card is not the card's.
-  const c = parseContent(item.raw.content)
-  const list: any[] = Array.isArray(c.obj?.chat) ? c.obj!.chat : []
-  const messages: ChatMessage[] = list
-    .map((m, i) => ({
-      id: String(m?.id ?? i),
-      role: (m?.role === "agent" ? "agent" : "user") as "user" | "agent",
-      text: String(m?.text ?? ""),
-      at: String(m?.at ?? ""),
-      agentName: m?.agentName ?? undefined,
-    }))
-    .filter((m) => m.text)
-  const agentId = c.obj?.chatAgentId != null ? Number(c.obj.chatAgentId) : undefined
-  return { measured: true, data: { agentId, messages } }
+/** BloqItemController@getChatMessages rows. The text key has moved before; read the ones it has used. */
+export function readChatMessage(m: any): ChatMessage {
+  const role = m?.role === "assistant" || m?.role === "agent" ? "agent" : "user"
+  return {
+    id: String(m?.id ?? m?.message_id ?? ""),
+    role,
+    text: String(m?.message ?? m?.content ?? m?.text ?? ""),
+    at: String(m?.created_at ?? m?.timestamp ?? m?.at ?? ""),
+    agentName: m?.agent_name ?? m?.agent?.name ?? undefined,
+  }
 }
 
 /**
- * One turn with an agent about this card. The reply comes from fl-api's agent chat route and
- * both messages are appended to content.chat so the next open shows the thread.
+ * The card's thread — fl-api keeps one per item (…/list/item/{id}/chat/messages), and it is the
+ * same thread Elon's Chat tab reads, so a conversation started in either place continues in
+ * the other. Nothing is invented on the card.
+ */
+export async function fetchItemChat(itemId: number): Promise<PlatformResult<{ agentId?: number; messages: ChatMessage[] }>> {
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: notSignedIn(), data: { messages: [] } }
+  try {
+    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/chat/messages`)
+    if (!res.ok) return { measured: false, reason: `fl-api ${res.status}`, data: { messages: [] } }
+    const j = (await res.json()) as any
+    const d = j?.data ?? j
+    const rows: any[] = Array.isArray(d) ? d : (d?.messages ?? [])
+    const messages = rows.map(readChatMessage).filter((m) => m.text)
+    // The agent last spoken to, so the picker opens on it.
+    const lastAgent = [...rows].reverse().find((m) => m?.agent_id != null)
+    return { measured: true, data: { agentId: lastAgent ? Number(lastAgent.agent_id) : undefined, messages } }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { messages: [] } }
+  }
+}
+
+/**
+ * One turn. The agent answers through /bloqs/agents/ask with the card as the system message
+ * and the thread as history; both sides are then stored on the item's thread so the next
+ * open — here or in Elon — shows them.
  */
 export async function sendItemChat(
   itemId: number,
@@ -2427,64 +2492,41 @@ export async function sendItemChat(
   const item = await rawItem(itemId)
   if (!item.ok) return { ok: false, reason: item.reason }
   const c = parseContent(item.raw.content)
-  const prior: any[] = Array.isArray(c.obj?.chat) ? c.obj!.chat : []
-
-  const context = [
-    `You are being asked about board card #${itemId}: "${item.raw.title ?? ""}".`,
+  const thread = await fetchItemChat(itemId)
+  const history = thread.data.messages.slice(-12).map((m) => ({ role: m.role === "agent" ? "assistant" : "user", content: m.text }))
+  const systemMessage = [
+    `You are answering questions about one board card, #${itemId}: "${item.raw.title ?? ""}" (status ${item.raw.status ?? "unknown"}).`,
     `Card body:\n${c.text.slice(0, 6000)}`,
-    prior.length ? `Earlier in this thread:\n${prior.slice(-8).map((m) => `${m.role}: ${m.text}`).join("\n")}` : "",
-  ]
-    .filter(Boolean)
-    .join("\n\n")
+    "Answer from the card. If the card does not say, say so.",
+  ].join("\n\n")
 
-  const reply = await agentReply(input.agentId, input.text, context, input.bloqId)
-  if (!reply.ok) return { ok: false, reason: reply.reason }
+  let replyText = ""
+  let agentName: string | undefined
+  try {
+    const res = await irisFetch(`/api/v1/bloqs/agents/ask`, FL_API, {
+      method: "POST",
+      body: JSON.stringify({ agentId: input.agentId, message: input.text, history, systemMessage, bloqId: input.bloqId }),
+    })
+    const j = (await res.json().catch(() => ({}))) as any
+    if (!res.ok) return { ok: false, reason: apiFailure(j, res.status) }
+    // Raw OpenAI shape for AI agents; {content} for human agents.
+    replyText = String(j?.choices?.[0]?.message?.content ?? j?.content ?? j?.data?.content ?? "")
+    agentName = j?.agentName ?? j?.agent?.name ?? undefined
+    if (!replyText) return { ok: false, reason: "the agent route answered without a reply text" }
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) }
+  }
 
-  const now = new Date().toISOString()
-  const mine = { id: `u-${Date.now()}`, role: "user", text: input.text, at: now }
-  const theirs = { id: `a-${Date.now()}`, role: "agent", text: reply.text, at: new Date().toISOString(), agentName: reply.agentName }
-  const body: Record<string, unknown> =
-    c.kind === "structured"
-      ? { content_merge: { chat: [...prior, mine, theirs], chatAgentId: input.agentId } }
-      : { content: JSON.stringify({ text: c.text, body: c.text, chat: [mine, theirs], chatAgentId: input.agentId }) }
-  const saved = await postJson(`/api/v1/user/bloqs/list/item/${itemId}`, body, "PUT")
+  const store = async (role: "user" | "assistant", message: string) =>
+    postJson(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/chat/messages`, { message, role, agent_id: input.agentId, agent_name: agentName })
+  const s1 = await store("user", input.text)
+  const s2 = await store("assistant", replyText)
+  const unsaved = [s1, s2].filter((x) => !x.ok).map((x) => x.reason).join("; ")
   return {
     ok: true,
-    reason: saved.ok ? undefined : `reply received but the thread was not saved to the card: ${saved.reason}`,
-    message: { id: theirs.id, role: "agent", text: theirs.text, at: theirs.at, agentName: theirs.agentName },
+    reason: unsaved ? `reply received but not stored on the card's thread: ${unsaved}` : undefined,
+    message: { id: String(s2.data?.id ?? `a-${Date.now()}`), role: "agent", text: replyText, at: new Date().toISOString(), agentName },
   }
-}
-
-/**
- * The agent chat call. Tries the routes fl-api has had for agent chat, first one that answers
- * wins; the reply text is looked for in the places each of them has put it.
- */
-async function agentReply(agentId: number, text: string, context: string, bloqId?: number): Promise<Ok & { text: string; agentName?: string }> {
-  const userId = await resolveUserId()
-  const attempts: { path: string; body: Record<string, unknown> }[] = [
-    { path: `/api/v1/bloqs/agents/${agentId}/chat`, body: { message: text, context, bloq_id: bloqId } },
-    { path: `/api/v1/users/${userId}/bloqs/agents/${agentId}/chat`, body: { message: text, context, bloq_id: bloqId } },
-    { path: `/api/v1/bloqs/agents/chat`, body: { agent_id: agentId, message: text, context, bloq_id: bloqId } },
-  ]
-  let last = "no agent chat route answered"
-  for (const a of attempts) {
-    try {
-      const res = await irisFetch(a.path, FL_API, { method: "POST", body: JSON.stringify(a.body) })
-      if (res.status === 404 || res.status === 405) {
-        last = `${a.path}: ${res.status}`
-        continue
-      }
-      const j = (await res.json().catch(() => ({}))) as any
-      if (!res.ok) return { ok: false, reason: apiFailure(j, res.status), text: "" }
-      const d = j?.data ?? j
-      const reply = d?.response ?? d?.reply ?? d?.message ?? d?.content ?? d?.text ?? d?.output ?? (typeof d === "string" ? d : "")
-      if (!reply || typeof reply !== "string") return { ok: false, reason: `${a.path} answered without a reply text`, text: "" }
-      return { ok: true, text: reply, agentName: d?.agent?.name ?? d?.agent_name ?? undefined }
-    } catch (e) {
-      last = e instanceof Error ? e.message : String(e)
-    }
-  }
-  return { ok: false, reason: `${last} (#185506)`, text: "" }
 }
 
 export interface SchemaOption {

@@ -546,7 +546,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
   const [shareBusy, setShareBusy] = createSignal(false)
   const [allowText, setAllowText] = createSignal("")
   const [inviteEmail, setInviteEmail] = createSignal("")
-  const [invitePerm, setInvitePerm] = createSignal("view")
+  const [invitePerm, setInvitePerm] = createSignal("viewer")
   const [linkDays, setLinkDays] = createSignal("")
   const [armedRevoke, setArmedRevoke] = createSignal<string | null>(null)
 
@@ -1270,9 +1270,9 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                                 </Show>
                               </span>
                               <select class="iris-field__input iris-card__perm" aria-label={`Permission for ${m.email}`} value={m.permission} onChange={(e) => void setPermission(m, e.currentTarget.value)}>
-                                <option value="view">view</option>
-                                <option value="edit">edit</option>
-                                <option value="admin">admin</option>
+                                <option value="viewer">viewer</option>
+                                <option value="editor">editor</option>
+                                <option value="owner">owner</option>
                               </select>
                               <button type="button" class="iris-card__x" classList={{ "iris-card__x--armed": armedRevoke() === `m${m.userId}` }} onClick={() => revokeMember(m)}>
                                 {armedRevoke() === `m${m.userId}` ? "sure?" : "×"}
@@ -1290,9 +1290,9 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                       >
                         <input class="iris-field__input" type="email" placeholder="Invite by email…" aria-label="Invite email" value={inviteEmail()} onInput={(e) => setInviteEmail(e.currentTarget.value)} />
                         <select class="iris-field__input iris-card__perm" aria-label="Invite permission" value={invitePerm()} onChange={(e) => setInvitePerm(e.currentTarget.value)}>
-                          <option value="view">view</option>
-                          <option value="edit">edit</option>
-                          <option value="admin">admin</option>
+                          <option value="viewer">viewer</option>
+                          <option value="editor">editor</option>
+                          <option value="owner">owner</option>
                         </select>
                         <button type="submit" class="iris-card__linkbtn iris-card__linkbtn--primary" disabled={!inviteEmail().trim() || shareBusy()}>
                           Invite
