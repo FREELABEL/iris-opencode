@@ -864,6 +864,13 @@
   min-height: 0;
   overflow: hidden;
 }
+/* The frame: 80vh, not the dialog's 600px cap. An editor is the thing you spend time in, and
+   600px on a 900px-tall window left a third of the screen as scrim. Selected through :has()
+   because the class lands on the content, and the container is its parent. */
+[data-slot="dialog-container"]:has(> .iris-card) {
+  height: min(80vh, 1000px);
+  width: min(calc(100vw - 32px), 1100px);
+}
 .iris-card__crumb {
   display: inline-flex;
   align-items: baseline;
