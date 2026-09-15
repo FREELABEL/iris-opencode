@@ -1036,9 +1036,24 @@ export const IrisApi = HttpApi.make("iris").add(
       }).annotateMerge(OpenApi.annotations({ identifier: "iris.itemAttachments", summary: "A card's attachments" })),
       HttpApiEndpoint.post("itemAttachmentUpload", IrisPaths.itemAttachments, {
         params: { itemID: Schema.NumberFromString },
-        payload: Schema.Any,
-        success: Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String) }).annotate({ identifier: "IrisOk" }),
-      }).annotateMerge(OpenApi.annotations({ identifier: "iris.itemAttachmentUpload", summary: "Upload one file to a card (multipart, field `file`)" })),
+        payload: Schema.Struct({
+          name: Schema.String,
+          type: Schema.optional(Schema.String),
+          data: described(Schema.String, "The file, base64. A data: URL prefix is tolerated."),
+          bloq: Schema.optional(Schema.Finite),
+        }),
+        success: described(
+          Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String), file: Schema.optional(CardFileSchema) }).annotate({ identifier: "IrisAttachmentUploaded" }),
+          "The attachment as the card now lists it",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.itemAttachmentUpload",
+          summary: "Upload one file to a card",
+          description:
+            "JSON with the file base64 — this route has no multipart machinery. Forwarded as multipart to fl-api /cloud-files/upload (the call Elon's CloudFileService makes), then appended to content.attachments in Elon's shape so both editors list it. 100MB cap is fl-api's.",
+        }),
+      ),
       HttpApiEndpoint.post("itemAttachmentDelete", IrisPaths.itemAttachmentDelete, {
         params: { itemID: Schema.NumberFromString, fileID: Schema.String },
         success: Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String) }).annotate({ identifier: "IrisOk" }),

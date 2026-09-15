@@ -2304,10 +2304,75 @@ export async function deleteAttachment(itemId: number, fileId: string): Promise<
   return { ok: r.ok, reason: r.reason }
 }
 
-/** Upload is the one write the sidecar cannot do yet: no cloud-file route is wired here. Says so. */
-export async function uploadAttachment(itemId: number): Promise<Ok> {
-  void itemId
-  return { ok: false, reason: "Upload is not wired yet: fl-api takes multipart at POST /cloud-files/upload (field `file`, plus bloq_item_id) and this sidecar route does not forward multipart (#185506). Attach from Elon for now." }
+/**
+ * Upload one file to a card. The webview sends it base64 in JSON (the sidecar route is plain
+ * JSON, no multipart machinery); this forwards it as multipart to fl-api's cloud-files
+ * upload — the same call Elon's CloudFileService makes — then appends the reference to
+ * content.attachments in Elon's shape, so both editors list it.
+ */
+export async function uploadAttachment(
+  itemId: number,
+  input: { name: string; type?: string; data: string; bloqId?: number },
+): Promise<Ok & { file?: CardFile }> {
+  const userId = await resolveUserId()
+  if (!userId) return { ok: false, reason: notSignedIn() }
+  const name = input.name.trim() || "file"
+  let bytes: Uint8Array<ArrayBuffer>
+  try {
+    const buf = Buffer.from(input.data.replace(/^data:[^;]+;base64,/, ""), "base64")
+    bytes = new Uint8Array(new ArrayBuffer(buf.length))
+    bytes.set(buf)
+  } catch (e) {
+    return { ok: false, reason: `not valid base64 — ${e instanceof Error ? e.message : String(e)}` }
+  }
+  if (bytes.length === 0) return { ok: false, reason: "empty file" }
+  if (bytes.length > 100 * 1024 * 1024) return { ok: false, reason: "fl-api takes files up to 100MB" }
+
+  const form = new FormData()
+  form.append("file", new Blob([bytes], { type: input.type || "application/octet-stream" }), name)
+  form.append("user_id", String(userId))
+  form.append("bloq_item_id", String(itemId))
+  if (input.bloqId != null) form.append("bloq_id", String(input.bloqId))
+  form.append("title", name)
+
+  let cloud: any
+  try {
+    const token = resolveToken()
+    const headers: Record<string, string> = { Accept: "application/json" }
+    if (token) headers["Authorization"] = `Bearer ${token}`
+    // NOT irisFetch: that sets content-type JSON, and multipart must carry its own boundary.
+    const res = await fetch(`${FL_API}/api/v1/cloud-files/upload`, { method: "POST", headers, body: form })
+    const j = (await res.json().catch(() => ({}))) as any
+    if (!res.ok) return { ok: false, reason: apiFailure(j, res.status) }
+    cloud = j?.data ?? j
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) }
+  }
+
+  const ref = {
+    id: cloud?.id ?? Date.now(),
+    name: cloud?.original_filename ?? name,
+    type: input.type || cloud?.filetype || undefined,
+    size: bytes.length,
+    url: cloud?.filepath ?? cloud?.url ?? undefined,
+    cloud_file_id: cloud?.id,
+    upload_status: "completed",
+    processing_status: cloud?.processing_status ?? "pending",
+    is_image: /^image\//.test(input.type ?? ""),
+    upload_date: new Date().toISOString(),
+    created_at: new Date().toISOString(),
+  }
+  const item = await rawItem(itemId)
+  if (!item.ok) return { ok: false, reason: `uploaded, but the card could not be read to attach it: ${item.reason}` }
+  const c = parseContent(item.raw.content)
+  const list: any[] = Array.isArray(c.obj?.attachments) ? c.obj!.attachments : []
+  const body: Record<string, unknown> =
+    c.kind === "structured"
+      ? { content_merge: { attachments: [...list, ref] } }
+      : { content: JSON.stringify({ text: c.text, body: c.text, attachments: [ref] }) }
+  const saved = await postJson(`/api/v1/user/bloqs/list/item/${itemId}`, body, "PUT")
+  if (!saved.ok) return { ok: false, reason: `uploaded (cloud file ${ref.cloud_file_id}) but not attached to the card: ${saved.reason}` }
+  return { ok: true, file: readAttachment(ref, list.length) }
 }
 
 // ── Events ──────────────────────────────────────────────────────────────────
@@ -2320,40 +2385,44 @@ export interface CardEvent {
   kind?: string
 }
 
+export function readCardEvent(e: any): CardEvent {
+  return {
+    id: String(e?.id ?? ""),
+    title: String(e?.title ?? "event"),
+    startsAt: String(e?.start_date ?? e?.startsAt ?? ""),
+    endsAt: e?.end_date ?? e?.endsAt ?? undefined,
+    kind: e?.event_type ?? e?.kind ?? undefined,
+  }
+}
+
+/**
+ * fl-api's card-scoped events (content_events, entity_type=item — fl-api a96b7388), plus the
+ * item's own due_date as a row so one list holds every date the card carries.
+ */
 export async function fetchEvents(itemId: number): Promise<PlatformResult<{ events: CardEvent[] }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: notSignedIn(), data: { events: [] } }
-  const item = await rawItem(itemId)
-  if (!item.ok) return { measured: false, reason: item.reason, data: { events: [] } }
-  // Events written by this editor live in content.events on the item — fl-api's events table
-  // has no link back to a card, so an event posted there is unfindable from here.
-  const c = parseContent(item.raw.content)
-  const list: any[] = Array.isArray(c.obj?.events) ? c.obj!.events : []
-  const events: CardEvent[] = list.map((e, i) => ({
-    id: String(e?.id ?? i),
-    title: String(e?.title ?? "event"),
-    startsAt: String(e?.startsAt ?? e?.starts_at ?? e?.date ?? ""),
-    endsAt: e?.endsAt ?? e?.ends_at ?? undefined,
-    kind: e?.kind ?? undefined,
-  }))
-  if (item.raw.due_date) events.push({ id: "due", title: "Due", startsAt: String(item.raw.due_date), kind: "due" })
-  events.sort((a, b) => a.startsAt.localeCompare(b.startsAt))
-  return { measured: true, data: { events } }
+  try {
+    const res = await irisFetch(`/api/v1/user/bloqs/list/item/${itemId}/events`)
+    if (!res.ok) return { measured: false, reason: `fl-api ${res.status}`, data: { events: [] } }
+    const j = (await res.json()) as any
+    const rows: any[] = j?.data?.events ?? j?.events ?? []
+    const events = rows.map(readCardEvent).filter((e) => e.id)
+    const item = await rawItem(itemId)
+    if (item.ok && item.raw.due_date) events.push({ id: "due", title: "Due", startsAt: String(item.raw.due_date), kind: "due" })
+    events.sort((a, b) => a.startsAt.localeCompare(b.startsAt))
+    return { measured: true, data: { events } }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { events: [] } }
+  }
 }
 
 export async function addEvent(itemId: number, input: { title: string; startsAt: string; endsAt?: string }): Promise<Ok> {
   const userId = await resolveUserId()
   if (!userId) return { ok: false, reason: notSignedIn() }
-  const item = await rawItem(itemId)
-  if (!item.ok) return { ok: false, reason: item.reason }
-  const c = parseContent(item.raw.content)
-  const list: any[] = Array.isArray(c.obj?.events) ? c.obj!.events : []
-  const ev = { id: `ev-${Date.now()}`, title: input.title.trim(), startsAt: input.startsAt, endsAt: input.endsAt, createdBy: userId }
-  const body: Record<string, unknown> =
-    c.kind === "structured"
-      ? { content_merge: { events: [...list, ev] } }
-      : { content: JSON.stringify({ text: c.text, body: c.text, events: [ev] }) }
-  const r = await postJson(`/api/v1/user/bloqs/list/item/${itemId}`, body, "PUT")
+  const body: Record<string, unknown> = { title: input.title.trim(), start_date: input.startsAt, event_type: "deadline" }
+  if (input.endsAt) body.end_date = input.endsAt
+  const r = await postJson(`/api/v1/user/bloqs/list/item/${itemId}/events`, body)
   return { ok: r.ok, reason: r.reason }
 }
 

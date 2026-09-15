@@ -314,8 +314,9 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
         Effect.map((r) => ({ measured: r.measured, reason: r.reason, files: r.data.files })),
       ),
     )
-    const itemAttachmentUpload = Effect.fn("IrisHttpApi.itemAttachmentUpload")((ctx: { params: { itemID: number } }) =>
-      Effect.promise(() => uploadAttachment(ctx.params.itemID)),
+    const itemAttachmentUpload = Effect.fn("IrisHttpApi.itemAttachmentUpload")(
+      (ctx: { params: { itemID: number }; payload: { name: string; type?: string; data: string; bloq?: number } }) =>
+        Effect.promise(() => uploadAttachment(ctx.params.itemID, { name: ctx.payload.name, type: ctx.payload.type, data: ctx.payload.data, bloqId: ctx.payload.bloq })),
     )
     const itemAttachmentDelete = Effect.fn("IrisHttpApi.itemAttachmentDelete")((ctx: { params: { itemID: number; fileID: string } }) =>
       Effect.promise(() => deleteAttachment(ctx.params.itemID, ctx.params.fileID)),

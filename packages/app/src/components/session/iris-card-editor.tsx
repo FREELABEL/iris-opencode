@@ -463,9 +463,18 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
     let okCount = 0
     let lastReason: string | undefined
     for (const f of Array.from(list)) {
-      const fd = new FormData()
-      fd.append("file", f, f.name)
-      const out = await post(`/iris/item/${d.id}/attachments`, fd)
+      // Base64 in JSON: the sidecar route is plain JSON and forwards multipart to fl-api itself.
+      const data = await new Promise<string>((resolve, reject) => {
+        const r = new FileReader()
+        r.onload = () => resolve(String(r.result ?? ""))
+        r.onerror = () => reject(r.error ?? new Error("could not read file"))
+        r.readAsDataURL(f)
+      }).catch((e) => {
+        lastReason = e instanceof Error ? e.message : String(e)
+        return ""
+      })
+      if (!data) continue
+      const out = await post(`/iris/item/${d.id}/attachments`, { name: f.name, type: f.type || undefined, data, bloq: props.bloqId })
       if (out.ok) okCount++
       else lastReason = out.reason
     }
