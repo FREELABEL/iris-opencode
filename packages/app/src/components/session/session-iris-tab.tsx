@@ -1,5 +1,4 @@
 import { createEffect, createMemo, createResource, createSignal, For, Match, onCleanup, Show, Switch } from "solid-js"
-import { marked } from "marked"
 import "./session-iris-tab.css"
 import { pageSummary, type PageEnvelope } from "./use-paged-surface"
 import { Dialog } from "@opencode-ai/ui/dialog"
@@ -10,6 +9,12 @@ import { IrisForceGraph, type ForceEdge, type ForceNode } from "./iris-force-gra
 import { graphBoardIsIsolated, scopeGraphRows, type GraphScope } from "./iris-graph-scope"
 import { useServerSDK } from "@/context/server-sdk"
 import { usePlatform } from "@/context/platform"
+import { IrisCardEditor } from "./iris-card-editor"
+import { itemCommands, renderMarkdown } from "./iris-item"
+
+// Re-exported: the panel tests assert on these, and they were defined here before the card
+// editor needed them too.
+export { itemCommands, renderMarkdown }
 
 /**
  * Atlas — the first IRIS platform surface in the desktop app.
@@ -83,22 +88,6 @@ const fieldsOf = (pairs: [string, unknown][]): [string, string][] =>
  * fields and maybe a command", and five near-identical panels would drift apart the first time
  * one of them got a fix.
  */
-/**
- * The commands that act on one Atlas item.
- *
- * Kept as data rather than markup so the set is one list to extend, and so the strings can be
- * asserted: an id pasted into the wrong verb is a command that runs and does the wrong thing,
- * which is worse than one that fails.
- */
-export function itemCommands(id: number): { label: string; cmd: string }[] {
-  return [
-    { label: "use", cmd: `iris atlas use ${id}` },
-    { label: "show", cmd: `iris bloqs get-item ${id}` },
-    { label: "edit", cmd: `iris bloqs update-item ${id} --content "…"` },
-    { label: "assign", cmd: `iris agents assign <agent-id> --item ${id}` },
-    { label: "share", cmd: `iris bloqs make-public ${id}` },
-  ]
-}
 
 /** "20h ago" — plain, so a stale reading announces its own age. */
 function relativeAge(iso: string): string | undefined {
@@ -272,6 +261,7 @@ function describeFields(surface: string, r: any): { title: string; fields: [stri
   return null
 }
 
+
 /**
  * JSON with the TYPE carried in the colour.
  *
@@ -302,14 +292,6 @@ export function highlightJson(value: unknown): string {
       return `<span class="${cls}">${m}</span>`
     },
   )
-}
-
-function renderMarkdown(md: string): string {
-  try {
-    return marked.parse(md, { async: false }) as string
-  } catch {
-    return ""
-  }
 }
 
 /**
@@ -796,7 +778,7 @@ export function SessionIrisTab() {
    */
   const [page, setPage] = createSignal(1)
 
-  const [data] = createResource(
+  const [data, { refetch: refetchSurface }] = createResource(
     () => {
       const id = activeBloq()
       // The sub-view is IN the key. Without it, switching Atlas › Lists to Atlas › Schemas
@@ -1115,8 +1097,6 @@ export function SessionIrisTab() {
     },
   )
 
-  /** The item being read, if any. Opening one replaces the list; there is no second panel. */
-  const [openItem, setOpenItem] = createSignal<AtlasItem | null>(null)
 
   // Leaving the surface or the board must close the reader — otherwise you switch to Leads and
   // are still looking at an Atlas item.
@@ -1141,7 +1121,6 @@ export function SessionIrisTab() {
       return
     }
     lastSubject = subject
-    setOpenItem(null)
     setOpenRow(null)
     // A query for one board is not a query for the next.
     setQuery("")
@@ -1150,6 +1129,33 @@ export function SessionIrisTab() {
     // asks the next surface for ITS page 3 and silently skips its first rows.
     setPage(1)
   })
+
+  /**
+   * THE CARD EDITOR (#185485). A row opens the item in a modal — read, edit, tasks — and the
+   * modal returns to this row. Every item opens, including one with no body: a title, a status
+   * and a list are things you change on a card that has nothing written in it yet.
+   *
+   * Lists come from the payload already on screen, so the List picker costs no request. On any
+   * write the surface is re-read so the row behind the dialog shows what was saved; a page
+   * beyond the first drops back to page 1, because a refetch returns only the page it asked for.
+   */
+  function openCard(itemId: number) {
+    const b = activeBloq()
+    if (b == null) return
+    const lists = ((data.latest ?? data())?.lists as AtlasList[] | undefined ?? []).map((l) => ({ id: l.id, name: l.name }))
+    dialog.show(() => (
+      <IrisCardEditor
+        itemId={itemId}
+        bloqId={Number(b)}
+        lists={lists}
+        doFetch={doFetch}
+        onChanged={() => {
+          if (page() !== 1) setPage(1)
+          else void refetchSurface()
+        }}
+      />
+    ))
+  }
 
   function chooseSurface(id: SurfaceId) {
     setSurface(id)
@@ -1291,7 +1297,7 @@ export function SessionIrisTab() {
 
       {/* SEARCH, for the pane that has enough in it to need one: a board's lists run to
           hundreds of items and the reader is the only way in. Server-side — see the `q` param. */}
-      <Show when={SEARCH_PLACEHOLDER[pane()] && !openItem() && !openRow()}>
+      <Show when={SEARCH_PLACEHOLDER[pane()] && !openRow()}>
         <div class="iris-search shrink-0">
           <input
             class="iris-search__input"
@@ -1798,70 +1804,12 @@ export function SessionIrisTab() {
         </div>
       </Show>
 
-      {/* THE READER. Replaces the list rather than opening beside it: the panel is ~500px wide
-          and a master/detail split inside that leaves neither half readable. */}
-      <Show when={openItem()}>
-        <div class="flex-1 min-h-0 flex flex-col">
-          <button
-            type="button"
-            class="flex items-center gap-1 px-2 py-1 text-12-regular text-text-weak hover:text-text-base shrink-0 text-start cursor-pointer"
-            onClick={() => setOpenItem(null)}
-          >
-            ← Back
-          </button>
-          {/* A BREADCRUMB, not a title. Atlas bodies almost always open with their own "# H1",
-              so printing the item title here too rendered it twice at the same size — which is
-              exactly the flat hierarchy that made these unreadable. The markdown's H1 is the
-              title; this row is just where you are and what to quote. */}
-          <div class="flex items-baseline gap-2 px-2 pb-1">
-            <span class="text-11-regular text-text-weaker min-w-0 truncate">{openItem()!.title}</span>
-            <span class="ms-auto shrink-0 font-mono tabular-nums text-11-regular text-text-weaker">
-              #{openItem()!.id}
-            </span>
-          </div>
-
-          {/* WHAT TO TYPE NEXT (#185124).
-              Every other detail in this panel ends in a copyable command; an Atlas item — the
-              thing you most often want to act on — ended in prose. The id is already on screen
-              and was useless without the verb that takes it. Each chip copies on click. */}
-          <div class="iris-cmdbar shrink-0">
-            <For each={itemCommands(openItem()!.id)}>
-              {(c) => (
-                <button
-                  type="button"
-                  class="iris-cmdbar__chip"
-                  title={`Copy: ${c.cmd}`}
-                  onClick={(e) => {
-                    navigator.clipboard?.writeText(c.cmd)
-                    // Says it copied, on the control you pressed. A toast would be a second
-                    // system for one word.
-                    const el = e.currentTarget
-                    const was = el.textContent
-                    el.textContent = "copied"
-                    setTimeout(() => (el.textContent = was), 900)
-                  }}
-                >
-                  {c.label}
-                </button>
-              )}
-            </For>
-          </div>
-          <div
-            class="iris-markdown flex-1 min-h-0 overflow-y-auto px-2 pb-4 text-12-regular text-text-base"
-            /* The body is the signed-in user's own Atlas content, fetched through their own
-               sidecar — not third-party input. marked does not sanitise, so this would need a
-               sanitiser the moment this panel renders anything someone else authored. */
-            innerHTML={renderMarkdown(openItem()!.content ?? "")}
-          />
-        </div>
-      </Show>
-
       {/* The graph OWNS the pane: a column that does not scroll, so the canvas can take the
           height instead of sitting in a box inside a scroller. Everything else scrolls as before. */}
       <div
         class="flex-1 min-h-0"
         classList={{
-          hidden: !!openItem() || !!openRow(),
+          hidden: !!openRow(),
           "overflow-y-auto": pane() !== "graph",
           "flex flex-col overflow-hidden": pane() === "graph",
         }}
@@ -1900,13 +1848,12 @@ export function SessionIrisTab() {
                         {(item) => (
                           <button
                             type="button"
-                            class="w-full flex gap-2 px-2 py-1 text-start rounded cursor-pointer hover:bg-background-element disabled:cursor-default disabled:hover:bg-transparent"
-                            disabled={!item.content}
-                            title={item.content ? undefined : "This item has no body to show"}
-                            onClick={() => item.content && setOpenItem(item)}
+                            class="w-full flex gap-2 px-2 py-1 text-start rounded cursor-pointer hover:bg-background-element"
+                            title="Open this card"
+                            onClick={() => openCard(item.id)}
                           >
                             <span class="text-12-regular text-text-weak shrink-0">
-                              {item.status === "completed" ? "✓" : "·"}
+                              {item.status === "done" || item.status === "completed" ? "✓" : "·"}
                             </span>
                             <span class="text-12-regular text-text-muted min-w-0 flex-1">{item.title}</span>
                             <span class="shrink-0 font-mono tabular-nums text-11-regular text-text-weaker">
