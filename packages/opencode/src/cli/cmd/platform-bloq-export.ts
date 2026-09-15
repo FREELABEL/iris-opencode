@@ -408,6 +408,18 @@ export const BloqsExportCommand = cmd({
       printKV("Bloq", `${bold(String(manifest.source?.bloq_name ?? resolvedId))} ${dim(`#${resolvedId}`)}`)
       printKV("Lists", String(manifest.counts?.lists ?? 0))
       printKV("Items", String(manifest.counts?.items ?? 0))
+      // Print the dataset line ALWAYS, including the zero. The reason this command shipped for
+      // months exporting no datasets is that nothing on screen mentioned them — a silent
+      // omission reads as "there were none". A visible 0 can be argued with. (#185521)
+      printKV(
+        "Datasets",
+        manifest.counts?.datasets_listing_ok === false
+          ? dim(`could not list (${manifest.counts?.datasets_listing_error ?? "unknown"})`)
+          : `${manifest.counts?.datasets ?? 0} ${dim(`· ${manifest.counts?.dataset_records ?? 0} records`)}` +
+            ((manifest.counts?.datasets_incomplete ?? []).length
+              ? ` ${dim(`· INCOMPLETE: ${(manifest.counts.datasets_incomplete as string[]).join(", ")}`)}`
+              : ""),
+      )
       if ((manifest.counts?.attachments_listed ?? 0) > 0) {
         printKV(
           "Attachments",
