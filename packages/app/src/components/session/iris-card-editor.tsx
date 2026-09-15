@@ -1103,7 +1103,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                         </For>
                       </ul>
                       <form
-                        class="iris-card__inline iris-card__inline--3"
+                        class="iris-card__inline iris-card__inline--ev"
                         onSubmit={(e) => {
                           e.preventDefault()
                           void addEvent()
@@ -1150,8 +1150,8 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                         }}
                       >
                         <input class="iris-field__input" placeholder="From whom…" aria-label="Ask: from whom" value={askTo()} onInput={(e) => setAskTo(e.currentTarget.value)} />
-                        <input class="iris-field__input" placeholder="What you need…" aria-label="Ask: what" value={askWhat()} onInput={(e) => setAskWhat(e.currentTarget.value)} />
                         <input class="iris-field__input" type="date" aria-label="Ask: by when" value={askDue()} onInput={(e) => setAskDue(e.currentTarget.value)} />
+                        <input class="iris-field__input" placeholder="What you need…" aria-label="Ask: what" value={askWhat()} onInput={(e) => setAskWhat(e.currentTarget.value)} />
                         <button type="submit" class="iris-card__linkbtn iris-card__linkbtn--primary" disabled={!askTo().trim() || !askWhat().trim()}>
                           Add
                         </button>

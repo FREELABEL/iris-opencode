@@ -1162,7 +1162,13 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
   padding-bottom: 4px;
 }
 .iris-card__inline--3 { grid-template-columns: 1fr auto auto; }
-.iris-card__inline--ask { grid-template-columns: 1fr 1.4fr auto auto; }
+/* Two-row forms: a 300px column cannot hold a title beside a datetime picker. The wide field
+   takes the row; the picker and the action share the next one. */
+.iris-card__inline--ev { grid-template-columns: 1fr auto; }
+.iris-card__inline--ev > input:first-child { grid-column: 1 / -1; }
+.iris-card__inline--ask { grid-template-columns: 1fr auto; }
+.iris-card__inline--ask > input[aria-label="Ask: what"] { grid-column: 1 / -1; }
+.iris-card__inline--ask > button { justify-self: end; }
 .iris-card__inline input[type="datetime-local"],
 .iris-card__inline input[type="date"] { max-width: 150px; }
 .iris-card__perm { width: auto; max-width: 84px; }
