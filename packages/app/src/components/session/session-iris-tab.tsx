@@ -1718,12 +1718,32 @@ export function SessionIrisTab() {
                             <th class="iris-table__num">id</th>
                             <For each={records.latest!.columns}>
                               {(c) => (
-                                <th title={`${c.key} · ${c.type}`}>
+                                <th
+                                  title={
+                                    c.visibility
+                                      ? `${c.key} · ${c.type} · visibility: ${c.visibility}`
+                                      : `${c.key} · ${c.type} · no visibility declared — nobody has said what this column is, which is not the same as saying it is safe to share`
+                                  }
+                                >
                                   {c.label}
-                                  {/* PHI is named on the column, not left to be inferred from
-                                      the content. */}
+                                  {/* THREE STATES, DRAWN AS THREE (#185139).
+                                      Declared phi, declared something else, and nobody said.
+                                      Only the first two were ever drawn, so silence rendered
+                                      identically to an explicit "public" — and silence is the
+                                      common case: 670 of 720 columns across this account
+                                      declare nothing, `Pathways Cases` among them, whose
+                                      columns include patient_name and law_firm.
+
+                                      The undeclared mark is quiet on purpose. It is not an
+                                      accusation that the column is sensitive; it is the
+                                      absence of a claim either way, and the tooltip says so. */}
                                   <Show when={c.visibility === "phi"}>
                                     <span class="iris-table__phi">phi</span>
+                                  </Show>
+                                  <Show when={!c.visibility}>
+                                    <span class="iris-table__undeclared" aria-label="no visibility declared">
+                                      ?
+                                    </span>
                                   </Show>
                                 </th>
                               )}

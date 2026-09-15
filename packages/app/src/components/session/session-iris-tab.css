@@ -440,6 +440,22 @@
   border: 1px solid var(--border-weaker-base);
 }
 
+/*
+ * NOBODY SAID — the third state (#185139).
+ *
+ * Deliberately lighter than the phi badge: it carries no claim about the column, only the
+ * absence of one, and 670 of 720 columns on this account are in this state. Drawn at the
+ * weight of a footnote so a table of them is still readable, but never invisible — the whole
+ * defect was that an undeclared column and one declared public looked identical.
+ */
+.iris-table__undeclared {
+  margin-inline-start: 4px;
+  font-size: 9px;
+  color: var(--text-weaker);
+  opacity: 0.6;
+  cursor: help;
+}
+
 /* Raw JSON. Wraps rather than scrolls: a deep object is easier to read broken than truncated. */
 .iris-json {
   font-family: var(--font-mono, ui-monospace, monospace);
