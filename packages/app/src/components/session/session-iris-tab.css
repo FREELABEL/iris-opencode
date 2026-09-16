@@ -773,6 +773,67 @@
 .iris-graph__svg:active {
   cursor: grabbing;
 }
+/*
+ * THE TYPE LEGEND, which is also the filter.
+ *
+ * Top-left rather than a footer strip: the graph fills its pane and a footer would either eat
+ * canvas height or scroll away. Absolute over the canvas costs nothing when the corner is
+ * empty, which it is whenever the layout is fitted.
+ *
+ * Tokens throughout — this panel is light or dark depending on the viewer, and Elon's version
+ * is hardcoded for a dark chrome it always had.
+ */
+.iris-graph__legend {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: calc(100% - 16px);
+  z-index: 1;
+}
+.iris-graph__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--background-element);
+  border: 1px solid var(--border-weaker-base);
+  color: var(--text-base);
+  font-size: 10px;
+  line-height: 18px;
+  cursor: pointer;
+  transition: opacity 120ms ease;
+}
+.iris-graph__chip:hover {
+  border-color: var(--border-base);
+}
+.iris-graph__swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex: none;
+}
+.iris-graph__reset {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--background-element);
+  border: 1px solid var(--border-weaker-base);
+  color: var(--text-base);
+  font-size: 10px;
+  line-height: 18px;
+  cursor: pointer;
+  z-index: 1;
+}
+.iris-graph__reset:hover {
+  border-color: var(--border-base);
+}
+
 .iris-graph__tip {
   position: absolute;
   left: 8px;

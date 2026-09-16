@@ -1,4 +1,4 @@
-import { createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
 import {
   forceCenter,
   forceCollide,
@@ -27,11 +27,25 @@ import {
  */
 
 export interface ForceNode extends SimulationNodeDatum {
-  id: number
+  /**
+   * `number` is a board id. A STRING is a namespaced interior node (`hub-agents-12`,
+   * `item-8841`), which is why this is not just a number: a board's contents and the boards
+   * themselves share one graph, and an item id could collide with a board id.
+   */
+  id: number | string
   name: string
   degree: number
-  /** Radius. Elon sizes by meaning; here degree is the only signal we have. */
+  /** Radius. A board sizes by degree; interior nodes size by role, the way Elon does. */
   size: number
+  /**
+   * One of NODE_TYPES. Absent means `bloq`, which is what every node was when this graph only
+   * drew boards — so an untyped payload renders exactly as it did before.
+   */
+  type?: string
+  /** Elon's second tooltip line. A board has none; a hub says what it collects. */
+  subtitle?: string
+  /** Elon's third tooltip line — a count, a status, whatever the type makes true. */
+  meta?: string
   /*
    * d3 WRITES THESE, and they are redeclared here on purpose.
    *
@@ -54,9 +68,18 @@ export interface ForceNode extends SimulationNodeDatum {
 
 export interface ForceEdge extends SimulationLinkDatum<ForceNode> {
   /** d3 REPLACES these ids with the node objects on the first tick, hence the union. */
-  source: number | ForceNode
-  target: number | ForceNode
+  source: number | string | ForceNode
+  target: number | string | ForceNode
   type: string
+  /** Drawn at the midpoint. Elon labels its edges; without it a dashed line is unreadable. */
+  label?: string
+  /**
+   * Link force strength. Elon reads this per edge and falls back to 0.3; this graph used d3's
+   * default, which is 1/min(degree) — so a hub's links went slack exactly where Elon's stay
+   * tight, and the two layouts settled differently from identical data. That was the one
+   * "same physics" claim in the header that was not true.
+   */
+  strength?: number
 }
 
 /**
@@ -74,8 +97,90 @@ const EDGE_STYLE: Record<string, { color: string; dash?: string }> = {
 }
 const edgeStyle = (t: string) => EDGE_STYLE[t] ?? { color: "#374151" }
 
-/** Elon's `bloq` node colour. Every node here is a board, so there is one. */
-const NODE_COLOR = "#6366f1"
+/**
+ * ELON'S 14-TYPE VOCABULARY, colours verbatim.
+ *
+ * This graph already spoke it without knowing: NODE_COLOR was "#6366f1", which is exactly
+ * Elon's `bloq` colour. Every node here was a board, so the graph was the `bloq` layer of this
+ * table rendered alone — not a different model that needed reconciling with Elon's.
+ *
+ * `icon` is an inline SVG path on a 24x24 grid, NOT a font glyph. Elon uses FontAwesome; this
+ * app has no icon font, and a webfont CDN is blocked by CSP and falls back silently. A path
+ * ships in the bundle and cannot fail to load.
+ */
+export const NODE_TYPES: Record<string, { label: string; color: string; icon: string }> = {
+  atlas: { label: "Atlas", color: "#34d399", icon: "M12 3 L20 18 H4 Z" },
+  artist: { label: "Artists", color: "#f43f5e", icon: "M9 18V6l10-2v12M9 18a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm10-2a2 2 0 1 1-4 0 2 2 0 0 1 4 0z" },
+  person: { label: "People", color: "#3b82f6", icon: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm-8 8a8 8 0 0 1 16 0z" },
+  venue: { label: "Venues", color: "#a855f7", icon: "M4 20V8l8-4 8 4v12H4zm6 0v-6h4v6" },
+  event: { label: "Events", color: "#f59e0b", icon: "M4 6h16v14H4zM4 10h16M8 3v4M16 3v4" },
+  brand: { label: "Brands", color: "#10b981", icon: "M4 12 12 4h8v8l-8 8zM16 8h.01" },
+  deal: { label: "Deals", color: "#06b6d4", icon: "M4 12h4l3 6 4-12 3 6h4" },
+  bloq: { label: "Bloqs", color: "#6366f1", icon: "M12 3v6M6 21v-6M18 21v-6M6 15h12v-6H6zM4 21h4M16 21h4" },
+  agent: { label: "Agents", color: "#38bdf8", icon: "M7 9h10v8H7zM9 13h.01M15 13h.01M12 5v4M10 21h4" },
+  workflow: { label: "Workflows", color: "#2dd4bf", icon: "M5 6h6v4H5zM13 14h6v4h-6zM8 10v6h5" },
+  program: { label: "Programs", color: "#fb923c", icon: "M3 9l9-4 9 4-9 4zM7 12v5c0 1 2 2 5 2s5-1 5-2v-5" },
+  leadcluster: { label: "Lead Groups", color: "#f472b6", icon: "M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM3 20a6 6 0 0 1 12 0M15 20a6 6 0 0 1 6-6" },
+  memory: { label: "Memory", color: "#a3a3a3", icon: "M4 7c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zm0 0v10c0 1.7 3.6 3 8 3s8-1.3 8-3V7" },
+  playbook: { label: "Playbooks", color: "#facc15", icon: "M4 5h7v15H4zM13 5h7v15h-7zM11 5v15" },
+}
+export const DEFAULT_TYPE = "bloq"
+export const nodeStyle = (t?: string) => NODE_TYPES[t ?? DEFAULT_TYPE] ?? NODE_TYPES[DEFAULT_TYPE]
+
+/**
+ * ELON'S PER-EDGE STRENGTHS. A hierarchy should hold tighter than an affiliation, and reading
+ * cluster tightness as meaning only works if the strengths differ on purpose.
+ */
+export const EDGE_STRENGTH: Record<string, number> = {
+  parent: 0.7,
+  sibling: 0.5,
+  feeds_into: 0.4,
+  mirrors: 0.35,
+  affiliated: 0.3,
+  partner: 0.3,
+}
+/** Elon's fallback when a payload carries no strength. */
+export const DEFAULT_EDGE_STRENGTH = 0.3
+
+/**
+ * Types actually present, in the vocabulary's order.
+ *
+ * Pure and exported for the same reason `scopeGraphRows` is: the interesting behaviour is
+ * "which chips appear", and that is decidable from a node list with no simulation, no DOM and
+ * no animation frame.
+ */
+export function presentTypesOf(nodes: { type?: string }[]): string[] {
+  const seen = new Set(nodes.map((n) => n.type ?? DEFAULT_TYPE))
+  return Object.keys(NODE_TYPES).filter((t) => seen.has(t))
+}
+
+export function typeCountsOf(nodes: { type?: string }[]): Record<string, number> {
+  const out: Record<string, number> = {}
+  for (const n of nodes) {
+    const t = n.type ?? DEFAULT_TYPE
+    out[t] = (out[t] ?? 0) + 1
+  }
+  return out
+}
+
+/** Elon's edge strength resolution: the edge's own, else the type's, else 0.3. */
+export function edgeStrengthOf(e: { type: string; strength?: number }): number {
+  return e.strength ?? EDGE_STRENGTH[e.type] ?? DEFAULT_EDGE_STRENGTH
+}
+
+/**
+ * d3's clickDistance predicate. Under the tolerance a pointer sequence is a CLICK, not a drag.
+ * Exported because this is the bug users actually felt and a regression here is silent — a
+ * graph whose nodes cannot be selected still renders perfectly.
+ */
+export function isDragGesture(
+  down: { x: number; y: number } | null,
+  last: { x: number; y: number } | null,
+  tolerance = 6,
+): boolean {
+  if (!down || !last) return false
+  return Math.hypot(last.x - down.x, last.y - down.y) > tolerance
+}
 
 export function IrisForceGraph(props: {
   nodes: ForceNode[]
@@ -96,9 +201,21 @@ export function IrisForceGraph(props: {
    * lose: the JSX reads `frame()`, and `frame()` is written once per animation frame.
    */
   const [frame, setFrame] = createSignal<{
-    nodes: { id: number; name: string; degree: number; size: number; x: number; y: number }[]
-    edges: { x1: number; y1: number; x2: number; y2: number; type: string }[]
+    nodes: {
+      id: number | string
+      name: string
+      degree: number
+      size: number
+      type?: string
+      subtitle?: string
+      meta?: string
+      x: number
+      y: number
+    }[]
+    edges: { x1: number; y1: number; x2: number; y2: number; type: string; label?: string }[]
   }>({ nodes: [], edges: [] })
+  /** Types the viewer has switched off. Empty = show everything, which is the default. */
+  const [hiddenTypes, setHiddenTypes] = createSignal<Set<string>>(new Set())
   const [view, setView] = createSignal({ x: 0, y: 0, k: 1 })
   const [hover, setHover] = createSignal<ForceNode | null>(null)
   let svgEl: SVGSVGElement | undefined
@@ -140,12 +257,15 @@ export function IrisForceGraph(props: {
   })
 
   createEffect(() => {
-    const nodes = props.nodes.map((n) => ({ ...n }))
+    // Filtering happens HERE, before the simulation, not at draw time: a hidden node that is
+    // still in the layout keeps pushing its neighbours apart, leaving a hole where it was.
+    const hidden = hiddenTypes()
+    const nodes = props.nodes.filter((n) => !hidden.has(n.type ?? DEFAULT_TYPE)).map((n) => ({ ...n }))
     const byId = new Map(nodes.map((n) => [n.id, n]))
     // Edges are rebuilt against THESE node objects: d3 mutates the datum in place, and linking
     // to a stale copy leaves every edge anchored at 0,0 while the nodes move away.
     const edges = props.edges
-      .filter((e) => byId.has(e.source as number) && byId.has(e.target as number))
+      .filter((e) => byId.has(e.source as number | string) && byId.has(e.target as number | string))
       .map((e) => ({ ...e }))
 
     // Nothing to lay out until the element has a width. Running anyway is what produced the
@@ -161,7 +281,10 @@ export function IrisForceGraph(props: {
         "link",
         forceLink<ForceNode, ForceEdge>(edges)
           .id((d: ForceNode) => d.id)
-          .distance(120),
+          .distance(120)
+          // Elon's: the edge's own strength, else 0.3. d3's default is 1/min(degree), which
+          // slackens exactly the hub links Elon holds tight.
+          .strength((e: ForceEdge) => edgeStrengthOf(e)),
       )
       .force("charge", forceManyBody().strength(-300))
       .force("center", forceCenter(w / 2, H() / 2))
@@ -176,13 +299,16 @@ export function IrisForceGraph(props: {
           name: n.name,
           degree: n.degree,
           size: n.size,
+          type: n.type,
+          subtitle: n.subtitle,
+          meta: n.meta,
           x: n.x ?? 0,
           y: n.y ?? 0,
         })),
         edges: edges.map((e) => {
           const a = e.source as ForceNode
           const b = e.target as ForceNode
-          return { x1: a?.x ?? 0, y1: a?.y ?? 0, x2: b?.x ?? 0, y2: b?.y ?? 0, type: e.type }
+          return { x1: a?.x ?? 0, y1: a?.y ?? 0, x2: b?.x ?? 0, y2: b?.y ?? 0, type: e.type, label: e.label }
         }),
       })
 
@@ -261,9 +387,25 @@ export function IrisForceGraph(props: {
   let dragging: ForceNode | null = null
   let panning: { x: number; y: number; vx: number; vy: number } | null = null
 
+  /**
+   * ELON'S `clickDistance(6)`, which this did not have.
+   *
+   * Without it every pointerdown on a node starts a drag, and a drag that moves one pixel
+   * still ends with fx/fy set and the click swallowed — so selecting a board was a coin flip
+   * that got worse the more precisely you aimed. d3 solves it with a tolerance: movement under
+   * 6px is a click, not a drag. Recorded here rather than inferred from the event, because by
+   * the time `click` fires the pointer has already moved.
+   */
+  const CLICK_DISTANCE = 6
+  let downAt: { x: number; y: number } | null = null
+  const movedFarEnoughToBeADrag = () => isDragGesture(downAt, lastPointer, CLICK_DISTANCE)
+  let lastPointer: { x: number; y: number } | null = null
+
   function onPointerDown(e: PointerEvent, n?: ForceNode) {
     ;(e.currentTarget as Element).setPointerCapture?.(e.pointerId)
     touched = true
+    downAt = { x: e.clientX, y: e.clientY }
+    lastPointer = { x: e.clientX, y: e.clientY }
     if (n) {
       dragging = n
       // alphaTarget keeps the simulation warm while you hold a node, which is what makes the
@@ -279,7 +421,11 @@ export function IrisForceGraph(props: {
   }
 
   function onPointerMove(e: PointerEvent) {
+    lastPointer = { x: e.clientX, y: e.clientY }
     if (dragging) {
+      // Below the tolerance this is still a click in progress — pinning now would jitter the
+      // node out from under the cursor before the viewer has committed to a drag.
+      if (!movedFarEnoughToBeADrag()) return
       const p = toGraph(e)
       dragging.fx = p.x
       dragging.fy = p.y
@@ -323,6 +469,34 @@ export function IrisForceGraph(props: {
     })
   }
 
+  /** Types actually present, in the vocabulary's order so the legend does not reshuffle. */
+  const presentTypes = createMemo(() => presentTypesOf(props.nodes))
+  const typeCounts = createMemo(() => typeCountsOf(props.nodes))
+
+  const toggleType = (t: string) =>
+    setHiddenTypes((prev) => {
+      const next = new Set(prev)
+      // A Set mutated in place is the same object, and Solid would not see the change.
+      if (next.has(t)) next.delete(t)
+      else next.add(t)
+      return next
+    })
+
+  const viewIsMoved = () => {
+    const v = view()
+    return v.k !== 1 || v.x !== 0 || v.y !== 0
+  }
+
+  /**
+   * Reset hands the graph back to the auto-fit it does on `end`, rather than snapping to
+   * identity — identity is not "fitted", it is the top-left corner at 1x, which is where
+   * nothing is.
+   */
+  const resetView = () => {
+    touched = false
+    sim?.alpha(0.3).restart()
+  }
+
   return (
     <div class="iris-graph">
       <svg
@@ -358,6 +532,26 @@ export function IrisForceGraph(props: {
               )
             }}
           </For>
+          {/* Elon labels its edges at the midpoint. `type` was already in this payload and on
+              ForceEdge — it reached the stroke colour and stopped there, so six relation kinds
+              rendered as six shades of line with nothing saying which was which. */}
+          <For each={frame().edges}>
+            {(e) => (
+              <Show when={view().k > 0.7}>
+                <text
+                  x={(e.x1 + e.x2) / 2}
+                  y={(e.y1 + e.y2) / 2 - 3}
+                  text-anchor="middle"
+                  font-size="9"
+                  fill={edgeStyle(e.type).color}
+                  fill-opacity="0.85"
+                  style={{ "pointer-events": "none" }}
+                >
+                  {e.label ?? e.type.replace(/_/g, " ")}
+                </text>
+              </Show>
+            )}
+          </For>
           <For each={frame().nodes}>
             {(n) => (
               <g
@@ -376,22 +570,49 @@ export function IrisForceGraph(props: {
               >
                 <circle
                   r={hover()?.id === n.id ? n.size + 4 : n.size}
-                  fill={NODE_COLOR}
+                  fill={nodeStyle(n.type).color}
                   fill-opacity="0.15"
-                  stroke={NODE_COLOR}
+                  stroke={nodeStyle(n.type).color}
                   stroke-width={hover()?.id === n.id ? "3" : "2"}
                 />
-                {/* Elon draws a FontAwesome glyph here. There is no icon font in this app, and
-                    the degree is more use than a repeated sitemap icon on 39 identical nodes. */}
-                <text
-                  text-anchor="middle"
-                  dominant-baseline="central"
-                  font-size={String(Math.max(9, n.size * 0.7))}
-                  fill={NODE_COLOR}
-                  style={{ "pointer-events": "none" }}
+                {/*
+                  ICON WHEN THE TYPE SAYS SOMETHING, DEGREE WHEN IT DOES NOT.
+
+                  The old comment here was right for the graph it was written against: a repeated
+                  sitemap glyph on 39 identical boards carries nothing, and the degree carries a
+                  number you would otherwise have to count. That argument holds ONLY while every
+                  node is the same type. Once a board's interior is folded in, the type is the
+                  first thing you need and the degree is noise, so the rule follows the data
+                  rather than being fixed either way.
+                */}
+                <Show
+                  when={(n.type ?? DEFAULT_TYPE) !== DEFAULT_TYPE}
+                  fallback={
+                    <text
+                      text-anchor="middle"
+                      dominant-baseline="central"
+                      font-size={String(Math.max(9, n.size * 0.7))}
+                      fill={nodeStyle(n.type).color}
+                      style={{ "pointer-events": "none" }}
+                    >
+                      {n.degree}
+                    </text>
+                  }
                 >
-                  {n.degree}
-                </text>
+                  <g
+                    transform={`translate(${-n.size * 0.45},${-n.size * 0.45}) scale(${(n.size * 0.9) / 24})`}
+                    style={{ "pointer-events": "none" }}
+                  >
+                    <path
+                      d={nodeStyle(n.type).icon}
+                      fill="none"
+                      stroke={nodeStyle(n.type).color}
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                  </g>
+                </Show>
                 <text
                   dy={n.size + 14}
                   text-anchor="middle"
@@ -409,10 +630,55 @@ export function IrisForceGraph(props: {
           </For>
         </g>
       </svg>
+      {/*
+        THE TYPE LEGEND IS ALSO THE FILTER, which is Elon's design and the reason it earns the
+        space: a legend that only names colours makes you hunt, and a filter with no legend
+        makes you guess what you turned off.
+
+        Only types PRESENT in the data get a chip. A fixed list of 14 would advertise Venues and
+        Deals on a graph of boards, which reads as "you have none" when the truth is "this view
+        has never shown them".
+      */}
+      <Show when={presentTypes().length > 1}>
+        <div class="iris-graph__legend">
+          <For each={presentTypes()}>
+            {(t) => (
+              <button
+                type="button"
+                class="iris-graph__chip"
+                title={hiddenTypes().has(t) ? `Show ${nodeStyle(t).label}` : `Hide ${nodeStyle(t).label}`}
+                onClick={() => toggleType(t)}
+                style={{ opacity: hiddenTypes().has(t) ? "0.35" : "1" }}
+              >
+                <span class="iris-graph__swatch" style={{ background: nodeStyle(t).color }} />
+                {nodeStyle(t).label}
+                <span class="font-mono tabular-nums opacity-60">{typeCounts()[t]}</span>
+              </button>
+            )}
+          </For>
+        </div>
+      </Show>
+
+      {/* Reset is only offered once the view has actually been moved — an always-on control
+          that does nothing on first sight is one more thing to wonder about. */}
+      <Show when={viewIsMoved()}>
+        <button type="button" class="iris-graph__reset" onClick={resetView} title="Reset zoom and position">
+          Reset view
+        </button>
+      </Show>
+
       <Show when={hover()}>
         {(n) => (
           <div class="iris-graph__tip">
-            {n().name} · {n().degree} {n().degree === 1 ? "link" : "links"}
+            <div>{n().name}</div>
+            {/* Elon's second and third lines. A board still shows its degree, so nothing that
+                used to be here was taken away. */}
+            <Show when={n().subtitle}>
+              <div class="opacity-70">{n().subtitle}</div>
+            </Show>
+            <div class="opacity-70">
+              {n().meta ?? `${n().degree} ${n().degree === 1 ? "link" : "links"}`}
+            </div>
           </div>
         )}
       </Show>

@@ -2008,7 +2008,16 @@ export function SessionIrisTab() {
                     connected boards cluster, and the list is the only thing that can show a
                     board with no edges — 76% of them — which a force graph renders as absence. */}
                 <Show when={graphScopedRows().length}>
-                  <IrisForceGraph nodes={graphNodes()} edges={graphEdges()} onNodeClick={(n) => choose(n.id)} />
+                  <IrisForceGraph
+                    nodes={graphNodes()}
+                    edges={graphEdges()}
+                    /* Only a BOARD selects a board. Interior nodes carry namespaced string ids
+                       (`hub-agents-12`), and `choose` takes a board id — passing one through
+                       would select nothing and clear the pane you were reading. */
+                    onNodeClick={(n) => {
+                      if (typeof n.id === "number") choose(n.id)
+                    }}
+                  />
                 </Show>
                 {/* An isolated board would otherwise leave the canvas blank, which reads as a
                     failed load rather than the finding it is. Offer the way out instead. */}
