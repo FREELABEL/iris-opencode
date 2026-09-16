@@ -1617,6 +1617,126 @@ export function graphRows(g: BloqGraph): {
   return rows
 }
 
+/** A node in a board's interior graph. Elon's shape, because Elon's renderer is the one we match. */
+export interface InteriorNode {
+  /** Namespaced: `bloq-12`, `hub-agents-12`, `item-agent-88`. An item id can equal a board id. */
+  id: string
+  name: string
+  type: string
+  subtitle?: string
+  meta?: string
+  size: number
+}
+
+export interface InteriorEdge {
+  source: string
+  target: string
+  type: string
+  label?: string
+}
+
+/**
+ * ONE BOARD'S INTERIOR, assembled the way Elon's `relationshipGraphData` assembles it.
+ *
+ * WHY THIS EXISTS AT ALL: Elon has no endpoint for this. Its computed property reads a Vuex
+ * store the board view has already filled, so the graph costs nothing there. The sidecar has no
+ * such store, which is why this fans out to the per-board fetchers — and why the caller must
+ * ask for ONE board at a time, on expand. Doing forty eagerly is forty fan-outs and thousands
+ * of nodes before anything is drawn.
+ *
+ * SHAPE: Atlas at the centre, a labelled hub per category, items under their hub. Categories
+ * hang off hubs rather than wiring straight into the centre so a board with 200 leads does not
+ * bury the other five categories under a hairball.
+ *
+ * A category with NOTHING in it gets no hub. An empty hub is a claim that the category exists
+ * and is empty, which is indistinguishable from "this fetch failed" — and these six fetches
+ * fail independently.
+ */
+/** Elon's log scale for a cluster node, so 5 and 50,000 both fit on one canvas. */
+export const interiorClusterSize = (count: number) => Math.min(30, 14 + Math.log2((count || 0) + 1) * 2)
+
+/**
+ * The SHAPE of a board's interior, separated from fetching it.
+ *
+ * Pure so the structural rules can be tested without a network: an empty category getting no
+ * hub, ids staying namespaced, every edge resolving to a node that exists. Those are the parts
+ * that break silently — a dangling edge anchors at the origin and reads as a real relation to
+ * nothing.
+ */
+export function assembleInterior(
+  bloqId: number,
+  categories: { key: string; label: string; type: string; items: { id: string; name: string; subtitle?: string; meta?: string }[] }[],
+): { nodes: InteriorNode[]; edges: InteriorEdge[] } {
+  const nodes: InteriorNode[] = []
+  const edges: InteriorEdge[] = []
+  const center = `bloq-${bloqId}`
+  nodes.push({ id: center, name: "ATLAS", type: "atlas", subtitle: `Board ${bloqId}`, size: 28 })
+
+  for (const c of categories) {
+    // An EMPTY category gets no hub. An empty hub claims "this category exists and holds
+    // nothing", which cannot be told apart from "this fetch failed" — and the five fetches
+    // behind this fail independently.
+    if (c.items.length === 0) continue
+    const hub = `hub-${c.key}-${bloqId}`
+    nodes.push({
+      id: hub,
+      name: c.label,
+      type: c.type,
+      subtitle: `${c.items.length}`,
+      meta: `${c.items.length} ${c.label.toLowerCase()}`,
+      size: interiorClusterSize(c.items.length),
+    })
+    edges.push({ source: center, target: hub, type: "parent", label: c.label.toLowerCase() })
+    for (const it of c.items) {
+      nodes.push({ id: it.id, name: it.name, type: c.type, subtitle: it.subtitle, meta: it.meta, size: 12 })
+      edges.push({ source: hub, target: it.id, type: "parent" })
+    }
+  }
+  return { nodes, edges }
+}
+
+export async function fetchBloqInterior(
+  bloqId: number,
+): Promise<PlatformResult<{ nodes: InteriorNode[]; edges: InteriorEdge[] }>> {
+  const empty = { nodes: [] as InteriorNode[], edges: [] as InteriorEdge[] }
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: empty }
+
+  // Parallel, and each failure is contained: allSettled rather than all, because one dead
+  // category should cost you that category, not the whole graph.
+  const [agents, leads, pages, playbooks, lists] = await Promise.allSettled([
+    fetchAgents(bloqId),
+    fetchLeads(bloqId),
+    fetchPages(bloqId),
+    fetchPlaybooks(bloqId),
+    fetchAtlas(bloqId),
+  ])
+  const ok = <T,>(r: PromiseSettledResult<PlatformResult<T>>): T | null =>
+    r.status === "fulfilled" && r.value.measured ? r.value.data : null
+
+  const a = ok(agents)
+  const l = ok(leads)
+  const p = ok(pages)
+  const pb = ok(playbooks)
+  const li = ok(lists)
+  const { nodes, edges } = assembleInterior(bloqId, [
+    { key: "agents", label: "Agents", type: "agent", items: (a?.agents ?? []).map((x) => ({ id: `item-agent-${x.id}`, name: x.name, subtitle: x.model, meta: x.status })) },
+    { key: "leads", label: "Leads", type: "leadcluster", items: (l?.leads ?? []).map((x) => ({ id: `item-lead-${x.id}`, name: x.name, subtitle: x.company, meta: x.status })) },
+    { key: "pages", label: "Pages", type: "page", items: (p?.pages ?? []).map((x) => ({ id: `item-page-${x.id}`, name: x.title, subtitle: x.slug, meta: x.status })) },
+    // Playbooks are keyed by NAME: the interface has no id field. Two cannot share a name upstream.
+    { key: "playbooks", label: "Playbooks", type: "playbook", items: (pb?.playbooks ?? []).map((x) => ({ id: `item-playbook-${x.name}`, name: x.name, subtitle: x.description, meta: x.attached ? "attached" : "account" })) },
+    { key: "lists", label: "Lists", type: "atlas", items: (li?.lists ?? []).map((x) => ({ id: `item-list-${x.id}`, name: x.name, meta: `${x.items?.length ?? 0} items` })) },
+  ])
+
+  // `measured` is false when EVERY category failed — a board with nothing in it is a real,
+  // measured answer and must not read as an error.
+  const anyMeasured = [agents, leads, pages, playbooks, lists].some((r) => r.status === "fulfilled" && r.value.measured)
+  return anyMeasured
+    ? { measured: true, data: { nodes, edges } }
+    : { measured: false, reason: "no category could be read", data: empty }
+}
+
+
 // ─────────────────────────────────────────────────────────────────────────────
 // One item, for EDITING — the card editor (#185485)
 // ─────────────────────────────────────────────────────────────────────────────

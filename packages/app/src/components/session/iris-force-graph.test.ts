@@ -23,11 +23,18 @@ describe("the vocabulary is Elon's, not a parallel one", () => {
     expect(NODE_TYPES.bloq.color).toBe("#6366f1")
   })
 
+  const ELON_14 = ["atlas", "artist", "person", "venue", "event", "brand", "deal", "bloq", "agent", "workflow", "program", "leadcluster", "memory", "playbook"]
+
   test("all 14 of Elon's types are present", () => {
-    expect(Object.keys(NODE_TYPES)).toHaveLength(14)
-    for (const t of ["atlas", "artist", "person", "venue", "event", "brand", "deal", "bloq", "agent", "workflow", "program", "leadcluster", "memory", "playbook"]) {
-      expect(NODE_TYPES[t]).toBeDefined()
-    }
+    for (const t of ELON_14) expect(NODE_TYPES[t], t).toBeDefined()
+  })
+
+  test("additions are DECLARED, not accidental", () => {
+    // Asserting an exact count of 14 would fail the moment this product grows a type Elon
+    // does not have, and the fix would be to bump a number — which is how a vocabulary drifts
+    // without anyone deciding to. Naming the extras makes each one a decision on the record.
+    const extras = Object.keys(NODE_TYPES).filter((t) => !ELON_14.includes(t))
+    expect(extras).toEqual(["page"])
   })
 
   test("every type has an inline icon path, never a font glyph name", () => {

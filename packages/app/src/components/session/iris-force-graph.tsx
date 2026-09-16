@@ -123,6 +123,15 @@ export const NODE_TYPES: Record<string, { label: string; color: string; icon: st
   leadcluster: { label: "Lead Groups", color: "#f472b6", icon: "M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM3 20a6 6 0 0 1 12 0M15 20a6 6 0 0 1 6-6" },
   memory: { label: "Memory", color: "#a3a3a3", icon: "M4 7c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zm0 0v10c0 1.7 3.6 3 8 3s8-1.3 8-3V7" },
   playbook: { label: "Playbooks", color: "#facc15", icon: "M4 5h7v15H4zM13 5h7v15h-7zM11 5v15" },
+  /*
+   * NOT ELON'S. Genesis pages have no equivalent in its 14 — that vocabulary was built for what
+   * an Elon board holds, and this product holds things Elon does not.
+   *
+   * Added rather than mapped onto a near-neighbour: calling a page a `brand` would colour it
+   * green, put a tag icon on it and file it in the Brands legend chip, which is not a smaller
+   * error than having no type for it — it is a confident wrong answer instead of a missing one.
+   */
+  page: { label: "Pages", color: "#e879f9", icon: "M6 3h8l4 4v14H6zM14 3v4h4M9 12h6M9 16h6" },
 }
 export const DEFAULT_TYPE = "bloq"
 export const nodeStyle = (t?: string) => NODE_TYPES[t ?? DEFAULT_TYPE] ?? NODE_TYPES[DEFAULT_TYPE]

@@ -892,16 +892,79 @@ export function SessionIrisTab() {
   /** True when the selected board has no relation to anything — the common case, not an error. */
   const graphBoardIsolated = createMemo(() => graphBoardIsIsolated(rows() as any[], activeBloq(), graphScope()))
 
-  const graphNodes = createMemo<ForceNode[]>(() =>
-    graphScopedRows().map((r) => ({
+  /**
+   * EXPANDED BOARDS AND THEIR INTERIORS.
+   *
+   * Lazy on purpose. Elon assembles a board's interior from a Vuex store its board view has
+   * already filled, so the graph is free there. The sidecar has no such store — /iris/graph/:id
+   * fans out to five per-board fetchers — so doing this for every connected board on open would
+   * be dozens of round trips and thousands of nodes before the first frame.
+   *
+   * Keyed by board id, and the entry is kept after collapse: re-expanding the board you just
+   * closed is the common gesture, and re-fetching it would make that feel broken.
+   */
+  const [expanded, setExpanded] = createSignal<Set<number>>(new Set())
+  const [interiors, setInteriors] = createSignal<Record<number, { nodes: any[]; edges: any[] }>>({})
+  const [expanding, setExpanding] = createSignal<Set<number>>(new Set())
+
+  async function toggleExpand(boardId: number) {
+    const open = expanded()
+    if (open.has(boardId)) {
+      setExpanded((prev) => {
+        const next = new Set(prev)
+        next.delete(boardId)
+        return next
+      })
+      return
+    }
+    // Cached from a previous expand — show it without a round trip.
+    if (interiors()[boardId]) {
+      setExpanded((prev) => new Set(prev).add(boardId))
+      return
+    }
+    setExpanding((prev) => new Set(prev).add(boardId))
+    try {
+      const res = await doFetch(`/iris/graph/${boardId}`, { headers: { Accept: "application/json" } })
+      if (!res.ok) return
+      const j = await res.json()
+      // `measured: false` is NOT an empty board — it is "could not read". Expanding to nothing
+      // would say the board is empty, which is the one answer we know we do not have.
+      if (j?.measured === false) return
+      setInteriors((prev) => ({ ...prev, [boardId]: { nodes: j?.nodes ?? [], edges: j?.edges ?? [] } }))
+      setExpanded((prev) => new Set(prev).add(boardId))
+    } catch {
+      // Swallowed deliberately: a failed expand leaves the board collapsed, which is the state
+      // it was already in. Nothing is lost and nothing is claimed.
+    } finally {
+      setExpanding((prev) => {
+        const next = new Set(prev)
+        next.delete(boardId)
+        return next
+      })
+    }
+  }
+
+  const graphNodes = createMemo<ForceNode[]>(() => {
+    const boards: ForceNode[] = graphScopedRows().map((r) => ({
       id: r.id,
       name: r.name,
       degree: r.degree,
-      // Elon sizes by meaning; degree is the signal we have. Clamped so a hub of 10 does not
-      // swallow its neighbours and a single link is still a target you can hit.
+      // A board sizes by degree — the only signal that exists BETWEEN boards. Elon's sizes
+      // (Atlas 28, hub 20, cluster log2) are roles inside one board and arrive with the
+      // interior payload below.
+      type: "bloq",
+      meta: expanded().has(r.id) ? "expanded — click to collapse" : "click to expand",
       size: Math.max(12, Math.min(26, 11 + r.degree * 1.5)),
-    })),
-  )
+    }))
+    const extra: ForceNode[] = []
+    for (const id of expanded()) {
+      // Only for boards actually ON SCREEN. A scope change can narrow the board set while an
+      // expansion is still open, and its interior would otherwise float unattached.
+      if (!graphScopedRows().some((r) => r.id === id)) continue
+      for (const n of interiors()[id]?.nodes ?? []) extra.push(n as ForceNode)
+    }
+    return [...boards, ...extra]
+  })
 
   const graphEdges = createMemo<ForceEdge[]>(() => {
     const known = new Set(graphScopedRows().map((r) => r.id))
@@ -923,6 +986,14 @@ export function SessionIrisTab() {
             : { source: l.id, target: r.id, type: l.type },
         )
       }
+    }
+    for (const id of expanded()) {
+      if (!graphScopedRows().some((r) => r.id === id)) continue
+      for (const e of interiors()[id]?.edges ?? []) out.push(e as ForceEdge)
+      // The seam: the board node to its own Atlas centre. Without it the interior is a second
+      // disconnected graph that the force layout pushes off to one side, which reads as two
+      // unrelated pictures rather than one board opened up.
+      out.push({ source: id, target: `bloq-${id}`, type: "parent", label: "contains" })
     }
     return out
   })
@@ -2014,8 +2085,15 @@ export function SessionIrisTab() {
                     /* Only a BOARD selects a board. Interior nodes carry namespaced string ids
                        (`hub-agents-12`), and `choose` takes a board id — passing one through
                        would select nothing and clear the pane you were reading. */
+                    /*
+                      A BOARD NODE EXPANDS; it does not navigate.
+                      Selecting a board is what the picker above is for, and it replaces the
+                      whole pane — doing that on a graph click means one misplaced tap loses the
+                      layout you were reading. Expanding is reversible and keeps you where you
+                      are. Interior nodes carry namespaced string ids and are inert for now.
+                    */
                     onNodeClick={(n) => {
-                      if (typeof n.id === "number") choose(n.id)
+                      if (typeof n.id === "number") void toggleExpand(n.id)
                     }}
                   />
                 </Show>
