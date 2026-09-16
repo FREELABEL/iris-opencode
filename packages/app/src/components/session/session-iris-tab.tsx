@@ -2041,39 +2041,8 @@ export function SessionIrisTab() {
                   </For>
                 </div>
 
-                {/* The count describes THE DRAWING BELOW IT, never the account.
-                    The server summary is about all 160 boards; printing it over a two-node
-                    project view would be a sentence about a set the picture never showed. */}
-                <p class="px-2 pb-2 text-11-regular text-text-weaker">
-                  <Switch>
-                    <Match when={graphScope() === "full"}>
-                      <Show when={(current() as any)?.summary}>
-                        {(sum) => (
-                          <>
-                            <span class="font-mono tabular-nums">{sum().edges}</span> relations across{" "}
-                            <span class="font-mono tabular-nums">{sum().nodes - sum().isolated}</span> boards ·{" "}
-                            <span class="font-mono tabular-nums">{sum().isolated}</span> boards ({sum().isolatedPct}%)
-                            connect to nothing
-                          </>
-                        )}
-                      </Show>
-                    </Match>
-                    <Match when={graphBoardIsolated()}>
-                      {/* Not an error and not an empty state: it is a measurement, and it is
-                          true of three boards in four on this account. */}
-                      {activeBloqName()} has no relation to any other board
-                    </Match>
-                    <Match when={graphScope() === "project"}>
-                      <span class="font-mono tabular-nums">{Math.max(0, graphScopedRows().length - 1)}</span> boards
-                      linked directly to {activeBloqName()} ·{" "}
-                      <span class="font-mono tabular-nums">{graphEdges().length}</span> relations
-                    </Match>
-                    <Match when={true}>
-                      <span class="font-mono tabular-nums">{graphScopedRows().length}</span> boards reachable from{" "}
-                      {activeBloqName()} · <span class="font-mono tabular-nums">{graphEdges().length}</span> relations
-                    </Match>
-                  </Switch>
-                </p>
+                {/* Counts row removed — the legend chips under the graph now carry the same
+                    numbers, and the isolated-board case is handled by its own block below. */}
                 {/* THE PICTURE, then the list.
                     Both, because they answer different halves: the layout shows how the
                     connected boards cluster, and the list is the only thing that can show a

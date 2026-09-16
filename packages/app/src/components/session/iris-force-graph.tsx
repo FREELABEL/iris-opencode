@@ -110,6 +110,13 @@ const edgeStyle = (t: string) => EDGE_STYLE[t] ?? { color: "#374151" }
  */
 export const NODE_TYPES: Record<string, { label: string; color: string; icon: string }> = {
   atlas: { label: "Atlas", color: "#34d399", icon: "M12 3 L20 18 H4 Z" },
+  /*
+   * NOT ELON'S EITHER — like `page`, this is desktop's own container type. Lists hold Atlas
+   * items; without a type of their own they collapse into the `atlas` chip and "filter items"
+     becomes indistinguishable from "filter the folders they sit in". Amber: the folder is
+     what holds the green content.
+   */
+  list: { label: "Lists", color: "#fbbf24", icon: "M4 6h16M4 12h16M4 18h10" },
   artist: { label: "Artists", color: "#f43f5e", icon: "M9 18V6l10-2v12M9 18a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm10-2a2 2 0 1 1-4 0 2 2 0 0 1 4 0z" },
   person: { label: "People", color: "#3b82f6", icon: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm-8 8a8 8 0 0 1 16 0z" },
   venue: { label: "Venues", color: "#a855f7", icon: "M4 20V8l8-4 8 4v12H4zm6 0v-6h4v6" },
@@ -285,6 +292,10 @@ export function IrisForceGraph(props: {
 
     sim?.stop()
 
+    // Elon's constants, verbatim, for EVERY graph including expanded interiors:
+    // distance 120, charge -300, collide 35. Scaling these per-node-count was tried and was
+    // worse — the jam is a matter of how nodes render and how much canvas they get, not of
+    // physics, and the physics were verified matching as part of the parity contract.
     sim = forceSimulation<ForceNode, ForceEdge>(nodes)
       .force(
         "link",
@@ -508,6 +519,29 @@ export function IrisForceGraph(props: {
 
   return (
     <div class="iris-graph">
+      {/*
+        LEGEND UNDER THE TABS, NOT AN OVERLAY. One strip above the canvas: one chip per type
+        PRESENT, click toggles that type in/out of the layout (seen counts typeCounts()).
+        Inside the flow so it reads as part of the tab UI, and never covers nodes or tooltips.
+      */}
+      <div class="iris-graph__legend">
+        <For each={presentTypes()}>
+          {(t) => (
+            <button
+              type="button"
+              class="iris-graph__chip"
+              title={hiddenTypes().has(t) ? `Show ${nodeStyle(t).label}` : `Hide ${nodeStyle(t).label}`}
+              onClick={() => toggleType(t)}
+              style={{ opacity: hiddenTypes().has(t) ? "0.35" : "1" }}
+            >
+              <span class="iris-graph__swatch" style={{ background: nodeStyle(t).color }} />
+              {nodeStyle(t).label}
+              <span class="font-mono tabular-nums opacity-60">{typeCounts()[t]}</span>
+            </button>
+          )}
+        </For>
+      </div>
+      <div class="iris-graph__canvas">
       <svg
         ref={svgEl}
         class="iris-graph__svg"
@@ -552,8 +586,9 @@ export function IrisForceGraph(props: {
                   y={(e.y1 + e.y2) / 2 - 3}
                   text-anchor="middle"
                   font-size="9"
-                  fill={edgeStyle(e.type).color}
-                  fill-opacity="0.85"
+                  /* Elon's gray (#6b7280) — the edge colour itself is loud next to a tinted
+                     line and competes with the nodes; Elon's label is a caption, not a signal. */
+                  fill="#6b7280"
                   style={{ "pointer-events": "none" }}
                 >
                   {e.label ?? e.type.replace(/_/g, " ")}
@@ -585,43 +620,24 @@ export function IrisForceGraph(props: {
                   stroke-width={hover()?.id === n.id ? "3" : "2"}
                 />
                 {/*
-                  ICON WHEN THE TYPE SAYS SOMETHING, DEGREE WHEN IT DOES NOT.
-
-                  The old comment here was right for the graph it was written against: a repeated
-                  sitemap glyph on 39 identical boards carries nothing, and the degree carries a
-                  number you would otherwise have to count. That argument holds ONLY while every
-                  node is the same type. Once a board's interior is folded in, the type is the
-                  first thing you need and the degree is noise, so the rule follows the data
-                  rather than being fixed either way.
+                  A GLYPH ON EVERY NODE — Elon draws getIconForType(d.type) unconditionally, and
+                  the old degree-in-circle ("a repeated sitemap glyph on 39 identical boards
+                  carries nothing") was a deliberate deviation recorded as pending in the parity
+                  ticket. Exact parity wins: bloq nodes carry the sitemap glyph too.
                 */}
-                <Show
-                  when={(n.type ?? DEFAULT_TYPE) !== DEFAULT_TYPE}
-                  fallback={
-                    <text
-                      text-anchor="middle"
-                      dominant-baseline="central"
-                      font-size={String(Math.max(9, n.size * 0.7))}
-                      fill={nodeStyle(n.type).color}
-                      style={{ "pointer-events": "none" }}
-                    >
-                      {n.degree}
-                    </text>
-                  }
+                <g
+                  transform={`translate(${-n.size * 0.45},${-n.size * 0.45}) scale(${(n.size * 0.9) / 24})`}
+                  style={{ "pointer-events": "none" }}
                 >
-                  <g
-                    transform={`translate(${-n.size * 0.45},${-n.size * 0.45}) scale(${(n.size * 0.9) / 24})`}
-                    style={{ "pointer-events": "none" }}
-                  >
-                    <path
-                      d={nodeStyle(n.type).icon}
-                      fill="none"
-                      stroke={nodeStyle(n.type).color}
-                      stroke-width="2"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    />
-                  </g>
-                </Show>
+                  <path
+                    d={nodeStyle(n.type).icon}
+                    fill="none"
+                    stroke={nodeStyle(n.type).color}
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </g>
                 <text
                   dy={n.size + 14}
                   text-anchor="middle"
@@ -639,35 +655,7 @@ export function IrisForceGraph(props: {
           </For>
         </g>
       </svg>
-      {/*
-        THE TYPE LEGEND IS ALSO THE FILTER, which is Elon's design and the reason it earns the
-        space: a legend that only names colours makes you hunt, and a filter with no legend
-        makes you guess what you turned off.
-
-        Only types PRESENT in the data get a chip. A fixed list of 14 would advertise Venues and
-        Deals on a graph of boards, which reads as "you have none" when the truth is "this view
-        has never shown them".
-      */}
-      <Show when={presentTypes().length > 1}>
-        <div class="iris-graph__legend">
-          <For each={presentTypes()}>
-            {(t) => (
-              <button
-                type="button"
-                class="iris-graph__chip"
-                title={hiddenTypes().has(t) ? `Show ${nodeStyle(t).label}` : `Hide ${nodeStyle(t).label}`}
-                onClick={() => toggleType(t)}
-                style={{ opacity: hiddenTypes().has(t) ? "0.35" : "1" }}
-              >
-                <span class="iris-graph__swatch" style={{ background: nodeStyle(t).color }} />
-                {nodeStyle(t).label}
-                <span class="font-mono tabular-nums opacity-60">{typeCounts()[t]}</span>
-              </button>
-            )}
-          </For>
-        </div>
-      </Show>
-
+      </div>
       {/* Reset is only offered once the view has actually been moved — an always-on control
           that does nothing on first sight is one more thing to wonder about. */}
       <Show when={viewIsMoved()}>

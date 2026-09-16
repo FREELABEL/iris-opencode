@@ -1738,8 +1738,52 @@ export async function fetchBloqInterior(
      * Playbooks are keyed by NAME: the interface has no id. Two cannot share a name upstream.
      */
     { key: "playbooks", label: "Playbooks", type: "playbook", items: (pb?.playbooks ?? []).filter((x) => x.attached).map((x) => ({ id: `item-playbook-${x.name}`, name: x.name, subtitle: x.description, meta: "attached" })) },
-    { key: "lists", label: "Lists", type: "atlas", items: (li?.lists ?? []).map((x) => ({ id: `item-list-${x.id}`, name: x.name, meta: `${x.items?.length ?? 0} items` })) },
   ])
+
+  // Lists get special treatment: each list is a hub, with its items as children.
+  // The "Lists" hub connects to the centre; each list connects to "Lists"; each item
+  // connects to its list. This gives a three-level tree: ATLAS → Lists → list → item.
+  const atlasLists = li?.lists ?? []
+  const centerNode = `bloq-${bloqId}`
+  if (atlasLists.length > 0) {
+    const listsHub = `hub-lists-${bloqId}`
+    nodes.push({
+      id: listsHub,
+      name: "Lists",
+      type: "list",
+      subtitle: `${atlasLists.length}`,
+      meta: `${atlasLists.length} lists`,
+      size: interiorClusterSize(atlasLists.length),
+    })
+    edges.push({ source: centerNode, target: listsHub, type: "parent", label: "lists" })
+    for (const list of atlasLists) {
+      const listId = `list-${list.id}`
+      const itemCount = list.items?.length ?? 0
+      nodes.push({
+        id: listId,
+        name: list.name,
+        // A SEPARATE type from the items beneath it: lists are containers and items are the
+        // Atlas. One shared type collapsed them into a single legend chip, which is the
+        // difference between filtering "everything green" and filtering "just lists".
+        type: "list",
+        subtitle: `${itemCount}`,
+        meta: `${itemCount} items`,
+        size: interiorClusterSize(itemCount),
+      })
+      edges.push({ source: listsHub, target: listId, type: "parent" })
+      for (const item of list.items ?? []) {
+        nodes.push({
+          id: `item-${item.id}`,
+          name: item.title,
+          type: "atlas",
+          subtitle: item.status,
+          meta: item.description,
+          size: 12,
+        })
+        edges.push({ source: listId, target: `item-${item.id}`, type: "parent" })
+      }
+    }
+  }
 
   // `measured` is false when EVERY category failed — a board with nothing in it is a real,
   // measured answer and must not read as an error.
