@@ -1723,8 +1723,21 @@ export async function fetchBloqInterior(
     { key: "agents", label: "Agents", type: "agent", items: (a?.agents ?? []).map((x) => ({ id: `item-agent-${x.id}`, name: x.name, subtitle: x.model, meta: x.status })) },
     { key: "leads", label: "Leads", type: "leadcluster", items: (l?.leads ?? []).map((x) => ({ id: `item-lead-${x.id}`, name: x.name, subtitle: x.company, meta: x.status })) },
     { key: "pages", label: "Pages", type: "page", items: (p?.pages ?? []).map((x) => ({ id: `item-page-${x.id}`, name: x.title, subtitle: x.slug, meta: x.status })) },
-    // Playbooks are keyed by NAME: the interface has no id field. Two cannot share a name upstream.
-    { key: "playbooks", label: "Playbooks", type: "playbook", items: (pb?.playbooks ?? []).map((x) => ({ id: `item-playbook-${x.name}`, name: x.name, subtitle: x.description, meta: x.attached ? "attached" : "account" })) },
+    /*
+     * ATTACHED ONLY, and this is not a preference.
+     *
+     * fetchPlaybooks returns the board's attached set AND the account-wide set, each flagged —
+     * deliberately, because the picker it was written for needs both. Measured against board
+     * 682: 138 playbooks came back, 0 of them attached. Unfiltered, that board's interior was
+     * 138 of 151 nodes, every one of them something the board does not contain, under a hub
+     * captioned "138 playbooks".
+     *
+     * Not a rendering problem — the picture was structurally perfect and said something false.
+     * Tests could not catch it: the fixtures are whatever you hand the assembler.
+     *
+     * Playbooks are keyed by NAME: the interface has no id. Two cannot share a name upstream.
+     */
+    { key: "playbooks", label: "Playbooks", type: "playbook", items: (pb?.playbooks ?? []).filter((x) => x.attached).map((x) => ({ id: `item-playbook-${x.name}`, name: x.name, subtitle: x.description, meta: "attached" })) },
     { key: "lists", label: "Lists", type: "atlas", items: (li?.lists ?? []).map((x) => ({ id: `item-list-${x.id}`, name: x.name, meta: `${x.items?.length ?? 0} items` })) },
   ])
 
