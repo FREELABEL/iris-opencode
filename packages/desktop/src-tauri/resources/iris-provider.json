@@ -11,83 +11,130 @@
       "models": {
         "iris-ai": {
           "name": "IRIS AI",
-          "tools": true
+          "tools": true,
+          "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }
         },
         "iris-ai-reasoning": {
           "name": "IRIS AI Reasoning",
-          "tools": true
+          "tools": true,
+          "reasoning": true,
+          "modalities": { "input": ["text"], "output": ["text"] }
         },
         "grok-4.3": {
           "name": "Grok 4.3",
-          "tools": true
+          "tools": true,
+          "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }
         },
         "gpt-4o-mini": {
           "name": "GPT-4o Mini",
-          "tools": true
+          "tools": true,
+          "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }
         },
         "gpt-4.1-nano": {
           "name": "GPT-4.1 Nano",
-          "tools": true
+          "tools": true,
+          "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }
         },
         "gpt-5-nano": {
           "name": "GPT-5 Nano",
-          "tools": true
+          "tools": true,
+          "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }
         },
         "gpt-5.4-nano": {
           "name": "GPT-5.4 Nano",
-          "tools": true
+          "tools": true,
+          "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }
         },
         "gpt-5.6-luna": {
           "name": "GPT-5.6 Luna",
-          "tools": true
+          "tools": true,
+          "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }
         },
         "gpt-5.6-terra": {
           "name": "GPT-5.6 Terra",
-          "tools": true
+          "tools": true,
+          "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }
         },
         "gpt-5.6-sol": {
           "name": "GPT-5.6 Sol",
-          "tools": true
+          "tools": true,
+          "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }
         },
         "big-pickle": {
           "name": "Big Pickle",
-          "tools": true
-        },
-        "deepseek-v4-flash": {
-          "name": "DeepSeek V4 Flash",
-          "tools": true
-        },
-        "mimo-v2.5": {
-          "name": "MiMo V2.5",
-          "tools": true
-        },
-        "nemotron-3.5-lightning": {
-          "name": "Nemotron 3.5 Lightning",
-          "tools": true
+          "tools": true,
+          "reasoning": true,
+          "modalities": { "input": ["text"], "output": ["text"] }
         },
         "hy3": {
           "name": "Hy3",
-          "tools": true
-        },
-        "mimo-v2.5-pro": {
-          "name": "MiMo V2.5 Pro",
-          "tools": true
-        },
-        "kimi-k2.7-code": {
-          "name": "Kimi K2.7 Code",
-          "tools": true
+          "tools": true,
+          "reasoning": true,
+          "modalities": { "input": ["text"], "output": ["text"] }
         },
         "glm-5.2": {
           "name": "GLM 5.2",
-          "tools": true
+          "tools": true,
+          "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }
+        },
+        "glm-5.3-flash": {
+          "name": "GLM 5.3 Flash",
+          "tools": true,
+          "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }
         },
         "kimi-k3": {
           "name": "Kimi K3",
-          "tools": true
+          "tools": true,
+          "reasoning": true,
+          "modalities": { "input": ["text"], "output": ["text"] }
         },
-        "minimax-m3": {
-          "name": "MiniMax M3",
-          "tools": true
+        "kimi-k2.7-code": {
+          "name": "Kimi K2.7 Code",
+          "tools": true,
+          "modalities": { "input": ["text"], "output": ["text"] }
+        },
+        "mimo-v2.5": {
+          "name": "MiMo V2.5",
+          "tools": true,
+          "reasoning": true,
+          "modalities": { "input": ["text"], "output": ["text"] }
+        },
+        "mimo-v2.5-go": {
+          "name": "MiMo V2.5 Go",
+          "tools": true,
+          "reasoning": true,
+          "modalities": { "input": ["text"], "output": ["text"] }
+        },
+        "mimo-v2.5-pro": {
+          "name": "MiMo V2.5 Pro",
+          "tools": true,
+          "reasoning": true,
+          "modalities": { "input": ["text"], "output": ["text"] }
+        },
+        "muse-spark-1.3": {
+          "name": "Muse Spark 1.3",
+          "tools": true,
+          "modalities": { "input": ["text"], "output": ["text"] }
+        },
+        "nemotron-3.5-lightning": {
+          "name": "Nemotron 3.5 Lightning",
+          "tools": true,
+          "modalities": { "input": ["text"], "output": ["text"] }
+        },
+        "deepseek-v4-flash": {
+          "name": "DeepSeek V4 Flash",
+          "tools": true,
+          "modalities": { "input": ["text"], "output": ["text"] }
+        },
+        "deepseek-v4-flash-go": {
+          "name": "DeepSeek V4 Flash Go",
+          "tools": true,
+          "modalities": { "input": ["text"], "output": ["text"] }
+        },
+        "deepseek-v4.1-flash": {
+          "name": "DeepSeek V4.1 Flash",
+          "tools": true,
+          "modalities": { "input": ["text"], "output": ["text"] }
         }
       }
     }
