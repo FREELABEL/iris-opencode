@@ -3088,7 +3088,7 @@ const HiveChatCommand = cmd({
 })
 
 const HiveFilesCommand = cmd({
-  command: "files <connection-id>",
+  command: "peer files <connection-id>",
   describe: "browse or download files from a peer's node",
   builder: (yargs) =>
     yargs

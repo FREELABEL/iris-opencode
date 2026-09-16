@@ -1,12 +1,10 @@
 /**
  * `iris hive fs` — move files to and from your OWN Hive nodes (#182013).
  *
- * NAMED `fs`, NOT `files`. `iris hive files <connection-id>` already exists and is the PEER
- * path: it browses another person's node through a connection relay, the same family as
- * `iris hive exec`. This command addresses YOUR machines by node name over Tailscale, so it
- * is a different subject and must not shadow the other. (That the two are told apart only by
- * the verb is itself a usability problem — nothing in either name tells you which one you
- * want. Worth its own ticket; not fixed here.)
+ * NAMED `files` (primary), with `fs` kept as a backward-compat alias. The PEER path lived at
+ * `iris hive files <connection-id>` until it moved to `iris hive peer files` — it browses
+ * another person's node through a connection relay, the same family as `iris hive peer exec`.
+ * This command addresses YOUR machines by node name over Tailscale.
  *
  * There was no file transfer in the Hive at all. Recovering one 57KB controller mapping on
  * 2026-08-23 took Tailscale, ssh, a TCC diagnosis, a staged copy and a hand-run sha256 at
@@ -205,7 +203,8 @@ const FilesPushCommand = cmd({
 })
 
 const HiveFilesCommand = cmd({
-  command: "fs",
+  command: "files",
+  aliases: ["fs"],
   describe: "move files to and from YOUR OWN Hive nodes over Tailscale, sha256-verified both ends",
   builder: (yargs) =>
     yargs
