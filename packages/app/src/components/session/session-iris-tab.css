@@ -1336,3 +1336,86 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
 .iris-card__compose { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: end; flex-shrink: 0; padding-top: 6px; border-top: 1px solid var(--border-weaker-base); }
 .iris-card__composetext { resize: none; font-family: inherit; }
 .iris-card__sidebody:has(> .iris-card__chat) { display: flex; flex-direction: column; }
+
+/* ── ELON parity chrome (#185584): header, active filter chips, legend footer, fullscreen ── */
+.iris-graph__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-weaker-base);
+}
+.iris-graph__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+.iris-graph__count {
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--background-element);
+  color: var(--text-weak);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 18px;
+}
+.iris-graph__actions {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+/* Inactive chips are quiet; a SELECTED chip takes its type's colour (set inline), as ELON's do. */
+.iris-graph__chip {
+  color: var(--text-weak);
+}
+.iris-graph__chip--active {
+  color: var(--text-strong);
+}
+.iris-graph__icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-weak);
+  cursor: pointer;
+}
+.iris-graph__icon-btn:hover {
+  color: var(--text-strong);
+  background: var(--background-element);
+}
+/* The legend is ELON's FOOTER now: swatches left, the hint pushed right. */
+.iris-graph__legend {
+  gap: 12px;
+  border-top: 1px solid var(--border-weaker-base);
+}
+.iris-graph__legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  color: var(--text-weak);
+}
+.iris-graph__hint {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-weaker);
+}
+/* Fullscreen needs a ground of its own: in-panel the graph is transparent on purpose, and a
+   transparent fixed layer over the app would show the app through it. */
+.iris-graph--fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  margin: 0;
+  background: var(--background-panel);
+}

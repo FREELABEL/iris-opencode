@@ -64,3 +64,64 @@ export function graphBoardIsIsolated(rows: ScopableRow[], active: number | undef
   if (scope === "full" || !active) return false
   return !rows.some((r) => r.id === active)
 }
+
+type MergeNode = { id: number | string; [k: string]: any }
+type MergeEdge = { source: number | string; target: number | string; type?: string; label?: string; [k: string]: any }
+
+/**
+ * Fold expanded boards' interiors into the account-wide graph.
+ *
+ * Each interior is ELON's `relationshipGraphData` for one board (#185584), and ELON names a
+ * RELATED board `bloq-<id>` — the same id it gives a board's own centre. ELON never collides
+ * because it draws one board at a time. This graph can have several open at once, so:
+ *
+ *   - expand boards 682 and 368, where 682 relates to 368: 682's interior has a related-board
+ *     node `bloq-368`, and 368's interior has its centre `bloq-368`. Two nodes, one id. d3 keys
+ *     links by id, so edges bind to whichever it finds first and the other node floats free.
+ *
+ * A related board that is ALREADY on screen as a board node is therefore drawn as that board
+ * node, not a second copy — and its relation edge is dropped, because the board-to-board layer
+ * already draws that relation. A related board NOT on screen keeps ELON's node, once.
+ *
+ * Pure so the collision cases are provable without mounting a panel.
+ */
+export function mergeInteriors(
+  boardIds: Set<number>,
+  expanded: number[],
+  interiors: Record<number, { nodes: MergeNode[]; edges: MergeEdge[] } | undefined>,
+): { nodes: MergeNode[]; edges: MergeEdge[] } {
+  const nodes: MergeNode[] = []
+  const edges: MergeEdge[] = []
+  const seen = new Set<string>()
+  const key = (id: number | string) => `${typeof id}:${id}`
+
+  for (const id of expanded) {
+    if (!boardIds.has(id)) continue
+    const interior = interiors[id]
+    if (!interior) continue
+
+    const remap = new Map<string, number>()
+    for (const n of interior.nodes) {
+      const m = typeof n.id === "string" ? /^bloq-(\d+)$/.exec(n.id) : null
+      const rid = m ? Number(m[1]) : null
+      if (rid !== null && rid !== id && boardIds.has(rid)) {
+        remap.set(n.id as string, rid)
+        continue
+      }
+      if (seen.has(key(n.id))) continue
+      seen.add(key(n.id))
+      nodes.push(n)
+    }
+
+    for (const e of interior.edges) {
+      const s = remap.get(e.source as string)
+      const t = remap.get(e.target as string)
+      // A relation to an on-screen board: the board layer already draws it.
+      if (s !== undefined || t !== undefined) continue
+      edges.push(e)
+    }
+    // The seam from the board node to its own centre, so an opened board reads as one picture.
+    edges.push({ source: id, target: `bloq-${id}`, type: "parent", label: "contains" })
+  }
+  return { nodes, edges }
+}

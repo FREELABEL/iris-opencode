@@ -6,7 +6,7 @@ import { List } from "@opencode-ai/ui/list"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { SegmentedControlV2, SegmentedControlItemV2 } from "@opencode-ai/ui/v2/segmented-control-v2"
 import { IrisForceGraph, type ForceEdge, type ForceNode } from "./iris-force-graph"
-import { graphBoardIsIsolated, scopeGraphRows, type GraphScope } from "./iris-graph-scope"
+import { graphBoardIsIsolated, mergeInteriors, scopeGraphRows, type GraphScope } from "./iris-graph-scope"
 import { useServerSDK } from "@/context/server-sdk"
 import { usePlatform } from "@/context/platform"
 import { IrisCardEditor } from "./iris-card-editor"
@@ -944,6 +944,15 @@ export function SessionIrisTab() {
     }
   }
 
+  /**
+   * Expanded interiors, merged ONCE for both nodes and edges so the two can never disagree about
+   * which related boards were collapsed. Only boards actually on screen: a scope change can
+   * narrow the set while an expansion is still open.
+   */
+  const merged = createMemo(() =>
+    mergeInteriors(new Set(graphScopedRows().map((r) => r.id)), [...expanded()], interiors()),
+  )
+
   const graphNodes = createMemo<ForceNode[]>(() => {
     const boards: ForceNode[] = graphScopedRows().map((r) => ({
       id: r.id,
@@ -956,14 +965,7 @@ export function SessionIrisTab() {
       meta: expanded().has(r.id) ? "expanded — click to collapse" : "click to expand",
       size: Math.max(12, Math.min(26, 11 + r.degree * 1.5)),
     }))
-    const extra: ForceNode[] = []
-    for (const id of expanded()) {
-      // Only for boards actually ON SCREEN. A scope change can narrow the board set while an
-      // expansion is still open, and its interior would otherwise float unattached.
-      if (!graphScopedRows().some((r) => r.id === id)) continue
-      for (const n of interiors()[id]?.nodes ?? []) extra.push(n as ForceNode)
-    }
-    return [...boards, ...extra]
+    return [...boards, ...(merged().nodes as ForceNode[])]
   })
 
   const graphEdges = createMemo<ForceEdge[]>(() => {
@@ -987,14 +989,9 @@ export function SessionIrisTab() {
         )
       }
     }
-    for (const id of expanded()) {
-      if (!graphScopedRows().some((r) => r.id === id)) continue
-      for (const e of interiors()[id]?.edges ?? []) out.push(e as ForceEdge)
-      // The seam: the board node to its own Atlas centre. Without it the interior is a second
-      // disconnected graph that the force layout pushes off to one side, which reads as two
-      // unrelated pictures rather than one board opened up.
-      out.push({ source: id, target: `bloq-${id}`, type: "parent", label: "contains" })
-    }
+    // Interiors, the seam to each board's own centre, and — the reason this is not a loop any
+    // more — related boards collapsed onto the board nodes already on screen. See mergeInteriors.
+    out.push(...(merged().edges as ForceEdge[]))
     return out
   })
 

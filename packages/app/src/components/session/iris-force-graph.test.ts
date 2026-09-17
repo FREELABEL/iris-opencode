@@ -8,6 +8,7 @@ import {
   nodeStyle,
   presentTypesOf,
   typeCountsOf,
+  visibleGraphOf,
 } from "./iris-force-graph"
 
 /**
@@ -34,7 +35,10 @@ describe("the vocabulary is Elon's, not a parallel one", () => {
     // does not have, and the fix would be to bump a number — which is how a vocabulary drifts
     // without anyone deciding to. Naming the extras makes each one a decision on the record.
     const extras = Object.keys(NODE_TYPES).filter((t) => !ELON_14.includes(t))
-    expect(extras).toEqual(["page"])
+    // EMPTY: the interior is now built by ELON's rules (#185584), which emit only ELON's 14. The
+    // desktop-only `page` and `list` types existed for the old assembler; `list` was added
+    // without being declared here, and this test caught it — it was already failing on PR #65.
+    expect(extras).toEqual([])
   })
 
   test("every type has an inline icon path, never a font glyph name", () => {
@@ -82,20 +86,53 @@ describe("the legend describes the data, not the vocabulary", () => {
   })
 })
 
-describe("edge strength is Elon's, not d3's", () => {
+describe("edge strength is ELON's: `e.strength || 0.3`, and ELON never sets one", () => {
   test("an edge's own strength wins", () => {
-    expect(edgeStrengthOf({ type: "parent", strength: 0.9 })).toBe(0.9)
+    expect(edgeStrengthOf({ strength: 0.9 })).toBe(0.9)
   })
 
-  test("a hierarchy holds tighter than an affiliation", () => {
-    // If these were equal, cluster tightness would carry no meaning.
-    expect(edgeStrengthOf({ type: "parent" })).toBeGreaterThan(edgeStrengthOf({ type: "affiliated" }))
+  test("every other edge is 0.3 — hierarchy and affiliation alike", () => {
+    // This test used to assert a parent edge pulls harder than an affiliated one. That was a
+    // per-type table labelled as ELON's; RelationshipGraph.vue gives EVERY edge 0.3, so the
+    // assertion encoded exactly the drift #185584 reports.
+    expect(edgeStrengthOf({})).toBe(DEFAULT_EDGE_STRENGTH)
+    expect(DEFAULT_EDGE_STRENGTH).toBe(0.3)
   })
 
-  test("an unknown type gets Elon's 0.3 fallback, NOT d3's 1/min(degree)", () => {
-    // d3's default slackens hub links exactly where Elon's stay tight, which is why two
-    // graphs built from identical data settled differently.
-    expect(edgeStrengthOf({ type: "whatever" })).toBe(DEFAULT_EDGE_STRENGTH)
+  test("a strength of 0 falls back to 0.3, as ELON's `||` does — not d3's 1/min(degree)", () => {
+    expect(edgeStrengthOf({ strength: 0 })).toBe(0.3)
+  })
+})
+
+describe("filtering is ELON's: select to SHOW, not to hide", () => {
+  const nodes = [
+    { id: "a", type: "agent" },
+    { id: "b", type: "bloq" },
+    { id: "c", type: "memory" },
+    { id: 7 }, // untyped = bloq
+  ]
+  const edges = [
+    { source: "a", target: "b" },
+    { source: "b", target: "c" },
+    { source: "c", target: "missing" },
+  ]
+
+  test("nothing selected shows everything, minus edges with a missing end", () => {
+    const v = visibleGraphOf(nodes, edges, new Set())
+    expect(v.nodes.length).toBe(4)
+    expect(v.edges.length).toBe(2) // the dangling edge is not drawn, and not counted
+  })
+
+  test("selecting a type shows ONLY that type — the old behaviour hid it instead", () => {
+    const v = visibleGraphOf(nodes, edges, new Set(["bloq"]))
+    expect(v.nodes.map((n) => n.id)).toEqual(["b", 7])
+    expect(v.edges.length).toBe(0) // both ends must survive the filter
+  })
+
+  test("selecting several unions them, and edges between survivors remain", () => {
+    const v = visibleGraphOf(nodes, edges, new Set(["agent", "bloq"]))
+    expect(v.nodes.map((n) => n.id)).toEqual(["a", "b", 7])
+    expect(v.edges).toEqual([{ source: "a", target: "b" }])
   })
 })
 

@@ -70,7 +70,8 @@ export interface ForceEdge extends SimulationLinkDatum<ForceNode> {
   /** d3 REPLACES these ids with the node objects on the first tick, hence the union. */
   source: number | string | ForceNode
   target: number | string | ForceNode
-  type: string
+  /** Set only on relations between boards. ELON's hub and child edges carry no type. */
+  type?: string
   /** Drawn at the midpoint. Elon labels its edges; without it a dashed line is unreadable. */
   label?: string
   /**
@@ -95,7 +96,8 @@ const EDGE_STYLE: Record<string, { color: string; dash?: string }> = {
   feeds_into: { color: "#f97316" },
   mirrors: { color: "#ec4899", dash: "2,2" },
 }
-const edgeStyle = (t: string) => EDGE_STYLE[t] ?? { color: "#374151" }
+/** ELON's getEdgeColor/getEdgeDash: an untyped or unknown edge is #374151, solid. */
+const edgeStyle = (t?: string) => (t && EDGE_STYLE[t]) || { color: "#374151" }
 
 /**
  * ELON'S 14-TYPE VOCABULARY, colours verbatim.
@@ -110,13 +112,6 @@ const edgeStyle = (t: string) => EDGE_STYLE[t] ?? { color: "#374151" }
  */
 export const NODE_TYPES: Record<string, { label: string; color: string; icon: string }> = {
   atlas: { label: "Atlas", color: "#34d399", icon: "M12 3 L20 18 H4 Z" },
-  /*
-   * NOT ELON'S EITHER — like `page`, this is desktop's own container type. Lists hold Atlas
-   * items; without a type of their own they collapse into the `atlas` chip and "filter items"
-     becomes indistinguishable from "filter the folders they sit in". Amber: the folder is
-     what holds the green content.
-   */
-  list: { label: "Lists", color: "#fbbf24", icon: "M4 6h16M4 12h16M4 18h10" },
   artist: { label: "Artists", color: "#f43f5e", icon: "M9 18V6l10-2v12M9 18a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm10-2a2 2 0 1 1-4 0 2 2 0 0 1 4 0z" },
   person: { label: "People", color: "#3b82f6", icon: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm-8 8a8 8 0 0 1 16 0z" },
   venue: { label: "Venues", color: "#a855f7", icon: "M4 20V8l8-4 8 4v12H4zm6 0v-6h4v6" },
@@ -130,32 +125,10 @@ export const NODE_TYPES: Record<string, { label: string; color: string; icon: st
   leadcluster: { label: "Lead Groups", color: "#f472b6", icon: "M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM3 20a6 6 0 0 1 12 0M15 20a6 6 0 0 1 6-6" },
   memory: { label: "Memory", color: "#a3a3a3", icon: "M4 7c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zm0 0v10c0 1.7 3.6 3 8 3s8-1.3 8-3V7" },
   playbook: { label: "Playbooks", color: "#facc15", icon: "M4 5h7v15H4zM13 5h7v15h-7zM11 5v15" },
-  /*
-   * NOT ELON'S. Genesis pages have no equivalent in its 14 — that vocabulary was built for what
-   * an Elon board holds, and this product holds things Elon does not.
-   *
-   * Added rather than mapped onto a near-neighbour: calling a page a `brand` would colour it
-   * green, put a tag icon on it and file it in the Brands legend chip, which is not a smaller
-   * error than having no type for it — it is a confident wrong answer instead of a missing one.
-   */
-  page: { label: "Pages", color: "#e879f9", icon: "M6 3h8l4 4v14H6zM14 3v4h4M9 12h6M9 16h6" },
 }
 export const DEFAULT_TYPE = "bloq"
 export const nodeStyle = (t?: string) => NODE_TYPES[t ?? DEFAULT_TYPE] ?? NODE_TYPES[DEFAULT_TYPE]
 
-/**
- * ELON'S PER-EDGE STRENGTHS. A hierarchy should hold tighter than an affiliation, and reading
- * cluster tightness as meaning only works if the strengths differ on purpose.
- */
-export const EDGE_STRENGTH: Record<string, number> = {
-  parent: 0.7,
-  sibling: 0.5,
-  feeds_into: 0.4,
-  mirrors: 0.35,
-  affiliated: 0.3,
-  partner: 0.3,
-}
-/** Elon's fallback when a payload carries no strength. */
 export const DEFAULT_EDGE_STRENGTH = 0.3
 
 /**
@@ -179,9 +152,38 @@ export function typeCountsOf(nodes: { type?: string }[]): Record<string, number>
   return out
 }
 
-/** Elon's edge strength resolution: the edge's own, else the type's, else 0.3. */
-export function edgeStrengthOf(e: { type: string; strength?: number }): number {
-  return e.strength ?? EDGE_STRENGTH[e.type] ?? DEFAULT_EDGE_STRENGTH
+/**
+ * ELON'S STRENGTH: `e.strength || 0.3`, and nothing in ELON ever sets `strength` — so every ELON
+ * edge is 0.3.
+ *
+ * This used to be a per-type table (parent 0.7, sibling 0.5, feeds_into 0.4…) under a comment
+ * calling it "ELON'S PER-EDGE STRENGTHS". It was not ELON's: RelationshipGraph.vue maps every edge
+ * to `strength: e.strength || 0.3` and Board.vue never supplies one. The table made hierarchy
+ * links pull harder here than in ELON, so identical data settled into a different layout — the
+ * exact drift #185584 is about. `||`, not `??`, because ELON's 0 falls back to 0.3 too.
+ */
+export function edgeStrengthOf(e: { strength?: number }): number {
+  return e.strength || DEFAULT_EDGE_STRENGTH
+}
+
+/**
+ * What ELON draws: its `nodes()` and `edges()` computeds, as one function.
+ *
+ * FILTERING IS INCLUSIVE, AS IN ELON. No chip selected = everything. Selecting chips shows ONLY
+ * those types. This graph used to do the opposite — a click HID that type — so the same clicks
+ * on the same data produced opposite pictures in the two UIs.
+ *
+ * ONE predicate for the layout AND the header's "N nodes · M links": a count computed separately
+ * from what is drawn is a count that eventually disagrees with it.
+ */
+export function visibleGraphOf<N extends { id: number | string; type?: string }, E extends { source: any; target: any }>(
+  nodes: N[],
+  edges: E[],
+  active: Set<string>,
+): { nodes: N[]; edges: E[] } {
+  const shown = active.size === 0 ? nodes : nodes.filter((n) => active.has(n.type ?? DEFAULT_TYPE))
+  const ids = new Set(shown.map((n) => n.id))
+  return { nodes: shown, edges: edges.filter((e) => ids.has(e.source) && ids.has(e.target)) }
 }
 
 /**
@@ -201,6 +203,8 @@ export function isDragGesture(
 export function IrisForceGraph(props: {
   nodes: ForceNode[]
   edges: ForceEdge[]
+  /** ELON's header title. */
+  title?: string
   height?: number
   onNodeClick?: (n: ForceNode) => void
 }) {
@@ -228,10 +232,19 @@ export function IrisForceGraph(props: {
       x: number
       y: number
     }[]
-    edges: { x1: number; y1: number; x2: number; y2: number; type: string; label?: string }[]
+    edges: { x1: number; y1: number; x2: number; y2: number; type?: string; label?: string }[]
   }>({ nodes: [], edges: [] })
-  /** Types the viewer has switched off. Empty = show everything, which is the default. */
-  const [hiddenTypes, setHiddenTypes] = createSignal<Set<string>>(new Set())
+  /** ELON's activeFilters: types selected to show. Empty = show everything. */
+  const [activeTypes, setActiveTypes] = createSignal<Set<string>>(new Set())
+  /** ELON's isFullscreen: the graph takes the viewport; Escape leaves. */
+  const [fullscreen, setFullscreen] = createSignal(false)
+  onMount(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && fullscreen()) setFullscreen(false)
+    }
+    window.addEventListener("keydown", onKey)
+    onCleanup(() => window.removeEventListener("keydown", onKey))
+  })
   const [view, setView] = createSignal({ x: 0, y: 0, k: 1 })
   const [hover, setHover] = createSignal<ForceNode | null>(null)
   let svgEl: SVGSVGElement | undefined
@@ -275,14 +288,11 @@ export function IrisForceGraph(props: {
   createEffect(() => {
     // Filtering happens HERE, before the simulation, not at draw time: a hidden node that is
     // still in the layout keeps pushing its neighbours apart, leaving a hole where it was.
-    const hidden = hiddenTypes()
-    const nodes = props.nodes.filter((n) => !hidden.has(n.type ?? DEFAULT_TYPE)).map((n) => ({ ...n }))
-    const byId = new Map(nodes.map((n) => [n.id, n]))
-    // Edges are rebuilt against THESE node objects: d3 mutates the datum in place, and linking
-    // to a stale copy leaves every edge anchored at 0,0 while the nodes move away.
-    const edges = props.edges
-      .filter((e) => byId.has(e.source as number | string) && byId.has(e.target as number | string))
-      .map((e) => ({ ...e }))
+    const shown = visibleGraphOf(props.nodes, props.edges, activeTypes())
+    const nodes = shown.nodes.map((n) => ({ ...n }))
+    // Copies, rebuilt against THESE node objects: d3 mutates the datum in place, and linking to a
+    // stale copy leaves every edge anchored at 0,0 while the nodes move away.
+    const edges = shown.edges.map((e) => ({ ...e }))
 
     // Nothing to lay out until the element has a width. Running anyway is what produced the
     // corner-cluster: the simulation settles around a centre of 0 and then has no energy left
@@ -494,7 +504,7 @@ export function IrisForceGraph(props: {
   const typeCounts = createMemo(() => typeCountsOf(props.nodes))
 
   const toggleType = (t: string) =>
-    setHiddenTypes((prev) => {
+    setActiveTypes((prev) => {
       const next = new Set(prev)
       // A Set mutated in place is the same object, and Solid would not see the change.
       if (next.has(t)) next.delete(t)
@@ -502,10 +512,8 @@ export function IrisForceGraph(props: {
       return next
     })
 
-  const viewIsMoved = () => {
-    const v = view()
-    return v.k !== 1 || v.x !== 0 || v.y !== 0
-  }
+  /** The header counts: ELON counts what is DRAWN, after filtering and dangling edges. */
+  const visible = createMemo(() => visibleGraphOf(props.nodes, props.edges, activeTypes()))
 
   /**
    * Reset hands the graph back to the auto-fit it does on `end`, rather than snapping to
@@ -518,28 +526,66 @@ export function IrisForceGraph(props: {
   }
 
   return (
-    <div class="iris-graph">
+    <div class="iris-graph" classList={{ "iris-graph--fullscreen": fullscreen() }}>
       {/*
-        LEGEND UNDER THE TABS, NOT AN OVERLAY. One strip above the canvas: one chip per type
-        PRESENT, click toggles that type in/out of the layout (seen counts typeCounts()).
-        Inside the flow so it reads as part of the tab UI, and never covers nodes or tooltips.
+        ELON'S HEADER, in ELON's order: title and counts pill on the left; type chips, reset zoom
+        and fullscreen on the right. The counts are of what is DRAWN (visible()), as ELON's are.
+        The Link control is not here yet — it writes a relation, which needs its own endpoint.
       */}
-      <div class="iris-graph__legend">
-        <For each={presentTypes()}>
-          {(t) => (
-            <button
-              type="button"
-              class="iris-graph__chip"
-              title={hiddenTypes().has(t) ? `Show ${nodeStyle(t).label}` : `Hide ${nodeStyle(t).label}`}
-              onClick={() => toggleType(t)}
-              style={{ opacity: hiddenTypes().has(t) ? "0.35" : "1" }}
-            >
-              <span class="iris-graph__swatch" style={{ background: nodeStyle(t).color }} />
-              {nodeStyle(t).label}
-              <span class="font-mono tabular-nums opacity-60">{typeCounts()[t]}</span>
-            </button>
-          )}
-        </For>
+      <div class="iris-graph__header">
+        <div class="iris-graph__title">
+          <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">
+            <path d={nodeStyle("bloq").icon} fill="none" stroke="#60a5fa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          <span>{props.title ?? "Relationship Graph"}</span>
+          <span class="iris-graph__count font-mono tabular-nums">
+            {visible().nodes.length} nodes · {visible().edges.length} links
+          </span>
+        </div>
+        <div class="iris-graph__actions">
+          <For each={presentTypes()}>
+            {(t) => (
+              <button
+                type="button"
+                class="iris-graph__chip"
+                classList={{ "iris-graph__chip--active": activeTypes().has(t) }}
+                title={activeTypes().has(t) ? `Stop filtering to ${nodeStyle(t).label}` : `Show only ${nodeStyle(t).label}`}
+                onClick={() => toggleType(t)}
+                style={
+                  activeTypes().has(t)
+                    ? { "border-color": nodeStyle(t).color, background: `${nodeStyle(t).color}22` }
+                    : undefined
+                }
+              >
+                <svg viewBox="0 0 24 24" width="10" height="10" aria-hidden="true">
+                  <path d={nodeStyle(t).icon} fill="none" stroke={nodeStyle(t).color} stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+                {nodeStyle(t).label}
+              </button>
+            )}
+          </For>
+          <button type="button" class="iris-graph__icon-btn" title="Reset zoom" onClick={resetView}>
+            <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true">
+              <path d="M12 3v4M12 17v4M3 12h4M17 12h4M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="iris-graph__icon-btn"
+            title={fullscreen() ? "Exit fullscreen" : "Fullscreen"}
+            onClick={() => setFullscreen((f) => !f)}
+          >
+            <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true">
+              <path
+                d={fullscreen() ? "M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" : "M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"}
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              />
+            </svg>
+          </button>
+        </div>
       </div>
       <div class="iris-graph__canvas">
       <svg
@@ -578,22 +624,21 @@ export function IrisForceGraph(props: {
           {/* Elon labels its edges at the midpoint. `type` was already in this payload and on
               ForceEdge — it reached the stroke colour and stopped there, so six relation kinds
               rendered as six shades of line with nothing saying which was which. */}
-          <For each={frame().edges}>
+          {/* ELON draws a label only on edges that HAVE one — `edges.filter(e => e.label)` — and at
+              every zoom. The old fallback printed the relation TYPE on unlabelled edges and hid
+              all labels below 0.7x; neither is ELON's. */}
+          <For each={frame().edges.filter((e) => e.label)}>
             {(e) => (
-              <Show when={view().k > 0.7}>
-                <text
-                  x={(e.x1 + e.x2) / 2}
-                  y={(e.y1 + e.y2) / 2 - 3}
-                  text-anchor="middle"
-                  font-size="9"
-                  /* Elon's gray (#6b7280) — the edge colour itself is loud next to a tinted
-                     line and competes with the nodes; Elon's label is a caption, not a signal. */
-                  fill="#6b7280"
-                  style={{ "pointer-events": "none" }}
-                >
-                  {e.label ?? e.type.replace(/_/g, " ")}
-                </text>
-              </Show>
+              <text
+                x={(e.x1 + e.x2) / 2}
+                y={(e.y1 + e.y2) / 2 - 3}
+                text-anchor="middle"
+                font-size="9"
+                fill="#6b7280"
+                style={{ "pointer-events": "none" }}
+              >
+                {e.label}
+              </text>
             )}
           </For>
           <For each={frame().nodes}>
@@ -656,13 +701,18 @@ export function IrisForceGraph(props: {
         </g>
       </svg>
       </div>
-      {/* Reset is only offered once the view has actually been moved — an always-on control
-          that does nothing on first sight is one more thing to wonder about. */}
-      <Show when={viewIsMoved()}>
-        <button type="button" class="iris-graph__reset" onClick={resetView} title="Reset zoom and position">
-          Reset view
-        </button>
-      </Show>
+      {/* ELON's legend row: a swatch per type present, and the interaction hint. */}
+      <div class="iris-graph__legend">
+        <For each={presentTypes()}>
+          {(t) => (
+            <span class="iris-graph__legend-item">
+              <span class="iris-graph__swatch" style={{ background: nodeStyle(t).color }} />
+              {nodeStyle(t).label}
+            </span>
+          )}
+        </For>
+        <span class="iris-graph__hint">Drag nodes · Scroll to zoom</span>
+      </div>
 
       <Show when={hover()}>
         {(n) => (
