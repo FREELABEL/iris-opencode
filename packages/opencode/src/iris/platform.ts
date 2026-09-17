@@ -27,6 +27,15 @@
  */
 
 import { existsSync, readFileSync } from "fs"
+// Aliased: this file already exports GraphNode/GraphEdge for the BOARD-TO-BOARD graph (numeric ids).
+// Same names, different graphs — importing them bare silently retyped graphRows.
+import {
+  buildRelationshipGraph,
+  renderedGraph,
+  type GraphEdge as InteriorGraphEdge,
+  type GraphInputs,
+  type GraphNode as InteriorGraphNode,
+} from "./relationship-graph"
 import { homedir } from "os"
 import path from "path"
 import { clampPaging, DEFAULT_PER_PAGE } from "./pagination"
@@ -1617,180 +1626,112 @@ export function graphRows(g: BloqGraph): {
   return rows
 }
 
-/** A node in a board's interior graph. Elon's shape, because Elon's renderer is the one we match. */
-export interface InteriorNode {
-  /** Namespaced: `bloq-12`, `hub-agents-12`, `item-agent-88`. An item id can equal a board id. */
-  id: string
-  name: string
-  type: string
-  subtitle?: string
-  meta?: string
-  size: number
-}
-
-export interface InteriorEdge {
-  source: string
-  target: string
-  type: string
-  label?: string
-}
+/** A node in a board's interior graph — ELON's node shape. */
+export type InteriorNode = InteriorGraphNode
+/** An interior edge — ELON's edge shape. `type` is set only on relation edges, as in ELON. */
+export type InteriorEdge = InteriorGraphEdge
 
 /**
- * ONE BOARD'S INTERIOR, assembled the way Elon's `relationshipGraphData` assembles it.
+ * ONE BOARD'S INTERIOR, fetched the way ELON fetches it and built by ELON'S rules.
  *
- * WHY THIS EXISTS AT ALL: Elon has no endpoint for this. Its computed property reads a Vuex
- * store the board view has already filled, so the graph costs nothing there. The sidecar has no
- * such store, which is why this fans out to the per-board fetchers — and why the caller must
- * ask for ONE board at a time, on expand. Doing forty eagerly is forty fan-outs and thousands
- * of nodes before anything is drawn.
+ * #185584: desktop's graph had to show the same structure as ELON's, with equal counts as the
+ * floor. The previous assembler matched ELON's shape loosely and its rules not at all (one node
+ * per lead where ELON clusters by status, no Programs/Workflows hubs, no runs/assigned edges,
+ * no related boards), so no board with leads could pass. The rules now live in
+ * relationship-graph.ts, a port proven against ELON's own function; this function only has to
+ * collect the SAME raw inputs ELON's store collects.
  *
- * SHAPE: Atlas at the centre, a labelled hub per category, items under their hub. Categories
- * hang off hubs rather than wiring straight into the centre so a board with 200 leads does not
- * bury the other five categories under a hairball.
+ * SAME REQUESTS, not similar ones — a different query returns a different set and the counts
+ * drift even with identical rules:
+ *   - scheduled jobs: NO query string, filtered client-side. ELON asks for all of them and keeps
+ *     this board's workflow jobs; `?bloq_id=&per_page=50` is a different result set.
+ *   - relations: `?direction=both`.  leads: `per_page=50`, ELON's page size.
  *
- * A category with NOTHING in it gets no hub. An empty hub is a claim that the category exists
- * and is empty, which is indistinguishable from "this fetch failed" — and these six fetches
- * fail independently.
+ * A failed source contributes nothing, exactly as a failed ELON store action leaves its getter
+ * empty — but unlike ELON it is NAMED in `unread`, because a missing Leads hub on a board that
+ * has leads is indistinguishable from "no leads" otherwise.
  */
-/** Elon's log scale for a cluster node, so 5 and 50,000 both fit on one canvas. */
-export const interiorClusterSize = (count: number) => Math.min(30, 14 + Math.log2((count || 0) + 1) * 2)
-
-/**
- * The SHAPE of a board's interior, separated from fetching it.
- *
- * Pure so the structural rules can be tested without a network: an empty category getting no
- * hub, ids staying namespaced, every edge resolving to a node that exists. Those are the parts
- * that break silently — a dangling edge anchors at the origin and reads as a real relation to
- * nothing.
- */
-export function assembleInterior(
-  bloqId: number,
-  categories: { key: string; label: string; type: string; items: { id: string; name: string; subtitle?: string; meta?: string }[] }[],
-): { nodes: InteriorNode[]; edges: InteriorEdge[] } {
-  const nodes: InteriorNode[] = []
-  const edges: InteriorEdge[] = []
-  const center = `bloq-${bloqId}`
-  nodes.push({ id: center, name: "ATLAS", type: "atlas", subtitle: `Board ${bloqId}`, size: 28 })
-
-  for (const c of categories) {
-    // An EMPTY category gets no hub. An empty hub claims "this category exists and holds
-    // nothing", which cannot be told apart from "this fetch failed" — and the five fetches
-    // behind this fail independently.
-    if (c.items.length === 0) continue
-    const hub = `hub-${c.key}-${bloqId}`
-    nodes.push({
-      id: hub,
-      name: c.label,
-      type: c.type,
-      subtitle: `${c.items.length}`,
-      meta: `${c.items.length} ${c.label.toLowerCase()}`,
-      size: interiorClusterSize(c.items.length),
-    })
-    edges.push({ source: center, target: hub, type: "parent", label: c.label.toLowerCase() })
-    for (const it of c.items) {
-      nodes.push({ id: it.id, name: it.name, type: c.type, subtitle: it.subtitle, meta: it.meta, size: 12 })
-      edges.push({ source: hub, target: it.id, type: "parent" })
-    }
-  }
-  return { nodes, edges }
-}
-
 export async function fetchBloqInterior(
   bloqId: number,
-): Promise<PlatformResult<{ nodes: InteriorNode[]; edges: InteriorEdge[] }>> {
-  const empty = { nodes: [] as InteriorNode[], edges: [] as InteriorEdge[] }
+): Promise<PlatformResult<{ nodes: InteriorNode[]; edges: InteriorEdge[]; unread: string[] }>> {
+  const empty = { nodes: [] as InteriorNode[], edges: [] as InteriorEdge[], unread: [] as string[] }
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: empty }
+  const unknown = await unknownBloq(bloqId)
+  if (unknown) return { measured: false, reason: unknown, data: empty }
 
-  // Parallel, and each failure is contained: allSettled rather than all, because one dead
-  // category should cost you that category, not the whole graph.
-  const [agents, leads, pages, playbooks, lists] = await Promise.allSettled([
-    fetchAgents(bloqId),
-    fetchLeads(bloqId),
-    fetchPages(bloqId),
-    fetchPlaybooks(bloqId),
-    fetchAtlas(bloqId),
-  ])
-  const ok = <T,>(r: PromiseSettledResult<PlatformResult<T>>): T | null =>
-    r.status === "fulfilled" && r.value.measured ? r.value.data : null
-
-  const a = ok(agents)
-  const l = ok(leads)
-  const p = ok(pages)
-  const pb = ok(playbooks)
-  const li = ok(lists)
-  const { nodes, edges } = assembleInterior(bloqId, [
-    { key: "agents", label: "Agents", type: "agent", items: (a?.agents ?? []).map((x) => ({ id: `item-agent-${x.id}`, name: x.name, subtitle: x.model, meta: x.status })) },
-    { key: "leads", label: "Leads", type: "leadcluster", items: (l?.leads ?? []).map((x) => ({ id: `item-lead-${x.id}`, name: x.name, subtitle: x.company, meta: x.status })) },
-    { key: "pages", label: "Pages", type: "page", items: (p?.pages ?? []).map((x) => ({ id: `item-page-${x.id}`, name: x.title, subtitle: x.slug, meta: x.status })) },
-    /*
-     * ATTACHED ONLY, and this is not a preference.
-     *
-     * fetchPlaybooks returns the board's attached set AND the account-wide set, each flagged —
-     * deliberately, because the picker it was written for needs both. Measured against board
-     * 682: 138 playbooks came back, 0 of them attached. Unfiltered, that board's interior was
-     * 138 of 151 nodes, every one of them something the board does not contain, under a hub
-     * captioned "138 playbooks".
-     *
-     * Not a rendering problem — the picture was structurally perfect and said something false.
-     * Tests could not catch it: the fixtures are whatever you hand the assembler.
-     *
-     * Playbooks are keyed by NAME: the interface has no id. Two cannot share a name upstream.
-     */
-    { key: "playbooks", label: "Playbooks", type: "playbook", items: (pb?.playbooks ?? []).filter((x) => x.attached).map((x) => ({ id: `item-playbook-${x.name}`, name: x.name, subtitle: x.description, meta: "attached" })) },
-  ])
-
-  // Lists get special treatment: each list is a hub, with its items as children.
-  // The "Lists" hub connects to the centre; each list connects to "Lists"; each item
-  // connects to its list. This gives a three-level tree: ATLAS → Lists → list → item.
-  const atlasLists = li?.lists ?? []
-  const centerNode = `bloq-${bloqId}`
-  if (atlasLists.length > 0) {
-    const listsHub = `hub-lists-${bloqId}`
-    nodes.push({
-      id: listsHub,
-      name: "Lists",
-      type: "list",
-      subtitle: `${atlasLists.length}`,
-      meta: `${atlasLists.length} lists`,
-      size: interiorClusterSize(atlasLists.length),
-    })
-    edges.push({ source: centerNode, target: listsHub, type: "parent", label: "lists" })
-    for (const list of atlasLists) {
-      const listId = `list-${list.id}`
-      const itemCount = list.items?.length ?? 0
-      nodes.push({
-        id: listId,
-        name: list.name,
-        // A SEPARATE type from the items beneath it: lists are containers and items are the
-        // Atlas. One shared type collapsed them into a single legend chip, which is the
-        // difference between filtering "everything green" and filtering "just lists".
-        type: "list",
-        subtitle: `${itemCount}`,
-        meta: `${itemCount} items`,
-        size: interiorClusterSize(itemCount),
-      })
-      edges.push({ source: listsHub, target: listId, type: "parent" })
-      for (const item of list.items ?? []) {
-        nodes.push({
-          id: `item-${item.id}`,
-          name: item.title,
-          type: "atlas",
-          subtitle: item.status,
-          meta: item.description,
-          size: 12,
-        })
-        edges.push({ source: listId, target: `item-${item.id}`, type: "parent" })
-      }
-    }
+  const get = async (path: string) => {
+    const res = await irisFetch(path)
+    if (!res.ok) throw new Error(`fl-api ${res.status}`)
+    return res.json()
   }
+  /** ELON unwraps `data.data`; a bare array is accepted because some of these return one. */
+  const rows = (j: any): any[] => (Array.isArray(j) ? j : Array.isArray(j?.data) ? j.data : [])
 
-  // `measured` is false when EVERY category failed — a board with nothing in it is a real,
-  // measured answer and must not read as an error.
-  const anyMeasured = [agents, leads, pages, playbooks, lists].some((r) => r.status === "fulfilled" && r.value.measured)
-  return anyMeasured
-    ? { measured: true, data: { nodes, edges } }
-    : { measured: false, reason: "no category could be read", data: empty }
+  const sources = {
+    agents: get(`/api/v1/users/${userId}/bloqs/${bloqId}/agents/with-tasks`),
+    scheduledJobs: get(`/api/v1/users/${userId}/bloqs/scheduled-jobs`),
+    playbooks: get(`/api/v1/bloqs/${bloqId}/playbooks`),
+    relations: get(`/api/v1/user/${userId}/bloqs/${bloqId}/relations?direction=both`),
+    leads: get(`/api/v1/users/${userId}/leads?bloq_id=${bloqId}&per_page=50`),
+    board: get(`/api/v1/user/${userId}/bloqs/${bloqId}?no_searchable_content=1`),
+  }
+  const names = Object.keys(sources) as (keyof typeof sources)[]
+  const settled = await Promise.allSettled(names.map((k) => sources[k]))
+  const got: Record<string, any> = {}
+  const unread: string[] = []
+  settled.forEach((r, i) => {
+    if (r.status === "fulfilled") got[names[i]] = r.value
+    else unread.push(`${names[i]}: ${r.reason instanceof Error ? r.reason.message : String(r.reason)}`)
+  })
+
+  // Without the board itself there is no centre and no lists — nothing ELON would draw either.
+  if (!got.board) return { measured: false, reason: unread.join("; ") || "board unreadable", data: { ...empty, unread } }
+  const boardBody = got.board?.data ?? got.board
+
+  const inputs: GraphInputs = {
+    bloqId,
+    boardTitle: boardBody?.name ?? null,
+    agents: rows(got.agents),
+    scheduledJobs: rows(got.scheduledJobs),
+    playbooks: rows(got.playbooks),
+    relations: rows(got.relations),
+    leads: rows(got.leads),
+    lists: Array.isArray(boardBody?.lists) ? boardBody.lists : [],
+  }
+  const { nodes, edges } = renderedGraph(buildRelationshipGraph(inputs))
+  return { measured: true, data: { nodes, edges, unread } }
+}
+
+/** The raw inputs, exposed for the parity harness — it must feed ELON's code the same bytes. */
+export async function fetchBloqInteriorInputs(bloqId: number): Promise<GraphInputs | null> {
+  const userId = await resolveUserId()
+  if (!userId) return null
+  const j = async (p: string) => {
+    const r = await irisFetch(p)
+    return r.ok ? r.json() : null
+  }
+  const rows = (x: any): any[] => (Array.isArray(x) ? x : Array.isArray(x?.data) ? x.data : [])
+  const [agents, jobs, playbooks, relations, leads, board] = await Promise.all([
+    j(`/api/v1/users/${userId}/bloqs/${bloqId}/agents/with-tasks`),
+    j(`/api/v1/users/${userId}/bloqs/scheduled-jobs`),
+    j(`/api/v1/bloqs/${bloqId}/playbooks`),
+    j(`/api/v1/user/${userId}/bloqs/${bloqId}/relations?direction=both`),
+    j(`/api/v1/users/${userId}/leads?bloq_id=${bloqId}&per_page=50`),
+    j(`/api/v1/user/${userId}/bloqs/${bloqId}?no_searchable_content=1`),
+  ])
+  const b = board?.data ?? board
+  if (!b) return null
+  return {
+    bloqId,
+    boardTitle: b?.name ?? null,
+    agents: rows(agents),
+    scheduledJobs: rows(jobs),
+    playbooks: rows(playbooks),
+    relations: rows(relations),
+    leads: rows(leads),
+    lists: Array.isArray(b?.lists) ? b.lists : [],
+  }
 }
 
 

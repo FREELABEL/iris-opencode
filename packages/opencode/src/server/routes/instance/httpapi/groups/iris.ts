@@ -763,9 +763,9 @@ export const IrisApi = HttpApi.make("iris").add(
             ...Measured,
             nodes: Schema.Array(
               Schema.Struct({
-                id: described(Schema.String, "Namespaced — `bloq-12`, `hub-agents-12`, `item-agent-88`. A STRING because an item id can equal a board id and both share one graph."),
+                id: described(Schema.String, "ELON's ids — `bloq-12` (centre or related board), `agents-hub`, `leadstatus-hot`, `list-900`, `item-88`. A STRING because an item id can equal a board id."),
                 name: Schema.String,
-                type: described(Schema.String, "One of the renderer's node types. `page` has no Elon equivalent; the rest are Elon's."),
+                type: described(Schema.String, "One of ELON's node types, assigned by ELON's rules (list and item types are inferred from titles)."),
                 subtitle: Schema.optional(Schema.String),
                 meta: Schema.optional(Schema.String),
                 size: Schema.Finite,
@@ -775,10 +775,11 @@ export const IrisApi = HttpApi.make("iris").add(
               Schema.Struct({
                 source: Schema.String,
                 target: Schema.String,
-                type: Schema.String,
+                type: described(Schema.optional(Schema.String), "Set only on relations to other boards (parent, sibling, feeds_into, …). ELON's hub and child edges carry a label or nothing — REQUIRED here, an ELON-shaped payload failed to encode."),
                 label: Schema.optional(Schema.String),
               }).annotate({ identifier: "IrisInteriorEdge" }),
             ),
+            unread: described(Schema.optional(Schema.Array(Schema.String)), "Sources that could not be read. Each drops its hub, as in ELON — named here so a missing hub is not read as an empty category."),
           }).annotate({ identifier: "IrisGraphBoardResponse" }),
           "One board's interior: Atlas, category hubs, and the items under them",
         ),

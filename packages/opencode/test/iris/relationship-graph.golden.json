@@ -1,0 +1,573 @@
+{
+ "RICH": {
+  "inputs": {
+   "bloqId": 42,
+   "boardTitle": "Song Wars HQ",
+   "leads": [
+    {
+     "status": "hot",
+     "enrolled_programs": [
+      {
+       "id": 7,
+       "name": "Mentorship"
+      },
+      {
+       "program_id": 9,
+       "name": "Bootcamp"
+      }
+     ]
+    },
+    {
+     "status": "hot",
+     "enrolled_programs": [
+      {
+       "id": 7,
+       "name": "Mentorship"
+      }
+     ]
+    },
+    {
+     "status": " Cold ",
+     "enrolled_programs": []
+    },
+    {
+     "status": null
+    },
+    {
+     "status": ""
+    },
+    {
+     "status": "Needs Follow-Up!"
+    }
+   ],
+   "agents": [
+    {
+     "id": 11,
+     "name": "Scout",
+     "model": "gpt-4.1-nano",
+     "scheduled_jobs": [
+      {
+       "workflow_id": 501
+      },
+      {
+       "workflow_id": 501
+      },
+      {
+       "workflow_id": null
+      }
+     ]
+    },
+    {
+     "id": 12,
+     "name": null,
+     "model": null,
+     "scheduled_jobs": [
+      {
+       "workflow_id": 999
+      }
+     ]
+    }
+   ],
+   "scheduledJobs": [
+    {
+     "id": 1,
+     "bloq_id": 42,
+     "workflow_id": 501,
+     "task_name": "Daily digest",
+     "status": "active"
+    },
+    {
+     "id": 2,
+     "bloq_id": "42",
+     "workflow_id": 502,
+     "workflow": {
+      "name": "Fallback name"
+     },
+     "frequency": "weekly"
+    },
+    {
+     "id": 3,
+     "bloq_id": 42,
+     "workflow_id": null,
+     "task_name": "agent job, not a workflow"
+    },
+    {
+     "id": 4,
+     "bloq_id": 77,
+     "workflow_id": 503,
+     "task_name": "other board"
+    }
+   ],
+   "playbooks": [
+    {
+     "name": "Lead Outreach",
+     "attached_at": "2026-09-01"
+    },
+    {
+     "name": null,
+     "slug": "health-check"
+    },
+    {
+     "name": null,
+     "slug": null
+    }
+   ],
+   "lists": [
+    {
+     "id": 900,
+     "name": "Venue Scouting",
+     "items": [
+      {
+       "id": 1,
+       "title": "Studio A booking",
+       "content": "{\"assignedAgents\":[11,999]}"
+      },
+      {
+       "id": 2,
+       "title": null,
+       "content": "{\"title\":\"Artist roster from content\"}"
+      },
+      {
+       "id": 3,
+       "title": "A very long item title that is well over thirty characters",
+       "content": "not json"
+      },
+      {
+       "id": 4,
+       "title": null,
+       "name": "has a name but ELON ignores it",
+       "content": null
+      }
+     ]
+    },
+    {
+     "id": 901,
+     "name": null,
+     "items": []
+    },
+    {
+     "id": 902,
+     "name": "Team Contacts",
+     "items": [
+      {
+       "id": 5,
+       "title": "Plain thing",
+       "content": {
+        "assignedAgents": [
+         12
+        ]
+       }
+      }
+     ]
+    }
+   ],
+   "relations": [
+    {
+     "direction": "from",
+     "relation_type": "feeds_into",
+     "related_bloq": {
+      "id": 7,
+      "name": "Label Ops"
+     }
+    },
+    {
+     "direction": "to",
+     "relation_type": "parent",
+     "related_bloq": {
+      "id": 8,
+      "name": null
+     }
+    },
+    {
+     "direction": "from",
+     "relation_type": "feeds_into",
+     "related_bloq": {
+      "id": 7,
+      "name": "Label Ops"
+     }
+    },
+    {
+     "direction": "from",
+     "relation_type": "sibling",
+     "related_bloq": null
+    }
+   ]
+  },
+  "expected": {
+   "nodes": [
+    {
+     "id": "bloq-42",
+     "name": "ATLAS",
+     "type": "atlas",
+     "subtitle": "Song Wars HQ",
+     "size": 28
+    },
+    {
+     "id": "programs-hub",
+     "name": "Programs",
+     "type": "program",
+     "subtitle": "2 programs",
+     "size": 20
+    },
+    {
+     "id": "program-7",
+     "name": "Mentorship",
+     "type": "program",
+     "subtitle": "2 leads",
+     "size": 17.169925001442312
+    },
+    {
+     "id": "program-9",
+     "name": "Bootcamp",
+     "type": "program",
+     "subtitle": "1 lead",
+     "size": 16
+    },
+    {
+     "id": "leads-hub",
+     "name": "Leads",
+     "type": "leadcluster",
+     "subtitle": "6 contacts",
+     "size": 20
+    },
+    {
+     "id": "leadstatus-cold",
+     "name": "Cold",
+     "type": "leadcluster",
+     "subtitle": "1 contact",
+     "size": 16
+    },
+    {
+     "id": "leadstatus-needs-follow-up-",
+     "name": "Needs Follow-Up!",
+     "type": "leadcluster",
+     "subtitle": "1 contact",
+     "size": 16
+    },
+    {
+     "id": "leadstatus-no-status",
+     "name": "No status",
+     "type": "leadcluster",
+     "subtitle": "2 contacts",
+     "size": 17.169925001442312
+    },
+    {
+     "id": "leadstatus-hot",
+     "name": "hot",
+     "type": "leadcluster",
+     "subtitle": "2 contacts",
+     "size": 17.169925001442312
+    },
+    {
+     "id": "agents-hub",
+     "name": "Agents",
+     "type": "agent",
+     "subtitle": "2 agents",
+     "size": 20
+    },
+    {
+     "id": "agent-11",
+     "name": "Scout",
+     "type": "agent",
+     "subtitle": "gpt-4.1-nano",
+     "size": 15
+    },
+    {
+     "id": "agent-12",
+     "name": "Agent #12",
+     "type": "agent",
+     "subtitle": "",
+     "size": 15
+    },
+    {
+     "id": "workflows-hub",
+     "name": "Workflows",
+     "type": "workflow",
+     "subtitle": "2 workflows",
+     "size": 20
+    },
+    {
+     "id": "workflow-501",
+     "name": "Daily digest",
+     "type": "workflow",
+     "subtitle": "active",
+     "size": 15
+    },
+    {
+     "id": "workflow-502",
+     "name": "Fallback name",
+     "type": "workflow",
+     "subtitle": "weekly",
+     "size": 15
+    },
+    {
+     "id": "playbooks-hub",
+     "name": "Playbooks",
+     "type": "playbook",
+     "subtitle": "3 playbooks",
+     "size": 20
+    },
+    {
+     "id": "playbook-lead-outreach",
+     "name": "Lead Outreach",
+     "type": "playbook",
+     "subtitle": "attached",
+     "size": 14
+    },
+    {
+     "id": "playbook-health-check",
+     "name": "health-check",
+     "type": "playbook",
+     "subtitle": "",
+     "size": 14
+    },
+    {
+     "id": "playbook-2",
+     "name": "Playbook 3",
+     "type": "playbook",
+     "subtitle": "",
+     "size": 14
+    },
+    {
+     "id": "memory-hub",
+     "name": "Memory",
+     "type": "memory",
+     "subtitle": "3 lists",
+     "size": 20
+    },
+    {
+     "id": "list-900",
+     "name": "Venue Scouting",
+     "type": "venue",
+     "size": 16
+    },
+    {
+     "id": "item-1",
+     "name": "Studio A booking",
+     "type": "venue",
+     "subtitle": "Venue Scouting",
+     "size": 12
+    },
+    {
+     "id": "item-2",
+     "name": "Artist roster from content",
+     "type": "artist",
+     "subtitle": "Venue Scouting",
+     "size": 12
+    },
+    {
+     "id": "item-3",
+     "name": "A very long item title that ...",
+     "type": "venue",
+     "subtitle": "Venue Scouting",
+     "size": 12
+    },
+    {
+     "id": "item-4",
+     "name": "Item",
+     "type": "venue",
+     "subtitle": "Venue Scouting",
+     "size": 12
+    },
+    {
+     "id": "list-901",
+     "name": "Untitled List",
+     "type": "brand",
+     "size": 16
+    },
+    {
+     "id": "list-902",
+     "name": "Team Contacts",
+     "type": "person",
+     "size": 16
+    },
+    {
+     "id": "item-5",
+     "name": "Plain thing",
+     "type": "person",
+     "subtitle": "Team Contacts",
+     "size": 12
+    },
+    {
+     "id": "bloq-7",
+     "name": "Label Ops",
+     "type": "bloq",
+     "size": 18
+    },
+    {
+     "id": "bloq-8",
+     "name": "Bloq #8",
+     "type": "bloq",
+     "size": 18
+    }
+   ],
+   "edges": [
+    {
+     "source": "bloq-42",
+     "target": "programs-hub",
+     "label": "programs"
+    },
+    {
+     "source": "programs-hub",
+     "target": "program-7"
+    },
+    {
+     "source": "programs-hub",
+     "target": "program-9"
+    },
+    {
+     "source": "bloq-42",
+     "target": "leads-hub",
+     "label": "leads"
+    },
+    {
+     "source": "leads-hub",
+     "target": "leadstatus-cold"
+    },
+    {
+     "source": "leads-hub",
+     "target": "leadstatus-needs-follow-up-"
+    },
+    {
+     "source": "leads-hub",
+     "target": "leadstatus-no-status"
+    },
+    {
+     "source": "leads-hub",
+     "target": "leadstatus-hot"
+    },
+    {
+     "source": "bloq-42",
+     "target": "agents-hub",
+     "label": "agents"
+    },
+    {
+     "source": "agents-hub",
+     "target": "agent-11"
+    },
+    {
+     "source": "agent-11",
+     "target": "workflow-501",
+     "label": "runs"
+    },
+    {
+     "source": "agents-hub",
+     "target": "agent-12"
+    },
+    {
+     "source": "bloq-42",
+     "target": "workflows-hub",
+     "label": "workflows"
+    },
+    {
+     "source": "workflows-hub",
+     "target": "workflow-501"
+    },
+    {
+     "source": "workflows-hub",
+     "target": "workflow-502"
+    },
+    {
+     "source": "bloq-42",
+     "target": "playbooks-hub",
+     "label": "playbooks"
+    },
+    {
+     "source": "playbooks-hub",
+     "target": "playbook-lead-outreach"
+    },
+    {
+     "source": "playbooks-hub",
+     "target": "playbook-health-check"
+    },
+    {
+     "source": "playbooks-hub",
+     "target": "playbook-2"
+    },
+    {
+     "source": "bloq-42",
+     "target": "memory-hub",
+     "label": "memory"
+    },
+    {
+     "source": "memory-hub",
+     "target": "list-900"
+    },
+    {
+     "source": "list-900",
+     "target": "item-1"
+    },
+    {
+     "source": "agent-11",
+     "target": "item-1",
+     "label": "assigned"
+    },
+    {
+     "source": "list-900",
+     "target": "item-2"
+    },
+    {
+     "source": "list-900",
+     "target": "item-3"
+    },
+    {
+     "source": "list-900",
+     "target": "item-4"
+    },
+    {
+     "source": "memory-hub",
+     "target": "list-901"
+    },
+    {
+     "source": "memory-hub",
+     "target": "list-902"
+    },
+    {
+     "source": "list-902",
+     "target": "item-5"
+    },
+    {
+     "source": "agent-12",
+     "target": "item-5",
+     "label": "assigned"
+    },
+    {
+     "source": "bloq-42",
+     "target": "bloq-7",
+     "type": "feeds_into",
+     "label": "feeds_into"
+    },
+    {
+     "source": "bloq-8",
+     "target": "bloq-42",
+     "type": "parent",
+     "label": "parent"
+    }
+   ]
+  }
+ },
+ "EMPTY": {
+  "inputs": {
+   "bloqId": 5,
+   "boardTitle": null,
+   "leads": [],
+   "agents": [],
+   "scheduledJobs": [],
+   "playbooks": [],
+   "lists": [],
+   "relations": []
+  },
+  "expected": {
+   "nodes": [
+    {
+     "id": "bloq-5",
+     "name": "ATLAS",
+     "type": "atlas",
+     "subtitle": "Project",
+     "size": 28
+    }
+   ],
+   "edges": []
+  }
+ }
+}

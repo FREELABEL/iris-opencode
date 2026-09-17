@@ -211,7 +211,7 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
     /** Not paged: a board's interior is one picture. Slicing it would draw half a graph. */
     const graphBoard = Effect.fn("IrisHttpApi.graphBoard")((ctx: { params: { bloqID: number } }) =>
       Effect.promise(() => fetchBloqInterior(ctx.params.bloqID)).pipe(
-        Effect.map((r) => ({ measured: r.measured, reason: r.reason, nodes: r.data.nodes, edges: r.data.edges })),
+        Effect.map((r) => ({ measured: r.measured, reason: r.reason, nodes: r.data.nodes, edges: r.data.edges, unread: r.data.unread })),
       ),
     )
 
