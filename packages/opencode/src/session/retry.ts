@@ -57,7 +57,34 @@ export namespace SessionRetry {
     return Math.min(RETRY_INITIAL_DELAY * Math.pow(RETRY_BACKOFF_FACTOR, attempt - 1), RETRY_MAX_DELAY_NO_HEADERS)
   }
 
-  export function retryable(error: ReturnType<NamedError["toObject"]>) {
+  /**
+ * EMPTY FINALIZATION — a stream that ended without an error, without output, having produced
+ * nothing. #157647 identified it; the handling then treated it as terminal.
+ *
+ * It is NOT terminal. Measured 2026-09-17 (#185820): a user hit it, typed "continue", and the
+ * same request succeeded immediately. At that moment the proxy's failover was healthy
+ * (`models:smoke --model=iris/iris-ai` passed sync+stream+tools) and the spare OpenCode Go
+ * licence had 80% headroom — only the primary was capped. The old comment claimed a stream
+ * "only finishes empty once EVERY provider has failed", so retrying was pointless. That premise
+ * did not hold, and the cost of it not holding was the user retyping "continue".
+ *
+ * Retrying is safe precisely because of what defines this case: zero output parts and zero
+ * output tokens, so there is nothing partial to duplicate.
+ */
+export const EMPTY_FINALIZATION_MAX_RETRIES = 2
+
+export function isEmptyFinalization(input: { finish?: string; hasOutput: boolean; outputTokens: number }) {
+  const badFinish = input.finish === undefined || input.finish === "unknown" || input.finish === "error"
+  return badFinish && !input.hasOutput && input.outputTokens === 0
+}
+
+/** Bounded, and never against a cancelled request — an aborted turn must stay aborted. */
+export function retryEmptyFinalization(input: { attempts: number; aborted: boolean }) {
+  if (input.aborted) return false
+  return input.attempts < EMPTY_FINALIZATION_MAX_RETRIES
+}
+
+export function retryable(error: ReturnType<NamedError["toObject"]>) {
     if (MessageV2.APIError.isInstance(error)) {
       if (!error.data.isRetryable) return undefined
       return error.data.message.includes("Overloaded") ? "Provider is overloaded" : error.data.message
