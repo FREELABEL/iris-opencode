@@ -426,6 +426,42 @@ export namespace MessageV2 {
   })
   export type WithParts = z.infer<typeof WithParts>
 
+  /**
+   * TOOL INPUTS ARE RE-SENT EVERY TURN, and nothing bounded them.
+   *
+   * `toModelMessage` puts `part.state.input` back into the request on every subsequent turn, so
+   * one oversized argument is paid for again and again for the rest of the session. Measured
+   * 2026-09-17 (#185821): a session reached 102,107 tokens / 78% of context, and the blob that
+   * did it was an ARGUMENT — a design-token JSON passed to a brands command — not a result.
+   * Tool OUTPUT already has a precedent for this two lines below: a compacted result becomes
+   * "[Old tool result content cleared]".
+   *
+   * Only the copy SENT TO THE MODEL is pruned. The stored part keeps the full value, so the
+   * transcript, the UI and anything reading the session record are unchanged — this is a
+   * context-window measure, not a data one.
+   *
+   * Structure is preserved (keys, numbers, booleans, arrays): only long STRINGS shrink, because
+   * a model re-reading its own earlier call needs to see WHICH arguments it passed far more
+   * often than it needs a 40 KB value verbatim. The marker names the omitted size so the
+   * omission is visible rather than silent.
+   */
+  export const TOOL_INPUT_MAX_CHARS = 2_000
+
+  export function pruneToolInput(value: unknown, maxChars = TOOL_INPUT_MAX_CHARS): unknown {
+    if (typeof value === "string") {
+      if (value.length <= maxChars) return value
+      const omitted = value.length - maxChars
+      return `${value.slice(0, maxChars)}… [${omitted} more characters omitted from context; the full value is kept in the session record]`
+    }
+    if (Array.isArray(value)) return value.map((item) => pruneToolInput(item, maxChars))
+    if (value && typeof value === "object") {
+      const out: Record<string, unknown> = {}
+      for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = pruneToolInput(v, maxChars)
+      return out
+    }
+    return value
+  }
+
   export function toModelMessage(input: WithParts[]): ModelMessage[] {
     const result: UIMessage[] = []
 
@@ -519,7 +555,7 @@ export namespace MessageV2 {
                 type: ("tool-" + part.tool) as `tool-${string}`,
                 state: "output-available",
                 toolCallId: part.callID,
-                input: part.state.input,
+                input: pruneToolInput(part.state.input),
                 output: part.state.time.compacted ? "[Old tool result content cleared]" : part.state.output,
                 callProviderMetadata: part.metadata,
               })
@@ -529,7 +565,7 @@ export namespace MessageV2 {
                 type: ("tool-" + part.tool) as `tool-${string}`,
                 state: "output-error",
                 toolCallId: part.callID,
-                input: part.state.input,
+                input: pruneToolInput(part.state.input),
                 errorText: part.state.error,
                 callProviderMetadata: part.metadata,
               })
