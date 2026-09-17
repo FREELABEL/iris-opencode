@@ -480,12 +480,26 @@ jobs:
             "gh release edit $TAG --prerelease=false" \
             '```' \
             > /tmp/notes.md
+          # --target IS LOAD-BEARING. On a tag push the tag already exists at the pushed commit,
+          # so create never makes one. On a workflow_dispatch it does NOT exist, and without
+          # --target GitHub creates it at the head of the DEFAULT branch — `main`, the CLI
+          # lineage. desktop-v1.18.65 and desktop-v1.18.66 were both tagged on main that way
+          # while their binaries were built from iris/1.18.23, so checking out the tag to debug
+          # a desktop build handed you the CLI. GITHUB_SHA is the commit this run built.
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
             || gh release create "$TAG" \
                  --repo "$GITHUB_REPOSITORY" \
+                 --target "$GITHUB_SHA" \
                  --title "IRIS Desktop ${{ steps.version.outputs.version }}" \
                  --prerelease \
                  --notes-file /tmp/notes.md
+          # And CHECK it rather than trust it: a tag on the wrong commit publishes perfectly and
+          # is only discovered when someone checks it out.
+          TAGGED=$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha)
+          if [ "$TAGGED" != "$GITHUB_SHA" ]; then
+            echo "::error::$TAG points at $TAGGED but this run built $GITHUB_SHA — refusing to publish a release whose tag names different source"
+            exit 1
+          fi
           xargs -a /tmp/assets.txt gh release upload "$TAG" --clobber --repo "$GITHUB_REPOSITORY"
           echo "Published $TAG (prerelease) with:"
           cat /tmp/assets.txt
