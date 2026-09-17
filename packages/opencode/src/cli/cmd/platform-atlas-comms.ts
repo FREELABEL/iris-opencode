@@ -1,3 +1,4 @@
+import { type ChannelRead, readOk, unavailable, nothingToRead, describeHttpFailure, channelOutcome, failedRunWarning } from "./comms-channel-read"
 import { cmd } from "./cmd"
 import { probeBridge, assessBridge, printDegradations } from "./subsystem-health"
 import * as prompts from "./clack"
@@ -15,7 +16,9 @@ import { firstArray } from "../../util/array"
 //           linkedin, sms, phone, in_person, other
 // ============================================================================
 
-const BRIDGE_URL = "http://localhost:3200"
+// Same resolution as iris-api.ts. A hardcoded port here ignored BRIDGE_URL / BRIDGE_PORT, so a
+// bridge on another port read as "no messages" through this file only.
+const BRIDGE_URL = process.env.BRIDGE_URL ?? `http://localhost:${process.env.BRIDGE_PORT ?? "3200"}`
 const CHANNELS = ["gmail", "imessage", "apple_mail", "whatsapp", "instagram", "linkedin", "sms", "phone", "in_person", "other"] as const
 
 function channelIcon(ch: string): string {
@@ -81,18 +84,35 @@ function leadEmails(lead: any): string[] {
   return out
 }
 
+/**
+ * A local message store that is not usable. ABSENT (not macOS, app not installed) means this
+ * machine has nothing to read — reporting it as a failure would make `--channel all` fail on every
+ * machine without WhatsApp, and an exit code that always fires gets ignored. PRESENT BUT UNREADABLE
+ * (Full Disk Access, a locked file) is a failure: the messages may be there and cannot be seen.
+ */
+function storeNotReadable(store: string, diagnosis: string): ChannelRead {
+  const absent = /not found|only available on macOS/i.test(diagnosis)
+  return absent ? nothingToRead(`${store} is not on this machine — ${diagnosis}`) : unavailable(`${store} store unreadable — ${diagnosis}`)
+}
+
 // ── iMessage ingestion (via shared lib) ──
 
-function ingestImessage(lead: any): any[] {
+function ingestImessage(lead: any): ChannelRead {
   const { searchByHandle, normalizeHandle } = require("../lib/imessage")
   const identifiers: string[] = []
   if (lead.phone) identifiers.push(normalizeHandle(lead.phone))
   for (const addr of leadEmails(lead)) identifiers.push(addr)
   if (lead.instagram) identifiers.push(lead.instagram.replace("@", ""))
 
-  if (identifiers.length === 0) return []
+  if (identifiers.length === 0) return nothingToRead("lead has no phone, email or instagram handle")
+
+  // searchByHandle() catches every query error and returns [] — so without this gate an unreadable
+  // Messages store (no Full Disk Access for whatever process is running this) reads as "no messages".
+  const imessageLib = require("../lib/imessage")
+  if (!imessageLib.isAvailable()) return storeNotReadable("Messages", imessageLib.diagnoseAccess())
 
   const items: any[] = []
+  const failures: string[] = []
   for (const ident of identifiers) {
     try {
       const messages = searchByHandle(ident, 90, 100)
@@ -106,21 +126,25 @@ function ingestImessage(lead: any): any[] {
           metadata: { chat_identifier: m.chat_identifier || ident },
         })
       }
-    } catch { /* SQLite access may fail — skip silently */ }
+    } catch (e: any) {
+      // Was `skip silently`. An unreadable Messages store (no Full Disk Access) then read as
+      // "no messages" for every lead in an --all sweep.
+      failures.push(`message store unreadable for ${ident}: ${String(e?.message ?? e).slice(0, 120)}`)
+    }
   }
-  return items
+  return { items, unavailable: failures }
 }
 
 // ── Gmail ingestion (via Google API) ──
 
-async function ingestGmailApi(lead: any): Promise<any[]> {
-  if (!lead.email) return []
+async function ingestGmailApi(lead: any): Promise<ChannelRead> {
+  if (!lead.email) return nothingToRead("lead has no email address")
   try {
     const { getToken: getGmailToken, searchMessages: gmailSearch } = await import("../lib/gmail")
     const token = await getGmailToken()
-    if (!token) return []
+    if (!token) return unavailable("Gmail API is not connected on this machine")
     const messages = await gmailSearch(token, `from:${lead.email} OR to:${lead.email}`, 50)
-    return messages.map((m: any) => ({
+    return readOk(messages.map((m: any) => ({
       direction: m.from?.includes(lead.email) ? "inbound" as const : "outbound" as const,
       from_identifier: m.from || lead.email,
       subject: m.subject,
@@ -128,35 +152,39 @@ async function ingestGmailApi(lead: any): Promise<any[]> {
       sent_at: m.date,
       external_message_id: `gmail_${m.id}`,
       metadata: { gmail_thread_id: m.thread_id, gmail_message_id: m.id },
-    }))
-  } catch { return [] }
+    })))
+  } catch (e: any) {
+    return unavailable(`Gmail API read failed: ${String(e?.message ?? e).slice(0, 160)}`)
+  }
 }
 
 // ── Slack ingestion (via Slack API) ──
 
-async function ingestSlack(lead: any): Promise<any[]> {
-  if (!lead.slack && !lead.name) return []
+async function ingestSlack(lead: any): Promise<ChannelRead> {
+  if (!lead.slack && !lead.name) return nothingToRead("lead has no slack handle or name")
   const searchTerm = lead.slack || lead.name
   try {
     const { getToken, searchMessages } = await import("../lib/slack")
     const token = await getToken()
-    if (!token) return []
+    if (!token) return unavailable("Slack is not connected on this machine")
     const messages = await searchMessages(token, searchTerm, 50)
-    return messages.map((m: any) => ({
+    return readOk(messages.map((m: any) => ({
       direction: "inbound" as const,
       from_identifier: m.username || searchTerm,
       body: m.text,
       sent_at: m.timestamp,
       external_message_id: `slack_${m.ts}`,
       metadata: { slack_ts: m.ts },
-    }))
-  } catch { return [] }
+    })))
+  } catch (e: any) {
+    return unavailable(`Slack read failed: ${String(e?.message ?? e).slice(0, 160)}`)
+  }
 }
 
 // ── Discord ingestion (via bridge) ──
 
-async function ingestDiscord(lead: any): Promise<any[]> {
-  if (!lead.discord && !lead.name) return []
+async function ingestDiscord(lead: any): Promise<ChannelRead> {
+  if (!lead.discord && !lead.name) return nothingToRead("lead has no discord handle or name")
   const searchTerm = lead.discord || lead.name
   try {
     const token = getBridgeToken()
@@ -167,55 +195,66 @@ async function ingestDiscord(lead: any): Promise<any[]> {
       headers,
       signal: AbortSignal.timeout(10000),
     })
-    if (!res.ok) return []
+    if (!res.ok) return unavailable(describeHttpFailure("bridge /api/discord/search", res.status, await res.text().catch(() => "")))
     const data = (await res.json()) as any
     const messages = data?.messages ?? []
-    return messages.map((m: any) => ({
+    return readOk(messages.map((m: any) => ({
       direction: "inbound" as const,
       from_identifier: m.author?.username || searchTerm,
       body: m.content,
       sent_at: m.timestamp,
       external_message_id: `discord_${m.id}`,
       metadata: { channel_name: m.channel_name, guild_name: m.guild_name },
-    }))
-  } catch { return [] }
+    })))
+  } catch (e: any) {
+    return unavailable(`bridge not reachable at ${BRIDGE_URL}: ${String(e?.message ?? e).slice(0, 120)}`)
+  }
 }
 
 // ── WhatsApp ingestion (via local SQLite) ──
 
-function ingestWhatsapp(lead: any): any[] {
-  const { searchByPhone, searchByName, normalizePhone, extractPhone, readGroupsForLead } = require("../lib/whatsapp")
+function ingestWhatsapp(lead: any, opts: { allowNameMatch?: boolean } = {}): ChannelRead {
+  const { searchByPhone, searchByName, normalizePhone, extractPhone, readGroupsForLead, isAvailable, diagnoseAccess } = require("../lib/whatsapp")
+  // Same trap as iMessage: the store helpers catch and return [], so check the store is readable first.
+  if (!isAvailable()) return storeNotReadable("WhatsApp", diagnoseAccess())
+  const failures: string[] = []
   // Linked GROUP chats (contact_info.whatsapp_groups) — read even when there's no 1:1 phone/name.
   const groupItems: any[] = (() => {
     try {
       return readGroupsForLead(lead, 90, 100)
-    } catch {
+    } catch (e: any) {
+      failures.push(`WhatsApp group read failed: ${String(e?.message ?? e).slice(0, 120)}`)
       return []
     }
   })()
-  if (!lead.phone && !lead.name) return groupItems
+  if (!lead.phone && !lead.name) {
+    return groupItems.length || failures.length ? { items: groupItems, unavailable: failures } : nothingToRead("lead has no phone or name")
+  }
 
   try {
-    // Try phone first, then fall back to name search (handles WhatsApp contact name mismatches)
+    // Phone first. A phone number is an identifier; a name is not.
     let messages = lead.phone ? searchByPhone(lead.phone, 90, 100) : []
+    let matchedByName: string | null = null
     if (messages.length === 0 && lead.name) {
-      // Extract all name variants: full name, nickname, parenthetical aliases, dash-separated parts
-      const fullName = lead.name || ""
-      const nameParts = [
+      // NAME FALLBACK — deliberately narrow (#183513). This used to try the first name alone and
+      // every dash fragment, with a SUBSTRING match, and take the most recent chat: "Kristen" matched
+      // a different "kristen" and 22 of a stranger's private messages landed on a client's record.
+      // Now: whole names only (full name, nickname, parenthetical alias, multi-word dash parts),
+      // compared exactly, case-insensitively.
+      const fullName = String(lead.name || "").trim()
+      const variants = [
         fullName,
         lead.nickname,
-        fullName.split(" ")[0], // first name
-        ...(fullName.match(/\(([^)]+)\)/g) || []).map((m: string) => m.replace(/[()]/g, "")), // (Maxx) -> Maxx
-        ...(fullName.split(/\s*[—–-]\s*/).filter((p: string) => p.length > 2)), // "Name — CatoDrive" -> ["Name", "CatoDrive"]
+        ...(fullName.match(/\(([^)]+)\)/g) || []).map((m: string) => m.replace(/[()]/g, "")),
+        ...fullName.split(/\s*[—–-]\s*/).filter((p: string) => p.trim().split(/\s+/).length >= 2),
       ].filter(Boolean)
-      // Deduplicate and remove very short tokens
       const seen = new Set<string>()
-      for (const n of nameParts) {
-        const key = n.toLowerCase().trim()
+      for (const n of variants) {
+        const key = String(n).toLowerCase().trim()
         if (key.length < 3 || seen.has(key)) continue
         seen.add(key)
-        messages = searchByName(n.trim(), 90, 100)
-        if (messages.length > 0) break
+        messages = searchByName(String(n).trim(), 90, 100, true)
+        if (messages.length > 0) { matchedByName = String(n).trim(); break }
       }
     }
     const oneToOne = messages.map((m: any) => ({
@@ -226,44 +265,57 @@ function ingestWhatsapp(lead: any): any[] {
       external_message_id: `whatsapp_${m.id}`,
       metadata: { from_jid: m.from_jid, push_name: m.push_name },
     }))
+    // A chat found by NAME is a guess about who someone is. It is not written unless the operator
+    // has looked and said so — two people can share a name, and the cost of a wrong guess is a
+    // stranger's messages on a client's record. Linked groups are explicit, so they still go through.
+    if (matchedByName && !opts.allowNameMatch && oneToOne.length) {
+      const partner = oneToOne.find((m: any) => m.metadata?.push_name)?.metadata?.push_name
+      failures.push(
+        `held back ${oneToOne.length} message(s) matched by NAME only ("${matchedByName}"` +
+          `${partner ? `, WhatsApp contact "${partner}"` : ""}) — not written. Check it is the same person, ` +
+          `then re-run with --allow-name-match, or add the lead's phone number.`,
+      )
+      return { items: groupItems, unavailable: failures, answered: true }
+    }
     // Merge 1:1 + linked-group messages; server dedups on external_message_id.
-    return [...oneToOne, ...groupItems]
-  } catch { return groupItems }
+    return { items: [...oneToOne, ...groupItems], unavailable: failures }
+  } catch (e: any) {
+    failures.push(`WhatsApp store unreadable: ${String(e?.message ?? e).slice(0, 120)}`)
+    return { items: groupItems, unavailable: failures }
+  }
 }
 
 // ── Gmail ingestion (via bridge or integration) ──
 
-async function ingestGmail(lead: any): Promise<any[]> {
+async function ingestGmail(lead: any, requested: "gmail" | "apple_mail"): Promise<ChannelRead> {
   const emails = leadEmails(lead)
-  if (emails.length === 0) return []
+  if (emails.length === 0) return nothingToRead("lead has no email address")
   const email = emails[0]
 
-  try {
-    // One search PER ADDRESS. The bridge filters on a single `from`, so a lead with alternates
-    // needs one call each — searching only the primary is what left 61% of #10394's mail out of
-    // the log while the command reported success. The server dedups on external_message_id, so
-    // an address that overlaps another costs a round trip, not a duplicate row.
-    const collected: any[] = []
-    let anyOk = false
+  // One search PER ADDRESS. The bridge filters on a single `from`, so a lead with alternates
+  // needs one call each — searching only the primary is what left 61% of #10394's mail out of
+  // the log while the command reported success. The server dedups on external_message_id, so
+  // an address that overlaps another costs a round trip, not a duplicate row.
+  const collected: any[] = []
+  const failures: string[] = []
+  let anyOk = false
 
-    // AUTHENTICATE. The bridge requires X-Bridge-Key and this call never sent it, so every
-    // Apple Mail ingest got a 401, fell through to the Gmail fallback, and reported whatever
-    // that found as the whole answer. The Discord ingest in this same file has always done it
-    // correctly — mail simply never did. A 401 here is indistinguishable from "no messages"
-    // downstream, which is how a mailbox with 70 messages in it logged 1 and said "1 new".
-    const bridgeToken = getBridgeToken()
-    const bridgeHeaders: Record<string, string> = { Accept: "application/json" }
-    if (bridgeToken) bridgeHeaders["X-Bridge-Key"] = bridgeToken
+  // AUTHENTICATE. The bridge requires X-Bridge-Key; without it every Apple Mail ingest got a 401.
+  const bridgeToken = getBridgeToken()
+  const bridgeHeaders: Record<string, string> = { Accept: "application/json" }
+  if (bridgeToken) bridgeHeaders["X-Bridge-Key"] = bridgeToken
 
-    for (const addr of emails) {
+  for (const addr of emails) {
+    try {
       const res = await fetch(`${BRIDGE_URL}/api/mail/search?from=${encodeURIComponent(addr)}&days=90&limit=50&include_body=1`, {
         headers: bridgeHeaders,
         signal: AbortSignal.timeout(15000),
       })
       if (!res.ok) {
-        // Say which address and why. Falling through to a lesser source without a word is what
-        // made this invisible for months.
-        console.log(dim(`    apple_mail: ${addr} → bridge returned ${res.status}${res.status === 401 ? " (no/invalid X-Bridge-Key — run: iris bridge status)" : ""}`))
+        // KEEP THE BRIDGE'S REASON (#185776). It answers 503 with a precise sentence — "the iris
+        // daemon has no Full Disk Access (the DAEMON's own grant, not your terminal's)" — and this
+        // used to print the status, discard that sentence, and go on to report "no messages found".
+        failures.push(`${addr}: ${describeHttpFailure("bridge /api/mail/search", res.status, await res.text().catch(() => ""))}`)
         continue
       }
       anyOk = true
@@ -282,37 +334,51 @@ async function ingestGmail(lead: any): Promise<any[]> {
           channel: "apple_mail", // override — this is Apple Mail, not Gmail API
         })
       }
+    } catch (e: any) {
+      failures.push(`${addr}: bridge not reachable at ${BRIDGE_URL}: ${String(e?.message ?? e).slice(0, 120)}`)
     }
+  }
 
-    if (anyOk) return collected
-  } catch { /* bridge not running */ }
+  if (anyOk) return { items: collected, unavailable: failures, answered: true }
 
-  // Fallback: Gmail API via fl-api integration
+  // Apple Mail was asked for by name, and could not be read. Do NOT answer with Gmail: the operator
+  // asked a question about one mailbox, and a different source's empty result is not its answer.
+  if (requested === "apple_mail") return unavailable(...failures)
+
+  // `gmail`: the bridge failed, so fall back to the Gmail threads on the platform — and say so.
   try {
     const res = await irisFetch(`/api/v1/leads/${lead.id}/gmail-threads`)
-    if (res.ok) {
-      const data = (await res.json()) as any
-      const threads = data?.data ?? data?.threads ?? []
-      const items: any[] = []
-      for (const thread of threads) {
-        const messages = thread.messages ?? [thread]
-        for (const m of messages) {
-          items.push({
-            direction: (m.from_email || "").includes(lead.email) ? "inbound" : "outbound",
-            from_identifier: m.from_email || m.from || email,
-            subject: m.subject,
-            body: m.body_text || m.snippet,
-            sent_at: m.sent_at || m.date,
-            external_message_id: m.gmail_message_id || m.id,
-            metadata: { gmail_thread_id: m.gmail_thread_id || thread.id },
-          })
-        }
-      }
-      return items
+    if (!res.ok) {
+      failures.push(describeHttpFailure("Gmail threads fallback (/leads/{id}/gmail-threads)", res.status, await res.text().catch(() => "")))
+      return unavailable(...failures)
     }
-  } catch { /* gmail not connected */ }
-
-  return []
+    const data = (await res.json()) as any
+    const threads = data?.data ?? data?.threads ?? []
+    const items: any[] = []
+    for (const thread of threads) {
+      const messages = thread.messages ?? [thread]
+      for (const m of messages) {
+        items.push({
+          direction: (m.from_email || "").includes(lead.email) ? "inbound" : "outbound",
+          from_identifier: m.from_email || m.from || email,
+          subject: m.subject,
+          body: m.body_text || m.snippet,
+          sent_at: m.sent_at || m.date,
+          external_message_id: m.gmail_message_id || m.id,
+          metadata: { gmail_thread_id: m.gmail_thread_id || thread.id },
+        })
+      }
+    }
+    // The fallback answered, but Apple Mail did not — a partial read, not a clean one, and not an unreadable one.
+    return {
+      items,
+      answered: true,
+      unavailable: failures.map((f) => `Apple Mail could not be read, so only the Gmail threads fallback was used (${items.length} found) — ${f}`),
+    }
+  } catch (e: any) {
+    failures.push(`Gmail threads fallback failed: ${String(e?.message ?? e).slice(0, 120)}`)
+    return unavailable(...failures)
+  }
 }
 
 // ── list ──
@@ -552,8 +618,13 @@ async function ingestAllLeads(channel: string, days: number, limit: number, dryR
   for (const t of targets) {
     const label = `${String(t.lead.id).padStart(6)}  ${String(t.lead.name ?? t.lead.nickname ?? "?").slice(0, 26)}`
     try {
-      const items = ingestImessage(t.lead)
-      if (!items.length) { console.log(`  ${dim(label)}  ${dim("no messages")}`); continue }
+      const read = ingestImessage(t.lead)
+      const outcome = channelOutcome("imessage", read)
+      if (outcome.failed) failed++
+      if (outcome.kind === "unavailable") { console.log(`  ${dim(label)}  ${outcome.line}`); continue }
+      if (outcome.kind === "nothing" || outcome.kind === "empty") { console.log(`  ${dim(label)}  ${dim("no messages")}`); continue }
+      if (outcome.kind === "partial") console.log(`  ${dim(label)}  ${dim(outcome.line)}`)
+      const items = read.items
 
       const res = await irisFetch("/api/v1/atlas/comms/ingest", {
         method: "POST",
@@ -578,7 +649,11 @@ async function ingestAllLeads(channel: string, days: number, limit: number, dryR
       (failed ? dim(`  ·  ${failed} failed`) : "") +
       (unmatched.length ? dim(`  ·  ${unmatched.length} handle(s) matched no lead`) : ""),
   )
-  prompts.outro("Done")
+  if (failed) {
+    prompts.log.error(`${failed} lead(s) could not be fully read or stored. Their "0 new" is not a zero.`)
+    process.exitCode = 1
+  }
+  prompts.outro(failed ? "Incomplete" : "Done")
 }
 
 const CommsIngestCommand = cmd({
@@ -597,7 +672,8 @@ const CommsIngestCommand = cmd({
       .option("all", { type: "boolean", default: false, describe: "sweep every lead with an ACTIVE conversation (reads the message store, not the CRM)" })
       .option("days", { type: "number", default: 30, describe: "with --all, how far back to look for active conversations" })
       .option("limit", { type: "number", default: 100, describe: "max leads to sweep with --all" })
-      .option("dry-run", { type: "boolean", default: false, describe: "with --all, list what would be swept and stop" }),
+      .option("dry-run", { type: "boolean", default: false, describe: "read and report what WOULD be ingested, write nothing (single lead or --all)" })
+      .option("allow-name-match", { type: "boolean", default: false, describe: "write WhatsApp chats matched by the lead's name alone (checked it is the same person)" }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Ingest Comms")
@@ -627,7 +703,7 @@ const CommsIngestCommand = cmd({
     sp.start("Resolving lead…")
 
     const resolved = await resolveLead(String(args.id))
-    if (!resolved) { sp.stop("Lead not found"); prompts.outro("Done"); return }
+    if (!resolved) { sp.stop("Lead not found", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
     const lead = resolved.lead
     const channel = String(args.channel).toLowerCase()
@@ -635,30 +711,45 @@ const CommsIngestCommand = cmd({
 
     let totalNew = 0
     let totalSkipped = 0
+    // Every channel that could not be fully read. Non-empty => the run exits non-zero and the
+    // total says the zero is not a zero (#185776).
+    const failedChannels: string[] = []
 
     for (const ch of channels) {
       sp.start(`Fetching ${ch}…`)
 
-      let items: any[] = []
+      let read: ChannelRead
       if (ch === "imessage") {
-        items = ingestImessage(lead)
+        read = ingestImessage(lead)
       } else if (ch === "whatsapp") {
-        items = ingestWhatsapp(lead)
+        read = ingestWhatsapp(lead, { allowNameMatch: Boolean(args["allow-name-match"]) })
       } else if (ch === "discord") {
-        items = await ingestDiscord(lead)
+        read = await ingestDiscord(lead)
       } else if (ch === "slack") {
-        items = await ingestSlack(lead)
+        read = await ingestSlack(lead)
       } else if (ch === "gmail_api") {
-        items = await ingestGmailApi(lead)
+        read = await ingestGmailApi(lead)
       } else if (ch === "gmail" || ch === "apple_mail") {
-        items = await ingestGmail(lead)
+        read = await ingestGmail(lead, ch)
       } else {
-        sp.stop(`Channel "${ch}" not yet supported for auto-ingest`)
+        // An unknown channel is an operator error, not an empty result.
+        sp.stop(`Channel "${ch}" is not supported for auto-ingest`, 1)
+        failedChannels.push(ch)
         continue
       }
 
-      if (items.length === 0) {
-        sp.stop(`${ch}: no messages found`)
+      const outcome = channelOutcome(ch, read)
+      if (outcome.failed) failedChannels.push(ch)
+      if (outcome.kind === "unavailable" || outcome.kind === "nothing" || outcome.kind === "empty") {
+        sp.stop(outcome.line, outcome.failed ? 1 : 0)
+        continue
+      }
+      if (outcome.kind === "partial") prompts.log.warn(outcome.line)
+      const items = read.items
+
+      if (args["dry-run"]) {
+        // #183513 asked for this on the single-lead path: see what would land on the record first.
+        sp.stop(`${ch}: ${items.length} message(s) would be ingested (dry run — nothing written)`)
         continue
       }
 
@@ -681,7 +772,8 @@ const CommsIngestCommand = cmd({
 
       if (!res.ok) {
         await handleApiError(res, `Ingest ${ch}`)
-        sp.stop(`${ch}: failed`)
+        sp.stop(`${ch}: read ${items.length} message(s) but could not store them`, 1)
+        failedChannels.push(ch)
         continue
       }
 
@@ -697,7 +789,12 @@ const CommsIngestCommand = cmd({
 
     printDivider()
     console.log(`  Total: ${success(`${totalNew} new`)} + ${dim(`${totalSkipped} skipped`)}`)
-    prompts.outro("Done")
+    const warning = failedChannels.length ? failedRunWarning([...new Set(failedChannels)]) : null
+    if (warning) {
+      prompts.log.error(warning)
+      process.exitCode = 1
+    }
+    prompts.outro(warning ? "Incomplete" : "Done")
   },
 })
 
