@@ -27,6 +27,15 @@
  */
 
 import { existsSync, readFileSync } from "fs"
+// Aliased: this file already exports GraphNode/GraphEdge for the BOARD-TO-BOARD graph (numeric ids).
+// Same names, different graphs — importing them bare silently retyped graphRows.
+import {
+  buildRelationshipGraph,
+  renderedGraph,
+  type GraphEdge as InteriorGraphEdge,
+  type GraphInputs,
+  type GraphNode as InteriorGraphNode,
+} from "./relationship-graph"
 import { homedir } from "os"
 import path from "path"
 import { clampPaging, DEFAULT_PER_PAGE } from "./pagination"
@@ -1616,6 +1625,115 @@ export function graphRows(g: BloqGraph): {
   rows.sort((a, b) => b.degree - a.degree || a.name.localeCompare(b.name))
   return rows
 }
+
+/** A node in a board's interior graph — ELON's node shape. */
+export type InteriorNode = InteriorGraphNode
+/** An interior edge — ELON's edge shape. `type` is set only on relation edges, as in ELON. */
+export type InteriorEdge = InteriorGraphEdge
+
+/**
+ * ONE BOARD'S INTERIOR, fetched the way ELON fetches it and built by ELON'S rules.
+ *
+ * #185584: desktop's graph had to show the same structure as ELON's, with equal counts as the
+ * floor. The previous assembler matched ELON's shape loosely and its rules not at all (one node
+ * per lead where ELON clusters by status, no Programs/Workflows hubs, no runs/assigned edges,
+ * no related boards), so no board with leads could pass. The rules now live in
+ * relationship-graph.ts, a port proven against ELON's own function; this function only has to
+ * collect the SAME raw inputs ELON's store collects.
+ *
+ * SAME REQUESTS, not similar ones — a different query returns a different set and the counts
+ * drift even with identical rules:
+ *   - scheduled jobs: NO query string, filtered client-side. ELON asks for all of them and keeps
+ *     this board's workflow jobs; `?bloq_id=&per_page=50` is a different result set.
+ *   - relations: `?direction=both`.  leads: `per_page=50`, ELON's page size.
+ *
+ * A failed source contributes nothing, exactly as a failed ELON store action leaves its getter
+ * empty — but unlike ELON it is NAMED in `unread`, because a missing Leads hub on a board that
+ * has leads is indistinguishable from "no leads" otherwise.
+ */
+export async function fetchBloqInterior(
+  bloqId: number,
+): Promise<PlatformResult<{ nodes: InteriorNode[]; edges: InteriorEdge[]; unread: string[] }>> {
+  const empty = { nodes: [] as InteriorNode[], edges: [] as InteriorEdge[], unread: [] as string[] }
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: empty }
+  const unknown = await unknownBloq(bloqId)
+  if (unknown) return { measured: false, reason: unknown, data: empty }
+
+  const get = async (path: string) => {
+    const res = await irisFetch(path)
+    if (!res.ok) throw new Error(`fl-api ${res.status}`)
+    return res.json()
+  }
+  /** ELON unwraps `data.data`; a bare array is accepted because some of these return one. */
+  const rows = (j: any): any[] => (Array.isArray(j) ? j : Array.isArray(j?.data) ? j.data : [])
+
+  const sources = {
+    agents: get(`/api/v1/users/${userId}/bloqs/${bloqId}/agents/with-tasks`),
+    scheduledJobs: get(`/api/v1/users/${userId}/bloqs/scheduled-jobs`),
+    playbooks: get(`/api/v1/bloqs/${bloqId}/playbooks`),
+    relations: get(`/api/v1/user/${userId}/bloqs/${bloqId}/relations?direction=both`),
+    leads: get(`/api/v1/users/${userId}/leads?bloq_id=${bloqId}&per_page=50`),
+    board: get(`/api/v1/user/${userId}/bloqs/${bloqId}?no_searchable_content=1`),
+  }
+  const names = Object.keys(sources) as (keyof typeof sources)[]
+  const settled = await Promise.allSettled(names.map((k) => sources[k]))
+  const got: Record<string, any> = {}
+  const unread: string[] = []
+  settled.forEach((r, i) => {
+    if (r.status === "fulfilled") got[names[i]] = r.value
+    else unread.push(`${names[i]}: ${r.reason instanceof Error ? r.reason.message : String(r.reason)}`)
+  })
+
+  // Without the board itself there is no centre and no lists — nothing ELON would draw either.
+  if (!got.board) return { measured: false, reason: unread.join("; ") || "board unreadable", data: { ...empty, unread } }
+  const boardBody = got.board?.data ?? got.board
+
+  const inputs: GraphInputs = {
+    bloqId,
+    boardTitle: boardBody?.name ?? null,
+    agents: rows(got.agents),
+    scheduledJobs: rows(got.scheduledJobs),
+    playbooks: rows(got.playbooks),
+    relations: rows(got.relations),
+    leads: rows(got.leads),
+    lists: Array.isArray(boardBody?.lists) ? boardBody.lists : [],
+  }
+  const { nodes, edges } = renderedGraph(buildRelationshipGraph(inputs))
+  return { measured: true, data: { nodes, edges, unread } }
+}
+
+/** The raw inputs, exposed for the parity harness — it must feed ELON's code the same bytes. */
+export async function fetchBloqInteriorInputs(bloqId: number): Promise<GraphInputs | null> {
+  const userId = await resolveUserId()
+  if (!userId) return null
+  const j = async (p: string) => {
+    const r = await irisFetch(p)
+    return r.ok ? r.json() : null
+  }
+  const rows = (x: any): any[] => (Array.isArray(x) ? x : Array.isArray(x?.data) ? x.data : [])
+  const [agents, jobs, playbooks, relations, leads, board] = await Promise.all([
+    j(`/api/v1/users/${userId}/bloqs/${bloqId}/agents/with-tasks`),
+    j(`/api/v1/users/${userId}/bloqs/scheduled-jobs`),
+    j(`/api/v1/bloqs/${bloqId}/playbooks`),
+    j(`/api/v1/user/${userId}/bloqs/${bloqId}/relations?direction=both`),
+    j(`/api/v1/users/${userId}/leads?bloq_id=${bloqId}&per_page=50`),
+    j(`/api/v1/user/${userId}/bloqs/${bloqId}?no_searchable_content=1`),
+  ])
+  const b = board?.data ?? board
+  if (!b) return null
+  return {
+    bloqId,
+    boardTitle: b?.name ?? null,
+    agents: rows(agents),
+    scheduledJobs: rows(jobs),
+    playbooks: rows(playbooks),
+    relations: rows(relations),
+    leads: rows(leads),
+    lists: Array.isArray(b?.lists) ? b.lists : [],
+  }
+}
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // One item, for EDITING — the card editor (#185485)

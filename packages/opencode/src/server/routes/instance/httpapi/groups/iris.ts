@@ -564,6 +564,7 @@ export const IrisPaths = {
   playbookDoc: `${root}/playbooks/doc/:name`,
   catalog: `${root}/catalog`,
   graph: `${root}/graph`,
+  graphBoard: `${root}/graph/:bloqID`,
   pageDoc: `${root}/page/:pageID`,
   pageSave: `${root}/page/:pageID/save`,
   item: `${root}/item/:itemID`,
@@ -753,6 +754,41 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "The bloq relationship graph",
           description:
             "A REAL endpoint, worth saying because the obvious place to look says otherwise: Elon's RelationshipGraph is fed by a computed property that assembles one board's contents client-side and has no endpoint. This is a different graph — bloq to bloq across the account — served whole at 12 KB with degree per node.",
+        }),
+      ),
+      HttpApiEndpoint.get("graphBoard", IrisPaths.graphBoard, {
+        params: { bloqID: Schema.NumberFromString },
+        success: described(
+          Schema.Struct({
+            ...Measured,
+            nodes: Schema.Array(
+              Schema.Struct({
+                id: described(Schema.String, "ELON's ids — `bloq-12` (centre or related board), `agents-hub`, `leadstatus-hot`, `list-900`, `item-88`. A STRING because an item id can equal a board id."),
+                name: Schema.String,
+                type: described(Schema.String, "One of ELON's node types, assigned by ELON's rules (list and item types are inferred from titles)."),
+                subtitle: Schema.optional(Schema.String),
+                meta: Schema.optional(Schema.String),
+                size: Schema.Finite,
+              }).annotate({ identifier: "IrisInteriorNode" }),
+            ),
+            edges: Schema.Array(
+              Schema.Struct({
+                source: Schema.String,
+                target: Schema.String,
+                type: described(Schema.optional(Schema.String), "Set only on relations to other boards (parent, sibling, feeds_into, …). ELON's hub and child edges carry a label or nothing — REQUIRED here, an ELON-shaped payload failed to encode."),
+                label: Schema.optional(Schema.String),
+              }).annotate({ identifier: "IrisInteriorEdge" }),
+            ),
+            unread: described(Schema.optional(Schema.Array(Schema.String)), "Sources that could not be read. Each drops its hub, as in ELON — named here so a missing hub is not read as an empty category."),
+          }).annotate({ identifier: "IrisGraphBoardResponse" }),
+          "One board's interior: Atlas, category hubs, and the items under them",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.graphBoard",
+          summary: "One board's interior graph",
+          description:
+            "The OTHER graph. `/iris/graph` is board-to-board across the account; this is what is INSIDE one board, which is what Elon's RelationshipGraph draws. Elon has no endpoint for it — its computed property reads a store the board view already filled — so this fans out to the per-board fetchers instead. ONE BOARD PER CALL, deliberately: the panel asks on expand, because doing this for forty boards eagerly is forty fan-outs and thousands of nodes before anything is drawn. A category that is empty gets no hub, since an empty hub cannot be told from a failed fetch and these fetches fail independently.",
         }),
       ),
       HttpApiEndpoint.get("catalog", IrisPaths.catalog, {
