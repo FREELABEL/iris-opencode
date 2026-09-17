@@ -3,6 +3,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { dim, bold, success, highlight, irisFetch, requireAuth, writeJson, PUBLIC_SITE, IRIS_API } from "./iris-api"
 import { resolveWalkthrough } from "../lib/walkthrough"
+import { execFileSync } from "child_process"
 
 // ============================================================================
 // iris newsroom — a front door for the writer that already exists.
@@ -91,6 +92,66 @@ export function draftPayload(
     if (args.force) body.force = true
   }
   return body
+}
+
+/**
+ * The same request, as arguments to `php artisan article:draft`.
+ *
+ * The text is NOT here — it goes in on stdin via `--stdin`. That is the whole reason this
+ * fallback is viable: a transcript is multi-line and full of quotes, and every documented attempt
+ * to carry one through a re-shelled argv (`railway ssh -- <cmd>`) has mangled it. Arguments stay
+ * short and structural; the words go down a pipe.
+ */
+export function artisanArgs(
+  bloq: number,
+  args: {
+    angle?: string
+    model?: string
+    title?: string
+    lane?: string
+    publish?: boolean
+    force?: boolean
+    skipLint?: boolean
+    json?: boolean
+  },
+  opts: { filing: boolean },
+): string[] {
+  const out = ["php", "artisan", "article:draft", String(bloq), "--stdin"]
+  if (!opts.filing) out.push("--dry-run")
+  if (args.angle) out.push(`--angle=${args.angle}`)
+  if (args.model) out.push(`--model=${args.model}`)
+  if (args.title) out.push(`--title=${args.title}`)
+  if (args.skipLint) out.push("--skip-lint")
+  if (opts.filing) {
+    if (args.lane) out.push(`--lane=${args.lane}`)
+    if (args.publish) out.push("--publish")
+    if (args.force) out.push("--force")
+  }
+  if (args.json) out.push("--json")
+  return out
+}
+
+/**
+ * A 404 means the service we reached does not have this route — an iris-api too old to have
+ * ArticleDraftController, or IRIS_API pointing somewhere else. That is worth a second transport.
+ * A 422 (bad input, PHI boundary, blocking findings) is the endpoint working correctly, and
+ * retrying it elsewhere would only launder a refusal into a second opinion.
+ */
+export function shouldTryLocalContainer(status: number | null): boolean {
+  return status === null || status === 404 || status === 502 || status === 503
+}
+
+/** The local dev container, if one is running. Absent on any machine without the stack. */
+export function findLocalIrisContainer(): string | null {
+  try {
+    const names = execFileSync("docker", ["ps", "--format", "{{.Names}}"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+    return names.split("\n").map((n) => n.trim()).find((n) => n === "fl-iris-api") ?? null
+  } catch {
+    return null
+  }
 }
 
 /** One-line shape of the drafted document, for someone deciding whether to keep it. */
@@ -193,15 +254,61 @@ const NewsroomDraftCommand = cmd({
     // IRIS_API, not the irisFetch default of FL_API: these two routes live in fl-iris-api
     // alongside ArticleDraftService. Against fl-api they 404 — which is what this did first,
     // with a green typecheck and passing unit tests.
-    const res = await irisFetch(path, { method: "POST", body: JSON.stringify(body) }, IRIS_API)
-    const payload = (await res.json().catch(() => null)) as any
+    let res: Response | null = null
+    let transportError: string | null = null
+    try {
+      res = await irisFetch(path, { method: "POST", body: JSON.stringify(body) }, IRIS_API)
+    } catch (e) {
+      transportError = e instanceof Error ? e.message : String(e)
+    }
+    const payload = res ? ((await res.json().catch(() => null)) as any) : null
 
-    if (!res.ok) {
+    if (!res || !res.ok) {
+      const status = res ? res.status : null
+      const container = shouldTryLocalContainer(status) && args.bloq !== undefined ? findLocalIrisContainer() : null
+
+      if (container) {
+        // Announced, never silent: a fallback that hides an unreachable API turns a broken
+        // deployment into a mystery that only shows up on a machine without the container.
+        sp2.stop(`${IRIS_API} could not serve ${path} (${status ?? transportError}) — using the local ${container} container`, 1)
+        try {
+          const out = execFileSync(
+            "docker",
+            ["exec", "-i", container, ...artisanArgs(Number(args.bloq), {
+              angle: args.angle,
+              model: args.model,
+              title: args.title,
+              lane: args.lane,
+              publish: args.publish,
+              force: args.force,
+              skipLint: args["skip-lint"],
+              json: args.json,
+            }, { filing })],
+            { input: walk.transcript, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 },
+          )
+          prompts.log.message(out.trim())
+          prompts.outro("Done")
+          return
+        } catch (e: any) {
+          prompts.log.error(String(e?.stdout || e?.stderr || e?.message || e))
+          process.exitCode = 1
+          prompts.outro("Done")
+          return
+        }
+      }
+
       sp2.stop("Failed", 1)
       // The refusals are the feature. Print what the gate said, and its findings.
-      prompts.log.error(String(payload?.error ?? `${res.status} from ${path}`))
+      prompts.log.error(String(payload?.error ?? transportError ?? `${status} from ${path}`))
       const { blockers, warnings } = lintSummary(payload?.lint)
       for (const f of [...blockers, ...warnings]) prompts.log.warn(formatFinding(f))
+      if (shouldTryLocalContainer(status)) {
+        prompts.log.info(
+          args.bloq === undefined
+            ? "No local fl-iris-api container to fall back to, and --dry-run cannot use one without --bloq."
+            : "No local fl-iris-api container to fall back to.",
+        )
+      }
       process.exitCode = 1
       prompts.outro("Done")
       return

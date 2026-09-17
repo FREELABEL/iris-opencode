@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test"
-import { draftPayload, lintSummary, documentLines, MAX_SOURCE_CHARS } from "./platform-newsroom"
+import {
+  draftPayload,
+  lintSummary,
+  documentLines,
+  artisanArgs,
+  shouldTryLocalContainer,
+  MAX_SOURCE_CHARS,
+} from "./platform-newsroom"
 
 describe("lintSummary", () => {
   test("separates blockers from warnings", () => {
@@ -86,6 +93,47 @@ describe("documentLines", () => {
   test("does not throw on an empty or partial document", () => {
     expect(documentLines(undefined).join("\n")).toContain("(untitled)")
     expect(documentLines({ title: "T" }).join("\n")).toContain("0 section(s)")
+  })
+})
+
+describe("artisanArgs (the local-container fallback)", () => {
+  // The transcript must never appear in argv. Every documented attempt to carry one through a
+  // re-shelled command line has mangled it; --stdin is why this fallback can work at all.
+  test("passes the text on stdin, never as an argument", () => {
+    const args = artisanArgs(368, {}, { filing: true })
+    expect(args).toContain("--stdin")
+    expect(args.join(" ")).not.toContain("Moderator")
+    expect(args.slice(0, 5)).toEqual(["php", "artisan", "article:draft", "368", "--stdin"])
+  })
+
+  test("adds --dry-run only when not filing", () => {
+    expect(artisanArgs(1, {}, { filing: false })).toContain("--dry-run")
+    expect(artisanArgs(1, {}, { filing: true })).not.toContain("--dry-run")
+  })
+
+  test("keeps an angle with spaces as ONE argument", () => {
+    const args = artisanArgs(1, { angle: "focus on the intake numbers" }, { filing: true })
+    expect(args).toContain("--angle=focus on the intake numbers")
+  })
+
+  test("drops filing-only flags on a dry run", () => {
+    const args = artisanArgs(1, { lane: "Drafts", publish: true, force: true }, { filing: false })
+    expect(args.some((a) => a.startsWith("--lane"))).toBe(false)
+    expect(args).not.toContain("--publish")
+    expect(args).not.toContain("--force")
+  })
+})
+
+describe("shouldTryLocalContainer", () => {
+  // 404 = the service we reached has no such route (old iris-api, or IRIS_API mispointed).
+  test("retries a missing route or an unreachable service", () => {
+    for (const s of [null, 404, 502, 503]) expect(shouldTryLocalContainer(s)).toBe(true)
+  })
+
+  // 422 is the endpoint working: bad input, a PHI boundary, or blocking findings. Retrying it
+  // against another transport would launder a correct refusal into a second opinion.
+  test("does NOT retry a refusal or an auth failure", () => {
+    for (const s of [200, 401, 403, 422, 500]) expect(shouldTryLocalContainer(s)).toBe(false)
   })
 })
 
