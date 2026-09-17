@@ -38,12 +38,15 @@ type Definition = {
   description: string
 }
 
-export const LeaderDefault = "ctrl+x"
+export function LeaderDefault(): BindingValueSchema {
+  if (process.platform === "darwin") return ["super+x", "ctrl+x"]
+  return "ctrl+x"
+}
 
 const keybind = (value: Definition["default"], description: string): Definition => ({ default: value, description })
 
 export const Definitions = {
-  leader: keybind(LeaderDefault, "Leader key for keybind combinations"),
+  leader: keybind(LeaderDefault(), "Leader key for keybind combinations"),
 
   app_exit: keybind("ctrl+c,ctrl+d,<leader>q", "Exit the application"),
   app_debug: keybind("none", "Toggle debug panel"),

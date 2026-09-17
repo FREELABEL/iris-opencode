@@ -179,7 +179,16 @@ function hasManagedTextareaFocus(renderer: CliRenderer) {
 
 function leaderDisplay(config: FormatConfig) {
   const key = config.keybinds.get(LEADER_TOKEN)?.[0]?.key
-  if (!key) return TuiKeybind.LeaderDefault
+  // LeaderDefault() is an ARRAY on macOS (["super+x", "ctrl+x"]). `as string` only silenced
+  // the type checker — at runtime the hint printed the array's toString, "super+x,ctrl+x".
+  // Take the first binding, the same rule the configured path above applies with `[0]`.
+  if (!key) {
+    const fallback = TuiKeybind.LeaderDefault()
+    const first = Array.isArray(fallback) ? fallback[0] : fallback
+    // An element can be a string OR a KeyStroke object — String() on the latter is
+    // "[object Object]". Same stringify rule as the configured path below.
+    return typeof first === "string" ? first : stringifyKeyStroke(first as any)
+  }
   return typeof key === "string" ? key : stringifyKeyStroke(key)
 }
 

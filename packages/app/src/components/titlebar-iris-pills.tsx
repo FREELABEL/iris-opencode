@@ -1,4 +1,4 @@
-import { createMemo, createResource, createSignal, Match, onCleanup, onMount, Show, Switch } from "solid-js"
+import { createMemo, createResource, createSignal, For, Match, onCleanup, onMount, Show, Switch } from "solid-js"
 import { Portal } from "solid-js/web"
 import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 import { useServer } from "@/context/server"
@@ -57,8 +57,7 @@ export function authNotice(auth: AuthState | undefined): { text: string; hint: s
   }
 }
 
-/**
- * How the fleet pill reads.
+/** How the fleet pill reads.
  *
  * THREE states, not two — and the third is the one I got wrong and a browser caught.
  * `fleetLabel` used to return "—" both while the first fetch was in flight and when it had
@@ -71,6 +70,20 @@ export function fleetLabel(hive: HiveState | undefined, loading = false): string
   if (loading && !hive) return "·"
   if (!hive || !hive.measured) return "—"
   return `${hive.nodes.filter((n) => n.online).length}/${hive.nodes.length}`
+}
+
+/**
+ * The dot's colour, as a state machine — not a bare boolean around one accent class.
+ *
+ * THREE visuals, matching fleetLabel's three facts: green when we measured and something is
+ * up, danger when measured:false (the fleet said so, with a reason), and the muted default
+ * while loading or before a measurement. A not-yet-fetched fleet must not wear green: that is
+ * the not-yet-measured-as-verdict bug this file already caught once (see above).
+ */
+export function fleetDotClass(hive: HiveState | undefined, loading = false): string {
+  if (loading && !hive) return "text-v2-text-text-weak"
+  if (!hive || !hive.measured) return "text-v2-text-text-danger"
+  return hive.nodes.some((n) => n.online) ? "text-v2-state-fg-success" : "text-v2-text-text-weak"
 }
 
 /** How the inbox pill reads. Null unread is not zero; zero is simply not shown. */
@@ -112,6 +125,17 @@ export function TitlebarIrisPills() {
 
   const unread = createMemo(() => inboxLabel(inbox(), inbox.loading))
 
+  /**
+   * Fleet hover panel, not a tooltip.
+   *
+   * A one-line tooltip left the per-machine state invisible (which machine is down?) — the
+   * whole point of a fleet count. The panel opens on hover (and toggle/click for keyboard),
+   * lists the SAME nodes the pill already fetched, and dismisses on mouse-leave; it does not
+   * flicker across the 30s refetch because the resource's latest is kept through reloads.
+   * Hover-only disclosure on a focusable pill: focus/click are equivalent entrances.
+   */
+  const [fleetOpen, setFleetOpen] = createSignal(false)
+
   return (
     <Show when={mount()}>
       <Portal mount={mount()!}>
@@ -122,35 +146,73 @@ export function TitlebarIrisPills() {
           {/* Real tooltips, not the `title` attribute. A native tooltip takes about a second to
               appear, cannot be styled, and is the reason these pills read as decoration: there
               was no way to find out what "3/4" counted without asking someone. */}
-          <TooltipV2
-            placement="bottom"
-            value={
-              <Switch fallback={<>Hive machines online</>}>
-                <Match when={hive()?.measured === false}>
-                  <>Fleet unreachable — {hive()?.reason ?? "unknown"}</>
-                </Match>
-                <Match when={hive.loading && !hive.latest}>
-                  <>Checking the fleet…</>
-                </Match>
-                <Match when={hive()?.measured}>
-                  <>
-                    {hive()!.nodes.filter((n) => n.online).length} of {hive()!.nodes.length} Hive machines online
-                    {hive()!.nodes.length ? ` · ${hive()!.nodes.map((n) => n.name).join(", ")}` : ""}
-                  </>
-                </Match>
-              </Switch>
-            }
-          >
-            <span data-slot="iris-fleet-pill" class="cursor-default">
+          <div data-slot="iris-fleet-wrap" class="relative">
+            <span
+              data-slot="iris-fleet-pill"
+              class="cursor-pointer"
+              tabIndex={0}
+              role="button"
+              onMouseEnter={() => setFleetOpen(true)}
+              onMouseLeave={() => setFleetOpen(false)}
+              onFocus={() => setFleetOpen(true)}
+              onBlur={() => setFleetOpen(false)}
+              onClick={() => setFleetOpen((v) => !v)}
+            >
               <span
                 class="mr-1"
-                classList={{ "text-v2-icon-icon-accent": (hive()?.nodes?.some((n) => n.online) ?? false) }}
+                data-slot="iris-fleet-dot"
+                classList={{ [fleetDotClass(hive(), hive.loading)]: true, "animate-pulse": (hive()?.measured === false) }}
               >
                 ●
               </span>
               {fleetLabel(hive(), hive.loading)}
             </span>
-          </TooltipV2>
+            <Show when={fleetOpen()}>
+              <div
+                data-slot="iris-fleet-panel"
+                class="absolute right-0 top-full z-50 mt-1 min-w-56 rounded-lg border border-v2-border-border-base bg-v2-background-bg-deep p-2 shadow-lg"
+              >
+                <Switch fallback={<div class="px-2 py-1 text-v2-text-text-weak">Hive machines online</div>}>
+                  <Match when={hive()?.measured === false}>
+                    <div class="px-2 py-1 text-v2-state-fg-danger">
+                      Fleet unreachable — {hive()?.reason ?? "unknown"}
+                    </div>
+                  </Match>
+                  <Match when={hive.loading && !hive.latest}>
+                    <div class="px-2 py-1 text-v2-text-text-weak">Checking the fleet…</div>
+                  </Match>
+                  <Match when={hive()?.measured}>
+                    <Show
+                      when={(hive()!.nodes?.length ?? 0) > 0}
+                      fallback={<div class="px-2 py-1 text-v2-text-text-weak">No machines linked</div>}
+                    >
+                      <ul class="flex flex-col">
+                        <For each={hive()!.nodes}>
+                          {(n) => (
+                            <li
+                              data-slot="iris-fleet-node"
+                              class="flex items-center justify-between gap-3 rounded px-2 py-1 text-v2-text-text-base"
+                            >
+                              <span class="truncate min-w-0">{n.name}</span>
+                              <span
+                                class="shrink-0 tabular-nums"
+                                classList={{
+                                  "text-v2-state-fg-success": n.online,
+                                  "text-v2-text-text-weak": !n.online,
+                                }}
+                              >
+                                {n.online ? "●" : "—"}
+                              </span>
+                            </li>
+                           )}
+                        </For>
+                      </ul>
+                    </Show>
+                  </Match>
+                </Switch>
+              </div>
+            </Show>
+          </div>
 
           <Show when={notice()}>
             <TooltipV2 placement="bottom" value={<>{notice()!.hint}</>}>
