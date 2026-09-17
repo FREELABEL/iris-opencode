@@ -4,7 +4,8 @@ import {
   forceCollide,
   forceLink,
   forceManyBody,
-  forceRadial,
+  forceX,
+  forceY,
   forceSimulation,
   type Simulation,
   type SimulationLinkDatum,
@@ -452,6 +453,82 @@ export function ringRadii(
   return out
 }
 
+/**
+ * A RADIAL TREE — where each node should sit, not just how far out.
+ *
+ * Rings alone fixed the distance but not the direction: lists spread evenly round their ring
+ * and a list's cards spread evenly round theirs, independently, so a card routinely settled on
+ * the far side from its own list and its edge crossed the whole graph. Here every subtree owns
+ * an angular WEDGE sized by how many leaves it holds, and each child sits in the middle of its
+ * share of its parent's wedge. A list's cards are therefore always fanned out right behind it.
+ *
+ * Outer types (related projects) are spaced evenly round the outermost ring on their own.
+ * Returns positions relative to the centre; the caller adds the canvas centre.
+ */
+export function radialTreeTargets(
+  nodes: { id: number | string; type?: string }[],
+  edges: { source: unknown; target: unknown }[],
+  rootId: number | string,
+  outerTypes: string[] = [],
+): Map<string, { x: number; y: number }> {
+  const idOf = (v: unknown) => String(typeof v === "object" && v ? (v as any).id : v)
+  const radii = ringRadii(nodes, edges, rootId, outerTypes)
+  const out = new Map<string, { x: number; y: number }>()
+  if (!radii.size) return out
+  const root = String(rootId)
+  const ids = new Set(nodes.map((n) => String(n.id)))
+  const outer = new Set(nodes.filter((n) => String(n.id) !== root && outerTypes.includes(n.type ?? "")).map((n) => String(n.id)))
+  const adj = new Map<string, string[]>()
+  for (const e of edges) {
+    const a = idOf(e.source), b = idOf(e.target)
+    if (!ids.has(a) || !ids.has(b)) continue
+    adj.set(a, [...(adj.get(a) ?? []), b])
+    adj.set(b, [...(adj.get(b) ?? []), a])
+  }
+  // Spanning tree by BFS, skipping outer nodes — first discoverer is the parent.
+  const children = new Map<string, string[]>()
+  const seen = new Set([root])
+  const queue = [root]
+  while (queue.length) {
+    const cur = queue.shift()!
+    for (const nb of (adj.get(cur) ?? []).slice().sort()) {
+      if (seen.has(nb) || outer.has(nb)) continue
+      seen.add(nb)
+      children.set(cur, [...(children.get(cur) ?? []), nb])
+      queue.push(nb)
+    }
+  }
+  const leaves = new Map<string, number>()
+  const countLeaves = (id: string): number => {
+    const kids = children.get(id) ?? []
+    const n = kids.length ? kids.reduce((sum, k) => sum + countLeaves(k), 0) : 1
+    leaves.set(id, n)
+    return n
+  }
+  countLeaves(root)
+  const place = (id: string, from: number, to: number) => {
+    const r = radii.get(id) ?? 0
+    const mid = (from + to) / 2
+    out.set(id, id === root ? { x: 0, y: 0 } : { x: r * Math.cos(mid), y: r * Math.sin(mid) })
+    let at = from
+    for (const k of children.get(id) ?? []) {
+      const span = ((to - from) * (leaves.get(k) ?? 1)) / (leaves.get(id) ?? 1)
+      place(k, at, at + span)
+      at += span
+    }
+  }
+  // Start at the top (-90deg) so the first subtree reads first.
+  place(root, -Math.PI / 2, (3 * Math.PI) / 2)
+  // Outer ring (and anything unreachable): even spacing, stable order.
+  const rest = nodes.map((n) => String(n.id)).filter((id) => !out.has(id)).sort()
+  rest.forEach((id, i) => {
+    const a = -Math.PI / 2 + (2 * Math.PI * i) / Math.max(1, rest.length)
+    const r = radii.get(id) ?? 0
+    out.set(id, { x: r * Math.cos(a), y: r * Math.sin(a) })
+  })
+  return out
+}
+
 export function IrisForceGraph(props: {
   nodes: ForceNode[]
   edges: ForceEdge[]
@@ -569,23 +646,32 @@ export function IrisForceGraph(props: {
       .force("collision", forceCollide().radius(35))
 
     if (props.rootId != null) {
-      const radii = ringRadii(nodes, edges, props.rootId, props.outerTypes ?? [])
-      if (radii.size) {
+      const targets = radialTreeTargets(nodes, edges, props.rootId, props.outerTypes ?? [])
+      if (targets.size) {
         const cx = w / 2
         const cy = H() / 2
-        // The root is pinned to the centre: a ring layout whose centre drifts is not a ring.
+        // The root is pinned to the centre: a radial tree whose centre drifts is not one.
         const root = nodes.find((n) => String(n.id) === String(props.rootId))
         if (root) {
           root.fx = cx
           root.fy = cy
         }
+        // Seed at the targets so the layout starts organised instead of untangling a burst.
+        for (const n of nodes) {
+          const t = targets.get(String(n.id))
+          if (t && n !== root) {
+            n.x = cx + t.x
+            n.y = cy + t.y
+          }
+        }
         sim
-          .force("radial", forceRadial<ForceNode>((n) => radii.get(String(n.id)) ?? 0, cx, cy).strength(0.9))
-          // Links pull a card toward its list AROUND the ring; at full ELON strength they would
-          // fight the rings and drag cards inward onto their list.
-          .force("link", (sim.force("link") as any).strength(0.05).distance(RING_STEP))
-          // Weaker charge: the rings do the spreading, so -300 would only fling nodes off them.
-          .force("charge", forceManyBody().strength(-120))
+          .force("x", forceX<ForceNode>((n) => cx + (targets.get(String(n.id))?.x ?? 0)).strength(0.5))
+          .force("y", forceY<ForceNode>((n) => cy + (targets.get(String(n.id))?.y ?? 0)).strength(0.5))
+          // The tree positions do the organising; the link force would only drag nodes off them.
+          .force("link", (sim.force("link") as any).strength(0))
+          // A little charge + ELON's collide keep near neighbours from sitting on each other.
+          .force("charge", forceManyBody().strength(-60))
+          .force("center", null)
       }
     }
 
@@ -755,9 +841,13 @@ export function IrisForceGraph(props: {
     sim.force("center", forceCenter(w / 2, H() / 2))
     // Rings move with the canvas too, and so does the pinned root — else a resize leaves the
     // ring centre where the old centre was and the whole picture sits lopsided.
-    const radial = sim.force("radial") as any
-    if (radial) {
-      radial.x(w / 2).y(H() / 2)
+    // A tree layout is anchored by its x/y targets, not the centre force — rebuild them round
+    // the new centre, and move the pinned root with it.
+    if (props.rootId != null && sim.force("x")) {
+      const targets = radialTreeTargets(sim.nodes(), (sim.force("link") as any)?.links?.() ?? [], props.rootId, props.outerTypes ?? [])
+      sim.force("center", null)
+      sim.force("x", forceX<ForceNode>((n) => w / 2 + (targets.get(String(n.id))?.x ?? 0)).strength(0.5))
+      sim.force("y", forceY<ForceNode>((n) => H() / 2 + (targets.get(String(n.id))?.y ?? 0)).strength(0.5))
       const root = sim.nodes().find((n) => String(n.id) === String(props.rootId))
       if (root) {
         root.fx = w / 2

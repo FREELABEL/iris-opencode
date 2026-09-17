@@ -8,6 +8,7 @@ import {
   placeLabelPositions,
   RING_MIN_GAP,
   RING_STEP,
+  radialTreeTargets,
   ringRadii,
   placeLabels,
   DEFAULT_TYPE,
@@ -317,5 +318,73 @@ describe("rings by depth — the Project graph reads PROJECT -> hubs -> lists ->
   test("d3's mutated edges (source/target as objects) still resolve", () => {
     const mutated = edges.map((x) => ({ source: { id: x.source }, target: { id: x.target } }))
     expect(ringRadii(nodes, mutated, "bloq-682", ["bloq"]).get("item-1")).toBe(r.get("item-1"))
+  })
+})
+
+describe("radial tree — a card sits beside its own list", () => {
+  // Board 682's real shape: ATLAS -> Memory -> 4 lists with 5/3/1/1 cards, + related boards.
+  const lists = [["list-pkg", 5], ["list-spec", 3], ["list-org", 1], ["list-diary", 1]] as const
+  const nodes: { id: string; type: string }[] = [{ id: "bloq-682", type: "atlas" }, { id: "memory-hub", type: "memory" }]
+  const edges: { source: string; target: string }[] = [{ source: "bloq-682", target: "memory-hub" }]
+  for (const [l, n] of lists) {
+    nodes.push({ id: l, type: "brand" })
+    edges.push({ source: "memory-hub", target: l })
+    for (let i = 0; i < n; i++) {
+      nodes.push({ id: `item-${l}-${i}`, type: "brand" })
+      edges.push({ source: l, target: `item-${l}-${i}` })
+    }
+  }
+  for (let i = 0; i < 31; i++) {
+    nodes.push({ id: `bloq-${i}`, type: "bloq" })
+    edges.push({ source: "bloq-682", target: `bloq-${i}` })
+  }
+  const t = radialTreeTargets(nodes, edges, "bloq-682", ["bloq"])
+  const angle = (id: string) => Math.atan2(t.get(id)!.y, t.get(id)!.x)
+  const gap = (a: number, b: number) => Math.abs(Math.atan2(Math.sin(a - b), Math.cos(a - b)))
+
+  test("each list's cards form ONE unbroken run round the ring — no interleaving, no crossing", () => {
+    // The glob: a card settled on the far side from its list and its edge crossed the graph.
+    // (Angular nearness to its own list is the wrong test — a list holding half the cards owns
+    // half the circle, so its end cards are legitimately near a neighbour.)
+    const cards = nodes.filter((n) => n.id.startsWith("item-")).map((n) => ({ list: n.id.replace(/-\d+$/, "").slice(5), a: angle(n.id) }))
+    cards.sort((x, y) => x.a - y.a)
+    let runs = 1
+    for (let i = 1; i < cards.length; i++) if (cards[i].list !== cards[i - 1].list) runs++
+    // Circular: the last and first may belong to the same list and are one run.
+    if (cards[0].list === cards[cards.length - 1].list) runs--
+    expect(runs).toBe(lists.length)
+  })
+
+  test("every card falls inside its OWN list's wedge", () => {
+    // Contiguity and even spacing both survive rotating every card 180deg away from its list.
+    // This does not: a list owns (its cards / all cards) of the circle, centred on the list.
+    const total = lists.reduce((sum, [, n]) => sum + n, 0)
+    for (const [l, n] of lists) {
+      const halfWedge = (Math.PI * n) / total
+      for (let i = 0; i < n; i++) expect(gap(angle(`item-${l}-${i}`), angle(l)), `${l} card ${i}`).toBeLessThanOrEqual(halfWedge + 0.001)
+    }
+  })
+
+  test("the root is the centre", () => {
+    expect(t.get("bloq-682")).toEqual({ x: 0, y: 0 })
+  })
+
+  test("wedges are sized by card count, so cards are evenly spaced and none are crammed", () => {
+    // Equal wedges per list would put Package Index's 5 cards in the same arc as Organ-System's
+    // one, cramming them. Proportional wedges space every card the same.
+    const as = nodes.filter((n) => n.id.startsWith("item-")).map((n) => angle(n.id)).sort((a, b) => a - b)
+    const gaps = as.map((a, i) => gap(a, as[(i + 1) % as.length]))
+    expect(Math.max(...gaps) - Math.min(...gaps)).toBeLessThan(0.001)
+  })
+
+  test("related projects all sit on the one outer ring, outside the structure", () => {
+    const r = (id: string) => Math.hypot(t.get(id)!.x, t.get(id)!.y)
+    const outer = Array.from({ length: 31 }, (_, i) => r(`bloq-${i}`))
+    expect(Math.max(...outer) - Math.min(...outer)).toBeLessThan(0.001)
+    expect(outer[0]).toBeGreaterThan(r("item-list-pkg-0"))
+  })
+
+  test("every node gets a position", () => {
+    expect(t.size).toBe(nodes.length)
   })
 })
