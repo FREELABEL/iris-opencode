@@ -5,6 +5,11 @@ import {
   edgeLabelBox,
   labelScale,
   nodeLabelBox,
+  placeLabelPositions,
+  RING_MIN_GAP,
+  RING_STEP,
+  radialTreeTargets,
+  ringRadii,
   placeLabels,
   DEFAULT_TYPE,
   edgeStrengthOf,
@@ -90,20 +95,26 @@ describe("the legend describes the data, not the vocabulary", () => {
   })
 })
 
-describe("edge strength is Elon's, not d3's", () => {
+describe("edge strength is ELON's exactly: e.strength || 0.3", () => {
   test("an edge's own strength wins", () => {
     expect(edgeStrengthOf({ type: "parent", strength: 0.9 })).toBe(0.9)
   })
 
-  test("a hierarchy holds tighter than an affiliation", () => {
-    // If these were equal, cluster tightness would carry no meaning.
-    expect(edgeStrengthOf({ type: "parent" })).toBeGreaterThan(edgeStrengthOf({ type: "affiliated" }))
+  test("TYPE PLAYS NO PART — a parent edge pulls exactly like any other", () => {
+    // A per-type table (parent 0.7…) once lived here labelled as ELON's. ELON has none: it
+    // is `strength: e.strength || 0.3` for every edge. The invented 0.7 crushed a project's
+    // related boards onto ATLAS and made the Project graph stop looking like ELON's.
+    expect(edgeStrengthOf({ type: "parent" })).toBe(DEFAULT_EDGE_STRENGTH)
+    expect(edgeStrengthOf({ type: "sibling" })).toBe(edgeStrengthOf({ type: "affiliated" }))
   })
 
-  test("an unknown type gets Elon's 0.3 fallback, NOT d3's 1/min(degree)", () => {
-    // d3's default slackens hub links exactly where Elon's stay tight, which is why two
-    // graphs built from identical data settled differently.
-    expect(edgeStrengthOf({ type: "whatever" })).toBe(DEFAULT_EDGE_STRENGTH)
+  test("the fallback is 0.3, not d3's 1/min(degree)", () => {
+    expect(DEFAULT_EDGE_STRENGTH).toBe(0.3)
+    expect(edgeStrengthOf({ type: "whatever" })).toBe(0.3)
+  })
+
+  test("a strength of 0 falls back, because ELON uses || not ??", () => {
+    expect(edgeStrengthOf({ strength: 0 })).toBe(0.3)
   })
 })
 
@@ -172,15 +183,14 @@ describe("label placement — decided, not all drawn", () => {
     expect(run()).toEqual(["a"])
   })
 
-  test("ZOOMING IN reveals labels hidden at 1x", () => {
-    // The reason labels are screen-constant: when text scaled with the zoom group, overlap
-    // was identical at every zoom and zooming in — the gesture you use to read a cluster —
-    // could never free a single label.
+  test("ZOOMING IN gives crowded labels their primary spot back", () => {
+    // Screen-constant labels shrink in graph units as you zoom, so labels pushed to a fallback
+    // spot (or off entirely) at 1x return to their natural place below the node when zoomed.
     const a = { id: 1, name: "Package Index v0.1", size: 12, x: 0, y: 0 }
     const b = { id: 2, name: "Dataset + Page SERVED", size: 12, x: 60, y: 0 }
-    const at = (k: number) => placeLabels([nodeLabelBox(a, k), nodeLabelBox(b, k)], []).size
-    expect(at(1)).toBe(1)
-    expect(at(3)).toBe(2)
+    const at = (k: number) => placeLabelPositions([nodeLabelBox(a, k), nodeLabelBox(b, k)], [])
+    expect([...at(1).values()].filter((p) => p === 0).length).toBe(1)
+    expect([...at(3).values()].every((p) => p === 0)).toBe(true)
   })
 
   test("labels stay screen-constant: 1x is unchanged, zoom is clamped", () => {
@@ -190,13 +200,44 @@ describe("label placement — decided, not all drawn", () => {
     expect(labelScale(0.01)).toBe(labelScale(0.3))
   })
 
-  test("a label already on screen keeps its place against a near-equal rival (hysteresis)", () => {
+  test("a label already on screen keeps the primary spot against a near-equal rival (hysteresis)", () => {
     const hub = { id: 1, name: "Agents", size: 14, x: 0, y: 0 }
     const item = { id: 2, name: "Agents", size: 12, x: 5, y: 0 }
-    // Without hysteresis the bigger node takes it...
-    expect([...placeLabels([nodeLabelBox(hub, 1), nodeLabelBox(item, 1)], [])]).toEqual(["n:1"])
-    // ...but a label that was already showing is not displaced by a 2px size difference.
-    expect([...placeLabels([nodeLabelBox(hub, 1), nodeLabelBox(item, 1, true)], [])]).toEqual(["n:2"])
+    // Without hysteresis the bigger node takes the spot below...
+    expect(placeLabelPositions([nodeLabelBox(hub, 1), nodeLabelBox(item, 1)], []).get("n:1")).toBe(0)
+    // ...but a label already showing is not displaced by a 2px size difference.
+    expect(placeLabelPositions([nodeLabelBox(hub, 1), nodeLabelBox(item, 1, true)], []).get("n:2")).toBe(0)
+  })
+
+  test("a list WITH cards takes the primary spot over a bigger leaf board", () => {
+    // Board 682: 31 related boards at size 18 took the space and "📦 Package Index" (16)
+    // lost its label while its own cards kept theirs.
+    const list = { id: "list-1", name: "📦 Package Index", size: 16, x: 0, y: 0 }
+    const board = { id: "bloq-9", name: "Genesis UI SDK", size: 18, x: 4, y: 0 }
+    expect(placeLabelPositions([nodeLabelBox(list, 1, false, 5), nodeLabelBox(board, 1)], []).get("n:list-1")).toBe(0)
+  })
+
+  test("an EMPTY list does not jump the queue", () => {
+    const list = { id: "list-2", name: "Ideas", size: 16, x: 0, y: 0 }
+    const board = { id: "bloq-9", name: "Genesis UI SDK", size: 18, x: 4, y: 0 }
+    expect(placeLabelPositions([nodeLabelBox(list, 1, false, 0), nodeLabelBox(board, 1)], []).get("n:bloq-9")).toBe(0)
+  })
+
+  test("a label BLOCKED below moves to another spot instead of vanishing", () => {
+    // The case that hid "📦 Package Index": its own cards cluster right under it. One card's
+    // circle directly below must not cost the list its name.
+    const list = { id: "list-1", name: "📦 Package Index", size: 16, x: 0, y: 0 }
+    const box = nodeLabelBox(list, 1, false, 5)
+    const cardBelow = { x: box.x, y: box.y, w: box.w, h: box.h, owner: "n:item-7" }
+    const pos = placeLabelPositions([box], [cardBelow]).get("n:list-1")
+    expect(pos).toBeDefined()
+    expect(pos).not.toBe(0)
+  })
+
+  test("a label keeps last frame's fallback spot rather than hopping back and forth", () => {
+    const list = { id: "list-1", name: "📦 Package Index", size: 16, x: 0, y: 0 }
+    // Nothing blocks it now, but it held "right" (2) last frame — it should stay there.
+    expect(placeLabelPositions([nodeLabelBox(list, 1, true, 5, 2)], []).get("n:list-1")).toBe(2)
   })
 
   test("an edge caption never beats a node name", () => {
@@ -225,5 +266,125 @@ describe("untyped edges — the crash an expanded board caused", () => {
 
   test("an untyped edge gets ELON's default strength, not undefined", () => {
     expect(edgeStrengthOf({})).toBe(DEFAULT_EDGE_STRENGTH)
+  })
+})
+
+describe("rings by depth — the Project graph reads PROJECT -> hubs -> lists -> cards", () => {
+  // Board 682's shape: ATLAS -> Memory -> lists -> cards, plus related boards off ATLAS.
+  const nodes = [
+    { id: "bloq-682", type: "atlas" },
+    { id: "memory-hub", type: "memory" },
+    { id: "list-1", type: "brand" },
+    { id: "item-1", type: "brand" },
+    { id: "bloq-9", type: "bloq" },
+    { id: "bloq-10", type: "bloq" },
+  ]
+  const edges = [
+    { source: "bloq-682", target: "memory-hub" },
+    { source: "memory-hub", target: "list-1" },
+    { source: "list-1", target: "item-1" },
+    { source: "bloq-682", target: "bloq-9" },
+    { source: "bloq-682", target: "bloq-10" },
+  ]
+  const r = ringRadii(nodes, edges, "bloq-682", ["bloq"])
+
+  test("each level of the hierarchy sits further out than the last", () => {
+    expect(r.get("bloq-682")).toBe(0)
+    expect(r.get("memory-hub")!).toBeGreaterThan(0)
+    expect(r.get("list-1")!).toBeGreaterThan(r.get("memory-hub")!)
+    expect(r.get("item-1")!).toBeGreaterThan(r.get("list-1")!)
+  })
+
+  test("related projects go on the OUTER ring, not beside Memory", () => {
+    // They are depth 1 (linked straight to ATLAS). On ring 1 they tangled into the project's
+    // own structure — the glob. They are other projects; they belong outside it.
+    expect(r.get("bloq-9")!).toBeGreaterThan(r.get("item-1")!)
+    expect(r.get("bloq-9")).toBe(r.get("bloq-10"))
+  })
+
+  test("a crowded ring grows so its nodes are not piled on each other", () => {
+    const many = [{ id: "root", type: "atlas" }, ...Array.from({ length: 40 }, (_, i) => ({ id: `n${i}`, type: "brand" }))]
+    const e = many.slice(1).map((n) => ({ source: "root", target: n.id }))
+    const radius = ringRadii(many, e, "root").get("n0")!
+    expect(radius).toBeGreaterThan(RING_STEP)
+    // Circumference leaves at least the minimum gap per node.
+    expect((2 * Math.PI * radius) / 40).toBeGreaterThanOrEqual(RING_MIN_GAP - 0.001)
+  })
+
+  test("no root on the canvas means no rings — the plain web is untouched", () => {
+    expect(ringRadii(nodes, edges, "bloq-999").size).toBe(0)
+  })
+
+  test("d3's mutated edges (source/target as objects) still resolve", () => {
+    const mutated = edges.map((x) => ({ source: { id: x.source }, target: { id: x.target } }))
+    expect(ringRadii(nodes, mutated, "bloq-682", ["bloq"]).get("item-1")).toBe(r.get("item-1"))
+  })
+})
+
+describe("radial tree — a card sits beside its own list", () => {
+  // Board 682's real shape: ATLAS -> Memory -> 4 lists with 5/3/1/1 cards, + related boards.
+  const lists = [["list-pkg", 5], ["list-spec", 3], ["list-org", 1], ["list-diary", 1]] as const
+  const nodes: { id: string; type: string }[] = [{ id: "bloq-682", type: "atlas" }, { id: "memory-hub", type: "memory" }]
+  const edges: { source: string; target: string }[] = [{ source: "bloq-682", target: "memory-hub" }]
+  for (const [l, n] of lists) {
+    nodes.push({ id: l, type: "brand" })
+    edges.push({ source: "memory-hub", target: l })
+    for (let i = 0; i < n; i++) {
+      nodes.push({ id: `item-${l}-${i}`, type: "brand" })
+      edges.push({ source: l, target: `item-${l}-${i}` })
+    }
+  }
+  for (let i = 0; i < 31; i++) {
+    nodes.push({ id: `bloq-${i}`, type: "bloq" })
+    edges.push({ source: "bloq-682", target: `bloq-${i}` })
+  }
+  const t = radialTreeTargets(nodes, edges, "bloq-682", ["bloq"])
+  const angle = (id: string) => Math.atan2(t.get(id)!.y, t.get(id)!.x)
+  const gap = (a: number, b: number) => Math.abs(Math.atan2(Math.sin(a - b), Math.cos(a - b)))
+
+  test("each list's cards form ONE unbroken run round the ring — no interleaving, no crossing", () => {
+    // The glob: a card settled on the far side from its list and its edge crossed the graph.
+    // (Angular nearness to its own list is the wrong test — a list holding half the cards owns
+    // half the circle, so its end cards are legitimately near a neighbour.)
+    const cards = nodes.filter((n) => n.id.startsWith("item-")).map((n) => ({ list: n.id.replace(/-\d+$/, "").slice(5), a: angle(n.id) }))
+    cards.sort((x, y) => x.a - y.a)
+    let runs = 1
+    for (let i = 1; i < cards.length; i++) if (cards[i].list !== cards[i - 1].list) runs++
+    // Circular: the last and first may belong to the same list and are one run.
+    if (cards[0].list === cards[cards.length - 1].list) runs--
+    expect(runs).toBe(lists.length)
+  })
+
+  test("every card falls inside its OWN list's wedge", () => {
+    // Contiguity and even spacing both survive rotating every card 180deg away from its list.
+    // This does not: a list owns (its cards / all cards) of the circle, centred on the list.
+    const total = lists.reduce((sum, [, n]) => sum + n, 0)
+    for (const [l, n] of lists) {
+      const halfWedge = (Math.PI * n) / total
+      for (let i = 0; i < n; i++) expect(gap(angle(`item-${l}-${i}`), angle(l)), `${l} card ${i}`).toBeLessThanOrEqual(halfWedge + 0.001)
+    }
+  })
+
+  test("the root is the centre", () => {
+    expect(t.get("bloq-682")).toEqual({ x: 0, y: 0 })
+  })
+
+  test("wedges are sized by card count, so cards are evenly spaced and none are crammed", () => {
+    // Equal wedges per list would put Package Index's 5 cards in the same arc as Organ-System's
+    // one, cramming them. Proportional wedges space every card the same.
+    const as = nodes.filter((n) => n.id.startsWith("item-")).map((n) => angle(n.id)).sort((a, b) => a - b)
+    const gaps = as.map((a, i) => gap(a, as[(i + 1) % as.length]))
+    expect(Math.max(...gaps) - Math.min(...gaps)).toBeLessThan(0.001)
+  })
+
+  test("related projects all sit on the one outer ring, outside the structure", () => {
+    const r = (id: string) => Math.hypot(t.get(id)!.x, t.get(id)!.y)
+    const outer = Array.from({ length: 31 }, (_, i) => r(`bloq-${i}`))
+    expect(Math.max(...outer) - Math.min(...outer)).toBeLessThan(0.001)
+    expect(outer[0]).toBeGreaterThan(r("item-list-pkg-0"))
+  })
+
+  test("every node gets a position", () => {
+    expect(t.size).toBe(nodes.length)
   })
 })

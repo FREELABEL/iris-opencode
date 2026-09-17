@@ -4,6 +4,8 @@ import {
   forceCollide,
   forceLink,
   forceManyBody,
+  forceX,
+  forceY,
   forceSimulation,
   type Simulation,
   type SimulationLinkDatum,
@@ -142,19 +144,16 @@ export const NODE_TYPES: Record<string, { label: string; color: string; icon: st
 export const DEFAULT_TYPE = "bloq"
 export const nodeStyle = (t?: string) => NODE_TYPES[t ?? DEFAULT_TYPE] ?? NODE_TYPES[DEFAULT_TYPE]
 
-/**
- * ELON'S PER-EDGE STRENGTHS. A hierarchy should hold tighter than an affiliation, and reading
- * cluster tightness as meaning only works if the strengths differ on purpose.
+/*
+ * NO PER-TYPE STRENGTH TABLE, and there was never one in ELON.
+ *
+ * A table lived here (parent 0.7, sibling 0.5, feeds_into 0.4…) under the heading "ELON'S
+ * PER-EDGE STRENGTHS". That heading was false — I wrote the table, not ELON. RelationshipGraph.vue
+ * maps every edge to `strength: e.strength || 0.3` and relationshipGraphData never sets one, so in
+ * ELON every link pulls at 0.3. The invented 0.7 on `parent` crushed a project's related boards
+ * into a tight ring on ATLAS while its lists and cards pulled at 0.3 — the Project graph stopped
+ * looking like ELON's for a reason no one had decided.
  */
-export const EDGE_STRENGTH: Record<string, number> = {
-  parent: 0.7,
-  sibling: 0.5,
-  feeds_into: 0.4,
-  mirrors: 0.35,
-  affiliated: 0.3,
-  partner: 0.3,
-}
-/** Elon's fallback when a payload carries no strength. */
 export const DEFAULT_EDGE_STRENGTH = 0.3
 
 /**
@@ -178,9 +177,10 @@ export function typeCountsOf(nodes: { type?: string }[]): Record<string, number>
   return out
 }
 
-/** Elon's edge strength resolution: the edge's own, else the type's, else 0.3. */
+/** ELON's edge strength: the edge's own, else 0.3. Type plays no part. */
 export function edgeStrengthOf(e: { type?: string; strength?: number }): number {
-  return e.strength ?? (e.type ? EDGE_STRENGTH[e.type] : undefined) ?? DEFAULT_EDGE_STRENGTH
+  // `||`, not `??`, exactly as ELON: a strength of 0 falls back to 0.3 there too.
+  return e.strength || DEFAULT_EDGE_STRENGTH
 }
 
 /**
@@ -220,6 +220,14 @@ export interface LabelBox {
   priority: number
   /** The node this label belongs to — its own circle is not an obstacle for it. */
   owner?: string
+  /**
+   * Other top-left corners to try, in order, when the primary spot is blocked — same w/h.
+   * Index 0 is (x, y); alts[i] is position i + 1. A label tried only BELOW its node loses
+   * whenever a child card sits there, which is exactly where a list's own cards cluster.
+   */
+  alts?: { x: number; y: number }[]
+  /** The position this label held last frame, tried first so it does not hop while settling. */
+  preferred?: number
 }
 
 export interface Obstacle {
@@ -233,7 +241,12 @@ export interface Obstacle {
 const overlaps = (a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }) =>
   a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
 
-export function placeLabels(candidates: LabelBox[], obstacles: Obstacle[], pinned: Set<string> = new Set()): Set<string> {
+/** Which position each placed label took: 0 = primary, i = alts[i - 1]. */
+export function placeLabelPositions(
+  candidates: LabelBox[],
+  obstacles: Obstacle[],
+  pinned: Set<string> = new Set(),
+): Map<string, number> {
   const order = [...candidates].sort(
     (a, b) =>
       Number(pinned.has(b.id)) - Number(pinned.has(a.id)) ||
@@ -243,18 +256,46 @@ export function placeLabels(candidates: LabelBox[], obstacles: Obstacle[], pinne
       (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
   )
   const placed: LabelBox[] = []
-  const visible = new Set<string>()
+  const chosen = new Map<string, number>()
   for (const c of order) {
+    const spots = [{ x: c.x, y: c.y }, ...(c.alts ?? [])]
+    // Last frame's spot first, then the rest in their natural order.
+    const tryOrder = spots.map((_, i) => i)
+    if (c.preferred != null && c.preferred > 0 && c.preferred < spots.length) {
+      tryOrder.splice(tryOrder.indexOf(c.preferred), 1)
+      tryOrder.unshift(c.preferred)
+    }
+    let pick = -1
+    for (const i of tryOrder) {
+      const box = { ...c, x: spots[i].x, y: spots[i].y }
+      const free =
+        !placed.some((p) => overlaps(box, p)) && !obstacles.some((o) => o.owner !== c.owner && overlaps(box, o))
+      if (free) {
+        pick = i
+        break
+      }
+    }
     // A pinned label (the hovered node) is drawn regardless — hovering something and still
     // not being able to read its name is the one outcome worse than clutter.
-    const free =
-      pinned.has(c.id) ||
-      (!placed.some((p) => overlaps(c, p)) && !obstacles.some((o) => o.owner !== c.owner && overlaps(c, o)))
-    if (!free) continue
-    placed.push(c)
-    visible.add(c.id)
+    if (pick < 0 && pinned.has(c.id)) pick = tryOrder[0]
+    if (pick < 0) continue
+    placed.push({ ...c, x: spots[pick].x, y: spots[pick].y })
+    chosen.set(c.id, pick)
   }
-  return visible
+  return chosen
+}
+
+export function placeLabels(candidates: LabelBox[], obstacles: Obstacle[], pinned: Set<string> = new Set()): Set<string> {
+  return new Set(placeLabelPositions(candidates, obstacles, pinned).keys())
+}
+
+/** Where a node's label sits for each position index, relative to the node centre. */
+export function nodeLabelAnchor(pos: number, size: number, k: number) {
+  const s = labelScale(k)
+  if (pos === 1) return { x: 0, dy: -(size + 5 * s), anchor: "middle" as const } // above
+  if (pos === 2) return { x: size + 4 * s, dy: 4 * s, anchor: "start" as const } // right
+  if (pos === 3) return { x: -(size + 4 * s), dy: 4 * s, anchor: "end" as const } // left
+  return { x: 0, dy: size + 14 * s, anchor: "middle" as const } // below — ELON's spot
 }
 
 /**
@@ -286,21 +327,41 @@ export const edgeCaption = (e: { label?: string; type?: string }): string | null
 
 export const nodeLabelText = (name: string) => (name.length > 18 ? name.slice(0, 16) + "…" : name)
 
-export function nodeLabelBox(n: { id: number | string; name: string; size: number; x: number; y: number }, k: number, prevVisible = false): LabelBox {
+export function nodeLabelBox(
+  n: { id: number | string; name: string; size: number; x: number; y: number },
+  k: number,
+  prevVisible = false,
+  /** Outgoing edges. A node with children is structure (a list with cards, a hub). */
+  children = 0,
+  /** Position held last frame, if any. */
+  prevPos?: number,
+): LabelBox {
   const s = labelScale(k)
   const w = nodeLabelText(n.name).length * NODE_CHAR_W * s
   const h = 13 * s
-  const baseline = n.y + n.size + 14 * s
+  // Top of a text box is its baseline minus the ascent (~10px at 11px type).
+  const top = (pos: number) => n.y + nodeLabelAnchor(pos, n.size, k).dy - 10 * s
+  const below = { x: n.x - w / 2, y: top(0) }
   return {
     id: `n:${n.id}`,
-    x: n.x - w / 2,
-    y: baseline - 10 * s,
+    x: below.x,
+    y: below.y,
+    alts: [
+      { x: n.x - w / 2, y: top(1) }, // above
+      { x: n.x + n.size + 4 * s, y: top(2) }, // right
+      { x: n.x - n.size - 4 * s - w, y: top(3) }, // left
+    ],
+    preferred: prevPos,
     w,
     h,
     // Bigger nodes are the hubs and the centre — the labels that orient you.
     // +5 for a label already on screen: hysteresis, so two near-equal labels do not trade
     // places every frame while the simulation is still settling.
-    priority: n.size + (prevVisible ? 5 : 0),
+    // A CONTAINER outranks a leaf, even a slightly bigger one. By size alone a project's 31
+    // related boards (18) beat its lists (16), so "📦 Package Index" lost its name while the
+    // cards under it kept theirs — the graph showed the leaves and hid the structure that
+    // gives them meaning. +6 lifts a list with cards over a leaf board; an empty list stays 16.
+    priority: n.size + (children > 0 ? 6 : 0) + (prevVisible ? 5 : 0),
     owner: `n:${n.id}`,
   }
 }
@@ -320,11 +381,163 @@ export function edgeLabelBox(e: { x1: number; y1: number; x2: number; y2: number
   }
 }
 
+/**
+ * RINGS BY DEPTH — the Project graph read as PROJECT -> hubs -> lists -> cards.
+ *
+ * ELON's physics (distance 120, charge -300) has no notion of depth, so a project with 30+
+ * related boards is one radial burst: lists interleave with boards and a card can settle on
+ * the far side of the canvas from its own list. Here each node gets a target RADIUS from its
+ * depth below the root, and a radial force holds it on that ring; the link force still pulls
+ * a card toward its list around the ring. The picture now encodes the hierarchy it is drawing.
+ *
+ * `outerTypes` go on their own outermost ring whatever their depth. Related projects are depth
+ * 1 (linked straight to ATLAS) but they are OTHER projects — putting them on ring 1 with Memory
+ * and Agents is what tangled them into this project's structure.
+ *
+ * A ring's radius grows with its population (minimum arc gap per node), so 31 boards do not
+ * pile up on a ring sized for 3. Pure, so the ring assignment is testable without a DOM.
+ */
+export const RING_STEP = 150
+export const RING_MIN_GAP = 70
+
+export function ringRadii(
+  nodes: { id: number | string; type?: string }[],
+  edges: { source: unknown; target: unknown }[],
+  rootId: number | string,
+  outerTypes: string[] = [],
+): Map<string, number> {
+  const idOf = (v: unknown) => String(typeof v === "object" && v ? (v as any).id : v)
+  const ids = new Set(nodes.map((n) => String(n.id)))
+  const root = String(rootId)
+  const out = new Map<string, number>()
+  if (!ids.has(root)) return out
+  const adj = new Map<string, string[]>()
+  for (const e of edges) {
+    const a = idOf(e.source), b = idOf(e.target)
+    if (!ids.has(a) || !ids.has(b)) continue
+    adj.set(a, [...(adj.get(a) ?? []), b])
+    adj.set(b, [...(adj.get(b) ?? []), a])
+  }
+  const outer = new Set(nodes.filter((n) => String(n.id) !== root && outerTypes.includes(n.type ?? "")).map((n) => String(n.id)))
+  // BFS through the structure only: an outer node is not a path to anything.
+  const depth = new Map<string, number>([[root, 0]])
+  const queue = [root]
+  while (queue.length) {
+    const cur = queue.shift()!
+    if (outer.has(cur)) continue
+    for (const nb of adj.get(cur) ?? []) {
+      if (depth.has(nb)) continue
+      depth.set(nb, depth.get(cur)! + 1)
+      queue.push(nb)
+    }
+  }
+  let maxDepth = 0
+  for (const [id, d] of depth) if (!outer.has(id)) maxDepth = Math.max(maxDepth, d)
+  // Outer types, and anything unreachable, sit one ring past the deepest structure.
+  const ringOf = (id: string) => (outer.has(id) || !depth.has(id) ? maxDepth + 1 : depth.get(id)!)
+  const counts = new Map<number, number>()
+  for (const n of nodes) {
+    const r = ringOf(String(n.id))
+    counts.set(r, (counts.get(r) ?? 0) + 1)
+  }
+  const radius = new Map<number, number>([[0, 0]])
+  const rings = [...counts.keys()].filter((r) => r > 0).sort((a, b) => a - b)
+  let prev = 0
+  for (const r of rings) {
+    const byPopulation = ((counts.get(r) ?? 0) * RING_MIN_GAP) / (2 * Math.PI)
+    const next = Math.max(prev + RING_STEP, byPopulation)
+    radius.set(r, next)
+    prev = next
+  }
+  for (const n of nodes) out.set(String(n.id), radius.get(ringOf(String(n.id))) ?? 0)
+  return out
+}
+
+/**
+ * A RADIAL TREE — where each node should sit, not just how far out.
+ *
+ * Rings alone fixed the distance but not the direction: lists spread evenly round their ring
+ * and a list's cards spread evenly round theirs, independently, so a card routinely settled on
+ * the far side from its own list and its edge crossed the whole graph. Here every subtree owns
+ * an angular WEDGE sized by how many leaves it holds, and each child sits in the middle of its
+ * share of its parent's wedge. A list's cards are therefore always fanned out right behind it.
+ *
+ * Outer types (related projects) are spaced evenly round the outermost ring on their own.
+ * Returns positions relative to the centre; the caller adds the canvas centre.
+ */
+export function radialTreeTargets(
+  nodes: { id: number | string; type?: string }[],
+  edges: { source: unknown; target: unknown }[],
+  rootId: number | string,
+  outerTypes: string[] = [],
+): Map<string, { x: number; y: number }> {
+  const idOf = (v: unknown) => String(typeof v === "object" && v ? (v as any).id : v)
+  const radii = ringRadii(nodes, edges, rootId, outerTypes)
+  const out = new Map<string, { x: number; y: number }>()
+  if (!radii.size) return out
+  const root = String(rootId)
+  const ids = new Set(nodes.map((n) => String(n.id)))
+  const outer = new Set(nodes.filter((n) => String(n.id) !== root && outerTypes.includes(n.type ?? "")).map((n) => String(n.id)))
+  const adj = new Map<string, string[]>()
+  for (const e of edges) {
+    const a = idOf(e.source), b = idOf(e.target)
+    if (!ids.has(a) || !ids.has(b)) continue
+    adj.set(a, [...(adj.get(a) ?? []), b])
+    adj.set(b, [...(adj.get(b) ?? []), a])
+  }
+  // Spanning tree by BFS, skipping outer nodes — first discoverer is the parent.
+  const children = new Map<string, string[]>()
+  const seen = new Set([root])
+  const queue = [root]
+  while (queue.length) {
+    const cur = queue.shift()!
+    for (const nb of (adj.get(cur) ?? []).slice().sort()) {
+      if (seen.has(nb) || outer.has(nb)) continue
+      seen.add(nb)
+      children.set(cur, [...(children.get(cur) ?? []), nb])
+      queue.push(nb)
+    }
+  }
+  const leaves = new Map<string, number>()
+  const countLeaves = (id: string): number => {
+    const kids = children.get(id) ?? []
+    const n = kids.length ? kids.reduce((sum, k) => sum + countLeaves(k), 0) : 1
+    leaves.set(id, n)
+    return n
+  }
+  countLeaves(root)
+  const place = (id: string, from: number, to: number) => {
+    const r = radii.get(id) ?? 0
+    const mid = (from + to) / 2
+    out.set(id, id === root ? { x: 0, y: 0 } : { x: r * Math.cos(mid), y: r * Math.sin(mid) })
+    let at = from
+    for (const k of children.get(id) ?? []) {
+      const span = ((to - from) * (leaves.get(k) ?? 1)) / (leaves.get(id) ?? 1)
+      place(k, at, at + span)
+      at += span
+    }
+  }
+  // Start at the top (-90deg) so the first subtree reads first.
+  place(root, -Math.PI / 2, (3 * Math.PI) / 2)
+  // Outer ring (and anything unreachable): even spacing, stable order.
+  const rest = nodes.map((n) => String(n.id)).filter((id) => !out.has(id)).sort()
+  rest.forEach((id, i) => {
+    const a = -Math.PI / 2 + (2 * Math.PI * i) / Math.max(1, rest.length)
+    const r = radii.get(id) ?? 0
+    out.set(id, { x: r * Math.cos(a), y: r * Math.sin(a) })
+  })
+  return out
+}
+
 export function IrisForceGraph(props: {
   nodes: ForceNode[]
   edges: ForceEdge[]
   height?: number
   onNodeClick?: (n: ForceNode) => void
+  /** Lay out as rings around this node (the Project graph). Omit for the plain ELON force web. */
+  rootId?: number | string
+  /** Types placed on the outermost ring regardless of depth — e.g. related boards. */
+  outerTypes?: string[]
 }) {
   /**
    * A SNAPSHOT per frame, not a counter.
@@ -350,7 +563,7 @@ export function IrisForceGraph(props: {
       x: number
       y: number
     }[]
-    edges: { x1: number; y1: number; x2: number; y2: number; type?: string; label?: string }[]
+    edges: { x1: number; y1: number; x2: number; y2: number; type?: string; label?: string; context?: boolean }[]
   }>({ nodes: [], edges: [] })
   /** Types the viewer has switched off. Empty = show everything, which is the default. */
   const [hiddenTypes, setHiddenTypes] = createSignal<Set<string>>(new Set())
@@ -432,6 +645,36 @@ export function IrisForceGraph(props: {
       .force("center", forceCenter(w / 2, H() / 2))
       .force("collision", forceCollide().radius(35))
 
+    if (props.rootId != null) {
+      const targets = radialTreeTargets(nodes, edges, props.rootId, props.outerTypes ?? [])
+      if (targets.size) {
+        const cx = w / 2
+        const cy = H() / 2
+        // The root is pinned to the centre: a radial tree whose centre drifts is not one.
+        const root = nodes.find((n) => String(n.id) === String(props.rootId))
+        if (root) {
+          root.fx = cx
+          root.fy = cy
+        }
+        // Seed at the targets so the layout starts organised instead of untangling a burst.
+        for (const n of nodes) {
+          const t = targets.get(String(n.id))
+          if (t && n !== root) {
+            n.x = cx + t.x
+            n.y = cy + t.y
+          }
+        }
+        sim
+          .force("x", forceX<ForceNode>((n) => cx + (targets.get(String(n.id))?.x ?? 0)).strength(0.5))
+          .force("y", forceY<ForceNode>((n) => cy + (targets.get(String(n.id))?.y ?? 0)).strength(0.5))
+          // The tree positions do the organising; the link force would only drag nodes off them.
+          .force("link", (sim.force("link") as any).strength(0))
+          // A little charge + ELON's collide keep near neighbours from sitting on each other.
+          .force("charge", forceManyBody().strength(-60))
+          .force("center", null)
+      }
+    }
+
     // One repaint per animation frame, not one per tick. A tick can fire several times a frame
     // and each would be a wasted render of the same positions.
     const snapshot = () =>
@@ -450,7 +693,20 @@ export function IrisForceGraph(props: {
         edges: edges.map((e) => {
           const a = e.source as ForceNode
           const b = e.target as ForceNode
-          return { x1: a?.x ?? 0, y1: a?.y ?? 0, x2: b?.x ?? 0, y2: b?.y ?? 0, type: e.type, label: e.label }
+          return {
+            x1: a?.x ?? 0,
+            y1: a?.y ?? 0,
+            x2: b?.x ?? 0,
+            y2: b?.y ?? 0,
+            type: e.type,
+            label: e.label,
+            // CONTEXT, not structure: in the Project tree an edge out to an outer-ring node (a
+            // related project) is drawn faint and uncaptioned. 31 full-strength spokes from ATLAS
+            // cut straight through the project's own lists and cards and were most of the glob.
+            context:
+              props.rootId != null && !!(props.outerTypes ?? []).length &&
+              ((props.outerTypes ?? []).includes(a?.type ?? "") || (props.outerTypes ?? []).includes(b?.type ?? "")),
+          }
         }),
       })
 
@@ -478,7 +734,9 @@ export function IrisForceGraph(props: {
      */
     sim.on("end", () => {
       if (touched) return
-      const pad = 28
+      // Room for labels, not just circles: a label hangs ~30px past its node, and fitting to
+      // circles alone clipped the top row of names in the Project graph.
+      const pad = 60
       const xs = nodes.map((n) => n.x ?? 0)
       const ys = nodes.map((n) => n.y ?? 0)
       if (!xs.length) return
@@ -594,6 +852,21 @@ export function IrisForceGraph(props: {
     const w = width()
     if (!w || !sim) return
     sim.force("center", forceCenter(w / 2, H() / 2))
+    // Rings move with the canvas too, and so does the pinned root — else a resize leaves the
+    // ring centre where the old centre was and the whole picture sits lopsided.
+    // A tree layout is anchored by its x/y targets, not the centre force — rebuild them round
+    // the new centre, and move the pinned root with it.
+    if (props.rootId != null && sim.force("x")) {
+      const targets = radialTreeTargets(sim.nodes(), (sim.force("link") as any)?.links?.() ?? [], props.rootId, props.outerTypes ?? [])
+      sim.force("center", null)
+      sim.force("x", forceX<ForceNode>((n) => w / 2 + (targets.get(String(n.id))?.x ?? 0)).strength(0.5))
+      sim.force("y", forceY<ForceNode>((n) => H() / 2 + (targets.get(String(n.id))?.y ?? 0)).strength(0.5))
+      const root = sim.nodes().find((n) => String(n.id) === String(props.rootId))
+      if (root) {
+        root.fx = w / 2
+        root.fy = H() / 2
+      }
+    }
     sim.alpha(0.5).restart()
   })
 
@@ -613,17 +886,26 @@ export function IrisForceGraph(props: {
 
   /** Types actually present, in the vocabulary's order so the legend does not reshuffle. */
   /** Labels on screen last frame — the hysteresis input to the next placement. */
-  let prevLabels = new Set<string>()
+  let prevLabels = new Map<string, number>()
 
   const visibleLabels = createMemo(() => {
     const f = frame()
     const k = view().k
-    const nodeBoxes = f.nodes.map((n) => nodeLabelBox(n, k, prevLabels.has(`n:${n.id}`)))
+    // Child counts come from the props, whose ids d3 never touches (it mutates the copies).
+    const kids = new Map<string, number>()
+    for (const e of props.edges) {
+      const src = typeof e.source === "object" ? e.source.id : e.source
+      kids.set(String(src), (kids.get(String(src)) ?? 0) + 1)
+    }
+    const nodeBoxes = f.nodes.map((n) =>
+      nodeLabelBox(n, k, prevLabels.has(`n:${n.id}`), kids.get(String(n.id)) ?? 0, prevLabels.get(`n:${n.id}`)),
+    )
     // Edge captions only once zoomed in far enough to read them, as before.
     const edgeBoxes =
       k > 0.7
         ? f.edges.flatMap((e, i) => {
-            const text = edgeCaption(e)
+            // A context edge gets no caption: 31 identical "parent" labels round ATLAS say nothing.
+            const text = e.context ? null : edgeCaption(e)
             return text ? [edgeLabelBox({ ...e, text }, i, k, prevLabels.has(`e:${i}`))] : []
           })
         : []
@@ -636,7 +918,7 @@ export function IrisForceGraph(props: {
     }))
     const h = hover()
     const pinned = new Set(h ? [`n:${h.id}`] : [])
-    const next = placeLabels([...nodeBoxes, ...edgeBoxes], obstacles, pinned)
+    const next = placeLabelPositions([...nodeBoxes, ...edgeBoxes], obstacles, pinned)
     prevLabels = next
     return next
   })
@@ -719,7 +1001,7 @@ export function IrisForceGraph(props: {
                   y2={e.y2}
                   stroke={edgeStyle(e.type).color}
                   stroke-width="1.5"
-                  stroke-opacity="0.6"
+                  stroke-opacity={e.context ? "0.14" : "0.6"}
                   stroke-dasharray={edgeStyle(e.type).dash}
                   marker-end="url(#iris-arrow)"
                 />
@@ -791,8 +1073,9 @@ export function IrisForceGraph(props: {
                 </g>
                 <Show when={visibleLabels().has(`n:${n.id}`)}>
                 <text
-                  dy={n.size + 14 * labelScale(view().k)}
-                  text-anchor="middle"
+                  x={nodeLabelAnchor(visibleLabels().get(`n:${n.id}`) ?? 0, n.size, view().k).x}
+                  dy={nodeLabelAnchor(visibleLabels().get(`n:${n.id}`) ?? 0, n.size, view().k).dy}
+                  text-anchor={nodeLabelAnchor(visibleLabels().get(`n:${n.id}`) ?? 0, n.size, view().k).anchor}
                   font-size={String(11 * labelScale(view().k))}
                   font-weight="600"
                   /* A token, not #e5e7eb. The panel is light or dark depending on the viewer,
