@@ -563,7 +563,7 @@ export function IrisForceGraph(props: {
       x: number
       y: number
     }[]
-    edges: { x1: number; y1: number; x2: number; y2: number; type?: string; label?: string }[]
+    edges: { x1: number; y1: number; x2: number; y2: number; type?: string; label?: string; context?: boolean }[]
   }>({ nodes: [], edges: [] })
   /** Types the viewer has switched off. Empty = show everything, which is the default. */
   const [hiddenTypes, setHiddenTypes] = createSignal<Set<string>>(new Set())
@@ -693,7 +693,20 @@ export function IrisForceGraph(props: {
         edges: edges.map((e) => {
           const a = e.source as ForceNode
           const b = e.target as ForceNode
-          return { x1: a?.x ?? 0, y1: a?.y ?? 0, x2: b?.x ?? 0, y2: b?.y ?? 0, type: e.type, label: e.label }
+          return {
+            x1: a?.x ?? 0,
+            y1: a?.y ?? 0,
+            x2: b?.x ?? 0,
+            y2: b?.y ?? 0,
+            type: e.type,
+            label: e.label,
+            // CONTEXT, not structure: in the Project tree an edge out to an outer-ring node (a
+            // related project) is drawn faint and uncaptioned. 31 full-strength spokes from ATLAS
+            // cut straight through the project's own lists and cards and were most of the glob.
+            context:
+              props.rootId != null && !!(props.outerTypes ?? []).length &&
+              ((props.outerTypes ?? []).includes(a?.type ?? "") || (props.outerTypes ?? []).includes(b?.type ?? "")),
+          }
         }),
       })
 
@@ -891,7 +904,8 @@ export function IrisForceGraph(props: {
     const edgeBoxes =
       k > 0.7
         ? f.edges.flatMap((e, i) => {
-            const text = edgeCaption(e)
+            // A context edge gets no caption: 31 identical "parent" labels round ATLAS say nothing.
+            const text = e.context ? null : edgeCaption(e)
             return text ? [edgeLabelBox({ ...e, text }, i, k, prevLabels.has(`e:${i}`))] : []
           })
         : []
@@ -987,7 +1001,7 @@ export function IrisForceGraph(props: {
                   y2={e.y2}
                   stroke={edgeStyle(e.type).color}
                   stroke-width="1.5"
-                  stroke-opacity="0.6"
+                  stroke-opacity={e.context ? "0.14" : "0.6"}
                   stroke-dasharray={edgeStyle(e.type).dash}
                   marker-end="url(#iris-arrow)"
                 />
