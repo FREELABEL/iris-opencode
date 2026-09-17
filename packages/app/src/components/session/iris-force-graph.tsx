@@ -110,13 +110,6 @@ const edgeStyle = (t: string) => EDGE_STYLE[t] ?? { color: "#374151" }
  */
 export const NODE_TYPES: Record<string, { label: string; color: string; icon: string }> = {
   atlas: { label: "Atlas", color: "#34d399", icon: "M12 3 L20 18 H4 Z" },
-  /*
-   * NOT ELON'S EITHER — like `page`, this is desktop's own container type. Lists hold Atlas
-   * items; without a type of their own they collapse into the `atlas` chip and "filter items"
-     becomes indistinguishable from "filter the folders they sit in". Amber: the folder is
-     what holds the green content.
-   */
-  list: { label: "Lists", color: "#fbbf24", icon: "M4 6h16M4 12h16M4 18h10" },
   artist: { label: "Artists", color: "#f43f5e", icon: "M9 18V6l10-2v12M9 18a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm10-2a2 2 0 1 1-4 0 2 2 0 0 1 4 0z" },
   person: { label: "People", color: "#3b82f6", icon: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm-8 8a8 8 0 0 1 16 0z" },
   venue: { label: "Venues", color: "#a855f7", icon: "M4 20V8l8-4 8 4v12H4zm6 0v-6h4v6" },
@@ -130,16 +123,16 @@ export const NODE_TYPES: Record<string, { label: string; color: string; icon: st
   leadcluster: { label: "Lead Groups", color: "#f472b6", icon: "M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM3 20a6 6 0 0 1 12 0M15 20a6 6 0 0 1 6-6" },
   memory: { label: "Memory", color: "#a3a3a3", icon: "M4 7c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zm0 0v10c0 1.7 3.6 3 8 3s8-1.3 8-3V7" },
   playbook: { label: "Playbooks", color: "#facc15", icon: "M4 5h7v15H4zM13 5h7v15h-7zM11 5v15" },
-  /*
-   * NOT ELON'S. Genesis pages have no equivalent in its 14 — that vocabulary was built for what
-   * an Elon board holds, and this product holds things Elon does not.
-   *
-   * Added rather than mapped onto a near-neighbour: calling a page a `brand` would colour it
-   * green, put a tag icon on it and file it in the Brands legend chip, which is not a smaller
-   * error than having no type for it — it is a confident wrong answer instead of a missing one.
-   */
-  page: { label: "Pages", color: "#e879f9", icon: "M6 3h8l4 4v14H6zM14 3v4h4M9 12h6M9 16h6" },
 }
+/*
+ * EXACTLY ELON'S 14 — `page` and `list` were removed, not forgotten.
+ *
+ * Both were desktop-only types added while /iris/graph/:id drew its own Lists/Pages hubs. Once
+ * that endpoint was ported onto ELON's relationshipGraphData (#185584), nothing emits either:
+ * lists hang under ELON's Memory hub typed by inferType, which only ever returns ELON types, and
+ * Genesis pages are not part of ELON's graph at all. A type nothing emits is a legend chip that
+ * can never appear and an icon nobody will see drift out of date.
+ */
 export const DEFAULT_TYPE = "bloq"
 export const nodeStyle = (t?: string) => NODE_TYPES[t ?? DEFAULT_TYPE] ?? NODE_TYPES[DEFAULT_TYPE]
 

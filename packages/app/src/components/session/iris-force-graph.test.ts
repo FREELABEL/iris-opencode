@@ -34,7 +34,10 @@ describe("the vocabulary is Elon's, not a parallel one", () => {
     // does not have, and the fix would be to bump a number — which is how a vocabulary drifts
     // without anyone deciding to. Naming the extras makes each one a decision on the record.
     const extras = Object.keys(NODE_TYPES).filter((t) => !ELON_14.includes(t))
-    expect(extras).toEqual(["page"])
+    // Empty since #185584 ported the interior onto ELON's own rules: `page` and `list` were
+    // desktop-only and nothing emits them now. Adding one back should fail here until someone
+    // decides it on purpose.
+    expect(extras).toEqual([])
   })
 
   test("every type has an inline icon path, never a font glyph name", () => {
