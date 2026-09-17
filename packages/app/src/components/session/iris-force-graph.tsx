@@ -218,6 +218,14 @@ export interface LabelBox {
   priority: number
   /** The node this label belongs to — its own circle is not an obstacle for it. */
   owner?: string
+  /**
+   * Other top-left corners to try, in order, when the primary spot is blocked — same w/h.
+   * Index 0 is (x, y); alts[i] is position i + 1. A label tried only BELOW its node loses
+   * whenever a child card sits there, which is exactly where a list's own cards cluster.
+   */
+  alts?: { x: number; y: number }[]
+  /** The position this label held last frame, tried first so it does not hop while settling. */
+  preferred?: number
 }
 
 export interface Obstacle {
@@ -231,7 +239,12 @@ export interface Obstacle {
 const overlaps = (a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }) =>
   a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
 
-export function placeLabels(candidates: LabelBox[], obstacles: Obstacle[], pinned: Set<string> = new Set()): Set<string> {
+/** Which position each placed label took: 0 = primary, i = alts[i - 1]. */
+export function placeLabelPositions(
+  candidates: LabelBox[],
+  obstacles: Obstacle[],
+  pinned: Set<string> = new Set(),
+): Map<string, number> {
   const order = [...candidates].sort(
     (a, b) =>
       Number(pinned.has(b.id)) - Number(pinned.has(a.id)) ||
@@ -241,18 +254,46 @@ export function placeLabels(candidates: LabelBox[], obstacles: Obstacle[], pinne
       (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
   )
   const placed: LabelBox[] = []
-  const visible = new Set<string>()
+  const chosen = new Map<string, number>()
   for (const c of order) {
+    const spots = [{ x: c.x, y: c.y }, ...(c.alts ?? [])]
+    // Last frame's spot first, then the rest in their natural order.
+    const tryOrder = spots.map((_, i) => i)
+    if (c.preferred != null && c.preferred > 0 && c.preferred < spots.length) {
+      tryOrder.splice(tryOrder.indexOf(c.preferred), 1)
+      tryOrder.unshift(c.preferred)
+    }
+    let pick = -1
+    for (const i of tryOrder) {
+      const box = { ...c, x: spots[i].x, y: spots[i].y }
+      const free =
+        !placed.some((p) => overlaps(box, p)) && !obstacles.some((o) => o.owner !== c.owner && overlaps(box, o))
+      if (free) {
+        pick = i
+        break
+      }
+    }
     // A pinned label (the hovered node) is drawn regardless — hovering something and still
     // not being able to read its name is the one outcome worse than clutter.
-    const free =
-      pinned.has(c.id) ||
-      (!placed.some((p) => overlaps(c, p)) && !obstacles.some((o) => o.owner !== c.owner && overlaps(c, o)))
-    if (!free) continue
-    placed.push(c)
-    visible.add(c.id)
+    if (pick < 0 && pinned.has(c.id)) pick = tryOrder[0]
+    if (pick < 0) continue
+    placed.push({ ...c, x: spots[pick].x, y: spots[pick].y })
+    chosen.set(c.id, pick)
   }
-  return visible
+  return chosen
+}
+
+export function placeLabels(candidates: LabelBox[], obstacles: Obstacle[], pinned: Set<string> = new Set()): Set<string> {
+  return new Set(placeLabelPositions(candidates, obstacles, pinned).keys())
+}
+
+/** Where a node's label sits for each position index, relative to the node centre. */
+export function nodeLabelAnchor(pos: number, size: number, k: number) {
+  const s = labelScale(k)
+  if (pos === 1) return { x: 0, dy: -(size + 5 * s), anchor: "middle" as const } // above
+  if (pos === 2) return { x: size + 4 * s, dy: 4 * s, anchor: "start" as const } // right
+  if (pos === 3) return { x: -(size + 4 * s), dy: 4 * s, anchor: "end" as const } // left
+  return { x: 0, dy: size + 14 * s, anchor: "middle" as const } // below — ELON's spot
 }
 
 /**
@@ -290,15 +331,25 @@ export function nodeLabelBox(
   prevVisible = false,
   /** Outgoing edges. A node with children is structure (a list with cards, a hub). */
   children = 0,
+  /** Position held last frame, if any. */
+  prevPos?: number,
 ): LabelBox {
   const s = labelScale(k)
   const w = nodeLabelText(n.name).length * NODE_CHAR_W * s
   const h = 13 * s
-  const baseline = n.y + n.size + 14 * s
+  // Top of a text box is its baseline minus the ascent (~10px at 11px type).
+  const top = (pos: number) => n.y + nodeLabelAnchor(pos, n.size, k).dy - 10 * s
+  const below = { x: n.x - w / 2, y: top(0) }
   return {
     id: `n:${n.id}`,
-    x: n.x - w / 2,
-    y: baseline - 10 * s,
+    x: below.x,
+    y: below.y,
+    alts: [
+      { x: n.x - w / 2, y: top(1) }, // above
+      { x: n.x + n.size + 4 * s, y: top(2) }, // right
+      { x: n.x - n.size - 4 * s - w, y: top(3) }, // left
+    ],
+    preferred: prevPos,
     w,
     h,
     // Bigger nodes are the hubs and the centre — the labels that orient you.
@@ -621,7 +672,7 @@ export function IrisForceGraph(props: {
 
   /** Types actually present, in the vocabulary's order so the legend does not reshuffle. */
   /** Labels on screen last frame — the hysteresis input to the next placement. */
-  let prevLabels = new Set<string>()
+  let prevLabels = new Map<string, number>()
 
   const visibleLabels = createMemo(() => {
     const f = frame()
@@ -632,7 +683,9 @@ export function IrisForceGraph(props: {
       const src = typeof e.source === "object" ? e.source.id : e.source
       kids.set(String(src), (kids.get(String(src)) ?? 0) + 1)
     }
-    const nodeBoxes = f.nodes.map((n) => nodeLabelBox(n, k, prevLabels.has(`n:${n.id}`), kids.get(String(n.id)) ?? 0))
+    const nodeBoxes = f.nodes.map((n) =>
+      nodeLabelBox(n, k, prevLabels.has(`n:${n.id}`), kids.get(String(n.id)) ?? 0, prevLabels.get(`n:${n.id}`)),
+    )
     // Edge captions only once zoomed in far enough to read them, as before.
     const edgeBoxes =
       k > 0.7
@@ -650,7 +703,7 @@ export function IrisForceGraph(props: {
     }))
     const h = hover()
     const pinned = new Set(h ? [`n:${h.id}`] : [])
-    const next = placeLabels([...nodeBoxes, ...edgeBoxes], obstacles, pinned)
+    const next = placeLabelPositions([...nodeBoxes, ...edgeBoxes], obstacles, pinned)
     prevLabels = next
     return next
   })
@@ -805,8 +858,9 @@ export function IrisForceGraph(props: {
                 </g>
                 <Show when={visibleLabels().has(`n:${n.id}`)}>
                 <text
-                  dy={n.size + 14 * labelScale(view().k)}
-                  text-anchor="middle"
+                  x={nodeLabelAnchor(visibleLabels().get(`n:${n.id}`) ?? 0, n.size, view().k).x}
+                  dy={nodeLabelAnchor(visibleLabels().get(`n:${n.id}`) ?? 0, n.size, view().k).dy}
+                  text-anchor={nodeLabelAnchor(visibleLabels().get(`n:${n.id}`) ?? 0, n.size, view().k).anchor}
                   font-size={String(11 * labelScale(view().k))}
                   font-weight="600"
                   /* A token, not #e5e7eb. The panel is light or dark depending on the viewer,

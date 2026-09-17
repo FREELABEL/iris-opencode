@@ -5,6 +5,7 @@ import {
   edgeLabelBox,
   labelScale,
   nodeLabelBox,
+  placeLabelPositions,
   placeLabels,
   DEFAULT_TYPE,
   edgeStrengthOf,
@@ -178,15 +179,14 @@ describe("label placement — decided, not all drawn", () => {
     expect(run()).toEqual(["a"])
   })
 
-  test("ZOOMING IN reveals labels hidden at 1x", () => {
-    // The reason labels are screen-constant: when text scaled with the zoom group, overlap
-    // was identical at every zoom and zooming in — the gesture you use to read a cluster —
-    // could never free a single label.
+  test("ZOOMING IN gives crowded labels their primary spot back", () => {
+    // Screen-constant labels shrink in graph units as you zoom, so labels pushed to a fallback
+    // spot (or off entirely) at 1x return to their natural place below the node when zoomed.
     const a = { id: 1, name: "Package Index v0.1", size: 12, x: 0, y: 0 }
     const b = { id: 2, name: "Dataset + Page SERVED", size: 12, x: 60, y: 0 }
-    const at = (k: number) => placeLabels([nodeLabelBox(a, k), nodeLabelBox(b, k)], []).size
-    expect(at(1)).toBe(1)
-    expect(at(3)).toBe(2)
+    const at = (k: number) => placeLabelPositions([nodeLabelBox(a, k), nodeLabelBox(b, k)], [])
+    expect([...at(1).values()].filter((p) => p === 0).length).toBe(1)
+    expect([...at(3).values()].every((p) => p === 0)).toBe(true)
   })
 
   test("labels stay screen-constant: 1x is unchanged, zoom is clamped", () => {
@@ -196,27 +196,44 @@ describe("label placement — decided, not all drawn", () => {
     expect(labelScale(0.01)).toBe(labelScale(0.3))
   })
 
-  test("a label already on screen keeps its place against a near-equal rival (hysteresis)", () => {
+  test("a label already on screen keeps the primary spot against a near-equal rival (hysteresis)", () => {
     const hub = { id: 1, name: "Agents", size: 14, x: 0, y: 0 }
     const item = { id: 2, name: "Agents", size: 12, x: 5, y: 0 }
-    // Without hysteresis the bigger node takes it...
-    expect([...placeLabels([nodeLabelBox(hub, 1), nodeLabelBox(item, 1)], [])]).toEqual(["n:1"])
-    // ...but a label that was already showing is not displaced by a 2px size difference.
-    expect([...placeLabels([nodeLabelBox(hub, 1), nodeLabelBox(item, 1, true)], [])]).toEqual(["n:2"])
+    // Without hysteresis the bigger node takes the spot below...
+    expect(placeLabelPositions([nodeLabelBox(hub, 1), nodeLabelBox(item, 1)], []).get("n:1")).toBe(0)
+    // ...but a label already showing is not displaced by a 2px size difference.
+    expect(placeLabelPositions([nodeLabelBox(hub, 1), nodeLabelBox(item, 1, true)], []).get("n:2")).toBe(0)
   })
 
-  test("a list WITH cards keeps its name over a bigger leaf board", () => {
+  test("a list WITH cards takes the primary spot over a bigger leaf board", () => {
     // Board 682: 31 related boards at size 18 took the space and "📦 Package Index" (16)
     // lost its label while its own cards kept theirs.
     const list = { id: "list-1", name: "📦 Package Index", size: 16, x: 0, y: 0 }
     const board = { id: "bloq-9", name: "Genesis UI SDK", size: 18, x: 4, y: 0 }
-    expect([...placeLabels([nodeLabelBox(list, 1, false, 5), nodeLabelBox(board, 1)], [])]).toEqual(["n:list-1"])
+    expect(placeLabelPositions([nodeLabelBox(list, 1, false, 5), nodeLabelBox(board, 1)], []).get("n:list-1")).toBe(0)
   })
 
   test("an EMPTY list does not jump the queue", () => {
     const list = { id: "list-2", name: "Ideas", size: 16, x: 0, y: 0 }
     const board = { id: "bloq-9", name: "Genesis UI SDK", size: 18, x: 4, y: 0 }
-    expect([...placeLabels([nodeLabelBox(list, 1, false, 0), nodeLabelBox(board, 1)], [])]).toEqual(["n:bloq-9"])
+    expect(placeLabelPositions([nodeLabelBox(list, 1, false, 0), nodeLabelBox(board, 1)], []).get("n:bloq-9")).toBe(0)
+  })
+
+  test("a label BLOCKED below moves to another spot instead of vanishing", () => {
+    // The case that hid "📦 Package Index": its own cards cluster right under it. One card's
+    // circle directly below must not cost the list its name.
+    const list = { id: "list-1", name: "📦 Package Index", size: 16, x: 0, y: 0 }
+    const box = nodeLabelBox(list, 1, false, 5)
+    const cardBelow = { x: box.x, y: box.y, w: box.w, h: box.h, owner: "n:item-7" }
+    const pos = placeLabelPositions([box], [cardBelow]).get("n:list-1")
+    expect(pos).toBeDefined()
+    expect(pos).not.toBe(0)
+  })
+
+  test("a label keeps last frame's fallback spot rather than hopping back and forth", () => {
+    const list = { id: "list-1", name: "📦 Package Index", size: 16, x: 0, y: 0 }
+    // Nothing blocks it now, but it held "right" (2) last frame — it should stay there.
+    expect(placeLabelPositions([nodeLabelBox(list, 1, true, 5, 2)], []).get("n:list-1")).toBe(2)
   })
 
   test("an edge caption never beats a node name", () => {
