@@ -70,7 +70,13 @@ export interface ForceEdge extends SimulationLinkDatum<ForceNode> {
   /** d3 REPLACES these ids with the node objects on the first tick, hence the union. */
   source: number | string | ForceNode
   target: number | string | ForceNode
-  type: string
+  /**
+   * OPTIONAL, because the server says so. Only board-to-board relations carry one (parent,
+   * sibling, feeds_into…). ELON's hub and child edges carry a label or nothing — 20 of 52 edges
+   * on board 682. This was `string`, `e.type.replace` threw on the first untyped edge, and the
+   * error boundary took down the whole app the moment a board was expanded past 0.7 zoom.
+   */
+  type?: string
   /** Drawn at the midpoint. Elon labels its edges; without it a dashed line is unreadable. */
   label?: string
   /**
@@ -95,7 +101,7 @@ const EDGE_STYLE: Record<string, { color: string; dash?: string }> = {
   feeds_into: { color: "#f97316" },
   mirrors: { color: "#ec4899", dash: "2,2" },
 }
-const edgeStyle = (t: string) => EDGE_STYLE[t] ?? { color: "#374151" }
+const edgeStyle = (t?: string) => (t ? EDGE_STYLE[t] : undefined) ?? { color: "#374151" }
 
 /**
  * ELON'S 14-TYPE VOCABULARY, colours verbatim.
@@ -173,8 +179,8 @@ export function typeCountsOf(nodes: { type?: string }[]): Record<string, number>
 }
 
 /** Elon's edge strength resolution: the edge's own, else the type's, else 0.3. */
-export function edgeStrengthOf(e: { type: string; strength?: number }): number {
-  return e.strength ?? EDGE_STRENGTH[e.type] ?? DEFAULT_EDGE_STRENGTH
+export function edgeStrengthOf(e: { type?: string; strength?: number }): number {
+  return e.strength ?? (e.type ? EDGE_STRENGTH[e.type] : undefined) ?? DEFAULT_EDGE_STRENGTH
 }
 
 /**
@@ -267,6 +273,17 @@ export const labelScale = (k: number) => 1 / Math.min(4, Math.max(0.3, k))
 const NODE_CHAR_W = 6.4
 const EDGE_CHAR_W = 5.2
 
+/**
+ * An edge's caption, or null for none.
+ *
+ * ELON captions only edges that HAVE a label (`edges.filter(e => e.label)`). Desktop also
+ * captions board relations by their type, since `feeds_into` on an unlabelled line is the only
+ * thing saying which relation it is. Neither label nor type means no caption — not a crash,
+ * and not an empty box claiming space in placement.
+ */
+export const edgeCaption = (e: { label?: string; type?: string }): string | null =>
+  e.label || (e.type ? e.type.replace(/_/g, " ") : null)
+
 export const nodeLabelText = (name: string) => (name.length > 18 ? name.slice(0, 16) + "…" : name)
 
 export function nodeLabelBox(n: { id: number | string; name: string; size: number; x: number; y: number }, k: number, prevVisible = false): LabelBox {
@@ -333,7 +350,7 @@ export function IrisForceGraph(props: {
       x: number
       y: number
     }[]
-    edges: { x1: number; y1: number; x2: number; y2: number; type: string; label?: string }[]
+    edges: { x1: number; y1: number; x2: number; y2: number; type?: string; label?: string }[]
   }>({ nodes: [], edges: [] })
   /** Types the viewer has switched off. Empty = show everything, which is the default. */
   const [hiddenTypes, setHiddenTypes] = createSignal<Set<string>>(new Set())
@@ -605,7 +622,10 @@ export function IrisForceGraph(props: {
     // Edge captions only once zoomed in far enough to read them, as before.
     const edgeBoxes =
       k > 0.7
-        ? f.edges.map((e, i) => edgeLabelBox({ ...e, text: e.label ?? e.type.replace(/_/g, " ") }, i, k, prevLabels.has(`e:${i}`)))
+        ? f.edges.flatMap((e, i) => {
+            const text = edgeCaption(e)
+            return text ? [edgeLabelBox({ ...e, text }, i, k, prevLabels.has(`e:${i}`))] : []
+          })
         : []
     const obstacles: Obstacle[] = f.nodes.map((n) => ({
       x: n.x - n.size,
@@ -722,7 +742,7 @@ export function IrisForceGraph(props: {
                   fill="#6b7280"
                   style={{ "pointer-events": "none" }}
                 >
-                  {e.label ?? e.type.replace(/_/g, " ")}
+                  {edgeCaption(e)}
                 </text>
               </Show>
             )}

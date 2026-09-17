@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   DEFAULT_EDGE_STRENGTH,
+  edgeCaption,
   edgeLabelBox,
   labelScale,
   nodeLabelBox,
@@ -203,5 +204,26 @@ describe("label placement — decided, not all drawn", () => {
     const edge = edgeLabelBox({ x1: -20, y1: node.y + 20, x2: 20, y2: node.y + 20, text: "parent" }, 0, 1, true)
     const v = placeLabels([edge, node], [])
     expect(v.has("n:1")).toBe(true)
+  })
+})
+
+describe("untyped edges — the crash an expanded board caused", () => {
+  // Live on board 682: 20 of 52 edges carry no `type`, 19 carry neither type nor label. The
+  // renderer called e.type.replace on them and the error boundary took the whole app down.
+  test("an edge with neither label nor type has NO caption, and does not throw", () => {
+    expect(() => edgeCaption({})).not.toThrow()
+    expect(edgeCaption({})).toBeNull()
+  })
+
+  test("ELON's labelled hub edge uses its label", () => {
+    expect(edgeCaption({ label: "memory" })).toBe("memory")
+  })
+
+  test("a board relation with only a type is still captioned by it", () => {
+    expect(edgeCaption({ type: "feeds_into" })).toBe("feeds into")
+  })
+
+  test("an untyped edge gets ELON's default strength, not undefined", () => {
+    expect(edgeStrengthOf({})).toBe(DEFAULT_EDGE_STRENGTH)
   })
 })
