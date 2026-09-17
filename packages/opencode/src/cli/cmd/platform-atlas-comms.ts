@@ -407,6 +407,75 @@ async function ingestAppleMailViaScript(lead: any, account: string, days: number
   return { items: unique, unavailable: failures, answered }
 }
 
+/**
+ * Refresh one lead's comms from the local channels, and REPORT WHAT COULD NOT BE READ (#184926).
+ *
+ * Pulse used to carry its own copies of the iMessage and WhatsApp readers. They were a fork of the
+ * ones above, so they missed every fix made here — including the name-matching that grafted a
+ * stranger's private messages onto a client record (#183513) — they never read mail at all, and
+ * they POSTed fire-and-forget, so pulse could score before the comms it just read had landed.
+ *
+ * Returns health-shaped checks so a channel that could not be read degrades the score instead of
+ * being scored over: "no contact" and "could not look" are different claims.
+ */
+export async function refreshLeadComms(
+  lead: any,
+  leadId: number,
+  opts: { mailAccount?: string; days?: number; allowNameMatch?: boolean } = {},
+): Promise<{ checks: { name: string; ok: boolean; detail?: string }[]; ingested: number }> {
+  const days = opts.days ?? 30
+  const reads: { label: string; channel: string; read: ChannelRead }[] = [
+    { label: "iMessage", channel: "imessage", read: ingestImessage(lead) },
+    { label: "WhatsApp", channel: "whatsapp", read: ingestWhatsapp(lead, { allowNameMatch: opts.allowNameMatch }) },
+  ]
+  if (opts.mailAccount) {
+    reads.push({ label: "Apple Mail", channel: "apple_mail", read: await ingestAppleMailViaScript(lead, opts.mailAccount, days) })
+  }
+
+  const checks: { name: string; ok: boolean; detail?: string }[] = []
+  let ingested = 0
+  let existing: any[] | null = null
+
+  for (const { label, channel, read } of reads) {
+    const outcome = channelOutcome(label, read)
+    checks.push(outcome.failed ? { name: label, ok: false, detail: outcome.line } : { name: label, ok: true })
+
+    let items = read.items
+    if (channel === "apple_mail" && items.length) {
+      if (existing === null) {
+        try {
+          const r = await irisFetch(`/api/v1/atlas/comms?${new URLSearchParams({ lead_id: String(leadId), per_page: "500" })}`)
+          const d = r.ok ? ((await r.json()) as any) : null
+          existing = d ? firstArray(d?.data?.data, d?.data) : []
+        } catch {
+          existing = []
+        }
+      }
+      items = withoutLedgerDuplicates(items, existing).keep
+    }
+    if (!items.length) continue
+
+    // AWAITED. The old inline version fired the POST and moved on, so the score could be computed
+    // over a ledger the ingest had not reached yet.
+    try {
+      const res = await irisFetch("/api/v1/atlas/comms/ingest", {
+        method: "POST",
+        body: JSON.stringify({ lead_id: leadId, channel, items: items.map((i: any) => ({ ...i, channel: i.channel ?? channel })) }),
+      })
+      if (!res.ok) {
+        checks.push({ name: `${label} (store)`, ok: false, detail: `read ${items.length} message(s) but the ledger refused them (HTTP ${res.status})` })
+        continue
+      }
+      const body = (await res.json()) as any
+      ingested += Number((body?.data ?? body)?.new ?? 0)
+    } catch (e: any) {
+      checks.push({ name: `${label} (store)`, ok: false, detail: `could not store ${items.length} message(s): ${String(e?.message ?? e).slice(0, 100)}` })
+    }
+  }
+
+  return { checks, ingested }
+}
+
 // ── list ──
 
 const CommsListCommand = cmd({

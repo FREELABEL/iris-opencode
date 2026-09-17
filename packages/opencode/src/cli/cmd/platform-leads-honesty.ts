@@ -68,6 +68,30 @@ export interface ChannelBlindness {
  * An empty input (the probe batch itself failed) is blind, not clean: that is
  * exactly the case where a fail-open default would claim health it never saw.
  */
+/**
+ * Fold a comms refresh into the health checks before blindness is computed (#184926).
+ *
+ * Both directions matter. A channel the refresh could not read is one this run did not see, even
+ * if a probe said the channel was fine. A channel the refresh DID read is one this run saw, even
+ * if the probe said otherwise — reading Mail over AppleEvents works while the daemon has no Full
+ * Disk Access, and calling that blind understates what was measured.
+ */
+export function mergeRefreshIntoChecks(
+  healthChecks: ChannelHealthLike[],
+  refreshChecks: { name: string; ok: boolean; detail?: string }[],
+): ChannelHealthLike[] {
+  const readOk = new Set(refreshChecks.filter((c) => c.ok).map((c) => c.name.toLowerCase()))
+  const seen = new Set(healthChecks.map((h) => String(h.name).toLowerCase()))
+  const merged: ChannelHealthLike[] = healthChecks.map((h) =>
+    !h.ok && readOk.has(String(h.name).toLowerCase()) ? { ...h, ok: true } : h,
+  )
+  // A failed refresh on a channel nothing probed is still a channel this run could not see.
+  for (const c of refreshChecks) {
+    if (!c.ok && !seen.has(c.name.toLowerCase())) merged.push({ name: c.name, ok: false })
+  }
+  return merged
+}
+
 export function groupChannelBlindness(checks: ChannelHealthLike[]): ChannelBlindness {
   const total = checks.length
   const blindChecks = checks.filter((c) => !c.ok)

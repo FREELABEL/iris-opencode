@@ -3,6 +3,7 @@ import { cmd } from "./cmd"
 import { PulseCheckCommand } from "./platform-pulse-check"
 import { summariseOutgoing, collectOutgoing, healOutgoing, type OutgoingReport } from "./comms-outgoing-health"
 import { probeBridge } from "./platform-mail"
+import { refreshLeadComms } from "./platform-atlas-comms"
 import { productCommand } from "./product-command"
 import * as prompts from "./clack"
 import { UI } from "../ui"
@@ -48,6 +49,7 @@ import {
 import { firstArray } from "../../util/array"
 import {
   groupChannelBlindness,
+  mergeRefreshIntoChecks,
   sentimentSufficiency,
   latestTouch,
   collectTouchCandidates,
@@ -3329,6 +3331,10 @@ const LeadsPulseCommand = cmd({
       .positional("id", { describe: "lead ID, name, or email", type: "string", demandOption: true })
       .option("days", { describe: "look-back window in days", type: "number", default: 30 })
       .option("limit", { describe: "max messages per channel", type: "number", default: 50 })
+      .option("mail-account", {
+        describe: "also read this Mail.app account's mail for the lead (both directions, no Full Disk Access) — e.g. amayo@mypathwaysai.com",
+        type: "string",
+      })
       .option("hydrate", {
         describe: "generate + send follow-up if gate is unpaid + past throttle window",
         type: "boolean",
@@ -3502,75 +3508,25 @@ const LeadsPulseCommand = cmd({
       printKV("Status", lead.status)
       printKV("Company", lead.company)
 
-      // Auto-ingest comms before scoring (fire-and-forget, non-blocking)
-      // This ensures pulse sees fresh comms data from iMessage, WhatsApp, etc.
+      // Refresh comms before scoring, through the SAME readers `iris comms ingest` uses.
+      //
+      // This was ~70 lines of forked iMessage and WhatsApp readers: they missed every fix made to
+      // the originals (including the name match that grafted a stranger's messages onto a client,
+      // #183513), never read mail at all, and POSTed fire-and-forget so the score could be computed
+      // before the comms landed. What could not be read now joins the health checks below, so a
+      // blind channel degrades the score instead of being silently scored over (#184926).
+      let commsRefresh: { checks: { name: string; ok: boolean; detail?: string }[]; ingested: number } = { checks: [], ingested: 0 }
       try {
-        const identifiers: string[] = []
-        if (phone) identifiers.push(phone)
-        if (email) identifiers.push(email)
-        if (identifiers.length > 0) {
-          // iMessage ingest
-          try {
-            const { isAvailable: imAvail, searchByHandle } = require("../lib/imessage")
-            if (imAvail()) {
-              for (const ident of identifiers) {
-                const msgs = searchByHandle(ident, 30, 50)
-                if (msgs.length > 0) {
-                  irisFetch("/api/v1/atlas/comms/ingest", {
-                    method: "POST",
-                    body: JSON.stringify({
-                      lead_id: leadId, channel: "imessage",
-                      items: msgs.map((m: any) => ({
-                        direction: m.from_me ? "outbound" : "inbound",
-                        from_identifier: m.from_me ? "me" : (m.chat_identifier || ident),
-                        body: m.text, sent_at: m.date,
-                        external_message_id: `imessage_${m.id}`,
-                      })),
-                    }),
-                  }).catch(() => {})
-                }
-              }
-            }
-          } catch {}
-          // WhatsApp ingest
-          try {
-            const wa = require("../lib/whatsapp")
-            if (wa.isAvailable()) {
-              let waMsgs = phone ? wa.searchByPhone(phone, 30, 50) : []
-              if (waMsgs.length === 0 && name) {
-                const names = [name, name.split(" ")[0], ...(name.match(/\(([^)]+)\)/g) || []).map((m: string) => m.replace(/[()]/g, "")), ...(name.split(/\s*[—–-]\s*/).filter((p: string) => p.length > 2))].filter(Boolean)
-                for (const n of names) {
-                  waMsgs = wa.searchByName(n.trim(), 30, 50)
-                  if (waMsgs.length > 0) break
-                }
-              }
-              if (waMsgs.length > 0) {
-                irisFetch("/api/v1/atlas/comms/ingest", {
-                  method: "POST",
-                  body: JSON.stringify({
-                    lead_id: leadId, channel: "whatsapp",
-                    items: waMsgs.map((m: any) => ({
-                      direction: m.from_me ? "outbound" : "inbound",
-                      from_identifier: m.from_me ? "me" : (wa.extractPhone(m.from_jid) || phone),
-                      body: m.text, sent_at: m.date,
-                      external_message_id: `whatsapp_${m.id}`,
-                    })),
-                  }),
-                }).catch(() => {})
-              }
-              // WhatsApp GROUP ingest — explicitly linked groups (contact_info.whatsapp_groups).
-              // Authoritative group-ingest path: items carry correct external IDs + metadata; server dedups.
-              const waGroupItems = wa.readGroupsForLead(lead, 30, 50)
-              if (waGroupItems.length > 0) {
-                irisFetch("/api/v1/atlas/comms/ingest", {
-                  method: "POST",
-                  body: JSON.stringify({ lead_id: leadId, channel: "whatsapp", items: waGroupItems }),
-                }).catch(() => {})
-              }
-            }
-          } catch {}
+        commsRefresh = await refreshLeadComms(lead, leadId, {
+          mailAccount: args["mail-account"] ? String(args["mail-account"]) : undefined,
+          days: 30,
+        })
+        for (const c of commsRefresh.checks.filter((c) => !c.ok)) {
+          prompts.log.warn(`comms refresh — ${c.detail ?? c.name}`)
         }
-      } catch { /* non-fatal — pulse still works without fresh comms */ }
+      } catch (e: any) {
+        commsRefresh.checks.push({ name: "comms refresh", ok: false, detail: String(e?.message ?? e).slice(0, 140) })
+      }
 
       // #184926 — probe channel health BEFORE rendering any score.
       //
@@ -3584,7 +3540,13 @@ const LeadsPulseCommand = cmd({
       // with 4/6 channels down printed "Engagement: 20/100", "Last outreach
       // 2695h ago" and a HIGH payment follow-up with no qualifier — the same
       // rendering as a fully-live read, for a lead who had been phoned that day.
-      const blindness: ChannelBlindness = groupChannelBlindness(healthChecks)
+      // The comms refresh above is part of the instrument, in BOTH directions.
+      //
+      // A channel it could not read is a channel this run did not see, exactly like a failed health
+      // probe. And a channel it DID read is one this run saw, even when the daemon's own probe says
+      // otherwise — reading Mail over AppleEvents works while the daemon has no Full Disk Access,
+      // and reporting that as blind would understate what was actually measured.
+      const blindness: ChannelBlindness = groupChannelBlindness(mergeRefreshIntoChecks(healthChecks, commsRefresh.checks))
 
       // Pulse readiness score — single source of truth.
       // Same number the cron snapshots and the daily digest emails.
@@ -4042,7 +4004,15 @@ const LeadsPulseCommand = cmd({
               ? `${UI.Style.TEXT_WARNING}${s}/100${UI.Style.TEXT_NORMAL}`
               : `${UI.Style.TEXT_DANGER}${s}/100${UI.Style.TEXT_NORMAL}`
         const hotBadge = leadScore.is_hot_lead ? `  ${success("HOT")}` : ""
-        printKV("Engagement", `${scoreLabel}${hotBadge}`)
+        // #184926 — engagement is computed from the same channels the health probes just failed on.
+        // The readiness score above already refuses to render a bare number over a blind read; this
+        // one was still printing "20/100" beside it, which is the figure the bug report quotes.
+        printKV(
+          "Engagement",
+          blindness.unavailable
+            ? `${UI.Style.TEXT_DIM}UNAVAILABLE${UI.Style.TEXT_NORMAL} — ${blindness.summary}`
+            : `${scoreLabel}${hotBadge}${blindness.partial ? dim(`  (partial read — ${blindness.summary})`) : ""}`,
+        )
       }
 
       // Render Deal Health — always show (#57659)

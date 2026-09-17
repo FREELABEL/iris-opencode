@@ -1,6 +1,7 @@
 import { describe, test, expect } from "bun:test"
 
 import {
+  mergeRefreshIntoChecks,
   channelShortName,
   groupChannelBlindness,
   sentimentSufficiency,
@@ -688,5 +689,42 @@ describe("nextFollowUpState", () => {
     const s = nextFollowUpState({ next_follow_up: "next Wednesday ish" }, NOW)
     expect(s.scheduled).toBe(false)
     expect(s.overdue).toBe(false)
+  })
+})
+
+describe("mergeRefreshIntoChecks — what THIS RUN saw (#184926)", () => {
+  const health = [
+    { name: "Apple Mail", ok: false },
+    { name: "iMessage", ok: false },
+    { name: "Gmail", ok: false },
+    { name: "WhatsApp", ok: true },
+  ]
+
+  test("a channel the refresh read is no longer blind, even though the daemon probe failed", () => {
+    // Measured 2026-09-17: the daemon has no Full Disk Access, so its Apple Mail probe fails —
+    // but pulse read that mailbox over AppleEvents in the same run.
+    const merged = mergeRefreshIntoChecks(health, [{ name: "Apple Mail", ok: true }, { name: "iMessage", ok: true }])
+    const blind = merged.filter((c) => !c.ok).map((c) => c.name)
+
+    expect(blind).toEqual(["Gmail"])
+  })
+
+  test("a channel the refresh could NOT read stays blind", () => {
+    const merged = mergeRefreshIntoChecks(health, [{ name: "Apple Mail", ok: false, detail: "Mail.app is not answering" }])
+
+    expect(merged.find((c) => c.name === "Apple Mail")?.ok).toBe(false)
+  })
+
+  test("a refresh failure on a channel nothing probed is added as blind", () => {
+    const merged = mergeRefreshIntoChecks([{ name: "Gmail", ok: true }], [{ name: "WhatsApp (store)", ok: false }])
+
+    expect(merged.map((c) => c.name)).toContain("WhatsApp (store)")
+    expect(merged.find((c) => c.name === "WhatsApp (store)")?.ok).toBe(false)
+  })
+
+  test("a healthy channel is never turned blind by the refresh saying it is fine", () => {
+    const merged = mergeRefreshIntoChecks([{ name: "WhatsApp", ok: true }], [{ name: "WhatsApp", ok: true }])
+
+    expect(merged).toEqual([{ name: "WhatsApp", ok: true }])
   })
 })
