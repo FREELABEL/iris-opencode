@@ -1,5 +1,23 @@
 import { describe, expect, test } from "bun:test"
-import { fleetLabel, inboxLabel } from "./titlebar-iris-pills"
+import { fleetDotClass, fleetLabel, inboxLabel } from "./titlebar-iris-pills"
+
+describe("fleetDotClass", () => {
+  // The dot is a verdict, so its colours must obey the same three-fact rule as the label:
+  // loading is grey, unreachable is danger, measured-with-someone-up is green. A not-yet-
+  // fetched fleet wearing green is the not-yet-measured-as-verdict bug fleetLabel caught.
+  test("loading is grey, not green", () => {
+    expect(fleetDotClass(undefined, true)).toBe("text-v2-text-text-weak")
+    expect(fleetDotClass(undefined, false)).toBe("text-v2-text-text-danger")
+  })
+  test("a measured fleet with a machine up is green", () => {
+    expect(
+      fleetDotClass({ measured: true, nodes: [{ online: true, name: "n" }, { online: false, name: "n" }] }),
+    ).toBe("text-v2-state-fg-success")
+  })
+  test("measured and all down is muted, NOT danger — reachable and dead are different facts", () => {
+    expect(fleetDotClass({ measured: true, nodes: [{ online: false, name: "n" }] })).toBe("text-v2-text-text-weak")
+  })
+})
 
 describe("fleetLabel", () => {
   test("LOADING is not unreachable", () => {
