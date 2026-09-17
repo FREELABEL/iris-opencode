@@ -84,3 +84,28 @@ export function failedRunWarning(failedChannels: string[]): string | null {
     `The totals above do NOT mean there was no contact on ${failedChannels.length === 1 ? "that channel" : "those channels"}.`
   )
 }
+
+/**
+ * The bridge's /api/mail/search response → ledger items (contract as of the Envelope Index bridge:
+ * `{ emails: [{ subject, sender, sender_name, date_sent, mailbox }], source: "envelope-index" }`).
+ * Returns null when the response has no list at all, so the caller records a failure instead of a zero.
+ */
+export function bridgeMailItems(data: any, addr: string): any[] | null {
+  const list = Array.isArray(data?.emails) ? data.emails : Array.isArray(data?.messages) ? data.messages : null
+  if (list === null) return null
+  return list.map((m: any) => {
+    const sentAt = m.date_sent ?? m.date ?? null
+    return {
+      direction: "inbound" as const,
+      from_identifier: m.sender || m.from || addr,
+      subject: m.subject,
+      body: m.body || m.snippet || "",
+      sent_at: sentAt,
+      // Envelopes carry no Message-ID. Sender + time + subject is stable across re-reads of the
+      // same index, which is all dedup needs from this source.
+      external_message_id: m.messageId || m.id || `mailenv_${String(m.sender || addr).toLowerCase()}_${sentAt}_${m.subject ?? ""}`,
+      metadata: { source: data?.source ?? "apple_mail", matched_address: addr, mailbox: m.mailbox },
+      channel: "apple_mail",
+    }
+  })
+}
