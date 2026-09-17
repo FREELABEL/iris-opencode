@@ -1,4 +1,5 @@
-import { type ChannelRead, readOk, unavailable, nothingToRead, describeHttpFailure, channelOutcome, failedRunWarning } from "./comms-channel-read"
+import { type ChannelRead, readOk, unavailable, nothingToRead, describeHttpFailure, channelOutcome, failedRunWarning, bridgeMailItems } from "./comms-channel-read"
+import { mailResponsive, readMailThread, withoutLedgerDuplicates } from "./comms-mail-applescript"
 import { cmd } from "./cmd"
 import { probeBridge, assessBridge, printDegradations } from "./subsystem-health"
 import * as prompts from "./clack"
@@ -318,22 +319,19 @@ async function ingestGmail(lead: any, requested: "gmail" | "apple_mail"): Promis
         failures.push(`${addr}: ${describeHttpFailure("bridge /api/mail/search", res.status, await res.text().catch(() => ""))}`)
         continue
       }
-      anyOk = true
 
       const data = (await res.json()) as any
-      const messages = data?.messages ?? []
-      for (const m of messages) {
-        collected.push({
-          direction: "inbound" as const,
-          from_identifier: m.sender || m.from || addr,
-          subject: m.subject,
-          body: m.body || m.snippet,
-          sent_at: m.date,
-          external_message_id: m.messageId || m.id || `mail_${m.date}_${m.subject}`,
-          metadata: { source: "apple_mail", matched_address: addr },
-          channel: "apple_mail", // override — this is Apple Mail, not Gmail API
-        })
+      // CONTRACT DRIFT (found 2026-09-17). The bridge moved to Mail's Envelope Index and answers
+      // { emails: [...] }; this read `data.messages`, so a bridge that COULD read Mail still ingested
+      // nothing and reported "no messages found". Granting the daemon Full Disk Access would have
+      // turned a visible 503 into that silent zero. Mapping lives in bridgeMailItems() (tested).
+      const envelopeItems = bridgeMailItems(data, addr)
+      if (envelopeItems === null) {
+        failures.push(`${addr}: bridge answered without an emails list (keys: ${Object.keys(data ?? {}).join(", ") || "none"})`)
+        continue
       }
+      anyOk = true
+      collected.push(...envelopeItems)
     } catch (e: any) {
       failures.push(`${addr}: bridge not reachable at ${BRIDGE_URL}: ${String(e?.message ?? e).slice(0, 120)}`)
     }
@@ -379,6 +377,34 @@ async function ingestGmail(lead: any, requested: "gmail" | "apple_mail"): Promis
     failures.push(`Gmail threads fallback failed: ${String(e?.message ?? e).slice(0, 120)}`)
     return unavailable(...failures)
   }
+}
+
+/**
+ * Apple Mail read over AppleEvents from ONE named account (--mail-account). Needs no daemon, no
+ * bridge and no Full Disk Access; reads both directions with RFC Message-IDs and bodies. See
+ * comms-mail-applescript.ts for why it is opt-in and bounded to one account.
+ */
+async function ingestAppleMailViaScript(lead: any, account: string, days: number): Promise<ChannelRead> {
+  const emails = leadEmails(lead)
+  if (emails.length === 0) return nothingToRead("lead has no email address")
+  if (!(await mailResponsive())) {
+    return unavailable("Mail.app is not answering (not running, or still busy with an earlier request) — not queuing more work behind it; try again in a few minutes")
+  }
+  const items: any[] = []
+  const failures: string[] = []
+  let answered = false
+  for (const addr of emails) {
+    const r = await readMailThread(addr, days, account, true)
+    if (r.ok) {
+      answered = true
+      items.push(...r.items)
+    } else {
+      failures.push(r.reason)
+    }
+  }
+  const seen = new Set<string>()
+  const unique = items.filter((i) => (seen.has(i.external_message_id) ? false : (seen.add(i.external_message_id), true)))
+  return { items: unique, unavailable: failures, answered }
 }
 
 // ── list ──
@@ -673,7 +699,8 @@ const CommsIngestCommand = cmd({
       .option("days", { type: "number", default: 30, describe: "with --all, how far back to look for active conversations" })
       .option("limit", { type: "number", default: 100, describe: "max leads to sweep with --all" })
       .option("dry-run", { type: "boolean", default: false, describe: "read and report what WOULD be ingested, write nothing (single lead or --all)" })
-      .option("allow-name-match", { type: "boolean", default: false, describe: "write WhatsApp chats matched by the lead's name alone (checked it is the same person)" }),
+      .option("allow-name-match", { type: "boolean", default: false, describe: "write WhatsApp chats matched by the lead's name alone (checked it is the same person)" })
+      .option("mail-account", { type: "string", describe: "apple_mail: read ONE Mail.app account over AppleEvents (both directions, bodies, no Full Disk Access) — e.g. amayo@mypathwaysai.com" }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Ingest Comms")
@@ -729,6 +756,8 @@ const CommsIngestCommand = cmd({
         read = await ingestSlack(lead)
       } else if (ch === "gmail_api") {
         read = await ingestGmailApi(lead)
+      } else if (ch === "apple_mail" && args["mail-account"]) {
+        read = await ingestAppleMailViaScript(lead, String(args["mail-account"]), Number(args.days))
       } else if (ch === "gmail" || ch === "apple_mail") {
         read = await ingestGmail(lead, ch)
       } else {
@@ -745,11 +774,34 @@ const CommsIngestCommand = cmd({
         continue
       }
       if (outcome.kind === "partial") prompts.log.warn(outcome.line)
-      const items = read.items
+      let items = read.items
+
+      if (ch === "apple_mail" && args["mail-account"]) {
+        // Messages `iris mail send` already logged at send time carry a different id than the same
+        // message read back from Sent Mail. Match them on direction + subject + time, or every one
+        // would be written twice.
+        const existingRes = await irisFetch(`/api/v1/atlas/comms?${new URLSearchParams({ lead_id: String(resolved.id), per_page: "500" })}`)
+        if (!existingRes.ok) {
+          sp.stop(`${ch}: could not read the lead's existing comms to rule out duplicates — nothing written`, 1)
+          failedChannels.push(ch)
+          continue
+        }
+        const existingData = (await existingRes.json()) as any
+        const { keep, dropped } = withoutLedgerDuplicates(items, firstArray(existingData?.data?.data, existingData?.data))
+        items = keep
+        if (dropped) prompts.log.info(`${ch}: ${dropped} message(s) already on the record under another id — skipped`)
+      }
 
       if (args["dry-run"]) {
         // #183513 asked for this on the single-lead path: see what would land on the record first.
         sp.stop(`${ch}: ${items.length} message(s) would be ingested (dry run — nothing written)`)
+        for (const it of [...items].sort((a, b) => String(a.sent_at).localeCompare(String(b.sent_at))).slice(-60)) {
+          console.log(`    ${dim(String(it.sent_at ?? "").slice(0, 10))} ${it.direction === "outbound" ? "→" : "←"} ${String(it.subject ?? "").slice(0, 80)}`)
+        }
+        continue
+      }
+      if (items.length === 0) {
+        sp.stop(`${ch}: nothing new — every message read is already on the record`)
         continue
       }
 

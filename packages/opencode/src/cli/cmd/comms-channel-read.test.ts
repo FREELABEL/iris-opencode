@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { channelOutcome, describeHttpFailure, failedRunWarning, nothingToRead, readOk, unavailable } from "./comms-channel-read"
+import { bridgeMailItems, channelOutcome, describeHttpFailure, failedRunWarning, nothingToRead, readOk, unavailable } from "./comms-channel-read"
 
 // The body the bridge actually returned on 2026-09-17 for Kristen Montero (#28363).
 const FDA_503 = '{"error":"No permission to read Mail — the iris daemon has no Full Disk Access (the DAEMON\'s own grant, not your terminal\'s)"}'
@@ -76,5 +76,39 @@ describe("the closing warning", () => {
   test("says the totals are not a zero, and is absent when nothing failed", () => {
     expect(failedRunWarning(["apple_mail"])).toContain("do NOT mean there was no contact")
     expect(failedRunWarning([])).toBeNull()
+  })
+})
+
+describe("the bridge mail contract (drift found 2026-09-17)", () => {
+  // The shape ~/.iris/bridge/index.js returns from /api/mail/search since the Envelope Index move.
+  const envelopeResponse = {
+    emails: [{ subject: "IRIS Work", sender: "kmontero@pathwaysinjuryconsultants.com", sender_name: "Kristen Montero", date_sent: "2026-09-09T14:00:00.000Z", mailbox: "INBOX" }],
+    count: 1,
+    days: 90,
+    source: "envelope-index",
+  }
+
+  test("reads the emails list the bridge actually returns", () => {
+    const items = bridgeMailItems(envelopeResponse, "kmontero@pathwaysinjuryconsultants.com")!
+
+    expect(items).toHaveLength(1)
+    expect(items[0].sent_at).toBe("2026-09-09T14:00:00.000Z")
+    expect(items[0].subject).toBe("IRIS Work")
+    expect(items[0].external_message_id).toContain("kmontero@pathwaysinjuryconsultants.com")
+  })
+
+  test("the OLD read of data.messages would have ingested nothing from the same response", () => {
+    const old = (envelopeResponse as any).messages ?? []
+    expect(old).toHaveLength(0)
+  })
+
+  test("the same envelope maps to the same key every time, so re-reads dedup", () => {
+    const a = bridgeMailItems(envelopeResponse, "x@y.z")![0].external_message_id
+    const b = bridgeMailItems(envelopeResponse, "x@y.z")![0].external_message_id
+    expect(a).toBe(b)
+  })
+
+  test("a response with no list is a failure, not an empty inbox", () => {
+    expect(bridgeMailItems({ error: "nope" }, "x@y.z")).toBeNull()
   })
 })
