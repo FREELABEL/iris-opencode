@@ -140,6 +140,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   monitor: "agents",
   personality: "agents",
   recall: "knowledge",
+  home: "integrations",
 
   // Playbooks & Workflows
   playbook: "agents",
