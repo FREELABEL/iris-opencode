@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import {
   DEFAULT_EDGE_STRENGTH,
+  edgeLabelBox,
+  labelScale,
+  nodeLabelBox,
+  placeLabels,
   DEFAULT_TYPE,
   edgeStrengthOf,
   isDragGesture,
@@ -126,5 +130,78 @@ describe("clickDistance — the bug you could feel", () => {
   test("no pointer recorded is not a drag", () => {
     expect(isDragGesture(null, { x: 9, y: 9 })).toBe(false)
     expect(isDragGesture({ x: 0, y: 0 }, null)).toBe(false)
+  })
+})
+
+describe("label placement — decided, not all drawn", () => {
+  const box = (id: string, x: number, priority: number, owner?: string) => ({ id, x, y: 0, w: 50, h: 10, priority, owner })
+
+  test("two overlapping labels: the more important one wins", () => {
+    const v = placeLabels([box("small", 0, 12), box("hub", 10, 20)], [])
+    expect([...v]).toEqual(["hub"])
+  })
+
+  test("labels that do not touch are both drawn", () => {
+    const v = placeLabels([box("a", 0, 12), box("b", 100, 12)], [])
+    expect(v.has("a") && v.has("b")).toBe(true)
+  })
+
+  test("the hovered label is drawn even when it loses on priority", () => {
+    // Hovering a node and still not being able to read its name is worse than clutter.
+    const v = placeLabels([box("small", 0, 12), box("hub", 10, 20)], [], new Set(["small"]))
+    expect(v.has("small")).toBe(true)
+  })
+
+  test("the hovered label is drawn even when it sits on ANOTHER node's circle", () => {
+    // Priority sorting alone cannot guarantee this: an obstacle is not a placed label, so
+    // going first does not clear it. The pin has to override the obstacle check itself.
+    const otherCircle = { x: 0, y: 0, w: 50, h: 10, owner: "n:9" }
+    expect(placeLabels([box("n:1", 0, 12, "n:1")], [otherCircle], new Set(["n:1"])).has("n:1")).toBe(true)
+  })
+
+  test("a node's OWN circle does not hide its label; another node's does", () => {
+    const circle = { x: 0, y: 0, w: 50, h: 10, owner: "n:1" }
+    expect(placeLabels([box("n:1", 0, 12, "n:1")], [circle]).has("n:1")).toBe(true)
+    expect(placeLabels([box("n:2", 0, 12, "n:2")], [circle]).has("n:2")).toBe(false)
+  })
+
+  test("equal priorities resolve the same way every call — no per-frame flicker", () => {
+    const run = () => [...placeLabels([box("b", 0, 12), box("a", 10, 12)], [])]
+    expect(run()).toEqual(run())
+    expect(run()).toEqual(["a"])
+  })
+
+  test("ZOOMING IN reveals labels hidden at 1x", () => {
+    // The reason labels are screen-constant: when text scaled with the zoom group, overlap
+    // was identical at every zoom and zooming in — the gesture you use to read a cluster —
+    // could never free a single label.
+    const a = { id: 1, name: "Package Index v0.1", size: 12, x: 0, y: 0 }
+    const b = { id: 2, name: "Dataset + Page SERVED", size: 12, x: 60, y: 0 }
+    const at = (k: number) => placeLabels([nodeLabelBox(a, k), nodeLabelBox(b, k)], []).size
+    expect(at(1)).toBe(1)
+    expect(at(3)).toBe(2)
+  })
+
+  test("labels stay screen-constant: 1x is unchanged, zoom is clamped", () => {
+    expect(labelScale(1)).toBe(1)
+    expect(labelScale(2)).toBe(0.5)
+    expect(labelScale(100)).toBe(labelScale(4))
+    expect(labelScale(0.01)).toBe(labelScale(0.3))
+  })
+
+  test("a label already on screen keeps its place against a near-equal rival (hysteresis)", () => {
+    const hub = { id: 1, name: "Agents", size: 14, x: 0, y: 0 }
+    const item = { id: 2, name: "Agents", size: 12, x: 5, y: 0 }
+    // Without hysteresis the bigger node takes it...
+    expect([...placeLabels([nodeLabelBox(hub, 1), nodeLabelBox(item, 1)], [])]).toEqual(["n:1"])
+    // ...but a label that was already showing is not displaced by a 2px size difference.
+    expect([...placeLabels([nodeLabelBox(hub, 1), nodeLabelBox(item, 1, true)], [])]).toEqual(["n:2"])
+  })
+
+  test("an edge caption never beats a node name", () => {
+    const node = nodeLabelBox({ id: 1, name: "Memory", size: 12, x: 0, y: 0 }, 1)
+    const edge = edgeLabelBox({ x1: -20, y1: node.y + 20, x2: 20, y2: node.y + 20, text: "parent" }, 0, 1, true)
+    const v = placeLabels([edge, node], [])
+    expect(v.has("n:1")).toBe(true)
   })
 })

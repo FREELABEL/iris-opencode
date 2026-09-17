@@ -191,6 +191,118 @@ export function isDragGesture(
   return Math.hypot(last.x - down.x, last.y - down.y) > tolerance
 }
 
+/**
+ * LABEL PLACEMENT — which labels get drawn, decided rather than all-drawn.
+ *
+ * ELON draws every node name and every edge caption, so a dense cluster is a smear of text
+ * over text. It never mattered much there because an ELON board shows one interior; here the
+ * account graph and expanded interiors share one canvas and the centre became unreadable.
+ *
+ * Greedy by priority: the most important label claims its box first, and a later label is
+ * skipped if its box would sit on a placed label or on ANOTHER node's circle. Standard map
+ * labelling, and O(n x placed) — trivial at a few hundred nodes, so it runs per frame.
+ *
+ * Everything here is in GRAPH units and pure, so it is testable with no DOM or simulation.
+ */
+export interface LabelBox {
+  id: string
+  /** Top-left corner and size, graph units. */
+  x: number
+  y: number
+  w: number
+  h: number
+  priority: number
+  /** The node this label belongs to — its own circle is not an obstacle for it. */
+  owner?: string
+}
+
+export interface Obstacle {
+  x: number
+  y: number
+  w: number
+  h: number
+  owner?: string
+}
+
+const overlaps = (a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }) =>
+  a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+
+export function placeLabels(candidates: LabelBox[], obstacles: Obstacle[], pinned: Set<string> = new Set()): Set<string> {
+  const order = [...candidates].sort(
+    (a, b) =>
+      Number(pinned.has(b.id)) - Number(pinned.has(a.id)) ||
+      b.priority - a.priority ||
+      // Stable tiebreak. Without it equal-priority labels swap every frame as the sort
+      // reshuffles them, and the canvas flickers even when nothing is moving.
+      (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+  )
+  const placed: LabelBox[] = []
+  const visible = new Set<string>()
+  for (const c of order) {
+    // A pinned label (the hovered node) is drawn regardless — hovering something and still
+    // not being able to read its name is the one outcome worse than clutter.
+    const free =
+      pinned.has(c.id) ||
+      (!placed.some((p) => overlaps(c, p)) && !obstacles.some((o) => o.owner !== c.owner && overlaps(c, o)))
+    if (!free) continue
+    placed.push(c)
+    visible.add(c.id)
+  }
+  return visible
+}
+
+/**
+ * Screen-constant label scale.
+ *
+ * Text used to scale with the zoom group, which made overlap ZOOM-INVARIANT: if two labels
+ * collided at 1x they collided at 4x, so zooming in could never reveal a hidden label — the
+ * one gesture a person reaches for to read a dense cluster. Drawing labels at 1/k in graph
+ * units keeps them a constant size on screen, so zooming in shrinks their graph-space boxes
+ * and frees room. At k = 1 nothing changes size.
+ */
+export const labelScale = (k: number) => 1 / Math.min(4, Math.max(0.3, k))
+
+/** Average advance of the label face, px per character. Estimated, not measured: good enough
+ *  to decide collisions, and measuring text in a per-frame loop would force layout. */
+const NODE_CHAR_W = 6.4
+const EDGE_CHAR_W = 5.2
+
+export const nodeLabelText = (name: string) => (name.length > 18 ? name.slice(0, 16) + "…" : name)
+
+export function nodeLabelBox(n: { id: number | string; name: string; size: number; x: number; y: number }, k: number, prevVisible = false): LabelBox {
+  const s = labelScale(k)
+  const w = nodeLabelText(n.name).length * NODE_CHAR_W * s
+  const h = 13 * s
+  const baseline = n.y + n.size + 14 * s
+  return {
+    id: `n:${n.id}`,
+    x: n.x - w / 2,
+    y: baseline - 10 * s,
+    w,
+    h,
+    // Bigger nodes are the hubs and the centre — the labels that orient you.
+    // +5 for a label already on screen: hysteresis, so two near-equal labels do not trade
+    // places every frame while the simulation is still settling.
+    priority: n.size + (prevVisible ? 5 : 0),
+    owner: `n:${n.id}`,
+  }
+}
+
+export function edgeLabelBox(e: { x1: number; y1: number; x2: number; y2: number; text: string }, i: number, k: number, prevVisible = false): LabelBox {
+  const s = labelScale(k)
+  const w = e.text.length * EDGE_CHAR_W * s
+  const h = 10 * s
+  return {
+    id: `e:${i}`,
+    x: (e.x1 + e.x2) / 2 - w / 2,
+    y: (e.y1 + e.y2) / 2 - 3 * s - 8 * s,
+    w,
+    h,
+    // Always below every node label: a caption on a line is the least load-bearing text here.
+    priority: -100 + (prevVisible ? 5 : 0),
+  }
+}
+
 export function IrisForceGraph(props: {
   nodes: ForceNode[]
   edges: ForceEdge[]
@@ -483,6 +595,32 @@ export function IrisForceGraph(props: {
   }
 
   /** Types actually present, in the vocabulary's order so the legend does not reshuffle. */
+  /** Labels on screen last frame — the hysteresis input to the next placement. */
+  let prevLabels = new Set<string>()
+
+  const visibleLabels = createMemo(() => {
+    const f = frame()
+    const k = view().k
+    const nodeBoxes = f.nodes.map((n) => nodeLabelBox(n, k, prevLabels.has(`n:${n.id}`)))
+    // Edge captions only once zoomed in far enough to read them, as before.
+    const edgeBoxes =
+      k > 0.7
+        ? f.edges.map((e, i) => edgeLabelBox({ ...e, text: e.label ?? e.type.replace(/_/g, " ") }, i, k, prevLabels.has(`e:${i}`)))
+        : []
+    const obstacles: Obstacle[] = f.nodes.map((n) => ({
+      x: n.x - n.size,
+      y: n.y - n.size,
+      w: n.size * 2,
+      h: n.size * 2,
+      owner: `n:${n.id}`,
+    }))
+    const h = hover()
+    const pinned = new Set(h ? [`n:${h.id}`] : [])
+    const next = placeLabels([...nodeBoxes, ...edgeBoxes], obstacles, pinned)
+    prevLabels = next
+    return next
+  })
+
   const presentTypes = createMemo(() => presentTypesOf(props.nodes))
   const typeCounts = createMemo(() => typeCountsOf(props.nodes))
 
@@ -572,13 +710,13 @@ export function IrisForceGraph(props: {
               ForceEdge — it reached the stroke colour and stopped there, so six relation kinds
               rendered as six shades of line with nothing saying which was which. */}
           <For each={frame().edges}>
-            {(e) => (
-              <Show when={view().k > 0.7}>
+            {(e, i) => (
+              <Show when={visibleLabels().has(`e:${i()}`)}>
                 <text
                   x={(e.x1 + e.x2) / 2}
-                  y={(e.y1 + e.y2) / 2 - 3}
+                  y={(e.y1 + e.y2) / 2 - 3 * labelScale(view().k)}
                   text-anchor="middle"
-                  font-size="9"
+                  font-size={String(9 * labelScale(view().k))}
                   /* Elon's gray (#6b7280) — the edge colour itself is loud next to a tinted
                      line and competes with the nodes; Elon's label is a caption, not a signal. */
                   fill="#6b7280"
@@ -631,18 +769,20 @@ export function IrisForceGraph(props: {
                     stroke-linejoin="round"
                   />
                 </g>
+                <Show when={visibleLabels().has(`n:${n.id}`)}>
                 <text
-                  dy={n.size + 14}
+                  dy={n.size + 14 * labelScale(view().k)}
                   text-anchor="middle"
-                  font-size="11"
+                  font-size={String(11 * labelScale(view().k))}
                   font-weight="600"
                   /* A token, not #e5e7eb. The panel is light or dark depending on the viewer,
                      and a hardcoded near-white label is invisible on half of them. */
                   fill="var(--text-base)"
                   style={{ "pointer-events": "none" }}
                 >
-                  {n.name.length > 18 ? n.name.slice(0, 16) + "…" : n.name}
+                  {nodeLabelText(n.name)}
                 </text>
+                </Show>
               </g>
             )}
           </For>
