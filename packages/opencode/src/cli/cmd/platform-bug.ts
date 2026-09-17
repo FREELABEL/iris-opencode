@@ -173,6 +173,23 @@ async function resolveReporterToken(): Promise<string> {
   return ""
 }
 
+/**
+ * Headers for the public amend endpoints (update / resolve), carrying the caller's token when
+ * there is one.
+ *
+ * The main bug board (#297) is amendable anonymously and stays that way. A bug filed to a
+ * registered intake board (a QA or client board) can only be amended by that board's owner or
+ * members, which the server can only check if we SAY who we are. These requests used to go out
+ * with no Authorization at all, so every bug off the main board answered "not found" to
+ * `iris bug update` / `iris bug close` — and the only way to record a finding was to rewrite the
+ * item through the generic item API, the bypass these commands exist to replace (#664, BUG-36).
+ */
+export function bugAmendHeaders(token: string): Record<string, string> {
+  const headers: Record<string, string> = { "Content-Type": "application/json", Accept: "application/json" }
+  if (token) headers.Authorization = `Bearer ${token}`
+  return headers
+}
+
 // Best-effort current git commit info from the cwd (used to stamp the fix that closed a bug)
 function detectGitCommit(): { hash?: string; url?: string } {
   try {
@@ -1052,12 +1069,28 @@ const ShowCommand = cmd({
       if (page >= lastPage) break
     }
 
+    // Not on the main board — it may live on a registered intake board (QA / client). Read the
+    // item directly: that route is scoped to what THIS caller may see, so it cannot surface a
+    // stranger's item, and a bug on #664 stops reading as "not found" when it is right there.
+    if (!found) {
+      try {
+        const direct = await irisFetch(`/api/v1/bloqs/items/${targetId}`)
+        if (direct.ok) {
+          const body = (await direct.json()) as any
+          const item = body?.data ?? body
+          if (item && Number(item.id) === targetId) found = item
+        }
+      } catch {
+        // Fall through to not-found below.
+      }
+    }
+
     if (!found) {
       if (args.json) {
         await writeJson({ error: "not_found", id: targetId })
         return
       }
-      console.error(`\n  Bug #${targetId} not found (searched open + closed).`)
+      console.error(`\n  Bug #${targetId} not found (searched the bug board, open + closed, and items you can see).`)
       console.error(`  ${dim('Try: iris bug list --status=all --search="keyword"')}\n`)
       process.exitCode = 1
       return
@@ -1135,7 +1168,7 @@ async function resolveBug(
   try {
     res = await fetch(`${FL_API}${bugResolveEndpoint(itemId)}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers: bugAmendHeaders(await resolveReporterToken()),
       body: JSON.stringify(body),
       signal: controller.signal,
     })
@@ -1498,7 +1531,7 @@ const UpdateCommand = cmd({
     try {
       res = await fetch(`${FL_API}${bugUpdateEndpoint(itemId)}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        headers: bugAmendHeaders(await resolveReporterToken()),
         body: JSON.stringify(body),
         signal: controller.signal,
       })
