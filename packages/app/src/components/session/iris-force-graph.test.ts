@@ -6,6 +6,9 @@ import {
   labelScale,
   nodeLabelBox,
   placeLabelPositions,
+  RING_MIN_GAP,
+  RING_STEP,
+  ringRadii,
   placeLabels,
   DEFAULT_TYPE,
   edgeStrengthOf,
@@ -262,5 +265,57 @@ describe("untyped edges — the crash an expanded board caused", () => {
 
   test("an untyped edge gets ELON's default strength, not undefined", () => {
     expect(edgeStrengthOf({})).toBe(DEFAULT_EDGE_STRENGTH)
+  })
+})
+
+describe("rings by depth — the Project graph reads PROJECT -> hubs -> lists -> cards", () => {
+  // Board 682's shape: ATLAS -> Memory -> lists -> cards, plus related boards off ATLAS.
+  const nodes = [
+    { id: "bloq-682", type: "atlas" },
+    { id: "memory-hub", type: "memory" },
+    { id: "list-1", type: "brand" },
+    { id: "item-1", type: "brand" },
+    { id: "bloq-9", type: "bloq" },
+    { id: "bloq-10", type: "bloq" },
+  ]
+  const edges = [
+    { source: "bloq-682", target: "memory-hub" },
+    { source: "memory-hub", target: "list-1" },
+    { source: "list-1", target: "item-1" },
+    { source: "bloq-682", target: "bloq-9" },
+    { source: "bloq-682", target: "bloq-10" },
+  ]
+  const r = ringRadii(nodes, edges, "bloq-682", ["bloq"])
+
+  test("each level of the hierarchy sits further out than the last", () => {
+    expect(r.get("bloq-682")).toBe(0)
+    expect(r.get("memory-hub")!).toBeGreaterThan(0)
+    expect(r.get("list-1")!).toBeGreaterThan(r.get("memory-hub")!)
+    expect(r.get("item-1")!).toBeGreaterThan(r.get("list-1")!)
+  })
+
+  test("related projects go on the OUTER ring, not beside Memory", () => {
+    // They are depth 1 (linked straight to ATLAS). On ring 1 they tangled into the project's
+    // own structure — the glob. They are other projects; they belong outside it.
+    expect(r.get("bloq-9")!).toBeGreaterThan(r.get("item-1")!)
+    expect(r.get("bloq-9")).toBe(r.get("bloq-10"))
+  })
+
+  test("a crowded ring grows so its nodes are not piled on each other", () => {
+    const many = [{ id: "root", type: "atlas" }, ...Array.from({ length: 40 }, (_, i) => ({ id: `n${i}`, type: "brand" }))]
+    const e = many.slice(1).map((n) => ({ source: "root", target: n.id }))
+    const radius = ringRadii(many, e, "root").get("n0")!
+    expect(radius).toBeGreaterThan(RING_STEP)
+    // Circumference leaves at least the minimum gap per node.
+    expect((2 * Math.PI * radius) / 40).toBeGreaterThanOrEqual(RING_MIN_GAP - 0.001)
+  })
+
+  test("no root on the canvas means no rings — the plain web is untouched", () => {
+    expect(ringRadii(nodes, edges, "bloq-999").size).toBe(0)
+  })
+
+  test("d3's mutated edges (source/target as objects) still resolve", () => {
+    const mutated = edges.map((x) => ({ source: { id: x.source }, target: { id: x.target } }))
+    expect(ringRadii(nodes, mutated, "bloq-682", ["bloq"]).get("item-1")).toBe(r.get("item-1"))
   })
 })

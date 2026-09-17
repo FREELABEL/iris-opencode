@@ -2101,6 +2101,8 @@ export function SessionIrisTab() {
                   <IrisForceGraph
                     nodes={graphNodes()}
                     edges={graphEdges()}
+                    rootId={projectScope() ? `bloq-${activeBloq()}` : undefined}
+                    outerTypes={["bloq"]}
                     /* Only a BOARD selects a board. Interior nodes carry namespaced string ids
                        (`hub-agents-12`), and `choose` takes a board id — passing one through
                        would select nothing and clear the pane you were reading. */

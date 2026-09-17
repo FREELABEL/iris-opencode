@@ -4,6 +4,7 @@ import {
   forceCollide,
   forceLink,
   forceManyBody,
+  forceRadial,
   forceSimulation,
   type Simulation,
   type SimulationLinkDatum,
@@ -379,11 +380,87 @@ export function edgeLabelBox(e: { x1: number; y1: number; x2: number; y2: number
   }
 }
 
+/**
+ * RINGS BY DEPTH — the Project graph read as PROJECT -> hubs -> lists -> cards.
+ *
+ * ELON's physics (distance 120, charge -300) has no notion of depth, so a project with 30+
+ * related boards is one radial burst: lists interleave with boards and a card can settle on
+ * the far side of the canvas from its own list. Here each node gets a target RADIUS from its
+ * depth below the root, and a radial force holds it on that ring; the link force still pulls
+ * a card toward its list around the ring. The picture now encodes the hierarchy it is drawing.
+ *
+ * `outerTypes` go on their own outermost ring whatever their depth. Related projects are depth
+ * 1 (linked straight to ATLAS) but they are OTHER projects — putting them on ring 1 with Memory
+ * and Agents is what tangled them into this project's structure.
+ *
+ * A ring's radius grows with its population (minimum arc gap per node), so 31 boards do not
+ * pile up on a ring sized for 3. Pure, so the ring assignment is testable without a DOM.
+ */
+export const RING_STEP = 150
+export const RING_MIN_GAP = 70
+
+export function ringRadii(
+  nodes: { id: number | string; type?: string }[],
+  edges: { source: unknown; target: unknown }[],
+  rootId: number | string,
+  outerTypes: string[] = [],
+): Map<string, number> {
+  const idOf = (v: unknown) => String(typeof v === "object" && v ? (v as any).id : v)
+  const ids = new Set(nodes.map((n) => String(n.id)))
+  const root = String(rootId)
+  const out = new Map<string, number>()
+  if (!ids.has(root)) return out
+  const adj = new Map<string, string[]>()
+  for (const e of edges) {
+    const a = idOf(e.source), b = idOf(e.target)
+    if (!ids.has(a) || !ids.has(b)) continue
+    adj.set(a, [...(adj.get(a) ?? []), b])
+    adj.set(b, [...(adj.get(b) ?? []), a])
+  }
+  const outer = new Set(nodes.filter((n) => String(n.id) !== root && outerTypes.includes(n.type ?? "")).map((n) => String(n.id)))
+  // BFS through the structure only: an outer node is not a path to anything.
+  const depth = new Map<string, number>([[root, 0]])
+  const queue = [root]
+  while (queue.length) {
+    const cur = queue.shift()!
+    if (outer.has(cur)) continue
+    for (const nb of adj.get(cur) ?? []) {
+      if (depth.has(nb)) continue
+      depth.set(nb, depth.get(cur)! + 1)
+      queue.push(nb)
+    }
+  }
+  let maxDepth = 0
+  for (const [id, d] of depth) if (!outer.has(id)) maxDepth = Math.max(maxDepth, d)
+  // Outer types, and anything unreachable, sit one ring past the deepest structure.
+  const ringOf = (id: string) => (outer.has(id) || !depth.has(id) ? maxDepth + 1 : depth.get(id)!)
+  const counts = new Map<number, number>()
+  for (const n of nodes) {
+    const r = ringOf(String(n.id))
+    counts.set(r, (counts.get(r) ?? 0) + 1)
+  }
+  const radius = new Map<number, number>([[0, 0]])
+  const rings = [...counts.keys()].filter((r) => r > 0).sort((a, b) => a - b)
+  let prev = 0
+  for (const r of rings) {
+    const byPopulation = ((counts.get(r) ?? 0) * RING_MIN_GAP) / (2 * Math.PI)
+    const next = Math.max(prev + RING_STEP, byPopulation)
+    radius.set(r, next)
+    prev = next
+  }
+  for (const n of nodes) out.set(String(n.id), radius.get(ringOf(String(n.id))) ?? 0)
+  return out
+}
+
 export function IrisForceGraph(props: {
   nodes: ForceNode[]
   edges: ForceEdge[]
   height?: number
   onNodeClick?: (n: ForceNode) => void
+  /** Lay out as rings around this node (the Project graph). Omit for the plain ELON force web. */
+  rootId?: number | string
+  /** Types placed on the outermost ring regardless of depth — e.g. related boards. */
+  outerTypes?: string[]
 }) {
   /**
    * A SNAPSHOT per frame, not a counter.
@@ -491,6 +568,27 @@ export function IrisForceGraph(props: {
       .force("center", forceCenter(w / 2, H() / 2))
       .force("collision", forceCollide().radius(35))
 
+    if (props.rootId != null) {
+      const radii = ringRadii(nodes, edges, props.rootId, props.outerTypes ?? [])
+      if (radii.size) {
+        const cx = w / 2
+        const cy = H() / 2
+        // The root is pinned to the centre: a ring layout whose centre drifts is not a ring.
+        const root = nodes.find((n) => String(n.id) === String(props.rootId))
+        if (root) {
+          root.fx = cx
+          root.fy = cy
+        }
+        sim
+          .force("radial", forceRadial<ForceNode>((n) => radii.get(String(n.id)) ?? 0, cx, cy).strength(0.9))
+          // Links pull a card toward its list AROUND the ring; at full ELON strength they would
+          // fight the rings and drag cards inward onto their list.
+          .force("link", (sim.force("link") as any).strength(0.05).distance(RING_STEP))
+          // Weaker charge: the rings do the spreading, so -300 would only fling nodes off them.
+          .force("charge", forceManyBody().strength(-120))
+      }
+    }
+
     // One repaint per animation frame, not one per tick. A tick can fire several times a frame
     // and each would be a wasted render of the same positions.
     const snapshot = () =>
@@ -537,7 +635,9 @@ export function IrisForceGraph(props: {
      */
     sim.on("end", () => {
       if (touched) return
-      const pad = 28
+      // Room for labels, not just circles: a label hangs ~30px past its node, and fitting to
+      // circles alone clipped the top row of names in the Project graph.
+      const pad = 60
       const xs = nodes.map((n) => n.x ?? 0)
       const ys = nodes.map((n) => n.y ?? 0)
       if (!xs.length) return
@@ -653,6 +753,17 @@ export function IrisForceGraph(props: {
     const w = width()
     if (!w || !sim) return
     sim.force("center", forceCenter(w / 2, H() / 2))
+    // Rings move with the canvas too, and so does the pinned root — else a resize leaves the
+    // ring centre where the old centre was and the whole picture sits lopsided.
+    const radial = sim.force("radial") as any
+    if (radial) {
+      radial.x(w / 2).y(H() / 2)
+      const root = sim.nodes().find((n) => String(n.id) === String(props.rootId))
+      if (root) {
+        root.fx = w / 2
+        root.fy = H() / 2
+      }
+    }
     sim.alpha(0.5).restart()
   })
 
