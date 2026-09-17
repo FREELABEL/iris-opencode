@@ -27,7 +27,15 @@ const createEmbeddedWebUIBundle = async () => {
   console.log(`Building Web UI to embed in the binary`)
   const appDir = path.join(import.meta.dirname, "../../app")
   const dist = path.join(appDir, "dist")
-  await $`OPENCODE_CHANNEL=${Script.channel} bun run --cwd ${appDir} build`
+  // HEAP HEADROOM for vite. The embedded UI build runs under node and sat right at node's default
+  // ~2 GB old-space limit: on the Intel macOS release runner it died with "Reached heap limit
+  // Allocation failed - JavaScript heap out of memory" at 2017 MB, inside JSON.stringify of the
+  // sourcemaps (desktop-v1.18.68, 2026-09-17). The same commit had passed an hour earlier, so it
+  // was borderline, not broken — and a borderline build fails a release at random, after the
+  // other platforms have already published. 4 GB leaves real room on a 14 GB runner. Appended,
+  // not replaced, so any NODE_OPTIONS the caller set still applies.
+  const nodeOptions = [process.env.NODE_OPTIONS, "--max-old-space-size=4096"].filter(Boolean).join(" ")
+  await $`OPENCODE_CHANNEL=${Script.channel} NODE_OPTIONS=${nodeOptions} bun run --cwd ${appDir} build`
   const files = (await Array.fromAsync(new Bun.Glob("**/*").scan({ cwd: dist })))
     .map((file) => file.replaceAll("\\", "/"))
     .filter((file) => !file.endsWith(".map"))
