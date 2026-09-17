@@ -142,19 +142,16 @@ export const NODE_TYPES: Record<string, { label: string; color: string; icon: st
 export const DEFAULT_TYPE = "bloq"
 export const nodeStyle = (t?: string) => NODE_TYPES[t ?? DEFAULT_TYPE] ?? NODE_TYPES[DEFAULT_TYPE]
 
-/**
- * ELON'S PER-EDGE STRENGTHS. A hierarchy should hold tighter than an affiliation, and reading
- * cluster tightness as meaning only works if the strengths differ on purpose.
+/*
+ * NO PER-TYPE STRENGTH TABLE, and there was never one in ELON.
+ *
+ * A table lived here (parent 0.7, sibling 0.5, feeds_into 0.4…) under the heading "ELON'S
+ * PER-EDGE STRENGTHS". That heading was false — I wrote the table, not ELON. RelationshipGraph.vue
+ * maps every edge to `strength: e.strength || 0.3` and relationshipGraphData never sets one, so in
+ * ELON every link pulls at 0.3. The invented 0.7 on `parent` crushed a project's related boards
+ * into a tight ring on ATLAS while its lists and cards pulled at 0.3 — the Project graph stopped
+ * looking like ELON's for a reason no one had decided.
  */
-export const EDGE_STRENGTH: Record<string, number> = {
-  parent: 0.7,
-  sibling: 0.5,
-  feeds_into: 0.4,
-  mirrors: 0.35,
-  affiliated: 0.3,
-  partner: 0.3,
-}
-/** Elon's fallback when a payload carries no strength. */
 export const DEFAULT_EDGE_STRENGTH = 0.3
 
 /**
@@ -178,9 +175,10 @@ export function typeCountsOf(nodes: { type?: string }[]): Record<string, number>
   return out
 }
 
-/** Elon's edge strength resolution: the edge's own, else the type's, else 0.3. */
+/** ELON's edge strength: the edge's own, else 0.3. Type plays no part. */
 export function edgeStrengthOf(e: { type?: string; strength?: number }): number {
-  return e.strength ?? (e.type ? EDGE_STRENGTH[e.type] : undefined) ?? DEFAULT_EDGE_STRENGTH
+  // `||`, not `??`, exactly as ELON: a strength of 0 falls back to 0.3 there too.
+  return e.strength || DEFAULT_EDGE_STRENGTH
 }
 
 /**
@@ -286,7 +284,13 @@ export const edgeCaption = (e: { label?: string; type?: string }): string | null
 
 export const nodeLabelText = (name: string) => (name.length > 18 ? name.slice(0, 16) + "…" : name)
 
-export function nodeLabelBox(n: { id: number | string; name: string; size: number; x: number; y: number }, k: number, prevVisible = false): LabelBox {
+export function nodeLabelBox(
+  n: { id: number | string; name: string; size: number; x: number; y: number },
+  k: number,
+  prevVisible = false,
+  /** Outgoing edges. A node with children is structure (a list with cards, a hub). */
+  children = 0,
+): LabelBox {
   const s = labelScale(k)
   const w = nodeLabelText(n.name).length * NODE_CHAR_W * s
   const h = 13 * s
@@ -300,7 +304,11 @@ export function nodeLabelBox(n: { id: number | string; name: string; size: numbe
     // Bigger nodes are the hubs and the centre — the labels that orient you.
     // +5 for a label already on screen: hysteresis, so two near-equal labels do not trade
     // places every frame while the simulation is still settling.
-    priority: n.size + (prevVisible ? 5 : 0),
+    // A CONTAINER outranks a leaf, even a slightly bigger one. By size alone a project's 31
+    // related boards (18) beat its lists (16), so "📦 Package Index" lost its name while the
+    // cards under it kept theirs — the graph showed the leaves and hid the structure that
+    // gives them meaning. +6 lifts a list with cards over a leaf board; an empty list stays 16.
+    priority: n.size + (children > 0 ? 6 : 0) + (prevVisible ? 5 : 0),
     owner: `n:${n.id}`,
   }
 }
@@ -618,7 +626,13 @@ export function IrisForceGraph(props: {
   const visibleLabels = createMemo(() => {
     const f = frame()
     const k = view().k
-    const nodeBoxes = f.nodes.map((n) => nodeLabelBox(n, k, prevLabels.has(`n:${n.id}`)))
+    // Child counts come from the props, whose ids d3 never touches (it mutates the copies).
+    const kids = new Map<string, number>()
+    for (const e of props.edges) {
+      const src = typeof e.source === "object" ? e.source.id : e.source
+      kids.set(String(src), (kids.get(String(src)) ?? 0) + 1)
+    }
+    const nodeBoxes = f.nodes.map((n) => nodeLabelBox(n, k, prevLabels.has(`n:${n.id}`), kids.get(String(n.id)) ?? 0))
     // Edge captions only once zoomed in far enough to read them, as before.
     const edgeBoxes =
       k > 0.7

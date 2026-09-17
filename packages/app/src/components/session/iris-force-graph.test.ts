@@ -90,20 +90,26 @@ describe("the legend describes the data, not the vocabulary", () => {
   })
 })
 
-describe("edge strength is Elon's, not d3's", () => {
+describe("edge strength is ELON's exactly: e.strength || 0.3", () => {
   test("an edge's own strength wins", () => {
     expect(edgeStrengthOf({ type: "parent", strength: 0.9 })).toBe(0.9)
   })
 
-  test("a hierarchy holds tighter than an affiliation", () => {
-    // If these were equal, cluster tightness would carry no meaning.
-    expect(edgeStrengthOf({ type: "parent" })).toBeGreaterThan(edgeStrengthOf({ type: "affiliated" }))
+  test("TYPE PLAYS NO PART — a parent edge pulls exactly like any other", () => {
+    // A per-type table (parent 0.7…) once lived here labelled as ELON's. ELON has none: it
+    // is `strength: e.strength || 0.3` for every edge. The invented 0.7 crushed a project's
+    // related boards onto ATLAS and made the Project graph stop looking like ELON's.
+    expect(edgeStrengthOf({ type: "parent" })).toBe(DEFAULT_EDGE_STRENGTH)
+    expect(edgeStrengthOf({ type: "sibling" })).toBe(edgeStrengthOf({ type: "affiliated" }))
   })
 
-  test("an unknown type gets Elon's 0.3 fallback, NOT d3's 1/min(degree)", () => {
-    // d3's default slackens hub links exactly where Elon's stay tight, which is why two
-    // graphs built from identical data settled differently.
-    expect(edgeStrengthOf({ type: "whatever" })).toBe(DEFAULT_EDGE_STRENGTH)
+  test("the fallback is 0.3, not d3's 1/min(degree)", () => {
+    expect(DEFAULT_EDGE_STRENGTH).toBe(0.3)
+    expect(edgeStrengthOf({ type: "whatever" })).toBe(0.3)
+  })
+
+  test("a strength of 0 falls back, because ELON uses || not ??", () => {
+    expect(edgeStrengthOf({ strength: 0 })).toBe(0.3)
   })
 })
 
@@ -197,6 +203,20 @@ describe("label placement — decided, not all drawn", () => {
     expect([...placeLabels([nodeLabelBox(hub, 1), nodeLabelBox(item, 1)], [])]).toEqual(["n:1"])
     // ...but a label that was already showing is not displaced by a 2px size difference.
     expect([...placeLabels([nodeLabelBox(hub, 1), nodeLabelBox(item, 1, true)], [])]).toEqual(["n:2"])
+  })
+
+  test("a list WITH cards keeps its name over a bigger leaf board", () => {
+    // Board 682: 31 related boards at size 18 took the space and "📦 Package Index" (16)
+    // lost its label while its own cards kept theirs.
+    const list = { id: "list-1", name: "📦 Package Index", size: 16, x: 0, y: 0 }
+    const board = { id: "bloq-9", name: "Genesis UI SDK", size: 18, x: 4, y: 0 }
+    expect([...placeLabels([nodeLabelBox(list, 1, false, 5), nodeLabelBox(board, 1)], [])]).toEqual(["n:list-1"])
+  })
+
+  test("an EMPTY list does not jump the queue", () => {
+    const list = { id: "list-2", name: "Ideas", size: 16, x: 0, y: 0 }
+    const board = { id: "bloq-9", name: "Genesis UI SDK", size: 18, x: 4, y: 0 }
+    expect([...placeLabels([nodeLabelBox(list, 1, false, 0), nodeLabelBox(board, 1)], [])]).toEqual(["n:bloq-9"])
   })
 
   test("an edge caption never beats a node name", () => {
