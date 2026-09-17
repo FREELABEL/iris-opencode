@@ -33,6 +33,8 @@ export namespace SessionProcessor {
     let snapshot: string | undefined
     let blocked = false
     let attempt = 0
+    /** Empty finalizations retried this turn — bounded separately from error retries. */
+    let emptyAttempts = 0
     let needsCompaction = false
 
     // ── Trace spine (#178533) ────────────────────────────────────────────
@@ -441,21 +443,48 @@ export namespace SessionProcessor {
           // callers (e.g. `iris run`) exit non-zero instead of reading it as success.
           if (!input.assistantMessage.error) {
             const finish = input.assistantMessage.finish
-            const badFinish = finish === undefined || finish === "unknown" || finish === "error"
             const hasOutput = p.some(
               (part) =>
                 (part.type === "text" && part.text.trim().length > 0) ||
                 (part.type === "reasoning" && part.text.trim().length > 0) ||
                 part.type === "tool",
             )
-            if (badFinish && !hasOutput && input.assistantMessage.tokens.output === 0) {
+            if (SessionRetry.isEmptyFinalization({ finish, hasOutput, outputTokens: input.assistantMessage.tokens.output })) {
               log.error("empty finalization", {
                 finish: finish ?? "unknown",
                 model: input.model?.id,
                 provider: input.model?.providerID,
                 sessionID: input.assistantMessage.sessionID,
                 messageID: input.assistantMessage.id,
+                emptyAttempts,
               })
+              /*
+               * RETRY IT — the old code went straight to a terminal error.
+               *
+               * #185820: a user hit this, typed "continue", and the same request succeeded on
+               * the first try. The comment below claimed a stream only finishes empty once every
+               * provider has failed, so retrying was pointless; measured the same hour, the
+               * proxy's failover was healthy and the spare licence had 80% headroom, so the
+               * premise was false and the user did by hand what the loop should have done.
+               *
+               * Safe because this branch is defined by having produced NOTHING: no output parts,
+               * zero output tokens. Bounded, and never against an aborted turn.
+               */
+              if (SessionRetry.retryEmptyFinalization({ attempts: emptyAttempts, aborted: input.abort.aborted })) {
+                emptyAttempts++
+                const delay = SessionRetry.delay(emptyAttempts)
+                SessionStatus.set(input.sessionID, {
+                  type: "retry",
+                  attempt: emptyAttempts,
+                  message: "Model returned nothing — retrying",
+                  next: Date.now() + delay,
+                })
+                await SessionRetry.sleep(delay, input.abort).catch(() => {})
+                // `finish` is read again on the next pass; leaving the failed value would make a
+                // successful retry look like another empty finalization.
+                input.assistantMessage.finish = undefined
+                continue
+              }
               // #178291: the old text was a generic "the upstream provider may be
               // rate-limited or exhausted", which was accurate but unactionable —
               // it named neither the model that failed nor a way forward, so a
@@ -474,7 +503,8 @@ export namespace SessionProcessor {
               input.assistantMessage.error = new MessageV2.APIError(
                 {
                   message:
-                    `${who} returned no output (finish reason: ${finish ?? "unknown"}). ` +
+                    `${who} returned no output (finish reason: ${finish ?? "unknown"}) ` +
+                    `after ${emptyAttempts + 1} attempts. ` +
                     `Every upstream attempt failed — most often a rate limit or an exhausted/invalid API key. ` +
                     `Check with: iris doctor    ·    Pick another model: iris models`,
                   isRetryable: false,
