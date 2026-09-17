@@ -16,7 +16,7 @@ import { classifyRef, explainWrongRef } from "./reference-kind"
 import { federatedSearch, resolveSources, formatOutcomes } from "./federated-search"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, FL_API, PUBLIC_SITE, promptOrFail, MissingFlagError, isNonInteractive, cli, writeJson } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, requireUserId, resolveUserId, printDivider, printKV, dim, bold, success, FL_API, PUBLIC_SITE, promptOrFail, MissingFlagError, isNonInteractive, cli, writeJson } from "./iris-api"
 import { itemTitle, itemContentPreview, matchesSearchQuery, normalizeDueDate } from "./bloq-item-format"
 import { executePublish } from "./bloq-item-shared"
 import { confirmWiden } from "./exposure-gate"
@@ -27,6 +27,7 @@ import { BloqsExportCommand } from "./platform-bloq-export"
 import { AtlasFilesCommandExport } from "./platform-atlas-files"
 import path from "path"
 import { firstArray } from "../../util/array"
+import { bloqWebUrl as atlasBloqUrl, bloqUrlFrom } from "./bloq-web-url"
 import { openBrowser } from "../../util/browser"
 import { AtlasDocCommand } from "./platform-atlas-item"
 
@@ -34,16 +35,20 @@ import { AtlasDocCommand } from "./platform-atlas-item"
 // Display helpers
 // ============================================================================
 
-// Frontend host. Override with IRIS_FRONTEND_URL.
+// Elon frontend host — invite links only. Override with IRIS_FRONTEND_URL.
 function frontendBase(): string {
   return (process.env.IRIS_FRONTEND_URL ?? "https://web.heyiris.io").replace(/\/+$/, "")
 }
 
-// Canonical web URL for a bloq/board. The frontend serves clean routes
-// /iris/bloq/:id, /iris/:id and /bloq/:id. Requires the viewer to already be
-// logged in — use a share link (below) for a passwordless deep-link.
+// A board's address is the Atlas console, not the Elon /iris/bloq/:id route (#185736) — see
+// bloq-web-url.ts. Requires the viewer to be signed in; use a share link for passwordless access.
 function bloqWebUrl(id: string | number): string {
-  return `${frontendBase()}/iris/bloq/${id}`
+  return atlasBloqUrl(id, PUBLIC_SITE)
+}
+
+/** Prefer the address fl-api returned for this board. */
+function bloqUrlOf(b: any, id: string | number): string {
+  return bloqUrlFrom(b, id, PUBLIC_SITE, Boolean(process.env.IRIS_PUBLIC_URL))
 }
 
 // Passwordless tokenized auth link — anyone with this URL can claim access and
@@ -358,7 +363,7 @@ const BloqsGetCommand = cmd({
       if (args.json) {
         // Included so an agent reading a board gets its neighbours in the SAME call. Having to
         // know to make a second request is the machine-readable version of the same bug.
-        await writeJson({ ...b, web_url: bloqWebUrl(b.id), lists, relations })
+        await writeJson({ ...b, web_url: bloqUrlOf(b, args.id), lists, relations })
         return
       }
 
@@ -397,7 +402,7 @@ const BloqsGetCommand = cmd({
       printKV("Name", b.name)
       printKV("Description", b.description)
       printKV("Created", b.created_at)
-      printKV("URL", bloqWebUrl(b.id))
+      printKV("URL", bloqUrlOf(b, args.id))
       console.log()
 
       // Entity summary bar
@@ -3598,7 +3603,21 @@ const BloqsOpenCommand = cmd({
       .option("print", { describe: "only print the URL, don't open a browser", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
+    // Ask fl-api for the address when signed in, so the URL is the server's to change. Non-fatal:
+    // `open` worked offline and unauthenticated before, and the local format is the same one.
     let url = bloqWebUrl(args.id)
+    try {
+      const userId = args["user-id"] ?? (await resolveUserId())
+      if (userId) {
+        const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}`)
+        if (res.ok) {
+          const body = (await res.json().catch(() => null)) as any
+          url = bloqUrlOf(body?.data ?? body, args.id)
+        }
+      }
+    } catch {
+      // keep the locally built address
+    }
 
     if (args.share) {
       const token = await requireAuth()
