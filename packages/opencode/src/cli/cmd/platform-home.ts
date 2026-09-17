@@ -14,6 +14,7 @@ import {
   type HomeDevice,
   type Verbs,
 } from "./home-core"
+import { TEMPLATES, findTemplate } from "./home-templates"
 import fs from "fs"
 import os from "os"
 import path from "path"
@@ -213,7 +214,7 @@ function sequences(): Record<string, unknown> {
   return { ...BUILTIN_SEQUENCES, ...readJson<Record<string, unknown>>(SEQUENCES, {}) }
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
 async function playScene(devices: HomeDevice[], raw: unknown, loops: number, onStep: (r: SendResult[]) => void) {
   const scene = normalizeScene(raw)
@@ -277,6 +278,37 @@ async function playModule(devices: HomeDevice[], file: string, onStep: (r: SendR
     sleep,
     all: async (verbs: Verbs) => onStep(await sendTo(devices, verbs)),
   })
+}
+
+async function playTemplate(
+  devices: HomeDevice[],
+  template: (typeof TEMPLATES)[number],
+  duration: number | undefined,
+  onStep: (r: SendResult[]) => void,
+) {
+  const rooms = [...new Set(devices.map((d) => d.room).filter(Boolean))]
+  if (!rooms.length) throw new Error("no rooms in the registry — set rooms with: iris home devices pair-hue")
+  if (duration !== undefined && !template.stretch) {
+    console.error(dim(`  ${template.name} is a fixed ${template.seconds}s show; --duration ignored`))
+  }
+  // Ctrl-C mid-show would otherwise freeze the house on whatever frame it was showing.
+  const restore = async () => {
+    await sendTo(devices, { on: true, ct: 340, bri: 200 })
+    process.exit(130)
+  }
+  process.once("SIGINT", restore)
+  try {
+    await template.play({
+      rooms,
+      send: async (room, verbs) => onStep(await sendTo(matchDevices(devices, room), verbs)),
+      sleep,
+      random: Math.random,
+      now: Date.now,
+      duration,
+    })
+  } finally {
+    process.removeListener("SIGINT", restore)
+  }
 }
 
 // ── output ──────────────────────────────────────────────────────────────────
@@ -349,10 +381,11 @@ async function setState(words: string[], json: boolean) {
 const RunCommand = cmd({
   command: "run <target>",
   aliases: ["play"],
-  describe: "play a scene (.json), an effect (.py/.js/.mjs), or a named sequence",
+  describe: "play a prebuilt show (barbie, halloween, disco…), a scene .json, an effect .py/.mjs, or a sequence",
   builder: (y) =>
     y
-      .positional("target", { type: "string", demandOption: true })
+      .positional("target", { type: "string", demandOption: true, describe: "see: iris home templates" })
+      .option("duration", { type: "number", describe: "seconds, for shows that stretch (disco, christmas, sunrise, chill)" })
       .option("loops", { type: "number", default: 1, describe: "repeat the whole scene N times (.json/sequences)" })
       .option("quiet", { type: "boolean", default: false, describe: "only print failures" }),
   async handler(args) {
@@ -361,9 +394,17 @@ const RunCommand = cmd({
     registryNotice(reg)
     if (!reg.devices.length) { console.error("No devices — run: iris home devices pair-hue"); process.exitCode = 1; return }
     let failures = 0
+    // A show sends hundreds of frames; one unplugged light must be reported once, not per frame.
+    const seen = new Set<string>()
     const onStep = (rs: SendResult[]) => {
       failures += rs.filter((r) => !r.ok).length
-      printResults(args.quiet ? rs.filter((r) => !r.ok) : rs)
+      const fresh = rs.filter((r) => {
+        const key = `${r.device}|${r.ok}|${r.note ?? ""}`
+        if (seen.has(key)) return false
+        seen.add(key)
+        return !args.quiet || !r.ok
+      })
+      printResults(fresh)
     }
     try {
       const file = /\.(json|py|js|mjs)$/.test(target) ? resolveFile(target) : null
@@ -371,9 +412,10 @@ const RunCommand = cmd({
       if (file?.endsWith(".json")) await playScene(reg.devices, readJson(file, null), args.loops, onStep)
       else if (file?.endsWith(".py")) { if ((await playPython(reg.devices, file, onStep)) !== 0) process.exitCode = 1 }
       else if (file) await playModule(reg.devices, file, onStep)
+      else if (findTemplate(target)) await playTemplate(reg.devices, findTemplate(target)!, args.duration, onStep)
       else {
         const seq = sequences()[target]
-        if (!seq) throw new Error(`no sequence '${target}'. Have: ${Object.keys(sequences()).join(", ")}`)
+        if (!seq) throw new Error(`no show '${target}'. Try: ${[...TEMPLATES.map((t) => t.name), ...Object.keys(sequences())].join(", ")}`)
         await playScene(reg.devices, seq, args.loops, onStep)
       }
     } catch (err) {
@@ -385,10 +427,15 @@ const RunCommand = cmd({
 })
 
 const SequencesCommand = cmd({
-  command: "sequences",
-  aliases: ["scenes", "effects"],
-  describe: "list named sequences and effect files",
+  command: "templates",
+  aliases: ["shows", "sequences", "scenes", "effects"],
+  describe: "list prebuilt light shows, your sequences, and your effect files",
   async handler() {
+    console.log(bold("Shows") + dim("  iris home run <name> [--duration N]"))
+    for (const t of TEMPLATES) {
+      const len = t.seconds >= 60 ? `${Math.round(t.seconds / 60)}m` : `${t.seconds}s`
+      console.log(`  ${t.name.padEnd(11)} ${dim(len.padStart(4))}  ${t.description}`)
+    }
     const user = readJson<Record<string, unknown>>(SEQUENCES, {})
     console.log(bold("Sequences"))
     for (const name of Object.keys(sequences())) console.log(`  ${name}${name in user ? dim("  (yours)") : ""}`)

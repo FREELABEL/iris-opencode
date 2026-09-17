@@ -20,6 +20,8 @@ export interface Verbs {
   hue?: number
   sat?: number
   ct?: number
+  /** Hue fade duration in tenths of a second; other transports ignore it */
+  transitiontime?: number
 }
 
 export const COLORS: Record<string, Verbs> = {
