@@ -284,13 +284,16 @@ export function searchByPhone(phone: string, days = 90, limit = 50): WAMessage[]
   }
 }
 
-export function searchByName(name: string, days = 90, limit = 50): WAMessage[] {
+export function searchByName(name: string, days = 90, limit = 50, exact = false): WAMessage[] {
   const escaped = name.replace(/'/g, "''")
   const cutoff = days * 86400
 
-  // Find chat session PK by partner name
+  // Find chat session PK by partner name. `exact` exists for anything that WRITES what it finds to
+  // a person's record (#183513): a substring match on a first name ("Kristen") took the most recent
+  // chat with ANY contact containing it and grafted a third party's private messages onto a client.
+  const match = exact ? `ZPARTNERNAME = '${escaped}' COLLATE NOCASE` : `ZPARTNERNAME LIKE '%${escaped}%'`
   const chatSql = `SELECT Z_PK FROM ZWACHATSESSION
-    WHERE ZPARTNERNAME LIKE '%${escaped}%'
+    WHERE ${match}
     AND ZREMOVED = 0
     ORDER BY ZLASTMESSAGEDATE DESC
     LIMIT 1;`.replace(/\n/g, " ").trim()
