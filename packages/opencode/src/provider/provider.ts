@@ -1473,6 +1473,135 @@ const layer = Layer.effect(
           })
         }
 
+        // Fetch live IRIS model manifest so the desktop never ships stale capabilities.
+        // The seed (iris-provider.json) is a static fallback for offline; this fetch is the
+        // source of truth when the network is available. One fetch replaces model list,
+        // capabilities, and availability — no client deploy needed.
+        if (cfg.provider?.["iris"]) {
+          try {
+            const apiKey = process.env.IRIS_API_KEY
+            const baseUrl = cfg.provider["iris"]?.options?.baseURL ?? "https://freelabel.net/api/v6/openai"
+            const manifestUrl = `${baseUrl}/models`
+            const headers: Record<string, string> = { Accept: "application/json" }
+            if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`
+            const manifestResp = yield* Effect.promise(() =>
+              fetch(manifestUrl, { headers, signal: AbortSignal.timeout(8000) }),
+            )
+            if (manifestResp.ok) {
+              const manifestData = (yield* Effect.promise(() => manifestResp.json())) as {
+                data?: Array<{
+                  id: string
+                  name?: string
+                  available?: boolean
+                  enabled?: boolean
+                  access_tier?: string
+                  tool_calling?: boolean
+                  modalities?: { input?: string[]; output?: string[] }
+                  pricing?: { input?: number; output?: number }
+                  limits?: { context?: number; input?: number; output?: number }
+                  reasoning?: boolean
+                }>
+              }
+              if (manifestData.data?.length) {
+                const irisModels: Record<string, Model> = {}
+                for (const m of manifestData.data) {
+                  if (!m.available) continue
+                  const modelID = m.id.replace(/^iris\//, "")
+                  irisModels[modelID] = {
+                    id: ModelV2.ID.make(modelID),
+                    providerID: ProviderV2.ID.make("iris"),
+                    name: m.name ?? modelID,
+                    api: {
+                      id: modelID,
+                      npm: "@ai-sdk/openai-compatible",
+                      url: baseUrl,
+                    },
+                    status: "active" as const,
+                    family: "",
+                    headers: {},
+                    options: {},
+                    cost: {
+                      input: m.pricing?.input ?? 0,
+                      output: m.pricing?.output ?? 0,
+                      cache: { read: 0, write: 0 },
+                    },
+                    limit: {
+                      context: m.limits?.context ?? 0,
+                      input: m.limits?.input,
+                      output: m.limits?.output ?? 0,
+                    },
+                    capabilities: {
+                      temperature: true,
+                      reasoning: m.reasoning ?? false,
+                      attachment: false,
+                      toolcall: m.tool_calling ?? true,
+                      input: {
+                        text: m.modalities?.input?.includes("text") ?? true,
+                        audio: m.modalities?.input?.includes("audio") ?? false,
+                        image: m.modalities?.input?.includes("image") ?? false,
+                        video: m.modalities?.input?.includes("video") ?? false,
+                        pdf: m.modalities?.input?.includes("pdf") ?? false,
+                      },
+                      output: {
+                        text: m.modalities?.output?.includes("text") ?? true,
+                        audio: m.modalities?.output?.includes("audio") ?? false,
+                        image: m.modalities?.output?.includes("image") ?? false,
+                        video: m.modalities?.output?.includes("video") ?? false,
+                        pdf: m.modalities?.output?.includes("pdf") ?? false,
+                      },
+                      interleaved: modelID.includes("deepseek")
+                        ? { field: "reasoning_content" }
+                        : false,
+                    },
+                    release_date: "",
+                    variants: ProviderTransform.variants({
+                      id: ModelV2.ID.make(modelID),
+                      providerID: ProviderV2.ID.make("iris"),
+                      name: m.name ?? modelID,
+                      api: { id: modelID, npm: "@ai-sdk/openai-compatible", url: baseUrl },
+                      status: "active",
+                      family: "",
+                      headers: {},
+                      options: {},
+                      cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+                      limit: { context: 0, output: 0 },
+                      capabilities: {
+                        temperature: true,
+                        reasoning: m.reasoning ?? false,
+                        attachment: false,
+                        toolcall: true,
+                        input: {
+                          text: m.modalities?.input?.includes("text") ?? true,
+                          audio: false,
+                          image: m.modalities?.input?.includes("image") ?? false,
+                          video: false,
+                          pdf: m.modalities?.input?.includes("pdf") ?? false,
+                        },
+                        output: { text: true, audio: false, image: false, video: false, pdf: false },
+                        interleaved: false,
+                      },
+                      release_date: "",
+                      variants: {},
+                    }),
+                  }
+                }
+                if (Object.keys(irisModels).length) {
+                  database["iris"] = {
+                    id: ProviderV2.ID.make("iris"),
+                    name: "IRIS",
+                    source: "api",
+                    env: [],
+                    options: {},
+                    models: irisModels,
+                  }
+                }
+              }
+            }
+          } catch {
+            // Network unavailable or timeout — seed fallback handles offline case
+          }
+        }
+
         // extend database from config
         for (const [providerID, provider] of configProviders) {
           const existing = database[providerID]
