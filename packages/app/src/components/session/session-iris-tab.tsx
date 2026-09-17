@@ -944,7 +944,45 @@ export function SessionIrisTab() {
     }
   }
 
+  /**
+   * THE PROJECT GRAPH IS THE ACTIVE BOARD'S INTERIOR — shown, not hidden behind a click.
+   *
+   * ELON opens its graph on the project itself: ATLAS at the centre, Memory -> every list ->
+   * every card, the agents/leads/workflows hubs, and the related boards around it.
+   * /iris/graph/:id already builds exactly that by ELON's own rules (pinned by a golden generated
+   * from ELON's code), related boards included. The Project tab was drawing the board-to-board
+   * web instead, and the graph ELON shows only appeared after clicking a board — so it read as
+   * "not the same graph" when it was the same graph behind a door.
+   *
+   * Connected and Full atlas stay the board-to-board webs: they are desktop's own account-wide
+   * views, which ELON does not have, and expanding a board there still works.
+   */
+  const projectScope = () => pane() === "graph" && graphScope() === "project" && activeBloq() != null
+  const [projectInterior] = createResource(
+    () => (projectScope() ? Number(activeBloq()) : undefined),
+    async (boardId: number) => {
+      if (interiors()[boardId]) return { measured: true, ...interiors()[boardId] }
+      const res = await doFetch(`/iris/graph/${boardId}`, { headers: { Accept: "application/json" } })
+      // Not ok, or not JSON: NOT MEASURED. Rendering it as an empty graph would claim the board
+      // holds nothing, which is the one thing we do not know.
+      if (!res.ok || !(res.headers.get("content-type") ?? "").includes("json")) return { measured: false, nodes: [], edges: [] }
+      const j = await res.json()
+      if (j?.measured === false) return { measured: false, reason: j?.reason, nodes: [], edges: [] }
+      const got = { nodes: j?.nodes ?? [], edges: j?.edges ?? [] }
+      setInteriors((prev) => ({ ...prev, [boardId]: got }))
+      return { measured: true, ...got }
+    },
+  )
+  const project = () => (projectScope() ? (projectInterior.latest ?? projectInterior()) : undefined)
+
+  /** Lists as the card editor wants them, read off the graph's own `list-<id>` nodes. */
+  const projectLists = () =>
+    (project()?.nodes ?? [])
+      .filter((n: any) => typeof n.id === "string" && n.id.startsWith("list-"))
+      .map((n: any) => ({ id: Number(n.id.slice("list-".length)), name: String(n.name) }))
+
   const graphNodes = createMemo<ForceNode[]>(() => {
+    if (projectScope()) return (project()?.nodes ?? []) as ForceNode[]
     const boards: ForceNode[] = graphScopedRows().map((r) => ({
       id: r.id,
       name: r.name,
@@ -967,6 +1005,7 @@ export function SessionIrisTab() {
   })
 
   const graphEdges = createMemo<ForceEdge[]>(() => {
+    if (projectScope()) return (project()?.edges ?? []) as ForceEdge[]
     const known = new Set(graphScopedRows().map((r) => r.id))
     const seen = new Set<string>()
     const out: ForceEdge[] = []
@@ -1210,10 +1249,13 @@ export function SessionIrisTab() {
    * write the surface is re-read so the row behind the dialog shows what was saved; a page
    * beyond the first drops back to page 1, because a refetch returns only the page it asked for.
    */
-  function openCard(itemId: number) {
+  function openCard(itemId: number, fromGraph?: { id: number; name: string }[]) {
     const b = activeBloq()
     if (b == null) return
-    const lists = ((data.latest ?? data())?.lists as AtlasList[] | undefined ?? []).map((l) => ({ id: l.id, name: l.name }))
+    // The Graph pane never loads the Atlas payload, so reading lists from `data` there gives the
+    // List picker nothing. The graph already holds every list as a `list-<id>` node.
+    const lists =
+      fromGraph ?? ((data.latest ?? data())?.lists as AtlasList[] | undefined ?? []).map((l) => ({ id: l.id, name: l.name }))
     dialog.show(() => (
       <IrisCardEditor
         itemId={itemId}
@@ -2047,7 +2089,15 @@ export function SessionIrisTab() {
                     Both, because they answer different halves: the layout shows how the
                     connected boards cluster, and the list is the only thing that can show a
                     board with no edges — 76% of them — which a force graph renders as absence. */}
-                <Show when={graphScopedRows().length}>
+                <Show when={projectScope() && !project() && projectInterior.loading}>
+                  <p class="px-2 py-6 text-12-regular text-text-weak">Loading this board's graph…</p>
+                </Show>
+                <Show when={projectScope() && project()?.measured === false}>
+                  <p class="px-2 py-6 text-12-regular text-text-weak">
+                    Not connected — this board's graph could not be read{(project() as any)?.reason ? ` (${(project() as any).reason})` : ""}.
+                  </p>
+                </Show>
+                <Show when={projectScope() ? (project()?.nodes?.length ?? 0) > 0 : graphScopedRows().length}>
                   <IrisForceGraph
                     nodes={graphNodes()}
                     edges={graphEdges()}
@@ -2062,13 +2112,22 @@ export function SessionIrisTab() {
                       are. Interior nodes carry namespaced string ids and are inert for now.
                     */
                     onNodeClick={(n) => {
-                      if (typeof n.id === "number") void toggleExpand(n.id)
+                      // ELON's rule, exactly: only a CARD responds, and it opens that card's
+                      // editor. Hubs, lists and related boards are inert (Board.vue
+                      // onGraphNodeClick returns unless the id starts with `item-`).
+                      if (typeof n.id === "string" && n.id.startsWith("item-")) {
+                        const itemId = Number(n.id.slice("item-".length))
+                        if (Number.isFinite(itemId)) openCard(itemId, projectScope() ? projectLists() : undefined)
+                        return
+                      }
+                      // The account-wide webs keep expand-on-click.
+                      if (!projectScope() && typeof n.id === "number") void toggleExpand(n.id)
                     }}
                   />
                 </Show>
                 {/* An isolated board would otherwise leave the canvas blank, which reads as a
                     failed load rather than the finding it is. Offer the way out instead. */}
-                <Show when={graphBoardIsolated()}>
+                <Show when={!projectScope() && graphBoardIsolated()}>
                   <div class="flex-1 min-h-0 flex flex-col items-center justify-center gap-2 px-6 text-center">
                     <p class="text-12-regular text-text-weak">Nothing links to this board yet.</p>
                     <button type="button" class="iris-detailnav__item" onClick={() => chooseGraphScope("full")}>
