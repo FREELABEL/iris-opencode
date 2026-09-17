@@ -134,6 +134,7 @@ import { PlatformExposureCommand } from "./cli/cmd/platform-exposure"
 import { PlatformFindCommand } from "./cli/cmd/platform-find"
 import { PlatformDashboardCommand } from "./cli/cmd/platform-dashboard"
 import { PlatformContentEngineCommand } from "./cli/cmd/platform-content-engine"
+import { PlatformNewsroomCommand } from "./cli/cmd/platform-newsroom"
 import { PlatformSitesCommand } from "./cli/cmd/platform-sites"
 import { PlatformDomainsCommand } from "./cli/cmd/platform-domains"
 import { PlatformPagesBatchCommand } from "./cli/cmd/platform-pages-batch"
@@ -439,6 +440,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformExposureCommand))
   .command(reg(PlatformDashboardCommand))
   .command(reg(PlatformContentEngineCommand))
+  .command(reg(PlatformNewsroomCommand))
   .command(reg(PlatformSitesCommand))
   .command(reg(PlatformDomainsCommand))
   .command(reg(PlatformPagesBatchCommand))
