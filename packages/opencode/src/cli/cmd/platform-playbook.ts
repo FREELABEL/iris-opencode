@@ -58,6 +58,7 @@ const SkillSearchCommand = cmd({
     yargs
       .positional("query", { type: "string", describe: "free text; matched against name, description, tags and triggers" })
       .option("tag", { type: "array", describe: "require this tag (repeatable; ALL must match)" })
+      .option("local", { type: "boolean", default: false, describe: "search this machine only — skip the marketplace" })
       .option("json", { type: "boolean", default: false, describe: "JSON output" }),
   async handler(args) {
     await withInstance(async () => {
@@ -109,14 +110,58 @@ const SkillSearchCommand = cmd({
       const rank: Record<string, number> = { name: 0, tag: 1, description: 2, trigger: 3 }
       hits.sort((a, b) => (rank[a.why] ?? 9) - (rank[b.why] ?? 9) || a.name.localeCompare(b.name))
 
+      // Search used to read only this machine, so a playbook published to the marketplace
+      // that the caller had not installed answered "No playbook matches" — which reads as
+      // "it does not exist". List what is published and not installed, as its own group, so
+      // an installed hit is never confused with one that needs `install` first.
+      const installed = new Set(skills.map((s) => s.name))
+      const registry = args.local ? [] : await fetchRegistryRows()
+      const published: Array<{ name: string; description: string; scope: string }> = []
+      for (const row of registry ?? []) {
+        const name = String(row?.name ?? "")
+        if (!name || installed.has(name)) continue
+        const description = String(row?.description ?? "")
+        const tags: string[] = Array.isArray(row?.tags) ? row.tags.map((x: unknown) => String(x).toLowerCase()) : []
+        if (need.length && !need.every((t) => tags.includes(t))) continue
+        if (q && !name.toLowerCase().includes(q) && !description.toLowerCase().includes(q)) continue
+        published.push({ name, description, scope: String(row?.scope ?? "unknown") })
+      }
+      published.sort((a, b) => a.name.localeCompare(b.name))
+
       if (args.json) {
-        console.log(JSON.stringify(hits, null, 2))
+        // Additive: every row keeps its old fields; `installed` says which command comes next.
+        const out = [
+          ...hits.map((h) => ({ ...h, installed: true })),
+          ...published.map((p) => ({ ...p, tags: [], why: "marketplace", installed: false })),
+        ]
+        console.log(JSON.stringify(out, null, 2))
         return
       }
 
+      // `null` means the marketplace could not be asked. Say so — a quiet "no match" there
+      // is the exact ambiguity this search was fixed to remove.
+      const unchecked = !args.local && registry === null
+      const printPublished = () => {
+        if (!published.length) return
+        console.log(bold(`${published.length} published, not installed here`))
+        printDivider()
+        for (const p of published) {
+          console.log(`  ${bold(p.name)}  ${dim("(" + p.scope + ")")}`)
+          const d = p.description.length > 96 ? p.description.slice(0, 96) + "…" : p.description
+          if (d) console.log(dim(`    ${d}`))
+        }
+        printDivider()
+        console.log(dim("  Install one, then run it:  iris playbook install <name>"))
+      }
+
       if (!hits.length) {
+        if (published.length) {
+          printPublished()
+          return
+        }
         console.log(`No playbook matches${q ? ` "${q}"` : ""}${need.length ? ` with tag(s): ${need.join(", ")}` : ""}.`)
         console.log(dim("  Most playbooks carry no tags yet — try a word from the description, or `iris playbook list`."))
+        if (unchecked) console.log(dim("  The marketplace could not be reached, so only this machine was searched."))
         return
       }
 
@@ -130,6 +175,11 @@ const SkillSearchCommand = cmd({
       }
       printDivider()
       console.log(dim("  Run one:  iris playbook run <name>"))
+      if (published.length) {
+        console.log()
+        printPublished()
+      }
+      if (unchecked) console.log(dim("  The marketplace could not be reached, so only this machine was searched."))
     })
   },
 })
@@ -254,7 +304,7 @@ const SkillShowCommand = cmd({
     await withInstance(async () => {
       const info = await Skill.get(args.name as string)
       if (!info) {
-        console.error(`Skill "${args.name}" not found`)
+        await reportNotInstalled(String(args.name))
         process.exit(1)
       }
 
@@ -430,7 +480,7 @@ const SkillRunCommand = cmd({
     await withInstance(async () => {
       const info = await Skill.get(args.name as string)
       if (!info) {
-        console.error(`Skill "${args.name}" not found`)
+        await reportNotInstalled(String(args.name))
         process.exit(1)
       }
 
@@ -694,7 +744,7 @@ const SkillTestCommand = cmd({
     await withInstance(async () => {
       const info = await Skill.get(args.name as string)
       if (!info) {
-        console.error(`Skill "${args.name}" not found`)
+        await reportNotInstalled(String(args.name))
         process.exit(1)
       }
 
@@ -1819,6 +1869,17 @@ export type PublishState =
  * resolve silently.
  */
 async function fetchRegistryScopes(): Promise<Map<string, string> | null> {
+  const rows = await fetchRegistryRows()
+  if (rows === null) return null
+  const out = new Map<string, string>()
+  for (const p of rows) {
+    if (p?.name) out.set(String(p.name), String(p.scope ?? "unknown"))
+  }
+  return out
+}
+
+/** Every playbook row the registry will show this caller. `null` = could not ask; never `[]` for that. */
+async function fetchRegistryRows(): Promise<any[] | null> {
   const timeout = new Promise<"timeout">((r) => setTimeout(() => r("timeout"), 5000))
   try {
     const raced = await Promise.race([irisFetch(`/api/v1/playbooks`, {}, IRIS_API), timeout])
@@ -1826,15 +1887,37 @@ async function fetchRegistryScopes(): Promise<Map<string, string> | null> {
     const res = raced as Response
     if (!res.ok) return null
     const body = (await res.json()) as any
-    const rows: any[] = firstArray(body?.playbooks, Array.isArray(body) ? body : [])
-    const out = new Map<string, string>()
-    for (const p of rows) {
-      if (p?.name) out.set(String(p.name), String(p.scope ?? "unknown"))
-    }
-    return out
+    return firstArray(body?.playbooks, Array.isArray(body) ? body : [])
   } catch {
     return null
   }
+}
+
+/**
+ * The error for a playbook that is not on this machine.
+ *
+ * `run`, `show` and `test` read only the local disk, so a playbook published to the
+ * marketplace answered a bare `Skill "x" not found` to every client who had not installed it.
+ * True about the disk, and read by clients as "this playbook does not exist". Ask the
+ * registry which of the three cases it is and name the next command.
+ *
+ * Deliberately NOT an auto-install: that would download shell steps from the network and
+ * execute them without the user ever choosing to install them.
+ */
+export async function reportNotInstalled(name: string): Promise<void> {
+  const state = await fetchPublishState(name)
+  if (state.state === "published") {
+    console.error(`Playbook "${name}" is not installed on this machine. It is published (${state.scope}) — install it, then run it again:`)
+    console.error(`  iris playbook install ${name}`)
+    return
+  }
+  if (state.state === "unpublished") {
+    console.error(`Playbook "${name}" not found — it is not installed here, and nothing by that name is published that you can see.`)
+    console.error(dim("  What you can install: iris playbook available"))
+    return
+  }
+  console.error(`Playbook "${name}" is not installed on this machine, and the marketplace could not be checked (${state.reason}).`)
+  console.error(dim(`  If it is published: iris playbook install ${name}`))
 }
 
 async function fetchPublishState(name: string): Promise<PublishState> {

@@ -27,7 +27,7 @@ const publishHandler = (() => {
 
 describe("playbook publish --scope local", () => {
   test("local is an offered scope", () => {
-    expect(publishHandler).toContain('choices: ["local", "private", "project", "public"]')
+    expect(publishHandler).toContain('choices: ["local", "private", "project", "unlisted", "public"]')
   })
 
   test("the local branch returns BEFORE requireAuth", () => {
