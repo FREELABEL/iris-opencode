@@ -15,32 +15,67 @@
 import { spawn } from "child_process"
 import { mkdtempSync, rmSync, accessSync, constants } from "fs"
 import { tmpdir } from "os"
-import { join } from "path"
+import { join, delimiter, isAbsolute } from "path"
 import net from "net"
 
 const CANDIDATES = [
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
   "/Applications/Chromium.app/Contents/MacOS/Chromium",
   "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+  "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
   "google-chrome",
   "google-chrome-stable",
   "chromium",
   "chromium-browser",
 ]
 
-export function findChrome(): string | null {
-  if (process.env["CHROME_BIN"]) return process.env["CHROME_BIN"]!
-  for (const c of CANDIDATES) {
-    try {
-      if (c.startsWith("/")) {
-        accessSync(c, constants.X_OK)
-        return c
-      }
-    } catch {
-      /* next */
+/**
+ * What a client sees when there is no browser. It used to be "headless Chrome did not open a
+ * debugging port on 58545" — true, and useless: nothing in it says Chrome is missing or what to do.
+ * The cause was twofold: a bare name like `google-chrome` was returned WITHOUT checking it is on
+ * PATH, and the spawn failure was never listened for, so launch waited 20s and blamed the port.
+ */
+export const NO_CHROME =
+  "IRIS Edge needs Google Chrome (or Chromium / Edge) to check the export actually renders, and none was found. " +
+  "Install Chrome, or set CHROME_BIN to its path. " +
+  "To export without that check — not recommended — pass --no-verify --no-harvest --no-data."
+
+const executable = (p: string) => {
+  try {
+    accessSync(p, constants.X_OK)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Resolve a bare command name against PATH, the way a shell would. */
+function onPath(name: string): string | null {
+  const exts = process.platform === "win32" ? ["", ".exe"] : [""]
+  for (const dir of (process.env["PATH"] ?? "").split(delimiter)) {
+    if (!dir) continue
+    for (const ext of exts) {
+      const full = join(dir, name + ext)
+      if (executable(full)) return full
     }
   }
-  return CANDIDATES.find((c) => !c.startsWith("/")) ?? null
+  return null
+}
+
+export function findChrome(): string | null {
+  const explicit = process.env["CHROME_BIN"]
+  if (explicit) return executable(explicit) ? explicit : null
+  for (const c of CANDIDATES) {
+    if (isAbsolute(c) || /^[A-Za-z]:\\/.test(c)) {
+      if (executable(c)) return c
+    } else {
+      const found = onPath(c)
+      if (found) return found
+    }
+  }
+  return null
 }
 
 const freePort = (): Promise<number> =>
@@ -70,7 +105,11 @@ export interface Session {
 /** Launch a throwaway Chrome, bound to nothing the user is logged into. */
 export async function launch({ timeout = 20000 }: { timeout?: number } = {}): Promise<Session> {
   const bin = findChrome()
-  if (!bin) throw new Error("no Chrome/Chromium found — set CHROME_BIN")
+  if (!bin) {
+    throw new Error(
+      process.env["CHROME_BIN"] ? `CHROME_BIN=${process.env["CHROME_BIN"]} is not an executable file. ${NO_CHROME}` : NO_CHROME,
+    )
+  }
 
   const port = await freePort()
   const profile = mkdtempSync(join(tmpdir(), "iris-edge-chrome-"))
@@ -88,11 +127,17 @@ export async function launch({ timeout = 20000 }: { timeout?: number } = {}): Pr
     "about:blank",
   ]
   const proc = spawn(bin, args, { stdio: "ignore", detached: false })
+  // A spawn that fails (the file vanished, no permission) is reported on this event and nowhere else.
+  let spawnError: Error | null = null
+  proc.on("error", (e) => {
+    spawnError = e
+  })
 
   const base = `http://127.0.0.1:${port}`
   const deadline = Date.now() + timeout
   let version: unknown = null
   while (Date.now() < deadline) {
+    if (spawnError) break
     try {
       version = await (await fetch(`${base}/json/version`)).json()
       break
@@ -103,7 +148,12 @@ export async function launch({ timeout = 20000 }: { timeout?: number } = {}): Pr
   if (!version) {
     proc.kill("SIGKILL")
     rmSync(profile, { recursive: true, force: true })
-    throw new Error(`headless Chrome did not open a debugging port on ${port}`)
+    throw new Error(
+      spawnError
+        ? `Could not start ${bin}: ${(spawnError as Error).message}. ${NO_CHROME}`
+        : `Chrome (${bin}) started but did not answer within ${Math.round(timeout / 1000)}s. ` +
+            `It may be blocked by a security tool or already hung; try again, or set CHROME_BIN to another browser.`,
+    )
   }
 
   const close = async () => {

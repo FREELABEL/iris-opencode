@@ -167,7 +167,6 @@ fi
 BRANCH=$(git branch --show-current)
 if [ "$BRANCH" != "main" ]; then
   echo "Error: Must be on main branch (currently on '$BRANCH')"
-  echo "  Note: this repo's GitHub DEFAULT branch is 'dev', but releases are cut from main."
   exit 1
 fi
 
@@ -361,38 +360,37 @@ echo ""
 echo "Release v$TARGET is live! ($ASSET_COUNT assets)"
 echo "Run 'iris update' to install."
 
-# 5. The dev branch — REPORT, do not silently attempt.
+# 5. The GitHub DEFAULT branch — does a plain `git clone` get this release? REPORT, never fix.
 #
-# This used to run `git checkout dev && git pull && git merge origin/main && git push`,
-# and it had not worked since **v1.3.118 on 2026-07-03** — 134 releases. `dev` and
-# `main` now have UNRELATED HISTORIES (git refuses the merge outright), so the merge
-# failed every time, the script printed nothing about it, and it exited 0.
+# This used to assume the default was `dev` and warn that `dev` did not contain the release. That
+# was true until 2026-09-13, when the default moved to `main` (#184680) — after which every release
+# printed a confident, false alarm telling people clones were missing the code. A warning that is
+# always wrong trains people to skip the warnings, including the next true one. So: ASK GitHub which
+# branch is the default (`ls-remote --symref`, no auth needed) and check containment against THAT.
 #
-# That matters more than a stale branch, because **dev is the GitHub DEFAULT branch**:
-# a plain `git clone` gets it. So for 134 releases, anyone cloning this repo received a
-# different lineage from the one that ships — and a test run against that clone fails
-# for a reason that looks exactly like a broken feature (#184680, measured while
-# deploying a security control to a second machine).
-#
-# Merging unrelated histories is not something a release script should decide to do.
-# So it reports, and the decision stays with a person.
+# The history worth keeping: `dev` and `main` have UNRELATED HISTORIES. The automatic dev sync that
+# used to live here failed silently from v1.3.118 for 134 releases, and a test run against a plain
+# clone then failed for a reason that looked exactly like a broken feature. Merging unrelated
+# histories is not a release script's call; it reports and a person decides.
 echo ""
-DEV_SHA=$(git ls-remote "https://github.com/$REPO.git" refs/heads/dev 2>/dev/null | cut -f1)
-if [ -z "$DEV_SHA" ]; then
-  echo "Note: could not read the dev branch; skipping the default-branch check."
+DEFAULT=$(git ls-remote --symref "https://github.com/$REPO.git" HEAD 2>/dev/null | awk '/^ref:/ {sub("refs/heads/","",$2); print $2}')
+if [ -z "$DEFAULT" ]; then
+  echo "Note: could not read the GitHub default branch; skipping the clone check."
+elif [ "$DEFAULT" = "main" ]; then
+  echo "Default branch is 'main' — a plain 'git clone' gets v$TARGET."
 else
-  git fetch origin dev --quiet 2>/dev/null || true
-  if git merge-base --is-ancestor "origin/main" "$DEV_SHA" 2>/dev/null; then
-    echo "Default branch 'dev' contains this release."
+  DEF_SHA=$(git ls-remote "https://github.com/$REPO.git" "refs/heads/$DEFAULT" 2>/dev/null | cut -f1)
+  git fetch origin "$DEFAULT" --quiet 2>/dev/null || true
+  if [ -n "$DEF_SHA" ] && git merge-base --is-ancestor "origin/main" "$DEF_SHA" 2>/dev/null; then
+    echo "Default branch '$DEFAULT' contains this release."
   else
-    BEHIND=$(git rev-list --count "$DEV_SHA..origin/main" 2>/dev/null || echo "?")
-    echo "⚠  The GitHub DEFAULT branch 'dev' does NOT contain v$TARGET (behind by $BEHIND commit(s))."
-    if ! git merge-base "origin/main" "$DEV_SHA" >/dev/null 2>&1; then
-      echo "   'dev' and 'main' have UNRELATED HISTORIES — they cannot be merged, and the"
-      echo "   automatic sync that used to live here has silently failed since v1.3.118."
+    BEHIND=$(git rev-list --count "$DEF_SHA..origin/main" 2>/dev/null || echo "?")
+    echo "⚠  The GitHub DEFAULT branch '$DEFAULT' does NOT contain v$TARGET (behind by $BEHIND commit(s))."
+    if [ -n "$DEF_SHA" ] && ! git merge-base "origin/main" "$DEF_SHA" >/dev/null 2>&1; then
+      echo "   '$DEFAULT' and 'main' have UNRELATED HISTORIES — they cannot be merged."
     fi
     echo "   Anyone running 'git clone <repo>' with no -b flag gets code WITHOUT this release."
-    echo "   Fix it deliberately: either point the GitHub default at 'main', or reconcile 'dev'."
-    echo "   Tracking: #184680"
+    echo "   Fix it deliberately: point the GitHub default at 'main', or reconcile '$DEFAULT'."
+    echo "   History: #184680"
   fi
 fi

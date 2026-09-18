@@ -5194,10 +5194,10 @@ export const PlatformPagesCommand = productCommand({
   name: "genesis",
   aliases: ["pages"],
   purpose:
-    "Genesis — composable pages, sites and COMPONENTS: browse the component library with its props/emits/slots, see which pages use a component before changing it, roll a component back, plus pages list/view/get/set/pull/push/diff/publish/screenshot",
-  keywords: ["genesis", "page", "site", "component", "components", "library", "catalogue", "props", "emits", "slots", "usage", "rollback", "versions", "stale", "publish", "artifact", "landing", "screenshot", "verify", "read", "bespoke", "html"],
-  howtos: ["genesis-design-standard", "bespoke", "genesis-sdk", "pages"],
-  playbooks: ["pages", "seed-pages"],
+    "Genesis — composable pages, sites and COMPONENTS: browse the component library with its props/emits/slots, see which pages use a component before changing it, roll a component back, plus pages list/view/get/set/pull/push/diff/publish/screenshot, and export a page to a server you control (export/deploy — IRIS Edge)",
+  keywords: ["genesis", "page", "site", "component", "components", "library", "catalogue", "props", "emits", "slots", "usage", "rollback", "versions", "stale", "publish", "artifact", "landing", "screenshot", "verify", "read", "bespoke", "html", "export", "deploy", "edge", "self-host", "static", "rollback"],
+  howtos: ["genesis-design-standard", "bespoke", "genesis-sdk", "pages", "edge-publish"],
+  playbooks: ["pages", "seed-pages", "edge-publish"],
   builder: (y) =>
     y
       .command(LibraryCmd)

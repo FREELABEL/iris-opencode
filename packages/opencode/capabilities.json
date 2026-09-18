@@ -5121,12 +5121,12 @@
     {
       "kind": "command",
       "name": "genesis",
-      "describe": "Genesis — composable pages, sites and COMPONENTS: browse the component library with its props/emits/slots, see which pages use a component before changing it, roll a component back, plus pages list/view/get/set/pull/push/diff/publish/screenshot",
+      "describe": "Genesis — composable pages, sites and COMPONENTS: browse the component library with its props/emits/slots, see which pages use a component before changing it, roll a component back, plus pages list/view/get/set/pull/push/diff/publish/screenshot, and export a page to a server you control (export/deploy — IRIS Edge)",
       "aliases": [
         "pages"
       ],
       "run": "iris genesis",
-      "haystack": "genesis pages genesis — composable pages, sites and components: browse the component library with its props/emits/slots, see which pages use a component before changing it, roll a component back, plus pages list/view/get/set/pull/push/diff/publish/screenshot library studio pull diff merge publish install list show usage versions audit rollback list search view get set pull push dev diff merge publish unpublish preview visibility share share:list share:revoke create duplicate check-public rebrand components compose component-registry add-table versions rollback qr screenshot read verify publish-html reassign ungate gate cache-clear export deploy serve-edge"
+      "haystack": "genesis pages genesis — composable pages, sites and components: browse the component library with its props/emits/slots, see which pages use a component before changing it, roll a component back, plus pages list/view/get/set/pull/push/diff/publish/screenshot, and export a page to a server you control (export/deploy — iris edge) library studio pull diff merge publish install list show usage versions audit rollback list search view get set pull push dev diff merge publish unpublish preview visibility share share:list share:revoke create duplicate check-public rebrand components compose component-registry add-table versions rollback qr screenshot read verify publish-html reassign ungate gate cache-clear export deploy serve-edge"
     },
     {
       "kind": "command",
