@@ -101,20 +101,20 @@ export async function exportCollections({
 
   for (const collection of collections) {
     if (!allowPhi && PHI_HINT.test(collection)) {
-      refused.push({ collection, reason: "PHI-flagged — needs a written compliance decision (ADR-03)" })
+      refused.push({ collection, reason: "left out — looks like health information, which needs a written decision before it can be self-hosted" })
       continue
     }
 
     const probe = await probeViewerVariance({ origin, slug, collection })
 
     if (probe.unreachable) {
-      refused.push({ collection, reason: `origin returned HTTP ${probe.status} — not written to disk` })
+      refused.push({ collection, reason: `left out — the source answered with an error (HTTP ${probe.status}), so nothing was written` })
       continue
     }
     if (probe.varies) {
       refused.push({
         collection,
-        reason: "rows differ by viewer — a static file cannot scope per viewer (ADR-02)",
+        reason: "left out — shows different rows to different visitors, and a static file would show every row to everyone",
       })
       continue
     }
@@ -128,7 +128,7 @@ export async function exportCollections({
       continue
     }
     if (!allowPhi && parsed && parsed.phi === true) {
-      refused.push({ collection, reason: "payload is PHI-flagged — refused (ADR-03)" })
+      refused.push({ collection, reason: "left out — marked as health information" })
       continue
     }
 

@@ -107,7 +107,7 @@ export async function verifyExport(
     // Independence is the export's own job and is never excused by the baseline.
     check(
       homeLive.length === 0,
-      "independent of our servers",
+      "runs without IRIS Cloud",
       homeLive.length
         ? `${homeLive.length} live call(s): ${homeLive[0].slice(0, 90)}`
         : homeDead.length

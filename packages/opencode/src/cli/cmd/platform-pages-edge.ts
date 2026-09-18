@@ -60,7 +60,7 @@ export const EdgeExportCmd = cmd({
       .option("no-verify", {
         type: "boolean",
         default: false,
-        describe: "skip loading the export in a real browser (egress to our servers blocked) — not recommended",
+        describe: "skip opening the export in a browser with IRIS Cloud switched off — not recommended",
       })
       .option("no-data", { type: "boolean", default: false, describe: "skip exporting bound collections" })
       .option("no-harvest", { type: "boolean", default: false, describe: "skip pulling assets the page injects at runtime" })
@@ -100,10 +100,10 @@ export const EdgeExportCmd = cmd({
           process.exitCode = 5
           if (json) return writeJson({ ok: false, reason: "auth-gated", slug })
           prompts.log.error(
-            "This page is behind a sign-in, so what exports is the sign-in FORM. The session it " +
-              "posts to lives on our servers, so the client would get a lock with no key.",
+            "This page is behind a sign-in. Sign-ins are handled by IRIS Cloud, so a self-hosted " +
+              "copy would show the sign-in form with nothing behind it.",
           )
-          prompts.log.info("Give them a custom domain instead: iris domains connect <domain> --page " + slug)
+          prompts.log.info("Keep this page on IRIS Cloud under your own domain instead: iris domains connect <domain> --page " + slug)
           prompts.outro("Not exported")
           return
         }
@@ -149,7 +149,7 @@ export const EdgeExportCmd = cmd({
 
       let verified: Awaited<ReturnType<typeof verifyExport>> | null = null
       if (!args["no-verify"]) {
-        sp?.message("Loading it in a browser, with egress to our servers blocked…")
+        sp?.message("Opening it in a browser with IRIS Cloud switched off…")
         // Offline is not optional. Without it the independence check reads "zero calls", which
         // cannot tell an independent page from one that had not needed the network yet.
         verified = await verifyExport(res.site, { offline: true, baseline: `${origin}/p/${slug}` })
