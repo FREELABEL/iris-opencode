@@ -1601,17 +1601,31 @@ const PreviewCmd = cmd({
 
 const CreateCmd = cmd({
   command: "create",
-  describe: "create a new page",
+  describe: "create a COMPOSABLE (component JSON) page — for a page a person reads, use `publish-html` instead (the default lane)",
   builder: (y) =>
     y
       .option("slug", { describe: "page slug", type: "string", demandOption: true })
       .option("title", { describe: "page title", type: "string", demandOption: true })
       .option("seo-title", { describe: "SEO title", type: "string" })
       .option("seo-description", { describe: "SEO description", type: "string" })
-      .option("template", { describe: "template name (landing/product/about/contact)", type: "string" })
+      .option("template", {
+        describe: "composable scaffold type (landing/product/about/contact) — there is no html template; hand-written HTML pages use `publish-html`",
+        type: "string",
+      })
       .option("owner-type", { describe: "owner type", type: "string", default: "bloq" })
       .option("owner-id", { describe: "owner ID", type: "number", default: 38 }),
   async handler(args) {
+    // `--template html` used to "work": it set json_content.type = "html" and then scaffolded the
+    // same component page as every other template. An author asking for a hand-written HTML page
+    // got a component page wearing the label, with nothing to say so. Refuse before auth or
+    // network, and name the verb that does build one.
+    if (String(args.template ?? "").toLowerCase() === "html") {
+      console.error("`pages create` builds composable (component JSON) pages only — it has no html template.")
+      console.error("For a hand-written HTML page, write the file and publish it:")
+      console.error(`  iris genesis publish-html ${args.slug} --file ./${args.slug}.html --dry-run`)
+      process.exitCode = 1
+      return
+    }
     UI.empty()
     prompts.intro(`◈  Create Page: ${args.slug}`)
     if (!(await requireAuth())) { prompts.outro("Done"); return }
@@ -1655,6 +1669,8 @@ const CreateCmd = cmd({
       printKV("URL", publicUrl(p))
       printDivider()
       printDesignStandardHint(p.slug)
+      console.log(dim("  This is a composable page. For a page a person reads, hand-written HTML is the default lane:"))
+      console.log(dim(`  iris genesis publish-html ${p.slug} --file ./${p.slug}.html`))
       prompts.outro(dim(`iris pages publish ${p.slug}`))
     } catch (err) {
       sp.stop("Error", 1)
