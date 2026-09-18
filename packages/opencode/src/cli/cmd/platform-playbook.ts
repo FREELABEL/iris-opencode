@@ -1810,6 +1810,190 @@ const PlaybookCheckPrivateCommand = cmd({
   },
 })
 
+// ============================================================================
+// iris playbook share <name> — how do I share this, and does the link work?
+// ============================================================================
+
+/** One address a playbook can be opened at, exactly as the registry returned it. */
+export type ShareLink = { kind: "public_url" | "canonical_url"; url: string }
+
+export type ShareSummary = {
+  name: string
+  scope: string
+  bloq_id: number | null
+  access_type: string | null
+  version: number | null
+  published_at: string | null
+  updated_at: string | null
+  uuid: string | null
+  /** ONLY addresses the API returned. Never built from the name — see shareSummary(). */
+  links: ShareLink[]
+  who_can_open: string
+  /** Set when there is no link to send, saying what to do instead. */
+  note: string | null
+}
+
+function isHttpUrl(v: unknown): v is string {
+  return typeof v === "string" && /^https?:\/\//i.test(v)
+}
+
+/** Who can open a playbook at this scope, in the words you would say to the person you send it to. */
+export function shareAudience(scope: string, bloqId: number | null): string {
+  switch (scope) {
+    case "public":   return "Anyone — it is listed in the marketplace, no sign-in needed"
+    case "unlisted": return "Anyone with the link — it is not listed in the marketplace, no sign-in needed"
+    case "project":  return `Signed-in members of board #${bloqId ?? "?"} only`
+    case "private":  return "Only you, signed in"
+    case "local":    return "Nobody else — it is on this machine only and was never uploaded"
+    default:         return `Whoever the registry allows (scope "${scope}")`
+  }
+}
+
+/**
+ * What to tell someone about sharing a playbook, from the registry row alone. Pure, so it is
+ * tested without a network.
+ *
+ * THE RULE: a URL is printed only if the API returned it. #185980 — at project scope `publish`
+ * fell back to building `/playbooks/<name>` itself, and that address 404s for everyone, members
+ * included, because the page never resolves a project-scope playbook. A made-up link that looks
+ * exactly like a real one is worse than no link: it gets pasted into a message and fails there.
+ */
+export function shareSummary(pb: any, fallbackName?: string): ShareSummary {
+  const name = String(pb?.name ?? fallbackName ?? "")
+  const scope = String(pb?.scope ?? "unknown")
+  const bloqId = pb?.bloq_id != null ? Number(pb.bloq_id) : null
+
+  const links: ShareLink[] = []
+  if (isHttpUrl(pb?.public_url)) links.push({ kind: "public_url", url: pb.public_url })
+  if (isHttpUrl(pb?.canonical_url) && pb.canonical_url !== pb?.public_url) {
+    links.push({ kind: "canonical_url", url: pb.canonical_url })
+  }
+
+  let note: string | null = null
+  if (links.length === 0) {
+    if (scope === "project") {
+      note = `No web link — members of board #${bloqId ?? "?"} install it with: iris playbook install ${name}`
+    } else if (scope === "private") {
+      note = `No web link — it is private. Widen it first: iris playbook publish ${name} --scope unlisted`
+    } else if (scope === "local") {
+      note = `No web link — it was never uploaded. Publish it first: iris playbook publish ${name} --scope unlisted`
+    } else {
+      note = `The registry returned no web link for this playbook (scope "${scope}"), so there is none to share.`
+    }
+  }
+
+  return {
+    name,
+    scope,
+    bloq_id: bloqId,
+    access_type: pb?.access_type ?? null,
+    version: pb?.version != null ? Number(pb.version) : null,
+    published_at: pb?.published_at ?? null,
+    updated_at: pb?.updated_at ?? null,
+    uuid: pb?.uuid ?? null,
+    links,
+    who_can_open: shareAudience(scope, bloqId),
+    note,
+  }
+}
+
+export type LinkCheck = { status: number; opens: boolean; detail: string }
+
+/**
+ * Judge an anonymous fetch of a share link. A 200 alone is not "it works": the detail page has
+ * in the past framed a 200 around a null playbook, so the body must also name the playbook.
+ */
+export function judgeLinkFetch(status: number, body: string, name: string): LinkCheck {
+  if (status === -1) return { status, opens: false, detail: "could not reach it — UNMEASURED, not the same as working" }
+  if (status !== 200) return { status, opens: false, detail: `HTTP ${status} — a stranger gets an error page` }
+  if (!body.includes(name)) return { status, opens: false, detail: "HTTP 200, but the page does not show this playbook" }
+  return { status, opens: true, detail: "HTTP 200 — opens for someone who is not signed in" }
+}
+
+/** Fetch a link the way the person you send it to would: no credential attached, ever. */
+async function checkLinkAnonymously(url: string, name: string): Promise<LinkCheck> {
+  try {
+    const res = await fetch(url, {
+      headers: { "User-Agent": "iris-playbook-share" },
+      signal: AbortSignal.timeout(10000),
+    })
+    return judgeLinkFetch(res.status, await res.text(), name)
+  } catch (e: any) {
+    return { ...judgeLinkFetch(-1, "", name), detail: `could not reach it (${e?.message ?? String(e)}) — UNMEASURED, not the same as working` }
+  }
+}
+
+const PlaybookShareCommand = cmd({
+  command: "share <name>",
+  aliases: ["url", "access"],
+  describe: "show a published playbook's link, who can open it, and whether the link works right now",
+  builder: (y) =>
+    y
+      .positional("name", { describe: "playbook name", type: "string", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const name = String(args.name)
+    const json = Boolean(args.json)
+
+    const token = await requireAuth()
+    if (!token) return
+
+    const res = await irisFetch(`/api/v1/playbooks/${encodeURIComponent(name)}`, {}, IRIS_API)
+    let pb: any = null
+    if (res.status === 404) {
+      // Not in the registry. Either it only exists on this machine (scope local), or it does not exist.
+      const local = await withInstance(() => Skill.get(name)).catch(() => null)
+      if (!local) {
+        const msg = `Playbook "${name}" is not published, and it is not on this machine.`
+        if (json) await writeJson({ name, ok: false, error: msg })
+        else console.error(msg)
+        process.exitCode = 1
+        return
+      }
+      pb = { name, scope: "local" }
+    } else if (!res.ok) {
+      await handleApiError(res, "Look up playbook")
+      process.exitCode = 1
+      return
+    } else {
+      const data = (await res.json()) as any
+      pb = data?.playbook ?? data
+    }
+
+    const summary = shareSummary(pb, name)
+    const checks = await Promise.all(summary.links.map((l) => checkLinkAnonymously(l.url, summary.name)))
+
+    if (json) {
+      await writeJson({
+        ...summary,
+        links: summary.links.map((l, i) => ({ ...l, anonymous_check: checks[i] })),
+      })
+      return
+    }
+
+    UI.empty()
+    prompts.intro(`◈  Share — ${summary.name}`)
+    printDivider()
+    printKV("Scope", summary.scope)
+    if (summary.bloq_id != null) printKV("Board", `#${summary.bloq_id}`)
+    if (summary.access_type) printKV("Access", summary.access_type)
+    if (summary.version != null) printKV("Registry version", String(summary.version))
+    if (summary.published_at) printKV("Published", summary.published_at)
+    if (summary.updated_at) printKV("Updated", summary.updated_at)
+    printKV("Who can open it", summary.who_can_open)
+    printDivider()
+    summary.links.forEach((l, i) => {
+      const label = l.kind === "public_url" ? "Link to send" : "Canonical link"
+      const c = checks[i]
+      console.log(`  ${bold(label)}  ${highlight(l.url)}`)
+      console.log(`    ${c.opens ? success("✓") : "✗"} ${dim(`checked just now, signed out: ${c.detail}`)}`)
+    })
+    if (summary.note) console.log(`  ${summary.note}`)
+    printDivider()
+    prompts.outro("Done")
+  },
+})
+
 /**
  * The web URL for a published playbook (#182116).
  *
@@ -2765,6 +2949,7 @@ export const PlatformPlaybookCommand = cmd({
       .command(PublishCommand)
       .command(UnpublishCommand)
       .command(PlaybookCheckPrivateCommand)
+      .command(PlaybookShareCommand)
       .command(PlaybookDoctorCommand)
       .command(PlaybookVerifyCommand)
       .command(PlaybookAvailableCommand)
