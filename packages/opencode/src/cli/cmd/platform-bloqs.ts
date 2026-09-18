@@ -14,6 +14,7 @@ import {
 import { buildListEnvelope } from "./list-envelope"
 import { classifyRef, explainWrongRef } from "./reference-kind"
 import { federatedSearch, resolveSources, formatOutcomes } from "./federated-search"
+import { webSearchHandler } from "./platform-web-search"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, requireUserId, resolveUserId, printDivider, printKV, dim, bold, success, FL_API, PUBLIC_SITE, promptOrFail, MissingFlagError, isNonInteractive, cli, writeJson } from "./iris-api"
@@ -4153,7 +4154,21 @@ export const PlatformSearchCommand = cmd({
   // except make the help attribute `find` to content search, hiding the real command
   // (#183479). Two commands cannot both own a name; the loser should not advertise it.
   aliases: [],
-  describe: "search everything you have written — item titles, item content, and board names",
+  describe: "search everything you have written — item titles, item content, and board names (--web for the open web)",
+  // #185771/#185774: `--web` / `--provider` route to web-search. Same verb people try first,
+  // so the open web has to be reachable from it — but only on request, because every existing
+  // `iris search` means "my content" and silently widening it would change what they return.
+  builder: (yargs: any) =>
+    (BloqsSearchCommand.builder as any)(yargs)
+      .option("web", { describe: "search the open web instead (see: iris web-search --help)", type: "boolean", default: false })
+      .option("provider", { describe: "web provider: tavily, composio-search (implies --web)", type: "string" })
+      .option("news", { describe: "with --web: recent news", type: "boolean", default: false }),
+  async handler(args: any) {
+    // `limit` defaults to 20 for content search; a web page of 20 links is noise, so the
+    // untouched default maps to web-search's own default of 5.
+    if (args.web || args.provider) return webSearchHandler({ ...args, limit: args.limit === 20 ? 5 : args.limit })
+    return (BloqsSearchCommand.handler as any)(args)
+  },
 })
 
 // `atlas` was an ALIAS here, so `iris atlas --help` printed "iris bloqs" and the brand

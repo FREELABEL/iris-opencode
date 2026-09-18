@@ -36,6 +36,7 @@ import { PlatformLeadsCommand, PlatformDealsCommand, PlatformPulseCommand } from
 import { PlatformDialerCommand } from "./cli/cmd/platform-dialer"
 import { PlatformWorkflowsCommand } from "./cli/cmd/platform-workflows"
 import { PlatformBloqsCommand, PlatformSearchCommand } from "./cli/cmd/platform-bloqs"
+import { PlatformWebSearchCommand } from "./cli/cmd/platform-web-search"
 import { PlatformBloqSyncCommand } from "./cli/cmd/platform-bloq-sync"
 import { PlatformWorkspaceCommand } from "./cli/cmd/platform-workspace"
 import { PlatformTeamsCommand } from "./cli/cmd/platform-teams"
@@ -322,6 +323,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformWorkflowsCommand))
   .command(reg(PlatformBloqsCommand))
   .command(reg(PlatformSearchCommand))
+  .command(reg(PlatformWebSearchCommand))
   .command(reg(PlatformBloqSyncCommand))
   .command(reg(PlatformWorkspaceCommand))
   .command(reg(PlatformTeamsCommand))
