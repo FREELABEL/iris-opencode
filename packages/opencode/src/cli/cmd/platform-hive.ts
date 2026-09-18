@@ -60,6 +60,7 @@ import {
   ExchangeCommand,
 } from "./platform-exchange"
 import { firstArray } from "../../util/array"
+import { classifyNodeKeyStatus, lanAddress, NODE_KEY_FIX } from "../lib/node-key"
 
 // Use iris-api base for Hive endpoints
 const IRIS_API = process.env.IRIS_API_URL ?? "https://freelabel.net"
@@ -1905,7 +1906,19 @@ const HiveDoctorCommand = cmd({
           checks.push({ name: "Cloud API", status: "pass", detail: `Connected to ${IRIS_API}` })
           checks.push({ name: "Node ID", status: "pass", detail: String(h.node_id ?? "unknown").substring(0, 16) + "…" })
         } else {
-          checks.push({ name: "Cloud API", status: "fail", detail: `HTTP ${res.status} — key may be invalid` })
+          // Name the fix. "key may be invalid" sent a client — and our own agent reading the same
+          // line — into re-logging-in, which never touches the node key (#185896).
+          const st = classifyNodeKeyStatus(res.status)
+          checks.push({
+            name: "Cloud API",
+            status: "fail",
+            detail:
+              st === "rejected"
+                ? `HTTP 401 — the server has no node with this key. Logging in will NOT fix it. Run: ${NODE_KEY_FIX}`
+                : st === "suspended"
+                  ? `HTTP 403 — this node is suspended or its IP is not allowed. Contact your account admin.`
+                  : `HTTP ${res.status} — could not verify the node key`,
+          })
         }
       } catch (err) {
         checks.push({ name: "Cloud API", status: "fail", detail: err instanceof Error ? err.message : "Connection failed" })
@@ -1975,10 +1988,14 @@ const HiveDoctorCommand = cmd({
     try {
       const netRes = await fetch("http://localhost:3200/health", { signal: AbortSignal.timeout(1000) }).catch(() => null)
       if (netRes?.ok) {
-        // Try from 0.0.0.0 — if it also responds, bridge is externally bound
-        const extRes = await fetch("http://0.0.0.0:3200/health", { signal: AbortSignal.timeout(1000) }).catch(() => null)
+        // Probe a REAL interface address. Fetching 0.0.0.0 is routed to loopback on macOS and
+        // Linux, so it answered even for a 127.0.0.1 bind and this warned on every machine (#185888).
+        const lan = lanAddress(os.networkInterfaces())
+        const extRes = lan
+          ? await fetch(`http://${lan}:3200/health`, { signal: AbortSignal.timeout(1000) }).catch(() => null)
+          : null
         if (extRes?.ok) {
-          checks.push({ name: "Bind address", status: "warn", detail: "Bound to 0.0.0.0 (network-accessible). Set BRIDGE_BIND_HOST=127.0.0.1" })
+          checks.push({ name: "Bind address", status: "warn", detail: `Reachable from the network at ${lan}:3200. Set BRIDGE_BIND_HOST=127.0.0.1 and restart the daemon` })
         } else {
           checks.push({ name: "Bind address", status: "pass", detail: "127.0.0.1 (localhost only)" })
         }

@@ -7,6 +7,7 @@ import { map, pipe, sortBy, values } from "remeda"
 import path from "path"
 import os from "os"
 import fs from "fs"
+import { NODE_KEY_FIX } from "../lib/node-key"
 import { Config } from "../../config/config"
 import { Global } from "../../global"
 import { Plugin } from "../../plugin"
@@ -307,6 +308,26 @@ async function irisLoginStatus(): Promise<{ authenticated: boolean; token?: stri
   return { authenticated: false }
 }
 
+/**
+ * Signing in heals this machine's Hive node key (#185896).
+ *
+ * The Hive daemon authenticates with the node key in ~/.iris/config.json, a different
+ * credential from the account token login writes. A client installed fresh, signed in to
+ * Desktop, ran `iris auth login`, read "Already authenticated" — and still had a key the
+ * server rejected, because nothing on the login path looked at it. Login is the moment we
+ * hold a valid account token, so it is where the node key gets fixed. Never fails the login.
+ */
+async function healNodeKeyAfterLogin(userId: string | number | undefined): Promise<void> {
+  const id = Number(userId)
+  if (!Number.isFinite(id) || id <= 0) return
+  try {
+    const { healNodeKey } = await import("./platform-hive-connect")
+    await healNodeKey(id, prompts.log)
+  } catch {
+    prompts.log.warn(`Could not check this machine's Hive node key. If Hive shows HTTP 401, run: ${NODE_KEY_FIX}`)
+  }
+}
+
 async function irisLoginFlow(forceReauth: boolean): Promise<boolean> {
   // Check existing auth
   if (!forceReauth) {
@@ -315,6 +336,7 @@ async function irisLoginFlow(forceReauth: boolean): Promise<boolean> {
       prompts.log.success("Already authenticated with IRIS Platform")
       prompts.log.info(`Token: ${status.token!.slice(0, 12)}…`)
       prompts.log.info(`To re-authenticate: ${UI.Style.TEXT_HIGHLIGHT}iris auth login --force${UI.Style.TEXT_NORMAL}`)
+      await healNodeKeyAfterLogin(status.userId)
       return true
     }
   }
@@ -467,6 +489,7 @@ async function irisLoginFlow(forceReauth: boolean): Promise<boolean> {
     if (dashboard) {
       prompts.log.info(`Dashboard: ${UI.Style.TEXT_HIGHLIGHT}${dashboard}${UI.Style.TEXT_NORMAL}`)
     }
+    await healNodeKeyAfterLogin(userId)
     return true
   } catch (e) {
     verifySpinner.stop("Failed", 1)

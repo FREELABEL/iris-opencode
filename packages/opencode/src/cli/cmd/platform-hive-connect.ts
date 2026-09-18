@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { dim, bold, success, highlight, requireAuth, resolveUserId } from "./iris-api"
 import { hiveFetch } from "./platform-hive-nodes"
+import { probeNodeKey } from "../lib/node-key"
 import { join } from "path"
 import { homedir, hostname, platform, arch, cpus, totalmem } from "os"
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs"
@@ -166,6 +167,137 @@ function detectCapabilities(): Record<string, unknown> {
   return caps
 }
 
+
+export type RegisterResult =
+  | { ok: true; apiKey: string; nodeId?: string; previousKey?: string }
+  | { ok: false; stage: "http" | "no-key"; error: string }
+
+/**
+ * Register THIS machine and persist the key it returns. Shared by `hive connect` and by the
+ * self-heal in `iris auth login` (#185896) so there is exactly one way a node key is minted
+ * on a machine — two copies of this would drift, and the drift would be a dead key.
+ */
+export async function registerThisMachine(
+  userId: number,
+  name: string,
+  capabilities: Record<string, unknown>,
+  config: IrisConfig,
+  maxConcurrent?: number,
+): Promise<RegisterResult> {
+  const res = await hiveFetch("/api/v6/nodes", {
+    method: "POST",
+    body: JSON.stringify({
+      user_id: userId,
+      name,
+      // Lets the server reclaim this machine's existing row instead of minting a ghost
+      // on every reinstall (#179932). Omitted entirely when unavailable.
+      ...(machineFingerprint() ? { machine_fingerprint: machineFingerprint() } : {}),
+      // THE TRANSITION CASE, and it is not hypothetical — it cost one ghost node per
+      // machine when the fingerprint first shipped. A node registered BEFORE fingerprints
+      // existed has a null one stored, and a null never matches, so the first
+      // fingerprint-aware registration could only create a new row and abandon the old.
+      //
+      // The key we currently hold is proof we ARE that node — it is the node's own bearer
+      // credential — so sending it lets the server adopt that row and stamp the
+      // fingerprint onto it. After one registration every machine is self-identifying and
+      // this field stops mattering.
+      ...(config.node_api_key ? { previous_node_api_key: config.node_api_key } : {}),
+      capabilities,
+      max_concurrent: Math.max(1, Math.min(20, Math.round(maxConcurrent ?? 2))),
+    }),
+  })
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "")
+    return { ok: false, stage: "http", error: `HTTP ${res.status}${body ? ` — ${body.slice(0, 300)}` : ""}` }
+  }
+
+  const data = (await res.json()) as any
+  const apiKey: string | undefined = data?.credentials?.api_key
+  const nodeId: string | undefined = data?.node?.id
+
+  if (!apiKey) {
+    return { ok: false, stage: "no-key", error: "The API did not return credentials.api_key — cannot start the daemon without it." }
+  }
+
+  // Persist BEFORE starting the daemon. The key is returned exactly once; if we
+  // crashed between here and the daemon start it would be unrecoverable.
+  //
+  // On --force there is an existing key for a still-registered node. Overwriting it
+  // outright would strand that node — it stays in the account but nothing on this
+  // machine can authenticate as it again, and the running daemon breaks on restart.
+  // Keep the old one so it can be put back.
+  const previousKey = config.node_api_key
+  writeConfig({
+    node_api_key: apiKey,
+    user_id: userId,
+    // The daemon authenticates against api_url, so it must be the host that just minted this
+    // key. A client's config had been hand-edited to app.heyiris.io, which 404s every node
+    // route — a fresh key written beside it would still never reach the server (#185896).
+    api_url: process.env.IRIS_API_URL ?? "https://freelabel.net",
+    // Persist WHICH node this machine is, not just how it authenticates.
+    //
+    // hive-local-node.ts reads `node_id` from this file as its second-most-authoritative
+    // source, and its header note says "if anything ever writes it" — nothing did. So
+    // whenever the daemon was not running to answer /health, resolution fell through to
+    // matching os.hostname(), which on macOS is LocalHostName and gets INCREMENTED by the
+    // OS on every mDNS collision. That is why the node list printed "(you?)" with a
+    // question mark instead of "(you)".
+    //
+    // The value was already in hand — the registration response returns node.id and it was
+    // simply dropped on the floor. Writing it makes local-node identity certain even with
+    // the daemon down, which is exactly when someone is most likely to be debugging.
+    ...(nodeId ? { node_id: nodeId } : {}),
+    ...(previousKey && previousKey !== apiKey ? { node_api_key_previous: previousKey } : {}),
+  })
+  return { ok: true, apiKey, nodeId, previousKey }
+}
+
+/**
+ * Heal a dead node key with no command for the user to know about (#185896).
+ *
+ * A client installed fresh, signed in, and still had a node key the server rejected; every
+ * login surface said "authenticated" and none of them could fix it. Signing in IS the moment
+ * we hold a valid account token, so it is the moment to re-register. Only acts when the
+ * server has positively rejected the key (401) — a suspended node (403) or a network failure
+ * is left alone, because re-registering those would mint a second node for one machine.
+ *
+ * Returns what it did so callers can report it; never throws.
+ */
+export async function healNodeKey(
+  userId: number,
+  log: { info: (m: string) => void; warn: (m: string) => void; success: (m: string) => void },
+): Promise<"healthy" | "healed" | "no-key" | "failed" | "skipped"> {
+  let config: IrisConfig
+  try {
+    config = readConfig()
+  } catch {
+    return "skipped"
+  }
+  if (!config.node_api_key) return "no-key"
+  const status = await probeNodeKey(config.node_api_key, process.env.IRIS_API_URL ?? "https://freelabel.net")
+  if (status !== "rejected") return status === "valid" ? "healthy" : "skipped"
+
+  log.warn("This machine's Hive node key is no longer accepted by the server — replacing it…")
+  const reg = await registerThisMachine(userId, hostname(), detectCapabilities(), config)
+  if (!reg.ok) {
+    log.warn(`Could not replace it automatically (${reg.error}). Run: iris hive connect --force`)
+    return "failed"
+  }
+  const ctl = daemonCtl()
+  if (ctl) {
+    try {
+      // RESTART — the running daemon holds the dead key and `start` would no-op on it.
+      execSync(`${ctl} restart 2>&1`, { timeout: 30000 })
+    } catch {
+      log.warn("New node key saved, but the daemon did not restart. Run: iris daemon restart")
+      return "healed"
+    }
+  }
+  log.success(`Hive node re-registered${reg.nodeId ? ` (${reg.nodeId.slice(0, 8)}…)` : ""}${ctl ? " and daemon restarted" : ""}.`)
+  return "healed"
+}
+
 const HiveConnectCommand = cmd({
   command: "connect",
   describe: "enroll THIS machine as a Hive node — outbound, no SSH or VPN required",
@@ -194,7 +326,18 @@ const HiveConnectCommand = cmd({
       return
     }
 
+    // A key being PRESENT is not the same as a key WORKING. Refusing on presence alone stranded
+    // a client whose key the server no longer had: every call 401'd, this command said "already
+    // has a node key", and nothing named --force (#185896). A rejected key protects nothing —
+    // re-register over it. A valid, suspended or unverifiable key still needs an explicit --force.
+    let staleKey = false
     if (config.node_api_key && !args.force) {
+      staleKey =
+        (await probeNodeKey(config.node_api_key, process.env.IRIS_API_URL ?? "https://freelabel.net")) === "rejected"
+      if (staleKey) prompts.log.warn("The node key on this machine is no longer accepted by the server — registering a new one.")
+    }
+
+    if (config.node_api_key && !args.force && !staleKey) {
       prompts.log.warn("This machine already has a node key in ~/.iris/config.json.")
       prompts.log.info(`Check it:      ${dim("iris hive nodes")}`)
       prompts.log.info(`Daemon state:  ${dim("iris daemon status")}`)
@@ -208,72 +351,14 @@ const HiveConnectCommand = cmd({
     const sp = prompts.spinner()
     sp.start(`Registering ${bold(name)}…`)
 
-    const res = await hiveFetch("/api/v6/nodes", {
-      method: "POST",
-      body: JSON.stringify({
-        user_id: userId,
-        name,
-        // Lets the server reclaim this machine's existing row instead of minting a ghost
-        // on every reinstall (#179932). Omitted entirely when unavailable.
-        ...(machineFingerprint() ? { machine_fingerprint: machineFingerprint() } : {}),
-        // THE TRANSITION CASE, and it is not hypothetical — it cost one ghost node per
-        // machine when the fingerprint first shipped. A node registered BEFORE fingerprints
-        // existed has a null one stored, and a null never matches, so the first
-        // fingerprint-aware registration could only create a new row and abandon the old.
-        //
-        // The key we currently hold is proof we ARE that node — it is the node's own bearer
-        // credential — so sending it lets the server adopt that row and stamp the
-        // fingerprint onto it. After one registration every machine is self-identifying and
-        // this field stops mattering.
-        ...(config.node_api_key ? { previous_node_api_key: config.node_api_key } : {}),
-        capabilities,
-        max_concurrent: Math.max(1, Math.min(20, Math.round(args["max-concurrent"] ?? 2))),
-      }),
-    })
-
-    if (!res.ok) {
-      sp.stop("Registration failed", 1)
-      const body = await res.text().catch(() => "")
-      prompts.log.error(`HTTP ${res.status}${body ? ` — ${body.slice(0, 300)}` : ""}`)
+    const reg = await registerThisMachine(userId, name, capabilities, config, args["max-concurrent"])
+    if (!reg.ok) {
+      sp.stop(reg.stage === "no-key" ? "Registered, but no key returned" : "Registration failed", 1)
+      prompts.log.error(reg.error)
       return
     }
+    const { apiKey, nodeId, previousKey } = reg
 
-    const data = (await res.json()) as any
-    const apiKey: string | undefined = data?.credentials?.api_key
-    const nodeId: string | undefined = data?.node?.id
-
-    if (!apiKey) {
-      sp.stop("Registered, but no key returned", 1)
-      prompts.log.error("The API did not return credentials.api_key — cannot start the daemon without it.")
-      return
-    }
-
-    // Persist BEFORE starting the daemon. The key is returned exactly once; if we
-    // crashed between here and the daemon start it would be unrecoverable.
-    //
-    // On --force there is an existing key for a still-registered node. Overwriting it
-    // outright would strand that node — it stays in the account but nothing on this
-    // machine can authenticate as it again, and the running daemon breaks on restart.
-    // Keep the old one so it can be put back.
-    const previousKey = config.node_api_key
-    writeConfig({
-      node_api_key: apiKey,
-      user_id: userId,
-      // Persist WHICH node this machine is, not just how it authenticates.
-      //
-      // hive-local-node.ts reads `node_id` from this file as its second-most-authoritative
-      // source, and its header note says "if anything ever writes it" — nothing did. So
-      // whenever the daemon was not running to answer /health, resolution fell through to
-      // matching os.hostname(), which on macOS is LocalHostName and gets INCREMENTED by the
-      // OS on every mDNS collision. That is why the node list printed "(you?)" with a
-      // question mark instead of "(you)".
-      //
-      // The value was already in hand — the registration response returns node.id and it was
-      // simply dropped on the floor. Writing it makes local-node identity certain even with
-      // the daemon down, which is exactly when someone is most likely to be debugging.
-      ...(nodeId ? { node_id: nodeId } : {}),
-      ...(previousKey && previousKey !== apiKey ? { node_api_key_previous: previousKey } : {}),
-    })
     sp.stop(success(`Registered ${bold(name)}`))
 
     if (args.json) {
