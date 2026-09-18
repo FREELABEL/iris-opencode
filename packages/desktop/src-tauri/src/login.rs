@@ -67,6 +67,46 @@ pub fn save_iris_token(app: AppHandle, token: String) -> Result<(), String> {
     Ok(())
 }
 
+/// How long the engine re-key waits on the post-sign-in setup before acting on its own.
+///
+/// While setup runs, the sign-in window owns the restart (it narrates progress and restarts
+/// when setup reports done). The watcher in lib.rs only steps in if that never happens — a
+/// dead thread, a window that was closed — and this is how long "never" is.
+const SETUP_MAX: std::time::Duration = std::time::Duration::from_secs(12 * 60);
+/// After setup reports, how long the sign-in window has to show the outcome before the
+/// watcher restarts regardless. The window's own countdown is shorter than this.
+const SETUP_GRACE: std::time::Duration = std::time::Duration::from_secs(30);
+
+static SETUP_HOLD_UNTIL: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
+fn hold_engine_restart(for_: std::time::Duration) {
+    if let Ok(mut h) = SETUP_HOLD_UNTIL.lock() {
+        *h = Some(std::time::Instant::now() + for_);
+    }
+}
+
+/// True while the sign-in flow owns the restart. Read by the engine re-key watcher.
+pub(crate) fn engine_restart_held() -> bool {
+    SETUP_HOLD_UNTIL
+        .lock()
+        .ok()
+        .and_then(|h| *h)
+        .map(|until| std::time::Instant::now() < until)
+        .unwrap_or(false)
+}
+
+/// What the sign-in window is told when setup ends. ALWAYS sent — see below.
+#[derive(Clone, serde::Serialize)]
+struct SetupOutcome {
+    /// "ready" (CLI present and signed in) · "not-signed-in" (present, whoami failed) ·
+    /// "missing" (no CLI — install failed)
+    cli: &'static str,
+    /// The reason, when there is one. Plain text; the window renders it with textContent.
+    detail: String,
+    /// What the user can run themselves, when the app could not do it. Platform-specific.
+    recovery: Option<String>,
+}
+
 /// Install the CLI, install the Hive daemon, and register this machine — after sign-in.
 ///
 /// Every one of these already worked; nothing ever ran them in order. That gap is what a
@@ -82,55 +122,116 @@ pub fn save_iris_token(app: AppHandle, token: String) -> Result<(), String> {
 /// `daemon install` refuses to reinstall over an existing daemon, and `register` is safe to
 /// repeat. So a re-login costs nothing, and a partial previous attempt is completed rather
 /// than duplicated.
+///
+/// THE CREDENTIAL IS NEVER HOSTAGE TO THIS (#186013). This used to emit `setup-failed` and
+/// RETURN when the CLI install failed, and the window then left itself open "so the message
+/// stays visible" — so the app was never restarted, and the engine, spawned before sign-in
+/// with IRIS_API_KEY="", kept answering every chat message with "Unauthorized: Provide a
+/// Bearer token" while the token sat correctly in ~/.iris/sdk/.env. On Windows the install
+/// ALWAYS failed, so sign-in could never take effect. Measured live on a client's machine
+/// 2026-09-18: TUI working, Desktop chat 401 on every message, same account, same file.
+///
+/// Now: every exit path sends `setup-done` with the outcome, the window restarts on every
+/// outcome (after showing it), and independently the engine watcher in lib.rs restarts the
+/// app whenever the key on disk differs from the key the engine was spawned with — held off
+/// only while this thread is running, and never longer than SETUP_MAX.
 fn finish_setup_in_background(app: AppHandle) {
+    hold_engine_restart(SETUP_MAX);
     std::thread::spawn(move || {
-        // Report each step to the sign-in window. Silence for ten seconds after a click reads
-        // as a hang, and the window then asks the user to do something it can do itself.
-        let step = |label: &str| {
-            let _ = app.emit("setup-step", label);
-        };
-        // The CLI first: the daemon verbs live in it.
-        //
-        // This comment used to read "install_cli() uses the BUNDLED sidecar, so this needs no
-        // network and cannot be broken by a bad release URL." That was true, and it was the
-        // bug: the sidecar is opencode-core, so the step that made sign-in self-sufficient was
-        // the same step that removed the platform commands the daemon verbs below depend on
-        // (#183738). It now downloads the real CLI, and a bad release URL is the correct thing
-        // to fail on — better than succeeding with the wrong product.
-        //
-        // Gated on identity so the "every step is idempotent" promise above stays true: a
-        // re-login on a healthy machine costs nothing instead of re-downloading ~120MB.
-        // install_cli_inner() rather than the async command: this already runs on its own
-        // std::thread, so there is no runtime here to spawn onto.
-        step("Installing the CLI");
-        let install = match crate::cli::cli_state() {
-            crate::cli::CliState::PlatformCli => {
-                println!("setup: cli -> already present, skipping install");
-                Ok(String::new())
-            }
-            _ => crate::cli::install_cli_inner(),
-        };
-        match install {
-            Ok(msg) => println!("setup: cli -> {msg}"),
-            Err(e) => {
-                eprintln!("setup: cli install failed: {e}");
-                let _ = app.emit("setup-failed", format!("CLI install failed: {e}"));
-                return; // nothing downstream can work without it
-            }
+        let outcome = run_setup_steps(&app);
+        println!("setup: done -> cli={} {}", outcome.cli, outcome.detail);
+        // Give the window time to show the outcome; after that the watcher may restart.
+        hold_engine_restart(SETUP_GRACE);
+        let _ = app.emit("setup-done", outcome);
+    });
+}
+
+fn run_setup_steps(app: &AppHandle) -> SetupOutcome {
+    // Report each step to the sign-in window. Silence for ten seconds after a click reads
+    // as a hang, and the window then asks the user to do something it can do itself.
+    let step = |label: &str| {
+        let _ = app.emit("setup-step", label);
+    };
+    // The CLI first: the daemon verbs live in it.
+    //
+    // This comment used to read "install_cli() uses the BUNDLED sidecar, so this needs no
+    // network and cannot be broken by a bad release URL." That was true, and it was the
+    // bug: the sidecar is opencode-core, so the step that made sign-in self-sufficient was
+    // the same step that removed the platform commands the daemon verbs below depend on
+    // (#183738). It now downloads the real CLI, and a bad release URL is the correct thing
+    // to fail on — better than succeeding with the wrong product.
+    //
+    // Gated on identity so the "every step is idempotent" promise above stays true: a
+    // re-login on a healthy machine costs nothing instead of re-downloading ~120MB.
+    step("Installing the CLI");
+    let install = match crate::cli::cli_state() {
+        crate::cli::CliState::PlatformCli => {
+            println!("setup: cli -> already present, skipping install");
+            Ok(String::new())
         }
-
-        let Some(iris) = crate::cli::get_cli_install_path() else {
-            eprintln!("setup: could not locate the installed CLI; skipping daemon setup");
-            let _ = app.emit("setup-failed", "Could not locate the installed CLI");
-            return;
+        _ => {
+            let r = crate::cli::install_cli_inner();
+            crate::cli::record_install_outcome(r.is_ok());
+            r
+        }
+    };
+    if let Err(e) = install {
+        eprintln!("setup: cli install failed: {e}");
+        // Nothing downstream can work without the CLI — but the credential already can, and
+        // the window restarts on this outcome too.
+        return SetupOutcome {
+            cli: "missing",
+            detail: format!("The iris CLI could not be installed: {e}"),
+            recovery: Some(if cfg!(windows) {
+                format!(
+                    "To install it yourself, open PowerShell and run:\n  {}",
+                    crate::cli::WINDOWS_INSTALL_ONE_LINER
+                )
+            } else {
+                "To install it yourself, open a terminal and run:\n  curl -fsSL https://heyiris.io/install-code | bash".to_string()
+            }),
         };
+    }
 
+    let Some(iris) = crate::cli::get_cli_install_path() else {
+        eprintln!("setup: could not locate the installed CLI; skipping daemon setup");
+        return SetupOutcome {
+            cli: "missing",
+            detail: "Could not locate the installed CLI.".into(),
+            recovery: None,
+        };
+    };
+
+    // Ask the CLI who it is before claiming it is signed in. The window used to print "The
+    // iris CLI is signed in too" before any of this ran, including on machines with no CLI.
+    let signed_in = crate::cli::run_with_timeout(
+        std::process::Command::new(&iris).args(["auth", "whoami"]),
+        std::time::Duration::from_secs(30),
+    )
+    .map(|o| o.status.success())
+    .unwrap_or(false);
+
+    // The Hive daemon. On Windows the CLI's `daemon install` / `daemon register` are not the
+    // path: the PowerShell installer that just ran sets up the Node-based bridge itself
+    // (iris-daemon.cmd, a per-user scheduled task) when Node.js is present, and skips it
+    // with a stated reason when it is not. Running the POSIX-shaped verbs here could only add
+    // a hang or a console window, so they are skipped — and the log says so.
+    if cfg!(windows) {
+        println!(
+            "setup: Hive daemon steps skipped on Windows — the PowerShell installer sets up the bridge (needs Node.js); see `iris-daemon status`"
+        );
+    } else {
         for (label, args) in [
             ("Installing the Hive daemon", ["daemon", "install"]),
             ("Registering this machine", ["daemon", "register"]),
         ] {
             step(label);
-            match std::process::Command::new(&iris).args(args).output() {
+            // Bounded: this thread holds the restart, so a step that never returns would hold
+            // the credential back with it.
+            match crate::cli::run_with_timeout(
+                std::process::Command::new(&iris).args(args),
+                std::time::Duration::from_secs(180),
+            ) {
                 Ok(out) => {
                     let text = String::from_utf8_lossy(if out.status.success() {
                         &out.stdout
@@ -148,11 +249,17 @@ fn finish_setup_in_background(app: AppHandle) {
                 Err(e) => eprintln!("setup: {label} could not run: {e}"),
             }
         }
+    }
 
-        // Done. The window restarts itself from here — a new user should never be told to go
-        // and relaunch an app that is already running and already knows it needs to.
-        let _ = app.emit("setup-done", ());
-    });
+    if signed_in {
+        SetupOutcome { cli: "ready", detail: String::new(), recovery: None }
+    } else {
+        SetupOutcome {
+            cli: "not-signed-in",
+            detail: "The iris CLI is installed but did not confirm the sign-in.".into(),
+            recovery: Some("In a terminal, run:\n  iris auth login".into()),
+        }
+    }
 }
 
 /// Relaunch the app so the freshly-written credential and PATH are picked up.
@@ -161,6 +268,10 @@ fn finish_setup_in_background(app: AppHandle) {
 /// is a chore the app can do for itself and the last manual step left in onboarding.
 #[tauri::command]
 pub fn restart_app(app: AppHandle) {
+    // Stop the engine first. A restart from the main thread exits without RunEvent::Exit, so
+    // the handler that normally kills the sidecar never runs and the old, un-keyed engine
+    // would be left running beside the new one.
+    crate::kill_sidecar(app.clone());
     app.restart();
 }
 

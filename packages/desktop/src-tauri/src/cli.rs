@@ -1,11 +1,128 @@
 const CLI_INSTALL_DIR: &str = ".iris/bin";
 const CLI_BINARY_NAME: &str = "iris";
 
+/// The one-liner a Windows user runs to install the CLI by hand. Shown as the recovery when
+/// the in-app install fails, and run by the app itself (see `install_cli_windows`).
+pub const WINDOWS_INSTALL_ONE_LINER: &str = "irm heyiris.io/install-code.ps1 | iex";
+#[cfg(windows)]
+const WINDOWS_INSTALLER_URL: &str = "https://heyiris.io/install-code.ps1";
+
+/// Where the CLI lives: `~/.iris/bin/iris`, or `%USERPROFILE%\.iris\bin\iris.exe` on Windows.
+///
+/// This read `$HOME` only and joined `iris` with no extension (#186013). Windows sets
+/// USERPROFILE, not HOME, so on every Windows machine this returned None — and even with HOME
+/// set, `iris` is not the file the PowerShell installer writes (`iris.exe`). Either way a CLI
+/// installed by hand was never detected: cli_state() said Missing, the menu said "No CLI
+/// installed", and auth-whoami said "not installed yet" on a machine where `iris` worked in
+/// PowerShell. Same HOME-only defect lib.rs and login.rs already fixed (#182738) — the helper
+/// had been copied rather than shared, and this copy was missed.
 pub fn get_cli_install_path() -> Option<std::path::PathBuf> {
-    std::env::var("HOME").ok().map(|home| {
-        std::path::PathBuf::from(home)
-            .join(CLI_INSTALL_DIR)
-            .join(CLI_BINARY_NAME)
+    cli_install_path_from(
+        std::env::var_os("HOME"),
+        std::env::var_os("USERPROFILE"),
+        cfg!(windows),
+    )
+}
+
+/// Pure form of `get_cli_install_path`, so the Windows rule is testable on any host.
+pub(crate) fn cli_install_path_from(
+    home: Option<std::ffi::OsString>,
+    userprofile: Option<std::ffi::OsString>,
+    windows: bool,
+) -> Option<std::path::PathBuf> {
+    let home = home
+        .filter(|h| !h.is_empty())
+        .or_else(|| userprofile.filter(|h| !h.is_empty()))?;
+    let binary = if windows {
+        format!("{CLI_BINARY_NAME}.exe")
+    } else {
+        CLI_BINARY_NAME.to_string()
+    };
+    let mut path = std::path::PathBuf::from(home);
+    for part in CLI_INSTALL_DIR.split('/') {
+        path.push(part);
+    }
+    path.push(binary);
+    Some(path)
+}
+
+/// Never flash a console window on Windows.
+///
+/// The app is a GUI-subsystem process (main.rs `windows_subsystem = "windows"`), so every
+/// console child it starts — `iris.exe --help`, `auth whoami`, powershell — gets a brand-new
+/// console window unless told otherwise. cli_state() runs on every launch; without this each
+/// launch would blink a terminal at the user. No-op everywhere else.
+pub(crate) fn no_window(cmd: &mut std::process::Command) -> &mut std::process::Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
+/// Run a command to completion with a hard ceiling, capturing stdout and stderr.
+///
+/// `Command::output()` waits forever. The setup steps run on a thread the sign-in window is
+/// waiting on, so one hung child (a prompt nobody can see, a stalled download) would leave the
+/// app un-restarted — and an un-restarted app is one whose engine never received the new
+/// credential (#186013). A step that times out is killed and reported, never waited on.
+pub(crate) fn run_with_timeout(
+    cmd: &mut std::process::Command,
+    timeout: std::time::Duration,
+) -> Result<std::process::Output, String> {
+    use std::io::Read;
+    use std::process::Stdio;
+
+    let mut child = no_window(cmd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("could not start: {e}"))?;
+
+    // Drain both pipes on their own threads: a child that fills a pipe buffer blocks on write,
+    // and waiting for its exit without reading would then deadlock until the timeout.
+    //
+    // Results come back over channels rather than join(): a grandchild the command started in
+    // the background inherits the pipe and holds it open after the command itself exits, and
+    // join() would then wait for THAT process — i.e. forever, for a daemon.
+    fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> std::sync::mpsc::Receiver<Vec<u8>> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut p) = pipe {
+                let _ = p.read_to_end(&mut buf);
+            }
+            let _ = tx.send(buf);
+        });
+        rx
+    }
+    let out_rx = drain(child.stdout.take());
+    let err_rx = drain(child.stderr.take());
+
+    let started = std::time::Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if started.elapsed() > timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!("timed out after {}s", timeout.as_secs()));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            Err(e) => return Err(format!("could not wait: {e}")),
+        }
+    };
+
+    let settle = std::time::Duration::from_secs(5);
+    Ok(std::process::Output {
+        status,
+        stdout: out_rx.recv_timeout(settle).unwrap_or_default(),
+        stderr: err_rx.recv_timeout(settle).unwrap_or_default(),
     })
 }
 
@@ -53,7 +170,7 @@ pub fn cli_state() -> CliState {
         return CliState::Missing;
     }
 
-    let Ok(output) = std::process::Command::new(&path)
+    let Ok(output) = no_window(&mut std::process::Command::new(&path))
         .arg("--help")
         .stdin(std::process::Stdio::null())
         .output()
@@ -76,14 +193,95 @@ pub fn cli_state() -> CliState {
     }
 }
 
+#[cfg(not(windows))]
 const INSTALL_SCRIPT: &str = include_str!("../../../../install");
 
 /// Install the real IRIS CLI. Blocking; callers put it on a worker thread.
 pub(crate) fn install_cli_inner() -> Result<String, String> {
-    if cfg!(not(unix)) {
-        return Err("CLI installation is only supported on macOS & Linux".to_string());
-    }
+    // Serialised: the launch-time sync and the post-sign-in setup can both reach here within
+    // seconds of each other on a fresh machine, and two installers racing over one binary is
+    // how you get a half-written iris.exe.
+    let _guard = INSTALL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
+    #[cfg(windows)]
+    install_cli_windows()?;
+
+    #[cfg(not(windows))]
+    install_cli_unix()?;
+
+    verify_installed_cli()
+}
+
+static INSTALL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Windows: run the PowerShell installer the site already serves.
+///
+/// This used to be `return Err("CLI installation is only supported on macOS & Linux")`
+/// (#186013). The Windows installer existed the whole time — heyiris.io/install-code.ps1, the
+/// one-liner the playbook page advertises — the app just never ran it. So every Windows
+/// Desktop user finished sign-in with no CLI, and the failure also stranded their credential
+/// (see login.rs).
+///
+/// Fetched, not bundled: the .ps1 is not in this repo, and the served copy is the one kept
+/// current (it resolves the newest `v*` CLI release and skips `desktop-v*` tags itself).
+/// Read 2026-09-18: it has no Read-Host or other prompt, reports failure with `exit 1`, and
+/// installs to %USERPROFILE%\.iris\bin\iris.exe plus the user PATH — never elevated. The
+/// Hive bridge step inside it needs Node.js and skips cleanly without it.
+///
+/// -NonInteractive so anything that ever does prompt fails instead of waiting on a console
+/// nobody can see; -ExecutionPolicy Bypass for this process only; no window; hard timeout.
+#[cfg(windows)]
+fn install_cli_windows() -> Result<(), String> {
+    let powershell = std::env::var_os("SystemRoot")
+        .map(|root| {
+            std::path::PathBuf::from(root)
+                .join("System32")
+                .join("WindowsPowerShell")
+                .join("v1.0")
+                .join("powershell.exe")
+        })
+        .filter(|p| p.exists())
+        .unwrap_or_else(|| std::path::PathBuf::from("powershell.exe"));
+
+    println!("cli install (windows): running {WINDOWS_INSTALLER_URL} via {}", powershell.display());
+    let output = run_with_timeout(
+        std::process::Command::new(&powershell).args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &format!(
+                "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; irm {WINDOWS_INSTALLER_URL} | iex"
+            ),
+        ]),
+        std::time::Duration::from_secs(600),
+    )
+    .map_err(|e| format!("The Windows installer {e}."))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for line in stdout.lines().chain(stderr.lines()).filter(|l| !l.trim().is_empty()) {
+        println!("cli install (windows): {}", line.trim_end());
+    }
+    if !output.status.success() {
+        // The installer prints its reason on stdout (Write-Host), not stderr — so name the last
+        // thing it said from BOTH, or the error reads "failed:" followed by nothing.
+        let last = stderr
+            .lines()
+            .chain(stdout.lines())
+            .filter(|l| !l.trim().is_empty())
+            .last()
+            .unwrap_or("no output")
+            .trim()
+            .to_string();
+        return Err(format!("The Windows installer failed: {last}"));
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn install_cli_unix() -> Result<(), String> {
     let temp_script = std::env::temp_dir().join("iris-install.sh");
     std::fs::write(&temp_script, INSTALL_SCRIPT)
         .map_err(|e| format!("Failed to write install script: {}", e))?;
@@ -115,10 +313,14 @@ pub(crate) fn install_cli_inner() -> Result<String, String> {
     // stdin is explicitly null so this can never block on a prompt. The script's remaining
     // interactive reads either target /dev/tty with a `|| fallback`, or sit behind `[ -t 0 ]`
     // (line 2983) — which also guards an `exec` of the TUI that must never happen here.
-    let output = std::process::Command::new(&temp_script)
-        .stdin(std::process::Stdio::null())
-        .output()
-        .map_err(|e| format!("Failed to run install script: {}", e))?;
+    //
+    // Bounded, like every other step setup waits on: the sign-in window holds the app's
+    // restart — and so the engine's credential — until this returns (#186013).
+    let output = run_with_timeout(
+        &mut std::process::Command::new(&temp_script),
+        std::time::Duration::from_secs(600),
+    )
+    .map_err(|e| format!("Failed to run install script: {}", e))?;
 
     let _ = std::fs::remove_file(&temp_script);
 
@@ -126,7 +328,11 @@ pub(crate) fn install_cli_inner() -> Result<String, String> {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!("Install script failed: {}", stderr));
     }
+    Ok(())
+}
 
+/// Read back what the installer left, then ask it who it is. Shared by both platforms.
+fn verify_installed_cli() -> Result<String, String> {
     let install_path =
         get_cli_install_path().ok_or_else(|| "Could not determine install path".to_string())?;
 
@@ -162,13 +368,12 @@ pub(crate) fn install_cli_inner() -> Result<String, String> {
     //
     // Ask the CLI who it is. `auth whoami` is the cheapest question that distinguishes
     // "installed" from "installed and signed in", and it is the same check a human would run.
-    let signed_in = std::process::Command::new(&install_path)
-        .arg("auth")
-        .arg("whoami")
-        .stdin(std::process::Stdio::null())
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
+    let signed_in = run_with_timeout(
+        std::process::Command::new(&install_path).arg("auth").arg("whoami"),
+        std::time::Duration::from_secs(30),
+    )
+    .map(|o| o.status.success())
+    .unwrap_or(false);
 
     if !signed_in {
         // Deliberately Ok, not Err: the install genuinely succeeded and re-running it will not
@@ -203,7 +408,7 @@ pub fn cli_health() -> String {
 
     match cli_state() {
         CliState::PlatformCli => {
-            let version = std::process::Command::new(&path)
+            let version = no_window(&mut std::process::Command::new(&path))
                 .arg("--version")
                 .stdin(std::process::Stdio::null())
                 .output()
@@ -213,6 +418,9 @@ pub fn cli_health() -> String {
                 .unwrap_or_else(|| "unknown".to_string());
             format!("IRIS CLI {version}\nPlatform commands OK.\n\n{path}")
         }
+        CliState::Missing if cfg!(windows) => format!(
+            "No CLI installed.\n\nUse IRIS -> Install CLI... to install it, or run this in PowerShell:\n  {WINDOWS_INSTALL_ONE_LINER}\n\n{path}"
+        ),
         CliState::Missing => {
             format!("No CLI installed.\n\nUse IRIS -> Install CLI... to install it.\n\n{path}")
         }
@@ -257,14 +465,172 @@ pub fn sync_cli() -> Result<(), String> {
         // is the front door; if the CLI is not there, put it there.
         CliState::Missing => {
             println!("No CLI installation found — installing the IRIS CLI");
-            install_cli_inner().map(|_| ())
+            install_cli_automatic()
         }
         // Self-heal, in the right direction this time. Machines in the field are sitting on a
         // sidecar this app wrote over their CLI; they should recover by opening the app, not by
         // being told to run a curl|bash that the next launch would have undone anyway.
         CliState::NotThePlatformCli => {
             println!("The binary at ~/.iris/bin/iris is not the IRIS CLI — repairing it");
-            install_cli_inner().map(|_| ())
+            install_cli_automatic()
         }
+    }
+}
+
+/// How long an UNATTENDED install waits after a failed one before trying again.
+///
+/// On Windows the launch-time install is now real work (a ~100 MB download through
+/// PowerShell), and sign-in restarts the app moments after its own attempt. Without a pause a
+/// machine that cannot install — offline, proxy, blocked download — would re-download on every
+/// launch, including the one straight after the failure it just reported. A user-initiated
+/// install (menu, sign-in) is never throttled: someone asked.
+const AUTO_INSTALL_RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
+fn install_failure_marker() -> Option<std::path::PathBuf> {
+    let home = std::env::var_os("HOME")
+        .filter(|h| !h.is_empty())
+        .or_else(|| std::env::var_os("USERPROFILE").filter(|h| !h.is_empty()))?;
+    Some(std::path::PathBuf::from(home).join(".iris").join(".desktop-cli-install-failed"))
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Whether an unattended install should be skipped, given the last failure time on record.
+pub(crate) fn auto_install_throttled(last_failure: Option<u64>, now: u64) -> bool {
+    match last_failure {
+        Some(t) if t <= now => now - t < AUTO_INSTALL_RETRY_AFTER.as_secs(),
+        // A timestamp in the future is a clock change, not a reason to never retry.
+        _ => false,
+    }
+}
+
+/// Record the outcome of ANY install attempt, so the unattended path knows when it may retry.
+pub(crate) fn record_install_outcome(ok: bool) {
+    let Some(marker) = install_failure_marker() else {
+        return;
+    };
+    if ok {
+        let _ = std::fs::remove_file(&marker);
+    } else {
+        if let Some(dir) = marker.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(&marker, now_secs().to_string());
+    }
+}
+
+/// The launch-time install: throttled after a failure, logged either way.
+fn install_cli_automatic() -> Result<(), String> {
+    let last_failure = install_failure_marker()
+        .and_then(|m| std::fs::read_to_string(m).ok())
+        .and_then(|t| t.trim().parse::<u64>().ok());
+    if auto_install_throttled(last_failure, now_secs()) {
+        println!(
+            "CLI install skipped — the last attempt failed under {} minutes ago; retrying on a later launch",
+            AUTO_INSTALL_RETRY_AFTER.as_secs() / 60
+        );
+        return Ok(());
+    }
+    let result = install_cli_inner();
+    record_install_outcome(result.is_ok());
+    match result {
+        Ok(msg) => {
+            println!("CLI install -> {msg}");
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+
+    #[test]
+    fn windows_without_home_uses_userprofile_and_exe() {
+        // The #186013 machine: HOME unset, USERPROFILE set.
+        let p = cli_install_path_from(None, Some(OsString::from(r"C:\Users\isifu")), true).unwrap();
+        let mut want = PathBuf::from(r"C:\Users\isifu");
+        want.push(".iris");
+        want.push("bin");
+        want.push("iris.exe");
+        assert_eq!(p, want);
+    }
+
+    #[test]
+    fn windows_with_empty_home_falls_back_to_userprofile() {
+        let p = cli_install_path_from(Some(OsString::new()), Some(OsString::from("C:/Users/x")), true)
+            .unwrap();
+        assert!(p.starts_with("C:/Users/x"));
+        assert_eq!(p.file_name().unwrap(), "iris.exe");
+    }
+
+    #[test]
+    fn unix_is_unchanged() {
+        let p = cli_install_path_from(Some(OsString::from("/Users/a")), Some(OsString::from("/ignored")), false)
+            .unwrap();
+        assert_eq!(p, PathBuf::from("/Users/a/.iris/bin/iris"));
+    }
+
+    #[test]
+    fn no_home_at_all_is_none_not_a_relative_path() {
+        assert_eq!(cli_install_path_from(None, None, true), None);
+        assert_eq!(cli_install_path_from(Some(OsString::new()), Some(OsString::new()), false), None);
+    }
+
+    #[test]
+    fn unattended_install_waits_an_hour_after_a_failure() {
+        let now = 1_000_000;
+        assert!(!auto_install_throttled(None, now));
+        assert!(auto_install_throttled(Some(now - 60), now));
+        assert!(!auto_install_throttled(Some(now - 3600), now));
+        assert!(!auto_install_throttled(Some(now + 500), now), "future stamp must not block forever");
+    }
+
+    #[test]
+    fn a_hung_child_is_killed_not_waited_on() {
+        #[cfg(unix)]
+        let mut cmd = {
+            let mut c = std::process::Command::new("sleep");
+            c.arg("30");
+            c
+        };
+        #[cfg(windows)]
+        let mut cmd = {
+            let mut c = std::process::Command::new("ping");
+            c.args(["-n", "30", "127.0.0.1"]);
+            c
+        };
+        let started = std::time::Instant::now();
+        let r = run_with_timeout(&mut cmd, std::time::Duration::from_millis(500));
+        assert!(r.is_err());
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    }
+
+    #[test]
+    fn output_is_captured_from_both_streams() {
+        #[cfg(unix)]
+        let mut cmd = {
+            let mut c = std::process::Command::new("sh");
+            c.args(["-c", "echo out; echo err 1>&2; exit 3"]);
+            c
+        };
+        #[cfg(windows)]
+        let mut cmd = {
+            let mut c = std::process::Command::new("cmd");
+            c.args(["/C", "echo out & echo err 1>&2 & exit 3"]);
+            c
+        };
+        let o = run_with_timeout(&mut cmd, std::time::Duration::from_secs(10)).unwrap();
+        assert_eq!(o.status.code(), Some(3));
+        assert!(String::from_utf8_lossy(&o.stdout).contains("out"));
+        assert!(String::from_utf8_lossy(&o.stderr).contains("err"));
     }
 }

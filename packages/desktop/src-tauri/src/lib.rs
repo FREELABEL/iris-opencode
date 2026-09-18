@@ -280,7 +280,15 @@ async fn iris_action(action: String) -> Result<String, String> {
     };
 
     let home = dirs_next_home().ok_or_else(|| "no HOME".to_string())?;
-    let path = home.join(".iris").join("bin").join(bin);
+    // Windows names these files differently: the CLI is iris.exe and the daemon launcher the
+    // PowerShell installer writes is iris-daemon.cmd. Joining the bare name made every action
+    // report "not installed yet" on a machine where both worked in a terminal (#186013).
+    let file = if cfg!(windows) {
+        if bin == "iris" { "iris.exe".to_string() } else { format!("{bin}.cmd") }
+    } else {
+        bin.to_string()
+    };
+    let path = home.join(".iris").join("bin").join(file);
     if !path.exists() {
         return Err(format!(
             "{bin} is not installed yet.\n\nUse IRIS -> Install CLI... first."
@@ -290,7 +298,10 @@ async fn iris_action(action: String) -> Result<String, String> {
     // The daemon subcommands talk to the platform and can take a while (register does a
     // round-trip); run off the UI thread so the menu does not appear frozen.
     let out = tauri::async_runtime::spawn_blocking(move || {
-        std::process::Command::new(&path).args(args).output()
+        cli::run_with_timeout(
+            std::process::Command::new(&path).args(args),
+            Duration::from_secs(120),
+        )
     })
     .await
     .map_err(|e| format!("could not run {bin}: {e}"))?
@@ -550,6 +561,11 @@ fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
     // Empty string when absent: passing the var through unconditionally keeps both spawn
     // branches identical, and an empty value behaves the same as an unset one downstream.
     let iris_api_key = iris_env_value("IRIS_API_KEY").unwrap_or_default();
+    // Remember exactly what this engine was given, so the watcher can tell when the key on
+    // disk has moved on without it (#186013).
+    if let Ok(mut k) = ENGINE_KEY.lock() {
+        *k = Some(iris_api_key.clone());
+    }
 
     // ...but "behaves the same as unset" is exactly the problem on a FRESH machine.
     //
@@ -638,6 +654,105 @@ fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
     child
 }
 
+/// The IRIS_API_KEY the running engine was spawned with. None until this app spawns one —
+/// and it stays None when the app attached to an engine it did not start, because then there
+/// is nothing here that could re-key it.
+static ENGINE_KEY: Mutex<Option<String>> = Mutex::new(None);
+
+/// Keep the engine's credential equal to the one on disk. Runs for the life of the app.
+///
+/// The engine reads IRIS_API_KEY from its environment ONCE, at spawn. Nothing re-read it, so
+/// any key written after launch — the in-app sign-in, `iris-login` in a terminal, `iris auth
+/// login` — never reached it, and chat answered "Unauthorized: Provide a Bearer token" on
+/// every message while the CLI on the same machine worked with the same file (#186013,
+/// measured on a client's Windows machine 2026-09-18). Relaunching fixed it, which is why it
+/// looked intermittent: it fixed itself for anyone who happened to quit the app.
+///
+/// Every launch already spawns the engine with whatever key is on disk, so a machine stuck in
+/// that state heals on the first launch of this build. This covers the rest: when the key on
+/// disk differs from the engine's, restart the app so the engine is spawned with it — at once
+/// when the engine has no key at all (it cannot answer anything), and after asking when it has
+/// an older one (it still works, and the user may be mid-task).
+///
+/// A full app restart rather than re-spawning the engine in place: the window has the
+/// engine's port baked in at creation, the restart path is the one sign-in already uses on
+/// every platform, and re-binding the same port under a live webview was not something we
+/// could test on Windows before shipping.
+///
+/// Two polls must agree before acting (a file caught mid-write is not a new key), and the
+/// restart waits while the sign-in window is running setup — it owns the restart then, and
+/// shows the user what happened first.
+fn watch_engine_key(app: AppHandle) {
+    std::thread::spawn(move || {
+        let mut pending: Option<String> = None;
+        let mut asked_for: Option<String> = None;
+        loop {
+            std::thread::sleep(Duration::from_secs(3));
+            let engine = ENGINE_KEY.lock().ok().and_then(|k| k.clone());
+            let Some(engine) = engine else {
+                pending = None;
+                continue;
+            };
+            let disk = iris_env_value("IRIS_API_KEY");
+            let Some(disk) = disk.filter(|d| *d != engine) else {
+                pending = None;
+                continue;
+            };
+            if pending.as_deref() != Some(disk.as_str()) {
+                pending = Some(disk);
+                continue;
+            }
+            if login::engine_restart_held() {
+                continue;
+            }
+
+            // An engine with a key that still works is not broken — the user signed in again
+            // somewhere, perhaps mid-task. Restarting under them would kill a running turn for a
+            // change they may not care about yet. Ask once per new key instead.
+            if !engine.is_empty() {
+                if asked_for.as_deref() == Some(disk.as_str()) {
+                    continue;
+                }
+                println!("The credential in ~/.iris/sdk/.env changed since the engine started — asking to restart");
+                asked_for = Some(disk);
+                let app_for_restart = app.clone();
+                app.dialog()
+                    .message("You signed in again on this machine. Restart IRIS now so chat uses the new sign-in?")
+                    .title("Restart IRIS")
+                    .buttons(MessageDialogButtons::OkCancelCustom(
+                        "Restart now".to_string(),
+                        "Later".to_string(),
+                    ))
+                    .show(move |restart| {
+                        if restart {
+                            restart_engine(&app_for_restart);
+                        }
+                    });
+                continue;
+            }
+
+            // An engine with NO key cannot answer a single message. There is nothing to protect
+            // by asking — restart.
+            println!(
+                "The credential in ~/.iris/sdk/.env appeared after the engine started with none — restarting so the engine uses it"
+            );
+            restart_engine(&app);
+            return;
+        }
+    });
+}
+
+fn restart_engine(app: &AppHandle) {
+    // Forget the engine key so the watcher cannot fire twice while the restart is under way.
+    if let Ok(mut k) = ENGINE_KEY.lock() {
+        *k = None;
+    }
+    // Stop the engine explicitly: depending on the thread, a Tauri restart can exit without
+    // RunEvent::Exit, and the old engine would outlive the app that started it.
+    kill_sidecar(app.clone());
+    app.request_restart();
+}
+
 async fn is_server_running(port: u32) -> bool {
     TcpSocket::new_v4()
         .unwrap()
@@ -694,6 +809,9 @@ pub fn run() {
 
             // Initialize log state
             app.manage(LogState(Arc::new(Mutex::new(VecDeque::new()))));
+
+            // Keep the engine's credential equal to the one on disk, for the life of the app.
+            watch_engine_key(app.clone());
 
             {
               let app = app.clone();

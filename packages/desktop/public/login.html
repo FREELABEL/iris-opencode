@@ -86,6 +86,11 @@
   .back:hover { color: var(--fg); background: none; }
   /* True, and unique to this product: one sign-in covers the app and the CLI. Worth saying
      where someone can act on it, rather than in a doc they will not read. */
+  /* The command a user may have to run themselves. Mono, selectable, wraps on a narrow window. */
+  .recovery { margin: 10px 0 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px;
+              font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px;
+              line-height: 1.5; white-space: pre-wrap; word-break: break-word; user-select: text;
+              color: var(--fg); text-align: left; }
   .foot { margin-top: 26px; padding-top: 16px; border-top: 1px solid var(--line);
           color: var(--dim); font-size: 11.5px; line-height: 1.55; text-align: center; }
 </style>
@@ -133,6 +138,7 @@
 </div>
 
 <div class="msg" id="msg"></div>
+<pre class="recovery" id="recovery" hidden></pre>
 
 <p class="foot">Signing in here signs in the <strong>iris</strong> CLI too, then finishes setup
 on this machine.</p>
@@ -221,7 +227,10 @@ on this machine.</p>
       const token = data?.data?.sdk_token?.key;
       if (!token) throw new Error("Signed in, but no token was returned. Contact support.");
       $("step-code").hidden = true;
-      $("sub").textContent = "You're signed in on this machine. The iris CLI is signed in too.";
+      // Only what is true YET. This line used to add "The iris CLI is signed in too" before
+      // setup had run — shown on Windows machines that had no CLI at all (#186013). The CLI
+      // line is added below, once setup has actually asked the CLI who it is.
+      $("sub").textContent = "You're signed in on this machine.";
 
       // Sign-in kicks off the rest of setup (CLI, daemon, registration) in Rust. Follow it
       // here so the window narrates real progress instead of sitting on one static line —
@@ -229,35 +238,49 @@ on this machine.</p>
       const listen = window.__TAURI__.event.listen;
       let settled = false;
 
-      const finish = async (label) => {
+      // EVERY outcome ends in a restart. It used to be only success: on a failed CLI install
+      // the window stayed open "so the message stays visible" — and the app was never
+      // restarted, so the engine never received the credential that had just been saved and
+      // every chat message 401'd (#186013). The message is still shown; it just no longer
+      // costs the user their sign-in. A failed outcome gets a longer countdown to read it.
+      const finish = async (label, seconds, cls) => {
         if (settled) return;
         settled = true;
-        // Count down visibly. A window that vanishes unannounced reads as a crash; three
-        // seconds is long enough to see what happened and still feel automatic.
-        for (let n = 3; n > 0; n--) {
-          msg(`${label} Restarting in ${n}…`, "ok");
+        // Count down visibly. A window that vanishes unannounced reads as a crash.
+        for (let n = seconds; n > 0; n--) {
+          msg(`${label} Restarting IRIS in ${n}…`, cls || "ok");
           await new Promise((r) => setTimeout(r, 1000));
         }
-        msg("Restarting…", "ok");
+        msg("Restarting…", cls || "ok");
         await invoke("restart_app");
       };
 
+      const showRecovery = (text) => {
+        if (!text) return;
+        $("recovery").textContent = text;
+        $("recovery").hidden = false;
+      };
+
       await listen("setup-step", (e) => { if (!settled) msg(e.payload + "…", "ok"); });
-      await listen("setup-done", () => finish("Setup complete."));
-      await listen("setup-failed", (e) => {
-        if (settled) return;
-        settled = true;
-        // Name the failing step and leave the window open. Restarting over a broken setup
-        // would hide the one message that explains what to fix.
-        msg(String(e.payload) + " — you are signed in; run `iris daemon install` to finish.", "err");
+      await listen("setup-done", (e) => {
+        const o = (e && e.payload) || {};
+        if (o.cli === "ready") {
+          $("sub").textContent = "You're signed in on this machine. The iris CLI is signed in too.";
+          return finish("Setup complete.", 3);
+        }
+        // Signed in either way — say so first, then what did not work and what to run.
+        $("sub").textContent = "You're signed in on this machine.";
+        showRecovery(o.recovery);
+        finish((o.detail || "Setup did not finish.") + " IRIS itself is ready.", 15, "err");
       });
 
       msg("Signed in. Finishing setup…", "ok");
       await invoke("save_iris_token", { token });
 
       // Backstop: if no event ever arrives (older build, dead thread), still finish rather
-      // than stranding the user on a dead window — the exact failure this change fixes.
-      setTimeout(() => finish("Signed in."), 45000);
+      // than stranding the user on a dead window. Long enough for a slow CLI download — the
+      // setup thread bounds each of its own steps, so this only fires if it has died.
+      setTimeout(() => finish("Signed in.", 3), 11 * 60 * 1000);
     } catch (e) {
       msg(e.message, "err");
     } finally {
