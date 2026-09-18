@@ -83,8 +83,8 @@ const SkillSearchCommand = cmd({
         }
         const name = plan?.name ?? info.name ?? ""
         const description = plan?.description ?? info.description ?? ""
-        const tags: string[] = plan?.tags ?? []
-        const triggers: string[] = plan?.triggers ?? []
+        const tags: string[] = firstArray(plan?.tags)
+        const triggers: string[] = firstArray(plan?.triggers)
 
         // --tag is a FILTER, not a ranking signal: every requested tag must be present.
         // Anything looser turns "show me one product" back into "show me everything".

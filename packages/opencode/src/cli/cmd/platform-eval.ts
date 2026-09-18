@@ -1,3 +1,4 @@
+import { firstArray } from "../../util/array"
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
@@ -140,7 +141,7 @@ async function runTest(agentId: number, userId: number, test: EvalTest, timeoutS
       }
     }
     const summary: string = result.content ?? ""
-    const toolsUsed: string[] = result.toolsUsed ?? []
+    const toolsUsed: string[] = firstArray(result.toolsUsed)
     let kw: boolean | null = null
     const lower = summary.toLowerCase()
     if (test.expectKeywords && test.expectKeywords.length > 0) {

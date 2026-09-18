@@ -1,3 +1,4 @@
+import { firstArray } from "../../util/array"
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
@@ -82,7 +83,7 @@ async function loadRegistry(opts: { fresh?: boolean } = {}): Promise<Registry> {
     if (res.status === 404) return { devices: cached, source: "cache", warning: cached.length ? undefined : "no registry yet" }
     if (!res.ok) return { devices: cached, source: "cache", warning: `Atlas answered ${res.status}; using local cache` }
     const body = (await res.json()) as any
-    const rows: any[] = body?.data?.records?.data ?? body?.data?.records ?? []
+    const rows: any[] = firstArray(body?.data?.records?.data, body?.data?.records)
     const devices = rows.map((r) => r?.data).filter((d) => d?.name && d?.transport) as HomeDevice[]
     // An empty Atlas dataset with a populated cache means records were never synced, not
     // that the house has no lights — keep working from the cache and say so.
