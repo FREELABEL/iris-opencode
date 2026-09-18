@@ -5158,10 +5158,10 @@
     {
       "kind": "command",
       "name": "hive connect",
-      "describe": "enroll THIS machine as a Hive node — outbound, no SSH or VPN required",
+      "describe": "bring THIS machine online as a Hive node — outbound, no SSH or VPN required",
       "aliases": [],
       "run": "iris hive connect",
-      "haystack": "hive connect enroll this machine as a hive node — outbound, no ssh or vpn required name node name (defaults to this machine max-concurrent max simultaneous tasks (1-20) no-daemon register only; don force register again even if this machine already has a node key json"
+      "haystack": "hive connect bring this machine online as a hive node — outbound, no ssh or vpn required force restart the daemon even if this machine is already online json"
     },
     {
       "kind": "command",
