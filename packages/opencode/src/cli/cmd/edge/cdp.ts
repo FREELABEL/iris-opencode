@@ -126,7 +126,17 @@ export async function launch({ timeout = 20000 }: { timeout?: number } = {}): Pr
     "--hide-scrollbars",
     "about:blank",
   ]
-  const proc = spawn(bin, args, { stdio: "ignore", detached: false })
+  // Its own process group, so tear-down can kill Chrome AND every helper it forked. Killing only the
+  // pid we spawned left a headless Chrome orphaned for 21 minutes after a launch that timed out.
+  const proc = spawn(bin, args, { stdio: "ignore", detached: process.platform !== "win32" })
+  const killAll = (sig: NodeJS.Signals) => {
+    try {
+      if (process.platform !== "win32" && proc.pid) process.kill(-proc.pid, sig)
+      else proc.kill(sig)
+    } catch {
+      /* already gone */
+    }
+  }
   // A spawn that fails (the file vanished, no permission) is reported on this event and nowhere else.
   let spawnError: Error | null = null
   proc.on("error", (e) => {
@@ -146,8 +156,12 @@ export async function launch({ timeout = 20000 }: { timeout?: number } = {}): Pr
     }
   }
   if (!version) {
-    proc.kill("SIGKILL")
-    rmSync(profile, { recursive: true, force: true })
+    killAll("SIGKILL")
+    try {
+      rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 150 })
+    } catch {
+      /* never mask the real error below */
+    }
     throw new Error(
       spawnError
         ? `Could not start ${bin}: ${(spawnError as Error).message}. ${NO_CHROME}`
@@ -156,19 +170,26 @@ export async function launch({ timeout = 20000 }: { timeout?: number } = {}): Pr
     )
   }
 
+  /**
+   * Wait for Chrome to actually EXIT before deleting its profile. This used to SIGTERM, sleep 120ms,
+   * SIGKILL and delete — and Chrome's helper processes were still writing into the profile, so the
+   * delete failed with ENOTEMPTY and threw out of a `finally`, turning a successful export into a
+   * failed one. A leftover temp folder is not worth failing a job over, so the delete retries and
+   * then gives up quietly.
+   */
   const close = async () => {
+    const done = () => proc.exitCode !== null || proc.signalCode !== null
+    const exited = new Promise<void>((r) => (done() ? r() : proc.once("exit", () => r())))
+    killAll("SIGTERM")
+    await Promise.race([exited, sleep(2000)])
+    // SIGKILL the group even when the main process exited: helpers can outlive it.
+    killAll("SIGKILL")
+    if (!done()) await Promise.race([exited, sleep(1000)])
     try {
-      proc.kill("SIGTERM")
+      rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 150 })
     } catch {
-      /* already gone */
+      /* a leftover temp profile must never fail the job */
     }
-    await sleep(120)
-    try {
-      proc.kill("SIGKILL")
-    } catch {
-      /* already gone */
-    }
-    rmSync(profile, { recursive: true, force: true })
   }
 
   return { base, close, newPage: () => newPage(base) }
