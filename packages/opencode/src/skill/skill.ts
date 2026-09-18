@@ -7,6 +7,7 @@ import { Log } from "../util/log"
 import { Global } from "@/global"
 import { Filesystem } from "@/util/filesystem"
 import { exists } from "fs/promises"
+import path from "path"
 
 // Re-export v2 execution engine for convenience
 export { parsePlan, executeSkill, validatePlan, resolveArgs } from "./executor"
@@ -101,9 +102,12 @@ export namespace Skill {
 
     // Global dirs
     const globalIris = `${Global.Path.home}/.iris`
-    if (await exists(globalIris)) irisDirs.push(globalIris)
+    // Outside a git repo the project walk runs to "/", so it can already have visited ~/.iris.
+    // Scanning it twice made every global playbook look like its own shadow copy.
+    const seen = (list: string[], dir: string) => list.some((d) => path.resolve(d) === path.resolve(dir))
+    if ((await exists(globalIris)) && !seen(irisDirs, globalIris)) irisDirs.push(globalIris)
     const globalClaude = `${Global.Path.home}/.claude`
-    if (await exists(globalClaude)) claudeDirs.push(globalClaude)
+    if ((await exists(globalClaude)) && !seen(claudeDirs, globalClaude)) claudeDirs.push(globalClaude)
 
     // Scan in priority order: playbooks first, then skills (first-found wins)
     await scanGlob(PLAYBOOK_GLOB, irisDirs)       // 1. .iris/playbooks/**/PLAYBOOK.md
