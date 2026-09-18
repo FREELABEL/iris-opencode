@@ -1,7 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { classifyNodeKeyStatus, lanAddress, probeNodeKey, NODE_KEY_FIX } from "./node-key"
-
-const fakeFetch = (status: number) => (async () => new Response("{}", { status })) as unknown as typeof fetch
+import { classifyNodeKeyStatus, lanAddress, NODE_KEY_FIX } from "./node-key"
 
 describe("classifyNodeKeyStatus", () => {
   test("only a 401 means the key is dead", () => {
@@ -18,29 +16,8 @@ describe("classifyNodeKeyStatus", () => {
   })
 })
 
-describe("probeNodeKey", () => {
-  test("posts the key to the heartbeat and classifies the answer", async () => {
-    let seen: { url?: string; auth?: string } = {}
-    const f = (async (url: string, init: RequestInit) => {
-      seen = { url, auth: (init.headers as Record<string, string>).Authorization }
-      return new Response("{}", { status: 401 })
-    }) as unknown as typeof fetch
-    expect(await probeNodeKey("node_live_x", "https://freelabel.net/", f)).toBe("rejected")
-    expect(seen.url).toBe("https://freelabel.net/api/v6/node-agent/heartbeat")
-    expect(seen.auth).toBe("Bearer node_live_x")
-  })
-
-  test("a network failure is unreachable, never rejected", async () => {
-    const boom = (async () => {
-      throw new Error("offline")
-    }) as unknown as typeof fetch
-    expect(await probeNodeKey("k", "https://x", boom)).toBe("unreachable")
-    expect(await probeNodeKey("k", "https://x", fakeFetch(200))).toBe("valid")
-  })
-
-  test("the fix it names is the command that actually mints a node key", () => {
-    expect(NODE_KEY_FIX).toBe("iris hive connect --force")
-  })
+test("the fix it names is the command that brings the node online", () => {
+  expect(NODE_KEY_FIX).toBe("iris hive connect")
 })
 
 describe("lanAddress", () => {

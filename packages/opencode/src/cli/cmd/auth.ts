@@ -7,7 +7,6 @@ import { map, pipe, sortBy, values } from "remeda"
 import path from "path"
 import os from "os"
 import fs from "fs"
-import { NODE_KEY_FIX } from "../lib/node-key"
 import { Config } from "../../config/config"
 import { Global } from "../../global"
 import { Plugin } from "../../plugin"
@@ -309,22 +308,20 @@ async function irisLoginStatus(): Promise<{ authenticated: boolean; token?: stri
 }
 
 /**
- * Signing in heals this machine's Hive node key (#185896).
+ * Signing in brings this machine online in Hive (#185896).
  *
- * The Hive daemon authenticates with the node key in ~/.iris/config.json, a different
- * credential from the account token login writes. A client installed fresh, signed in to
- * Desktop, ran `iris auth login`, read "Already authenticated" — and still had a key the
- * server rejected, because nothing on the login path looked at it. Login is the moment we
- * hold a valid account token, so it is where the node key gets fixed. Never fails the login.
+ * The daemon is the one writer of the node key: it enrolls this machine from the account token
+ * that sign-in just saved. All login does is wake it when it is not already online — so a dead or
+ * missing node key is fixed by signing in, with no second command to know about. Never fails the
+ * login, and does nothing on a machine without the daemon.
  */
-async function healNodeKeyAfterLogin(userId: string | number | undefined): Promise<void> {
-  const id = Number(userId)
-  if (!Number.isFinite(id) || id <= 0) return
+async function healNodeKeyAfterLogin(_userId: string | number | undefined): Promise<void> {
   try {
-    const { healNodeKey } = await import("./platform-hive-connect")
-    await healNodeKey(id, prompts.log)
+    const { wakeHiveNode } = await import("./platform-hive-connect")
+    const id = await wakeHiveNode({ quiet: true })
+    if (id) prompts.log.success(`Hive: this machine is online (${id.slice(0, 8)}…)`)
   } catch {
-    prompts.log.warn(`Could not check this machine's Hive node key. If Hive shows HTTP 401, run: ${NODE_KEY_FIX}`)
+    /* sign-in succeeded; Hive is best-effort here and `iris hive doctor` explains the rest */
   }
 }
 

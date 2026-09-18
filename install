@@ -1581,266 +1581,15 @@ esac
 BCTL
     chmod 755 "$bridge_dir/bridgectl"
 
-    # Create iris-daemon convenience script for Hive compute
-    cat > "$bridge_dir/daemonctl" << 'DCTL'
-#!/usr/bin/env bash
-REAL_SCRIPT="$0"
-[ -L "$REAL_SCRIPT" ] && REAL_SCRIPT="$(readlink "$REAL_SCRIPT")"
-BRIDGE_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
-IRIS_CONFIG="$HOME/.iris/config.json"
-
-# Does this machine have a HIVE NODE key — not "is the user logged in".
-#
-# This used to return true whenever IRIS_API_KEY was set. That is the ACCOUNT key: it proves
-# who you are, and it is what `iris auth whoami` reads. The node key is a DIFFERENT credential,
-# issued per machine by /hive/register-node and stored as node_api_key in ~/.iris/config.json.
-#
-# Conflating them meant that as soon as someone logged in, node registration was skipped — so
-# the daemon came up with no valid node key and reported "HTTP 401 Invalid API key" while
-# `iris auth whoami` happily returned the user's email. A client hit exactly that on
-# 2026-08-27: authenticated, and the daemon offline, with nothing to connect the two.
-#
-# The bridge .env check went the same way: having a bridge configured says nothing about
-# whether THIS machine is a registered node.
-has_node_key() {
-    [ -f "$IRIS_CONFIG" ] && grep -q '"node_api_key"' "$IRIS_CONFIG" 2>/dev/null && return 0
-    return 1
-}
-
-case "${1:-status}" in
-    start)
-        # NO auto-update on start.
-        #
-        # This used to `git pull` whenever $BRIDGE_DIR/.git existed, so starting the
-        # daemon could silently change the code that was about to run. It also only
-        # ever fired for clone-based installs, so after the move to archive fetching
-        # some nodes would self-update on start and others never would — the worst of
-        # both. Updating is now an explicit operation: `iris node install`.
-        # Fix stale API URLs in config (pre-Railway migration)
-        if [ -f "$IRIS_CONFIG" ] && grep -qE 'ondigitalocean\.app|main\.heyiris\.io|apiv2\.heyiris\.io' "$IRIS_CONFIG" 2>/dev/null; then
-            echo "Fixing stale API URL in config..."
-            sed -i.bak \
-                -e 's|https://[^"]*ondigitalocean\.app[^"]*|https://freelabel.net|g' \
-                -e 's|https://main\.heyiris\.io[^"]*|https://freelabel.net|g' \
-                -e 's|https://apiv2\.heyiris\.io[^"]*|https://freelabel.net|g' \
-                "$IRIS_CONFIG" && rm -f "$IRIS_CONFIG.bak"
-        fi
-        if ! has_node_key; then
-            # Self-heal: auto-register if SDK token exists
-            if [ -f "$HOME/.iris/sdk/.env" ]; then
-                _TOKEN=$(grep IRIS_API_KEY "$HOME/.iris/sdk/.env" 2>/dev/null | cut -d= -f2)
-                _UID=$(grep IRIS_USER_ID "$HOME/.iris/sdk/.env" 2>/dev/null | cut -d= -f2)
-                if [ -n "$_TOKEN" ]; then
-                    echo "No node key found. Auto-registering..."
-                    _HLABEL=$(hostname -s 2>/dev/null || echo "My-Machine")
-                    _HDOCK=$(command -v docker >/dev/null 2>&1 && echo "true" || echo "false")
-                    _RESP=$(curl -sL --max-time 10 \
-                        -H "Authorization: Bearer $_TOKEN" \
-                        -H "Content-Type: application/json" \
-                        -d "{\"name\": \"$_HLABEL\", \"capabilities\": {\"docker\": $_HDOCK}}" \
-                        "https://raichu.heyiris.io/api/v1/hive/register-node" 2>/dev/null || echo '{}')
-                    _NKEY=$(echo "$_RESP" | jq -r '.node_key // empty' 2>/dev/null || \
-                            echo "$_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('node_key',''))" 2>/dev/null || \
-                            echo "$_RESP" | sed -n 's/.*"node_key"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-                    if [ -n "$_NKEY" ] && [ "$_NKEY" != "null" ]; then
-                        printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://freelabel.net"}\n' "$_NKEY" "${_UID:-0}" > "$IRIS_CONFIG"
-                        chmod 600 "$IRIS_CONFIG"
-                        echo "Registered! Continuing to start daemon..."
-                    else
-                        echo "Auto-registration failed. Register manually:"
-                        echo "  iris-daemon register"
-                        exit 1
-                    fi
-                fi
-            fi
-            # Re-check after auto-registration attempt
-            if ! has_node_key; then
-                echo "No API key configured."
-                echo "  Authenticate:  iris-login"
-                echo "  Then register: iris-daemon register"
-                exit 1
-            fi
-        fi
-        SOCK="$HOME/.iris/daemon.sock"
-        if [ -S "$SOCK" ] && node -e "require('net').createConnection('$SOCK',()=>{console.log('alive');process.exit(0)}).on('error',()=>process.exit(1))" 2>/dev/null; then
-            echo "Daemon already running"; exit 0
-        fi
-        rm -f "$SOCK"
-        # Prefer the supervisor when one exists. `stop` boots the launchd job out, so a
-        # plain nohup here would bring the daemon back UNSUPERVISED — alive now, gone after
-        # the next crash or reboot, and no longer the thing launchctl reports on. Loading
-        # the job starts it too, so this is a start either way.
-        LBL="io.heyiris.daemon"
-        PLIST="$HOME/Library/LaunchAgents/$LBL.plist"
-        if [ -f "$PLIST" ] && command -v launchctl >/dev/null 2>&1; then
-            # Same lesson as #184931 one layer up: launchctl's exit code is not evidence.
-            # This used to print "Daemon started (launchd)" off a zero from `load`, which
-            # returns zero for jobs it never registered. Wait for the socket instead.
-            LC_ERR=$(launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>&1) \
-              || LC_ERR=$(launchctl load -w "$PLIST" 2>&1) || true
-            for _ in 1 2 3 4 5; do
-                [ -S "$SOCK" ] && break
-                sleep 1
-            done
-            if [ -S "$SOCK" ]; then
-                echo "Daemon started (launchd)"
-                exit 0
-            fi
-            echo "launchd did not bring the daemon up${LC_ERR:+ ($(printf '%s' "$LC_ERR" | head -1))} — starting it unsupervised."
-        fi
-
-        nohup node "$BRIDGE_DIR/daemon.js" > "$BRIDGE_DIR/daemon.log" 2>&1 &
-        sleep 3
-        if [ -S "$SOCK" ]; then
-            echo "Hive daemon started (PID: $!)"
-            echo "Your machine is now a compute node in IRIS Hive."
-        else
-            echo "Daemon failed to start. Check logs: iris-daemon logs"
-            tail -5 "$BRIDGE_DIR/daemon.log" 2>/dev/null
-            exit 1
-        fi ;;
-    stop)
-        # VERIFY THE STOP. This used to `kill` and immediately print "Daemon stopped",
-        # which is a claim, not an observation. When the process did not die promptly the
-        # next `start` found it alive, printed "Daemon already running", and the operator
-        # was told twice that everything worked while the OLD process kept running with a
-        # stale key — 401ing on every heartbeat. Measured 2026-08-12 after a key rotation.
-        #
-        # Also look for the process by name, not only by whoever holds port 3200. A daemon
-        # that crashed before binding, or bound elsewhere, is invisible to lsof and was
-        # reported as "Not running" while very much running.
-        SOCK="$HOME/.iris/daemon.sock"
-
-        # THE DAEMON IS SUPERVISED. io.heyiris.daemon is a launchd job with KeepAlive, so
-        # killing the pid is whack-a-mole: launchd respawns it within a second and `stop`
-        # looks broken when it worked. Worse, `restart` then hits a live process and prints
-        # "Daemon already running" — reporting success for a daemon still holding whatever
-        # key it booted with. Stop the JOB, not the process.
-        LBL="io.heyiris.daemon"
-        PLIST="$HOME/Library/LaunchAgents/$LBL.plist"
-        if [ -f "$PLIST" ] && command -v launchctl >/dev/null 2>&1; then
-            launchctl bootout "gui/$(id -u)/$LBL" 2>/dev/null \
-              || launchctl unload "$PLIST" 2>/dev/null || true
-            sleep 1
-        fi
-
-        PIDS=$(lsof -ti :3200 2>/dev/null || true)
-        PIDS="$PIDS $(pgrep -f "$BRIDGE_DIR/daemon.js" 2>/dev/null || true)"
-        PIDS=$(echo $PIDS | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -u | tr '\n' ' ')
-
-        if [ -z "$(echo $PIDS | tr -d ' ')" ]; then
-            if [ -S "$SOCK" ]; then rm -f "$SOCK"; echo "Cleaned stale socket"
-            else echo "Not running"; fi
-            exit 0
-        fi
-
-        for P in $PIDS; do kill "$P" 2>/dev/null || true; done
-
-        # Give it up to 5s to exit cleanly, then stop asking nicely. Polling beats a fixed
-        # sleep in both directions: a fast exit is not punished, a slow one is not missed.
-        for _ in 1 2 3 4 5 6 7 8 9 10; do
-            STILL=""
-            for P in $PIDS; do kill -0 "$P" 2>/dev/null && STILL="$STILL $P"; done
-            [ -z "$(echo $STILL | tr -d ' ')" ] && break
-            sleep 0.5
-        done
-
-        STILL=""
-        for P in $PIDS; do kill -0 "$P" 2>/dev/null && STILL="$STILL $P"; done
-        if [ -n "$(echo $STILL | tr -d ' ')" ]; then
-            echo "Daemon did not exit on SIGTERM — forcing:$STILL"
-            for P in $STILL; do kill -9 "$P" 2>/dev/null || true; done
-            sleep 1
-        fi
-
-        STILL=""
-        for P in $PIDS; do kill -0 "$P" 2>/dev/null && STILL="$STILL $P"; done
-        rm -f "$SOCK" 2>/dev/null || true
-        if [ -n "$(echo $STILL | tr -d ' ')" ]; then
-            echo "FAILED to stop daemon:$STILL — still running" >&2
-            exit 1
-        fi
-        echo "Daemon stopped (PID:$PIDS)" ;;
-    restart)
-        # Under launchd, `kickstart -k` is the only restart that is guaranteed to replace the
-        # process — it kills and relaunches in one supervised step, so there is no window
-        # where `start` can find a survivor and no-op. This matters after a key rotation:
-        # the running process holds a credential that is now invalid, so it MUST be replaced.
-        LBL="io.heyiris.daemon"
-        PLIST="$HOME/Library/LaunchAgents/$LBL.plist"
-        if [ -f "$PLIST" ] && command -v launchctl >/dev/null 2>&1; then
-            if launchctl kickstart -k "gui/$(id -u)/$LBL" 2>/dev/null; then
-                sleep 2
-                echo "Daemon restarted (launchd)"
-                exit 0
-            fi
-        fi
-
-        # Unsupervised fallback. `stop` exits non-zero if the process survived, so do not
-        # carry on to `start` — it would find the old process and report success for it.
-        if ! "$0" stop; then
-            echo "Not restarting: the old daemon is still running." >&2
-            exit 1
-        fi
-        sleep 1
-        "$0" start ;;
-    status)
-        SOCK="$HOME/.iris/daemon.sock"
-        if [ -S "$SOCK" ]; then
-            node "$BRIDGE_DIR/daemon.js" --status 2>/dev/null || echo "Not running. Start with: iris-daemon start"
-        else echo "Not running. Start with: iris-daemon start"; fi ;;
-    logs) tail -f "$BRIDGE_DIR/daemon.log" ;;
-    register)
-        if [ ! -f "$HOME/.iris/sdk/.env" ] || [ -z "$(grep IRIS_API_KEY "$HOME/.iris/sdk/.env" 2>/dev/null | cut -d= -f2)" ]; then
-            if command -v iris-login >/dev/null 2>&1; then
-                echo "Not authenticated. Running iris-login..."
-                iris-login
-                # Re-check after login
-                if [ ! -f "$HOME/.iris/sdk/.env" ]; then echo "Auth failed."; exit 1; fi
-            else
-                echo "Not authenticated. Run 'iris-login' first."
-                exit 1
-            fi
-        fi
-        SDK_TOKEN=$(grep IRIS_API_KEY "$HOME/.iris/sdk/.env" | cut -d= -f2)
-        if [ -z "$SDK_TOKEN" ]; then
-            echo "SDK token not found. Run 'iris-login' first."
-            exit 1
-        fi
-        HOSTNAME_LABEL=$(hostname -s 2>/dev/null || echo "My Machine")
-        HAS_DOCKER=$(command -v docker >/dev/null 2>&1 && echo "true" || echo "false")
-        USER_ID=$(grep IRIS_USER_ID "$HOME/.iris/sdk/.env" 2>/dev/null | cut -d= -f2)
-        echo "Registering $(hostname -s) as Hive compute node..."
-        REG_TMP=$(mktemp 2>/dev/null || echo "/tmp/iris-reg-$$")
-        HTTP_CODE=$(curl -sL --max-time 10 -o "$REG_TMP" -w "%{http_code}" \
-            -H "Authorization: Bearer $SDK_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "{\"name\": \"$HOSTNAME_LABEL\", \"capabilities\": {\"docker\": $HAS_DOCKER}}" \
-            "https://raichu.heyiris.io/api/v1/hive/register-node" 2>/dev/null || echo "000")
-        RESP=$(cat "$REG_TMP" 2>/dev/null || echo '{}'); rm -f "$REG_TMP"
-        NODE_KEY=$(echo "$RESP" | jq -r '.node_key // empty' 2>/dev/null || \
-                   echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('node_key',''))" 2>/dev/null || \
-                   echo "$RESP" | sed -n 's/.*"node_key"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-        if [ -n "$NODE_KEY" ] && [ "$NODE_KEY" != "null" ]; then
-            mkdir -p "$HOME/.iris"
-            printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://freelabel.net"}\n' "$NODE_KEY" "${USER_ID:-0}" > "$IRIS_CONFIG"
-            chmod 600 "$IRIS_CONFIG"
-            echo "Registered! Node key saved to ~/.iris/config.json"
-            echo "Start with: iris-daemon start"
-        else
-            case "$HTTP_CODE" in
-                000) echo "Registration failed: network unreachable." ;;
-                401) echo "Registration failed: token not authorized."
-                     echo "  Your SDK token may be expired. Run: iris-login" ;;
-                5*)  echo "Registration failed: server error ($HTTP_CODE). Try again later." ;;
-                *)   echo "Registration failed (HTTP $HTTP_CODE)."
-                     echo "$RESP" | head -c 200 ;;
-            esac
-            echo "  Manual setup: https://web.heyiris.io/dashboard/hive"
-        fi ;;
-    *) echo "Usage: iris-daemon {start|stop|restart|status|register|logs}" ;;
-esac
-DCTL
+    # iris-daemon control script: use the one that ships IN the daemon archive.
+    #
+    # This used to write its own ~260-line copy here, over the real one. The two drifted — the copy
+    # still minted node keys through a different endpoint with no machine fingerprint after the
+    # daemon became the one writer of the node key (#185896), so every install silently undid it.
+    # One daemonctl, owned by FREELABEL/iris-daemon.
+    if [ ! -f "$bridge_dir/daemonctl" ]; then
+        print_message error "Daemon archive is missing daemonctl — the download is incomplete. Re-run the installer."
+    fi
     chmod 755 "$bridge_dir/daemonctl"
 
     # Symlink both CLIs into the iris bin directory
@@ -1991,33 +1740,18 @@ print(d)" 2>/dev/null || echo ""
 }
 
 register_hive() {
-    local token="$1" user_id="$2"
-    local hostname_label; hostname_label=$(hostname -s 2>/dev/null || echo "My-Machine")
-    local has_docker; has_docker=$(command -v docker >/dev/null 2>&1 && echo "true" || echo "false")
-    local tmpfile; tmpfile=$(mktemp 2>/dev/null || echo "/tmp/iris-reg-$$")
-    local http_code; http_code=$(curl -sL --max-time 10 -o "$tmpfile" -w "%{http_code}" \
-        -H "Authorization: Bearer $token" \
-        -H "Content-Type: application/json" \
-        -d "{\"name\": \"$(echo "$hostname_label" | sed 's/[\"\\]/\\&/g')\", \"capabilities\": {\"docker\": $has_docker}}" \
-        "$API_BASE/api/v1/hive/register-node" 2>/dev/null || echo "000")
-    local resp; resp=$(cat "$tmpfile" 2>/dev/null || echo '{}'); rm -f "$tmpfile"
-    local node_key; node_key=$(json_field "$resp" "node_key")
-    if [ -n "$node_key" ] && [ "$node_key" != "null" ]; then
-        mkdir -p "$IRIS_DIR"
-        printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://freelabel.net"}\n' "$node_key" "${user_id:-0}" > "$CONFIG_JSON"
-        chmod 600 "$CONFIG_JSON"
-        echo -e "  ${GREEN}Machine registered as Hive compute node${NC}"
+    # The daemon is the ONE writer of the node key (#185896): it enrolls this machine itself using
+    # the account this login just saved. All login does is wake it if it is not already online.
+    # (This used to mint a key itself — via a proxy endpoint, no machine fingerprint, and a `>` that
+    # truncated config.json — and a key minted here could be one the hub did not know.)
+    if curl -s --max-time 3 http://localhost:3200/health 2>/dev/null | grep -q '"node_id":"'; then
         return 0
     fi
-    # Registration failed — show why
-    case "$http_code" in
-        000) echo -e "  ${MUTED}Hive registration skipped (network unreachable).${NC}" ;;
-        401) echo -e "  ${MUTED}Hive registration skipped (token not authorized). Re-run ${NC}iris-login${MUTED} to refresh.${NC}" ;;
-        404) echo -e "  ${MUTED}Hive registration endpoint not found. The API may be updating.${NC}" ;;
-        5*) echo -e "  ${MUTED}Hive registration skipped (server error $http_code). Try later: ${NC}iris-daemon register" ;;
-        *)  echo -e "  ${MUTED}Hive registration skipped (HTTP $http_code). Try later: ${NC}iris-daemon register" ;;
-    esac
-    return 1
+    if [ -x "$HOME/.iris/bin/iris-daemon" ]; then
+        "$HOME/.iris/bin/iris-daemon" restart >/dev/null 2>&1 || true
+        echo -e "  ${GREEN}Hive: this machine is connecting — it will show online in a minute.${NC}"
+    fi
+    return 0
 }
 
 # Parse flags
@@ -2951,23 +2685,9 @@ ENVFILE
     AUTH_SUCCESS=true
     echo -e "  ${GREEN}Authenticated via pre-seeded token${NC}"
 
-    # Auto-register this machine as a Hive compute node
-    HOSTNAME_LABEL=$(hostname -s 2>/dev/null || echo "My-Machine")
-    HAS_DOCKER=$(command -v docker >/dev/null 2>&1 && echo "true" || echo "false")
-    NODE_RESPONSE=$(curl -sL --fail --max-time 10 \
-        -H "Authorization: Bearer $SDK_TOKEN" \
-        -H "Content-Type: application/json" \
-        --data-raw "{\"name\": \"$(echo "$HOSTNAME_LABEL" | sed 's/[\"\\]/\\&/g')\", \"capabilities\": {\"docker\": $HAS_DOCKER}}" \
-        "https://raichu.heyiris.io/api/v1/hive/register-node" 2>/dev/null || echo '{}')
-    NODE_KEY=$(json_field "$NODE_RESPONSE" "node_key")
-    if [ -n "$NODE_KEY" ] && [ "$NODE_KEY" != "null" ]; then
-        mkdir -p "$HOME/.iris"
-        printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://freelabel.net"}\n' "$NODE_KEY" "$USER_ID" > "$HOME/.iris/config.json"
-        chmod 600 "$HOME/.iris/config.json"
-        echo -e "  ${GREEN}Machine registered as Hive compute node${NC}"
-    else
-        echo -e "  ${MUTED}Hive auto-registration skipped. Register later: ${NC}iris-daemon register"
-    fi
+    # No node registration here: the daemon enrolls this machine itself from the account just
+    # saved — it is the ONE writer of the node key (#185896). This block minted keys through a
+    # different endpoint, with no machine fingerprint, and truncated config.json with `>`.
 fi
 
 tty_available=false
@@ -3062,23 +2782,9 @@ ENVFILE
                             echo -e "  ${MUTED}Dashboard:${NC} ${CYAN}${DASHBOARD_URL}${NC}"
                         fi
 
-                        # Auto-register this machine as a Hive compute node
-                        HOSTNAME_LABEL=$(hostname -s 2>/dev/null || echo "My-Machine")
-                        HAS_DOCKER=$(command -v docker >/dev/null 2>&1 && echo "true" || echo "false")
-                        NODE_RESPONSE=$(curl -sL --fail --max-time 10 \
-                            -H "Authorization: Bearer $SDK_TOKEN" \
-                            -H "Content-Type: application/json" \
-                            --data-raw "{\"name\": \"$(echo "$HOSTNAME_LABEL" | sed 's/[\"\\]/\\&/g')\", \"capabilities\": {\"docker\": $HAS_DOCKER}}" \
-                            "https://raichu.heyiris.io/api/v1/hive/register-node" 2>/dev/null || echo '{}')
-                        NODE_KEY=$(json_field "$NODE_RESPONSE" "node_key")
-                        if [ -n "$NODE_KEY" ] && [ "$NODE_KEY" != "null" ]; then
-                            mkdir -p "$HOME/.iris"
-                            printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://freelabel.net"}\n' "$NODE_KEY" "$USER_ID" > "$HOME/.iris/config.json"
-                            chmod 600 "$HOME/.iris/config.json"
-                            echo -e "  ${GREEN}Machine registered as Hive compute node${NC}"
-                        else
-                            echo -e "  ${MUTED}Hive auto-registration skipped. Register later: ${NC}iris-daemon register"
-                        fi
+                        # No node registration here: the daemon enrolls this machine itself from the account just
+                        # saved — it is the ONE writer of the node key (#185896). This block minted keys through a
+                        # different endpoint, with no machine fingerprint, and truncated config.json with `>`.
                     else
                         # Login succeeded but SDK token wasn't generated
                         AUTH_SUCCESS=true

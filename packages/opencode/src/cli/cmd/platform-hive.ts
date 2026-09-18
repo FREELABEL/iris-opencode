@@ -1914,7 +1914,7 @@ const HiveDoctorCommand = cmd({
             status: "fail",
             detail:
               st === "rejected"
-                ? `HTTP 401 — the server has no node with this key. Logging in will NOT fix it. Run: ${NODE_KEY_FIX}`
+                ? `HTTP 401 — this machine's node key is not recognised. The daemon replaces it by itself when you are signed in; to do it now, run: ${NODE_KEY_FIX}`
                 : st === "suspended"
                   ? `HTTP 403 — this node is suspended or its IP is not allowed. Contact your account admin.`
                   : `HTTP ${res.status} — could not verify the node key`,

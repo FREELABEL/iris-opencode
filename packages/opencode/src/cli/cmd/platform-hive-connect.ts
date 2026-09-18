@@ -1,14 +1,10 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
-import { dim, bold, success, highlight, requireAuth, resolveUserId } from "./iris-api"
-import { hiveFetch } from "./platform-hive-nodes"
-import { probeNodeKey } from "../lib/node-key"
+import { dim, bold, success, highlight, requireAuth } from "./iris-api"
 import { join } from "path"
-import { homedir, hostname, platform, arch, cpus, totalmem } from "os"
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs"
+import { homedir, platform } from "os"
+import { existsSync } from "fs"
 import { execSync } from "child_process"
-import { createHash } from "crypto"
-
 // ============================================================================
 // iris hive connect  —  enroll THIS machine, outbound, in one command
 //
@@ -37,90 +33,74 @@ import { createHash } from "crypto"
 // ============================================================================
 
 const CONFIG_DIR = join(homedir(), ".iris")
-const CONFIG_PATH = join(CONFIG_DIR, "config.json")
+const BRIDGE_DIR = join(CONFIG_DIR, "bridge")
+
+// ONE WRITER (#185896). This command used to register the machine and write the node key itself —
+// one of ELEVEN places across two repos that minted node keys, through two endpoints, most with no
+// machine fingerprint. A client ended up holding a key the hub had never issued, and every sign-in
+// surface said "authenticated" while Hive 401'd. The daemon now owns enrollment: on start, with no
+// key or a rejected one, it registers from the signed-in account. So "connect" means: be signed in,
+// have a daemon that can enroll itself, and (re)start it. Nothing here touches the node key.
+
+/** Does the installed daemon enroll itself? Older copies cannot, and must be updated first. */
+function daemonSelfEnrolls(): boolean {
+  return existsSync(join(BRIDGE_DIR, "daemon", "node-key-heal.js"))
+}
+
+async function localNodeId(): Promise<string | null> {
+  try {
+    const res = await fetch("http://localhost:3200/health", { signal: AbortSignal.timeout(2000) })
+    if (!res.ok) return null
+    const h = (await res.json()) as any
+    return typeof h?.node_id === "string" && h.node_id ? h.node_id : null
+  } catch {
+    return null
+  }
+}
+
+function irisBin(): string {
+  const installed = join(CONFIG_DIR, "bin", `iris${platform() === "win32" ? ".exe" : ""}`)
+  return existsSync(installed) ? installed : process.execPath
+}
 
 /**
- * A stable id for THIS physical machine, hashed. (#179932)
- *
- * Node identity on the server was the api_key, and a reinstall throws the api_key away — so
- * re-registering produced a SECOND node for the same computer and orphaned the first. Eight
- * rows for two machines in production, two of them sharing a name, and no way to answer
- * "which node am I".
- *
- * Hostname cannot fix it: on macOS os.hostname() returns LocalHostName, which the OS
- * INCREMENTS on every mDNS collision, so one laptop reported three different names in a
- * single run. The value has to come from the hardware, not the network.
- *
- * ALWAYS HASHED. The raw values below are real hardware/install identifiers, and a hardware
- * UUID is the kind of thing that should never leave a machine in the clear or end up in a
- * log. sha256 keeps it stable and comparable while making it useless as an identifier
- * anywhere else. The server only ever needs equality.
- *
- * Returns undefined when nothing stable is available, and that is a supported outcome — the
- * server treats a missing fingerprint as "create a new node", i.e. exactly today's behaviour.
- * A GUESSED fingerprint would be far worse than none: two machines colliding on a weak value
- * would silently share one node row.
+ * Bring this machine online in Hive. Used by `hive connect` and by sign-in (`iris auth login`).
+ * Never mints a key. Returns the node id once online, or null.
  */
-function machineFingerprint(): string | undefined {
-  const read = (cmd: string): string | undefined => {
+export async function wakeHiveNode(opts: { quiet?: boolean; restart?: boolean } = {}): Promise<string | null> {
+  const say = (m: string) => {
+    if (!opts.quiet) prompts.log.info(m)
+  }
+  if (!opts.restart) {
+    const id = await localNodeId()
+    if (id) return id
+  }
+  if (!daemonSelfEnrolls()) {
+    say("Updating the Hive daemon on this machine…")
     try {
-      const out = execSync(cmd, { encoding: "utf8", timeout: 4000, stdio: ["ignore", "pipe", "ignore"] }).trim()
-      return out || undefined
+      execSync(`"${irisBin()}" node install`, { stdio: opts.quiet ? "ignore" : "inherit", timeout: 600000 })
     } catch {
-      return undefined
+      /* fall through — the start below reports what is still wrong */
     }
   }
-
-  let raw: string | undefined
-  const os = platform()
-
-  if (os === "darwin") {
-    // IOPlatformUUID — burned into the hardware, survives OS reinstalls.
-    raw = read(`ioreg -rd1 -c IOPlatformExpertDevice | awk -F'"' '/IOPlatformUUID/{print $4}'`)
-  } else if (os === "linux") {
-    // machine-id is per-INSTALL rather than per-hardware, which is the right granularity
-    // here: a reimaged box genuinely is a new node.
-    raw = read("cat /etc/machine-id 2>/dev/null || cat /var/lib/dbus/machine-id 2>/dev/null")
-  } else if (os === "win32") {
-    raw = read(
-      'powershell -NoProfile -Command "(Get-ItemProperty HKLM:\\SOFTWARE\\Microsoft\\Cryptography).MachineGuid"',
-    )
-  }
-
-  if (!raw) return undefined
-
-  // Salted with the platform so the same string on two OSes cannot collide, and so the
-  // digest is not a plain hash of a value someone else could also compute and assert.
-  return createHash("sha256").update(`iris-node:${os}:${raw}`).digest("hex")
-}
-
-interface IrisConfig {
-  /** Which node this machine IS. Read by hive-local-node.ts to answer "(you)" with
-   *  certainty rather than guessing from a hostname that mutates. */
-  node_id?: string
-  node_api_key?: string
-  local_api_key?: string
-  user_id?: number
-  [k: string]: unknown
-}
-
-function readConfig(): IrisConfig {
-  if (!existsSync(CONFIG_PATH)) return {}
+  const ctl = daemonCtl()
+  if (!ctl) return null
   try {
-    return JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as IrisConfig
+    if (platform() === "win32") {
+      execSync(`"${ctl}" stop`, { stdio: "ignore", timeout: 30000 })
+      execSync(`"${ctl}" start`, { stdio: "ignore", timeout: 30000 })
+    } else {
+      execSync(`"${ctl}" restart`, { stdio: "ignore", timeout: 30000 })
+    }
   } catch {
-    // A corrupt config must not read as "no config" — that would silently mint a
-    // duplicate node and orphan whatever key is already in the file.
-    throw new Error(`${CONFIG_PATH} exists but is not valid JSON — fix or move it, then re-run.`)
+    /* the wait below is the real check */
   }
-}
-
-// MERGE, never overwrite. The file also carries local_api_key, pusher config and
-// the paused flag; clobbering it would break a working bridge to fix an unrelated thing.
-function writeConfig(patch: IrisConfig): void {
-  const merged = { ...readConfig(), ...patch }
-  if (!existsSync(CONFIG_DIR)) mkdirSync(CONFIG_DIR, { recursive: true })
-  writeFileSync(CONFIG_PATH, JSON.stringify(merged, null, 2) + "\n", { mode: 0o600 })
+  for (let i = 0; i < 20; i++) {
+    await new Promise((r) => setTimeout(r, 3000))
+    const id = await localNodeId()
+    if (id) return id
+  }
+  return null
 }
 
 function daemonCtl(): string | null {
@@ -134,340 +114,54 @@ function installHint(): string {
     : "curl -fsSL https://heyiris.io/install-code | bash"
 }
 
-function detectCapabilities(): Record<string, unknown> {
-  const caps: Record<string, unknown> = {
-    os: platform(),
-    arch: arch(),
-    cpus: cpus().length,
-    memory_gb: Math.round(totalmem() / 1024 ** 3),
-  }
-  // Report which coding agents are actually present. The whole reason to connect a
-  // box is to drive one of these remotely, so a node advertising none is a useful
-  // signal rather than a silent surprise at dispatch time.
-  const agents = ["claude", "codex", "opencode", "iris"].filter((bin) => {
-    try {
-      execSync(platform() === "win32" ? `where ${bin}` : `command -v ${bin}`, {
-        stdio: "ignore",
-        timeout: 3000,
-      })
-      return true
-    } catch {
-      return false
-    }
-  })
-  caps.agents = agents
-  caps.docker = (() => {
-    try {
-      execSync("docker info", { stdio: "ignore", timeout: 5000 })
-      return true
-    } catch {
-      return false
-    }
-  })()
-  return caps
-}
-
-
-export type RegisterResult =
-  | { ok: true; apiKey: string; nodeId?: string; previousKey?: string }
-  | { ok: false; stage: "http" | "no-key"; error: string }
-
-/**
- * Register THIS machine and persist the key it returns. Shared by `hive connect` and by the
- * self-heal in `iris auth login` (#185896) so there is exactly one way a node key is minted
- * on a machine — two copies of this would drift, and the drift would be a dead key.
- */
-export async function registerThisMachine(
-  userId: number,
-  name: string,
-  capabilities: Record<string, unknown>,
-  config: IrisConfig,
-  maxConcurrent?: number,
-): Promise<RegisterResult> {
-  const res = await hiveFetch("/api/v6/nodes", {
-    method: "POST",
-    body: JSON.stringify({
-      user_id: userId,
-      name,
-      // Lets the server reclaim this machine's existing row instead of minting a ghost
-      // on every reinstall (#179932). Omitted entirely when unavailable.
-      ...(machineFingerprint() ? { machine_fingerprint: machineFingerprint() } : {}),
-      // THE TRANSITION CASE, and it is not hypothetical — it cost one ghost node per
-      // machine when the fingerprint first shipped. A node registered BEFORE fingerprints
-      // existed has a null one stored, and a null never matches, so the first
-      // fingerprint-aware registration could only create a new row and abandon the old.
-      //
-      // The key we currently hold is proof we ARE that node — it is the node's own bearer
-      // credential — so sending it lets the server adopt that row and stamp the
-      // fingerprint onto it. After one registration every machine is self-identifying and
-      // this field stops mattering.
-      ...(config.node_api_key ? { previous_node_api_key: config.node_api_key } : {}),
-      capabilities,
-      max_concurrent: Math.max(1, Math.min(20, Math.round(maxConcurrent ?? 2))),
-    }),
-  })
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => "")
-    return { ok: false, stage: "http", error: `HTTP ${res.status}${body ? ` — ${body.slice(0, 300)}` : ""}` }
-  }
-
-  const data = (await res.json()) as any
-  const apiKey: string | undefined = data?.credentials?.api_key
-  const nodeId: string | undefined = data?.node?.id
-
-  if (!apiKey) {
-    return { ok: false, stage: "no-key", error: "The API did not return credentials.api_key — cannot start the daemon without it." }
-  }
-
-  // Persist BEFORE starting the daemon. The key is returned exactly once; if we
-  // crashed between here and the daemon start it would be unrecoverable.
-  //
-  // On --force there is an existing key for a still-registered node. Overwriting it
-  // outright would strand that node — it stays in the account but nothing on this
-  // machine can authenticate as it again, and the running daemon breaks on restart.
-  // Keep the old one so it can be put back.
-  const previousKey = config.node_api_key
-  writeConfig({
-    node_api_key: apiKey,
-    user_id: userId,
-    // The daemon authenticates against api_url, so it must be the host that just minted this
-    // key. A client's config had been hand-edited to app.heyiris.io, which 404s every node
-    // route — a fresh key written beside it would still never reach the server (#185896).
-    api_url: process.env.IRIS_API_URL ?? "https://freelabel.net",
-    // Persist WHICH node this machine is, not just how it authenticates.
-    //
-    // hive-local-node.ts reads `node_id` from this file as its second-most-authoritative
-    // source, and its header note says "if anything ever writes it" — nothing did. So
-    // whenever the daemon was not running to answer /health, resolution fell through to
-    // matching os.hostname(), which on macOS is LocalHostName and gets INCREMENTED by the
-    // OS on every mDNS collision. That is why the node list printed "(you?)" with a
-    // question mark instead of "(you)".
-    //
-    // The value was already in hand — the registration response returns node.id and it was
-    // simply dropped on the floor. Writing it makes local-node identity certain even with
-    // the daemon down, which is exactly when someone is most likely to be debugging.
-    ...(nodeId ? { node_id: nodeId } : {}),
-    ...(previousKey && previousKey !== apiKey ? { node_api_key_previous: previousKey } : {}),
-  })
-  return { ok: true, apiKey, nodeId, previousKey }
-}
-
-/**
- * Heal a dead node key with no command for the user to know about (#185896).
- *
- * A client installed fresh, signed in, and still had a node key the server rejected; every
- * login surface said "authenticated" and none of them could fix it. Signing in IS the moment
- * we hold a valid account token, so it is the moment to re-register. Only acts when the
- * server has positively rejected the key (401) — a suspended node (403) or a network failure
- * is left alone, because re-registering those would mint a second node for one machine.
- *
- * Returns what it did so callers can report it; never throws.
- */
-export async function healNodeKey(
-  userId: number,
-  log: { info: (m: string) => void; warn: (m: string) => void; success: (m: string) => void },
-): Promise<"healthy" | "healed" | "no-key" | "failed" | "skipped"> {
-  let config: IrisConfig
-  try {
-    config = readConfig()
-  } catch {
-    return "skipped"
-  }
-  if (!config.node_api_key) return "no-key"
-  const status = await probeNodeKey(config.node_api_key, process.env.IRIS_API_URL ?? "https://freelabel.net")
-  if (status !== "rejected") return status === "valid" ? "healthy" : "skipped"
-
-  log.warn("This machine's Hive node key is no longer accepted by the server — replacing it…")
-  const reg = await registerThisMachine(userId, hostname(), detectCapabilities(), config)
-  if (!reg.ok) {
-    log.warn(`Could not replace it automatically (${reg.error}). Run: iris hive connect --force`)
-    return "failed"
-  }
-  const ctl = daemonCtl()
-  if (ctl) {
-    try {
-      // RESTART — the running daemon holds the dead key and `start` would no-op on it.
-      execSync(`${ctl} restart 2>&1`, { timeout: 30000 })
-    } catch {
-      log.warn("New node key saved, but the daemon did not restart. Run: iris daemon restart")
-      return "healed"
-    }
-  }
-  log.success(`Hive node re-registered${reg.nodeId ? ` (${reg.nodeId.slice(0, 8)}…)` : ""}${ctl ? " and daemon restarted" : ""}.`)
-  return "healed"
-}
-
 const HiveConnectCommand = cmd({
   command: "connect",
-  describe: "enroll THIS machine as a Hive node — outbound, no SSH or VPN required",
-  builder: (y) =>
-    y
-      .option("name", { describe: "node name (defaults to this machine's hostname)", type: "string" })
-      .option("max-concurrent", { describe: "max simultaneous tasks (1-20)", type: "number", default: 2 })
-      .option("no-daemon", { describe: "register only; don't start the daemon", type: "boolean", default: false })
-      .option("force", { describe: "register again even if this machine already has a node key", type: "boolean", default: false })
+  describe: "bring THIS machine online as a Hive node — outbound, no SSH or VPN required",
+  builder: (yargs) =>
+    yargs
+      .option("force", { describe: "restart the daemon even if this machine is already online", type: "boolean", default: false })
       .option("json", { type: "boolean", default: false }),
   async handler(args: any) {
     const token = await requireAuth()
     if (!token) return
 
-    const userId = await resolveUserId()
-    if (!userId) {
-      prompts.log.error("Could not resolve your IRIS user id. Run: iris auth login")
-      return
-    }
-
-    let config: IrisConfig
-    try {
-      config = readConfig()
-    } catch (e: any) {
-      prompts.log.error(e.message)
-      return
-    }
-
-    // A key being PRESENT is not the same as a key WORKING. Refusing on presence alone stranded
-    // a client whose key the server no longer had: every call 401'd, this command said "already
-    // has a node key", and nothing named --force (#185896). A rejected key protects nothing —
-    // re-register over it. A valid, suspended or unverifiable key still needs an explicit --force.
-    let staleKey = false
-    if (config.node_api_key && !args.force) {
-      staleKey =
-        (await probeNodeKey(config.node_api_key, process.env.IRIS_API_URL ?? "https://freelabel.net")) === "rejected"
-      if (staleKey) prompts.log.warn("The node key on this machine is no longer accepted by the server — registering a new one.")
-    }
-
-    if (config.node_api_key && !args.force && !staleKey) {
-      prompts.log.warn("This machine already has a node key in ~/.iris/config.json.")
-      prompts.log.info(`Check it:      ${dim("iris hive nodes")}`)
-      prompts.log.info(`Daemon state:  ${dim("iris daemon status")}`)
-      prompts.log.info(`Register anew: ${dim("iris hive connect --force")}`)
-      return
-    }
-
-    const name = args.name || hostname()
-    const capabilities = detectCapabilities()
-
-    const sp = prompts.spinner()
-    sp.start(`Registering ${bold(name)}…`)
-
-    const reg = await registerThisMachine(userId, name, capabilities, config, args["max-concurrent"])
-    if (!reg.ok) {
-      sp.stop(reg.stage === "no-key" ? "Registered, but no key returned" : "Registration failed", 1)
-      prompts.log.error(reg.error)
-      return
-    }
-    const { apiKey, nodeId, previousKey } = reg
-
-    sp.stop(success(`Registered ${bold(name)}`))
-
-    if (args.json) {
-      console.log(JSON.stringify({ node_id: nodeId, name, capabilities, daemon_started: !args["no-daemon"] }))
-      return
-    }
-
-    console.log(`  ${dim("Node:")}          ${name}${nodeId ? dim(`  (${nodeId})`) : ""}`)
-    console.log(`  ${dim("OS / arch:")}     ${capabilities.os} / ${capabilities.arch}`)
-    const agents = capabilities.agents as string[]
-    console.log(`  ${dim("Agents found:")}  ${agents.length ? agents.join(", ") : dim("none — install one to run coding tasks here")}`)
-    console.log(`  ${dim("Key saved to:")}  ${CONFIG_PATH}`)
-    if (previousKey && previousKey !== apiKey) {
-      prompts.log.warn(
-        `Replaced this machine's existing node key. The previous node is still registered but can no longer authenticate from here — remove it with ${dim("iris hive nodes")}, or restore the old key from ${dim("node_api_key_previous")} in ${CONFIG_PATH}.`,
-      )
-    }
-
-    if (args["no-daemon"]) {
-      prompts.log.info(`Registered only. Start it when ready: ${dim("iris daemon start")}`)
-      prompts.outro("Done")
-      return
-    }
-
-    const ctl = daemonCtl()
-    if (!ctl) {
+    if (!daemonCtl() && !daemonSelfEnrolls()) {
       // #184597 — say WHY the daemon is missing, or this advice is a LOOP.
       //
-      // installHint() points at the installer. On Windows the installer is exactly what
-      // skipped the bridge, because Node.js was absent. So: installer skips Step 5 and
-      // prints "installed successfully!", user runs `iris hive connect`, connect says
-      // "Daemon binary not found, install it: <re-run the installer>", the installer skips
-      // Step 5 again. Nothing anywhere in that circle names Node.js. Measured on a client's
-      // Windows machine 2026-09-11 — roughly two hours lost going round it.
+      // On Windows the installer skips the bridge when Node.js is absent, then prints success;
+      // pointing back at the installer sends the user round the same circle. Name Node.js.
       let hasNode = true
       try {
-        execSync(platform() === "win32" ? "where node" : "command -v node", {
-          stdio: "ignore",
-          timeout: 3000,
-        })
+        execSync(platform() === "win32" ? "where node" : "command -v node", { stdio: "ignore", timeout: 3000 })
       } catch {
         hasNode = false
       }
-
       if (!hasNode) {
         prompts.log.error("Node.js is not installed, so the Hive daemon cannot run on this machine.")
-        prompts.log.info(
-          `Install it: ${dim("https://nodejs.org")}  ·  then re-run: ${dim("iris hive connect")}`,
-        )
-      } else {
-        prompts.log.warn(`Daemon binary not found. Install it: ${dim(installHint())}`)
-        prompts.log.info(`Then run: ${dim("iris daemon start")}`)
-      }
-      prompts.outro("Done")
-      return
-    }
-
-    const sp2 = prompts.spinner()
-    // RESTART, not start, whenever we just rotated the key.
-    //
-    // `start` no-ops on a running daemon and prints "Daemon already running" — which after
-    // a key rotation leaves the OLD process alive holding the OLD key. It then 401s on
-    // every heartbeat forever while this command cheerfully reports success. Measured on a
-    // real machine 2026-08-12: `hive connect --force` left the node unable to authenticate,
-    // and the only symptom was "Invalid API key" buried in daemon.log.
-    //
-    // A rotation invalidates the credential the running process is holding, so the process
-    // MUST be replaced. Only a fresh install can safely `start`.
-    const rotated = Boolean(previousKey && previousKey !== apiKey)
-    const action = rotated ? "restart" : "start"
-    sp2.start(rotated ? "Restarting daemon with the new key…" : "Starting daemon…")
-    try {
-      execSync(`${ctl} ${action} 2>&1`, { timeout: 30000 })
-    } catch {
-      // Non-fatal: registration already succeeded, so the useful state is saved.
-      sp2.stop("Daemon did not start", 1)
-      prompts.log.warn(`Start it manually: ${dim("iris daemon start")}  ·  diagnose: ${dim("iris hive doctor")}`)
-      prompts.outro("Done")
-      return
-    }
-
-    // Confirm the node actually reached the cloud, rather than trusting that a
-    // process launched. "Started" and "connected" are different claims.
-    sp2.message("Waiting for the node to come online…")
-    let online = false
-    for (let i = 0; i < 10; i++) {
-      await new Promise((r) => setTimeout(r, 3000))
-      const check = await hiveFetch(`/api/v6/nodes/?user_id=${userId}`)
-      if (check.ok) {
-        const list = (await check.json()) as any
-        const nodes = list?.nodes ?? list?.data ?? []
-        const me = nodes.find((n: any) => n.id === nodeId || n.name === name)
-        if (me && (me.connection_status === "online" || me.status === "online")) {
-          online = true
-          break
-        }
+        prompts.log.info(`Install it: ${dim("https://nodejs.org")}  ·  then re-run: ${dim("iris hive connect")}`)
+        prompts.outro("Done")
+        return
       }
     }
 
-    if (online) {
-      sp2.stop(success("Node is online"))
-    } else {
-      sp2.stop("Daemon started, but the node hasn't reported in yet", 1)
-      prompts.log.info(`Give it a moment, then: ${dim("iris hive nodes")}  ·  ${dim("iris hive doctor")}`)
+    const sp = prompts.spinner()
+    sp.start("Connecting this machine…")
+    const nodeId = await wakeHiveNode({ quiet: true, restart: !!args.force })
+    if (args.json) {
+      sp.stop(nodeId ? "Online" : "Not online", nodeId ? 0 : 1)
+      console.log(JSON.stringify({ node_id: nodeId, online: !!nodeId }))
+      return
     }
-
+    if (!nodeId) {
+      sp.stop("This machine did not come online", 1)
+      prompts.log.info(`Diagnose: ${dim("iris hive doctor")}  ·  log: ${dim("~/.iris/bridge/bridge.log")}`)
+      if (!daemonCtl()) prompts.log.info(`Daemon not installed: ${dim(installHint())}`)
+      prompts.outro("Done")
+      return
+    }
+    sp.stop(success(`Online  ${dim(`(${nodeId})`)}`))
     console.log()
     console.log(`  ${bold("This machine is now controllable from anywhere.")}`)
-    console.log(`  ${dim("Run a command:")}   ${highlight(`iris hive run ${name} "ls ~"`)}`)
     console.log(`  ${dim("See the fleet:")}   ${highlight("iris hive board")}`)
     console.log(`  ${dim("Send it work:")}    ${highlight("iris hive tasks")}`)
     prompts.outro("Done")

@@ -13,10 +13,11 @@
 // A client spent a live call re-logging-in while the dead key sat untouched (#185896), and
 // the in-app agent, reading the same messages, recommended the same wrong fix (#185893).
 //
-// So every surface that can see a rejected key names the ONE command that replaces it.
+// The daemon now owns the node key and replaces a rejected one from the signed-in account; every
+// surface that can see a rejected key names the one command that makes that happen now.
 // ============================================================================
 
-export const NODE_KEY_FIX = "iris hive connect --force"
+export const NODE_KEY_FIX = "iris hive connect"
 
 export type NodeKeyStatus =
   | "valid" // server accepted it
@@ -34,24 +35,6 @@ export function classifyNodeKeyStatus(httpStatus: number): NodeKeyStatus {
   if (httpStatus === 401) return "rejected"
   if (httpStatus === 403) return "suspended"
   return "unreachable"
-}
-
-export async function probeNodeKey(
-  key: string,
-  apiBase: string,
-  fetchImpl: typeof fetch = fetch,
-): Promise<NodeKeyStatus> {
-  try {
-    const res = await fetchImpl(`${apiBase.replace(/\/$/, "")}/api/v6/node-agent/heartbeat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-      body: JSON.stringify({}),
-      signal: AbortSignal.timeout(8000),
-    })
-    return classifyNodeKeyStatus(res.status)
-  } catch {
-    return "unreachable"
-  }
 }
 
 /**

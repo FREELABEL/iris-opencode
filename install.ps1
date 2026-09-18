@@ -662,23 +662,19 @@ function Get-JsonField {
 }
 
 function Register-Hive {
+    # The daemon is the ONE writer of the node key (#185896): it enrolls this machine from the
+    # account this login just saved. Login only wakes it if it is not already online. (This used to
+    # mint a key itself via a proxy endpoint with no machine fingerprint.)
     param([string]$AuthToken, [string]$HiveUserId)
-    $HostLabel = $env:COMPUTERNAME
-    $HasDocker = if (Get-Command docker -ErrorAction SilentlyContinue) { "true" } else { "false" }
-    $Body = @{ name = $HostLabel; capabilities = @{ docker = ($HasDocker -eq "true") } } | ConvertTo-Json
     try {
-        $resp = Invoke-RestMethod -Uri "$API_BASE/api/v1/hive/register-node" -Method Post `
-            -Headers @{ Authorization = "Bearer $AuthToken"; "Content-Type" = "application/json" } `
-            -Body $Body -TimeoutSec 10 -ErrorAction Stop
-        if ($resp.node_key) {
-            New-Item -ItemType Directory -Force -Path $IRIS_DIR | Out-Null
-            $cfg = @{ node_api_key = $resp.node_key; user_id = [int]$HiveUserId; api_url = "https://freelabel.net" } | ConvertTo-Json
-            Write-Utf8NoBom -Path $CONFIG_JSON -Content $cfg
-            Write-Host "  Machine registered as Hive compute node" -ForegroundColor Green
-            return
-        }
+        $h = Invoke-RestMethod -Uri "http://localhost:3200/health" -TimeoutSec 3 -ErrorAction Stop
+        if ($h.node_id) { return }
     } catch {}
-    Write-Host "  Hive registration skipped. Try later: iris-daemon register" -ForegroundColor DarkGray
+    $ctl = Join-Path $IRIS_DIR "bin\iris-daemon.cmd"
+    if (Test-Path $ctl) {
+        try { & $ctl stop *> $null; & $ctl start *> $null } catch {}  # the .cmd wrapper has no restart
+        Write-Host "  Hive: this machine is connecting - it will show online in a minute." -ForegroundColor Green
+    }
 }
 
 # ─── whoami subcommand ────────────────────────────────────────────────────

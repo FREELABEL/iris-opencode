@@ -39,9 +39,10 @@ const SRC = readFileSync(join(import.meta.dir, "platform-hive-connect.ts"), "utf
  *    so an ordering assertion over raw source measures prose rather than behaviour.
  */
 function ctlMissingBranch(): string {
-  const start = SRC.indexOf("if (!ctl)")
+  // #185896 made the daemon enroll itself, so the branch now fires when there is no daemon at all.
+  const start = SRC.indexOf("if (!daemonCtl() && !daemonSelfEnrolls())")
   expect(start).toBeGreaterThan(-1)
-  const end = SRC.indexOf("const sp2 = prompts.spinner()", start)
+  const end = SRC.indexOf("const sp = prompts.spinner()", start)
   expect(end).toBeGreaterThan(start)
   return SRC.slice(start, end).replace(/^\s*\/\/.*$/gm, "")
 }
@@ -73,7 +74,9 @@ describe("#184597 — a missing daemon must name the real cause", () => {
 
   test("the rest of the command keeps verifying that the node actually came online", () => {
     // Guard against someone "simplifying" the confirmation loop away while touching this file.
-    expect(SRC).toContain("Waiting for the node to come online")
-    expect(SRC).toMatch(/connection_status === "online"/)
+    // Since #185896 the proof is the daemon's own health reporting a node id — it only has one after
+    // a heartbeat the hub accepted — polled until it appears, and a clear failure when it does not.
+    expect(SRC).toMatch(/for \(let i = 0; i < \d+; i\+\+\)[\s\S]{0,200}localNodeId\(\)/)
+    expect(SRC).toContain("This machine did not come online")
   })
 })
