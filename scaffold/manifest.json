@@ -439,6 +439,12 @@
       "dest": "how-to/product-from-idea-to-published-page.md",
       "managed": true,
       "purpose": "Recipe for taking a product from a spoken idea to a live URL inside IRIS alone — Atlas, Genesis and Hive, with agents on two machines passing work. Written from a session that did it, including where a step cost an hour."
+    },
+    {
+      "src": "how-to/edge-publish.md",
+      "dest": "how-to/edge-publish.md",
+      "managed": true,
+      "purpose": "Recipe for putting a Genesis page on a server you control — export it as static files, host them, and roll back. Written from the edge-publish rollout."
     }
   ]
 }
