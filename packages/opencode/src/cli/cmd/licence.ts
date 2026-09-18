@@ -1,3 +1,4 @@
+import { firstArray } from "../../util/array"
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
@@ -149,7 +150,7 @@ const ListCmd = cmd({
     if (!res.ok) return reportError(res, "List licences")
 
     const page = ((await res.json()) as any)?.data
-    const rows: any[] = page?.data ?? []
+    const rows: any[] = firstArray(page?.data)
     if (args.json) return writeJson(page)
 
     UI.empty()

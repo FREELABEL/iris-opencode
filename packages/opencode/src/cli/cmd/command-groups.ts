@@ -104,6 +104,8 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   // Knowledge & Content
   content: "knowledge",
   search: "knowledge",
+  // The open web, next to the verb people try first for it (#185571).
+  "web-search": "knowledge",
   // `find` searches the CLI's OWN verbs; `search` searches what you have written. Both belong
   // here, and `find` was absent — so the one command that answers "what can this thing do"
   // appeared in no help output at all (#183479).

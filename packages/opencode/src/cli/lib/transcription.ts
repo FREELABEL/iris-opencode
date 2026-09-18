@@ -1,3 +1,4 @@
+import { firstArray } from "../../util/array"
 import { spawnSync } from "child_process"
 import { existsSync, mkdirSync, readFileSync } from "fs"
 import { homedir } from "os"
@@ -248,7 +249,7 @@ export async function transcribeLocal(
         const jsonPath = `${outBase}.json`
         if (existsSync(jsonPath)) {
           const raw = JSON.parse(readFileSync(jsonPath, "utf8"))
-          const rows: any[] = raw?.transcription ?? []
+          const rows: any[] = firstArray(raw?.transcription)
           const segments: TranscriptSegment[] = rows
             .map((r) => ({
               // whisper.cpp offsets are MILLISECONDS. Emitting them as seconds without
