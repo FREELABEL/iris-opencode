@@ -136,7 +136,7 @@ function collectBlocks(dir: string): BlockIndex {
     // only `cmd(` silently dropped the first product built on the new helper from the
     // index — the command resolved for a human typing `iris lexicon` and did not exist
     // for any agent reading capabilities.json, which is the worse of the two failures.
-    for (const m of src.matchAll(/(?:export\s+)?const ([A-Za-z0-9_]+(?:Command|Group))\s*=\s*(?:cmd|productCommand)\(\s*\{/g)) {
+    for (const m of src.matchAll(/(?:export\s+)?const ([A-Za-z0-9_]+(?:Command|Group|Cmd))\s*=\s*(?:cmd|productCommand)\(\s*\{/g)) {
       const openIdx = m.index! + m[0].length - 1
       const body = readBlock(src, openIdx)
       if (!body) continue
@@ -160,7 +160,7 @@ function collectBlocks(dir: string): BlockIndex {
     // original — so the walker looked up a name it had never collected and silently
     // skipped the command. `iris heartbeat` is a top-level product and was missing from
     // the index entirely because of this one line, with nothing anywhere reporting a gap.
-    aliasPairs.push(...[...src.matchAll(/export\s+const\s+([A-Za-z0-9_]+(?:Command|Group))\s*=\s*([A-Za-z0-9_]+(?:Command|Group))\s*$/gm)].map((m) => [m[1], m[2]] as [string, string]))
+    aliasPairs.push(...[...src.matchAll(/export\s+const\s+([A-Za-z0-9_]+(?:Command|Group|Cmd))\s*=\s*([A-Za-z0-9_]+(?:Command|Group|Cmd))\s*$/gm)].map((m) => [m[1], m[2]] as [string, string]))
   }
 
   // Resolve after every file is scanned — an alias may point at a block defined later.
@@ -314,7 +314,7 @@ function collectCommands(): Entry[] {
     const nextSeen = new Set(seen).add(`${b.file}::${constName}`)
 
     // Direct children only — those named in THIS block's builder.
-    const childNames = [...b.body.matchAll(/\.command\((?:reg\()?([A-Za-z0-9_]+(?:Command|Group))/g)].map((m) => m[1])
+    const childNames = [...b.body.matchAll(/\.command\((?:reg\()?([A-Za-z0-9_]+(?:Command|Group|Cmd))/g)].map((m) => m[1])
     const childTokens: string[] = []
     for (const child of childNames) {
       childTokens.push(...walk(child, path, nextSeen, depth + 1, b.file))
