@@ -15,14 +15,15 @@ iris genesis deploy exports/my-page/site --target production # a new release, sw
 iris genesis deploy --target production --rollback           # back one release, in a second
 ```
 
-Needs the IRIS CLI **v1.3.268+** (`iris update`), Google Chrome on the machine doing the export,
-and ssh + rsync for a remote server. The full walkthrough is the `edge-publish` playbook.
+Needs the IRIS CLI **v1.3.271+** (`iris update`), Google Chrome on the machine doing the export,
+and ssh + rsync for a remote server. Full step-by-step, including the deploy config:
+[the edge-publish playbook](https://heyiris.io/playbooks/edge-publish).
 
 ## First: is this the right answer?
 
 | You want | Use |
 |---|---|
-| Your domain in the address bar | **A custom domain.** Our servers, your name. |
+| Your domain in the address bar | **A custom domain** — ask your IRIS contact to connect it. Our servers, your name. |
 | The page's files on your own server | **This.** |
 | A dashboard behind a login, on your server | **Neither works.** A file cannot ask who is reading it — use a custom domain. |
 
