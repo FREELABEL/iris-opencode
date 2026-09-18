@@ -178,3 +178,22 @@ describe("deploy — the swap, read back from the target", () => {
     expect(() => new Remote({ type: "ssh", path: "/srv/site" })).toThrow()
   })
 })
+
+describe("cdp — a missing browser says so, in words a client can act on", () => {
+  test("CHROME_BIN pointing at nothing is refused up front, naming the variable", async () => {
+    const { findChrome, launch, NO_CHROME } = await import("./cdp")
+    const prev = process.env["CHROME_BIN"]
+    process.env["CHROME_BIN"] = "/nonexistent/chrome"
+    try {
+      expect(findChrome()).toBeNull()
+      const err = await launch({ timeout: 2000 }).then(() => null, (e: Error) => e)
+      expect(err?.message).toContain("CHROME_BIN=/nonexistent/chrome")
+      expect(err?.message).toContain(NO_CHROME)
+      // The old message — true and useless — must never come back.
+      expect(err?.message).not.toContain("debugging port")
+    } finally {
+      if (prev === undefined) delete process.env["CHROME_BIN"]
+      else process.env["CHROME_BIN"] = prev
+    }
+  })
+})
