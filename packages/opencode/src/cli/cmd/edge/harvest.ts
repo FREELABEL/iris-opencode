@@ -21,8 +21,8 @@ import path from "path"
 import { launch, inspect } from "./cdp"
 import { startStaticServer } from "./serve"
 import { isAppDataPath } from "./export-data"
+import { isOurs } from "./hosts"
 
-const OURS = /^https:\/\/(?:www\.)?(?:freelabel\.net|heyiris\.io|cdn\.heyiris\.io|raichu\.heyiris\.io)\//
 
 // A local path that mirrors the remote one, so two files named logo.png cannot collide.
 const localFor = (url: string, origin: string): string => {
@@ -58,7 +58,7 @@ export async function harvest(
       for (const url of seen.requests) {
         // Data paths are deliberately excluded: mirroring a collection here would bypass ADR-02
         // (per-viewer scoping) and ADR-03 (PHI). export-data.mjs owns those, refusals and all.
-        if (OURS.test(url) && !isAppDataPath(url)) found.add(url)
+        if (isOurs(url) && !isAppDataPath(url)) found.add(url)
       }
       for (const f of seen.failures) {
         // A same-origin 404 is an asset the page asks for at RUNTIME that no static scrape can see —

@@ -158,7 +158,7 @@ function writeEdgeManifest(
   refused: RefusedCollection[],
 ): void {
   const file = path.join(site, "api/v1/app-data/_edge.json")
-  let manifest: any = { slug, generated_at: null, collections: [] }
+  let manifest: any = { slugs: [], generated_at: null, collections: [] }
   if (fs.existsSync(file)) {
     try {
       manifest = JSON.parse(fs.readFileSync(file, "utf8"))
@@ -167,13 +167,22 @@ function writeEdgeManifest(
     }
   }
 
-  const byName = new Map<string, any>((manifest.collections || []).map((c: any) => [c.collection, c]))
-  for (const e of exported) byName.set(e.collection, { ...e, refused: false })
-  for (const r of refused) byName.set(r.collection, { collection: r.collection, refused: true, reason: r.reason })
+  // Keyed by DATA SLUG + collection, not collection alone. A page can bind collections from more
+  // than one data slug, and keying by name let `a/cases` and `b/cases` overwrite each other — so an
+  // EXPORT under one slug could erase the record of a REFUSAL under another. The refusals are the
+  // audit trail; that is the half that must never be lost. Entries written before this carry no
+  // slug, so they inherit the manifest-level one they were written under.
+  const keyOf = (c: any) => `${c.slug ?? manifest.slug ?? slug}/${c.collection}`
+  const byKey = new Map<string, any>((manifest.collections || []).map((c: any) => [keyOf(c), { slug: c.slug ?? manifest.slug ?? slug, ...c }]))
+  for (const e of exported) byKey.set(`${slug}/${e.collection}`, { slug, ...e, refused: false })
+  for (const r of refused) byKey.set(`${slug}/${r.collection}`, { slug, collection: r.collection, refused: true, reason: r.reason })
 
-  manifest.slug = slug
+  // `slug` used to be "whichever ran last". `slugs` is every data slug this export touched.
+  const slugs = new Set<string>([...(manifest.slugs ?? []), ...(manifest.slug ? [manifest.slug] : []), slug])
+  delete manifest.slug
+  manifest.slugs = [...slugs].sort()
   manifest.generated_at = new Date().toISOString()
-  manifest.collections = [...byName.values()]
+  manifest.collections = [...byKey.values()]
 
   fs.mkdirSync(path.dirname(file), { recursive: true })
   fs.writeFileSync(file, JSON.stringify(manifest, null, 2))

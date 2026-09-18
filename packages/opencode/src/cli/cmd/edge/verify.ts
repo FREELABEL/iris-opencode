@@ -24,17 +24,9 @@ import { startStaticServer } from "./serve"
 
 export type VerifyCheck = { label: string; ok: boolean; detail: string }
 
-// Match on HOST. A substring test flags the harvested copies under /_ext/freelabel.net/... as calls
-// home, and a checker that cries wolf gets ignored exactly as fast as one that stays silent.
-export const OUR_HOSTS =
-  /^(?:www\.)?(?:freelabel\.net|heyiris\.io|cdn\.heyiris\.io|raichu\.heyiris\.io|apiv2\.heyiris\.io)$/
-export const isOurs = (u: string): boolean => {
-  try {
-    return OUR_HOSTS.test(new URL(u).hostname)
-  } catch {
-    return false
-  }
-}
+// Defined once in ./hosts — see there for why harvest and verify must share it.
+export { OUR_HOSTS, isOurs } from "./hosts"
+import { isOurs } from "./hosts"
 
 const PROBE = `
   const imgs = [...document.images].map(i => ({ src: i.currentSrc || i.src, ok: i.naturalWidth > 0 }));
