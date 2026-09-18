@@ -7,6 +7,7 @@ import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, writeJson } from "./iris-api"
 import { OutreachApproveGroup } from "./platform-outreach-approve"
 import { ScriptGroup } from "./platform-outreach-script"
+import { ReachrScrapeCmd } from "./platform-reachr-scrape"
 
 // ============================================================================
 // Outreach Strategy Commands — list, show, create, update, delete
@@ -275,12 +276,15 @@ const OutreachApplyCommand = cmd({
 export const PlatformOutreachCommand = productCommand({
   name: "reachr",
   aliases: ["outreach", "outreach-strategy", "reachr-strategy"],
-  purpose: "Reachr — outreach strategies: list, show, create, update, apply, delete",
-  keywords: ["reachr", "outreach", "strategy", "campaign", "sequence", "prospect", "send", "offer", "offers", "pricing", "licence", "license", "seat"],
+  // The purpose line carries "scrape"/"find leads" because the capability index reads describe
+  // text, not keywords (#185867) — without it `iris find scrape` never reaches this product.
+  purpose: "Reachr — find leads on public pages (scrape team, about and directory pages), then run outreach strategies: list, show, create, update, apply, delete",
+  keywords: ["reachr", "outreach", "strategy", "campaign", "sequence", "prospect", "send", "offer", "offers", "pricing", "licence", "license", "seat", "scrape", "leads", "lead generation", "prospecting", "team page", "directory"],
   howtos: ["comms-router", "outreach-campaign"],
   playbooks: ["som-outreach"],
   builder: (yargs) =>
     yargs
+      .command(ReachrScrapeCmd)
       .command(OutreachListCommand)
       .command(OutreachShowCommand)
       .command(OutreachCreateCommand)

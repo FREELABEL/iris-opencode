@@ -4,9 +4,14 @@ import path from "path"
 import { spawn } from "child_process"
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
-import { UI } from "../ui"
+
 import { printDivider, printKV, dim, writeJson } from "./iris-api"
 import { productCommand } from "./product-command"
+
+// Every report line on STDOUT. UI.println writes to stderr while printKV/printDivider write to
+// stdout, so mixing them scrambled the order whenever output was piped or saved — a person's
+// details printed before their name.
+const out = (...parts: string[]) => console.log(parts.join(""))
 
 /**
  * `iris browser` — drive a real browser from the command line.
@@ -30,19 +35,26 @@ import { productCommand } from "./product-command"
  * A checker that cannot say "I did not measure" reports a broken deploy as a clean page.
  */
 
-const SCRIPT_CANDIDATES = [
-  () => process.env.IRIS_BROWSER_USE_SCRIPT,
-  () => path.join(os.homedir(), ".iris", "bridge", "scripts", "browser-use", "render-check.sh"),
-  // Running from a source checkout that sits next to the daemon repo.
-  () => path.join(process.cwd(), "scripts", "browser-use", "render-check.sh"),
-]
+/**
+ * Find one of the bridge's browser-use scripts. Exported so `iris reachr scrape` resolves its
+ * extractor the same way — one lookup rule, so "not found" means the same thing everywhere.
+ * IRIS_BROWSER_USE_DIR points at a checkout; IRIS_BROWSER_USE_SCRIPT (render-check only) is kept
+ * for anyone who already set it.
+ */
+export function resolveBrowserUseScript(file: string): string | null {
+  const candidates = [
+    file === "render-check.sh" ? process.env.IRIS_BROWSER_USE_SCRIPT : undefined,
+    process.env.IRIS_BROWSER_USE_DIR ? path.join(process.env.IRIS_BROWSER_USE_DIR, file) : undefined,
+    path.join(os.homedir(), ".iris", "bridge", "scripts", "browser-use", file),
+    // Running from a source checkout that sits next to the daemon repo.
+    path.join(process.cwd(), "scripts", "browser-use", file),
+  ]
+  for (const p of candidates) if (p && fs.existsSync(p)) return p
+  return null
+}
 
 function resolveScript(): string | null {
-  for (const c of SCRIPT_CANDIDATES) {
-    const p = c()
-    if (p && fs.existsSync(p)) return p
-  }
-  return null
+  return resolveBrowserUseScript("render-check.sh")
 }
 
 const MISSING_SCRIPT =
@@ -84,7 +96,7 @@ function findChrome(): string | null {
 }
 
 /** Run the script, streaming nothing: it prints exactly one JSON line and we own the rendering. */
-function runScript(script: string, args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+export function runBrowserUseScript(script: string, args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const child = spawn("bash", [script, ...args], {
       env: { ...process.env, BH_TELEMETRY: "0" },
@@ -130,7 +142,7 @@ const CheckCmd = cmd({
     if (args.viewports) argv.push("--viewports", args.viewports)
     if (args.schemes) argv.push("--schemes", args.schemes)
 
-    const { code, stdout, stderr } = await runScript(script, argv)
+    const { code, stdout, stderr } = await runBrowserUseScript(script, argv)
     const line = stdout
       .split("\n")
       .map((l) => l.trim())
@@ -165,7 +177,7 @@ const CheckCmd = cmd({
     // renderer keeps them apart — the whole point of the third state.
     if (data.measured === false) {
       prompts.log.error(`could not measure ${data.url ?? args.url}`)
-      UI.println(dim(`  ${data.error ?? "no reason given"}`))
+      out(dim(`  ${data.error ?? "no reason given"}`))
       process.exitCode = 2
       return
     }
@@ -183,10 +195,10 @@ const CheckCmd = cmd({
       prompts.log.success(`no findings — ${data.screenshots?.length ?? 0} screenshot(s)`)
     } else {
       prompts.log.warn(`${data.failures.length} finding(s):`)
-      for (const f of data.failures) UI.println(`  • ${f}`)
+      for (const f of data.failures) out(`  • ${f}`)
     }
-    for (const e of (data.console_errors ?? []).slice(0, 5)) UI.println(dim(`  console: ${e}`))
-    for (const s of data.screenshots ?? []) UI.println(dim(`  ${typeof s === "string" ? s : s.url ?? s.filename}`))
+    for (const e of (data.console_errors ?? []).slice(0, 5)) out(dim(`  console: ${e}`))
+    for (const s of data.screenshots ?? []) out(dim(`  ${typeof s === "string" ? s : s.url ?? s.filename}`))
 
     prompts.outro(dim(data.ok ? "look at the screenshots — a clean verdict is not a visual check" : "exit 1 = findings"))
     process.exitCode = data.ok ? 0 : 1
