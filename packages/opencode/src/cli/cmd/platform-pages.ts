@@ -4941,6 +4941,38 @@ export function buildBespokeJsonContent(
   }
 }
 
+
+/**
+ * The heads-up fl-api returns with a saved standalone page (`data.sandbox`).
+ *
+ * An account that is not trusted for raw HTML gets its page served in a browser sandbox, where
+ * some ordinary web code stops working; the server scans the page and says what, where and how
+ * to fix it. Pure: returns lines, so it is testable without a network. Empty when there is
+ * nothing to say — a trusted, unsandboxed page prints nothing extra.
+ */
+export function formatSandboxReport(report: any): string[] {
+  if (!report || report.sandboxed !== true) return []
+  const findings: any[] = Array.isArray(report.findings) ? report.findings : []
+  const lines = [
+    "This page is served in a browser sandbox — your account is not trusted for raw HTML.",
+    "It renders normally; its scripts cannot use our sign-in, cookies or browser storage.",
+  ]
+  if (!findings.length) {
+    lines.push("Nothing in it uses what the sandbox blocks.")
+    return lines
+  }
+  const mark: Record<string, string> = { warning: "!", review: "⚑", info: "i" }
+  for (const f of findings) {
+    const where = f.line ? ` (line ${f.line}${f.count > 1 ? `, ${f.count} places` : ""})` : ""
+    lines.push(`  ${mark[f.severity] ?? "·"} ${f.message}${where}`)
+    if (f.fix) lines.push(`      → ${f.fix}`)
+  }
+  if (findings.some((f) => f.severity === "review")) {
+    lines.push("Pages flagged ⚑ are reviewed by the IRIS team.")
+  }
+  return lines
+}
+
 const PublishHtmlCmd = cmd({
   command: "publish-html <slug>",
   aliases: ["ship-html"],
@@ -5026,6 +5058,7 @@ const PublishHtmlCmd = cmd({
 
     const sp = prompts.spinner()
     sp.start("Uploading…")
+    let sandboxReport: any = undefined
     try {
       let page = await getBySlug(slug, false)
 
@@ -5043,6 +5076,7 @@ const PublishHtmlCmd = cmd({
           requires_auth: !!args["requires-auth"],
         })
         if (!page) { sp.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
+        sandboxReport = page.sandbox
       } else {
         const updateData: Record<string, unknown> = {
           json_content: jsonContent,
@@ -5053,6 +5087,7 @@ const PublishHtmlCmd = cmd({
         if (description) updateData.seo_description = description
         const res = await pagesFetch(`/api/v1/pages/${page.id}`, { method: "PUT", body: JSON.stringify(updateData) })
         if (!(await handleApiError(res, "Update page"))) { sp.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
+        sandboxReport = ((await res.json().catch(() => ({}))) as any)?.data?.sandbox
 
         if (shouldPublish) {
           const pubRes = await pagesFetch(`/api/v1/pages/${page.id}/publish`, { method: "POST" })
@@ -5098,6 +5133,12 @@ const PublishHtmlCmd = cmd({
       }
       console.log(`  ${highlight(publicUrl(slug))}`)
       console.log()
+      const headsUp = formatSandboxReport(sandboxReport)
+      if (headsUp.length) {
+        prompts.log.warn(headsUp[0])
+        for (const l of headsUp.slice(1)) console.log(`  ${l}`)
+        console.log()
+      }
       // The publish is not the evidence. Hand over the command that produces evidence,
       // with the page's own title pre-filled so it is one paste to run.
       if (liveNow) {
