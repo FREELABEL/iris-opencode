@@ -451,6 +451,12 @@
       "dest": "how-to/save-tokens-with-playbooks-and-atlas.md",
       "managed": true,
       "purpose": "How to: Spend fewer tokens with playbooks and iris atlas use (measured) — how playbooks and Atlas cut token spend, with benchmarks."
+    },
+    {
+      "src": "how-to/genesis-atlas-commerce.md",
+      "dest": "how-to/genesis-atlas-commerce.md",
+      "managed": true,
+      "purpose": "Sell fixed-price packages from an Atlas dataset: Genesis AtlasStorefront on the page, checkout priced on the server on the platform account, and an append-only settlement ledger (pending, paid, held, released, paid out). Runnable version: the genesis-atlas-commerce playbook."
     }
   ]
 }
