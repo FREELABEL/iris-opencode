@@ -59,6 +59,8 @@ export function webSearchEnabled(providerID: ProviderV2.ID, flags = { exa: false
   return (
     providerID === ProviderV2.ID.opencode ||
     providerID === ProviderV2.ID.make("opencode-go") ||
+    // IRIS accounts chat through the "iris" provider; without this they get webfetch but no search
+    providerID === ProviderV2.ID.make("iris") ||
     flags.exa ||
     flags.parallel
   )
