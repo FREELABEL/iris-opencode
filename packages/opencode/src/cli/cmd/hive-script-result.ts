@@ -171,6 +171,23 @@ export interface RenderedOutput {
  * sends, and the CLI caps what it prints. A reader who cannot tell them apart cannot tell
  * whether re-running with a larger limit would help.
  */
+/**
+ * What a finished (or abandoned) Hive task amounts to, for a command that must exit on it.
+ *
+ * `iris scripts run` re-derived this inline and exited 0 on every failure — a failed script, a
+ * timeout, an offline node (#186174) — and never printed the daemon's reason, which was sitting
+ * in `task.error`. One decision, shared, so the commands cannot disagree again.
+ *
+ * `null` means the CLI stopped waiting before the task finished. That is a timeout from the
+ * caller's point of view (124), never a pass.
+ */
+export function scriptTaskOutcome(task: HiveTaskLike | null | undefined): { exitCode: number; reason: string | null } {
+  if (!task) return { exitCode: TIMEOUT_EXIT, reason: "still not finished when the CLI stopped waiting — the task is not cancelled" }
+  const exitCode = exitCodeForResult(fromHiveTask(task))
+  const reason = exitCode === 0 ? null : (String(task.error ?? "").trim() || null)
+  return { exitCode, reason }
+}
+
 export function renderOutput(text: string | undefined | null, limit: number, truncatedUpstream = false): RenderedOutput {
   const raw = String(text ?? "").trim()
   if (!raw) {

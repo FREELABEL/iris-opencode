@@ -3,6 +3,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold, success, writeJson } from "./iris-api"
 import { resolveNode } from "./platform-hive-nodes"
+import { scriptTaskOutcome } from "./hive-script-result"
 import { existsSync, writeFileSync, readFileSync } from "fs"
 import { createHash } from "crypto"
 
@@ -79,7 +80,7 @@ const PushCmd = cmd({
   async handler(args) {
     if (!(await requireAuth())) return
     const file = args.file as string
-    if (!existsSync(file)) return void prompts.log.error(`File not found: ${file}`)
+    if (!existsSync(file)) { process.exitCode = 1; return void prompts.log.error(`File not found: ${file}`) }
     const content = readFileSync(file, "utf8")
     const res = await scriptsFetch("/api/v1/scripts", {
       method: "POST",
@@ -109,7 +110,7 @@ const PullCmd = cmd({
   async handler(args) {
     if (!(await requireAuth())) return
     const res = await scriptsFetch(`/api/v1/scripts/${encodeURIComponent(args.slug as string)}`)
-    if (res.status === 404) return void prompts.log.error(`Script '${args.slug}' not found`)
+    if (res.status === 404) { process.exitCode = 1; return void prompts.log.error(`Script '${args.slug}' not found`) }
     if (!res.ok) return void (await handleApiError(res, "Pull script"))
     const json = (await res.json()) as { data?: any }
     const content = json.data?.script_content ?? ""
@@ -133,7 +134,7 @@ const RmCmd = cmd({
       method: "DELETE",
       body: JSON.stringify({ user_id: await requireUserId() }),
     })
-    if (res.status === 404) return void prompts.log.error(`Script '${args.slug}' not found`)
+    if (res.status === 404) { process.exitCode = 1; return void prompts.log.error(`Script '${args.slug}' not found`) }
     if (!res.ok) return void (await handleApiError(res, "Delete script"))
     success(`Deleted ${bold(String(args.slug))}`)
   },
@@ -155,9 +156,12 @@ const RunCmd = cmd({
     if (!userId) return
 
     const node = await resolveNode(userId, String(args.node))
-    if (!node) return void prompts.log.error(`No node matching "${args.node}". Run: iris hive nodes list`)
+    // Every failure below sets process.exitCode. They used to log and return, so the shell saw 0
+    // and `iris scripts run … && next` ran `next` after a failure (#186174).
+    const fail = (msg: string, code = 1) => { prompts.log.error(msg); process.exitCode = code }
+    if (!node) return fail(`No node matching "${args.node}". Run: iris hive nodes list`)
     if (node.connection_status !== "online") {
-      return void prompts.log.error(`Node "${node.name}" is ${node.connection_status} — cannot dispatch.`)
+      return fail(`Node "${node.name}" is ${node.connection_status} — cannot dispatch.`)
     }
 
     const timeoutSec = Math.max(30, Math.min(3600, Number(args.timeout) || 120))
@@ -196,7 +200,7 @@ const RunCmd = cmd({
         timeout_seconds: timeoutSec,
       }),
     })
-    if (!createRes.ok) return void prompts.log.error(`Dispatch failed: ${createRes.status} ${await createRes.text()}`)
+    if (!createRes.ok) return fail(`Dispatch failed: ${createRes.status} ${await createRes.text()}`)
 
     const created = (await createRes.json()) as { task: { id: string; status: string } }
     const taskId = created.task.id
@@ -209,21 +213,27 @@ const RunCmd = cmd({
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 1500))
       const r = await scriptsFetch(`/api/v6/nodes/tasks/${taskId}?user_id=${userId}`)
-      if (!r.ok) return void prompts.log.error(`Poll failed: ${r.status}`)
+      if (!r.ok) return fail(`Poll failed: ${r.status} — the task was created; read it with: iris hive tasks ${taskId}`)
       const t = ((await r.json()) as { task: any }).task
       if (terminal.has(t.status)) {
         final = t
         break
       }
     }
-    if (!final) return void prompts.log.error(`Timed out waiting for task ${taskId}`)
-    if (args.json) return void await writeJson(final)
+    const outcome = scriptTaskOutcome(final)
+    if (!final) return fail(`Timed out waiting for task ${taskId} — ${outcome.reason}`, outcome.exitCode)
+    if (args.json) {
+      await writeJson(final)
+      process.exitCode = outcome.exitCode
+      return
+    }
 
     const out = final.result?.output ?? final.output ?? final.result?.stdout ?? ""
     console.log()
     if (out) console.log(typeof out === "string" ? out : JSON.stringify(out, null, 2))
-    if (["succeeded", "completed"].includes(final.status)) success(`${bold(String(args.slug))} ran on ${node.name}`)
-    else prompts.log.error(`Script ${final.status} on ${node.name}`)
+    if (outcome.exitCode === 0) return void success(`${bold(String(args.slug))} ran on ${node.name}`)
+    // The daemon's reason was in the task all along and never printed: "Script failed" with no why.
+    fail(`Script ${final.status} on ${node.name}${outcome.reason ? `: ${outcome.reason}` : ""}`, outcome.exitCode)
   },
 })
 
