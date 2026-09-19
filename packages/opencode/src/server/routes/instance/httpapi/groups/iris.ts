@@ -415,7 +415,11 @@ const PlaybooksResponse = Schema.Struct({
       views: Schema.optional(Schema.Finite),
       hasLocal: described(
         Schema.Boolean,
-        "~/.iris/playbooks/<name>/PLAYBOOK.md exists on THIS machine. Playbook content never leaves the machine, so the local document is richer than anything the API has.",
+        "Installed where this session can use it: <project>/.iris/playbooks, <project>/.claude/skills or ~/.iris/playbooks (#186277). Playbook content never leaves the machine, so the local document is richer than anything the API has.",
+      ),
+      localWhere: described(
+        Schema.optional(Schema.Literals(["project", "skill", "home"])),
+        "Which copy hasLocal found — the project's, a synced skill, or the home install.",
       ),
       bloqId: described(Schema.optional(Schema.Finite), "The board it is filed against. 19 of 128 carry one."),
       ownerUserId: Schema.optional(Schema.Finite),
@@ -702,6 +706,10 @@ export const IrisApi = HttpApi.make("iris").add(
           view: described(
             Schema.optional(Schema.Literals(["all", "project", "marketplace"])),
             "project = attached to this board or filed against it. marketplace = actually published (public or unlisted). `private` is neither: yours and unshared.",
+          ),
+          project: described(
+            Schema.optional(Schema.String),
+            "The session's project directory, so 'installed here' counts <project>/.iris/playbooks and <project>/.claude/skills (#186277). Absolute path; anything else is ignored.",
           ),
         }),
         params: { bloqID: Schema.NumberFromString },
@@ -1136,6 +1144,12 @@ export const IrisApi = HttpApi.make("iris").add(
       }).annotateMerge(OpenApi.annotations({ identifier: "iris.itemChatSend", summary: "Send one message to an agent about this card" })),
       HttpApiEndpoint.get("playbookDoc", IrisPaths.playbookDoc, {
         params: { name: Schema.String },
+        query: Schema.Struct({
+          project: described(
+            Schema.optional(Schema.String),
+            "The session's project directory, so 'installed here' counts <project>/.iris/playbooks and <project>/.claude/skills (#186277). Absolute path; anything else is ignored.",
+          ),
+        }),
         success: described(
           Schema.Struct({
             found: Schema.Boolean,
