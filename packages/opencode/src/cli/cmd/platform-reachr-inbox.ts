@@ -1,7 +1,7 @@
 import fs from "fs"
 import os from "os"
 import path from "path"
-import { spawn } from "child_process"
+import { runSpec } from "./reachr-playwright"
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { requireAuth, resolveUserId, printDivider, dim, bold, writeJson } from "./iris-api"
@@ -73,10 +73,12 @@ export const ReachrInboxCmd = cmd({
     spinner?.start(
       `Reading @${account}'s inbox (last ${args.since}) — a browser window will open; ${writeBack ? "matched leads will be tagged" : "nothing is written"}, nothing is sent…`,
     )
-    const run = await new Promise<{ code: number; text: string }>((resolve) => {
-      const child = spawn("npx", ["playwright", "test", SPEC, "--headed", "--timeout", String(15 * 60_000)], {
-        cwd: root,
-        env: {
+    const run = await runSpec({
+      root,
+      spec: SPEC,
+      timeoutMs: 15 * 60_000,
+      resultFile,
+      env: {
           ...process.env,
           BOARD_ID: String(bloqId),
           IG_ACCOUNT: account,
@@ -89,13 +91,7 @@ export const ReachrInboxCmd = cmd({
           SEND_REPLIES: "0", // never — messaging a person is not this command's job
           NOTIFY_DISCORD: "0",
           RESULT_FILE: resultFile,
-        },
-      })
-      let text = ""
-      child.stdout.on("data", (d) => (text += d))
-      child.stderr.on("data", (d) => (text += d))
-      child.on("close", (code) => resolve({ code: code ?? 1, text }))
-      child.on("error", (e) => resolve({ code: 1, text: String(e) }))
+      },
     })
 
     let r: any = null

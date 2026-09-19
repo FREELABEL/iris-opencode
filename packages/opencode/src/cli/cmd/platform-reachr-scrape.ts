@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { irisFetch, requireAuth, resolveUserId, handleApiError, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
 import { inferMode, normalizeTarget, isMode, findFreelabelRoot, savedSessions, runInstagramScrape } from "./reachr-instagram"
+import { runLinkedInScrape, liSessionFile, liSlug, LI_MAX_PROFILES } from "./reachr-linkedin"
 import { resolveBrowserUseScript, runBrowserUseScript } from "./platform-browser"
 
 // Every report line on STDOUT. UI.println writes to stderr while printKV/printDivider write to
@@ -20,9 +21,9 @@ const out = (...parts: string[]) => console.log(parts.join(""))
  * run.
  *
  * WHAT IT IS NOT. It reads public pages only — no login, no session — through the bridge's
- * scrape-leads.sh (throwaway Chrome, robots.txt obeyed, polite delay, same-site links). LinkedIn
- * and Instagram need a logged-in session and break those sites' terms; they are separate lanes
- * (the Hive LinkedIn / Instagram tools), not flags on this one.
+ * scrape-leads.sh (throwaway Chrome, robots.txt obeyed, polite delay, same-site links).
+ * --instagram and --linkedin are different: they browse AS YOU, through a saved session, via the
+ * existing Playwright scrapers (reachr-instagram.ts / reachr-linkedin.ts). Always dry there too.
  *
  * PUBLIC IS NOT CONFIRMED. Every lead it writes carries a note saying where it was found, how,
  * and that it is unverified — the lead-hydrate playbook's rule, applied at the moment of entry.
@@ -47,11 +48,14 @@ interface Lead {
   company_how?: string
   evidence?: string[]
   source_url: string
-  /** Instagram lane: the @handle (no @), the lead `source`, and what the scraper saw. */
+  /** Instagram / LinkedIn lanes: the handle (IG @handle without @, or the LinkedIn /in/ slug). */
+  platform?: "instagram" | "linkedin"
   handle?: string
   source?: string
   extra?: Record<string, unknown>
 }
+
+const platformOf = (l: Lead) => l.platform ?? (l.handle ? "instagram" : undefined)
 
 function provenanceNote(l: Lead, when: string): string {
   const fields = [
@@ -59,7 +63,10 @@ function provenanceNote(l: Lead, when: string): string {
     l.email && `email: ${l.email.v} (${l.email.how})`,
     l.phone && `phone: ${l.phone.v} (${l.phone.how})`,
     ...Object.entries(l.socials ?? {}).map(([k, v]) => `${k}: ${v}`),
-    l.handle && `instagram handle: @${l.handle}`,
+    l.handle && platformOf(l) === "instagram" && `instagram handle: @${l.handle}`,
+    l.extra?.headline && `headline: ${l.extra.headline}`,
+    l.extra?.location && `location: ${l.extra.location}`,
+    l.extra?.summary && `summary: ${String(l.extra.summary).slice(0, 300)}`,
     // 0 means "not fetched" (profiles mode skips stats), not "has no followers" — say nothing.
     Number(l.extra?.followers) > 0 && `followers: ${l.extra?.followers}`,
     l.extra?.context && `found as: ${l.extra.context}`,
@@ -69,9 +76,11 @@ function provenanceNote(l: Lead, when: string): string {
   return [
     `PUBLIC — not confirmed. Found by \`iris reachr scrape\` on ${when}.`,
     `Source: ${l.source_url}`,
-    l.handle
+    platformOf(l) === "instagram"
       ? `Found via: ${(l.evidence ?? []).join(", ")} — an Instagram account, which may be a brand rather than a person.`
-      : `Why it was believed to be a person: ${(l.evidence ?? ["structured data"]).join(", ")}.`,
+      : platformOf(l) === "linkedin"
+        ? `Found via: ${(l.evidence ?? []).join(", ")} — the headline is self-described and may be out of date.`
+        : `Why it was believed to be a person: ${(l.evidence ?? ["structured data"]).join(", ")}.`,
     ...fields,
     `Verify before outreach (iris playbook run reachr-lead-hydrate).`,
   ].join("\n")
@@ -119,12 +128,15 @@ const digits = (v: unknown) => String(v ?? "").replace(/\D/g, "").slice(-10)
 function findExisting(l: Lead, onBoard: any[]): any | null {
   // An Instagram handle is the strongest identity a scraped IG lead has — and the one earlier
   // SOM leadgen runs stored (contact_info.instagram, nickname "@handle"), so match it first.
+  // LinkedIn leads (the Playwright runner's and ours) keep the profile URL in contact_info.linkedin.
   const handle = l.handle ? norm(l.handle).replace(/^@/, "") : ""
-  const byHandle = handle
-    ? onBoard.find(
-        (r) => norm(r?.contact_info?.instagram).replace(/^@/, "") === handle || norm(r?.nickname) === `@${handle}`,
-      )
-    : null
+  const byHandle = !handle
+    ? null
+    : platformOf(l) === "linkedin"
+      ? onBoard.find((r) => liSlug(r?.contact_info?.linkedin) === handle || liSlug(r?.linkedin_url) === handle)
+      : onBoard.find(
+          (r) => norm(r?.contact_info?.instagram).replace(/^@/, "") === handle || norm(r?.nickname) === `@${handle}`,
+        )
   return (
     byHandle ??
     onBoard.find((r) => l.email && norm(r?.email) === norm(l.email.v)) ??
@@ -136,7 +148,7 @@ function findExisting(l: Lead, onBoard: any[]): any | null {
 
 export const ReachrScrapeCmd = cmd({
   command: "scrape <bloq-id> [urls..]",
-  describe: "find people on public pages (team, about, directories) or Instagram (commenters, followers, profiles, your inbox) — dry run; --write adds them as leads",
+  describe: "find people on public pages (team, about, directories), Instagram (commenters, followers, profiles, your inbox) or LinkedIn (people search, your inbox) — dry run; --write adds them as leads",
   builder: (y: any) =>
     y
       .positional("bloq-id", { describe: "board the leads would land on", type: "number" })
@@ -157,7 +169,12 @@ export const ReachrScrapeCmd = cmd({
       })
       .option("ig-mode", { describe: "comments | followers | profiles | inbox (default: inferred from --instagram)", type: "string" })
       .option("ig-account", { describe: "the Instagram account whose saved session does the browsing", type: "string" })
-      .option("max-profiles", { describe: "Instagram: profiles to collect", type: "number", default: 30 })
+      .option("linkedin", {
+        describe: 'LinkedIn instead: a people-search query ("founder fintech") or "inbox" (people in your LinkedIn messages)',
+        type: "string",
+      })
+      .option("li-location", { describe: "LinkedIn search: add a location to the query", type: "string" })
+      .option("max-profiles", { describe: `Instagram / LinkedIn: profiles to collect (LinkedIn cap ${LI_MAX_PROFILES})`, type: "number", default: 30 })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args: any) {
     const bloqId = Number(args["bloq-id"])
@@ -178,7 +195,42 @@ export const ReachrScrapeCmd = cmd({
       process.exitCode = 2
     }
 
-    if (args.instagram) {
+    if (args.instagram && args.linkedin) return fail("give --instagram or --linkedin, not both")
+    if (args.linkedin) {
+      if (urls.length) return fail("give either page URLs or --linkedin, not both")
+      const q = String(args.linkedin).trim()
+      const mode = q.toLowerCase() === "inbox" ? "inbox" : "search"
+      const max = Number(args["max-profiles"])
+      if (!(max > 0) || max > LI_MAX_PROFILES)
+        return fail(`--max-profiles must be 1–${LI_MAX_PROFILES} for LinkedIn — it browses as you, and LinkedIn restricts accounts that pull too many profiles`)
+      const root = findFreelabelRoot()
+      if (!root)
+        return fail(
+          "The LinkedIn scraper lives in the Freelabel checkout (tests/e2e/linkedin-scraper.spec.ts) and this machine has none. " +
+            "Run this where the checkout is, or set FREELABEL_PATH.",
+        )
+      if (!liSessionFile(root))
+        return fail(
+          "No usable LinkedIn session (tests/e2e/linkedin-auth.json missing, or its login cookie expired). Save one: " +
+            "npx playwright test tests/e2e/save-linkedin-session.spec.ts --headed --timeout 300000",
+        )
+      const token = await requireAuth()
+      const userId = await resolveUserId()
+      if (!token || !userId) return fail("Not signed in — run `iris login`.")
+      spinner?.start(`LinkedIn ${mode === "inbox" ? "inbox" : `search "${q}"`} — a browser window will open; nothing is written…`)
+      const r = await runLinkedInScrape({
+        root,
+        mode,
+        query: mode === "search" ? q : "",
+        location: String(args["li-location"] ?? ""),
+        max,
+        bloqId,
+        token,
+        userId,
+      })
+      if (r.error) return fail(r.error)
+      data = r.data
+    } else if (args.instagram) {
       if (urls.length) return fail("give either page URLs or --instagram, not both")
       const mode = args["ig-mode"] ?? inferMode(String(args.instagram))
       if (!isMode(mode)) return fail(`--ig-mode must be comments, followers, profiles or inbox — got "${mode}"`)
@@ -207,7 +259,7 @@ export const ReachrScrapeCmd = cmd({
       if (r.error) return fail(r.error)
       data = r.data
     } else {
-      if (!urls.length) return fail("give one or more page URLs, or --instagram <post|@account|@a,@b|inbox>")
+      if (!urls.length) return fail('give one or more page URLs, --instagram <post|@account|@a,@b|inbox>, or --linkedin "<query>"|inbox')
       const script = resolveBrowserUseScript("scrape-leads.sh")
       if (!script) {
         const msg =
@@ -257,7 +309,9 @@ export const ReachrScrapeCmd = cmd({
     spinner?.stop(
       data.instagram
         ? `Instagram ${data.instagram.mode}: ${leads.length} new profile(s) — scraped ${data.instagram.scraped ?? "?"}, skipped ${data.instagram.existing_skipped ?? 0} already on board ${bloqId}`
-        : `Read ${data.counts?.pages ?? "?"} page(s): ${leads.length} people, ${data.contacts?.length ?? 0} company contact(s)`,
+        : data.linkedin
+          ? `LinkedIn ${data.linkedin.mode}: ${leads.length} profile(s) — scraped ${data.linkedin.scraped ?? "?"}`
+          : `Read ${data.counts?.pages ?? "?"} page(s): ${leads.length} people, ${data.contacts?.length ?? 0} company contact(s)`,
     )
 
     if (!args.write) {
@@ -271,7 +325,7 @@ export const ReachrScrapeCmd = cmd({
         const marks = [l.email && "email", l.phone && "phone", Object.keys(l.socials ?? {}).length && "social"]
           .filter(Boolean)
           .join(" ")
-        out(`  ${bold(l.name.v)}${l.handle && l.name.v !== `@${l.handle}` ? dim(` @${l.handle}`) : ""}${l.title ? dim(` — ${l.title.v}`) : ""}`)
+        out(`  ${bold(l.name.v)}${l.handle && platformOf(l) === "instagram" && l.name.v !== `@${l.handle}` ? dim(` @${l.handle}`) : ""}${l.title ? dim(` — ${l.title.v}`) : ""}`)
         out(dim(`      ${[l.company, marks || "no contact", `evidence: ${(l.evidence ?? ["json-ld"]).join(", ")}`].filter(Boolean).join("  ·  ")}`))
       }
       if (data.contacts?.length) {
@@ -321,7 +375,10 @@ export const ReachrScrapeCmd = cmd({
         if (l.company) payload.company = l.company
         // Instagram leads in the shape the SOM leadgen runner has always stored them, so the two
         // recognise each other: nickname "@handle", contact_info.instagram / instagram_url.
-        if (l.handle) {
+        if (l.handle && platformOf(l) === "linkedin") {
+          // The Playwright runner's shape: contact_info.linkedin = the profile URL.
+          payload.contact_info = { linkedin: `https://www.linkedin.com/in/${l.handle}/` }
+        } else if (l.handle) {
           payload.nickname = `@${l.handle}`
           payload.contact_info = { instagram: l.handle, instagram_url: `https://www.instagram.com/${l.handle}/` }
         }

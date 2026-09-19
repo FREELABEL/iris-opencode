@@ -1,7 +1,7 @@
 import fs from "fs"
 import os from "os"
 import path from "path"
-import { spawn } from "child_process"
+import { runSpec } from "./reachr-playwright"
 
 /**
  * The Instagram lane of `iris reachr scrape` — a front door onto the lead scraper that already
@@ -107,17 +107,7 @@ export async function runInstagramScrape(r: InstagramRun): Promise<{ data?: any;
     USER_ID: String(r.userId),
     CAMPAIGN_LABEL: "ReachR scrape",
   }
-  const output = await new Promise<{ code: number; text: string }>((resolve) => {
-    const child = spawn("npx", ["playwright", "test", SPEC, "--headed", "--timeout", String(timeoutMs)], {
-      cwd: r.root,
-      env,
-    })
-    let text = ""
-    child.stdout.on("data", (d) => (text += d))
-    child.stderr.on("data", (d) => (text += d))
-    child.on("close", (code) => resolve({ code: code ?? 1, text }))
-    child.on("error", (e) => resolve({ code: 1, text: String(e) }))
-  })
+  const output = await runSpec({ root: r.root, spec: SPEC, env, timeoutMs, resultFile })
 
   let raw: any = null
   try {
