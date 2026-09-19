@@ -57,6 +57,16 @@ async function withInstance<T>(fn: () => Promise<T>): Promise<T> {
  * False for --json and for non-interactive stdin (pipes, CI, scheduled jobs) —
  * those runs pause at human steps instead of blocking on a prompt nobody sees.
  */
+/**
+ * A step asked for confirmation and nobody is at a terminal (#186184). `run` used to call
+ * prompts.confirm anyway and spin at ~99% CPU forever; `resume` silently returned true — a
+ * confirmation that approves itself. Both now decline and say how to approve: --yes.
+ */
+export function declineUnattendedConfirm(stepId: string): false {
+  console.error(`  Step "${stepId}" needs confirmation and no one is at a terminal — not run. Re-run with --yes to approve it.`)
+  return false
+}
+
 function canPromptHuman(json: boolean): boolean {
   return !json && Boolean(process.stdin.isTTY)
 }
@@ -605,7 +615,7 @@ const SkillRunCommand = cmd({
           }
         },
         async onConfirm(stepId, command) {
-          if (args.json) return true
+          if (!canPromptHuman(args.json as boolean)) return declineUnattendedConfirm(stepId)
           const preview = command.length > 200 ? command.slice(0, 200) + "..." : command
           const result = await prompts.confirm({
             message: `Step "${stepId}" will execute:\n\n    ${preview}\n\n  Continue?`,
@@ -999,7 +1009,7 @@ const SkillResumeCommand = cmd({
           }
         },
         async onConfirm(stepId, command) {
-          if (!canPromptHuman(args.json as boolean)) return true
+          if (!canPromptHuman(args.json as boolean)) return declineUnattendedConfirm(stepId)
           const preview = command.length > 200 ? command.slice(0, 200) + "..." : command
           const result = await prompts.confirm({
             message: `Step "${stepId}" will execute:\n\n    ${preview}\n\n  Continue?`,
