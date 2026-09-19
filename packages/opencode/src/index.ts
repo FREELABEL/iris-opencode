@@ -195,6 +195,7 @@ import { PlatformArticleQaCommand } from "./cli/cmd/platform-article-qa"
 import { PlatformMsgCommand } from "./cli/cmd/platform-msg"
 import { PlatformAffiliatesCommand } from "./cli/cmd/platform-affiliates"
 import { PlatformPlaybookCommand, PlatformSkillCommand } from "./cli/cmd/platform-playbook"
+import { BrowserCommand } from "./cli/cmd/platform-browser"
 import { PlatformLoopCommand } from "./cli/cmd/platform-loop"
 import { PlatformUsageCommand, PlatformTracesCommand } from "./cli/cmd/platform-usage"
 import { GuideCommand } from "./cli/cmd/guide"
@@ -498,6 +499,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformLoopCommand))
   .command(reg(PlatformUsageCommand))
   .command(reg(PlatformTracesCommand))
+  .command(reg(BrowserCommand))
   .command(reg(PlatformPlaybookCommand))
   .command(PlatformSkillCommand) // hidden alias for backward compat
   .fail((msg, err) => {
