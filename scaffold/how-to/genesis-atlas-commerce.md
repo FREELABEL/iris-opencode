@@ -79,8 +79,8 @@ service packages, workshops, fixed-price offers — without building a shop.
 <line x1="475" y1="150" x2="475" y2="164" style="stroke:currentColor;stroke-width:1.5"/>
 <rect x="404" y="164" width="142" height="30" rx="15" style="fill:none;stroke:#c62f1a;stroke-opacity:1;stroke-width:2"/>
 <text x="475" y="183" text-anchor="middle" style="fill:currentColor;font-size:11px;font-weight:600">held — fee kept</text>
-<line x1="475" y1="194" x2="475" y2="208" style="stroke:currentColor;stroke-width:1.5;stroke-dasharray:4 4"/>
-<rect x="404" y="208" width="142" height="30" rx="15" style="fill:none;stroke:currentColor;stroke-opacity:.35;stroke-width:1.5;stroke-dasharray:5 4"/>
+<line x1="475" y1="194" x2="475" y2="208" style="stroke:currentColor;stroke-width:1.5"/>
+<rect x="404" y="208" width="142" height="30" rx="15" style="fill:none;stroke:currentColor;stroke-opacity:.35;stroke-width:1.5"/>
 <text x="475" y="227" text-anchor="middle" style="fill:currentColor;font-size:11px">payout to you</text>
 <text x="475" y="284" text-anchor="middle" style="fill:currentColor;font-size:11px;opacity:.75">price read on the</text>
 <text x="475" y="300" text-anchor="middle" style="fill:currentColor;font-size:11px;opacity:.75">server; released by</text>
@@ -123,7 +123,7 @@ service packages, workshops, fixed-price offers — without building a shop.
 - **Commerce takes the money.** Every Buy is a payment link. The price is read on the server, Stripe collects it on the platform account, and it is **held** until a person releases it with a reason. The payout to you comes after that.
 - **Mint keeps the books.** Every step of every sale is a new ledger entry — pending, paid, held, released, paid out — with the fee and what you are owed. Nothing is ever edited.
 
-Dashed parts are coming next: the payout transfer and the Mint view of your sales. Everything solid is live today.
+Everything solid is live today, including the payout: once a sale is released, `iris commerce payout` transfers the seller's share to their own Stripe account. The dashed box — your sales shown inside `iris mint` — is coming next.
 
 ## How the money moves
 
@@ -214,7 +214,9 @@ iris playbook install genesis-atlas-commerce
 
 - **Self-serve payment setup.** Who gets paid and the platform fee are switched on by the IRIS
   team for your workspace today.
-- **Payouts.** Releases are recorded; the transfer to the seller is being built. The person being
-  paid needs Stripe onboarding before a payout — not before a sale.
+- **Self-serve releases.** Releasing held money and paying out are done by the IRIS team today with
+  `iris commerce release` and `iris commerce payout`; sellers can read their own sales with
+  `iris commerce settlements --seller <workspace>`. The person being paid needs Stripe onboarding
+  before a payout — not before a sale.
 - **Subscriptions, other currencies, partial refunds.** One-time USD sales; partial refunds are
   flagged for a person.
