@@ -445,6 +445,12 @@
       "dest": "how-to/edge-publish.md",
       "managed": true,
       "purpose": "Recipe for putting a Genesis page on a server you control — export it as static files, host them, and roll back. Written from the edge-publish rollout."
+    },
+    {
+      "src": "how-to/save-tokens-with-playbooks-and-atlas.md",
+      "dest": "how-to/save-tokens-with-playbooks-and-atlas.md",
+      "managed": true,
+      "purpose": "How to: Spend fewer tokens with playbooks and iris atlas use (measured) — how playbooks and Atlas cut token spend, with benchmarks."
     }
   ]
 }
