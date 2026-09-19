@@ -5,7 +5,7 @@ tags: [playbooks, atlas, tokens, cost, benchmarks, claude-code, skills]
 duration_min: 10
 prerequisites: []
 ---
-# How to: Spend fewer tokens with playbooks and `iris atlas use` (measured)
+# How to: Spend fewer tokens with playbooks and iris atlas use (measured)
 
 ## What this does
 
