@@ -316,26 +316,16 @@ const DaemonInstallCommand = cmd({
       return
     }
 
-    const url = "https://heyiris.io/install-daemon"
-    prompts.log.info(`Installing the Hive daemon from ${url}`)
-    const keyArg = args.key ? ` --key ${String(args.key).replace(/[^A-Za-z0-9_-]/g, "")}` : ""
-
-    try {
-      // Pipe to bash rather than downloading to a temp file: matches the documented one-liner,
-      // and keeps the daemon installer the single source of truth for its own steps.
-      const out = execSync(`curl -fsSL ${url} | bash -s --${keyArg} 2>&1`, {
-        timeout: 300000,
-        maxBuffer: 32 * 1024 * 1024,
-      })
-        .toString()
-        .trim()
-      if (out) console.log(out)
-    } catch (e: any) {
-      const detail = (e?.stdout?.toString() || e?.stderr?.toString() || e?.message || "").trim()
-      prompts.log.error("Daemon install failed.")
-      if (detail) console.log(detail.split("\n").slice(-20).join("\n"))
-      return
-    }
+    // This fetched https://heyiris.io/install-daemon — a route that does not exist (404,
+    // measured 2026-09-18). The desktop app's post-sign-in setup runs exactly this command, so
+    // every fresh Mac finished "sign in" with no Hive daemon and nothing said why. `iris node
+    // install` is the working path (daemon archive over HTTPS, deps, autostart, start); use it.
+    // A key passed with --key is no longer needed: the daemon enrolls itself from the signed-in
+    // account (#185896).
+    if (args.key) prompts.log.info("--key is no longer needed: the daemon enrolls this machine from your sign-in.")
+    const { NodeInstallCommand } = await import("./platform-node")
+    await (NodeInstallCommand as any).handler({ json: false, "no-start": false, "no-autostart": false })
+    if (process.exitCode) return
 
     // Installed is not working — verify, the way a human would.
     if (!getDaemonCtl()) {

@@ -5,6 +5,7 @@ import { join } from "path"
 import { homedir, platform } from "os"
 import { existsSync } from "fs"
 import { execSync } from "child_process"
+import { ensureNodeOnPath } from "../lib/node-path"
 // ============================================================================
 // iris hive connect  —  enroll THIS machine, outbound, in one command
 //
@@ -68,6 +69,7 @@ function irisBin(): string {
  * Never mints a key. Returns the node id once online, or null.
  */
 export async function wakeHiveNode(opts: { quiet?: boolean; restart?: boolean } = {}): Promise<string | null> {
+  ensureNodeOnPath() // the desktop app runs this with a GUI PATH that has no node
   const say = (m: string) => {
     if (!opts.quiet) prompts.log.info(m)
   }
@@ -78,7 +80,7 @@ export async function wakeHiveNode(opts: { quiet?: boolean; restart?: boolean } 
   if (!daemonSelfEnrolls()) {
     say("Updating the Hive daemon on this machine…")
     try {
-      execSync(`"${irisBin()}" node install`, { stdio: opts.quiet ? "ignore" : "inherit", timeout: 600000 })
+      execSync(`"${irisBin()}" node install`, { env: process.env, stdio: opts.quiet ? "ignore" : "inherit", timeout: 600000 })
     } catch {
       /* fall through — the start below reports what is still wrong */
     }
@@ -87,10 +89,10 @@ export async function wakeHiveNode(opts: { quiet?: boolean; restart?: boolean } 
   if (!ctl) return null
   try {
     if (platform() === "win32") {
-      execSync(`"${ctl}" stop`, { stdio: "ignore", timeout: 30000 })
-      execSync(`"${ctl}" start`, { stdio: "ignore", timeout: 30000 })
+      execSync(`"${ctl}" stop`, { env: process.env, stdio: "ignore", timeout: 30000 })
+      execSync(`"${ctl}" start`, { env: process.env, stdio: "ignore", timeout: 30000 })
     } else {
-      execSync(`"${ctl}" restart`, { stdio: "ignore", timeout: 30000 })
+      execSync(`"${ctl}" restart`, { env: process.env, stdio: "ignore", timeout: 30000 })
     }
   } catch {
     /* the wait below is the real check */
@@ -124,6 +126,7 @@ const HiveConnectCommand = cmd({
   async handler(args: any) {
     const token = await requireAuth()
     if (!token) return
+    ensureNodeOnPath()
 
     if (!daemonCtl() && !daemonSelfEnrolls()) {
       // #184597 — say WHY the daemon is missing, or this advice is a LOOP.
@@ -132,7 +135,7 @@ const HiveConnectCommand = cmd({
       // pointing back at the installer sends the user round the same circle. Name Node.js.
       let hasNode = true
       try {
-        execSync(platform() === "win32" ? "where node" : "command -v node", { stdio: "ignore", timeout: 3000 })
+        execSync(platform() === "win32" ? "where node" : "command -v node", { env: process.env, stdio: "ignore", timeout: 3000 })
       } catch {
         hasNode = false
       }

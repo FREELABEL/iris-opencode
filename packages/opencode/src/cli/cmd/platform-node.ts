@@ -10,6 +10,7 @@ import { existsSync, mkdirSync, rmSync, readdirSync, renameSync, writeFileSync }
 import { homedir, tmpdir, platform } from "os"
 import { join } from "path"
 import { execFileSync, spawnSync } from "child_process"
+import { ensureNodeOnPath } from "../lib/node-path"
 
 // ============================================================================
 // `iris node` — make THIS machine a Hive compute node, from the CLI you already have.
@@ -60,9 +61,9 @@ export function fetchDaemon(dest: string, url = ARCHIVE_URL): StepResult {
   try {
     mkdirSync(stage, { recursive: true })
     const tgz = join(stage, "daemon.tar.gz")
-    const dl = spawnSync("curl", ["-fsSL", "--max-time", "180", url, "-o", tgz], { stdio: "pipe" })
+    const dl = spawnSync("curl", ["-fsSL", "--max-time", "180", url, "-o", tgz], { env: process.env, stdio: "pipe" })
     if (dl.status !== 0) return { ok: false, detail: `could not download ${url}` }
-    const ex = spawnSync("tar", ["-xzf", tgz, "-C", stage], { stdio: "pipe" })
+    const ex = spawnSync("tar", ["-xzf", tgz, "-C", stage], { env: process.env, stdio: "pipe" })
     if (ex.status !== 0) return { ok: false, detail: "the downloaded archive could not be extracted" }
 
     // GitHub wraps the tree in one <repo>-<branch> directory.
@@ -82,7 +83,7 @@ export function fetchDaemon(dest: string, url = ARCHIVE_URL): StepResult {
     }
     // cp -R rather than rename: dest may be on a different filesystem, and rename
     // across devices fails with EXDEV.
-    const cp = spawnSync("cp", ["-R", `${src}/.`, `${dest}/`], { stdio: "pipe" })
+    const cp = spawnSync("cp", ["-R", `${src}/.`, `${dest}/`], { env: process.env, stdio: "pipe" })
     if (cp.status !== 0) return { ok: false, detail: `could not copy the daemon into ${dest}` }
     return { ok: true }
   } catch (e: any) {
@@ -95,7 +96,7 @@ export function fetchDaemon(dest: string, url = ARCHIVE_URL): StepResult {
 /** Is a usable `node` on PATH? Returns its version, or null. */
 export function nodeVersion(): string | null {
   try {
-    return execFileSync("node", ["--version"], { stdio: "pipe" }).toString().trim()
+    return execFileSync("node", ["--version"], { env: process.env, stdio: "pipe" }).toString().trim()
   } catch {
     return null
   }
@@ -118,7 +119,7 @@ export function registerAutostart(bridgeDir: string): StepResult {
     const agents = join(homedir(), "Library", "LaunchAgents")
     mkdirSync(agents, { recursive: true })
     const plist = join(agents, `${label}.plist`)
-    const node = spawnSync("which", ["node"], { stdio: "pipe" }).stdout?.toString().trim()
+    const node = spawnSync("which", ["node"], { env: process.env, stdio: "pipe" }).stdout?.toString().trim()
     if (!node) return { ok: false, detail: "node is not on PATH, so there is nothing to launch" }
     writeFileSync(
       plist,
@@ -139,8 +140,8 @@ export function registerAutostart(bridgeDir: string): StepResult {
       "utf8",
     )
     // bootout first so a re-run replaces rather than duplicating.
-    spawnSync("launchctl", ["bootout", `gui/${process.getuid?.() ?? 501}/${label}`], { stdio: "pipe" })
-    const boot = spawnSync("launchctl", ["bootstrap", `gui/${process.getuid?.() ?? 501}`, plist], { stdio: "pipe" })
+    spawnSync("launchctl", ["bootout", `gui/${process.getuid?.() ?? 501}/${label}`], { env: process.env, stdio: "pipe" })
+    const boot = spawnSync("launchctl", ["bootstrap", `gui/${process.getuid?.() ?? 501}`, plist], { env: process.env, stdio: "pipe" })
     if (boot.status !== 0)
       return { ok: false, detail: (boot.stderr?.toString() || "launchctl bootstrap failed").trim() }
     return { ok: true, detail: plist }
@@ -151,7 +152,7 @@ export function registerAutostart(bridgeDir: string): StepResult {
 
 // ── commands ────────────────────────────────────────────────────────────────
 
-const NodeInstallCommand = cmd({
+export const NodeInstallCommand = cmd({
   command: "install",
   describe: "make this machine a Hive compute node (fetch the daemon, install deps, autostart, start)",
   builder: (y) =>
@@ -160,6 +161,7 @@ const NodeInstallCommand = cmd({
       .option("no-autostart", { type: "boolean", default: false, describe: "skip registering it to start at login" })
       .option("json", { type: "boolean", default: false }),
   async handler(args: any) {
+    ensureNodeOnPath() // run from the desktop app, PATH has no node — see lib/node-path.ts
     const bridge = BRIDGE_DIR()
     const out: Record<string, any> = { bridge_dir: bridge, steps: {} }
     const say = (s: string) => {
@@ -197,8 +199,22 @@ const NodeInstallCommand = cmd({
     }
     say(`  ✓ daemon ${updating ? "updated" : "downloaded"} ${dim("(over HTTPS — no Git needed)")}`)
 
+    // 2b. Control commands on PATH. `iris-daemon` is what `iris hive connect`, `iris daemon *` and
+    // the desktop app's Hive menu run; without this link a fresh install had a daemon nothing could
+    // start (2026-09-18). The Windows .cmd wrapper is written by install.ps1 instead.
+    if (platform() !== "win32") {
+      const binDir = join(IRIS_DIR(), "bin")
+      mkdirSync(binDir, { recursive: true })
+      for (const [name, target] of [["iris-daemon", "daemonctl"], ["iris-bridge", "bridgectl"]] as const) {
+        const src = join(bridge, target)
+        if (!existsSync(src)) continue
+        spawnSync("chmod", ["755", src])
+        spawnSync("ln", ["-sfn", src, join(binDir, name)])
+      }
+    }
+
     // 3. Dependencies.
-    const npm = spawnSync("npm", ["install", "--production", "--silent"], { cwd: bridge, stdio: "pipe" })
+    const npm = spawnSync("npm", ["install", "--production", "--silent"], { env: process.env, cwd: bridge, stdio: "pipe" })
     const depsOk = npm.status === 0 || existsSync(join(bridge, "node_modules", "dotenv"))
     out.steps.deps = {
       ok: depsOk,
@@ -219,7 +235,7 @@ const NodeInstallCommand = cmd({
     // 5. Start.
     let started: StepResult = { ok: false, detail: "skipped (--no-start)" }
     if (!args["no-start"] && depsOk) {
-      const r = spawnSync("node", [join(bridge, "daemon.js"), "--status"], { stdio: "pipe" })
+      const r = spawnSync("node", [join(bridge, "daemon.js"), "--status"], { env: process.env, stdio: "pipe" })
       started = { ok: r.status === 0, detail: r.status === 0 ? "already running" : "not running yet" }
       if (!started.ok && !auto.ok) {
         say(dim("  · start it with: iris-daemon start"))
@@ -252,7 +268,7 @@ const NodeStatusCommand = cmd({
     const deps = existsSync(join(bridge, "node_modules", "dotenv"))
     let running = false
     if (installed && nv)
-      running = spawnSync("node", [join(bridge, "daemon.js"), "--status"], { stdio: "pipe" }).status === 0
+      running = spawnSync("node", [join(bridge, "daemon.js"), "--status"], { env: process.env, stdio: "pipe" }).status === 0
 
     if (args.json) {
       process.stdout.write(JSON.stringify({ bridge_dir: bridge, installed, node: nv, deps, running }, null, 2) + "\n")
