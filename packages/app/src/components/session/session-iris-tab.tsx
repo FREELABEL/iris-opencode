@@ -8,6 +8,7 @@ import { SegmentedControlV2, SegmentedControlItemV2 } from "@opencode-ai/ui/v2/s
 import { IrisForceGraph, type ForceEdge, type ForceNode } from "./iris-force-graph"
 import { graphBoardIsIsolated, scopeGraphRows, type GraphScope } from "./iris-graph-scope"
 import { useServerSDK } from "@/context/server-sdk"
+import { useSDK } from "@/context/sdk"
 import { usePlatform } from "@/context/platform"
 import { IrisCardEditor } from "./iris-card-editor"
 import { itemCommands, renderMarkdown } from "./iris-item"
@@ -215,12 +216,15 @@ function describeFields(surface: string, r: any): { title: string; fields: [stri
         ["active", r.active],
         ["steps", (r.steps ?? []).length || undefined],
         ["arguments", (r.args ?? []).length || undefined],
-        ["installed here", r.hasLocal],
+        // Which copy — the project's, a synced skill, or the home install (#186277).
+        ["installed here", r.hasLocal ? (r.localWhere ? `yes — ${r.localWhere}` : true) : false],
         ["installs", r.installs], ["views", r.views],
         ["published", r.publishedAt], ["landing page", r.publicUrl],
         ["description", r.description],
       ]),
-      command: `iris playbook run ${r.name}`,
+      // `run` on a playbook that is not installed fails ("install it, then run it again"), so the
+      // one command the card offers must be the one that works (#186278).
+      command: r.hasLocal ? `iris playbook run ${r.name}` : `iris playbook install ${r.name}`,
     }
   if (surface === "integrations")
     return {
@@ -669,6 +673,27 @@ export function SessionIrisTab() {
   const platform = usePlatform()
 
   const base = createMemo(() => serverSDK().url.replace(/\/$/, ""))
+  /**
+   * This session's project directory, for "installed here" (#186277): a project's playbooks live
+   * in <project>/.iris/playbooks and <project>/.claude/skills, which the server cannot guess —
+   * /iris routes run outside any project instance. Optional: without a session SDK (no provider
+   * above this panel) the server checks ~/.iris/playbooks only, as before.
+   */
+  const dirSdk = (() => {
+    try {
+      return useSDK()
+    } catch {
+      return undefined
+    }
+  })()
+  const projectParam = () => {
+    try {
+      const d = dirSdk?.().directory
+      return d ? `project=${encodeURIComponent(d)}` : ""
+    } catch {
+      return ""
+    }
+  }
   /** Every request to the sidecar. `init` exists because this panel now WRITES (page saves). */
   const doFetch = (path: string, init?: RequestInit) =>
     (platform.fetch ?? globalThis.fetch)(`${base()}${path}`, init)
@@ -804,7 +829,8 @@ export function SessionIrisTab() {
        * The whole set is 39 rows and 45 edges. There is nothing to page.
        */
       const perPage = which === "graph" ? 500 : 25
-      const res = await doFetch(`${url}${sep}page=${pageNo}&perPage=${perPage}${search}`)
+      const project = which === "playbooks" && projectParam() ? `&${projectParam()}` : ""
+      const res = await doFetch(`${url}${sep}page=${pageNo}&perPage=${perPage}${search}${project}`)
       // Stamped with the pane it was fetched FOR, so a held payload can be told apart from an
       // answer about what is currently on screen. See surfaceView.
       const next = { ...((await res.json()) as SurfacePayload), __pane: which } as SurfacePayload
@@ -1114,7 +1140,8 @@ export function SessionIrisTab() {
         : undefined
     },
     async ([, name]) => {
-      const res = await doFetch(`/iris/playbooks/doc/${encodeURIComponent(name)}`)
+      const project = projectParam()
+      const res = await doFetch(`/iris/playbooks/doc/${encodeURIComponent(name)}${project ? `?${project}` : ""}`)
       return (await res.json()) as {
         found: boolean
         name: string

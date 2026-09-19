@@ -39,6 +39,7 @@ import {
 import { homedir } from "os"
 import path from "path"
 import { clampPaging, DEFAULT_PER_PAGE } from "./pagination"
+import { findLocalPlaybook } from "./playbook-local"
 
 /**
  * Where `auth.json` lives — derived, not imported.
@@ -3054,8 +3055,9 @@ export interface Playbook {
  */
 export async function fetchPlaybookDoc(
   name: string,
+  project?: string,
 ): Promise<{ found: boolean; content: string; path: string; source: "local" | "published" | "none" }> {
-  const local = readPlaybookDoc(name)
+  const local = readPlaybookDoc(name, project)
   if (local.found) return { ...local, source: "local" }
 
   const safe = /^[a-zA-Z0-9._-]+$/.test(name) ? name : ""
@@ -3075,13 +3077,13 @@ export async function fetchPlaybookDoc(
 }
 
 /** One playbook's local document, when this machine has it. */
-export function readPlaybookDoc(name: string): { found: boolean; content: string; path: string } {
-  // The name comes off a list WE produced, but it still lands in a filesystem path, so it is
-  // constrained here rather than trusted: a slug, nothing else. `..` in a playbook name would
-  // otherwise read any file the sidecar can reach.
-  const safe = /^[a-zA-Z0-9._-]+$/.test(name) ? name : ""
-  const file = path.join(homedir(), ".iris", "playbooks", safe, "PLAYBOOK.md")
-  if (!safe || !existsSync(file)) return { found: false, content: "", path: file }
+export function readPlaybookDoc(name: string, project?: string): { found: boolean; content: string; path: string } {
+  // Same places "installed here" looks — the project's copy first (#186277). The name is
+  // constrained to a slug inside findLocalPlaybook: `..` would otherwise read any file the
+  // sidecar can reach.
+  const hit = findLocalPlaybook(name, { project })
+  const file = hit.path
+  if (!hit.found) return { found: false, content: "", path: file }
   try {
     return { found: true, content: readFileSync(file, "utf-8"), path: file }
   } catch {
