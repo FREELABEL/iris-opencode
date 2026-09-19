@@ -134,6 +134,8 @@ export function mapInstagramResult(raw: any): any {
       scraped: raw.scraped,
       existing_skipped: raw.existing_skipped,
       errors,
+      // Present when follower filters ran (#186254): how many profiles were checked, kept, dropped.
+      ...(raw.qualification ? { qualification: raw.qualification } : {}),
     },
   }
 }
@@ -473,3 +475,28 @@ export async function collectPages<T>(
   }
   throw new Error(`the board has more than ${o.maxPages * o.pageSize} rows — refusing to work from a partial list`)
 }
+
+/**
+ * --min-followers / --max-followers → the scraper's own qualification env (#186254).
+ * tests/e2e/leadgen-scraper.spec.ts has filtered by follower count all along (FILTER_MIN_FOLLOWERS /
+ * FILTER_MAX_FOLLOWERS), but nothing passed them, so every commenter became a candidate.
+ * Returns the env to add, or an error a person can act on. 0 / absent = no bound.
+ */
+export function followerFilterEnv(min: unknown, max: unknown): { env: Record<string, string> } | { error: string } {
+  const parse = (v: unknown, flag: string): number | { error: string } | undefined => {
+    if (v === undefined || v === null || v === "") return undefined
+    const n = Number(v)
+    if (!Number.isInteger(n) || n < 0) return { error: `${flag} must be a whole number of followers — got "${v}"` }
+    return n
+  }
+  const lo = parse(min, "--min-followers")
+  const hi = parse(max, "--max-followers")
+  if (typeof lo === "object") return lo
+  if (typeof hi === "object") return hi
+  if (lo && hi && lo > hi) return { error: `--min-followers (${lo}) is above --max-followers (${hi}) — nobody could qualify` }
+  const env: Record<string, string> = {}
+  if (lo) env.FILTER_MIN_FOLLOWERS = String(lo)
+  if (hi) env.FILTER_MAX_FOLLOWERS = String(hi)
+  return { env }
+}
+

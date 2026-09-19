@@ -14,6 +14,7 @@ import {
   liSlug,
   auditRepliedLead,
   collectPages,
+  followerFilterEnv,
 } from "./reachr-core"
 
 /**
@@ -408,5 +409,24 @@ describe("reading every page of a board", () => {
 
   test("hitting the safety cap with pages still full is an error, not a partial answer", async () => {
     await expect(collectPages(pager(board(1000)), { pageSize: 200, maxPages: 3 })).rejects.toThrow(/more than 600/)
+  })
+})
+
+describe("followerFilterEnv (#186254)", () => {
+  test("maps the flags to the scraper's own filter env", () => {
+    expect(followerFilterEnv(1000, undefined)).toEqual({ env: { FILTER_MIN_FOLLOWERS: "1000" } })
+    expect(followerFilterEnv(1000, 50000)).toEqual({ env: { FILTER_MIN_FOLLOWERS: "1000", FILTER_MAX_FOLLOWERS: "50000" } })
+  })
+  test("no flags = no filter (unchanged behaviour)", () => {
+    expect(followerFilterEnv(undefined, undefined)).toEqual({ env: {} })
+  })
+  test("refuses impossible or malformed bounds instead of scraping nothing", () => {
+    expect(followerFilterEnv(5000, 100)).toEqual({ error: expect.stringContaining("nobody could qualify") })
+    expect(followerFilterEnv("lots", undefined)).toEqual({ error: expect.stringContaining("--min-followers") })
+    expect(followerFilterEnv(-5, undefined)).toEqual({ error: expect.stringContaining("whole number") })
+  })
+  test("qualification counts pass through from the scraper result", () => {
+    const d = mapInstagramResult({ mode: "comments", target: "https://www.instagram.com/p/x/", scraped: 40, existing_skipped: 2, profiles: [{ username: "a" }], errors: [], qualification: { checked: 12, passed: 1, failed: 11, errors: 0 } })
+    expect(d.instagram.qualification).toEqual({ checked: 12, passed: 1, failed: 11, errors: 0 })
   })
 })

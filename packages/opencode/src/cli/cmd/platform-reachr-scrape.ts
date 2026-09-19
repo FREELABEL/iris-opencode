@@ -3,7 +3,7 @@ import * as prompts from "./clack"
 import { irisFetch, requireAuth, resolveUserId, handleApiError, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
 import { inferMode, normalizeTarget, isMode, findFreelabelRoot, savedSessions, runInstagramScrape } from "./reachr-instagram"
 import { runLinkedInScrape, liSessionFile, LI_MAX_PROFILES } from "./reachr-linkedin"
-import { type Lead, platformOf, findExisting, provenanceNote, leadPayload, judgeCreated, collectPages } from "./reachr-core"
+import { followerFilterEnv, type Lead, platformOf, findExisting, provenanceNote, leadPayload, judgeCreated, collectPages } from "./reachr-core"
 import { resolveBrowserUseScript, runBrowserUseScript } from "./platform-browser"
 
 // Every report line on STDOUT. UI.println writes to stderr while printKV/printDivider write to
@@ -104,6 +104,8 @@ export const ReachrScrapeCmd = cmd({
         type: "string",
       })
       .option("li-location", { describe: "LinkedIn search: add a location to the query", type: "string" })
+      .option("min-followers", { describe: "Instagram: keep only profiles with at least this many followers", type: "number" })
+      .option("max-followers", { describe: "Instagram: keep only profiles with at most this many followers", type: "number" })
       .option("max-profiles", { describe: `Instagram / LinkedIn: profiles to collect (LinkedIn cap ${LI_MAX_PROFILES})`, type: "number", default: 30 })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args: any) {
@@ -183,9 +185,11 @@ export const ReachrScrapeCmd = cmd({
       const token = await requireAuth()
       const userId = await resolveUserId()
       if (!token || !userId) return fail("Not signed in — run `iris login`. The scraper reads the board to skip people already on it.")
+      const ff = followerFilterEnv(args["min-followers"], args["max-followers"])
+      if ("error" in ff) return fail(ff.error)
       const target = normalizeTarget(String(args.instagram), mode)
       spinner?.start(`Instagram ${mode} as @${account} — a browser window will open; nothing is written…`)
-      const r = await runInstagramScrape({ root, account, mode, target, max: Number(args["max-profiles"]), bloqId, token, userId })
+      const r = await runInstagramScrape({ root, account, mode, target, max: Number(args["max-profiles"]), bloqId, token, userId, filters: ff.env })
       if (r.error) return fail(r.error)
       data = r.data
     } else {
@@ -238,7 +242,10 @@ export const ReachrScrapeCmd = cmd({
     const leads: Lead[] = data.leads ?? []
     spinner?.stop(
       data.instagram
-        ? `Instagram ${data.instagram.mode}: ${leads.length} new profile(s) — scraped ${data.instagram.scraped ?? "?"}, skipped ${data.instagram.existing_skipped ?? 0} already on board ${bloqId}`
+        ? `Instagram ${data.instagram.mode}: ${leads.length} new profile(s) — scraped ${data.instagram.scraped ?? "?"}, skipped ${data.instagram.existing_skipped ?? 0} already on board ${bloqId}` +
+          (data.instagram.qualification
+            ? ` · follower filter: ${data.instagram.qualification.passed} kept, ${data.instagram.qualification.failed} dropped of ${data.instagram.qualification.checked} checked`
+            : "")
         : data.linkedin
           ? `LinkedIn ${data.linkedin.mode}: ${leads.length} profile(s) — scraped ${data.linkedin.scraped ?? "?"}`
           : `Read ${data.counts?.pages ?? "?"} page(s): ${leads.length} people, ${data.contacts?.length ?? 0} company contact(s)`,
