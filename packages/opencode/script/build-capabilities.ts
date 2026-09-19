@@ -496,14 +496,17 @@ function collectMarkdown(
  */
 const TERMS: Record<string, string[]> = {
   bespoke: ["custom html", "hand-designed page", "artifact", "branded page", "one-pager", "landing page", "report page", "custom css"],
-  pages: ["genesis", "page builder", "composable page", "publish a page", "web page", "site"],
+  pages: ["genesis", "page builder", "composable page", "publish a page", "web page", "site", "website"],
   bloqs: ["board", "kanban", "list", "project", "workspace", "notes"],
-  leads: ["crm", "contacts", "prospects", "pipeline"],
+  // The plain-English sales ask found only page tools on 2026-09-19 ("find people who need my
+  // product from my website then email them and book calls") — none of its words were here.
+  leads: ["crm", "contacts", "prospects", "pipeline", "find people", "find customers", "customers", "outreach", "cold email", "email them", "book calls", "book a call", "sales", "lead generation"],
   agents: ["ai agent", "assistant", "bot"],
   hive: ["compute node", "distributed", "remote machine", "fleet", "daemon"],
   "data-sources": ["obsidian", "imessage", "apple mail", "calendar", "local data", "bridge"],
   integrations: ["oauth", "connect", "composio", "third party", "api key"],
-  playbook: ["workflow", "recipe", "automation", "runbook"],
+  // "sync team skills into claude code and cursor" found production-deploy (#186212).
+  playbook: ["workflow", "recipe", "automation", "runbook", "skills", "team skills", "shared rules", "claude code", "cursor", "agents.md"],
   "how-to": ["guide", "tutorial", "documentation", "docs", "instructions"],
   memory: ["remember", "recall", "knowledge base", "rag"],
   bug: ["issue", "report a problem", "defect", "ticket"],
