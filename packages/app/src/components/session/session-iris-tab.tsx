@@ -68,12 +68,52 @@ interface Measured {
  * `lists`, `schemas`, `nodes` and `items` respectively. Keying this on the surface would have
  * read `d["atlas"]` for the schemas pane and found nothing, which renders as an empty board.
  */
+export interface McpServerRow {
+  name: string
+  type?: string
+  target?: string
+  enabled?: boolean
+  status: string
+  error?: string
+}
+
+/**
+ * One row per MCP server, from the two endpoints the sidecar already serves: `GET /config`
+ * (what is configured — command or URL, enabled) and `GET /mcp` (what each one is doing).
+ *
+ * Configured with no status yet reads as "disabled", never "connected": this screen exists to
+ * show what is actually running. A server present in the status map but not in config was added
+ * at runtime and is still listed — hiding it would make the panel disagree with the agent.
+ */
+export function mcpServerRows(
+  config: Record<string, any> | undefined,
+  status: Record<string, { status?: string; error?: string }> | undefined,
+): McpServerRow[] {
+  const cfg = config ?? {}
+  const st = status ?? {}
+  return [...new Set([...Object.keys(cfg), ...Object.keys(st)])]
+    .sort((a, b) => a.localeCompare(b))
+    .map((name) => {
+      const c: any = cfg[name]
+      const command = Array.isArray(c?.command) ? c.command.join(" ") : undefined
+      return {
+        name,
+        type: c?.type,
+        target: c?.url ?? command,
+        enabled: c?.enabled,
+        status: st[name]?.status ?? "disabled",
+        error: st[name]?.error,
+      }
+    })
+}
+
 function arrayKeyFor(pane: string): string {
   if (pane === "graph") return "rows"
   if (pane === "catalog") return "catalog"
   if (pane === "atlas") return "lists"
   if (pane === "hive") return "nodes"
   if (pane === "inbox") return "items"
+  if (pane === "mcp") return "servers"
   return pane
 }
 
@@ -231,6 +271,19 @@ function describeFields(surface: string, r: any): { title: string; fields: [stri
       // sorted unread-first, so the two differ the moment anything has been read. This command
       // takes the manifest number, so printing the row's position would open a different message.
       command: `iris hive inbox read ${r.index}`,
+    }
+  if (surface === "mcp")
+    return {
+      title: r.name,
+      fields: fieldsOf([
+        ["status", r.status],
+        ["error", r.error],
+        ["type", r.type],
+        [r.type === "remote" ? "url" : "command", r.target],
+        ["enabled", r.enabled],
+      ]),
+      // `iris mcp` is the CLI half of this surface; `tools` is what the Tools tab shows.
+      command: `iris mcp tools ${/\s/.test(String(r.name)) ? JSON.stringify(r.name) : r.name}`,
     }
   if (surface === "playbooks")
     return {
@@ -399,6 +452,9 @@ const SURFACES = [
    * strand everyone whose panel remembers the old value for the sake of a word on screen.
    */
   { id: "pages", label: "Genesis", path: (b: number) => `/iris/pages/${b}` },
+  // MCP servers belong to the machine and the project, not to a board, so the path ignores the
+  // argument (as Hive does). The rows are built from /config + /mcp — see mcpServerRows.
+  { id: "mcp", label: "MCP", path: () => `/mcp` },
   // Hive is NOT bloq-scoped — machines belong to the account, not to a board — so its path
   // ignores the argument. Kept in the same list anyway so the switcher stays one mechanism;
   // a second code path for one surface is how surfaces drift apart.
@@ -498,6 +554,12 @@ export interface DetailTab {
   label: string
 }
 const DETAIL_TABS: Record<string, readonly DetailTab[]> = {
+  mcp: [
+    { id: "info", label: "Info" },
+    // What this server actually gives an agent. The reason to open a server at all.
+    { id: "tools", label: "Tools" },
+    { id: "json", label: "JSON" },
+  ],
   schemas: [
     { id: "info", label: "Info" },
     // The database table. This is the one that turns a schema from a description of data into
@@ -862,6 +924,23 @@ export function SessionIrisTab() {
        * The whole set is 39 rows and 45 edges. There is nothing to page.
        */
       const perPage = which === "graph" ? 500 : 25
+      // MCP is two endpoints, not one: /mcp says what each server is doing, /config says what
+      // each one IS. Merged here so the panel keeps ONE row shape (see mcpServerRows).
+      if (which === "mcp") {
+        const [statusRes, configRes] = await Promise.all([doFetch("/mcp"), doFetch("/config")])
+        const status = statusRes.ok ? ((await statusRes.json()) as any) : {}
+        const config = configRes.ok ? ((await configRes.json()) as any)?.mcp : undefined
+        const servers = mcpServerRows(config, status)
+        return {
+          measured: statusRes.ok,
+          reason: statusRes.ok ? undefined : `the sidecar could not read MCP status (HTTP ${statusRes.status})`,
+          total: servers.length,
+          totalIsExact: true,
+          hasMore: false,
+          servers,
+          __pane: which,
+        } as unknown as SurfacePayload
+      }
       const project = which === "playbooks" && projectParam() ? `&${projectParam()}` : ""
       const res = await doFetch(`${url}${sep}page=${pageNo}&perPage=${perPage}${search}${project}`)
       // Stamped with the pane it was fetched FOR, so a held payload can be told apart from an
@@ -1226,6 +1305,19 @@ export function SessionIrisTab() {
   )
 
   /** The open playbook's local PLAYBOOK.md. A file read through the sidecar, not a fetch. */
+  /** One MCP server's tools, read when the Tools tab is open. */
+  const [mcpTools] = createResource(
+    () => {
+      const r = openRow()
+      return r?.pane === "mcp" && detailTab() === "tools" && r.raw?.name ? ([base(), String(r.raw.name)] as const) : undefined
+    },
+    async ([, name]) => {
+      const res = await doFetch(`/mcp/${encodeURIComponent(name)}/tools`)
+      if (!res.ok) throw new Error(`the sidecar could not list tools (HTTP ${res.status})`)
+      return (await res.json()) as { name: string; description?: string }[]
+    },
+  )
+
   const [playbookDoc] = createResource(
     () => {
       const r = openRow()
@@ -1780,6 +1872,41 @@ export function SessionIrisTab() {
               </Match>
 
               {/* THE STEPS. What the playbook will actually do, and what it needs from you. */}
+              {/* THE TOOLS an MCP server gives an agent. Empty is an answer: a server that is
+                  not connected exposes none, and that is what the status field is for. */}
+              <Match when={detailTab() === "tools"}>
+                <Switch>
+                  <Match when={mcpTools.loading && !mcpTools.latest}>
+                    <p class="text-12-regular text-text-weak py-2">Reading…</p>
+                  </Match>
+                  <Match when={mcpTools.error}>
+                    <p class="text-12-regular text-text-danger-base py-2">{String(mcpTools.error?.message ?? mcpTools.error)}</p>
+                  </Match>
+                  <Match when={(mcpTools.latest?.length ?? 0) === 0}>
+                    <p class="text-12-regular text-text-weak py-2">
+                      No tools.{openRow()!.raw?.status === "connected" ? "" : ` This server is ${String(openRow()!.raw?.status ?? "not connected").replace("_", " ")}.`}
+                    </p>
+                  </Match>
+                  <Match when={mcpTools.latest}>
+                    <p class="text-11-regular text-text-weaker pb-1">Tools · {mcpTools.latest!.length}</p>
+                    <For each={mcpTools.latest}>
+                      {(t) => (
+                        <div class="px-2 py-1.5 border-b border-border-weaker-base last:border-0">
+                          <div class="font-mono text-12-regular text-text-base">{t.name}</div>
+                          <Show when={t.description}>
+                            {/* Clamped: some descriptions are a page of prose (iris_agent), and one
+                                of those pushes every other tool off the screen. Full text on hover. */}
+                            <div class="text-11-regular text-text-weak line-clamp-2" title={t.description}>
+                              {t.description}
+                            </div>
+                          </Show>
+                        </div>
+                      )}
+                    </For>
+                  </Match>
+                </Switch>
+              </Match>
+
               <Match when={detailTab() === "steps"}>
                 <Show
                   when={(openRow()!.raw?.steps?.length ?? 0) > 0 || (openRow()!.raw?.args?.length ?? 0) > 0}
@@ -2155,6 +2282,24 @@ export function SessionIrisTab() {
                       <Show when={l.status}>
                         <span class="font-mono tabular-nums text-11-regular text-text-weak shrink-0">{l.status}</span>
                       </Show>
+                    </button>
+                  )}
+                </For>
+              </Match>
+
+              <Match when={pane() === "mcp"}>
+                <For each={rows()}>
+                  {(m) => (
+                    <button type="button" data-slot="iris-mcp-row" class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow(pane(), m))}>
+                      <span class="shrink-0" classList={{ "text-text-base": m.status === "connected", "text-text-weak": m.status !== "connected" }}>
+                        {m.status === "connected" ? "●" : "○"}
+                      </span>
+                      <span class="text-12-regular text-text-base min-w-0 flex-1">{m.name}</span>
+                      {/* The status is the whole point of the row — "failed" and "needs_auth" are
+                          the two a person acts on. */}
+                      <span class="font-mono text-11-regular text-text-weaker shrink-0">
+                        {m.status === "connected" ? (m.type ?? "") : m.status.replace("_", " ")}
+                      </span>
                     </button>
                   )}
                 </For>

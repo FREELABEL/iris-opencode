@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { cellText, detailTabsFor, highlightJson, integrationHealth, itemCommands, logoFor, normalizeSurface, playbookButton, playbookCommand, providerMark, resolvePane, surfaceView } from "./session-iris-tab"
+import { cellText, detailTabsFor, highlightJson, integrationHealth, itemCommands, logoFor, mcpServerRows, normalizeSurface, playbookButton, playbookCommand, providerMark, resolvePane, surfaceView } from "./session-iris-tab"
 
 describe("surfaceView", () => {
   test("a failed fetch is never rendered as an empty surface", () => {
@@ -298,5 +298,52 @@ describe("playbook card: the command and the button", () => {
   test("an older server that sends no action falls back to hasLocal", () => {
     expect(playbookCommand(row({ hasLocal: false }))).toBe("iris playbook install capture-sops")
     expect(playbookCommand(row({ hasLocal: true }))).toBe("iris playbook run capture-sops")
+  })
+})
+
+/**
+ * The MCP surface merges two endpoints the sidecar already serves: `GET /config` (what is
+ * configured) and `GET /mcp` (what each one is doing). Shapes measured 2026-09-19 on a running
+ * sidecar: config.mcp = {"IRIS OS": {type:"local", command:[...], enabled:true}}, status =
+ * {"IRIS OS": {status:"connected"}} — names carry spaces.
+ */
+describe("MCP servers, from config + status", () => {
+  test("a local server shows what it runs, and that it is connected", () => {
+    const rows = mcpServerRows({ "IRIS OS": { type: "local", command: ["/u/.iris/bin/iris", "mcp", "serve"], enabled: true } }, { "IRIS OS": { status: "connected" } })
+    expect(rows).toEqual([{ name: "IRIS OS", type: "local", target: "/u/.iris/bin/iris mcp serve", enabled: true, status: "connected", error: undefined }])
+  })
+
+  test("a remote server shows its URL", () => {
+    const rows = mcpServerRows({ hosted: { type: "remote", url: "https://heyiris.io/mcp", enabled: false } }, {})
+    expect(rows[0]).toMatchObject({ type: "remote", target: "https://heyiris.io/mcp", enabled: false, status: "disabled" })
+  })
+
+  test("a failure carries its reason — the point of looking at this screen", () => {
+    const rows = mcpServerRows({ x: { type: "local", command: ["x"], enabled: true } }, { x: { status: "failed", error: "spawn x ENOENT" } })
+    expect(rows[0]).toMatchObject({ status: "failed", error: "spawn x ENOENT" })
+  })
+
+  test("a server that is running but not in config is still listed (added at runtime)", () => {
+    expect(mcpServerRows({}, { ghost: { status: "connected" } })).toEqual([
+      { name: "ghost", type: undefined, target: undefined, enabled: undefined, status: "connected", error: undefined },
+    ])
+  })
+
+  test("configured but with no status yet reads as disabled, never as connected", () => {
+    expect(mcpServerRows({ a: { type: "local", command: ["a"], enabled: true } }, {})[0].status).toBe("disabled")
+  })
+
+  test("sorted by name, so the list does not reshuffle between reads", () => {
+    expect(mcpServerRows({ b: { type: "local", command: ["b"] }, a: { type: "local", command: ["a"] } }, {}).map((r) => r.name)).toEqual(["a", "b"])
+  })
+
+  test("nothing configured → an empty list", () => {
+    expect(mcpServerRows(undefined, undefined)).toEqual([])
+  })
+})
+
+describe("MCP detail tabs", () => {
+  test("Info and Tools — the tools are the reason to open a server", () => {
+    expect(detailTabsFor("mcp").map((t) => t.id)).toEqual(["info", "tools", "json"])
   })
 })

@@ -19,6 +19,7 @@ const testMcpHandlers = HttpApiBuilder.group(TestHttpApi, "mcp", (handlers) =>
   Effect.succeed(
     handlers
       .handle("status", () => Effect.die("unexpected MCP status"))
+      .handle("tools", () => Effect.die("unexpected MCP tools"))
       .handle("add", () => Effect.die("unexpected MCP add"))
       .handle("authStart", () =>
         Effect.succeed({ authorizationUrl: "https://auth.example/start", oauthState: "state-123" }),

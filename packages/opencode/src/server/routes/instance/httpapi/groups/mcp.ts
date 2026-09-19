@@ -29,8 +29,14 @@ export class UnsupportedOAuthError extends Schema.ErrorClass<UnsupportedOAuthErr
   { httpApiStatus: 400 },
 ) {}
 
+export const ServerTool = Schema.Struct({
+  name: Schema.String,
+  description: Schema.optional(Schema.String),
+}).annotate({ identifier: "McpServerTool" })
+
 export const McpPaths = {
   status: "/mcp",
+  tools: "/mcp/:name/tools",
   auth: "/mcp/:name/auth",
   authCallback: "/mcp/:name/auth/callback",
   authAuthenticate: "/mcp/:name/auth/authenticate",
@@ -50,6 +56,18 @@ export const McpApi = HttpApi.make("mcp")
             identifier: "mcp.status",
             summary: "Get MCP status",
             description: "Get the status of all Model Context Protocol (MCP) servers.",
+          }),
+        ),
+        HttpApiEndpoint.get("tools", McpPaths.tools, {
+          params: { name: Schema.String },
+          query: WorkspaceRoutingQuery,
+          success: described(Schema.Array(ServerTool), "The tools this MCP server exposes"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "mcp.tools",
+            summary: "List one server's tools",
+            description:
+              "The tools a connected MCP server exposes, with their descriptions. A server that is not connected has none — an empty list, not an error. Tool ids are `server_tool`, so each entry is confirmed by recomposing its key rather than splitting it (server names may contain the separator).",
           }),
         ),
         HttpApiEndpoint.post("add", McpPaths.status, {
