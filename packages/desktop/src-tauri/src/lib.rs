@@ -591,6 +591,13 @@ fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
         .resolve("", BaseDirectory::AppLocalData)
         .expect("Failed to resolve app local data dir");
 
+    // The engine's working directory (#186118). An app opened from Finder / the Dock starts at `/`,
+    // and the sidecar inherited it — so a chat with no project folder ran its shell at the read-only
+    // root, and every relative write ("iris playbook install", exports, saves) targeted `/.iris`.
+    // Observed on a client's QA call: install failed until the agent `cd ~`'d. Home is where a person
+    // expects "here" to be when they have not opened a folder.
+    let engine_cwd = dirs_next_home().unwrap_or_else(|| std::path::PathBuf::from("/"));
+
     #[cfg(target_os = "windows")]
     let (mut rx, child) = app
         .shell()
@@ -600,6 +607,7 @@ fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
         .env("OPENCODE_CLIENT", "desktop")
         .env("XDG_STATE_HOME", &state_dir)
         .env("IRIS_API_KEY", &iris_api_key)
+        .current_dir(&engine_cwd)
         .args(["serve", &format!("--port={port}")])
         .spawn()
         .expect("Failed to spawn opencode");
@@ -613,6 +621,7 @@ fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
         .env("OPENCODE_CLIENT", "desktop")
         .env("XDG_STATE_HOME", &state_dir)
         .env("IRIS_API_KEY", &iris_api_key)
+        .current_dir(&engine_cwd)
         .args(["serve", &format!("--port={port}")])
         .spawn()
         .expect("Failed to spawn opencode");
