@@ -9,6 +9,7 @@ import { OutreachApproveGroup } from "./platform-outreach-approve"
 import { ScriptGroup } from "./platform-outreach-script"
 import { ReachrScrapeCmd } from "./platform-reachr-scrape"
 import { ReachrInboxCmd } from "./platform-reachr-inbox"
+import { ReachrAuditRepliesCmd } from "./platform-reachr-audit"
 
 // ============================================================================
 // Outreach Strategy Commands — list, show, create, update, delete
@@ -287,6 +288,7 @@ export const PlatformOutreachCommand = productCommand({
     yargs
       .command(ReachrScrapeCmd)
       .command(ReachrInboxCmd)
+      .command(ReachrAuditRepliesCmd)
       .command(OutreachListCommand)
       .command(OutreachShowCommand)
       .command(OutreachCreateCommand)

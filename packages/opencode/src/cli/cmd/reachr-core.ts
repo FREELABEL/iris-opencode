@@ -377,3 +377,99 @@ export function planReplyLog(replies: ScannedReply[], existingRows: { body?: unk
 export function shouldRetrySpec(o: { resultFileExists: boolean; text: string; elapsedMs: number }): boolean {
   return !o.resultFileExists && /has been closed/.test(o.text) && o.elapsedMs < 120_000
 }
+
+// ── audit: is a "DM Replied" tag backed by a real reply? ─────────────────────
+
+/** Opening lines of our own outreach, as they appear in threads (lowercase). */
+export const OUR_OPENERS = [
+  "noticed you're",
+  "i noticed you're",
+  "hi! noticed",
+  "hi! i noticed",
+  "noticed your interest",
+  "i saw you're",
+  "i built a platform",
+  "hey! i came across your",
+]
+
+export interface AuditInput {
+  notes: string[]
+  comms: { body: string; source: string | null }[]
+  ourOpeners?: string[]
+}
+
+/**
+ * Before 2026-09-18 the inbox scan counted our own DMs as replies (#186186): it tagged the lead
+ * "DM Replied" and wrote the pitch into a `[DM Reply]` note under sender "me" — which a backfill then
+ * copied into lead_comms as an inbound message. This reads what a tagged lead actually carries and
+ * says whether a reply is really there. Never "false" without having read something: no evidence
+ * either way is "unknown".
+ */
+export function auditRepliedLead(i: AuditInput): {
+  verdict: "replied" | "false_reply" | "unknown"
+  evidence: string[]
+  ourLines: number
+} {
+  const openers = i.ourOpeners ?? OUR_OPENERS
+  const ours = (body: string) => openers.some((o) => replyKey(body).startsWith(o))
+  const evidence: string[] = []
+  let ourLines = 0
+
+  const readWrapped = (s: string) => {
+    const dm = s.match(/^\s*\[dm reply\][^\n]*\n---\n([\s\S]*?)\n---/i)
+    if (dm) {
+      for (const line of dm[1].split("\n")) {
+        const m = line.match(/^([^:\n]{1,40}):\s([\s\S]*)$/)
+        if (!m) continue
+        const [, sender, body] = m
+        if (sender.trim().toLowerCase() === "me" || ours(body)) ourLines++
+        else if (body.trim()) evidence.push(body.trim())
+      }
+      return true
+    }
+    if (/^\s*\[(?:inbox reply|dm reply)\]/i.test(s)) {
+      const q = s.match(/:\s*"([\s\S]*?)"?\s*$/)
+      if (q && q[1].trim()) {
+        if (ours(q[1])) ourLines++
+        else evidence.push(q[1].trim())
+      }
+      return true
+    }
+    return false
+  }
+
+  for (const n of i.notes) readWrapped(n)
+  for (const c of i.comms) {
+    if (c.source === "reachr-inbox") {
+      evidence.push(c.body) // read with the fixed sender logic
+      continue
+    }
+    if (readWrapped(c.body)) continue
+    if (ours(c.body)) ourLines++
+    else if (c.body.trim()) evidence.push(c.body.trim())
+  }
+
+  const verdict = evidence.length ? "replied" : ourLines ? "false_reply" : "unknown"
+  return { verdict, evidence: [...new Set(evidence)], ourLines }
+}
+
+// ── paging ───────────────────────────────────────────────────────────────────
+
+/**
+ * Every row a paged endpoint has, or an error. The board reader used to stop after 20 pages of 200
+ * without a word, so on a 6,005-lead board the last 2,005 were invisible: a scrape wrote duplicates
+ * of them and the replies audit skipped them (measured on board 80, 2026-09-18). A cap still exists
+ * against a runaway loop, but reaching it with full pages throws instead of returning a subset.
+ */
+export async function collectPages<T>(
+  fetchPage: (page: number, size: number) => Promise<T[]>,
+  o: { pageSize: number; maxPages: number },
+): Promise<T[]> {
+  const all: T[] = []
+  for (let page = 1; page <= o.maxPages; page++) {
+    const rows = await fetchPage(page, o.pageSize)
+    all.push(...rows)
+    if (rows.length < o.pageSize) return all
+  }
+  throw new Error(`the board has more than ${o.maxPages * o.pageSize} rows — refusing to work from a partial list`)
+}

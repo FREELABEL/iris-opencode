@@ -12,6 +12,8 @@ import {
   inferMode,
   normalizeTarget,
   liSlug,
+  auditRepliedLead,
+  collectPages,
 } from "./reachr-core"
 
 /**
@@ -335,5 +337,76 @@ describe("retry a spec run?", () => {
   })
   test("any other error (login wall, timeout) → reported, not retried away", () => {
     expect(shouldRetrySpec({ resultFileExists: false, text: "Timeout 30000ms exceeded", elapsedMs: 9_000 })).toBe(false)
+  })
+})
+
+// ══ AUDIT: is a "DM Replied" tag backed by a real reply? ═════════════════════
+// Shapes from the 24 tagged leads on boards 38 and 80, 2026-09-18 (#186186). A scan before the fix
+// wrote our own pitch into the note as the "reply", under sender "me".
+
+describe("audit a 'DM Replied' lead", () => {
+  const note = (lines: string[]) =>
+    `[DM Reply] @studio.nine replied via Instagram DM:\n---\n${lines.join("\n")}\n---\nScanned: 2026-04-26`
+
+  test("a note holding only our own lines ('me:') → no real reply: the tag is false", () => {
+    const v = auditRepliedLead({ notes: [note(["me: Noticed you're heavily involved in AI. Interested in teaming up?"])], comms: [] })
+    expect(v.verdict).toBe("false_reply")
+    expect(v.ourLines).toBe(1)
+  })
+
+  test("a note with a line from them → a real reply, the tag stands", () => {
+    const v = auditRepliedLead({ notes: [note(["me: Noticed you're into AI", "them: Tell me more"])], comms: [] })
+    expect(v.verdict).toBe("replied")
+    expect(v.evidence).toContain("Tell me more")
+  })
+
+  test("a reachr-inbox comms row is evidence — it was read with the fixed sender logic", () => {
+    const v = auditRepliedLead({ notes: [note(["me: pitch"])], comms: [{ body: "Sounds good", source: "reachr-inbox" }] })
+    expect(v.verdict).toBe("replied")
+  })
+
+  test("a comms row that is only a backfilled copy of a 'me:' note is NOT evidence", () => {
+    const n = note(["me: Noticed you're heavily involved in AI."])
+    const v = auditRepliedLead({ notes: [n], comms: [{ body: n, source: null }] })
+    expect(v.verdict).toBe("false_reply")
+  })
+
+  test("a line from them that repeats our own opening line is still ours", () => {
+    // The old scan's second bug labelled OUR un-avatared bubbles by the lead's handle sometimes.
+    const v = auditRepliedLead({
+      notes: [note(["studio.nine: Noticed you're heavily involved in AI. Interested in teaming up?"])],
+      comms: [],
+      ourOpeners: ["noticed you're heavily involved in ai"],
+    })
+    expect(v.verdict).toBe("false_reply")
+  })
+
+  test("no note and no comms → cannot tell (tagged by some other path) — never called false", () => {
+    expect(auditRepliedLead({ notes: [], comms: [] }).verdict).toBe("unknown")
+  })
+
+  test("an older [inbox reply] preview from them counts as a reply", () => {
+    const v = auditRepliedLead({ notes: ['[inbox reply] IG reply from @studio.nine: "yes interested"'], comms: [] })
+    expect(v.verdict).toBe("replied")
+  })
+})
+
+// ══ READING A BOARD: every lead, or an error — never a silent subset ═════════
+
+describe("reading every page of a board", () => {
+  const board = (n: number) => Array.from({ length: n }, (_, i) => ({ id: i + 1 }))
+  const pager = (rows: any[]) => async (page: number, size: number) => rows.slice((page - 1) * size, page * size)
+
+  test("a 6,005-lead board is read to the end (the old 20-page cap stopped at 4,000)", async () => {
+    const got = await collectPages(pager(board(6005)), { pageSize: 200, maxPages: 100 })
+    expect(got.length).toBe(6005)
+  })
+
+  test("an exact multiple of the page size ends on the empty page", async () => {
+    expect((await collectPages(pager(board(400)), { pageSize: 200, maxPages: 100 })).length).toBe(400)
+  })
+
+  test("hitting the safety cap with pages still full is an error, not a partial answer", async () => {
+    await expect(collectPages(pager(board(1000)), { pageSize: 200, maxPages: 3 })).rejects.toThrow(/more than 600/)
   })
 })

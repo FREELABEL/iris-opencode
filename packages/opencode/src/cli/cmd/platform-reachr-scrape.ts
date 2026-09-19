@@ -3,7 +3,7 @@ import * as prompts from "./clack"
 import { irisFetch, requireAuth, resolveUserId, handleApiError, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
 import { inferMode, normalizeTarget, isMode, findFreelabelRoot, savedSessions, runInstagramScrape } from "./reachr-instagram"
 import { runLinkedInScrape, liSessionFile, LI_MAX_PROFILES } from "./reachr-linkedin"
-import { type Lead, platformOf, findExisting, provenanceNote, leadPayload, judgeCreated } from "./reachr-core"
+import { type Lead, platformOf, findExisting, provenanceNote, leadPayload, judgeCreated, collectPages } from "./reachr-core"
 import { resolveBrowserUseScript, runBrowserUseScript } from "./platform-browser"
 
 // Every report line on STDOUT. UI.println writes to stderr while printKV/printDivider write to
@@ -49,23 +49,27 @@ const rowsOf = (x: any): any[] => (Array.isArray(x) ? x : Array.isArray(x?.data)
  * The board list is read from the database, so it is current. Prospected has to be asked for by
  * name, so the default list and the Prospected list are both fetched and merged.
  */
-async function boardLeads(bloqId: number): Promise<any[]> {
+export async function boardLeads(bloqId: number): Promise<any[]> {
   const all = new Map<number, any>()
   for (const status of [undefined, "Prospected"]) {
-    for (let page = 1; page <= 20; page++) {
-      // `fresh_read`: fl-api caches this list in Redis for 30s per user and never invalidates it
-      // on create/update/delete — and strips `_`/`timestamp` from the cache key, so the usual
-      // cache-busters do nothing. Measured: a lead created a moment ago was absent from the list
-      // for ~30s, so two runs 20s apart duplicated every no-contact person. Any OTHER unique
-      // parameter changes the key. Remove once the controller invalidates on write (#185994).
-      const q = new URLSearchParams({ bloq_id: String(bloqId), per_page: "200", page: String(page), fresh_read: String(Date.now()) })
-      if (status) q.set("status", status)
-      const res = await irisFetch(`/api/v1/leads?${q}`)
-      if (!res.ok) throw new Error(`could not read board ${bloqId} to check for duplicates (HTTP ${res.status})`)
-      const rows = rowsOf(((await res.json()) as any)?.data)
-      for (const r of rows) if (r?.id != null) all.set(r.id, r)
-      if (rows.length < 200) break
-    }
+    // Every page, or an error (collectPages): a 20-page cap here once hid the last 2,005 leads of
+    // a 6,005-lead board — duplicates on write, a blind spot in the replies audit.
+    const rows = await collectPages(
+      async (page, size) => {
+        // `fresh_read`: fl-api caches this list in Redis for 30s per user and never invalidates it
+        // on create/update/delete — and strips `_`/`timestamp` from the cache key, so the usual
+        // cache-busters do nothing. Measured: a lead created a moment ago was absent from the list
+        // for ~30s, so two runs 20s apart duplicated every no-contact person. Any OTHER unique
+        // parameter changes the key. Remove once the controller invalidates on write (#185994).
+        const q = new URLSearchParams({ bloq_id: String(bloqId), per_page: String(size), page: String(page), fresh_read: String(Date.now()) })
+        if (status) q.set("status", status)
+        const res = await irisFetch(`/api/v1/leads?${q}`)
+        if (!res.ok) throw new Error(`could not read board ${bloqId} to check for duplicates (HTTP ${res.status})`)
+        return rowsOf(((await res.json()) as any)?.data)
+      },
+      { pageSize: 200, maxPages: 250 },
+    )
+    for (const r of rows) if (r?.id != null) all.set(r.id, r)
   }
   return [...all.values()]
 }
