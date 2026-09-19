@@ -491,7 +491,7 @@ const HiveRunCommand = cmd({
         return
       }
       console.log(`${success("✓")} dispatched task ${bold(taskId)}  status=${created.task.status}`)
-      console.log(dim(`  Check later:  iris hive tasks --task ${taskId}`))
+      console.log(dim(`  Check later:  iris hive tasks get ${taskId}`))
       return
     }
 
