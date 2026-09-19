@@ -4,7 +4,7 @@ import path from "path"
 import { runSpec } from "./reachr-playwright"
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
-import { requireAuth, resolveUserId, printDivider, dim, bold, writeJson } from "./iris-api"
+import { irisFetch, requireAuth, resolveUserId, printDivider, dim, bold, writeJson } from "./iris-api"
 import { findFreelabelRoot, savedSessions } from "./reachr-instagram"
 
 const out = (...parts: string[]) => console.log(parts.join(""))
@@ -23,6 +23,13 @@ const out = (...parts: string[]) => console.log(parts.join(""))
  * here and is forced off. Messaging a person is a separate, deliberate act. `--write-back` is the only
  * write: notes and "replied"/"no response" tags on the matched leads.
  *
+ * THE COMMS SPINE. `--log-comms` (implied by `--write-back`) writes each reply into the lead's
+ * thread (lead_comms, channel instagram, inbound) — the one ledger the board Communications inbox,
+ * the reply-suggestion pane and the agents' thread tools all read. Before this, a reply seen by
+ * the scan existed only in its log: every one of those surfaces showed the lead as silent.
+ * Idempotent: a reply whose text is already on that lead's Instagram thread is skipped (the
+ * server's own dedupe keys on the timestamp, which Instagram often does not show).
+ *
  * People who messaged you but are not leads yet are listed with the command that adds them —
  * `iris reachr scrape <board> --instagram inbox`.
  */
@@ -39,6 +46,11 @@ export const ReachrInboxCmd = cmd({
       .option("since", { describe: "how far back: 24h, 3d, 1w", type: "string", default: "24h" })
       .option("limit", { describe: "conversations to read", type: "number", default: 30 })
       .option("write-back", { describe: "add notes and replied / no-response tags to the matched leads (never sends a message)", type: "boolean", default: false })
+      .option("log-comms", {
+        describe: "log each reply into the lead's comms thread (what the board inbox and agents read) — implied by --write-back",
+        type: "boolean",
+        default: false,
+      })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args: any) {
     const bloqId = Number(args["bloq-id"])
@@ -104,19 +116,20 @@ export const ReachrInboxCmd = cmd({
     }
     if (!r) {
       const tail = run.text.trim().split("\n").filter(Boolean).slice(-3).join(" | ").slice(-400)
-      return fail(`the inbox scan produced no result (exit ${run.code}): ${tail || "no output"}`)
+      return fail(`the inbox scan produced no result (exit ${run.code}, ${run.attempts} attempt(s)): ${tail || "no output"}`)
     }
     // With --write-back the scan continues past the result file; its exit code says whether the
     // write-back finished.
     const wroteOk = !writeBack || run.code === 0
+    const comms = writeBack || args["log-comms"] ? await logReplies(r, bloqId, account) : null
 
     spinner?.stop(
       `@${account}: ${r.conversations} conversation(s) — ${r.replied.length} replied, ${r.no_response.length} no response, ${r.not_on_board.length} not on board ${bloqId}`,
     )
     if (isJson) {
       // discord_posted is read from the scan's own log, so "private" is checked, not assumed.
-      writeJson({ ok: wroteOk, measured: true, write_back: writeBack, discord_posted: /Discord (scan summary|notification) sent/.test(run.text), ...r })
-      process.exitCode = wroteOk ? 0 : 1
+      writeJson({ ok: wroteOk && !comms?.failed.length, measured: true, write_back: writeBack, comms, discord_posted: /Discord (scan summary|notification) sent/.test(run.text), ...r })
+      process.exitCode = wroteOk && !comms?.failed.length ? 0 : 1
       return
     }
 
@@ -135,6 +148,11 @@ export const ReachrInboxCmd = cmd({
       out(dim(`  ${r.not_on_board.slice(0, 12).map((u: any) => "@" + u.handle).join("  ")}${r.not_on_board.length > 12 ? "  …" : ""}`))
       out(dim(`  Add them: iris reachr scrape ${bloqId} --instagram inbox --ig-account ${account} --write`))
     }
+    if (comms) {
+      printDivider()
+      out(`  Comms thread: ${comms.logged} repl${comms.logged === 1 ? "y" : "ies"} logged, ${comms.already} already there${comms.failed.length ? `, ${comms.failed.length} FAILED` : ""}`)
+      for (const f of comms.failed.slice(0, 5)) out(dim(`      #${f.lead_id}: ${f.why}`))
+    }
     printDivider()
     prompts.outro(
       writeBack
@@ -143,6 +161,65 @@ export const ReachrInboxCmd = cmd({
           : `Write-back did not finish (exit ${run.code}) — check the leads; nothing was sent.`
         : dim(`Read-only — nothing written or sent. --write-back tags the matched leads.`),
     )
-    process.exitCode = wroteOk ? 0 : 1
+    process.exitCode = wroteOk && !comms?.failed.length ? 0 : 1
   },
 })
+
+// Rows written by the older inbox-check path (notes backfilled into lead_comms) wrap the text:
+// `[inbox reply] IG reply from @handle: "Tell me more"`. Compare the words inside, or the same
+// reply is logged twice.
+const bodyKey = (v: unknown) =>
+  String(v ?? "")
+    .replace(/^\s*\[(?:inbox reply|dm reply)\]\s*(?:IG|LinkedIn)?\s*reply from @?[\w.]+:\s*/i, "")
+    .replace(/^"([\s\S]*)"\s*$/, "$1")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase()
+
+/** Write each reply into its lead's comms thread, skipping text already there. */
+async function logReplies(r: any, bloqId: number, account: string) {
+  const res = { logged: 0, already: 0, failed: [] as { lead_id: number; why: string }[] }
+  for (const l of r.replied ?? []) {
+    const replies: { body: string; timestamp: string | null }[] = l.replies ?? []
+    if (!replies.length) continue
+    try {
+      const q = new URLSearchParams({ lead_id: String(l.lead_id), channel: "instagram", direction: "inbound", per_page: "200" })
+      const got = await irisFetch(`/api/v1/atlas/comms?${q}`)
+      if (!got.ok) throw new Error(`could not read the lead's thread (HTTP ${got.status}) — nothing logged for it`)
+      const b: any = await got.json()
+      const rows: any[] = Array.isArray(b?.data) ? b.data : Array.isArray(b?.data?.data) ? b.data.data : []
+      const have = new Set(rows.map((x) => bodyKey(x?.body)))
+      for (const m of replies) {
+        if (!bodyKey(m.body)) continue
+        if (have.has(bodyKey(m.body))) {
+          res.already++
+          continue
+        }
+        const ts = m.timestamp ? Date.parse(m.timestamp) : NaN
+        const post = await irisFetch("/api/v1/atlas/comms/log", {
+          method: "POST",
+          body: JSON.stringify({
+            lead_id: l.lead_id,
+            bloq_id: bloqId,
+            channel: "instagram",
+            direction: "inbound",
+            body: m.body,
+            from_identifier: `@${l.handle}`,
+            to_identifiers: [`@${account}`],
+            ...(Number.isFinite(ts) ? { sent_at: new Date(ts).toISOString() } : {}),
+            metadata: { source: "reachr-inbox", ig_account: account, timestamp_seen: Number.isFinite(ts) },
+          }),
+        })
+        if (!post.ok) {
+          res.failed.push({ lead_id: l.lead_id, why: `HTTP ${post.status}` })
+          continue
+        }
+        have.add(bodyKey(m.body))
+        res.logged++
+      }
+    } catch (e: any) {
+      res.failed.push({ lead_id: l.lead_id, why: e?.message ?? String(e) })
+    }
+  }
+  return res
+}

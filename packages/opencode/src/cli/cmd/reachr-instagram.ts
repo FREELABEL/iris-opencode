@@ -119,7 +119,7 @@ export async function runInstagramScrape(r: InstagramRun): Promise<{ data?: any;
   }
   if (!raw) {
     const tail = output.text.trim().split("\n").filter(Boolean).slice(-3).join(" | ").slice(-400)
-    return { error: `the Instagram scraper produced no result (exit ${output.code}): ${tail || "no output"}` }
+    return { error: `the Instagram scraper produced no result (exit ${output.code}, ${output.attempts} attempt(s)): ${tail || "no output"}` }
   }
 
   const profiles: any[] = raw.profiles ?? []
