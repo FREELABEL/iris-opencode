@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { parseTargets, toCursorRule, isGenerated, upsertAgentsBlock, type SyncTarget } from "../lib/playbook-targets"
 import { PlaybookContentsCommands } from "./platform-playbook-contents"
 import * as prompts from "./clack"
 // Aliased: `Tier` is already taken in this file by the e2e runner's own unrelated enum.
@@ -25,7 +26,7 @@ import {
   type StepResult,
   type ExecuteOptions,
 } from "../../skill/executor"
-import { existsSync, readdirSync, readFileSync } from "fs"
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "fs"
 import {
   resolveInstallRoot,
   playbookFile,
@@ -1508,10 +1509,24 @@ const PlaybookSyncCommand = cmd({
   builder: (yargs) =>
     yargs
       .option("json", { type: "boolean", default: false })
-      .option("api", { type: "boolean", default: false, describe: "also push metadata to iris-api for frontend/API access" }),
+      .option("api", { type: "boolean", default: false, describe: "also push metadata to iris-api for frontend/API access" })
+      .option("target", {
+        type: "string",
+        describe: "where to sync: claude (default, .claude/skills), cursor (.cursor/rules), agents (AGENTS.md), or all — comma-separate for several",
+      }),
   async handler(args) {
+    let syncTargets: SyncTarget[]
+    try {
+      syncTargets = parseTargets(args.target as string | undefined)
+    } catch (e: any) {
+      prompts.log.error(e.message)
+      process.exitCode = 1
+      return
+    }
     await withInstance(async () => {
       const allPlaybooks = await Skill.all()
+      // Rendered once per playbook, then written to every requested target (#186212).
+      const rendered: { name: string; description: string; output: string }[] = []
       const skillSyncFailures: string[] = []
       const { join } = await import("path")
 
@@ -1550,6 +1565,8 @@ const PlaybookSyncCommand = cmd({
         }
 
         const output = await renderSkillReplica(info, plan)
+        rendered.push({ name: plan.name, description: plan.description, output })
+        if (!syncTargets.includes("claude")) continue
 
         // Write to .claude/skills/{name}/SKILL.md
         //
@@ -1581,6 +1598,33 @@ const PlaybookSyncCommand = cmd({
           }
         }
       }
+
+      // --target cursor / agents (#186212): the same replicas, for the other agents on this repo.
+      // Written into the current project — Cursor and AGENTS.md readers are per-repo.
+      const extraWritten: string[] = []
+      if (syncTargets.includes("cursor") && rendered.length) {
+        const rulesDir = join(cwd, ".cursor", "rules")
+        let n = 0
+        for (const r of rendered) {
+          const file = join(rulesDir, `${r.name}.mdc`)
+          const existing = existsSync(file) ? readFileSync(file, "utf8") : null
+          if (!isGenerated(existing)) {
+            if (!args.json) console.log(`  ${dim("·")} ${r.name} ${dim(`— ${file} is hand-written; left alone`)}`)
+            continue
+          }
+          mkdirSync(rulesDir, { recursive: true })
+          writeFileAtomic(file, toCursorRule(r.output, r.description))
+          n++
+        }
+        extraWritten.push(`${n} Cursor rule(s) → ${rulesDir}`)
+      }
+      if (syncTargets.includes("agents") && rendered.length) {
+        const file = join(cwd, "AGENTS.md")
+        const existing = existsSync(file) ? readFileSync(file, "utf8") : null
+        writeFileAtomic(file, upsertAgentsBlock(existing, rendered))
+        extraWritten.push(`${rendered.length} playbook(s) indexed in ${file}`)
+      }
+      if (!args.json) for (const line of extraWritten) console.log(`  ${success("✓")} ${line}`)
 
       // --api: also push metadata to iris-api
       let apiSynced = 0
