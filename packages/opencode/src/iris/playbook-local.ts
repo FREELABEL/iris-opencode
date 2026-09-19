@@ -1,6 +1,7 @@
 import { existsSync, statSync } from "fs"
 import { homedir } from "os"
 import path from "path"
+import { installState, playbookAction, type PlaybookAction } from "./playbook-install"
 
 /**
  * Where a playbook is installed on this machine, if anywhere — for the session's project, not
@@ -58,12 +59,21 @@ export function projectRoot(dir: unknown): string | undefined {
 }
 
 /** Set `hasLocal` (and `localWhere`) on a page of playbook rows by the rule above. */
-export function markLocal<T extends { name: string; hasLocal: boolean }>(
+export function markLocal<T extends { name: string; hasLocal: boolean; version?: number }>(
   rows: T[],
   roots: LocalRoots = {},
-): (T & { localWhere?: LocalWhere })[] {
+): (T & { localWhere?: LocalWhere; installedVersion?: number; edited?: boolean; action: PlaybookAction })[] {
   return rows.map((r) => {
     const hit = findLocalPlaybook(r.name, roots)
-    return { ...r, hasLocal: hit.found, localWhere: hit.where ?? undefined }
+    // A synced skill (SKILL.md) is not a Marketplace install; only a PLAYBOOK.md can carry a record.
+    const st = hit.found && hit.where !== "skill" ? installState(hit.path) : { installedVersion: undefined, edited: false }
+    return {
+      ...r,
+      hasLocal: hit.found,
+      localWhere: hit.where ?? undefined,
+      installedVersion: st.installedVersion,
+      edited: st.edited || undefined,
+      action: playbookAction({ hasLocal: hit.found, installedVersion: st.installedVersion, version: r.version }),
+    }
   })
 }

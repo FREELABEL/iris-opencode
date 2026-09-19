@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createResource, createSignal, For, Match, onCleanup, Show, Switch } from "solid-js"
+import { createEffect, createMemo, createResource, createSignal, For, Match, on, onCleanup, Show, Switch, untrack } from "solid-js"
 import "./session-iris-tab.css"
 import { pageSummary, type PageEnvelope } from "./use-paged-surface"
 import { Dialog } from "@opencode-ai/ui/dialog"
@@ -7,6 +7,7 @@ import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { SegmentedControlV2, SegmentedControlItemV2 } from "@opencode-ai/ui/v2/segmented-control-v2"
 import { IrisForceGraph, type ForceEdge, type ForceNode } from "./iris-force-graph"
 import { graphBoardIsIsolated, scopeGraphRows, type GraphScope } from "./iris-graph-scope"
+import { Button } from "@opencode-ai/ui/button"
 import { useServerSDK } from "@/context/server-sdk"
 import { useSDK } from "@/context/sdk"
 import { usePlatform } from "@/context/platform"
@@ -100,6 +101,30 @@ function relativeAge(iso: string): string | undefined {
   const hrs = Math.floor(mins / 60)
   if (hrs < 24) return `${hrs}h ago`
   return `${Math.floor(hrs / 24)}d ago`
+}
+
+/**
+ * The one command a playbook card offers (#186274, #186278). `action` is decided by the server from
+ * what is on disk and the copy's install record; an older sidecar without it falls back to hasLocal.
+ */
+export function playbookCommand(r: any): string {
+  const action = r?.action ?? (r?.hasLocal ? "run" : "install")
+  if (action === "install") return `iris playbook install ${r.name}`
+  if (action === "update") return `iris playbook install ${r.name} --force`
+  return `iris playbook run ${r.name}`
+}
+
+/** The button the card shows, or null when there is nothing to install. */
+export function playbookButton(r: any): { label: string; force: boolean; warn?: string } | null {
+  const action = r?.action ?? (r?.hasLocal ? "run" : "install")
+  if (action === "install") return { label: "Install", force: false }
+  if (action === "update")
+    return {
+      label: r?.version != null ? `Update to v${r.version}` : "Update",
+      force: true,
+      ...(r?.edited ? { warn: "This copy has local edits — updating replaces them." } : {}),
+    }
+  return null
 }
 
 function describeRow(
@@ -218,13 +243,14 @@ function describeFields(surface: string, r: any): { title: string; fields: [stri
         ["arguments", (r.args ?? []).length || undefined],
         // Which copy — the project's, a synced skill, or the home install (#186277).
         ["installed here", r.hasLocal ? (r.localWhere ? `yes — ${r.localWhere}` : true) : false],
+        ["installed version", r.installedVersion],
+        ["local edits", r.edited],
         ["installs", r.installs], ["views", r.views],
         ["published", r.publishedAt], ["landing page", r.publicUrl],
         ["description", r.description],
       ]),
-      // `run` on a playbook that is not installed fails ("install it, then run it again"), so the
-      // one command the card offers must be the one that works (#186278).
-      command: r.hasLocal ? `iris playbook run ${r.name}` : `iris playbook install ${r.name}`,
+      // The one command that works for this card's state (#186278, #186274).
+      command: playbookCommand(r),
     }
   if (surface === "integrations")
     return {
@@ -686,6 +712,13 @@ export function SessionIrisTab() {
       return undefined
     }
   })()
+  const projectDir = (): string | undefined => {
+    try {
+      return dirSdk?.().directory || undefined
+    } catch {
+      return undefined
+    }
+  }
   const projectParam = () => {
     try {
       const d = dirSdk?.().directory
@@ -1069,6 +1102,44 @@ export function SessionIrisTab() {
 
   /** A non-Atlas row being inspected. Atlas has its own reader because it has a BODY; the rest
    *  are records, so they get a field list rather than prose. */
+  /**
+   * Install / Update from the card (#186274): the sidecar runs the real `iris playbook install`.
+   * On success the list is refetched and the open card re-described from the fresh row, so
+   * "installed here" and the button change without reopening it.
+   */
+  const [installing, setInstalling] = createSignal(false)
+  const [installResult, setInstallResult] = createSignal<{ ok: boolean; message: string } | null>(null)
+  /** The playbook just installed, until the refreshed list shows it installed (see the effect below openRow). */
+  const [justInstalled, setJustInstalled] = createSignal<string | null>(null)
+  const installOpenPlaybook = async (force: boolean) => {
+    const row = openRow()
+    const name = row?.raw?.name
+    if (!name || installing()) return
+    setInstalling(true)
+    setInstallResult(null)
+    try {
+      const res = await doFetch("/iris/playbooks/install", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name, project: projectDir(), force }),
+      })
+      const r = (await res.json().catch(() => null)) as { ok?: boolean; message?: string } | null
+      const ok = !!r?.ok
+      setInstallResult({ ok, message: r?.message || (ok ? "Installed" : `Install failed (HTTP ${res.status})`) })
+      if (ok) {
+        // Do NOT await the refetch: measured on a built sidecar, awaiting it left the button on
+        // "Installing…" and the card unchanged after a successful install. Ask for fresh rows and
+        // let the effect below re-describe the card once the row shows up installed.
+        setJustInstalled(name)
+        void refetchSurface()
+      }
+    } catch (e: any) {
+      setInstallResult({ ok: false, message: e?.message ?? String(e) })
+    } finally {
+      setInstalling(false)
+    }
+  }
+
   const [openRow, setOpenRow] = createSignal<{
     title: string
     fields: [string, string][]
@@ -1078,6 +1149,29 @@ export function SessionIrisTab() {
     /** Which pane it came from, which is what decides its detail tabs. */
     pane?: string
   } | null>(null)
+  // A result belongs to the card it was produced on — clear it when another opens. Declared AFTER
+  // openRow: reading a signal above its declaration is a TDZ crash one timing change away.
+  createEffect(
+    on(
+      () => openRow()?.raw?.name,
+      // Only when a DIFFERENT playbook opens — re-describing the same card after an install must
+      // keep its "Installed …" message.
+      (name, prev) => {
+        if (name !== prev) setInstallResult(null)
+      },
+      { defer: true },
+    ),
+  )
+  // After an install: when the refreshed list carries the row as installed, show the card from it
+  // — "installed here: yes — project", the Run command, no button.
+  createEffect(() => {
+    const name = justInstalled()
+    if (!name) return
+    const fresh = rows().find((x: any) => x?.name === name)
+    if (!fresh?.hasLocal) return
+    setJustInstalled(null)
+    if (untrack(() => openRow()?.raw?.name) === name) setOpenRow(describeRow(pane(), fresh))
+  })
 
   const [detailTab, setDetailTab] = createSignal("info")
   const detailTabs = createMemo(() => detailTabsFor(openRow()?.pane ?? ""))
@@ -1531,6 +1625,35 @@ export function SessionIrisTab() {
                         : ""}
                     </p>
                   </div>
+                </Show>
+                <Show when={openRow()!.pane === "playbooks" && playbookButton(openRow()!.raw)}>
+                  {(btn) => (
+                    <div class="flex flex-col gap-1 pb-2" data-slot="iris-playbook-install">
+                      <div class="flex items-center gap-2">
+                        <Button
+                          size="small"
+                          variant="primary"
+                          disabled={installing()}
+                          onClick={() => void installOpenPlaybook(btn().force)}
+                        >
+                          {installing() ? "Installing…" : btn().label}
+                        </Button>
+                        <span class="text-11-regular text-text-weaker">
+                          {projectDir() ? "into this project" : "into your home folder"}
+                        </span>
+                      </div>
+                      <Show when={btn().warn}>
+                        <p class="text-11-regular text-text-danger-base">{btn().warn}</p>
+                      </Show>
+                      <Show when={installResult()}>
+                        {(r) => (
+                          <p class="text-11-regular" classList={{ "text-text-weak": r().ok, "text-text-danger-base": !r().ok }}>
+                            {r().message}
+                          </p>
+                        )}
+                      </Show>
+                    </div>
+                  )}
                 </Show>
                 <Show when={openRow()!.command}>
                   <button
@@ -2278,7 +2401,9 @@ export function SessionIrisTab() {
                             {pb.name}
                           </span>
                           <Show when={pb.hasLocal}>
-                            <span class="font-mono text-11-regular text-text-weaker shrink-0">installed</span>
+                            <span class="font-mono text-11-regular text-text-weaker shrink-0">
+                              {pb.action === "update" ? `update · v${pb.version}` : "installed"}
+                            </span>
                           </Show>
                           <Show when={pb.attached}>
                             <span class="font-mono text-11-regular text-text-weaker shrink-0">this board</span>

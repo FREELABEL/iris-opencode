@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { cellText, detailTabsFor, highlightJson, integrationHealth, itemCommands, logoFor, normalizeSurface, providerMark, resolvePane, surfaceView } from "./session-iris-tab"
+import { cellText, detailTabsFor, highlightJson, integrationHealth, itemCommands, logoFor, normalizeSurface, playbookButton, playbookCommand, providerMark, resolvePane, surfaceView } from "./session-iris-tab"
 
 describe("surfaceView", () => {
   test("a failed fetch is never rendered as an empty surface", () => {
@@ -268,5 +268,35 @@ describe("logoFor", () => {
     // could show marks without the attribution that pays for them.
     expect(logoFor(logos, "tradovate")).toBeUndefined()
     expect(logoFor(logos, undefined)).toBeUndefined()
+  })
+})
+
+// #186274 — the Marketplace card acts instead of printing a command to paste. `action` comes from
+// the server (install | update | run), decided from what is on disk and the install record.
+describe("playbook card: the command and the button", () => {
+  const row = (x: any) => ({ name: "capture-sops", version: 18, ...x })
+
+  test("not installed → the command installs, and the button says Install", () => {
+    expect(playbookCommand(row({ action: "install" }))).toBe("iris playbook install capture-sops")
+    expect(playbookButton(row({ action: "install" }))).toEqual({ label: "Install", force: false })
+  })
+
+  test("a newer version published → Update to v18, which replaces the copy (--force)", () => {
+    expect(playbookCommand(row({ action: "update", installedVersion: 17 }))).toBe("iris playbook install capture-sops --force")
+    expect(playbookButton(row({ action: "update", installedVersion: 17 }))).toEqual({ label: "Update to v18", force: true })
+  })
+
+  test("an update over local edits says so before it replaces them", () => {
+    expect(playbookButton(row({ action: "update", installedVersion: 17, edited: true }))?.warn).toMatch(/local edits/)
+  })
+
+  test("installed and current → the command runs it, and there is no button", () => {
+    expect(playbookCommand(row({ action: "run" }))).toBe("iris playbook run capture-sops")
+    expect(playbookButton(row({ action: "run" }))).toBeNull()
+  })
+
+  test("an older server that sends no action falls back to hasLocal", () => {
+    expect(playbookCommand(row({ hasLocal: false }))).toBe("iris playbook install capture-sops")
+    expect(playbookCommand(row({ hasLocal: true }))).toBe("iris playbook run capture-sops")
   })
 })
