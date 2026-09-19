@@ -151,7 +151,7 @@ export function registerAutostart(bridgeDir: string): StepResult {
 
 // ── commands ────────────────────────────────────────────────────────────────
 
-const NodeInstallCommand = cmd({
+export const NodeInstallCommand = cmd({
   command: "install",
   describe: "make this machine a Hive compute node (fetch the daemon, install deps, autostart, start)",
   builder: (y) =>

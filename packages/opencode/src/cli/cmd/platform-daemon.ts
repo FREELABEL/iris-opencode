@@ -6,6 +6,8 @@ import { join } from "path"
 import { homedir } from "os"
 import { existsSync, readFileSync } from "fs"
 import { execSync, spawn } from "child_process"
+import { nodeVersion, NodeInstallCommand } from "./platform-node"
+import { missingDaemonAdvice } from "./daemon-advice"
 
 function printDivider() {
   console.log(`  ${dim("─".repeat(56))}`)
@@ -28,11 +30,10 @@ function getBridgeCtl(): string | null {
   return existsSync(p) ? p : null
 }
 
-function getInstallHint(): string {
-  // `iris daemon install`, NOT the CLI installer. This used to return the install-code
-  // one-liner, which installs the CLI and does nothing for the daemon — so every
-  // "Daemon not installed" message named a fix that could not fix it.
-  return "iris daemon install"
+function reportMissingDaemon(): void {
+  const [problem, fix] = missingDaemonAdvice(!!nodeVersion())
+  prompts.log.error(problem)
+  prompts.log.info(fix)
 }
 
 function runCtl(ctl: string, action: string): string {
@@ -49,7 +50,7 @@ const DaemonStartCommand = cmd({
   async handler() {
     const ctl = getDaemonCtl()
     if (!ctl) {
-      prompts.log.error(`Daemon not installed. Run: ${getInstallHint()}`)
+      reportMissingDaemon()
       return
     }
     prompts.log.info("Starting daemon...")
@@ -63,7 +64,7 @@ const DaemonStopCommand = cmd({
   describe: "stop the Hive daemon",
   async handler() {
     const ctl = getDaemonCtl()
-    if (!ctl) { prompts.log.error("Daemon not installed"); return }
+    if (!ctl) { reportMissingDaemon(); return }
     const out = runCtl(ctl, "stop")
     if (out) console.log(out)
   },
@@ -127,8 +128,14 @@ const DaemonStatusCommand = cmd({
         } catch {}
       }
       printDivider()
-      prompts.log.info(dim("Fix: iris daemon restart"))
-      prompts.log.info(dim("Or:  curl -fsSL https://heyiris.io/install-code | bash"))
+      // Offline because it was never installed is a different problem from offline because it
+      // stopped — "restart" cannot fix the first, and the usual cause of the first is no Node.js.
+      if (!getDaemonCtl()) {
+        reportMissingDaemon()
+      } else {
+        prompts.log.info(dim("Fix: iris daemon restart"))
+        prompts.log.info(dim("Or reinstall: iris node install"))
+      }
     }
 
     prompts.outro("Done")
@@ -140,7 +147,7 @@ const DaemonRestartCommand = cmd({
   describe: "restart the Hive daemon",
   async handler() {
     const ctl = getDaemonCtl()
-    if (!ctl) { prompts.log.error("Daemon not installed"); return }
+    if (!ctl) { reportMissingDaemon(); return }
     prompts.log.info("Restarting daemon...")
     const out = runCtl(ctl, "restart")
     if (out) console.log(out)
@@ -156,7 +163,7 @@ const DaemonLogsCommand = cmd({
       .option("no-follow", { alias: "n", describe: "don't follow (just print and exit)", type: "boolean", default: false }),
   async handler(args) {
     const ctl = getDaemonCtl()
-    if (!ctl) { prompts.log.error("Daemon not installed"); return }
+    if (!ctl) { reportMissingDaemon(); return }
     const logFile = join(homedir(), ".iris", "bridge", "daemon.log")
     if (!existsSync(logFile)) { prompts.log.error("No log file found"); return }
     const lines = (args as any).lines ?? 100
@@ -288,7 +295,7 @@ const DaemonRegisterCommand = cmd({
   describe: "register this machine as a Hive compute node",
   async handler() {
     const ctl = getDaemonCtl()
-    if (!ctl) { prompts.log.error("Daemon not installed"); return }
+    if (!ctl) { reportMissingDaemon(); return }
     prompts.log.info("Registering node...")
     const out = runCtl(ctl, "register")
     if (out) console.log(out)
@@ -297,52 +304,19 @@ const DaemonRegisterCommand = cmd({
 
 const DaemonInstallCommand = cmd({
   command: "install",
-  describe: "install the Hive daemon on this machine",
+  describe: "install the Hive daemon on this machine (same as: iris node install)",
   builder: (y) =>
-    y.option("key", { type: "string", describe: "node key (otherwise registered interactively later)" }),
+    y.option("key", { type: "string", describe: "ignored — the daemon enrolls itself once you are signed in" }),
   async handler(args) {
-    // This verb did not exist, and its absence was load-bearing.
+    // This used to run `curl -fsSL https://heyiris.io/install-daemon | bash`. That URL is a 404
+    // (measured 2026-09-18) and Windows has no bash, so the command every "not installed" message
+    // pointed at failed on every machine (#186038). `iris node install` is the installer that
+    // works everywhere — HTTPS archive, no Git, names Node.js when it is missing — so this verb
+    // is now that, rather than a second installer that can drift.
     //
-    // `iris daemon start/status/register` all reported "Daemon not installed" and pointed at
-    // getInstallHint() — which returns the CLI installer. That does NOT install the daemon;
-    // the daemon has its own installer at /install-daemon. So the error named a fix that
-    // could not work, and a client spent 2026-08-31 discovering the real one by hand.
-    //
-    // Non-interactive on purpose: the desktop app spawns commands with NO TTY, so anything
-    // that prompts fails silently there. That is the same constraint that makes `auth login`
-    // impossible to shell out to from the app.
-    if (getDaemonCtl()) {
-      prompts.log.info("Daemon already installed. Use `iris daemon status` to check it.")
-      return
-    }
-
-    const url = "https://heyiris.io/install-daemon"
-    prompts.log.info(`Installing the Hive daemon from ${url}`)
-    const keyArg = args.key ? ` --key ${String(args.key).replace(/[^A-Za-z0-9_-]/g, "")}` : ""
-
-    try {
-      // Pipe to bash rather than downloading to a temp file: matches the documented one-liner,
-      // and keeps the daemon installer the single source of truth for its own steps.
-      const out = execSync(`curl -fsSL ${url} | bash -s --${keyArg} 2>&1`, {
-        timeout: 300000,
-        maxBuffer: 32 * 1024 * 1024,
-      })
-        .toString()
-        .trim()
-      if (out) console.log(out)
-    } catch (e: any) {
-      const detail = (e?.stdout?.toString() || e?.stderr?.toString() || e?.message || "").trim()
-      prompts.log.error("Daemon install failed.")
-      if (detail) console.log(detail.split("\n").slice(-20).join("\n"))
-      return
-    }
-
-    // Installed is not working — verify, the way a human would.
-    if (!getDaemonCtl()) {
-      prompts.log.error("Install reported success but the daemon control script is still missing.")
-      return
-    }
-    prompts.log.info(`${success("✓")} Daemon installed. Next: ${bold("iris daemon register")}`)
+    // Non-interactive on purpose: the desktop app spawns commands with NO TTY.
+    if (args.key) prompts.log.info(dim("--key is no longer needed: the daemon enrolls itself once you are signed in."))
+    await (NodeInstallCommand as any).handler({ ...args, "no-start": false, "no-autostart": false, json: false })
   },
 })
 
@@ -353,7 +327,7 @@ const DaemonPassthroughCommand = cmd({
   async handler(args) {
     const ctl = getDaemonCtl()
     if (!ctl) {
-      prompts.log.error(`Daemon not installed. Run: ${getInstallHint()}`)
+      reportMissingDaemon()
       return
     }
     // Forward all unrecognized args to daemonctl
