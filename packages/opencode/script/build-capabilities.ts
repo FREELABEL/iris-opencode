@@ -25,6 +25,7 @@
 import { readdirSync, readFileSync, writeFileSync, existsSync, statSync } from "fs"
 import { join, dirname, basename } from "path"
 import { homedir } from "os"
+import { redactSecrets } from "../src/util/redact-secrets"
 import { execSync } from "child_process"
 
 const ROOT = join(import.meta.dir, "..")
@@ -409,7 +410,8 @@ function collectCommands(): Entry[] {
  * above still see real line structure when they run.
  */
 function prose(src: string): string {
-  return src
+  // redactSecrets first (#186275): this prose is copied from PRIVATE playbooks into the PUBLIC index.
+  return redactSecrets(src)
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/https?:\/\/\S+/g, " ")
     .replace(/\s+/g, " ")
