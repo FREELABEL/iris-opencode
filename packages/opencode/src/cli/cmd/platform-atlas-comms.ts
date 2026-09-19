@@ -6,6 +6,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, dim, bold, success, highlight, getBridgeToken, writeJson } from "./iris-api"
 import { firstArray } from "../../util/array"
+import { newGroupId, GROUP_ID, buildLogPayloads, checkLogged, alsoSentTo, type Recipient } from "./comms-log-group"
 
 // ============================================================================
 // Atlas Comms CLI — Unified cross-channel lead communications log
@@ -535,6 +536,8 @@ const CommsListCommand = cmd({
 
       console.log(`  ${dim(date.padEnd(18))} ${icon} ${arrow} ${highlight(row.channel.padEnd(12))} ${subj}`)
       if (preview) console.log(`    ${preview}`)
+      const also = alsoSentTo(row, resolved.id)
+      if (also) console.log(`    ${dim(also)}`)
     }
     printDivider()
 
@@ -993,12 +996,17 @@ const CommsDeleteCommand = cmd({
 })
 
 const CommsLogCommand = cmd({
-  command: "log <id>",
+  command: "log <ids..>",
   aliases: ["add", "record"],
-  describe: "manually log a communication (call, in-person, etc.)",
+  describe: "manually log a communication — one lead, or one message sent to several (call, email, in-person…)",
   builder: (y) =>
     y
-      .positional("id", { type: "string", describe: "lead ID or name", demandOption: true })
+      .positional("ids", {
+        type: "string",
+        array: true,
+        describe: "one or more lead IDs or names — every one gets its own copy, linked as one message",
+        demandOption: true,
+      })
       .option("channel", {
           type: "string",
           choices: CHANNELS as unknown as string[],
@@ -1008,41 +1016,97 @@ const CommsLogCommand = cmd({
       .option("message", { type: "string", aliases: ["m", "body"], describe: "what happened", demandOption: true })
       .option("direction", { type: "string", default: "outbound", describe: "inbound|outbound" })
       .option("subject", { type: "string" })
-      .option("date", { type: "string", describe: "YYYY-MM-DD (defaults to now)" }),
+      .option("date", { type: "string", describe: "YYYY-MM-DD (defaults to now)" })
+      .option("cc", { type: "string", array: true, describe: "addresses that were CC'd but are not leads (recorded, not logged to)" })
+      .option("group", {
+        type: "string",
+        describe: "reuse a message group id — add a recipient later, or re-run safely without duplicates",
+      })
+      .option("json", { type: "boolean", default: false })
+      .example('iris comms log 29019 --channel apple_mail --subject "Hosting" -m "…"', "one lead")
+      .example('iris comms log 29019 29016 29021 --channel apple_mail --subject "Hosting" -m "…"', "one email, three recipients")
+      .example("iris comms log 29020 --group grp_ab12cd --channel apple_mail -m \"…\"", "add a recipient to an earlier group"),
   async handler(args) {
-    UI.empty()
-    prompts.intro("◈  Log Communication")
-    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    const json = Boolean(args.json)
+    if (!json) {
+      UI.empty()
+      prompts.intro("◈  Log Communication")
+    }
+    if (!(await requireAuth())) { if (!json) prompts.outro("Done"); return }
 
-    const sp = prompts.spinner()
-    sp.start("Resolving lead…")
-
-    const resolved = await resolveLead(String(args.id))
-    if (!resolved) { sp.stop("Lead not found"); prompts.outro("Done"); return }
-
-    sp.start("Logging…")
-
-    const body = {
-      lead_id: resolved.id,
-      channel: args.channel,
-      direction: args.direction,
-      body: args.message,
-      subject: args.subject ?? null,
-      sent_at: args.date ?? new Date().toISOString(),
+    const groupId = (args.group as string | undefined) ?? newGroupId()
+    if (!GROUP_ID.test(groupId)) {
+      process.exitCode = 64
+      if (json) return writeJson({ ok: false, error: `invalid --group "${groupId}"` })
+      prompts.log.error(`--group must be letters, digits, _ or - (got "${groupId}").`)
+      prompts.outro("Done")
+      return
     }
 
-    const res = await irisFetch("/api/v1/atlas/comms/log", {
-      method: "POST",
-      body: JSON.stringify(body),
+    const sp = json ? null : prompts.spinner()
+    sp?.start("Resolving leads…")
+    const ids = (args.ids as string[]).map(String)
+    const recipients: Recipient[] = []
+    const missing: string[] = []
+    for (const q of ids) {
+      const r = await resolveLead(q)
+      if (!r) { missing.push(q); continue }
+      recipients.push({ lead_id: r.id, name: r.lead?.name ?? null, email: r.lead?.email ?? null })
+    }
+    // Refuse a partial send list rather than logging to some recipients and quietly skipping one.
+    if (missing.length) {
+      sp?.stop("Lead not found")
+      process.exitCode = 1
+      if (json) return writeJson({ ok: false, error: "lead not found", missing })
+      prompts.log.error(`No lead matches: ${missing.join(", ")}. Nothing was logged.`)
+      prompts.outro("Done")
+      return
+    }
+
+    // ONE timestamp for every copy — it is one message. (Per-call timestamps were what hid the
+    // server bug: they made the copies look different enough to be kept.)
+    const sentAt = (args.date as string | undefined) ?? new Date().toISOString()
+    const payloads = buildLogPayloads(recipients, {
+      channel: String(args.channel),
+      direction: String(args.direction),
+      body: String(args.message),
+      subject: (args.subject as string | undefined) ?? null,
+      sentAt,
+      groupId,
+      cc: (args.cc as string[] | undefined) ?? [],
     })
 
-    if (!res.ok) { await handleApiError(res, "Log comm"); sp.stop("Failed", 1); prompts.outro("Done"); return }
+    sp?.message(`Logging to ${payloads.length} lead${payloads.length === 1 ? "" : "s"}…`)
+    const results: { lead_id: number; name: string | null; outcome: string; error?: string }[] = []
+    for (const body of payloads) {
+      const who = recipients.find((r) => r.lead_id === body.lead_id)!
+      const res = await irisFetch("/api/v1/atlas/comms/log", { method: "POST", body: JSON.stringify(body) })
+      let payload: any = null
+      try { payload = await res.json() } catch { /* non-JSON error body */ }
+      const outcome = checkLogged(body.lead_id, res.status, payload?.data?.record ?? payload?.data)
+      results.push({
+        lead_id: body.lead_id,
+        name: who.name,
+        outcome,
+        ...(outcome === "failed" || outcome === "wrong_lead" ? { error: payload?.error ?? payload?.message ?? `HTTP ${res.status}` } : {}),
+      })
+    }
 
-    const result = (await res.json()) as any
-    const record = result?.data?.record ?? result?.data
-    sp.stop(success("Logged"))
+    const bad = results.filter((r) => r.outcome === "failed" || r.outcome === "wrong_lead")
+    if (bad.length) process.exitCode = 1
+    if (json) return writeJson({ ok: bad.length === 0, message_group_id: groupId, sent_at: sentAt, results })
+
+    sp?.stop(bad.length ? success("Logged, with problems") : success("Logged"))
+    for (const r of results) {
+      const label = `#${r.lead_id}${r.name ? " " + r.name : ""}`
+      if (r.outcome === "logged") console.log(`  ✓ ${label}`)
+      else if (r.outcome === "already") console.log(`  = ${label} ${dim("— already logged, left as is")}`)
+      else if (r.outcome === "wrong_lead")
+        console.log(`  ✗ ${label} — NOT logged: the server returned another lead's record. Update the IRIS CLI and re-run with --group ${groupId}.`)
+      else console.log(`  ✗ ${label} — NOT logged: ${r.error}`)
+    }
     console.log(`  ${channelIcon(args.channel as string)} ${directionArrow(args.direction as string)} ${highlight(args.channel as string)} — ${dim(String(args.message).slice(0, 80))}`)
-
+    if (payloads.length > 1 || args.group) console.log(dim(`  message group ${groupId} — add someone later with: iris comms log <lead> --group ${groupId} …`))
     prompts.outro("Done")
   },
 })
