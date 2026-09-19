@@ -31,6 +31,36 @@ The organization is derived from the **project**, never from the person. A contr
 may belong to two organizations; the bloq knows which one owns the work, the user does
 not.
 
+```svg
+<svg viewBox="0 0 640 300" width="100%" role="img" aria-label="The four-tier credential ladder: project, organization, brand, personal. First match wins.">
+  <text x="0" y="16" class="sv-head" font-size="15">One tool call · first match wins · stop at the first row that has a credential</text>
+
+  <rect x="0" y="34" width="640" height="44" rx="6" class="sv-box"/>
+  <text x="16" y="55" class="sv-k" font-size="13">1 · PROJECT</text>
+  <text x="16" y="71" class="sv-v" font-size="12">integrations.bloq_id — everyone on that project</text>
+  <text x="624" y="62" class="sv-cap" font-size="12" text-anchor="end">empty here → fall through</text>
+
+  <rect x="0" y="86" width="640" height="44" rx="6" class="sv-good"/>
+  <text x="16" y="107" class="sv-good-t" font-size="13">2 · ORGANIZATION</text>
+  <text x="16" y="123" class="sv-good-t" font-size="12">integrations.organization_id — the org's active members</text>
+  <text x="624" y="114" class="sv-good-t" font-size="12" text-anchor="end">MATCH — stop</text>
+
+  <rect x="0" y="138" width="640" height="44" rx="6" class="sv-box"/>
+  <text x="16" y="159" class="sv-k" font-size="13">3 · BRAND</text>
+  <text x="16" y="175" class="sv-v" font-size="12">integrations.brand_id — dormant, social resolves elsewhere</text>
+  <text x="624" y="166" class="sv-cap" font-size="12" text-anchor="end">never reached</text>
+
+  <rect x="0" y="190" width="640" height="44" rx="6" class="sv-bad"/>
+  <text x="16" y="211" class="sv-bad-t" font-size="13">4 · PERSONAL</text>
+  <text x="16" y="227" class="sv-bad-t" font-size="12">integrations.user_id — one human's token</text>
+  <text x="624" y="218" class="sv-bad-t" font-size="12" text-anchor="end">GATED when the work is shared</text>
+
+  <text x="0" y="258" class="sv-cap" font-size="12">The organization is derived from the PROJECT, never from the person —</text>
+  <text x="0" y="276" class="sv-cap" font-size="12">a contractor in two orgs does not get to pick which client's credential runs.</text>
+  <text x="0" y="294" class="sv-cap" font-size="12">Absent scope always means personal. Silence must never promote a credential to shared.</text>
+</svg>
+```
+
 ## Do it
 
 ```bash
@@ -124,6 +154,41 @@ across that line, and today they are stored on both sides of it.
 **Consequence:** a credential connected at organization scope is invisible to a Genesis
 client dashboard. Wiring `organization_id` into `IntegrationsGrid` against the iris table
 would build on a table that cannot hold it.
+
+```svg
+<svg viewBox="0 0 640 330" width="100%" role="img" aria-label="Two integrations tables in two databases holding largely disjoint populations, with one real duplicate between them.">
+  <text x="0" y="16" class="sv-head" font-size="15">Two tables, one concept, two databases — measured 2026-09-12</text>
+
+  <rect x="0" y="32" width="300" height="150" rx="6" class="sv-box"/>
+  <text x="16" y="54" class="sv-k" font-size="13">fl_api.integrations</text>
+  <text x="16" y="74" class="sv-v" font-size="12">30 rows · HAS scope columns</text>
+  <text x="16" y="94" class="sv-v" font-size="12">user_id · brand_id · bloq_id</text>
+  <text x="16" y="110" class="sv-v" font-size="12">organization_id</text>
+  <text x="16" y="134" class="sv-cap" font-size="12">16 are social-* brand rows that</text>
+  <text x="16" y="150" class="sv-cap" font-size="12">never had an iris counterpart</text>
+  <text x="16" y="170" class="sv-cap" font-size="12">read by IntegrationRegistry</text>
+
+  <rect x="340" y="32" width="300" height="150" rx="6" class="sv-box"/>
+  <text x="356" y="54" class="sv-k" font-size="13">iris_db.integrations</text>
+  <text x="356" y="74" class="sv-v" font-size="12">92 rows · user_id ONLY</text>
+  <text x="356" y="94" class="sv-bad-t" font-size="12">no organization_id · no bloq_id</text>
+  <text x="356" y="118" class="sv-cap" font-size="12">59 Composio-backed user rows</text>
+  <text x="356" y="138" class="sv-cap" font-size="12">read by /v1/creator/integrations</text>
+  <text x="356" y="154" class="sv-cap" font-size="12">→ the Genesis IntegrationsGrid</text>
+  <text x="356" y="174" class="sv-cap" font-size="12">+ ~10 iris classes</text>
+
+  <line x1="300" y1="107" x2="340" y2="107" class="sv-line"/>
+  <text x="320" y="200" class="sv-cap" font-size="12" text-anchor="middle">1 real duplicate</text>
+  <text x="320" y="216" class="sv-cap" font-size="12" text-anchor="middle">google-drive</text>
+
+  <rect x="0" y="238" width="640" height="46" rx="6" class="sv-bad"/>
+  <text x="16" y="258" class="sv-bad-t" font-size="13">A credential shared with an org is INVISIBLE to a client dashboard.</text>
+  <text x="16" y="276" class="sv-bad-t" font-size="12">The grid reads the table on the right, which has nowhere to put the scope.</text>
+
+  <text x="0" y="308" class="sv-cap" font-size="12">Identity across the two is composio_connected_account_id first, then (type, account_email).</text>
+  <text x="0" y="324" class="sv-cap" font-size="12">Never id — the sequences are independent. Never the credentials blob — different app keys.</text>
+</svg>
+```
 
 **The plan is to split the row set, not the system.** A credential's ownership, tenancy
 and authorization are business facts → fl-api. Agent-facing service connections, model
@@ -233,6 +298,10 @@ used to sit at step 2 was measured and removed: it resolves nothing on this data
   iris `organizations` table as unused; two routed controllers use it.
 
 ## Related
+
+**Run it instead of reading it:** `iris playbook run iris-integrations` — the sharing flow
+above is a first-class section of that playbook, alongside connecting, executing and
+self-debugging. That is the one an agent or a client on the standalone CLI should reach for.
 
 Epic: `/p/epic-integration-tenancy` · #183590 #183591 #183592 #183593 ·
 `iris how-to view iris-integrations`
