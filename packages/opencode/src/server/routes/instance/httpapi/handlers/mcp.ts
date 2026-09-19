@@ -4,6 +4,7 @@ import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
 import { McpServerNotFoundError } from "../errors"
 import { AddPayload, AuthCallbackPayload, StatusMap, UnsupportedOAuthError } from "../groups/mcp"
+import { toolsOfServer } from "@/mcp/server-tools"
 
 export const mcpHandlers = HttpApiBuilder.group(InstanceHttpApi, "mcp", (handlers) =>
   Effect.gen(function* () {
@@ -11,6 +12,10 @@ export const mcpHandlers = HttpApiBuilder.group(InstanceHttpApi, "mcp", (handler
 
     const status = Effect.fn("McpHttpApi.status")(function* () {
       return yield* mcp.status()
+    })
+
+    const tools = Effect.fn("McpHttpApi.tools")(function* (ctx: { params: { name: string } }) {
+      return toolsOfServer(ctx.params.name, yield* mcp.tools())
     })
 
     const add = Effect.fn("McpHttpApi.add")(function* (ctx: { payload: typeof AddPayload.Type }) {
@@ -99,7 +104,7 @@ export const mcpHandlers = HttpApiBuilder.group(InstanceHttpApi, "mcp", (handler
     })
 
     return handlers
-      .handle("status", status)
+      .handle("status", status).handle("tools", tools)
       .handle("add", add)
       .handle("authStart", authStart)
       .handle("authCallback", authCallback)
