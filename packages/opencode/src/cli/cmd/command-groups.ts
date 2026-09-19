@@ -52,7 +52,7 @@ export const CATEGORIES: Record<string, CommandCategory> = {
   },
   finance: {
     name: "Finance",
-    description: "Wallets, payments, Good Deals planning",
+    description: "Wallets, payments, commerce sales + payouts, Good Deals planning",
     order: 10,
   },
   compute: {
@@ -198,6 +198,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   // Finance
   wallet: "finance",
   payments: "finance",
+  commerce: "finance",
 
   // Hive & Compute
   hive: "compute",

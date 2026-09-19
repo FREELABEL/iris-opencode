@@ -146,6 +146,7 @@ import { PlatformDriveCommand } from "./cli/cmd/platform-drive"
 import { PlatformObsidianCommand } from "./cli/cmd/platform-obsidian"
 import { PlatformCreativeCommand } from "./cli/cmd/platform-creative"
 import { PlatformPackagesCommand } from "./cli/cmd/platform-packages"
+import { PlatformCommerceCommand } from "./cli/cmd/platform-commerce"
 import { PricingCommand } from "./cli/cmd/pricing"
 import { PlatformMarketplaceCommand } from "./cli/cmd/platform-marketplace"
 import { PlatformMemoryCommand } from "./cli/cmd/platform-memory"
@@ -453,6 +454,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformObsidianCommand))
   .command(reg(PlatformCreativeCommand))
   .command(reg(PlatformPackagesCommand))
+  .command(reg(PlatformCommerceCommand))
   .command(reg(PricingCommand))
   .command(reg(PlatformMarketplaceCommand))
   .command(reg(PlatformMemoryCommand))
