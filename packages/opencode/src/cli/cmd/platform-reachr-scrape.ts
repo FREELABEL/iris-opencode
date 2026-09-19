@@ -2,7 +2,8 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { irisFetch, requireAuth, resolveUserId, handleApiError, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
 import { inferMode, normalizeTarget, isMode, findFreelabelRoot, savedSessions, runInstagramScrape } from "./reachr-instagram"
-import { runLinkedInScrape, liSessionFile, liSlug, LI_MAX_PROFILES } from "./reachr-linkedin"
+import { runLinkedInScrape, liSessionFile, LI_MAX_PROFILES } from "./reachr-linkedin"
+import { type Lead, platformOf, findExisting, provenanceNote, leadPayload, judgeCreated } from "./reachr-core"
 import { resolveBrowserUseScript, runBrowserUseScript } from "./platform-browser"
 
 // Every report line on STDOUT. UI.println writes to stderr while printKV/printDivider write to
@@ -33,58 +34,6 @@ const out = (...parts: string[]) => console.log(parts.join(""))
  * and reported as "already on the board", and no note is attached to someone else's record.
  * Leads with no email have no such protection, so they are looked up by name on the board first.
  */
-
-interface Field {
-  v: string
-  how: string
-}
-interface Lead {
-  name: Field
-  title?: Field | null
-  email?: Field | null
-  phone?: Field | null
-  socials?: Record<string, string>
-  company?: string
-  company_how?: string
-  evidence?: string[]
-  source_url: string
-  /** Instagram / LinkedIn lanes: the handle (IG @handle without @, or the LinkedIn /in/ slug). */
-  platform?: "instagram" | "linkedin"
-  handle?: string
-  source?: string
-  extra?: Record<string, unknown>
-}
-
-const platformOf = (l: Lead) => l.platform ?? (l.handle ? "instagram" : undefined)
-
-function provenanceNote(l: Lead, when: string): string {
-  const fields = [
-    l.title && `title: ${l.title.v} (${l.title.how})`,
-    l.email && `email: ${l.email.v} (${l.email.how})`,
-    l.phone && `phone: ${l.phone.v} (${l.phone.how})`,
-    ...Object.entries(l.socials ?? {}).map(([k, v]) => `${k}: ${v}`),
-    l.handle && platformOf(l) === "instagram" && `instagram handle: @${l.handle}`,
-    l.extra?.headline && `headline: ${l.extra.headline}`,
-    l.extra?.location && `location: ${l.extra.location}`,
-    l.extra?.summary && `summary: ${String(l.extra.summary).slice(0, 300)}`,
-    // 0 means "not fetched" (profiles mode skips stats), not "has no followers" — say nothing.
-    Number(l.extra?.followers) > 0 && `followers: ${l.extra?.followers}`,
-    l.extra?.context && `found as: ${l.extra.context}`,
-    l.extra?.comment && `their comment: ${String(l.extra.comment).slice(0, 200)}`,
-    l.extra?.bio && `bio: ${String(l.extra.bio).slice(0, 200)}`,
-  ].filter(Boolean)
-  return [
-    `PUBLIC — not confirmed. Found by \`iris reachr scrape\` on ${when}.`,
-    `Source: ${l.source_url}`,
-    platformOf(l) === "instagram"
-      ? `Found via: ${(l.evidence ?? []).join(", ")} — an Instagram account, which may be a brand rather than a person.`
-      : platformOf(l) === "linkedin"
-        ? `Found via: ${(l.evidence ?? []).join(", ")} — the headline is self-described and may be out of date.`
-        : `Why it was believed to be a person: ${(l.evidence ?? ["structured data"]).join(", ")}.`,
-    ...fields,
-    `Verify before outreach (iris playbook run reachr-lead-hydrate).`,
-  ].join("\n")
-}
 
 const rowsOf = (x: any): any[] => (Array.isArray(x) ? x : Array.isArray(x?.data) ? x.data : [])
 
@@ -122,29 +71,6 @@ async function boardLeads(bloqId: number): Promise<any[]> {
 }
 
 const norm = (v: unknown) => String(v ?? "").trim().toLowerCase()
-const digits = (v: unknown) => String(v ?? "").replace(/\D/g, "").slice(-10)
-
-/** Same person? Email, then phone, then exact name (+ company when both have one). */
-function findExisting(l: Lead, onBoard: any[]): any | null {
-  // An Instagram handle is the strongest identity a scraped IG lead has — and the one earlier
-  // SOM leadgen runs stored (contact_info.instagram, nickname "@handle"), so match it first.
-  // LinkedIn leads (the Playwright runner's and ours) keep the profile URL in contact_info.linkedin.
-  const handle = l.handle ? norm(l.handle).replace(/^@/, "") : ""
-  const byHandle = !handle
-    ? null
-    : platformOf(l) === "linkedin"
-      ? onBoard.find((r) => liSlug(r?.contact_info?.linkedin) === handle || liSlug(r?.linkedin_url) === handle)
-      : onBoard.find(
-          (r) => norm(r?.contact_info?.instagram).replace(/^@/, "") === handle || norm(r?.nickname) === `@${handle}`,
-        )
-  return (
-    byHandle ??
-    onBoard.find((r) => l.email && norm(r?.email) === norm(l.email.v)) ??
-    onBoard.find((r) => l.phone && digits(r?.phone) && digits(r?.phone) === digits(l.phone.v)) ??
-    onBoard.find((r) => norm(r?.name) === norm(l.name.v) && (!l.company || !r?.company || norm(r.company) === norm(l.company))) ??
-    null
-  )
-}
 
 export const ReachrScrapeCmd = cmd({
   command: "scrape <bloq-id> [urls..]",
@@ -369,19 +295,7 @@ export const ReachrScrapeCmd = cmd({
           outcome.existing.push({ name, id: hit.id, why: `already on board ${bloqId}${norm(hit.name) !== norm(name) ? ` as "${hit.name}"` : ""}` })
           continue
         }
-        const payload: Record<string, unknown> = { name, bloqId, source: l.source ?? "reachr-scrape" }
-        if (l.email) payload.email = l.email.v
-        if (l.phone) payload.phone = l.phone.v
-        if (l.company) payload.company = l.company
-        // Instagram leads in the shape the SOM leadgen runner has always stored them, so the two
-        // recognise each other: nickname "@handle", contact_info.instagram / instagram_url.
-        if (l.handle && platformOf(l) === "linkedin") {
-          // The Playwright runner's shape: contact_info.linkedin = the profile URL.
-          payload.contact_info = { linkedin: `https://www.linkedin.com/in/${l.handle}/` }
-        } else if (l.handle) {
-          payload.nickname = `@${l.handle}`
-          payload.contact_info = { instagram: l.handle, instagram_url: `https://www.instagram.com/${l.handle}/` }
-        }
+        const payload = leadPayload(l, bloqId)
         const res = await irisFetch("/api/v1/leads", { method: "POST", body: JSON.stringify(payload) })
         if (!(await handleApiError(res, `Create ${name}`))) {
           outcome.failed.push({ name, why: `HTTP ${res.status}` })
@@ -389,13 +303,11 @@ export const ReachrScrapeCmd = cmd({
         }
         const body = (await res.json()) as any
         const lead = body?.data ?? body
-        // Second guard, for whatever the search missed. The API upserts (#137529 — by email, and
-        // measured here by phone too): it hands back an EXISTING record and drops what we sent. A
-        // record created before this run started is not one we created, whatever its name.
-        const createdAt = Date.parse(lead?.created_at ?? "")
-        const renamed = String(lead?.name ?? "").trim().toLowerCase() !== name.trim().toLowerCase()
-        if (renamed || (Number.isFinite(createdAt) && createdAt < runStarted - 5000)) {
-          outcome.existing.push({ name, id: lead?.id, why: renamed ? `matched existing "${lead?.name}"` : "the API returned an existing record" })
+        // Second guard, for whatever the search missed: the API upserts (#137529) and can hand back
+        // an existing record. See judgeCreated.
+        const judged = judgeCreated(lead, name, runStarted)
+        if (!judged.ours) {
+          outcome.existing.push({ name, id: lead?.id, why: judged.why })
           continue
         }
         const note = await irisFetch(`/api/v1/leads/${lead.id}/notes`, {

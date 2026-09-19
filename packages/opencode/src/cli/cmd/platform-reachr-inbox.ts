@@ -6,6 +6,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { irisFetch, requireAuth, resolveUserId, printDivider, dim, bold, writeJson } from "./iris-api"
 import { findFreelabelRoot, savedSessions } from "./reachr-instagram"
+import { planReplyLog, type ScannedReply } from "./reachr-core"
 
 const out = (...parts: string[]) => console.log(parts.join(""))
 
@@ -165,22 +166,11 @@ export const ReachrInboxCmd = cmd({
   },
 })
 
-// Rows written by the older inbox-check path (notes backfilled into lead_comms) wrap the text:
-// `[inbox reply] IG reply from @handle: "Tell me more"`. Compare the words inside, or the same
-// reply is logged twice.
-const bodyKey = (v: unknown) =>
-  String(v ?? "")
-    .replace(/^\s*\[(?:inbox reply|dm reply)\]\s*(?:IG|LinkedIn)?\s*reply from @?[\w.]+:\s*/i, "")
-    .replace(/^"([\s\S]*)"\s*$/, "$1")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase()
-
 /** Write each reply into its lead's comms thread, skipping text already there. */
 async function logReplies(r: any, bloqId: number, account: string) {
   const res = { logged: 0, already: 0, failed: [] as { lead_id: number; why: string }[] }
   for (const l of r.replied ?? []) {
-    const replies: { body: string; timestamp: string | null }[] = l.replies ?? []
+    const replies: ScannedReply[] = l.replies ?? []
     if (!replies.length) continue
     try {
       const q = new URLSearchParams({ lead_id: String(l.lead_id), channel: "instagram", direction: "inbound", per_page: "200" })
@@ -188,14 +178,11 @@ async function logReplies(r: any, bloqId: number, account: string) {
       if (!got.ok) throw new Error(`could not read the lead's thread (HTTP ${got.status}) — nothing logged for it`)
       const b: any = await got.json()
       const rows: any[] = Array.isArray(b?.data) ? b.data : Array.isArray(b?.data?.data) ? b.data.data : []
-      const have = new Set(rows.map((x) => bodyKey(x?.body)))
-      for (const m of replies) {
-        if (!bodyKey(m.body)) continue
-        if (have.has(bodyKey(m.body))) {
-          res.already++
-          continue
-        }
-        const ts = m.timestamp ? Date.parse(m.timestamp) : NaN
+      // What is already there — including replies the older inbox-check path wrote as notes. See
+      // planReplyLog / knownReplies in reachr-core.
+      const plan = planReplyLog(replies, rows)
+      res.already += plan.already
+      for (const m of plan.toLog) {
         const post = await irisFetch("/api/v1/atlas/comms/log", {
           method: "POST",
           body: JSON.stringify({
@@ -206,15 +193,14 @@ async function logReplies(r: any, bloqId: number, account: string) {
             body: m.body,
             from_identifier: `@${l.handle}`,
             to_identifiers: [`@${account}`],
-            ...(Number.isFinite(ts) ? { sent_at: new Date(ts).toISOString() } : {}),
-            metadata: { source: "reachr-inbox", ig_account: account, timestamp_seen: Number.isFinite(ts) },
+            ...(m.sent_at ? { sent_at: m.sent_at } : {}),
+            metadata: { source: "reachr-inbox", ig_account: account, timestamp_seen: !!m.sent_at },
           }),
         })
         if (!post.ok) {
           res.failed.push({ lead_id: l.lead_id, why: `HTTP ${post.status}` })
           continue
         }
-        have.add(bodyKey(m.body))
         res.logged++
       }
     } catch (e: any) {

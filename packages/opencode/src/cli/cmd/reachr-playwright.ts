@@ -1,5 +1,6 @@
 import fs from "fs"
 import { spawn } from "child_process"
+import { shouldRetrySpec } from "./reachr-core"
 
 /**
  * Run one of the Freelabel Playwright specs (Instagram / LinkedIn scrapers, the inbox scan) the
@@ -35,9 +36,8 @@ export async function runSpec(o: {
 
   const started = Date.now()
   const first = await once()
-  const closedEarly =
-    !fs.existsSync(o.resultFile) && /has been closed/.test(first.text) && Date.now() - started < 120_000
-  if (!closedEarly) return { ...first, attempts: 1 }
+  const retry = shouldRetrySpec({ resultFileExists: fs.existsSync(o.resultFile), text: first.text, elapsedMs: Date.now() - started })
+  if (!retry) return { ...first, attempts: 1 }
   await new Promise((r) => setTimeout(r, 5000)) // let the dead browser finish tearing down
   const second = await once()
   return { ...second, attempts: 2 }

@@ -18,31 +18,8 @@ import { runSpec } from "./reachr-playwright"
  * existing runner does — Instagram is hostile to headless ones.
  */
 
-export type IgMode = "comments" | "followers" | "profiles" | "inbox"
-const MODES: IgMode[] = ["comments", "followers", "profiles", "inbox"]
-
-/** What a target most likely means: a post → its commenters, an account → its followers. */
-export function inferMode(target: string): IgMode {
-  const t = target.trim().toLowerCase()
-  if (t === "inbox") return "inbox"
-  if (t.includes(",")) return "profiles"
-  if (/\/(p|reel|reels|tv)\//.test(t)) return "comments"
-  return "followers"
-}
-
-export function normalizeTarget(target: string, mode: IgMode): string {
-  const t = target.trim()
-  if (mode === "inbox") return ""
-  const bare = (h: string) =>
-    h.trim().replace(/^https?:\/\/(www\.)?instagram\.com\//i, "").replace(/[/?#].*$/, "").replace(/^@/, "")
-  if (mode === "profiles") return t.split(",").map((h) => `@${bare(h)}`).join(",")
-  if (/^@?[A-Za-z0-9._]+$/.test(t)) return `https://www.instagram.com/${bare(t)}/`
-  return t
-}
-
-export function isMode(m: unknown): m is IgMode {
-  return MODES.includes(m as IgMode)
-}
+import { mapInstagramResult, type IgMode } from "./reachr-core"
+export { inferMode, normalizeTarget, isMode, type IgMode } from "./reachr-core"
 
 const SPEC = path.join("tests", "e2e", "leadgen-scraper.spec.ts")
 
@@ -122,58 +99,5 @@ export async function runInstagramScrape(r: InstagramRun): Promise<{ data?: any;
     return { error: `the Instagram scraper produced no result (exit ${output.code}, ${output.attempts} attempt(s)): ${tail || "no output"}` }
   }
 
-  const profiles: any[] = raw.profiles ?? []
-  const errors: string[] = raw.errors ?? []
-  // Nothing scraped AND the scraper reported errors: it did not get to look (session expired,
-  // login wall, post gone) — that is "could not measure", never "no leads here".
-  if (!profiles.length && !raw.scraped && errors.length) {
-    return { data: { measured: false, ok: false, error: errors.join("; ").slice(0, 400), leads: [], contacts: [], skipped: [] } }
-  }
-
-  const source_url = raw.target || "https://www.instagram.com/direct/inbox/"
-  const leads = profiles.map((p) => {
-    // Strip a trailing "/" or whitespace: the scraper used to append "/" to its whole target, so
-    // the last handle of a profiles list came back as "handle/" (fixed at the source too).
-    const username = String(p.username ?? "").replace(/^@/, "").replace(/[/\s]+$/, "")
-    const md = p.rawMetadata ?? {}
-    const bio = String(md.bio ?? "")
-    const email = bio.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/)?.[0]
-    const display = p.displayName && p.displayName !== username ? String(p.displayName) : `@${username}`
-    return {
-      name: { v: display, how: "instagram" },
-      title: null,
-      email: email ? { v: email, how: "ig-bio" } : null,
-      phone: null,
-      socials: { instagram: `https://www.instagram.com/${username}/` }, // built from the CLEAN handle
-      company: null,
-      evidence: [`instagram:${raw.mode}`, ...(md.followers ? [`${md.followers} followers`] : [])],
-      source_url,
-      handle: username,
-      source: `leadgen:instagram:${raw.mode}`,
-      extra: {
-        followers: md.followers ?? null,
-        bio: bio || null,
-        comment: md.commentText || null,
-        context: p.sourceContext || null,
-      },
-    }
-  })
-  return {
-    data: {
-      measured: true,
-      ok: leads.length > 0,
-      leads,
-      contacts: [],
-      skipped: [],
-      counts: { pages: 1, leads: leads.length, with_email: leads.filter((l) => l.email).length },
-      instagram: {
-        mode: raw.mode,
-        account: raw.ig_account,
-        target: raw.target,
-        scraped: raw.scraped,
-        existing_skipped: raw.existing_skipped,
-        errors,
-      },
-    },
-  }
+  return { data: mapInstagramResult(raw) }
 }

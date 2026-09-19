@@ -2,6 +2,7 @@ import fs from "fs"
 import os from "os"
 import path from "path"
 import { runSpec } from "./reachr-playwright"
+import { mapLinkedInResult } from "./reachr-core"
 
 /**
  * The LinkedIn lane of `iris reachr scrape` — a front door onto the scraper that already exists
@@ -37,11 +38,7 @@ export function liSessionFile(root: string): string | null {
   }
 }
 
-/** "https://www.linkedin.com/in/jane-doe-123/?x" → "jane-doe-123" */
-export function liSlug(v: unknown): string {
-  const m = String(v ?? "").match(/linkedin\.com\/in\/([^/?#]+)/i)
-  return m ? decodeURIComponent(m[1]).toLowerCase() : ""
-}
+export { liSlug } from "./reachr-core"
 
 export interface LinkedInRun {
   root: string
@@ -86,63 +83,5 @@ export async function runLinkedInScrape(r: LinkedInRun): Promise<{ data?: any; e
     return { error: `the LinkedIn scraper produced no result (exit ${output.code}, ${output.attempts} attempt(s)): ${tail || "no output"}` }
   }
 
-  const profiles: any[] = raw.profiles ?? []
-  const errors: string[] = raw.errors ?? []
-  // Nothing scraped AND errors: it never got to look (login wall, checkpoint, rate limit) —
-  // "could not measure", never "no leads".
-  if (!profiles.length && !raw.scraped && errors.length) {
-    return { data: { measured: false, ok: false, error: errors.join("; ").slice(0, 400), leads: [], contacts: [], skipped: [] } }
-  }
-
-  const source_url = raw.target || "https://www.linkedin.com/"
-  const leads = profiles
-    .map((p) => {
-      const url = String(p.profileUrl ?? "")
-      const slug = liSlug(url)
-      const md = p.rawMetadata ?? {}
-      const name = String(p.displayName || p.username || "").trim()
-      if (!name || !slug) return null
-      // A headline is usually "Title at Company"; split it only when it says so.
-      const headline = String(md.headline ?? "").trim()
-      // "CEO at Blu Creative Agency" → title + company. Only the first clause: headlines run on
-      // ("Owner @ Artscape Creative | Dallas Custom Screen Printing, …").
-      const first = headline.split(/\s+\|\s+|\.\s/)[0]
-      const at = first.match(/^(.{2,80}?)\s+(?:at|@)\s+(.{2,80})$/i)
-      // LinkedIn's own one-line summary states the company when the headline does not:
-      // "Founder & CEO at Blu Creative Agency in Dallas since December 2018, …".
-      const fromSummary = String(md.summary ?? "").match(/\b(?:at|of)\s+(.{2,80}?)\s+in\s+[A-Z][\w .'-]{1,40}?\s+since\b/)
-      const company = at ? at[2] : fromSummary?.[1]
-      return {
-        name: { v: name, how: "linkedin" },
-        title: headline ? { v: (at ? at[1] : first).slice(0, 120), how: "linkedin-headline" } : null,
-        email: null,
-        phone: null,
-        socials: { linkedin: `https://www.linkedin.com/in/${slug}/` },
-        company,
-        company_how: at ? "linkedin-headline" : company ? "linkedin-summary" : undefined,
-        evidence: [`linkedin:${raw.mode}`, ...(md.location ? [String(md.location)] : [])],
-        source_url,
-        platform: "linkedin" as const,
-        handle: slug,
-        source: `leadgen:linkedin:${raw.mode}`,
-        extra: {
-          headline: headline || null,
-          location: md.location || null,
-          summary: md.summary || null,
-          // no `context`: for a search it is the search URL, already the note's Source line
-        },
-      }
-    })
-    .filter(Boolean)
-  return {
-    data: {
-      measured: true,
-      ok: leads.length > 0,
-      leads,
-      contacts: [],
-      skipped: [],
-      counts: { pages: 1, leads: leads.length, with_email: 0 },
-      linkedin: { mode: raw.mode, query: raw.query, location: raw.location, target: raw.target, scraped: raw.scraped, errors },
-    },
-  }
+  return { data: mapLinkedInResult(raw) }
 }
