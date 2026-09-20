@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { productCommand } from "./product-command"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, success, writeJson } from "./iris-api"
@@ -224,9 +225,14 @@ const BuyLinkCmd = cmd({
   },
 })
 
-export const PlatformCommerceCommand = cmd({
-  command: "commerce",
-  describe: "sell from Atlas, hold the money, pay the seller — sales, release, payout, buy links",
+export const PlatformCommerceCommand = productCommand({
+  name: "commerce",
+  purpose: "sell from Atlas, hold the money, pay the seller — sales, release, payout, buy links",
+  keywords: ["commerce", "sell", "sales", "checkout", "payout", "settlement", "stripe", "buy link", "storefront", "refund"],
+  // Shipped without either of these (#186319): the guide existed, but nobody reading
+  // `iris commerce --help` was ever told where it was.
+  howtos: ["genesis-atlas-commerce"],
+  playbooks: ["genesis-atlas-commerce"],
   builder: (y) =>
     y
       .command(SettlementsCmd)

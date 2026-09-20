@@ -152,8 +152,10 @@ pass it.
   and what you are owed on its own ledger; Mint holds what you spend. Nothing joins them today,
   so "what did we actually make this month" is still two screens and some arithmetic.
   See the `genesis-atlas-commerce` how-to for the sales side.
-- **`iris mint status` can hang when its output is piped into something that exits early**
-  (`| head`, for instance). Run it plain, or use `--json`.
+- **`iris mint status` has been seen to hang before printing anything** — once, for 20+
+  minutes, producing no output at all. It has not reproduced since (three attempts, plain and
+  piped, all finished). If it happens to you, `--json` returned promptly in the same
+  conditions. Tracked as #186318; the cause is not yet known, so do not assume a workaround.
 - Mint is not an accounting system and does not file anything. For double-entry accounts and
   a QuickBooks path, see `track-finances-atlas-ledger`, which is a different subsystem
   (`iris atlas:ledger`) despite the similar-sounding name.
@@ -165,5 +167,5 @@ pass it.
 | Total looks too high | Two budgets cover the same category — read the overlap warning above the bars |
 | A budget shows 0% and never moves | No cap set; it cannot produce a variance |
 | Business numbers look wrong | `--scope` (whose books) confused with `paid-from` (whose card) |
-| `iris mint status` never returns | Piped into a command that exits early — run it plain or `--json` |
+| `iris mint status` never returns | Known, not yet understood (#186318). Try `--json`; report it if it recurs |
 | Importing the same CSV twice | Safe, by design — import is idempotent |

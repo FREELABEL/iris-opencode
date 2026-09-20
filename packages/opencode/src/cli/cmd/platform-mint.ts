@@ -3600,7 +3600,16 @@ export const PlatformMintCommand = productCommand({
   name: "mint",
   purpose: "Mint — budgets vs actuals for personal and business money",
   keywords: ["mint", "budget", "actuals", "spend", "money", "finance", "scenario", "ledger", "bill", "bills", "receipt", "receipts", "invoice", "ocr"],
-  howtos: ["track-finances-atlas-ledger"],
+  // track-money-with-iris-mint FIRST: it is the only recipe that covers this command.
+  // Until 2026-09-19 the sole pointer here was track-finances-atlas-ledger, which is about
+  // `iris atlas:ledger` — a different subsystem — and never says "mint" once. Mint therefore
+  // looked documented for its whole life while having no how-to at all (#186319).
+  // ONLY the recipe that covers this command. track-finances-atlas-ledger is deliberately
+  // not listed: it is about `iris atlas:ledger`, and pointing here at a guide for another
+  // subsystem is what made mint look documented while it had no how-to at all. The mint
+  // how-to explains the difference in prose, which is where that belongs.
+  howtos: ["track-money-with-iris-mint"],
+  playbooks: ["iris-mint"],
   builder: (y) =>
     y
       .command(SpendCommand)
