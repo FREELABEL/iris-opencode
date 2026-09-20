@@ -6,6 +6,7 @@ process.env.TZ = "America/Chicago"
 
 import { describe, test, expect } from "bun:test"
 import {
+  moneyFlow,
   ymd,
   periodWindow,
   parseAmountDollars,
@@ -704,5 +705,77 @@ describe("imagePixels / resolutionWarning — the guard on a silent digit misrea
     // to rows nobody can act on, and a warning that fires on everything is ignored.
     expect(imagePixels(new Uint8Array([1, 2, 3]))).toBeNull()
     expect(resolutionWarning(null)).toBeNull()
+  })
+})
+
+describe("money in and money out (#186322)", () => {
+  const row = (type: string, cents: number, scope: string | null = "business", extra: any = {}) => ({
+    type,
+    amount_cents: cents,
+    metadata: scope === null ? { ...extra } : { scope, ...extra },
+  })
+
+  test("separates what came in from what went out", () => {
+    const f = moneyFlow([row("revenue", 29700), row("expense", 5940), row("expense", 1200)], "business")
+
+    expect(f.incomeCents).toBe(29700)
+    expect(f.expenseCents).toBe(7140)
+    expect(f.netCents).toBe(22560)
+  })
+
+  test("a payout is not an expense", () => {
+    // The payout moves the seller's own money from the platform to their bank. Counting it
+    // as spending would report a profitable month as a loss, and double-count the fee that
+    // was already taken out of it.
+    const f = moneyFlow([row("revenue", 29700), row("expense", 5940), row("transfer", 23760)], "business")
+
+    expect(f.expenseCents).toBe(5940)
+    expect(f.netCents).toBe(23760)
+    expect(f.paidOutCents).toBe(23760)
+  })
+
+  test("a row with no scope belongs to no books", () => {
+    // Same rule mint already applies to budgets: untagged counts against nothing. Defaulting
+    // it into the scope being viewed would pull every legacy row into this total.
+    const f = moneyFlow([row("revenue", 500, null), row("revenue", 100)], "business")
+
+    expect(f.incomeCents).toBe(100)
+  })
+
+  test("another scope's money is not this scope's money", () => {
+    const f = moneyFlow([row("revenue", 500, "personal"), row("revenue", 100, "business")], "business")
+
+    expect(f.incomeCents).toBe(100)
+  })
+
+  test("a split parent is not counted on top of its children", () => {
+    // The children carry the same money under their own categories; counting the parent too
+    // double-books the original invoice.
+    const f = moneyFlow(
+      [row("expense", 600, "business", { superseded_by_split: true }), row("expense", 360), row("expense", 240)],
+      "business",
+    )
+
+    expect(f.expenseCents).toBe(600)
+  })
+
+  test("a refund reverses income rather than inflating spending", () => {
+    // The refund row is written as an expense in the books so the ledger stays append-only,
+    // but on this screen it belongs against income — a refunded month did not SPEND that
+    // money, it failed to keep it.
+    const f = moneyFlow([row("revenue", 29700), row("expense", 29700, "business", { category: "commerce-refund" })], "business", {
+      refundCategories: ["commerce-refund"],
+    })
+
+    // Income stays GROSS and the refund is its own line: "sold 297, refunded 297, kept 0"
+    // is three true facts, where a single netted 0 hides that anything sold at all.
+    expect(f.incomeCents).toBe(29700)
+    expect(f.expenseCents).toBe(0) // a refund is not spending
+    expect(f.refundedCents).toBe(29700)
+    expect(f.netCents).toBe(0)
+  })
+
+  test("no rows is zero, not NaN", () => {
+    expect(moneyFlow([], "business")).toEqual({ incomeCents: 0, expenseCents: 0, netCents: 0, paidOutCents: 0, refundedCents: 0 })
   })
 })

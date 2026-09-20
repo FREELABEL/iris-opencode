@@ -570,7 +570,17 @@ export async function handleApiError(res: Response, action: string): Promise<boo
     try {
       const body = (await res.json()) as { error?: string; message?: string; errors?: Record<string, string[]> }
       // Bug #57643/#57647: use || not ?? — API returns {"message":""} which ?? doesn't fall through
-      const rawMsg = body.error || body.message || ""
+      //
+      // PREFER THE SENTENCE OVER THE CODE. Some endpoints send BOTH a machine code and a human
+      // message — {"error":"wrong_id_type","message":"1668 is a LIST, not a bloq — its bloq is
+      // 550."}. Taking `error` first showed the operator "wrong_id_type" and threw away the one
+      // string that told them what to do. Measured 2026-09-20 on `iris bloqs items 1668`, where
+      // the server had just been fixed to explain itself and the CLI discarded the explanation.
+      //
+      // A code is recognised by shape: lowercase, no spaces. Anything else is prose and stays
+      // first, so endpoints that put their human text in `error` are unaffected.
+      const looksLikeCode = (v?: string) => !!v && /^[a-z0-9]+(?:_[a-z0-9]+)*$/.test(v)
+      const rawMsg = (looksLikeCode(body.error) && body.message ? body.message : body.error || body.message) || ""
       // Bug #57646: sanitize raw Laravel model errors (e.g. "No query results for model [App\Models\Bloq\ScheduledJob]")
       // Bug #162342: sanitize raw DB errors — a QueryException leaks the full SQL,
       // table/column names, the FK constraint, and the DB name. Never surface it.

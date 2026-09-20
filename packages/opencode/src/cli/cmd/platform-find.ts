@@ -73,6 +73,14 @@ function loadIndex(): Index {
   return embeddedIndex as Index
 }
 
+/**
+ * Does the query contain this synonym as whole words? Substring matching made "web-SITE" fire the
+ * pages synonym "site", so a sales question mentioning a website returned page-building tools.
+ */
+export function phraseIn(raw: string, phrase: string): boolean {
+  return new RegExp(`\\b${phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(raw)
+}
+
 const KIND_LABEL: Record<string, string> = {
   command: "cmd",
   "how-to": "how-to",
@@ -182,9 +190,15 @@ export const PlatformFindCommand = cmd({
     // Expand the query through the terminology map, so intent words reach internal nouns.
     // This is the part that makes "artifact" find `bespoke`.
     const expanded = new Set(terms)
+    // How many of each topic's phrases the query actually used. One incidental "website" must not
+    // tie with "find people … email them … book calls" — the topic the query keeps pointing at wins.
+    const topicHits = new Map<string, number>()
     for (const [noun, synonyms] of Object.entries(index.terms)) {
-      if (synonyms.some((s) => raw.includes(s)) || terms.includes(noun)) {
+      // WHOLE WORDS, not substrings: "web-SITE" used to fire the pages synonym "site", so a sales
+      // question containing "website" returned page-building tools (2026-09-19).
+      if (synonyms.some((s) => phraseIn(raw, s)) || terms.includes(noun)) {
         expanded.add(noun)
+        topicHits.set(noun, synonyms.filter((s) => phraseIn(raw, s)).length)
         for (const s of synonyms) for (const w of s.split(/\s+/)) expanded.add(w)
       }
     }
@@ -204,7 +218,12 @@ export const PlatformFindCommand = cmd({
     }
 
     const hits = pool
-      .map((e) => ({ e, s: score(e, [...expanded], raw, rarity) }))
+      .map((e) => {
+        let s = score(e, [...expanded], raw, rarity)
+        // Topic weight: an entry NAMED for a topic the query hit several times ranks up with each hit.
+        if (s > 0) for (const [noun, n] of topicHits) if (n > 1 && e.name.toLowerCase().includes(noun.replace(/s$/, ""))) s += 15 * n
+        return { e, s }
+      })
       .filter((h) => h.s > 0)
       .sort((a, b) => b.s - a.s)
       .slice(0, Math.max(1, Number(args.limit) || 12))

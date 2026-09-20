@@ -243,16 +243,35 @@ const IntegrationsConnectCommand = cmd({
 })
 
 export const IntegrationsShareCommand = cmd({
-  command: "share <id> <bloq-id>",
-  describe: "share an existing integration with a bloq",
+  command: "share <id> [bloq-id]",
+  describe: "share an existing integration with a bloq, or with an organization (--org)",
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "integration ID", type: "number", demandOption: true })
-      .positional("bloq-id", { describe: "bloq ID to share with", type: "number", demandOption: true })
+      .positional("bloq-id", { describe: "bloq ID to share with (project scope)", type: "number" })
+      .option("org", { describe: "organization ID to share with (organization scope)", type: "number" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
     UI.empty()
-    prompts.intro(`◈  Share Integration #${args.id} → Bloq #${args["bloq-id"]}`)
+
+    // Exactly one target. Sharing to both would mean two scopes on one row, and the
+    // resolver reads project BEFORE organization — so the org argument would be silently
+    // ignored rather than refused, which is the failure mode this whole area keeps hitting.
+    const bloqId = args["bloq-id"] as number | undefined
+    const orgId = args.org as number | undefined
+    if ((bloqId == null) === (orgId == null)) {
+      prompts.intro(`◈  Share Integration #${args.id}`)
+      prompts.log.error(
+        bloqId == null
+          ? "Name a target: a bloq id for project scope, or --org <id> for organization scope."
+          : "Pick one: a bloq id OR --org <id>, not both.",
+      )
+      prompts.outro(dim("iris integrations share <id> <bloq-id>   ·   iris integrations share <id> --org <org-id>"))
+      return
+    }
+
+    const toOrg = orgId != null
+    prompts.intro(`◈  Share Integration #${args.id} → ${toOrg ? `Organization #${orgId}` : `Bloq #${bloqId}`}`)
 
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
@@ -264,16 +283,53 @@ export const IntegrationsShareCommand = cmd({
     spinner.start("Updating…")
 
     try {
-      const res = await irisFetch(`/api/v1/users/${userId}/integrations/${args.id}`, {
-        method: "PUT",
-        body: JSON.stringify({ bloq_id: args["bloq-id"] }),
-      })
+      // Organization scope promotes the row IN PLACE through its own endpoint, which
+      // enforces owner/admin and refuses with a named reason. Project scope is a plain
+      // field update on the integration.
+      const res = toOrg
+        ? await irisFetch(`/api/v1/integrations-temp/${args.id}/share`, {
+            method: "POST",
+            body: JSON.stringify({ organization_id: orgId }),
+          })
+        : await irisFetch(`/api/v1/users/${userId}/integrations/${args.id}`, {
+            method: "PUT",
+            body: JSON.stringify({ bloq_id: bloqId }),
+          })
+
+      if (toOrg && !res.ok) {
+        // The endpoint names WHY it refused. Passing the raw status through would turn
+        // four distinct, fixable situations into one "failed".
+        const body: any = await res.json().catch(() => ({}))
+        const hint: Record<string, string> = {
+          not_owner: "Only the person who connected a credential can share it.",
+          already_scoped: "Already shared. Disconnect and reconnect to move it to another scope.",
+          role_insufficient: "You need owner or admin on that organization — membership is not enough.",
+          not_a_member: "You are not a member of that organization.",
+          org_already_has_type: "That organization already holds an integration of this type.",
+        }
+        spinner.stop("Refused", 1)
+        prompts.log.error(body?.message ?? `Share failed (HTTP ${res.status})`)
+        if (body?.reason && hint[body.reason]) prompts.log.info(dim(hint[body.reason]))
+        if (body?.existing_id) prompts.log.info(dim(`Existing integration: #${body.existing_id}`))
+        prompts.outro("Done")
+        return
+      }
+
       const ok = await handleApiError(res, "Share integration")
       if (!ok) { spinner.stop("Failed", 1); return }
 
-      spinner.stop(`${success("✓")} Integration #${args.id} shared with Bloq #${args["bloq-id"]}`)
-      prompts.log.info(dim("All agents and users in this bloq can now use this integration."))
-      prompts.outro(dim("iris integrations list --bloq=" + args["bloq-id"]))
+      if (toOrg) {
+        spinner.stop(`${success("✓")} Integration #${args.id} shared with Organization #${orgId}`)
+        prompts.log.info(dim("Every active member of that organization can now use it."))
+        // The tier only fires for work the ORG OWNS. Saying so here is the difference
+        // between a share that works and one that looks applied and resolves to personal.
+        prompts.log.warn("The org must also OWN THE PROJECT for this to resolve — attach the bloq, then prove it.")
+        prompts.outro(dim("There is no unshare for org scope."))
+      } else {
+        spinner.stop(`${success("✓")} Integration #${args.id} shared with Bloq #${bloqId}`)
+        prompts.log.info(dim("All agents and users in this bloq can now use this integration."))
+        prompts.outro(dim("iris integrations list --bloq=" + bloqId))
+      }
     } catch (err) {
       spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))

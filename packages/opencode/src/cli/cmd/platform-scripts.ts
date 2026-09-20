@@ -204,7 +204,7 @@ const RunCmd = cmd({
 
     const created = (await createRes.json()) as { task: { id: string; status: string } }
     const taskId = created.task.id
-    if (args.queue) return void success(`Dispatched task ${bold(taskId)}  (check: iris hive tasks --task ${taskId})`)
+    if (args.queue) return void success(`Dispatched task ${bold(taskId)}  (check: iris hive tasks get ${taskId})`)
     if (!args.json) console.log(dim("waiting for completion…"))
 
     const deadline = Date.now() + (timeoutSec + 30) * 1000

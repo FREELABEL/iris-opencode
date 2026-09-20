@@ -353,7 +353,13 @@ export async function parsePlan(skillInfo: Skill.Info): Promise<SkillPlan> {
   if (!md) throw new Error(`Failed to parse skill at ${skillInfo.location}`)
 
   const fm = md.data as Record<string, any>
-  const version = fm.version === 2 ? 2 : 1
+  // Parse steps first: they, not the version number, decide whether this playbook runs (#186184).
+  const bodySteps = parseSteps(md.content)
+  // Authors read `version` as a RELEASE number and bump it — and anything but exactly 2 used to turn
+  // an executable playbook into a document that `run` printed and exited 0 on (bisected 2026-09-18).
+  // `### step:` blocks in the body are unambiguous intent: run them. validateSkill still warns so the
+  // author learns what the field means.
+  const version = fm.version === 2 || fm.version === "2" || bodySteps.length > 0 ? 2 : 1
 
   // Parse args schema
   const args: Record<string, ArgDef> = {}
@@ -373,7 +379,6 @@ export async function parsePlan(skillInfo: Skill.Info): Promise<SkillPlan> {
   // Parse steps from markdown body.
   // Parse unconditionally so a mis-versioned playbook can be told apart from one
   // that genuinely has no steps; only EXPOSE them as executable steps on v2.
-  const bodySteps = parseSteps(md.content)
   const steps = version === 2 ? bodySteps : []
   // Prose after the last step. Carried on the plan so it is addressable as what it is —
   // playbook documentation — instead of being smuggled inside the final step (#182907).
@@ -2205,6 +2210,17 @@ export function validatePlan(plan: SkillPlan): ValidationIssue[] {
 
   if (plan.version === 2 && plan.steps.length === 0) {
     issues.push({ level: "warning", message: "v2 skill has no steps defined" })
+  }
+
+  // Promoted by its steps (#186184): runs, but say what the field is for so the next bump is not a surprise.
+  if (plan.version === 2 && plan.declaredVersion !== 2 && plan.declaredVersion !== "2" && plan.steps.length > 0) {
+    const declared = plan.declaredVersion === undefined ? "no version field" : `version: ${JSON.stringify(plan.declaredVersion)}`
+    issues.push({
+      level: "warning",
+      message:
+        `frontmatter has ${declared}, but the body has ${plan.steps.length} "### step:" block(s), so it runs as an executable ` +
+        `playbook. "version" is the playbook FORMAT (2 = executable steps), not a release number — set "version: 2".`,
+    })
   }
 
   // The version-coercion trap. `parsePlan` collapses any frontmatter `version`

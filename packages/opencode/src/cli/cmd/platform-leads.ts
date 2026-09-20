@@ -7340,7 +7340,7 @@ const LeadsEnrichCommand = cmd({
       console.log(`${success("✓")} dispatched ${bold("leadgen")} task ${highlight(taskId)} (status=${status})`)
     }
     console.log(dim(`  prompt:  ${prompt}`))
-    console.log(dim(`  monitor: iris hive tasks --task ${taskId}`))
+    console.log(dim(`  monitor: iris hive tasks get ${taskId}`))
   },
 })
 

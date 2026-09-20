@@ -3632,6 +3632,21 @@
 "service": "iris-api"
 },
 {
+"method": "GET",
+"uri": "/api/v1/commerce/buy",
+"service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/commerce/buy/{}/{}/{}",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/commerce/checkout",
+"service": "fl-api"
+},
+{
 "method": "POST",
 "uri": "/api/v1/commerce/connect/onboard",
 "service": "fl-api"
@@ -3649,6 +3664,36 @@
 {
 "method": "PUT",
 "uri": "/api/v1/commerce/resources/rates",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/commerce/sellers/{}/payouts",
+"service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/commerce/settlements",
+"service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/commerce/settlements/verify",
+"service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/commerce/settlements/{}",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/commerce/settlements/{}/payout",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/commerce/settlements/{}/release",
 "service": "fl-api"
 },
 {
@@ -5150,6 +5195,11 @@
 "method": "POST",
 "uri": "/api/v1/integrations-temp/{}/execute",
 "service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/integrations-temp/{}/share",
+"service": "fl-api"
 },
 {
 "method": "POST",
@@ -14442,62 +14492,12 @@
 "service": "iris-api"
 },
 {
-"method": "DELETE",
-"uri": "/content/product/{}",
-"service": "iris-api"
-},
-{
 "method": "GET",
 "uri": "/content/product/{}",
 "service": "iris-api"
 },
 {
-"method": "OPTIONS",
-"uri": "/content/product/{}",
-"service": "iris-api"
-},
-{
-"method": "PATCH",
-"uri": "/content/product/{}",
-"service": "iris-api"
-},
-{
-"method": "POST",
-"uri": "/content/product/{}",
-"service": "iris-api"
-},
-{
-"method": "PUT",
-"uri": "/content/product/{}",
-"service": "iris-api"
-},
-{
-"method": "DELETE",
-"uri": "/content/service/{}",
-"service": "iris-api"
-},
-{
 "method": "GET",
-"uri": "/content/service/{}",
-"service": "iris-api"
-},
-{
-"method": "OPTIONS",
-"uri": "/content/service/{}",
-"service": "iris-api"
-},
-{
-"method": "PATCH",
-"uri": "/content/service/{}",
-"service": "iris-api"
-},
-{
-"method": "POST",
-"uri": "/content/service/{}",
-"service": "iris-api"
-},
-{
-"method": "PUT",
 "uri": "/content/service/{}",
 "service": "iris-api"
 },
@@ -14632,38 +14632,8 @@
 "service": "iris-api"
 },
 {
-"method": "DELETE",
-"uri": "/discover",
-"service": "iris-api"
-},
-{
 "method": "GET",
 "uri": "/discover",
-"service": "iris-api"
-},
-{
-"method": "OPTIONS",
-"uri": "/discover",
-"service": "iris-api"
-},
-{
-"method": "PATCH",
-"uri": "/discover",
-"service": "iris-api"
-},
-{
-"method": "POST",
-"uri": "/discover",
-"service": "iris-api"
-},
-{
-"method": "PUT",
-"uri": "/discover",
-"service": "iris-api"
-},
-{
-"method": "DELETE",
-"uri": "/discover/{}",
 "service": "iris-api"
 },
 {
@@ -14672,52 +14642,7 @@
 "service": "iris-api"
 },
 {
-"method": "OPTIONS",
-"uri": "/discover/{}",
-"service": "iris-api"
-},
-{
-"method": "PATCH",
-"uri": "/discover/{}",
-"service": "iris-api"
-},
-{
-"method": "POST",
-"uri": "/discover/{}",
-"service": "iris-api"
-},
-{
-"method": "PUT",
-"uri": "/discover/{}",
-"service": "iris-api"
-},
-{
-"method": "DELETE",
-"uri": "/docs",
-"service": "iris-api"
-},
-{
 "method": "GET",
-"uri": "/docs",
-"service": "iris-api"
-},
-{
-"method": "OPTIONS",
-"uri": "/docs",
-"service": "iris-api"
-},
-{
-"method": "PATCH",
-"uri": "/docs",
-"service": "iris-api"
-},
-{
-"method": "POST",
-"uri": "/docs",
-"service": "iris-api"
-},
-{
-"method": "PUT",
 "uri": "/docs",
 "service": "iris-api"
 },
@@ -15023,6 +14948,11 @@
 },
 {
 "method": "POST",
+"uri": "/login/select-workspace",
+"service": "iris-api"
+},
+{
+"method": "POST",
 "uri": "/login/send-code",
 "service": "iris-api"
 },
@@ -15192,32 +15122,7 @@
 "service": "fl-api"
 },
 {
-"method": "DELETE",
-"uri": "/p/genesis-fde",
-"service": "iris-api"
-},
-{
 "method": "GET",
-"uri": "/p/genesis-fde",
-"service": "iris-api"
-},
-{
-"method": "OPTIONS",
-"uri": "/p/genesis-fde",
-"service": "iris-api"
-},
-{
-"method": "PATCH",
-"uri": "/p/genesis-fde",
-"service": "iris-api"
-},
-{
-"method": "POST",
-"uri": "/p/genesis-fde",
-"service": "iris-api"
-},
-{
-"method": "PUT",
 "uri": "/p/genesis-fde",
 "service": "iris-api"
 },
@@ -15227,62 +15132,12 @@
 "service": "iris-api"
 },
 {
-"method": "DELETE",
-"uri": "/p/iris-downloads",
-"service": "iris-api"
-},
-{
 "method": "GET",
 "uri": "/p/iris-downloads",
 "service": "iris-api"
 },
 {
-"method": "OPTIONS",
-"uri": "/p/iris-downloads",
-"service": "iris-api"
-},
-{
-"method": "PATCH",
-"uri": "/p/iris-downloads",
-"service": "iris-api"
-},
-{
-"method": "POST",
-"uri": "/p/iris-downloads",
-"service": "iris-api"
-},
-{
-"method": "PUT",
-"uri": "/p/iris-downloads",
-"service": "iris-api"
-},
-{
-"method": "DELETE",
-"uri": "/p/open-playbooks",
-"service": "iris-api"
-},
-{
 "method": "GET",
-"uri": "/p/open-playbooks",
-"service": "iris-api"
-},
-{
-"method": "OPTIONS",
-"uri": "/p/open-playbooks",
-"service": "iris-api"
-},
-{
-"method": "PATCH",
-"uri": "/p/open-playbooks",
-"service": "iris-api"
-},
-{
-"method": "POST",
-"uri": "/p/open-playbooks",
-"service": "iris-api"
-},
-{
-"method": "PUT",
 "uri": "/p/open-playbooks",
 "service": "iris-api"
 },
@@ -15407,32 +15262,7 @@
 "service": "iris-api"
 },
 {
-"method": "DELETE",
-"uri": "/playbooks",
-"service": "iris-api"
-},
-{
 "method": "GET",
-"uri": "/playbooks",
-"service": "iris-api"
-},
-{
-"method": "OPTIONS",
-"uri": "/playbooks",
-"service": "iris-api"
-},
-{
-"method": "PATCH",
-"uri": "/playbooks",
-"service": "iris-api"
-},
-{
-"method": "POST",
-"uri": "/playbooks",
-"service": "iris-api"
-},
-{
-"method": "PUT",
 "uri": "/playbooks",
 "service": "iris-api"
 },
@@ -15562,32 +15392,7 @@
 "service": "iris-api"
 },
 {
-"method": "DELETE",
-"uri": "/services/marketplace",
-"service": "iris-api"
-},
-{
 "method": "GET",
-"uri": "/services/marketplace",
-"service": "iris-api"
-},
-{
-"method": "OPTIONS",
-"uri": "/services/marketplace",
-"service": "iris-api"
-},
-{
-"method": "PATCH",
-"uri": "/services/marketplace",
-"service": "iris-api"
-},
-{
-"method": "POST",
-"uri": "/services/marketplace",
-"service": "iris-api"
-},
-{
-"method": "PUT",
 "uri": "/services/marketplace",
 "service": "iris-api"
 },
@@ -15802,32 +15607,7 @@
 "service": "iris-api"
 },
 {
-"method": "DELETE",
-"uri": "/v/{}",
-"service": "iris-api"
-},
-{
 "method": "GET",
-"uri": "/v/{}",
-"service": "iris-api"
-},
-{
-"method": "OPTIONS",
-"uri": "/v/{}",
-"service": "iris-api"
-},
-{
-"method": "PATCH",
-"uri": "/v/{}",
-"service": "iris-api"
-},
-{
-"method": "POST",
-"uri": "/v/{}",
-"service": "iris-api"
-},
-{
-"method": "PUT",
 "uri": "/v/{}",
 "service": "iris-api"
 },
