@@ -545,6 +545,19 @@ const ChatSendResponse = Schema.Struct({
   message: Schema.optional(ChatMessageSchema),
 }).annotate({ identifier: "IrisChatSendResponse" })
 
+const BillingResponse = Schema.Struct({
+  measured: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  plan: Schema.NullOr(Schema.String),
+  bypassed: Schema.Boolean,
+  fraction: Schema.Number,
+  bindingPeriod: Schema.String,
+  capUsd: Schema.Number,
+  spentUsd: Schema.Number,
+  resetsAt: Schema.NullOr(Schema.String),
+  upgradeUrl: Schema.NullOr(Schema.String),
+}).annotate({ identifier: "IrisBillingResponse" })
+
 const root = "/iris"
 
 export const IrisPaths = {
@@ -589,6 +602,7 @@ export const IrisPaths = {
   itemAskAnswer: `${root}/item/:itemID/asks/:askID/answer`,
   itemChat: `${root}/item/:itemID/chat`,
   hive: `${root}/hive`,
+  billing: `${root}/billing`,
 } as const
 
 export const IrisApi = HttpApi.make("iris").add(
@@ -1219,6 +1233,18 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "List Hive machines",
           description:
             "The machines registered to this account, from iris-api. Check `measured` before rendering a count: an unreachable fleet must never display as zero online.",
+        }),
+      ),
+    )
+    .add(
+      HttpApiEndpoint.get("billing", IrisPaths.billing, {
+        success: described(BillingResponse, "What this account may spend, and what it has spent"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.billing",
+          summary: "Spending limit and usage",
+          description:
+            "The signed-in account's binding cap, spend against it, and where to upgrade. Check `measured` first: an unreachable endpoint and a user who has spent nothing both produce zero, and showing the second when it is the first leaves the indicator reassuringly empty right before someone hits a wall.",
         }),
       ),
     )
