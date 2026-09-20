@@ -56,6 +56,62 @@ iris kinetic couple revoke cpl_mu9buyovdiqt
 An agent identifies itself by setting `IRIS_AGENT` to its sealed hash (and `IRIS_RUN_ID`, if the
 run should be traceable) before it calls `iris camera` or `iris obs`.
 
+## Every act path, not the ones someone remembered
+
+The check runs once, before any command, from a table of what counts as an act
+(`iris kinetic bodies` lists the classes and their verbs). So `iris hive run`, `iris device clean
+--apply` and `iris n8n trigger` are covered without anyone wiring them, and a new act path is
+covered by adding a row.
+
+Reads are not acts: `iris camera list`, `iris obs status`, `iris hive nodes` and a `device clean`
+dry run all pass untouched.
+
+## A fleet: issue in one place, verify on every node
+
+A couple still lives on the machine that holds the body — that is what makes it work offline. To
+avoid typing one on every node, ISSUE it centrally and let each node verify the signature locally,
+with no call to anyone:
+
+```bash
+# once, on the machine that will issue (keep the private key there)
+iris kinetic issuer new                      # prints iss_… and writes issuer.key(.pub)
+
+# on every node that should accept its couples — the PUBLIC key only
+iris kinetic issuer trust --file issuer.key.pub
+iris kinetic issuer list
+
+# issue for a node, sign it, hand it over
+iris kinetic couple add --agent sha256:… --body camera:* --allow move --node laptop --sign
+iris kinetic couple export > fleet.json
+
+# on that node
+iris kinetic couple import fleet.json
+```
+
+Every field that grants anything is signed — the agent, the node, the body, the verbs, the
+budgets, the expiry. Change one and the signature stops verifying. The label is not signed, since
+renaming it grants nothing.
+
+**Three ways to take it away**, in increasing size: `couple revoke` ends one couple on one node and
+that no survives a re-import; `issuer untrust` drops everything an issuer ever signed on that node;
+and a short `--expires` means an unreachable node forgets by itself.
+
+## Budgets that see a whole night, not one act
+
+A per-act ceiling never fires on a thousand cheap acts, which is the shape runaway automation
+usually has. So a couple can carry windows:
+
+```bash
+iris kinetic couple add --agent sha256:… --body node:* --allow run \
+  --max-cents 100 --max-day-cents 1500 --max-day-acts 200
+iris kinetic spend cpl_…      # this run, today, acts today, against each ceiling
+```
+
+An act declares its own cost — `IRIS_ACT_CENTS=60` (which works for any command), or `--cents` on
+commands that define the flag. **Nothing guesses a cost**, so an act that declares nothing counts
+as zero; the ceilings exist for the acts that do declare, like rented compute and metered APIs.
+Only allowed acts count against a budget — being refused all day cannot exhaust it.
+
 ## You, at your own keyboard
 
 An operator at a terminal is **not** an agent act. Your own `iris camera left` keeps working, and
@@ -77,15 +133,20 @@ to be moving. A cloud copy would be a report, not permission.
 The consequences of that are worth knowing:
 
 - **A file that will not parse authorises nothing.** Corrupt it and every agent act is refused.
-- **Couples are per machine.** The same agent on two nodes needs a couple on each.
-- **Revoking is local too.** Revoke on the node that holds the body.
+- **Couples are per machine.** The same agent on two nodes needs a couple on each — issue and
+  import them rather than typing each one (above).
+- **Revoking is local too.** Revoke on the node that holds the body, or untrust the issuer.
 
 ## What it does NOT do yet
 
 - Acts are recorded to `~/.iris/kinetic/acts.jsonl` on the node. Booking them to the Mint ledger
   as `expense:device:*` is the next step.
-- Reads are open. `iris camera list` and `iris camera pos` are not acts — looking is not moving.
 - The sealed hash is derived from the agent's definition. When Mint issues identities, a couple
   will carry that hash instead, and nothing about the record changes.
+- A couple is checked precisely when the command names its target (`hive run <node>`). When the
+  command picks its device inside the handler (a camera), the first check is class-level and the
+  act path checks the instance — so a couple for one camera does not become a couple for all of
+  them, but the refusal for the wrong camera arrives a moment later.
+- Costs are declared, never measured. A budget is only as honest as what the caller reports.
 
 Related: `iris kinetic --help` · the Kinetics epic (#184906) · `iris hive` for reaching a node.

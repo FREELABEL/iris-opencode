@@ -15,6 +15,8 @@ import { homedir, hostname } from "node:os"
 import { join } from "node:path"
 import { AGENT_HASH, type Couple, type Actor } from "./kinetic-couple"
 import { hostnameStem } from "./hive-local-node"
+import type { ActRow } from "./kinetic-budget"
+import { verifyCoupleSig } from "./kinetic-sign"
 
 export const kineticDir = (): string => process.env.IRIS_KINETIC_HOME || join(process.env.IRIS_HOME || join(homedir(), ".iris"), "kinetic")
 export const couplesPath = (): string => join(kineticDir(), "couples.json")
@@ -34,7 +36,11 @@ export function readCouples(): ReadResult {
   try {
     const raw = JSON.parse(readFileSync(p, "utf-8"))
     if (!Array.isArray(raw)) return { couples: [], error: `${p} is not a list of couples` }
-    const couples = raw.filter((c: unknown): c is Couple => !!c && typeof c === "object" && AGENT_HASH.test(String((c as Couple).agent ?? "")))
+    const kept = raw.filter((c: unknown): c is Couple => !!c && typeof c === "object" && AGENT_HASH.test(String((c as Couple).agent ?? "")))
+    // A node's own revocation outlives a re-import: an issued couple is still correctly signed
+    // after it is revoked here, so the signature cannot be what withdraws it.
+    const revoked = new Set(revokedIds())
+    const couples = kept.map((c) => (revoked.has(c.id) && !c.revoked_at ? { ...c, revoked_at: "revoked-on-this-node" } : c))
     const dropped = raw.length - couples.length
     return { couples, error: dropped > 0 ? `${dropped} couple(s) in ${p} have no valid agent hash and were ignored` : null }
   } catch (e) {
@@ -87,6 +93,18 @@ export function currentActor(): Actor {
   return { kind: "operator", who: process.env.USER || undefined }
 }
 
+/**
+ * One id for THIS act, stable for the life of the process.
+ *
+ * The command-level gate and the instance-level gate both record, and without a shared id the same
+ * act would be counted twice against its budget — a ceiling that halves itself is worse than none.
+ */
+let _actId: string | null = null
+export function currentActId(): string {
+  _actId ??= `act_${Date.now().toString(36)}${Math.floor(Math.random() * 36 ** 5).toString(36).padStart(5, "0")}`
+  return _actId
+}
+
 export const currentRunId = (): string | null => String(process.env.IRIS_RUN_ID || "").trim() || null
 
 /** Is this node locked down (an operator needs a couple too)? One file, one line, node-local. */
@@ -96,5 +114,88 @@ export function nodeIsLocked(): boolean {
     return existsSync(join(kineticDir(), "locked"))
   } catch {
     return false
+  }
+}
+
+// ── issued couples: the trust store, and what survives a re-import ────────────────────────────
+
+export const trustPath = (): string => join(kineticDir(), "trusted-issuers.json")
+export const issuerKeyPath = (): string => join(kineticDir(), "issuer.key")
+export const revokedPath = (): string => join(kineticDir(), "revoked.json")
+
+/** Public keys this node accepts issued couples from. Empty means: only couples written here. */
+export function trustedIssuers(): Record<string, string> {
+  try {
+    if (!existsSync(trustPath())) return {}
+    const raw = JSON.parse(readFileSync(trustPath(), "utf-8"))
+    return raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, string>) : {}
+  } catch {
+    // Unreadable trust store = trust nobody. The alternative (trust everybody) is how a signature
+    // check becomes decoration.
+    return {}
+  }
+}
+
+export function trustIssuer(fingerprint: string, publicKeyPem: string): void {
+  const all = trustedIssuers()
+  all[fingerprint] = publicKeyPem
+  mkdirSync(kineticDir(), { recursive: true, mode: 0o700 })
+  writeFileSync(trustPath(), JSON.stringify(all, null, 2) + "\n", { mode: 0o600 })
+}
+
+export function untrustIssuer(fingerprint: string): boolean {
+  const all = trustedIssuers()
+  if (!(fingerprint in all)) return false
+  delete all[fingerprint]
+  writeFileSync(trustPath(), JSON.stringify(all, null, 2) + "\n", { mode: 0o600 })
+  return true
+}
+
+/**
+ * Couple ids revoked on this node.
+ *
+ * Kept SEPARATELY from the couples file, because a revoked issued couple would otherwise come back
+ * the next time it is imported — the record is signed and still valid, so nothing about it says
+ * "this node said no". A revocation is the node's own statement and outlives any re-import.
+ */
+export function revokedIds(): string[] {
+  try {
+    if (!existsSync(revokedPath())) return []
+    const raw = JSON.parse(readFileSync(revokedPath(), "utf-8"))
+    return Array.isArray(raw) ? raw.map(String) : []
+  } catch {
+    return []
+  }
+}
+
+export function markRevoked(id: string): void {
+  const all = new Set(revokedIds())
+  all.add(id)
+  mkdirSync(kineticDir(), { recursive: true, mode: 0o700 })
+  writeFileSync(revokedPath(), JSON.stringify([...all], null, 2) + "\n", { mode: 0o600 })
+}
+
+/** The verifier the guard injects into `decide` — signature valid AND the issuer trusted here. */
+export const sigVerifier = () => {
+  const trusted = trustedIssuers()
+  return (c: Parameters<typeof verifyCoupleSig>[0]) => verifyCoupleSig(c, trusted)
+}
+
+/** Recent act rows, for the spend windows. Tail-bounded: a year of acts should not be parsed to book one. */
+export function recentActs(limit = 5000): ActRow[] {
+  try {
+    if (!existsSync(actLogPath())) return []
+    const lines = readFileSync(actLogPath(), "utf-8").trim().split("\n").filter(Boolean)
+    const out: ActRow[] = []
+    for (const l of lines.slice(-limit)) {
+      try {
+        out.push(JSON.parse(l))
+      } catch {
+        // one corrupt line must not hide the rest of the day's spend
+      }
+    }
+    return out
+  } catch {
+    return []
   }
 }
