@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { AtlasPullCommand, AtlasDiffCommand, AtlasPushCommand } from "./platform-atlas-tree"
 import { productCommand } from "./product-command"
 import { AtlasUseCommand } from "./platform-atlas-use"
 import {
@@ -4199,6 +4200,11 @@ export const PlatformBloqsCommand = productCommand({
       .command(BloqsListCommand)
       .command(BloqsGetCommand)
       .command(BloqsExportCommand)
+      // Round trip, same nomenclature as atlas:item — and because this group is `atlas` with
+      // `bloqs` as an alias, `iris atlas pull` and `iris bloqs pull` are one command.
+      .command(AtlasPullCommand)
+      .command(AtlasDiffCommand)
+      .command(AtlasPushCommand)
       .command(AtlasFilesCommandExport)
       .command(BloqsOpenCommand)
       .command(BloqsShareCommand)
