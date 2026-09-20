@@ -1,4 +1,6 @@
 import { cmd } from "./cmd"
+import { guardAct } from "./kinetic-guard"
+import { bodyForDevice } from "./kinetic-couple"
 import { dim, bold, success } from "./iris-api"
 import { execSync, execFileSync } from "child_process"
 import { existsSync, mkdirSync, copyFileSync, chmodSync } from "fs"
@@ -191,6 +193,20 @@ function target(args: { device?: number; name?: string }): { bin: string; dev: D
   return { bin, dev }
 }
 
+/**
+ * THE CLUTCH, on the camera's act path (#184906).
+ *
+ * `target()` stays as it is for READS (`list`, `pos`) — looking is not moving. Anything that drives
+ * the hardware goes through here instead, so a sealed agent hash must hold a couple for THIS camera
+ * on THIS node with THIS verb blessed. An operator at a terminal still works unless the node is
+ * locked; the act is recorded as unbound rather than booked to an agent that did not do it.
+ */
+async function actTarget(args: { device?: number; name?: string }, verb: string): Promise<{ bin: string; dev: Device }> {
+  const t = target(args)
+  await guardAct({ body: bodyForDevice("camera", t.dev.name) ?? "camera:unknown", verb })
+  return t
+}
+
 const deviceOpts = (yargs: any) =>
   yargs
     .option("device", { alias: "D", describe: "camera index (see `iris camera list`)", type: "number" })
@@ -250,7 +266,7 @@ const CenterCommand = cmd({
   describe: "recenter pan/tilt to default",
   builder: deviceOpts,
   async handler(args) {
-    const { bin, dev } = target(args as any)
+    const { bin, dev } = await actTarget(args as any, "move")
     setControl(bin, dev.index, "pan-tilt-abs", "default")
     console.log(success(`centered ${dev.name}`))
   },
@@ -264,7 +280,7 @@ function directionCommand(name: string, aliases: string[], axis: "pan" | "tilt",
     describe: `pan/tilt ${name}`,
     builder: deviceOpts,
     async handler(args) {
-      const { bin, dev } = target(args as any)
+      const { bin, dev } = await actTarget(args as any, "move")
       await warnIfTracking(bin, dev.index)
       const cur = getPanTilt(bin, dev.index)
       const other = axis === "pan" ? `tilt=${cur ? cur.tilt : "default"}` : `pan=${cur ? cur.pan : "default"}`
@@ -288,7 +304,7 @@ const MoveCommand = cmd({
       .option("pan", { alias: "p", describe: "absolute pan (or 0..1 fraction, or min/max)", type: "string" })
       .option("tilt", { alias: "t", describe: "absolute tilt (or 0..1 fraction, or min/max)", type: "string" }),
   async handler(args) {
-    const { bin, dev } = target(args as any)
+    const { bin, dev } = await actTarget(args as any, "move")
     if (args.pan === undefined && args.tilt === undefined) {
       console.error("Provide --pan and/or --tilt.")
       process.exit(1)
@@ -319,7 +335,7 @@ const ZoomCommand = cmd({
       console.error(`Invalid zoom value. Use a number 0–100.`)
       process.exit(1)
     }
-    const { bin, dev } = target(args as any)
+    const { bin, dev } = await actTarget(args as any, "zoom")
     const level = Math.max(0, Math.min(100, raw))
     // map 0-100 to a 0..1 fraction so it works regardless of the camera's zoom range
     setControl(bin, dev.index, "zoom-abs", String(level / 100))
@@ -337,7 +353,7 @@ const SweepCommand = cmd({
       .option("step", { describe: "fraction per step (smaller = smoother)", type: "number", default: 0.05 })
       .option("delay", { describe: "ms between steps", type: "number", default: 40 }),
   async handler(args) {
-    const { bin, dev } = target(args as any)
+    const { bin, dev } = await actTarget(args as any, "move")
     await warnIfTracking(bin, dev.index)
     const seconds = Math.max(1, Number(args.seconds))
     const step = Math.min(0.5, Math.max(0.01, Number(args.step)))
@@ -369,7 +385,7 @@ const PatrolCommand = cmd({
       .option("delay", { describe: "ms between steps (higher = slower)", type: "number", default: 120 })
       .option("step", { describe: "fraction per step", type: "number", default: 0.04 }),
   async handler(args) {
-    const { bin, dev } = target(args as any)
+    const { bin, dev } = await actTarget(args as any, "patrol")
     await warnIfTracking(bin, dev.index)
     const delay = Math.max(0, Number(args.delay))
     const step = Math.min(0.5, Math.max(0.01, Number(args.step)))
@@ -400,7 +416,7 @@ const ResetCommand = cmd({
   describe: "reset all camera controls to defaults",
   builder: deviceOpts,
   async handler(args) {
-    const { bin, dev } = target(args as any)
+    const { bin, dev } = await actTarget(args as any, "reset")
     try {
       execFileSync(bin, ["-I", String(dev.index), "-r"], { stdio: "ignore" })
     } catch {
