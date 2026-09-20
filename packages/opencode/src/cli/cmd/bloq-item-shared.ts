@@ -5,6 +5,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { confirmWiden, type Tier } from "./exposure-gate"
 import matter from "gray-matter"
+import { divergenceRefusal } from "./atlas-item-sync"
 import { readFileSync, writeFileSync, existsSync } from "fs"
 import path from "path"
 
@@ -81,11 +82,29 @@ async function fetchItems(userId: number, bloqId: number): Promise<any[]> {
   return Array.isArray(raw) ? raw : (raw?.items ?? [])
 }
 
-// Fetch a single item (by scanning its bloq's items — there's no single-item GET
-// endpoint). Used to read the server's current updated_at for divergence checks.
+// Fetch a single item (by scanning its bloq's items). Kept as the FALLBACK only — see below.
 async function fetchItem(userId: number, bloqId: number, itemId: number): Promise<any | null> {
   const items = await fetchItems(userId, bloqId)
   return items.find((it) => Number(it.id) === Number(itemId)) ?? null
+}
+
+/**
+ * Read one item by id alone.
+ *
+ * There IS a single-item GET endpoint — `bloqs get-item` has always used it. The comment here used
+ * to say there wasn't, and that belief is what made the divergence guard depend on knowing the
+ * bloq: a file without `iris_bloq_id` could not be checked, so it was not checked, so it
+ * overwrote whatever was on the server (measured 2026-09-20 with a pulled file).
+ */
+async function fetchItemById(itemId: number): Promise<any | null> {
+  try {
+    const res = await irisFetch(`/api/v1/user/bloqs/list/item/${itemId}`)
+    if (!res.ok) return null
+    const j = (await res.json()) as { data?: any }
+    return j?.data ?? j ?? null
+  } catch {
+    return null
+  }
 }
 
 async function fetchBloqs(userId: number): Promise<any[]> {
@@ -515,13 +534,21 @@ export async function executePublish(args: PublishArgs): Promise<void> {
       // by comparing the server item's updated_at against the marker we stored on the
       // last publish (atlas_published_at). Newer server timestamp ⇒ diverged ⇒ require
       // --force. No prior marker (first sync / legacy file) ⇒ can't detect ⇒ proceed.
+      // The check no longer needs the bloq: read the item by its own id, and fall back to the
+      // bloq scan only if that fails. A file we cannot check is a file we must not silently clobber.
       const guardBloqId = fm.iris_bloq_id ? Number(fm.iris_bloq_id) : (bloqId ?? null)
-      if (fm.atlas_published_at && guardBloqId && !args.force) {
-        const serverItem = await fetchItem(userId, Number(guardBloqId), existingItemId)
-        const serverTime = serverItem?.updated_at ? new Date(serverItem.updated_at).getTime() : NaN
-        const markerTime = new Date(String(fm.atlas_published_at)).getTime()
-        if (Number.isFinite(serverTime) && Number.isFinite(markerTime) && serverTime > markerTime) {
-          const msg = `Item #${existingItemId} was modified after your last publish (server ${serverItem.updated_at} > published ${fm.atlas_published_at}). Re-run with --force to overwrite those UI edits.`
+      if (fm.atlas_published_at && !args.force) {
+        const serverItem =
+          (await fetchItemById(existingItemId)) ??
+          (guardBloqId ? await fetchItem(userId, Number(guardBloqId), existingItemId) : null)
+        const refusal = divergenceRefusal({
+          itemId: existingItemId,
+          markerIso: String(fm.atlas_published_at),
+          serverIso: serverItem?.updated_at ?? null,
+          force: Boolean(args.force),
+        })
+        if (refusal) {
+          const msg = refusal
           spinner?.stop("Diverged — refusing to overwrite", 1)
           if (json) console.log(JSON.stringify({ success: false, error: msg, diverged: true, server_updated_at: serverItem.updated_at, published_at: fm.atlas_published_at }))
           else { prompts.log.warn(msg); prompts.outro("Done") }

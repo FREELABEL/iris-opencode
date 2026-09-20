@@ -1,5 +1,129 @@
 import { cmd } from "./cmd"
 import { executePublish, executePublishMany, executeMakePublic, executeMakePrivate, executeUnpublish, executeListPublished } from "./bloq-item-shared"
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs"
+import { dirname, join } from "node:path"
+import * as prompts from "./clack"
+import { irisFetch, handleApiError, dim, bold, success } from "./iris-api"
+import { renderItemFile, parseItemFile, pullDecision, diffItem, itemFilename, type RemoteItem } from "./atlas-item-sync"
+
+/**
+ * One item, read from the server.
+ *
+ * Same endpoint `bloqs get-item` reads and `publish` writes (/api/v1/user/bloqs/list/item/<id>), so
+ * pull, diff and push cannot disagree about what an item IS.
+ */
+async function fetchItem(id: string | number): Promise<RemoteItem | null> {
+  const res = await irisFetch(`/api/v1/user/bloqs/list/item/${id}`)
+  if (!res.ok) {
+    await handleApiError(res, "Get item")
+    return null
+  }
+  const body = (await res.json()) as { data?: RemoteItem } & RemoteItem
+  const item = (body as any)?.data ?? body
+  return item && (item as RemoteItem).id !== undefined ? (item as RemoteItem) : null
+}
+
+const readLocal = (file: string) => (existsSync(file) ? parseItemFile(readFileSync(file, "utf-8")) : null)
+
+const AtlasItemPullCommand = cmd({
+  command: "pull <item-id>",
+  describe: "bring an Atlas item DOWN as a markdown file you can edit, diff and push back",
+  builder: (y: any) =>
+    y
+      .positional("item-id", { describe: "item id", type: "string", demandOption: true })
+      .option("out", { describe: "write here (default: ./atlas/<title>-<id>.md)", type: "string" })
+      .option("force", { describe: "overwrite local edits that were never pushed", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args: any) {
+    const item = await fetchItem(String(args["item-id"]))
+    if (!item) { process.exitCode = 1; return }
+
+    const file = String(args.out || join("atlas", itemFilename(item)))
+    const local = readLocal(file)
+    const d = pullDecision({ local, remote: item, force: Boolean(args.force) })
+
+    if (d.action === "refuse-local-edits" || d.action === "refuse-no-item") {
+      if (args.json) console.log(JSON.stringify({ success: false, action: d.action, reason: d.reason, file }))
+      else prompts.log.error(`${file}: ${d.reason}`)
+      process.exitCode = 1
+      return
+    }
+    if (d.action === "identical") {
+      if (args.json) console.log(JSON.stringify({ success: true, action: d.action, file }))
+      else console.log(dim(`  ${file} is already up to date`))
+      return
+    }
+
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, renderItemFile(item))
+    if (args.json) { console.log(JSON.stringify({ success: true, action: "write", file, item_id: item.id, updated_at: item.updated_at })); return }
+    console.log(success(`  pulled #${item.id} → ${bold(file)}`))
+    console.log(dim(`  edit it, then:  iris atlas:item diff ${file}   ·   iris atlas:item push ${file}`))
+  },
+})
+
+const AtlasItemDiffCommand = cmd({
+  command: "diff <file>",
+  describe: "what differs between your local file and the item on the server",
+  builder: (y: any) =>
+    y
+      .positional("file", { describe: "a file produced by `pull`", type: "string", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args: any) {
+    const file = String(args.file)
+    const local = readLocal(file)
+    if (!local) { console.error(`No such file: ${file}`); process.exitCode = 1; return }
+    const id = local.fm?.iris_item_id
+    if (!id) { console.error(`${file} has no iris_item_id — pull it first, or publish it to create the item.`); process.exitCode = 1; return }
+
+    const item = await fetchItem(String(id))
+    if (!item) { process.exitCode = 1; return }
+    const d = diffItem(local, item)
+
+    if (args.json) { console.log(JSON.stringify({ item_id: item.id, ...d })); process.exitCode = d.changed.length ? 1 : 0; return }
+    if (d.changed.length === 0) {
+      console.log(dim(`  no difference — ${file} matches item #${item.id}`))
+      return
+    }
+    console.log(`  ${bold(`#${item.id}`)}  differs in: ${d.changed.join(", ")}`)
+    if (d.serverMovedSincePull)
+      prompts.log.warn(`The server copy changed after you pulled it (${item.updated_at}). Pushing would overwrite that — pull again, or push with --force.`)
+    console.log("")
+    for (const l of d.lines) console.log(l.startsWith("+") ? success(`  ${l}`) : l.startsWith("-") ? dim(`  ${l}`) : `  ${l}`)
+    console.log("")
+    // exit 1 so a script can branch on "is there anything to push"
+    process.exitCode = 1
+  },
+})
+
+/**
+ * `push` is deliberately a thin alias over `publish`, not a second writer.
+ *
+ * `publish` already keys on iris_item_id, refuses to overwrite UI edits, and writes the divergence
+ * marker back. A separate push implementation would be a second thing to keep correct, and the two
+ * would drift the first time one of them was fixed.
+ */
+const AtlasItemPushCommand = cmd({
+  command: "push <file>",
+  describe: "send your local edits back to the item this file came from",
+  builder: (y: any) =>
+    y
+      .positional("file", { describe: "a file produced by `pull`", type: "string", demandOption: true })
+      .option("force", { describe: "overwrite changes made on the server since you pulled", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args: any) {
+    const file = String(args.file)
+    const local = readLocal(file)
+    if (!local) { console.error(`No such file: ${file}`); process.exitCode = 1; return }
+    if (!local.fm?.iris_item_id) {
+      console.error(`${file} has no iris_item_id, so pushing would CREATE a second item rather than update one.\n  Pull it first:  iris atlas:item pull <id> --out ${file}`)
+      process.exitCode = 1
+      return
+    }
+    await executePublish({ ...(args as any), file, update: Number(local.fm.iris_item_id), force: Boolean(args.force) } as any)
+  },
+})
 
 // ============================================================================
 // Atlas Item CLI — publish/share Atlas (bloq) items with a public URL.
@@ -105,6 +229,9 @@ const AtlasItemUnshareCommand = cmd({
 const mountItemVerbs = (y: any) =>
   y
     .command(AtlasItemPublishCommand)
+    .command(AtlasItemPullCommand)
+    .command(AtlasItemDiffCommand)
+    .command(AtlasItemPushCommand)
     .command(AtlasItemUnpublishCommand)
     .command(AtlasItemListCommand)
     .command(AtlasItemShareCommand)
@@ -114,7 +241,7 @@ const mountItemVerbs = (y: any) =>
 export const PlatformAtlasItemCommand = cmd({
   command: "atlas:item",
   aliases: ["atlas-item"],
-  describe: "publish & share Atlas items (markdown → public URL)",
+  describe: "Atlas items as files — pull, diff, push, publish & share",
   builder: mountItemVerbs,
   async handler() {},
 })
