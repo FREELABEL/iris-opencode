@@ -37,6 +37,16 @@ export const COLORS: Record<string, Verbs> = {
   white: { ct: 370 },
   bright: { bri: 254 },
   dim: { bri: 80 },
+  // ADR-04 (#186312). Every value here is what resolveColor() computes for that colour's
+  // canonical hex, so the word and the hex agree — `teal` and `#008080` are the same light.
+  // Added because an unknown colour does not fail as a colour: it falls through to the room
+  // name, matches nothing, and reads to the user as "the lights are broken".
+  teal: { hue: 32768, sat: 254 }, // #008080 — exactly half the wheel, between green and cyan
+  turquoise: { hue: 31690, sat: 181 }, // #40e0d0
+  lime: { hue: 16000, sat: 254 }, // yellow-green; distinct from `green` at 25500
+  magenta: { hue: 54613, sat: 254 }, // #ff00ff
+  gold: { hue: 9209, sat: 254 }, // #ffd700 — richer than `amber`
+  lavender: { hue: 50084, sat: 108 }, // #b57edc — low saturation is the point
 }
 
 /** Words that read naturally ("iris home living lights blue") but carry no meaning. */
@@ -78,6 +88,17 @@ export function parseSetArgs(words: string[]): { room: string | null; verbs: Ver
     if (NOISE.has(lw)) continue
     if (lw === "on") { verbs.on = true; continue }
     if (lw === "off") { verbs.on = false; continue }
+    // `over <duration>` — ADR-04 (#186312). A fade the BRIDGE performs: the command exits
+    // immediately and the bulb keeps changing, so a 30-minute wind-down needs no daemon.
+    // A bad duration REFUSES rather than falling through to the room name, because a
+    // dropped fade looks exactly like a command that worked.
+    if (lw === "over") {
+      const ms = words[i + 1] ? parseDuration(words[i + 1]) : null
+      if (ms === null) return { room: null, verbs: null }
+      verbs.transitiontime = toTransitionTime(ms)
+      i++
+      continue
+    }
     if ((lw === "bri" || lw === "brightness") && words[i + 1] && /^\d+%?$/.test(words[i + 1])) {
       const raw = words[++i]
       const n = parseInt(raw, 10)
@@ -97,6 +118,90 @@ export function parseSetArgs(words: string[]): { room: string | null; verbs: Ver
  * "all"/null → every device. An exact device name targets only that device — otherwise
  * "Living Room" also hits "Living Room - Dome". Then the room field, then a name substring.
  */
+/**
+ * Parse a duration token to MILLISECONDS. ADR-04 (#186312).
+ *
+ * A bare number stays milliseconds because the shipped scene format already means ms by
+ * `wait: 400`. Redefining it would silently reinterpret every scene anyone has written.
+ *
+ * Returns null rather than guessing: a duration that is quietly wrong does not error, it
+ * just makes a fade snap, which reads as "transitions don't work" rather than "bad input".
+ */
+export function parseDuration(token: string): number | null {
+  const m = /^(\d+(?:\.\d+)?)(ms|s|m|h)?$/i.exec(token.trim())
+  if (!m) return null
+  const n = parseFloat(m[1])
+  if (!Number.isFinite(n)) return null
+  switch ((m[2] ?? "ms").toLowerCase()) {
+    case "s":
+      return Math.round(n * 1000)
+    case "m":
+      return Math.round(n * 60_000)
+    case "h":
+      return Math.round(n * 3_600_000)
+    default:
+      return Math.round(n)
+  }
+}
+
+/**
+ * Milliseconds → Hue `transitiontime`, which counts TENTHS OF A SECOND.
+ *
+ * The unit mismatch is the entire reason this exists: handing the bridge milliseconds makes
+ * every fade ten times too long and reports no error. The field is a uint16, so a fade over
+ * 6553.5s does not fail either — it OVERFLOWS, turning a long sunset into a jump cut.
+ * Clamp, never overflow.
+ */
+export function toTransitionTime(ms: number): number {
+  if (!Number.isFinite(ms) || ms <= 0) return 0
+  // A caller who asked for a fade gets the shortest real one rather than a silent snap.
+  return clamp(Math.max(1, Math.round(ms / 100)), 0, 65535)
+}
+
+/**
+ * Explain a command that produced nothing, by NAMING the word that was not understood.
+ *
+ * ADR-04 (#186312). Everything unrecognised falls through to the room name by design, so a
+ * misspelled or unknown COLOUR becomes a room that matches no devices. The old message —
+ * "Nothing to do with 'all teal'" — reports the whole phrase and blames neither word, which
+ * is how "teal is not a word I know" reaches a user as "my lights are broken".
+ *
+ * Only words that are genuinely unrecognised are quoted. A word that means something —
+ * a colour, a verb, a number, "all", or any token of a real room name — is never accused.
+ */
+export function unknownWordHelp(words: string[], rooms: string[]): string {
+  // Multi-word rooms ("treyton's room") must not have their parts flagged individually.
+  const roomTokens = new Set(
+    rooms.flatMap((r) => r.toLowerCase().split(/\s+/)).filter(Boolean),
+  )
+
+  const unknown = words.filter((w) => {
+    const lw = w.toLowerCase()
+    if (NOISE.has(lw)) return false
+    if (lw === "all" || lw === "on" || lw === "off") return false
+    if (lw === "bri" || lw === "brightness") return false
+    if (/^\d+%?$/.test(lw)) return false
+    if (resolveColor(w)) return false
+    if (roomTokens.has(lw)) return false
+    return true
+  })
+
+  const colours = Object.keys(COLORS).join(", ")
+  const roomList = rooms.length ? rooms.join(", ") : "none — pair a bridge first"
+
+  if (!unknown.length) {
+    return `Nothing to change in "${words.join(" ")}". Colours: ${colours}. Rooms: ${roomList}.`
+  }
+
+  const named = unknown.map((w) => `'${w}'`).join(", ")
+  const isOne = unknown.length === 1
+  return (
+    `${named} ${isOne ? "is" : "are"} not a colour or a room. ` +
+    `Colours: ${colours}, or a hex like #008080. ` +
+    `Rooms: ${roomList}.`
+  )
+}
+
 export function matchDevices(devices: HomeDevice[], room: string | null): HomeDevice[] {
   if (!room || room.toLowerCase() === "all") return devices
   const t = room.toLowerCase()
@@ -165,15 +270,168 @@ export function normalizeScene(input: unknown): Scene {
   if (!steps.length) throw new Error("scene has no steps")
   for (const [i, s] of steps.entries()) {
     if (s.color && !resolveColor(s.color)) throw new Error(`step ${i + 1}: unknown color '${s.color}'`)
+    // A bad fade must fail HERE, at load. Dropped silently it would produce a show that
+    // runs, reports success, and simply does not fade — the hardest kind of bug to see.
+    if (s.fade !== undefined && typeof s.fade !== "number" && parseDuration(String(s.fade)) === null)
+      throw new Error(`step ${i + 1}: unreadable fade '${s.fade}' — try 800, "800ms" or "1.5s"`)
   }
   return { steps, repeat: clamp(Number.isFinite(repeat) ? repeat : 1, 1, 1000) }
 }
 
 export function stepVerbs(step: SceneStep): Verbs {
-  if (step.off) return { on: false }
+  // ADR-04 (#186312). `fade` is OPTIONAL and absent means snap — the shipped sequences have
+  // no fade, and defaulting one would silently change the character of every scene that has
+  // already been written. Fading OFF is still a fade: the light dims out instead of cutting.
+  const fade = (step as any).fade
+  const ms = fade === undefined ? null : typeof fade === "number" ? fade : parseDuration(String(fade))
+  const t = ms === null ? undefined : toTransitionTime(ms)
+
+  if (step.off) return t === undefined ? { on: false } : { on: false, transitiontime: t }
   const v: Verbs = { on: true, ...(step.color ? resolveColor(step.color) : {}) }
+  // RAW passthrough, for steps written by `save`. Capture stores the bridge's own units
+  // rather than a hex round trip, so the runner has to read them back — without this every
+  // saved scene would restore brightness and nothing else.
+  const raw = step as any
+  if (raw.hue !== undefined) v.hue = clamp(Number(raw.hue), 0, 65535)
+  if (raw.sat !== undefined) v.sat = clamp(Number(raw.sat), 0, 254)
+  if (raw.ct !== undefined) v.ct = Number(raw.ct)
   if (step.bri !== undefined) v.bri = clamp(step.bri, 1, 254)
+  if (t !== undefined) v.transitiontime = t
   return v
+}
+
+/** Photosensitivity floor, mirrored from home-templates so the shorthand inherits it. */
+export const SHORTHAND_MIN_STEP_MS = 100
+
+export type ShorthandMode = "drift" | "pulse" | "strobe"
+
+export interface TimelineStep {
+  color?: string
+  off?: boolean
+  fade: number
+  wait: number
+}
+
+export interface TimelineScene {
+  tracks: Record<string, TimelineStep[]>
+  repeat: number
+  loop: boolean
+  mode: ShorthandMode
+}
+
+/**
+ * Compile the shorthand timeline language to a scene. ADR-04 (#186312).
+ *
+ * `@living teal:6s blue:6s @bedroom amber:4s drift loop`
+ *
+ * Returns NULL when the words contain no `colour:duration` token at all, so plain
+ * `iris home all blue` falls through to the existing single-state parser untouched.
+ * Throws — never silently drops — on a token that looks like a timeline step and is not
+ * readable, because a dropped step produces a show that runs and is quietly wrong.
+ *
+ * THE MODE WORD, not more punctuation: `teal:6s` is ambiguous on its own (six seconds
+ * fading INTO teal, or sitting AT teal?) and those are opposite feels. One word at the end
+ * settles it for the whole line, which is also how people say it out loud.
+ */
+export function compileShorthand(words: string[]): TimelineScene | null {
+  if (!words.length) return null
+  if (!words.some((w) => /^[^:\s]+:[^:\s]+$/.test(w))) return null
+
+  let mode: ShorthandMode = "drift"
+  let repeat = 1
+  let loop = false
+
+  const tracks: Record<string, TimelineStep[]> = {}
+  let current = "all"
+  let roomWords: string[] | null = null
+
+  const flushRoom = () => {
+    if (roomWords && roomWords.length) {
+      current = roomWords.join(" ").toLowerCase()
+      tracks[current] ??= []
+    }
+    roomWords = null
+  }
+
+  for (const w of words) {
+    const lw = w.toLowerCase()
+
+    if (lw === "drift" || lw === "pulse" || lw === "strobe") { flushRoom(); mode = lw as ShorthandMode; continue }
+    if (lw === "loop") { flushRoom(); loop = true; continue }
+    if (/^x\d+$/.test(lw)) { flushRoom(); repeat = clamp(parseInt(lw.slice(1), 10), 1, 1000); continue }
+
+    if (w.startsWith("@")) {
+      flushRoom()
+      roomWords = [w.slice(1)].filter(Boolean)
+      continue
+    }
+
+    const m = /^(.+):(.+)$/.exec(w)
+    if (m) {
+      flushRoom()
+      const [, colour, dur] = m
+      const ms = parseDuration(dur)
+      if (ms === null) throw new Error(`unreadable duration '${dur}' in '${w}' — try 400, 800ms or 1.5s`)
+      const isOff = colour.toLowerCase() === "off"
+      if (!isOff && !resolveColor(colour)) throw new Error(`unknown colour '${colour}' in '${w}'`)
+      tracks[current] ??= []
+      tracks[current].push({ ...(isOff ? { off: true } : { color: colour }), fade: 0, wait: ms })
+      continue
+    }
+
+    // Anything else extends the room name currently being read (multi-word rooms).
+    if (roomWords) { roomWords.push(w); continue }
+  }
+  flushRoom()
+
+  const steps = Object.values(tracks).flat()
+  if (!steps.length) return null
+
+  for (const st of steps) {
+    // The floor is a CLAMP, not a refusal: the language must be unable to express an
+    // unsafe show, rather than validating one after the fact.
+    st.wait = Math.max(SHORTHAND_MIN_STEP_MS, st.wait)
+    st.fade = mode === "drift" ? st.wait : 0
+  }
+
+  return { tracks, repeat, loop, mode }
+}
+
+/** One light's live state, as the Hue bridge reports it. */
+export interface LightState {
+  on?: boolean
+  bri?: number
+  hue?: number
+  sat?: number
+  ct?: number
+  colormode?: string
+}
+
+/**
+ * Turn a light's CURRENT state into a scene step — the pure half of `iris home save`.
+ *
+ * ADR-04 (#186312). Capture beats authoring: people tune a room by eye and then want it
+ * back. Stored in the bridge's own units, never via hex, because hex cannot express a white
+ * colour temperature at all and loses precision on everything else.
+ *
+ * THE TRAP: a bulb in `ct` mode still reports hue and sat — stale values from whenever it
+ * was last coloured. Saving those restores a completely different light. `colormode` is the
+ * only thing that says which pair is real.
+ */
+export function captureStep(room: string, state: LightState): Record<string, unknown> {
+  if (state.on === false) return { room, off: true }
+
+  const step: Record<string, unknown> = { room }
+  if (state.colormode === "ct" && state.ct !== undefined) {
+    step.ct = state.ct
+  } else if (state.hue !== undefined) {
+    step.hue = state.hue
+    if (state.sat !== undefined) step.sat = state.sat
+  } else if (state.ct !== undefined) {
+    step.ct = state.ct
+  }
+  if (state.bri !== undefined) step.bri = state.bri
+  return step
 }
 
 /** Sequences shipped with the CLI; users add their own in ~/.iris/home/sequences.json. */

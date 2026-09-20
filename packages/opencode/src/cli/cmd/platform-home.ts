@@ -11,6 +11,11 @@ import {
   parseSetArgs,
   stepVerbs,
   summarizeHueResponse,
+  captureStep,
+  compileShorthand,
+  type TimelineScene,
+  type TimelineStep,
+  unknownWordHelp,
   toWizParams,
   type HomeDevice,
   type Verbs,
@@ -227,6 +232,39 @@ async function playScene(devices: HomeDevice[], raw: unknown, loops: number, onS
   }
 }
 
+/**
+ * Run a compiled shorthand timeline — ADR-04 (#186312).
+ *
+ * TRACKS RUN IN PARALLEL, each with its own clock. That is the capability the single
+ * sequential scene format could not express, and it is the whole reason ambient lighting
+ * works: rooms slightly out of phase read as alive, rooms in lockstep read as a machine.
+ *
+ * Ctrl-C restores warm light, matching every prebuilt show — a show must never leave
+ * someone standing in a dark or strobing room because they stopped it.
+ */
+async function playTimeline(
+  devices: HomeDevice[],
+  scene: TimelineScene,
+  onStep: (r: SendResult[]) => void,
+  signal: { stop: boolean },
+) {
+  const runTrack = async (room: string, steps: TimelineStep[]) => {
+    const targets = matchDevices(devices, room)
+    if (!targets.length) {
+      console.error(`No device matches '${room}'`)
+      return
+    }
+    for (let n = 0; scene.loop || n < scene.repeat; n++) {
+      for (const st of steps) {
+        if (signal.stop) return
+        onStep(await sendTo(targets, stepVerbs(st as any)))
+        await sleep(st.wait)
+      }
+    }
+  }
+  await Promise.all(Object.entries(scene.tracks).map(([room, steps]) => runTrack(room, steps)))
+}
+
 // Python effect contract, same as the reference implementation: `def play(ctx)` with
 // ctx.send(room, verbs), ctx.sleep(ms), ctx.COLORS, ctx.devices. The Python side only
 // describes sends (one JSON line each); this process performs them, so effects never
@@ -359,13 +397,17 @@ async function listDevices(json: boolean) {
 
 async function setState(words: string[], json: boolean) {
   const { room, verbs } = parseSetArgs(words)
+  // The registry is loaded BEFORE the refusal, not after: a message that cannot name the
+  // real rooms cannot tell someone whether they mistyped a colour or a room, which is the
+  // whole point of the refusal (ADR-04, #186312).
+  const reg = await loadRegistry()
+  registryNotice(reg)
   if (!verbs) {
-    console.error(`Nothing to do with "${words.join(" ")}". Try: iris home ${room ?? "all"} warm  (colors: ${Object.keys(COLORS).join(", ")})`)
+    const rooms = [...new Set(reg.devices.map((d) => d.room))].filter(Boolean) as string[]
+    console.error(unknownWordHelp(words, rooms))
     process.exitCode = 1
     return
   }
-  const reg = await loadRegistry()
-  registryNotice(reg)
   const targets = matchDevices(reg.devices, room)
   if (!targets.length) {
     const rooms = [...new Set(reg.devices.map((d) => d.room))].join(", ") || "none — pair a bridge first"
@@ -379,18 +421,88 @@ async function setState(words: string[], json: boolean) {
   if (results.every((r) => !r.ok)) process.exitCode = 1
 }
 
+/**
+ * `iris home save <name>` — ADR-04 (#186312).
+ *
+ * Capture beats authoring. People tune a room by eye and then want it back; without this,
+ * every good accident is lost the moment the next command runs.
+ *
+ * ONE STEP PER DEVICE, not per room: two bulbs in the same room are routinely set
+ * differently (the Living Room lamp and its dome were different colours the night this was
+ * written), and collapsing them to one step would silently flatten the look being saved.
+ * Unreachable lights are SKIPPED rather than saved dark — a bulb off at the wall is not a
+ * design decision, and saving it as `off` would bake tonight's accident into the scene.
+ */
+const SaveCommand = cmd({
+  command: "save <name>",
+  describe: "capture what the lights are doing right now as a named scene",
+  builder: (y) =>
+    y.positional("name", { type: "string", demandOption: true, describe: "scene name" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    const name = String(args.name).trim().toLowerCase()
+    if (!/^[a-z0-9][a-z0-9_-]{0,39}$/.test(name)) {
+      console.error("Scene name: letters, numbers, - and _ (max 40).")
+      process.exitCode = 1
+      return
+    }
+    if (TEMPLATES.some((t) => t.name === name) || name in BUILTIN_SEQUENCES) {
+      console.error(`'${name}' is a built-in show. Pick another name.`)
+      process.exitCode = 1
+      return
+    }
+
+    const reg = await loadRegistry({ fresh: true })
+    if (!reg.devices.length) {
+      console.error("No devices — run: iris home devices pair-hue")
+      process.exitCode = 1
+      return
+    }
+
+    const states = new Map<string, any>()
+    for (const ip of new Set(reg.devices.filter((d) => d.transport === "hue" && d.ip).map((d) => d.ip!))) {
+      states.set(ip, await hueApi(ip, "/lights").catch(() => null))
+    }
+
+    const steps: Record<string, unknown>[] = []
+    const skipped: string[] = []
+    for (const d of reg.devices) {
+      const st = d.transport === "hue" ? states.get(d.ip ?? "")?.[d.id]?.state : undefined
+      if (!st) { skipped.push(`${d.name} (no state)`); continue }
+      if (st.reachable === false) { skipped.push(`${d.name} (unreachable)`); continue }
+      steps.push({ ...captureStep(d.name, st), wait: 0 })
+    }
+
+    if (!steps.length) {
+      console.error("Nothing to save — no light reported a state. Are they powered on at the wall?")
+      process.exitCode = 1
+      return
+    }
+
+    const existing = readJson<Record<string, unknown>>(SEQUENCES, {})
+    const isNew = !(name in existing)
+    writeLocal(SEQUENCES, { ...existing, [name]: steps })
+
+    if (args.json) { await writeJson({ saved: name, steps, skipped, new: isNew }); return }
+    console.log(`${success("✓")} ${isNew ? "Saved" : "Replaced"} ${bold(name)} — ${steps.length} light(s)`)
+    for (const sk of skipped) console.log(`  ${dim("skipped " + sk)}`)
+    console.log(dim(`  iris home run ${name}`))
+  },
+})
+
 const RunCommand = cmd({
-  command: "run <target>",
+  command: "run [target]",
   aliases: ["play"],
   describe: "play a prebuilt show (barbie, halloween, disco…), a scene .json, an effect .py/.mjs, or a sequence",
   builder: (y) =>
     y
-      .positional("target", { type: "string", demandOption: true, describe: "see: iris home templates" })
+      .positional("target", { type: "string", default: "", describe: "see: iris home templates  ·  use --stdin to pipe a scene" })
+      .option("stdin", { type: "boolean", default: false, describe: "read a scene as JSON from stdin" })
       .option("duration", { type: "number", describe: "seconds, for shows that stretch (disco, christmas, sunrise, chill)" })
       .option("loops", { type: "number", default: 1, describe: "repeat the whole scene N times (.json/sequences)" })
       .option("quiet", { type: "boolean", default: false, describe: "only print failures" }),
   async handler(args) {
-    const target = String(args.target)
+    const target = String(args.target ?? "")
     const reg = await loadRegistry()
     registryNotice(reg)
     if (!reg.devices.length) { console.error("No devices — run: iris home devices pair-hue"); process.exitCode = 1; return }
@@ -408,6 +520,28 @@ const RunCommand = cmd({
       printResults(fresh)
     }
     try {
+      // `run -` reads a scene from stdin. ADR-04 (#186312): a quoted heredoc escapes
+      // NOTHING, so the JSON can be written exactly as it appears in a file — which is the
+      // answer to "author without a file" rather than fighting argv, where `[` globs and
+      // `{` brace-expands before iris is ever reached.
+      if (args.stdin || target === "-" || target === "") {
+        const raw = await new Response(Bun.stdin.stream()).text()
+        if (!raw.trim())
+          throw new Error(
+            target === "" && !args.stdin
+              ? `no show named. Try: ${[...TEMPLATES.map((t) => t.name), ...Object.keys(sequences())].join(", ")}`
+              : "nothing on stdin — pipe a scene, e.g. iris home run --stdin < scene.json",
+          )
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(raw)
+        } catch (e) {
+          throw new Error(`stdin is not valid JSON: ${(e as Error).message}`)
+        }
+        await playScene(reg.devices, parsed, args.loops, onStep)
+        if (failures) console.error(dim(`  ${failures} send(s) failed`))
+        return
+      }
       const file = /\.(json|py|js|mjs)$/.test(target) ? resolveFile(target) : null
       if (/\.(json|py|js|mjs)$/.test(target) && !file) throw new Error(`no such file: ${target} (also looked in ${EFFECTS_DIR})`)
       if (file?.endsWith(".json")) await playScene(reg.devices, readJson(file, null), args.loops, onStep)
@@ -601,15 +735,61 @@ export const HomeCommand = cmd({
     (y as unknown as { recommendCommands(on: boolean): typeof y })
       .recommendCommands(false)
       .command(RunCommand)
+      .command(SaveCommand)
       .command(SequencesCommand)
       .command(DevicesCommand)
       .command(cmd({ command: "list", aliases: ["status"], describe: "devices by room with live state", builder: (b) => b.option("json", { type: "boolean", default: false }), handler: (a) => listDevices(a.json) }))
-      .positional("words", { type: "string", array: true, describe: "<room> <color|on|off|bri N|#hex>" })
+      .positional("words", { type: "string", array: true, describe: "<room> <color|on|off|bri N|#hex>  ·  @room color:6s drift" })
       .option("json", { type: "boolean", default: false })
+      .option("explain", { type: "boolean", default: false, describe: "print the scene the shorthand compiles to, and run nothing" })
       .strict(false),
   async handler(args) {
     const words = ((args.words as string[] | undefined) ?? []).map(String)
     if (!words.length) return listDevices(args.json)
+
+    // A timeline (`teal:6s`) compiles to a scene; anything else is a single state and
+    // falls through to the original parser untouched. compileShorthand returns null
+    // rather than guessing, so `iris home all blue` can never be captured by mistake.
+    let timeline: TimelineScene | null = null
+    try {
+      timeline = compileShorthand(words)
+    } catch (err) {
+      console.error(`✗ ${(err as Error).message}`)
+      process.exitCode = 1
+      return
+    }
+
+    if (timeline) {
+      // --explain makes the shorthand a teacher: see what it compiled to, and you have
+      // learned the file format without reading any documentation.
+      if (args.explain || args.json) {
+        await writeJson(timeline)
+        return
+      }
+      const reg = await loadRegistry()
+      registryNotice(reg)
+      if (!reg.devices.length) { console.error("No devices — run: iris home devices pair-hue"); process.exitCode = 1; return }
+      const signal = { stop: false }
+      const onSig = () => { signal.stop = true }
+      process.once("SIGINT", onSig)
+      const seen = new Set<string>()
+      try {
+        await playTimeline(reg.devices, timeline, (rs) => {
+          const fresh = rs.filter((r) => {
+            const key = `${r.device}|${r.ok}|${r.note ?? ""}`
+            if (seen.has(key)) return false
+            seen.add(key)
+            return true
+          })
+          printResults(fresh)
+        }, signal)
+      } finally {
+        process.off("SIGINT", onSig)
+        if (signal.stop) await sendTo(reg.devices, { on: true, ct: 340, bri: 200 })
+      }
+      return
+    }
+
     await setState(words, args.json)
   },
 })
