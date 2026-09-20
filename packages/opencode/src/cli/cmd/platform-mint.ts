@@ -43,6 +43,7 @@ import {
   overlappingBudgets,
   evaluatePolicy,
   groupViolations,
+  moneyFlow,
   norm,
   NO_POLICY,
   type GroupLike,
@@ -346,6 +347,21 @@ async function fetchUntagged(): Promise<any[]> {
   return rows.filter((tx) => !tx?.metadata?.scope)
 }
 
+/**
+ * Money in and money out for a scope in a window — where Commerce sales now land (#186322).
+ *
+ * A SEPARATE read from the budget comparison on purpose: budgets measure spending against a
+ * cap, and folding income into that arithmetic would change what every existing budget row
+ * means.
+ */
+async function fetchFlow(scope: string, from: string, to: string) {
+  const p = new URLSearchParams({ per_page: "500", from, to })
+  const res = await irisFetch(`/api/v1/atlas/transactions?${p}`)
+  if (!res.ok) return null
+  const body = (await res.json()) as any
+  return moneyFlow(firstArray(body?.data?.data, body?.data), scope)
+}
+
 function bar(pct: number, width = 24): string {
   const filled = Math.max(0, Math.min(width, Math.round((pct / 100) * width)))
   return "█".repeat(filled) + dim("░".repeat(width - filled))
@@ -632,7 +648,8 @@ const StatusCommand = cmd({
     spinner.stop(`${rows.length} budget(s)`)
 
     if (args.json) {
-      await writeJson(rows)
+      const [jf, jt] = periodWindow(String(args.period ?? "monthly"))
+      await writeJson({ budgets: rows, flow: await fetchFlow(String(args.scope), jf, jt), from: jf, to: jt })
       prompts.outro("Done")
       return
     }
@@ -669,6 +686,22 @@ const StatusCommand = cmd({
       prompts.log.warn(
         `"${o.category}" is covered by ${o.budgets.length} active budgets (${o.budgets.join(", ")}) — those dollars are counted in each, so the TOTAL double-counts them`,
       )
+    }
+
+    // Money in and out first: the bars below answer "am I overspending", this answers "did
+    // we make anything". Until #186322 the second question lived on a different screen.
+    const [flowFrom, flowTo] = periodWindow(String(args.period ?? "monthly"))
+    const flow = await fetchFlow(String(args.scope), flowFrom, flowTo)
+    if (flow && (flow.incomeCents > 0 || flow.refundedCents > 0)) {
+      printDivider()
+      console.log(`  ${bold("Money in")}  ${dim(`${flowFrom} → ${flowTo}`)}`)
+      console.log(`    ${"sales".padEnd(18)} ${fmtCents(flow.incomeCents)}`)
+      if (flow.refundedCents > 0) console.log(`    ${"refunded".padEnd(18)} ${dim("-" + fmtCents(flow.refundedCents))}`)
+      console.log(`    ${"spent".padEnd(18)} ${dim("-" + fmtCents(flow.expenseCents))}`)
+      console.log(`    ${bold("net".padEnd(18))} ${bold(fmtCents(flow.netCents))}`)
+      // Apart from "spent" on purpose: a payout is your own money moving to your bank, not a
+      // cost. Adding it to spending would report a good month as a loss.
+      if (flow.paidOutCents > 0) console.log(`    ${dim("paid out to you".padEnd(18))} ${dim(fmtCents(flow.paidOutCents))}`)
     }
 
     printDivider()

@@ -722,3 +722,53 @@ export function reimbursableOf(tx: {
   if (!paidFrom || !scope || paidFrom === scope) return null
   return { owed_by: scope, owed_to: paidFrom }
 }
+
+/**
+ * Money in, money out, for one scope in one window — the screen that answers "what did we
+ * make this month". #186322.
+ *
+ * Rules, each one a way this number can be wrong while looking right:
+ *
+ *   · A row with no scope belongs to NO books. Defaulting it into the scope being viewed
+ *     would pull every legacy row into the total the first time a category matched.
+ *   · A TRANSFER is not spending. A commerce payout moves the seller's own money from the
+ *     platform to their bank; counting it as an expense reports a profitable month as a loss
+ *     and double-counts the fee that was already deducted from it.
+ *   · A split parent is excluded — its children carry the same money.
+ *   · A refund is stored as an expense so the books stay append-only, but it belongs against
+ *     INCOME here. A refunded month did not spend that money, it failed to keep it.
+ */
+export function moneyFlow(
+  rows: { type?: string; amount_cents?: number | string; metadata?: any }[],
+  scope: string,
+  opts: { refundCategories?: string[] } = {},
+): { incomeCents: number; expenseCents: number; netCents: number; paidOutCents: number; refundedCents: number } {
+  const refundCats = opts.refundCategories ?? ["commerce-refund"]
+  let incomeCents = 0
+  let expenseCents = 0
+  let paidOutCents = 0
+  let refundedCents = 0
+
+  for (const r of rows ?? []) {
+    const md = r?.metadata ?? {}
+    if (md.scope !== scope) continue
+    if (md.superseded_by_split) continue
+    const cents = Number(r?.amount_cents) || 0
+
+    if (refundCats.includes(String(md.category ?? ""))) {
+      refundedCents += cents
+      continue
+    }
+    if (r?.type === "revenue") incomeCents += cents
+    else if (r?.type === "transfer") paidOutCents += cents
+    else if (r?.type === "expense") expenseCents += cents
+  }
+
+  return {
+    incomeCents,
+    expenseCents,
+    netCents: incomeCents - expenseCents - refundedCents,
+    paidOutCents,
+    refundedCents,
+  }
+}
