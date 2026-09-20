@@ -150,9 +150,10 @@ const SendCmd = cmd({
     yargs
       .positional("lead-id", { describe: "lead ID", type: "number", demandOption: true })
       .option("step", { describe: "step number (1-based)", type: "number", demandOption: true })
-      .option("message", { describe: "override the step's copy for this send only", type: "string" })
+      .option("message", { describe: "send THIS text, verbatim — overrides the step's copy for this send only", type: "string" })
+      .option("vary", { describe: "let the model rewrite the copy and write a subject (default: send verbatim)", type: "boolean", default: false })
       .option("channel", { describe: "email | sms | imessage | linkedin | instagram", type: "string" })
-      .option("dry-run", { describe: "resolve the channel and show what would go — sends nothing", type: "boolean", default: false })
+      .option("dry-run", { describe: "show exactly what would go — sends nothing", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   /**
    * THIS USED TO REFUSE, and the refusal outlived its reason.
@@ -184,6 +185,9 @@ const SendCmd = cmd({
         message: args.message ?? null,
         channel: args.channel ?? null,
         dry_run: !!args["dry-run"],
+        // Opt IN to rewriting. The words someone typed are the words that get sent unless they
+        // ask otherwise — see ReachrSendController for what shipped before this defaulted.
+        vary: !!args.vary,
       }),
     })
     const body = (await res.json().catch(() => ({}))) as any
@@ -199,9 +203,16 @@ const SendCmd = cmd({
     }
 
     if (body?.dry_run) {
+      const d = body?.data ?? {}
+      const exact = d.preview_is_exact !== false
       prompts.log.info(`${bold("dry run")} — nothing sent, nothing logged`)
-      prompts.log.info(dim(`  channel: ${body?.data?.channel ?? "—"}`))
-      prompts.log.info(dim(`  ${String(body?.data?.message_preview ?? "").slice(0, 200)}`))
+      prompts.log.info(dim(`  channel: ${d.channel ?? "—"}`))
+      prompts.log.info(dim(`  mode:    ${d.mode ?? "verbatim"}`))
+      // Say it BEFORE the text, not after. A caveat printed under a message the reader has
+      // already accepted as the message does not get read.
+      if (!exact) prompts.log.warn(d.preview_caveat ?? "The body below is a prompt, not the message that will arrive.")
+      prompts.log.info(dim(`  ${String(d.message_preview ?? "").slice(0, 400)}`))
+      if (exact && d.preview_caveat) prompts.log.info(dim(`  ${d.preview_caveat}`))
       return
     }
 

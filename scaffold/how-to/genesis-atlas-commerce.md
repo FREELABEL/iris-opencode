@@ -96,7 +96,7 @@ service packages, workshops, fixed-price offers — without building a shop.
 <line x1="594" y1="194" x2="736" y2="194" style="stroke:currentColor;stroke-width:1.5"/>
 <text x="596" y="214" text-anchor="start" style="fill:currentColor;font-size:11px;font-weight:600;font-family:ui-monospace,Menlo,Consolas,monospace">owed</text>
 <text x="736" y="214" text-anchor="end" style="fill:currentColor;font-size:11px;font-weight:600;font-family:ui-monospace,Menlo,Consolas,monospace">$237.60</text>
-<rect x="594" y="232" width="142" height="30" rx="15" style="fill:none;stroke:currentColor;stroke-opacity:.35;stroke-width:1.5;stroke-dasharray:5 4"/>
+<rect x="594" y="232" width="142" height="30" rx="15" style="fill:none;stroke:currentColor;stroke-opacity:.35;stroke-width:1.5"/>
 <text x="665" y="251" text-anchor="middle" style="fill:currentColor;font-size:11px">in iris mint</text>
 <text x="665" y="284" text-anchor="middle" style="fill:currentColor;font-size:11px;opacity:.75">every step is a new</text>
 <text x="665" y="300" text-anchor="middle" style="fill:currentColor;font-size:11px;opacity:.75">entry — nothing is</text>
@@ -123,7 +123,7 @@ service packages, workshops, fixed-price offers — without building a shop.
 - **Commerce takes the money.** Every Buy is a payment link. The price is read on the server, Stripe collects it on the platform account, and it is **held** until a person releases it with a reason. The payout to you comes after that.
 - **Mint keeps the books.** Every step of every sale is a new ledger entry — pending, paid, held, released, paid out — with the fee and what you are owed. Nothing is ever edited.
 
-Everything solid is live today, including the payout: once a sale is released, `iris commerce payout` transfers the seller's share to their own Stripe account. The dashed box — your sales shown inside `iris mint` — is coming next.
+Everything solid is live today, including the payout: once a sale is released, `iris commerce payout` transfers the seller's share to their own Stripe account. Every box is live, including the last one — a paid sale posts income, the platform fee and the payout into your books, and `iris mint status` shows them under Money in.
 
 ## How the money moves
 

@@ -18,6 +18,7 @@ import {
   type StepResult,
   type SkillPlan,
   type ArgDef,
+  parsePlan,
 } from "./executor"
 
 /** Remove the on-disk checkpoint a test run created, so tests don't litter ~/.iris. */
@@ -2481,5 +2482,35 @@ describe("validatePlan: dead interpolation references", () => {
     // Flagging those would make the check noise, and a noisy check gets ignored.
     const issues = validatePlan(plan([{ code: 'const p = `${process.env.HOME}/x`\nfor i; do echo "${i}"; done' }]))
     expect(issues.filter((i) => /interpolat/i.test(i.message)).length).toBe(0)
+  })
+})
+
+describe("#186184 — step blocks decide whether a playbook runs, not the version number", () => {
+  const body = "\n# P\n\n### step:hello Say hello\n```yaml\nmode: shell\n```\n```bash\necho hi\n```\n"
+  async function planFor(front: string) {
+    const fs = await import("fs")
+    const os = await import("os")
+    const path = await import("path")
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pb-"))
+    const f = path.join(dir, "PLAYBOOK.md")
+    fs.writeFileSync(f, `---\nname: p\ndescription: d\n${front}---\n${body}`)
+    return parsePlan({ name: "p", description: "d", location: f } as any)
+  }
+  test.each([["version: 3\n"], ["version: 1\n"], ['version: "2"\n'], [""], ["version: 2\n"]])("%s with steps → executable", async (front) => {
+    const plan = await planFor(front)
+    expect(plan.version).toBe(2)
+    expect(plan.steps.length).toBe(1)
+  })
+  test("a genuine v1 document (no step blocks) stays a document", async () => {
+    const fs = await import("fs"); const os = await import("os"); const path = await import("path")
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pb-"))
+    const f = path.join(dir, "PLAYBOOK.md")
+    fs.writeFileSync(f, "---\nname: p\ndescription: d\nversion: 1\n---\n# Just prose\n\nNo steps here.\n")
+    const plan = await parsePlan({ name: "p", description: "d", location: f } as any)
+    expect(plan.version).toBe(1)
+  })
+  test("the author is told what the field means", async () => {
+    const plan = await planFor("version: 3\n")
+    expect(validatePlan(plan).some((i) => i.level === "warning" && i.message.includes("FORMAT"))).toBe(true)
   })
 })

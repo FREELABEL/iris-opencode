@@ -63,6 +63,27 @@ import { firstArray } from "../../util/array"
 import { classifyNodeKeyStatus, lanAddress, NODE_KEY_FIX } from "../lib/node-key"
 
 // Use iris-api base for Hive endpoints
+
+/** A full task id (UUID, incl. v7, or a 26-char ULID). */
+export function isFullTaskId(s: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s) || /^[0-9A-HJKMNP-TV-Z]{26}$/i.test(s)
+}
+/**
+ * A task id — full, or the SHORTENED form the task list prints ("01a0bab8-b78"), which is what
+ * people copy — as opposed to a subcommand name.
+ */
+export function looksLikeTaskId(s: string): boolean {
+  return isFullTaskId(s) || /^[0-9a-f]{8}(-[0-9a-f]{1,12}){0,4}$/i.test(s)
+}
+/** Resolve a shortened id against recent task ids: exactly one match, or a reason. */
+export function resolveTaskPrefix(prefix: string, ids: string[]): { id: string } | { error: string } {
+  const p = prefix.toLowerCase()
+  const hits = [...new Set(ids.filter((i) => i.toLowerCase().startsWith(p)))]
+  if (hits.length === 1) return { id: hits[0] }
+  if (hits.length === 0) return { error: `no task starting with ${prefix} in the last 7 days` }
+  return { error: `${prefix} matches ${hits.length} tasks (${hits.slice(0, 4).join(", ")}…) — give more of the id` }
+}
+
 const IRIS_API = process.env.IRIS_API_URL ?? "https://freelabel.net"
 
 async function hiveFetch(path: string, options: RequestInit = {}) {
@@ -1054,8 +1075,15 @@ const HiveTasksCommand = cmd({
       .example("iris hive tasks create --type mcp_call --node studio --config '{\"server\":\"argent\",\"tool\":\"list_devices\"}'", "call one tool and print the result"),
   async handler(args) {
     UI.empty()
-    const sub = args.subcommand as string | undefined
+    let sub = args.subcommand as string | undefined
     const extraArgs = args._ as string[]
+    // `iris hive tasks <id>` — a bare task id means "show me that task" (#186129). It used to land in
+    // the subcommand slot, match nothing, and print the recent list instead — while `scripts run`
+    // told people to read a task exactly that way.
+    if (sub && looksLikeTaskId(sub)) {
+      args["task-id"] = sub
+      sub = "get"
+    }
     const userId = await requireUserId(args["user-id"] as number | undefined)
 
     // ── iris hive tasks create ──
@@ -1220,10 +1248,24 @@ const HiveTasksCommand = cmd({
 
     // ── iris hive tasks get <id> ──
     if (sub === "get" || sub === "logs") {
-      const taskId = args["task-id"] as string || extraArgs[extraArgs.length - 1]
+      let taskId = args["task-id"] as string || extraArgs[extraArgs.length - 1]
       if (!taskId) {
         prompts.log.error("Usage: iris hive tasks get <task-id>")
+        process.exitCode = 1
         return
+      }
+      // The list prints shortened ids; resolve one against the last 7 days (#186129).
+      if (!isFullTaskId(String(taskId))) {
+        const params = new URLSearchParams({ user_id: String(userId), since: "7d", limit: "500" })
+        const lr = await hiveFetch(`/api/v6/nodes/tasks?${params}`).catch(() => null)
+        const ids = lr?.ok ? (((await lr.json()) as any).tasks ?? []).map((t: any) => String(t.id)) : []
+        const r = resolveTaskPrefix(String(taskId), ids)
+        if ("error" in r) {
+          prompts.log.error(r.error)
+          process.exitCode = 1
+          return
+        }
+        taskId = r.id
       }
       prompts.intro(`◈  Task ${String(taskId).substring(0, 12)}…`)
       const spinner = prompts.spinner()

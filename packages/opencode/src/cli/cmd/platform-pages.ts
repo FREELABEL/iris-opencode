@@ -162,6 +162,21 @@ export function normalizePathIndexes(path: string): string {
  * Stripped rather than refused: everyone who typed the prefix meant the key inside
  * json_content, and there is nothing else it could have addressed.
  */
+/**
+ * May `pages set` write this top-level json_content key? (#186203)
+ *
+ * The list of known keys predates bespoke pages (render_mode html), whose `html` and `css` live at
+ * json_content.html / json_content.css — so `set <slug> css …` was refused, and the refusal told the
+ * caller to type `json_content.css`, which normaliseSetPath strips straight back to `css`: a loop that
+ * ended in "Done" every time. A key the page ALREADY HAS cannot be a dead key, so it is allowed too.
+ */
+export const JSON_TOP_KEYS = new Set(["version", "type", "theme", "layout", "components", "requireOtp", "html", "css"])
+export function isWritableTopKey(path: string, jsonContent: unknown): boolean {
+  if (path.includes(".")) return true
+  if (JSON_TOP_KEYS.has(path)) return true
+  return !!jsonContent && typeof jsonContent === "object" && Object.prototype.hasOwnProperty.call(jsonContent, path)
+}
+
 export function normaliseSetPath(path: string): { path: string; stripped: boolean } {
   const PREFIX = "json_content."
   if (path.startsWith(PREFIX) && path.length > PREFIX.length) {
@@ -575,12 +590,12 @@ const SetCmd = cmd({
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Set ${args.slug} → ${args.path}`)
-    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    if (!(await requireAuth())) { process.exitCode = 1; prompts.outro("Nothing changed"); return }
     const sp = prompts.spinner()
     sp.start("Updating…")
     try {
       const page = await getBySlug(args.slug, true)
-      if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!page) { sp.stop("Failed", 1); process.exitCode = 1; prompts.outro("Nothing changed"); return }
 
       // A leading `json_content.` is REDUNDANT here and used to be silently destructive
       // (#181940). The nested write below is already rooted AT json_content, so
@@ -626,7 +641,7 @@ const SetCmd = cmd({
             `  iris pages reassign ${args.slug} --owner-type bloq --owner-id <id>`,
         )
         process.exitCode = 1
-        prompts.outro("Done")
+        prompts.outro("Nothing changed")
         return
       }
 
@@ -634,18 +649,18 @@ const SetCmd = cmd({
       // a column the caller expected to exist — nesting it silently is how
       // `set <slug> thumbnail_url ""` reported "Updated thumbnail_url" while writing a dead
       // `json_content.thumbnail_url` that nothing reads (#179802). Refuse rather than guess.
-      const JSON_TOP_KEYS = new Set(["version", "type", "theme", "layout", "components", "requireOtp"])
-      if (!args.path.includes(".") && !PAGE_COLUMNS.has(args.path) && !JSON_TOP_KEYS.has(args.path)) {
+      if (!PAGE_COLUMNS.has(args.path) && !isWritableTopKey(args.path, page.json_content)) {
         sp.stop("Refused", 1)
         prompts.log.error(
           `'${args.path}' is not a page column and not a known json_content key.\n` +
             `Writing it here would nest a dead key that nothing reads.\n\n` +
             `  Columns:      ${[...PAGE_COLUMNS].sort().join(", ")}\n` +
             `  json_content: ${[...JSON_TOP_KEYS].sort().join(", ")}\n\n` +
-            `If you really meant a nested value, be explicit: json_content.${args.path}`,
+            `To add a NEW top-level key, edit the page file instead (nothing here can tell a new key from a typo):\n` +
+            `  iris pages pull ${args.slug} --dir /tmp/p && edit json_content.${args.path} && iris pages push ${args.slug} --dir /tmp/p --publish`,
         )
         process.exitCode = 1
-        prompts.outro("Done")
+        prompts.outro("Nothing changed")
         return
       }
 
@@ -655,7 +670,7 @@ const SetCmd = cmd({
           method: "PUT",
           body: JSON.stringify({ [args.path]: colVal }),
         })
-        if (!(await handleApiError(colRes, `Update ${args.path}`))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+        if (!(await handleApiError(colRes, `Update ${args.path}`))) { sp.stop("Failed", 1); process.exitCode = 1; prompts.outro("Nothing changed"); return }
 
         // VERIFY THE WRITE LANDED (#179802). This printed "Updated" on a page whose slug did
         // not even resolve. Re-read the record and compare rather than trusting the 200.
@@ -671,7 +686,7 @@ const SetCmd = cmd({
             `The API accepted the request but ${args.path} is still ${JSON.stringify(landed)}, not ${JSON.stringify(colVal)}.`,
           )
           process.exitCode = 1
-          prompts.outro("Done")
+          prompts.outro("Nothing changed")
           return
         }
         sp.stop(success(`Updated page column ${args.path} = ${JSON.stringify(colVal)}`))
@@ -708,7 +723,8 @@ const SetCmd = cmd({
           for (const err of validation.errors) {
             if (err) prompts.log.error(err)
           }
-          prompts.outro("Done")
+          process.exitCode = 1
+          prompts.outro("Nothing changed")
           return
         }
       }
@@ -717,7 +733,7 @@ const SetCmd = cmd({
         method: "PUT",
         body: JSON.stringify({ json_content: json }),
       })
-      if (!(await handleApiError(res, "Update path"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!(await handleApiError(res, "Update path"))) { sp.stop("Failed", 1); process.exitCode = 1; prompts.outro("Nothing changed"); return }
 
       // VERIFY THE WRITE LANDED (#181119). This printed "Updated" 51 times across 17 client
       // pages while writing nothing — the path resolved to a dead key, so the PUT succeeded
@@ -738,7 +754,7 @@ const SetCmd = cmd({
           `The API accepted the request but ${args.path} reads back as ${JSON.stringify(landed)}, not ${JSON.stringify(parsed)}.`,
         )
         process.exitCode = 1
-        prompts.outro("Done")
+        prompts.outro("Nothing changed")
         return
       }
 
@@ -750,7 +766,8 @@ const SetCmd = cmd({
     } catch (err) {
       sp.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
+      process.exitCode = 1
+      prompts.outro("Nothing changed")
     }
   },
 })

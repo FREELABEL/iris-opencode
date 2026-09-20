@@ -3282,7 +3282,18 @@ const BloqsItemsCommand = cmd({
       const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args["bloq-id"]}/items?${params}`)
       if (!res.ok) {
         if (spinner) spinner.stop("Failed", 1)
-        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        if (args.json) {
+          // Forward the server's own body rather than collapsing it to a status code.
+          // `iris bloqs items 1668 --json` returned {"error":"HTTP 422"} while the server was
+          // saying "1668 is a LIST, not a bloq — its bloq is 550", with the parent id in meta.
+          // A script cannot act on a status code whose meaning it has to guess.
+          //
+          // NOTE: this idiom appears ~25 times in this file alone. Fixed here because this is
+          // the path verified end to end; the pattern is filed rather than blind-edited.
+          const detail = (await res.json().catch(() => null)) as Record<string, unknown> | null
+          console.log(JSON.stringify({ success: false, status: res.status, ...(detail ?? { error: `HTTP ${res.status}` }) }))
+          return
+        }
         await handleApiError(res, "List items")
         prompts.outro("Done")
         return

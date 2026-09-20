@@ -102,6 +102,7 @@ import { PlatformDeliverCommand, DeliverCarouselCommand } from "./cli/cmd/platfo
 import { PlatformRunCommand, PlatformConnectCommand, PlatformListConnectedCommand, PlatformListAvailableCommand, PlatformExecCommand, PlatformListToolsCommand, PlatformListIntegrationsCommand } from "./cli/cmd/platform-run"
 import { PlatformListenCommand } from "./cli/cmd/listen"
 import { PlatformTranscribeCommand } from "./cli/cmd/transcribe"
+import { PlatformOcrCommand } from "./cli/cmd/platform-ocr"
 import { PlatformDownloadCommand } from "./cli/cmd/download"
 import { PlatformBugCommand } from "./cli/cmd/platform-bug"
 import { PlatformFeatureCommand } from "./cli/cmd/platform-feature"
@@ -196,6 +197,7 @@ import { PlatformArticleQaCommand } from "./cli/cmd/platform-article-qa"
 import { PlatformMsgCommand } from "./cli/cmd/platform-msg"
 import { PlatformAffiliatesCommand } from "./cli/cmd/platform-affiliates"
 import { PlatformPlaybookCommand, PlatformSkillCommand } from "./cli/cmd/platform-playbook"
+import { BrowserCommand } from "./cli/cmd/platform-browser"
 import { PlatformLoopCommand } from "./cli/cmd/platform-loop"
 import { PlatformUsageCommand, PlatformTracesCommand } from "./cli/cmd/platform-usage"
 import { GuideCommand } from "./cli/cmd/guide"
@@ -402,6 +404,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformListToolsCommand))
   .command(reg(PlatformListIntegrationsCommand))
   .command(reg(PlatformTranscribeCommand))
+  .command(reg(PlatformOcrCommand))
   .command(reg(PlatformListenCommand))
   .command(reg(PlatformDownloadCommand))
   .command(reg(PlatformConnectCommand))
@@ -500,6 +503,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformLoopCommand))
   .command(reg(PlatformUsageCommand))
   .command(reg(PlatformTracesCommand))
+  .command(reg(BrowserCommand))
   .command(reg(PlatformPlaybookCommand))
   .command(PlatformSkillCommand) // hidden alias for backward compat
   .fail((msg, err) => {
