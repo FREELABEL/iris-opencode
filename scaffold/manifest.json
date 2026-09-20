@@ -457,6 +457,12 @@
       "dest": "how-to/genesis-atlas-commerce.md",
       "managed": true,
       "purpose": "Sell fixed-price packages from an Atlas dataset: Genesis AtlasStorefront on the page, checkout priced on the server on the platform account, and an append-only settlement ledger (pending, paid, held, released, paid out). Runnable version: the genesis-atlas-commerce playbook."
+    },
+    {
+      "src": "how-to/track-money-with-iris-mint.md",
+      "dest": "how-to/track-money-with-iris-mint.md",
+      "managed": true,
+      "purpose": "Track your own spending with iris mint: caps and groups, four idempotent ways in (spend, CSV import, email scan, photo of a bill), scope vs paid-from, and verify/audit that prove every reported figure ties to its rows. Runnable version: the iris-mint playbook."
     }
   ]
 }
