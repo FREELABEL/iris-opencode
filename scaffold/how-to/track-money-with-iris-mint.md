@@ -148,17 +148,20 @@ pass it.
 
 ## Where this stops — read this before you plan around it
 
-- **Commerce sales do not appear in Mint yet.** `iris commerce` records what customers pay you
-  and what you are owed on its own ledger; Mint holds what you spend. Nothing joins them today,
-  so "what did we actually make this month" is still two screens and some arithmetic.
-  See the `genesis-atlas-commerce` how-to for the sales side.
+- **Commerce sales now appear here** (since 2026-09-20). A paid sale posts three rows into the
+  same books: the sale as income, the platform fee as an expense, and — once the payout
+  actually runs — the transfer to your account. `iris mint status` shows them under **Money
+  in**, with net. Nobody has to run anything: it happens on the payment. To backfill older
+  sales, an operator runs `commerce:post-to-books --seller <workspace> --apply`.
+  A payout is shown apart from spending, because it is your own money moving to your bank.
 - **`iris mint status` has been seen to hang before printing anything** — once, for 20+
   minutes, producing no output at all. It has not reproduced since (three attempts, plain and
   piped, all finished). If it happens to you, `--json` returned promptly in the same
   conditions. Tracked as #186318; the cause is not yet known, so do not assume a workaround.
 - Mint is not an accounting system and does not file anything. For double-entry accounts and
-  a QuickBooks path, see `track-finances-atlas-ledger`, which is a different subsystem
-  (`iris atlas:ledger`) despite the similar-sounding name.
+  a QuickBooks path, see `track-finances-atlas-ledger`. That recipe covers `iris atlas:ledger`,
+  which writes to **the same transactions** Mint reads — two views over one store, not two
+  stores. Anything either one records, the other can see.
 
 ## Troubleshoot
 
