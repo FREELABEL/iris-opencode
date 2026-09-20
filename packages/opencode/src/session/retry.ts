@@ -9,10 +9,22 @@ export type Err = ReturnType<NamedError["toObject"]>
 
 export const GO_UPSELL_MESSAGE = "Free usage exceeded, subscribe to Go"
 export const GO_UPSELL_URL = "https://opencode.ai/go"
-export type RetryReason = "free_tier_limit" | "account_rate_limit" | (string & {})
+
+// IRIS's own spending cap. Distinct from the two OpenCode limits below: those are a vendor
+// throttling us, this is us refusing us. The server marks it `limit_source: iris_billing_gate`,
+// which is the only field in the body that cannot also be produced by a provider.
+export const IRIS_LIMIT_SOURCE = "iris_billing_gate"
+export const IRIS_UPGRADE_URL = "https://web.heyiris.io/pricing?source=desktop-limit"
+
+export type RetryReason = "free_tier_limit" | "account_rate_limit" | "iris_budget_exceeded" | (string & {})
 
 export type Retryable = {
   message: string
+  // Publish the action once, then stop. A spending cap does not clear for hours, so retrying it
+  // is instructing the caller to hammer a wall — which is what we were doing five times per
+  // refusal, because the client reads the SDK's own isRetryable flag and never looked at the
+  // `retryable: false` the server had gone to the trouble of sending.
+  terminal?: boolean
   action?: {
     reason: RetryReason
     provider: string
@@ -86,6 +98,40 @@ export function retryable(error: Err, provider: string) {
   // context overflow errors should not be retried
   if (SessionV1.ContextOverflowError.isInstance(error)) return undefined
   if (SessionV1.APIError.isInstance(error)) {
+    // OUR OWN CAP, CHECKED FIRST AND BEFORE THE RETRYABLE GATE.
+    //
+    // Before the gate, because the gate's job is "is this worth trying again" and the answer
+    // here is a flat no — but we still need the action published so the upgrade dialog can
+    // fire. Those are different questions and the old code could only answer one.
+    if (error.data.responseBody?.includes(IRIS_LIMIT_SOURCE)) {
+      const body = parseJSON(error.data.responseBody)
+      const detail = isRecord(body) && isRecord(body.error) ? body.error : undefined
+      const reason = str(detail?.message) || "You have reached your IRIS spending limit."
+      const resets = str(detail?.resets_at)
+      const cap = str(detail?.cap_usd)
+      const period = str(detail?.period) || "period"
+
+      // Built from what the server sent, never from a string typed here — the same rule the
+      // web CTAs need. If the server stops sending a field the line disappears rather than
+      // going stale.
+      const parts = [reason]
+      if (cap) parts.push(`Your ${period} limit is $${cap}.`)
+      if (resets) parts.push(`It resets ${resets}.`)
+
+      return {
+        message: reason,
+        terminal: true,
+        action: {
+          reason: "iris_budget_exceeded",
+          provider,
+          title: "You've hit your IRIS limit",
+          message: parts.join(" "),
+          label: "See plans",
+          link: str(detail?.upgrade_url) || IRIS_UPGRADE_URL,
+        },
+      }
+    }
+
     const status = error.data.statusCode
     // 5xx errors are transient server failures and should always be retried,
     // even when the provider SDK doesn't explicitly mark them as retryable.
@@ -191,6 +237,10 @@ export function policy(opts: {
       const retry = retryable(error, opts.provider)
       if (!retry) return Cause.done(meta.attempt)
       if (meta.attempt > RETRY_MAX_RETRIES) return Cause.done(meta.attempt)
+      // A terminal retryable publishes its action on the first pass — which is what raises the
+      // dialog — and then stops. Without the first pass there is no status event and no dialog
+      // at all; without the stop we would retry a wall that cannot clear for hours.
+      if (retry.terminal && meta.attempt >= 1) return Cause.done(meta.attempt)
       return Effect.gen(function* () {
         const wait = delay(meta.attempt, SessionV1.APIError.isInstance(error) ? error : undefined)
         const now = yield* Clock.currentTimeMillis

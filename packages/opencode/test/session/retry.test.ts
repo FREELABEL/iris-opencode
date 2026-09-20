@@ -361,6 +361,84 @@ describe("session.retry.retryable", () => {
     })
   })
 
+  test("maps an IRIS spending cap to its own upsell, terminal, with server-supplied copy", () => {
+    const error = Schema.decodeUnknownSync(SessionV1.APIError.Schema)(
+      new SessionV1.APIError({
+        message: "IRIS daily spending limit of $0.1 exceeded.",
+        // The server sends retryable:false, but the SDK marks any 429 retryable and the client
+        // reads the SDK. Set true here so the test reproduces PRODUCTION, not the fix we wish
+        // were in place — the branch has to win from where the code actually stands.
+        isRetryable: true,
+        statusCode: 429,
+        responseBody: JSON.stringify({
+          error: {
+            message: "IRIS daily spending limit of $0.1 exceeded. Current spend: $0.20 — this is an IRIS cap, not a model-provider limit.",
+            type: "budget_exceeded",
+            code: "budget_exceeded",
+            party: "iris",
+            limit_source: "iris_billing_gate",
+            retryable: false,
+            period: "daily",
+            cap_usd: 0.1,
+            spend_usd: 0.2,
+            resets_at: "2026-09-21T00:00:00+00:00",
+            upgrade_url: "https://web.heyiris.io/pricing?source=desktop-limit",
+          },
+        }),
+      }).toObject(),
+    )
+
+    const result = SessionRetry.retryable(error, "iris")
+
+    // Terminal: publish the action once so the dialog fires, then stop. A daily cap does not
+    // clear for hours, and this used to be retried five times.
+    expect(result?.terminal).toBe(true)
+    expect(result?.action?.reason).toBe("iris_budget_exceeded")
+    expect(result?.action?.provider).toBe("iris")
+    // Copy and destination come off the wire, so the dialog cannot go stale when pricing moves.
+    expect(result?.action?.link).toBe("https://web.heyiris.io/pricing?source=desktop-limit")
+    expect(result?.action?.message).toContain("Your daily limit is $0.1.")
+    expect(result?.action?.message).toContain("It resets 2026-09-21T00:00:00+00:00.")
+    // And it must NOT be mistaken for OpenCode's limits, which sell a different product.
+    expect(result?.action?.label).not.toBe("subscribe")
+    expect(result?.action?.link).not.toContain("opencode.ai")
+  })
+
+  test("falls back to the IRIS pricing URL when the server sends no upgrade_url", () => {
+    const error = Schema.decodeUnknownSync(SessionV1.APIError.Schema)(
+      new SessionV1.APIError({
+        message: "IRIS monthly spending limit exceeded.",
+        isRetryable: true,
+        statusCode: 429,
+        responseBody: JSON.stringify({
+          error: { message: "IRIS monthly spending limit exceeded.", limit_source: "iris_billing_gate" },
+        }),
+      }).toObject(),
+    )
+
+    const result = SessionRetry.retryable(error, "iris")
+    expect(result?.action?.link).toBe(SessionRetry.IRIS_UPGRADE_URL)
+    // No cap or reset sent means those sentences are simply absent, never invented.
+    expect(result?.action?.message).toBe("IRIS monthly spending limit exceeded.")
+  })
+
+  test("an OpenCode free-tier limit is still OpenCode's, not ours", () => {
+    const error = Schema.decodeUnknownSync(SessionV1.APIError.Schema)(
+      new SessionV1.APIError({
+        message: "Free usage exceeded",
+        isRetryable: true,
+        statusCode: 429,
+        responseBody: JSON.stringify({
+          type: "error",
+          error: { type: "FreeUsageLimitError", message: "Free usage exceeded" },
+        }),
+      }).toObject(),
+    )
+    const result = SessionRetry.retryable(error, "opencode")
+    expect(result?.action?.reason).toBe("free_tier_limit")
+    expect(result?.terminal).toBeUndefined()
+  })
+
   test("maps Go subscription limits to workspace PAYG upsell", () => {
     const error = Schema.decodeUnknownSync(SessionV1.APIError.Schema)(
       new SessionV1.APIError({

@@ -12,8 +12,19 @@ const GO_UPSELL_FREE_TIER_LAST_SEEN_AT = "go_upsell_last_seen_at"
 const GO_UPSELL_FREE_TIER_DONT_SHOW = "go_upsell_dont_show"
 const GO_UPSELL_ACCOUNT_RATE_LIMIT_LAST_SEEN_AT = "go_upsell_account_rate_limit_last_seen_at"
 const GO_UPSELL_ACCOUNT_RATE_LIMIT_DONT_SHOW = "go_upsell_account_rate_limit_dont_show"
+const IRIS_LIMIT_LAST_SEEN_AT = "iris_limit_last_seen_at"
+const IRIS_LIMIT_DONT_SHOW = "iris_limit_dont_show"
 const GO_UPSELL_WINDOW = 86_400_000 // 24 hrs
-const GO_UPSELL_PROVIDERS = new Set(["opencode", "opencode-go"])
+
+// The provider allowlist. "iris" was missing, which was the third of three independent reasons
+// this dialog could never fire for an IRIS spending cap — and the cheapest to miss, because the
+// other two also had to be fixed before adding it changed anything.
+const GO_UPSELL_PROVIDERS = new Set(["opencode", "opencode-go", "iris"])
+
+// A shorter window for our own cap than the 24h Go upsell uses. A daily limit can be hit again
+// tomorrow, and suppressing the explanation for a full day means the second time someone runs
+// out they get silence — which is the behaviour we are trying to remove.
+const IRIS_LIMIT_WINDOW = 4 * 60 * 60 * 1000 // 4 hrs
 
 function goUpsellKeys(status: SessionStatus) {
   if (status.type !== "retry" || !status.action) return
@@ -23,12 +34,21 @@ function goUpsellKeys(status: SessionStatus) {
     return {
       lastSeenAt: GO_UPSELL_FREE_TIER_LAST_SEEN_AT,
       dontShow: GO_UPSELL_FREE_TIER_DONT_SHOW,
+      window: GO_UPSELL_WINDOW,
     } as const
   }
   if (action.reason === "account_rate_limit") {
     return {
       lastSeenAt: GO_UPSELL_ACCOUNT_RATE_LIMIT_LAST_SEEN_AT,
       dontShow: GO_UPSELL_ACCOUNT_RATE_LIMIT_DONT_SHOW,
+      window: GO_UPSELL_WINDOW,
+    } as const
+  }
+  if (action.reason === "iris_budget_exceeded") {
+    return {
+      lastSeenAt: IRIS_LIMIT_LAST_SEEN_AT,
+      dontShow: IRIS_LIMIT_DONT_SHOW,
+      window: IRIS_LIMIT_WINDOW,
     } as const
   }
 }
@@ -47,6 +67,8 @@ export function useUsageExceededDialogs() {
       [GO_UPSELL_FREE_TIER_DONT_SHOW]: null as null | number,
       [GO_UPSELL_ACCOUNT_RATE_LIMIT_LAST_SEEN_AT]: null as null | number,
       [GO_UPSELL_ACCOUNT_RATE_LIMIT_DONT_SHOW]: null as null | number,
+      [IRIS_LIMIT_LAST_SEEN_AT]: null as null | number,
+      [IRIS_LIMIT_DONT_SHOW]: null as null | number,
     }),
   )
 
@@ -62,7 +84,7 @@ export function useUsageExceededDialogs() {
       if (!keys) return
 
       const seen = goUpsellState[keys.lastSeenAt]
-      if (seen && Date.now() - seen < GO_UPSELL_WINDOW) return
+      if (seen && Date.now() - seen < keys.window) return
       if (goUpsellState[keys.dontShow]) return
 
       if (action.reason === "free_tier_limit") {
@@ -82,6 +104,22 @@ export function useUsageExceededDialogs() {
                   void dialog.show(() => <x.DialogConnectProvider controller={controller} />)
                 })
               }
+            }}
+          />
+        ))
+      } else if (action.reason === "iris_budget_exceeded") {
+        // Title, message, label and link all come from the server action. Nothing about the
+        // plan or the price is typed here, so this dialog cannot go stale when the price list
+        // moves — the same rule the web CTAs are getting.
+        dialog.show(() => (
+          <DialogUsageExceeded
+            title={action.title}
+            description={action.message}
+            actionLabel={action.label}
+            link={action.link}
+            onClose={(dontShowAgain) => {
+              setGoUpsellState(keys.lastSeenAt, Date.now())
+              if (dontShowAgain) setGoUpsellState(keys.dontShow, Date.now())
             }}
           />
         ))
