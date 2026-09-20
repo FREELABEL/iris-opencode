@@ -101,6 +101,7 @@ import { PlatformDeliverCommand, DeliverCarouselCommand } from "./cli/cmd/platfo
 import { PlatformRunCommand, PlatformConnectCommand, PlatformListConnectedCommand, PlatformListAvailableCommand, PlatformExecCommand, PlatformListToolsCommand, PlatformListIntegrationsCommand } from "./cli/cmd/platform-run"
 import { PlatformListenCommand } from "./cli/cmd/listen"
 import { PlatformTranscribeCommand } from "./cli/cmd/transcribe"
+import { PlatformOcrCommand } from "./cli/cmd/platform-ocr"
 import { PlatformDownloadCommand } from "./cli/cmd/download"
 import { PlatformBugCommand } from "./cli/cmd/platform-bug"
 import { PlatformFeatureCommand } from "./cli/cmd/platform-feature"
@@ -401,6 +402,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformListToolsCommand))
   .command(reg(PlatformListIntegrationsCommand))
   .command(reg(PlatformTranscribeCommand))
+  .command(reg(PlatformOcrCommand))
   .command(reg(PlatformListenCommand))
   .command(reg(PlatformDownloadCommand))
   .command(reg(PlatformConnectCommand))
