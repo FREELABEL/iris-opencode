@@ -415,6 +415,104 @@ export async function fetchHiveNodes(): Promise<PlatformResult<{ nodes: HiveNode
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Allowance
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The weekly allowance, and the notice policy, as the SERVER defines them.
+ *
+ * Every field here is policy the client must not hold. `thresholds` is a list because the
+ * number of rungs is a decision that has already changed twice; `window` is a string because
+ * "week" is this quarter's answer and not a law. The desktop ships on its own release cadence,
+ * so anything compiled in is something we cannot change without shipping a build — which is
+ * exactly how the upgrade URL ended up pointing at opencode.ai.
+ *
+ * See config/allowance.php in fl-iris-api, and bloq item #186459.
+ */
+export interface Allowance {
+  window: string
+  capUsd: number | null
+  uncapped: boolean
+  spendUsd: number | null
+  fraction: number | null
+  resetsAt: string | null
+  thresholds: number[]
+  surface: string
+  upgradeUrl: string | null
+  notice: AllowanceNotice | null
+}
+
+export interface AllowanceNotice {
+  threshold: number
+  fraction: number
+  spendUsd: number
+  capUsd: number
+  window: string
+  resetsAt: string
+  upgradeUrl: string | null
+}
+
+const EMPTY_ALLOWANCE: Allowance = {
+  window: "week",
+  capUsd: null,
+  uncapped: false,
+  spendUsd: null,
+  fraction: null,
+  resetsAt: null,
+  thresholds: [],
+  surface: "chat",
+  upgradeUrl: null,
+  notice: null,
+}
+
+/**
+ * FETCHING THIS CONSUMES A PENDING NOTICE. Call it when about to render, never on a timer.
+ *
+ * The server writes the row that makes "once per week" true as it answers, so a caller that
+ * polls this and discards the response has eaten somebody's only warning for the week. That
+ * is a deliberate server-side design — asking whether a notice is due and marking it delivered
+ * cannot be two steps without a race — and it makes this function unusual enough to say twice.
+ */
+export async function fetchAllowance(): Promise<PlatformResult<Allowance>> {
+  try {
+    const res = await irisFetch("/api/v6/allowance/me", IRIS_API)
+    if (!res.ok) return { measured: false, reason: `iris-api ${res.status}`, data: EMPTY_ALLOWANCE }
+    const j = (await res.json()) as any
+    const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null)
+    const notice = j?.notice
+      ? {
+          threshold: Number(j.notice.threshold),
+          fraction: Number(j.notice.fraction),
+          spendUsd: Number(j.notice.spend_usd),
+          capUsd: Number(j.notice.cap_usd),
+          window: String(j.notice.window ?? j.window ?? "week"),
+          resetsAt: String(j.notice.resets_at ?? ""),
+          upgradeUrl: j.notice.upgrade_url ?? j.upgrade_url ?? null,
+        }
+      : null
+    return {
+      measured: true,
+      data: {
+        window: String(j?.window ?? "week"),
+        capUsd: num(j?.cap_usd),
+        // An uncapped account is NOT an account at 0%. A UI that renders null as an empty
+        // progress bar tells someone with no limit that they have spent nothing of nothing.
+        uncapped: Boolean(j?.uncapped),
+        spendUsd: num(j?.spend_usd),
+        fraction: num(j?.fraction),
+        resetsAt: j?.resets_at ?? null,
+        thresholds: Array.isArray(j?.thresholds) ? j.thresholds.map(Number).filter(Number.isFinite) : [],
+        surface: String(j?.surface ?? "chat"),
+        upgradeUrl: j?.upgrade_url ?? null,
+        notice,
+      },
+    }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: EMPTY_ALLOWANCE }
+  }
+}
+
 export interface Bloq {
   id: number
   name: string
