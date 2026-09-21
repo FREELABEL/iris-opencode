@@ -15,6 +15,52 @@ should be page JSON, not a build.
 `https://heyiris.io/p/dashboard-design-philosophy` — ten checks, 9–10 ship, 6–8 revise,
 0–5 rebuild. The long-form walkthrough is `iris playbook run console-shape`.
 
+## The three parts, and which one you are touching
+
+A dashboard here is not one product. It is a page from one, reading records from another, about
+machines belonging to a third. Knowing which is which turns most "it renders but it is empty"
+questions into a one-line answer.
+
+| Product | What it is | What it gives the dashboard | You touch it with |
+|---|---|---|---|
+| **Genesis** | pages and the components they are made of | the page itself: the panes, the layout, the published URL | `iris pages …`, `iris genesis library …` |
+| **Atlas** | your records — bloqs, lists, items, datasets | the ROWS: everything a pane lists or details | `iris collections read …`, `iris bloqs …` |
+| **Hive** | your own machines, and the agents and jobs on them | the fleet a pane can show, and the work it dispatches | `iris hive …`, `iris agents …` |
+
+<svg viewBox="0 0 720 210" width="100%" height="auto" role="img" aria-label="Atlas records and Hive machines resolve through a collection address into the panes of a Genesis page" style="max-width:720px;margin:1rem 0">
+  <g fill="none" stroke="currentColor" stroke-width="1.25" opacity="0.5">
+    <rect x="1" y="34" width="150" height="52" rx="6"/>
+    <rect x="1" y="106" width="150" height="52" rx="6"/>
+    <rect x="245" y="70" width="150" height="52" rx="6"/>
+    <rect x="489" y="18" width="230" height="156" rx="6"/>
+    <line x1="559" y1="52" x2="559" y2="150"/>
+    <line x1="559" y1="112" x2="719" y2="112"/>
+    <line x1="489" y1="150" x2="719" y2="150"/>
+    <line x1="489" y1="52" x2="719" y2="52"/>
+  </g>
+  <g fill="currentColor" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="12">
+    <text x="14" y="58">ATLAS</text><text x="14" y="76" opacity="0.7">bloqs · lists · datasets</text>
+    <text x="14" y="130">HIVE</text><text x="14" y="148" opacity="0.7">nodes · agents · jobs</text>
+    <text x="258" y="94">agents:all</text><text x="258" y="112" opacity="0.7">the address</text>
+    <text x="500" y="38" opacity="0.7">GENESIS PAGE</text>
+    <text x="500" y="76">rail</text>
+    <text x="570" y="76">list</text>
+    <text x="570" y="136">stage</text>
+    <text x="500" y="168" opacity="0.7">status</text>
+  </g>
+  <g stroke="currentColor" stroke-width="1.25" opacity="0.85">
+    <path d="M151 60 H 200 Q 215 60 215 80 V 96 H 243" fill="none"/>
+    <path d="M151 132 H 200 Q 215 132 215 112 V 96 H 243" fill="none"/>
+    <path d="M395 96 H 487" fill="none"/>
+    <path d="M481 92 l 8 4 l -8 4 z" fill="currentColor" stroke="none"/>
+    <path d="M237 92 l 8 4 l -8 4 z" fill="currentColor" stroke="none"/>
+  </g>
+</svg>
+
+**A component names a SOURCE; the page names the ADDRESS.** That split is the tenancy boundary —
+it is why a component can never read a feed it was not handed, and why an empty pane is usually
+an address problem rather than a component problem.
+
 ## Prerequisites
 - IRIS CLI authenticated (`iris login`).
 - A page you own, and a bloq to own it (`--owner-type bloq --owner-id <id>`).
@@ -68,6 +114,38 @@ Four slots and one state bus. Slots take ARRAYS, so a column can stack a tab str
 ```
 **`emitTo` writes into a named state key. `bindState` reads it into a prop.** That is the whole
 mechanism — if you want a third one, you probably want a state key you have not named yet.
+
+<svg viewBox="0 0 720 200" width="100%" height="auto" role="img" aria-label="Clicking in the rail writes the source state key, which the list reads; clicking a row writes session, which the stage reads" style="max-width:720px;margin:1rem 0">
+  <g fill="none" stroke="currentColor" stroke-width="1.25" opacity="0.5">
+    <rect x="1" y="16" width="130" height="46" rx="6"/>
+    <rect x="1" y="86" width="130" height="46" rx="6"/>
+    <rect x="1" y="150" width="130" height="46" rx="6"/>
+    <rect x="300" y="16" width="120" height="180" rx="6" stroke-dasharray="4 3"/>
+    <rect x="589" y="86" width="130" height="46" rx="6"/>
+  </g>
+  <g fill="currentColor" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="12">
+    <text x="14" y="38">source-rail</text><text x="14" y="54" opacity="0.7">emitTo: select</text>
+    <text x="14" y="108">registry-table</text><text x="14" y="124" opacity="0.7">bindState + emitTo</text>
+    <text x="14" y="172">tab-bar</text><text x="14" y="188" opacity="0.7">emitTo: subfilter</text>
+    <text x="312" y="38" opacity="0.7">page state</text>
+    <text x="312" y="72">source</text>
+    <text x="312" y="108">subfilter</text>
+    <text x="312" y="144">session</text>
+    <text x="600" y="108">record-detail</text><text x="600" y="124" opacity="0.7">bindState: session</text>
+  </g>
+  <g stroke="currentColor" stroke-width="1.25" opacity="0.85" fill="none">
+    <path d="M131 39 H 298"/><path d="M292 35 l 8 4 l -8 4 z" fill="currentColor" stroke="none"/>
+    <path d="M131 173 H 250 Q 262 173 262 150 V 108 H 298"/><path d="M292 104 l 8 4 l -8 4 z" fill="currentColor" stroke="none"/>
+    <path d="M298 68 H 220 Q 205 68 205 88 V 104 H 129" stroke-dasharray="3 3"/><path d="M135 100 l -8 4 l 8 4 z" fill="currentColor" stroke="none"/>
+    <path d="M131 118 H 240 Q 262 118 262 132 V 144 H 298"/><path d="M292 140 l 8 4 l -8 4 z" fill="currentColor" stroke="none"/>
+    <path d="M420 108 H 587"/><path d="M581 104 l 8 4 l -8 4 z" fill="currentColor" stroke="none"/>
+  </g>
+  <g fill="currentColor" font-size="11" opacity="0.65" font-family="ui-sans-serif,system-ui,sans-serif">
+    <text x="150" y="30">a click writes</text>
+    <text x="150" y="88">a prop reads (dashed)</text>
+    <text x="440" y="100">the stage follows the selection</text>
+  </g>
+</svg>
 
 Three things that cost a round trip each if you miss them:
 - `collections` / `defaultSource` sit at the ITEM level, **beside** `componentProps`, never inside
