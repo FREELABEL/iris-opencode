@@ -101,6 +101,7 @@ import { extractPromptFromParts } from "@/utils/prompt"
 import { formatServerError, isLocalSessionNotFoundError, isSessionNotFoundError } from "@/utils/server-errors"
 import { legacySessionHref, requireServerKey, sessionHref } from "@/utils/session-route"
 import { useUsageExceededDialogs } from "./session/usage-exceeded-dialogs"
+import { useAllowanceNotice } from "./session/allowance-toast"
 import { createSessionOwnership } from "./session/session-ownership"
 import { createSessionLineage } from "./session/session-lineage"
 
@@ -2013,6 +2014,10 @@ export default function Page() {
   })
 
   useUsageExceededDialogs()
+  // The 90% allowance notice. Sits beside the wall's dialog rather than inside it: one is a
+  // refusal, the other is a heads-up, and they are shown at different moments in different
+  // surfaces. See allowance-toast.tsx.
+  useAllowanceNotice()
 
   const mobileTabs = (compact = false, bottom = false) => (
     <Tabs value={store.mobileTab} class="h-auto">

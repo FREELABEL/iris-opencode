@@ -1,7 +1,7 @@
 import { Effect } from "effect"
 import { filterRows, paginate } from "@/iris/pagination"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
-import { filterAtlas, checkAuth, fetchAgents, fetchAtlas, fetchBloqs, fetchHiveNodes, fetchInbox, fetchLeads, fetchIntegrations, fetchPages, fetchPlaybooks, fetchRecords, fetchSchemas, fetchSites, fetchAgentTasks, fetchPlaybookDoc, fetchPageDoc, savePageDoc, fetchItem, saveItem, addItemTask, saveItemTask, deleteItemTask, fetchCardSchema, fetchShareState, setShareVisibility, setShareAllowlist, inviteMember, setMemberPermission, revokeMember, createShareLink, revokeShareLink, setItemLabels, fetchAttachments, uploadAttachment, deleteAttachment, fetchEvents, addEvent, fetchAsks, addAsk, answerAsk, fetchItemChat, sendItemChat, fetchCatalog, fetchBloqGraph, fetchBloqInterior, graphRows } from "@/iris/platform"
+import { filterAtlas, checkAuth, fetchAgents, fetchAtlas, fetchBloqs, fetchHiveNodes, fetchInbox, fetchLeads, fetchIntegrations, fetchPages, fetchPlaybooks, fetchRecords, fetchSchemas, fetchSites, fetchAgentTasks, fetchPlaybookDoc, fetchPageDoc, savePageDoc, fetchItem, saveItem, addItemTask, saveItemTask, deleteItemTask, fetchCardSchema, fetchShareState, setShareVisibility, setShareAllowlist, inviteMember, setMemberPermission, revokeMember, createShareLink, revokeShareLink, setItemLabels, fetchAttachments, uploadAttachment, deleteAttachment, fetchEvents, addEvent, fetchAsks, addAsk, answerAsk, fetchItemChat, sendItemChat, fetchCatalog, fetchBloqGraph, fetchBloqInterior, graphRows, fetchAllowance } from "@/iris/platform"
 import { RootHttpApi } from "../api"
 import { markLocal, projectRoot } from "@/iris/playbook-local"
 import { runPlaybookInstall, ttlCache } from "@/iris/playbook-install"
@@ -453,6 +453,32 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
         ),
     )
 
-    return handlers.handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("graph", graph).handle("graphBoard", graphBoard).handle("catalog", catalog).handle("pageDoc", pageDoc).handle("pageSave", pageSave).handle("item", item).handle("itemSave", itemSave).handle("itemTaskAdd", itemTaskAdd).handle("itemTaskSave", itemTaskSave).handle("itemTaskDelete", itemTaskDelete).handle("cardSchema", cardSchema).handle("itemShare", itemShare).handle("itemShareVisibility", itemShareVisibility).handle("itemShareAllowlist", itemShareAllowlist).handle("itemShareInvite", itemShareInvite).handle("itemSharePermission", itemSharePermission).handle("itemShareRevoke", itemShareRevoke).handle("itemShareLink", itemShareLink).handle("itemShareLinkRevoke", itemShareLinkRevoke).handle("itemLabels", itemLabels).handle("itemAttachments", itemAttachments).handle("itemAttachmentUpload", itemAttachmentUpload).handle("itemAttachmentDelete", itemAttachmentDelete).handle("itemEvents", itemEvents).handle("itemEventAdd", itemEventAdd).handle("itemAsks", itemAsks).handle("itemAskAdd", itemAskAdd).handle("itemAskAnswer", itemAskAnswer).handle("itemChat", itemChat).handle("itemChatSend", itemChatSend).handle("playbookDoc", playbookDoc).handle("playbookInstall", playbookInstall).handle("agentTasks", agentTasks).handle("sites", sites).handle("records", records).handle("integrations", integrations).handle("hive", hive)
+    /**
+     * The allowance, straight through from fl-iris-api.
+     *
+     * Deliberately does NOT reshape, threshold, or decide anything. Every judgement in this
+     * feature lives in config/allowance.php; this route's only job is that the webview cannot
+     * reach fl-iris-api itself, because the bearer token is on disk in this process.
+     */
+    const allowance = Effect.fn("IrisHttpApi.allowance")(() =>
+      Effect.promise(() => fetchAllowance()).pipe(
+        Effect.map((r) => ({
+          measured: r.measured,
+          ...(r.reason ? { reason: r.reason } : {}),
+          window: r.data.window,
+          capUsd: r.data.capUsd,
+          uncapped: r.data.uncapped,
+          spendUsd: r.data.spendUsd,
+          fraction: r.data.fraction,
+          resetsAt: r.data.resetsAt,
+          thresholds: r.data.thresholds,
+          surface: r.data.surface,
+          upgradeUrl: r.data.upgradeUrl,
+          notice: r.data.notice,
+        })),
+      ),
+    )
+
+    return handlers.handle("allowance", allowance).handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("graph", graph).handle("graphBoard", graphBoard).handle("catalog", catalog).handle("pageDoc", pageDoc).handle("pageSave", pageSave).handle("item", item).handle("itemSave", itemSave).handle("itemTaskAdd", itemTaskAdd).handle("itemTaskSave", itemTaskSave).handle("itemTaskDelete", itemTaskDelete).handle("cardSchema", cardSchema).handle("itemShare", itemShare).handle("itemShareVisibility", itemShareVisibility).handle("itemShareAllowlist", itemShareAllowlist).handle("itemShareInvite", itemShareInvite).handle("itemSharePermission", itemSharePermission).handle("itemShareRevoke", itemShareRevoke).handle("itemShareLink", itemShareLink).handle("itemShareLinkRevoke", itemShareLinkRevoke).handle("itemLabels", itemLabels).handle("itemAttachments", itemAttachments).handle("itemAttachmentUpload", itemAttachmentUpload).handle("itemAttachmentDelete", itemAttachmentDelete).handle("itemEvents", itemEvents).handle("itemEventAdd", itemEventAdd).handle("itemAsks", itemAsks).handle("itemAskAdd", itemAskAdd).handle("itemAskAnswer", itemAskAnswer).handle("itemChat", itemChat).handle("itemChatSend", itemChatSend).handle("playbookDoc", playbookDoc).handle("playbookInstall", playbookInstall).handle("agentTasks", agentTasks).handle("sites", sites).handle("records", records).handle("integrations", integrations).handle("hive", hive)
   }),
 )

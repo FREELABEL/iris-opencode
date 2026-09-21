@@ -560,6 +560,42 @@ const ChatSendResponse = Schema.Struct({
 
 const root = "/iris"
 
+/**
+ * The weekly allowance, and the notice policy, exactly as the server states them.
+ *
+ * `thresholds` is a LIST and `window` is a STRING because both are policy that has already
+ * changed twice. Nothing downstream of this may turn them into constants: the desktop ships on
+ * its own cadence, so a compiled-in threshold is one we cannot change without a release.
+ *
+ * FETCHING THIS CONSUMES A PENDING NOTICE. The server writes the row that makes "once per
+ * week" true as it answers, so a caller that polls and discards has eaten somebody's only
+ * warning. Render-time only.
+ */
+const AllowanceNotice = Schema.Struct({
+  threshold: Schema.Finite,
+  fraction: Schema.Finite,
+  spendUsd: Schema.Finite,
+  capUsd: Schema.Finite,
+  window: Schema.String,
+  resetsAt: Schema.String,
+  upgradeUrl: Schema.NullOr(Schema.String),
+})
+
+const AllowanceResponse = Schema.Struct({
+  measured: described(Schema.Boolean, "FALSE means we could not ask. Never render that as 0% used."),
+  reason: Schema.optional(Schema.String),
+  window: Schema.String,
+  capUsd: described(Schema.NullOr(Schema.Finite), "NULL means uncapped, which is not zero."),
+  uncapped: Schema.Boolean,
+  spendUsd: Schema.NullOr(Schema.Finite),
+  fraction: described(Schema.NullOr(Schema.Finite), "NULL means uncapped or unmeasured. Not 0."),
+  resetsAt: Schema.NullOr(Schema.String),
+  thresholds: described(Schema.Array(Schema.Finite), "POLICY. Read it, never hold it."),
+  surface: Schema.String,
+  upgradeUrl: Schema.NullOr(Schema.String),
+  notice: Schema.NullOr(AllowanceNotice),
+})
+
 export const IrisPaths = {
   auth: `${root}/auth`,
   bloqs: `${root}/bloqs`,
@@ -603,6 +639,7 @@ export const IrisPaths = {
   itemAskAnswer: `${root}/item/:itemID/asks/:askID/answer`,
   itemChat: `${root}/item/:itemID/chat`,
   hive: `${root}/hive`,
+  allowance: `${root}/allowance`,
 } as const
 
 export const IrisApi = HttpApi.make("iris").add(
@@ -616,6 +653,16 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Credential state",
           description:
             "Three states, not two. A key can exist in the auth store and still be invisible to the provider, which is why a signed-in machine could send a message and get a raw 401 with no prompt.",
+        }),
+      ),
+      HttpApiEndpoint.get("allowance", IrisPaths.allowance, {
+        success: described(AllowanceResponse, "The weekly allowance, the notice policy, and any notice now due"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.allowance",
+          summary: "Allowance and notice policy",
+          description:
+            "The window, the amount, the reset instant, the threshold list and any pending notice. The thresholds travel because the client must not hold a policy the server can change without a desktop release. Fetching CONSUMES a pending notice — call it when rendering, never on a timer.",
         }),
       ),
       HttpApiEndpoint.get("bloqs", IrisPaths.bloqs, {
