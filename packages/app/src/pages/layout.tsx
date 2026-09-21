@@ -54,7 +54,6 @@ import { useTheme, type ColorScheme } from "@opencode-ai/ui/theme/context"
 import { useCommand, type CommandOption } from "@/context/command"
 import { ConstrainDragXAxis, getDraggableId } from "@/utils/solid-dnd"
 import { DebugBar } from "@/components/debug-bar"
-import { SidebarUsage } from "@/components/sidebar-usage"
 import { TabsInfoPopup } from "@/components/help-button"
 import { Titlebar, type TitlebarUpdate } from "@/components/titlebar"
 import { useDirectoryPicker } from "@/components/directory-picker"
@@ -2235,7 +2234,6 @@ export default function LegacyLayout(props: ParentProps) {
   const projectOverlay = () => <ProjectDragOverlay projects={projects} activeProject={() => store.activeProject} />
   const sidebarContent = (mobile?: boolean) => (
     <SidebarContent
-      renderUsage={() => <SidebarUsage />}
       mobile={mobile}
       opened={() => layout.sidebar.opened()}
       aimMove={aim.move}

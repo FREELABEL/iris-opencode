@@ -375,57 +375,6 @@ export interface HiveNode {
   hardwareDetectedAt?: string
 }
 
-export type BillingStatus = {
-  plan: string | null
-  bypassed: boolean
-  fraction: number
-  bindingPeriod: string
-  capUsd: number
-  spentUsd: number
-  resetsAt: string | null
-  upgradeUrl: string | null
-}
-
-/**
- * What the signed-in user may spend, and what they have spent.
- *
- * `measured` matters more here than anywhere else in this file. An unreachable billing endpoint
- * and a user who has spent nothing both produce zero, and rendering the second when it is really
- * the first means a usage indicator that sits reassuringly empty while someone is about to hit a
- * wall. The caller must check `measured` before drawing anything — the same rule the fleet pill
- * learned by getting it wrong.
- */
-export async function fetchBilling(): Promise<PlatformResult<{ billing: BillingStatus | null }>> {
-  try {
-    const res = await irisFetch(`/api/v6/billing/me`, IRIS_API)
-    if (res.status === 401) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { billing: null } }
-    if (!res.ok) return { measured: false, reason: `iris-api ${res.status}`, data: { billing: null } }
-    const json = (await res.json()) as any
-    const d = json?.data
-    if (!d) return { measured: false, reason: "iris-api returned no data", data: { billing: null } }
-
-    const period = String(d.binding_period ?? "daily")
-    const side = period === "monthly" ? d.monthly : d.daily
-    return {
-      measured: true,
-      data: {
-        billing: {
-          plan: d.plan ?? null,
-          bypassed: Boolean(d.bypassed),
-          fraction: Number(d.fraction ?? 0),
-          bindingPeriod: period,
-          capUsd: Number(side?.cap_usd ?? 0),
-          spentUsd: Number(side?.spent_usd ?? 0),
-          resetsAt: d.resets_at ?? null,
-          upgradeUrl: d.upgrade_url ?? null,
-        },
-      },
-    }
-  } catch (e) {
-    return { measured: false, reason: e instanceof Error ? e.message : "unreachable", data: { billing: null } }
-  }
-}
-
 export async function fetchHiveNodes(): Promise<PlatformResult<{ nodes: HiveNode[] }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { nodes: [] } }
