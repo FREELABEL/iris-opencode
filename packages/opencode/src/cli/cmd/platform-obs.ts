@@ -1,5 +1,6 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
+import { guardAct } from "./kinetic-guard"
 import { UI } from "../ui"
 import { dim, bold, success, highlight } from "./iris-api"
 import { readFileSync, existsSync } from "fs"
@@ -162,6 +163,9 @@ const SceneCmd = cmd({
   builder: (y) => y.positional("name", { type: "string", demandOption: true }),
   async handler(args) {
     UI.empty()
+    // The clutch (#184906): OBS is a body too. Reads below stay open; this one changes what is
+    // being captured, so a coupled hash is required when an agent asks.
+    await guardAct({ body: "obs:studio", verb: "scene" })
     const sp = prompts.spinner()
     sp.start(`Switching to "${args.name}"…`)
     try {
@@ -196,6 +200,7 @@ const StreamCmd = cmd({
         process.exitCode = 1 // signal failure to scripts/automation (#152275)
       }
     } else {
+      await guardAct({ body: "obs:studio", verb: "stream" })
       const sp = prompts.spinner()
       sp.start(`${args.action === "start" ? "Starting" : "Stopping"} stream…`)
       try {
@@ -231,6 +236,7 @@ const RecordCmd = cmd({
         process.exitCode = 1 // signal failure to scripts/automation (#152275)
       }
     } else {
+      await guardAct({ body: "obs:studio", verb: "record" })
       const sp = prompts.spinner()
       sp.start(`${args.action === "start" ? "Starting" : "Stopping"} recording…`)
       try {

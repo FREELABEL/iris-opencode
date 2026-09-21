@@ -119,6 +119,8 @@ import { PlatformCampaignCommand } from "./cli/cmd/platform-campaign"
 import { PlatformDaemonCommand } from "./cli/cmd/platform-daemon"
 import { PlatformChannelsCommand } from "./cli/cmd/platform-channels"
 import { PlatformObsCommand } from "./cli/cmd/platform-obs"
+import { PlatformKineticCommand } from "./cli/cmd/platform-kinetic"
+import { guardCommand } from "./cli/cmd/kinetic-guard"
 import { VideoCommand } from "./cli/cmd/platform-video"
 import { PlatformDoctorCommand } from "./cli/cmd/platform-doctor"
 import { PlatformSessionsCommand } from "./cli/cmd/platform-sessions"
@@ -287,6 +289,17 @@ const cli = yargs(rawArgs)
       version: Installation.VERSION,
       args: process.argv.slice(2),
     })
+
+    // THE CLUTCH (#184906), at the one point every command passes through.
+    //
+    // Wiring the guard into individual act paths made enforcement opt-in: `iris device`, `iris hive
+    // run` and anything added later drove hardware with no check. Here the route table (kinetic-
+    // bodies.ts) decides whether the command being run is an act on a body, so a new act path is
+    // covered by adding a row — not by remembering to call a function. Reads route to nothing and
+    // pay only a table lookup.
+    // RAW argv, not `opts._`: yargs has already eaten the positionals by here, and `iris hive run
+    // studio-mac` would arrive as ["hive","run"] — without the node it is about to drive.
+    await guardCommand(process.argv.slice(2), opts._.map(String))
   })
   .usage("\n" + UI.logo())
   .completion("completion", "generate shell completion script")
@@ -437,6 +450,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformSystemAppsScanCommand))
   .command(reg(PlatformIdeasCommand))
   .command(reg(PlatformObsCommand))
+  .command(reg(PlatformKineticCommand))
   .command(reg(VideoCommand))
   .command(reg(PlatformCameraCommand))
   .command(reg(PlatformOnboardCommand))
