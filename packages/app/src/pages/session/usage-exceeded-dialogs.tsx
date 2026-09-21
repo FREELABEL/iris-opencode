@@ -21,10 +21,29 @@ const GO_UPSELL_WINDOW = 86_400_000 // 24 hrs
 // other two also had to be fixed before adding it changed anything.
 const GO_UPSELL_PROVIDERS = new Set(["opencode", "opencode-go", "iris"])
 
-// A shorter window for our own cap than the 24h Go upsell uses. A daily limit can be hit again
-// tomorrow, and suppressing the explanation for a full day means the second time someone runs
-// out they get silence — which is the behaviour we are trying to remove.
-const IRIS_LIMIT_WINDOW = 4 * 60 * 60 * 1000 // 4 hrs
+// A FALLBACK, used only when the server did not say when the limit clears. The real window is
+// `action.resetsAt`, computed server-side from the allowance policy.
+//
+// The previous version of this constant WAS the policy: four hours, on the reasoning that a
+// daily limit can be hit again tomorrow. That reasoning does not survive the allowance becoming
+// weekly — someone who exhausts a week on Monday would be shown the same dialog every four
+// hours until Sunday, explaining something that cannot change until then. The client must not
+// hold a number that the server can change without shipping a build.
+const IRIS_LIMIT_FALLBACK_WINDOW = 4 * 60 * 60 * 1000 // 4 hrs
+
+// Suppress until the limit actually clears. Anything in the past, unparseable, or absurdly far
+// out falls back rather than silencing the dialog forever on a malformed date.
+function irisLimitWindow(resetsAt?: string) {
+  if (!resetsAt) return IRIS_LIMIT_FALLBACK_WINDOW
+  const at = Date.parse(resetsAt)
+  if (Number.isNaN(at)) return IRIS_LIMIT_FALLBACK_WINDOW
+  const ms = at - Date.now()
+  if (ms <= 0) return IRIS_LIMIT_FALLBACK_WINDOW
+  // A month is the longest allowance window the policy defines. Beyond that the value is
+  // wrong, and a wrong value here means a person never sees the explanation again.
+  const MAX = 35 * 24 * 60 * 60 * 1000
+  return Math.min(ms, MAX)
+}
 
 function goUpsellKeys(status: SessionStatus) {
   if (status.type !== "retry" || !status.action) return
@@ -48,7 +67,7 @@ function goUpsellKeys(status: SessionStatus) {
     return {
       lastSeenAt: IRIS_LIMIT_LAST_SEEN_AT,
       dontShow: IRIS_LIMIT_DONT_SHOW,
-      window: IRIS_LIMIT_WINDOW,
+      window: irisLimitWindow(action.resetsAt),
     } as const
   }
 }

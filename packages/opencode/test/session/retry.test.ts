@@ -402,6 +402,43 @@ describe("session.retry.retryable", () => {
     // And it must NOT be mistaken for OpenCode's limits, which sell a different product.
     expect(result?.action?.label).not.toBe("subscribe")
     expect(result?.action?.link).not.toContain("opencode.ai")
+    // The reset instant travels as a FIELD, not only inside the prose. The dialog suppresses
+    // itself until the limit clears, and it cannot parse that out of an English sentence.
+    expect(result?.action?.resetsAt).toBe("2026-09-21T00:00:00+00:00")
+  })
+
+  test("a WEEKLY allowance refusal carries its own window, so nothing in the client says 'week'", () => {
+    // The allowance became weekly on 2026-09-21 (config/allowance.php, bloq item #186455). The
+    // client must render this correctly while knowing nothing about weeks: the period, the
+    // amount and the reset instant all arrive from the server.
+    const err = Schema.decodeUnknownSync(SessionV1.APIError.Schema)(
+      new SessionV1.APIError({
+        message: "IRIS weekly allowance of $5 used up.",
+        isRetryable: true,
+        statusCode: 429,
+        responseBody: JSON.stringify({
+          error: {
+            message:
+              "IRIS weekly allowance of $5 used up. This week: $5.02 — this is an IRIS limit, not a model-provider limit.",
+            limit_source: "iris_billing_gate",
+            retryable: false,
+            period: "weekly",
+            cap_usd: 5,
+            spend_usd: 5.02,
+            resets_at: "2026-09-28T00:00:00+00:00",
+            upgrade_url: "https://web.heyiris.io/pricing?source=desktop-limit",
+          },
+        }),
+      }).toObject(),
+    )
+
+    const result = SessionRetry.retryable(err, "iris")
+
+    expect(result?.terminal).toBe(true)
+    expect(result?.action?.reason).toBe("iris_budget_exceeded")
+    expect(result?.action?.resetsAt).toBe("2026-09-28T00:00:00+00:00")
+    // The word "weekly" is the SERVER's, echoed back. Grep the client for it and find nothing.
+    expect(result?.action?.message).toContain("Your weekly limit is $5.")
   })
 
   test("falls back to the IRIS pricing URL when the server sends no upgrade_url", () => {

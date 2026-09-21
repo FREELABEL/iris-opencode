@@ -685,6 +685,7 @@ export type SessionStatus =
         message: string
         label: string
         link?: string
+        resetsAt?: string
       }
       next: number
     }

@@ -32,6 +32,17 @@ export type Retryable = {
     message: string
     label: string
     link?: string
+    // WHEN THE LIMIT ACTUALLY CLEARS, as the server computed it. ISO-8601.
+    //
+    // The dialog used to suppress itself for a hard-coded four hours, on the reasoning that a
+    // DAILY limit can be hit again tomorrow. That reasoning does not survive the allowance
+    // becoming weekly: someone who exhausts a week on Monday would be shown the same dialog
+    // every four hours until Sunday, explaining a thing that cannot change.
+    //
+    // The client must not compute this either — "a week" is policy, and policy lives in
+    // config/allowance.php on the server. Suppress until this instant and the client stays
+    // correct across every future change to the window.
+    resetsAt?: string
   }
 }
 
@@ -128,6 +139,7 @@ export function retryable(error: Err, provider: string) {
           message: parts.join(" "),
           label: "See plans",
           link: str(detail?.upgrade_url) || IRIS_UPGRADE_URL,
+          resetsAt: resets,
         },
       }
     }

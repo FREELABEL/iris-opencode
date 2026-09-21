@@ -22,6 +22,13 @@ export const Info = Schema.Union([
         message: Schema.String,
         label: Schema.String,
         link: optional(Schema.String),
+        // When the limit actually clears, ISO-8601, as the SERVER computed it.
+        //
+        // The dialog that reads this used to suppress itself for a hard-coded four hours,
+        // which was policy living in the client: correct for a daily cap, wrong the moment
+        // the allowance became weekly. A client cannot hold a number the server can change
+        // without shipping a build, so the instant travels instead of the rule.
+        resetsAt: optional(Schema.String),
       }),
     ),
     next: NonNegativeInt,
