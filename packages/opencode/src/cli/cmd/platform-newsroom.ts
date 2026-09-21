@@ -365,13 +365,165 @@ const NewsroomDraftCommand = cmd({
   },
 })
 
+
+// ============================================================================
+// iris newsroom roster / send — the CLIENT-facing half of #186357.
+//
+// The chain existed only as artisan commands on the production container, reachable by
+// `railway ssh` and nobody else (#186373). A client could not see their own member list, let
+// alone mail it. These call the HTTP door, which shells the same artisan commands with --json,
+// so the CLI and an operator's terminal cannot report two different roster counts.
+//
+// ADMIN STAYS IN ARTISAN. Attaching a program to a newsroom and minting a Resend audience are
+// setup, not operation, and they are not exposed here on purpose.
+// ============================================================================
+
+const NewsroomRosterCommand = cmd({
+  command: "roster <bloq>",
+  describe: "who this newsroom can send to, and how many",
+  builder: (yargs) =>
+    yargs
+      .positional("bloq", { describe: "newsroom board id", type: "number", demandOption: true })
+      .option("import", { describe: "path to a membership CSV to load", type: "string" })
+      .option("apply", { describe: "actually write the import (default: report only)", type: "boolean", default: false })
+      .option("paid-only", { describe: "skip members whose Paid Through has passed", type: "boolean", default: false })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args: any) {
+    if (!(await requireAuth())) return
+    const bloq = Number(args.bloq)
+
+    if (args.import) {
+      const file = Bun.file(args.import)
+      if (!(await file.exists())) {
+        prompts.log.error(`No such file: ${args.import}`)
+        process.exitCode = 1
+        return
+      }
+      const form = new FormData()
+      form.append("file", file, args.import.split("/").pop())
+      if (args.apply) form.append("apply", "1")
+      if (args["paid-only"]) form.append("paid_only", "1")
+
+      const res = await irisFetch(`/api/v1/newsroom/${bloq}/roster/import`, { method: "POST", body: form })
+      const body = (await res.json().catch(() => ({}))) as any
+      if (args.json) return writeJson(body)
+      if (!res.ok) {
+        prompts.log.error(body?.message ?? body?.error ?? `HTTP ${res.status}`)
+        process.exitCode = 1
+        return
+      }
+      const d = body?.data ?? {}
+      UI.empty()
+      prompts.intro(`◈  Roster import — bloq ${bloq}`)
+      prompts.log.info(`  rows in file   ${d.rows ?? "—"}`)
+      prompts.log.info(`  would create   ${d.would_create ?? 0}`)
+      prompts.log.info(`  would update   ${d.would_update ?? 0}`)
+      prompts.log.info(`  skipped        ${(d.skipped ?? []).length}`)
+      prompts.log.info(`  lapsed in file ${d.lapsed_in_file ?? 0}${args["paid-only"] ? dim("  (excluded)") : dim("  (included — --paid-only to exclude)")}`)
+      if (d.dry_run !== false) {
+        prompts.log.warn("DRY RUN — nothing written. Add --apply to load them.")
+      } else {
+        prompts.log.success(`${success("✓")} imported`)
+      }
+      prompts.outro("Done")
+      return
+    }
+
+    const res = await irisFetch(`/api/v1/newsroom/${bloq}/roster`)
+    const body = (await res.json().catch(() => ({}))) as any
+    if (args.json) return writeJson(body)
+    if (!res.ok) {
+      prompts.log.error(body?.message ?? body?.error ?? `HTTP ${res.status}`)
+      process.exitCode = 1
+      return
+    }
+    const d = body?.data ?? {}
+    UI.empty()
+    prompts.intro(`◈  ${d?.bloq?.name ?? `Bloq ${bloq}`}`)
+    if (!(d.programs ?? []).length) {
+      prompts.log.warn("No program attached, so no roster.")
+      prompts.log.info(dim("  A newsroom sends through a program — ask an operator to attach one."))
+      prompts.outro("Done")
+      return
+    }
+    for (const p of d.programs) {
+      prompts.log.info(`${bold(p.name)}  ${dim(`#${p.id}`)}`)
+      prompts.log.info(`  members   ${p.roster_count}`)
+      prompts.log.info(`  audience  ${p.resend_audience_id ?? dim("none")}`)
+    }
+    // Said every time, not only when it looks relevant: this is the number that ends up in a
+    // client report, and it is a roster size rather than a delivery figure.
+    prompts.log.info(dim("  members = enrolled and not unsubscribed. An upper bound on delivery."))
+    prompts.outro("Done")
+  },
+})
+
+const NewsroomSendCommand = cmd({
+  command: "send <bloq>",
+  describe: "send the newsletter to this newsroom's members — dry run unless --send",
+  builder: (yargs) =>
+    yargs
+      .positional("bloq", { describe: "newsroom board id", type: "number", demandOption: true })
+      .option("articles", { describe: "comma-separated article item ids", type: "string", demandOption: true })
+      .option("subject", { describe: "email subject", type: "string" })
+      .option("limit", { describe: "cap recipients — use for a first small send", type: "number" })
+      .option("send", { describe: "actually send — also needs --confirm", type: "boolean", default: false })
+      .option("confirm", { describe: "the second key", type: "boolean", default: false })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args: any) {
+    if (!(await requireAuth())) return
+
+    const res = await irisFetch(`/api/v1/newsroom/${Number(args.bloq)}/send`, {
+      method: "POST",
+      body: JSON.stringify({
+        articles: String(args.articles),
+        subject: args.subject ?? null,
+        limit: args.limit ?? null,
+        apply: !!args.send,
+        confirm: !!args.confirm,
+      }),
+    })
+    const body = (await res.json().catch(() => ({}))) as any
+    if (args.json) return writeJson(body)
+
+    if (!res.ok) {
+      prompts.log.error(body?.data?.message ?? body?.message ?? body?.error ?? `HTTP ${res.status}`)
+      process.exitCode = 1
+      return
+    }
+
+    const d = body?.data ?? {}
+    UI.empty()
+    prompts.intro(`◈  Newsletter — ${d?.bloq?.name ?? `bloq ${args.bloq}`}`)
+    prompts.log.info(`  subject   ${d.subject ?? "—"}`)
+    prompts.log.info(`  articles  ${(d.articles ?? []).join(" · ") || "—"}`)
+    prompts.log.info(`  roster    ${d.roster ?? 0} eligible · ${d.sendable ?? 0} sendable · ${(d.skipped ?? []).length} skipped`)
+    if (d.body_preview) {
+      prompts.log.info(dim("  ── body ──"))
+      for (const line of String(d.body_preview).split("\n").slice(0, 12)) prompts.log.info(dim(`  ${line}`))
+    }
+    if (d.consent_enforced === false) {
+      prompts.log.warn("Consent is not enforced on this path yet — see #186372.")
+    }
+    if (d.dry_run !== false) {
+      prompts.log.warn("DRY RUN — nothing sent, nothing logged.")
+      prompts.log.info(dim(`  To send: iris newsroom send ${args.bloq} --articles=${args.articles} --send --confirm`))
+    } else {
+      prompts.log.success(`${success("✓")} sent — each member has a logged comm chained to their lead`)
+    }
+    prompts.outro("Done")
+  },
+})
+
 export const PlatformNewsroomCommand = cmd({
   command: "newsroom",
   aliases: ["article"],
-  describe: "newsroom — draft articles from recordings, transcripts, notes or outlines",
+  describe: "newsroom — draft articles, and send them to your members",
   builder: (yargs) =>
     yargs
       .command(NewsroomDraftCommand)
+      .command(NewsroomRosterCommand)
+      .command(NewsroomSendCommand)
       .epilogue(
         [
           `${bold("Related:")}`,
