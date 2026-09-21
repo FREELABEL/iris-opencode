@@ -34,6 +34,16 @@ export const BODY_CLASSES: BodyClass[] = [
   { name: "device", describe: "this machine's disk — reclaiming space deletes files", verbs: ["clean"] },
   { name: "node", describe: "another machine in the Hive", verbs: ["run", "task", "script", "send"] },
   { name: "n8n", describe: "an automation that reaches the world", verbs: ["trigger", "activate"] },
+  // A phone is the highest-consequence body on this list and the only one carrying someone's
+  // logged-in sessions — bank, mail, the 2FA codes for everything else. ARTEMIS (google/artemis)
+  // ships an MCP server that drives one over ADB with NO permission model at all, which is the
+  // whole reason this row exists: the adapter is theirs, the clutch is ours.
+  //
+  // Verbs are the canonical agent-facing actions ARTEMIS actually declares
+  // (artemis/mcp/action_specs.py: click, long_press, input_text, swipe, press_key, manage_app,
+  // open_link, ...), collapsed to the sub-commands `iris phone` exposes. Read out of their source,
+  // not invented — the `device` row above records what inventing verbs costs.
+  { name: "android", describe: "an Android device over ADB — a real phone, with real sessions on it", verbs: ["run", "tap", "type", "swipe", "key", "app", "open"] },
 ]
 
 export const bodyClass = (name: string): BodyClass | null =>
@@ -57,6 +67,12 @@ const READS: Record<string, string[]> = {
   device: ["scan", "audit", "log", "record", "list", "ls", "status"],
   node: ["list", "ls", "nodes", "status", "scan", "ping", "doctor", "uptime"],
   n8n: ["list", "ls", "status", "export", "workflows"],
+  // `screenshot` and `state` READ the screen — looking is not moving, same call as `camera pos`.
+  // `doctor` is OUR local capability check (is adb here, is a device attached), deliberately NOT
+  // ARTEMIS's `mobile_diagnose`, which can launch an emulator and apply fixes. A read that can
+  // repair things is not a read, and naming ours `doctor` while calling theirs would smuggle an
+  // act through this list.
+  android: ["devices", "list", "ls", "state", "screen", "screenshot", "logcat", "trace", "doctor", "status"],
 }
 
 /** `iris obs record status` is a read; `iris obs record start` is an act. Same sub-command, different argv. */
@@ -91,7 +107,7 @@ export function routeFor(argv: string[], parsed?: string[]): Route | null {
   // class later cannot make the clutch require its own permission to be inspected.
   if (head === "kinetic" || head === "kinetics") return null
 
-  const map: Record<string, string> = { camera: "camera", cam: "camera", ptz: "camera", obs: "obs", device: "device", hive: "node", n8n: "n8n" }
+  const map: Record<string, string> = { camera: "camera", cam: "camera", ptz: "camera", obs: "obs", device: "device", hive: "node", n8n: "n8n", android: "android", adb: "android" }
   const cls = map[head]
   if (!cls) return null
   if (!sub) return null
@@ -111,6 +127,25 @@ export function routeFor(argv: string[], parsed?: string[]): Route | null {
     // `iris hive run <node> <cmd>` — arbitrary shell on another machine, the epic's named danger.
     const verb = sub === "run" || sub === "exec" ? "run" : sub === "task" ? "task" : sub === "script" ? "script" : sub === "send" ? "send" : null
     return verb ? { class: "node", verb, instance: third && !third.startsWith("-") ? third : null } : null
+  }
+  if (cls === "android") {
+    const verb =
+      sub === "run" || sub === "task" ? "run"
+      : sub === "tap" || sub === "click" || sub === "press" ? "tap"
+      : sub === "type" || sub === "input" || sub === "text" ? "type"
+      : sub === "swipe" || sub === "scroll" ? "swipe"
+      : sub === "key" ? "key"
+      : sub === "app" ? "app"
+      : sub === "open" ? "open"
+      : null
+    // INSTANCE IS ALWAYS NULL HERE, and this is the one line to get right. Every other class either
+    // has no positional instance or has it in a fixed slot; a phone's device serial arrives as
+    // `--device <serial>`, while the word after the sub-command is the PAYLOAD —
+    // `iris android run "open settings"` would otherwise ask for a couple on `android:open settings`,
+    // a body that cannot exist, so every act would be refused for the wrong reason and the fix
+    // would look like loosening the guard. The handler resolves the real serial and re-asks
+    // precisely via guardAct; coarse first, fine second.
+    return verb ? { class: "android", verb, instance: null } : null
   }
   if (cls === "n8n") {
     const verb = sub === "trigger" || sub === "execute" || sub === "run" ? "trigger" : sub === "activate" ? "activate" : null
