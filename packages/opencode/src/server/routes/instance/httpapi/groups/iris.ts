@@ -415,7 +415,20 @@ const PlaybooksResponse = Schema.Struct({
       views: Schema.optional(Schema.Finite),
       hasLocal: described(
         Schema.Boolean,
-        "~/.iris/playbooks/<name>/PLAYBOOK.md exists on THIS machine. Playbook content never leaves the machine, so the local document is richer than anything the API has.",
+        "Installed where this session can use it: <project>/.iris/playbooks, <project>/.claude/skills or ~/.iris/playbooks (#186277). Playbook content never leaves the machine, so the local document is richer than anything the API has.",
+      ),
+      localWhere: described(
+        Schema.optional(Schema.Literals(["project", "skill", "home"])),
+        "Which copy hasLocal found — the project's, a synced skill, or the home install.",
+      ),
+      installedVersion: described(
+        Schema.optional(Schema.Finite),
+        "The published version the local copy was installed at, from its .installed.json. Absent for a copy written or synced locally.",
+      ),
+      edited: described(Schema.optional(Schema.Boolean), "The local copy changed since it was installed — an update would replace those edits."),
+      action: described(
+        Schema.optional(Schema.Literals(["install", "update", "run"])),
+        "What the card offers: install (not here), update (installed from the Marketplace and a newer version is published), run (#186274).",
       ),
       bloqId: described(Schema.optional(Schema.Finite), "The board it is filed against. 19 of 128 carry one."),
       ownerUserId: Schema.optional(Schema.Finite),
@@ -562,6 +575,7 @@ export const IrisPaths = {
   sites: `${root}/sites/:bloqID`,
   agentTasks: `${root}/agents/:agentID/tasks`,
   playbookDoc: `${root}/playbooks/doc/:name`,
+  playbookInstall: `${root}/playbooks/install`,
   catalog: `${root}/catalog`,
   graph: `${root}/graph`,
   graphBoard: `${root}/graph/:bloqID`,
@@ -702,6 +716,10 @@ export const IrisApi = HttpApi.make("iris").add(
           view: described(
             Schema.optional(Schema.Literals(["all", "project", "marketplace"])),
             "project = attached to this board or filed against it. marketplace = actually published (public or unlisted). `private` is neither: yours and unshared.",
+          ),
+          project: described(
+            Schema.optional(Schema.String),
+            "The session's project directory, so 'installed here' counts <project>/.iris/playbooks and <project>/.claude/skills (#186277). Absolute path; anything else is ignored.",
           ),
         }),
         params: { bloqID: Schema.NumberFromString },
@@ -849,6 +867,30 @@ export const IrisApi = HttpApi.make("iris").add(
         OpenApi.annotations({
           identifier: "iris.pageDoc",
           summary: "Read a page for editing",
+        }),
+      ),
+      HttpApiEndpoint.post("playbookInstall", IrisPaths.playbookInstall, {
+        payload: Schema.Struct({
+          name: Schema.String,
+          project: Schema.optional(Schema.String),
+          force: Schema.optional(Schema.Boolean),
+        }),
+        success: described(
+          Schema.Struct({
+            ok: Schema.Boolean,
+            message: Schema.String,
+            version: Schema.optional(Schema.Finite),
+            location: Schema.optional(Schema.String),
+            path: Schema.optional(Schema.String),
+          }).annotate({ identifier: "IrisPlaybookInstallResult" }),
+          "Whether the install landed, and where",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.playbookInstall",
+          summary: "Install or update a playbook",
+          description:
+            "Runs the real `iris playbook install <name> --json` (no shell; name must be a slug) — into the session's project when `project` is sent, otherwise the home folder. `force` replaces the local copy (Update). The failure message is the CLI's own words (#186274).",
         }),
       ),
       HttpApiEndpoint.post("pageSave", IrisPaths.pageSave, {
@@ -1136,6 +1178,12 @@ export const IrisApi = HttpApi.make("iris").add(
       }).annotateMerge(OpenApi.annotations({ identifier: "iris.itemChatSend", summary: "Send one message to an agent about this card" })),
       HttpApiEndpoint.get("playbookDoc", IrisPaths.playbookDoc, {
         params: { name: Schema.String },
+        query: Schema.Struct({
+          project: described(
+            Schema.optional(Schema.String),
+            "The session's project directory, so 'installed here' counts <project>/.iris/playbooks and <project>/.claude/skills (#186277). Absolute path; anything else is ignored.",
+          ),
+        }),
         success: described(
           Schema.Struct({
             found: Schema.Boolean,

@@ -3,6 +3,16 @@ import { filterRows, paginate } from "@/iris/pagination"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { filterAtlas, checkAuth, fetchAgents, fetchAtlas, fetchBloqs, fetchHiveNodes, fetchInbox, fetchLeads, fetchIntegrations, fetchPages, fetchPlaybooks, fetchRecords, fetchSchemas, fetchSites, fetchAgentTasks, fetchPlaybookDoc, fetchPageDoc, savePageDoc, fetchItem, saveItem, addItemTask, saveItemTask, deleteItemTask, fetchCardSchema, fetchShareState, setShareVisibility, setShareAllowlist, inviteMember, setMemberPermission, revokeMember, createShareLink, revokeShareLink, setItemLabels, fetchAttachments, uploadAttachment, deleteAttachment, fetchEvents, addEvent, fetchAsks, addAsk, answerAsk, fetchItemChat, sendItemChat, fetchCatalog, fetchBloqGraph, fetchBloqInterior, graphRows } from "@/iris/platform"
 import { RootHttpApi } from "../api"
+import { markLocal, projectRoot } from "@/iris/playbook-local"
+import { runPlaybookInstall, ttlCache } from "@/iris/playbook-install"
+
+/**
+ * The board + account playbook list, cached for a minute per board/view (#186279). The handler
+ * used to re-fetch the whole account set from the API for EVERY search query (~3 s each) and then
+ * filter it in memory. "Installed here" is NOT cached — it is recomputed from disk per request.
+ * An install clears it.
+ */
+const playbookLists = ttlCache<string, Awaited<ReturnType<typeof fetchPlaybooks>>>(60_000)
 
 /**
  * Handlers for the IRIS platform routes.
@@ -171,22 +181,29 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
     const playbooks = Effect.fn("IrisHttpApi.playbooks")(
       (ctx: {
         params: { bloqID: number }
-        query: { page?: number; perPage?: number; q?: string; view?: "all" | "project" | "marketplace" }
+        query: { page?: number; perPage?: number; q?: string; view?: "all" | "project" | "marketplace"; project?: string }
       }) =>
-        Effect.promise(() => fetchPlaybooks(ctx.params.bloqID, ctx.query.view)).pipe(
-          Effect.map((r) => {
-            // Description as well as name: playbooks are FOUND by what they do, and the name is
-            // a slug. "restaurant-booking-cancel" is not how anyone looks for it.
-            const rows = filterRows(r.data.playbooks, ctx.query.q, (p) => [
-              p.name,
-              p.description,
-              p.scope,
-              ...p.steps.map((s) => s.title),
-            ])
-            const { items, meta } = pageOf(r, rows, ctx.query)
-            return { ...meta, playbooks: items }
-          }),
-        ),
+        Effect.gen(function* () {
+          // The session's project, sent by the panel: "installed here" must count the project's
+          // .iris/playbooks and .claude/skills, not only ~/.iris/playbooks (#186277). NOT
+          // InstanceState.directory — /iris routes run outside an instance and that throws
+          // "InstanceRef not provided", failing every request (caught on a live server).
+          const project = projectRoot(ctx.query.project)
+          const key = `${ctx.params.bloqID}:${ctx.query.view ?? "all"}`
+          const r = yield* Effect.promise(() => playbookLists.get(key, () => fetchPlaybooks(ctx.params.bloqID, ctx.query.view)))
+          // Never keep an answer that says it could not measure — the next request should retry.
+          if (!(r as any).measured) playbookLists.invalidate()
+          // Description as well as name: playbooks are FOUND by what they do, and the name is
+          // a slug. "restaurant-booking-cancel" is not how anyone looks for it.
+          const rows = filterRows(r.data.playbooks, ctx.query.q, (p) => [
+            p.name,
+            p.description,
+            p.scope,
+            ...p.steps.map((s) => s.title),
+          ])
+          const { items, meta } = pageOf(r, rows, ctx.query)
+          return { ...meta, playbooks: markLocal(items, { project }) }
+        }),
     )
 
     /**
@@ -356,10 +373,25 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
       Effect.promise(() => sendItemChat(ctx.params.itemID, { agentId: ctx.payload.agentId, text: ctx.payload.text, bloqId: ctx.payload.bloq })),
     )
 
-    const playbookDoc = Effect.fn("IrisHttpApi.playbookDoc")((ctx: { params: { name: string } }) =>
-      Effect.promise(() => fetchPlaybookDoc(ctx.params.name)).pipe(
-        Effect.map((r) => ({ found: r.found, name: ctx.params.name, path: r.path, source: r.source, content: r.content })),
-      ),
+    const playbookDoc = Effect.fn("IrisHttpApi.playbookDoc")((ctx: { params: { name: string }; query: { project?: string } }) =>
+      Effect.gen(function* () {
+        const project = projectRoot(ctx.query.project)
+        const r = yield* Effect.promise(() => fetchPlaybookDoc(ctx.params.name, project))
+        return { found: r.found, name: ctx.params.name, path: r.path, source: r.source, content: r.content }
+      }),
+    )
+
+    const playbookInstall = Effect.fn("IrisHttpApi.playbookInstall")(
+      (ctx: { payload: { name: string; project?: string; force?: boolean } }) =>
+        Effect.promise(async () => {
+          const r = await runPlaybookInstall({
+            name: ctx.payload.name,
+            project: projectRoot(ctx.payload.project),
+            force: ctx.payload.force === true,
+          })
+          if (r.ok) playbookLists.invalidate()
+          return r
+        }),
     )
 
     const agentTasks = Effect.fn("IrisHttpApi.agentTasks")(
@@ -421,6 +453,6 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
         ),
     )
 
-    return handlers.handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("graph", graph).handle("graphBoard", graphBoard).handle("catalog", catalog).handle("pageDoc", pageDoc).handle("pageSave", pageSave).handle("item", item).handle("itemSave", itemSave).handle("itemTaskAdd", itemTaskAdd).handle("itemTaskSave", itemTaskSave).handle("itemTaskDelete", itemTaskDelete).handle("cardSchema", cardSchema).handle("itemShare", itemShare).handle("itemShareVisibility", itemShareVisibility).handle("itemShareAllowlist", itemShareAllowlist).handle("itemShareInvite", itemShareInvite).handle("itemSharePermission", itemSharePermission).handle("itemShareRevoke", itemShareRevoke).handle("itemShareLink", itemShareLink).handle("itemShareLinkRevoke", itemShareLinkRevoke).handle("itemLabels", itemLabels).handle("itemAttachments", itemAttachments).handle("itemAttachmentUpload", itemAttachmentUpload).handle("itemAttachmentDelete", itemAttachmentDelete).handle("itemEvents", itemEvents).handle("itemEventAdd", itemEventAdd).handle("itemAsks", itemAsks).handle("itemAskAdd", itemAskAdd).handle("itemAskAnswer", itemAskAnswer).handle("itemChat", itemChat).handle("itemChatSend", itemChatSend).handle("playbookDoc", playbookDoc).handle("agentTasks", agentTasks).handle("sites", sites).handle("records", records).handle("integrations", integrations).handle("hive", hive)
+    return handlers.handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("graph", graph).handle("graphBoard", graphBoard).handle("catalog", catalog).handle("pageDoc", pageDoc).handle("pageSave", pageSave).handle("item", item).handle("itemSave", itemSave).handle("itemTaskAdd", itemTaskAdd).handle("itemTaskSave", itemTaskSave).handle("itemTaskDelete", itemTaskDelete).handle("cardSchema", cardSchema).handle("itemShare", itemShare).handle("itemShareVisibility", itemShareVisibility).handle("itemShareAllowlist", itemShareAllowlist).handle("itemShareInvite", itemShareInvite).handle("itemSharePermission", itemSharePermission).handle("itemShareRevoke", itemShareRevoke).handle("itemShareLink", itemShareLink).handle("itemShareLinkRevoke", itemShareLinkRevoke).handle("itemLabels", itemLabels).handle("itemAttachments", itemAttachments).handle("itemAttachmentUpload", itemAttachmentUpload).handle("itemAttachmentDelete", itemAttachmentDelete).handle("itemEvents", itemEvents).handle("itemEventAdd", itemEventAdd).handle("itemAsks", itemAsks).handle("itemAskAdd", itemAskAdd).handle("itemAskAnswer", itemAskAnswer).handle("itemChat", itemChat).handle("itemChatSend", itemChatSend).handle("playbookDoc", playbookDoc).handle("playbookInstall", playbookInstall).handle("agentTasks", agentTasks).handle("sites", sites).handle("records", records).handle("integrations", integrations).handle("hive", hive)
   }),
 )

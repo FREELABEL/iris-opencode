@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createResource, createSignal, For, Match, onCleanup, Show, Switch } from "solid-js"
+import { createEffect, createMemo, createResource, createSignal, For, Match, on, onCleanup, Show, Switch, untrack } from "solid-js"
 import "./session-iris-tab.css"
 import { pageSummary, type PageEnvelope } from "./use-paged-surface"
 import { Dialog } from "@opencode-ai/ui/dialog"
@@ -7,7 +7,9 @@ import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { SegmentedControlV2, SegmentedControlItemV2 } from "@opencode-ai/ui/v2/segmented-control-v2"
 import { IrisForceGraph, type ForceEdge, type ForceNode } from "./iris-force-graph"
 import { graphBoardIsIsolated, scopeGraphRows, type GraphScope } from "./iris-graph-scope"
+import { Button } from "@opencode-ai/ui/button"
 import { useServerSDK } from "@/context/server-sdk"
+import { useSDK } from "@/context/sdk"
 import { usePlatform } from "@/context/platform"
 import { IrisCardEditor } from "./iris-card-editor"
 import { itemCommands, renderMarkdown } from "./iris-item"
@@ -66,12 +68,52 @@ interface Measured {
  * `lists`, `schemas`, `nodes` and `items` respectively. Keying this on the surface would have
  * read `d["atlas"]` for the schemas pane and found nothing, which renders as an empty board.
  */
+export interface McpServerRow {
+  name: string
+  type?: string
+  target?: string
+  enabled?: boolean
+  status: string
+  error?: string
+}
+
+/**
+ * One row per MCP server, from the two endpoints the sidecar already serves: `GET /config`
+ * (what is configured — command or URL, enabled) and `GET /mcp` (what each one is doing).
+ *
+ * Configured with no status yet reads as "disabled", never "connected": this screen exists to
+ * show what is actually running. A server present in the status map but not in config was added
+ * at runtime and is still listed — hiding it would make the panel disagree with the agent.
+ */
+export function mcpServerRows(
+  config: Record<string, any> | undefined,
+  status: Record<string, { status?: string; error?: string }> | undefined,
+): McpServerRow[] {
+  const cfg = config ?? {}
+  const st = status ?? {}
+  return [...new Set([...Object.keys(cfg), ...Object.keys(st)])]
+    .sort((a, b) => a.localeCompare(b))
+    .map((name) => {
+      const c: any = cfg[name]
+      const command = Array.isArray(c?.command) ? c.command.join(" ") : undefined
+      return {
+        name,
+        type: c?.type,
+        target: c?.url ?? command,
+        enabled: c?.enabled,
+        status: st[name]?.status ?? "disabled",
+        error: st[name]?.error,
+      }
+    })
+}
+
 function arrayKeyFor(pane: string): string {
   if (pane === "graph") return "rows"
   if (pane === "catalog") return "catalog"
   if (pane === "atlas") return "lists"
   if (pane === "hive") return "nodes"
   if (pane === "inbox") return "items"
+  if (pane === "mcp") return "servers"
   return pane
 }
 
@@ -99,6 +141,30 @@ function relativeAge(iso: string): string | undefined {
   const hrs = Math.floor(mins / 60)
   if (hrs < 24) return `${hrs}h ago`
   return `${Math.floor(hrs / 24)}d ago`
+}
+
+/**
+ * The one command a playbook card offers (#186274, #186278). `action` is decided by the server from
+ * what is on disk and the copy's install record; an older sidecar without it falls back to hasLocal.
+ */
+export function playbookCommand(r: any): string {
+  const action = r?.action ?? (r?.hasLocal ? "run" : "install")
+  if (action === "install") return `iris playbook install ${r.name}`
+  if (action === "update") return `iris playbook install ${r.name} --force`
+  return `iris playbook run ${r.name}`
+}
+
+/** The button the card shows, or null when there is nothing to install. */
+export function playbookButton(r: any): { label: string; force: boolean; warn?: string } | null {
+  const action = r?.action ?? (r?.hasLocal ? "run" : "install")
+  if (action === "install") return { label: "Install", force: false }
+  if (action === "update")
+    return {
+      label: r?.version != null ? `Update to v${r.version}` : "Update",
+      force: true,
+      ...(r?.edited ? { warn: "This copy has local edits — updating replaces them." } : {}),
+    }
+  return null
 }
 
 function describeRow(
@@ -206,6 +272,19 @@ function describeFields(surface: string, r: any): { title: string; fields: [stri
       // takes the manifest number, so printing the row's position would open a different message.
       command: `iris hive inbox read ${r.index}`,
     }
+  if (surface === "mcp")
+    return {
+      title: r.name,
+      fields: fieldsOf([
+        ["status", r.status],
+        ["error", r.error],
+        ["type", r.type],
+        [r.type === "remote" ? "url" : "command", r.target],
+        ["enabled", r.enabled],
+      ]),
+      // `iris mcp` is the CLI half of this surface; `tools` is what the Tools tab shows.
+      command: `iris mcp tools ${/\s/.test(String(r.name)) ? JSON.stringify(r.name) : r.name}`,
+    }
   if (surface === "playbooks")
     return {
       title: r.name,
@@ -215,12 +294,16 @@ function describeFields(surface: string, r: any): { title: string; fields: [stri
         ["active", r.active],
         ["steps", (r.steps ?? []).length || undefined],
         ["arguments", (r.args ?? []).length || undefined],
-        ["installed here", r.hasLocal],
+        // Which copy — the project's, a synced skill, or the home install (#186277).
+        ["installed here", r.hasLocal ? (r.localWhere ? `yes — ${r.localWhere}` : true) : false],
+        ["installed version", r.installedVersion],
+        ["local edits", r.edited],
         ["installs", r.installs], ["views", r.views],
         ["published", r.publishedAt], ["landing page", r.publicUrl],
         ["description", r.description],
       ]),
-      command: `iris playbook run ${r.name}`,
+      // The one command that works for this card's state (#186278, #186274).
+      command: playbookCommand(r),
     }
   if (surface === "integrations")
     return {
@@ -369,6 +452,9 @@ const SURFACES = [
    * strand everyone whose panel remembers the old value for the sake of a word on screen.
    */
   { id: "pages", label: "Genesis", path: (b: number) => `/iris/pages/${b}` },
+  // MCP servers belong to the machine and the project, not to a board, so the path ignores the
+  // argument (as Hive does). The rows are built from /config + /mcp — see mcpServerRows.
+  { id: "mcp", label: "MCP", path: () => `/mcp` },
   // Hive is NOT bloq-scoped — machines belong to the account, not to a board — so its path
   // ignores the argument. Kept in the same list anyway so the switcher stays one mechanism;
   // a second code path for one surface is how surfaces drift apart.
@@ -468,6 +554,12 @@ export interface DetailTab {
   label: string
 }
 const DETAIL_TABS: Record<string, readonly DetailTab[]> = {
+  mcp: [
+    { id: "info", label: "Info" },
+    // What this server actually gives an agent. The reason to open a server at all.
+    { id: "tools", label: "Tools" },
+    { id: "json", label: "JSON" },
+  ],
   schemas: [
     { id: "info", label: "Info" },
     // The database table. This is the one that turns a schema from a description of data into
@@ -669,6 +761,34 @@ export function SessionIrisTab() {
   const platform = usePlatform()
 
   const base = createMemo(() => serverSDK().url.replace(/\/$/, ""))
+  /**
+   * This session's project directory, for "installed here" (#186277): a project's playbooks live
+   * in <project>/.iris/playbooks and <project>/.claude/skills, which the server cannot guess —
+   * /iris routes run outside any project instance. Optional: without a session SDK (no provider
+   * above this panel) the server checks ~/.iris/playbooks only, as before.
+   */
+  const dirSdk = (() => {
+    try {
+      return useSDK()
+    } catch {
+      return undefined
+    }
+  })()
+  const projectDir = (): string | undefined => {
+    try {
+      return dirSdk?.().directory || undefined
+    } catch {
+      return undefined
+    }
+  }
+  const projectParam = () => {
+    try {
+      const d = dirSdk?.().directory
+      return d ? `project=${encodeURIComponent(d)}` : ""
+    } catch {
+      return ""
+    }
+  }
   /** Every request to the sidecar. `init` exists because this panel now WRITES (page saves). */
   const doFetch = (path: string, init?: RequestInit) =>
     (platform.fetch ?? globalThis.fetch)(`${base()}${path}`, init)
@@ -804,7 +924,25 @@ export function SessionIrisTab() {
        * The whole set is 39 rows and 45 edges. There is nothing to page.
        */
       const perPage = which === "graph" ? 500 : 25
-      const res = await doFetch(`${url}${sep}page=${pageNo}&perPage=${perPage}${search}`)
+      // MCP is two endpoints, not one: /mcp says what each server is doing, /config says what
+      // each one IS. Merged here so the panel keeps ONE row shape (see mcpServerRows).
+      if (which === "mcp") {
+        const [statusRes, configRes] = await Promise.all([doFetch("/mcp"), doFetch("/config")])
+        const status = statusRes.ok ? ((await statusRes.json()) as any) : {}
+        const config = configRes.ok ? ((await configRes.json()) as any)?.mcp : undefined
+        const servers = mcpServerRows(config, status)
+        return {
+          measured: statusRes.ok,
+          reason: statusRes.ok ? undefined : `the sidecar could not read MCP status (HTTP ${statusRes.status})`,
+          total: servers.length,
+          totalIsExact: true,
+          hasMore: false,
+          servers,
+          __pane: which,
+        } as unknown as SurfacePayload
+      }
+      const project = which === "playbooks" && projectParam() ? `&${projectParam()}` : ""
+      const res = await doFetch(`${url}${sep}page=${pageNo}&perPage=${perPage}${search}${project}`)
       // Stamped with the pane it was fetched FOR, so a held payload can be told apart from an
       // answer about what is currently on screen. See surfaceView.
       const next = { ...((await res.json()) as SurfacePayload), __pane: which } as SurfacePayload
@@ -1043,6 +1181,44 @@ export function SessionIrisTab() {
 
   /** A non-Atlas row being inspected. Atlas has its own reader because it has a BODY; the rest
    *  are records, so they get a field list rather than prose. */
+  /**
+   * Install / Update from the card (#186274): the sidecar runs the real `iris playbook install`.
+   * On success the list is refetched and the open card re-described from the fresh row, so
+   * "installed here" and the button change without reopening it.
+   */
+  const [installing, setInstalling] = createSignal(false)
+  const [installResult, setInstallResult] = createSignal<{ ok: boolean; message: string } | null>(null)
+  /** The playbook just installed, until the refreshed list shows it installed (see the effect below openRow). */
+  const [justInstalled, setJustInstalled] = createSignal<string | null>(null)
+  const installOpenPlaybook = async (force: boolean) => {
+    const row = openRow()
+    const name = row?.raw?.name
+    if (!name || installing()) return
+    setInstalling(true)
+    setInstallResult(null)
+    try {
+      const res = await doFetch("/iris/playbooks/install", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name, project: projectDir(), force }),
+      })
+      const r = (await res.json().catch(() => null)) as { ok?: boolean; message?: string } | null
+      const ok = !!r?.ok
+      setInstallResult({ ok, message: r?.message || (ok ? "Installed" : `Install failed (HTTP ${res.status})`) })
+      if (ok) {
+        // Do NOT await the refetch: measured on a built sidecar, awaiting it left the button on
+        // "Installing…" and the card unchanged after a successful install. Ask for fresh rows and
+        // let the effect below re-describe the card once the row shows up installed.
+        setJustInstalled(name)
+        void refetchSurface()
+      }
+    } catch (e: any) {
+      setInstallResult({ ok: false, message: e?.message ?? String(e) })
+    } finally {
+      setInstalling(false)
+    }
+  }
+
   const [openRow, setOpenRow] = createSignal<{
     title: string
     fields: [string, string][]
@@ -1052,6 +1228,29 @@ export function SessionIrisTab() {
     /** Which pane it came from, which is what decides its detail tabs. */
     pane?: string
   } | null>(null)
+  // A result belongs to the card it was produced on — clear it when another opens. Declared AFTER
+  // openRow: reading a signal above its declaration is a TDZ crash one timing change away.
+  createEffect(
+    on(
+      () => openRow()?.raw?.name,
+      // Only when a DIFFERENT playbook opens — re-describing the same card after an install must
+      // keep its "Installed …" message.
+      (name, prev) => {
+        if (name !== prev) setInstallResult(null)
+      },
+      { defer: true },
+    ),
+  )
+  // After an install: when the refreshed list carries the row as installed, show the card from it
+  // — "installed here: yes — project", the Run command, no button.
+  createEffect(() => {
+    const name = justInstalled()
+    if (!name) return
+    const fresh = rows().find((x: any) => x?.name === name)
+    if (!fresh?.hasLocal) return
+    setJustInstalled(null)
+    if (untrack(() => openRow()?.raw?.name) === name) setOpenRow(describeRow(pane(), fresh))
+  })
 
   const [detailTab, setDetailTab] = createSignal("info")
   const detailTabs = createMemo(() => detailTabsFor(openRow()?.pane ?? ""))
@@ -1106,6 +1305,19 @@ export function SessionIrisTab() {
   )
 
   /** The open playbook's local PLAYBOOK.md. A file read through the sidecar, not a fetch. */
+  /** One MCP server's tools, read when the Tools tab is open. */
+  const [mcpTools] = createResource(
+    () => {
+      const r = openRow()
+      return r?.pane === "mcp" && detailTab() === "tools" && r.raw?.name ? ([base(), String(r.raw.name)] as const) : undefined
+    },
+    async ([, name]) => {
+      const res = await doFetch(`/mcp/${encodeURIComponent(name)}/tools`)
+      if (!res.ok) throw new Error(`the sidecar could not list tools (HTTP ${res.status})`)
+      return (await res.json()) as { name: string; description?: string }[]
+    },
+  )
+
   const [playbookDoc] = createResource(
     () => {
       const r = openRow()
@@ -1114,7 +1326,8 @@ export function SessionIrisTab() {
         : undefined
     },
     async ([, name]) => {
-      const res = await doFetch(`/iris/playbooks/doc/${encodeURIComponent(name)}`)
+      const project = projectParam()
+      const res = await doFetch(`/iris/playbooks/doc/${encodeURIComponent(name)}${project ? `?${project}` : ""}`)
       return (await res.json()) as {
         found: boolean
         name: string
@@ -1505,6 +1718,35 @@ export function SessionIrisTab() {
                     </p>
                   </div>
                 </Show>
+                <Show when={openRow()!.pane === "playbooks" && playbookButton(openRow()!.raw)}>
+                  {(btn) => (
+                    <div class="flex flex-col gap-1 pb-2" data-slot="iris-playbook-install">
+                      <div class="flex items-center gap-2">
+                        <Button
+                          size="small"
+                          variant="primary"
+                          disabled={installing()}
+                          onClick={() => void installOpenPlaybook(btn().force)}
+                        >
+                          {installing() ? "Installing…" : btn().label}
+                        </Button>
+                        <span class="text-11-regular text-text-weaker">
+                          {projectDir() ? "into this project" : "into your home folder"}
+                        </span>
+                      </div>
+                      <Show when={btn().warn}>
+                        <p class="text-11-regular text-text-danger-base">{btn().warn}</p>
+                      </Show>
+                      <Show when={installResult()}>
+                        {(r) => (
+                          <p class="text-11-regular" classList={{ "text-text-weak": r().ok, "text-text-danger-base": !r().ok }}>
+                            {r().message}
+                          </p>
+                        )}
+                      </Show>
+                    </div>
+                  )}
+                </Show>
                 <Show when={openRow()!.command}>
                   <button
                     type="button"
@@ -1630,6 +1872,41 @@ export function SessionIrisTab() {
               </Match>
 
               {/* THE STEPS. What the playbook will actually do, and what it needs from you. */}
+              {/* THE TOOLS an MCP server gives an agent. Empty is an answer: a server that is
+                  not connected exposes none, and that is what the status field is for. */}
+              <Match when={detailTab() === "tools"}>
+                <Switch>
+                  <Match when={mcpTools.loading && !mcpTools.latest}>
+                    <p class="text-12-regular text-text-weak py-2">Reading…</p>
+                  </Match>
+                  <Match when={mcpTools.error}>
+                    <p class="text-12-regular text-text-danger-base py-2">{String(mcpTools.error?.message ?? mcpTools.error)}</p>
+                  </Match>
+                  <Match when={(mcpTools.latest?.length ?? 0) === 0}>
+                    <p class="text-12-regular text-text-weak py-2">
+                      No tools.{openRow()!.raw?.status === "connected" ? "" : ` This server is ${String(openRow()!.raw?.status ?? "not connected").replace("_", " ")}.`}
+                    </p>
+                  </Match>
+                  <Match when={mcpTools.latest}>
+                    <p class="text-11-regular text-text-weaker pb-1">Tools · {mcpTools.latest!.length}</p>
+                    <For each={mcpTools.latest}>
+                      {(t) => (
+                        <div class="px-2 py-1.5 border-b border-border-weaker-base last:border-0">
+                          <div class="font-mono text-12-regular text-text-base">{t.name}</div>
+                          <Show when={t.description}>
+                            {/* Clamped: some descriptions are a page of prose (iris_agent), and one
+                                of those pushes every other tool off the screen. Full text on hover. */}
+                            <div class="text-11-regular text-text-weak line-clamp-2" title={t.description}>
+                              {t.description}
+                            </div>
+                          </Show>
+                        </div>
+                      )}
+                    </For>
+                  </Match>
+                </Switch>
+              </Match>
+
               <Match when={detailTab() === "steps"}>
                 <Show
                   when={(openRow()!.raw?.steps?.length ?? 0) > 0 || (openRow()!.raw?.args?.length ?? 0) > 0}
@@ -2010,6 +2287,24 @@ export function SessionIrisTab() {
                 </For>
               </Match>
 
+              <Match when={pane() === "mcp"}>
+                <For each={rows()}>
+                  {(m) => (
+                    <button type="button" data-slot="iris-mcp-row" class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow(pane(), m))}>
+                      <span class="shrink-0" classList={{ "text-text-base": m.status === "connected", "text-text-weak": m.status !== "connected" }}>
+                        {m.status === "connected" ? "●" : "○"}
+                      </span>
+                      <span class="text-12-regular text-text-base min-w-0 flex-1">{m.name}</span>
+                      {/* The status is the whole point of the row — "failed" and "needs_auth" are
+                          the two a person acts on. */}
+                      <span class="font-mono text-11-regular text-text-weaker shrink-0">
+                        {m.status === "connected" ? (m.type ?? "") : m.status.replace("_", " ")}
+                      </span>
+                    </button>
+                  )}
+                </For>
+              </Match>
+
               <Match when={pane() === "hive"}>
                 <For each={rows()}>
                   {(n) => (
@@ -2251,7 +2546,9 @@ export function SessionIrisTab() {
                             {pb.name}
                           </span>
                           <Show when={pb.hasLocal}>
-                            <span class="font-mono text-11-regular text-text-weaker shrink-0">installed</span>
+                            <span class="font-mono text-11-regular text-text-weaker shrink-0">
+                              {pb.action === "update" ? `update · v${pb.version}` : "installed"}
+                            </span>
                           </Show>
                           <Show when={pb.attached}>
                             <span class="font-mono text-11-regular text-text-weaker shrink-0">this board</span>
