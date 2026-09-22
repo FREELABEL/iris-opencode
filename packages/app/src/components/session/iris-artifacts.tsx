@@ -71,12 +71,16 @@ export function IrisArtifacts(props: { doFetch: Fetch; sessionId?: string; proje
   const stop = props.listen((e) => {
     if (e.details?.type === ARTIFACT_EVENT && e.details.properties?.session === props.sessionId) refresh()
   })
-  const poll = setInterval(() => {
-    if (typeof document === "undefined" || document.visibilityState === "visible") refresh()
-  }, POLL_MS)
+  // NOT gated on document.visibilityState. It was, and a desktop window behind another app — or a
+  // browser tab the OS calls "hidden" — then never refreshed while agents wrote: measured, the
+  // preview sat on rev 1 while rev 2 was on disk. The poll is one local directory read.
+  const poll = setInterval(refresh, POLL_MS)
+  const onVisible = () => document.visibilityState === "visible" && refresh()
+  if (typeof document !== "undefined") document.addEventListener("visibilitychange", onVisible)
   onCleanup(() => {
     stop()
     clearInterval(poll)
+    if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVisible)
   })
 
   const [openId, setOpenId] = createSignal<string | undefined>()
@@ -109,13 +113,13 @@ export function IrisArtifacts(props: { doFetch: Fetch; sessionId?: string; proje
   return (
     <div class="iris-artifacts">
       <Show when={!props.sessionId}>
-        <p class="iris-rooms__hint">Open a session — artifacts belong to the conversation that made them.</p>
+        <p class="iris-artifacts__note">Open a session — artifacts belong to the conversation that made them.</p>
       </Show>
       <Show when={list.latest && !list.latest.measured}>
-        <p class="iris-rooms__note">Could not read artifacts — {list.latest?.reason}</p>
+        <p class="iris-artifacts__note">Could not read artifacts — {list.latest?.reason}</p>
       </Show>
       <Show when={props.sessionId && list.latest?.measured && artifacts().length === 0}>
-        <p class="iris-rooms__hint">
+        <p class="iris-artifacts__note">
           Nothing yet. When an agent in this session makes a page, a brief or a table with the artifact tool, it appears
           here — from subagents too — with the agent that made it.
         </p>
