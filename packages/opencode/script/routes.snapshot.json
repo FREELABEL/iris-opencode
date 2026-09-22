@@ -4387,6 +4387,11 @@
 "service": "iris-api"
 },
 {
+"method": "POST",
+"uri": "/api/v1/downloads/send-link",
+"service": "iris-api"
+},
+{
 "method": "GET",
 "uri": "/api/v1/downloads/{}",
 "service": "fl-api"
@@ -5324,6 +5329,11 @@
 {
 "method": "GET",
 "uri": "/api/v1/integrations/{}/tools",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/intent",
 "service": "iris-api"
 },
 {
@@ -7354,6 +7364,21 @@
 {
 "method": "GET",
 "uri": "/api/v1/newsletter/stats",
+"service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/newsroom/{}/roster",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/newsroom/{}/roster/import",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/newsroom/{}/send",
 "service": "fl-api"
 },
 {
@@ -13287,6 +13312,11 @@
 "service": "iris-api"
 },
 {
+"method": "GET",
+"uri": "/api/v6/allowance/me",
+"service": "iris-api"
+},
+{
 "method": "POST",
 "uri": "/api/v6/bloqs/{}/announce",
 "service": "iris-api"
@@ -15010,6 +15040,11 @@
 "method": "POST",
 "uri": "/n/{}/gate/verify",
 "service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/newsletter/unsubscribe/{}",
+"service": "fl-api"
 },
 {
 "method": "GET",
