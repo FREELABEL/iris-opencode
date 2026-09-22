@@ -899,6 +899,11 @@ export function highlight(s: string): string {
   return `${UI.Style.TEXT_HIGHLIGHT}${s}${UI.Style.TEXT_NORMAL}`
 }
 
+/** Amber. For a number that is not an error but must not be skimmed past. */
+export function warn(s: string): string {
+  return `${UI.Style.TEXT_WARNING}${s}${UI.Style.TEXT_NORMAL}`
+}
+
 /**
  * Write a JSON payload to stdout and WAIT for it to actually leave.
  *

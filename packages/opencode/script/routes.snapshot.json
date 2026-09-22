@@ -5338,6 +5338,11 @@
 },
 {
 "method": "POST",
+"uri": "/api/v1/intent/bench",
+"service": "iris-api"
+},
+{
+"method": "POST",
 "uri": "/api/v1/internal/audit/events",
 "service": "fl-api"
 },
