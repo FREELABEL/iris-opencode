@@ -12,6 +12,8 @@ import { useServerSDK } from "@/context/server-sdk"
 import { useSDK } from "@/context/sdk"
 import { usePlatform } from "@/context/platform"
 import { IrisCardEditor } from "./iris-card-editor"
+import { IrisArtifacts } from "./iris-artifacts"
+import { useSessionLayout } from "@/pages/session/session-layout"
 import { IrisRooms } from "./iris-rooms"
 import { itemCommands, renderMarkdown } from "./iris-item"
 
@@ -508,6 +510,9 @@ const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
     // Threaded multi-agent chat with @mention (#186511). Account-wide like Graph — a room is an
     // iris-api thread, not a board row — and it owns its pane: IrisRooms fetches for itself.
     { id: "rooms", label: "Rooms", pane: "rooms", path: () => `/iris/rooms` },
+    // What the agents in THIS session made (#186508 / #186510). Session-scoped, not board-scoped,
+    // and it owns its pane: IrisArtifacts fetches, listens and polls for itself.
+    { id: "artifacts", label: "Artifacts", pane: "artifacts", path: () => `/iris/artifacts` },
   ],
   pages: [
     { id: "pages", label: "Pages", pane: "pages", path: (b) => `/iris/pages/${b}` },
@@ -762,6 +767,7 @@ export function surfaceView(input: {
 export function SessionIrisTab() {
   const dialog = useDialog()
   const serverSDK = useServerSDK()
+  const sessionLayout = useSessionLayout()
   const platform = usePlatform()
 
   const base = createMemo(() => serverSDK().url.replace(/\/$/, ""))
@@ -907,8 +913,8 @@ export function SessionIrisTab() {
       const id = activeBloq()
       // The sub-view is IN the key. Without it, switching Atlas › Lists to Atlas › Schemas
       // changes nothing the resource can see and the old rows stay on screen under the new tab.
-      // Rooms fetch for themselves (IrisRooms); the generic row list has nothing to draw.
-      if (resolved().pane === "rooms") return undefined
+      // Rooms and Artifacts fetch for themselves; the generic row list has nothing to draw.
+      if (resolved().pane === "rooms" || resolved().pane === "artifacts") return undefined
       return id ? ([base(), id, surface(), resolved().sub?.id ?? "", page(), applied()] as const) : undefined
     },
     async ([, id, , , pageNo, q], info): Promise<SurfacePayload> => {
@@ -1524,7 +1530,8 @@ export function SessionIrisTab() {
       surface() !== "integrations" &&
       pane() !== "graph" &&
       pane() !== "catalog" &&
-      pane() !== "rooms",
+      pane() !== "rooms" &&
+      pane() !== "artifacts",
   )
 
   function choose(id: number) {
@@ -2211,8 +2218,8 @@ export function SessionIrisTab() {
         class="flex-1 min-h-0"
         classList={{
           hidden: !!openRow(),
-          "overflow-y-auto": pane() !== "graph" && pane() !== "rooms",
-          "flex flex-col overflow-hidden": pane() === "graph" || pane() === "rooms",
+          "overflow-y-auto": pane() !== "graph" && pane() !== "rooms" && pane() !== "artifacts",
+          "flex flex-col overflow-hidden": pane() === "graph" || pane() === "rooms" || pane() === "artifacts",
         }}
       >
         <Switch>
@@ -2220,6 +2227,16 @@ export function SessionIrisTab() {
               rooms, and "empty" must still show the New room button. */}
           <Match when={pane() === "rooms"}>
             <IrisRooms doFetch={doFetch} bloqId={activeBloq()} />
+          </Match>
+          {/* Artifacts own the pane, ahead of the loading/empty states: they belong to the
+              session, not the board, and must render with no board chosen. */}
+          <Match when={pane() === "artifacts"}>
+            <IrisArtifacts
+              doFetch={doFetch}
+              sessionId={sessionLayout.params.id}
+              projectParam={projectParam()}
+              listen={(fn) => serverSDK().event.listen(fn as any)}
+            />
           </Match>
           <Match when={view() === "loading"}>
             <p class="px-2 py-2 text-12-regular text-text-weak">Loading…</p>
@@ -2707,7 +2724,7 @@ export function SessionIrisTab() {
             server said there is one — never as a permanent button that sometimes does nothing. */}
         {/* No footer on the graph: it is never partial, so "39 of 39" and a dead Load more
             would both be noise. */}
-        <Show when={view() === "rows" && pane() !== "graph" && pane() !== "rooms"}>
+        <Show when={view() === "rows" && pane() !== "graph" && pane() !== "rooms" && pane() !== "artifacts"}>
           <div class="flex items-center gap-2 px-2 py-2 text-11-regular text-text-weaker">
             <Show when={pageSummary({ shown: rows().length, env: current() as PageEnvelope | undefined })}>
               {(text) => <span class="font-mono tabular-nums">{text()}</span>}

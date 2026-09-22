@@ -649,6 +649,11 @@ const AllowanceResponse = Schema.Struct({
  * ever may (ADR-01): the panel places `content` into a sandboxed `srcdoc` iframe, and an iframe
  * pointed at an /iris URL would be same-origin with the app, with the sandbox mere decoration.
  */
+const ArtifactAuthor = Schema.Struct({
+  agent: Schema.String,
+  session: Schema.optional(Schema.String),
+}).annotate({ identifier: "IrisArtifactAuthor" })
+
 const ArtifactMeta = Schema.Struct({
   id: Schema.String,
   title: Schema.String,
@@ -658,6 +663,8 @@ const ArtifactMeta = Schema.Struct({
   updated: Schema.String,
   filename: Schema.String,
   language: Schema.optional(Schema.String),
+  author: described(Schema.optional(ArtifactAuthor), "Who wrote the current revision — the pane shows it on every row."),
+  createdBy: Schema.optional(ArtifactAuthor),
 }).annotate({ identifier: "IrisArtifactMeta" })
 
 const ArtifactQuery = Schema.Struct({

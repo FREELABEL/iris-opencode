@@ -10,7 +10,8 @@ import path from "path"
  * (ADR-02): the database is upstream's schema and we rebase on it; files survive that, are
  * readable by the CLI, and can be committed.
  *
- *   <root>/<session>/<id>/meta.json     { id, title, kind, revision, created, updated, filename }
+ *   <root>/<session>/<id>/meta.json     { id, title, kind, revision, created, updated, filename,
+ *                                         author, createdBy }
  *   <root>/<session>/<id>/<filename>    the content
  *
  * <root> is `<project>/.iris/artifacts` when the session has a project, else
@@ -31,6 +32,17 @@ export namespace Artifacts {
   export type Kind = "html" | "markdown" | "csv" | "code"
   export type Root = "project" | "user"
 
+  /**
+   * WHO wrote a revision (#186510 — the shared pane). `agent` is the engine's agent name
+   * (build, plan, a custom agent, a subagent), `session` the session it ran in — a subagent's
+   * own child session, so two subagents of the same type are still told apart. A writer outside
+   * the engine (the CLI, another tool) says what it is in `agent`.
+   */
+  export interface Author {
+    agent: string
+    session?: string
+  }
+
   export interface Meta {
     id: string
     title: string
@@ -40,6 +52,25 @@ export namespace Artifacts {
     updated: string
     filename: string
     language?: string
+    /** Who wrote the CURRENT revision. */
+    author?: Author
+    /** Who wrote revision 1. Never changes after that. */
+    createdBy?: Author
+  }
+
+  /** A write against a revision that is no longer current. The caller re-reads and decides. */
+  export class Conflict extends Error {
+    constructor(
+      readonly id: string,
+      readonly current: number,
+      readonly base: number,
+      readonly by?: Author,
+    ) {
+      super(
+        `artifact ${id} is at revision ${current}${by ? ` (last written by ${by.agent})` : ""}; ` +
+          `this write was based on revision ${base}. Re-read it and apply your change to the current revision.`,
+      )
+    }
   }
 
   export const KINDS: readonly Kind[] = ["html", "markdown", "csv", "code"]
@@ -63,6 +94,15 @@ export namespace Artifacts {
       : { dir: path.join(home, ".iris", "artifacts"), root: "user" }
   }
 
+  function readAuthor(a: unknown): Author | undefined {
+    const o = a as { agent?: unknown; session?: unknown } | null
+    if (!o || typeof o.agent !== "string" || !o.agent) return undefined
+    return {
+      agent: o.agent.slice(0, 80),
+      ...(typeof o.session === "string" && validSegment(o.session) ? { session: o.session } : {}),
+    }
+  }
+
   function readMeta(dir: string): Meta | undefined {
     try {
       const m = JSON.parse(readFileSync(path.join(dir, "meta.json"), "utf8"))
@@ -78,6 +118,8 @@ export namespace Artifacts {
         updated: String(m.updated ?? ""),
         filename: m.filename,
         ...(typeof m.language === "string" ? { language: m.language.slice(0, 40) } : {}),
+        ...(readAuthor(m.author) ? { author: readAuthor(m.author) } : {}),
+        ...(readAuthor(m.createdBy) ? { createdBy: readAuthor(m.createdBy) } : {}),
       }
     } catch {
       return undefined
@@ -138,18 +180,38 @@ export namespace Artifacts {
    * Create an artifact, or — given an existing id — write a new revision of it. Content first,
    * then meta, each atomically, so a reader never sees a revision whose content is not there.
    * This is what the artifact tool and PROMOTE will call; nothing else writes the store.
+   *
+   * SEVERAL WRITERS (#186510). With `baseRevision`, the write is refused with Conflict unless the
+   * artifact is still at that revision — two agents editing one artifact get "re-read it" instead
+   * of the second silently erasing the first. Without it (a create, or a deliberate overwrite)
+   * the last write wins, as before. The check and the write are one synchronous step, so writers
+   * in this process cannot interleave between them.
    */
   export function write(
     rootDir: string,
-    input: { session: string; id?: string; title: string; kind: Kind; content: string; language?: string },
+    input: {
+      session: string
+      id?: string
+      title: string
+      kind: Kind
+      content: string
+      language?: string
+      author?: Author
+      baseRevision?: number
+    },
     now = new Date(),
   ): Meta {
     if (!validSegment(input.session)) throw new Error(`invalid session id: ${String(input.session).slice(0, 40)}`)
-    if (input.id !== undefined && !validSegment(input.id)) throw new Error(`invalid artifact id: ${String(input.id).slice(0, 40)}`)
+    if (input.id !== undefined && !validSegment(input.id))
+      throw new Error(`invalid artifact id: ${String(input.id).slice(0, 40)}`)
     if (!KINDS.includes(input.kind)) throw new Error(`unknown artifact kind: ${input.kind}`)
     const id = input.id ?? newId()
     const dir = path.join(rootDir, input.session, id)
     const prev = existsSync(dir) ? readMeta(dir) : undefined
+    if (input.baseRevision !== undefined && (prev?.revision ?? 0) !== input.baseRevision) {
+      throw new Conflict(id, prev?.revision ?? 0, input.baseRevision, prev?.author)
+    }
+    const author = input.author ? readAuthor(input.author) : undefined
     mkdirSync(dir, { recursive: true })
     const filename = prev && prev.kind === input.kind ? prev.filename : `content.${EXT[input.kind]}`
     const stamp = now.toISOString()
@@ -162,6 +224,8 @@ export namespace Artifacts {
       updated: stamp,
       filename,
       ...(input.language ? { language: input.language.slice(0, 40) } : {}),
+      ...(author ? { author } : {}),
+      ...(prev ? (prev.createdBy ? { createdBy: prev.createdBy } : {}) : author ? { createdBy: author } : {}),
     }
     writeAtomic(path.join(dir, filename), input.content)
     writeAtomic(path.join(dir, "meta.json"), JSON.stringify(meta, null, 2) + "\n")

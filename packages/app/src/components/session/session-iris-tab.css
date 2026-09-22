@@ -1337,6 +1337,28 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
 .iris-card__composetext { resize: none; font-family: inherit; }
 .iris-card__sidebody:has(> .iris-card__chat) { display: flex; flex-direction: column; }
 
+/* ── Agents › Artifacts (#186508 / #186510) ── */
+.iris-artifacts { display: flex; flex-direction: column; height: 100%; min-height: 0; padding: 6px 8px; gap: 6px; }
+.iris-artifacts__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; max-height: 38%; overflow-y: auto; flex-shrink: 0; }
+.iris-artifacts__row {
+  display: grid; grid-template-columns: 1fr auto; grid-template-areas: "title kind" "by by";
+  width: 100%; text-align: left; padding: 5px 7px; border-radius: 5px; border: 1px solid transparent; gap: 1px 8px;
+}
+.iris-artifacts__row:hover { background: var(--background-element); }
+.iris-artifacts__row--open { border-color: var(--border-weak-base); }
+.iris-artifacts__row--fresh .iris-artifacts__title::after { content: " •"; color: var(--text-strong); }
+.iris-artifacts__title { grid-area: title; font-size: 12px; color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iris-artifacts__kind { grid-area: kind; font-size: 10px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-weaker); }
+.iris-artifacts__by { grid-area: by; font-size: 11px; color: var(--text-weak); font-variant-numeric: tabular-nums; }
+.iris-artifacts__preview { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 4px; }
+.iris-artifacts__note { font-size: 11px; color: var(--text-weak); }
+.iris-artifacts__head { font-size: 11px; color: var(--text-weak); flex-shrink: 0; }
+.iris-artifacts__frame { flex: 1; min-height: 200px; width: 100%; border: 1px solid var(--border-weaker-base); border-radius: 6px; background: #fff; }
+.iris-artifacts__doc { flex: 1; min-height: 0; overflow: auto; font-size: 12px; }
+.iris-artifacts__code { font-family: var(--font-mono, ui-monospace, monospace); white-space: pre; margin: 0; }
+.iris-artifacts__table { border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.iris-artifacts__table th, .iris-artifacts__table td { border: 1px solid var(--border-weaker-base); padding: 2px 6px; text-align: left; }
+
 /* ── Agents › Rooms (#186511) — reuses the card chat's message styles ── */
 .iris-rooms { display: flex; flex-direction: column; height: 100%; min-height: 0; padding: 6px 8px; gap: 6px; }
 .iris-rooms__bar { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; align-items: center; flex-shrink: 0; }
