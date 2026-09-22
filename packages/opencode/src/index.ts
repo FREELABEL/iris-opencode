@@ -209,6 +209,8 @@ import { GuideCommand } from "./cli/cmd/guide"
 import { registerCommand, getRegistry } from "./cli/cmd/command-groups"
 import { renderGroupedHelp, renderNamespacedHelp } from "./cli/help-renderer"
 import { Beacon } from "./telemetry/beacon"
+import { Consent } from "./telemetry/consent"
+import { TelemetryCommand } from "./cli/cmd/telemetry"
 
 // Register a command in the grouped help registry and return it unchanged
 function reg<T>(commandModule: T): T {
@@ -308,6 +310,7 @@ const cli = yargs(rawArgs)
   .completion("completion", "generate shell completion script")
   // Guide / discoverability (must be before TuiThreadCommand's $0 [project])
   .command(reg(GuideCommand))
+  .command(reg(TelemetryCommand))
   .command(reg(PlatformFindCommand))
   // Core CLI commands
   .command(reg(AcpCommand))
@@ -667,6 +670,12 @@ Beacon.span("run_start", {
   span_id: commandSpanId,
   command: commandName,
 })
+
+// USAGE (#186171). A bare `iris` opens the app (the TUI); that is the app_open event. The
+// first-run notice says what is recorded and how to stop it — once, on stderr, only at a
+// terminal, and never ahead of `iris telemetry off` itself.
+if (commandName !== "telemetry") Consent.noticeOnce()
+if (rawArgs.length === 0) Beacon.usage("app_open")
 
 try {
   await cli.parse()

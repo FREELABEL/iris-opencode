@@ -1,3 +1,4 @@
+import { Beacon } from "../../telemetry/beacon"
 import { cmd } from "./cmd"
 import { parseTargets, toCursorRule, isGenerated, upsertAgentsBlock, type SyncTarget } from "../lib/playbook-targets"
 import { PlaybookContentsCommands } from "./platform-playbook-contents"
@@ -510,6 +511,8 @@ const SkillRunCommand = cmd({
       }
 
       const plan = await parsePlan(info)
+      // #186171 — counted, never named: the playbook name is an argument, and arguments stay home.
+      Beacon.usage("playbook_run")
 
       // v1 skills — just print content
       if (plan.version !== 2) {

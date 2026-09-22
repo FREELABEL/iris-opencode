@@ -1,4 +1,5 @@
 import { Auth } from "../../auth"
+import { Beacon } from "../../telemetry/beacon"
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
@@ -469,6 +470,7 @@ async function irisLoginFlow(forceReauth: boolean): Promise<boolean> {
 
     // Also store in the opencode auth system so resolveToken() finds it first
     await Auth.set("iris", { type: "api", key: sdkToken })
+    Beacon.usage("sign_in")
 
     // Regenerate onboarding prompt with current user identity
     try {
