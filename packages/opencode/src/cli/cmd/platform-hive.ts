@@ -26,6 +26,7 @@ import {
   TERMINAL_STATUSES,
 } from "./hive-task-create"
 import { HiveFilesCommandExport } from "./platform-hive-files"
+import { HiveBrowserCommand } from "./platform-hive-browser"
 import { runRemoteDoctor } from "./platform-hive-doctor"
 import { HiveSelftestCommandExport } from "./platform-hive-selftest"
 import { HiveSessionsCommand, HiveSendInputCommand } from "./platform-hive-sessions"
@@ -5031,5 +5032,6 @@ export const PlatformHiveCommand = productCommand({
       .command(HiveWatchCommand)
       .command(HiveLogsCommand)
       .command(HiveClioCommand)
+      .command(HiveBrowserCommand)
       .demandCommand(),
 })
