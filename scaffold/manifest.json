@@ -463,6 +463,12 @@
       "dest": "how-to/track-money-with-iris-mint.md",
       "managed": true,
       "purpose": "Track your own spending with iris mint: caps and groups, four idempotent ways in (spend, CSV import, email scan, photo of a bill), scope vs paid-from, and verify/audit that prove every reported figure ties to its rows. Runnable version: the iris-mint playbook."
+    },
+    {
+      "src": "how-to/kinetics.md",
+      "dest": "how-to/kinetics.md",
+      "managed": true,
+      "purpose": "Decide which agent may move which body — seal an agent into an identity hash, couple it to a camera/OBS/phone/node with an allowed verb list and a budget, then check or revoke it. Node-local, works offline."
     }
   ]
 }
