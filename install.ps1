@@ -162,9 +162,8 @@ New-Item -ItemType Directory -Force -Path $TmpDir | Out-Null
 $ZipPath = Join-Path $TmpDir $Filename
 
 try {
-    Write-Host "Downloading..." -ForegroundColor DarkGray -NoNewline
-    Invoke-WebRequest -Uri $Url -OutFile $ZipPath -UseBasicParsing -ErrorAction Stop
-    Write-Host " done." -ForegroundColor Green
+    $dl = Invoke-IrisDownload -Url $Url -OutFile $ZipPath -Label "Downloading iris"
+    if (-not $dl.Ok) { throw $dl.Reason }
 } catch {
     Write-Host " failed." -ForegroundColor Red
     Send-InstallBeacon -EventType "install_failed" -Step "download" -Reason "$_"
@@ -363,8 +362,9 @@ function Install-IrisDaemonSource {
         # next run treated as installed — "already installed, updating..." over a tree
         # with no daemon.js. Staging means a failed download leaves the existing
         # install exactly as it was.
-        $ProgressPreference = 'SilentlyContinue'   # the progress bar makes this ~10x slower
-        Invoke-WebRequest -Uri $Url -OutFile $zip -UseBasicParsing -ErrorAction Stop
+        $dl = Invoke-IrisDownload -Url $Url -OutFile $zip -Label "Downloading Hive daemon"
+        if (-not $dl.Ok) { throw $dl.Reason }
+        Write-Host "  Unpacking..." -ForegroundColor DarkGray
         Expand-Archive -Path $zip -DestinationPath $tmp -Force -ErrorAction Stop
 
         # GitHub wraps the tree in one directory named <repo>-<branch>.
@@ -420,6 +420,96 @@ function Install-IrisDaemonSource {
 # system-wide task store. A task that needs admin to install is also a task most
 # clients simply will not have, and an installer that demands elevation for an
 # optional convenience is one people stop running.
+function Invoke-IrisDownload {
+    <#
+      A download that SAYS SOMETHING WHILE IT RUNS.
+
+      The installer silenced PowerShell's own progress bar because, on PS 5.1, Write-Progress
+      repaints per byte and makes a download roughly ten times slower — true, and it left a
+      multi-megabyte fetch printing nothing at all. Measured 2026-09-22 on a client's Windows
+      machine: the install worked, took minutes, looked hung, and was reported as stuck. A
+      silent slow step and a hung one are indistinguishable, and the person watching picks the
+      worse reading every time.
+
+      So this streams the body itself and prints its own line — no Write-Progress, none of its
+      cost. It returns a RESULT rather than throwing: a failure here is the caller's to report,
+      and a half-written file is removed so a retry cannot resume onto garbage.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Url,
+        [Parameter(Mandatory)][string]$OutFile,
+        [string]$Label = "Downloading"
+    )
+
+    $result = [pscustomobject]@{ Ok = $false; Bytes = 0; Reason = $null }
+    # Redirected output (a piped install, CI) must not receive a carriage-return repaint per
+    # tick — it would arrive as one unreadable line. There, print a line every few seconds.
+    $live = $false
+    try { $live = -not [Console]::IsOutputRedirected } catch { $live = $false }
+
+    $client = $null; $resp = $null; $in = $null; $out = $null
+    try {
+        Add-Type -AssemblyName System.Net.Http -ErrorAction SilentlyContinue
+        $client = [System.Net.Http.HttpClient]::new()
+        $client.Timeout = [TimeSpan]::FromMinutes(30)
+        $client.DefaultRequestHeaders.Add("User-Agent", "iris-installer")
+
+        # ResponseHeadersRead: start writing as bytes arrive rather than buffering it all first.
+        $resp = $client.GetAsync($Url, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+        if (-not $resp.IsSuccessStatusCode) { throw "HTTP $([int]$resp.StatusCode) $($resp.ReasonPhrase)" }
+
+        $total = $resp.Content.Headers.ContentLength    # $null when the server sends chunked
+        $in  = $resp.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
+        $out = [System.IO.File]::Create($OutFile)
+
+        $buffer = [byte[]]::new(128KB)
+        $done = 0L
+        $started = Get-Date
+        $lastTick = [datetime]::MinValue
+        $tick = if ($live) { [TimeSpan]::FromMilliseconds(200) } else { [TimeSpan]::FromSeconds(3) }
+
+        while (($read = $in.Read($buffer, 0, $buffer.Length)) -gt 0) {
+            $out.Write($buffer, 0, $read)
+            $done += $read
+            if (((Get-Date) - $lastTick) -ge $tick) {
+                $lastTick = Get-Date
+                $mb = [math]::Round($done / 1MB, 1)
+                if ($total) {
+                    # A percentage is only printed when a total was actually declared. Inventing
+                    # one from a guess is how a progress bar comes to sit at 99% for a minute.
+                    $totalMb = [math]::Round($total / 1MB, 1)
+                    $pct = [math]::Floor(($done / $total) * 100)
+                    $line = "  $Label  $mb MB / $totalMb MB  $pct%"
+                } else {
+                    $line = "  $Label  $mb MB"
+                }
+                if ($live) { Write-Host "`r$line".PadRight(64) -NoNewline -ForegroundColor DarkGray }
+                else { Write-Host $line -ForegroundColor DarkGray }
+            }
+        }
+        $out.Close(); $out = $null
+
+        $secs = [math]::Max(1, [int]((Get-Date) - $started).TotalSeconds)
+        $mb = [math]::Round($done / 1MB, 1)
+        if ($live) { Write-Host "`r".PadRight(66) -NoNewline }
+        Write-Host "`r  $Label  $mb MB in ${secs}s" -ForegroundColor DarkGray
+
+        $result.Ok = $true
+        $result.Bytes = $done
+        return $result
+    } catch {
+        $result.Reason = "$_"
+        return $result
+    } finally {
+        if ($out) { try { $out.Close() } catch {} }
+        if ($in) { try { $in.Dispose() } catch {} }
+        if ($resp) { try { $resp.Dispose() } catch {} }
+        if ($client) { try { $client.Dispose() } catch {} }
+        # No half-written file: the next run must not mistake a truncated zip for a download.
+        if (-not $result.Ok -and (Test-Path $OutFile)) { Remove-Item -Force $OutFile -ErrorAction SilentlyContinue }
+    }
+}
+
 function Register-IrisAutostart {
     param(
         [Parameter(Mandatory)][string]$DaemonCmd,   # full path to iris-daemon.cmd
@@ -525,6 +615,9 @@ if (-not $HasNode) {
         $BridgeSkippedReason = "the daemon could not be downloaded ($($Fetch.Reason))"
     } else {
         Push-Location $BridgeDir
+        # Minutes on a cold cache, and --silent prints nothing at all. Say what is happening,
+        # for the same reason the download now does.
+        Write-Host "  Installing daemon dependencies (a minute on a first install)..." -ForegroundColor DarkGray
         npm install --production --silent 2>$null
         Pop-Location
     }
