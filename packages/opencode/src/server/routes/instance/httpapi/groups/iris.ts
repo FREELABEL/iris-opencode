@@ -552,6 +552,52 @@ const ChatResponse = Schema.Struct({
   messages: Schema.Array(ChatMessageSchema),
 }).annotate({ identifier: "IrisChatResponse" })
 
+// ── Rooms: threaded multi-agent chat with @mention (#186511) ──
+const RoomAgentSchema = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  role: Schema.String,
+  autoRespond: Schema.Boolean,
+}).annotate({ identifier: "IrisRoomAgent" })
+
+const RoomSchema = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  agents: Schema.Array(RoomAgentSchema),
+  messageCount: Schema.optional(Schema.Finite),
+  updatedAt: Schema.optional(Schema.String),
+}).annotate({ identifier: "IrisRoom" })
+
+const RoomMessageSchema = Schema.Struct({
+  id: Schema.String,
+  sender: Schema.Literals(["user", "agent"]),
+  senderId: Schema.String,
+  senderName: Schema.String,
+  text: Schema.String,
+  at: Schema.String,
+  inReplyTo: Schema.optional(Schema.String),
+  addressees: Schema.Array(Schema.String),
+  routing: Schema.optional(Schema.Literals(["mention", "room-default"])),
+}).annotate({ identifier: "IrisRoomMessage" })
+
+const RoomsResponse = Schema.Struct({ ...Measured, rooms: Schema.Array(RoomSchema) }).annotate({ identifier: "IrisRoomsResponse" })
+const RoomResponse = Schema.Struct({
+  ...Measured,
+  room: Schema.NullOr(RoomSchema),
+  messages: Schema.Array(RoomMessageSchema),
+}).annotate({ identifier: "IrisRoomResponse" })
+const RoomCreateResponse = Schema.Struct({
+  ok: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  room: Schema.optional(RoomSchema),
+}).annotate({ identifier: "IrisRoomCreateResponse" })
+const RoomSendResponse = Schema.Struct({
+  ok: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  message: Schema.optional(RoomMessageSchema),
+  replies: Schema.Array(RoomMessageSchema),
+}).annotate({ identifier: "IrisRoomSendResponse" })
+
 const ChatSendResponse = Schema.Struct({
   ok: Schema.Boolean,
   reason: Schema.optional(Schema.String),
@@ -671,6 +717,9 @@ export const IrisPaths = {
   itemAsks: `${root}/item/:itemID/asks`,
   itemAskAnswer: `${root}/item/:itemID/asks/:askID/answer`,
   itemChat: `${root}/item/:itemID/chat`,
+  rooms: `${root}/rooms`,
+  room: `${root}/rooms/:roomID`,
+  roomMessages: `${root}/rooms/:roomID/messages`,
   hive: `${root}/hive`,
   allowance: `${root}/allowance`,
 } as const
@@ -1256,6 +1305,22 @@ export const IrisApi = HttpApi.make("iris").add(
         payload: Schema.Struct({ agentId: Schema.Finite, text: Schema.String, bloq: Schema.optional(Schema.Finite) }),
         success: described(ChatSendResponse, "The agent's reply"),
       }).annotateMerge(OpenApi.annotations({ identifier: "iris.itemChatSend", summary: "Send one message to an agent about this card" })),
+      HttpApiEndpoint.get("rooms", IrisPaths.rooms, {
+        success: described(RoomsResponse, "Your multi-agent rooms (iris-api threads)"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.rooms", summary: "List rooms" })),
+      HttpApiEndpoint.post("roomCreate", IrisPaths.rooms, {
+        payload: Schema.Struct({ name: Schema.String, agentIds: Schema.Array(Schema.String) }),
+        success: described(RoomCreateResponse, "The new room; the first agent is its primary"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.roomCreate", summary: "Create a room" })),
+      HttpApiEndpoint.get("room", IrisPaths.room, {
+        params: { roomID: Schema.String },
+        success: described(RoomResponse, "A room and its thread, in send order"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.room", summary: "A room's thread" })),
+      HttpApiEndpoint.post("roomSend", IrisPaths.roomMessages, {
+        params: { roomID: Schema.String },
+        payload: Schema.Struct({ text: Schema.String }),
+        success: described(RoomSendResponse, "The sent message (with its resolved addressees) and every reply"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.roomSend", summary: "Send a message to a room; @mention addresses agents" })),
       HttpApiEndpoint.get("playbookDoc", IrisPaths.playbookDoc, {
         params: { name: Schema.String },
         query: Schema.Struct({

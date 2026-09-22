@@ -12,6 +12,7 @@ import { useServerSDK } from "@/context/server-sdk"
 import { useSDK } from "@/context/sdk"
 import { usePlatform } from "@/context/platform"
 import { IrisCardEditor } from "./iris-card-editor"
+import { IrisRooms } from "./iris-rooms"
 import { itemCommands, renderMarkdown } from "./iris-item"
 
 // Re-exported: the panel tests assert on these, and they were defined here before the card
@@ -504,6 +505,9 @@ const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
     { id: "all", label: "All", pane: "agents", path: (b) => `/iris/agents/${b}` },
     { id: "scheduled", label: "Scheduled", pane: "agents", path: (b) => `/iris/agents/${b}?mode=scheduled` },
     { id: "ondemand", label: "On demand", pane: "agents", path: (b) => `/iris/agents/${b}?mode=ondemand` },
+    // Threaded multi-agent chat with @mention (#186511). Account-wide like Graph — a room is an
+    // iris-api thread, not a board row — and it owns its pane: IrisRooms fetches for itself.
+    { id: "rooms", label: "Rooms", pane: "rooms", path: () => `/iris/rooms` },
   ],
   pages: [
     { id: "pages", label: "Pages", pane: "pages", path: (b) => `/iris/pages/${b}` },
@@ -903,6 +907,8 @@ export function SessionIrisTab() {
       const id = activeBloq()
       // The sub-view is IN the key. Without it, switching Atlas › Lists to Atlas › Schemas
       // changes nothing the resource can see and the old rows stay on screen under the new tab.
+      // Rooms fetch for themselves (IrisRooms); the generic row list has nothing to draw.
+      if (resolved().pane === "rooms") return undefined
       return id ? ([base(), id, surface(), resolved().sub?.id ?? "", page(), applied()] as const) : undefined
     },
     async ([, id, , , pageNo, q], info): Promise<SurfacePayload> => {
@@ -1513,7 +1519,12 @@ export function SessionIrisTab() {
   // Hive machines and Integrations belong to the ACCOUNT. Everything else, Sites included
   // since it was narrowed, is this board.
   const boardScoped = createMemo(
-    () => surface() !== "hive" && surface() !== "integrations" && pane() !== "graph" && pane() !== "catalog",
+    () =>
+      surface() !== "hive" &&
+      surface() !== "integrations" &&
+      pane() !== "graph" &&
+      pane() !== "catalog" &&
+      pane() !== "rooms",
   )
 
   function choose(id: number) {
@@ -2200,11 +2211,16 @@ export function SessionIrisTab() {
         class="flex-1 min-h-0"
         classList={{
           hidden: !!openRow(),
-          "overflow-y-auto": pane() !== "graph",
-          "flex flex-col overflow-hidden": pane() === "graph",
+          "overflow-y-auto": pane() !== "graph" && pane() !== "rooms",
+          "flex flex-col overflow-hidden": pane() === "graph" || pane() === "rooms",
         }}
       >
         <Switch>
+          {/* Rooms own the pane, ahead of the loading/empty states: a first-time user has zero
+              rooms, and "empty" must still show the New room button. */}
+          <Match when={pane() === "rooms"}>
+            <IrisRooms doFetch={doFetch} bloqId={activeBloq()} />
+          </Match>
           <Match when={view() === "loading"}>
             <p class="px-2 py-2 text-12-regular text-text-weak">Loading…</p>
           </Match>
@@ -2691,7 +2707,7 @@ export function SessionIrisTab() {
             server said there is one — never as a permanent button that sometimes does nothing. */}
         {/* No footer on the graph: it is never partial, so "39 of 39" and a dead Load more
             would both be noise. */}
-        <Show when={view() === "rows" && pane() !== "graph"}>
+        <Show when={view() === "rows" && pane() !== "graph" && pane() !== "rooms"}>
           <div class="flex items-center gap-2 px-2 py-2 text-11-regular text-text-weaker">
             <Show when={pageSummary({ shown: rows().length, env: current() as PageEnvelope | undefined })}>
               {(text) => <span class="font-mono tabular-nums">{text()}</span>}
