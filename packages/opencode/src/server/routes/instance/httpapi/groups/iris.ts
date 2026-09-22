@@ -596,6 +596,37 @@ const AllowanceResponse = Schema.Struct({
   notice: Schema.NullOr(AllowanceNotice),
 })
 
+
+/**
+ * ARTIFACTS (epic #186508). What the agent made in this session, from the store in
+ * src/iris/artifacts.ts. Both routes return JSON. Neither returns an HTML document, and none
+ * ever may (ADR-01): the panel places `content` into a sandboxed `srcdoc` iframe, and an iframe
+ * pointed at an /iris URL would be same-origin with the app, with the sandbox mere decoration.
+ */
+const ArtifactMeta = Schema.Struct({
+  id: Schema.String,
+  title: Schema.String,
+  kind: Schema.Literals(["html", "markdown", "csv", "code"]),
+  revision: described(Schema.Finite, "Bumps on every write. The panel reloads the preview when it changes."),
+  created: Schema.String,
+  updated: Schema.String,
+  filename: Schema.String,
+  language: Schema.optional(Schema.String),
+}).annotate({ identifier: "IrisArtifactMeta" })
+
+const ArtifactQuery = Schema.Struct({
+  session: described(Schema.String, "The session whose artifacts to read. One path segment: letters, digits, _ and -."),
+  project: described(
+    Schema.optional(Schema.String),
+    "The session's project directory (absolute). Absent or invalid means the home store, ~/.iris/artifacts.",
+  ),
+})
+
+const ArtifactWhere = {
+  root: described(Schema.Literals(["project", "user"]), "Which store was read: <project>/.iris/artifacts or ~/.iris/artifacts."),
+  dir: described(Schema.String, "The store folder on disk, for Reveal."),
+}
+
 export const IrisPaths = {
   auth: `${root}/auth`,
   bloqs: `${root}/bloqs`,
@@ -611,6 +642,8 @@ export const IrisPaths = {
   sites: `${root}/sites/:bloqID`,
   agentTasks: `${root}/agents/:agentID/tasks`,
   playbookDoc: `${root}/playbooks/doc/:name`,
+  artifacts: `${root}/artifacts`,
+  artifactDoc: `${root}/artifacts/:artifactID`,
   playbookInstall: `${root}/playbooks/install`,
   catalog: `${root}/catalog`,
   graph: `${root}/graph`,
@@ -1250,6 +1283,43 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Read a playbook's local document",
           description:
             "Local file first, published copy second. The file read must come through the sidecar because playbook content never leaves the machine and the webview cannot read a home directory; the published fallback covers the 125 of 128 not installed here. NOT an iframe of the landing page: heyiris.io sends x-frame-options SAMEORIGIN, so embedding renders blank and reads as a broken panel.",
+        }),
+      ),
+      HttpApiEndpoint.get("artifacts", IrisPaths.artifacts, {
+        query: ArtifactQuery,
+        success: described(
+          Schema.Struct({ ...Measured, ...ArtifactWhere, artifacts: Schema.Array(ArtifactMeta) }).annotate({
+            identifier: "IrisArtifactList",
+          }),
+          "This session's artifacts, newest first",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.artifacts",
+          summary: "List a session's artifacts",
+          description:
+            "Metadata only, newest first, capped at 200. measured=false with a reason when the session id is not a valid segment — never an empty list that reads as 'nothing made'.",
+        }),
+      ),
+      HttpApiEndpoint.get("artifactDoc", IrisPaths.artifactDoc, {
+        params: { artifactID: Schema.String },
+        query: ArtifactQuery,
+        success: described(
+          Schema.Struct({
+            ...ArtifactWhere,
+            found: Schema.Boolean,
+            meta: Schema.NullOr(ArtifactMeta),
+            content: described(Schema.String, "The artifact's text. Goes into a sandboxed srcdoc iframe — never into the page itself."),
+            truncated: described(Schema.Boolean, "True when the file is larger than the 2 MB preview cap."),
+          }).annotate({ identifier: "IrisArtifactDoc" }),
+          "One artifact and its content",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.artifactDoc",
+          summary: "Read one artifact",
+          description:
+            "JSON, not a document. There is deliberately no raw/HTML variant of this route: an iframe src at an /iris URL is same-origin with the app and would bypass the preview sandbox (epic #186508, ADR-01).",
         }),
       ),
       HttpApiEndpoint.get("agentTasks", IrisPaths.agentTasks, {

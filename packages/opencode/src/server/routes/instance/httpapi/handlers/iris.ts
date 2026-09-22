@@ -4,6 +4,7 @@ import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { filterAtlas, checkAuth, fetchAgents, fetchAtlas, fetchBloqs, fetchHiveNodes, fetchInbox, fetchLeads, fetchIntegrations, fetchPages, fetchPlaybooks, fetchRecords, fetchSchemas, fetchSites, fetchAgentTasks, fetchPlaybookDoc, fetchPageDoc, savePageDoc, fetchItem, saveItem, addItemTask, saveItemTask, deleteItemTask, fetchCardSchema, fetchShareState, setShareVisibility, setShareAllowlist, inviteMember, setMemberPermission, revokeMember, createShareLink, revokeShareLink, setItemLabels, fetchAttachments, uploadAttachment, deleteAttachment, fetchEvents, addEvent, fetchAsks, addAsk, answerAsk, fetchItemChat, sendItemChat, fetchCatalog, fetchBloqGraph, fetchBloqInterior, graphRows, fetchAllowance } from "@/iris/platform"
 import { RootHttpApi } from "../api"
 import { markLocal, projectRoot } from "@/iris/playbook-local"
+import { Artifacts } from "@/iris/artifacts"
 import { runPlaybookInstall, ttlCache } from "@/iris/playbook-install"
 
 /**
@@ -381,6 +382,29 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
       }),
     )
 
+    // Artifacts (epic #186508). Local files only — no network, no token. The project comes from the
+    // panel because /iris routes have no instance (memory: desktop-iris-routes-have-no-instance).
+    const artifacts = Effect.fn("IrisHttpApi.artifacts")((ctx: { query: { session: string; project?: string } }) =>
+      Effect.sync(() => {
+        const where = Artifacts.rootFor(projectRoot(ctx.query.project))
+        if (!Artifacts.validSegment(ctx.query.session)) {
+          return { measured: false, reason: "invalid session id", root: where.root, dir: where.dir, artifacts: [] }
+        }
+        return { measured: true, root: where.root, dir: where.dir, artifacts: Artifacts.list(where.dir, ctx.query.session) }
+      }),
+    )
+
+    const artifactDoc = Effect.fn("IrisHttpApi.artifactDoc")(
+      (ctx: { params: { artifactID: string }; query: { session: string; project?: string } }) =>
+        Effect.sync(() => {
+          const where = Artifacts.rootFor(projectRoot(ctx.query.project))
+          const r = Artifacts.read(where.dir, ctx.query.session, ctx.params.artifactID)
+          return r
+            ? { root: where.root, dir: where.dir, found: true, meta: r.meta, content: r.content, truncated: r.truncated }
+            : { root: where.root, dir: where.dir, found: false, meta: null, content: "", truncated: false }
+        }),
+    )
+
     const playbookInstall = Effect.fn("IrisHttpApi.playbookInstall")(
       (ctx: { payload: { name: string; project?: string; force?: boolean } }) =>
         Effect.promise(async () => {
@@ -479,6 +503,6 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
       ),
     )
 
-    return handlers.handle("allowance", allowance).handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("graph", graph).handle("graphBoard", graphBoard).handle("catalog", catalog).handle("pageDoc", pageDoc).handle("pageSave", pageSave).handle("item", item).handle("itemSave", itemSave).handle("itemTaskAdd", itemTaskAdd).handle("itemTaskSave", itemTaskSave).handle("itemTaskDelete", itemTaskDelete).handle("cardSchema", cardSchema).handle("itemShare", itemShare).handle("itemShareVisibility", itemShareVisibility).handle("itemShareAllowlist", itemShareAllowlist).handle("itemShareInvite", itemShareInvite).handle("itemSharePermission", itemSharePermission).handle("itemShareRevoke", itemShareRevoke).handle("itemShareLink", itemShareLink).handle("itemShareLinkRevoke", itemShareLinkRevoke).handle("itemLabels", itemLabels).handle("itemAttachments", itemAttachments).handle("itemAttachmentUpload", itemAttachmentUpload).handle("itemAttachmentDelete", itemAttachmentDelete).handle("itemEvents", itemEvents).handle("itemEventAdd", itemEventAdd).handle("itemAsks", itemAsks).handle("itemAskAdd", itemAskAdd).handle("itemAskAnswer", itemAskAnswer).handle("itemChat", itemChat).handle("itemChatSend", itemChatSend).handle("playbookDoc", playbookDoc).handle("playbookInstall", playbookInstall).handle("agentTasks", agentTasks).handle("sites", sites).handle("records", records).handle("integrations", integrations).handle("hive", hive)
+    return handlers.handle("allowance", allowance).handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("graph", graph).handle("graphBoard", graphBoard).handle("catalog", catalog).handle("pageDoc", pageDoc).handle("pageSave", pageSave).handle("item", item).handle("itemSave", itemSave).handle("itemTaskAdd", itemTaskAdd).handle("itemTaskSave", itemTaskSave).handle("itemTaskDelete", itemTaskDelete).handle("cardSchema", cardSchema).handle("itemShare", itemShare).handle("itemShareVisibility", itemShareVisibility).handle("itemShareAllowlist", itemShareAllowlist).handle("itemShareInvite", itemShareInvite).handle("itemSharePermission", itemSharePermission).handle("itemShareRevoke", itemShareRevoke).handle("itemShareLink", itemShareLink).handle("itemShareLinkRevoke", itemShareLinkRevoke).handle("itemLabels", itemLabels).handle("itemAttachments", itemAttachments).handle("itemAttachmentUpload", itemAttachmentUpload).handle("itemAttachmentDelete", itemAttachmentDelete).handle("itemEvents", itemEvents).handle("itemEventAdd", itemEventAdd).handle("itemAsks", itemAsks).handle("itemAskAdd", itemAskAdd).handle("itemAskAnswer", itemAskAnswer).handle("itemChat", itemChat).handle("itemChatSend", itemChatSend).handle("playbookDoc", playbookDoc).handle("artifacts", artifacts).handle("artifactDoc", artifactDoc).handle("playbookInstall", playbookInstall).handle("agentTasks", agentTasks).handle("sites", sites).handle("records", records).handle("integrations", integrations).handle("hive", hive)
   }),
 )
