@@ -239,6 +239,41 @@ export const AuthWhoamiCommand = cmd({
   },
 })
 
+/**
+ * The age of a stored OAuth credential, said out loud.
+ *
+ * `auth list` used to print only the provider name and `oauth`, which reads as a working
+ * connection. Measured 2026-09-22: this machine's Anthropic row had been sitting there with an
+ * access token that expired 230 days earlier, and the listing looked identical to a live one.
+ * Same defect family as an advertised-but-dead model or a node that heartbeats while its
+ * transport carries nothing — a listing that answers "is it present" where the reader is asking
+ * "does it work".
+ *
+ * DELIBERATELY NOT CALLED "DEAD". In OAuth an expired ACCESS token is normal and the refresh
+ * token usually renews it on next use. Printing "dead" would replace one misleading signal with
+ * another, which is the whole failure being fixed. It states the fact and names the remedy only
+ * if calls actually fail.
+ */
+export function credentialAge(result: { type: string; expires?: number }): string {
+  if (result.type !== "oauth" || typeof result.expires !== "number") return ""
+
+  const ms = result.expires - Date.now()
+  const days = Math.round(Math.abs(ms) / 86_400_000)
+  const unit = days === 1 ? "day" : "days"
+
+  if (ms > 0) {
+    // Still valid. Only worth flagging when it is close enough to matter.
+    return days <= 7
+      ? `  ${UI.Style.TEXT_WARNING}expires in ${days} ${unit}${UI.Style.TEXT_NORMAL}`
+      : `  ${UI.Style.TEXT_DIM}expires in ${days} ${unit}${UI.Style.TEXT_NORMAL}`
+  }
+
+  return (
+    `  ${UI.Style.TEXT_WARNING}access expired ${days} ${unit} ago${UI.Style.TEXT_NORMAL}` +
+    `${UI.Style.TEXT_DIM} — normally refreshes on next use; re-login if calls fail${UI.Style.TEXT_NORMAL}`
+  )
+}
+
 export const AuthListCommand = cmd({
   command: "list",
   aliases: ["ls"],
@@ -254,7 +289,7 @@ export const AuthListCommand = cmd({
 
     for (const [providerID, result] of results) {
       const name = database[providerID]?.name || providerID
-      prompts.log.info(`${name} ${UI.Style.TEXT_DIM}${result.type}`)
+      prompts.log.info(`${name} ${UI.Style.TEXT_DIM}${result.type}${credentialAge(result)}`)
     }
 
     prompts.outro(`${results.length} credentials`)
