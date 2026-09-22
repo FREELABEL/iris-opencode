@@ -1,4 +1,5 @@
 import { createSignal, onCleanup } from "solid-js"
+import { captureIsLive } from "./dictation-probe"
 
 /**
  * Push-to-talk dictation.
@@ -221,7 +222,7 @@ export function createDictation(opts: DictationOptions) {
     begin()
     mode = "webview"
     await new Promise((r) => setTimeout(r, PROBE_MS))
-    if (peak >= SILENCE_FLOOR) {
+    if (captureIsLive(peak, captured.length)) {
       cachedMode = "webview"
       return
     }

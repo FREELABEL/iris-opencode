@@ -3,6 +3,7 @@ import {
   hasNonBlockingServiceIssue,
   hasServiceNeedingAttention,
   serverStatusDotClass,
+  serverStatusDotLabelKey,
 } from "./status-popover-indicator"
 
 describe("serverStatusDotClass", () => {
@@ -54,5 +55,34 @@ describe("hasServiceNeedingAttention", () => {
   test("ignores states that do not need user attention", () => {
     expect(hasServiceNeedingAttention({ mcp: ["failed"] })).toBe(false)
     expect(hasServiceNeedingAttention({ mcp: ["connected", "pending", "disabled"] })).toBe(false)
+  })
+})
+
+// #186524 — the dot said nothing on its own; a client had to ask what green meant.
+describe("serverStatusDotLabelKey", () => {
+  test("every dot colour has a sentence, chosen by the same rules", () => {
+    const cases: Array<[Parameters<typeof serverStatusDotLabelKey>[0], string]> = [
+      [{ ready: true, serverHealth: true, issue: false }, "status.dot.healthy"],
+      [{ ready: true, serverHealth: true, attention: true, issue: true }, "status.dot.attention"],
+      [{ ready: true, serverHealth: true, issue: true }, "status.dot.issue"],
+      [{ ready: true, serverHealth: false, issue: false }, "status.dot.offline"],
+      [{ ready: false, serverHealth: true, issue: false }, "status.dot.connecting"],
+      [{ ready: true, serverHealth: undefined, issue: false }, "status.dot.connecting"],
+    ]
+    for (const [input, key] of cases) expect(serverStatusDotLabelKey(input)).toBe(key)
+  })
+
+  test("colour and words are picked by the same state, so they cannot disagree", () => {
+    // one distinct sentence per distinct colour
+    const states: Parameters<typeof serverStatusDotClass>[0][] = [
+      { ready: true, serverHealth: true, issue: false },
+      { ready: true, serverHealth: true, attention: true, issue: true },
+      { ready: true, serverHealth: true, issue: true },
+      { ready: true, serverHealth: false, issue: false },
+      { ready: false, serverHealth: undefined, issue: false },
+    ]
+    const colours = new Set(states.map((s) => serverStatusDotClass(s)))
+    const labels = new Set(states.map((s) => serverStatusDotLabelKey(s)))
+    expect(labels.size).toBe(colours.size)
   })
 })

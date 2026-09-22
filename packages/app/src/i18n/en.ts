@@ -764,6 +764,12 @@ export const dict = {
   "session.header.open.app.sublimeText": "Sublime Text",
 
   "status.popover.trigger": "Status",
+  // #186524 — what the dot in the corner means, on hover. Same states as serverStatusDotClass.
+  "status.dot.healthy": "Connected — the engine and its services are running",
+  "status.dot.connecting": "Connecting to the engine…",
+  "status.dot.offline": "Not connected to the engine — click for details",
+  "status.dot.attention": "A service needs you to sign in — click for details",
+  "status.dot.issue": "A service is not running — click for details",
   "status.popover.ariaLabel": "Server configurations",
   "status.popover.tab.servers": "Servers",
   "status.popover.tab.mcp": "MCP",
