@@ -211,6 +211,7 @@ import { renderGroupedHelp, renderNamespacedHelp } from "./cli/help-renderer"
 import { Beacon } from "./telemetry/beacon"
 import { Consent } from "./telemetry/consent"
 import { TelemetryCommand } from "./cli/cmd/telemetry"
+import { TunnelCommand } from "./cli/cmd/tunnel"
 
 // Register a command in the grouped help registry and return it unchanged
 function reg<T>(commandModule: T): T {
@@ -328,6 +329,7 @@ const cli = yargs(rawArgs)
   .command(reg(UninstallCommand))
   .command(reg(InstallAppCommand))
   .command(reg(ServeCommand))
+  .command(reg(TunnelCommand))
   .command(reg(WebCommand))
   .command(reg(ModelsCommand))
   .command(reg(StatsCommand))
