@@ -4,6 +4,7 @@ import { spawnSync, spawn } from "child_process"
 import { existsSync, writeFileSync, readFileSync, appendFileSync } from "fs"
 import { join } from "path"
 import { homedir } from "os"
+import { McpClients } from "../../mcp/clients"
 
 // ============================================================================
 // iris hive vpn  —  Tailscale (WireGuard) transport layer for the Hive
@@ -696,7 +697,8 @@ const VpnEnrollCommand = cmd({
     console.log(`${dim("→")} enrolling ${bold(target)} over the tailnet...`)
     console.log(dim("  This reuses the existing SSH enroll path — the tunnel just makes the host reachable."))
     // Hand off to the already-built enroll command for the real work.
-    const r = spawnSync("iris", ["hive", "enroll", target], { stdio: "inherit" })
+    // Absolute path: a bare `iris` is not found when this runs outside an interactive zsh (#184675).
+    const r = spawnSync(McpClients.irisBinary(), ["hive", "enroll", target], { stdio: "inherit" })
     process.exit(r.status ?? 0)
   },
 })

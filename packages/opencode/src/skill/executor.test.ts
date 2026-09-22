@@ -13,6 +13,7 @@ import {
   resolveArgs,
   validatePlan,
   executeSkill,
+  stepEnv,
   getRun,
   type StepDef,
   type StepResult,
@@ -2512,5 +2513,59 @@ describe("#186184 — step blocks decide whether a playbook runs, not the versio
   test("the author is told what the field means", async () => {
     const plan = await planFor("version: 3\n")
     expect(validatePlan(plan).some((i) => i.level === "warning" && i.message.includes("FORMAT"))).toBe(true)
+  })
+})
+
+// ############################################################################
+//
+//  SHELL STEPS FIND `iris` (#184675)
+//
+//  A step is `bash -c`, which reads no rc file. Started from an MCP client, the
+//  desktop sidecar or launchd, PATH has no ~/.iris/bin, and every `iris ...` in
+//  a step died with `iris: command not found`. Reproduce that PATH exactly.
+//
+// ############################################################################
+
+describe("shell steps can call iris from a GUI-shaped PATH", () => {
+  const installDir = join(homedir(), ".iris", "bin")
+
+  test("stepEnv puts the iris install dir on a PATH that lacks it", () => {
+    const env = stepEnv({ PATH: "/usr/bin:/bin", HOME: homedir() })
+    const parts = env.PATH!.split(":")
+    expect(parts).toContain(installDir)
+    // Existing entries survive, in order, after what was added.
+    expect(parts.slice(-2)).toEqual(["/usr/bin", "/bin"])
+    expect(env.IRIS_BIN).toBeTruthy()
+  })
+
+  test("stepEnv does not duplicate or reorder a PATH that already has it", () => {
+    const path = `/opt/homebrew/bin:${installDir}:/usr/bin`
+    const env = stepEnv({ PATH: path, IRIS_BIN: "/custom/iris" })
+    expect(env.PATH!.split(":").filter((d) => d === installDir)).toHaveLength(1)
+    expect(env.PATH!.endsWith(path)).toBe(true)
+    expect(env.IRIS_BIN).toBe("/custom/iris")
+  })
+
+  test("a real shell step started with PATH=/usr/bin:/bin sees the install dir", async () => {
+    const saved = process.env.PATH
+    process.env.PATH = "/usr/bin:/bin"
+    const plan: SkillPlan = {
+      ...basePlan,
+      name: "path-test",
+      steps: [makeStep({ id: "p", mode: "shell", code: 'echo "PATH=$PATH"; echo "BIN=$IRIS_BIN"' })],
+    }
+    let result: Awaited<ReturnType<typeof executeSkill>> | undefined
+    try {
+      result = await executeSkill(plan, {})
+    } finally {
+      process.env.PATH = saved
+    }
+    try {
+      expect(result!.steps["p"].status).toBe("success")
+      expect(result!.steps["p"].output).toContain(installDir)
+      expect(result!.steps["p"].output).toMatch(/BIN=\S+/)
+    } finally {
+      cleanupRun(result!.run_id)
+    }
   })
 })

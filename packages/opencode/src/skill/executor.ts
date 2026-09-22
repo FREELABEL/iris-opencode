@@ -3,8 +3,9 @@ import { minimatch } from "minimatch"
 import { Skill } from "./skill"
 import { ConfigMarkdown } from "../config/markdown"
 import { Log } from "../util/log"
+import { McpClients } from "../mcp/clients"
 import { homedir } from "os"
-import { join, dirname, resolve as resolvePath, relative as relativePath, isAbsolute } from "path"
+import { join, dirname, delimiter, resolve as resolvePath, relative as relativePath, isAbsolute } from "path"
 import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, unlinkSync, chmodSync } from "fs"
 
 const log = Log.create({ service: "skill-executor" })
@@ -918,12 +919,29 @@ export function pruneRuns(maxAgeDays: number): number {
 // Step Executors
 // ============================================================================
 
+/**
+ * The environment a shell step runs in. A step is `bash -c`, which reads no rc or profile file,
+ * so it inherits PATH from whoever started iris. When that was not an interactive zsh — an MCP
+ * client (Claude Desktop, Cursor), the desktop sidecar, launchd, cron — `~/.iris/bin` is not on
+ * it, and the first `iris ...` in a step dies with `iris: command not found` (#184675). The
+ * playbook is being run BY iris, so the binary running it goes on PATH, plus the install dir.
+ * Existing entries keep their order; `IRIS_BIN` gives steps an absolute path if they want one.
+ */
+export function stepEnv(base: Record<string, string | undefined> = process.env): Record<string, string | undefined> {
+  const bin = McpClients.irisBinary()
+  const current = (base.PATH ?? "").split(delimiter).filter(Boolean)
+  const missing = [dirname(bin), join(homedir(), ".iris", "bin")].filter(
+    (d, i, all) => all.indexOf(d) === i && !current.includes(d),
+  )
+  return { ...base, PATH: [...missing, ...current].join(delimiter), IRIS_BIN: base.IRIS_BIN || bin }
+}
+
 async function executeShell(code: string, timeoutMs: number): Promise<{ output: string; exit_code: number }> {
   try {
     const proc = Bun.spawn(["bash", "-c", code], {
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env },
+      env: stepEnv(),
     })
 
     const timeoutId = setTimeout(() => proc.kill(), timeoutMs)

@@ -910,45 +910,40 @@ fi
 if [[ "$no_modify_path" != "true" ]]; then
     XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}
 
-    # Find the right shell config file
+    # Which files get the source line. EVERY one listed, not the first that exists (#184675).
+    # The old loop stopped at ~/.zshrc, which only INTERACTIVE zsh reads — so `zsh -c`, login
+    # shells, launchd, cron and GUI-launched MCP clients never had iris on PATH. ~/.zshenv is
+    # read by every zsh. For bash: ~/.bashrc (interactive) plus the login file — but never create
+    # ~/.bash_profile beside an existing ~/.profile, which would stop bash reading ~/.profile.
+    # Files marked "!" are created if missing; the rest are only written if they already exist.
     case $current_shell in
-        fish) config_files="$HOME/.config/fish/config.fish" ;;
-        zsh)  config_files="$HOME/.zshrc $HOME/.zshenv" ;;
-        bash) config_files="$HOME/.bashrc $HOME/.bash_profile $HOME/.profile" ;;
-        *)    config_files="$HOME/.bashrc $HOME/.profile" ;;
+        fish) config_files="!$HOME/.config/fish/config.fish" ;;
+        zsh)  config_files="!$HOME/.zshenv $HOME/.zshrc" ;;
+        bash)
+            if [[ -f "$HOME/.bash_profile" ]]; then login_file="$HOME/.bash_profile"; else login_file="$HOME/.profile"; fi
+            config_files="!$HOME/.bashrc !$login_file" ;;
+        *)    config_files="!$HOME/.profile $HOME/.bashrc" ;;
     esac
 
-    config_file=""
-    for file in $config_files; do
-        if [[ -f $file ]]; then
-            config_file=$file
-            break
-        fi
-    done
-
-    # Create default config file if none exists
-    if [[ -z $config_file ]]; then
-        case $current_shell in
-            zsh)  config_file="$HOME/.zshrc" ;;
-            bash) config_file="$HOME/.bashrc" ;;
-            fish) mkdir -p "$HOME/.config/fish" 2>/dev/null; config_file="$HOME/.config/fish/config.fish" ;;
-            *)    config_file="$HOME/.profile" ;;
-        esac
-        touch "$config_file" 2>/dev/null || true
-    fi
-
-    # Add source line if not already present
     if [ "$current_shell" = "fish" ]; then
         source_line="source \"$IRIS_ENV_FILE\""
     else
         source_line=". \"$HOME/.iris/env\""
     fi
 
-    if [[ -f "$config_file" ]] && ! grep -q "\.iris/env" "$config_file" 2>/dev/null; then
-        echo "" >> "$config_file"
-        echo "# IRIS CLI" >> "$config_file"
-        echo "$source_line" >> "$config_file"
-    fi
+    for entry in $config_files; do
+        config_file="${entry#!}"
+        if [[ ! -f "$config_file" ]]; then
+            [[ "$entry" == !* ]] || continue
+            mkdir -p "$(dirname "$config_file")" 2>/dev/null
+            touch "$config_file" 2>/dev/null || continue
+        fi
+        if ! grep -q "\.iris/env" "$config_file" 2>/dev/null; then
+            echo "" >> "$config_file"
+            echo "# IRIS CLI" >> "$config_file"
+            echo "$source_line" >> "$config_file"
+        fi
+    done
 fi
 
 # Persist a directory on PATH for FUTURE shells by appending to ~/.iris/env — the one
