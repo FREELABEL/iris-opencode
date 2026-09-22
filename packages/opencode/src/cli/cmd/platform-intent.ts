@@ -81,7 +81,16 @@ export const PlatformIntentCommand = cmd({
 
     // --json emits the DECISION, not the envelope, so `| jq -e '.choice'` works — which is the
     // exit check this slice is scored against.
-    if (a.json) return writeJson(d)
+    //
+    // AND IT EXITS NON-ZERO WHEN IT DID NOT DECIDE. The first version returned here before the
+    // `!res.ok` branch below, so `--json` reported every refusal with exit 0: a script doing
+    // `iris intent … --json || handle` never saw an error, and an undecided run was
+    // byte-identical to a decided one for anything checking status. Same defect requireAuth
+    // documents at #180540, reintroduced two files away.
+    if (a.json) {
+      if (!res.ok) process.exitCode = 1
+      return writeJson(d)
+    }
 
     if (!res.ok) {
       prompts.log.error(d?.error ?? body?.message ?? `HTTP ${res.status}`)
