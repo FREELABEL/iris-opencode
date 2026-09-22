@@ -76,6 +76,7 @@ const PushCmd = cmd({
       .positional("file", { describe: "path to the script file", type: "string", demandOption: true })
       .option("runtime", { describe: "bash|node|python|playwright (default: inferred from extension)", type: "string" })
       .option("name", { describe: "human-readable name", type: "string" })
+      .option("description", { describe: "one line for the marketplace card (default: the prose at the top of the file)", type: "string" })
       .option("auto-pull", { describe: "pre-fetch this script to every node on heartbeat", type: "boolean", default: false }),
   async handler(args) {
     if (!(await requireAuth())) return
@@ -87,6 +88,7 @@ const PushCmd = cmd({
       body: JSON.stringify({
         slug: args.slug,
         name: args.name,
+        description: args.description,
         runtime: (args.runtime as string) ?? inferRuntime(file),
         script_content: content,
         auto_pull: args["auto-pull"],
@@ -305,6 +307,170 @@ const DoctorCmd = cmd({
 })
 
 // ============================================================================
+// publish / unpublish — the same shape as `iris playbook publish` / `unpublish`
+// ============================================================================
+
+export type ScriptScope = "unlisted" | "public"
+
+/**
+ * Whether a publish may proceed, and whether it must ask first.
+ *
+ * Consent follows the DIRECTION of the change, as it does for playbooks. Making a script public
+ * is the irreversible one — anyone can read its source and run it, and a copy taken cannot be
+ * recalled — so it asks at a terminal and needs `--force` without one. With neither, it is
+ * REFUSED rather than allowed: an agent or a CI job must not be able to make something public by
+ * omission. `unlisted` appears in no listing, and asks nothing.
+ */
+export function publishGate(o: { scope: ScriptScope; force: boolean; interactive: boolean }): "go" | "ask" | "refuse" {
+  if (o.scope !== "public") return "go"
+  if (o.force) return "go"
+  return o.interactive ? "ask" : "refuse"
+}
+
+/**
+ * Who can open a script at a given visibility, in words.
+ *
+ * Anything unrecognised reads as PRIVATE, matching the server (UserScript::normalizeVisibility):
+ * the failure worth designing against is a typo that describes something as public.
+ */
+export function scriptReach(visibility: string): string {
+  switch (visibility) {
+    case "public": return "Anyone — listed in the marketplace, no sign-in needed"
+    case "unlisted": return "Anyone with the link — it appears in no listing"
+    default: return "Only you"
+  }
+}
+
+/** A refusal that names its cause — a missing script and a bad manifest need different fixes. */
+export function publishFailure(status: number, body: { error?: string; message?: string; errors?: unknown }, slug: string): string {
+  if (status === 404) return `No script named '${slug}'. See: iris scripts list`
+  if (status === 422) {
+    const why = body.error || body.message || "The server refused it."
+    const list = Array.isArray(body.errors) ? body.errors.map((e) => `\n    - ${typeof e === "string" ? e : JSON.stringify(e)}`).join("") : ""
+    return `${why}${list}`
+  }
+  return `HTTP ${status}${body.message || body.error ? ` — ${body.message || body.error}` : ""}`
+}
+
+/** Read for REPORTING only — never as a gate (see the note in UnpublishCmd). */
+async function currentVisibility(slug: string): Promise<string> {
+  const res = await scriptsFetch(`/api/v1/scripts/${encodeURIComponent(slug)}`).catch(() => null)
+  if (!res || !res.ok) return "unknown"
+  const json = (await res.json().catch(() => ({}))) as { data?: { visibility?: string } }
+  return json.data?.visibility ?? "private"
+}
+
+const MARKETPLACE_URL = "https://heyiris.io/p/hive-scripts"
+
+const PublishCmd = cmd({
+  command: "publish <slug>",
+  describe: "publish a saved script: --scope unlisted | public (public lists it in the Hive marketplace)",
+  builder: (y) =>
+    y
+      .positional("slug", { describe: "script slug", type: "string", demandOption: true })
+      .option("scope", {
+        type: "string",
+        choices: ["unlisted", "public"] as const,
+        demandOption: true,
+        describe: "unlisted (anyone with the link, in no listing) or public (the Hive marketplace)",
+      })
+      .option("force", { type: "boolean", default: false, describe: "consent to a PUBLIC publish — REQUIRED when there is no terminal" })
+      .option("json", { type: "boolean", default: false, describe: "JSON output" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    const slug = String(args.slug)
+    const scope = args.scope as ScriptScope
+
+    const gate = publishGate({ scope, force: Boolean(args.force), interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY) })
+    if (gate === "refuse") {
+      process.exitCode = 1
+      return void prompts.log.error(
+        `Refusing to make '${slug}' public without consent. There is no terminal to ask at — pass --force if that is what you mean.`,
+      )
+    }
+    if (gate === "ask") {
+      const ok = await prompts.confirm({
+        message: `Publish '${slug}' to the PUBLIC Hive marketplace? Anyone will be able to read its source and run it.`,
+        initialValue: false,
+      })
+      if (prompts.isCancel(ok) || !ok) {
+        process.exitCode = 1
+        return void prompts.log.info("Nothing published.")
+      }
+    }
+
+    const before = await currentVisibility(slug)
+    const res = await scriptsFetch(`/api/v1/scripts/${encodeURIComponent(slug)}/publish`, {
+      method: "POST",
+      body: JSON.stringify({ visibility: scope }),
+    })
+    if (!res.ok) {
+      const body = (await res.json().catch(() => ({}))) as any
+      process.exitCode = 1
+      return void prompts.log.error(`Could not publish: ${publishFailure(res.status, body, slug)}`)
+    }
+    const json = (await res.json().catch(() => ({}))) as { data?: { visibility?: string; name?: string } }
+    const now = json.data?.visibility ?? scope
+    const url = `https://heyiris.io/api/v1/public/scripts/${slug}`
+
+    if (args.json) return void (await writeJson({ slug, was: before, visibility: now, changed: before !== now, url, marketplace: now === "public" ? MARKETPLACE_URL : null }))
+
+    console.log()
+    console.log(`  ${success("✓")} ${bold(slug)} is now ${bold(now)}${before === now || before === "unknown" ? "" : dim(` (was ${before})`)}`)
+    console.log(`  ${dim(scriptReach(now))}`)
+    if (now === "public") console.log(`  ${dim("Listed at:")} ${MARKETPLACE_URL}`)
+    console.log(`  ${dim("Source:")}    ${url}`)
+    console.log()
+    console.log(`  ${dim("Take it back out of view:")} iris scripts unpublish ${slug}`)
+  },
+})
+
+/**
+ * Take a published script back out of view.
+ *
+ * IT DOES NOT UNDO A PUBLISH, and the output says so — same honesty as `iris playbook
+ * unpublish`. Anyone who already pulled it has it. What changes is what happens NEXT: it leaves
+ * the marketplace and stops resolving for anyone but you.
+ *
+ * Narrowing asks nothing: the gate on publish exists because widening is the irreversible
+ * direction, and this one only ever removes reach. `before` is read for the WORDING, never as a
+ * gate — a lookup that fails must not turn into "already private, nothing to do" and leave a
+ * public script public. The write happens regardless.
+ */
+const UnpublishCmd = cmd({
+  command: "unpublish <slug>",
+  describe: "take a script out of the marketplace — narrows it back to private (does NOT un-send it)",
+  builder: (y) =>
+    y
+      .positional("slug", { describe: "script slug", type: "string", demandOption: true })
+      .option("json", { type: "boolean", default: false, describe: "JSON output" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    const slug = String(args.slug)
+    const before = await currentVisibility(slug)
+
+    const res = await scriptsFetch(`/api/v1/scripts/${encodeURIComponent(slug)}/unpublish`, { method: "POST" })
+    if (!res.ok) {
+      const body = (await res.json().catch(() => ({}))) as any
+      process.exitCode = 1
+      return void prompts.log.error(`Could not unpublish: ${publishFailure(res.status, body, slug)}`)
+    }
+
+    if (args.json) return void (await writeJson({ slug, was: before, visibility: "private", changed: before !== "private" }))
+
+    console.log()
+    console.log(`  ${success("✓")} ${bold(slug)} is now ${bold("private")}${before === "private" || before === "unknown" ? "" : dim(` (was ${before})`)}`)
+    console.log(`  ${dim("Delisted, and no longer readable by anyone but you.")}`)
+    if (before === "public" || before === "unlisted") {
+      console.log()
+      console.log(`  ${dim("This does NOT un-send it. Anyone who already pulled it still has their copy.")}`)
+      console.log(`  ${dim("Change what matters — credentials, ids, internal names — rather than relying on this.")}`)
+    }
+    console.log()
+  },
+})
+
+// ============================================================================
 // Root
 // ============================================================================
 
@@ -312,6 +478,15 @@ export const PlatformScriptsCommand = cmd({
   command: "scripts",
   describe: "account-scoped, slug-addressed scripts that run on your Hive fleet",
   builder: (y) =>
-    y.command(ListCmd).command(PushCmd).command(PullCmd).command(RunCmd).command(RmCmd).command(DoctorCmd).demandCommand(),
+    y
+      .command(ListCmd)
+      .command(PushCmd)
+      .command(PullCmd)
+      .command(RunCmd)
+      .command(RmCmd)
+      .command(DoctorCmd)
+      .command(PublishCmd)
+      .command(UnpublishCmd)
+      .demandCommand(),
   async handler() {},
 })
