@@ -31,7 +31,7 @@ import { spill } from "./mcp-overflow"
 // Writing the brace as a slice of a BALANCED pair keeps the counter honest.
 const JSON_OPEN = "{}".slice(0, 1)
 
-const IRIS_BIN = join(homedir(), ".iris", "bin", "iris")
+export const IRIS_BIN = join(homedir(), ".iris", "bin", "iris")
 const HOWTO_DIR = join(homedir(), ".iris", "how-to")
 const MAX_OUTPUT = 100 * 1024 // 100KB
 const TIMEOUT_MS = 30_000

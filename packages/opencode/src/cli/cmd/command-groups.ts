@@ -221,6 +221,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   completion: "core",
   acp: "core",
   mcp: "core",
+  a2a: "core",
   marketplace: "core",
   attach: "core",
   run: "core",

@@ -17,6 +17,7 @@ import { ServeCommand } from "./cli/cmd/serve"
 import { DebugCommand } from "./cli/cmd/debug"
 import { StatsCommand } from "./cli/cmd/stats"
 import { McpCommand } from "./cli/cmd/mcp"
+import { A2aCommand } from "./cli/cmd/a2a"
 import { MarketplaceCommand } from "./cli/cmd/marketplace"
 import { GithubCommand } from "./cli/cmd/github"
 import { ExportCommand } from "./cli/cmd/export"
@@ -316,6 +317,7 @@ const cli = yargs(rawArgs)
   // Core CLI commands
   .command(reg(AcpCommand))
   .command(reg(McpCommand))
+  .command(reg(A2aCommand))
   .command(reg(MarketplaceCommand))
   .command(TuiThreadCommand)
   .command(TuiSpawnCommand)
