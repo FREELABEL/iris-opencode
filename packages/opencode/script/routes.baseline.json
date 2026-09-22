@@ -144,18 +144,18 @@
   },
   {
    "method": "POST",
-   "path": "/api/v1/bloq-items/{}/relate",
-   "why": "Called by platform-boards.ts. The API half is UNPUSHED: fl-api commit c621c1fa 'feat(bloq): typed relations between ITEMS' sits on branch feat/bloq-item-relations and has never been deployed — verified 2026-09-03 against a routes snapshot read from production. So the CLI shipped and its endpoint did not. Baselined ONLY to unblock an unrelated push (#183399 hive sessions). The fix is to ship the fl-api branch, not to keep this entry — delete it the moment that lands."
-  },
-  {
-   "method": "POST",
-   "path": "/api/v1/bloq-items/{}/unrelate",
-   "why": "Called by platform-boards.ts. The API half is UNPUSHED: fl-api commit c621c1fa 'feat(bloq): typed relations between ITEMS' sits on branch feat/bloq-item-relations and has never been deployed — verified 2026-09-03 against a routes snapshot read from production. So the CLI shipped and its endpoint did not. Baselined ONLY to unblock an unrelated push (#183399 hive sessions). The fix is to ship the fl-api branch, not to keep this entry — delete it the moment that lands."
+   "path": "/api/v1/newsroom/{}/roster/import",
+   "why": "known dead, #186449. NOT yet fixed — the CLI half of #186373 shipped in 81d84cfc without its API half. The artisan commands exist but live in fl-api (NewsroomRosterImport, NewsroomSend, NewsroomAudience) while the CLI calls IRIS_API, so the fix is a cross-repo proxy decision, not a path typo. Baselined ONLY to stop this blocking every push in the repo; it is a real defect and `iris newsroom roster`/`send` 404 for users until it lands."
   },
   {
    "method": "GET",
-   "path": "/api/v1/bloq-items/{}/relations",
-   "why": "Called by platform-boards.ts. The API half is UNPUSHED: fl-api commit c621c1fa 'feat(bloq): typed relations between ITEMS' sits on branch feat/bloq-item-relations and has never been deployed — verified 2026-09-03 against a routes snapshot read from production. Baselined ONLY to unblock an unrelated push (#183399). Delete the moment that branch ships."
+   "path": "/api/v1/newsroom/{}/roster",
+   "why": "known dead, #186449. NOT yet fixed — the CLI half of #186373 shipped in 81d84cfc without its API half. The artisan commands exist but live in fl-api (NewsroomRosterImport, NewsroomSend, NewsroomAudience) while the CLI calls IRIS_API, so the fix is a cross-repo proxy decision, not a path typo. Baselined ONLY to stop this blocking every push in the repo; it is a real defect and `iris newsroom roster`/`send` 404 for users until it lands."
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/newsroom/{}/send",
+   "why": "known dead, #186449. NOT yet fixed — the CLI half of #186373 shipped in 81d84cfc without its API half. The artisan commands exist but live in fl-api (NewsroomRosterImport, NewsroomSend, NewsroomAudience) while the CLI calls IRIS_API, so the fix is a cross-repo proxy decision, not a path typo. Baselined ONLY to stop this blocking every push in the repo; it is a real defect and `iris newsroom roster`/`send` 404 for users until it lands."
   }
  ]
 }
