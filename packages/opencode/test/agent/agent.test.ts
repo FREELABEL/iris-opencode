@@ -446,3 +446,28 @@ test("legacy tools config maps write/edit/patch/multiedit to edit permission", a
     },
   })
 })
+
+// Desktop #184406 — name-based process kills ask; ordinary commands and kill-by-PID do not.
+test("killing processes by name asks first; everything else is unchanged", async () => {
+  await using tmp = await tmpdir()
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const build = await Agent.get("build")
+      const action = (cmd: string) => PermissionNext.evaluate("bash", cmd, build!.permission).action
+      for (const cmd of [
+        "Get-Process excel | Stop-Process -Force",
+        "stop-process -name excel",
+        "taskkill /F /IM excel.exe",
+        "TASKKILL /F /IM EXCEL.EXE",
+        "pkill -f 'Microsoft Excel'",
+        "killall Excel",
+      ]) {
+        expect([cmd, action(cmd)]).toEqual([cmd, "ask"])
+      }
+      for (const cmd of ["ls -la", "git status", "kill 4242", "Get-Process excel"]) {
+        expect([cmd, action(cmd)]).toEqual([cmd, "allow"])
+      }
+    },
+  })
+})
