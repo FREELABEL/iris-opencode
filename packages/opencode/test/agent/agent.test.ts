@@ -753,3 +753,26 @@ it.instance(
     },
   },
 )
+
+// Desktop #184406 — an agent retrying its own Excel COM script killed every Excel window on an
+// operator's machine, in a loop, unasked. The exact commands it ran must ASK; ordinary shell
+// work, and killing a process by its own PID, must not.
+it.instance("killing processes by name asks first; everything else is unchanged", () =>
+  Effect.gen(function* () {
+    const build = yield* load((svc) => svc.get("build"))
+    const action = (cmd: string) => Permission.evaluate("bash", cmd, build!.permission).action
+    for (const cmd of [
+      "Get-Process excel | Stop-Process -Force",
+      "Stop-Process -Name EXCEL -Force",
+      "taskkill /F /IM excel.exe",
+      "spps -Name excel",
+      "pkill -f 'Microsoft Excel'",
+      "killall Excel",
+    ]) {
+      expect([cmd, action(cmd)]).toEqual([cmd, "ask"])
+    }
+    for (const cmd of ["ls -la", "git status", "kill 4242", "Get-Process excel", "bun test"]) {
+      expect([cmd, action(cmd)]).toEqual([cmd, "allow"])
+    }
+  }),
+)

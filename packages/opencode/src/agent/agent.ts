@@ -126,6 +126,21 @@ const layer = Layer.effect(
           question: "deny",
           plan_enter: "deny",
           plan_exit: "deny",
+          // KILLING PROCESSES BY NAME ASKS FIRST (desktop #184406). An agent retrying its own
+          // Excel COM script ran `Get-Process excel | Stop-Process -Force` and `taskkill /F /IM
+          // excel.exe` in a loop on an operator's machine — every open workbook, unsaved work
+          // included, gone with no prompt. A name matches processes the agent never started, so
+          // name-based kills ask. `kill <pid>` stays allowed: agents use it on their own servers.
+          // "Contains" patterns, so a kill at the end of a pipeline is caught however the command
+          // is split. Matching is case-insensitive on Windows, where PowerShell is.
+          bash: {
+            "*": "allow",
+            "*Stop-Process*": "ask",
+            "*spps *": "ask",
+            "*taskkill*": "ask",
+            "*pkill *": "ask",
+            "*killall *": "ask",
+          },
           // mirrors github.com/github/gitignore Node.gitignore pattern for .env files
           read: {
             "*": "allow",
