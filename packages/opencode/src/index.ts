@@ -110,6 +110,7 @@ import { DeviceCommand } from "./cli/cmd/platform-device"
 import { HomeCommand } from "./cli/cmd/platform-home"
 import { PlatformCameraCommand } from "./cli/cmd/platform-camera"
 import { PlatformAndroidCommand } from "./cli/cmd/platform-android"
+import { PlatformIntentCommand } from "./cli/cmd/platform-intent"
 import { PlatformAtlasMeetingsCommand } from "./cli/cmd/platform-atlas-meetings"
 import { PlatformAtlasBrandKitCommand } from "./cli/cmd/platform-atlas-brand-kit"
 import { PlatformAgreementsCommand } from "./cli/cmd/platform-agreements"
@@ -455,6 +456,7 @@ const cli = yargs(rawArgs)
   .command(reg(VideoCommand))
   .command(reg(PlatformCameraCommand))
   .command(reg(PlatformAndroidCommand))
+  .command(reg(PlatformIntentCommand))
   .command(reg(PlatformOnboardCommand))
   .command(reg(PlatformInitCommand))
   .command(reg(PlatformOnboardFlowsCommand))
