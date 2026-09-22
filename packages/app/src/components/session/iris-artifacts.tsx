@@ -120,7 +120,8 @@ export function IrisArtifacts(props: { doFetch: Fetch; sessionId?: string; proje
       </Show>
       <Show when={props.sessionId && list.latest?.measured && artifacts().length === 0}>
         <p class="iris-artifacts__note">
-          Nothing here. Files saved under .iris/artifacts for this session show up here, with who wrote them.
+          Nothing yet. When an agent in this session makes a page, a brief or a table with the artifact tool, it appears
+          here — from subagents too — with the agent that made it.
         </p>
       </Show>
 
