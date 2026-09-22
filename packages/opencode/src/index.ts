@@ -57,6 +57,7 @@ import { PlatformAtlasInventoryCommand } from "./cli/cmd/platform-atlas-inventor
 import { PlatformAtlasDatasetsCommand } from "./cli/cmd/platform-atlas-datasets"
 import { PlatformOnboardingCommand } from "./cli/cmd/platform-onboarding"
 import { PlatformAtlasListCommand } from "./cli/cmd/platform-atlas-tree"
+import { PlatformAtlasDatabaseCommand } from "./cli/cmd/platform-atlas-database"
 import { PlatformAtlasItemCommand } from "./cli/cmd/platform-atlas-item"
 import { PlatformAtlasProjectionsCommand } from "./cli/cmd/platform-atlas-projections"
 import { PlatformSchedulesCommand } from "./cli/cmd/platform-schedules"
@@ -363,6 +364,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformOnboardingCommand))
   .command(reg(PlatformAtlasItemCommand))
   .command(reg(PlatformAtlasListCommand))
+  .command(reg(PlatformAtlasDatabaseCommand))
   .command(reg(PlatformAtlasProjectionsCommand))
   .command(reg(PlatformSchedulesCommand))
   .command(reg(PlatformN8nCommand))
