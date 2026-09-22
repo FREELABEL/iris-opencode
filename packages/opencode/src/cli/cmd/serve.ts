@@ -19,6 +19,20 @@ export const ServeCommand = effectCmd({
     const server = yield* Effect.promise(() => Server.listen(opts))
     console.log(`opencode server listening on http://${server.hostname}:${server.port}`)
 
+    // #186171: the desktop app starting its engine is the desktop's app_open. Only when the
+    // desktop is the client (spawn_sidecar sets OPENCODE_CLIENT=desktop), so a headless
+    // `serve` is never counted as someone opening the app. Fire-and-forget; see usage-beacon.ts.
+    if (process.env.OPENCODE_CLIENT === "desktop") {
+      void (async () => {
+        const [{ UsageBeacon }, platform, { InstallationVersion }] = await Promise.all([
+          import("../../iris/usage-beacon"),
+          import("../../iris/platform"),
+          import("@opencode-ai/core/installation/version"),
+        ])
+        await UsageBeacon.send("app_open", { token: platform.resolveToken(), apiBase: platform.IRIS_API, version: InstallationVersion })
+      })().catch(() => {})
+    }
+
     yield* Effect.never
   }),
 })
