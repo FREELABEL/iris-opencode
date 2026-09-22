@@ -26,6 +26,7 @@ import {
   type StepDef,
   type StepResult,
   type ExecuteOptions,
+  NoPosixShellError,
 } from "../../skill/executor"
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "fs"
 import {
@@ -649,7 +650,19 @@ const SkillRunCommand = cmd({
         }
       }
 
-      const result = await executeSkill(plan, resolvedArgs, opts)
+      let result: Awaited<ReturnType<typeof executeSkill>>
+      try {
+        result = await executeSkill(plan, resolvedArgs, opts)
+      } catch (e) {
+        // A run refused up front (no bash for its shell steps, #184180) is an answer, not a
+        // crash: say it plainly and exit non-zero, so a script or an agent sees it failed.
+        if (e instanceof NoPosixShellError) {
+          if (args.json) await writeJson({ status: "refused", reason: e.message, shell_steps: e.shellSteps })
+          else console.error(`\n${e.message}\n`)
+          process.exit(1)
+        }
+        throw e
+      }
 
       const passedN = Object.values(result.steps).filter((r) => r.status === "success").length
       const failedN = Object.values(result.steps).filter((r) => r.status === "failed").length

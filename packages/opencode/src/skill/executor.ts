@@ -927,18 +927,76 @@ export function pruneRuns(maxAgeDays: number): number {
  * playbook is being run BY iris, so the binary running it goes on PATH, plus the install dir.
  * Existing entries keep their order; `IRIS_BIN` gives steps an absolute path if they want one.
  */
-export function stepEnv(base: Record<string, string | undefined> = process.env): Record<string, string | undefined> {
+export function stepEnv(
+  base: Record<string, string | undefined> = process.env,
+  sep: string = delimiter,
+): Record<string, string | undefined> {
   const bin = McpClients.irisBinary()
-  const current = (base.PATH ?? "").split(delimiter).filter(Boolean)
+  // Windows spells it `Path`. Writing a second `PATH` key beside it gives the child two
+  // variables that differ only in case, and which one wins is up to the loader.
+  const key = Object.keys(base).find((k) => k.toUpperCase() === "PATH") ?? "PATH"
+  const current = (base[key] ?? "").split(sep).filter(Boolean)
   const missing = [dirname(bin), join(homedir(), ".iris", "bin")].filter(
     (d, i, all) => all.indexOf(d) === i && !current.includes(d),
   )
-  return { ...base, PATH: [...missing, ...current].join(delimiter), IRIS_BIN: base.IRIS_BIN || bin }
+  return { ...base, [key]: [...missing, ...current].join(sep), IRIS_BIN: base.IRIS_BIN || bin }
+}
+
+/**
+ * The bash a shell step runs in, or null when this machine has none (#184180 / desktop #184185).
+ *
+ * Playbook shell steps are WRITTEN in bash — heredocs, `[ -d ]`, `$( )`, `set -o pipefail` — so
+ * PowerShell or cmd cannot stand in for it. On Windows the usable bash is Git for Windows'.
+ * `C:\Windows\System32\bash.exe` is the WSL launcher: it runs the step inside a Linux VM
+ * that has neither this machine's paths nor its iris, so it is deliberately never chosen.
+ */
+export function resolveBash(
+  platform: string = process.platform,
+  env: Record<string, string | undefined> = process.env,
+  exists: (p: string) => boolean = existsSync,
+  onPath: () => string[] = () => {
+    try {
+      const r = Bun.spawnSync(["where", "bash"], { stdout: "pipe", stderr: "pipe" })
+      return r.exitCode === 0 ? r.stdout.toString().split(/\r?\n/).map((l) => l.trim()).filter(Boolean) : []
+    } catch {
+      return []
+    }
+  },
+): string | null {
+  if (platform !== "win32") return "bash"
+  const get = (name: string) => env[Object.keys(env).find((k) => k.toUpperCase() === name) ?? name]
+  const isWslLauncher = (p: string) => /\\(System32|SysWOW64|Sysnative|WindowsApps)\\/i.test(p)
+  const explicit = get("IRIS_BASH")
+  if (explicit && exists(explicit)) return explicit
+  const roots = [get("PROGRAMFILES"), get("PROGRAMW6432"), get("PROGRAMFILES(X86)"), get("LOCALAPPDATA") && `${get("LOCALAPPDATA")}\\Programs`]
+  const candidates = [
+    ...roots.filter(Boolean).map((r) => `${r}\\Git\\bin\\bash.exe`),
+    get("USERPROFILE") && `${get("USERPROFILE")}\\scoop\\apps\\git\\current\\bin\\bash.exe`,
+  ].filter(Boolean) as string[]
+  for (const c of candidates) if (exists(c)) return c
+  for (const c of onPath()) if (!isWslLauncher(c) && exists(c)) return c
+  return null
+}
+
+/** Refusing a run is the fix, not a symptom: running only the AI half LOOKS like success. */
+export class NoPosixShellError extends Error {
+  constructor(
+    readonly playbook: string,
+    readonly shellSteps: string[],
+  ) {
+    super(
+      `"${playbook}" has ${shellSteps.length} shell step(s) (${shellSteps.join(", ")}) written for bash, and this ` +
+        `machine has no bash. Nothing was run: running only the AI steps would look like it worked and ` +
+        `publish nothing.\n` +
+        `  Fix: install Git for Windows (https://git-scm.com/download/win) — IRIS finds its bash ` +
+        `automatically — or set IRIS_BASH to a bash.exe.`,
+    )
+  }
 }
 
 async function executeShell(code: string, timeoutMs: number): Promise<{ output: string; exit_code: number }> {
   try {
-    const proc = Bun.spawn(["bash", "-c", code], {
+    const proc = Bun.spawn([resolveBash() ?? "bash", "-c", code], {
       stdout: "pipe",
       stderr: "pipe",
       env: stepEnv(),
@@ -1595,6 +1653,8 @@ export interface ExecuteOptions {
    * are skipped too rather than running on work that never happened.
    */
   resolvePaused?: "done" | "skip"
+  /** Which bash shell steps run in; null means none exists. Injectable so the refusal is testable off Windows. */
+  bash?: () => string | null
 }
 
 export async function executeSkill(
@@ -1674,6 +1734,15 @@ export async function executeSkill(
   // What is actually in this invocation. With --step, everything else is absent rather than
   // failed, and the two need different words (#183406, defect 5).
   const inThisRun = new Set(stepsToRun.map((s) => s.id))
+
+  // FAIL WHOLE, BEFORE ANYTHING RUNS (#184180 / #184185). On a Windows machine with no bash
+  // the shell steps failed one by one while the AI steps went ahead: the model drafted a real
+  // epic, output streamed past, and the publish step never happened. Checked once, up front,
+  // so no step of a run that cannot finish is ever started.
+  if (!opts.dryRun) {
+    const shellSteps = stepsToRun.filter((s) => s.mode === "shell" && !restoredIds.has(s.id)).map((s) => s.id)
+    if (shellSteps.length && !(opts.bash ?? resolveBash)()) throw new NoPosixShellError(plan.name, shellSteps)
+  }
 
   let finalStatus: "completed" | "failed" | "interrupted" | "paused" = "completed"
   let pausedOn: SkillResult["paused_on"] | undefined
