@@ -39,12 +39,20 @@ export function DialogCommandPaletteV2(props: { onOpenFile?: (path: string) => v
   const palette = createCommandPaletteModel(props)
   const loadItems = async (text: string) => {
     const q = text.trim()
-    if (!q) return [...palette.preferredCommandEntries(), ...palette.recentFileEntries()]
+    // Even with nothing typed, the IRIS commands are listed: the palette said "Commands" and
+    // showed three app actions, which read as "that is all there is" (#186546).
+    if (!q)
+      return [...palette.preferredCommandEntries(), ...(await palette.searchCliCommands("")), ...palette.recentFileEntries()]
 
-    const [files, nextSessions] = await Promise.all([palette.file.searchFiles(q), Promise.resolve(palette.sessions(q))])
+    const [files, nextSessions, cli] = await Promise.all([
+      palette.file.searchFiles(q),
+      Promise.resolve(palette.sessions(q)),
+      palette.searchCliCommands(q),
+    ])
     const category = palette.language.t("palette.group.files")
     return [
       ...palette.commandEntries().filter((entry) => matchesEntry(entry, q)),
+      ...cli,
       ...nextSessions,
       ...files.map((path) => createCommandPaletteFileEntry(path, category)),
     ]
@@ -285,6 +293,20 @@ function PaletteRow(props: {
           </div>
         }
       >
+        {/* An IRIS CLI command (#186546). It needs its own branch: the fallback draws a FILE —
+            icon plus path — and a cli entry has no path, so the rows rendered as blank lines
+            with a file icon. Monospace, because it is a line you are going to type. */}
+        <Match when={props.item.type === "cli"}>
+          <div class="command-palette-v2-row-main">
+            <div class="command-palette-v2-row-text">
+              <span class="command-palette-v2-title font-mono">{props.item.title}</span>
+              <Show when={props.item.description}>
+                <span class="command-palette-v2-description">{props.item.description}</span>
+              </Show>
+            </div>
+          </div>
+          <span class="command-palette-v2-description shrink-0">copy</span>
+        </Match>
         <Match when={props.item.type === "command"}>
           <div class="command-palette-v2-row-main">
             <div class="command-palette-v2-row-text">
