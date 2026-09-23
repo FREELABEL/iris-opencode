@@ -27,6 +27,9 @@ export function IrisArtifactPublish(props: {
   bloqId?: number
   bloqName?: string
   onPublished: () => void
+  /** Present when the page can be shown in the app; toggles Draft ⇄ Live. */
+  onToggleLive?: () => void
+  live?: boolean
 }) {
   const [mode, setMode] = createSignal<"closed" | "form">("closed")
   const [slug, setSlug] = createSignal("")
@@ -112,6 +115,11 @@ export function IrisArtifactPublish(props: {
               <button type="button" class="iris-card__linkbtn" onClick={() => void copy(p().url)}>
                 {copied() ? "Copied" : "Copy"}
               </button>
+              <Show when={props.onToggleLive}>
+                <button type="button" class="iris-card__linkbtn" onClick={() => props.onToggleLive?.()}>
+                  {props.live ? "Show draft" : "View live"}
+                </button>
+              </Show>
               <a class="iris-card__linkbtn" href={p().url} target="_blank" rel="noopener noreferrer">
                 Open in browser
               </a>

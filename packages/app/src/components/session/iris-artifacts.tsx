@@ -15,6 +15,8 @@ import {
   ARTIFACT_SANDBOX,
   authorLine,
   changedSince,
+  LIVE_SANDBOX,
+  liveUrl,
   markdownDocument,
   parseCsv,
   sandboxedDocument,
@@ -101,6 +103,11 @@ export function IrisArtifacts(props: {
     if (!list.some((m) => m.id === openId())) setOpenId(list[0].id)
   })
   const open = createMemo(() => artifacts().find((m) => m.id === openId()))
+  // Draft (the artifact, from disk) or Live (its published page, from heyiris.io). Resets to the
+  // draft when another artifact is opened.
+  const [live, setLive] = createSignal(false)
+  createEffect(on(openId, () => setLive(false), { defer: true }))
+  const liveSrc = createMemo(() => (live() ? liveUrl(open()?.published?.url) : undefined))
 
   const choose = (id: string) => {
     setOpenId(id)
@@ -190,9 +197,23 @@ export function IrisArtifacts(props: {
                   bloqId={props.bloqId}
                   bloqName={props.bloqName}
                   onPublished={refresh}
+                  live={live()}
+                  onToggleLive={liveUrl((open() ?? meta()).published?.url) ? () => setLive((v) => !v) : undefined}
                 />
               </Show>
               <Switch>
+                <Match when={liveSrc()}>
+                  {(src) => (
+                    <iframe
+                      class="iris-artifacts__frame"
+                      title={`${meta().title} — live`}
+                      sandbox={LIVE_SANDBOX}
+                      referrerpolicy="strict-origin-when-cross-origin"
+                      src={src()}
+                      data-testid="artifact-live-frame"
+                    />
+                  )}
+                </Match>
                 <Match when={meta().kind === "html"}>
                   <iframe
                     class="iris-artifacts__frame"

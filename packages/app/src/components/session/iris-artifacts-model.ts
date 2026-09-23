@@ -82,6 +82,29 @@ export function sandboxedDocument(html: string): string {
   return `<!doctype html><html><head>${meta}</head><body>${html}</body></html>`
 }
 
+/**
+ * The LIVE published page, shown in the app (#186541) — a different rule from the draft preview.
+ *
+ * The draft is agent-written HTML placed with srcdoc: it would share the app's origin, so it
+ * must never get allow-same-origin (ADR-01). The live page is served BY heyiris.io, a different
+ * origin from the app; allow-same-origin there gives it heyiris.io's own origin (its sign-in
+ * gate and storage work), never the app's. What keeps that true is the URL: only
+ * https://heyiris.io/p/… and /n/… are ever loaded (liveUrl), and top navigation is not granted.
+ * heyiris.io allows the app to frame exactly those paths (frame-ancestors, fl-iris-api f4002920).
+ */
+export const LIVE_SANDBOX = "allow-scripts allow-same-origin allow-forms allow-popups"
+
+export function liveUrl(url: string | undefined): string | undefined {
+  if (!url) return undefined
+  try {
+    const u = new URL(url)
+    if (u.protocol !== "https:" || u.hostname !== "heyiris.io") return undefined
+    return /^\/(p|n)\/[^/]+/.test(u.pathname) ? u.toString() : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /** A rendered markdown body as a readable standalone page, for the sandboxed frame. */
 export function markdownDocument(bodyHtml: string): string {
   return (
