@@ -96,6 +96,7 @@ export function IrisArtifacts(props: {
   })
 
   const [openId, setOpenId] = createSignal<string | undefined>()
+  const [listOpen, setListOpen] = createSignal(false)
   // Open the newest one by default; keep the user's choice while it still exists.
   createEffect(() => {
     const list = artifacts()
@@ -155,52 +156,86 @@ export function IrisArtifacts(props: {
       </Show>
 
       <Show when={artifacts().length}>
-        <ul class="iris-artifacts__list" aria-label="Artifacts">
-          <For each={artifacts()}>
-            {(m) => (
-              <li>
-                <button
-                  type="button"
-                  class="iris-artifacts__row"
-                  classList={{
-                    "iris-artifacts__row--open": m.id === openId(),
-                    "iris-artifacts__row--fresh": fresh().has(m.id),
-                  }}
-                  data-artifact-id={m.id}
-                  onClick={() => choose(m.id)}
-                >
-                  <span class="iris-artifacts__title">{m.title}</span>
-                  <span class="iris-artifacts__kind">{m.kind}</span>
-                  <span class="iris-artifacts__by" data-testid="artifact-author">
-                    {authorLine(m)}
-                  </span>
-                </button>
-              </li>
+        {/* ONE LINE for the artifact (#186509 nav): the list opens from "‹ All (N)", and the
+            title, author and publish actions share the row. It used to be three stacked rows —
+            a list, a title line repeating it, and a button bar. */}
+        <div class="iris-artifacts__toolbar">
+          <div class="iris-artifacts__all">
+            <button
+              type="button"
+              class="iris-artifacts__allbtn"
+              classList={{ "iris-artifacts__allbtn--open": listOpen() }}
+              aria-haspopup="listbox"
+              aria-expanded={listOpen()}
+              onClick={() => setListOpen((v) => !v)}
+            >
+              ‹ All ({artifacts().length}){fresh().size ? " •" : ""} ▾
+            </button>
+            <Show when={listOpen()}>
+              <ul
+                class="iris-artifacts__list iris-artifacts__menu"
+                aria-label="Artifacts"
+                onMouseLeave={() => setListOpen(false)}
+              >
+                <For each={artifacts()}>
+                  {(m) => (
+                    <li>
+                      <button
+                        type="button"
+                        class="iris-artifacts__row"
+                        classList={{
+                          "iris-artifacts__row--open": m.id === openId(),
+                          "iris-artifacts__row--fresh": fresh().has(m.id),
+                        }}
+                        data-artifact-id={m.id}
+                        onClick={() => {
+                          choose(m.id)
+                          setListOpen(false)
+                        }}
+                      >
+                        <span class="iris-artifacts__title">{m.title}</span>
+                        <span class="iris-artifacts__kind">{m.kind}</span>
+                        <span class="iris-artifacts__by" data-testid="artifact-author">
+                          {authorLine(m)}
+                        </span>
+                      </button>
+                    </li>
+                  )}
+                </For>
+              </ul>
+            </Show>
+          </div>
+          <Show when={doc.latest?.found && doc.latest.meta}>
+            {(meta) => (
+              <>
+                <span class="iris-artifacts__sep" />
+                <strong class="iris-artifacts__tbtitle">{meta().title}</strong>
+                <span class="iris-artifacts__tbmeta" data-testid="artifact-toolbar-author">
+                  {authorLine(meta())}
+                  {doc.latest?.truncated ? " · truncated" : ""}
+                </span>
+                <Show when={props.sessionId}>
+                  <IrisArtifactPublish
+                    meta={open() ?? meta()}
+                    content={doc.latest!.content}
+                    doFetch={props.doFetch}
+                    sessionId={props.sessionId!}
+                    project={props.project}
+                    bloqId={props.bloqId}
+                    bloqName={props.bloqName}
+                    onPublished={refresh}
+                    live={live()}
+                    onToggleLive={liveUrl((open() ?? meta()).published?.url) ? () => setLive((v) => !v) : undefined}
+                  />
+                </Show>
+              </>
             )}
-          </For>
-        </ul>
+          </Show>
+        </div>
 
         <Show when={doc.latest?.found && doc.latest.meta}>
           {(meta) => (
             <div class="iris-artifacts__preview">
-              <p class="iris-artifacts__head">
-                <strong>{meta().title}</strong> · {authorLine(meta())}
-                <Show when={doc.latest?.truncated}> · truncated at 2 MB</Show>
-              </p>
-              <Show when={props.sessionId}>
-                <IrisArtifactPublish
-                  meta={open() ?? meta()}
-                  content={doc.latest!.content}
-                  doFetch={props.doFetch}
-                  sessionId={props.sessionId!}
-                  project={props.project}
-                  bloqId={props.bloqId}
-                  bloqName={props.bloqName}
-                  onPublished={refresh}
-                  live={live()}
-                  onToggleLive={liveUrl((open() ?? meta()).published?.url) ? () => setLive((v) => !v) : undefined}
-                />
-              </Show>
               <Switch>
                 <Match when={liveSrc()}>
                   {(src) => (

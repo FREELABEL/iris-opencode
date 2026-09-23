@@ -18,7 +18,6 @@ import { pageSummary, type PageEnvelope } from "./use-paged-surface"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { List } from "@opencode-ai/ui/list"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
-import { SegmentedControlV2, SegmentedControlItemV2 } from "@opencode-ai/ui/v2/segmented-control-v2"
 import { IrisForceGraph, type ForceEdge, type ForceNode } from "./iris-force-graph"
 import { graphBoardIsIsolated, scopeGraphRows, type GraphScope } from "./iris-graph-scope"
 import { Button } from "@opencode-ai/ui/button"
@@ -27,6 +26,7 @@ import { useSDK } from "@/context/sdk"
 import { usePlatform } from "@/context/platform"
 import { IrisCardEditor } from "./iris-card-editor"
 import { IrisArtifacts } from "./iris-artifacts"
+import { ACCOUNT_SURFACES, panelScope, readPinnedIds, visibleTabs } from "./iris-panel-nav"
 import { irisNavRequest, clearIrisNav } from "./iris-nav"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { IrisRooms } from "./iris-rooms"
@@ -310,7 +310,8 @@ function describeFields(
       title: r.name,
       fields: fieldsOf([
         ["about", r.description],
-        ["type", r.type], ["category", r.category],
+        ["type", r.type],
+        ["category", r.category],
         // The MODE is the thing worth knowing before you start: these are not the same job.
         ["connect by", connectsBy(r.mode, r.oauthRequired)],
         ["provider status", `${health.label} — ${health.basis}`],
@@ -882,6 +883,19 @@ export const IRIS_SURFACE_CHOICES: readonly { id: string; label: string }[] = SU
   label: s.label,
 }))
 
+/**
+ * PROJECT FIRST, PRODUCTS AS TABS (#186509 nav). The panel reads top-down: which project, which
+ * product, which view. Products are tabs you PIN from the + menu instead of one eight-item bar.
+ */
+const PINNED_KEY = "iris.panel.pinned"
+const DEFAULT_PINNED: SurfaceId[] = ["pages", "atlas", "agents"]
+const readPinned = (raw: string | null) =>
+  readPinnedIds<SurfaceId>(
+    raw,
+    SURFACES.map((x) => x.id),
+    DEFAULT_PINNED,
+  )
+
 const [requestedSurface, setRequestedSurface] = createSignal<{ surface: SurfaceId; sub?: string } | undefined>()
 
 /**
@@ -1402,7 +1416,11 @@ export function SessionIrisTab() {
    * when the refreshed catalogue stops offering this connector, which is the same signal the
    * rest of the panel already trusts.
    */
-  const [connect, setConnect] = createSignal<{ type: string; state: "opening" | "waiting" | "failed" | "nothing"; message?: string } | null>(null)
+  const [connect, setConnect] = createSignal<{
+    type: string
+    state: "opening" | "waiting" | "failed" | "nothing"
+    message?: string
+  } | null>(null)
 
   async function startConnect(type: string) {
     setConnect({ type, state: "opening" })
@@ -1414,9 +1432,12 @@ export function SessionIrisTab() {
         headers: { "Content-Type": "application/json", Accept: "application/json" },
         body: JSON.stringify({ type }),
       })
-      const res = (await raw.json().catch(() => null)) as
-        | { measured?: boolean; reason?: string; url?: string; hint?: string }
-        | null
+      const res = (await raw.json().catch(() => null)) as {
+        measured?: boolean
+        reason?: string
+        url?: string
+        hint?: string
+      } | null
       if (!res?.measured) {
         // The API's own words: "no OAuth flow for this type" and "requires owner or admin on
         // that organization" are different problems and the person has to read which.
@@ -1697,6 +1718,49 @@ export function SessionIrisTab() {
     ))
   }
 
+  const [pinned, setPinned] = createSignal<SurfaceId[]>(
+    readPinned(
+      (() => {
+        try {
+          return localStorage.getItem(PINNED_KEY)
+        } catch {
+          return null
+        }
+      })(),
+    ),
+  )
+  const togglePin = (id: SurfaceId) => {
+    const cur = pinned()
+    const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]
+    if (!next.length) return
+    setPinned(next)
+    try {
+      localStorage.setItem(PINNED_KEY, JSON.stringify(next))
+    } catch {}
+    if (!cur.includes(id)) chooseSurface(id)
+  }
+  const [plusOpen, setPlusOpen] = createSignal(false)
+  // FOCUS: fold the product and sub-view rows away so the content (an artifact) runs nearly full
+  // height. Esc or ⤢ brings them back.
+  const [focus, setFocus] = createSignal(false)
+  // Esc closes the pin menu only while it is on screen; in focus mode the menu's row is hidden,
+  // so Esc goes straight to leaving focus. (Measured: a menu left open under focus swallowed Esc.)
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key !== "Escape") return
+    if (plusOpen() && !focus()) return setPlusOpen(false)
+    if (focus()) setFocus(false)
+  }
+  const onDown = (e: MouseEvent) => {
+    if (plusOpen() && !(e.target as HTMLElement | null)?.closest?.(".iris-products__plus")) setPlusOpen(false)
+  }
+  document.addEventListener("keydown", onKey)
+  document.addEventListener("mousedown", onDown)
+  onCleanup(() => {
+    document.removeEventListener("keydown", onKey)
+    document.removeEventListener("mousedown", onDown)
+  })
+  const rowScope = createMemo(() => panelScope(surface(), pane()))
+
   function chooseSurface(id: SurfaceId) {
     setSurface(id)
     try {
@@ -1766,69 +1830,142 @@ export function SessionIrisTab() {
           fifty siblings. `List` is the app's filtered-list primitive and gives search for
           free; dialog-select-mcp and dialog-select-file are the same shape, so this is the
           house answer to "pick one of many" rather than a new idea. */}
-      <Show when={((bloqs.latest ?? bloqs())?.bloqs?.length ?? 0) > 0}>
-        <button
-          type="button"
-          class="flex items-center gap-1 px-2 py-1 text-12-regular text-text-base hover:bg-background-element rounded text-start min-w-0 cursor-pointer"
-          onClick={() => {
-            const all = (bloqs.latest ?? bloqs())?.bloqs ?? []
-            dialog.show(() => (
-              <Dialog title="Board" description={`${all.length} boards`}>
-                <List
-                  class="px-3"
-                  search={{ placeholder: "Search boards or #id…", autofocus: true }}
-                  emptyMessage="No boards match."
-                  key={(b) => String(b?.id ?? "")}
-                  items={() => all.map((b) => ({ ...b, ref: `#${b.id}` }))}
-                  /* `ref` is in the filter keys so typing 674 finds the board. You refer to
+      {/* ROW 1 — THE PROJECT. Everything below belongs to it; for a view that is not per-project
+          it says so instead of showing a picker that changes nothing. */}
+      <div class="iris-projectrow shrink-0">
+        <Show when={rowScope() !== "project"}>
+          <span class="iris-projectrow__scope" data-testid="iris-scope">
+            {rowScope() === "session" ? "This session" : "All projects"}
+            <span class="iris-projectrow__chip">{rowScope()}</span>
+          </span>
+        </Show>
+        <Show when={rowScope() === "project" && ((bloqs.latest ?? bloqs())?.bloqs?.length ?? 0) > 0}>
+          <button
+            type="button"
+            class="flex items-center gap-1 px-2 py-1 text-12-regular text-text-base hover:bg-background-element rounded text-start min-w-0 cursor-pointer"
+            onClick={() => {
+              const all = (bloqs.latest ?? bloqs())?.bloqs ?? []
+              dialog.show(() => (
+                <Dialog title="Board" description={`${all.length} boards`}>
+                  <List
+                    class="px-3"
+                    search={{ placeholder: "Search boards or #id…", autofocus: true }}
+                    emptyMessage="No boards match."
+                    key={(b) => String(b?.id ?? "")}
+                    items={() => all.map((b) => ({ ...b, ref: `#${b.id}` }))}
+                    /* `ref` is in the filter keys so typing 674 finds the board. You refer to
                      these by number everywhere else — commits, tickets, conversation — and a
                      picker you can only search by name makes the number useless here. */
-                  filterKeys={["name", "ref"]}
-                  onSelect={(b) => {
-                    if (!b) return
-                    choose(b.id)
-                    // Close it. A picker that stays open after you have picked leaves you
-                    // looking at a list of things you did not choose, with the result hidden
-                    // behind it — dialog-select-mcp does not close because it is a TOGGLE
-                    // list you keep working in, and copying its shape brought that along.
-                    dialog.close()
-                  }}
-                >
-                  {(b) => (
-                    <div class="w-full flex items-baseline gap-2 min-w-0">
-                      <span class="truncate">{b.name}</span>
-                      {/* AFTER the name, muted and mono. Leading with the number would make
+                    filterKeys={["name", "ref"]}
+                    onSelect={(b) => {
+                      if (!b) return
+                      choose(b.id)
+                      // Close it. A picker that stays open after you have picked leaves you
+                      // looking at a list of things you did not choose, with the result hidden
+                      // behind it — dialog-select-mcp does not close because it is a TOGGLE
+                      // list you keep working in, and copying its shape brought that along.
+                      dialog.close()
+                    }}
+                  >
+                    {(b) => (
+                      <div class="w-full flex items-baseline gap-2 min-w-0">
+                        <span class="truncate">{b.name}</span>
+                        {/* AFTER the name, muted and mono. Leading with the number would make
                           every row start with noise and wreck scanning; trailing keeps the
                           names left-aligned and the ids in a column of their own. */}
-                      <span class="ms-auto shrink-0 font-mono tabular-nums text-11-regular text-text-weaker">
-                        {b.ref}
-                      </span>
-                    </div>
-                  )}
-                </List>
-              </Dialog>
-            ))
+                        <span class="ms-auto shrink-0 font-mono tabular-nums text-11-regular text-text-weaker">
+                          {b.ref}
+                        </span>
+                      </div>
+                    )}
+                  </List>
+                </Dialog>
+              ))
+            }}
+          >
+            <span class="truncate">{activeBloqName()}</span>
+            <span class="text-text-weak flex items-center shrink-0">
+              <ChevronDown />
+            </span>
+          </button>
+        </Show>
+        <span class="flex-1" />
+        <button
+          type="button"
+          class="iris-focusbtn"
+          classList={{ "iris-focusbtn--on": focus() }}
+          title={focus() ? "Show tabs (Esc)" : "Focus — hide the tab rows"}
+          aria-pressed={focus()}
+          onClick={() => {
+            setPlusOpen(false)
+            setFocus((v) => !v)
           }}
         >
-          <span class="truncate">{activeBloqName()}</span>
-          <span class="text-text-weak flex items-center shrink-0">
-            <ChevronDown />
-          </span>
+          ⤢
         </button>
-      </Show>
+      </div>
 
-      {/* full-width: the control is a FIXED 232px by default and four flex items inside it leave
-          each label ~34px of room, so "Agents" and "Pages" were clipped on both sides. The
-          modifier class exists in segmented-control-v2.css; there is no prop for it. */}
-      <SegmentedControlV2
-        class="segmented-control-v2--full-width iris-surfaces shrink-0"
-        value={surface()}
-        onChange={(v) => v && chooseSurface(v as SurfaceId)}
-      >
-        <For each={SURFACES}>
-          {(def) => <SegmentedControlItemV2 value={def.id}>{def.label}</SegmentedControlItemV2>}
-        </For>
-      </SegmentedControlV2>
+      {/* ROW 2 — PRODUCTS AS TABS. Only what you pinned, plus + to pin more. The eight-item bar
+          clipped its labels and put every product on screen whether you use it or not. */}
+      <Show when={!focus()}>
+        <div class="iris-products shrink-0" role="tablist" aria-label="Products">
+          <For each={visibleTabs(pinned(), surface())}>
+            {(id) => (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={surface() === id}
+                class="iris-products__tab"
+                classList={{
+                  "iris-products__tab--on": surface() === id,
+                  "iris-products__tab--temp": !pinned().includes(id),
+                }}
+                onClick={() => chooseSurface(id)}
+              >
+                {SURFACES.find((x) => x.id === id)?.label ?? id}
+              </button>
+            )}
+          </For>
+          <div class="iris-products__plus">
+            <button
+              type="button"
+              class="iris-products__tab"
+              classList={{ "iris-products__tab--on": plusOpen() }}
+              title="Pin a product"
+              aria-haspopup="menu"
+              aria-expanded={plusOpen()}
+              onClick={() => setPlusOpen((v) => !v)}
+            >
+              +
+            </button>
+            <Show when={plusOpen()}>
+              <div class="iris-pinmenu" role="menu" onMouseLeave={() => setPlusOpen(false)}>
+                <div class="iris-pinmenu__head">Tabs in this panel</div>
+                <For each={SURFACES}>
+                  {(def) => (
+                    <button
+                      type="button"
+                      role="menuitemcheckbox"
+                      aria-checked={pinned().includes(def.id)}
+                      class="iris-pinmenu__item"
+                      onClick={() => togglePin(def.id)}
+                    >
+                      <span
+                        class="iris-pinmenu__check"
+                        classList={{ "iris-pinmenu__check--on": pinned().includes(def.id) }}
+                      >
+                        ✓
+                      </span>
+                      {def.label}
+                      <span class="iris-pinmenu__scope">{ACCOUNT_SURFACES.has(def.id) ? "account" : "project"}</span>
+                    </button>
+                  )}
+                </For>
+              </div>
+            </Show>
+          </div>
+        </div>
+      </Show>
 
       {/* LEVEL 2 — a rule underneath, deliberately NOT a second plate.
           The filled segmented control above says "which product surface"; this says "which way
@@ -1836,7 +1973,7 @@ export function SessionIrisTab() {
           happens to wrap, and nothing tells you that picking from the lower one keeps you where
           you are. Rendered only where a surface has sub-views, so the panel does not grow a
           permanent empty row. */}
-      <Show when={SUBVIEWS[surface()]}>
+      <Show when={!focus() && SUBVIEWS[surface()]}>
         {(list) => (
           <div class="iris-subnav shrink-0" role="tablist" aria-label={`${paneLabel()} views`}>
             <For each={list()}>
@@ -1993,7 +2130,11 @@ export function SessionIrisTab() {
                 <Show when={openRow()!.pane === "catalog" && openRow()!.raw?.type}>
                   <IrisIntegrationDetail
                     row={openRow()!.raw}
-                    connect={connect()?.type === openRow()!.raw.type ? { state: connect()!.state, message: connect()!.message } : undefined}
+                    connect={
+                      connect()?.type === openRow()!.raw.type
+                        ? { state: connect()!.state, message: connect()!.message }
+                        : undefined
+                    }
                     onConnect={() => void startConnect(String(openRow()!.raw.type))}
                   />
                 </Show>
@@ -2007,7 +2148,10 @@ export function SessionIrisTab() {
                     {openRow()!.command}
                   </button>
                 </Show>
-                <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1" classList={{ hidden: openRow()!.pane === "catalog" }}>
+                <dl
+                  class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1"
+                  classList={{ hidden: openRow()!.pane === "catalog" }}
+                >
                   <For each={openRow()!.fields}>
                     {([k, v]) => (
                       <>
