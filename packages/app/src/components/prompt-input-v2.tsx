@@ -37,6 +37,11 @@ export type PromptInputV2ComposerProps = {
   class?: string
   controller: PromptInputV2ComposerController
   borderUnderlay?: boolean
+  /**
+   * Open the integrations panel (#186527). Passed only by the session page: the new-session
+   * screen has no session panel, and a menu entry that does nothing is worse than none.
+   */
+  onIntegrations?: () => void
 }
 
 export type PromptInputV2ControllerProps = Omit<PromptInputProps, "class" | "submission">
@@ -56,6 +61,7 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
       <PromptInputV2
         controller={props.controller}
         borderUnderlay={props.borderUnderlay}
+        onIntegrations={props.onIntegrations}
         class={props.class}
         variantControlVisible={!props.controller.model.loading}
         transcribeUrl={() => sdkForDictation().url}
