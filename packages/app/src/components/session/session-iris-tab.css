@@ -1353,7 +1353,13 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
 .iris-artifacts__preview { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 4px; }
 .iris-artifacts__note { font-size: 11px; color: var(--text-weak); }
 .iris-artifacts__head { font-size: 11px; color: var(--text-weak); flex-shrink: 0; }
-.iris-artifacts__frame { flex: 1; min-height: 200px; width: 100%; border: 1px solid var(--border-weaker-base); border-radius: 6px; background: #fff; }
+/* The page sits FLUSH in the pane: no border, no radius, and it cancels the pane's own padding on
+   the sides and bottom so it meets the panel edges — a window onto the page, not a card in it. */
+.iris-artifacts__frame {
+  flex: 1; min-height: 200px; display: block;
+  width: calc(100% + 16px); margin: 0 -8px -6px;
+  border: 0; border-radius: 0; background: #fff;
+}
 .iris-artifacts__doc { flex: 1; min-height: 0; overflow: auto; font-size: 12px; }
 .iris-artifacts__code { font-family: var(--font-mono, ui-monospace, monospace); white-space: pre; margin: 0; }
 .iris-artifacts__table { border-collapse: collapse; font-variant-numeric: tabular-nums; }
