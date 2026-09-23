@@ -1397,3 +1397,13 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
 .iris-cat__dot[data-tone="up"] { background: var(--icon-success-base, #4a9); }
 .iris-cat__dot[data-tone="down"] { background: var(--icon-critical-base, #d55); }
 .iris-cat__dot[data-tone="unknown"] { background: var(--border-weak-base, #666); }
+
+/* The monogram is a FALLBACK, not a watermark.
+   It sits behind the logo so a row that loses its image to a dropped request still says which
+   service it is — logo.dev answers 200 with a generic glyph for an unknown name, so onerror
+   fires only on a network failure. But most brand marks are transparent PNGs, and the letters
+   showed straight through them: a "G" stamped across the Google logo. Once the image has
+   actually loaded, the letters go. If it fails, the img is removed and they come back. */
+.iris-int__mark[data-logo="1"] .iris-int__fallback {
+  visibility: hidden;
+}

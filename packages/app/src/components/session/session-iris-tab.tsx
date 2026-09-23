@@ -2644,10 +2644,27 @@ export function SessionIrisTab() {
                   {(c) => (
                     <button type="button" class="w-full text-start flex items-center gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow("catalog", c))}>
                       <span class="iris-int__mark iris-int__mark--off shrink-0" title={c.type}>
+                        {/* A LOADED logo hides the monogram behind it. Most brand marks are
+                            transparent PNGs, so the letters showed THROUGH the logo — a "G"
+                            stamped across the Google mark. onError removes the image and the
+                            monogram returns: a row that loses its logo to a dropped request
+                            must still say which service it is. */}
                         <Show when={c.logoUrl}>
-                          <img class="iris-int__logo" src={c.logoUrl} alt="" aria-hidden="true" loading="lazy" decoding="async" onError={(e) => e.currentTarget.remove()} />
+                          <img
+                            class="iris-int__logo"
+                            src={c.logoUrl}
+                            alt=""
+                            aria-hidden="true"
+                            loading="lazy"
+                            decoding="async"
+                            onLoad={(e) => e.currentTarget.parentElement?.setAttribute("data-logo", "1")}
+                            onError={(e) => {
+                              e.currentTarget.parentElement?.removeAttribute("data-logo")
+                              e.currentTarget.remove()
+                            }}
+                          />
                         </Show>
-                        {providerMark(c.type, c.name)}
+                        <span class="iris-int__fallback">{providerMark(c.type, c.name)}</span>
                       </span>
                       <span class="min-w-0 flex-1">
                         <span class="block text-12-regular text-text-base truncate">{c.name}</span>
@@ -2782,10 +2799,14 @@ export function SessionIrisTab() {
                             aria-hidden="true"
                             loading="lazy"
                             decoding="async"
-                            onError={(e) => e.currentTarget.remove()}
+                            onLoad={(e) => e.currentTarget.parentElement?.setAttribute("data-logo", "1")}
+                            onError={(e) => {
+                              e.currentTarget.parentElement?.removeAttribute("data-logo")
+                              e.currentTarget.remove()
+                            }}
                           />
                         </Show>
-                        {providerMark(i.type, i.name)}
+                        <span class="iris-int__fallback">{providerMark(i.type, i.name)}</span>
                       </span>
                       <span class="min-w-0 flex-1">
                         <span class="block text-12-regular text-text-base truncate">{i.name}</span>
