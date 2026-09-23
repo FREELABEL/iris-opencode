@@ -1,4 +1,16 @@
-import { createEffect, createMemo, createResource, createSignal, For, Match, on, onCleanup, Show, Switch, untrack } from "solid-js"
+import {
+  createEffect,
+  createMemo,
+  createResource,
+  createSignal,
+  For,
+  Match,
+  on,
+  onCleanup,
+  Show,
+  Switch,
+  untrack,
+} from "solid-js"
 import "./session-iris-tab.css"
 import { connectsBy, healthRead, metaLine, usageBars } from "./iris-catalog"
 import { IrisIntegrationDetail } from "./iris-integration-detail"
@@ -15,6 +27,7 @@ import { useSDK } from "@/context/sdk"
 import { usePlatform } from "@/context/platform"
 import { IrisCardEditor } from "./iris-card-editor"
 import { IrisArtifacts } from "./iris-artifacts"
+import { irisNavRequest, clearIrisNav } from "./iris-nav"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { IrisRooms } from "./iris-rooms"
 import { itemCommands, renderMarkdown } from "./iris-item"
@@ -180,14 +193,23 @@ function describeRow(
   return out ? { ...out, raw: r, pane: surface } : null
 }
 
-function describeFields(surface: string, r: any): { title: string; fields: [string, string][]; command?: string } | null {
+function describeFields(
+  surface: string,
+  r: any,
+): { title: string; fields: [string, string][]; command?: string } | null {
   if (surface === "agents")
     return {
       title: r.name,
       fields: fieldsOf([
-        ["id", r.id], ["status", r.status], ["model", r.model], ["active", r.active],
-        ["mode", r.heartbeat ? "heartbeat" : "on demand"], ["schedule", r.schedule],
-        ["last run", r.lastRun], ["consecutive failures", r.failures], ["created", r.createdAt],
+        ["id", r.id],
+        ["status", r.status],
+        ["model", r.model],
+        ["active", r.active],
+        ["mode", r.heartbeat ? "heartbeat" : "on demand"],
+        ["schedule", r.schedule],
+        ["last run", r.lastRun],
+        ["consecutive failures", r.failures],
+        ["created", r.createdAt],
         ["description", r.description],
       ]),
       command: `iris agents show ${r.id}`,
@@ -196,10 +218,18 @@ function describeFields(surface: string, r: any): { title: string; fields: [stri
     return {
       title: r.name,
       fields: fieldsOf([
-        ["id", r.id], ["status", r.status], ["company", r.company], ["email", r.email],
-        ["score", r.score], ["hot", r.hot], ["type", r.type],
-        ["city", r.city], ["country", r.country], ["replied", r.repliedAt],
-        ["keywords", r.keywords], ["created", r.createdAt],
+        ["id", r.id],
+        ["status", r.status],
+        ["company", r.company],
+        ["email", r.email],
+        ["score", r.score],
+        ["hot", r.hot],
+        ["type", r.type],
+        ["city", r.city],
+        ["country", r.country],
+        ["replied", r.repliedAt],
+        ["keywords", r.keywords],
+        ["created", r.createdAt],
       ]),
       command: `iris leads show ${r.id}`,
     }
@@ -207,9 +237,16 @@ function describeFields(surface: string, r: any): { title: string; fields: [stri
     return {
       title: r.title,
       fields: fieldsOf([
-        ["id", r.id], ["slug", r.slug], ["status", r.status], ["version", r.version],
-        ["visibility", r.visibility], ["requires auth", r.requiresAuth], ["category", r.category],
-        ["published", r.publishedAt], ["updated", r.updatedAt], ["url", r.url],
+        ["id", r.id],
+        ["slug", r.slug],
+        ["status", r.status],
+        ["version", r.version],
+        ["visibility", r.visibility],
+        ["requires auth", r.requiresAuth],
+        ["category", r.category],
+        ["published", r.publishedAt],
+        ["updated", r.updatedAt],
+        ["url", r.url],
       ]),
       command: r.slug ? `iris pages view ${r.slug}` : undefined,
     }
@@ -218,9 +255,11 @@ function describeFields(surface: string, r: any): { title: string; fields: [stri
     return {
       title: r.name,
       fields: fieldsOf([
-        ["status", r.status], ["online", r.online],
+        ["status", r.status],
+        ["online", r.online],
         // "0/3" on the row meant active tasks over capacity and said so nowhere.
-        ["running tasks", r.activeTasks], ["max concurrent", r.maxConcurrent],
+        ["running tasks", r.activeTasks],
+        ["max concurrent", r.maxConcurrent],
         // The hardware block is a SNAPSHOT and says when it was taken. Without that, a
         // twenty-hour-old "0.1 GB free" reads as an emergency happening right now.
         ["hardware as of", r.hardwareDetectedAt ? relativeAge(r.hardwareDetectedAt) : undefined],
@@ -229,15 +268,18 @@ function describeFields(surface: string, r: any): { title: string; fields: [stri
         // Disk free is here because a full disk is the failure that looks like everything else
         // breaking at once, and nothing in this fleet reported it until someone went looking.
         ["disk", r.diskTotalGb ? `${r.diskFreeGb ?? "?"} GB free of ${r.diskTotalGb} GB` : undefined],
-        ["os", r.os], ["daemon", r.daemonVersion],
+        ["os", r.os],
+        ["daemon", r.daemonVersion],
         ["uptime", hrs != null ? (hrs >= 1 ? `${hrs}h` : `${Math.floor((r.uptimeSeconds ?? 0) / 60)}m`) : undefined],
         // A crash-looping daemon heartbeats once per restart, so it never misses one and reads
         // as healthy. The restart count is what separates "up for hours" from "dying nightly".
         ["restarts seen", r.recentRestarts],
         ["tasks completed", r.tasksCompleted],
         ["can run", (r.capabilities ?? []).join(", ")],
-        ["transport", r.transport], ["tailnet ip", r.tailscaleIp],
-        ["last heartbeat", r.lastHeartbeat], ["id", r.id],
+        ["transport", r.transport],
+        ["tailnet ip", r.tailscaleIp],
+        ["last heartbeat", r.lastHeartbeat],
+        ["id", r.id],
       ]),
       command: `iris hive nodes show ${r.id}`,
     }
@@ -246,10 +288,15 @@ function describeFields(surface: string, r: any): { title: string; fields: [stri
     return {
       title: r.name,
       fields: fieldsOf([
-        ["id", r.id], ["slug", r.slug], ["status", r.status],
-        ["pages", r.pagesCount], ["home page", r.homePageId],
-        ["owner", r.owner], ["requires auth", r.requiresAuth],
-        ["description", r.description], ["updated", r.updatedAt],
+        ["id", r.id],
+        ["slug", r.slug],
+        ["status", r.status],
+        ["pages", r.pagesCount],
+        ["home page", r.homePageId],
+        ["owner", r.owner],
+        ["requires auth", r.requiresAuth],
+        ["description", r.description],
+        ["updated", r.updatedAt],
       ]),
       command: r.slug ? `iris pages sites show ${r.slug}` : undefined,
     }
@@ -281,7 +328,9 @@ function describeFields(surface: string, r: any): { title: string; fields: [stri
     return {
       title: r.label,
       fields: fieldsOf([
-        ["from", r.from], ["type", r.type], ["read", r.read],
+        ["from", r.from],
+        ["type", r.type],
+        ["read", r.read],
         ["received", r.receivedAt ? relativeAge(r.receivedAt) : undefined],
         ["manifest position", r.index],
       ]),
@@ -308,7 +357,9 @@ function describeFields(surface: string, r: any): { title: string; fields: [stri
       title: r.name,
       fields: fieldsOf([
         ["attached to this board", r.attached],
-        ["scope", r.scope], ["access", r.accessType], ["version", r.version],
+        ["scope", r.scope],
+        ["access", r.accessType],
+        ["version", r.version],
         ["active", r.active],
         ["steps", (r.steps ?? []).length || undefined],
         ["arguments", (r.args ?? []).length || undefined],
@@ -316,8 +367,10 @@ function describeFields(surface: string, r: any): { title: string; fields: [stri
         ["installed here", r.hasLocal ? (r.localWhere ? `yes — ${r.localWhere}` : true) : false],
         ["installed version", r.installedVersion],
         ["local edits", r.edited],
-        ["installs", r.installs], ["views", r.views],
-        ["published", r.publishedAt], ["landing page", r.publicUrl],
+        ["installs", r.installs],
+        ["views", r.views],
+        ["published", r.publishedAt],
+        ["landing page", r.publicUrl],
         ["description", r.description],
       ]),
       // The one command that works for this card's state (#186278, #186274).
@@ -327,9 +380,15 @@ function describeFields(surface: string, r: any): { title: string; fields: [stri
     return {
       title: r.name,
       fields: fieldsOf([
-        ["id", r.id], ["provider", r.provider], ["type", r.type], ["category", r.category],
-        ["scope", r.scope], ["brand", r.brandId], ["auth", r.authMode],
-        ["your connection", r.status], ["connected", r.connected],
+        ["id", r.id],
+        ["provider", r.provider],
+        ["type", r.type],
+        ["category", r.category],
+        ["scope", r.scope],
+        ["brand", r.brandId],
+        ["auth", r.authMode],
+        ["your connection", r.status],
+        ["connected", r.connected],
         // TWO DIFFERENT QUESTIONS, said separately. "Is the provider up" and "does your
         // credential work" get confused constantly, and the confusion always resolves in the
         // reassuring direction — people read an operational provider as a working connection.
@@ -350,18 +409,26 @@ function describeFields(surface: string, r: any): { title: string; fields: [stri
     return {
       title: r.name,
       fields: fieldsOf([
-        ["slug", r.slug], ["scope", r.scope], ["version", r.version], ["system", r.isSystem],
+        ["slug", r.slug],
+        ["scope", r.scope],
+        ["version", r.version],
+        ["system", r.isSystem],
         ["display field", r.displayField],
         ["fields", (r.fields ?? []).map((f: any) => `${f.key}:${f.type}`).join(", ")],
         // Said out loud rather than left to the column list: some of these datasets carry PHI,
         // and which ones is not something to make someone infer.
-        ["phi fields", (r.fields ?? []).filter((f: any) => f.visibility === "phi").map((f: any) => f.key).join(", ")],
+        [
+          "phi fields",
+          (r.fields ?? [])
+            .filter((f: any) => f.visibility === "phi")
+            .map((f: any) => f.key)
+            .join(", "),
+        ],
       ]),
       command: r.slug ? `iris atlas:datasets records list --schema ${r.slug}` : undefined,
     }
   return null
 }
-
 
 /**
  * JSON with the TYPE carried in the colour.
@@ -405,7 +472,13 @@ export function highlightJson(value: unknown): string {
  */
 const ChevronDown = () => (
   <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" class="shrink-0">
-    <path d="M5 6.5L8 9.5L11 6.5" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+    <path
+      d="M5 6.5L8 9.5L11 6.5"
+      stroke="currentColor"
+      stroke-width="1"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
   </svg>
 )
 
@@ -525,9 +598,6 @@ const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
     // Threaded multi-agent chat with @mention (#186511). Account-wide like Graph — a room is an
     // iris-api thread, not a board row — and it owns its pane: IrisRooms fetches for itself.
     { id: "rooms", label: "Rooms", pane: "rooms", path: () => `/iris/rooms` },
-    // What the agents in THIS session made (#186508 / #186510). Session-scoped, not board-scoped,
-    // and it owns its pane: IrisArtifacts fetches, listens and polls for itself.
-    { id: "artifacts", label: "Artifacts", pane: "artifacts", path: () => `/iris/artifacts` },
   ],
   pages: [
     { id: "pages", label: "Pages", pane: "pages", path: (b) => `/iris/pages/${b}` },
@@ -536,18 +606,32 @@ const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
     // pages made every one of those invisible and made a nine-page site look like nine
     // unrelated rows. Not board-scoped — sites are owned by a user OR a bloq.
     { id: "sites", label: "Sites", pane: "sites", path: (b) => `/iris/sites/${b}` },
+    // Genesis artifacts drafted in THIS session (#186508 / #186510) — what `genesis_artifact`
+    // made, before it is published to /p/. Session-scoped, not board-scoped, and it owns its
+    // pane: IrisArtifacts fetches, listens and polls for itself.
+    { id: "artifacts", label: "Artifacts", pane: "artifacts", path: () => `/iris/artifacts` },
   ],
   playbooks: [
     // "Which playbooks does this project use" and "what could I install" are different
     // questions; one flat list of 128 was the wrong answer to both.
     { id: "project", label: "Project", pane: "playbooks", path: (b) => `/iris/playbooks/${b}?view=project` },
-    { id: "marketplace", label: "Marketplace", pane: "playbooks", path: (b) => `/iris/playbooks/${b}?view=marketplace` },
+    {
+      id: "marketplace",
+      label: "Marketplace",
+      pane: "playbooks",
+      path: (b) => `/iris/playbooks/${b}?view=marketplace`,
+    },
   ],
   integrations: [
     // A connected account is not automatically a board's to use. Narrowed server-side so the
     // footer counts the scope on screen — see rule 1 in NAVIGATION-TEMPLATE.md.
     { id: "project", label: "Project", pane: "integrations", path: (b) => `/iris/integrations/${b}?scope=project` },
-    { id: "organization", label: "Org", pane: "integrations", path: (b) => `/iris/integrations/${b}?scope=organization` },
+    {
+      id: "organization",
+      label: "Org",
+      pane: "integrations",
+      path: (b) => `/iris/integrations/${b}?scope=organization`,
+    },
     { id: "user", label: "Personal", pane: "integrations", path: (b) => `/iris/integrations/${b}?scope=user` },
     // "What can I add" is a different question from "what do I have", so it is a view rather
     // than a "+" that opens a modal over the list you were reading.
@@ -671,7 +755,10 @@ export function logoFor(logos: Record<string, string>, type: string | undefined)
 }
 
 export function providerMark(type: string | undefined, name: string): string {
-  const brand = String(type ?? "").split("-").pop() ?? ""
+  const brand =
+    String(type ?? "")
+      .split("-")
+      .pop() ?? ""
   if (PROVIDER_MARKS[brand]) return PROVIDER_MARKS[brand]
   const src = brand || name
   return src.slice(0, 2).toUpperCase() || "?"
@@ -845,8 +932,7 @@ export function SessionIrisTab() {
     }
   }
   /** Every request to the sidecar. `init` exists because this panel now WRITES (page saves). */
-  const doFetch = (path: string, init?: RequestInit) =>
-    (platform.fetch ?? globalThis.fetch)(`${base()}${path}`, init)
+  const doFetch = (path: string, init?: RequestInit) => (platform.fetch ?? globalThis.fetch)(`${base()}${path}`, init)
 
   const [bloqs] = createResource(base, async () => {
     /*
@@ -1177,7 +1263,8 @@ export function SessionIrisTab() {
       const res = await doFetch(`/iris/graph/${boardId}`, { headers: { Accept: "application/json" } })
       // Not ok, or not JSON: NOT MEASURED. Rendering it as an empty graph would claim the board
       // holds nothing, which is the one thing we do not know.
-      if (!res.ok || !(res.headers.get("content-type") ?? "").includes("json")) return { measured: false, nodes: [], edges: [] }
+      if (!res.ok || !(res.headers.get("content-type") ?? "").includes("json"))
+        return { measured: false, nodes: [], edges: [] }
       const j = await res.json()
       if (j?.measured === false) return { measured: false, reason: j?.reason, nodes: [], edges: [] }
       const got = { nodes: j?.nodes ?? [], edges: j?.edges ?? [] }
@@ -1432,7 +1519,9 @@ export function SessionIrisTab() {
   const [mcpTools] = createResource(
     () => {
       const r = openRow()
-      return r?.pane === "mcp" && detailTab() === "tools" && r.raw?.name ? ([base(), String(r.raw.name)] as const) : undefined
+      return r?.pane === "mcp" && detailTab() === "tools" && r.raw?.name
+        ? ([base(), String(r.raw.name)] as const)
+        : undefined
     },
     async ([, name]) => {
       const res = await doFetch(`/mcp/${encodeURIComponent(name)}/tools`)
@@ -1465,7 +1554,9 @@ export function SessionIrisTab() {
   const [pageDoc, { mutate: mutatePageDoc }] = createResource(
     () => {
       const r = openRow()
-      return r?.pane === "pages" && detailTab() === "edit" && r.raw?.id ? ([base(), Number(r.raw.id)] as const) : undefined
+      return r?.pane === "pages" && detailTab() === "edit" && r.raw?.id
+        ? ([base(), Number(r.raw.id)] as const)
+        : undefined
     },
     async ([, id]) => {
       const res = await doFetch(`/iris/page/${id}`)
@@ -1543,7 +1634,6 @@ export function SessionIrisTab() {
     },
   )
 
-
   // Leaving the surface or the board must close the reader — otherwise you switch to Leads and
   // are still looking at an Atlas item.
   /**
@@ -1591,7 +1681,8 @@ export function SessionIrisTab() {
     // The Graph pane never loads the Atlas payload, so reading lists from `data` there gives the
     // List picker nothing. The graph already holds every list as a `list-<id>` node.
     const lists =
-      fromGraph ?? ((data.latest ?? data())?.lists as AtlasList[] | undefined ?? []).map((l) => ({ id: l.id, name: l.name }))
+      fromGraph ??
+      (((data.latest ?? data())?.lists as AtlasList[] | undefined) ?? []).map((l) => ({ id: l.id, name: l.name }))
     dialog.show(() => (
       <IrisCardEditor
         itemId={itemId}
@@ -1620,6 +1711,18 @@ export function SessionIrisTab() {
       localStorage.setItem(LAST_SUBVIEW_KEY, JSON.stringify(next))
     } catch {}
   }
+  // Steered from outside (iris-nav.ts) — e.g. a Genesis artifact card in the chat asking for
+  // Genesis › Artifacts. Read here, applied, cleared; a request made before this tab mounted is
+  // still waiting in the signal and lands on first mount.
+  createEffect(() => {
+    const req = irisNavRequest()
+    if (!req) return
+    untrack(() => {
+      if (SURFACES.some((x) => x.id === req.surface)) chooseSurface(req.surface as SurfaceId)
+      if (req.sub) chooseSub(req.sub)
+    })
+    clearIrisNav()
+  })
 
   /**
    * What to call the thing on screen, in a sentence.
@@ -1717,7 +1820,11 @@ export function SessionIrisTab() {
       {/* full-width: the control is a FIXED 232px by default and four flex items inside it leave
           each label ~34px of room, so "Agents" and "Pages" were clipped on both sides. The
           modifier class exists in segmented-control-v2.css; there is no prop for it. */}
-      <SegmentedControlV2 class="segmented-control-v2--full-width iris-surfaces shrink-0" value={surface()} onChange={(v) => v && chooseSurface(v as SurfaceId)}>
+      <SegmentedControlV2
+        class="segmented-control-v2--full-width iris-surfaces shrink-0"
+        value={surface()}
+        onChange={(v) => v && chooseSurface(v as SurfaceId)}
+      >
         <For each={SURFACES}>
           {(def) => <SegmentedControlItemV2 value={def.id}>{def.label}</SegmentedControlItemV2>}
         </For>
@@ -1868,7 +1975,10 @@ export function SessionIrisTab() {
                       </Show>
                       <Show when={installResult()}>
                         {(r) => (
-                          <p class="text-11-regular" classList={{ "text-text-weak": r().ok, "text-text-danger-base": !r().ok }}>
+                          <p
+                            class="text-11-regular"
+                            classList={{ "text-text-weak": r().ok, "text-text-danger-base": !r().ok }}
+                          >
                             {r().message}
                           </p>
                         )}
@@ -2020,11 +2130,16 @@ export function SessionIrisTab() {
                     <p class="text-12-regular text-text-weak py-2">Reading…</p>
                   </Match>
                   <Match when={mcpTools.error}>
-                    <p class="text-12-regular text-text-danger-base py-2">{String(mcpTools.error?.message ?? mcpTools.error)}</p>
+                    <p class="text-12-regular text-text-danger-base py-2">
+                      {String(mcpTools.error?.message ?? mcpTools.error)}
+                    </p>
                   </Match>
                   <Match when={(mcpTools.latest?.length ?? 0) === 0}>
                     <p class="text-12-regular text-text-weak py-2">
-                      No tools.{openRow()!.raw?.status === "connected" ? "" : ` This server is ${String(openRow()!.raw?.status ?? "not connected").replace("_", " ")}.`}
+                      No tools.
+                      {openRow()!.raw?.status === "connected"
+                        ? ""
+                        : ` This server is ${String(openRow()!.raw?.status ?? "not connected").replace("_", " ")}.`}
                     </p>
                   </Match>
                   <Match when={mcpTools.latest}>
@@ -2052,8 +2167,8 @@ export function SessionIrisTab() {
                   when={(openRow()!.raw?.steps?.length ?? 0) > 0 || (openRow()!.raw?.args?.length ?? 0) > 0}
                   fallback={
                     <p class="text-12-regular text-text-weak py-2">
-                      This playbook publishes no step summary. The Document tab has the real thing when it
-                      is installed on this machine.
+                      This playbook publishes no step summary. The Document tab has the real thing when it is installed
+                      on this machine.
                     </p>
                   }
                 >
@@ -2077,9 +2192,7 @@ export function SessionIrisTab() {
                     </For>
                   </Show>
                   <Show when={(openRow()!.raw?.steps?.length ?? 0) > 0}>
-                    <h4 class="text-11-regular text-text-weaker pt-3 pb-1">
-                      Steps · {openRow()!.raw.steps.length}
-                    </h4>
+                    <h4 class="text-11-regular text-text-weaker pt-3 pb-1">Steps · {openRow()!.raw.steps.length}</h4>
                     <For each={openRow()!.raw.steps}>
                       {(st: any, i) => (
                         <div class="flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0">
@@ -2112,8 +2225,7 @@ export function SessionIrisTab() {
                   <Match when={playbookDoc.latest && !playbookDoc.latest!.found}>
                     {/* Neither copy exists: not installed here AND not published. */}
                     <p class="text-12-regular text-text-weak py-2">
-                      No document — this playbook is not installed on this machine and has not been
-                      published.
+                      No document — this playbook is not installed on this machine and has not been published.
                       <br />
                       <span class="font-mono text-11-regular">iris playbook install {openRow()!.raw?.name}</span>
                     </p>
@@ -2122,11 +2234,17 @@ export function SessionIrisTab() {
                     {/* WHICH COPY you are reading. The local file and the published one can
                         differ — that is the whole reason `playbook publish` can lie — so the
                         source is stated rather than left to be assumed. */}
-                    <p class="font-mono text-11-regular text-text-weaker pb-2 truncate" title={playbookDoc.latest!.path}>
+                    <p
+                      class="font-mono text-11-regular text-text-weaker pb-2 truncate"
+                      title={playbookDoc.latest!.path}
+                    >
                       {playbookDoc.latest!.source === "local" ? "local · " : "published · "}
                       {playbookDoc.latest!.path}
                     </p>
-                    <div class="iris-markdown text-12-regular" innerHTML={renderMarkdown(playbookDoc.latest!.content)} />
+                    <div
+                      class="iris-markdown text-12-regular"
+                      innerHTML={renderMarkdown(playbookDoc.latest!.content)}
+                    />
                   </Match>
                 </Switch>
               </Match>
@@ -2149,9 +2267,8 @@ export function SessionIrisTab() {
                     {/* A GENUINE zero, and it says what it means: attached to a board is not
                         the same as given something to do. */}
                     <p class="text-12-regular text-text-weak py-2">
-                      Nothing assigned. This agent belongs to a board but has not been handed any
-                      work — assign an item with{" "}
-                      <span class="font-mono text-11-regular">iris agents assign</span>.
+                      Nothing assigned. This agent belongs to a board but has not been handed any work — assign an item
+                      with <span class="font-mono text-11-regular">iris agents assign</span>.
                     </p>
                   </Match>
                   <Match when={agentTasks.latest}>
@@ -2168,7 +2285,10 @@ export function SessionIrisTab() {
                             {t.done ? "✓" : "·"}
                           </span>
                           <div class="min-w-0 flex-1">
-                            <p class="text-12-regular" classList={{ "text-text-weak": t.done, "text-text-base": !t.done }}>
+                            <p
+                              class="text-12-regular"
+                              classList={{ "text-text-weak": t.done, "text-text-base": !t.done }}
+                            >
                               {t.title}
                             </p>
                             {/* WHERE the work lives. A task title with no context is the same
@@ -2243,8 +2363,8 @@ export function SessionIrisTab() {
                     <Show when={records.latest!.columns.some((c) => !c.visibility)}>
                       <p class="text-11-regular text-text-weaker pb-2">
                         {records.latest!.columns.filter((c) => !c.visibility).length} of{" "}
-                        {records.latest!.columns.length} columns declare no visibility — unlabelled is
-                        not the same as safe to share.
+                        {records.latest!.columns.length} columns declare no visibility — unlabelled is not the same as
+                        safe to share.
                       </p>
                     </Show>
                     <div class="iris-table-wrap">
@@ -2357,6 +2477,9 @@ export function SessionIrisTab() {
               doFetch={doFetch}
               sessionId={sessionLayout.params.id}
               projectParam={projectParam()}
+              project={projectDir()}
+              bloqId={activeBloq()}
+              bloqName={activeBloqName()}
               listen={(fn) => serverSDK().event.listen(fn as any)}
             />
           </Match>
@@ -2366,10 +2489,14 @@ export function SessionIrisTab() {
 
           {/* NOT MEASURED. Never rendered as an empty surface — see surfaceView. */}
           <Match when={view() === "unreachable"}>
-            <p class="px-2 py-2 text-12-regular text-text-weak">Could not reach IRIS — {(bloqs.latest ?? bloqs())?.reason ?? "unknown"}.</p>
+            <p class="px-2 py-2 text-12-regular text-text-weak">
+              Could not reach IRIS — {(bloqs.latest ?? bloqs())?.reason ?? "unknown"}.
+            </p>
           </Match>
           <Match when={view() === "surface-error"}>
-            <p class="px-2 py-2 text-12-regular text-text-weak">Could not load {paneLabel()} — {current()?.reason ?? "unknown"}.</p>
+            <p class="px-2 py-2 text-12-regular text-text-weak">
+              Could not load {paneLabel()} — {current()?.reason ?? "unknown"}.
+            </p>
           </Match>
 
           <Match when={view() === "rows"}>
@@ -2385,9 +2512,7 @@ export function SessionIrisTab() {
                       <header class="flex items-baseline gap-2 px-2 pb-1 pt-1">
                         <h3 class="text-12-medium text-text-base">{list.name}</h3>
                         {/* Counts in mono + tabular, so columns of numbers line up and read as data. */}
-                        <span class="font-mono tabular-nums text-11-regular text-text-weak">
-                          {list.items.length}
-                        </span>
+                        <span class="font-mono tabular-nums text-11-regular text-text-weak">{list.items.length}</span>
                       </header>
                       <For each={list.items}>
                         {(item) => (
@@ -2415,8 +2540,18 @@ export function SessionIrisTab() {
               <Match when={pane() === "agents"}>
                 <For each={rows()}>
                   {(a) => (
-                    <button type="button" class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow(pane(), a))}>
-                      <span class="shrink-0" classList={{ "text-text-base": a.status === "healthy", "text-text-weak": a.status !== "healthy" }}>
+                    <button
+                      type="button"
+                      class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
+                      onClick={() => setOpenRow(describeRow(pane(), a))}
+                    >
+                      <span
+                        class="shrink-0"
+                        classList={{
+                          "text-text-base": a.status === "healthy",
+                          "text-text-weak": a.status !== "healthy",
+                        }}
+                      >
                         ●
                       </span>
                       <span class="text-12-regular text-text-base min-w-0 flex-1">{a.name}</span>
@@ -2431,7 +2566,11 @@ export function SessionIrisTab() {
               <Match when={pane() === "leads"}>
                 <For each={rows()}>
                   {(l) => (
-                    <button type="button" class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow(pane(), l))}>
+                    <button
+                      type="button"
+                      class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
+                      onClick={() => setOpenRow(describeRow(pane(), l))}
+                    >
                       <span class="shrink-0">{l.hot ? "🔥" : "·"}</span>
                       <span class="text-12-regular text-text-base min-w-0 flex-1">{l.name}</span>
                       <Show when={l.status}>
@@ -2445,8 +2584,19 @@ export function SessionIrisTab() {
               <Match when={pane() === "mcp"}>
                 <For each={rows()}>
                   {(m) => (
-                    <button type="button" data-slot="iris-mcp-row" class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow(pane(), m))}>
-                      <span class="shrink-0" classList={{ "text-text-base": m.status === "connected", "text-text-weak": m.status !== "connected" }}>
+                    <button
+                      type="button"
+                      data-slot="iris-mcp-row"
+                      class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
+                      onClick={() => setOpenRow(describeRow(pane(), m))}
+                    >
+                      <span
+                        class="shrink-0"
+                        classList={{
+                          "text-text-base": m.status === "connected",
+                          "text-text-weak": m.status !== "connected",
+                        }}
+                      >
                         {m.status === "connected" ? "●" : "○"}
                       </span>
                       <span class="text-12-regular text-text-base min-w-0 flex-1">{m.name}</span>
@@ -2463,11 +2613,12 @@ export function SessionIrisTab() {
               <Match when={pane() === "hive"}>
                 <For each={rows()}>
                   {(n) => (
-                    <button type="button" class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow(pane(), n))}>
-                      <span
-                        class="shrink-0"
-                        classList={{ "text-text-base": n.online, "text-text-weak": !n.online }}
-                      >
+                    <button
+                      type="button"
+                      class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
+                      onClick={() => setOpenRow(describeRow(pane(), n))}
+                    >
+                      <span class="shrink-0" classList={{ "text-text-base": n.online, "text-text-weak": !n.online }}>
                         {n.online ? "●" : "○"}
                       </span>
                       <span class="text-12-regular text-text-base min-w-0 flex-1">{n.name}</span>
@@ -2482,9 +2633,20 @@ export function SessionIrisTab() {
               <Match when={pane() === "sites"}>
                 <For each={rows()}>
                   {(st) => (
-                    <button type="button" data-slot="iris-site-row" class="w-full text-start px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow("sites", st))}>
+                    <button
+                      type="button"
+                      data-slot="iris-site-row"
+                      class="w-full text-start px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
+                      onClick={() => setOpenRow(describeRow("sites", st))}
+                    >
                       <div class="flex items-baseline gap-2">
-                        <span class="shrink-0" classList={{ "text-text-base": st.status === "published", "text-text-weak": st.status !== "published" }}>
+                        <span
+                          class="shrink-0"
+                          classList={{
+                            "text-text-base": st.status === "published",
+                            "text-text-weak": st.status !== "published",
+                          }}
+                        >
                           {st.status === "published" ? "●" : "○"}
                         </span>
                         <span class="text-12-regular text-text-base min-w-0 flex-1">{st.name}</span>
@@ -2544,7 +2706,8 @@ export function SessionIrisTab() {
                 </Show>
                 <Show when={projectScope() && project()?.measured === false}>
                   <p class="px-2 py-6 text-12-regular text-text-weak">
-                    Not connected — this board's graph could not be read{(project() as any)?.reason ? ` (${(project() as any).reason})` : ""}.
+                    Not connected — this board's graph could not be read
+                    {(project() as any)?.reason ? ` (${(project() as any).reason})` : ""}.
                   </p>
                 </Show>
                 <Show when={projectScope() ? (project()?.nodes?.length ?? 0) > 0 : graphScopedRows().length}>
@@ -2589,8 +2752,8 @@ export function SessionIrisTab() {
                 </Show>
                 <details class="iris-rows shrink-0">
                   <summary class="iris-rows__summary">
-                    {graphScopedRows().length} connected{" "}
-                    {graphScopedRows().length === 1 ? "board" : "boards"}, as a list
+                    {graphScopedRows().length} connected {graphScopedRows().length === 1 ? "board" : "boards"}, as a
+                    list
                   </summary>
                   <div class="iris-rows__body">
                     <For each={graphScopedRows()}>
@@ -2622,7 +2785,11 @@ export function SessionIrisTab() {
               <Match when={pane() === "catalog"}>
                 <For each={rows()}>
                   {(c) => (
-                    <button type="button" class="w-full text-start flex items-center gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow("catalog", c))}>
+                    <button
+                      type="button"
+                      class="w-full text-start flex items-center gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
+                      onClick={() => setOpenRow(describeRow("catalog", c))}
+                    >
                       <span class="iris-int__mark iris-int__mark--off shrink-0" title={c.type}>
                         {/* A LOADED logo hides the monogram behind it. Most brand marks are
                             transparent PNGs, so the letters showed THROUGH the logo — a "G"
@@ -2679,7 +2846,11 @@ export function SessionIrisTab() {
               <Match when={pane() === "inbox"}>
                 <For each={rows()}>
                   {(m) => (
-                    <button type="button" class="w-full text-start px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow("inbox", m))}>
+                    <button
+                      type="button"
+                      class="w-full text-start px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
+                      onClick={() => setOpenRow(describeRow("inbox", m))}
+                    >
                       <div class="flex items-baseline gap-2">
                         {/* Filled means UNREAD — the one thing you are scanning this list for. */}
                         <span class="shrink-0" classList={{ "text-text-base": !m.read, "text-text-weaker": m.read }}>
@@ -2724,12 +2895,22 @@ export function SessionIrisTab() {
                           {pb.ownerUserId ? ` · #${pb.ownerUserId}` : ""} — you can run these, not edit them
                         </h4>
                       </Show>
-                      <button type="button" class="w-full text-start px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow(pane(), pb))}>
+                      <button
+                        type="button"
+                        class="w-full text-start px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
+                        onClick={() => setOpenRow(describeRow(pane(), pb))}
+                      >
                         <div class="flex items-baseline gap-2">
-                          <span class="shrink-0" classList={{ "text-text-base": pb.attached, "text-text-weaker": !pb.attached }}>
+                          <span
+                            class="shrink-0"
+                            classList={{ "text-text-base": pb.attached, "text-text-weaker": !pb.attached }}
+                          >
                             {pb.attached ? "★" : "·"}
                           </span>
-                          <span class="text-12-regular min-w-0 flex-1" classList={{ "text-text-base": pb.owned, "text-text-weak": !pb.owned }}>
+                          <span
+                            class="text-12-regular min-w-0 flex-1"
+                            classList={{ "text-text-base": pb.owned, "text-text-weak": !pb.owned }}
+                          >
                             {pb.name}
                           </span>
                           <Show when={pb.hasLocal}>
@@ -2753,7 +2934,11 @@ export function SessionIrisTab() {
               <Match when={pane() === "integrations"}>
                 <For each={rows()}>
                   {(i) => (
-                    <button type="button" class="w-full text-start flex items-center gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow(pane(), i))}>
+                    <button
+                      type="button"
+                      class="w-full text-start flex items-center gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
+                      onClick={() => setOpenRow(describeRow(pane(), i))}
+                    >
                       {/* The provider mark carries the identity; the ring carries the state.
                           Twenty-five identical grey dots was a list you could not scan and
                           could not triage. */}
@@ -2808,7 +2993,11 @@ export function SessionIrisTab() {
               <Match when={pane() === "schemas"}>
                 <For each={rows()}>
                   {(sc) => (
-                    <button type="button" class="w-full text-start px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow(pane(), sc))}>
+                    <button
+                      type="button"
+                      class="w-full text-start px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
+                      onClick={() => setOpenRow(describeRow(pane(), sc))}
+                    >
                       <div class="flex items-baseline gap-2">
                         <span class="text-12-regular text-text-base min-w-0 flex-1">{sc.name}</span>
                         {/* Scope is shown because 40 of these belong to the account, not the
@@ -2835,10 +3024,17 @@ export function SessionIrisTab() {
               <Match when={pane() === "pages"}>
                 <For each={rows()}>
                   {(pg) => (
-                    <button type="button" class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow(pane(), pg))}>
+                    <button
+                      type="button"
+                      class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
+                      onClick={() => setOpenRow(describeRow(pane(), pg))}
+                    >
                       <span
                         class="shrink-0"
-                        classList={{ "text-text-base": pg.status === "published", "text-text-weak": pg.status !== "published" }}
+                        classList={{
+                          "text-text-base": pg.status === "published",
+                          "text-text-weak": pg.status !== "published",
+                        }}
                       >
                         {pg.status === "published" ? "●" : "○"}
                       </span>
@@ -2872,10 +3068,7 @@ export function SessionIrisTab() {
             payload that supplies the marks — the panel cannot show logos without the credit.
             The string is the platform's own, served beside the logo map. */}
         <Show when={pane() === "integrations" && (current() as any)?.attribution}>
-          <p
-            class="iris-attr px-2 pb-2 text-11-regular text-text-weaker"
-            innerHTML={(current() as any).attribution}
-          />
+          <p class="iris-attr px-2 pb-2 text-11-regular text-text-weaker" innerHTML={(current() as any).attribution} />
         </Show>
 
         {/* The shared footer. Says how many of how many, and offers the next page only when the

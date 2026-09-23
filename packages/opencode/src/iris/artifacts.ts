@@ -56,6 +56,24 @@ export namespace Artifacts {
     author?: Author
     /** Who wrote revision 1. Never changes after that. */
     createdBy?: Author
+    /**
+     * Where this artifact was published in Genesis — ONE page, updated in place on every
+     * republish, so "Publish" twice does not leave two copies on /p/. `revision` is the artifact
+     * revision the page carries; the pane compares it to the current one ("page is behind").
+     */
+    published?: Published
+  }
+
+  export type Visibility = "public" | "unlisted" | "private"
+
+  export interface Published {
+    pageId: number
+    slug: string
+    url: string
+    visibility: Visibility
+    requiresAuth: boolean
+    revision: number
+    at: string
   }
 
   /** A write against a revision that is no longer current. The caller re-reads and decides. */
@@ -103,6 +121,20 @@ export namespace Artifacts {
     }
   }
 
+  function readPublished(p: any): Published | undefined {
+    if (!p || !Number.isInteger(p.pageId) || typeof p.slug !== "string" || typeof p.url !== "string") return undefined
+    if (!["public", "unlisted", "private"].includes(p.visibility)) return undefined
+    return {
+      pageId: p.pageId,
+      slug: p.slug.slice(0, 255),
+      url: p.url.slice(0, 500),
+      visibility: p.visibility,
+      requiresAuth: p.requiresAuth === true,
+      revision: Number.isFinite(p.revision) ? p.revision : 0,
+      at: String(p.at ?? ""),
+    }
+  }
+
   function readMeta(dir: string): Meta | undefined {
     try {
       const m = JSON.parse(readFileSync(path.join(dir, "meta.json"), "utf8"))
@@ -120,6 +152,7 @@ export namespace Artifacts {
         ...(typeof m.language === "string" ? { language: m.language.slice(0, 40) } : {}),
         ...(readAuthor(m.author) ? { author: readAuthor(m.author) } : {}),
         ...(readAuthor(m.createdBy) ? { createdBy: readAuthor(m.createdBy) } : {}),
+        ...(readPublished(m.published) ? { published: readPublished(m.published) } : {}),
       }
     } catch {
       return undefined
@@ -166,6 +199,33 @@ export namespace Artifacts {
     }
   }
 
+  /**
+   * The store keeps itself out of git. Artifacts are drafts — often built from whatever was in
+   * the conversation, client data included — and they showed up as "Changed files" in the
+   * session and were one `git add -A` from a commit. A `.gitignore` of `*` INSIDE the folder
+   * ignores the folder without touching the project's own .gitignore.
+   */
+  export function ensureIgnored(rootDir: string) {
+    const file = path.join(rootDir, ".gitignore")
+    if (existsSync(file)) return
+    mkdirSync(rootDir, { recursive: true })
+    writeFileSync(
+      file,
+      "# IRIS Genesis artifacts are local drafts — publish them from the app, don't commit them.\n*\n",
+    )
+  }
+
+  /** Record (or replace) where an artifact was published. Does not bump the revision. */
+  export function setPublished(rootDir: string, session: string, id: string, published: Published): Meta | undefined {
+    if (!validSegment(session) || !validSegment(id)) return undefined
+    const dir = path.join(rootDir, session, id)
+    const meta = readMeta(dir)
+    if (!meta) return undefined
+    const next = { ...meta, published }
+    writeAtomic(path.join(dir, "meta.json"), JSON.stringify(next, null, 2) + "\n")
+    return next
+  }
+
   function newId(): string {
     return "a" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7)
   }
@@ -207,6 +267,7 @@ export namespace Artifacts {
     if (!KINDS.includes(input.kind)) throw new Error(`unknown artifact kind: ${input.kind}`)
     const id = input.id ?? newId()
     const dir = path.join(rootDir, input.session, id)
+    ensureIgnored(rootDir)
     const prev = existsSync(dir) ? readMeta(dir) : undefined
     if (input.baseRevision !== undefined && (prev?.revision ?? 0) !== input.baseRevision) {
       throw new Conflict(id, prev?.revision ?? 0, input.baseRevision, prev?.author)
@@ -226,6 +287,8 @@ export namespace Artifacts {
       ...(input.language ? { language: input.language.slice(0, 40) } : {}),
       ...(author ? { author } : {}),
       ...(prev ? (prev.createdBy ? { createdBy: prev.createdBy } : {}) : author ? { createdBy: author } : {}),
+      // A new revision keeps its page link; the page is simply behind until republished.
+      ...(prev?.published ? { published: prev.published } : {}),
     }
     writeAtomic(path.join(dir, filename), input.content)
     writeAtomic(path.join(dir, "meta.json"), JSON.stringify(meta, null, 2) + "\n")

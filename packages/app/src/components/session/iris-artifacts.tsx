@@ -15,11 +15,15 @@ import {
   ARTIFACT_SANDBOX,
   authorLine,
   changedSince,
+  LIVE_SANDBOX,
+  liveUrl,
   markdownDocument,
   parseCsv,
   sandboxedDocument,
   type ArtifactMeta,
 } from "./iris-artifacts-model"
+import { clearArtifactFocus, irisArtifactFocus } from "./iris-nav"
+import { IrisArtifactPublish } from "./iris-artifact-publish"
 
 /**
  * Agents › Artifacts (epics #186508 / #186510): what the agents in THIS session made.
@@ -45,7 +49,15 @@ type Listen = (fn: (e: { name: string; details?: { type?: string; properties?: a
 export const ARTIFACT_EVENT = "iris.artifact.updated"
 const POLL_MS = 4000
 
-export function IrisArtifacts(props: { doFetch: Fetch; sessionId?: string; projectParam: string; listen: Listen }) {
+export function IrisArtifacts(props: {
+  doFetch: Fetch
+  sessionId?: string
+  projectParam: string
+  project?: string
+  bloqId?: number
+  bloqName?: string
+  listen: Listen
+}) {
   const query = () =>
     `session=${encodeURIComponent(props.sessionId ?? "")}${props.projectParam ? `&${props.projectParam}` : ""}`
 
@@ -91,6 +103,12 @@ export function IrisArtifacts(props: { doFetch: Fetch; sessionId?: string; proje
     if (!list.some((m) => m.id === openId())) setOpenId(list[0].id)
   })
   const open = createMemo(() => artifacts().find((m) => m.id === openId()))
+  // Draft (the artifact, from disk) or Live (its published page, from heyiris.io). Resets to the
+  // draft when another artifact is opened.
+  const [live, setLive] = createSignal(false)
+  createEffect(on(openId, () => setLive(false), { defer: true }))
+  const liveSrc = createMemo(() => (live() ? liveUrl(open()?.published?.url) : undefined))
+
   const choose = (id: string) => {
     setOpenId(id)
     setFresh((s) => {
@@ -99,6 +117,17 @@ export function IrisArtifacts(props: { doFetch: Fetch; sessionId?: string; proje
       return n
     })
   }
+
+  // A chat card asked for one artifact (iris-nav.ts). Select it once the list has it; until then
+  // re-read — the card can arrive before this pane's next poll has seen the new file.
+  createEffect(() => {
+    const want = irisArtifactFocus()
+    if (!want) return
+    if (artifacts().some((m) => m.id === want.id)) {
+      choose(want.id)
+      clearArtifactFocus()
+    } else refresh()
+  })
 
   // The preview re-reads when the open artifact's REVISION changes — another agent's edit
   // reloads it by itself.
@@ -120,7 +149,8 @@ export function IrisArtifacts(props: { doFetch: Fetch; sessionId?: string; proje
       </Show>
       <Show when={props.sessionId && list.latest?.measured && artifacts().length === 0}>
         <p class="iris-artifacts__note">
-          Nothing here. Files saved under .iris/artifacts for this session show up here, with who wrote them.
+          Nothing yet. When an agent in this session makes a page, a brief or a table with the artifact tool, it appears
+          here — from subagents too — with the agent that made it.
         </p>
       </Show>
 
@@ -157,7 +187,33 @@ export function IrisArtifacts(props: { doFetch: Fetch; sessionId?: string; proje
                 <strong>{meta().title}</strong> · {authorLine(meta())}
                 <Show when={doc.latest?.truncated}> · truncated at 2 MB</Show>
               </p>
+              <Show when={props.sessionId}>
+                <IrisArtifactPublish
+                  meta={open() ?? meta()}
+                  content={doc.latest!.content}
+                  doFetch={props.doFetch}
+                  sessionId={props.sessionId!}
+                  project={props.project}
+                  bloqId={props.bloqId}
+                  bloqName={props.bloqName}
+                  onPublished={refresh}
+                  live={live()}
+                  onToggleLive={liveUrl((open() ?? meta()).published?.url) ? () => setLive((v) => !v) : undefined}
+                />
+              </Show>
               <Switch>
+                <Match when={liveSrc()}>
+                  {(src) => (
+                    <iframe
+                      class="iris-artifacts__frame"
+                      title={`${meta().title} — live`}
+                      sandbox={LIVE_SANDBOX}
+                      referrerpolicy="strict-origin-when-cross-origin"
+                      src={src()}
+                      data-testid="artifact-live-frame"
+                    />
+                  )}
+                </Match>
                 <Match when={meta().kind === "html"}>
                   <iframe
                     class="iris-artifacts__frame"
