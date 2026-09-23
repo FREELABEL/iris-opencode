@@ -33,7 +33,7 @@ jobs:
       - name: Unit tests
         run: |
           cd packages/session-ui && bun test src/v2/components/prompt-input/dictation.test.ts
-          cd ../app && bun test src/components/status-popover-indicator.test.ts
+          cd ../app && bun test src/components/status-popover-indicator.test.ts src/components/session/iris-catalog.test.ts
       - name: Labels the UI asks for must exist
         run: |
           for k in status.dot.healthy status.dot.connecting status.dot.offline status.dot.attention status.dot.issue session.panel.add; do
