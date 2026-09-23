@@ -123,7 +123,7 @@ export const dict: Record<string, string> = {
   "ui.messageNav.newMessage": "New message",
 
   "ui.promptInput.noMatchingItems": "No matching items",
-  "ui.promptInput.commands": "Commands",
+  "ui.promptInput.commands": "Skills",
   "ui.promptInput.dropFiles": "Drop files to attach",
   "ui.promptInput.removeAttachment": "Remove attachment",
   "ui.promptInput.label": "Prompt",

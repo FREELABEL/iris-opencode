@@ -1,6 +1,7 @@
 import { createEffect, createMemo, createResource, createSignal, For, Match, on, onCleanup, Show, Switch, untrack } from "solid-js"
 import "./session-iris-tab.css"
 import { connectsBy, healthRead, metaLine, usageBars } from "./iris-catalog"
+import { IrisIntegrationDetail } from "./iris-integration-detail"
 import { pageSummary, type PageEnvelope } from "./use-paged-surface"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { List } from "@opencode-ai/ui/list"
@@ -1875,39 +1876,18 @@ export function SessionIrisTab() {
                     </div>
                   )}
                 </Show>
+                {/* A CONNECTOR IS NOT A RECORD. Rendering it through the generic key/value list
+                    below turned the registry's page into a database row: a full-width green slab
+                    for uptime, a raw ISO timestamp, the basis sentence in a value cell. Same
+                    data, drawn with the page's hierarchy. */}
                 <Show when={openRow()!.pane === "catalog" && openRow()!.raw?.type}>
-                  <div class="flex flex-col gap-1">
-                    <div class="flex items-center gap-2">
-                      <Button
-                        size="small"
-                        variant="primary"
-                        disabled={connect()?.type === openRow()!.raw.type && connect()?.state === "opening"}
-                        onClick={() => void startConnect(String(openRow()!.raw.type))}
-                      >
-                        {connect()?.type === openRow()!.raw.type && connect()?.state === "opening"
-                          ? "Opening…"
-                          : `Connect ${openRow()!.title}`}
-                      </Button>
-                      {/* What it is about to do, before it does it: a sign-in opens a browser,
-                          a key does not, and a bridge has nothing to authorize at all. */}
-                      <span class="text-11-regular text-text-weaker">
-                        {connectsBy(openRow()!.raw.mode, Boolean(openRow()!.raw.oauthRequired))}
-                      </span>
-                    </div>
-                    <Show when={connect()?.type === openRow()!.raw.type && connect()?.message}>
-                      <p
-                        class="text-11-regular"
-                        classList={{
-                          "text-text-danger-base": connect()?.state === "failed",
-                          "text-text-weak": connect()?.state !== "failed",
-                        }}
-                      >
-                        {connect()!.message}
-                      </p>
-                    </Show>
-                  </div>
+                  <IrisIntegrationDetail
+                    row={openRow()!.raw}
+                    connect={connect()?.type === openRow()!.raw.type ? { state: connect()!.state, message: connect()!.message } : undefined}
+                    onConnect={() => void startConnect(String(openRow()!.raw.type))}
+                  />
                 </Show>
-                <Show when={openRow()!.command}>
+                <Show when={openRow()!.command && openRow()!.pane !== "catalog"}>
                   <button
                     type="button"
                     class="iris-command"
@@ -1917,7 +1897,7 @@ export function SessionIrisTab() {
                     {openRow()!.command}
                   </button>
                 </Show>
-                <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+                <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1" classList={{ hidden: openRow()!.pane === "catalog" }}>
                   <For each={openRow()!.fields}>
                     {([k, v]) => (
                       <>

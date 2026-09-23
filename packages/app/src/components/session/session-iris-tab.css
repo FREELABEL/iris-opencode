@@ -1407,3 +1407,68 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
 .iris-int__mark[data-logo="1"] .iris-int__fallback {
   visibility: hidden;
 }
+
+/* ── One integration, drawn like the registry (#186542) ─────────────────────────────────
+   The first cut rendered this through the generic key/value list: a full-width green slab for
+   uptime, a raw ISO date, and the basis sentence stretched across a value cell. Same data,
+   given the page's hierarchy. Sizes are small because this is a side panel, not a web page. */
+.iris-det { display: flex; flex-direction: column; gap: 14px; padding-bottom: 8px; max-width: 640px; }
+.iris-det__head { display: flex; align-items: center; gap: 10px; }
+.iris-det__mark {
+  position: relative; width: 34px; height: 34px; flex: none; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center; overflow: hidden;
+  background: var(--background-element); color: var(--text-weak);
+  font-size: 12px; font-weight: 600; letter-spacing: .02em;
+}
+.iris-det__logo { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; border-radius: 8px; }
+.iris-det__mark[data-logo="1"] .iris-det__fallback { visibility: hidden; }
+.iris-det__title { margin: 0; font-size: 15px; font-weight: 600; color: var(--text-base); line-height: 1.2; }
+.iris-det__slug { margin: 1px 0 0; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; color: var(--text-weaker); }
+.iris-det__lede { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--text-weak); max-width: 60ch; }
+
+.iris-det__cta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.iris-det__by { font-size: 11px; color: var(--text-weaker); }
+.iris-det__note { margin: 0; font-size: 11px; line-height: 1.5; color: var(--text-weaker); max-width: 62ch; }
+.iris-det__note[data-tone="bad"] { color: var(--text-danger-base, #e07d7d); }
+
+.iris-det__sec { display: flex; flex-direction: column; gap: 6px; padding-top: 12px; border-top: 1px solid var(--border-weaker-base); }
+.iris-det__h { margin: 0; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--text-weaker); font-weight: 500; }
+
+/* Uptime: five day-columns, capped so they read as days rather than one wide slab. */
+.iris-det__bars { display: flex; gap: 4px; align-items: flex-end; height: 26px; }
+.iris-det__bars i { flex: 1 1 0; max-width: 40px; border-radius: 2px; display: block; height: 8px; background: var(--border-weak-base); }
+.iris-det__bars i[data-state="up"] { height: 26px; background: var(--icon-success-base, #4a9); }
+.iris-det__bars i[data-state="partial"] { height: 17px; background: var(--icon-warning-base, #c8a349); }
+.iris-det__bars i[data-state="down"] { height: 11px; background: var(--icon-critical-base, #d55); }
+.iris-det__days { display: flex; gap: 4px; }
+.iris-det__days span { flex: 1 1 0; max-width: 40px; text-align: center; font-size: 9.5px; color: var(--text-weaker); }
+.iris-det__verdict { margin: 2px 0 0; display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-base); }
+.iris-det__dot { width: 7px; height: 7px; border-radius: 50%; display: block; background: var(--border-weak-base); flex: none; }
+.iris-det__dot[data-tone="up"] { background: var(--icon-success-base, #4a9); }
+.iris-det__dot[data-tone="down"] { background: var(--icon-critical-base, #d55); }
+.iris-det__when { font-size: 11px; color: var(--text-weaker); }
+
+.iris-det__cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
+.iris-det__card { border: 1px solid var(--border-weaker-base); border-radius: 8px; padding: 9px 11px; }
+.iris-det__card h5 { margin: 0 0 4px; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--text-weaker); font-weight: 500; }
+.iris-det__card p { margin: 0; font-size: 12px; color: var(--text-weak); }
+.iris-det__big { font-size: 18px !important; color: var(--text-base) !important; font-variant-numeric: tabular-nums; line-height: 1.1; }
+
+/* Usage: thirty thin bars, deliberately unlike the five chunky day-columns above — that answers
+   "is it up", this answers "is anyone using it", and they must not be mistakable. */
+.iris-det__use { display: flex; gap: 2px; align-items: flex-end; height: 30px; }
+.iris-det__use i { flex: 1 1 0; border-radius: 1px; display: block; min-height: 2px; background: var(--icon-accent-base, #c284b0); opacity: .85; }
+.iris-det__use i[data-zero="1"] { background: var(--border-weak-base); opacity: .5; }
+.iris-det__useline { margin: 0; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
+.iris-det__band { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--icon-accent-base, #c284b0); }
+
+.iris-det__fns { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.iris-det__fns li { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--text-weak); min-width: 0; }
+.iris-det__fnbar { flex: 0 0 40px; height: 3px; border-radius: 2px; background: var(--border-weaker-base); overflow: hidden; }
+.iris-det__fnbar[data-none="1"] { opacity: .35; }
+.iris-det__fnbar > span { display: block; height: 100%; background: var(--icon-accent-base, #c284b0); }
+.iris-det__fnname { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iris-det__fnname[data-top="1"] { color: var(--text-base); }
+
+.iris-det__cli { margin: 0; font-size: 10.5px; color: var(--text-weaker); }
+.iris-det__cli code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 10.5px; }
