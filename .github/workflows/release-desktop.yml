@@ -44,28 +44,51 @@ on:
         description: 'Version to build (e.g. 1.18.24)'
         required: true
         type: string
+      platforms:
+        description: 'What to build. mac-arm64-only is the BETA lane — one runner instead of three, and NEVER promoted.'
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - mac-arm64-only
 
 permissions:
   contents: write
 
 jobs:
+  # WHAT TO BUILD (beta lane). A TAG PUSH ALWAYS BUILDS EVERYTHING — only a manual run can ask
+  # for less, and a partial run can never be promoted (see verify-and-promote). That is the
+  # whole safety story for the Intel warning below: the front page keeps serving the last full
+  # release, so a beta build cannot leave any architecture on a stale one.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      macos: ${{ steps.p.outputs.macos }}
+      windows: ${{ steps.p.outputs.windows }}
+      partial: ${{ steps.p.outputs.partial }}
+    steps:
+      - id: p
+        run: |
+          set -euo pipefail
+          ARM='{"os":"macos-latest","rust_target":"aarch64-apple-darwin","oc_target":"opencode-darwin-arm64","arch":"arm64"}'
+          INTEL='{"os":"macos-15-intel","rust_target":"x86_64-apple-darwin","oc_target":"opencode-darwin-x64","arch":"x64"}'
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.platforms }}" = "mac-arm64-only" ]; then
+            echo "macos=[$ARM]" >> "$GITHUB_OUTPUT"
+            echo "windows=false"  >> "$GITHUB_OUTPUT"
+            echo "partial=true"   >> "$GITHUB_OUTPUT"
+            echo "BETA LANE: macOS arm64 only — stays a prerelease, never promoted."
+          else
+            echo "macos=[$ARM,$INTEL]" >> "$GITHUB_OUTPUT"
+            echo "windows=true" >> "$GITHUB_OUTPUT"
+            echo "partial=false" >> "$GITHUB_OUTPUT"
+          fi
   macos:
+    needs: plan
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: macos-latest
-            rust_target: aarch64-apple-darwin
-            oc_target: opencode-darwin-arm64
-            arch: arm64
-          # Intel is NOT optional. A client on an Intel i5 sat on a stale build for weeks
-          # because arm64 was the only artifact produced -- the fix existed and had no
-          # binary she could run. An architecture with no build is an architecture with
-          # no users.
-          - os: macos-15-intel
-            rust_target: x86_64-apple-darwin
-            oc_target: opencode-darwin-x64
-            arch: x64
+        include: ${{ fromJSON(needs.plan.outputs.macos) }}
     runs-on: ${{ matrix.os }}
     continue-on-error: true
     timeout-minutes: 45
@@ -249,6 +272,8 @@ jobs:
           if-no-files-found: warn
 
   windows:
+    needs: plan
+    if: needs.plan.outputs.windows == 'true'
     runs-on: windows-latest
     continue-on-error: true
     timeout-minutes: 45
@@ -357,8 +382,8 @@ jobs:
           if-no-files-found: warn
 
   publish:
-    needs: [macos, windows]
-    if: always() && !cancelled()
+    needs: [plan, macos, windows]
+    if: always() && !cancelled() && needs.macos.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -520,8 +545,11 @@ jobs:
   #
   # macOS runner because the check launches the .app; the publish job is ubuntu.
   verify-and-promote:
-    needs: [publish]
-    if: success()
+    needs: [plan, publish]
+    # A PARTIAL BUILD IS NEVER PROMOTED. latest.json is written from whichever artifacts exist,
+    # so a mac-arm64-only run would publish a manifest naming one platform. Promoting that would
+    # strand every other architecture's updater — the Intel lesson in the build matrix above.
+    if: success() && needs.plan.outputs.partial != 'true'
     runs-on: macos-latest
     timeout-minutes: 20
     steps:

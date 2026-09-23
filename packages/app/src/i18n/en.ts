@@ -763,6 +763,7 @@ export const dict = {
   "session.header.open.app.powershell": "PowerShell",
   "session.header.open.app.sublimeText": "Sublime Text",
 
+  "session.panel.add": "Open in this panel",
   "status.popover.trigger": "Status",
   // #186524 — what the dot in the corner means, on hover. Same states as serverStatusDotClass.
   "status.dot.healthy": "Connected — the engine and its services are running",

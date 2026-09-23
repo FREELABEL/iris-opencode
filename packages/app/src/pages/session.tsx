@@ -2251,13 +2251,15 @@ export default function Page() {
                           its own "+ Add" catalogue, so this opens it rather than growing a
                           second one that would drift.
 
-                          The three steps are session-header.tsx's onIrisOpen, verbatim and for
-                          its stated reason: the tab only renders once "iris" is in the tab
-                          list, so any two of the three show nothing. requestIrisSurface runs
+                          The three steps matter: the tab only renders once "iris" is in the tab
+                          list, so any two of them show nothing. requestIrisSurface runs
                           FIRST because opening the panel is what mounts the tab that reads it.
                         */
                         onIntegrations={() => {
-                          requestIrisSurface("integrations")
+                          // "add", not the default sub-view: this entry means "connect something". Landing on
+                          // the default showed "Nothing in Integrations › Project." to a person who had
+                          // just asked to add one.
+                          requestIrisSurface("integrations", "add")
                           view().reviewPanel.open("other")
                           if (layout.fileTree.opened() && layout.fileTree.tab() !== "all") layout.fileTree.setTab("all")
                           void tabs().open("iris")

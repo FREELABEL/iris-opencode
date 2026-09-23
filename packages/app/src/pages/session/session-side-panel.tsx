@@ -15,6 +15,7 @@ import {
   type DragEvent,
 } from "@thisbeyond/solid-dnd"
 import { Tabs } from "@opencode-ai/ui/tabs"
+import { MenuV2 } from "@opencode-ai/ui/v2/menu-v2"
 import { IconButton } from "@opencode-ai/ui/icon-button"
 import { Icon } from "@opencode-ai/ui/icon"
 import { TooltipKeybind } from "@opencode-ai/ui/tooltip"
@@ -31,7 +32,7 @@ import { useDialog } from "@opencode-ai/ui/context/dialog"
 import FileTree from "@/components/file-tree"
 import { normalizeFileTreeV2Path } from "@/components/file-tree-v2-model"
 import { SessionContextUsage } from "@/components/session-context-usage"
-import { SessionIrisTab } from "@/components/session/session-iris-tab"
+import { SessionIrisTab, IRIS_SURFACE_CHOICES, requestIrisSurface } from "@/components/session/session-iris-tab"
 
 const reviewTabID = "session-side-panel-review-tab"
 const reviewTabPanelID = "session-side-panel-review-tabpanel"
@@ -190,6 +191,32 @@ export function SessionSidePanel(props: {
   const openedTabs = tabState.openedTabs
   const activeTab = tabState.activeTab
   const activeFileTab = tabState.activeFileTab
+
+  /**
+   * THE + IS A MENU, NOT A FILE PICKER (#186531).
+   *
+   * It opened the file picker directly, which made "open a file" the only thing the panel could
+   * add. The IRIS surfaces were reachable only from a button in the session header, and that
+   * button is gone — so this is now the way in, and the file picker is one entry among them.
+   */
+  const openIrisSurface = (id: string) => {
+    // requestIrisSurface FIRST: opening the tab is what mounts the component that reads it.
+    requestIrisSurface(id)
+    void tabs().open("iris")
+    tabs().setActive("iris")
+  }
+
+  const AddMenuItems = (props: { onOpenFile: () => void }) => (
+    <MenuV2.Content style={{ "min-width": "190px" }}>
+      <MenuV2.Item onSelect={props.onOpenFile} shortcut={command.keybind("file.open")}>
+        {language.t("command.file.open")}
+      </MenuV2.Item>
+      <MenuV2.Separator />
+      <For each={IRIS_SURFACE_CHOICES}>
+        {(surface) => <MenuV2.Item onSelect={() => openIrisSurface(surface.id)}>{surface.label}</MenuV2.Item>}
+      </For>
+    </MenuV2.Content>
+  )
 
   const fileTreeTab = () => layout.fileTree.tab()
 
@@ -474,24 +501,25 @@ export function SessionSidePanel(props: {
                                   "bg-background-stronger": !settings.general.newLayoutDesigns(),
                                 }}
                               >
-                                <TooltipKeybind
-                                  title={language.t("command.file.open")}
-                                  keybind={command.keybind("file.open")}
-                                  class="flex items-center"
-                                >
-                                  <IconButton
+                                <MenuV2 gutter={6} modal={false} placement="bottom-end">
+                                  <MenuV2.Trigger
+                                    as={IconButton}
                                     icon="plus-small"
                                     variant="ghost"
                                     iconSize="large"
                                     class="!rounded-md"
-                                    onClick={() => {
-                                      void import("@/components/dialog-select-file").then((x) => {
-                                        dialog.show(() => <x.DialogSelectFile mode="files" onOpenFile={showAllFiles} />)
-                                      })
-                                    }}
-                                    aria-label={language.t("command.file.open")}
+                                    aria-label={language.t("session.panel.add")}
                                   />
-                                </TooltipKeybind>
+                                  <MenuV2.Portal>
+                                    <AddMenuItems
+                                      onOpenFile={() => {
+                                        void import("@/components/dialog-select-file").then((x) => {
+                                          dialog.show(() => <x.DialogSelectFile mode="files" onOpenFile={showAllFiles} />)
+                                        })
+                                      }}
+                                    />
+                                  </MenuV2.Portal>
+                                </MenuV2>
                               </div>
                             </Tabs.List>
                           </div>
@@ -718,26 +746,18 @@ export function SessionSidePanel(props: {
                                 "bg-background-stronger": !settings.general.newLayoutDesigns(),
                               }}
                             >
-                              <TooltipV2
-                                value={
-                                  <>
-                                    {language.t("command.file.open")}
-                                    <Show when={openFileKeybind().length > 0}>
-                                      <KeybindV2 keys={openFileKeybind()} variant="neutral" />
-                                    </Show>
-                                  </>
-                                }
-                                placement="bottom"
-                                class="flex items-center"
-                              >
-                                <IconButtonV2
+                              <MenuV2 gutter={6} modal={false} placement="bottom-end">
+                                <MenuV2.Trigger
+                                  as={IconButtonV2}
                                   icon={<Icon name="plus-small" />}
                                   variant="ghost-muted"
                                   size="large"
-                                  onClick={() => openFileBrowser()}
-                                  aria-label={language.t("command.file.open")}
+                                  aria-label={language.t("session.panel.add")}
                                 />
-                              </TooltipV2>
+                                <MenuV2.Portal>
+                                  <AddMenuItems onOpenFile={() => openFileBrowser()} />
+                                </MenuV2.Portal>
+                              </MenuV2>
                             </div>
                           </Tabs.List>
                           <div

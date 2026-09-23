@@ -1439,6 +1439,53 @@ export async function fetchAgentTasks(
 
 export type IntegrationScope = "project" | "organization" | "user"
 
+/**
+ * The parts of a catalogue row the sidecar already caches but never passed on: reachability,
+ * usage and the command list. Kept in one function so a row from the registry and a brokered
+ * row — which has no registry entry at all and gets its commands from the broker's action map —
+ * come out the same shape rather than the UI branching on which kind it is.
+ */
+function catalogDetail(
+  type: string,
+  row: any,
+): Pick<CatalogEntry, "health" | "usage" | "functions"> {
+  const out: Pick<CatalogEntry, "health" | "usage" | "functions"> = {}
+
+  const h = (_catalogCache.health as Record<string, any>)[type]
+  if (h && typeof h === "object") {
+    out.health = {
+      state: typeof h.state === "string" ? h.state : undefined,
+      lastCheckedAt: typeof h.last_verified_at === "string" ? h.last_verified_at : undefined,
+      bars: Array.isArray(h.bars)
+        ? h.bars.map((b: any) => ({ from: typeof b?.from === "string" ? b.from : undefined, state: String(b?.state ?? "none") }))
+        : [],
+    }
+  }
+
+  const u = (_catalogCache.usage as Record<string, any>)[type] ?? row?.usage
+  if (u && typeof u === "object" && Array.isArray(u.series)) {
+    out.usage = {
+      band: typeof u.band === "string" ? u.band : undefined,
+      series: u.series.map((pt: any) => ({ day: typeof pt?.day === "string" ? pt.day : undefined, v: Number(pt?.v ?? 0) })),
+    }
+  }
+
+  // A registry row carries {name: label}; a brokered one has no row, so the broker's map is the
+  // only list there is. Either way the UI gets names, and ranking only where it was measured.
+  const fns = row?.functions ?? (_catalogCache.brokerFunctions as Record<string, any>)?.[type]
+  const ranked: Record<string, any> = (u && typeof u === "object" && u.functions) || {}
+  let names: { name: string; label?: string }[] = []
+  if (fns && typeof fns === "object" && !Array.isArray(fns)) names = Object.keys(fns).map((k) => ({ name: k, label: String(fns[k] ?? "") || undefined }))
+  else if (Array.isArray(fns)) names = fns.map((f: any) => ({ name: String(f) }))
+  if (names.length) {
+    out.functions = names
+      .map((f) => ({ ...f, share: ranked[f.name]?.share, rank: ranked[f.name]?.rank }))
+      .sort((a, b) => (a.rank ?? 9999) - (b.rank ?? 9999))
+  }
+
+  return out
+}
+
 export interface CatalogEntry {
   type: string
   name: string
@@ -1452,6 +1499,21 @@ export interface CatalogEntry {
   logoUrl?: string
   /** What to type. Built from the mode, because the steps genuinely differ. */
   command: string
+  /**
+   * PLATFORM reachability, not yours (#186542). We ask the provider whether it answers, with no
+   * credential attached — so "reachable" means the service is up and our endpoint is still
+   * right. It does NOT mean your own connection works, and the UI has to keep saying so.
+   * `state` is absent when nothing has measured it: absent and "down" are different claims.
+   */
+  health?: { state?: string; lastCheckedAt?: string; bars: { from?: string; state: string }[] }
+  /**
+   * How much the whole platform uses it over 30 days, as a SHAPE. Each point is relative to this
+   * connector's own busiest day; absolute volume is deliberately not published, because a
+   * connector's call volume is a customer's throughput.
+   */
+  usage?: { band?: string; series: { day?: string; v: number }[] }
+  /** What an agent gets, ranked by real use where it is known. `share` is relative to the top one. */
+  functions?: { name: string; label?: string; share?: number; rank?: number }[]
 }
 
 /**
@@ -1506,6 +1568,7 @@ export async function fetchCatalog(): Promise<PlatformResult<{ catalog: CatalogE
         // It handles the OAuth and key paths itself, which is why there is one command and not
         // four; the mode is shown so you know what it is about to do.
         command: `iris connect ${type}`,
+        ...catalogDetail(type, x),
       }
     })
     .sort((a, b) => (a.category ?? "").localeCompare(b.category ?? "") || a.name.localeCompare(b.name))
@@ -1516,6 +1579,56 @@ export async function fetchCatalog(): Promise<PlatformResult<{ catalog: CatalogE
       ? undefined
       : "could not read your existing integrations, so this list may offer things you already have",
     data: { catalog, attribution: logoMap.attribution },
+  }
+}
+
+/**
+ * START CONNECTING ONE INTEGRATION (#186542, component 4).
+ *
+ * The desktop cannot run the CLI's OAuth flow: that one resolves app credentials locally and
+ * prompts on a TTY. The platform already owns a hosted flow — GET /api/v1/integrations/oauth-url/
+ * {type} returns the authorize URL for THIS user, and fl-api's callback stores the credential —
+ * so the app's job is to fetch that URL and open it, then watch for the connection to appear.
+ *
+ * WHY THE SIDECAR AND NOT THE WEBVIEW: the bearer token lives in the auth store on disk, which
+ * only this process can read.
+ *
+ * Scope is deliberately NOT passed. fl-api treats an absent organization_id as personal, and its
+ * own comment says silence must never promote a credential to shared — connecting for an org
+ * needs owner or admin there, and that is a choice to make explicitly rather than by default.
+ */
+export async function startIntegrationConnect(
+  type: string,
+): Promise<PlatformResult<{ url?: string; mode?: string; hint?: string }>> {
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: {} }
+
+  const mode = _catalogCache.modes[type]
+  // A bridge connector has nothing to authorize: it talks to an app on this machine. Saying so
+  // is a real answer; sending someone to a browser that will not help is not.
+  if (mode === "bridge") {
+    return {
+      measured: true,
+      data: { mode, hint: "This one runs on your own machine — there is nothing to sign in to. Set it up from the bridge." },
+    }
+  }
+
+  try {
+    const res = await irisFetch(`/api/v1/integrations/oauth-url/${encodeURIComponent(type)}`, FL_API)
+    const body = await res.json().catch(() => null)
+    if (!res.ok) {
+      // The API's own words, not ours: it distinguishes "no OAuth for this type" from "you may
+      // not connect for that organization", and both are things the person needs to read.
+      const reason = (body && (body.message || body.reason)) || `HTTP ${res.status}`
+      return { measured: false, reason: String(reason), data: { mode } }
+    }
+    const url = body?.oauth_url ?? body?.url ?? body?.data?.oauth_url ?? body?.data?.url
+    if (typeof url !== "string" || !/^https?:/i.test(url)) {
+      return { measured: false, reason: "the platform returned no authorize URL for this integration", data: { mode } }
+    }
+    return { measured: true, data: { url, mode } }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { mode } }
   }
 }
 
@@ -2935,7 +3048,9 @@ let _catalogCache: {
   functions: Record<string, number>
   items: any[]
   modes: Record<string, string>
-} = { health: {}, usage: {}, functions: {}, items: [], modes: {} }
+  /** A BROKERED connector has no registry row, so this is the only list of what it can do. */
+  brokerFunctions: Record<string, any>
+} = { health: {}, usage: {}, functions: {}, items: [], modes: {}, brokerFunctions: {} }
 
 let _logoCache: { logos: Record<string, string>; attribution?: string } | null = null
 export async function fetchIntegrationLogos(): Promise<{ logos: Record<string, string>; attribution?: string }> {
@@ -2953,6 +3068,7 @@ export async function fetchIntegrationLogos(): Promise<{ logos: Record<string, s
       ),
       items: Array.isArray(j?.data) ? j.data : [],
       modes: j?.modes && typeof j.modes === "object" ? j.modes : {},
+      brokerFunctions: j?.broker_functions && typeof j.broker_functions === "object" ? j.broker_functions : {},
     }
     // CACHE ONLY A SUCCESS.
     //

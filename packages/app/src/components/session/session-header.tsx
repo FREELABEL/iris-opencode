@@ -242,21 +242,6 @@ export function SessionHeader() {
     reviewVisible: isDesktop(),
     reviewOpened: view().reviewPanel.opened(),
     onReviewToggle: () => view().reviewPanel.toggle(),
-    // Three steps, not one: open the panel, put "iris" in the tab list, select it. The tab
-    // only renders once it is in the list, so any two of the three shows nothing.
-    onIrisOpen: () => {
-      // Mirrors openSessionContext (components/session-context-usage.tsx) step for step,
-      // because that path is PROVEN to activate its tab in a browser and this one was not.
-      // The source argument is the part that is easy to drop and is not decoration.
-      // "other", NOT "context-button". That source is a claim about WHO opened the panel, and
-      // session-context-usage.tsx closes the panel again when the source is "context-button"
-      // and no other tabs are open. Borrowing it for the IRIS button made the panel open and
-      // immediately shut — which looked like the button doing nothing at all.
-      view().reviewPanel.open("other")
-      if (layout.fileTree.opened() && layout.fileTree.tab() !== "all") layout.fileTree.setTab("all")
-      void tabs().open("iris")
-      tabs().setActive("iris")
-    },
   }))
 
   const selectApp = (app: OpenApp) => {
@@ -493,26 +478,6 @@ export function SessionHeader() {
                         </Button>
                       </TooltipKeybind>
 
-                      {/* IRIS. The account surfaces — Atlas, agents, leads, pages — it opens the
-                          panel and selects the tab, the same three steps the context button
-                          takes, because the tab only renders once "iris" is in the tab list.
-                          No keybind yet: TooltipKeybind wants one that exists, and inventing a
-                          binding is a separate decision from adding the surface. */}
-                      <Button
-                        variant="ghost"
-                        class="titlebar-icon w-8 h-6 p-0 box-border"
-                        onClick={() => {
-                          view().reviewPanel.open("other")
-                          void tabs().open("iris")
-                          tabs().setActive("iris")
-                        }}
-                        aria-label="IRIS"
-                        title="IRIS — Atlas, agents, leads, pages"
-                      >
-                        <div class="relative flex items-center justify-center size-4">
-                          <Icon size="small" name="bullet-list" class="text-icon-weak" />
-                        </div>
-                      </Button>
 
                       <TooltipKeybind
                         title={language.t("command.fileTree.toggle")}
@@ -553,8 +518,6 @@ export function SessionHeader() {
 }
 
 type SessionHeaderV2ActionsState = {
-  /** Opens the IRIS panel tab. See onIrisOpen below — it must do all three steps. */
-  onIrisOpen: () => void
   statusVisible: boolean
   statusLabel: string
   reviewLabel: string
@@ -569,21 +532,6 @@ function SessionHeaderV2Actions(props: { state: SessionHeaderV2ActionsState }) {
 
   return (
     <div class="flex items-center gap-2">
-      {/* IRIS. This lives in the V2 actions row AND in the legacy row below, because the two
-          headers are separate components and only one renders. Putting it in the legacy branch
-          alone is exactly the bug a browser caught: typecheck green, unit tests green, button
-          nowhere on screen. */}
-      <IconButtonV2
-        type="button"
-        variant="ghost-muted"
-        size="large"
-        class="!w-9 shrink-0"
-        onClick={props.state.onIrisOpen}
-        aria-label="IRIS"
-        title="IRIS — Atlas, agents, leads, pages"
-      >
-        <Icon size="small" name="bullet-list" />
-      </IconButtonV2>
       <Show when={props.state.statusVisible}>
         <Tooltip placement="bottom" value={props.state.statusLabel}>
           <StatusPopoverV2 />

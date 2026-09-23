@@ -1,5 +1,6 @@
 import { createEffect, createMemo, createResource, createSignal, For, Match, on, onCleanup, Show, Switch, untrack } from "solid-js"
 import "./session-iris-tab.css"
+import { connectsBy, healthRead, metaLine, usageBars } from "./iris-catalog"
 import { pageSummary, type PageEnvelope } from "./use-paged-surface"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { List } from "@opencode-ai/ui/list"
@@ -251,17 +252,30 @@ function describeFields(surface: string, r: any): { title: string; fields: [stri
       ]),
       command: r.slug ? `iris pages sites show ${r.slug}` : undefined,
     }
-  if (surface === "catalog")
+  if (surface === "catalog") {
+    // What the registry page shows for one connector, in the order it shows it: what it is,
+    // what connecting involves, whether the provider is answering (and what that proves), how
+    // much the platform uses it, and what an agent would get.
+    const health = healthRead(r.health?.state)
+    const top = (r.functions ?? []).slice(0, 6).map((f: any) => f.label || f.name)
     return {
       title: r.name,
       fields: fieldsOf([
+        ["about", r.description],
         ["type", r.type], ["category", r.category],
         // The MODE is the thing worth knowing before you start: these are not the same job.
-        ["connect by", r.mode], ["opens a browser", r.oauthRequired],
-        ["functions", r.functionsCount], ["about", r.description],
+        ["connect by", connectsBy(r.mode, r.oauthRequired)],
+        ["provider status", `${health.label} — ${health.basis}`],
+        ["last checked", r.health?.lastCheckedAt],
+        // Band only. The absolute figure is deliberately unpublished: a connector's call volume
+        // is a customer's throughput.
+        ["platform usage", usageBars(r.usage?.series).measured ? r.usage?.band : "not measured yet"],
+        ["commands", r.functionsCount],
+        ["most used", top.length ? top.join(", ") : undefined],
       ]),
       command: r.command,
     }
+  }
   if (surface === "inbox")
     return {
       title: r.label,
@@ -771,9 +785,27 @@ export function surfaceView(input: {
  * panel is what mounts it — so the request has to outlive the click. The tab consumes it on
  * mount and clears it, so it steers exactly one opening and never re-steers a later one.
  */
-const [requestedSurface, setRequestedSurface] = createSignal<SurfaceId | undefined>()
-export function requestIrisSurface(surface: string) {
-  setRequestedSurface(normalizeSurface(surface))
+/**
+ * What the panel's + menu offers (#186531). One list, derived from SURFACES, so a surface added
+ * there appears in the menu without a second table to keep in step.
+ */
+export const IRIS_SURFACE_CHOICES: readonly { id: string; label: string }[] = SURFACES.map((s) => ({
+  id: s.id,
+  label: s.label,
+}))
+
+const [requestedSurface, setRequestedSurface] = createSignal<{ surface: SurfaceId; sub?: string } | undefined>()
+
+/**
+ * Open the panel on a surface, and optionally on one of its SUB-VIEWS.
+ *
+ * The sub-view is not a nicety. "Integrations" from the chat bar means "let me add one", and
+ * landing on the default sub-view showed `Nothing in Integrations › Project.` — an empty list,
+ * for a person who asked to connect something. The catalogue lives under the `add` sub-view,
+ * so the caller says which one it wants and this puts them there.
+ */
+export function requestIrisSurface(surface: string, sub?: string) {
+  setRequestedSurface({ surface: normalizeSurface(surface), sub })
 }
 
 export function SessionIrisTab() {
@@ -851,7 +883,16 @@ export function SessionIrisTab() {
   createEffect(() => {
     const wanted = requestedSurface()
     if (!wanted) return
-    setSurface(wanted)
+    setSurface(wanted.surface)
+    // The sub-view is written through the SAME store the switcher uses, so the strip highlights
+    // where you actually are rather than where it was last time.
+    if (wanted.sub && SUBVIEWS[wanted.surface]?.some((v) => v.id === wanted.sub)) {
+      const next = { ...subviews(), [wanted.surface]: wanted.sub }
+      setSubviews(next)
+      try {
+        localStorage.setItem(LAST_SUBVIEW_KEY, JSON.stringify(next))
+      } catch {}
+    }
     setRequestedSurface(undefined)
   })
 
@@ -1260,6 +1301,55 @@ export function SessionIrisTab() {
     /** Which pane it came from, which is what decides its detail tabs. */
     pane?: string
   } | null>(null)
+  /**
+   * CONNECTING AN INTEGRATION (#186542, component 4).
+   *
+   * The catalogue used to end at a CLI line to copy. For a navigator on a Mac who has never
+   * opened a terminal that is the same as no button at all, so this does the round trip: ask
+   * the sidecar for the platform's authorize URL, open it in a REAL browser (not the webview —
+   * an OAuth consent screen inside the app chrome is both hostile and often refused by the
+   * provider), then watch for the connection to show up.
+   *
+   * Nothing here claims success on its own. The list is the source of truth: `connecting` ends
+   * when the refreshed catalogue stops offering this connector, which is the same signal the
+   * rest of the panel already trusts.
+   */
+  const [connect, setConnect] = createSignal<{ type: string; state: "opening" | "waiting" | "failed" | "nothing"; message?: string } | null>(null)
+
+  async function startConnect(type: string) {
+    setConnect({ type, state: "opening" })
+    try {
+      // doFetch returns the Response; the body has to be read. A non-2xx still carries JSON
+      // here — the sidecar answers with measured:false and a reason rather than an empty error.
+      const raw = await doFetch(`/iris/integrations/connect`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ type }),
+      })
+      const res = (await raw.json().catch(() => null)) as
+        | { measured?: boolean; reason?: string; url?: string; hint?: string }
+        | null
+      if (!res?.measured) {
+        // The API's own words: "no OAuth flow for this type" and "requires owner or admin on
+        // that organization" are different problems and the person has to read which.
+        setConnect({ type, state: "failed", message: res?.reason ?? "could not start the connection" })
+        return
+      }
+      if (res.hint) {
+        setConnect({ type, state: "nothing", message: res.hint })
+        return
+      }
+      if (!res.url) {
+        setConnect({ type, state: "failed", message: "the platform returned no authorize URL" })
+        return
+      }
+      platform.openExternal(res.url)
+      setConnect({ type, state: "waiting", message: "Approve it in your browser — this list updates when it lands." })
+    } catch (e) {
+      setConnect({ type, state: "failed", message: e instanceof Error ? e.message : String(e) })
+    }
+  }
+
   // A result belongs to the card it was produced on — clear it when another opens. Declared AFTER
   // openRow: reading a signal above its declaration is a TDZ crash one timing change away.
   createEffect(
@@ -1784,6 +1874,38 @@ export function SessionIrisTab() {
                       </Show>
                     </div>
                   )}
+                </Show>
+                <Show when={openRow()!.pane === "catalog" && openRow()!.raw?.type}>
+                  <div class="flex flex-col gap-1">
+                    <div class="flex items-center gap-2">
+                      <Button
+                        size="small"
+                        variant="primary"
+                        disabled={connect()?.type === openRow()!.raw.type && connect()?.state === "opening"}
+                        onClick={() => void startConnect(String(openRow()!.raw.type))}
+                      >
+                        {connect()?.type === openRow()!.raw.type && connect()?.state === "opening"
+                          ? "Opening…"
+                          : `Connect ${openRow()!.title}`}
+                      </Button>
+                      {/* What it is about to do, before it does it: a sign-in opens a browser,
+                          a key does not, and a bridge has nothing to authorize at all. */}
+                      <span class="text-11-regular text-text-weaker">
+                        {connectsBy(openRow()!.raw.mode, Boolean(openRow()!.raw.oauthRequired))}
+                      </span>
+                    </div>
+                    <Show when={connect()?.type === openRow()!.raw.type && connect()?.message}>
+                      <p
+                        class="text-11-regular"
+                        classList={{
+                          "text-text-danger-base": connect()?.state === "failed",
+                          "text-text-weak": connect()?.state !== "failed",
+                        }}
+                      >
+                        {connect()!.message}
+                      </p>
+                    </Show>
+                  </div>
                 </Show>
                 <Show when={openRow()!.command}>
                   <button
@@ -2529,14 +2651,29 @@ export function SessionIrisTab() {
                       </span>
                       <span class="min-w-0 flex-1">
                         <span class="block text-12-regular text-text-base truncate">{c.name}</span>
+                        {/* The one-line description the registry leads with. Without it the list
+                            is 79 brand names and no way to tell what any of them would do. */}
+                        <Show when={c.description}>
+                          <span class="block text-11-regular text-text-weak truncate">{c.description}</span>
+                        </Show>
                         <span class="block text-11-regular text-text-weaker truncate">
-                          {c.category}
-                          {/* Says what connecting involves, because a key and an OAuth round
-                              trip are different jobs and only one of them needs a browser. */}
-                          {c.mode ? ` · ${c.mode}` : ""}
-                          {c.functionsCount ? ` · ${c.functionsCount} functions` : ""}
+                          {metaLine({
+                            category: c.category,
+                            mode: c.mode,
+                            oauthRequired: c.oauthRequired,
+                            functionsCount: c.functionsCount,
+                            usageBand: c.usage?.band,
+                          })}
                         </span>
                       </span>
+                      {/* PROVIDER reachability, not yours — the title carries the claim so the
+                          dot cannot be read as "your connection is fine". Unmeasured is grey. */}
+                      <span
+                        class="iris-cat__dot shrink-0"
+                        data-tone={healthRead(c.health?.state).tone}
+                        title={`${healthRead(c.health?.state).label} — ${healthRead(c.health?.state).basis}`}
+                        aria-label={healthRead(c.health?.state).label}
+                      />
                     </button>
                   )}
                 </For>
