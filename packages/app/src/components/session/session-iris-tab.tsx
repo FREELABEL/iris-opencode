@@ -147,6 +147,7 @@ function arrayKeyFor(pane: string): string {
   if (pane === "catalog") return "catalog"
   if (pane === "atlas") return "lists"
   if (pane === "hive") return "nodes"
+  if (pane === "peers") return "peers"
   if (pane === "inbox") return "items"
   if (pane === "mcp") return "servers"
   return pane
@@ -316,6 +317,20 @@ function describeFields(
         ["updated", r.updatedAt],
       ]),
       command: r.slug ? `iris pages sites show ${r.slug}` : undefined,
+    }
+  if (surface === "peers")
+    return {
+      title: r.name,
+      fields: fieldsOf([
+        ["status", r.status],
+        ["direction", r.inviter ? "you invited them" : "they invited you"],
+        ["can do", (r.permissions ?? []).join(", ")],
+        ["invite code", r.inviteCode],
+        ["accepted", r.acceptedAt],
+        ["expires", r.expiresAt],
+        ["connection id", r.id],
+      ]),
+      command: r.id ? `iris hive peers ${r.id}` : undefined,
     }
   if (surface === "catalog") {
     // What the registry page shows for one connector, in the order it shows it: what it is,
@@ -660,6 +675,9 @@ const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
     // The inbox was the original ask — "I want to see the inbox and all of the other machines
     // on the network in this tab". It belongs under Hive, not beside it: it is Hive traffic.
     { id: "inbox", label: "Inbox", pane: "inbox", path: () => `/iris/inbox` },
+    // THE OTHER HALF OF HIVE. The tab showed your own machines only; a peer connection — the
+    // person whose agents can carry your work — had no surface at all.
+    { id: "peers", label: "Peers", pane: "peers", path: () => `/iris/hive/peers` },
   ],
 }
 
@@ -2870,13 +2888,39 @@ export function SessionIrisTab() {
                       class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
                       onClick={() => setOpenRow(describeRow(pane(), n))}
                     >
-                      <span class="shrink-0" classList={{ "text-text-base": n.online, "text-text-weak": !n.online }}>
-                        {n.online ? "●" : "○"}
-                      </span>
+                      {/* Online is GREEN and breathing — a machine that is up is the thing you
+                          look for in this list, and a glyph in body-text colour said nothing.
+                          The pulse stops under prefers-reduced-motion; the colour still carries it. */}
+                      <span class="iris-hive__dot shrink-0" data-on={n.online ? "1" : undefined} title={n.online ? "online" : "offline"} />
                       <span class="text-12-regular text-text-base min-w-0 flex-1">{n.name}</span>
                       <span class="font-mono tabular-nums text-11-regular text-text-weaker shrink-0">
                         {n.activeTasks}/{n.maxConcurrent}
                       </span>
+                    </button>
+                  )}
+                </For>
+              </Match>
+
+              <Match when={pane() === "peers"}>
+                <For each={rows()}>
+                  {(p) => (
+                    <button
+                      type="button"
+                      class="w-full text-start flex items-center gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
+                      onClick={() => setOpenRow(describeRow(pane(), p))}
+                    >
+                      <span class="iris-hive__dot shrink-0" data-on={p.active ? "1" : undefined} title={p.status} />
+                      <span class="min-w-0 flex-1">
+                        <span class="block text-12-regular text-text-base truncate">{p.name}</span>
+                        <span class="block text-11-regular text-text-weaker truncate">
+                          {p.inviter ? "you invited" : "invited you"}
+                          {p.permissions?.length ? ` · ${p.permissions.join(", ")}` : ""}
+                        </span>
+                      </span>
+                      {/* A pending invite is only useful WITH its code, so the code is on the row. */}
+                      <Show when={p.inviteCode}>
+                        <span class="font-mono text-11-regular text-text-weaker shrink-0">{p.inviteCode}</span>
+                      </Show>
                     </button>
                   )}
                 </For>

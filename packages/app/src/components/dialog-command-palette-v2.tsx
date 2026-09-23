@@ -41,8 +41,11 @@ export function DialogCommandPaletteV2(props: { onOpenFile?: (path: string) => v
     const q = text.trim()
     // Even with nothing typed, the IRIS commands are listed: the palette said "Commands" and
     // showed three app actions, which read as "that is all there is" (#186546).
-    if (!q)
-      return [...palette.preferredCommandEntries(), ...(await palette.searchCliCommands("")), ...palette.recentFileEntries()]
+    // NO APP COMMANDS HERE. "New session", "Toggle terminal" and "Toggle review" each have a
+    // keybind shown on the row that teaches it — they are affordances, not a catalogue — and
+    // sitting at the top under a heading called "Commands" they pushed the IRIS commands, which
+    // is what this palette is for, below the fold. They remain on the home palette.
+    if (!q) return [...(await palette.searchCliCommands("")), ...palette.recentFileEntries()]
 
     const [files, nextSessions, cli] = await Promise.all([
       palette.file.searchFiles(q),
@@ -50,12 +53,7 @@ export function DialogCommandPaletteV2(props: { onOpenFile?: (path: string) => v
       palette.searchCliCommands(q),
     ])
     const category = palette.language.t("palette.group.files")
-    return [
-      ...palette.commandEntries().filter((entry) => matchesEntry(entry, q)),
-      ...cli,
-      ...nextSessions,
-      ...files.map((path) => createCommandPaletteFileEntry(path, category)),
-    ]
+    return [...cli, ...nextSessions, ...files.map((path) => createCommandPaletteFileEntry(path, category))]
   }
 
   return (
@@ -146,9 +144,10 @@ function CommandPaletteView(props: {
   /**
    * All · Commands · Files — a filter over what already loaded, not a second query.
    *
-   * "Commands" means both kinds a person would call a command: the app's own actions and the
-   * IRIS CLI's. Sessions stay under All, because a session is not either of those and hiding it
-   * behind a third pill nobody asked for would bury it.
+   * "Commands" means the IRIS CLI's commands, and only those. The app's own actions — Archive
+   * session, Toggle terminal — are keyboard affordances you already have a shortcut for, not a
+   * catalogue you browse; mixing them in put "Archive session" above the thing being looked for.
+   * They remain under All, with sessions and files.
    */
   const [filter, setFilter] = createSignal<"all" | "commands" | "files">("all")
   const FILTERS = [
@@ -162,7 +161,7 @@ function CommandPaletteView(props: {
   const visibleEntries = createMemo(() => {
     const all = uniqueCommandPaletteEntries(entries.latest ?? [])
     const f = filter()
-    if (f === "commands") return all.filter((e) => e.type === "command" || e.type === "cli")
+    if (f === "commands") return all.filter((e) => e.type === "cli")
     if (f === "files") return all.filter((e) => e.type === "file")
     return all
   })
