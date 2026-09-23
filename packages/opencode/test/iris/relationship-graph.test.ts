@@ -75,3 +75,53 @@ describe("the rules the golden file exercises, named", () => {
     expect(inferType("")).toBe("brand")
   })
 })
+
+/**
+ * THE CAP, which is the one place the port and ELON deliberately agree to stop drawing.
+ *
+ * Measured 2026-09-22 on the Pathways SOP library: one board produced 159 item nodes, the labels
+ * overlapped into an unreadable ring, and the owner could not use the pane. Leads and programs
+ * were already clustered; cards were not. The remainder is not dropped — it is one node that
+ * says how many it stands for, so the picture still reports its own size.
+ */
+describe("a long list collapses its tail instead of drawing every card", () => {
+  const listOf = (n: number) => ({
+    id: 9001,
+    name: "SOP Library",
+    items: Array.from({ length: n }, (_, i) => ({ id: 5000 + i, title: `SOP ${i + 1}` })),
+  })
+  const inputs = (n: number): GraphInputs => ({
+    bloqId: 42,
+    boardTitle: "Pathways",
+    lists: [listOf(n)],
+    relations: [],
+    agents: [],
+    scheduledJobs: [],
+    playbooks: [],
+    leads: [],
+  })
+
+  test("nine cards draw six, plus one node standing for the other three", () => {
+    const g = renderedGraph(buildRelationshipGraph(inputs(9)))
+    const items = g.nodes.filter((n) => n.id.startsWith("item-"))
+    const more = g.nodes.filter((n) => n.id === "list-9001-more")
+    expect(items).toHaveLength(6)
+    expect(more).toHaveLength(1)
+    expect(more[0].name).toBe("+3 more")
+    // It hangs off the list it belongs to, not off the Memory hub or the centre.
+    expect(g.edges.some((e) => e.source === "list-9001" && e.target === "list-9001-more")).toBe(true)
+  })
+
+  test("six or fewer is left exactly as it was — the cap never fires early", () => {
+    const g = renderedGraph(buildRelationshipGraph(inputs(6)))
+    expect(g.nodes.filter((n) => n.id.startsWith("item-"))).toHaveLength(6)
+    expect(g.nodes.some((n) => n.id.endsWith("-more"))).toBe(false)
+  })
+
+  test("the collapsed node is sized by how many it stands for", () => {
+    const small = renderedGraph(buildRelationshipGraph(inputs(8)))
+    const big = renderedGraph(buildRelationshipGraph(inputs(200)))
+    const sizeOf = (g: { nodes: any[] }) => g.nodes.find((n) => n.id === "list-9001-more")!.size
+    expect(sizeOf(big)).toBeGreaterThan(sizeOf(small))
+  })
+})

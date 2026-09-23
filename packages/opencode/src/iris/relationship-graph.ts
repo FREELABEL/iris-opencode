@@ -68,6 +68,12 @@ export interface GraphInputs {
 /** ELON's log scale, so a cluster of 5 and one of 50,000 both fit. */
 export const clusterSize = (count: number) => Math.min(30, 14 + Math.log2((count || 0) + 1) * 2)
 
+/**
+ * How many cards one list may draw before the rest collapse into a single "+N more".
+ * Six keeps a list legible at the zoom the pane opens at; the cap is mirrored in ELON.
+ */
+const MAX_CARDS_PER_LIST = 6
+
 /** ELON's title→type guess for lists and their items. Order matters: first match wins. */
 export function inferType(text: unknown): string {
   const t = String(text || "").toLowerCase()
@@ -223,7 +229,29 @@ export function buildRelationshipGraph(input: GraphInputs): { nodes: GraphNode[]
     const listType = inferType(list.title)
     addNode("list-" + list.id, list.title || "List", listType, { size: 16 })
     if (memoryHub) edges.push({ source: memoryHub, target: "list-" + list.id })
-    for (const item of list.cards) {
+    /*
+     * CARDS ARE CAPPED PER LIST — the one deliberate divergence from drawing every row.
+     *
+     * ELON drew one node per card, and on a small board that is right. On a real one it is not:
+     * the Pathways SOP library renders 159 item nodes under a handful of lists, the labels
+     * overlap into a ring, and the hubs the picture exists to show disappear inside it. Leads
+     * and programs were already clustered for this exact reason; cards were the branch that
+     * still drew everything.
+     *
+     * The remainder is never silently dropped: it becomes one "+N more" node, sized by how many
+     * it stands for, so the drawing still says how much is behind it. The same cap now applies in
+     * ELON's Board.vue, so the two surfaces still agree — which is what the golden pins.
+     */
+    const shownCards = list.cards.slice(0, MAX_CARDS_PER_LIST)
+    const hiddenCards = list.cards.length - shownCards.length
+    if (hiddenCards > 0) {
+      addNode("list-" + list.id + "-more", "+" + hiddenCards + " more", listType, {
+        subtitle: list.title || "",
+        size: clusterSize(hiddenCards),
+      })
+      edges.push({ source: "list-" + list.id, target: "list-" + list.id + "-more" })
+    }
+    for (const item of shownCards) {
       const itemLabel = String(item.title || "Item")
       const type = inferType(itemLabel) !== "brand" ? inferType(itemLabel) : listType
       addNode("item-" + item.id, itemLabel.length > 30 ? itemLabel.slice(0, 28) + "..." : itemLabel, type, {
