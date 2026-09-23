@@ -22,6 +22,7 @@ import { TooltipKeybind } from "@opencode-ai/ui/tooltip"
 import { ResizeHandle } from "@opencode-ai/ui/resize-handle"
 import { Mark } from "@opencode-ai/ui/logo"
 import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
+import { Icon as IconV2 } from "@opencode-ai/ui/v2/icon"
 import { KeybindV2 } from "@opencode-ai/ui/v2/keybind-v2"
 import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 import type { SnapshotFileDiff, VcsFileDiff } from "@opencode-ai/sdk/v2"
@@ -32,7 +33,15 @@ import { useDialog } from "@opencode-ai/ui/context/dialog"
 import FileTree from "@/components/file-tree"
 import { normalizeFileTreeV2Path } from "@/components/file-tree-v2-model"
 import { SessionContextUsage } from "@/components/session-context-usage"
-import { SessionIrisTab, IRIS_SURFACE_CHOICES, requestIrisSurface } from "@/components/session/session-iris-tab"
+import {
+  SessionIrisTab,
+  IRIS_SURFACE_CHOICES,
+  requestIrisSurface,
+  irisStripTabs,
+  irisActiveSurface,
+  irisPinned,
+  toggleIrisPin,
+} from "@/components/session/session-iris-tab"
 
 const reviewTabID = "session-side-panel-review-tab"
 const reviewTabPanelID = "session-side-panel-review-tabpanel"
@@ -77,7 +86,9 @@ export function SessionSidePanel(props: {
   reviewHasFocusableContent: () => boolean
   reviewCount: () => number
   reviewPanel: () => JSX.Element
-  reviewSidebarToggle?: (disabled: boolean) => JSX.Element
+  /** The file tree beside Review. The Review tab IS the file-tree icon: clicking it on Review toggles this. */
+  fileTreeOpened?: () => boolean
+  onToggleFileTree?: () => void
   fileBrowserState?: SessionFileBrowserState
   activeDiff?: string
   focusReviewDiff: (path: string) => void
@@ -212,10 +223,43 @@ export function SessionSidePanel(props: {
         {language.t("command.file.open")}
       </MenuV2.Item>
       <MenuV2.Separator />
+      {/* PIN a product as a tab (#186509 nav). Pinning also opens it; unpinning only removes the
+          tab. The ✓ is the state, so the menu answers "what is in my strip" at a glance. */}
       <For each={IRIS_SURFACE_CHOICES}>
-        {(surface) => <MenuV2.Item onSelect={() => openIrisSurface(surface.id)}>{surface.label}</MenuV2.Item>}
+        {(surface) => (
+          <MenuV2.Item
+            onSelect={() => {
+              if (toggleIrisPin(surface.id)) openIrisSurface(surface.id)
+            }}
+          >
+            <span class="inline-flex w-4 shrink-0">{irisPinned().includes(surface.id as any) ? "✓" : ""}</span>
+            {surface.label}
+          </MenuV2.Item>
+        )}
       </For>
     </MenuV2.Content>
+  )
+
+  /** What the strip shows as selected: the product tab when the IRIS panel is the active one. */
+  const stripValue = () => (activeTab() === "iris" ? `iris:${irisActiveSurface()}` : activeTab())
+
+  /** One trigger per pinned product (plus the open one if unpinned) — replaces the "IRIS" tab. */
+  // Keyed by PRODUCT ID (strings), not by fresh objects. Rebuilding the triggers on every product
+  // switch made the Tabs component lose its selected trigger for a frame, fall back to the first
+  // tab and report it as a choice — measured: Agents → Genesis landed on Review.
+  const productIds = createMemo(() => irisStripTabs().map((t) => t.id as string), undefined, {
+    equals: (a, b) => a.length === b.length && a.every((x, i) => x === b[i]),
+  })
+  const ProductTriggers = () => (
+    <For each={productIds()}>
+      {(id) => (
+        <Tabs.Trigger value={`iris:${id}`} classList={{ italic: !irisPinned().includes(id as any) }}>
+          <div class="flex items-center gap-2">
+            <div>{irisStripTabs().find((t) => t.id === id)?.label ?? id}</div>
+          </div>
+        </Tabs.Trigger>
+      )}
+    </For>
   )
 
   const fileTreeTab = () => layout.fileTree.tab()
@@ -246,6 +290,8 @@ export function SessionSidePanel(props: {
     queueMicrotask(() => fileFilter?.focus())
   }
   const activateTab = (value: string) => {
+    // A product tab: the IRIS panel, on that product. "iris" itself is never shown as a tab.
+    if (value.startsWith("iris:")) return openIrisSurface(value.slice(5))
     const next = normalizeTab(value)
     const path = file.pathFromTab(next)
     if (path) void file.load(path)
@@ -384,7 +430,7 @@ export function SessionSidePanel(props: {
                       >
                         <DragDropSensors />
                         <ConstrainDragYAxis />
-                        <Tabs value={activeTab()} onChange={activateTab}>
+                        <Tabs value={stripValue()} onChange={activateTab}>
                           <div class="sticky top-0 shrink-0 flex">
                             <Tabs.List
                               ref={(el: HTMLDivElement) => {
@@ -417,11 +463,7 @@ export function SessionSidePanel(props: {
                                   that to always-true would make IRIS beat Review as the default
                                   tab for every session with no files open — a behaviour change
                                   nobody asked for, smuggled in behind a cosmetic one. */}
-                              <Tabs.Trigger value="iris">
-                                <div class="flex items-center gap-2">
-                                  <div>IRIS</div>
-                                </div>
-                              </Tabs.Trigger>
+                              <ProductTriggers />
                               <Show when={contextOpen()}>
                                 <Tabs.Trigger
                                   value="context"
@@ -514,7 +556,9 @@ export function SessionSidePanel(props: {
                                     <AddMenuItems
                                       onOpenFile={() => {
                                         void import("@/components/dialog-select-file").then((x) => {
-                                          dialog.show(() => <x.DialogSelectFile mode="files" onOpenFile={showAllFiles} />)
+                                          dialog.show(() => (
+                                            <x.DialogSelectFile mode="files" onOpenFile={showAllFiles} />
+                                          ))
                                         })
                                       }}
                                     />
@@ -619,7 +663,7 @@ export function SessionSidePanel(props: {
                         tabs().move(source.id.toString(), source.index)
                       }}
                     >
-                      <Tabs value={activeTab()} onChange={activateTab}>
+                      <Tabs value={stripValue()} onChange={activateTab}>
                         <div class="session-review-v2-tabs-bar sticky top-0 shrink-0 flex items-center">
                           <Tabs.List
                             ref={(el: HTMLDivElement) => {
@@ -628,34 +672,49 @@ export function SessionSidePanel(props: {
                               onCleanup(stop)
                             }}
                           >
-                            <Show when={props.reviewSidebarToggle}>
-                              {(toggle) => (
-                                <div class="session-review-v2-sidebar-toggle-slot h-full shrink-0 sticky left-0 z-10 flex items-center justify-center bg-v2-background-bg-base">
-                                  {toggle()(activeTab() === SESSION_OPEN_FILE_TAB)}
-                                </div>
-                              )}
-                            </Show>
+                            {/* REVIEW IS THE FILE-TREE ICON. One control instead of two: the icon opens Review
+                                (with the changed-files count on it), and on Review a second click toggles the
+                                file tree — what the separate icon did. The "Files Changed N" text tab is gone. */}
                             <Show when={reviewTab() && props.canReview()}>
-                              <Tabs.Trigger
-                                value="review"
-                                id={reviewTabID}
-                                aria-controls={activeTab() === "review" ? reviewTabPanelID : undefined}
-                              >
-                                {props.hasReview()
-                                  ? language.t("session.review.filesChanged", { count: props.reviewCount() })
-                                  : language.t("session.tab.review")}
-                              </Tabs.Trigger>
+                              <div class="session-review-v2-sidebar-toggle-slot h-full shrink-0 sticky left-0 z-10 flex items-center justify-center bg-v2-background-bg-base">
+                                <Tabs.Trigger
+                                  value="review"
+                                  id={reviewTabID}
+                                  aria-controls={activeTab() === "review" ? reviewTabPanelID : undefined}
+                                  aria-label={
+                                    props.hasReview()
+                                      ? `${language.t("session.tab.review")} — ${language.t("session.review.filesChanged", { count: props.reviewCount() })}`
+                                      : language.t("session.tab.review")
+                                  }
+                                  title={
+                                    activeTab() === "review"
+                                      ? props.fileTreeOpened?.()
+                                        ? "Hide file tree"
+                                        : "Show file tree"
+                                      : language.t("session.tab.review")
+                                  }
+                                  data-review-icon-tab=""
+                                  onClick={() => {
+                                    if (activeTab() === "review") props.onToggleFileTree?.()
+                                  }}
+                                >
+                                  <span class="inline-flex items-center gap-1">
+                                    <IconV2 name="filetree" />
+                                    <Show when={props.hasReview()}>
+                                      <span class="text-[11px] leading-none font-mono tabular-nums">
+                                        {props.reviewCount()}
+                                      </span>
+                                    </Show>
+                                  </span>
+                                </Tabs.Trigger>
+                              </div>
                             </Show>
                             {/* Also here, not only in the strip above. This file renders TWO tab
                                 strips — legacy and v2 — and only one is live. Adding the tab to
                                 one of them is a bug that typechecks, unit-tests green and shows
                                 nothing on screen; it cost a browser run to find, twice, because
                                 the session HEADER has the same shape. */}
-                            <Tabs.Trigger value="iris">
-                              <div class="flex items-center gap-2">
-                                <div>IRIS</div>
-                              </div>
-                            </Tabs.Trigger>
+                            <ProductTriggers />
                             <Show when={contextOpen()}>
                               <Tabs.Trigger
                                 value="context"

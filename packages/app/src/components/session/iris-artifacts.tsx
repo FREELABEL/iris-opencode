@@ -24,6 +24,8 @@ import {
 } from "./iris-artifacts-model"
 import { clearArtifactFocus, irisArtifactFocus } from "./iris-nav"
 import { IrisArtifactPublish } from "./iris-artifact-publish"
+import { IrisFileArtifact, type FileContent } from "./iris-file-artifact"
+import { fileRevision, type PromotedFile } from "./iris-promote"
 
 /**
  * Agents › Artifacts (epics #186508 / #186510): what the agents in THIS session made.
@@ -57,6 +59,11 @@ export function IrisArtifacts(props: {
   bloqId?: number
   bloqName?: string
   listen: Listen
+  /** PROMOTE (#186584): documents this session made, from its changed files. */
+  files?: () => PromotedFile[]
+  readFile?: (path: string) => Promise<FileContent | undefined>
+  openPath?: (path: string) => void
+  revealPath?: (path: string) => void
 }) {
   const query = () =>
     `session=${encodeURIComponent(props.sessionId ?? "")}${props.projectParam ? `&${props.projectParam}` : ""}`
@@ -69,6 +76,8 @@ export function IrisArtifacts(props: {
     async () => (await (await props.doFetch(`/iris/artifacts?${query()}`)).json()) as ListPayload,
   )
   const artifacts = createMemo(() => list.latest?.artifacts ?? [])
+  const files = createMemo(() => props.files?.() ?? [])
+  const total = () => artifacts().length + files().length
 
   // Marked rows: whatever changed between the last two reads. Cleared when you open one.
   const [fresh, setFresh] = createSignal<Set<string>>(new Set())
@@ -96,13 +105,17 @@ export function IrisArtifacts(props: {
   })
 
   const [openId, setOpenId] = createSignal<string | undefined>()
+  const [listOpen, setListOpen] = createSignal(false)
   // Open the newest one by default; keep the user's choice while it still exists.
   createEffect(() => {
     const list = artifacts()
-    if (!list.length) return
-    if (!list.some((m) => m.id === openId())) setOpenId(list[0].id)
+    const docs = files()
+    if (list.some((m) => m.id === openId()) || docs.some((f) => f.id === openId())) return
+    const first = list[0]?.id ?? docs[0]?.id
+    if (first) setOpenId(first)
   })
   const open = createMemo(() => artifacts().find((m) => m.id === openId()))
+  const openFile = createMemo(() => files().find((f) => f.id === openId()))
   // Draft (the artifact, from disk) or Live (its published page, from heyiris.io). Resets to the
   // draft when another artifact is opened.
   const [live, setLive] = createSignal(false)
@@ -123,7 +136,7 @@ export function IrisArtifacts(props: {
   createEffect(() => {
     const want = irisArtifactFocus()
     if (!want) return
-    if (artifacts().some((m) => m.id === want.id)) {
+    if (artifacts().some((m) => m.id === want.id) || files().some((f) => f.id === want.id)) {
       choose(want.id)
       clearArtifactFocus()
     } else refresh()
@@ -147,60 +160,152 @@ export function IrisArtifacts(props: {
       <Show when={list.latest && !list.latest.measured}>
         <p class="iris-artifacts__note">Could not read artifacts — {list.latest?.reason}</p>
       </Show>
-      <Show when={props.sessionId && list.latest?.measured && artifacts().length === 0}>
+      <Show when={props.sessionId && list.latest?.measured && total() === 0}>
         <p class="iris-artifacts__note">
           Nothing yet. When an agent in this session makes a page, a brief or a table with the artifact tool, it appears
-          here — from subagents too — with the agent that made it.
+          here — from subagents too — with the agent that made it. Documents the session creates (spreadsheets, PDFs,
+          Word, Markdown) show up here too.
         </p>
       </Show>
 
-      <Show when={artifacts().length}>
-        <ul class="iris-artifacts__list" aria-label="Artifacts">
-          <For each={artifacts()}>
-            {(m) => (
-              <li>
-                <button
-                  type="button"
-                  class="iris-artifacts__row"
-                  classList={{
-                    "iris-artifacts__row--open": m.id === openId(),
-                    "iris-artifacts__row--fresh": fresh().has(m.id),
-                  }}
-                  data-artifact-id={m.id}
-                  onClick={() => choose(m.id)}
-                >
-                  <span class="iris-artifacts__title">{m.title}</span>
-                  <span class="iris-artifacts__kind">{m.kind}</span>
-                  <span class="iris-artifacts__by" data-testid="artifact-author">
-                    {authorLine(m)}
-                  </span>
-                </button>
-              </li>
+      <Show when={total()}>
+        {/* ONE LINE for the artifact (#186509 nav): the list opens from "‹ All (N)", and the
+            title, author and publish actions share the row. It used to be three stacked rows —
+            a list, a title line repeating it, and a button bar. */}
+        <div class="iris-artifacts__toolbar">
+          <div class="iris-artifacts__all">
+            <button
+              type="button"
+              class="iris-artifacts__allbtn"
+              classList={{ "iris-artifacts__allbtn--open": listOpen() }}
+              aria-haspopup="listbox"
+              aria-expanded={listOpen()}
+              onClick={() => setListOpen((v) => !v)}
+            >
+              ‹ All ({total()}){fresh().size ? " •" : ""} ▾
+            </button>
+            <Show when={listOpen()}>
+              <ul
+                class="iris-artifacts__list iris-artifacts__menu"
+                aria-label="Artifacts"
+                onMouseLeave={() => setListOpen(false)}
+              >
+                <For each={artifacts()}>
+                  {(m) => (
+                    <li>
+                      <button
+                        type="button"
+                        class="iris-artifacts__row"
+                        classList={{
+                          "iris-artifacts__row--open": m.id === openId(),
+                          "iris-artifacts__row--fresh": fresh().has(m.id),
+                        }}
+                        data-artifact-id={m.id}
+                        onClick={() => {
+                          choose(m.id)
+                          setListOpen(false)
+                        }}
+                      >
+                        <span class="iris-artifacts__title">{m.title}</span>
+                        <span class="iris-artifacts__kind">{m.kind}</span>
+                        <span class="iris-artifacts__by" data-testid="artifact-author">
+                          {authorLine(m)}
+                        </span>
+                      </button>
+                    </li>
+                  )}
+                </For>
+                <Show when={files().length}>
+                  <li class="iris-artifacts__group" aria-hidden="true">
+                    Files this session made
+                  </li>
+                  <For each={files()}>
+                    {(f) => (
+                      <li>
+                        <button
+                          type="button"
+                          class="iris-artifacts__row"
+                          classList={{ "iris-artifacts__row--open": f.id === openId() }}
+                          data-artifact-id={f.id}
+                          title={f.path}
+                          onClick={() => {
+                            choose(f.id)
+                            setListOpen(false)
+                          }}
+                        >
+                          <span class="iris-artifacts__title">{f.name}</span>
+                          <span class="iris-artifacts__kind">{f.kind}</span>
+                          <span class="iris-artifacts__by">file · {f.status}</span>
+                        </button>
+                      </li>
+                    )}
+                  </For>
+                </Show>
+              </ul>
+            </Show>
+          </div>
+          <Show when={openFile()}>
+            {(f) => (
+              <>
+                <span class="iris-artifacts__sep" />
+                <strong class="iris-artifacts__tbtitle">{f().name}</strong>
+                <span class="iris-artifacts__tbmeta" data-testid="artifact-file-path">
+                  {f().path}
+                </span>
+                <Show when={props.openPath}>
+                  <button type="button" class="iris-card__linkbtn" onClick={() => props.openPath!(f().path)}>
+                    Open
+                  </button>
+                </Show>
+                <Show when={props.revealPath}>
+                  <button type="button" class="iris-card__linkbtn" onClick={() => props.revealPath!(f().path)}>
+                    Reveal
+                  </button>
+                </Show>
+              </>
             )}
-          </For>
-        </ul>
+          </Show>
+          <Show when={!openFile() && doc.latest?.found && doc.latest.meta}>
+            {(meta) => (
+              <>
+                <span class="iris-artifacts__sep" />
+                <strong class="iris-artifacts__tbtitle">{meta().title}</strong>
+                <span class="iris-artifacts__tbmeta" data-testid="artifact-toolbar-author">
+                  {authorLine(meta())}
+                  {doc.latest?.truncated ? " · truncated" : ""}
+                </span>
+                <Show when={props.sessionId}>
+                  <IrisArtifactPublish
+                    meta={open() ?? meta()}
+                    content={doc.latest!.content}
+                    doFetch={props.doFetch}
+                    sessionId={props.sessionId!}
+                    project={props.project}
+                    bloqId={props.bloqId}
+                    bloqName={props.bloqName}
+                    onPublished={refresh}
+                    live={live()}
+                    onToggleLive={liveUrl((open() ?? meta()).published?.url) ? () => setLive((v) => !v) : undefined}
+                  />
+                </Show>
+              </>
+            )}
+          </Show>
+        </div>
 
-        <Show when={doc.latest?.found && doc.latest.meta}>
+        <Show when={openFile()}>
+          {(f) => (
+            <IrisFileArtifact
+              file={f()}
+              revision={fileRevision(f())}
+              read={(path) => props.readFile?.(path) ?? Promise.resolve(undefined)}
+              onOpen={props.openPath ? () => props.openPath!(f().path) : undefined}
+            />
+          )}
+        </Show>
+        <Show when={!openFile() && doc.latest?.found && doc.latest.meta}>
           {(meta) => (
             <div class="iris-artifacts__preview">
-              <p class="iris-artifacts__head">
-                <strong>{meta().title}</strong> · {authorLine(meta())}
-                <Show when={doc.latest?.truncated}> · truncated at 2 MB</Show>
-              </p>
-              <Show when={props.sessionId}>
-                <IrisArtifactPublish
-                  meta={open() ?? meta()}
-                  content={doc.latest!.content}
-                  doFetch={props.doFetch}
-                  sessionId={props.sessionId!}
-                  project={props.project}
-                  bloqId={props.bloqId}
-                  bloqName={props.bloqName}
-                  onPublished={refresh}
-                  live={live()}
-                  onToggleLive={liveUrl((open() ?? meta()).published?.url) ? () => setLive((v) => !v) : undefined}
-                />
-              </Show>
               <Switch>
                 <Match when={liveSrc()}>
                   {(src) => (

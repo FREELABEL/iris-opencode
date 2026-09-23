@@ -735,6 +735,64 @@
   color: var(--text-base);
 }
 
+/* Atlas › Lists toolbar — sort, status, edited window, hide empty (#186580 #186581). */
+.iris-atlas-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 0 8px 8px;
+  font-size: 11px;
+  color: var(--text-weak);
+}
+.iris-atlas-tools__field,
+.iris-atlas-tools__check {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+.iris-atlas-tools select {
+  appearance: none;
+  font: inherit;
+  color: var(--text-base);
+  background: var(--background-element);
+  border: 1px solid var(--border-weaker-base);
+  border-radius: 5px;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+.iris-atlas-tools select:focus {
+  outline: none;
+  border-color: var(--border-weak-base);
+}
+.iris-atlas-tools__chips {
+  display: inline-flex;
+  border: 1px solid var(--border-weaker-base);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.iris-atlas-tools__chips button {
+  appearance: none;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--text-weak);
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.iris-atlas-tools__chips button + button {
+  border-left: 1px solid var(--border-weaker-base);
+}
+.iris-atlas-tools__chips button[aria-pressed="true"] {
+  background: var(--background-element);
+  color: var(--text-base);
+}
+.iris-atlas-tools__check input {
+  margin: 0;
+  accent-color: var(--text-base);
+}
+
 /*
  * The force graph — FULL BLEED.
  *
@@ -1540,3 +1598,43 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
 .iris-publish__note--bad { color: var(--text-strong); font-weight: 600; }
 .iris-publish__addr { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
 .iris-publish__url { font-size: 11px; font-family: var(--font-mono, ui-monospace, monospace); color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+
+/* ── Project first, products as tabs (#186509 nav) ── */
+.iris-projectrow { display: flex; align-items: center; gap: 6px; min-height: 30px; }
+.iris-projectrow__scope { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; font-size: 12px; color: var(--text-weak); }
+.iris-projectrow__chip { font-size: 10px; font-family: var(--font-mono, ui-monospace, monospace); color: var(--text-weaker); border: 1px solid var(--border-weak-base); border-radius: 999px; padding: 0 6px; }
+.iris-focusbtn { width: 26px; height: 24px; display: grid; place-items: center; border-radius: 6px; color: var(--text-weak); background: var(--background-element); transition: color .15s, transform .2s ease; }
+.iris-focusbtn:hover { color: var(--text-strong); }
+.iris-focusbtn--on { color: var(--text-strong); transform: rotate(180deg); }
+@keyframes iris-pop { from { opacity: 0; transform: translateY(-6px) scale(.97); } to { opacity: 1; transform: none; } }
+/* One-line artifact toolbar: ‹ All ▾ │ title · author  …  Save · Publish. The publish component
+   joins the row (display: contents); its form wraps onto a full-width line underneath. */
+.iris-artifacts__toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; flex-shrink: 0; position: relative; min-height: 32px; }
+.iris-artifacts__all { position: relative; }
+.iris-artifacts__allbtn { padding: 4px 8px; border-radius: 6px; font-size: 12px; color: var(--text-weak); white-space: nowrap; }
+.iris-artifacts__allbtn:hover, .iris-artifacts__allbtn--open { color: var(--text-strong); background: var(--background-element); }
+.iris-artifacts__menu { position: absolute; top: calc(100% + 4px); left: 0; z-index: 20; width: min(420px, 80vw); max-height: 320px; padding: 6px;
+  background: var(--background-base); border: 1px solid var(--border-weak-base); border-radius: 10px; box-shadow: 0 14px 40px rgba(0,0,0,.35); animation: iris-pop .16s ease; }
+.iris-artifacts__sep { width: 1px; height: 16px; background: var(--border-weak-base); }
+.iris-artifacts__tbtitle { font-size: 13px; color: var(--text-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%; }
+.iris-artifacts__tbmeta { font-size: 11px; color: var(--text-weaker); font-family: var(--font-mono, ui-monospace, monospace); white-space: nowrap; }
+.iris-artifacts__toolbar .iris-publish { display: contents; }
+.iris-artifacts__toolbar .iris-publish__bar { flex: 1; justify-content: flex-end; min-width: 0; }
+.iris-artifacts__toolbar .iris-publish__spacer { display: none; }
+.iris-artifacts__toolbar .iris-publish__form,
+.iris-artifacts__toolbar .iris-publish__note { flex-basis: 100%; }
+
+/* PROMOTE (#186584/#186585): files this session made, in the Artifacts list and viewer. */
+.iris-artifacts__group { padding: 8px 8px 2px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-weaker); list-style: none; }
+.iris-file__sheet { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; }
+.iris-file__tabs { display: flex; gap: 2px; padding: 0 8px 6px; overflow-x: auto; flex-shrink: 0; }
+.iris-file__tabs button { appearance: none; border: 1px solid var(--border-weaker-base); background: none; color: var(--text-weak); font: inherit; font-size: 11px; padding: 2px 8px; border-radius: 5px; cursor: pointer; white-space: nowrap; }
+.iris-file__tabs button[aria-selected="true"] { background: var(--background-element); color: var(--text-base); }
+.iris-file__doc { overflow: auto; }
+.iris-file__title { margin: 0 0 2px; font-size: 13px; font-weight: 600; color: var(--text-strong); }
+.iris-file__pre { margin: 0 0 2px; font-size: 11px; color: var(--text-weak); max-width: 80ch; }
+.iris-file__title + .iris-file__pre, .iris-file__pre:last-of-type { margin-bottom: 8px; }
+/* Wide text wraps inside a capped column; the table scrolls sideways instead of squeezing. */
+.iris-file__table th, .iris-file__table td { max-width: 32ch; min-width: 6ch; vertical-align: top; line-height: 1.4; }
+.iris-file__table th { position: sticky; top: 0; z-index: 1; background: var(--background-base); font-weight: 600; white-space: nowrap; }
+.iris-file__table td { font-size: 11px; }

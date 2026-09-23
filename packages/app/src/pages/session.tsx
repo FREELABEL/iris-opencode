@@ -86,7 +86,6 @@ import { SessionSidePanel } from "@/pages/session/session-side-panel"
 import { sessionPanelLayout } from "@/pages/session/session-panel-layout"
 import { SessionReviewEmptyChangesV2 } from "@opencode-ai/session-ui/v2/session-review-empty-changes-v2"
 import { SessionReviewEmptyNoGitV2 } from "@opencode-ai/session-ui/v2/session-review-empty-no-git-v2"
-import { SessionReviewV2SidebarToggle } from "@opencode-ai/session-ui/v2/session-review-v2"
 import { ReviewPanelV2 } from "@/pages/session/v2/review-panel-v2"
 import { createReviewPanelV2State } from "@/pages/session/v2/review-panel-v2-state"
 import { reviewDiffDirectory, reviewDiffNeedsLoad, reviewRootDirectory } from "@/pages/session/v2/review-diff-kinds"
@@ -2366,13 +2365,8 @@ export default function Page() {
                       reviewHasFocusableContent={() => hasReview() || reviewV2State.sidebarOpened()}
                       reviewCount={reviewCount}
                       reviewPanel={reviewPanelV2}
-                      reviewSidebarToggle={(disabled) => (
-                        <SessionReviewV2SidebarToggle
-                          opened={reviewV2State.sidebarOpened()}
-                          disabled={disabled}
-                          onToggle={reviewV2State.toggleSidebar}
-                        />
-                      )}
+                      fileTreeOpened={reviewV2State.sidebarOpened}
+                      onToggleFileTree={reviewV2State.toggleSidebar}
                       fileBrowserState={reviewV2State}
                       activeDiff={activeReviewFile()}
                       focusReviewDiff={focusReviewDiff}

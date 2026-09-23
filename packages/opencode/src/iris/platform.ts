@@ -55,8 +55,7 @@ import { findLocalPlaybook } from "./playbook-local"
  */
 function dataDir(): string {
   if (process.env.XDG_DATA_HOME) return path.join(process.env.XDG_DATA_HOME, "opencode")
-  if (process.platform === "win32" && process.env.LOCALAPPDATA)
-    return path.join(process.env.LOCALAPPDATA, "opencode")
+  if (process.platform === "win32" && process.env.LOCALAPPDATA) return path.join(process.env.LOCALAPPDATA, "opencode")
   return path.join(homedir(), ".local", "share", "opencode")
 }
 
@@ -213,7 +212,6 @@ export interface PlatformResult<T> {
   data: T
 }
 
-
 /**
  * Is this a bloq the signed-in user actually has?
  *
@@ -248,6 +246,9 @@ export interface AtlasItem {
   description?: string
   /** The item's body. This is the thing a person actually opens an item to read. */
   content?: string
+  /** ISO timestamps from fl-api — what the panel's "last edited", sort and filter read. */
+  createdAt?: string
+  updatedAt?: string
 }
 export interface AtlasList {
   id: number
@@ -328,6 +329,8 @@ export async function fetchAtlas(bloqId: number): Promise<PlatformResult<{ lists
         status: i.status ?? undefined,
         description: i.description || undefined,
         content: i.content || undefined,
+        createdAt: typeof i.created_at === "string" ? i.created_at : undefined,
+        updatedAt: typeof i.updated_at === "string" ? i.updated_at : undefined,
       })),
     }))
     return { measured: true, data: { lists } }
@@ -946,7 +949,11 @@ export interface AuthState {
   verdict: "ready" | "signed-out" | "unreachable-credential"
 }
 
-export function describeAuth(input: { storedToken: string | null; source: string; envKey: string | undefined }): AuthState {
+export function describeAuth(input: {
+  storedToken: string | null
+  source: string
+  envKey: string | undefined
+}): AuthState {
   const signedIn = Boolean(input.storedToken)
   const providerCanSee = Boolean(input.envKey)
   return {
@@ -964,7 +971,6 @@ export function checkAuth(): AuthState {
     envKey: process.env.IRIS_API_KEY,
   })
 }
-
 
 export interface SchemaField {
   /** The key in a record's `data` map — what a table column reads. */
@@ -1083,7 +1089,6 @@ export async function fetchSchemas(bloqId: number): Promise<PlatformResult<{ sch
     return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { schemas: [] } }
   }
 }
-
 
 export interface RecordRow {
   id: number
@@ -1277,8 +1282,7 @@ export async function fetchSites(bloqId: number): Promise<PlatformResult<{ sites
     // projects_bloq_id the newer one, and rows in the wild carry one or the other.
     const mine = rows.filter(
       (r: any) =>
-        (String(r.owner_type) === "bloq" && Number(r.owner_id) === bloqId) ||
-        Number(r.projects_bloq_id) === bloqId,
+        (String(r.owner_type) === "bloq" && Number(r.owner_id) === bloqId) || Number(r.projects_bloq_id) === bloqId,
     )
 
     const sites: Site[] = mine.map((r: any) => ({
@@ -1304,7 +1308,13 @@ export async function fetchSites(bloqId: number): Promise<PlatformResult<{ sites
 
     // Published first, then the biggest. A draft with one page is the least useful row here.
     sites.sort((a, b) =>
-      a.status === b.status ? b.pagesCount - a.pagesCount : a.status === "published" ? -1 : b.status === "published" ? 1 : 0,
+      a.status === b.status
+        ? b.pagesCount - a.pagesCount
+        : a.status === "published"
+          ? -1
+          : b.status === "published"
+            ? 1
+            : 0,
     )
     return { measured: true, data: { sites } }
   } catch (e) {
@@ -1445,10 +1455,7 @@ export type IntegrationScope = "project" | "organization" | "user"
  * row — which has no registry entry at all and gets its commands from the broker's action map —
  * come out the same shape rather than the UI branching on which kind it is.
  */
-function catalogDetail(
-  type: string,
-  row: any,
-): Pick<CatalogEntry, "health" | "usage" | "functions"> {
+function catalogDetail(type: string, row: any): Pick<CatalogEntry, "health" | "usage" | "functions"> {
   const out: Pick<CatalogEntry, "health" | "usage" | "functions"> = {}
 
   const h = (_catalogCache.health as Record<string, any>)[type]
@@ -1457,7 +1464,10 @@ function catalogDetail(
       state: typeof h.state === "string" ? h.state : undefined,
       lastCheckedAt: typeof h.last_verified_at === "string" ? h.last_verified_at : undefined,
       bars: Array.isArray(h.bars)
-        ? h.bars.map((b: any) => ({ from: typeof b?.from === "string" ? b.from : undefined, state: String(b?.state ?? "none") }))
+        ? h.bars.map((b: any) => ({
+            from: typeof b?.from === "string" ? b.from : undefined,
+            state: String(b?.state ?? "none"),
+          }))
         : [],
     }
   }
@@ -1466,7 +1476,10 @@ function catalogDetail(
   if (u && typeof u === "object" && Array.isArray(u.series)) {
     out.usage = {
       band: typeof u.band === "string" ? u.band : undefined,
-      series: u.series.map((pt: any) => ({ day: typeof pt?.day === "string" ? pt.day : undefined, v: Number(pt?.v ?? 0) })),
+      series: u.series.map((pt: any) => ({
+        day: typeof pt?.day === "string" ? pt.day : undefined,
+        v: Number(pt?.v ?? 0),
+      })),
     }
   }
 
@@ -1475,7 +1488,8 @@ function catalogDetail(
   const fns = row?.functions ?? (_catalogCache.brokerFunctions as Record<string, any>)?.[type]
   const ranked: Record<string, any> = (u && typeof u === "object" && u.functions) || {}
   let names: { name: string; label?: string }[] = []
-  if (fns && typeof fns === "object" && !Array.isArray(fns)) names = Object.keys(fns).map((k) => ({ name: k, label: String(fns[k] ?? "") || undefined }))
+  if (fns && typeof fns === "object" && !Array.isArray(fns))
+    names = Object.keys(fns).map((k) => ({ name: k, label: String(fns[k] ?? "") || undefined }))
   else if (Array.isArray(fns)) names = fns.map((f: any) => ({ name: String(f) }))
   if (names.length) {
     out.functions = names
@@ -1532,7 +1546,8 @@ export async function fetchCatalog(): Promise<PlatformResult<{ catalog: CatalogE
   if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { catalog: [] } }
 
   const logoMap = await fetchIntegrationLogos()
-  if (!_catalogCache.items.length) return { measured: false, reason: "integration catalogue unavailable", data: { catalog: [] } }
+  if (!_catalogCache.items.length)
+    return { measured: false, reason: "integration catalogue unavailable", data: { catalog: [] } }
 
   /*
    * WHAT YOU HAVE, asked of your own account — not read off the catalogue.
@@ -1609,7 +1624,10 @@ export async function startIntegrationConnect(
   if (mode === "bridge") {
     return {
       measured: true,
-      data: { mode, hint: "This one runs on your own machine — there is nothing to sign in to. Set it up from the bridge." },
+      data: {
+        mode,
+        hint: "This one runs on your own machine — there is nothing to sign in to. Set it up from the bridge.",
+      },
     }
   }
 
@@ -1898,7 +1916,8 @@ export async function fetchBloqInterior(
   })
 
   // Without the board itself there is no centre and no lists — nothing ELON would draw either.
-  if (!got.board) return { measured: false, reason: unread.join("; ") || "board unreadable", data: { ...empty, unread } }
+  if (!got.board)
+    return { measured: false, reason: unread.join("; ") || "board unreadable", data: { ...empty, unread } }
   const boardBody = got.board?.data ?? got.board
 
   const inputs: GraphInputs = {
@@ -1945,7 +1964,6 @@ export async function fetchBloqInteriorInputs(bloqId: number): Promise<GraphInpu
     lists: Array.isArray(b?.lists) ? b.lists : [],
   }
 }
-
 
 // ─────────────────────────────────────────────────────────────────────────────
 // One item, for EDITING — the card editor (#185485)
@@ -2068,7 +2086,9 @@ function parseContent(raw: unknown): { kind: ContentKind; text: string; obj?: Re
 export function readItemDoc(raw: any): Omit<ItemDoc, "tasks" | "tasksMeasured" | "tasksReason"> {
   const c = parseContent(raw.content)
   const labels: string[] = Array.isArray(c.obj?.labels)
-    ? c.obj!.labels.map((l: any) => (typeof l === "string" ? l : String(l?.name ?? l?.label ?? l?.id ?? ""))).filter(Boolean)
+    ? c
+        .obj!.labels.map((l: any) => (typeof l === "string" ? l : String(l?.name ?? l?.label ?? l?.id ?? "")))
+        .filter(Boolean)
     : []
   return {
     id: Number(raw.id),
@@ -2283,7 +2303,11 @@ type Ok = { ok: boolean; reason?: string }
 async function rawItem(id: number): Promise<{ ok: true; raw: any } | { ok: false; reason: string }> {
   try {
     const res = await irisFetch(`/api/v1/user/bloqs/list/item/${id}`)
-    if (!res.ok) return { ok: false, reason: res.status === 404 ? `no item ${id} visible to this account` : `fl-api ${res.status}` }
+    if (!res.ok)
+      return {
+        ok: false,
+        reason: res.status === 404 ? `no item ${id} visible to this account` : `fl-api ${res.status}`,
+      }
     const j = (await res.json()) as any
     return { ok: true, raw: j?.data ?? j }
   } catch (e) {
@@ -2350,7 +2374,10 @@ export function readEmailList(v: unknown): string[] {
         return readEmailList(JSON.parse(s))
       } catch {}
     }
-    return s.split(/[\s,;]+/).map((x) => x.trim().toLowerCase()).filter(Boolean)
+    return s
+      .split(/[\s,;]+/)
+      .map((x) => x.trim().toLowerCase())
+      .filter(Boolean)
   }
   return []
 }
@@ -2388,7 +2415,14 @@ export function readShareLink(r: any): ShareLink {
  * different sentences.
  */
 export async function fetchShareState(itemId: number, bloqId?: number): Promise<PlatformResult<ShareState>> {
-  const empty: ShareState = { isPublic: false, allowKnown: false, allowedEmails: [], boardDefaults: { allowedEmails: [] }, members: [], links: [] }
+  const empty: ShareState = {
+    isPublic: false,
+    allowKnown: false,
+    allowedEmails: [],
+    boardDefaults: { allowedEmails: [] },
+    members: [],
+    links: [],
+  }
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: notSignedIn(), data: empty }
   const item = await rawItem(itemId)
@@ -2420,7 +2454,10 @@ export async function fetchShareState(itemId: number, bloqId?: number): Promise<
         // {allowed_emails: [], allowed_domains: []} — domains shown with a leading @ so a
         // reader can tell "anyone at heyiris.io" from one address at a glance.
         state.boardDefaults = {
-          allowedEmails: [...readEmailList(d?.allowed_emails), ...readEmailList(d?.allowed_domains).map((x) => (x.startsWith("@") ? x : `@${x}`))],
+          allowedEmails: [
+            ...readEmailList(d?.allowed_emails),
+            ...readEmailList(d?.allowed_domains).map((x) => (x.startsWith("@") ? x : `@${x}`)),
+          ],
         }
       },
     ],
@@ -2504,16 +2541,27 @@ export async function setShareAllowlist(itemId: number, entries: string[]): Prom
   if (!userId) return { ok: false, reason: notSignedIn() }
   const item = await rawItem(itemId)
   if (!item.ok) return { ok: false, reason: item.reason }
-  if (!item.raw.is_public) return { ok: false, reason: "Make the card public first — fl-api stores the allow-list on publish, a private card has no link to guard." }
+  if (!item.raw.is_public)
+    return {
+      ok: false,
+      reason:
+        "Make the card public first — fl-api stores the allow-list on publish, a private card has no link to guard.",
+    }
   const { emails, domains } = splitAllowList(entries)
-  const r = await postJson(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/make-public`, { allowed_emails: emails, allowed_domains: domains })
+  const r = await postJson(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/make-public`, {
+    allowed_emails: emails,
+    allowed_domains: domains,
+  })
   if (!r.ok) return r
   // Read back from the reply's own ladder label: make-public answers access_level, and it is
   // "gated" exactly when a list is stored. "Accepted" and "stored" have differed here before.
   const level = r.data?.access_level
   const want = emails.length + domains.length > 0
   if (level && (level === "gated") !== want) {
-    return { ok: false, reason: `fl-api accepted the write but reports access_level "${level}" (expected ${want ? "gated" : "public"})` }
+    return {
+      ok: false,
+      reason: `fl-api accepted the write but reports access_level "${level}" (expected ${want ? "gated" : "public"})`,
+    }
   }
   return { ok: true }
 }
@@ -2541,7 +2589,8 @@ export async function createShareLink(bloqId: number, expiresInDays?: number): P
   const userId = await resolveUserId()
   if (!userId) return { ok: false, reason: notSignedIn() }
   const body: Record<string, unknown> = { permission: "viewer" }
-  if (expiresInDays != null && expiresInDays > 0) body.expires_at = new Date(Date.now() + expiresInDays * 86400_000).toISOString()
+  if (expiresInDays != null && expiresInDays > 0)
+    body.expires_at = new Date(Date.now() + expiresInDays * 86400_000).toISOString()
   const r = await postJson(`/api/v1/user/bloqs/${bloqId}/share-link`, body)
   if (!r.ok) return { ok: false, reason: r.reason }
   const link = readShareLink(r.data)
@@ -2613,7 +2662,11 @@ export async function fetchAttachments(itemId: number): Promise<PlatformResult<{
   const item = await rawItem(itemId)
   if (!item.ok) return { measured: false, reason: item.reason, data: { files: [] } }
   const c = parseContent(item.raw.content)
-  const list = Array.isArray(c.obj?.attachments) ? c.obj!.attachments : Array.isArray(item.raw.attachments) ? item.raw.attachments : []
+  const list = Array.isArray(c.obj?.attachments)
+    ? c.obj!.attachments
+    : Array.isArray(item.raw.attachments)
+      ? item.raw.attachments
+      : []
   return { measured: true, data: { files: list.map(readAttachment) } }
 }
 
@@ -2631,10 +2684,15 @@ export async function deleteAttachment(itemId: number, fileId: string): Promise<
   if (gone.cloud_file_id) {
     const del = await postJson(`/api/v1/cloud-files/${gone.cloud_file_id}`, undefined, "DELETE")
     // Already gone is fine — the reference is what is being removed. Laravel says it three ways.
-    if (!del.ok && !/not found|404|no query results/i.test(del.reason ?? "")) return { ok: false, reason: `cloud file: ${del.reason}` }
+    if (!del.ok && !/not found|404|no query results/i.test(del.reason ?? ""))
+      return { ok: false, reason: `cloud file: ${del.reason}` }
   }
   // Whole object: content_merge cannot remove an array element (array_replace_recursive).
-  const r = await postJson(`/api/v1/user/bloqs/list/item/${itemId}`, { content: JSON.stringify({ ...c.obj, attachments: keep }) }, "PUT")
+  const r = await postJson(
+    `/api/v1/user/bloqs/list/item/${itemId}`,
+    { content: JSON.stringify({ ...c.obj, attachments: keep }) },
+    "PUT",
+  )
   return { ok: r.ok, reason: r.reason }
 }
 
@@ -2705,7 +2763,11 @@ export async function uploadAttachment(
       ? { content_merge: { attachments: [...list, ref] } }
       : { content: JSON.stringify({ text: c.text, body: c.text, attachments: [ref] }) }
   const saved = await postJson(`/api/v1/user/bloqs/list/item/${itemId}`, body, "PUT")
-  if (!saved.ok) return { ok: false, reason: `uploaded (cloud file ${ref.cloud_file_id}) but not attached to the card: ${saved.reason}` }
+  if (!saved.ok)
+    return {
+      ok: false,
+      reason: `uploaded (cloud file ${ref.cloud_file_id}) but not attached to the card: ${saved.reason}`,
+    }
   return { ok: true, file: readAttachment(ref, list.length) }
 }
 
@@ -2743,7 +2805,8 @@ export async function fetchEvents(itemId: number): Promise<PlatformResult<{ even
     const rows: any[] = j?.data?.events ?? j?.events ?? []
     const events = rows.map(readCardEvent).filter((e) => e.id)
     const item = await rawItem(itemId)
-    if (item.ok && item.raw.due_date) events.push({ id: "due", title: "Due", startsAt: String(item.raw.due_date), kind: "due" })
+    if (item.ok && item.raw.due_date)
+      events.push({ id: "due", title: "Due", startsAt: String(item.raw.due_date), kind: "due" })
     events.sort((a, b) => a.startsAt.localeCompare(b.startsAt))
     return { measured: true, data: { events } }
   } catch (e) {
@@ -2751,7 +2814,10 @@ export async function fetchEvents(itemId: number): Promise<PlatformResult<{ even
   }
 }
 
-export async function addEvent(itemId: number, input: { title: string; startsAt: string; endsAt?: string }): Promise<Ok> {
+export async function addEvent(
+  itemId: number,
+  input: { title: string; startsAt: string; endsAt?: string },
+): Promise<Ok> {
   const userId = await resolveUserId()
   if (!userId) return { ok: false, reason: notSignedIn() }
   // MySQL's own format, UTC. fl-api ead6675c parses ISO too; an older build refuses the Z.
@@ -2759,7 +2825,11 @@ export async function addEvent(itemId: number, input: { title: string; startsAt:
     const d = new Date(iso)
     return Number.isNaN(d.getTime()) ? iso : d.toISOString().slice(0, 19).replace("T", " ")
   }
-  const body: Record<string, unknown> = { title: input.title.trim(), start_date: sql(input.startsAt), event_type: "deadline" }
+  const body: Record<string, unknown> = {
+    title: input.title.trim(),
+    start_date: sql(input.startsAt),
+    event_type: "deadline",
+  }
   if (input.endsAt) body.end_date = sql(input.endsAt)
   const r = await postJson(`/api/v1/user/bloqs/list/item/${itemId}/events`, body)
   return { ok: r.ok, reason: r.reason }
@@ -2877,7 +2947,9 @@ export function readChatMessage(m: any): ChatMessage {
  * same thread Elon's Chat tab reads, so a conversation started in either place continues in
  * the other. Nothing is invented on the card.
  */
-export async function fetchItemChat(itemId: number): Promise<PlatformResult<{ agentId?: number; messages: ChatMessage[] }>> {
+export async function fetchItemChat(
+  itemId: number,
+): Promise<PlatformResult<{ agentId?: number; messages: ChatMessage[] }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: notSignedIn(), data: { messages: [] } }
   try {
@@ -2910,7 +2982,9 @@ export async function sendItemChat(
   if (!item.ok) return { ok: false, reason: item.reason }
   const c = parseContent(item.raw.content)
   const thread = await fetchItemChat(itemId)
-  const history = thread.data.messages.slice(-12).map((m) => ({ role: m.role === "agent" ? "assistant" : "user", content: m.text }))
+  const history = thread.data.messages
+    .slice(-12)
+    .map((m) => ({ role: m.role === "agent" ? "assistant" : "user", content: m.text }))
   const systemMessage = [
     `You are answering questions about one board card, #${itemId}: "${item.raw.title ?? ""}" (status ${item.raw.status ?? "unknown"}).`,
     `Card body:\n${c.text.slice(0, 6000)}`,
@@ -2922,7 +2996,13 @@ export async function sendItemChat(
   try {
     const res = await irisFetch(`/api/v1/bloqs/agents/ask`, FL_API, {
       method: "POST",
-      body: JSON.stringify({ agentId: input.agentId, message: input.text, history, systemMessage, bloqId: input.bloqId }),
+      body: JSON.stringify({
+        agentId: input.agentId,
+        message: input.text,
+        history,
+        systemMessage,
+        bloqId: input.bloqId,
+      }),
     })
     const j = (await res.json().catch(() => ({}))) as any
     if (!res.ok) return { ok: false, reason: apiFailure(j, res.status) }
@@ -2935,14 +3015,28 @@ export async function sendItemChat(
   }
 
   const store = async (role: "user" | "assistant", message: string) =>
-    postJson(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/chat/messages`, { message, role, agent_id: input.agentId, agent_name: agentName })
+    postJson(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/chat/messages`, {
+      message,
+      role,
+      agent_id: input.agentId,
+      agent_name: agentName,
+    })
   const s1 = await store("user", input.text)
   const s2 = await store("assistant", replyText)
-  const unsaved = [s1, s2].filter((x) => !x.ok).map((x) => x.reason).join("; ")
+  const unsaved = [s1, s2]
+    .filter((x) => !x.ok)
+    .map((x) => x.reason)
+    .join("; ")
   return {
     ok: true,
     reason: unsaved ? `reply received but not stored on the card's thread: ${unsaved}` : undefined,
-    message: { id: String(s2.data?.id ?? `a-${Date.now()}`), role: "agent", text: replyText, at: new Date().toISOString(), agentName },
+    message: {
+      id: String(s2.data?.id ?? `a-${Date.now()}`),
+      role: "agent",
+      text: replyText,
+      at: new Date().toISOString(),
+      agentName,
+    },
   }
 }
 
@@ -2960,7 +3054,11 @@ export interface CardSchema {
 function readOptions(v: unknown): SchemaOption[] {
   if (!Array.isArray(v)) return []
   return v
-    .map((o: any) => (typeof o === "string" ? { id: o, label: o } : { id: String(o?.id ?? ""), label: String(o?.label ?? o?.name ?? o?.id ?? ""), color: o?.color || undefined }))
+    .map((o: any) =>
+      typeof o === "string"
+        ? { id: o, label: o }
+        : { id: String(o?.id ?? ""), label: String(o?.label ?? o?.name ?? o?.id ?? ""), color: o?.color || undefined },
+    )
     .filter((o) => o.id)
 }
 
@@ -3079,7 +3177,10 @@ export async function fetchIntegrationLogos(): Promise<{ logos: Record<string, s
     //
     // A failure is a reason to try again, never a result to remember.
     if (!Object.keys(logos).length) return { logos: {} }
-    return (_logoCache = { logos, attribution: typeof j?.logo_attribution === "string" ? j.logo_attribution : undefined })
+    return (_logoCache = {
+      logos,
+      attribution: typeof j?.logo_attribution === "string" ? j.logo_attribution : undefined,
+    })
   } catch {
     return { logos: {} }
   }
@@ -3186,7 +3287,8 @@ export async function fetchIntegrations(
         : all.filter((i) =>
             want === "project"
               ? // A PROJECT credential means this board's, not "any board's".
-                i.scope === "project" && (opts.bloqId == null || Number(rows.find((r: any) => String(r.id) === i.id)?.bloq_id) === opts.bloqId)
+                i.scope === "project" &&
+                (opts.bloqId == null || Number(rows.find((r: any) => String(r.id) === i.id)?.bloq_id) === opts.bloqId)
               : i.scope === want,
           )
 
@@ -3361,7 +3463,10 @@ let meId: number | null = null
  */
 export type PlaybookView = "project" | "marketplace" | "all"
 
-export async function fetchPlaybooks(bloqId: number, view?: PlaybookView): Promise<PlatformResult<{ playbooks: Playbook[] }>> {
+export async function fetchPlaybooks(
+  bloqId: number,
+  view?: PlaybookView,
+): Promise<PlatformResult<{ playbooks: Playbook[] }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { playbooks: [] } }
 

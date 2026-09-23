@@ -184,7 +184,26 @@ jobs:
           # release carried latest.json and the in-app "Check For Updates..." pointed at a 404.
           # The app had an updater pubkey, a menu item and a UI, with nothing to update from —
           # which is why every fix so far required telling every user to re-download by hand.
-          ./node_modules/.bin/tauri build --config ./src-tauri/tauri.prod.conf.json --config '{"bundle":{"createUpdaterArtifacts":true}}' --target ${{ matrix.rust_target }} --bundles app,dmg,updater
+          #
+          # RETRY ONLY APPLE'S TIMESTAMP FLAKE. codesign asks timestamp.apple.com to stamp every
+          # signature; when that service hiccups it fails with "A timestamp was expected but was
+          # not found" and the whole platform is lost (1.18.80, x64, 2026-09-23 — nothing shipped).
+          # The retry reuses the compiled target, so it re-runs bundle + sign only. Any other
+          # failure fails at once: retrying a real error just hides it for longer.
+          LOG="$RUNNER_TEMP/tauri-build.log"
+          for attempt in 1 2 3; do
+            set +e
+            ./node_modules/.bin/tauri build --config ./src-tauri/tauri.prod.conf.json --config '{"bundle":{"createUpdaterArtifacts":true}}' --target ${{ matrix.rust_target }} --bundles app,dmg,updater 2>&1 | tee "$LOG"
+            rc=${PIPESTATUS[0]}
+            set -e
+            [ "$rc" -eq 0 ] && break
+            if [ "$attempt" -lt 3 ] && grep -qiE 'timestamp was expected but was not found|timestamp service is not available' "$LOG"; then
+              echo "::warning::codesign could not reach Apple's timestamp service (attempt $attempt) — retrying in 30s"
+              sleep 30
+              continue
+            fi
+            exit "$rc"
+          done
         env:
           OPENCODE_CHANNEL: latest
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}

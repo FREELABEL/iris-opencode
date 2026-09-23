@@ -18,19 +18,34 @@ import { pageSummary, type PageEnvelope } from "./use-paged-surface"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { List } from "@opencode-ai/ui/list"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
-import { SegmentedControlV2, SegmentedControlItemV2 } from "@opencode-ai/ui/v2/segmented-control-v2"
 import { IrisForceGraph, type ForceEdge, type ForceNode } from "./iris-force-graph"
 import { graphBoardIsIsolated, scopeGraphRows, type GraphScope } from "./iris-graph-scope"
 import { Button } from "@opencode-ai/ui/button"
 import { useServerSDK } from "@/context/server-sdk"
 import { useSDK } from "@/context/sdk"
 import { usePlatform } from "@/context/platform"
+import { useSync } from "@/context/sync"
+import { promotedFiles } from "./iris-promote"
+import type { FileContent } from "./iris-file-artifact"
 import { IrisCardEditor } from "./iris-card-editor"
 import { IrisArtifacts } from "./iris-artifacts"
+import { ACCOUNT_SURFACES, panelScope, readPinnedIds, visibleTabs } from "./iris-panel-nav"
 import { irisNavRequest, clearIrisNav } from "./iris-nav"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { IrisRooms } from "./iris-rooms"
 import { itemCommands, renderMarkdown } from "./iris-item"
+import {
+  ATLAS_EDITED,
+  ATLAS_SORTS,
+  ATLAS_STATUSES,
+  ATLAS_VIEW_DEFAULT,
+  applyAtlasView,
+  isDefaultView,
+  isDone,
+  readAtlasView,
+  relativeTime,
+  type AtlasViewOptions,
+} from "./iris-atlas-view"
 
 // Re-exported: the panel tests assert on these, and they were defined here before the card
 // editor needed them too.
@@ -57,6 +72,8 @@ interface AtlasItem {
   type?: string
   status?: string
   content?: string
+  createdAt?: string
+  updatedAt?: string
 }
 interface AtlasList {
   id: number
@@ -310,7 +327,8 @@ function describeFields(
       title: r.name,
       fields: fieldsOf([
         ["about", r.description],
-        ["type", r.type], ["category", r.category],
+        ["type", r.type],
+        ["category", r.category],
         // The MODE is the thing worth knowing before you start: these are not the same job.
         ["connect by", connectsBy(r.mode, r.oauthRequired)],
         ["provider status", `${health.label} — ${health.basis}`],
@@ -882,6 +900,55 @@ export const IRIS_SURFACE_CHOICES: readonly { id: string; label: string }[] = SU
   label: s.label,
 }))
 
+/**
+ * PROJECT FIRST, PRODUCTS AS TABS (#186509 nav). The panel reads top-down: which project, which
+ * product, which view. Products are tabs you PIN from the + menu instead of one eight-item bar.
+ */
+const PINNED_KEY = "iris.panel.pinned"
+const DEFAULT_PINNED: SurfaceId[] = ["pages", "atlas", "agents"]
+const readPinned = (raw: string | null) =>
+  readPinnedIds<SurfaceId>(
+    raw,
+    SURFACES.map((x) => x.id),
+    DEFAULT_PINNED,
+  )
+const storage = (key: string) => {
+  try {
+    return localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * SHARED with the side panel's tab strip (#186509 nav): each pinned product is a top-level tab
+ * there, and the separate "IRIS" tab is gone. Module-level so the strip can read them before (and
+ * without) this component mounting; the component keeps them current.
+ */
+const [irisPinnedSig, setIrisPinnedSig] = createSignal<SurfaceId[]>(readPinned(storage(PINNED_KEY)))
+const [irisSurfaceSig, setIrisSurfaceSig] = createSignal<SurfaceId>(normalizeSurface(storage(LAST_SURFACE_KEY)))
+export const irisPinned = irisPinnedSig
+export const irisActiveSurface = irisSurfaceSig
+export function irisStripTabs(): { id: SurfaceId; label: string; pinned: boolean }[] {
+  return visibleTabs(irisPinnedSig(), irisSurfaceSig()).map((id) => ({
+    id,
+    label: SURFACES.find((x) => x.id === id)?.label ?? id,
+    pinned: irisPinnedSig().includes(id),
+  }))
+}
+/** Pin or unpin a product. Never leaves the strip empty. Returns whether it is now pinned. */
+export function toggleIrisPin(id: string): boolean {
+  const sid = normalizeSurface(id)
+  const cur = irisPinnedSig()
+  const next = cur.includes(sid) ? cur.filter((x) => x !== sid) : [...cur, sid]
+  if (!next.length) return true
+  setIrisPinnedSig(next)
+  try {
+    localStorage.setItem(PINNED_KEY, JSON.stringify(next))
+  } catch {}
+  return next.includes(sid)
+}
+
 const [requestedSurface, setRequestedSurface] = createSignal<{ surface: SurfaceId; sub?: string } | undefined>()
 
 /**
@@ -923,6 +990,38 @@ export function SessionIrisTab() {
       return undefined
     }
   }
+  /*
+   * PROMOTE (#186584): the documents this session made, from its turns' changed files. Optional
+   * like dirSdk — without a directory context there is no session to read and no files to show.
+   */
+  const dirSync = (() => {
+    try {
+      return dirSdk ? useSync() : undefined
+    } catch {
+      return undefined
+    }
+  })()
+  const sessionFiles = createMemo(() => {
+    const id = sessionLayout.params.id
+    if (!id || !dirSync) return []
+    try {
+      return promotedFiles((dirSync().data.message[id] ?? []) as any[])
+    } catch {
+      return []
+    }
+  })
+  const readSessionFile = (path: string): Promise<FileContent | undefined> =>
+    dirSdk
+      ? dirSdk()
+          .client.file.read({ path })
+          .then((r) => r.data as FileContent | undefined)
+          .catch(() => undefined)
+      : Promise.resolve(undefined)
+  const absolute = (rel: string) => {
+    const dir = projectDir()
+    return dir ? `${dir.replace(/[\\/]$/, "")}/${rel}` : undefined
+  }
+
   const projectParam = () => {
     try {
       const d = dirSdk?.().directory
@@ -992,6 +1091,8 @@ export function SessionIrisTab() {
       }
     })(),
   )
+  // The side panel's strip highlights the product on screen — keep the shared signal current.
+  createEffect(() => setIrisSurfaceSig(surface()))
 
   // Remembered PER SURFACE — see LAST_SUBVIEW_KEY. A malformed or missing entry is not an
   // error worth surfacing; resolvePane falls back to the first sub-view of whatever you open.
@@ -1142,6 +1243,38 @@ export function SessionIrisTab() {
     const v = d[key]
     return Array.isArray(v) ? v : []
   })
+
+  /*
+   * SORT / FILTER / LAST EDITED on Atlas › Lists (#186579 #186580 #186581). Applied to the board
+   * the sidecar returned, after the server-side search. Remembered per board in localStorage —
+   * a convenience: losing it just means Board order again.
+   */
+  const atlasViewKey = () => `iris.atlas.view.${activeBloq() ?? "none"}`
+  const [atlasView, setAtlasViewSig] = createSignal<AtlasViewOptions>({ ...ATLAS_VIEW_DEFAULT })
+  createEffect(
+    on(atlasViewKey, (key) => {
+      let raw: string | null = null
+      try {
+        raw = localStorage.getItem(key)
+      } catch {}
+      setAtlasViewSig(readAtlasView(raw))
+    }),
+  )
+  const setAtlasView = (patch: Partial<AtlasViewOptions>) => {
+    const next = { ...atlasView(), ...patch }
+    setAtlasViewSig(next)
+    try {
+      if (isDefaultView(next)) localStorage.removeItem(atlasViewKey())
+      else localStorage.setItem(atlasViewKey(), JSON.stringify(next))
+    } catch {}
+  }
+  // A clock for the relative times, so "2m" does not sit there for an hour.
+  const [now, setNow] = createSignal(Date.now())
+  const clock = setInterval(() => setNow(Date.now()), 60_000)
+  onCleanup(() => clearInterval(clock))
+  const atlasRows = createMemo(() =>
+    pane() === "atlas" ? applyAtlasView(rows() as AtlasList[], atlasView(), now()) : ([] as AtlasList[]),
+  )
 
   // Loading ONLY on the first load. A refetch with a previous payload in hand is not a loading
   // state — treating it as one is what caused the flash.
@@ -1402,7 +1535,11 @@ export function SessionIrisTab() {
    * when the refreshed catalogue stops offering this connector, which is the same signal the
    * rest of the panel already trusts.
    */
-  const [connect, setConnect] = createSignal<{ type: string; state: "opening" | "waiting" | "failed" | "nothing"; message?: string } | null>(null)
+  const [connect, setConnect] = createSignal<{
+    type: string
+    state: "opening" | "waiting" | "failed" | "nothing"
+    message?: string
+  } | null>(null)
 
   async function startConnect(type: string) {
     setConnect({ type, state: "opening" })
@@ -1414,9 +1551,12 @@ export function SessionIrisTab() {
         headers: { "Content-Type": "application/json", Accept: "application/json" },
         body: JSON.stringify({ type }),
       })
-      const res = (await raw.json().catch(() => null)) as
-        | { measured?: boolean; reason?: string; url?: string; hint?: string }
-        | null
+      const res = (await raw.json().catch(() => null)) as {
+        measured?: boolean
+        reason?: string
+        url?: string
+        hint?: string
+      } | null
       if (!res?.measured) {
         // The API's own words: "no OAuth flow for this type" and "requires owner or admin on
         // that organization" are different problems and the person has to read which.
@@ -1697,6 +1837,18 @@ export function SessionIrisTab() {
     ))
   }
 
+  // FOCUS: fold the product and sub-view rows away so the content (an artifact) runs nearly full
+  // height. Esc or ⤢ brings them back.
+  const [focus, setFocus] = createSignal(false)
+  // Esc closes the pin menu only while it is on screen; in focus mode the menu's row is hidden,
+  // so Esc goes straight to leaving focus. (Measured: a menu left open under focus swallowed Esc.)
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === "Escape" && focus()) setFocus(false)
+  }
+  document.addEventListener("keydown", onKey)
+  onCleanup(() => document.removeEventListener("keydown", onKey))
+  const rowScope = createMemo(() => panelScope(surface(), pane()))
+
   function chooseSurface(id: SurfaceId) {
     setSurface(id)
     try {
@@ -1766,77 +1918,81 @@ export function SessionIrisTab() {
           fifty siblings. `List` is the app's filtered-list primitive and gives search for
           free; dialog-select-mcp and dialog-select-file are the same shape, so this is the
           house answer to "pick one of many" rather than a new idea. */}
-      <Show when={((bloqs.latest ?? bloqs())?.bloqs?.length ?? 0) > 0}>
-        <button
-          type="button"
-          class="flex items-center gap-1 px-2 py-1 text-12-regular text-text-base hover:bg-background-element rounded text-start min-w-0 cursor-pointer"
-          onClick={() => {
-            const all = (bloqs.latest ?? bloqs())?.bloqs ?? []
-            dialog.show(() => (
-              <Dialog title="Board" description={`${all.length} boards`}>
-                <List
-                  class="px-3"
-                  search={{ placeholder: "Search boards or #id…", autofocus: true }}
-                  emptyMessage="No boards match."
-                  key={(b) => String(b?.id ?? "")}
-                  items={() => all.map((b) => ({ ...b, ref: `#${b.id}` }))}
-                  /* `ref` is in the filter keys so typing 674 finds the board. You refer to
+      {/* ROW 1 — THE PROJECT. Everything below belongs to it; for a view that is not per-project
+          it says so instead of showing a picker that changes nothing. */}
+      <div class="iris-projectrow shrink-0">
+        <Show when={rowScope() !== "project"}>
+          <span class="iris-projectrow__scope" data-testid="iris-scope">
+            {rowScope() === "session" ? "This session" : "All projects"}
+            <span class="iris-projectrow__chip">{rowScope()}</span>
+          </span>
+        </Show>
+        <Show when={rowScope() === "project" && ((bloqs.latest ?? bloqs())?.bloqs?.length ?? 0) > 0}>
+          <button
+            type="button"
+            class="flex items-center gap-1 px-2 py-1 text-12-regular text-text-base hover:bg-background-element rounded text-start min-w-0 cursor-pointer"
+            onClick={() => {
+              const all = (bloqs.latest ?? bloqs())?.bloqs ?? []
+              dialog.show(() => (
+                <Dialog title="Board" description={`${all.length} boards`}>
+                  <List
+                    class="px-3"
+                    search={{ placeholder: "Search boards or #id…", autofocus: true }}
+                    emptyMessage="No boards match."
+                    key={(b) => String(b?.id ?? "")}
+                    items={() => all.map((b) => ({ ...b, ref: `#${b.id}` }))}
+                    /* `ref` is in the filter keys so typing 674 finds the board. You refer to
                      these by number everywhere else — commits, tickets, conversation — and a
                      picker you can only search by name makes the number useless here. */
-                  filterKeys={["name", "ref"]}
-                  onSelect={(b) => {
-                    if (!b) return
-                    choose(b.id)
-                    // Close it. A picker that stays open after you have picked leaves you
-                    // looking at a list of things you did not choose, with the result hidden
-                    // behind it — dialog-select-mcp does not close because it is a TOGGLE
-                    // list you keep working in, and copying its shape brought that along.
-                    dialog.close()
-                  }}
-                >
-                  {(b) => (
-                    <div class="w-full flex items-baseline gap-2 min-w-0">
-                      <span class="truncate">{b.name}</span>
-                      {/* AFTER the name, muted and mono. Leading with the number would make
+                    filterKeys={["name", "ref"]}
+                    onSelect={(b) => {
+                      if (!b) return
+                      choose(b.id)
+                      // Close it. A picker that stays open after you have picked leaves you
+                      // looking at a list of things you did not choose, with the result hidden
+                      // behind it — dialog-select-mcp does not close because it is a TOGGLE
+                      // list you keep working in, and copying its shape brought that along.
+                      dialog.close()
+                    }}
+                  >
+                    {(b) => (
+                      <div class="w-full flex items-baseline gap-2 min-w-0">
+                        <span class="truncate">{b.name}</span>
+                        {/* AFTER the name, muted and mono. Leading with the number would make
                           every row start with noise and wreck scanning; trailing keeps the
                           names left-aligned and the ids in a column of their own. */}
-                      <span class="ms-auto shrink-0 font-mono tabular-nums text-11-regular text-text-weaker">
-                        {b.ref}
-                      </span>
-                    </div>
-                  )}
-                </List>
-              </Dialog>
-            ))
-          }}
+                        <span class="ms-auto shrink-0 font-mono tabular-nums text-11-regular text-text-weaker">
+                          {b.ref}
+                        </span>
+                      </div>
+                    )}
+                  </List>
+                </Dialog>
+              ))
+            }}
+          >
+            <span class="truncate">{activeBloqName()}</span>
+            <span class="text-text-weak flex items-center shrink-0">
+              <ChevronDown />
+            </span>
+          </button>
+        </Show>
+        <span class="flex-1" />
+        <button
+          type="button"
+          class="iris-focusbtn"
+          classList={{ "iris-focusbtn--on": focus() }}
+          title={focus() ? "Show tabs (Esc)" : "Focus — hide the tab rows"}
+          aria-pressed={focus()}
+          onClick={() => setFocus((v) => !v)}
         >
-          <span class="truncate">{activeBloqName()}</span>
-          <span class="text-text-weak flex items-center shrink-0">
-            <ChevronDown />
-          </span>
+          ⤢
         </button>
-      </Show>
+      </div>
 
-      {/* full-width: the control is a FIXED 232px by default and four flex items inside it leave
-          each label ~34px of room, so "Agents" and "Pages" were clipped on both sides. The
-          modifier class exists in segmented-control-v2.css; there is no prop for it. */}
-      <SegmentedControlV2
-        class="segmented-control-v2--full-width iris-surfaces shrink-0"
-        value={surface()}
-        onChange={(v) => v && chooseSurface(v as SurfaceId)}
-      >
-        <For each={SURFACES}>
-          {(def) => <SegmentedControlItemV2 value={def.id}>{def.label}</SegmentedControlItemV2>}
-        </For>
-      </SegmentedControlV2>
-
-      {/* LEVEL 2 — a rule underneath, deliberately NOT a second plate.
-          The filled segmented control above says "which product surface"; this says "which way
-          of looking at it". Drawn the same way, the two strips read as one eight-item menu that
-          happens to wrap, and nothing tells you that picking from the lower one keeps you where
-          you are. Rendered only where a surface has sub-views, so the panel does not grow a
-          permanent empty row. */}
-      <Show when={SUBVIEWS[surface()]}>
+      {/* Products are no longer a row in here: each pinned product is a top-level tab in the side
+          panel's own strip (session-side-panel.tsx), and "IRIS" is not a tab of its own. */}
+      <Show when={!focus() && SUBVIEWS[surface()]}>
         {(list) => (
           <div class="iris-subnav shrink-0" role="tablist" aria-label={`${paneLabel()} views`}>
             <For each={list()}>
@@ -1879,6 +2035,55 @@ export function SessionIrisTab() {
               }}
             >
               clear
+            </button>
+          </Show>
+        </div>
+      </Show>
+
+      <Show when={pane() === "atlas" && !openRow() && view() === "rows"}>
+        <div class="iris-atlas-tools shrink-0">
+          <label class="iris-atlas-tools__field">
+            <span>Sort</span>
+            <select
+              value={atlasView().sort}
+              onChange={(e) => setAtlasView({ sort: e.currentTarget.value as AtlasViewOptions["sort"] })}
+            >
+              <For each={ATLAS_SORTS}>{(o) => <option value={o.id}>{o.label}</option>}</For>
+            </select>
+          </label>
+          <div class="iris-atlas-tools__chips" role="group" aria-label="Status">
+            <For each={ATLAS_STATUSES}>
+              {(o) => (
+                <button
+                  type="button"
+                  aria-pressed={atlasView().status === o.id}
+                  onClick={() => setAtlasView({ status: o.id })}
+                >
+                  {o.label}
+                </button>
+              )}
+            </For>
+          </div>
+          <label class="iris-atlas-tools__field">
+            <span>Edited</span>
+            <select
+              value={atlasView().edited}
+              onChange={(e) => setAtlasView({ edited: e.currentTarget.value as AtlasViewOptions["edited"] })}
+            >
+              <For each={ATLAS_EDITED}>{(o) => <option value={o.id}>{o.label}</option>}</For>
+            </select>
+          </label>
+          <label class="iris-atlas-tools__check">
+            <input
+              type="checkbox"
+              checked={atlasView().hideEmpty}
+              onChange={(e) => setAtlasView({ hideEmpty: e.currentTarget.checked })}
+            />
+            <span>Hide empty</span>
+          </label>
+          <Show when={!isDefaultView(atlasView())}>
+            <button type="button" class="iris-search__clear" onClick={() => setAtlasView({ ...ATLAS_VIEW_DEFAULT })}>
+              reset
             </button>
           </Show>
         </div>
@@ -1993,7 +2198,11 @@ export function SessionIrisTab() {
                 <Show when={openRow()!.pane === "catalog" && openRow()!.raw?.type}>
                   <IrisIntegrationDetail
                     row={openRow()!.raw}
-                    connect={connect()?.type === openRow()!.raw.type ? { state: connect()!.state, message: connect()!.message } : undefined}
+                    connect={
+                      connect()?.type === openRow()!.raw.type
+                        ? { state: connect()!.state, message: connect()!.message }
+                        : undefined
+                    }
                     onConnect={() => void startConnect(String(openRow()!.raw.type))}
                   />
                 </Show>
@@ -2007,7 +2216,10 @@ export function SessionIrisTab() {
                     {openRow()!.command}
                   </button>
                 </Show>
-                <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1" classList={{ hidden: openRow()!.pane === "catalog" }}>
+                <dl
+                  class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1"
+                  classList={{ hidden: openRow()!.pane === "catalog" }}
+                >
                   <For each={openRow()!.fields}>
                     {([k, v]) => (
                       <>
@@ -2481,6 +2693,24 @@ export function SessionIrisTab() {
               bloqId={activeBloq()}
               bloqName={activeBloqName()}
               listen={(fn) => serverSDK().event.listen(fn as any)}
+              files={sessionFiles}
+              readFile={readSessionFile}
+              openPath={
+                platform.openPath
+                  ? (rel) => {
+                      const abs = absolute(rel)
+                      if (abs) void platform.openPath!(abs)
+                    }
+                  : undefined
+              }
+              revealPath={
+                platform.revealPath
+                  ? (rel) => {
+                      const abs = absolute(rel)
+                      if (abs) void platform.revealPath!(abs)
+                    }
+                  : undefined
+              }
             />
           </Match>
           <Match when={view() === "loading"}>
@@ -2506,7 +2736,19 @@ export function SessionIrisTab() {
 
             <Switch>
               <Match when={pane() === "atlas"}>
-                <For each={rows() as AtlasList[]}>
+                <Show when={atlasRows().length === 0 && rows().length > 0}>
+                  <p class="px-2 py-2 text-12-regular text-text-weak">
+                    Nothing matches these filters.{" "}
+                    <button
+                      type="button"
+                      class="underline cursor-pointer"
+                      onClick={() => setAtlasView({ ...ATLAS_VIEW_DEFAULT })}
+                    >
+                      Reset
+                    </button>
+                  </p>
+                </Show>
+                <For each={atlasRows()}>
                   {(list) => (
                     <section class="mb-4">
                       <header class="flex items-baseline gap-2 px-2 pb-1 pt-1">
@@ -2523,9 +2765,19 @@ export function SessionIrisTab() {
                             onClick={() => openCard(item.id)}
                           >
                             <span class="text-12-regular text-text-weak shrink-0">
-                              {item.status === "done" || item.status === "completed" ? "✓" : "·"}
+                              {isDone(item.status) ? "✓" : "·"}
                             </span>
                             <span class="text-12-regular text-text-muted min-w-0 flex-1">{item.title}</span>
+                            <Show when={item.updatedAt ?? item.createdAt}>
+                              {(ts) => (
+                                <span
+                                  class="shrink-0 font-mono tabular-nums text-11-regular text-text-weak"
+                                  title={`Last edited ${new Date(ts()).toLocaleString()}`}
+                                >
+                                  {relativeTime(ts(), now())}
+                                </span>
+                              )}
+                            </Show>
                             <span class="shrink-0 font-mono tabular-nums text-11-regular text-text-weaker">
                               #{item.id}
                             </span>
