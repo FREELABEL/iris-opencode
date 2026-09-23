@@ -1381,3 +1381,19 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
 .iris-rooms__picks { display: flex; flex-direction: column; gap: 2px; max-height: 160px; overflow-y: auto; }
 .iris-rooms__pick { display: flex; gap: 6px; align-items: center; font-size: 12px; }
 .iris-rooms__tag { font-size: 10px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-weak); }
+
+/* The catalogue's reachability dot (#186542).
+   Three tones, and the third is the point: unmeasured is GREY, never red. Several connectors
+   run on the user's own machine and can never be probed from here, and a red dot on those
+   would invent an outage. Colour is backed by the title text on the element, so the claim
+   travels with the mark rather than living in a legend nobody reads. */
+.iris-cat__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: block;
+  background: var(--icon-weak-base, #888);
+}
+.iris-cat__dot[data-tone="up"] { background: var(--icon-success-base, #4a9); }
+.iris-cat__dot[data-tone="down"] { background: var(--icon-critical-base, #d55); }
+.iris-cat__dot[data-tone="unknown"] { background: var(--border-weak-base, #666); }

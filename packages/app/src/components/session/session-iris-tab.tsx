@@ -1,5 +1,6 @@
 import { createEffect, createMemo, createResource, createSignal, For, Match, on, onCleanup, Show, Switch, untrack } from "solid-js"
 import "./session-iris-tab.css"
+import { connectsBy, healthRead, metaLine, usageBars } from "./iris-catalog"
 import { pageSummary, type PageEnvelope } from "./use-paged-surface"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { List } from "@opencode-ai/ui/list"
@@ -251,17 +252,30 @@ function describeFields(surface: string, r: any): { title: string; fields: [stri
       ]),
       command: r.slug ? `iris pages sites show ${r.slug}` : undefined,
     }
-  if (surface === "catalog")
+  if (surface === "catalog") {
+    // What the registry page shows for one connector, in the order it shows it: what it is,
+    // what connecting involves, whether the provider is answering (and what that proves), how
+    // much the platform uses it, and what an agent would get.
+    const health = healthRead(r.health?.state)
+    const top = (r.functions ?? []).slice(0, 6).map((f: any) => f.label || f.name)
     return {
       title: r.name,
       fields: fieldsOf([
+        ["about", r.description],
         ["type", r.type], ["category", r.category],
         // The MODE is the thing worth knowing before you start: these are not the same job.
-        ["connect by", r.mode], ["opens a browser", r.oauthRequired],
-        ["functions", r.functionsCount], ["about", r.description],
+        ["connect by", connectsBy(r.mode, r.oauthRequired)],
+        ["provider status", `${health.label} — ${health.basis}`],
+        ["last checked", r.health?.lastCheckedAt],
+        // Band only. The absolute figure is deliberately unpublished: a connector's call volume
+        // is a customer's throughput.
+        ["platform usage", usageBars(r.usage?.series).measured ? r.usage?.band : "not measured yet"],
+        ["commands", r.functionsCount],
+        ["most used", top.length ? top.join(", ") : undefined],
       ]),
       command: r.command,
     }
+  }
   if (surface === "inbox")
     return {
       title: r.label,
@@ -2556,14 +2570,29 @@ export function SessionIrisTab() {
                       </span>
                       <span class="min-w-0 flex-1">
                         <span class="block text-12-regular text-text-base truncate">{c.name}</span>
+                        {/* The one-line description the registry leads with. Without it the list
+                            is 79 brand names and no way to tell what any of them would do. */}
+                        <Show when={c.description}>
+                          <span class="block text-11-regular text-text-weak truncate">{c.description}</span>
+                        </Show>
                         <span class="block text-11-regular text-text-weaker truncate">
-                          {c.category}
-                          {/* Says what connecting involves, because a key and an OAuth round
-                              trip are different jobs and only one of them needs a browser. */}
-                          {c.mode ? ` · ${c.mode}` : ""}
-                          {c.functionsCount ? ` · ${c.functionsCount} functions` : ""}
+                          {metaLine({
+                            category: c.category,
+                            mode: c.mode,
+                            oauthRequired: c.oauthRequired,
+                            functionsCount: c.functionsCount,
+                            usageBand: c.usage?.band,
+                          })}
                         </span>
                       </span>
+                      {/* PROVIDER reachability, not yours — the title carries the claim so the
+                          dot cannot be read as "your connection is fine". Unmeasured is grey. */}
+                      <span
+                        class="iris-cat__dot shrink-0"
+                        data-tone={healthRead(c.health?.state).tone}
+                        title={`${healthRead(c.health?.state).label} — ${healthRead(c.health?.state).basis}`}
+                        aria-label={healthRead(c.health?.state).label}
+                      />
                     </button>
                   )}
                 </For>
