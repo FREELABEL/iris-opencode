@@ -16,6 +16,39 @@ export type ArtifactMeta = {
   language?: string
   author?: ArtifactAuthor
   createdBy?: ArtifactAuthor
+  published?: ArtifactPublished
+}
+
+export type Visibility = "public" | "unlisted" | "private"
+export type ArtifactPublished = {
+  pageId: number
+  slug: string
+  url: string
+  visibility: Visibility
+  requiresAuth: boolean
+  revision: number
+  at: string
+}
+
+/** The Publish button's words, and whether the page lags the artifact. */
+export function publishState(m: Pick<ArtifactMeta, "revision" | "published">): { label: string; behind: boolean } {
+  if (!m.published) return { label: "Publish…", behind: false }
+  const behind = m.published.revision < m.revision
+  return { label: behind ? "Update page…" : "Publish settings…", behind }
+}
+
+/** Mirrors the engine's slugify (artifact-publish.ts) so the suggested address is the one it accepts. */
+export function slugify(title: string): string {
+  return (
+    title
+      .toLowerCase()
+      .normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 80)
+      .replace(/-+$/, "") || "artifact"
+  )
 }
 
 /**

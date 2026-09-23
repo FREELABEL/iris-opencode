@@ -2358,6 +2358,9 @@ export function SessionIrisTab() {
               doFetch={doFetch}
               sessionId={sessionLayout.params.id}
               projectParam={projectParam()}
+              project={projectDir()}
+              bloqId={activeBloq()}
+              bloqName={activeBloqName()}
               listen={(fn) => serverSDK().event.listen(fn as any)}
             />
           </Match>

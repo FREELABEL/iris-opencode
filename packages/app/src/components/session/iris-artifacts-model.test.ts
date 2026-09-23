@@ -9,6 +9,8 @@ import {
   markdownDocument,
   parseCsv,
   sandboxedDocument,
+  publishState,
+  slugify,
 } from "./iris-artifacts-model"
 
 describe("ADR-01 — the artifact sandbox", () => {
@@ -90,4 +92,23 @@ test("the chat card obeys the same sandbox as the pane — it renders agent-writ
   expect(src).not.toMatch(/<iframe[^>]*\ssrc=/)
   expect(src).not.toContain("allow-same-origin")
   expect(src).not.toMatch(/innerHTML=/)
+})
+
+describe("publishing an artifact as a page", () => {
+  const pub = (revision: number) => ({ pageId: 1, slug: "x", url: "u", visibility: "public" as const, requiresAuth: false, revision, at: "" })
+  test("never published → Publish…; current → settings; behind → Update page…", () => {
+    expect(publishState({ revision: 1 })).toEqual({ label: "Publish…", behind: false })
+    expect(publishState({ revision: 2, published: pub(2) })).toEqual({ label: "Publish settings…", behind: false })
+    expect(publishState({ revision: 3, published: pub(2) })).toEqual({ label: "Update page…", behind: true })
+  })
+  test("the suggested address is one the engine accepts", () => {
+    expect(slugify("All Hallows — Landing Page!")).toBe("all-hallows-landing-page")
+    expect(slugify("Café Menu")).toBe("cafe-menu")
+  })
+  test("the form asks for the scope: nothing is pre-selected on a first publish", () => {
+    const src = readFileSync(path.join(import.meta.dir, "iris-artifact-publish.tsx"), "utf8")
+    // First publish: preset is undefined (Publish…) and there is no prior page → no scope.
+    expect(src).toContain("setScope(preset ?? p?.visibility)")
+    expect(src).toContain("disabled={!scope() || !slug().trim() || busy()}")
+  })
 })

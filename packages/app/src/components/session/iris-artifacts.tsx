@@ -21,6 +21,7 @@ import {
   type ArtifactMeta,
 } from "./iris-artifacts-model"
 import { clearArtifactFocus, irisArtifactFocus } from "./iris-nav"
+import { IrisArtifactPublish } from "./iris-artifact-publish"
 
 /**
  * Agents › Artifacts (epics #186508 / #186510): what the agents in THIS session made.
@@ -46,7 +47,15 @@ type Listen = (fn: (e: { name: string; details?: { type?: string; properties?: a
 export const ARTIFACT_EVENT = "iris.artifact.updated"
 const POLL_MS = 4000
 
-export function IrisArtifacts(props: { doFetch: Fetch; sessionId?: string; projectParam: string; listen: Listen }) {
+export function IrisArtifacts(props: {
+  doFetch: Fetch
+  sessionId?: string
+  projectParam: string
+  project?: string
+  bloqId?: number
+  bloqName?: string
+  listen: Listen
+}) {
   const query = () =>
     `session=${encodeURIComponent(props.sessionId ?? "")}${props.projectParam ? `&${props.projectParam}` : ""}`
 
@@ -171,6 +180,18 @@ export function IrisArtifacts(props: { doFetch: Fetch; sessionId?: string; proje
                 <strong>{meta().title}</strong> · {authorLine(meta())}
                 <Show when={doc.latest?.truncated}> · truncated at 2 MB</Show>
               </p>
+              <Show when={props.sessionId}>
+                <IrisArtifactPublish
+                  meta={open() ?? meta()}
+                  content={doc.latest!.content}
+                  doFetch={props.doFetch}
+                  sessionId={props.sessionId!}
+                  project={props.project}
+                  bloqId={props.bloqId}
+                  bloqName={props.bloqName}
+                  onPublished={refresh}
+                />
+              </Show>
               <Switch>
                 <Match when={meta().kind === "html"}>
                   <iframe
