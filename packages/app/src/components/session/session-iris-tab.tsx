@@ -895,6 +895,42 @@ const readPinned = (raw: string | null) =>
     SURFACES.map((x) => x.id),
     DEFAULT_PINNED,
   )
+const storage = (key: string) => {
+  try {
+    return localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * SHARED with the side panel's tab strip (#186509 nav): each pinned product is a top-level tab
+ * there, and the separate "IRIS" tab is gone. Module-level so the strip can read them before (and
+ * without) this component mounting; the component keeps them current.
+ */
+const [irisPinnedSig, setIrisPinnedSig] = createSignal<SurfaceId[]>(readPinned(storage(PINNED_KEY)))
+const [irisSurfaceSig, setIrisSurfaceSig] = createSignal<SurfaceId>(normalizeSurface(storage(LAST_SURFACE_KEY)))
+export const irisPinned = irisPinnedSig
+export const irisActiveSurface = irisSurfaceSig
+export function irisStripTabs(): { id: SurfaceId; label: string; pinned: boolean }[] {
+  return visibleTabs(irisPinnedSig(), irisSurfaceSig()).map((id) => ({
+    id,
+    label: SURFACES.find((x) => x.id === id)?.label ?? id,
+    pinned: irisPinnedSig().includes(id),
+  }))
+}
+/** Pin or unpin a product. Never leaves the strip empty. Returns whether it is now pinned. */
+export function toggleIrisPin(id: string): boolean {
+  const sid = normalizeSurface(id)
+  const cur = irisPinnedSig()
+  const next = cur.includes(sid) ? cur.filter((x) => x !== sid) : [...cur, sid]
+  if (!next.length) return true
+  setIrisPinnedSig(next)
+  try {
+    localStorage.setItem(PINNED_KEY, JSON.stringify(next))
+  } catch {}
+  return next.includes(sid)
+}
 
 const [requestedSurface, setRequestedSurface] = createSignal<{ surface: SurfaceId; sub?: string } | undefined>()
 
@@ -1006,6 +1042,8 @@ export function SessionIrisTab() {
       }
     })(),
   )
+  // The side panel's strip highlights the product on screen — keep the shared signal current.
+  createEffect(() => setIrisSurfaceSig(surface()))
 
   // Remembered PER SURFACE — see LAST_SUBVIEW_KEY. A malformed or missing entry is not an
   // error worth surfacing; resolvePane falls back to the first sub-view of whatever you open.
@@ -1718,47 +1756,16 @@ export function SessionIrisTab() {
     ))
   }
 
-  const [pinned, setPinned] = createSignal<SurfaceId[]>(
-    readPinned(
-      (() => {
-        try {
-          return localStorage.getItem(PINNED_KEY)
-        } catch {
-          return null
-        }
-      })(),
-    ),
-  )
-  const togglePin = (id: SurfaceId) => {
-    const cur = pinned()
-    const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]
-    if (!next.length) return
-    setPinned(next)
-    try {
-      localStorage.setItem(PINNED_KEY, JSON.stringify(next))
-    } catch {}
-    if (!cur.includes(id)) chooseSurface(id)
-  }
-  const [plusOpen, setPlusOpen] = createSignal(false)
   // FOCUS: fold the product and sub-view rows away so the content (an artifact) runs nearly full
   // height. Esc or ⤢ brings them back.
   const [focus, setFocus] = createSignal(false)
   // Esc closes the pin menu only while it is on screen; in focus mode the menu's row is hidden,
   // so Esc goes straight to leaving focus. (Measured: a menu left open under focus swallowed Esc.)
   const onKey = (e: KeyboardEvent) => {
-    if (e.key !== "Escape") return
-    if (plusOpen() && !focus()) return setPlusOpen(false)
-    if (focus()) setFocus(false)
-  }
-  const onDown = (e: MouseEvent) => {
-    if (plusOpen() && !(e.target as HTMLElement | null)?.closest?.(".iris-products__plus")) setPlusOpen(false)
+    if (e.key === "Escape" && focus()) setFocus(false)
   }
   document.addEventListener("keydown", onKey)
-  document.addEventListener("mousedown", onDown)
-  onCleanup(() => {
-    document.removeEventListener("keydown", onKey)
-    document.removeEventListener("mousedown", onDown)
-  })
+  onCleanup(() => document.removeEventListener("keydown", onKey))
   const rowScope = createMemo(() => panelScope(surface(), pane()))
 
   function chooseSurface(id: SurfaceId) {
@@ -1896,83 +1903,14 @@ export function SessionIrisTab() {
           classList={{ "iris-focusbtn--on": focus() }}
           title={focus() ? "Show tabs (Esc)" : "Focus — hide the tab rows"}
           aria-pressed={focus()}
-          onClick={() => {
-            setPlusOpen(false)
-            setFocus((v) => !v)
-          }}
+          onClick={() => setFocus((v) => !v)}
         >
           ⤢
         </button>
       </div>
 
-      {/* ROW 2 — PRODUCTS AS TABS. Only what you pinned, plus + to pin more. The eight-item bar
-          clipped its labels and put every product on screen whether you use it or not. */}
-      <Show when={!focus()}>
-        <div class="iris-products shrink-0" role="tablist" aria-label="Products">
-          <For each={visibleTabs(pinned(), surface())}>
-            {(id) => (
-              <button
-                type="button"
-                role="tab"
-                aria-selected={surface() === id}
-                class="iris-products__tab"
-                classList={{
-                  "iris-products__tab--on": surface() === id,
-                  "iris-products__tab--temp": !pinned().includes(id),
-                }}
-                onClick={() => chooseSurface(id)}
-              >
-                {SURFACES.find((x) => x.id === id)?.label ?? id}
-              </button>
-            )}
-          </For>
-          <div class="iris-products__plus">
-            <button
-              type="button"
-              class="iris-products__tab"
-              classList={{ "iris-products__tab--on": plusOpen() }}
-              title="Pin a product"
-              aria-haspopup="menu"
-              aria-expanded={plusOpen()}
-              onClick={() => setPlusOpen((v) => !v)}
-            >
-              +
-            </button>
-            <Show when={plusOpen()}>
-              <div class="iris-pinmenu" role="menu" onMouseLeave={() => setPlusOpen(false)}>
-                <div class="iris-pinmenu__head">Tabs in this panel</div>
-                <For each={SURFACES}>
-                  {(def) => (
-                    <button
-                      type="button"
-                      role="menuitemcheckbox"
-                      aria-checked={pinned().includes(def.id)}
-                      class="iris-pinmenu__item"
-                      onClick={() => togglePin(def.id)}
-                    >
-                      <span
-                        class="iris-pinmenu__check"
-                        classList={{ "iris-pinmenu__check--on": pinned().includes(def.id) }}
-                      >
-                        ✓
-                      </span>
-                      {def.label}
-                      <span class="iris-pinmenu__scope">{ACCOUNT_SURFACES.has(def.id) ? "account" : "project"}</span>
-                    </button>
-                  )}
-                </For>
-              </div>
-            </Show>
-          </div>
-        </div>
-      </Show>
-
-      {/* LEVEL 2 — a rule underneath, deliberately NOT a second plate.
-          The filled segmented control above says "which product surface"; this says "which way
-          of looking at it". Drawn the same way, the two strips read as one eight-item menu that
-          happens to wrap, and nothing tells you that picking from the lower one keeps you where
-          you are. Rendered only where a surface has sub-views, so the panel does not grow a
-          permanent empty row. */}
+      {/* Products are no longer a row in here: each pinned product is a top-level tab in the side
+          panel's own strip (session-side-panel.tsx), and "IRIS" is not a tab of its own. */}
       <Show when={!focus() && SUBVIEWS[surface()]}>
         {(list) => (
           <div class="iris-subnav shrink-0" role="tablist" aria-label={`${paneLabel()} views`}>
