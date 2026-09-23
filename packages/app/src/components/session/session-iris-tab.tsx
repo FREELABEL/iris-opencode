@@ -780,9 +780,18 @@ export const IRIS_SURFACE_CHOICES: readonly { id: string; label: string }[] = SU
   label: s.label,
 }))
 
-const [requestedSurface, setRequestedSurface] = createSignal<SurfaceId | undefined>()
-export function requestIrisSurface(surface: string) {
-  setRequestedSurface(normalizeSurface(surface))
+const [requestedSurface, setRequestedSurface] = createSignal<{ surface: SurfaceId; sub?: string } | undefined>()
+
+/**
+ * Open the panel on a surface, and optionally on one of its SUB-VIEWS.
+ *
+ * The sub-view is not a nicety. "Integrations" from the chat bar means "let me add one", and
+ * landing on the default sub-view showed `Nothing in Integrations › Project.` — an empty list,
+ * for a person who asked to connect something. The catalogue lives under the `add` sub-view,
+ * so the caller says which one it wants and this puts them there.
+ */
+export function requestIrisSurface(surface: string, sub?: string) {
+  setRequestedSurface({ surface: normalizeSurface(surface), sub })
 }
 
 export function SessionIrisTab() {
@@ -860,7 +869,16 @@ export function SessionIrisTab() {
   createEffect(() => {
     const wanted = requestedSurface()
     if (!wanted) return
-    setSurface(wanted)
+    setSurface(wanted.surface)
+    // The sub-view is written through the SAME store the switcher uses, so the strip highlights
+    // where you actually are rather than where it was last time.
+    if (wanted.sub && SUBVIEWS[wanted.surface]?.some((v) => v.id === wanted.sub)) {
+      const next = { ...subviews(), [wanted.surface]: wanted.sub }
+      setSubviews(next)
+      try {
+        localStorage.setItem(LAST_SUBVIEW_KEY, JSON.stringify(next))
+      } catch {}
+    }
     setRequestedSurface(undefined)
   })
 

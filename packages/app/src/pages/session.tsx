@@ -2256,7 +2256,10 @@ export default function Page() {
                           FIRST because opening the panel is what mounts the tab that reads it.
                         */
                         onIntegrations={() => {
-                          requestIrisSurface("integrations")
+                          // "add", not the default sub-view: this entry means "connect something". Landing on
+                          // the default showed "Nothing in Integrations › Project." to a person who had
+                          // just asked to add one.
+                          requestIrisSurface("integrations", "add")
                           view().reviewPanel.open("other")
                           if (layout.fileTree.opened() && layout.fileTree.tab() !== "all") layout.fileTree.setTab("all")
                           void tabs().open("iris")

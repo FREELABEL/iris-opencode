@@ -966,6 +966,40 @@ export const IrisApi = HttpApi.make("iris").add(
                 connected: Schema.Boolean,
                 logoUrl: Schema.optional(Schema.String),
                 command: Schema.String,
+                // The registry experience (#186542). PLATFORM reachability — we ask the provider
+                // whether it answers, with no credential attached. It does NOT say your own
+                // connection works, and a UI that implies otherwise is lying quietly.
+                health: Schema.optional(
+                  Schema.Struct({
+                    state: described(
+                      Schema.optional(Schema.String),
+                      "operational | degraded | not_checked | not_applicable. ABSENT means nothing has measured it — never render that as down.",
+                    ),
+                    lastCheckedAt: Schema.optional(Schema.String),
+                    bars: Schema.Array(Schema.Struct({ from: Schema.optional(Schema.String), state: Schema.String })),
+                  }),
+                ),
+                // Platform-wide usage as a SHAPE: each point is relative to this connector's own
+                // busiest day. Absolute volume is deliberately not published — call volume is a
+                // customer's operational throughput.
+                usage: Schema.optional(
+                  Schema.Struct({
+                    band: Schema.optional(Schema.String),
+                    series: Schema.Array(Schema.Struct({ day: Schema.optional(Schema.String), v: Schema.Finite })),
+                  }),
+                ),
+                // What an agent gets, ranked where use was measured. `share` is relative to the
+                // most-called command; absent means not measured, not "never called".
+                functions: Schema.optional(
+                  Schema.Array(
+                    Schema.Struct({
+                      name: Schema.String,
+                      label: Schema.optional(Schema.String),
+                      share: Schema.optional(Schema.Finite),
+                      rank: Schema.optional(Schema.Finite),
+                    }),
+                  ),
+                ),
               }).annotate({ identifier: "IrisCatalogEntry" }),
             ),
             attribution: Schema.optional(Schema.String),

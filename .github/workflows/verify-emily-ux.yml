@@ -17,12 +17,12 @@ jobs:
         with: { bun-version-file: package.json }
       - run: bun install
       - name: Typecheck the packages these changes touch
-        run: bun turbo typecheck --filter=@opencode-ai/app --filter=@opencode-ai/session-ui --filter=@opencode-ai/ui 2>&1 | tee /tmp/tc.txt || true
+        run: bun turbo typecheck --filter=@opencode-ai/app --filter=@opencode-ai/session-ui --filter=@opencode-ai/ui --filter=opencode 2>&1 | tee /tmp/tc.txt || true
       - name: Baseline, so only NEW errors fail
         run: |
           git worktree add /tmp/base origin/iris/1.18.23
           cd /tmp/base && bun install >/dev/null 2>&1
-          (bun turbo typecheck --filter=@opencode-ai/app --filter=@opencode-ai/session-ui --filter=@opencode-ai/ui 2>&1 || true) | tee /tmp/tc-base.txt
+          (bun turbo typecheck --filter=@opencode-ai/app --filter=@opencode-ai/session-ui --filter=@opencode-ai/ui --filter=opencode 2>&1 || true) | tee /tmp/tc-base.txt
       - name: New type errors only
         run: |
           norm() { grep -E "error TS" "$1" | sed -E 's/\([0-9]+,[0-9]+\)//' | sed -E 's#^[^ ]*/##' | sort -u; }
