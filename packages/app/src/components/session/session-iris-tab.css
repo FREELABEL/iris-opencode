@@ -943,12 +943,24 @@
   height: min(80vh, 1000px);
   width: min(calc(100vw - 32px), 1100px);
 }
+/* Full screen (#186549). Same :has() hook as the rule above and declared after it, so it wins
+   on equal specificity; the class rides on the content, beside .iris-card. */
+[data-slot="dialog-container"]:has(> .iris-card--full) {
+  height: calc(100vh - 12px);
+  width: calc(100vw - 12px);
+}
 .iris-card__crumb {
   display: inline-flex;
   align-items: baseline;
   gap: 8px;
   font-size: 11px;
   font-weight: 400;
+}
+/* Full screen and the sidebar, sitting in the dialog header beside the close. */
+.iris-card__winbtns {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
 }
 .iris-card__frame {
   display: flex;
@@ -1098,6 +1110,33 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
 .iris-card__linkbtn:disabled { cursor: default; color: var(--text-weaker); }
 .iris-card__linkbtn--primary:not(:disabled) { color: var(--text-strong); border: 1px solid var(--border-weak-base); }
 
+/* A REAL save button (#186547). linkbtn--primary read as body copy, so the one control that
+   writes to the server looked like a label. Filled green, and obviously dead when there is
+   nothing to save — an enabled/disabled difference you can see without reading it. */
+.iris-card__save {
+  appearance: none;
+  cursor: pointer;
+  border: 1px solid var(--surface-success-strong);
+  background: var(--surface-success-strong);
+  color: var(--text-on-success-strong);
+  border-radius: 4px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 560;
+  line-height: 1.5;
+  padding: 3px 12px;
+}
+.iris-card__save:hover:not(:disabled) { filter: brightness(1.08); }
+.iris-card__save:focus-visible { outline: 2px solid var(--border-success-hover); outline-offset: 1px; }
+.iris-card__save:disabled {
+  cursor: default;
+  background: transparent;
+  border-color: var(--border-weaker-base);
+  color: var(--text-weaker);
+}
+/* The 300px column can be put away so a wide card is read at full width (#186549). */
+.iris-card__cols[data-side-collapsed] .iris-card__side { display: none; }
+
 .iris-card__facts {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -1157,6 +1196,9 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
 
 .iris-card__unsaved {
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 6px 16px;
   border-top: 1px solid var(--border-weaker-base);
   font-size: 11px;
