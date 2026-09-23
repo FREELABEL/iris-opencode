@@ -301,7 +301,9 @@ export const dict = {
   "prompt.action.attachFile": "Add files",
   "prompt.menu.addImagesAndFiles": "Add files and more",
   "prompt.menu.imagesAndFiles": "Images and files",
-  "prompt.menu.commands": "Commands",
+  // The `/` list is SKILLS — playbooks and skills like /iris-hive, /genesis-sdk — not the
+  // IRIS CLI's commands. Calling them "Commands" left no word for the actual `iris ...` ones.
+  "prompt.menu.commands": "Skills",
   "prompt.menu.context": "Context",
   "prompt.menu.shellCommand": "Shell command",
   "prompt.attachment.remove": "Remove attachment",

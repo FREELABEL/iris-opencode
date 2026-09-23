@@ -1,6 +1,7 @@
-import { createEffect, createMemo, createResource, createSignal, For, Match, Show, Switch, type JSX } from "solid-js"
+import { createEffect, createMemo, createResource, createSignal, For, Match, onCleanup, onMount, Show, Switch, type JSX } from "solid-js"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
+import { IconButton } from "@opencode-ai/ui/icon-button"
 import { itemCommands, renderMarkdown } from "./iris-item"
 
 /**
@@ -294,7 +295,14 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
    * confident "no members, no links, nothing shared" about a route that does not exist.
    * So: JSON or it is not connected, and `measured` comes from the body, never assumed.
    */
-  const MISSING = `Not connected yet — sidecar route missing (${HANDOFF})`
+  /**
+   * What a section says when its route is not there yet. It must NOT name the sidecar or the
+   * handoff ticket (#186548): "sidecar" is our word for a process the reader does not know
+   * exists, and a ticket number is a URL they cannot open. The reader needs the state, not
+   * the cause — and this same string is rendered in the Sharing panel of a card about to be
+   * shared, where "half-built" is the last thing it should read as.
+   */
+  const MISSING = "Not available yet"
   async function readJson(res: Response): Promise<any | undefined> {
     if (!/json/i.test(res.headers.get("content-type") ?? "")) return undefined
     return res.json().catch(() => undefined)
@@ -304,7 +312,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
       const res = await props.doFetch(path, init)
       const j = await readJson(res)
       if (res.status === 404 || j === undefined) return { measured: false, reason: MISSING, ...empty }
-      if (!res.ok) return { measured: false, reason: j?.reason ?? j?.message ?? `sidecar ${res.status}`, ...empty }
+      if (!res.ok) return { measured: false, reason: j?.reason ?? j?.message ?? `request failed (${res.status})`, ...empty }
       return { ...empty, ...j, measured: j.measured ?? true, reason: j.reason }
     } catch (e) {
       return { measured: false, reason: e instanceof Error ? e.message : String(e), ...empty }
@@ -321,7 +329,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
       })
       const j = await readJson(res)
       if (res.status === 404 || j === undefined) return { ok: false, reason: MISSING }
-      if (!res.ok) return { ok: false, reason: j?.reason ?? j?.message ?? `sidecar ${res.status}` }
+      if (!res.ok) return { ok: false, reason: j?.reason ?? j?.message ?? `request failed (${res.status})` }
       return { ...j, ok: j.ok ?? true }
     } catch (e) {
       return { ok: false, reason: e instanceof Error ? e.message : String(e) }
@@ -428,6 +436,61 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
     }
     setSavingBody(false)
   }
+
+  // ── Window shape: full screen and a sidebar you can put away (#186549) ───
+  // Remembered across opens: this is a preference about how you read cards, not a fact about
+  // one card, so a reader who maximises once should not have to do it every time.
+  const VIEW_PREF = "iris.card.view"
+  const readViewPref = (): { full: boolean; collapsed: boolean } => {
+    try {
+      const raw = localStorage.getItem(VIEW_PREF)
+      if (!raw) return { full: false, collapsed: false }
+      const j = JSON.parse(raw) as { full?: boolean; collapsed?: boolean }
+      return { full: !!j.full, collapsed: !!j.collapsed }
+    } catch {
+      return { full: false, collapsed: false }
+    }
+  }
+  const viewPref = readViewPref()
+  const [full, setFull] = createSignal(viewPref.full)
+  const [collapsed, setCollapsed] = createSignal(viewPref.collapsed)
+  const rememberView = (next: { full: boolean; collapsed: boolean }) => {
+    try {
+      localStorage.setItem(VIEW_PREF, JSON.stringify(next))
+    } catch {
+      /* a preference that cannot be stored is not worth failing a render over */
+    }
+  }
+  const toggleFull = () => {
+    setFull((v) => !v)
+    rememberView({ full: full(), collapsed: collapsed() })
+  }
+  const toggleSide = () => {
+    setCollapsed((v) => !v)
+    rememberView({ full: full(), collapsed: collapsed() })
+  }
+
+  /**
+   * One save for whatever is dirty — the Save in the footer and Cmd+S both land here
+   * (#186547). It saves each dirty SECTION rather than sending one global patch, because a
+   * details save must never blank a body: the field-scoped contract is the reason a body edit
+   * cannot clear a priority, and a single "save everything" button would quietly undo it.
+   */
+  async function saveAll() {
+    if (bodyDirty()) await saveBody()
+    if (dirty()) await saveDetails()
+  }
+
+  onMount(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "s") return
+      if (!dirty() && !bodyDirty()) return
+      e.preventDefault()
+      void saveAll()
+    }
+    window.addEventListener("keydown", onKey)
+    onCleanup(() => window.removeEventListener("keydown", onKey))
+  })
 
   // ── Labels (HANDOFF: POST /iris/item/:id/labels {labels}) ───────────────
   const [labelText, setLabelText] = createSignal("")
@@ -793,9 +856,34 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
   }
 
   return (
+    // Full screen and the sidebar are window controls, so they belong in the header beside
+    // the close — not buried in the sidebar they resize (#186549). Supplying an `action`
+    // replaces the dialog's own close button, so this action carries the close too.
     <Dialog
       size="x-large"
       class="iris-card"
+      classList={{ "iris-card--full": full() }}
+      action={
+        <span class="iris-card__winbtns">
+          <IconButton
+            icon={full() ? "collapse" : "expand"}
+            size="small"
+            variant="ghost"
+            aria-label={full() ? "Exit full screen" : "Full screen"}
+            title={full() ? "Exit full screen" : "Full screen"}
+            onClick={toggleFull}
+          />
+          <IconButton
+            icon={collapsed() ? "layout-right" : "layout-right-full"}
+            size="small"
+            variant="ghost"
+            aria-label={collapsed() ? "Show the sidebar" : "Hide the sidebar"}
+            title={collapsed() ? "Show the sidebar" : "Hide the sidebar"}
+            onClick={toggleSide}
+          />
+          <IconButton icon="close" size="small" variant="ghost" aria-label="Close" title="Close" onClick={() => dialog.close()} />
+        </span>
+      }
       title={
         <span class="iris-card__crumb">
           <span class="text-text-weaker">{doc.latest?.listName ?? "Card"}</span>
@@ -841,7 +929,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
               </div>
             </div>
 
-            <div class="iris-card__cols">
+            <div class="iris-card__cols" data-side-collapsed={collapsed() ? "" : undefined}>
               {/* LEFT — the body. Read by default; one toggle to a plain textarea. */}
               <section class="iris-card__body">
                 <div class="iris-card__bodybar">
@@ -876,7 +964,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                     </button>
                     <button
                       type="button"
-                      class="iris-card__linkbtn iris-card__linkbtn--primary"
+                      class="iris-card__save"
                       disabled={!bodyDirty() || savingBody()}
                       onClick={() => void saveBody()}
                     >
@@ -1004,7 +1092,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                         <NoteLine note={note()} />
                         <button
                           type="button"
-                          class="iris-card__linkbtn iris-card__linkbtn--primary ms-auto"
+                          class="iris-card__save ms-auto"
                           disabled={!dirty() || saving()}
                           onClick={() => void saveDetails()}
                         >
@@ -1048,7 +1136,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                         </button>
                       </form>
                       <Show when={doc.latest!.contentKind === "markdown"}>
-                        <p class="text-11-regular text-text-weaker">Labels need a structured body; this one is plain markdown. The sidecar decides whether to convert it ({HANDOFF}).</p>
+                        <p class="text-11-regular text-text-weaker">This card's body is plain markdown, so labels cannot be saved to it.</p>
                       </Show>
                       <NoteLine note={labelNote()} />
 
@@ -1491,7 +1579,16 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
           people who look for a button. Nothing is lost on close: every write was explicit. */}
       <Show when={dirty() || bodyDirty()}>
         <div class="iris-card__unsaved" role="status">
-          Unsaved changes — Save, or they stay in this window until it closes.{" "}
+          <span>
+            {dirty() && bodyDirty()
+              ? "Unsaved changes to the details and the body."
+              : dirty()
+                ? "Unsaved changes to the details."
+                : "Unsaved changes to the body."}
+          </span>
+          <button type="button" class="iris-card__save" disabled={saving() || savingBody()} onClick={() => void saveAll()}>
+            {saving() || savingBody() ? "Saving…" : "Save"}
+          </button>
           <button type="button" class="iris-card__linkbtn" onClick={() => dialog.close()}>
             Discard and close
           </button>
