@@ -42,6 +42,8 @@ export type PromptInputV2Props = {
   borderUnderlay?: boolean
   class?: string
   modelControl?: JSX.Element
+  /** Connect an integration (#186527). Absent on surfaces with no panel to open. */
+  onIntegrations?: () => void
   /** Dictation control, rendered beside the attach menu. */
   /**
    * Base URL of the local server that owns POST /transcribe, read at request time.
@@ -226,6 +228,8 @@ export function PromptInputV2(props: PromptInputV2Props) {
               onCommands={props.controller.openCommands}
               onContext={props.controller.openContext}
               onShell={props.controller.openShell}
+              integrationsLabel={props.onIntegrations ? i18n.t("ui.promptInput.integrations") : undefined}
+              onIntegrations={props.onIntegrations}
             />
             <Show when={dictateError()}>
               {(message) => (
@@ -525,10 +529,13 @@ export function PromptInputV2AddMenu(props: {
   commandsLabel: string
   contextLabel: string
   shellLabel: string
+  /** Optional: only the session composer can open the integrations panel (#186527). */
+  integrationsLabel?: string
   onAttach: () => void
   onCommands: () => void
   onContext: () => void
   onShell: () => void
+  onIntegrations?: () => void
 }) {
   return (
     <TooltipV2
@@ -566,6 +573,16 @@ export function PromptInputV2AddMenu(props: {
             <MenuV2.Item onSelect={props.onShell} shortcut="!">
               {props.shellLabel}
             </MenuV2.Item>
+            {/*
+              CONNECT AN INTEGRATION from the chat bar (#186527). The menu was images, files and
+              three typed prefixes; the thing people actually wanted to add next — Gmail, Drive,
+              Slack — was reachable only by finding a panel. Rendered only where something can
+              handle it: the new-session screen has no session panel to open.
+            */}
+            <Show when={props.onIntegrations && props.integrationsLabel}>
+              <MenuV2.Separator />
+              <MenuV2.Item onSelect={() => props.onIntegrations?.()}>{props.integrationsLabel}</MenuV2.Item>
+            </Show>
           </MenuV2.Content>
         </MenuV2.Portal>
       </MenuV2>

@@ -28,3 +28,27 @@ export function serverStatusDotClass(input: {
   if (input.serverHealth === true) return "bg-icon-success-base"
   return "bg-border-weak-base"
 }
+
+/**
+ * WHICH i18n KEY EXPLAINS THE DOT (#186524).
+ *
+ * The dot carried colour and nothing else: a client asked what the green dot meant and had to
+ * be told out loud. Colour is a recall test — you either remember the legend or you do not —
+ * and there was no legend anywhere in the app. The same four states that pick the colour pick
+ * a sentence, so the two can never drift apart.
+ *
+ * Returned as a KEY, not a string: this app ships ~40 locales, and a hardcoded English tooltip
+ * would be a regression everywhere but here.
+ */
+export function serverStatusDotLabelKey(input: {
+  ready: boolean
+  serverHealth: boolean | undefined
+  attention?: boolean
+  issue: boolean
+}): string {
+  if (input.serverHealth === false) return "status.dot.offline"
+  if (!input.ready || input.serverHealth === undefined) return "status.dot.connecting"
+  if (input.attention) return "status.dot.attention"
+  if (input.issue) return "status.dot.issue"
+  return "status.dot.healthy"
+}

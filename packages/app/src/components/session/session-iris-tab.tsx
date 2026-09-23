@@ -764,6 +764,18 @@ export function surfaceView(input: {
   return "empty"
 }
 
+/**
+ * OPEN THE PANEL ON A PARTICULAR SURFACE (#186527).
+ *
+ * Module-level on purpose: the caller (the chat bar) asks before the tab exists — opening the
+ * panel is what mounts it — so the request has to outlive the click. The tab consumes it on
+ * mount and clears it, so it steers exactly one opening and never re-steers a later one.
+ */
+const [requestedSurface, setRequestedSurface] = createSignal<SurfaceId | undefined>()
+export function requestIrisSurface(surface: string) {
+  setRequestedSurface(normalizeSurface(surface))
+}
+
 export function SessionIrisTab() {
   const dialog = useDialog()
   const serverSDK = useServerSDK()
@@ -834,6 +846,14 @@ export function SessionIrisTab() {
   )
 
   const activeBloq = createMemo(() => selected() ?? (bloqs.latest ?? bloqs())?.bloqs?.[0]?.id)
+
+  // A surface asked for from outside (the chat bar's Integrations entry). Consumed once.
+  createEffect(() => {
+    const wanted = requestedSurface()
+    if (!wanted) return
+    setSurface(wanted)
+    setRequestedSurface(undefined)
+  })
 
   const [surface, setSurface] = createSignal<SurfaceId>(
     (() => {

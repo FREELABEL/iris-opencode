@@ -12,7 +12,7 @@ import { useGlobal } from "@/context/global"
 import {
   hasNonBlockingServiceIssue,
   hasServiceNeedingAttention,
-  serverStatusDotClass,
+  serverStatusDotClass, serverStatusDotLabelKey,
 } from "./status-popover-indicator"
 
 const Body = lazy(() => import("./status-popover-body").then((x) => ({ default: x.StatusPopoverBody })))
@@ -46,7 +46,12 @@ export function StatusPopover() {
       triggerProps={{
         variant: "ghost",
         class: "titlebar-icon w-8 h-6 p-0 box-border",
+        // The tooltip says what the DOT means, not what the button is: the dot is the part
+        // people ask about (#186524). aria-label keeps naming the control for a screen reader.
         "aria-label": language.t("status.popover.trigger"),
+        title: language.t(
+          serverStatusDotLabelKey({ ready: ready(), serverHealth: serverHealth(), attention: attention(), issue: issue() }),
+        ),
         style: { scale: 1 },
       }}
       trigger={

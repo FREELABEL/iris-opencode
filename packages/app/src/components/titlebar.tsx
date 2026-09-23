@@ -435,6 +435,32 @@ export function Titlebar(props: { update?: TitlebarUpdate; debugTools?: { visibl
                   />
                 </TooltipV2>
                 <div class="flex-1" />
+                {/*
+                  COMMANDS, VISIBLE (#186524-sibling #186526). The palette already listed every
+                  command with its shortcut — and could only be opened BY a shortcut, so the
+                  feature was invisible to anyone who did not already know it. A client asked for
+                  "a dropdown commands list, far right of the tab bar". This is that entry point;
+                  it opens the same palette, so there is one list, not a second that drifts.
+                */}
+                <TooltipV2
+                  placement="bottom"
+                  value={
+                    <>
+                      {language.t("command.palette")}
+                      <KeybindV2 keys={command.keybindParts("command.palette")} variant="neutral" />
+                    </>
+                  }
+                >
+                  <IconButtonV2
+                    type="button"
+                    variant="ghost-muted"
+                    size="large"
+                    class="shrink-0"
+                    icon={<IconV2 name="outline-dots" />}
+                    onClick={() => command.trigger("command.palette")}
+                    aria-label={language.t("command.palette")}
+                  />
+                </TooltipV2>
                 <TitlebarV2Right state={v2RightState()} />
               </div>
             )

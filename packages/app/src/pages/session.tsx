@@ -60,6 +60,7 @@ import { useTabs } from "@/context/tabs"
 import { TerminalProvider, useTerminal } from "@/context/terminal"
 import { PromptInput } from "@/components/prompt-input"
 import { PromptInputV2Composer, usePromptInputV2Controller } from "@/components/prompt-input-v2"
+import { requestIrisSurface } from "@/components/session/session-iris-tab"
 import { useSettingsCommand } from "@/components/settings-dialog"
 import { setCursorPosition } from "@/components/prompt-input/editor-dom"
 import { promptLength } from "@/components/prompt-input/history"
@@ -2239,7 +2240,31 @@ export default function Page() {
                         setFollowup("paused", id, true)
                       },
                     })
-                    return <PromptInputV2Composer controller={controller} borderUnderlay />
+                    return (
+                      <PromptInputV2Composer
+                        controller={controller}
+                        borderUnderlay
+                        /*
+                          #186527 — "when you click this it should show the integrations
+                          options and that's where the users can choose the integrations and
+                          connect them". The panel's Integrations surface IS that screen, with
+                          its own "+ Add" catalogue, so this opens it rather than growing a
+                          second one that would drift.
+
+                          The three steps are session-header.tsx's onIrisOpen, verbatim and for
+                          its stated reason: the tab only renders once "iris" is in the tab
+                          list, so any two of the three show nothing. requestIrisSurface runs
+                          FIRST because opening the panel is what mounts the tab that reads it.
+                        */
+                        onIntegrations={() => {
+                          requestIrisSurface("integrations")
+                          view().reviewPanel.open("other")
+                          if (layout.fileTree.opened() && layout.fileTree.tab() !== "all") layout.fileTree.setTab("all")
+                          void tabs().open("iris")
+                          tabs().setActive("iris")
+                        }}
+                      />
+                    )
                   }}
                 </Show>
               }
