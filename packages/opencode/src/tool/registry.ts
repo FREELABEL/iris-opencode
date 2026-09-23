@@ -12,6 +12,7 @@ import { ReadTool } from "./read"
 import { TaskTool } from "./task"
 import { Database } from "@opencode-ai/core/database/database"
 import { TodoWriteTool } from "./todo"
+import { GenesisArtifactTool } from "./genesis-artifact"
 import { WebFetchTool } from "./webfetch"
 import { WriteTool } from "./write"
 import { InvalidTool } from "./invalid"
@@ -105,6 +106,7 @@ const layer = Layer.effect(
     const read = yield* ReadTool
     const question = yield* QuestionTool
     const todo = yield* TodoWriteTool
+    const artifacttool = yield* GenesisArtifactTool
     const lsptool = yield* LspTool
     const plan = yield* PlanExitTool
     const webfetch = yield* WebFetchTool
@@ -219,6 +221,7 @@ const layer = Layer.effect(
           task: Tool.init(task),
           fetch: Tool.init(webfetch),
           todo: Tool.init(todo),
+          artifact: Tool.init(artifacttool),
           search: Tool.init(websearch),
           skill: Tool.init(skilltool),
           patch: Tool.init(patchtool),
@@ -242,6 +245,9 @@ const layer = Layer.effect(
             tool.task,
             tool.fetch,
             tool.todo,
+            // `genesis_artifact` — Genesis › Artifacts (#186508 / #186510). Scoped by its description
+            // to things the user will look at; the files land in .iris/artifacts.
+            tool.artifact,
             tool.search,
             tool.skill,
             tool.patch,

@@ -1,0 +1,13 @@
+Make a Genesis artifact — a page, a document, a table or a snippet the user will LOOK AT — and show it in the Genesis › Artifacts pane beside this conversation. The chat gets a card with a preview the user can click to open it.
+
+Use it only when the user asks for something to look at: a landing page, a one-pager, a report, a mockup, a table, a visual. Do NOT use it to carry out a task (controlling devices, calling APIs, running jobs, fixing code). Do the task; if a visual would genuinely help, offer one.
+
+The artifact is a local draft in this project. To publish it at a public heyiris.io/p/ URL, the user asks for that and you run `iris genesis publish-html <slug> --file <path>` (or the genesis-artifact playbook). Do not publish unasked.
+
+Actions:
+- create: title, kind (html | markdown | csv | code), content, optional language (for code). Returns the artifact id and revision 1.
+- update: id, full new content (and title/kind if they change). Pass base_revision = the revision you last read; if someone else wrote since, the update is refused and tells you who — read it again and apply your change to the current version instead of overwriting theirs.
+- read: id. Returns the current content, its revision, and who wrote it.
+- list: every artifact in this session, newest first, with its revision and author.
+
+The pane is shared by every agent in the session, subagents included; check list before creating something that may already exist. Do not paste the artifact's content into your reply as well — say what you made. HTML runs in a sandbox: scripts work, but it cannot reach the app, the network as the user, or localStorage.

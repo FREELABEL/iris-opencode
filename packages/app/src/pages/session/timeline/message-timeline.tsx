@@ -27,6 +27,8 @@ import {
   partDefaultOpen,
   type UserActions,
 } from "@opencode-ai/session-ui/message-part"
+// Registers the `genesis_artifact` chat card (a side effect: ToolRegistry is module-global).
+import "@/components/session/genesis-artifact-card"
 import { DiffChanges } from "@opencode-ai/ui/diff-changes"
 import { FileIcon } from "@opencode-ai/ui/file-icon"
 import { Icon } from "@opencode-ai/ui/icon"

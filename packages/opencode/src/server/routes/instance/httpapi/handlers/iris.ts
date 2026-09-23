@@ -1,12 +1,62 @@
 import { Effect } from "effect"
 import { filterRows, paginate } from "@/iris/pagination"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
-import { filterAtlas, checkAuth, fetchAgents, fetchAtlas, fetchBloqs, fetchHiveNodes, fetchInbox, fetchLeads, fetchIntegrations, fetchPages, fetchPlaybooks, fetchRecords, fetchSchemas, fetchSites, fetchAgentTasks, fetchPlaybookDoc, fetchPageDoc, savePageDoc, fetchItem, saveItem, addItemTask, saveItemTask, deleteItemTask, fetchCardSchema, fetchShareState, setShareVisibility, setShareAllowlist, inviteMember, setMemberPermission, revokeMember, createShareLink, revokeShareLink, setItemLabels, fetchAttachments, uploadAttachment, deleteAttachment, fetchEvents, addEvent, fetchAsks, addAsk, answerAsk, fetchItemChat, sendItemChat, fetchCatalog, fetchBloqGraph, fetchBloqInterior, graphRows, fetchAllowance } from "@/iris/platform"
+import {
+  filterAtlas,
+  checkAuth,
+  fetchAgents,
+  fetchAtlas,
+  fetchBloqs,
+  fetchHiveNodes,
+  fetchInbox,
+  fetchLeads,
+  fetchIntegrations,
+  fetchPages,
+  fetchPlaybooks,
+  fetchRecords,
+  fetchSchemas,
+  fetchSites,
+  fetchAgentTasks,
+  fetchPlaybookDoc,
+  fetchPageDoc,
+  savePageDoc,
+  fetchItem,
+  saveItem,
+  addItemTask,
+  saveItemTask,
+  deleteItemTask,
+  fetchCardSchema,
+  fetchShareState,
+  setShareVisibility,
+  setShareAllowlist,
+  inviteMember,
+  setMemberPermission,
+  revokeMember,
+  createShareLink,
+  revokeShareLink,
+  setItemLabels,
+  fetchAttachments,
+  uploadAttachment,
+  deleteAttachment,
+  fetchEvents,
+  addEvent,
+  fetchAsks,
+  addAsk,
+  answerAsk,
+  fetchItemChat,
+  sendItemChat,
+  fetchCatalog,
+  fetchBloqGraph,
+  fetchBloqInterior,
+  graphRows,
+  fetchAllowance,
+} from "@/iris/platform"
 import { createRoom, fetchRoom, fetchRooms, sendRoomMessage } from "@/iris/rooms"
 import { RootHttpApi } from "../api"
 import { markLocal, projectRoot } from "@/iris/playbook-local"
 import { Artifacts } from "@/iris/artifacts"
 import { startIntegrationConnect } from "@/iris/platform"
+import { publishArtifact } from "@/iris/artifact-publish"
 import { runPlaybookInstall, ttlCache } from "@/iris/playbook-install"
 
 /**
@@ -37,11 +87,7 @@ const playbookLists = ttlCache<string, Awaited<ReturnType<typeof fetchPlaybooks>
  * One helper rather than eight inline slices — the whole reason pagination is a service is that
  * "how many are there" must mean the same thing on every surface.
  */
-const pageOf = <T>(
-  r: { measured: boolean; reason?: string },
-  all: T[],
-  q: { page?: number; perPage?: number },
-) => {
+const pageOf = <T>(r: { measured: boolean; reason?: string }, all: T[], q: { page?: number; perPage?: number }) => {
   const p = paginate(all, q)
   return {
     items: p.items,
@@ -61,14 +107,13 @@ const pageOf = <T>(
 
 export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers) =>
   Effect.gen(function* () {
-    const bloqs = Effect.fn("IrisHttpApi.bloqs")(
-      (ctx: { query: { page?: number; perPage?: number } }) =>
-        Effect.promise(() => fetchBloqs()).pipe(
-          Effect.map((r) => {
-            const { items, meta } = pageOf(r, r.data.bloqs, ctx.query)
-            return { ...meta, bloqs: items }
-          }),
-        ),
+    const bloqs = Effect.fn("IrisHttpApi.bloqs")((ctx: { query: { page?: number; perPage?: number } }) =>
+      Effect.promise(() => fetchBloqs()).pipe(
+        Effect.map((r) => {
+          const { items, meta } = pageOf(r, r.data.bloqs, ctx.query)
+          return { ...meta, bloqs: items }
+        }),
+      ),
     )
 
     const auth = Effect.fn("IrisHttpApi.auth")(() => Effect.sync(() => checkAuth()))
@@ -82,24 +127,23 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
      * fault, not an empty inbox. A partially unparseable one still counts what it can, and says
      * how much is missing in `reason` rather than quietly returning a shorter list.
      */
-    const inbox = Effect.fn("IrisHttpApi.inbox")(
-      (ctx: { query: { page?: number; perPage?: number } }) =>
-        Effect.sync(() => {
-          const r = fetchInbox()
-          const { items, meta } = pageOf(
-            {
-              measured: !r.unreadable,
-              reason: r.unreadable
-                ? "the inbox manifest could not be parsed"
-                : r.unparsed
-                  ? `${r.unparsed} manifest ${r.unparsed === 1 ? "line" : "lines"} could not be read and ${r.unparsed === 1 ? "is" : "are"} missing below`
-                  : undefined,
-            },
-            r.items,
-            ctx.query,
-          )
-          return { ...meta, unread: r.unread, from: r.from, unreadable: r.unreadable, items }
-        }),
+    const inbox = Effect.fn("IrisHttpApi.inbox")((ctx: { query: { page?: number; perPage?: number } }) =>
+      Effect.sync(() => {
+        const r = fetchInbox()
+        const { items, meta } = pageOf(
+          {
+            measured: !r.unreadable,
+            reason: r.unreadable
+              ? "the inbox manifest could not be parsed"
+              : r.unparsed
+                ? `${r.unparsed} manifest ${r.unparsed === 1 ? "line" : "lines"} could not be read and ${r.unparsed === 1 ? "is" : "are"} missing below`
+                : undefined,
+          },
+          r.items,
+          ctx.query,
+        )
+        return { ...meta, unread: r.unread, from: r.from, unreadable: r.unreadable, items }
+      }),
     )
 
     const atlas = Effect.fn("IrisHttpApi.atlas")(
@@ -184,7 +228,13 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
     const playbooks = Effect.fn("IrisHttpApi.playbooks")(
       (ctx: {
         params: { bloqID: number }
-        query: { page?: number; perPage?: number; q?: string; view?: "all" | "project" | "marketplace"; project?: string }
+        query: {
+          page?: number
+          perPage?: number
+          q?: string
+          view?: "all" | "project" | "marketplace"
+          project?: string
+        }
       }) =>
         Effect.gen(function* () {
           // The session's project, sent by the panel: "installed here" must count the project's
@@ -193,7 +243,9 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
           // "InstanceRef not provided", failing every request (caught on a live server).
           const project = projectRoot(ctx.query.project)
           const key = `${ctx.params.bloqID}:${ctx.query.view ?? "all"}`
-          const r = yield* Effect.promise(() => playbookLists.get(key, () => fetchPlaybooks(ctx.params.bloqID, ctx.query.view)))
+          const r = yield* Effect.promise(() =>
+            playbookLists.get(key, () => fetchPlaybooks(ctx.params.bloqID, ctx.query.view)),
+          )
           // Never keep an answer that says it could not measure — the next request should retry.
           if (!(r as any).measured) playbookLists.invalidate()
           // Description as well as name: playbooks are FOUND by what they do, and the name is
@@ -231,7 +283,13 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
     /** Not paged: a board's interior is one picture. Slicing it would draw half a graph. */
     const graphBoard = Effect.fn("IrisHttpApi.graphBoard")((ctx: { params: { bloqID: number } }) =>
       Effect.promise(() => fetchBloqInterior(ctx.params.bloqID)).pipe(
-        Effect.map((r) => ({ measured: r.measured, reason: r.reason, nodes: r.data.nodes, edges: r.data.edges, unread: r.data.unread })),
+        Effect.map((r) => ({
+          measured: r.measured,
+          reason: r.reason,
+          nodes: r.data.nodes,
+          edges: r.data.edges,
+          unread: r.data.unread,
+        })),
       ),
     )
 
@@ -305,36 +363,45 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
     )
 
     // ── Card editor, second pass (#185506) ──
-    const itemShare = Effect.fn("IrisHttpApi.itemShare")((ctx: { params: { itemID: number }; query: { bloq?: number } }) =>
-      Effect.promise(() => fetchShareState(ctx.params.itemID, ctx.query.bloq)).pipe(
-        Effect.map((r) => ({ measured: r.measured, reason: r.reason, ...r.data })),
-      ),
+    const itemShare = Effect.fn("IrisHttpApi.itemShare")(
+      (ctx: { params: { itemID: number }; query: { bloq?: number } }) =>
+        Effect.promise(() => fetchShareState(ctx.params.itemID, ctx.query.bloq)).pipe(
+          Effect.map((r) => ({ measured: r.measured, reason: r.reason, ...r.data })),
+        ),
     )
-    const itemShareVisibility = Effect.fn("IrisHttpApi.itemShareVisibility")((ctx: { params: { itemID: number }; payload: { public: boolean } }) =>
-      Effect.promise(() => setShareVisibility(ctx.params.itemID, ctx.payload.public)),
+    const itemShareVisibility = Effect.fn("IrisHttpApi.itemShareVisibility")(
+      (ctx: { params: { itemID: number }; payload: { public: boolean } }) =>
+        Effect.promise(() => setShareVisibility(ctx.params.itemID, ctx.payload.public)),
     )
-    const itemShareAllowlist = Effect.fn("IrisHttpApi.itemShareAllowlist")((ctx: { params: { itemID: number }; payload: { emails: readonly string[] } }) =>
-      Effect.promise(() => setShareAllowlist(ctx.params.itemID, [...ctx.payload.emails])),
+    const itemShareAllowlist = Effect.fn("IrisHttpApi.itemShareAllowlist")(
+      (ctx: { params: { itemID: number }; payload: { emails: readonly string[] } }) =>
+        Effect.promise(() => setShareAllowlist(ctx.params.itemID, [...ctx.payload.emails])),
     )
-    const itemShareInvite = Effect.fn("IrisHttpApi.itemShareInvite")((ctx: { payload: { email: string; permission: string; bloq: number } }) =>
-      Effect.promise(() => inviteMember(ctx.payload.bloq, ctx.payload.email, ctx.payload.permission)),
+    const itemShareInvite = Effect.fn("IrisHttpApi.itemShareInvite")(
+      (ctx: { payload: { email: string; permission: string; bloq: number } }) =>
+        Effect.promise(() => inviteMember(ctx.payload.bloq, ctx.payload.email, ctx.payload.permission)),
     )
-    const itemSharePermission = Effect.fn("IrisHttpApi.itemSharePermission")((ctx: { payload: { userId: number; permission: string; bloq: number } }) =>
-      Effect.promise(() => setMemberPermission(ctx.payload.bloq, ctx.payload.userId, ctx.payload.permission)),
+    const itemSharePermission = Effect.fn("IrisHttpApi.itemSharePermission")(
+      (ctx: { payload: { userId: number; permission: string; bloq: number } }) =>
+        Effect.promise(() => setMemberPermission(ctx.payload.bloq, ctx.payload.userId, ctx.payload.permission)),
     )
-    const itemShareRevoke = Effect.fn("IrisHttpApi.itemShareRevoke")((ctx: { payload: { userId: number; bloq: number } }) =>
-      Effect.promise(() => revokeMember(ctx.payload.bloq, ctx.payload.userId)),
+    const itemShareRevoke = Effect.fn("IrisHttpApi.itemShareRevoke")(
+      (ctx: { payload: { userId: number; bloq: number } }) =>
+        Effect.promise(() => revokeMember(ctx.payload.bloq, ctx.payload.userId)),
     )
-    const itemShareLink = Effect.fn("IrisHttpApi.itemShareLink")((ctx: { payload: { bloq: number; expiresInDays?: number } }) =>
-      Effect.promise(() => createShareLink(ctx.payload.bloq, ctx.payload.expiresInDays)),
+    const itemShareLink = Effect.fn("IrisHttpApi.itemShareLink")(
+      (ctx: { payload: { bloq: number; expiresInDays?: number } }) =>
+        Effect.promise(() => createShareLink(ctx.payload.bloq, ctx.payload.expiresInDays)),
     )
-    const itemShareLinkRevoke = Effect.fn("IrisHttpApi.itemShareLinkRevoke")((ctx: { params: { linkID: string }; payload: { bloq: number } }) =>
-      Effect.promise(() => revokeShareLink(ctx.payload.bloq, ctx.params.linkID)),
+    const itemShareLinkRevoke = Effect.fn("IrisHttpApi.itemShareLinkRevoke")(
+      (ctx: { params: { linkID: string }; payload: { bloq: number } }) =>
+        Effect.promise(() => revokeShareLink(ctx.payload.bloq, ctx.params.linkID)),
     )
-    const itemLabels = Effect.fn("IrisHttpApi.itemLabels")((ctx: { params: { itemID: number }; payload: { labels: readonly string[] } }) =>
-      Effect.promise(() => setItemLabels(ctx.params.itemID, [...ctx.payload.labels])).pipe(
-        Effect.map((r) => ({ measured: r.measured, reason: r.reason, labels: r.data.labels })),
-      ),
+    const itemLabels = Effect.fn("IrisHttpApi.itemLabels")(
+      (ctx: { params: { itemID: number }; payload: { labels: readonly string[] } }) =>
+        Effect.promise(() => setItemLabels(ctx.params.itemID, [...ctx.payload.labels])).pipe(
+          Effect.map((r) => ({ measured: r.measured, reason: r.reason, labels: r.data.labels })),
+        ),
     )
     const itemAttachments = Effect.fn("IrisHttpApi.itemAttachments")((ctx: { params: { itemID: number } }) =>
       Effect.promise(() => fetchAttachments(ctx.params.itemID)).pipe(
@@ -343,60 +410,89 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
     )
     const itemAttachmentUpload = Effect.fn("IrisHttpApi.itemAttachmentUpload")(
       (ctx: { params: { itemID: number }; payload: { name: string; type?: string; data: string; bloq?: number } }) =>
-        Effect.promise(() => uploadAttachment(ctx.params.itemID, { name: ctx.payload.name, type: ctx.payload.type, data: ctx.payload.data, bloqId: ctx.payload.bloq })),
+        Effect.promise(() =>
+          uploadAttachment(ctx.params.itemID, {
+            name: ctx.payload.name,
+            type: ctx.payload.type,
+            data: ctx.payload.data,
+            bloqId: ctx.payload.bloq,
+          }),
+        ),
     )
-    const itemAttachmentDelete = Effect.fn("IrisHttpApi.itemAttachmentDelete")((ctx: { params: { itemID: number; fileID: string } }) =>
-      Effect.promise(() => deleteAttachment(ctx.params.itemID, ctx.params.fileID)),
+    const itemAttachmentDelete = Effect.fn("IrisHttpApi.itemAttachmentDelete")(
+      (ctx: { params: { itemID: number; fileID: string } }) =>
+        Effect.promise(() => deleteAttachment(ctx.params.itemID, ctx.params.fileID)),
     )
     const itemEvents = Effect.fn("IrisHttpApi.itemEvents")((ctx: { params: { itemID: number } }) =>
       Effect.promise(() => fetchEvents(ctx.params.itemID)).pipe(
         Effect.map((r) => ({ measured: r.measured, reason: r.reason, events: r.data.events })),
       ),
     )
-    const itemEventAdd = Effect.fn("IrisHttpApi.itemEventAdd")((ctx: { params: { itemID: number }; payload: { title: string; startsAt: string; endsAt?: string } }) =>
-      Effect.promise(() => addEvent(ctx.params.itemID, ctx.payload)),
+    const itemEventAdd = Effect.fn("IrisHttpApi.itemEventAdd")(
+      (ctx: { params: { itemID: number }; payload: { title: string; startsAt: string; endsAt?: string } }) =>
+        Effect.promise(() => addEvent(ctx.params.itemID, ctx.payload)),
     )
     const itemAsks = Effect.fn("IrisHttpApi.itemAsks")((ctx: { params: { itemID: number } }) =>
       Effect.promise(() => fetchAsks(ctx.params.itemID)).pipe(
         Effect.map((r) => ({ measured: r.measured, reason: r.reason, asks: r.data.asks })),
       ),
     )
-    const itemAskAdd = Effect.fn("IrisHttpApi.itemAskAdd")((ctx: { params: { itemID: number }; payload: { to: string; what: string; dueAt?: string } }) =>
-      Effect.promise(() => addAsk(ctx.params.itemID, ctx.payload)),
+    const itemAskAdd = Effect.fn("IrisHttpApi.itemAskAdd")(
+      (ctx: { params: { itemID: number }; payload: { to: string; what: string; dueAt?: string } }) =>
+        Effect.promise(() => addAsk(ctx.params.itemID, ctx.payload)),
     )
-    const itemAskAnswer = Effect.fn("IrisHttpApi.itemAskAnswer")((ctx: { params: { itemID: number; askID: number }; payload: { answer?: string } }) =>
-      Effect.promise(() => answerAsk(ctx.params.itemID, ctx.params.askID, ctx.payload.answer)),
+    const itemAskAnswer = Effect.fn("IrisHttpApi.itemAskAnswer")(
+      (ctx: { params: { itemID: number; askID: number }; payload: { answer?: string } }) =>
+        Effect.promise(() => answerAsk(ctx.params.itemID, ctx.params.askID, ctx.payload.answer)),
     )
-    const itemChat = Effect.fn("IrisHttpApi.itemChat")((ctx: { params: { itemID: number }; query: { bloq?: number } }) =>
-      Effect.promise(() => fetchItemChat(ctx.params.itemID)).pipe(
-        Effect.map((r) => ({ measured: r.measured, reason: r.reason, agentId: r.data.agentId, messages: r.data.messages })),
-      ),
+    const itemChat = Effect.fn("IrisHttpApi.itemChat")(
+      (ctx: { params: { itemID: number }; query: { bloq?: number } }) =>
+        Effect.promise(() => fetchItemChat(ctx.params.itemID)).pipe(
+          Effect.map((r) => ({
+            measured: r.measured,
+            reason: r.reason,
+            agentId: r.data.agentId,
+            messages: r.data.messages,
+          })),
+        ),
     )
-    const itemChatSend = Effect.fn("IrisHttpApi.itemChatSend")((ctx: { params: { itemID: number }; payload: { agentId: number; text: string; bloq?: number } }) =>
-      Effect.promise(() => sendItemChat(ctx.params.itemID, { agentId: ctx.payload.agentId, text: ctx.payload.text, bloqId: ctx.payload.bloq })),
+    const itemChatSend = Effect.fn("IrisHttpApi.itemChatSend")(
+      (ctx: { params: { itemID: number }; payload: { agentId: number; text: string; bloq?: number } }) =>
+        Effect.promise(() =>
+          sendItemChat(ctx.params.itemID, {
+            agentId: ctx.payload.agentId,
+            text: ctx.payload.text,
+            bloqId: ctx.payload.bloq,
+          }),
+        ),
     )
 
     const rooms = Effect.fn("IrisHttpApi.rooms")(() =>
-      Effect.promise(() => fetchRooms()).pipe(Effect.map((r) => ({ measured: r.measured, reason: r.reason, rooms: r.data.rooms }))),
+      Effect.promise(() => fetchRooms()).pipe(
+        Effect.map((r) => ({ measured: r.measured, reason: r.reason, rooms: r.data.rooms })),
+      ),
     )
-    const roomCreate = Effect.fn("IrisHttpApi.roomCreate")((ctx: { payload: { name: string; agentIds: readonly string[] } }) =>
-      Effect.promise(() => createRoom({ name: ctx.payload.name, agentIds: [...ctx.payload.agentIds] })),
+    const roomCreate = Effect.fn("IrisHttpApi.roomCreate")(
+      (ctx: { payload: { name: string; agentIds: readonly string[] } }) =>
+        Effect.promise(() => createRoom({ name: ctx.payload.name, agentIds: [...ctx.payload.agentIds] })),
     )
     const room = Effect.fn("IrisHttpApi.room")((ctx: { params: { roomID: string } }) =>
       Effect.promise(() => fetchRoom(ctx.params.roomID)).pipe(
         Effect.map((r) => ({ measured: r.measured, reason: r.reason, room: r.data.room, messages: r.data.messages })),
       ),
     )
-    const roomSend = Effect.fn("IrisHttpApi.roomSend")((ctx: { params: { roomID: string }; payload: { text: string } }) =>
-      Effect.promise(() => sendRoomMessage(ctx.params.roomID, ctx.payload.text)),
+    const roomSend = Effect.fn("IrisHttpApi.roomSend")(
+      (ctx: { params: { roomID: string }; payload: { text: string } }) =>
+        Effect.promise(() => sendRoomMessage(ctx.params.roomID, ctx.payload.text)),
     )
 
-    const playbookDoc = Effect.fn("IrisHttpApi.playbookDoc")((ctx: { params: { name: string }; query: { project?: string } }) =>
-      Effect.gen(function* () {
-        const project = projectRoot(ctx.query.project)
-        const r = yield* Effect.promise(() => fetchPlaybookDoc(ctx.params.name, project))
-        return { found: r.found, name: ctx.params.name, path: r.path, source: r.source, content: r.content }
-      }),
+    const playbookDoc = Effect.fn("IrisHttpApi.playbookDoc")(
+      (ctx: { params: { name: string }; query: { project?: string } }) =>
+        Effect.gen(function* () {
+          const project = projectRoot(ctx.query.project)
+          const r = yield* Effect.promise(() => fetchPlaybookDoc(ctx.params.name, project))
+          return { found: r.found, name: ctx.params.name, path: r.path, source: r.source, content: r.content }
+        }),
     )
 
     // Artifacts (epic #186508). Local files only — no network, no token. The project comes from the
@@ -407,7 +503,12 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
         if (!Artifacts.validSegment(ctx.query.session)) {
           return { measured: false, reason: "invalid session id", root: where.root, dir: where.dir, artifacts: [] }
         }
-        return { measured: true, root: where.root, dir: where.dir, artifacts: Artifacts.list(where.dir, ctx.query.session) }
+        return {
+          measured: true,
+          root: where.root,
+          dir: where.dir,
+          artifacts: Artifacts.list(where.dir, ctx.query.session),
+        }
       }),
     )
 
@@ -417,9 +518,43 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
           const where = Artifacts.rootFor(projectRoot(ctx.query.project))
           const r = Artifacts.read(where.dir, ctx.query.session, ctx.params.artifactID)
           return r
-            ? { root: where.root, dir: where.dir, found: true, meta: r.meta, content: r.content, truncated: r.truncated }
+            ? {
+                root: where.root,
+                dir: where.dir,
+                found: true,
+                meta: r.meta,
+                content: r.content,
+                truncated: r.truncated,
+              }
             : { root: where.root, dir: where.dir, found: false, meta: null, content: "", truncated: false }
         }),
+    )
+
+    const artifactPublish = Effect.fn("IrisHttpApi.artifactPublish")(
+      (ctx: {
+        params: { artifactID: string }
+        payload: {
+          session: string
+          project?: string
+          slug: string
+          visibility: "public" | "unlisted" | "private"
+          requiresAuth: boolean
+          bloq?: number
+          html?: string
+        }
+      }) =>
+        Effect.promise(() =>
+          publishArtifact({
+            rootDir: Artifacts.rootFor(projectRoot(ctx.payload.project)).dir,
+            session: ctx.payload.session,
+            id: ctx.params.artifactID,
+            slug: ctx.payload.slug,
+            visibility: ctx.payload.visibility,
+            requiresAuth: ctx.payload.requiresAuth,
+            bloqId: ctx.payload.bloq,
+            html: ctx.payload.html,
+          }),
+        ),
     )
 
     const playbookInstall = Effect.fn("IrisHttpApi.playbookInstall")(
@@ -490,14 +625,13 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
         ),
     )
 
-    const hive = Effect.fn("IrisHttpApi.hive")(
-      (ctx: { query: { page?: number; perPage?: number } }) =>
-        Effect.promise(() => fetchHiveNodes()).pipe(
-          Effect.map((r) => {
-            const { items, meta } = pageOf(r, r.data.nodes, ctx.query)
-            return { ...meta, nodes: items }
-          }),
-        ),
+    const hive = Effect.fn("IrisHttpApi.hive")((ctx: { query: { page?: number; perPage?: number } }) =>
+      Effect.promise(() => fetchHiveNodes()).pipe(
+        Effect.map((r) => {
+          const { items, meta } = pageOf(r, r.data.nodes, ctx.query)
+          return { ...meta, nodes: items }
+        }),
+      ),
     )
 
     /**
@@ -526,6 +660,6 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
       ),
     )
 
-    return handlers.handle("allowance", allowance).handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("graph", graph).handle("graphBoard", graphBoard).handle("catalog", catalog).handle("integrationConnect", integrationConnect).handle("pageDoc", pageDoc).handle("pageSave", pageSave).handle("item", item).handle("itemSave", itemSave).handle("itemTaskAdd", itemTaskAdd).handle("itemTaskSave", itemTaskSave).handle("itemTaskDelete", itemTaskDelete).handle("cardSchema", cardSchema).handle("itemShare", itemShare).handle("itemShareVisibility", itemShareVisibility).handle("itemShareAllowlist", itemShareAllowlist).handle("itemShareInvite", itemShareInvite).handle("itemSharePermission", itemSharePermission).handle("itemShareRevoke", itemShareRevoke).handle("itemShareLink", itemShareLink).handle("itemShareLinkRevoke", itemShareLinkRevoke).handle("itemLabels", itemLabels).handle("itemAttachments", itemAttachments).handle("itemAttachmentUpload", itemAttachmentUpload).handle("itemAttachmentDelete", itemAttachmentDelete).handle("itemEvents", itemEvents).handle("itemEventAdd", itemEventAdd).handle("itemAsks", itemAsks).handle("itemAskAdd", itemAskAdd).handle("itemAskAnswer", itemAskAnswer).handle("itemChat", itemChat).handle("itemChatSend", itemChatSend).handle("rooms", rooms).handle("roomCreate", roomCreate).handle("room", room).handle("roomSend", roomSend).handle("playbookDoc", playbookDoc).handle("artifacts", artifacts).handle("artifactDoc", artifactDoc).handle("playbookInstall", playbookInstall).handle("agentTasks", agentTasks).handle("sites", sites).handle("records", records).handle("integrations", integrations).handle("hive", hive)
+    return handlers.handle("allowance", allowance).handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("graph", graph).handle("graphBoard", graphBoard).handle("catalog", catalog).handle("integrationConnect", integrationConnect).handle("pageDoc", pageDoc).handle("pageSave", pageSave).handle("item", item).handle("itemSave", itemSave).handle("itemTaskAdd", itemTaskAdd).handle("itemTaskSave", itemTaskSave).handle("itemTaskDelete", itemTaskDelete).handle("cardSchema", cardSchema).handle("itemShare", itemShare).handle("itemShareVisibility", itemShareVisibility).handle("itemShareAllowlist", itemShareAllowlist).handle("itemShareInvite", itemShareInvite).handle("itemSharePermission", itemSharePermission).handle("itemShareRevoke", itemShareRevoke).handle("itemShareLink", itemShareLink).handle("itemShareLinkRevoke", itemShareLinkRevoke).handle("itemLabels", itemLabels).handle("itemAttachments", itemAttachments).handle("itemAttachmentUpload", itemAttachmentUpload).handle("itemAttachmentDelete", itemAttachmentDelete).handle("itemEvents", itemEvents).handle("itemEventAdd", itemEventAdd).handle("itemAsks", itemAsks).handle("itemAskAdd", itemAskAdd).handle("itemAskAnswer", itemAskAnswer).handle("itemChat", itemChat).handle("itemChatSend", itemChatSend).handle("rooms", rooms).handle("roomCreate", roomCreate).handle("room", room).handle("roomSend", roomSend).handle("playbookDoc", playbookDoc).handle("artifacts", artifacts).handle("artifactDoc", artifactDoc).handle("artifactPublish", artifactPublish).handle("playbookInstall", playbookInstall).handle("agentTasks", agentTasks).handle("sites", sites).handle("records", records).handle("integrations", integrations).handle("hive", hive)
   }),
 )
