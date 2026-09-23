@@ -1400,3 +1400,5 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
 .iris-publish__actions { display: flex; justify-content: flex-end; gap: 6px; }
 .iris-publish__note { font-size: 11px; color: var(--text-weak); word-break: break-all; }
 .iris-publish__note--bad { color: var(--text-strong); font-weight: 600; }
+.iris-publish__addr { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
+.iris-publish__url { font-size: 11px; font-family: var(--font-mono, ui-monospace, monospace); color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }

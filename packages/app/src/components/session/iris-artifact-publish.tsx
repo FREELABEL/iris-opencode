@@ -34,6 +34,16 @@ export function IrisArtifactPublish(props: {
   const [auth, setAuth] = createSignal(false)
   const [busy, setBusy] = createSignal(false)
   const [note, setNote] = createSignal<{ ok: boolean; text: string } | null>(null)
+  const [copied, setCopied] = createSignal(false)
+  const copy = async (url: string) => {
+    try {
+      await navigator.clipboard.writeText(url)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {
+      setNote({ ok: false, text: `copy failed — the address is ${url}` })
+    }
+  }
 
   const state = () => publishState(props.meta)
   const publishable = () => props.meta.kind === "html" || props.meta.kind === "markdown"
@@ -73,7 +83,10 @@ export function IrisArtifactPublish(props: {
         setMode("closed")
         setNote({
           ok: true,
-          text: chosen === "private" ? "Saved to Genesis (private)" : `Published — ${out.published.url}`,
+          text:
+            chosen === "private"
+              ? "Saved to Genesis (private) — only you can open it."
+              : `Live at ${out.published.url.replace(/^https?:\/\//, "")} — what you see below is what's there.`,
         })
         props.onPublished()
       } else setNote({ ok: false, text: out.reason ?? `could not publish (HTTP ${res.status})` })
@@ -86,17 +99,23 @@ export function IrisArtifactPublish(props: {
   return (
     <div class="iris-publish">
       <div class="iris-publish__bar">
+        {/* The address stays IN the app (#186541). The live page is exactly this artifact's
+            revision, already on screen below — so the link is shown and copyable, and leaving
+            for the browser is a separate, explicit action. */}
         <Show when={props.meta.published}>
           {(p) => (
-            <a
-              class="iris-publish__link"
-              href={p().url}
-              target="_blank"
-              rel="noopener noreferrer"
-              data-testid="artifact-page-link"
-            >
-              {p().visibility === "private" ? "In Genesis (private)" : p().url.replace(/^https?:\/\//, "")} ↗
-            </a>
+            <span class="iris-publish__addr" data-testid="artifact-page-link">
+              <span class="iris-publish__url" title={p().url}>
+                {p().visibility === "private" ? "Private in Genesis · " : ""}
+                {p().url.replace(/^https?:\/\//, "")}
+              </span>
+              <button type="button" class="iris-card__linkbtn" onClick={() => void copy(p().url)}>
+                {copied() ? "Copied" : "Copy"}
+              </button>
+              <a class="iris-card__linkbtn" href={p().url} target="_blank" rel="noopener noreferrer">
+                Open in browser
+              </a>
+            </span>
           )}
         </Show>
         <Show when={state().behind}>
