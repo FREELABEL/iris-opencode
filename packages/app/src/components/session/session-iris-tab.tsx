@@ -24,6 +24,9 @@ import { Button } from "@opencode-ai/ui/button"
 import { useServerSDK } from "@/context/server-sdk"
 import { useSDK } from "@/context/sdk"
 import { usePlatform } from "@/context/platform"
+import { useSync } from "@/context/sync"
+import { promotedFiles } from "./iris-promote"
+import type { FileContent } from "./iris-file-artifact"
 import { IrisCardEditor } from "./iris-card-editor"
 import { IrisArtifacts } from "./iris-artifacts"
 import { ACCOUNT_SURFACES, panelScope, readPinnedIds, visibleTabs } from "./iris-panel-nav"
@@ -987,6 +990,38 @@ export function SessionIrisTab() {
       return undefined
     }
   }
+  /*
+   * PROMOTE (#186584): the documents this session made, from its turns' changed files. Optional
+   * like dirSdk — without a directory context there is no session to read and no files to show.
+   */
+  const dirSync = (() => {
+    try {
+      return dirSdk ? useSync() : undefined
+    } catch {
+      return undefined
+    }
+  })()
+  const sessionFiles = createMemo(() => {
+    const id = sessionLayout.params.id
+    if (!id || !dirSync) return []
+    try {
+      return promotedFiles((dirSync().data.message[id] ?? []) as any[])
+    } catch {
+      return []
+    }
+  })
+  const readSessionFile = (path: string): Promise<FileContent | undefined> =>
+    dirSdk
+      ? dirSdk()
+          .client.file.read({ path })
+          .then((r) => r.data as FileContent | undefined)
+          .catch(() => undefined)
+      : Promise.resolve(undefined)
+  const absolute = (rel: string) => {
+    const dir = projectDir()
+    return dir ? `${dir.replace(/[\\/]$/, "")}/${rel}` : undefined
+  }
+
   const projectParam = () => {
     try {
       const d = dirSdk?.().directory
@@ -2658,6 +2693,24 @@ export function SessionIrisTab() {
               bloqId={activeBloq()}
               bloqName={activeBloqName()}
               listen={(fn) => serverSDK().event.listen(fn as any)}
+              files={sessionFiles}
+              readFile={readSessionFile}
+              openPath={
+                platform.openPath
+                  ? (rel) => {
+                      const abs = absolute(rel)
+                      if (abs) void platform.openPath!(abs)
+                    }
+                  : undefined
+              }
+              revealPath={
+                platform.revealPath
+                  ? (rel) => {
+                      const abs = absolute(rel)
+                      if (abs) void platform.revealPath!(abs)
+                    }
+                  : undefined
+              }
             />
           </Match>
           <Match when={view() === "loading"}>
