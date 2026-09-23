@@ -1319,7 +1319,16 @@ export function SessionIrisTab() {
   async function startConnect(type: string) {
     setConnect({ type, state: "opening" })
     try {
-      const res = await doFetch(`/iris/integrations/connect`, { method: "POST", body: JSON.stringify({ type }) })
+      // doFetch returns the Response; the body has to be read. A non-2xx still carries JSON
+      // here — the sidecar answers with measured:false and a reason rather than an empty error.
+      const raw = await doFetch(`/iris/integrations/connect`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ type }),
+      })
+      const res = (await raw.json().catch(() => null)) as
+        | { measured?: boolean; reason?: string; url?: string; hint?: string }
+        | null
       if (!res?.measured) {
         // The API's own words: "no OAuth flow for this type" and "requires owner or admin on
         // that organization" are different problems and the person has to read which.
