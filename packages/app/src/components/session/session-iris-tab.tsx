@@ -771,6 +771,15 @@ export function surfaceView(input: {
  * panel is what mounts it — so the request has to outlive the click. The tab consumes it on
  * mount and clears it, so it steers exactly one opening and never re-steers a later one.
  */
+/**
+ * What the panel's + menu offers (#186531). One list, derived from SURFACES, so a surface added
+ * there appears in the menu without a second table to keep in step.
+ */
+export const IRIS_SURFACE_CHOICES: readonly { id: string; label: string }[] = SURFACES.map((s) => ({
+  id: s.id,
+  label: s.label,
+}))
+
 const [requestedSurface, setRequestedSurface] = createSignal<SurfaceId | undefined>()
 export function requestIrisSurface(surface: string) {
   setRequestedSurface(normalizeSurface(surface))

@@ -2251,9 +2251,8 @@ export default function Page() {
                           its own "+ Add" catalogue, so this opens it rather than growing a
                           second one that would drift.
 
-                          The three steps are session-header.tsx's onIrisOpen, verbatim and for
-                          its stated reason: the tab only renders once "iris" is in the tab
-                          list, so any two of the three show nothing. requestIrisSurface runs
+                          The three steps matter: the tab only renders once "iris" is in the tab
+                          list, so any two of them show nothing. requestIrisSurface runs
                           FIRST because opening the panel is what mounts the tab that reads it.
                         */
                         onIntegrations={() => {
