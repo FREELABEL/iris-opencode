@@ -237,6 +237,12 @@ export function SessionSidePanel(props: {
     </MenuV2.Content>
   )
 
+  /** Review, an open file, or the open-file placeholder — the tabs the file tree belongs to. */
+  const fileTreeRelevant = () => {
+    const t = activeTab()
+    return t === "review" || t === SESSION_OPEN_FILE_TAB || (!!t && !!file.pathFromTab(t))
+  }
+
   /** What the strip shows as selected: the product tab when the IRIS panel is the active one. */
   const stripValue = () => (activeTab() === "iris" ? `iris:${irisActiveSurface()}` : activeTab())
 
@@ -669,7 +675,9 @@ export function SessionSidePanel(props: {
                               onCleanup(stop)
                             }}
                           >
-                            <Show when={props.reviewSidebarToggle}>
+                            {/* The file-tree toggle only means something beside files: Review and open file
+                                tabs. On a product tab (Genesis, Atlas, …) it was a dead button in the strip. */}
+                            <Show when={fileTreeRelevant() && props.reviewSidebarToggle}>
                               {(toggle) => (
                                 <div class="session-review-v2-sidebar-toggle-slot h-full shrink-0 sticky left-0 z-10 flex items-center justify-center bg-v2-background-bg-base">
                                   {toggle()(activeTab() === SESSION_OPEN_FILE_TAB)}
