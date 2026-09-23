@@ -699,6 +699,7 @@ export const IrisPaths = {
   artifactDoc: `${root}/artifacts/:artifactID`,
   playbookInstall: `${root}/playbooks/install`,
   catalog: `${root}/catalog`,
+  integrationConnect: `${root}/integrations/connect`,
   graph: `${root}/graph`,
   graphBoard: `${root}/graph/:bloqID`,
   pageDoc: `${root}/page/:pageID`,
@@ -1426,6 +1427,31 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Read one artifact",
           description:
             "JSON, not a document. There is deliberately no raw/HTML variant of this route: an iframe src at an /iris URL is same-origin with the app and would bypass the preview sandbox (epic #186508, ADR-01).",
+        }),
+      ),
+      HttpApiEndpoint.post("integrationConnect", IrisPaths.integrationConnect, {
+        payload: Schema.Struct({ type: Schema.String }),
+        success: described(
+          Schema.Struct({
+            ...Measured,
+            mode: Schema.optional(Schema.String),
+            url: described(
+              Schema.optional(Schema.String),
+              "The platform's authorize URL for THIS user. The app opens it in a real browser; fl-api's callback stores the credential.",
+            ),
+            hint: described(
+              Schema.optional(Schema.String),
+              "Set when there is nothing to authorize — a bridge connector runs on this machine.",
+            ),
+          }).annotate({ identifier: "IrisIntegrationConnect" }),
+          "Where to send someone to connect this integration",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.integrationConnect",
+          summary: "Start connecting an integration",
+          description:
+            "Asks the platform for the authorize URL and hands it back. measured=false carries the API's own words — 'no OAuth flow for this type' and 'connecting for an organization requires owner or admin' are different problems and the person has to read which. Scope is personal: fl-api treats an absent organization_id that way on purpose, because silence must never promote a credential to shared.",
         }),
       ),
       HttpApiEndpoint.get("agentTasks", IrisPaths.agentTasks, {

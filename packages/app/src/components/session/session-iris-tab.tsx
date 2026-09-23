@@ -1301,6 +1301,46 @@ export function SessionIrisTab() {
     /** Which pane it came from, which is what decides its detail tabs. */
     pane?: string
   } | null>(null)
+  /**
+   * CONNECTING AN INTEGRATION (#186542, component 4).
+   *
+   * The catalogue used to end at a CLI line to copy. For a navigator on a Mac who has never
+   * opened a terminal that is the same as no button at all, so this does the round trip: ask
+   * the sidecar for the platform's authorize URL, open it in a REAL browser (not the webview —
+   * an OAuth consent screen inside the app chrome is both hostile and often refused by the
+   * provider), then watch for the connection to show up.
+   *
+   * Nothing here claims success on its own. The list is the source of truth: `connecting` ends
+   * when the refreshed catalogue stops offering this connector, which is the same signal the
+   * rest of the panel already trusts.
+   */
+  const [connect, setConnect] = createSignal<{ type: string; state: "opening" | "waiting" | "failed" | "nothing"; message?: string } | null>(null)
+
+  async function startConnect(type: string) {
+    setConnect({ type, state: "opening" })
+    try {
+      const res = await doFetch(`/iris/integrations/connect`, { method: "POST", body: JSON.stringify({ type }) })
+      if (!res?.measured) {
+        // The API's own words: "no OAuth flow for this type" and "requires owner or admin on
+        // that organization" are different problems and the person has to read which.
+        setConnect({ type, state: "failed", message: res?.reason ?? "could not start the connection" })
+        return
+      }
+      if (res.hint) {
+        setConnect({ type, state: "nothing", message: res.hint })
+        return
+      }
+      if (!res.url) {
+        setConnect({ type, state: "failed", message: "the platform returned no authorize URL" })
+        return
+      }
+      platform.openExternal(res.url)
+      setConnect({ type, state: "waiting", message: "Approve it in your browser — this list updates when it lands." })
+    } catch (e) {
+      setConnect({ type, state: "failed", message: e instanceof Error ? e.message : String(e) })
+    }
+  }
+
   // A result belongs to the card it was produced on — clear it when another opens. Declared AFTER
   // openRow: reading a signal above its declaration is a TDZ crash one timing change away.
   createEffect(
@@ -1825,6 +1865,38 @@ export function SessionIrisTab() {
                       </Show>
                     </div>
                   )}
+                </Show>
+                <Show when={openRow()!.pane === "catalog" && openRow()!.raw?.type}>
+                  <div class="flex flex-col gap-1">
+                    <div class="flex items-center gap-2">
+                      <Button
+                        size="small"
+                        variant="primary"
+                        disabled={connect()?.type === openRow()!.raw.type && connect()?.state === "opening"}
+                        onClick={() => void startConnect(String(openRow()!.raw.type))}
+                      >
+                        {connect()?.type === openRow()!.raw.type && connect()?.state === "opening"
+                          ? "Opening…"
+                          : `Connect ${openRow()!.title}`}
+                      </Button>
+                      {/* What it is about to do, before it does it: a sign-in opens a browser,
+                          a key does not, and a bridge has nothing to authorize at all. */}
+                      <span class="text-11-regular text-text-weaker">
+                        {connectsBy(openRow()!.raw.mode, Boolean(openRow()!.raw.oauthRequired))}
+                      </span>
+                    </div>
+                    <Show when={connect()?.type === openRow()!.raw.type && connect()?.message}>
+                      <p
+                        class="text-11-regular"
+                        classList={{
+                          "text-text-danger-base": connect()?.state === "failed",
+                          "text-text-weak": connect()?.state !== "failed",
+                        }}
+                      >
+                        {connect()!.message}
+                      </p>
+                    </Show>
+                  </div>
                 </Show>
                 <Show when={openRow()!.command}>
                   <button

@@ -1582,6 +1582,56 @@ export async function fetchCatalog(): Promise<PlatformResult<{ catalog: CatalogE
   }
 }
 
+/**
+ * START CONNECTING ONE INTEGRATION (#186542, component 4).
+ *
+ * The desktop cannot run the CLI's OAuth flow: that one resolves app credentials locally and
+ * prompts on a TTY. The platform already owns a hosted flow — GET /api/v1/integrations/oauth-url/
+ * {type} returns the authorize URL for THIS user, and fl-api's callback stores the credential —
+ * so the app's job is to fetch that URL and open it, then watch for the connection to appear.
+ *
+ * WHY THE SIDECAR AND NOT THE WEBVIEW: the bearer token lives in the auth store on disk, which
+ * only this process can read.
+ *
+ * Scope is deliberately NOT passed. fl-api treats an absent organization_id as personal, and its
+ * own comment says silence must never promote a credential to shared — connecting for an org
+ * needs owner or admin there, and that is a choice to make explicitly rather than by default.
+ */
+export async function startIntegrationConnect(
+  type: string,
+): Promise<PlatformResult<{ url?: string; mode?: string; hint?: string }>> {
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: {} }
+
+  const mode = _catalogCache.modes[type]
+  // A bridge connector has nothing to authorize: it talks to an app on this machine. Saying so
+  // is a real answer; sending someone to a browser that will not help is not.
+  if (mode === "bridge") {
+    return {
+      measured: true,
+      data: { mode, hint: "This one runs on your own machine — there is nothing to sign in to. Set it up from the bridge." },
+    }
+  }
+
+  try {
+    const res = await irisFetch(`/api/v1/integrations/oauth-url/${encodeURIComponent(type)}`, FL_API)
+    const body = await res.json().catch(() => null)
+    if (!res.ok) {
+      // The API's own words, not ours: it distinguishes "no OAuth for this type" from "you may
+      // not connect for that organization", and both are things the person needs to read.
+      const reason = (body && (body.message || body.reason)) || `HTTP ${res.status}`
+      return { measured: false, reason: String(reason), data: { mode } }
+    }
+    const url = body?.oauth_url ?? body?.url ?? body?.data?.oauth_url ?? body?.data?.url
+    if (typeof url !== "string" || !/^https?:/i.test(url)) {
+      return { measured: false, reason: "the platform returned no authorize URL for this integration", data: { mode } }
+    }
+    return { measured: true, data: { url, mode } }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { mode } }
+  }
+}
+
 export interface PageDoc {
   id: number
   title: string
