@@ -735,6 +735,64 @@
   color: var(--text-base);
 }
 
+/* Atlas › Lists toolbar — sort, status, edited window, hide empty (#186580 #186581). */
+.iris-atlas-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 0 8px 8px;
+  font-size: 11px;
+  color: var(--text-weak);
+}
+.iris-atlas-tools__field,
+.iris-atlas-tools__check {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+.iris-atlas-tools select {
+  appearance: none;
+  font: inherit;
+  color: var(--text-base);
+  background: var(--background-element);
+  border: 1px solid var(--border-weaker-base);
+  border-radius: 5px;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+.iris-atlas-tools select:focus {
+  outline: none;
+  border-color: var(--border-weak-base);
+}
+.iris-atlas-tools__chips {
+  display: inline-flex;
+  border: 1px solid var(--border-weaker-base);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.iris-atlas-tools__chips button {
+  appearance: none;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--text-weak);
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.iris-atlas-tools__chips button + button {
+  border-left: 1px solid var(--border-weaker-base);
+}
+.iris-atlas-tools__chips button[aria-pressed="true"] {
+  background: var(--background-element);
+  color: var(--text-base);
+}
+.iris-atlas-tools__check input {
+  margin: 0;
+  accent-color: var(--text-base);
+}
+
 /*
  * The force graph — FULL BLEED.
  *

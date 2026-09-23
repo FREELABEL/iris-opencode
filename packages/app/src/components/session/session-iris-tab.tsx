@@ -31,6 +31,18 @@ import { irisNavRequest, clearIrisNav } from "./iris-nav"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { IrisRooms } from "./iris-rooms"
 import { itemCommands, renderMarkdown } from "./iris-item"
+import {
+  ATLAS_EDITED,
+  ATLAS_SORTS,
+  ATLAS_STATUSES,
+  ATLAS_VIEW_DEFAULT,
+  applyAtlasView,
+  isDefaultView,
+  isDone,
+  readAtlasView,
+  relativeTime,
+  type AtlasViewOptions,
+} from "./iris-atlas-view"
 
 // Re-exported: the panel tests assert on these, and they were defined here before the card
 // editor needed them too.
@@ -57,6 +69,8 @@ interface AtlasItem {
   type?: string
   status?: string
   content?: string
+  createdAt?: string
+  updatedAt?: string
 }
 interface AtlasList {
   id: number
@@ -1195,6 +1209,38 @@ export function SessionIrisTab() {
     return Array.isArray(v) ? v : []
   })
 
+  /*
+   * SORT / FILTER / LAST EDITED on Atlas › Lists (#186579 #186580 #186581). Applied to the board
+   * the sidecar returned, after the server-side search. Remembered per board in localStorage —
+   * a convenience: losing it just means Board order again.
+   */
+  const atlasViewKey = () => `iris.atlas.view.${activeBloq() ?? "none"}`
+  const [atlasView, setAtlasViewSig] = createSignal<AtlasViewOptions>({ ...ATLAS_VIEW_DEFAULT })
+  createEffect(
+    on(atlasViewKey, (key) => {
+      let raw: string | null = null
+      try {
+        raw = localStorage.getItem(key)
+      } catch {}
+      setAtlasViewSig(readAtlasView(raw))
+    }),
+  )
+  const setAtlasView = (patch: Partial<AtlasViewOptions>) => {
+    const next = { ...atlasView(), ...patch }
+    setAtlasViewSig(next)
+    try {
+      if (isDefaultView(next)) localStorage.removeItem(atlasViewKey())
+      else localStorage.setItem(atlasViewKey(), JSON.stringify(next))
+    } catch {}
+  }
+  // A clock for the relative times, so "2m" does not sit there for an hour.
+  const [now, setNow] = createSignal(Date.now())
+  const clock = setInterval(() => setNow(Date.now()), 60_000)
+  onCleanup(() => clearInterval(clock))
+  const atlasRows = createMemo(() =>
+    pane() === "atlas" ? applyAtlasView(rows() as AtlasList[], atlasView(), now()) : ([] as AtlasList[]),
+  )
+
   // Loading ONLY on the first load. A refetch with a previous payload in hand is not a loading
   // state — treating it as one is what caused the flash.
   /** Anything in flight — a first load OR a refetch. The bar is the only thing that reports a
@@ -1959,6 +2005,55 @@ export function SessionIrisTab() {
         </div>
       </Show>
 
+      <Show when={pane() === "atlas" && !openRow() && view() === "rows"}>
+        <div class="iris-atlas-tools shrink-0">
+          <label class="iris-atlas-tools__field">
+            <span>Sort</span>
+            <select
+              value={atlasView().sort}
+              onChange={(e) => setAtlasView({ sort: e.currentTarget.value as AtlasViewOptions["sort"] })}
+            >
+              <For each={ATLAS_SORTS}>{(o) => <option value={o.id}>{o.label}</option>}</For>
+            </select>
+          </label>
+          <div class="iris-atlas-tools__chips" role="group" aria-label="Status">
+            <For each={ATLAS_STATUSES}>
+              {(o) => (
+                <button
+                  type="button"
+                  aria-pressed={atlasView().status === o.id}
+                  onClick={() => setAtlasView({ status: o.id })}
+                >
+                  {o.label}
+                </button>
+              )}
+            </For>
+          </div>
+          <label class="iris-atlas-tools__field">
+            <span>Edited</span>
+            <select
+              value={atlasView().edited}
+              onChange={(e) => setAtlasView({ edited: e.currentTarget.value as AtlasViewOptions["edited"] })}
+            >
+              <For each={ATLAS_EDITED}>{(o) => <option value={o.id}>{o.label}</option>}</For>
+            </select>
+          </label>
+          <label class="iris-atlas-tools__check">
+            <input
+              type="checkbox"
+              checked={atlasView().hideEmpty}
+              onChange={(e) => setAtlasView({ hideEmpty: e.currentTarget.checked })}
+            />
+            <span>Hide empty</span>
+          </label>
+          <Show when={!isDefaultView(atlasView())}>
+            <button type="button" class="iris-search__clear" onClick={() => setAtlasView({ ...ATLAS_VIEW_DEFAULT })}>
+              reset
+            </button>
+          </Show>
+        </div>
+      </Show>
+
       {/* THE RECORD PANEL — for the surfaces whose rows are records rather than prose.
           Every field, plus the command that does something with it. The command is selectable
           and copies on click, because "what do I type to act on this" was the actual question
@@ -2588,7 +2683,19 @@ export function SessionIrisTab() {
 
             <Switch>
               <Match when={pane() === "atlas"}>
-                <For each={rows() as AtlasList[]}>
+                <Show when={atlasRows().length === 0 && rows().length > 0}>
+                  <p class="px-2 py-2 text-12-regular text-text-weak">
+                    Nothing matches these filters.{" "}
+                    <button
+                      type="button"
+                      class="underline cursor-pointer"
+                      onClick={() => setAtlasView({ ...ATLAS_VIEW_DEFAULT })}
+                    >
+                      Reset
+                    </button>
+                  </p>
+                </Show>
+                <For each={atlasRows()}>
                   {(list) => (
                     <section class="mb-4">
                       <header class="flex items-baseline gap-2 px-2 pb-1 pt-1">
@@ -2605,9 +2712,19 @@ export function SessionIrisTab() {
                             onClick={() => openCard(item.id)}
                           >
                             <span class="text-12-regular text-text-weak shrink-0">
-                              {item.status === "done" || item.status === "completed" ? "✓" : "·"}
+                              {isDone(item.status) ? "✓" : "·"}
                             </span>
                             <span class="text-12-regular text-text-muted min-w-0 flex-1">{item.title}</span>
+                            <Show when={item.updatedAt ?? item.createdAt}>
+                              {(ts) => (
+                                <span
+                                  class="shrink-0 font-mono tabular-nums text-11-regular text-text-weak"
+                                  title={`Last edited ${new Date(ts()).toLocaleString()}`}
+                                >
+                                  {relativeTime(ts(), now())}
+                                </span>
+                              )}
+                            </Show>
                             <span class="shrink-0 font-mono tabular-nums text-11-regular text-text-weaker">
                               #{item.id}
                             </span>
