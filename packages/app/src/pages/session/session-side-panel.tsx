@@ -22,6 +22,7 @@ import { TooltipKeybind } from "@opencode-ai/ui/tooltip"
 import { ResizeHandle } from "@opencode-ai/ui/resize-handle"
 import { Mark } from "@opencode-ai/ui/logo"
 import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
+import { Icon as IconV2 } from "@opencode-ai/ui/v2/icon"
 import { KeybindV2 } from "@opencode-ai/ui/v2/keybind-v2"
 import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 import type { SnapshotFileDiff, VcsFileDiff } from "@opencode-ai/sdk/v2"
@@ -85,7 +86,9 @@ export function SessionSidePanel(props: {
   reviewHasFocusableContent: () => boolean
   reviewCount: () => number
   reviewPanel: () => JSX.Element
-  reviewSidebarToggle?: (disabled: boolean) => JSX.Element
+  /** The file tree beside Review. The Review tab IS the file-tree icon: clicking it on Review toggles this. */
+  fileTreeOpened?: () => boolean
+  onToggleFileTree?: () => void
   fileBrowserState?: SessionFileBrowserState
   activeDiff?: string
   focusReviewDiff: (path: string) => void
@@ -236,12 +239,6 @@ export function SessionSidePanel(props: {
       </For>
     </MenuV2.Content>
   )
-
-  /** Review, an open file, or the open-file placeholder — the tabs the file tree belongs to. */
-  const fileTreeRelevant = () => {
-    const t = activeTab()
-    return t === "review" || t === SESSION_OPEN_FILE_TAB || (!!t && !!file.pathFromTab(t))
-  }
 
   /** What the strip shows as selected: the product tab when the IRIS panel is the active one. */
   const stripValue = () => (activeTab() === "iris" ? `iris:${irisActiveSurface()}` : activeTab())
@@ -675,25 +672,42 @@ export function SessionSidePanel(props: {
                               onCleanup(stop)
                             }}
                           >
-                            {/* The file-tree toggle only means something beside files: Review and open file
-                                tabs. On a product tab (Genesis, Atlas, …) it was a dead button in the strip. */}
-                            <Show when={fileTreeRelevant() && props.reviewSidebarToggle}>
-                              {(toggle) => (
-                                <div class="session-review-v2-sidebar-toggle-slot h-full shrink-0 sticky left-0 z-10 flex items-center justify-center bg-v2-background-bg-base">
-                                  {toggle()(activeTab() === SESSION_OPEN_FILE_TAB)}
-                                </div>
-                              )}
-                            </Show>
+                            {/* REVIEW IS THE FILE-TREE ICON. One control instead of two: the icon opens Review
+                                (with the changed-files count on it), and on Review a second click toggles the
+                                file tree — what the separate icon did. The "Files Changed N" text tab is gone. */}
                             <Show when={reviewTab() && props.canReview()}>
-                              <Tabs.Trigger
-                                value="review"
-                                id={reviewTabID}
-                                aria-controls={activeTab() === "review" ? reviewTabPanelID : undefined}
-                              >
-                                {props.hasReview()
-                                  ? language.t("session.review.filesChanged", { count: props.reviewCount() })
-                                  : language.t("session.tab.review")}
-                              </Tabs.Trigger>
+                              <div class="session-review-v2-sidebar-toggle-slot h-full shrink-0 sticky left-0 z-10 flex items-center justify-center bg-v2-background-bg-base">
+                                <Tabs.Trigger
+                                  value="review"
+                                  id={reviewTabID}
+                                  aria-controls={activeTab() === "review" ? reviewTabPanelID : undefined}
+                                  aria-label={
+                                    props.hasReview()
+                                      ? `${language.t("session.tab.review")} — ${language.t("session.review.filesChanged", { count: props.reviewCount() })}`
+                                      : language.t("session.tab.review")
+                                  }
+                                  title={
+                                    activeTab() === "review"
+                                      ? props.fileTreeOpened?.()
+                                        ? "Hide file tree"
+                                        : "Show file tree"
+                                      : language.t("session.tab.review")
+                                  }
+                                  data-review-icon-tab=""
+                                  onClick={() => {
+                                    if (activeTab() === "review") props.onToggleFileTree?.()
+                                  }}
+                                >
+                                  <span class="relative inline-flex items-center">
+                                    <IconV2 name="filetree" />
+                                    <Show when={props.hasReview()}>
+                                      <span class="absolute -top-2 -right-3 min-w-4 px-1 rounded-full bg-v2-background-bg-strong text-[10px] leading-4 text-center font-mono tabular-nums">
+                                        {props.reviewCount()}
+                                      </span>
+                                    </Show>
+                                  </span>
+                                </Tabs.Trigger>
+                              </div>
                             </Show>
                             {/* Also here, not only in the strip above. This file renders TWO tab
                                 strips — legacy and v2 — and only one is live. Adding the tab to
