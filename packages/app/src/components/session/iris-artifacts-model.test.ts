@@ -82,3 +82,12 @@ test("changedSince marks a new artifact AND a new revision of an old one", () =>
   expect([...changedSince([m("a", 1), m("b", 1)], [m("a", 2), m("b", 1), m("c", 1)])].sort()).toEqual(["a", "c"])
   expect(changedSince(undefined, [m("a", 1)]).size).toBe(0)
 })
+
+test("the chat card obeys the same sandbox as the pane — it renders agent-written HTML too", () => {
+  const src = readFileSync(path.join(import.meta.dir, "genesis-artifact-card.tsx"), "utf8")
+  expect(src).toContain("sandbox={ARTIFACT_SANDBOX}")
+  expect(src).toContain("srcdoc=")
+  expect(src).not.toMatch(/<iframe[^>]*\ssrc=/)
+  expect(src).not.toContain("allow-same-origin")
+  expect(src).not.toMatch(/innerHTML=/)
+})

@@ -12,7 +12,7 @@ import { ReadTool } from "./read"
 import { TaskTool } from "./task"
 import { Database } from "@opencode-ai/core/database/database"
 import { TodoWriteTool } from "./todo"
-import { ArtifactTool } from "./artifact"
+import { GenesisArtifactTool } from "./genesis-artifact"
 import { WebFetchTool } from "./webfetch"
 import { WriteTool } from "./write"
 import { InvalidTool } from "./invalid"
@@ -106,7 +106,7 @@ const layer = Layer.effect(
     const read = yield* ReadTool
     const question = yield* QuestionTool
     const todo = yield* TodoWriteTool
-    const artifacttool = yield* ArtifactTool
+    const artifacttool = yield* GenesisArtifactTool
     const lsptool = yield* LspTool
     const plan = yield* PlanExitTool
     const webfetch = yield* WebFetchTool
@@ -245,8 +245,8 @@ const layer = Layer.effect(
             tool.task,
             tool.fetch,
             tool.todo,
-            // The shared Artifacts pane (#186508 / #186510). Desktop-only surface, but harmless
-            // elsewhere: the files land in .iris/artifacts and `iris` can read them.
+            // `genesis_artifact` — Genesis › Artifacts (#186508 / #186510). Scoped by its description
+            // to things the user will look at; the files land in .iris/artifacts.
             tool.artifact,
             tool.search,
             tool.skill,

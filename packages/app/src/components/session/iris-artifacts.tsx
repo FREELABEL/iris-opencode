@@ -20,6 +20,7 @@ import {
   sandboxedDocument,
   type ArtifactMeta,
 } from "./iris-artifacts-model"
+import { clearArtifactFocus, irisArtifactFocus } from "./iris-nav"
 
 /**
  * Agents › Artifacts (epics #186508 / #186510): what the agents in THIS session made.
@@ -91,6 +92,7 @@ export function IrisArtifacts(props: { doFetch: Fetch; sessionId?: string; proje
     if (!list.some((m) => m.id === openId())) setOpenId(list[0].id)
   })
   const open = createMemo(() => artifacts().find((m) => m.id === openId()))
+
   const choose = (id: string) => {
     setOpenId(id)
     setFresh((s) => {
@@ -99,6 +101,17 @@ export function IrisArtifacts(props: { doFetch: Fetch; sessionId?: string; proje
       return n
     })
   }
+
+  // A chat card asked for one artifact (iris-nav.ts). Select it once the list has it; until then
+  // re-read — the card can arrive before this pane's next poll has seen the new file.
+  createEffect(() => {
+    const want = irisArtifactFocus()
+    if (!want) return
+    if (artifacts().some((m) => m.id === want.id)) {
+      choose(want.id)
+      clearArtifactFocus()
+    } else refresh()
+  })
 
   // The preview re-reads when the open artifact's REVISION changes — another agent's edit
   // reloads it by itself.

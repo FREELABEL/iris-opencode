@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
 import * as Tool from "./tool"
-import DESCRIPTION from "./artifact.txt"
+import DESCRIPTION from "./genesis-artifact.txt"
 import { Session } from "@/session/session"
 import { InstanceState } from "@/effect/instance-state"
 import { GlobalBus } from "@/bus/global"
@@ -8,7 +8,12 @@ import { Artifacts } from "@/iris/artifacts"
 import type { SessionID } from "../session/schema"
 
 /**
- * The agent's side of the Artifacts pane (epics #186508 / #186510).
+ * The agent's side of Genesis › Artifacts (epics #186508 / #186510).
+ *
+ * NAMED `genesis_artifact`. A bare `artifact` builtin reached for itself on unrelated work (asked
+ * to run a smart-lights show, the agent called it), and "artifact" already meant a Genesis page.
+ * The description scopes it to things the user will LOOK AT, and the drafts live under Genesis,
+ * where publishing to /p/ is the next step.
  *
  * SHARED BY THE SESSION, NOT THE CALLER. A subagent runs in its own child session; keyed by
  * that, its artifacts would land in a folder the parent's pane never reads. Every write goes to
@@ -35,12 +40,22 @@ export const Parameters = Schema.Struct({
   }),
 })
 
-type Metadata = { id?: string; revision?: number; count?: number; conflict?: boolean }
+/** Everything the chat card needs to draw and open the artifact without asking the server first. */
+type Metadata = {
+  id?: string
+  revision?: number
+  count?: number
+  conflict?: boolean
+  title?: string
+  kind?: Artifacts.Kind
+  session?: string
+  created?: boolean
+}
 
 const byline = (m: Artifacts.Meta) => `rev ${m.revision}${m.author ? ` by ${m.author.agent}` : ""}`
 
-export const ArtifactTool = Tool.define<typeof Parameters, Metadata, Session.Service>(
-  "artifact",
+export const GenesisArtifactTool = Tool.define<typeof Parameters, Metadata, Session.Service>(
+  "genesis_artifact",
   Effect.gen(function* () {
     const sessions = yield* Session.Service
 
@@ -128,8 +143,15 @@ export const ArtifactTool = Tool.define<typeof Parameters, Metadata, Session.Ser
 
           return {
             title: `${meta.title} (${byline(meta)})`,
-            output: `${params.action === "create" ? "Created" : "Updated"} artifact ${meta.id}, revision ${meta.revision}. It is showing in the Artifacts pane.`,
-            metadata: { id: meta.id, revision: meta.revision },
+            output: `${params.action === "create" ? "Created" : "Updated"} Genesis artifact ${meta.id}, revision ${meta.revision}. It is showing in Genesis › Artifacts, and the chat has a card for it.`,
+            metadata: {
+              id: meta.id,
+              revision: meta.revision,
+              title: meta.title,
+              kind: meta.kind,
+              session,
+              created: params.action === "create",
+            },
           }
         }).pipe(Effect.orDie),
     } satisfies Tool.DefWithoutID<typeof Parameters, Metadata>

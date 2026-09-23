@@ -12,7 +12,7 @@ import { Truncate } from "@/tool/truncate"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { GlobalBus, type GlobalEvent } from "@/bus/global"
 import { Artifacts } from "@/iris/artifacts"
-import { ArtifactTool, ARTIFACT_EVENT } from "../../src/tool/artifact"
+import { GenesisArtifactTool as ArtifactTool, ARTIFACT_EVENT } from "../../src/tool/genesis-artifact"
 import { MessageID } from "../../src/session/schema"
 import type { Tool } from "@/tool/tool"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
@@ -127,6 +127,27 @@ describe("tool.artifact — the shared pane", () => {
       const now = yield* run({ action: "read", id }, ctxFor(parent.id, "build"))
       expect(now.output).toContain("a\n2")
       expect(now.output).toContain("revision: 2")
+    }),
+  )
+})
+
+describe("genesis_artifact — scoped, and the card has what it needs", () => {
+  it.instance("is named genesis_artifact and says not to use it for tasks", () =>
+    Effect.gen(function* () {
+      const info = yield* ArtifactTool
+      expect(info.id).toBe("genesis_artifact")
+      const tool = yield* info.init()
+      expect(tool.description).toContain("Do NOT use it to carry out a task")
+      expect(tool.description).toContain("iris genesis publish-html")
+    }),
+  )
+
+  it.instance("a create returns title, kind, session and created:true for the chat card", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const parent = yield* sessions.create({ title: "desk" })
+      const r = yield* run({ action: "create", title: "All Hallows", kind: "html", content: "<h1>hi</h1>" }, ctxFor(parent.id, "build"))
+      expect(r.metadata).toMatchObject({ title: "All Hallows", kind: "html", session: parent.id, created: true, revision: 1 })
     }),
   )
 })
