@@ -698,10 +698,10 @@ export function SessionSidePanel(props: {
                                     if (activeTab() === "review") props.onToggleFileTree?.()
                                   }}
                                 >
-                                  <span class="relative inline-flex items-center">
+                                  <span class="inline-flex items-center gap-1">
                                     <IconV2 name="filetree" />
                                     <Show when={props.hasReview()}>
-                                      <span class="absolute -top-2 -right-3 min-w-4 px-1 rounded-full bg-v2-background-bg-strong text-[10px] leading-4 text-center font-mono tabular-nums">
+                                      <span class="text-[11px] leading-none font-mono tabular-nums">
                                         {props.reviewCount()}
                                       </span>
                                     </Show>
