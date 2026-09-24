@@ -9,7 +9,10 @@ Actions:
 - read: returns the page text, cut to a budget. If it says truncated, the rest is still there — use find.
 - find: query. Searches the WHOLE page and returns the matching lines with their line numbers and neighbours. A row inside a table comes back with its HEADER row, so you can tell which column is which. On a long page use this FIRST; it is the difference between answering and guessing.
 - window: line (and optional radius, default 5). Reads the lines around a line number that find gave you. Use this to see more around a hit instead of re-reading the page with a bigger budget.
+- elements: lists every control on the page as a numbered menu — [4] button "Run search". Run it again after anything changes the page; the numbers are rebuilt each time.
+- click: ref. Clicks that element. A control that looks irreversible (delete, pay, send, submit…) is refused unless you pass confirm: true — and you tell the user what you are about to do BEFORE you do it. What actually changed is reported back to you; if it says nothing changed, nothing changed.
+- type: ref, text. Types into that field. A ref that is not a text field is refused.
 - screenshot: photographs the page and saves it to the Genesis Artifacts pane, where the user can see it. Optional title.
 - close: ends the browser. Do this when you are finished with the page.
 
-Clicking and typing are not available yet — this tool can look, not act.
+Clicking and typing act on a real page in a real browser. Before you act on someone's behalf — sending, buying, deleting, submitting — say what you are about to do and let them answer.

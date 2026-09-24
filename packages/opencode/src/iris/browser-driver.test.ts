@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test"
 import { PageSession, findChrome } from "./browser-driver"
-import { clampPageText, findInPage } from "./browser-verbs"
+import { clampPageText, describeChange, findInPage, refuseTargetReason } from "./browser-verbs"
 
 /**
  * The driver, against a REAL Chrome and a real page.
@@ -15,7 +15,12 @@ import { clampPageText, findInPage } from "./browser-verbs"
 const chrome = await findChrome()
 const server = Bun.serve({
   port: 0,
-  fetch() {
+  fetch(req) {
+    if (new URL(req.url).pathname === "/second") {
+      return new Response("<!doctype html><title>Second</title><body><h1>Second page</h1></body>", {
+        headers: { "content-type": "text/html" },
+      })
+    }
     const lines = [
       "<h1>Fixture page</h1>",
       ...Array.from({ length: 40 }, (_, i) => `<p>filler line ${i}</p>`),
@@ -23,6 +28,10 @@ const server = Bun.serve({
       "<table><tr><th>Model</th><th>Floor</th><th>Mean</th></tr>",
       "<tr><td>hy3</td><td>64</td><td>81</td></tr>",
       "<tr><td>kimi-k2.6</td><td>55</td><td>89</td></tr></table>",
+      '<input id="q" placeholder="Search models">',
+      '<button id="go">Run search</button>',
+      '<button id="danger">Delete account</button>',
+      '<a href="/second">Go to second page</a>',
       ...Array.from({ length: 40 }, (_, i) => `<p>tail line ${i}</p>`),
     ]
 
@@ -82,6 +91,46 @@ describe.if(!!chrome)("PageSession against real Chrome", () => {
     const png = await session.screenshot()
     expect(png.length).toBeGreaterThan(1000)
     expect(Array.from(png.slice(1, 4))).toEqual([0x50, 0x4e, 0x47]) // "PNG"
+  }, 60_000)
+
+  test("lists the page as a numbered menu, with roles a target can be checked against", async () => {
+    const els = await session.elements()
+    const byName = (n: string) => els.find((e) => e.name.includes(n))
+    expect(byName("Search models")?.role).toBe("textbox")
+    expect(byName("Run search")?.role).toBe("button")
+    expect(byName("second page")?.role).toBe("link")
+    // the compatibility rule is enforced against THESE roles, not against a guess
+    expect(refuseTargetReason(els, byName("Search models")!.ref, "click")).toContain("not clickable")
+    expect(refuseTargetReason(els, byName("Run search")!.ref, "type")).toContain("not a text field")
+  }, 60_000)
+
+  test("typing lands in the field, and the change is visible in the diff — not asserted", async () => {
+    const els = await session.elements()
+    const field = els.find((e) => e.name.includes("Search models"))!
+    const before = await session.state()
+    expect(await session.typeRef(field.ref, "kimi-k3")).toBe(true)
+    const after = await session.state()
+    expect(describeChange(before, after)).toContain("kimi-k3")
+  }, 60_000)
+
+  test("a click that navigates is reported as a navigation", async () => {
+    const els = await session.elements()
+    const link = els.find((e) => e.name.includes("second page"))!
+    const before = await session.state()
+    expect(await session.clickRef(link.ref)).toBe(true)
+    const after = await session.state()
+    const changed = describeChange(before, after)
+    expect(changed).toContain("/second")
+    expect(changed).toContain("title")
+    await session.open(url) // back to the fixture for the remaining tests
+  }, 60_000)
+
+  test("a stale ref is not a wrong click — it is not found at all", async () => {
+    // The failure this prevents: refs from a previous page silently addressing whatever now sits
+    // in that position. After a navigation the data attribute is gone, so the click cannot land.
+    await session.open(`${url}second`)
+    expect(await session.clickRef(999)).toBe(false)
+    await session.open(url)
   }, 60_000)
 
   test("closing twice is not an error — the session may end after the user already closed it", async () => {

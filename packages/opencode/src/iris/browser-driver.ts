@@ -226,6 +226,114 @@ export class PageSession {
     return (await this.evaluate<string>("document.body ? document.body.innerText : ''")) ?? ""
   }
 
+  /**
+   * The page as a numbered menu, rebuilt on every call (S3).
+   *
+   * Refs are assigned here and stamped onto the elements as a data attribute, so a later click
+   * addresses the SAME node even if the page reflowed — and a ref from a previous page simply is
+   * not found, rather than hitting whatever now sits in that position. Never coordinates: a
+   * screenshot-and-click loop misses when a banner shifts the layout by ten pixels.
+   */
+  async elements(limit = 150): Promise<
+    Array<{ ref: number; role: string; name: string; tag: string; value?: string; enabled: boolean; inViewport: boolean }>
+  > {
+    const js = `(() => {
+      const SEL = 'a[href], button, input, select, textarea, [role=button], [role=link], [role=tab], [role=checkbox], [role=radio], [role=switch], [role=menuitem], [contenteditable=true]'
+      const roleOf = (el) => {
+        const r = el.getAttribute('role')
+        if (r) return r
+        const tag = el.tagName.toLowerCase()
+        if (tag === 'a') return 'link'
+        if (tag === 'button') return 'button'
+        if (tag === 'select') return 'combobox'
+        if (tag === 'textarea') return 'textarea'
+        if (tag === 'input') {
+          const t = (el.getAttribute('type') || 'text').toLowerCase()
+          if (t === 'checkbox' || t === 'radio') return t
+          if (t === 'submit' || t === 'button' || t === 'reset') return 'button'
+          if (t === 'search') return 'searchbox'
+          return 'textbox'
+        }
+        return 'textbox'
+      }
+      const nameOf = (el) =>
+        (el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('title') ||
+         (el.innerText || el.value || '').trim() || el.getAttribute('name') || '').replace(/\\s+/g, ' ').slice(0, 120)
+      const out = []
+      let ref = 0
+      for (const el of document.querySelectorAll(SEL)) {
+        const rect = el.getBoundingClientRect()
+        const style = getComputedStyle(el)
+        if (style.display === 'none' || style.visibility === 'hidden' || (rect.width === 0 && rect.height === 0)) continue
+        ref++
+        if (ref > ${limit}) break
+        el.setAttribute('data-iris-ref', String(ref))
+        out.push({
+          ref,
+          role: roleOf(el),
+          name: nameOf(el),
+          tag: el.tagName.toLowerCase(),
+          value: el.value === undefined ? undefined : String(el.value),
+          enabled: !el.disabled && el.getAttribute('aria-disabled') !== 'true',
+          inViewport: rect.top < innerHeight && rect.bottom > 0 && rect.left < innerWidth && rect.right > 0,
+        })
+      }
+      return out
+    })()`
+
+    return (await this.evaluate<any[]>(js)) ?? []
+  }
+
+  /** Everything the change check compares, taken before and after an action. */
+  async state(): Promise<{ url: string; title: string; textLength: number; textHash: string; values: Record<string, string> }> {
+    const js = `(() => {
+      const text = document.body ? document.body.innerText : ''
+      let h = 0
+      for (let i = 0; i < text.length; i++) h = (h * 31 + text.charCodeAt(i)) | 0
+      const values = {}
+      for (const el of document.querySelectorAll('[data-iris-ref]')) {
+        if (el.value !== undefined) values[el.getAttribute('data-iris-ref')] = String(el.value)
+      }
+      return { url: location.href, title: document.title, textLength: text.length, textHash: String(h), values }
+    })()`
+
+    return await this.evaluate(js)
+  }
+
+  /** Click the element holding this ref. Returns false when the ref is no longer on the page. */
+  async clickRef(ref: number): Promise<boolean> {
+    const ok = await this.evaluate<boolean>(
+      `(() => { const el = document.querySelector('[data-iris-ref="${ref}"]'); if (!el) return false; el.scrollIntoView({block:'center'}); el.click(); return true })()`,
+    )
+    await Bun.sleep(400) // let a navigation or a re-render start before the state is read back
+    this.currentUrl = await this.evaluate<string>("location.href")
+
+    return !!ok
+  }
+
+  /** Type into the element holding this ref, firing the events a real keystroke would. */
+  async typeRef(ref: number, text: string): Promise<boolean> {
+    const ok = await this.evaluate<boolean>(
+      `(() => {
+        const el = document.querySelector('[data-iris-ref="${ref}"]')
+        if (!el) return false
+        el.focus()
+        const v = ${JSON.stringify(text)}
+        if (el.isContentEditable) { el.textContent = v }
+        else {
+          const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value')?.set
+          setter ? setter.call(el, v) : (el.value = v)
+        }
+        el.dispatchEvent(new Event('input', { bubbles: true }))
+        el.dispatchEvent(new Event('change', { bubbles: true }))
+        return true
+      })()`,
+    )
+    await Bun.sleep(150)
+
+    return !!ok
+  }
+
   async screenshot(): Promise<Uint8Array> {
     const r = await this.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false })
 

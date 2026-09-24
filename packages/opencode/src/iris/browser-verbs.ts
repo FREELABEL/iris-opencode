@@ -21,7 +21,7 @@
  */
 
 /** Read-only in slice 1. `click` and `type` are S3. */
-export const VERBS = ["open", "read", "find", "window", "screenshot", "close"] as const
+export const VERBS = ["open", "read", "find", "window", "elements", "click", "type", "screenshot", "close"] as const
 export type Verb = (typeof VERBS)[number]
 
 const FIND_MAX = 8
@@ -202,4 +202,105 @@ export function windowOfLines(text: string, line: number, radius = 5): string {
   for (let n = from; n <= to; n++) out.push(`${n === at - 1 ? "→" : " "} line ${n + 1}: ${lines[n]}`)
 
   return out.join("\n")
+}
+
+/**
+ * S3 — acting on the page.
+ *
+ * Built in the shape the fast browser agents converged on, because the expensive part of driving a
+ * browser is HOW MANY TIMES YOU ASK, not how clever the planner is. So:
+ *
+ *   1. The page becomes a NUMBERED MENU, rebuilt every step — a stale action space is a stale
+ *      decision, and after one click the legal set has changed.
+ *   2. A target is chosen by REF, and a ref that cannot take the operation is refused here. Not
+ *      "the prompt says only click clickable things": a text field is not clickable, in code.
+ *   3. The result is VERIFIED BY DIFF — url, title, page size, field values — never by asking
+ *      whether it worked. The daemon's rule, earned: DONE is not independent evidence of success.
+ *
+ * Whether the next step is picked by this agent or by a typed decision model behind a seam
+ * (#185842, #186466) does not change any of the above. That is a provider choice; this is the
+ * action space it chooses from.
+ */
+export type PageElement = {
+  ref: number
+  role: string
+  name: string
+  tag: string
+  value?: string
+  enabled: boolean
+  inViewport: boolean
+}
+
+const CLICKABLE = new Set(["link", "button", "checkbox", "radio", "tab", "menuitem", "option", "switch"])
+const TYPEABLE = new Set(["textbox", "searchbox", "combobox", "textarea"])
+
+/** One line per element: what it is, what it says, and anything that makes it unusable. */
+export function renderElements(els: PageElement[]): string {
+  if (!els.length) return "No interactive elements on this page."
+
+  return els
+    .map((e) => {
+      const flags = [
+        e.enabled ? "" : "disabled",
+        e.inViewport ? "" : "off-screen",
+        e.value ? `value: ${JSON.stringify(e.value.slice(0, 40))}` : "",
+      ].filter(Boolean)
+
+      return `[${e.ref}] ${e.role.padEnd(10)} ${e.name.slice(0, 60)}${flags.length ? `  · ${flags.join(" · ")}` : ""}`
+    })
+    .join("\n")
+}
+
+/** Why this ref cannot take this operation, or null when it can. */
+export function refuseTargetReason(els: PageElement[], ref: number, op: "click" | "type"): string | null {
+  const el = els.find((e) => e.ref === ref)
+  if (!el) return `there is no [${ref}] on this page — it lists ${els.length} elements; run elements again`
+  if (!el.enabled) return `[${ref}] ${el.name} is disabled`
+  if (op === "click" && !CLICKABLE.has(el.role)) return `[${ref}] is a ${el.role} — not clickable`
+  if (op === "type" && !TYPEABLE.has(el.role)) return `[${ref}] is a ${el.role} — not a text field`
+
+  return null
+}
+
+const IRREVERSIBLE =
+  /\b(delete|remove|destroy|erase|wipe|pay|buy|purchase|checkout|order|send|submit|transfer|withdraw|confirm|cancel subscription|unsubscribe|deactivate|archive|publish|post|sign out|log out)\b/i
+
+/**
+ * Does this control look like it cannot be undone?
+ *
+ * The cheap half of a risk gate: the agent must say it meant it, and the refusal names the word
+ * that triggered it, so a wrong gate is obvious rather than mysterious. The page is untrusted
+ * input — one of these clicks spends money or sends something in the user's name.
+ */
+export function looksIrreversible(label: string): boolean {
+  return IRREVERSIBLE.test(String(label ?? ""))
+}
+
+export type PageState = {
+  url: string
+  title: string
+  textLength: number
+  textHash: string
+  values: Record<string, string>
+}
+
+/**
+ * What actually changed, in the page's own terms.
+ *
+ * A click that changed nothing is the case a model is most likely to narrate as success, so that
+ * is the sentence this returns plainly rather than an empty summary.
+ */
+export function describeChange(before: PageState, after: PageState): string {
+  const parts: string[] = []
+  if (before.url !== after.url) parts.push(`navigated to ${after.url}`)
+  if (before.title !== after.title) parts.push(`title is now "${after.title}"`)
+  for (const [ref, v] of Object.entries(after.values)) {
+    if ((before.values[ref] ?? "") !== v) parts.push(`[${ref}] now holds ${JSON.stringify(v.slice(0, 60))}`)
+  }
+  if (before.textHash !== after.textHash && before.url === after.url) {
+    const delta = after.textLength - before.textLength
+    parts.push(`the page text changed (${delta >= 0 ? "+" : ""}${delta} characters)`)
+  }
+
+  return parts.length ? parts.join("; ") : "nothing changed — same url, same text, same field values"
 }

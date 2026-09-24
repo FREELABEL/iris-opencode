@@ -1,11 +1,22 @@
 import { describe, expect, test } from "bun:test"
-import { VERBS, clampPageText, findInPage, refuseUrlReason, refuseNavigationReason, windowOfLines } from "./browser-verbs"
+import {
+  VERBS,
+  clampPageText,
+  describeChange,
+  findInPage,
+  looksIrreversible,
+  refuseNavigationReason,
+  refuseTargetReason,
+  refuseUrlReason,
+  renderElements,
+  windowOfLines,
+} from "./browser-verbs"
 
 describe("VERBS", () => {
-  test("slice 1 is read-only — no verb here can change a page", () => {
-    // click/type land in S3 behind the same-origin rule. A read-only slice proves the driver,
-    // the guards and the artifact join with nothing to undo.
-    expect(VERBS).toEqual(["open", "read", "find", "window", "screenshot", "close"])
+  test("S3 adds the acting verbs, in one place", () => {
+    // Read-only through S1.1; click and type arrive here with compatibility, a gate on
+    // irreversible labels, and a change verified in code.
+    expect(VERBS).toEqual(["open", "read", "find", "window", "elements", "click", "type", "screenshot", "close"])
   })
 })
 
@@ -167,5 +178,94 @@ describe("windowOfLines", () => {
 
   test("refuses a line number the page does not have", () => {
     expect(() => windowOfLines(doc, 9999, 3)).toThrow()
+  })
+})
+
+describe("S3 — the element table", () => {
+  const raw = [
+    { ref: 1, role: "link", name: "Home", tag: "a", enabled: true, inViewport: true },
+    { ref: 2, role: "textbox", name: "Search", tag: "input", value: "", enabled: true, inViewport: true },
+    { ref: 3, role: "button", name: "Delete account", tag: "button", enabled: true, inViewport: false },
+    { ref: 4, role: "button", name: "Disabled thing", tag: "button", enabled: false, inViewport: true },
+  ]
+
+  test("renders one numbered line per element, with what it is and what it says", () => {
+    const t = renderElements(raw)
+    expect(t).toContain("[1] link")
+    expect(t).toContain("Home")
+    expect(t).toContain("[2] textbox")
+  })
+
+  test("marks what is off-screen and what is disabled, instead of hiding them", () => {
+    const t = renderElements(raw)
+    expect(t).toContain("off-screen")
+    expect(t).toContain("disabled")
+  })
+})
+
+describe("S3 — a target must be compatible with the operation", () => {
+  const els = [
+    { ref: 1, role: "link", name: "Home", tag: "a", enabled: true, inViewport: true },
+    { ref: 2, role: "textbox", name: "Search", tag: "input", value: "", enabled: true, inViewport: true },
+    { ref: 9, role: "button", name: "Off", tag: "button", enabled: false, inViewport: true },
+  ]
+
+  test("clicking a text field is refused by TYPE, not by prompt", () => {
+    // The property worth having: a target head that only contains compatible elements makes the
+    // wrong pick structurally impossible rather than discouraged.
+    expect(refuseTargetReason(els, 2, "click")).toContain("not clickable")
+    expect(refuseTargetReason(els, 1, "click")).toBeNull()
+  })
+
+  test("typing into a link is refused", () => {
+    expect(refuseTargetReason(els, 1, "type")).toContain("not a text field")
+    expect(refuseTargetReason(els, 2, "type")).toBeNull()
+  })
+
+  test("a ref the page does not have is refused with the count, not a silent no-op", () => {
+    expect(refuseTargetReason(els, 42, "click")).toContain("3 elements")
+  })
+
+  test("a disabled element is refused", () => {
+    expect(refuseTargetReason(els, 9, "click")).toContain("disabled")
+  })
+})
+
+describe("S3 — irreversible clicks are gated", () => {
+  test("a destructive label needs confirm", () => {
+    // The page is untrusted input, and a click cannot be undone. This is the cheap half of a risk
+    // gate: the agent must say it meant it, and the user sees which word triggered the gate.
+    expect(looksIrreversible("Delete account")).toBe(true)
+    expect(looksIrreversible("Pay $420 now")).toBe(true)
+    expect(looksIrreversible("Send message")).toBe(true)
+    expect(looksIrreversible("Confirm transfer")).toBe(true)
+  })
+
+  test("ordinary navigation is not gated", () => {
+    expect(looksIrreversible("Home")).toBe(false)
+    expect(looksIrreversible("Next page")).toBe(false)
+    expect(looksIrreversible("Search")).toBe(false)
+  })
+})
+
+describe("S3 — the change is verified in code, not asserted by the model", () => {
+  const before = { url: "https://x.test/a", title: "A", textLength: 1000, textHash: "aaa", values: { "2": "" } }
+
+  test("reports a navigation", () => {
+    const after = { ...before, url: "https://x.test/b", title: "B", textHash: "bbb" }
+    const s = describeChange(before, after)
+    expect(s).toContain("https://x.test/b")
+    expect(s).toContain("title")
+  })
+
+  test("reports a field that now holds what was typed", () => {
+    const after = { ...before, values: { "2": "kimi" } }
+    expect(describeChange(before, after)).toContain("kimi")
+  })
+
+  test("says plainly when NOTHING changed — the most useful answer after a click", () => {
+    // "DONE is never independent evidence of success". A click that changed nothing is the case a
+    // model is most likely to narrate as success.
+    expect(describeChange(before, { ...before })).toContain("nothing changed")
   })
 })

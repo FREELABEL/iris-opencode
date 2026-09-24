@@ -6,7 +6,17 @@ import { InstanceState } from "@/effect/instance-state"
 import { GlobalBus } from "@/bus/global"
 import { Artifacts } from "@/iris/artifacts"
 import { PageSession } from "@/iris/browser-driver"
-import { clampPageText, findInPage, refuseNavigationReason, refuseUrlReason, windowOfLines } from "@/iris/browser-verbs"
+import {
+  clampPageText,
+  describeChange,
+  findInPage,
+  looksIrreversible,
+  refuseNavigationReason,
+  refuseTargetReason,
+  refuseUrlReason,
+  renderElements,
+  windowOfLines,
+} from "@/iris/browser-verbs"
 import { ARTIFACT_EVENT } from "./genesis-artifact"
 import type { SessionID } from "../session/schema"
 
@@ -31,9 +41,9 @@ import type { SessionID } from "../session/schema"
  * tells the agent so, and `find` returns lines rather than a narrative to be persuaded by.
  */
 export const Parameters = Schema.Struct({
-  action: Schema.Literals(["open", "read", "find", "window", "screenshot", "close"]).annotate({
-    description: "What to do",
-  }),
+  action: Schema.Literals(["open", "read", "find", "window", "elements", "click", "type", "screenshot", "close"]).annotate(
+    { description: "What to do" },
+  ),
   url: Schema.optional(Schema.String).annotate({ description: "The page to open (open)" }),
   query: Schema.optional(Schema.String).annotate({ description: "Text to search the page for (find)" }),
   title: Schema.optional(Schema.String).annotate({ description: "Title for the saved screenshot (screenshot)" }),
@@ -42,11 +52,19 @@ export const Parameters = Schema.Struct({
   }),
   line: Schema.optional(Schema.Number).annotate({ description: "Line number to read around (window)" }),
   radius: Schema.optional(Schema.Number).annotate({ description: "Lines either side, default 5 (window)" }),
+  ref: Schema.optional(Schema.Number).annotate({ description: "Element number from `elements` (click, type)" }),
+  text: Schema.optional(Schema.String).annotate({ description: "What to type (type)" }),
+  confirm: Schema.optional(Schema.Boolean).annotate({
+    description: "Required for a click that cannot be undone (delete, pay, send…)",
+  }),
 })
 
 type Metadata = {
   url?: string
   line?: number
+  ref?: number
+  elements?: number
+  changed?: boolean
   title?: string
   matches?: number
   truncated?: boolean
@@ -171,6 +189,75 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
             }
 
             return { title: `window at line ${params.line}`, output: out, metadata: { line: params.line } }
+          }
+
+          if (params.action === "elements") {
+            const got = yield* attempt(() => page.elements())
+            if (!got.ok) return yield* Effect.fail(new Error(got.message))
+
+            return {
+              title: `${got.value.length} elements`,
+              output: `${renderElements(got.value)}\n\nUse the number: {"action":"click","ref":N} or {"action":"type","ref":N,"text":"…"}.`,
+              metadata: { elements: got.value.length, url: page.currentUrl ?? undefined },
+            }
+          }
+
+          if (params.action === "click" || params.action === "type") {
+            if (!params.ref) return yield* Effect.fail(new Error(`${params.action} needs a ref — run action=elements first`))
+            if (params.action === "type" && params.text === undefined) {
+              return yield* Effect.fail(new Error("type needs text"))
+            }
+
+            // The menu is rebuilt for every action, because after one click the legal set has
+            // changed and a stale action space is a stale decision.
+            const listed = yield* attempt(() => page.elements())
+            if (!listed.ok) return yield* Effect.fail(new Error(listed.message))
+            const refusal = refuseTargetReason(listed.value, params.ref, params.action)
+            if (refusal) return yield* Effect.fail(new Error(refusal))
+            const el = listed.value.find((e) => e.ref === params.ref)!
+
+            if (params.action === "click" && looksIrreversible(el.name) && !params.confirm) {
+              return yield* Effect.fail(
+                new Error(
+                  `"${el.name}" looks like it cannot be undone. If you mean it, repeat with confirm: true — and tell the user what you are about to do first.`,
+                ),
+              )
+            }
+
+            const before = yield* attempt(() => page.state())
+            if (!before.ok) return yield* Effect.fail(new Error(before.message))
+            const acted =
+              params.action === "click"
+                ? yield* attempt(() => page.clickRef(params.ref!))
+                : yield* attempt(() => page.typeRef(params.ref!, params.text!))
+            if (!acted.ok) return yield* Effect.fail(new Error(acted.message))
+            if (!acted.value) {
+              return yield* Effect.fail(new Error(`[${params.ref}] is no longer on the page — run action=elements again`))
+            }
+
+            const after = yield* attempt(() => page.state())
+            if (!after.ok) return yield* Effect.fail(new Error(after.message))
+
+            // A click may take the page somewhere the agent never chose. Same rule as open: the
+            // page does not get to pick the next origin.
+            const offOrigin = refuseNavigationReason(before.value.url, after.value.url)
+            if (offOrigin && after.value.url !== before.value.url) {
+              yield* attempt(() => page.open(before.value.url))
+
+              return {
+                title: "navigation refused",
+                output: `that click went to ${after.value.url} — ${offOrigin}. Came back to ${before.value.url}. Open it deliberately if you meant to.`,
+                metadata: { url: before.value.url, changed: false },
+              }
+            }
+
+            const changed = describeChange(before.value, after.value)
+
+            return {
+              title: `${params.action} [${params.ref}] ${el.name.slice(0, 40)}`,
+              output: changed,
+              metadata: { ref: params.ref, url: after.value.url, changed: !changed.startsWith("nothing changed") },
+            }
           }
 
           // screenshot → a Genesis artifact, so it lands in the pane the user is watching (ADR-04).
