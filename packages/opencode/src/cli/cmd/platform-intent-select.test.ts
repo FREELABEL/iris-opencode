@@ -80,3 +80,11 @@ test("the no-model fill uses a URL for <url> and never pastes the sentence where
   expect(heuristicFill(t, "transcribe https://youtu.be/x please")).toBe("iris transcribe https://youtu.be/x")
   expect(heuristicFill({ ...t, run: "iris transcribe <url>" }, "transcribe this video")).toBe("iris transcribe <url>")
 })
+
+test("related: ranked by Decide, p ≥ 0.25 kept, at least 5, never the pick itself, capped at top", async () => {
+  const { rankRelated } = await import("./platform-intent-select")
+  const pool = ["a", "b", "c", "d", "e", "f", "g"].map(c)
+  const probs = [0.9, 0.1, 0.8, 0.05, 0.3, 0.02, 0.6]
+  expect(rankRelated(pool, probs, 10, new Set(["a"])).map((x) => x.name)).toEqual(["c", "g", "e", "b", "d"])
+  expect(rankRelated(pool, [0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9], 3, new Set()).length).toBe(3)
+})

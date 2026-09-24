@@ -188,9 +188,9 @@ export const PlatformIntentCommand = cmd({
         default: false,
       })
       .option("limit", { describe: "how many of find's commands to choose between", type: "number", default: 12 })
+      .option("top", { describe: "how many related commands to list (5–30)", type: "number", default: 10 })
       .option("via", {
-        describe:
-          "who decides: auto = the Decide engine, then the platform classifier, then find's order",
+        describe: "who decides: auto = the Decide engine, then the platform classifier, then find's order",
         type: "string",
         choices: ["auto", "decide", "platform", "keyword"],
         default: "auto",
@@ -221,6 +221,7 @@ export const PlatformIntentCommand = cmd({
         limit: Number(a.limit) || 12,
         decide: a.via === "auto" || a.via === "decide",
         platform: a.via === "auto" || a.via === "platform",
+        top: Number(a.top) || 10,
       })
     }
     if (!(await requireAuth())) return

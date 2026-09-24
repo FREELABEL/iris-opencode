@@ -337,6 +337,63 @@ export function commandLines(content: string): string[] {
 /** A command still carrying a <required> placeholder cannot be run as-is. */
 export const needsArgument = (run: string) => /<[^>]+>/.test(run)
 
+/**
+ * MANY COMMANDS, not one (5–30). Decide answers one yes/no relevance question per candidate in a
+ * single call — measured 40 questions in 368ms — and the candidates are ranked by p(yes).
+ * Kept: everything at p ≥ RELATED_MIN, padded to at least RELATED_FLOOR, capped at `top`.
+ */
+export const RELATED_MIN = 0.25
+export const RELATED_FLOOR = 5
+
+export type Related = Candidate & { p: number }
+
+export function rankRelated(
+  pool: Candidate[],
+  probs: (number | undefined)[],
+  top: number,
+  exclude: Set<string>,
+): Related[] {
+  const ranked = pool
+    .map((c, i) => ({ ...c, p: probs[i] ?? 0 }))
+    .filter((c) => !exclude.has(c.name))
+    .sort((a, b) => b.p - a.p)
+  const keep = ranked.filter((c) => c.p >= RELATED_MIN)
+  const out = keep.length >= RELATED_FLOOR ? keep : ranked.slice(0, RELATED_FLOOR)
+  return out.slice(0, top)
+}
+
+async function viaRelevance(
+  text: string,
+  pool: Candidate[],
+  timeoutMs: number,
+): Promise<(number | undefined)[] | string> {
+  const questions = Object.fromEntries(
+    pool.map((c, i) => [
+      `c${i}`,
+      {
+        type: "boolean",
+        instructions: `Would running \`${c.run}\` (${c.describe.slice(0, 140)}) help with this request?`,
+      },
+    ]),
+  )
+  try {
+    const res = await fetch(`${decideUrl()}/decide`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ state: `User request: "${text}"`, questions }),
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+    if (!res.ok) return `Decide relevance: HTTP ${res.status}`
+    const r = (await res.json()) as any
+    return pool.map((_, i) => {
+      const p = r?.answers?.[`c${i}`]?.probabilities?.true
+      return typeof p === "number" ? p : undefined
+    })
+  } catch (e) {
+    return `Decide relevance: ${e instanceof Error ? e.message : String(e)}`
+  }
+}
+
 export async function selectTool(a: {
   text: string
   json?: boolean
@@ -346,6 +403,7 @@ export async function selectTool(a: {
   platform?: boolean
   fill?: boolean
   timeout?: number
+  top?: number
 }) {
   const text = a.text.trim()
   const steps = splitSteps(text)
@@ -396,6 +454,36 @@ export async function selectTool(a: {
       : await fillArguments(text, picked)
   const commands = filled.lines
 
+  // RELATED: a wider pool (find's top 40 per step, leaf commands, plus playbooks), ranked by Decide.
+  // Without Decide, find's own order stands in — the list is still useful, and says so.
+  const top = Math.min(30, Math.max(RELATED_FLOOR, a.top || 10))
+  const pool = [
+    ...new Map(
+      steps
+        .flatMap((step) => candidatesFor(step, 40))
+        .concat(candidates)
+        .map((c) => [c.name, c]),
+    ).values(),
+  ]
+  const exclude = new Set(picked.map((c) => c.name))
+  let relatedBy = "keyword"
+  let probs: (number | undefined)[] = pool.map(() => undefined)
+  if (a.decide !== false && pool.length) {
+    const r = await viaRelevance(text, pool, a.timeout || 20000)
+    if (typeof r === "string") misses.push(r)
+    else {
+      probs = r
+      relatedBy = "decide"
+    }
+  }
+  const related =
+    relatedBy === "decide"
+      ? rankRelated(pool, probs, top, exclude)
+      : pool
+          .filter((c) => !exclude.has(c.name))
+          .slice(0, top)
+          .map((c) => ({ ...c, p: 0 }))
+
   if (a.json) {
     console.log(
       JSON.stringify(
@@ -411,7 +499,13 @@ export async function selectTool(a: {
           confidence: chosen.confidence ?? null,
           ms: chosen.ms ?? null,
           fell_back: misses,
-          candidates: candidates.map((c) => ({ name: c.name, score: c.score, describe: c.describe })),
+          related_by: relatedBy,
+          related: related.map((c) => ({
+            name: c.name,
+            run: c.run,
+            relevance: relatedBy === "decide" ? Number(c.p.toFixed(2)) : null,
+            describe: c.describe,
+          })),
         },
         null,
         2,
@@ -429,21 +523,23 @@ export async function selectTool(a: {
       .filter(Boolean)
       .join(" · ")
     console.log(`  ${bold(best.name)}  ${dim(`(${detail})`)}`)
-    if (best.describe) console.log(`  ${dim(best.describe)}`)
+    if (best.describe)
+      console.log(`  ${dim(best.describe.replace(/^GUIDED PROJECT[^:]*: /, "playbook — ").slice(0, 110))}`)
     if (picks.some((p) => p.by === "keyword") && misses.length)
       console.log(`  ${dim(`fell back to keyword order — ${misses.join("; ")}`)}`)
     console.log()
     for (const line of commands) console.log(`  ${highlight(`→ ${line}`)}`)
     printDivider()
     console.log(
-      `  ${dim("also matched:")} ${dim(
-        candidates
-          .filter((c) => c !== best)
-          .slice(0, 4)
-          .map((c) => c.name)
-          .join(" · "),
-      )}`,
+      `  ${bold(`also relevant (${related.length})`)}  ${dim(relatedBy === "decide" ? "ranked by Decide" : "find's order — Decide unavailable")}`,
     )
+    const w = Math.min(46, Math.max(...related.map((c) => c.run.length), 10))
+    for (const c of related) {
+      const pct = relatedBy === "decide" ? dim(`${String(Math.round(c.p * 100)).padStart(3)}%`) : dim("  · ")
+      console.log(
+        `  ${pct}  ${c.run.padEnd(w)}  ${dim(c.describe.replace(/^GUIDED PROJECT[^:]*: /, "playbook — ").slice(0, 60))}`,
+      )
+    }
     UI.empty()
   }
 
