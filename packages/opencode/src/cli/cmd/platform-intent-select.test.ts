@@ -88,3 +88,20 @@ test("related: ranked by Decide, p ≥ 0.25 kept, at least 5, never the pick its
   expect(rankRelated(pool, probs, 10, new Set(["a"])).map((x) => x.name)).toEqual(["c", "g", "e", "b", "d"])
   expect(rankRelated(pool, [0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9], 3, new Set()).length).toBe(3)
 })
+
+test("the fallback query is the request's topic, not its verb", async () => {
+  const { topicOf, heuristicFill } = await import("./platform-intent-select")
+  expect(topicOf("find places to eat in austin texas")).toBe("places to eat in austin texas")
+  expect(topicOf("can you show me my leads?")).toBe("my leads")
+  expect(
+    heuristicFill(
+      { name: "web-search", describe: "", run: "iris web-search [query]", score: 0 },
+      "search for coffee grinders",
+    ),
+  ).toBe('iris web-search "coffee grinders"')
+})
+test("promotion needs an unsure pick and a clearly surer ranking", async () => {
+  const m = await import("./platform-intent-select")
+  expect(m.PROMOTE_UNSURE).toBeLessThanOrEqual(0.6)
+  expect(m.PROMOTE_MIN).toBeGreaterThanOrEqual(0.7)
+})

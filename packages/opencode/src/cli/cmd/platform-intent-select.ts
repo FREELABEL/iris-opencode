@@ -232,14 +232,26 @@ const allCommands = () =>
     .entries.filter((e) => e.kind === "command")
     .map((e) => ({ name: e.name, describe: e.describe, run: e.run, score: 0 })))
 
+/** "find places to eat in austin" -> "places to eat in austin": the request's topic, not its verb. */
+export function topicOf(text: string): string {
+  const t = text
+    .trim()
+    .replace(
+      /^(?:(?:please|can you|could you|i want to|i need to|help me|let'?s)\s+)*(?:find|search(?: for)?|look ?up|show me|get me|get|give me|tell me|what are|what is|list|see)\s+/i,
+      "",
+    )
+    .replace(/[?.!]+$/, "")
+  return t || text.trim()
+}
+
 /**
  * The no-model fallback: fill a placeholder only from what the request actually supplies — a URL
- * for <url>, the request for a [query]. Anything else stays a placeholder (and --run refuses it);
- * pasting the whole sentence into `transcribe [url]` was worse than asking.
+ * for <url>, the request's TOPIC for a [query]. Anything else stays a placeholder (and --run refuses
+ * it); pasting the whole sentence into `transcribe [url]` was worse than asking.
  */
 export function heuristicFill(c: Candidate, text: string): string {
   const url = /https?:\/\/\S+/.exec(text)?.[0]
-  const q = `"${text.replace(/"/g, "'")}"`
+  const q = `"${topicOf(text).replace(/"/g, "'")}"`
   let used = false
   return c.run
     .replace(/<([^>]+)>|\[([^\]]+)\]/g, (m, req, opt) => {
@@ -253,20 +265,19 @@ export function heuristicFill(c: Candidate, text: string): string {
     .trim()
 }
 
-/**
- * ARGUMENTS ONLY. Decide has already chosen `chosen`; a nano model (IRIS proxy, the article-qa
- * rail) writes their arguments — the web query, and for atlas search the PERSONAL context worth
- * looking up (e.g. "favorite foods", "family"). A line for any command not in `chosen` is dropped,
- * so the model cannot change the decision. Any command it leaves out gets heuristicFill.
- */
-async function fillArguments(text: string, chosen: Candidate[]): Promise<{ lines: string[]; filled: boolean }> {
-  const fallback = { lines: chosen.map((c) => heuristicFill(c, text)), filled: false }
+const FILL_TIMEOUT_MS = 12_000
+const FILL_ATTEMPTS = 2
+
+/** One filler call -> the valid lines it produced, per chosen command. Never throws. */
+async function fillOnce(text: string, chosen: Candidate[], signal: AbortSignal): Promise<Map<string, string[]>> {
+  const got = new Map<string, string[]>()
   const spec = chosen.map((c) => `- ${c.run}  — ${c.describe}`).join("\n")
   try {
     const res = await irisFetch(
       "/api/v6/openai/chat/completions",
       {
         method: "POST",
+        signal,
         body: JSON.stringify({
           model: FILL_MODEL,
           temperature: 0.2,
@@ -292,30 +303,73 @@ async function fillArguments(text: string, chosen: Candidate[]): Promise<{ lines
       },
       IRIS_API,
     )
-    if (!res.ok) return fallback
+    if (!res.ok) return got
     const content: string = ((await res.json()) as any)?.choices?.[0]?.message?.content ?? ""
-    // Resolved against EVERY command, not just the chosen ones: "iris leads pull" starts with the
-    // chosen `leads` but is a different command — the filler must not change Decide's decision.
-    const lines = [...new Set(commandLines(content).map((l) => l.trim()))].filter((l) => {
+    for (const l of new Set(commandLines(content).map((x) => x.trim()))) {
       const c = commandOf(l, chosen)
-      if (!c || c.name.startsWith("playbook run ")) return false
+      if (!c || c.name.startsWith("playbook run ")) continue
+      // Resolved against EVERY command, not just the chosen ones: "iris leads pull" starts with the
+      // chosen `leads` but is a different command — the filler must not change Decide's decision.
       const bare = l.replace(/"[^"]*"/g, "").replace(/<[^>\s]+>/g, "")
-      return commandOf(l, allCommands())?.name === c.name && !/[;&|`$<>]/.test(bare)
-    })
-    // Every chosen command appears: filled if the model covered it, heuristically if it did not.
-    const out: string[] = []
-    for (const c of chosen) {
-      if (c.name.startsWith("playbook run ")) {
-        out.push(c.run)
-        continue
-      }
-      const mine = lines.filter((l) => commandOf(l, chosen) === c).slice(0, c.name === "atlas search" ? 2 : 1)
-      out.push(...(mine.length ? mine : [heuristicFill(c, text)]))
+      if (commandOf(l, allCommands())?.name !== c.name || /[;&|`$<>]/.test(bare)) continue
+      got.set(c.name, [...(got.get(c.name) ?? []), l])
     }
-    return { lines: out, filled: lines.length > 0 }
-  } catch {
-    return fallback
+  } catch {}
+  return got
+}
+
+/** Lines that still hold a <placeholder> are worse than lines that do not. */
+const filledScore = (lines: string[] = []) => lines.filter((l) => !/<[^>]+>/.test(l.replace(/"[^"]*"/g, ""))).length
+
+/**
+ * ARGUMENTS ONLY. Decide has already chosen `chosen`; a nano model (IRIS proxy, the article-qa
+ * rail) writes their arguments — the web query, and for atlas search the PERSONAL context worth
+ * looking up (e.g. "favorite foods", "family"). A line for any command not in `chosen` is dropped,
+ * so the model cannot change the decision.
+ *
+ * HEDGED, because one call is flaky (measured, 6 runs: 3.7–20.8s; one returned nothing, two
+ * covered only some commands). Two calls race; the first to cover EVERY command wins at once, and
+ * otherwise, at the 12s limit, each command takes the best line either call produced. A command
+ * neither covered gets heuristicFill — the request's topic, never the whole sentence.
+ */
+export async function fillArguments(text: string, chosen: Candidate[]): Promise<{ lines: string[]; filled: boolean }> {
+  const needs = chosen.filter((c) => !c.name.startsWith("playbook run "))
+  const results: Map<string, string[]>[] = []
+  if (needs.length) {
+    const controller = new AbortController()
+    const covers = (m: Map<string, string[]>) => needs.every((c) => filledScore(m.get(c.name)) > 0 || m.has(c.name))
+    await new Promise<void>((resolve) => {
+      let settled = 0
+      const timer = setTimeout(resolve, FILL_TIMEOUT_MS)
+      for (let i = 0; i < FILL_ATTEMPTS; i++) {
+        fillOnce(text, needs, controller.signal).then((m) => {
+          results.push(m)
+          if (covers(m) || ++settled === FILL_ATTEMPTS) {
+            clearTimeout(timer)
+            resolve()
+          }
+        })
+      }
+    })
+    controller.abort()
   }
+  const out: string[] = []
+  let filled = false
+  for (const c of chosen) {
+    if (c.name.startsWith("playbook run ")) {
+      out.push(c.run)
+      continue
+    }
+    const best = results
+      .map((m) => m.get(c.name) ?? [])
+      .filter((l) => l.length)
+      .sort((a, b) => filledScore(b) - filledScore(a))[0]
+    if (best) {
+      filled = true
+      out.push(...best.slice(0, c.name === "atlas search" ? 2 : 1))
+    } else out.push(heuristicFill(c, text))
+  }
+  return { lines: out, filled }
 }
 
 /**
@@ -343,6 +397,12 @@ export const needsArgument = (run: string) => /<[^>]+>/.test(run)
  * Kept: everything at p ≥ RELATED_MIN, padded to at least RELATED_FLOOR, capped at `top`.
  */
 export const RELATED_MIN = 0.25
+/** Promote the ranking's top command over the pick when it is at least this sure, and this much surer. */
+export const PROMOTE_MIN = 0.7
+export const PROMOTE_MARGIN = 0.15
+/** ...and only when the pick itself was unsure. A 63% pick of `integrations connect` lost to a
+ *  bare `connect` at 80% before this guard (measured). */
+export const PROMOTE_UNSURE = 0.6
 export const RELATED_FLOOR = 5
 
 export type Related = Candidate & { p: number }
@@ -416,46 +476,11 @@ export async function selectTool(a: {
     return
   }
 
-  // One decision per step. The web / notes questions are asked once, with the first step, about
-  // the WHOLE request.
-  const misses: string[] = []
-  const picks: Pick[] = []
-  for (const [i, step] of steps.entries()) {
-    const cands = perStep[i]
-    if (!cands.length) continue
-    let pick: Pick | undefined
-    if (cands.length === 1) pick = { candidate: cands[0], by: "only candidate" }
-    if (!pick && a.decide !== false) {
-      const r = await viaDecide(step, cands, a.timeout || 20000, text, i === 0)
-      if (typeof r === "string") misses.push(r)
-      else pick = r
-    }
-    if (!pick && a.platform !== false) {
-      const r = await viaPlatform(step, cands)
-      if (typeof r === "string") misses.push(r)
-      else pick = r
-    }
-    picks.push(pick ?? { candidate: cands[0], by: "keyword" })
-  }
-  const chosen = picks[0]
-  const best = chosen.candidate
-  const extras = picks.flatMap((p) => p.extras ?? [])
-  const picked = [
-    ...new Map(
-      [
-        ...picks.map((p) => p.candidate),
-        ...extras.map((n) => candidates.find((c) => c.name === n)!).filter(Boolean),
-      ].map((c) => [c.name, c]),
-    ).values(),
-  ]
-  const filled =
-    a.fill === false
-      ? { lines: picked.map((c) => heuristicFill(c, text)), filled: false }
-      : await fillArguments(text, picked)
-  const commands = filled.lines
-
-  // RELATED: a wider pool (find's top 40 per step, leaf commands, plus playbooks), ranked by Decide.
-  // Without Decide, find's own order stands in — the list is still useful, and says so.
+  // EVERY Decide call runs at once — the per-step picks and the relevance ranking of the wider pool
+  // do not depend on each other. Sequentially they added up; in parallel the whole decision costs
+  // one Decide round trip (~250–400ms).
+  const t0 = Date.now()
+  const timing: Record<string, number> = {}
   const top = Math.min(30, Math.max(RELATED_FLOOR, a.top || 10))
   const pool = [
     ...new Map(
@@ -465,17 +490,82 @@ export async function selectTool(a: {
         .map((c) => [c.name, c]),
     ).values(),
   ]
-  const exclude = new Set(picked.map((c) => c.name))
+  const misses: string[] = []
+  const decideStep = async (step: string, i: number): Promise<Pick | undefined> => {
+    const cands = perStep[i]
+    if (!cands.length) return undefined
+    if (cands.length === 1) return { candidate: cands[0], by: "only candidate" }
+    if (a.decide !== false) {
+      const r = await viaDecide(step, cands, a.timeout || 20000, text, i === 0)
+      if (typeof r !== "string") return r
+      misses.push(r)
+    }
+    if (a.platform !== false) {
+      const r = await viaPlatform(step, cands)
+      if (typeof r !== "string") return r
+      misses.push(r)
+    }
+    return { candidate: cands[0], by: "keyword" }
+  }
+  const [stepPicks, relevance] = await Promise.all([
+    Promise.all(steps.map(decideStep)),
+    a.decide !== false && pool.length ? viaRelevance(text, pool, a.timeout || 20000) : Promise.resolve(undefined),
+  ])
+  timing.decide_ms = Date.now() - t0
+  const picks = stepPicks.filter((p): p is Pick => !!p)
+
   let relatedBy = "keyword"
   let probs: (number | undefined)[] = pool.map(() => undefined)
-  if (a.decide !== false && pool.length) {
-    const r = await viaRelevance(text, pool, a.timeout || 20000)
-    if (typeof r === "string") misses.push(r)
-    else {
-      probs = r
-      relatedBy = "decide"
+  if (typeof relevance === "string") misses.push(relevance)
+  else if (relevance) {
+    probs = relevance
+    relatedBy = "decide"
+  }
+
+  // PROMOTE: the ranking asks "would this help?" of every candidate; the pick asks "which one?" of
+  // a shorter list. When the ranking is clearly surer about a command than the pick was about its
+  // own (coffee shop: genesis compose 80% vs the pick's 57%), that command leads.
+  let promoted: string | undefined
+  if (relatedBy === "decide" && picks[0]) {
+    const pickP = picks[0].confidence ?? 0
+    const lead = pool
+      .map((c, i) => ({ c, p: probs[i] ?? 0 }))
+      .filter((x) => x.c.name !== picks[0].candidate.name && !x.c.name.startsWith("playbook run "))
+      .sort((x, y) => y.p - x.p)[0]
+    if (lead && pickP < PROMOTE_UNSURE && lead.p >= PROMOTE_MIN && lead.p >= pickP + PROMOTE_MARGIN) {
+      promoted = lead.c.name
+      picks.unshift({
+        candidate: lead.c,
+        by: `decide relevance (promoted over ${picks[0].candidate.name})`,
+        confidence: lead.p,
+        extras: picks[0].extras,
+      })
+      picks[1] = { ...picks[1], extras: [] }
     }
   }
+
+  const chosen = picks[0]
+  const best = chosen.candidate
+  const extras = picks.flatMap((p) => p.extras ?? [])
+  const picked = [
+    ...new Map(
+      [
+        ...picks.map((p) => p.candidate),
+        ...extras.map((n) => candidates.find((c) => c.name === n) ?? pool.find((c) => c.name === n)!).filter(Boolean),
+      ].map((c) => [c.name, c]),
+    ).values(),
+  ]
+
+  // Arguments: instant from the request by default; `--fill` asks a model (3–12s through the proxy).
+  const tf = Date.now()
+  const filled = a.fill
+    ? await fillArguments(text, picked)
+    : { lines: picked.map((c) => heuristicFill(c, text)), filled: false }
+  timing.fill_ms = Date.now() - tf
+  timing.total_ms = Date.now() - t0
+  const commands = filled.lines
+
+  const exclude = new Set(picked.map((c) => c.name))
   const related =
     relatedBy === "decide"
       ? rankRelated(pool, probs, top, exclude)
@@ -496,6 +586,8 @@ export async function selectTool(a: {
           decided: picked.map((c) => c.name),
           steps,
           arguments_by: filled.filled ? FILL_MODEL : "request text",
+          promoted: promoted ?? null,
+          timing,
           confidence: chosen.confidence ?? null,
           ms: chosen.ms ?? null,
           fell_back: misses,

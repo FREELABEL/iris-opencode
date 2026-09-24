@@ -188,6 +188,11 @@ export const PlatformIntentCommand = cmd({
         default: false,
       })
       .option("limit", { describe: "how many of find's commands to choose between", type: "number", default: 12 })
+      .option("fill", {
+        describe: "have a model write the arguments (and personal Atlas searches) — adds 3–12s",
+        type: "boolean",
+        default: false,
+      })
       .option("top", { describe: "how many related commands to list (5–30)", type: "number", default: 10 })
       .option("via", {
         describe: "who decides: auto = the Decide engine, then the platform classifier, then find's order",
@@ -222,6 +227,7 @@ export const PlatformIntentCommand = cmd({
         decide: a.via === "auto" || a.via === "decide",
         platform: a.via === "auto" || a.via === "platform",
         top: Number(a.top) || 10,
+        fill: a.fill === true,
       })
     }
     if (!(await requireAuth())) return
