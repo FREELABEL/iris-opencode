@@ -1,163 +1,39 @@
 [
- [
-  "connect my instagram",
+  ["connect my instagram", ["integrations connect"]],
+  ["check platform health", ["monitor", "monitor overview"]],
+  ["schedule a recurring task", ["schedules create"]],
+  ["manage my outreach campaigns", ["outreach-campaign"]],
+  ["search my knowledge base for onboarding notes", ["search"]],
+  ["report a bug in the CLI", ["bug report"]],
+  ["run a playbook", ["playbook run", "playbook run"]],
+  ["transcribe this video file", ["transcribe"]],
+  ["show me my leads", ["leads list", "leads", "leads list", "leads pull"]],
+  ["send an email to a client", ["mail send"]],
+  ["publish my html page", ["genesis publish-html"]],
+  ["what is on my calendar today", ["calendar today", "calendar list"]],
+  ["is my hive fleet online", ["hive status", "hive nodes", "hive nodes list", "hive status"]],
+  ["how much have I spent on ai usage", ["usage"]],
+  ["add a new lead", ["leads create"]],
+  ["chat with one of my agents", ["agents chat", "chat"]],
+  ["list all my agents", ["agents list"]],
+  ["create a new agent", ["agents create", "agent create"]],
+  ["find a free slot on my calendar", ["calendar free"]],
+  ["close a bug that is fixed", ["bug close"]],
   [
-   "integrations connect"
-  ]
- ],
- [
-  "check platform health",
-  [
-   "monitor",
-   "monitor overview"
-  ]
- ],
- [
-  "schedule a recurring task",
-  [
-   "schedules create"
-  ]
- ],
- [
-  "manage my outreach campaigns",
-  [
-   "outreach-campaign"
-  ]
- ],
- [
-  "search my knowledge base for onboarding notes",
-  [
-   "search"
-  ]
- ],
- [
-  "report a bug in the CLI",
-  [
-   "bug report"
-  ]
- ],
- [
-  "run a playbook",
-  [
-   "playbook run",
-   "playbook run"
-  ]
- ],
- [
-  "transcribe this video file",
-  [
-   "transcribe"
-  ]
- ],
- [
-  "show me my leads",
-  [
-   "leads list",
-   "leads",
-   "leads list",
-   "leads pull"
-  ]
- ],
- [
-  "send an email to a client",
-  [
-   "mail send"
-  ]
- ],
- [
-  "publish my html page",
-  [
-   "genesis publish-html"
-  ]
- ],
- [
-  "what is on my calendar today",
-  [
-   "calendar today",
-   "calendar list"
-  ]
- ],
- [
-  "is my hive fleet online",
-  [
-   "hive status",
-   "hive nodes",
-   "hive nodes list",
-   "hive status"
-  ]
- ],
- [
-  "how much have I spent on ai usage",
-  [
-   "usage"
-  ]
- ],
- [
-  "add a new lead",
-  [
-   "leads create"
-  ]
- ],
- [
-  "chat with one of my agents",
-  [
-   "agents chat",
-   "chat"
-  ]
- ],
- [
-  "list all my agents",
-  [
-   "agents list"
-  ]
- ],
- [
-  "create a new agent",
-  [
-   "agents create",
-   "agent create"
-  ]
- ],
- [
-  "find a free slot on my calendar",
-  [
-   "calendar free"
-  ]
- ],
- [
-  "close a bug that is fixed",
-  [
-   "bug close"
-  ]
- ],
- [
-  "build a website for my coffee shop",
-  [
-   "genesis compose",
-   "playbook run genesis-bespoke",
-   "genesis create",
-   "playbook run pages"
-  ]
- ],
- [
-  "make a landing page for my bakery",
-  [
-   "playbook run genesis-bespoke",
-   "genesis create",
-   "genesis compose"
-  ]
- ],
- [
-  "transcribe this video and build a website from it",
-  [
-   "transcribe"
-  ]
- ],
- [
-  "find places to eat in austin texas",
-  [
-   "geo nearby",
-   "web-search"
-  ]
- ]
+    "build a website for my coffee shop",
+    ["genesis compose", "playbook run genesis-bespoke", "genesis create", "playbook run pages"]
+  ],
+  ["make a landing page for my bakery", ["playbook run genesis-bespoke", "genesis create", "genesis compose"]],
+  ["transcribe this video and build a website from it", ["transcribe"]],
+  ["find places to eat in austin texas", ["geo nearby", "web-search"]],
+  ["go get a client", [], [601, 603, 692, 676, 691, 609]],
+  ["write this week's newsroom article for AIAI", [], [702]],
+  ["program a DJ mix for The Function", [], [695]],
+  ["answer questions about XArt's datasets", [], [724, 701]],
+  ["cut short clips from the latest podcast episode of The Function", [], [694, 697]],
+  ["plan the content strategy for The Function podcast", [], [693, 697]],
+  ["manage the events calendar for Locals Only", [], [641]],
+  ["run a backtest of the DELO trading strategy", [], [605, 604]],
+  ["write a tips article for streamers", [], [632]],
+  ["fix a bug in the iris CLI", [], [679, 678, 630]]
 ]

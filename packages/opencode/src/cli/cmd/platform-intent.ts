@@ -193,6 +193,11 @@ export const PlatformIntentCommand = cmd({
         type: "boolean",
         default: false,
       })
+      .option("skip-agents", {
+        describe: "don't consider your AI agents, only commands and playbooks",
+        type: "boolean",
+        default: false,
+      })
       .option("top", { describe: "how many related commands to list (5–30)", type: "number", default: 10 })
       .option("via", {
         describe: "who decides: auto = the Decide engine, then the platform classifier, then find's order",
@@ -228,6 +233,7 @@ export const PlatformIntentCommand = cmd({
         platform: a.via === "auto" || a.via === "platform",
         top: Number(a.top) || 10,
         fill: a.fill === true,
+        agents: a["skip-agents"] !== true,
       })
     }
     if (!(await requireAuth())) return

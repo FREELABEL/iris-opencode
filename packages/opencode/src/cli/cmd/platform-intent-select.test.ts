@@ -144,3 +144,59 @@ test("an optional input the request did not give stays visible as <url>, and is 
     ),
   ).toBe("iris genesis export <slug>")
 })
+
+describe("agent discovery (#186666)", () => {
+  const agents = [
+    {
+      id: 1,
+      name: "Good Deals — Outreach Agent",
+      type: "chat",
+      active: true,
+      description: "Manages LinkedIn founder outreach, drafts messages to prospects",
+    },
+    {
+      id: 2,
+      name: "Newsroom Agent",
+      type: "chat",
+      active: true,
+      description: "Researches and drafts portfolio articles",
+      last_active_at: "2026-09-20",
+    },
+    { id: 3, name: "Jane Doe", type: "human", active: true, description: "team member" },
+    { id: 4, name: "BENCH grok", type: "chat", active: true, description: "Model benchmark scratch agent" },
+    { id: 5, name: "Uniqueness Test 17", type: "chat", active: true, description: "test" },
+    { id: 6, name: "Old Agent", type: "chat", active: false, description: "retired" },
+  ]
+  test("humans, inactive, bench and test agents are never candidates", async () => {
+    const { isDiscoverable } = await import("./platform-intent-agents")
+    expect(agents.filter(isDiscoverable).map((a) => a.id)).toEqual([1, 2])
+  })
+  test("ranking puts the matching agent first; the run line hands it the request", async () => {
+    const { rankAgents } = await import("./platform-intent-agents")
+    const r = rankAgents("draft outreach to founders", agents, {}, 8)
+    expect(r[0].id).toBe(1)
+    expect(r[0].run).toBe('iris agents chat 1 "draft outreach to founders"')
+    expect(r.map((x) => x.id).sort()).toEqual([1, 2])
+  })
+  test("hand off only when Decide is sure it's an agent's job AND sure which agent", async () => {
+    const { agentFrom, handsOff } = await import("./platform-intent-select")
+    const cands = [
+      { id: 1, name: "agent 1 · A", describe: "", run: 'iris agents chat 1 "x"', score: 0 },
+      { id: 2, name: "agent 2 · B", describe: "", run: 'iris agents chat 2 "x"', score: 0 },
+    ]
+    const sure = agentFrom(
+      { agent: { value: "agent 1 · A", confidence: 0.9 }, delegate: { probabilities: { true: 0.8 } } },
+      cands,
+    )
+    expect(handsOff(sure)).toBe(true)
+    expect(
+      handsOff(
+        agentFrom(
+          { agent: { value: "agent 1 · A", confidence: 0.9 }, delegate: { probabilities: { true: 0.58 } } },
+          cands,
+        ),
+      ),
+    ).toBe(false)
+    expect(agentFrom({ agent: { value: "__none__", confidence: 0.9 } }, cands)).toBeUndefined()
+  })
+})

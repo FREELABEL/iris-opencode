@@ -12,7 +12,9 @@
  */
 import { join } from "path"
 
-const cases: [string, string[]][] = await Bun.file(join(import.meta.dir, "intent-cases.json")).json()
+// [request, accepted commands, accepted agent ids?]. A case WITH agent ids is scored on the agent
+// hand-off; a case without them counts a hand-off as a FALSE hand-off (it was a command's job).
+const cases: [string, string[], number[]?][] = await Bun.file(join(import.meta.dir, "intent-cases.json")).json()
 const extra = process.argv.includes("--fill") ? ["--fill"] : []
 const bin = process.env.IRIS_BIN
 const cmd = (q: string) =>
@@ -25,17 +27,35 @@ const pct = (xs: number[], p: number) => {
   return s.length ? Math.round(s[Math.min(s.length - 1, Math.floor(s.length * p))]) : NaN
 }
 const rows: { ok: boolean; wall: number; decide: number; fill: number; total: number }[] = []
-for (const [q, accept] of cases) {
-  const t = performance.now()
-  const out = await new Response(Bun.spawn(cmd(q), { stdout: "pipe", stderr: "ignore" }).stdout).text()
-  const wall = performance.now() - t
+const agentRows: { ok: boolean }[] = []
+let falseHandoffs = 0
+for (const [q, accept, agents] of cases) {
   let j: any
-  try {
-    j = JSON.parse(out.slice(out.indexOf("{")))
-  } catch {
-    console.log(`✗ ${q} — no JSON`)
+  let wall = 0
+  // One retry: a run that printed no JSON (a transient network or start-up failure) is not a
+  // wrong answer, and scoring it as one moved the headline number by 2/32 (measured).
+  for (let attempt = 0; attempt < 2 && !j; attempt++) {
+    const t = performance.now()
+    const out = await new Response(Bun.spawn(cmd(q), { stdout: "pipe", stderr: "ignore" }).stdout).text()
+    wall = performance.now() - t
+    try {
+      j = JSON.parse(out.slice(out.indexOf("{")))
+    } catch {}
+  }
+  if (!j) {
+    console.log(`✗ ${q} — no JSON (twice)`)
     continue
   }
+  const handed = j.agent?.handed_off ? j.agent : null
+  if (agents) {
+    const ok = !!handed && agents.includes(handed.id)
+    agentRows.push({ ok })
+    console.log(
+      `${ok ? "✓" : "✗"} ${q.slice(0, 48).padEnd(48)} → agent ${handed ? `${handed.id} ${handed.name}` : "(none)"}`,
+    )
+    continue
+  }
+  if (handed) falseHandoffs++
   const ok = accept.includes(j.choice)
   rows.push({
     ok,
@@ -44,9 +64,14 @@ for (const [q, accept] of cases) {
     fill: j.timing?.fill_ms ?? NaN,
     total: j.timing?.total_ms ?? NaN,
   })
-  console.log(`${ok ? "✓" : "✗"} ${q.slice(0, 48).padEnd(48)} → ${String(j.choice).padEnd(28)} ${Math.round(wall)}ms`)
+  console.log(
+    `${ok ? "✓" : "✗"} ${q.slice(0, 48).padEnd(48)} → ${String(j.choice).padEnd(28)} ${Math.round(wall)}ms${handed ? `  (handed to agent ${handed.id})` : ""}`,
+  )
 }
 const col = (k: keyof (typeof rows)[number]) => rows.map((r) => r[k] as number).filter(Number.isFinite)
-console.log(`\n@1 ${rows.filter((r) => r.ok).length}/${rows.length}`)
+console.log(
+  `\ncommand @1 ${rows.filter((r) => r.ok).length}/${rows.length}   false hand-offs ${falseHandoffs}/${rows.length}`,
+)
+if (agentRows.length) console.log(`agent   @1 ${agentRows.filter((r) => r.ok).length}/${agentRows.length}`)
 for (const k of ["decide", "fill", "total", "wall"] as const)
   console.log(`${k.padEnd(6)} p50 ${pct(col(k), 0.5)}ms  p95 ${pct(col(k), 0.95)}ms`)

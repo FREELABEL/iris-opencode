@@ -2,6 +2,7 @@ import { spawnSync } from "child_process"
 import { UI } from "../ui"
 import { irisFetch, IRIS_API, dim, bold, highlight, printDivider } from "./iris-api"
 import { loadIndex, searchCapabilities } from "./platform-find"
+import { loadAgents, rankAgents, type AgentCandidate } from "./platform-intent-agents"
 
 /**
  * `iris intent "<what you want to do>"` — TOOL SELECTION, by the Decide engine.
@@ -28,7 +29,11 @@ import { loadIndex, searchCapabilities } from "./platform-find"
  */
 
 export type Candidate = { name: string; describe: string; run: string; score: number }
-type Pick = { candidate: Candidate; by: string; confidence?: number; ms?: number; extras?: string[] }
+type AgentPick = { candidate: Candidate; confidence: number; delegate: number }
+type Pick = { candidate: Candidate; by: string; confidence?: number; ms?: number; extras?: string[]; agent?: AgentPick }
+
+/** Lines built whole, never argument-filled by a model: playbooks and agent hand-offs. */
+export const prebuilt = (c: { name: string }) => c.name.startsWith("playbook run ") || c.name.startsWith("agent ")
 
 const decideUrl = () => (process.env.DECIDE_URL || "http://127.0.0.1:3210").replace(/\/$/, "")
 
@@ -146,7 +151,33 @@ export function splitSteps(text: string): string[] {
   return parts.length > 1 ? parts.slice(0, 3) : [text]
 }
 
-export function decidePayload(text: string, candidates: Candidate[], full = text, extras = true) {
+export function decidePayload(
+  text: string,
+  candidates: Candidate[],
+  full = text,
+  extras = true,
+  agents: AgentCandidate[] = [],
+) {
+  const agentQs =
+    extras && agents.length >= 2
+      ? {
+          // (#186666 A2) Same call, two more questions: which of the account's agents, and whether
+          // handing the job to an agent beats running one command at all.
+          agent: {
+            type: "choice",
+            instructions: "Which of the user's AI agents is best suited to take on this request?",
+            options: agents.map((a) => a.name),
+            criteria: Object.fromEntries(agents.map((a) => [a.name, a.describe])),
+            allow_none: true,
+          },
+          delegate: {
+            type: "boolean",
+            instructions:
+              "Is this a job to hand to an AI agent (ongoing work, research, writing, outreach, judgement) rather than " +
+              "something one CLI command does?",
+          },
+        }
+      : {}
   return {
     state: full === text ? `User request: "${text}"` : `User request: "${full}"\nThis step of it: "${text}"`,
     questions: {
@@ -163,6 +194,7 @@ export function decidePayload(text: string, candidates: Candidate[], full = text
           "Could things the user has saved about themselves — tastes, favourite foods, family, past choices, notes — " +
           "personalise or improve the answer?",
       },
+      ...agentQs,
     },
   }
 }
@@ -188,6 +220,32 @@ export function extrasFrom(answers: any, picked: string, candidates: Candidate[]
   return out
 }
 
+/** Decide's agent answer, only if it named one of the offered agents (never "none of these"). */
+export function agentFrom(answers: any, agents: AgentCandidate[]): AgentPick | undefined {
+  const name = answers?.agent?.value
+  const a = typeof name === "string" ? agents.find((x) => x.name === name) : undefined
+  if (!a) return undefined
+  const delegate = Number(
+    answers?.delegate?.probabilities?.true ??
+      (answers?.delegate?.value === true ? answers?.delegate?.confidence : 0) ??
+      0,
+  )
+  return { candidate: a, confidence: Number(answers?.agent?.confidence ?? 0), delegate }
+}
+
+/**
+ * Hand the job to the agent only when Decide is sure it's an agent's job AND sure which agent.
+ * Set from the bench (script/intent-cases.json, 2026-09-24): every real agent job scored delegate
+ * ≥ 0.78 and agent ≥ 0.87; at 0.65 / 0.5, 9 of 24 command requests also handed off ("send an email
+ * to a client" → an outreach agent at 0.89 / 0.53). At 0.75 / 0.85: 10/10 agent jobs, 1/24
+ * command requests (a website → the Web Designer Agent, 0.93 / 0.95 — defensible). Ten agent
+ * cases set this line; widen the case set before trusting it further.
+ */
+export const AGENT_DELEGATE_MIN = 0.75
+export const AGENT_CONFIDENCE_MIN = 0.85
+export const handsOff = (a?: AgentPick) =>
+  !!a && a.delegate >= AGENT_DELEGATE_MIN && a.confidence >= AGENT_CONFIDENCE_MIN
+
 /** Only an answer that names a candidate counts. */
 export const byName = (name: unknown, candidates: Candidate[]) =>
   typeof name === "string" ? candidates.find((c) => c.name === name.trim()) : undefined
@@ -198,9 +256,10 @@ async function viaDecide(
   timeoutMs: number,
   full = text,
   extras = true,
+  agents: AgentCandidate[] = [],
 ): Promise<Pick | string> {
   try {
-    const payload = decidePayload(text, candidates, full)
+    const payload = decidePayload(text, candidates, full, extras, agents)
     const res = await fetch(`${decideUrl()}/decide`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -217,6 +276,7 @@ async function viaDecide(
       confidence: r?.answers?.command?.confidence,
       ms: r?.meta?.latency_ms,
       extras: extrasFrom(r?.answers, c.name, candidates),
+      agent: agentFrom(r?.answers, agents),
     }
   } catch (e) {
     const m = e instanceof Error ? e.message : String(e)
@@ -334,7 +394,7 @@ async function fillOnce(text: string, chosen: Candidate[], signal: AbortSignal):
     const content: string = ((await res.json()) as any)?.choices?.[0]?.message?.content ?? ""
     for (const l of new Set(commandLines(content).map((x) => x.trim()))) {
       const c = commandOf(l, chosen)
-      if (!c || c.name.startsWith("playbook run ")) continue
+      if (!c || prebuilt(c)) continue
       // Resolved against EVERY command, not just the chosen ones: "iris leads pull" starts with the
       // chosen `leads` but is a different command — the filler must not change Decide's decision.
       const bare = l.replace(/"[^"]*"/g, "").replace(/<[^>\s]+>/g, "")
@@ -360,7 +420,7 @@ const filledScore = (lines: string[] = []) => lines.filter((l) => !/<[^>]+>/.tes
  * neither covered gets heuristicFill — the request's topic, never the whole sentence.
  */
 export async function fillArguments(text: string, chosen: Candidate[]): Promise<{ lines: string[]; filled: boolean }> {
-  const needs = chosen.filter((c) => !c.name.startsWith("playbook run "))
+  const needs = chosen.filter((c) => !prebuilt(c))
   const results: Map<string, string[]>[] = []
   if (needs.length) {
     const controller = new AbortController()
@@ -383,7 +443,7 @@ export async function fillArguments(text: string, chosen: Candidate[]): Promise<
   const out: string[] = []
   let filled = false
   for (const c of chosen) {
-    if (c.name.startsWith("playbook run ")) {
+    if (prebuilt(c)) {
       out.push(c.run)
       continue
     }
@@ -491,8 +551,11 @@ export async function selectTool(a: {
   fill?: boolean
   timeout?: number
   top?: number
+  agents?: boolean
 }) {
   const text = a.text.trim()
+  // Agents load (cache or API) while the index is searched — never on the critical path twice.
+  const agentsLoad = a.agents === false ? Promise.resolve({ agents: [], source: "off" }) : loadAgents()
   const steps = splitSteps(text)
   const pools = steps.map((step) => candidatePools(step, a.limit || 12))
   const perStep = pools.map((p) => p.pick)
@@ -510,10 +573,14 @@ export async function selectTool(a: {
   const t0 = Date.now()
   const timing: Record<string, number> = {}
   const top = Math.min(30, Math.max(RELATED_FLOOR, a.top || 10))
+  const loaded = await agentsLoad
+  const agentCands = rankAgents(text, loaded.agents, index().terms, 8)
+  timing.agents_ms = Date.now() - t0
   const pool = [
     ...new Map(
       steps
         .flatMap((_, i) => pools[i].pool)
+        .concat(agentCands)
         .concat(candidates)
         .map((c) => [c.name, c]),
     ).values(),
@@ -524,7 +591,7 @@ export async function selectTool(a: {
     if (!cands.length) return undefined
     if (cands.length === 1) return { candidate: cands[0], by: "only candidate" }
     if (a.decide !== false) {
-      const r = await viaDecide(step, cands, a.timeout || 20000, text, i === 0)
+      const r = await viaDecide(step, cands, a.timeout || 20000, text, i === 0, i === 0 ? agentCands : [])
       if (typeof r !== "string") return r
       misses.push(r)
     }
@@ -562,7 +629,7 @@ export async function selectTool(a: {
     const pickP = picks[0].confidence ?? 0
     const lead = pool
       .map((c, i) => ({ c, p: probs[i] ?? 0 }))
-      .filter((x) => x.c.name !== picks[0].candidate.name && !x.c.name.startsWith("playbook run "))
+      .filter((x) => x.c.name !== picks[0].candidate.name && !prebuilt(x.c))
       .sort((x, y) => y.p - x.p)[0]
     if (lead && pickP < PROMOTE_UNSURE && lead.p >= PROMOTE_MIN && lead.p >= pickP + PROMOTE_MARGIN) {
       promoted = lead.c.name
@@ -579,10 +646,13 @@ export async function selectTool(a: {
   const chosen = picks[0]
   const best = chosen.candidate
   const extras = picks.flatMap((p) => p.extras ?? [])
+  const agentPick = picks[0]?.agent
+  const handoff = handsOff(agentPick) ? agentPick!.candidate : undefined
   const picked = [
     ...new Map(
       [
         ...picks.map((p) => p.candidate),
+        ...(handoff ? [handoff] : []),
         ...extras.map((n) => candidates.find((c) => c.name === n) ?? pool.find((c) => c.name === n)!).filter(Boolean),
       ].map((c) => [c.name, c]),
     ).values(),
@@ -619,6 +689,16 @@ export async function selectTool(a: {
           steps,
           arguments_by: filled.filled ? FILL_MODEL : "request text",
           promoted: promoted ?? null,
+          agent: agentPick
+            ? {
+                id: agentCands.find((c) => c.name === agentPick.candidate.name)?.id ?? null,
+                name: agentPick.candidate.name.replace(/^agent \d+ · /, ""),
+                confidence: Number(agentPick.confidence.toFixed(2)),
+                delegate: Number(agentPick.delegate.toFixed(2)),
+                handed_off: !!handoff,
+              }
+            : null,
+          agents_source: loaded.source,
           timing,
           confidence: chosen.confidence ?? null,
           ms: chosen.ms ?? null,
