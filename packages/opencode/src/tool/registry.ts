@@ -13,6 +13,7 @@ import { TaskTool } from "./task"
 import { Database } from "@opencode-ai/core/database/database"
 import { TodoWriteTool } from "./todo"
 import { GenesisArtifactTool } from "./genesis-artifact"
+import { BrowserTool } from "./browser"
 import { WebFetchTool } from "./webfetch"
 import { WriteTool } from "./write"
 import { InvalidTool } from "./invalid"
@@ -107,6 +108,7 @@ const layer = Layer.effect(
     const question = yield* QuestionTool
     const todo = yield* TodoWriteTool
     const artifacttool = yield* GenesisArtifactTool
+    const browsertool = yield* BrowserTool
     const lsptool = yield* LspTool
     const plan = yield* PlanExitTool
     const webfetch = yield* WebFetchTool
@@ -222,6 +224,7 @@ const layer = Layer.effect(
           fetch: Tool.init(webfetch),
           todo: Tool.init(todo),
           artifact: Tool.init(artifacttool),
+          browser: Tool.init(browsertool),
           search: Tool.init(websearch),
           skill: Tool.init(skilltool),
           patch: Tool.init(patchtool),
@@ -248,6 +251,10 @@ const layer = Layer.effect(
             // `genesis_artifact` — Genesis › Artifacts (#186508 / #186510). Scoped by its description
             // to things the user will look at; the files land in .iris/artifacts.
             tool.artifact,
+            // `browser` — Genesis › Browser (#186665). Read-only: open, read, find, screenshot,
+            // close. The refusals (private hosts, credential URLs, off-origin) are in
+            // iris/browser-verbs; the screenshot lands in the Artifacts pane above.
+            tool.browser,
             tool.search,
             tool.skill,
             tool.patch,
