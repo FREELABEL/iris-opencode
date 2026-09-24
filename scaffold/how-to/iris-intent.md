@@ -18,7 +18,7 @@ a quarter of a second.
 How it works, with the measurements: https://heyiris.io/p/iris-intent-how-it-works
 
 ## Prerequisites
-- IRIS CLI **v1.3.289 or later** — check with `iris --version`, update with `iris upgrade`
+- IRIS CLI **v1.3.290 or later** — check with `iris --version`, update with `iris upgrade`
 - Signed in (`iris auth`)
 - For the best picks, the local Decide service (powered by Jev) running on this machine.
   Without it, `iris intent` still answers, using the platform classifier and then plain search
@@ -50,10 +50,10 @@ brackets>` is a value your request didn't give — fill it in yourself.
 Join steps with **and** or **then**; each step gets its own pick:
 ```bash
 $ iris intent "transcribe this video and build a website from it"
-  → iris transcribe
+  → iris transcribe <url>
   → iris genesis compose <description..>
 ```
-Add the video's URL to the transcribe step. Big jobs can also come back as a **playbook** — a
+Put the video's URL in place of `<url>` (or include it in your request and it's filled in). Big jobs can also come back as a **playbook** — a
 guided, multi-step procedure such as `iris playbook run genesis-bespoke` — instead of a single
 command.
 

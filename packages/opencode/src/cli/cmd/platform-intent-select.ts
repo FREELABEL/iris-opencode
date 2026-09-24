@@ -279,8 +279,13 @@ export function heuristicFill(c: Candidate, text: string): string {
     .replace(/<([^>]+)>|\[([^\]]+)\]/g, (m, req, opt) => {
       const name = String(req ?? opt).toLowerCase()
       if (used) return opt ? "" : m
-      if (/url|link|file|path|source/.test(name) && url) return ((used = true), url)
+      const input = /url|link|file|path|source/.test(name)
+      if (input && url) return ((used = true), url)
       if (/query|text|search|q\b|message|topic|prompt|question|term/.test(name)) return ((used = true), q)
+      // An optional INPUT the request did not supply stays visible as <url>: dropping it made
+      // "transcribe this video" come out as a bare `iris transcribe`, hiding the one thing the
+      // user has to add. --run refuses anything still holding a <placeholder>.
+      if (input) return `<${name.replace(/\.\.$/, "")}>`
       return opt ? "" : m
     })
     .replace(/\s+/g, " ")

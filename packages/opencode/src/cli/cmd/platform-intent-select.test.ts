@@ -129,3 +129,18 @@ describe("speed — local work must stay small next to Decide's ~180ms round tri
     expect(performance.now() - t).toBeLessThan(400)
   })
 })
+
+test("an optional input the request did not give stays visible as <url>, and is not runnable", async () => {
+  const { heuristicFill, needsArgument } = await import("./platform-intent-select")
+  const t = { name: "transcribe", describe: "", run: "iris transcribe [url]", score: 0 }
+  expect(heuristicFill(t, "transcribe this video")).toBe("iris transcribe <url>")
+  expect(needsArgument(heuristicFill(t, "transcribe this video"))).toBe(true)
+  expect(heuristicFill(t, "transcribe https://youtu.be/x")).toBe("iris transcribe https://youtu.be/x")
+  // optional non-inputs still drop
+  expect(
+    heuristicFill(
+      { name: "genesis export", describe: "", run: "iris genesis export <slug> [out]", score: 0 },
+      "export it",
+    ),
+  ).toBe("iris genesis export <slug>")
+})
