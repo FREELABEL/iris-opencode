@@ -18,7 +18,7 @@ a quarter of a second.
 How it works, with the measurements: https://heyiris.io/p/iris-intent-how-it-works
 
 ## Prerequisites
-- IRIS CLI **v1.3.290 or later** — check with `iris --version`, update with `iris upgrade`
+- IRIS CLI **v1.3.291 or later** (agent suggestions need 1.3.291) — check with `iris --version`, update with `iris upgrade`
 - Signed in (`iris auth`)
 - For the best picks, the local Decide service (powered by Jev) running on this machine.
   Without it, `iris intent` still answers, using the platform classifier and then plain search
@@ -57,14 +57,28 @@ Put the video's URL in place of `<url>` (or include it in your request and it's 
 guided, multi-step procedure such as `iris playbook run genesis-bespoke` — instead of a single
 command.
 
-### 3. See more options (5–30)
+### 3. Let it pick one of your agents
+Some jobs belong to an agent, not a single command. `iris intent` looks through your own AI agents
+in the same decision and adds a hand-off line when it's sure:
+```bash
+$ iris intent "program a DJ mix for The Function"
+  → iris discover playlist <url>
+  → iris agents chat 695 "program a DJ mix for The Function"
+```
+It hands off only when Decide is at least 75% sure the job is an agent's and 85% sure which agent;
+otherwise agents just appear in the ranked list. Human team members and test/benchmark agents are
+never suggested. An agent with a clear description of what it's for is much easier to match, so
+fill in your agents' descriptions (`iris agents update <id> --description "…"`).
+`--skip-agents` leaves agents out entirely.
+
+### 4. See more options (5–30)
 ```bash
 $ iris intent "build a website for my coffee shop" --top 20
 ```
 Every candidate gets its own "would this help?" score in the same call, so asking for 20 costs
 no more time than asking for 5.
 
-### 4. Let a model write the arguments (slower)
+### 5. Let a model write the arguments (slower)
 ```bash
 $ iris intent "find places to eat in austin texas" --fill
   → iris geo nearby "Austin, Texas"
@@ -76,18 +90,19 @@ $ iris intent "find places to eat in austin texas" --fill
 have saved that shape the answer. It adds **3–12 seconds**. It can only fill arguments for the
 commands Decide picked; it can't swap in a different command.
 
-### 5. Run it
+### 6. Run it
 ```bash
 $ iris intent "check platform health" --run
 ```
 Runs the first command. If it still has a `<placeholder>`, it stops and prints the command for
 you to complete instead of guessing.
 
-### 6. Use it from an agent or a script
+### 7. Use it from an agent or a script
 ```bash
 $ iris intent "connect my instagram" --json
 ```
-Returns `choice`, `run`, `commands[]`, `related[]` (with a `relevance` score each),
+Returns `choice`, `run`, `commands[]`, `related[]` (with a `relevance` score each), `agent`
+(`id`, `name`, `confidence`, `delegate`, `handed_off`),
 `decided_by`, `fell_back[]` (why any engine was skipped) and `timing` (`decide_ms`, `fill_ms`,
 `total_ms`).
 
@@ -100,6 +115,7 @@ Returns `choice`, `run`, `commands[]`, `related[]` (with a `relevance` score eac
 | `--run` | Run the first command, unless it still needs an argument |
 | `--json` | Machine-readable answer, with timings and fallbacks |
 | `--via decide\|platform\|keyword` | Force one engine; `keyword` is plain search order |
+| `--skip-agents` | Leave your agents out of the decision |
 | `--limit N` | How many search candidates Decide chooses between (default 12) |
 | `--choices a,b` | The older mode: sort a message into your own labels |
 
