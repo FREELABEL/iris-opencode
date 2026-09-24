@@ -226,8 +226,16 @@ export function buildRelationshipGraph(input: GraphInputs): { nodes: GraphNode[]
   const memoryHub = lists.length > 0 ? addHub("memory-hub", "Memory", "memory", plural(lists.length, "list")) : null
   const deployed = input.deployedAgentIds ?? new Set(agents.map((a) => a.id))
   for (const list of lists) {
-    const listType = inferType(list.title)
-    addNode("list-" + list.id, list.title || "List", listType, { size: 16 })
+    /*
+     * A LIST IS STRUCTURE, NOT A SUBJECT.
+     *
+     * Lists were typed by inferType(title), which almost always fell through to "brand" — so a
+     * list, its cards and an actual brand all drew the same green, and a project board read as
+     * one undifferentiated mass (board 517: 89 of 129 nodes "brand"). A list is now its own
+     * type and a card another, so the two things a board is MADE of are told apart on sight.
+     * Mirrored in ELON's Board.vue, which is what the golden pins.
+     */
+    addNode("list-" + list.id, list.title || "List", "list", { size: 16 })
     if (memoryHub) edges.push({ source: memoryHub, target: "list-" + list.id })
     /*
      * CARDS ARE CAPPED PER LIST — the one deliberate divergence from drawing every row.
@@ -245,7 +253,8 @@ export function buildRelationshipGraph(input: GraphInputs): { nodes: GraphNode[]
     const shownCards = list.cards.slice(0, MAX_CARDS_PER_LIST)
     const hiddenCards = list.cards.length - shownCards.length
     if (hiddenCards > 0) {
-      addNode("list-" + list.id + "-more", "+" + hiddenCards + " more", listType, {
+      // It stands for hidden CARDS, so it is coloured as one.
+      addNode("list-" + list.id + "-more", "+" + hiddenCards + " more", "item", {
         subtitle: list.title || "",
         size: clusterSize(hiddenCards),
       })
@@ -253,7 +262,9 @@ export function buildRelationshipGraph(input: GraphInputs): { nodes: GraphNode[]
     }
     for (const item of shownCards) {
       const itemLabel = String(item.title || "Item")
-      const type = inferType(itemLabel) !== "brand" ? inferType(itemLabel) : listType
+      // A card keeps a type its title genuinely implies (an event, a venue, a person);
+      // otherwise it is just a card, which is most of them.
+      const type = inferType(itemLabel) !== "brand" ? inferType(itemLabel) : "item"
       addNode("item-" + item.id, itemLabel.length > 30 ? itemLabel.slice(0, 28) + "..." : itemLabel, type, {
         subtitle: list.title || "",
         size: 12,

@@ -129,17 +129,22 @@ export const NODE_TYPES: Record<string, { label: string; color: string; icon: st
   workflow: { label: "Workflows", color: "#2dd4bf", icon: "M5 6h6v4H5zM13 14h6v4h-6zM8 10v6h5" },
   program: { label: "Programs", color: "#fb923c", icon: "M3 9l9-4 9 4-9 4zM7 12v5c0 1 2 2 5 2s5-1 5-2v-5" },
   leadcluster: { label: "Lead Groups", color: "#f472b6", icon: "M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM3 20a6 6 0 0 1 12 0M15 20a6 6 0 0 1 6-6" },
-  memory: { label: "Memory", color: "#a3a3a3", icon: "M4 7c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zm0 0v10c0 1.7 3.6 3 8 3s8-1.3 8-3V7" },
+  memory: { label: "Memory", color: "#a78bfa", icon: "M4 7c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zm0 0v10c0 1.7 3.6 3 8 3s8-1.3 8-3V7" },
   playbook: { label: "Playbooks", color: "#facc15", icon: "M4 5h7v15H4zM13 5h7v15h-7zM11 5v15" },
+  list: { label: "Lists", color: "#a3e635", icon: "M4 5h4v14H4zM10 5h4v14h-4zM16 5h4v14h-4z" },
+  item: { label: "Cards", color: "#cbd5e1", icon: "M5 4h14v11l-4 5H5zM19 15h-4v5" },
 }
 /*
- * EXACTLY ELON'S 14 — `page` and `list` were removed, not forgotten.
+ * ELON'S 14, PLUS `list` AND `item` — and `page` is still gone.
  *
- * Both were desktop-only types added while /iris/graph/:id drew its own Lists/Pages hubs. Once
- * that endpoint was ported onto ELON's relationshipGraphData (#185584), nothing emits either:
- * lists hang under ELON's Memory hub typed by inferType, which only ever returns ELON types, and
- * Genesis pages are not part of ELON's graph at all. A type nothing emits is a legend chip that
- * can never appear and an icon nobody will see drift out of date.
+ * All three were once desktop-only types, dropped when /iris/graph/:id was ported onto ELON's
+ * relationshipGraphData (#185584) because nothing emitted them: lists and cards were typed by
+ * inferType, which only returns ELON's vocabulary. That typing is what made a project board
+ * unreadable — inferType falls through to "brand" for almost every list and card, so 89 of
+ * board 517's 129 nodes drew the same green as an actual brand, and structure was invisible.
+ * Both ends now emit `list` for a column and `item` for a card, so both are back here. `page`
+ * is not: Genesis pages are still not part of ELON's graph, and a type nothing emits is a
+ * legend chip that can never appear and an icon nobody will see drift out of date.
  */
 export const DEFAULT_TYPE = "bloq"
 export const nodeStyle = (t?: string) => NODE_TYPES[t ?? DEFAULT_TYPE] ?? NODE_TYPES[DEFAULT_TYPE]

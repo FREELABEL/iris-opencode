@@ -338,7 +338,7 @@
     {
      "id": "list-900",
      "name": "Venue Scouting",
-     "type": "venue",
+     "type": "list",
      "size": 16
     },
     {
@@ -358,33 +358,33 @@
     {
      "id": "item-3",
      "name": "A very long item title that ...",
-     "type": "venue",
+     "type": "item",
      "subtitle": "Venue Scouting",
      "size": 12
     },
     {
      "id": "item-4",
      "name": "Item",
-     "type": "venue",
+     "type": "item",
      "subtitle": "Venue Scouting",
      "size": 12
     },
     {
      "id": "list-901",
      "name": "Untitled List",
-     "type": "brand",
+     "type": "list",
      "size": 16
     },
     {
      "id": "list-902",
      "name": "Team Contacts",
-     "type": "person",
+     "type": "list",
      "size": 16
     },
     {
      "id": "item-5",
      "name": "Plain thing",
-     "type": "person",
+     "type": "item",
      "subtitle": "Team Contacts",
      "size": 12
     },

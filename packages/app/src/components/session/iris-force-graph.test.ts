@@ -44,10 +44,11 @@ describe("the vocabulary is Elon's, not a parallel one", () => {
     // does not have, and the fix would be to bump a number — which is how a vocabulary drifts
     // without anyone deciding to. Naming the extras makes each one a decision on the record.
     const extras = Object.keys(NODE_TYPES).filter((t) => !ELON_14.includes(t))
-    // Empty since #185584 ported the interior onto ELON's own rules: `page` and `list` were
-    // desktop-only and nothing emits them now. Adding one back should fail here until someone
-    // decides it on purpose.
-    expect(extras).toEqual([])
+    // `list` and `item` are declared: both ends now type a column `list` and a card `item`
+    // instead of running their titles through inferType, which fell through to "brand" for
+    // almost all of them — board 517 drew 89 of its 129 nodes in one green and structure was
+    // invisible. `page` is still absent: Genesis pages are not part of ELON's graph.
+    expect(extras).toEqual(["list", "item"])
   })
 
   test("every type has an inline icon path, never a font glyph name", () => {
