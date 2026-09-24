@@ -4,26 +4,31 @@ import { irisFetch, IRIS_API, dim, bold, highlight, printDivider } from "./iris-
 import { loadIndex, searchCapabilities } from "./platform-find"
 
 /**
- * `iris intent "<what you want to do>"` — TOOL SELECTION: the one iris command to run.
+ * `iris intent "<what you want to do>"` — TOOL SELECTION, by the Decide engine.
  *
- * `iris find` is a search and lists what matches. This picks. find's top commands are the
- * candidates; a chooser picks one, because keyword order is often wrong at rank 1 while the right
- * command sits at 2 or 3 (S6, 20 intents: keyword 15/20 at @1, Decide rerank 19/20).
+ * `iris find` is traditional search: it lists what matches. `intent` DECIDES. find's top commands
+ * are the candidates, and Decide answers three questions about them in one call:
+ *   command  which candidate fulfils the request (a `choice`, descriptions as criteria)
+ *   web      would a web search help?            (boolean)
+ *   atlas    would the user's saved Atlas notes help?  (boolean)
+ * That is the decision. A nano model then only FILLS ARGUMENTS for the commands Decide picked —
+ * it chooses nothing, and a line for any other command is dropped.
  *
- * Choosers, first that answers wins — it ALWAYS answers:
- *   1. the Decide service   POST $DECIDE_URL/decide (default http://127.0.0.1:3210), a `choice`
- *                           over the candidate names with each command's description as criteria
- *   2. the platform         POST /api/v1/intent with the candidate names as `choices` — the same
- *                           IntentClassifier the agent router uses (nano models), for installs
- *                           with no Decide service
- *   3. find's own order     and it says which chooser failed and why
- * A chooser's answer only counts if it is one of the candidates — never a command it made up.
+ *   "find places to eat in austin" -> Decide: web-search · web yes · atlas yes
+ *     -> iris web-search "places to eat in Austin"
+ *        iris atlas search "favorite foods"
+ *        iris atlas search "family"
  *
- * `iris intent "<text>" --choices a,b` is the older classifier and is unchanged.
+ * Choosers, first that answers: Decide ($DECIDE_URL, default http://127.0.0.1:3210); the platform
+ * classifier (/api/v1/intent — for installs with no Decide service); find's own order. It always
+ * answers, and says which failed and why. Keyword order alone is 5/20 at @1 on our intent set;
+ * Decide is 16/20.
+ *
+ * `iris intent "<text>" --choices a,b` is the older label classifier and is unchanged.
  */
 
 export type Candidate = { name: string; describe: string; run: string; score: number }
-type Pick = { candidate: Candidate; by: string; confidence?: number; ms?: number }
+type Pick = { candidate: Candidate; by: string; confidence?: number; ms?: number; extras?: string[] }
 
 const decideUrl = () => (process.env.DECIDE_URL || "http://127.0.0.1:3210").replace(/\/$/, "")
 
@@ -59,7 +64,7 @@ export function argv(line: string): string[] {
 
 /**
  * Which candidate a full command line runs — the LONGEST candidate name it starts with, on word
- * boundaries — or undefined. This is what stops the planner from inventing a command.
+ * boundaries — or undefined. This is what stops a model from inventing a command.
  */
 export function commandOf(line: string, candidates: Candidate[]): Candidate | undefined {
   const words = argv(line.trim())
@@ -83,8 +88,25 @@ export function decidePayload(text: string, candidates: Candidate[]) {
         options: candidates.map((c) => c.name),
         criteria: Object.fromEntries(candidates.map((c) => [c.name, c.describe || ""])),
       },
+      web: { type: "boolean", instructions: "Would searching the open web help fulfil this request?" },
+      atlas: {
+        type: "boolean",
+        instructions:
+          "Could things the user has saved about themselves — tastes, favourite foods, family, past choices, notes — " +
+          "personalise or improve the answer?",
+      },
     },
   }
+}
+
+/** Decide's yes/no answers -> the extra commands they add beside its pick. */
+export function extrasFrom(answers: any, picked: string, candidates: Candidate[]): string[] {
+  const out: string[] = []
+  const yes = (k: string) => answers?.[k]?.value === true
+  if (yes("web") && picked !== "web-search" && candidates.some((c) => c.name === "web-search")) out.push("web-search")
+  if (yes("atlas") && picked !== "atlas search" && candidates.some((c) => c.name === "atlas search"))
+    out.push("atlas search")
+  return out
 }
 
 /** Only an answer that names a candidate counts. */
@@ -108,6 +130,7 @@ async function viaDecide(text: string, candidates: Candidate[], timeoutMs: numbe
       by: `decide${r?.meta?.engine ? `:${r.meta.engine}` : ""}`,
       confidence: r?.answers?.command?.confidence,
       ms: r?.meta?.latency_ms,
+      extras: extrasFrom(r?.answers, c.name, candidates),
     }
   } catch (e) {
     const m = e instanceof Error ? e.message : String(e)
@@ -136,52 +159,77 @@ async function viaPlatform(text: string, candidates: Candidate[]): Promise<Pick 
   }
 }
 
-const PLANNER_MODEL = "gpt-4.1-nano"
+const FILL_MODEL = "gpt-4.1-nano"
+
+let _all: Candidate[] | undefined
+/** Every command in the index, as candidates — to resolve what a filled line REALLY runs. */
+const allCommands = () =>
+  (_all ??= loadIndex()
+    .entries.filter((e) => e.kind === "command")
+    .map((e) => ({ name: e.name, describe: e.describe, run: e.run, score: 0 })))
+
+/** The command with its first placeholder filled by the request itself — the no-model fallback. */
+export function heuristicFill(c: Candidate, text: string): string {
+  const q = `"${text.replace(/"/g, "'")}"`
+  return /<[^>]+>|\[[^\]]+\]/.test(c.run)
+    ? c.run.replace(/<[^>]+>|\[[^\]]+\]/, q).replace(/\s*(<[^>]+>|\[[^\]]+\])/g, "")
+    : c.run
+}
 
 /**
- * The PLANNER: up to 3 complete commands, arguments filled in, for the request — e.g.
- * "find places to eat in austin" -> web-search "places to eat in austin" and an Atlas search for
- * what the user has saved about food. A nano model through the IRIS proxy (the same rail as
- * article-qa), so every signed-in install has it. Every line is checked against the candidates.
+ * ARGUMENTS ONLY. Decide has already chosen `chosen`; a nano model (IRIS proxy, the article-qa
+ * rail) writes their arguments — the web query, and for atlas search the PERSONAL context worth
+ * looking up (e.g. "favorite foods", "family"). A line for any command not in `chosen` is dropped,
+ * so the model cannot change the decision. Any command it leaves out gets heuristicFill.
  */
-async function viaPlanner(text: string, candidates: Candidate[]): Promise<{ lines: string[]; ms: number } | string> {
-  const t0 = Date.now()
-  const tools = candidates.map((c) => `- ${c.run}  — ${c.describe}`).join("\n")
+async function fillArguments(text: string, chosen: Candidate[]): Promise<{ lines: string[]; filled: boolean }> {
+  const fallback = { lines: chosen.map((c) => heuristicFill(c, text)), filled: false }
+  const spec = chosen.map((c) => `- ${c.run}  — ${c.describe}`).join("\n")
   try {
     const res = await irisFetch(
       "/api/v6/openai/chat/completions",
       {
         method: "POST",
         body: JSON.stringify({
-          model: PLANNER_MODEL,
+          model: FILL_MODEL,
           temperature: 0.2,
-          max_tokens: 400,
+          // The IRIS proxy spends tokens on a <think> preamble even for nano (#186551); 300 ran out
+          // inside it and returned no commands at all (finish_reason "length").
+          max_tokens: 1500,
           response_format: { type: "json_object" },
           messages: [
             {
               role: "system",
               content:
-                "You turn a request into IRIS CLI commands. Use ONLY the commands listed, with their exact names, " +
-                "and fill every <placeholder> or [optional] argument with concrete text from the request (quote multi-word " +
-                "arguments with double quotes). Return 1 to 3 commands, best first. When the request is about finding or " +
-                "choosing something in the world (food, places, gifts, trips), answer with a web search first, then " +
-                "Atlas searches for PERSONAL context the user may have saved that shapes the choice — e.g. for places " +
-                'to eat: atlas search "favorite foods" and atlas search "family". Answer JSON: {"commands":["iris ..."]}.',
+                "Fill in the arguments of the given IRIS CLI commands for the request. Use exactly these commands, in this " +
+                "order, and no others. Replace every <placeholder> or [optional] argument with concrete text (double-quote " +
+                "multi-word arguments). For `iris atlas search`, give up to 2 searches for PERSONAL context the user may " +
+                'have saved that shapes the answer (for places to eat: "favorite foods" and "family"). ' +
+                'Answer JSON: {"commands":["iris ..."]}.',
             },
-            { role: "user", content: `Commands:\n${tools}\n\nRequest: ${text}` },
+            { role: "user", content: `Commands:\n${spec}\n\nRequest: ${text}` },
           ],
         }),
       },
       IRIS_API,
     )
-    if (!res.ok) return `planner: HTTP ${res.status}`
+    if (!res.ok) return fallback
     const content: string = ((await res.json()) as any)?.choices?.[0]?.message?.content ?? ""
-    const lines = [...new Set(commandLines(content).map((l) => l.trim()))]
-      .filter((l) => commandOf(l, candidates) && !/[;&|`$<>]/.test(l.replace(/"[^"]*"/g, "")))
-      .slice(0, 3)
-    return lines.length ? { lines, ms: Date.now() - t0 } : "planner: no usable command"
-  } catch (e) {
-    return `planner: ${e instanceof Error ? e.message : String(e)}`
+    // Resolved against EVERY command, not just the chosen ones: "iris leads pull" starts with the
+    // chosen `leads` but is a different command — the filler must not change Decide's decision.
+    const lines = [...new Set(commandLines(content).map((l) => l.trim()))].filter((l) => {
+      const c = commandOf(l, chosen)
+      return c && commandOf(l, allCommands())?.name === c.name && !/[;&|`$<>]/.test(l.replace(/"[^"]*"/g, ""))
+    })
+    // Every chosen command appears: filled if the model covered it, heuristically if it did not.
+    const out: string[] = []
+    for (const c of chosen) {
+      const mine = lines.filter((l) => commandOf(l, chosen) === c).slice(0, c.name === "atlas search" ? 2 : 1)
+      out.push(...(mine.length ? mine : [heuristicFill(c, text)]))
+    }
+    return { lines: out, filled: lines.length > 0 }
+  } catch {
+    return fallback
   }
 }
 
@@ -211,7 +259,7 @@ export async function selectTool(a: {
   limit?: number
   decide?: boolean
   platform?: boolean
-  plan?: boolean
+  fill?: boolean
   timeout?: number
 }) {
   const text = a.text.trim()
@@ -225,16 +273,7 @@ export async function selectTool(a: {
 
   const misses: string[] = []
   let pick: Pick | undefined
-  let lines: string[] | undefined
-  if (a.plan !== false) {
-    const r = await viaPlanner(text, candidates)
-    if (typeof r === "string") misses.push(r)
-    else {
-      lines = r.lines
-      pick = { candidate: commandOf(r.lines[0], candidates)!, by: `planner:${PLANNER_MODEL}`, ms: r.ms }
-    }
-  }
-  if (!pick && candidates.length === 1) pick = { candidate: candidates[0], by: "only candidate" }
+  if (candidates.length === 1) pick = { candidate: candidates[0], by: "only candidate" }
   if (!pick && a.decide !== false) {
     const r = await viaDecide(text, candidates, a.timeout || 20000)
     if (typeof r === "string") misses.push(r)
@@ -247,7 +286,12 @@ export async function selectTool(a: {
   }
   const chosen = pick ?? { candidate: candidates[0], by: "keyword" }
   const best = chosen.candidate
-  const commands = lines ?? [best.run]
+  const picked = [best, ...(chosen.extras ?? []).map((n) => candidates.find((c) => c.name === n)!).filter(Boolean)]
+  const filled =
+    a.fill === false
+      ? { lines: picked.map((c) => heuristicFill(c, text)), filled: false }
+      : await fillArguments(text, picked)
+  const commands = filled.lines
 
   if (a.json) {
     console.log(
@@ -258,6 +302,8 @@ export async function selectTool(a: {
           run: commands[0],
           commands,
           decided_by: chosen.by,
+          decided: picked.map((c) => c.name),
+          arguments_by: filled.filled ? FILL_MODEL : "request text",
           confidence: chosen.confidence ?? null,
           ms: chosen.ms ?? null,
           fell_back: misses,

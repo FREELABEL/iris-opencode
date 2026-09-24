@@ -28,3 +28,20 @@ describe("iris intent — tool selection", () => {
     expect(needsArgument('iris web-search "x"')).toBe(false)
   })
 })
+
+test("Decide's yes/no answers add web-search and atlas search beside its pick", async () => {
+  const { extrasFrom } = await import("./platform-intent-select")
+  const pool = [c("geo nearby"), c("web-search"), c("atlas search")]
+  expect(extrasFrom({ web: { value: true }, atlas: { value: true } }, "geo nearby", pool)).toEqual([
+    "web-search",
+    "atlas search",
+  ])
+  expect(extrasFrom({ web: { value: true }, atlas: { value: false } }, "web-search", pool)).toEqual([])
+})
+test("no model: the request fills the first placeholder", async () => {
+  const { heuristicFill } = await import("./platform-intent-select")
+  expect(
+    heuristicFill({ name: "web-search", describe: "", run: "iris web-search [query]", score: 0 }, "places to eat"),
+  ).toBe('iris web-search "places to eat"')
+  expect(heuristicFill({ name: "monitor", describe: "", run: "iris monitor", score: 0 }, "x")).toBe("iris monitor")
+})

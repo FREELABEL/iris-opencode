@@ -190,9 +190,9 @@ export const PlatformIntentCommand = cmd({
       .option("limit", { describe: "how many of find's commands to choose between", type: "number", default: 12 })
       .option("via", {
         describe:
-          "who picks: auto = planner (nano, fills arguments), then the Decide service, then the platform, then find's order",
+          "who decides: auto = the Decide engine, then the platform classifier, then find's order",
         type: "string",
-        choices: ["auto", "plan", "decide", "platform", "keyword"],
+        choices: ["auto", "decide", "platform", "keyword"],
         default: "auto",
       })
       .example('iris intent "connect my instagram"', "which iris command does this?")
@@ -219,7 +219,6 @@ export const PlatformIntentCommand = cmd({
         json: a.json,
         run: a.run,
         limit: Number(a.limit) || 12,
-        plan: a.via === "auto" || a.via === "plan",
         decide: a.via === "auto" || a.via === "decide",
         platform: a.via === "auto" || a.via === "platform",
       })
