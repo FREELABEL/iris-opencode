@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { irisFetch, requireAuth, writeJson, dim, bold, success, warn, IRIS_API } from "./iris-api"
 import { UI } from "../ui"
+import { selectTool } from "./platform-intent-select"
 
 // ============================================================================
 // iris intent — which of these does this mean?
@@ -52,7 +53,10 @@ const BenchCommand = cmd({
   describe: "measure which model routes YOUR traffic best — one row per provider, on the same cases",
   builder: (yargs) =>
     yargs
-      .option("cases", { describe: "JSON file of {input, expect} cases — omit to use the shipped demo set", type: "string" })
+      .option("cases", {
+        describe: "JSON file of {input, expect} cases — omit to use the shipped demo set",
+        type: "string",
+      })
       .option("models", { describe: "comma-separated providers to compare", type: "string", default: "rules" })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .example("iris intent bench", "the shipped demo set, local rules only — free and instant")
@@ -148,7 +152,9 @@ const BenchCommand = cmd({
 
     UI.empty()
     console.log(`  ${dim("wrong = confidently routed and WRONG. coverage only counts if precision holds.")}`)
-    console.log(`  ${dim("no cost column: we do not carry trustworthy per-token pricing — multiply reqs by your own rate.")}`)
+    console.log(
+      `  ${dim("no cost column: we do not carry trustworthy per-token pricing — multiply reqs by your own rate.")}`,
+    )
     UI.empty()
   },
 })
@@ -156,7 +162,7 @@ const BenchCommand = cmd({
 export const PlatformIntentCommand = cmd({
   command: "intent [text]",
   aliases: ["classify"],
-  describe: "which of these does this mean? — decided by local rules when they cover it, a model when they don't",
+  describe: "pick the iris command for what you want to do — or, with --choices, which of your labels a message means",
   builder: (yargs) =>
     yargs
       // Subcommands registered BEFORE the positional. With `intent [text]` and `.command()`
@@ -164,7 +170,7 @@ export const PlatformIntentCommand = cmd({
       // hid its own — the command routed correctly and documented itself wrongly, which is the
       // worse half of that bug.
       .command(BenchCommand)
-      .positional("text", { describe: "the message to route", type: "string" })
+      .positional("text", { describe: "what you want to do, in your own words", type: "string" })
       .option("choices", {
         describe: "comma-separated labels to choose between (default: the built-in simple/complex)",
         type: "string",
@@ -176,17 +182,47 @@ export const PlatformIntentCommand = cmd({
       })
       .option("model", { describe: "model to escalate to (nano only)", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
-      .example('iris intent "find my overdue leads"', "route one message")
+      .option("run", {
+        describe: "run the picked command (not if it still needs an argument)",
+        type: "boolean",
+        default: false,
+      })
+      .option("limit", { describe: "how many of find's commands to choose between", type: "number", default: 12 })
+      .option("via", {
+        describe:
+          "who picks: auto = planner (nano, fills arguments), then the Decide service, then the platform, then find's order",
+        type: "string",
+        choices: ["auto", "plan", "decide", "platform", "keyword"],
+        default: "auto",
+      })
+      .example('iris intent "connect my instagram"', "which iris command does this?")
+      .example('iris intent "check platform health" --run', "pick it and run it")
+      .example('iris intent "find my overdue leads" --choices simple,complex', "classify into your own labels")
       .example('iris intent "card charged twice" --choices billing,support,sales', "your own labels")
       .example('iris intent "..." --local-only', "refuse to egress when the rules miss"),
   async handler(args) {
     const a = args as any
     // `iris intent` with nothing is a request for help, not an error.
     if (!a.text) {
-      prompts.log.info("Pass a message to route, or run `iris intent bench` to compare providers.")
-      prompts.log.info(dim('  iris intent "Read my latest emails from Gmail"'))
+      prompts.log.info("Say what you want to do, and it picks the iris command:")
+      prompts.log.info(dim('  iris intent "connect my instagram"'))
+      prompts.log.info(dim('  iris intent "card charged twice" --choices billing,support,sales'))
       prompts.log.info(dim("  iris intent bench --models rules,gpt-4.1-nano"))
       return
+    }
+    // TOOL SELECTION is the default: `iris intent "<text>"` answers "which iris command?".
+    // The label classifier below runs only when the caller brings its own --choices.
+    if (!a.choices && !a["local-only"] && !a.model) {
+      // String(): a numeric-looking text arrives from yargs as a number.
+      return selectTool({
+        text: String(a.text),
+        json: a.json,
+        run: a.run,
+        limit: Number(a.limit) || 12,
+        plan: a.via === "auto" || a.via === "plan",
+        decide: a.via === "auto" || a.via === "decide",
+        platform: a.via === "auto" || a.via === "platform",
+      })
     }
     if (!(await requireAuth())) return
 

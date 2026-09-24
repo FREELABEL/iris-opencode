@@ -32,7 +32,7 @@ import embeddedIndex from "../../../capabilities.json"
  * to 15 of 120 before anyone noticed.
  */
 
-type Entry = {
+export type Entry = {
   kind: "command" | "how-to" | "playbook" | "skill"
   name: string
   describe: string
@@ -41,7 +41,7 @@ type Entry = {
   haystack: string
 }
 
-type Index = {
+export type Index = {
   counts: Record<string, number>
   terms: Record<string, string[]>
   entries: Entry[]
@@ -58,7 +58,7 @@ type Index = {
  * `process.cwd()` is deliberately NOT a candidate: any directory containing an unrelated
  * `capabilities.json` would silently take over the search results.
  */
-function loadIndex(): Index {
+export function loadIndex(): Index {
   for (const p of [
     join(import.meta.dir, "../../../capabilities.json"),
     join(import.meta.dir, "../../../../capabilities.json"),
@@ -139,6 +139,62 @@ function score(e: Entry, terms: string[], raw: string, rarity: Map<string, numbe
   return s
 }
 
+/**
+ * The ranking behind `iris find`, callable in-process — `iris intent` reranks its top commands.
+ * Keyword + terminology-map + rarity scoring; highest first.
+ */
+export function searchCapabilities(
+  index: Index,
+  raw: string,
+  kind: Entry["kind"] | undefined,
+  limit: number,
+): { e: Entry; s: number }[] {
+  const terms = raw.split(/\s+/).filter((t) => t.length > 1)
+
+  // Expand the query through the terminology map, so intent words reach internal nouns.
+  // This is the part that makes "artifact" find `bespoke`.
+  const expanded = new Set(terms)
+  // How many of each topic's phrases the query actually used. One incidental "website" must not
+  // tie with "find people … email them … book calls" — the topic the query keeps pointing at wins.
+  const topicHits = new Map<string, number>()
+  for (const [noun, synonyms] of Object.entries(index.terms)) {
+    // WHOLE WORDS, not substrings: "web-SITE" used to fire the pages synonym "site", so a sales
+    // question containing "website" returned page-building tools (2026-09-19).
+    if (synonyms.some((s) => phraseIn(raw, s)) || terms.includes(noun)) {
+      expanded.add(noun)
+      topicHits.set(noun, synonyms.filter((s) => phraseIn(raw, s)).length)
+      for (const s of synonyms) for (const w of s.split(/\s+/)) expanded.add(w)
+    }
+  }
+
+  let pool = index.entries
+  if (kind) pool = pool.filter((e) => e.kind === kind)
+
+  // How rare is each query term across the whole index? Cheap to compute (1,300 entries
+  // x a handful of terms) and it is what lets a distinctive word beat a common one.
+  const rarity = new Map<string, number>()
+  for (const t of expanded) {
+    const df = index.entries.reduce((n, e) => n + (e.haystack.includes(t) ? 1 : 0), 0)
+    // 1 doc -> ~28pts, 10 -> ~18, 100 -> ~9, everywhere -> ~2. Floored so a common term
+    // still counts for something; a word the user typed is never worth zero.
+    const total = index.entries.length
+    rarity.set(t, df === 0 ? 0 : Math.max(2, Math.round(12 * Math.log10(total / df))))
+  }
+
+  return pool
+    .map((e) => {
+      let s = score(e, [...expanded], raw, rarity)
+      // Topic weight: an entry NAMED for a topic the query hit several times ranks up with each hit.
+      if (s > 0)
+        for (const [noun, n] of topicHits)
+          if (n > 1 && e.name.toLowerCase().includes(noun.replace(/s$/, ""))) s += 15 * n
+      return { e, s }
+    })
+    .filter((h) => h.s > 0)
+    .sort((a, b) => b.s - a.s)
+    .slice(0, Math.max(1, limit))
+}
+
 export const PlatformFindCommand = cmd({
   command: "find [query..]",
   aliases: ["search-commands", "capabilities", "what-can-i"],
@@ -185,54 +241,16 @@ export const PlatformFindCommand = cmd({
       return
     }
 
-    const terms = raw.split(/\s+/).filter((t) => t.length > 1)
-
-    // Expand the query through the terminology map, so intent words reach internal nouns.
-    // This is the part that makes "artifact" find `bespoke`.
-    const expanded = new Set(terms)
-    // How many of each topic's phrases the query actually used. One incidental "website" must not
-    // tie with "find people … email them … book calls" — the topic the query keeps pointing at wins.
-    const topicHits = new Map<string, number>()
-    for (const [noun, synonyms] of Object.entries(index.terms)) {
-      // WHOLE WORDS, not substrings: "web-SITE" used to fire the pages synonym "site", so a sales
-      // question containing "website" returned page-building tools (2026-09-19).
-      if (synonyms.some((s) => phraseIn(raw, s)) || terms.includes(noun)) {
-        expanded.add(noun)
-        topicHits.set(noun, synonyms.filter((s) => phraseIn(raw, s)).length)
-        for (const s of synonyms) for (const w of s.split(/\s+/)) expanded.add(w)
-      }
-    }
-
-    let pool = index.entries
-    if (args.kind) pool = pool.filter((e) => e.kind === args.kind)
-
-    // How rare is each query term across the whole index? Cheap to compute (1,300 entries
-    // x a handful of terms) and it is what lets a distinctive word beat a common one.
-    const rarity = new Map<string, number>()
-    for (const t of expanded) {
-      const df = index.entries.reduce((n, e) => n + (e.haystack.includes(t) ? 1 : 0), 0)
-      // 1 doc -> ~28pts, 10 -> ~18, 100 -> ~9, everywhere -> ~2. Floored so a common term
-      // still counts for something; a word the user typed is never worth zero.
-      const total = index.entries.length
-      rarity.set(t, df === 0 ? 0 : Math.max(2, Math.round(12 * Math.log10(total / df))))
-    }
-
-    const hits = pool
-      .map((e) => {
-        let s = score(e, [...expanded], raw, rarity)
-        // Topic weight: an entry NAMED for a topic the query hit several times ranks up with each hit.
-        if (s > 0) for (const [noun, n] of topicHits) if (n > 1 && e.name.toLowerCase().includes(noun.replace(/s$/, ""))) s += 15 * n
-        return { e, s }
-      })
-      .filter((h) => h.s > 0)
-      .sort((a, b) => b.s - a.s)
-      .slice(0, Math.max(1, Number(args.limit) || 12))
+    const hits = searchCapabilities(index, raw, args.kind as Entry["kind"] | undefined, Number(args.limit) || 12)
 
     if (args.json) {
-      console.log(JSON.stringify(
-        { query: raw, matched: hits.length, results: hits.map((h) => ({ ...h.e, haystack: undefined, score: h.s })) },
-        null, 2,
-      ))
+      console.log(
+        JSON.stringify(
+          { query: raw, matched: hits.length, results: hits.map((h) => ({ ...h.e, haystack: undefined, score: h.s })) },
+          null,
+          2,
+        ),
+      )
       return
     }
 
