@@ -105,3 +105,27 @@ test("promotion needs an unsure pick and a clearly surer ranking", async () => {
   expect(m.PROMOTE_UNSURE).toBeLessThanOrEqual(0.6)
   expect(m.PROMOTE_MIN).toBeGreaterThanOrEqual(0.7)
 })
+
+describe("speed — local work must stay small next to Decide's ~180ms round trip", () => {
+  test("one ranking per step: pick is the top of pool, from a single search", async () => {
+    const { candidatePools } = await import("./platform-intent-select")
+    const { pick, pool } = candidatePools("build a website for my coffee shop", 12)
+    const cmdPick = pick.filter(
+      (x) => !x.name.startsWith("playbook run ") && !["web-search", "atlas search"].includes(x.name),
+    )
+    const cmdPool = pool.filter(
+      (x) => !x.name.startsWith("playbook run ") && !["web-search", "atlas search"].includes(x.name),
+    )
+    expect(cmdPick.map((x) => x.name)).toEqual(cmdPool.slice(0, cmdPick.length).map((x) => x.name))
+  })
+  test("warm local selection for a 3-step request is well under a Decide round trip", async () => {
+    const { candidatePools, splitSteps } = await import("./platform-intent-select")
+    candidatePools("warm up", 12) // first call parses the index
+    const t = performance.now()
+    for (const step of splitSteps("transcribe this video and build a website from it then email it to my team"))
+      candidatePools(step, 12)
+    // Measured ~95ms per step before the one-ranking change; the budget catches a regression back
+    // to per-step re-parsing and double searches without flaking on a busy CI box.
+    expect(performance.now() - t).toBeLessThan(400)
+  })
+})

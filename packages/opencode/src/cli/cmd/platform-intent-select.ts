@@ -50,34 +50,56 @@ export function leafOnly(cands: Candidate[], allNames: string[]): Candidate[] {
   return leaves.length ? leaves : cands
 }
 
-export function candidatesFor(text: string, limit: number): Candidate[] {
-  const index = loadIndex()
+/** The index and its command names, read ONCE per process — `intent` used to re-parse per step. */
+let _index: ReturnType<typeof loadIndex> | undefined
+let _names: string[] | undefined
+const index = () => (_index ??= loadIndex())
+const commandNames = () =>
+  (_names ??= index()
+    .entries.filter((e) => e.kind === "command")
+    .map((e) => e.name))
+
+/**
+ * ONE ranking per step gives both lists: the short list Decide picks from (`pick`) and the wide
+ * list it ranks for "also relevant" (`pool`). It was two searches per step at ~95ms each (measured).
+ */
+export function candidatePools(
+  text: string,
+  pickLimit: number,
+  poolLimit = 40,
+): { pick: Candidate[]; pool: Candidate[] } {
   const q = text.toLowerCase()
-  const commands = searchCapabilities(index, q, "command", limit + 6).map(({ e, s }) => ({
-    name: e.name,
-    describe: e.describe,
-    run: e.run || `iris ${e.name}`,
-    score: s,
-  }))
-  const allNames = index.entries.filter((e) => e.kind === "command").map((e) => e.name)
-  const hits = leafOnly(commands, allNames).slice(0, limit)
+  const leaves = leafOnly(
+    searchCapabilities(index(), q, "command", Math.max(pickLimit, poolLimit) + 6).map(({ e, s }) => ({
+      name: e.name,
+      describe: e.describe,
+      run: e.run || `iris ${e.name}`,
+      score: s,
+    })),
+    commandNames(),
+  )
   // PLAYBOOKS are answers too: "build a website" is best served by a playbook, not a raw command.
   // Offered as GUIDED PROJECTS, so a single action ("report a bug") still goes to its command:
   // unlabelled, playbooks won 3 of 20 simple requests from the right command (measured).
-  for (const { e, s } of searchCapabilities(index, q, "playbook", 2)) {
-    hits.push({
-      name: `playbook run ${e.name}`,
-      describe: `GUIDED PROJECT, not a single action — choose only when the request is a whole multi-step job: ${e.describe}`,
-      run: `iris playbook run ${e.name}`,
-      score: s,
+  const playbooks = searchCapabilities(index(), q, "playbook", 2).map(({ e, s }) => ({
+    name: `playbook run ${e.name}`,
+    describe: `GUIDED PROJECT, not a single action — choose only when the request is a whole multi-step job: ${e.describe}`,
+    run: `iris playbook run ${e.name}`,
+    score: s,
+  }))
+  const general = (have: Candidate[]) =>
+    GENERAL.flatMap((name) => {
+      if (have.some((h) => h.name === name)) return []
+      const e = index().entries.find((x) => x.kind === "command" && x.name === name)
+      return e ? [{ name, describe: e.describe, run: e.run, score: 0 }] : []
     })
-  }
+  const pick = [...leaves.slice(0, pickLimit), ...playbooks]
+  const pool = [...leaves.slice(0, poolLimit), ...playbooks]
+  return { pick: [...pick, ...general(pick)], pool: [...pool, ...general(pool)] }
+}
 
-  for (const name of GENERAL) {
-    const e = index.entries.find((x) => x.kind === "command" && x.name === name)
-    if (e && !hits.some((h) => h.name === name)) hits.push({ name, describe: e.describe, run: e.run, score: 0 })
-  }
-  return hits
+export function candidatesFor(text: string, limit: number): Candidate[] {
+  return candidatePools(text, limit, limit).pick
 }
 
 /** Split a command line the way a shell would for quoted words: iris atlas search "family" -> 4 args. */
@@ -228,7 +250,7 @@ const FILL_MODEL = "gpt-4.1-nano"
 let _all: Candidate[] | undefined
 /** Every command in the index, as candidates — to resolve what a filled line REALLY runs. */
 const allCommands = () =>
-  (_all ??= loadIndex()
+  (_all ??= index()
     .entries.filter((e) => e.kind === "command")
     .map((e) => ({ name: e.name, describe: e.describe, run: e.run, score: 0 })))
 
@@ -467,7 +489,8 @@ export async function selectTool(a: {
 }) {
   const text = a.text.trim()
   const steps = splitSteps(text)
-  const perStep = steps.map((step) => candidatesFor(step, a.limit || 12))
+  const pools = steps.map((step) => candidatePools(step, a.limit || 12))
+  const perStep = pools.map((p) => p.pick)
   const candidates = [...new Map(perStep.flat().map((c) => [c.name, c])).values()]
   if (!perStep.some((c) => c.length)) {
     if (a.json) console.log(JSON.stringify({ query: text, choice: null, run: null, candidates: [] }, null, 2))
@@ -485,7 +508,7 @@ export async function selectTool(a: {
   const pool = [
     ...new Map(
       steps
-        .flatMap((step) => candidatesFor(step, 40))
+        .flatMap((_, i) => pools[i].pool)
         .concat(candidates)
         .map((c) => [c.name, c]),
     ).values(),
@@ -522,11 +545,15 @@ export async function selectTool(a: {
     relatedBy = "decide"
   }
 
+  // PROMOTE — OFF BY DEFAULT (IRIS_INTENT_PROMOTE=1 to try it). Measured on script/intent-cases.json:
+  // 21/24 @1 without it, 18/24 with it — it fixed the coffee-shop case and broke three
+  // ("check platform health" → hive doctor). The relevance question is broader than "which command",
+  // so it over-rates general tools. The ranked list still shows its top command first.
   // PROMOTE: the ranking asks "would this help?" of every candidate; the pick asks "which one?" of
   // a shorter list. When the ranking is clearly surer about a command than the pick was about its
   // own (coffee shop: genesis compose 80% vs the pick's 57%), that command leads.
   let promoted: string | undefined
-  if (relatedBy === "decide" && picks[0]) {
+  if (relatedBy === "decide" && picks[0] && process.env.IRIS_INTENT_PROMOTE === "1") {
     const pickP = picks[0].confidence ?? 0
     const lead = pool
       .map((c, i) => ({ c, p: probs[i] ?? 0 }))
