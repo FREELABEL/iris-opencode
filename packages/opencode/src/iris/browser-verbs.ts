@@ -21,11 +21,37 @@
  */
 
 /** Read-only in slice 1. `click` and `type` are S3. */
-export const VERBS = ["open", "read", "find", "screenshot", "close"] as const
+export const VERBS = ["open", "read", "find", "window", "screenshot", "close"] as const
 export type Verb = (typeof VERBS)[number]
 
 const FIND_MAX = 8
 const FIND_CONTEXT = 1
+
+/**
+ * The header row for a matched TABLE row, or null when the match is ordinary prose.
+ *
+ * Measured in the app on 2026-09-24, the first real use of this tool: eleven calls to answer one
+ * question. `find` returned `kimi-k3  67  67  67  0` — correct, and unreadable, because nothing
+ * said which column was the Mean. The agent spent six of those calls hunting for the header and
+ * then fell back to another tool entirely. A row without its header is a row you cannot use.
+ *
+ * innerText renders a table row as tab-separated cells, so: walk up from the match while the
+ * lines still look like rows, and take the first one whose cells are mostly non-numeric. Stop at
+ * a line with no tabs — that is the end of the table, not a header.
+ */
+function headerRowFor(lines: string[], at: number): string | null {
+  if (!lines[at]?.includes("\t")) return null
+  for (let i = at - 1; i >= 0 && i >= at - 40; i--) {
+    const line = lines[i]
+    if (!line?.includes("\t")) return null
+    const cells = line.split("\t").map((c) => c.trim()).filter(Boolean)
+    if (cells.length < 2) continue
+    const numeric = cells.filter((c) => /^[\d.,%$\/\s-]+$/.test(c)).length
+    if (numeric <= cells.length / 2) return line
+  }
+
+  return null
+}
 
 /**
  * Search the page instead of reading it from the top.
@@ -58,6 +84,10 @@ export function findInPage(
     const from = Math.max(0, i - context)
     const to = Math.min(lines.length - 1, i + context)
     const out: string[] = []
+    const header = headerRowFor(lines, i)
+    if (header && !(from <= lines.indexOf(header) && lines.indexOf(header) <= to)) {
+      out.push(`  header: ${header}`)
+    }
     for (let n = from; n <= to; n++) out.push(`${n === i ? "→" : " "} line ${n + 1}: ${lines[n]}`)
     return out.join("\n")
   })
@@ -149,4 +179,27 @@ export function refuseNavigationReason(from: string, to: string): string | null 
   }
 
   return null
+}
+
+/**
+ * The lines around one line number — zoom in on a hit instead of re-reading the page.
+ *
+ * `find` hands back line numbers and, until this existed, there was no way to use them: the agent
+ * re-read the whole page with a bigger budget each time (2,000 → 1,800 → 9,000 characters on its
+ * first real run). Cheaper for us, and it keeps the page out of the context window.
+ */
+export function windowOfLines(text: string, line: number, radius = 5): string {
+  const lines = String(text ?? "").split("\n")
+  const at = Math.trunc(line)
+  if (!Number.isFinite(at) || at < 1 || at > lines.length) {
+    throw new Error(`the page has ${lines.length} lines; there is no line ${line}`)
+  }
+  const from = Math.max(0, at - 1 - radius)
+  const to = Math.min(lines.length - 1, at - 1 + radius)
+  const out: string[] = []
+  const header = headerRowFor(lines, at - 1)
+  if (header && !(from <= lines.indexOf(header) && lines.indexOf(header) <= to)) out.push(`  header: ${header}`)
+  for (let n = from; n <= to; n++) out.push(`${n === at - 1 ? "→" : " "} line ${n + 1}: ${lines[n]}`)
+
+  return out.join("\n")
 }

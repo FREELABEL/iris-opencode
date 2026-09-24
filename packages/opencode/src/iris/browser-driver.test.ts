@@ -20,6 +20,9 @@ const server = Bun.serve({
       "<h1>Fixture page</h1>",
       ...Array.from({ length: 40 }, (_, i) => `<p>filler line ${i}</p>`),
       "<p>kimi-k3 scored 67 on the far fact</p>",
+      "<table><tr><th>Model</th><th>Floor</th><th>Mean</th></tr>",
+      "<tr><td>hy3</td><td>64</td><td>81</td></tr>",
+      "<tr><td>kimi-k2.6</td><td>55</td><td>89</td></tr></table>",
       ...Array.from({ length: 40 }, (_, i) => `<p>tail line ${i}</p>`),
     ]
 
@@ -62,6 +65,17 @@ describe.if(!!chrome)("PageSession against real Chrome", () => {
     const hit = findInPage(text, "kimi-k3")
     expect(hit.matches).toBe(1)
     expect(hit.text).toContain("67")
+  }, 60_000)
+
+  test("a table row comes back WITH its header — the eleven-call lesson, against real Chrome", async () => {
+    // The header detection assumes innerText renders a row as tab-separated cells. That is an
+    // assumption about a browser, so it is checked in one: a unit test with hand-written tabs
+    // would prove only that the fixture matches the parser.
+    const text = await session.text()
+    const hit = findInPage(text, "kimi-k2.6")
+    expect(hit.matches).toBe(1)
+    expect(hit.text).toContain("header")
+    expect(hit.text).toContain("Mean")
   }, 60_000)
 
   test("photographs the page as a PNG", async () => {

@@ -6,7 +6,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { GlobalBus } from "@/bus/global"
 import { Artifacts } from "@/iris/artifacts"
 import { PageSession } from "@/iris/browser-driver"
-import { clampPageText, findInPage, refuseNavigationReason, refuseUrlReason } from "@/iris/browser-verbs"
+import { clampPageText, findInPage, refuseNavigationReason, refuseUrlReason, windowOfLines } from "@/iris/browser-verbs"
 import { ARTIFACT_EVENT } from "./genesis-artifact"
 import type { SessionID } from "../session/schema"
 
@@ -31,17 +31,22 @@ import type { SessionID } from "../session/schema"
  * tells the agent so, and `find` returns lines rather than a narrative to be persuaded by.
  */
 export const Parameters = Schema.Struct({
-  action: Schema.Literals(["open", "read", "find", "screenshot", "close"]).annotate({ description: "What to do" }),
+  action: Schema.Literals(["open", "read", "find", "window", "screenshot", "close"]).annotate({
+    description: "What to do",
+  }),
   url: Schema.optional(Schema.String).annotate({ description: "The page to open (open)" }),
   query: Schema.optional(Schema.String).annotate({ description: "Text to search the page for (find)" }),
   title: Schema.optional(Schema.String).annotate({ description: "Title for the saved screenshot (screenshot)" }),
   max_chars: Schema.optional(Schema.Number).annotate({
     description: "Budget for page text, default 3000 (read). Past it, use find.",
   }),
+  line: Schema.optional(Schema.Number).annotate({ description: "Line number to read around (window)" }),
+  radius: Schema.optional(Schema.Number).annotate({ description: "Lines either side, default 5 (window)" }),
 })
 
 type Metadata = {
   url?: string
+  line?: number
   title?: string
   matches?: number
   truncated?: boolean
@@ -152,6 +157,20 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
             const hit = findInPage(got.value, params.query)
 
             return { title: `find "${params.query}"`, output: hit.text, metadata: { matches: hit.matches } }
+          }
+
+          if (params.action === "window") {
+            if (!params.line) return yield* Effect.fail(new Error('window needs a line, e.g. {"action":"window","line":142}'))
+            const got = yield* attempt(() => page.text())
+            if (!got.ok) return yield* Effect.fail(new Error(got.message))
+            let out: string
+            try {
+              out = windowOfLines(got.value, params.line, params.radius ?? 5)
+            } catch (e) {
+              return yield* Effect.fail(e instanceof Error ? e : new Error(String(e)))
+            }
+
+            return { title: `window at line ${params.line}`, output: out, metadata: { line: params.line } }
           }
 
           // screenshot → a Genesis artifact, so it lands in the pane the user is watching (ADR-04).
