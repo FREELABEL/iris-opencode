@@ -51,6 +51,7 @@ import {
   graphRows,
   fetchAllowance,
 } from "@/iris/platform"
+import { parseExpandedListIds } from "@/iris/relationship-graph"
 import { createRoom, fetchRoom, fetchRooms, sendRoomMessage } from "@/iris/rooms"
 import { RootHttpApi } from "../api"
 import { markLocal, projectRoot } from "@/iris/playbook-local"
@@ -283,8 +284,9 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
     )
 
     /** Not paged: a board's interior is one picture. Slicing it would draw half a graph. */
-    const graphBoard = Effect.fn("IrisHttpApi.graphBoard")((ctx: { params: { bloqID: number } }) =>
-      Effect.promise(() => fetchBloqInterior(ctx.params.bloqID)).pipe(
+    const graphBoard = Effect.fn("IrisHttpApi.graphBoard")(
+      (ctx: { params: { bloqID: number }; query: { expand?: string } }) =>
+      Effect.promise(() => fetchBloqInterior(ctx.params.bloqID, parseExpandedListIds(ctx.query.expand))).pipe(
         Effect.map((r) => ({
           measured: r.measured,
           reason: r.reason,

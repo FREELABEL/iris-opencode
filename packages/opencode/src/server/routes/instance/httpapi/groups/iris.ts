@@ -958,6 +958,12 @@ export const IrisApi = HttpApi.make("iris").add(
       ),
       HttpApiEndpoint.get("graphBoard", IrisPaths.graphBoard, {
         params: { bloqID: Schema.NumberFromString },
+        query: Schema.Struct({
+          expand: described(
+            Schema.optional(Schema.String),
+            "Comma-separated list ids to draw IN FULL, e.g. `expand=1871,1902`. A list holds at most six card nodes by default and collapses the rest into one `+N more` — readable, but a card with no node cannot be clicked open. Expanding a list restores every card in it as a real node; every other list stays capped. Unknown ids are ignored.",
+          ),
+        }),
         success: described(
           Schema.Struct({
             ...Measured,
@@ -1000,7 +1006,7 @@ export const IrisApi = HttpApi.make("iris").add(
           identifier: "iris.graphBoard",
           summary: "One board's interior graph",
           description:
-            "The OTHER graph. `/iris/graph` is board-to-board across the account; this is what is INSIDE one board, which is what Elon's RelationshipGraph draws. Elon has no endpoint for it — its computed property reads a store the board view already filled — so this fans out to the per-board fetchers instead. ONE BOARD PER CALL, deliberately: the panel asks on expand, because doing this for forty boards eagerly is forty fan-outs and thousands of nodes before anything is drawn. A category that is empty gets no hub, since an empty hub cannot be told from a failed fetch and these fetches fail independently.",
+            "The OTHER graph. `/iris/graph` is board-to-board across the account; this is what is INSIDE one board, which is what Elon's RelationshipGraph draws. Cards are capped at six per list with the remainder collapsed into a `+N more` node; pass `expand` to draw one list's cards in full. Elon has no endpoint for it — its computed property reads a store the board view already filled — so this fans out to the per-board fetchers instead. ONE BOARD PER CALL, deliberately: the panel asks on expand, because doing this for forty boards eagerly is forty fan-outs and thousands of nodes before anything is drawn. A category that is empty gets no hub, since an empty hub cannot be told from a failed fetch and these fetches fail independently.",
         }),
       ),
       HttpApiEndpoint.get("catalog", IrisPaths.catalog, {

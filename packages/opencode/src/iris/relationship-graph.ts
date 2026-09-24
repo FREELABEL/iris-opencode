@@ -63,6 +63,15 @@ export interface GraphInputs {
    * `assigned` edge to an agent with no node on this board is dropped as dangling either way.
    */
   deployedAgentIds?: Set<number>
+  /**
+   * Lists whose cards are ALL drawn, ignoring MAX_CARDS_PER_LIST.
+   *
+   * The cap is what makes a real board readable, but it also means a card behind a "+N more"
+   * has no node — and a node is the only thing you can click to open a card. On board 517 that
+   * was 101 of 167 cards unreachable. Expanding one list restores every card in it as a real,
+   * clickable node while the rest of the board stays capped.
+   */
+  expandedListIds?: ReadonlySet<number>
 }
 
 /** ELON's log scale, so a cluster of 5 and one of 50,000 both fit. */
@@ -73,6 +82,22 @@ export const clusterSize = (count: number) => Math.min(30, 14 + Math.log2((count
  * Six keeps a list legible at the zoom the pane opens at; the cap is mirrored in ELON.
  */
 const MAX_CARDS_PER_LIST = 6
+
+/**
+ * `expand=1871, 1902` -> the set of list ids to draw in full (GraphInputs.expandedListIds).
+ *
+ * Anything that is not a positive integer is DROPPED rather than rejected. This parameter only
+ * ever widens what is drawn, so a malformed id should cost you that one list, not the whole
+ * graph — a 400 here would blank a board because one id had a stray character. Absent, empty,
+ * or nothing usable means undefined: cap every list, which is the default the golden pins.
+ */
+export function parseExpandedListIds(raw?: string | null): ReadonlySet<number> | undefined {
+  const ids = String(raw ?? "")
+    .split(",")
+    .map((part) => Number(part.trim()))
+    .filter((n) => Number.isInteger(n) && n > 0)
+  return ids.length ? new Set(ids) : undefined
+}
 
 /** ELON's title→type guess for lists and their items. Order matters: first match wins. */
 export function inferType(text: unknown): string {
@@ -247,10 +272,13 @@ export function buildRelationshipGraph(input: GraphInputs): { nodes: GraphNode[]
      * still drew everything.
      *
      * The remainder is never silently dropped: it becomes one "+N more" node, sized by how many
-     * it stands for, so the drawing still says how much is behind it. The same cap now applies in
+     * it stands for, so the drawing still says how much is behind it — and clicking that node
+     * puts the list in `expandedListIds`, which draws every card in it. The same cap now applies in
      * ELON's Board.vue, so the two surfaces still agree — which is what the golden pins.
      */
-    const shownCards = list.cards.slice(0, MAX_CARDS_PER_LIST)
+    // Board ids arrive as numbers or numeric strings depending on the source; compare as numbers.
+    const expanded = input.expandedListIds?.has(Number(list.id)) ?? false
+    const shownCards = expanded ? list.cards : list.cards.slice(0, MAX_CARDS_PER_LIST)
     const hiddenCards = list.cards.length - shownCards.length
     if (hiddenCards > 0) {
       // It stands for hidden CARDS, so it is coloured as one.

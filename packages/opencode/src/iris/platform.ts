@@ -1941,6 +1941,8 @@ export type InteriorEdge = InteriorGraphEdge
  */
 export async function fetchBloqInterior(
   bloqId: number,
+  /** Lists to draw in full — see GraphInputs.expandedListIds. Everything else stays capped. */
+  expandedListIds?: ReadonlySet<number>,
 ): Promise<PlatformResult<{ nodes: InteriorNode[]; edges: InteriorEdge[]; unread: string[] }>> {
   const empty = { nodes: [] as InteriorNode[], edges: [] as InteriorEdge[], unread: [] as string[] }
   const userId = await resolveUserId()
@@ -1987,6 +1989,7 @@ export async function fetchBloqInterior(
     relations: rows(got.relations),
     leads: rows(got.leads),
     lists: Array.isArray(boardBody?.lists) ? boardBody.lists : [],
+    expandedListIds,
   }
   const { nodes, edges } = renderedGraph(buildRelationshipGraph(inputs))
   return { measured: true, data: { nodes, edges, unread } }

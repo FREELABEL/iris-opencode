@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import golden from "./relationship-graph.golden.json"
-import { buildRelationshipGraph, inferType, renderedGraph, type GraphInputs } from "../../src/iris/relationship-graph"
+import {
+  buildRelationshipGraph,
+  inferType,
+  parseExpandedListIds,
+  renderedGraph,
+  type GraphInputs,
+} from "../../src/iris/relationship-graph"
 
 /**
  * #185584 PARITY, pinned.
@@ -123,5 +129,117 @@ describe("a long list collapses its tail instead of drawing every card", () => {
     const big = renderedGraph(buildRelationshipGraph(inputs(200)))
     const sizeOf = (g: { nodes: any[] }) => g.nodes.find((n) => n.id === "list-9001-more")!.size
     expect(sizeOf(big)).toBeGreaterThan(sizeOf(small))
+  })
+})
+
+/*
+ * EXPANDING A LIST — the cap's escape hatch (the `expand` query on /iris/graph/:bloqID).
+ *
+ * The cap is what makes a real board readable, and it is also why a card can become
+ * unreachable: a node is the only thing you can click to open a card, and a card behind a
+ * "+N more" has none. Measured on board 517 with the cap and no way out: 66 cards clickable,
+ * 101 not, out of 167.
+ */
+describe("a list can be expanded to draw every card in it", () => {
+  const listOf = (n: number, id = 9001) => ({
+    id,
+    name: "List " + id,
+    items: Array.from({ length: n }, (_, i) => ({ id: id * 100 + i + 1, title: "Card " + (i + 1) })),
+  })
+  const inputs = (lists: any[], expandedListIds?: ReadonlySet<number>): GraphInputs => ({
+    bloqId: 42,
+    boardTitle: "Pathways",
+    lists,
+    expandedListIds,
+    relations: [],
+    agents: [],
+    scheduledJobs: [],
+    playbooks: [],
+    leads: [],
+  })
+
+  test("an expanded list draws all of its cards, and loses its +N more", () => {
+    const g = renderedGraph(buildRelationshipGraph(inputs([listOf(20)], new Set([9001]))))
+    expect(g.nodes.filter((n) => n.id.startsWith("item-"))).toHaveLength(20)
+    // Nothing is standing in for anything any more, so the placeholder must be gone — leaving
+    // it would claim there are cards beyond the twenty now drawn.
+    expect(g.nodes.some((n) => n.id === "list-9001-more")).toBe(false)
+  })
+
+  test("every expanded card is a real node, which is the whole point — they can be opened", () => {
+    const g = renderedGraph(buildRelationshipGraph(inputs([listOf(20)], new Set([9001]))))
+    const ids = new Set(g.nodes.map((n) => n.id))
+    for (let i = 1; i <= 20; i++) expect(ids.has("item-" + (900100 + i)), "card " + i).toBe(true)
+    // And each hangs off its own list, not off the centre.
+    expect(g.edges.filter((e) => e.source === "list-9001" && e.target.startsWith("item-"))).toHaveLength(20)
+  })
+
+  test("expanding ONE list leaves every other list capped", () => {
+    const g = renderedGraph(buildRelationshipGraph(inputs([listOf(20, 9001), listOf(20, 9002)], new Set([9001]))))
+    const under = (listId: number) =>
+      g.edges.filter((e) => e.source === "list-" + listId && e.target.startsWith("item-")).length
+    expect(under(9001)).toBe(20)
+    expect(under(9002)).toBe(6)
+    expect(g.nodes.some((n) => n.id === "list-9002-more")).toBe(true)
+    expect(g.nodes.some((n) => n.id === "list-9001-more")).toBe(false)
+  })
+
+  test("an id nobody has expands nothing — it never widens another list", () => {
+    const g = renderedGraph(buildRelationshipGraph(inputs([listOf(20)], new Set([424242]))))
+    expect(g.nodes.filter((n) => n.id.startsWith("item-"))).toHaveLength(6)
+    expect(g.nodes.some((n) => n.id === "list-9001-more")).toBe(true)
+  })
+
+  test("no expansion at all is byte-identical to the capped default", () => {
+    // The golden pins the default; this pins that ADDING the parameter did not change it.
+    const withUndefined = renderedGraph(buildRelationshipGraph(inputs([listOf(20)])))
+    const withEmptySet = renderedGraph(buildRelationshipGraph(inputs([listOf(20)], new Set())))
+    expect(withEmptySet).toEqual(withUndefined)
+    expect(withUndefined.nodes.filter((n) => n.id.startsWith("item-"))).toHaveLength(6)
+  })
+
+  test("a list id that arrives as a numeric STRING still expands", () => {
+    // fl-api returns ids as numbers here and strings there; comparing them raw silently
+    // expanded nothing, which looks exactly like a click that did not register.
+    const stringy = [{ ...listOf(20), id: "9001" as any }]
+    const g = renderedGraph(buildRelationshipGraph(inputs(stringy, new Set([9001]))))
+    expect(g.nodes.filter((n) => n.id.startsWith("item-"))).toHaveLength(20)
+  })
+})
+
+/*
+ * THE `expand` QUERY, parsed.
+ *
+ * It only ever widens what is drawn, so every rule here is "drop the bad id, keep the graph".
+ * Rejecting the request instead would blank a board because one id had a stray character.
+ */
+describe("parseExpandedListIds", () => {
+  test("a comma-separated list becomes the set of ids", () => {
+    expect([...(parseExpandedListIds("1871,1902") ?? [])]).toEqual([1871, 1902])
+  })
+
+  test("spaces around the ids are tolerated — a hand-typed URL still works", () => {
+    expect([...(parseExpandedListIds(" 1871 , 1902 ") ?? [])]).toEqual([1871, 1902])
+  })
+
+  test("nothing to expand is undefined, not an empty set", () => {
+    // buildRelationshipGraph reads `expandedListIds?.has(...) ?? false`, so an empty set and
+    // undefined behave the same — but undefined is what "the caller asked for nothing" means.
+    expect(parseExpandedListIds(undefined)).toBeUndefined()
+    expect(parseExpandedListIds("")).toBeUndefined()
+    expect(parseExpandedListIds(",,")).toBeUndefined()
+    expect(parseExpandedListIds(null)).toBeUndefined()
+  })
+
+  test("junk is dropped, and the ids beside it survive", () => {
+    expect([...(parseExpandedListIds("1871,abc,,1902") ?? [])]).toEqual([1871, 1902])
+  })
+
+  test("zero, negatives and fractions are not list ids", () => {
+    expect(parseExpandedListIds("0,-4,1.5")).toBeUndefined()
+  })
+
+  test("a repeated id is one id — the set is the point", () => {
+    expect([...(parseExpandedListIds("1871,1871") ?? [])]).toEqual([1871])
   })
 })

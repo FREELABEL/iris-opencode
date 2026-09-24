@@ -1407,11 +1407,35 @@ export function SessionIrisTab() {
    * views, which ELON does not have, and expanding a board there still works.
    */
   const projectScope = () => pane() === "graph" && graphScope() === "project" && activeBloq() != null
+
+  /**
+   * LISTS DRAWN IN FULL — the way back to a card the cap hid.
+   *
+   * A list draws at most six cards and collapses the rest into one "+N more". That is what
+   * makes a real board readable, and it is also how a card becomes unreachable: a node is the
+   * only thing you can click to open a card, so a card with no node cannot be opened at all.
+   * Board 517: 66 cards clickable, 101 not. Clicking "+N more" puts its list in here, the
+   * graph is re-read with `?expand=`, and every card in that list comes back as a real node.
+   * Sorted so the same expansion is the same key, and the same key is the same request.
+   */
+  const [expandedLists, setExpandedLists] = createSignal<number[]>([])
+  const expandKey = () =>
+    expandedLists()
+      .slice()
+      .sort((a, b) => a - b)
+      .join(",")
+
   const [projectInterior] = createResource(
-    () => (projectScope() ? Number(activeBloq()) : undefined),
-    async (boardId: number) => {
-      if (interiors()[boardId]) return { measured: true, ...interiors()[boardId] }
-      const res = await doFetch(`/iris/graph/${boardId}`, { headers: { Accept: "application/json" } })
+    () => (projectScope() ? { boardId: Number(activeBloq()), expand: expandKey() } : undefined),
+    async ({ boardId, expand }: { boardId: number; expand: string }) => {
+      // `interiors` holds the DEFAULT capped interior — it is what the board-to-board web
+      // expands a board into. An expanded read is a different picture of the same board, so it
+      // neither reads nor writes that cache; otherwise expanding one list here would silently
+      // change what the other graph draws for that board.
+      if (!expand && interiors()[boardId]) return { measured: true, ...interiors()[boardId] }
+      const res = await doFetch(`/iris/graph/${boardId}${expand ? `?expand=${encodeURIComponent(expand)}` : ""}`, {
+        headers: { Accept: "application/json" },
+      })
       // Not ok, or not JSON: NOT MEASURED. Rendering it as an empty graph would claim the board
       // holds nothing, which is the one thing we do not know.
       if (!res.ok || !(res.headers.get("content-type") ?? "").includes("json"))
@@ -1419,7 +1443,7 @@ export function SessionIrisTab() {
       const j = await res.json()
       if (j?.measured === false) return { measured: false, reason: j?.reason, nodes: [], edges: [] }
       const got = { nodes: j?.nodes ?? [], edges: j?.edges ?? [] }
-      setInteriors((prev) => ({ ...prev, [boardId]: got }))
+      if (!expand) setInteriors((prev) => ({ ...prev, [boardId]: got }))
       return { measured: true, ...got }
     },
   )
@@ -1816,6 +1840,9 @@ export function SessionIrisTab() {
     }
     lastSubject = subject
     setOpenRow(null)
+    // Another board's list ids expand nothing here, and carrying them would send a `?expand=`
+    // that silently matches no list — which looks exactly like a click that did not register.
+    setExpandedLists([])
     // A query for one board is not a query for the next.
     setQuery("")
     setApplied("")
@@ -3023,9 +3050,33 @@ export function SessionIrisTab() {
                       are. Interior nodes carry namespaced string ids and are inert for now.
                     */
                     onNodeClick={(n) => {
+                      /*
+                       * A "+N MORE" NODE OPENS THE CARDS IT STANDS FOR.
+                       *
+                       * Only a card responds to a click, and only a card that HAS a node can be
+                       * clicked — so the six-per-list cap quietly put most of a real board out
+                       * of reach (board 517: 101 of 167 cards). Clicking the placeholder draws
+                       * its list in full; clicking that list again puts the cap back. Expanding
+                       * is reversible and keeps you where you are, which is the same reason a
+                       * board node expands rather than navigating.
+                       */
+                      const collapsed =
+                        typeof n.id === "string" ? /^list-(\d+)-more$/.exec(n.id) : null
+                      if (collapsed) {
+                        const listId = Number(collapsed[1])
+                        setExpandedLists((prev) => (prev.includes(listId) ? prev : [...prev, listId]))
+                        return
+                      }
+                      const listNode = typeof n.id === "string" ? /^list-(\d+)$/.exec(n.id) : null
+                      if (listNode) {
+                        // Only an EXPANDED list responds; a capped one stays inert, as before.
+                        const listId = Number(listNode[1])
+                        setExpandedLists((prev) => prev.filter((id) => id !== listId))
+                        return
+                      }
                       // ELON's rule, exactly: only a CARD responds, and it opens that card's
-                      // editor. Hubs, lists and related boards are inert (Board.vue
-                      // onGraphNodeClick returns unless the id starts with `item-`).
+                      // editor. Hubs and related boards are inert (Board.vue onGraphNodeClick
+                      // returns unless the id starts with `item-`).
                       if (typeof n.id === "string" && n.id.startsWith("item-")) {
                         const itemId = Number(n.id.slice("item-".length))
                         if (Number.isFinite(itemId)) openCard(itemId, projectScope() ? projectLists() : undefined)
