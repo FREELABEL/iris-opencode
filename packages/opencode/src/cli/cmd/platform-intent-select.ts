@@ -38,6 +38,50 @@ export const prebuilt = (c: { name: string }) => c.name.startsWith("playbook run
 const decideUrl = () => (process.env.DECIDE_URL || "http://127.0.0.1:3210").replace(/\/$/, "")
 
 /**
+ * WHERE A DECISION IS MADE (#186675). A Decide service on this machine first — it answers in one
+ * local hop and can route PHI to a local model — then the platform's `/api/v1/decide`, which runs
+ * the same Jev decision on the platform's key with the user's IRIS token. The platform leg is what
+ * every client install uses: before it, the local service existed on one machine and every other
+ * install fell back to keyword order.
+ */
+let localDown = false
+export async function postDecide(
+  body: object,
+  timeoutMs: number,
+): Promise<{ json: any; via: "local" | "platform" } | string> {
+  const errs: string[] = []
+  if (!localDown) {
+    try {
+      const res = await fetch(`${decideUrl()}/decide`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(timeoutMs),
+      })
+      if (res.ok) return { json: await res.json(), via: "local" }
+      errs.push(`local HTTP ${res.status}`)
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e)
+      if (/refused|Unable to connect|fetch failed|ECONN/i.test(m)) localDown = true
+      errs.push(localDown ? "no local service" : `local: ${m}`)
+    }
+  }
+  try {
+    const res = await irisFetch(
+      "/api/v1/decide",
+      { method: "POST", body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs) },
+      IRIS_API,
+    )
+    const j = (await res.json().catch(() => ({}))) as any
+    if (res.ok && j?.answers) return { json: j, via: "platform" }
+    errs.push(`platform: ${j?.error ?? j?.message ?? `HTTP ${res.status}`}`)
+  } catch (e) {
+    errs.push(`platform: ${e instanceof Error ? e.message : String(e)}`)
+  }
+  return `Decide: ${errs.join("; ")}`
+}
+
+/**
  * Always offered, whatever the keywords matched: most requests are answered by looking something
  * up — on the web or in your own Atlas — and "find places to eat" shares no word with either.
  */
@@ -262,19 +306,14 @@ async function viaDecide(
 ): Promise<Pick | string> {
   try {
     const payload = decidePayload(text, candidates, full, extras, agents)
-    const res = await fetch(`${decideUrl()}/decide`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(extras ? payload : withoutExtras(payload)),
-      signal: AbortSignal.timeout(timeoutMs),
-    })
-    if (!res.ok) return `Decide: HTTP ${res.status}`
-    const r = (await res.json()) as any
+    const sent = await postDecide(extras ? payload : withoutExtras(payload), timeoutMs)
+    if (typeof sent === "string") return sent
+    const r = sent.json as any
     const c = byName(r?.answers?.command?.value, candidates)
     if (!c) return "Decide: answer was not a candidate"
     return {
       candidate: c,
-      by: `decide${r?.meta?.engine ? `:${r.meta.engine}` : ""}`,
+      by: `decide${r?.meta?.engine ? `:${r.meta.engine}` : ""}${sent.via === "platform" ? " (platform)" : ""}`,
       confidence: r?.answers?.command?.confidence,
       ms: r?.meta?.latency_ms,
       extras: extrasFrom(r?.answers, c.name, candidates),
@@ -526,14 +565,9 @@ async function viaRelevance(
     ]),
   )
   try {
-    const res = await fetch(`${decideUrl()}/decide`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ state: `User request: "${text}"`, questions }),
-      signal: AbortSignal.timeout(timeoutMs),
-    })
-    if (!res.ok) return `Decide relevance: HTTP ${res.status}`
-    const r = (await res.json()) as any
+    const sent = await postDecide({ state: `User request: "${text}"`, questions }, timeoutMs)
+    if (typeof sent === "string") return sent.replace(/^Decide:/, "Decide relevance:")
+    const r = sent.json as any
     return pool.map((_, i) => {
       const p = r?.answers?.[`c${i}`]?.probabilities?.true
       return typeof p === "number" ? p : undefined
