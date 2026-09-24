@@ -268,7 +268,11 @@ export class PageSession {
         ref++
         if (ref > ${limit}) break
         el.setAttribute('data-iris-ref', String(ref))
+        const options = el.tagName.toLowerCase() === 'select'
+          ? Array.from(el.options).map((o) => o.value).slice(0, 60)
+          : undefined
         out.push({
+          options,
           ref,
           role: roleOf(el),
           name: nameOf(el),
@@ -332,6 +336,35 @@ export class PageSession {
     await Bun.sleep(150)
 
     return !!ok
+  }
+
+  /** Set a dropdown to one of ITS values, firing the events a real choice would. */
+  async selectRef(ref: number, value: string): Promise<boolean> {
+    const ok = await this.evaluate<boolean>(
+      `(() => {
+        const el = document.querySelector('[data-iris-ref="${ref}"]')
+        if (!el) return false
+        el.value = ${JSON.stringify(value)}
+        el.dispatchEvent(new Event('input', { bubbles: true }))
+        el.dispatchEvent(new Event('change', { bubbles: true }))
+        return true
+      })()`,
+    )
+    await Bun.sleep(150)
+
+    return !!ok
+  }
+
+  /** Move the viewport. Lazy pages load on scroll, so this is how the rest of a page appears. */
+  async scroll(direction: "up" | "down" | "top" | "bottom"): Promise<void> {
+    const js = {
+      up: "scrollBy(0, -Math.round(innerHeight * 0.9))",
+      down: "scrollBy(0, Math.round(innerHeight * 0.9))",
+      top: "scrollTo(0, 0)",
+      bottom: "scrollTo(0, document.body.scrollHeight)",
+    }[direction]
+    await this.evaluate(`(() => { ${js}; return true })()`)
+    await Bun.sleep(250)
   }
 
   async screenshot(): Promise<Uint8Array> {

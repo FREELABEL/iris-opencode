@@ -12,6 +12,8 @@ Actions:
 - elements: lists every control on the page as a numbered menu — [4] button "Run search". Run it again after anything changes the page; the numbers are rebuilt each time.
 - click: ref. Clicks that element. A control that looks irreversible (delete, pay, send, submit…) is refused unless you pass confirm: true — and you tell the user what you are about to do BEFORE you do it. What actually changed is reported back to you; if it says nothing changed, nothing changed.
 - type: ref, text. Types into that field. A ref that is not a text field is refused.
+- select: ref, value. Sets a dropdown to one of ITS options — `elements` lists them. A value it does not offer is refused, with the real options.
+- scroll: direction (up, down, top, bottom). Moves the viewport; use it when a page loads more as you go, then run elements again.
 - screenshot: photographs the page and saves it to the Genesis Artifacts pane, where the user can see it. Optional title.
 - close: ends the browser. Do this when you are finished with the page.
 

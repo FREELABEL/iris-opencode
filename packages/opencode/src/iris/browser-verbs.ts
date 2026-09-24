@@ -21,7 +21,19 @@
  */
 
 /** Read-only in slice 1. `click` and `type` are S3. */
-export const VERBS = ["open", "read", "find", "window", "elements", "click", "type", "screenshot", "close"] as const
+export const VERBS = [
+  "open",
+  "read",
+  "find",
+  "window",
+  "elements",
+  "click",
+  "type",
+  "select",
+  "scroll",
+  "screenshot",
+  "close",
+] as const
 export type Verb = (typeof VERBS)[number]
 
 const FIND_MAX = 8
@@ -229,10 +241,14 @@ export type PageElement = {
   value?: string
   enabled: boolean
   inViewport: boolean
+  /** For a dropdown: what it can actually be set to. A closed set cannot be invented. */
+  options?: string[]
 }
 
 const CLICKABLE = new Set(["link", "button", "checkbox", "radio", "tab", "menuitem", "option", "switch"])
 const TYPEABLE = new Set(["textbox", "searchbox", "combobox", "textarea"])
+const SELECTABLE = new Set(["combobox", "listbox"])
+const SCROLLS = ["up", "down", "top", "bottom"] as const
 
 /** One line per element: what it is, what it says, and anything that makes it unusable. */
 export function renderElements(els: PageElement[]): string {
@@ -244,6 +260,7 @@ export function renderElements(els: PageElement[]): string {
         e.enabled ? "" : "disabled",
         e.inViewport ? "" : "off-screen",
         e.value ? `value: ${JSON.stringify(e.value.slice(0, 40))}` : "",
+        e.options?.length ? `options: ${e.options.slice(0, 12).join(", ")}${e.options.length > 12 ? " …" : ""}` : "",
       ].filter(Boolean)
 
       return `[${e.ref}] ${e.role.padEnd(10)} ${e.name.slice(0, 60)}${flags.length ? `  · ${flags.join(" · ")}` : ""}`
@@ -252,14 +269,41 @@ export function renderElements(els: PageElement[]): string {
 }
 
 /** Why this ref cannot take this operation, or null when it can. */
-export function refuseTargetReason(els: PageElement[], ref: number, op: "click" | "type"): string | null {
+export function refuseTargetReason(els: PageElement[], ref: number, op: "click" | "type" | "select"): string | null {
   const el = els.find((e) => e.ref === ref)
   if (!el) return `there is no [${ref}] on this page — it lists ${els.length} elements; run elements again`
   if (!el.enabled) return `[${ref}] ${el.name} is disabled`
   if (op === "click" && !CLICKABLE.has(el.role)) return `[${ref}] is a ${el.role} — not clickable`
   if (op === "type" && !TYPEABLE.has(el.role)) return `[${ref}] is a ${el.role} — not a text field`
+  if (op === "select" && !(SELECTABLE.has(el.role) && el.options?.length)) {
+    return `[${ref}] is a ${el.role} — not a dropdown with options`
+  }
 
   return null
+}
+
+/**
+ * Why this dropdown cannot take this value, or null when it can.
+ *
+ * The option set is CLOSED: a value the page does not offer comes back as a refusal that lists
+ * what it does offer, rather than a set() that silently does nothing. Same property that makes a
+ * typed picker honest — it can only choose what is there.
+ */
+export function refuseOptionReason(els: PageElement[], ref: number, value: string): string | null {
+  const el = els.find((e) => e.ref === ref)
+  if (!el) return `there is no [${ref}] on this page — run elements again`
+  const options = el.options ?? []
+  if (!options.length) return `[${ref}] has no options to choose from`
+  if (options.includes(value)) return null
+
+  return `[${ref}] has no option ${JSON.stringify(value)} — it offers: ${options.slice(0, 20).join(", ")}`
+}
+
+/** Why this scroll cannot be done, or null. Four directions, named in the refusal. */
+export function refuseScrollReason(direction: string): string | null {
+  return (SCROLLS as readonly string[]).includes(direction)
+    ? null
+    : `scroll takes ${SCROLLS.join(", ")} — got ${JSON.stringify(direction)}`
 }
 
 const IRREVERSIBLE =

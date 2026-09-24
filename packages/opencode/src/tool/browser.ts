@@ -12,6 +12,8 @@ import {
   findInPage,
   looksIrreversible,
   refuseNavigationReason,
+  refuseOptionReason,
+  refuseScrollReason,
   refuseTargetReason,
   refuseUrlReason,
   renderElements,
@@ -41,9 +43,19 @@ import type { SessionID } from "../session/schema"
  * tells the agent so, and `find` returns lines rather than a narrative to be persuaded by.
  */
 export const Parameters = Schema.Struct({
-  action: Schema.Literals(["open", "read", "find", "window", "elements", "click", "type", "screenshot", "close"]).annotate(
-    { description: "What to do" },
-  ),
+  action: Schema.Literals([
+    "open",
+    "read",
+    "find",
+    "window",
+    "elements",
+    "click",
+    "type",
+    "select",
+    "scroll",
+    "screenshot",
+    "close",
+  ]).annotate({ description: "What to do" }),
   url: Schema.optional(Schema.String).annotate({ description: "The page to open (open)" }),
   query: Schema.optional(Schema.String).annotate({ description: "Text to search the page for (find)" }),
   title: Schema.optional(Schema.String).annotate({ description: "Title for the saved screenshot (screenshot)" }),
@@ -54,6 +66,10 @@ export const Parameters = Schema.Struct({
   radius: Schema.optional(Schema.Number).annotate({ description: "Lines either side, default 5 (window)" }),
   ref: Schema.optional(Schema.Number).annotate({ description: "Element number from `elements` (click, type)" }),
   text: Schema.optional(Schema.String).annotate({ description: "What to type (type)" }),
+  value: Schema.optional(Schema.String).annotate({ description: "Option to choose (select)" }),
+  direction: Schema.optional(Schema.Literals(["up", "down", "top", "bottom"])).annotate({
+    description: "Where to scroll (scroll)",
+  }),
   confirm: Schema.optional(Schema.Boolean).annotate({
     description: "Required for a click that cannot be undone (delete, pay, send…)",
   }),
@@ -199,6 +215,52 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
               title: `${got.value.length} elements`,
               output: `${renderElements(got.value)}\n\nUse the number: {"action":"click","ref":N} or {"action":"type","ref":N,"text":"…"}.`,
               metadata: { elements: got.value.length, url: page.currentUrl ?? undefined },
+            }
+          }
+
+          if (params.action === "scroll") {
+            const dir = params.direction ?? "down"
+            const bad = refuseScrollReason(dir)
+            if (bad) return yield* Effect.fail(new Error(bad))
+            const before = yield* attempt(() => page.state())
+            if (!before.ok) return yield* Effect.fail(new Error(before.message))
+            const done = yield* attempt(() => page.scroll(dir))
+            if (!done.ok) return yield* Effect.fail(new Error(done.message))
+            const after = yield* attempt(() => page.state())
+            if (!after.ok) return yield* Effect.fail(new Error(after.message))
+            const changed = describeChange(before.value, after.value)
+
+            return {
+              title: `scroll ${dir}`,
+              output: `scrolled ${dir}. ${changed === "nothing changed — same url, same text, same field values" ? "The page text is unchanged (nothing new loaded); run elements to see what is in view." : changed}`,
+              metadata: { url: after.value.url },
+            }
+          }
+
+          if (params.action === "select") {
+            if (!params.ref) return yield* Effect.fail(new Error("select needs a ref — run action=elements first"))
+            if (params.value === undefined) return yield* Effect.fail(new Error("select needs a value"))
+            const listed = yield* attempt(() => page.elements())
+            if (!listed.ok) return yield* Effect.fail(new Error(listed.message))
+            const wrongTarget = refuseTargetReason(listed.value, params.ref, "select")
+            if (wrongTarget) return yield* Effect.fail(new Error(wrongTarget))
+            const wrongOption = refuseOptionReason(listed.value, params.ref, params.value)
+            if (wrongOption) return yield* Effect.fail(new Error(wrongOption))
+
+            const before = yield* attempt(() => page.state())
+            if (!before.ok) return yield* Effect.fail(new Error(before.message))
+            const set = yield* attempt(() => page.selectRef(params.ref!, params.value!))
+            if (!set.ok) return yield* Effect.fail(new Error(set.message))
+            if (!set.value) {
+              return yield* Effect.fail(new Error(`[${params.ref}] is no longer on the page — run action=elements again`))
+            }
+            const after = yield* attempt(() => page.state())
+            if (!after.ok) return yield* Effect.fail(new Error(after.message))
+
+            return {
+              title: `select [${params.ref}] = ${params.value}`,
+              output: describeChange(before.value, after.value),
+              metadata: { ref: params.ref, url: after.value.url },
             }
           }
 

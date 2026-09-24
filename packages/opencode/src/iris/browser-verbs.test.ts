@@ -6,6 +6,8 @@ import {
   findInPage,
   looksIrreversible,
   refuseNavigationReason,
+  refuseOptionReason,
+  refuseScrollReason,
   refuseTargetReason,
   refuseUrlReason,
   renderElements,
@@ -16,7 +18,7 @@ describe("VERBS", () => {
   test("S3 adds the acting verbs, in one place", () => {
     // Read-only through S1.1; click and type arrive here with compatibility, a gate on
     // irreversible labels, and a change verified in code.
-    expect(VERBS).toEqual(["open", "read", "find", "window", "elements", "click", "type", "screenshot", "close"])
+    expect(VERBS).toEqual(["open", "read", "find", "window", "elements", "click", "type", "select", "scroll", "screenshot", "close"])
   })
 })
 
@@ -267,5 +269,37 @@ describe("S3 — the change is verified in code, not asserted by the model", () 
     // "DONE is never independent evidence of success". A click that changed nothing is the case a
     // model is most likely to narrate as success.
     expect(describeChange(before, { ...before })).toContain("nothing changed")
+  })
+})
+
+describe("S3.1 — select and scroll", () => {
+  const els = [
+    { ref: 1, role: "combobox", name: "Round", tag: "select", value: "01", enabled: true, inViewport: true, options: ["01", "02", "03"] },
+    { ref: 2, role: "button", name: "Go", tag: "button", enabled: true, inViewport: true },
+  ]
+
+  test("select refuses a target that is not a dropdown", () => {
+    expect(refuseTargetReason(els, 2, "select")).toContain("not a dropdown")
+    expect(refuseTargetReason(els, 1, "select")).toBeNull()
+  })
+
+  test("select refuses an option the dropdown does not have — and lists what it does have", () => {
+    // A picker that cannot invent is the property worth keeping: the option set is closed, so a
+    // wrong value is a refusal with the real choices, not a silent no-op on the page.
+    const why = refuseOptionReason(els, 1, "99")
+    expect(why).toContain("01")
+    expect(why).toContain("02")
+    expect(refuseOptionReason(els, 1, "02")).toBeNull()
+  })
+
+  test("the element table shows a dropdown's options, so a choice can be made from the menu", () => {
+    expect(renderElements(els)).toContain("options: 01, 02, 03")
+  })
+
+  test("scroll takes a direction, and says what it will not take", () => {
+    expect(refuseScrollReason("down")).toBeNull()
+    expect(refuseScrollReason("up")).toBeNull()
+    expect(refuseScrollReason("bottom")).toBeNull()
+    expect(refuseScrollReason("sideways")).toContain("up, down, top, bottom")
   })
 })

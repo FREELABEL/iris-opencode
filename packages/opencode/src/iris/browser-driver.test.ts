@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test"
 import { PageSession, findChrome } from "./browser-driver"
-import { clampPageText, describeChange, findInPage, refuseTargetReason } from "./browser-verbs"
+import { clampPageText, describeChange, findInPage, refuseOptionReason, refuseTargetReason } from "./browser-verbs"
 
 /**
  * The driver, against a REAL Chrome and a real page.
@@ -32,6 +32,7 @@ const server = Bun.serve({
       '<button id="go">Run search</button>',
       '<button id="danger">Delete account</button>',
       '<a href="/second">Go to second page</a>',
+      '<select id="round"><option value="01">Round 01</option><option value="02">Round 02</option></select>',
       ...Array.from({ length: 40 }, (_, i) => `<p>tail line ${i}</p>`),
     ]
 
@@ -131,6 +132,27 @@ describe.if(!!chrome)("PageSession against real Chrome", () => {
     await session.open(`${url}second`)
     expect(await session.clickRef(999)).toBe(false)
     await session.open(url)
+  }, 60_000)
+
+  test("a dropdown comes back with its own options, and can only be set to one of them", async () => {
+    // The closed-set property, against a real <select>: what it offers is what it can become.
+    const els = await session.elements()
+    const dd = els.find((e) => e.tag === "select")!
+    expect(dd.options).toEqual(["01", "02"])
+    expect(refuseOptionReason(els, dd.ref, "99")).toContain("01, 02")
+
+    const before = await session.state()
+    expect(await session.selectRef(dd.ref, "02")).toBe(true)
+    const after = await session.state()
+    expect(describeChange(before, after)).toContain("02")
+  }, 60_000)
+
+  test("scrolling to the bottom and back to the top actually moves the viewport", async () => {
+    await session.scroll("bottom")
+    const atBottom = await session.evaluate<number>("Math.round(scrollY)")
+    expect(atBottom).toBeGreaterThan(0)
+    await session.scroll("top")
+    expect(await session.evaluate<number>("Math.round(scrollY)")).toBe(0)
   }, 60_000)
 
   test("closing twice is not an error — the session may end after the user already closed it", async () => {
