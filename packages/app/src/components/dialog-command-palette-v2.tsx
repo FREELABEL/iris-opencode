@@ -39,15 +39,21 @@ export function DialogCommandPaletteV2(props: { onOpenFile?: (path: string) => v
   const palette = createCommandPaletteModel(props)
   const loadItems = async (text: string) => {
     const q = text.trim()
-    if (!q) return [...palette.preferredCommandEntries(), ...palette.recentFileEntries()]
+    // Even with nothing typed, the IRIS commands are listed: the palette said "Commands" and
+    // showed three app actions, which read as "that is all there is" (#186546).
+    // NO APP COMMANDS HERE. "New session", "Toggle terminal" and "Toggle review" each have a
+    // keybind shown on the row that teaches it — they are affordances, not a catalogue — and
+    // sitting at the top under a heading called "Commands" they pushed the IRIS commands, which
+    // is what this palette is for, below the fold. They remain on the home palette.
+    if (!q) return [...(await palette.searchCliCommands("")), ...palette.recentFileEntries()]
 
-    const [files, nextSessions] = await Promise.all([palette.file.searchFiles(q), Promise.resolve(palette.sessions(q))])
+    const [files, nextSessions, cli] = await Promise.all([
+      palette.file.searchFiles(q),
+      Promise.resolve(palette.sessions(q)),
+      palette.searchCliCommands(q),
+    ])
     const category = palette.language.t("palette.group.files")
-    return [
-      ...palette.commandEntries().filter((entry) => matchesEntry(entry, q)),
-      ...nextSessions,
-      ...files.map((path) => createCommandPaletteFileEntry(path, category)),
-    ]
+    return [...cli, ...nextSessions, ...files.map((path) => createCommandPaletteFileEntry(path, category))]
   }
 
   return (
@@ -135,9 +141,30 @@ function CommandPaletteView(props: {
   const [query, setQuery] = createSignal("")
   const [active, setActive] = createSignal(0)
 
+  /**
+   * All · Commands · Files — a filter over what already loaded, not a second query.
+   *
+   * "Commands" means the IRIS CLI's commands, and only those. The app's own actions — Archive
+   * session, Toggle terminal — are keyboard affordances you already have a shortcut for, not a
+   * catalogue you browse; mixing them in put "Archive session" above the thing being looked for.
+   * They remain under All, with sessions and files.
+   */
+  const [filter, setFilter] = createSignal<"all" | "commands" | "files">("all")
+  const FILTERS = [
+    { id: "all", label: language.t("palette.filter.all") },
+    { id: "commands", label: language.t("palette.filter.commands") },
+    { id: "files", label: language.t("palette.filter.files") },
+  ] as const
+
   const [entries] = createResource(query, props.loadItems, { initialValue: [] as CommandPaletteEntry[] })
   // Render stale results while a new query loads to avoid flashing "Loading" per keystroke.
-  const visibleEntries = createMemo(() => uniqueCommandPaletteEntries(entries.latest ?? []))
+  const visibleEntries = createMemo(() => {
+    const all = uniqueCommandPaletteEntries(entries.latest ?? [])
+    const f = filter()
+    if (f === "commands") return all.filter((e) => e.type === "cli")
+    if (f === "files") return all.filter((e) => e.type === "file")
+    return all
+  })
   const groupedEntries = createMemo(() => groups(visibleEntries()))
   const activeEntry = createMemo(() => visibleEntries()[active()])
   const openSessions = createMemo(
@@ -202,6 +229,25 @@ function CommandPaletteView(props: {
             onInput={(event) => setQuery(event.currentTarget.value)}
             onKeyDown={handleKeyDown}
           />
+        </div>
+        <div class="command-palette-v2-filters" role="tablist" aria-label={props.placeholder}>
+          <For each={FILTERS}>
+            {(f) => (
+              <button
+                type="button"
+                role="tab"
+                class="command-palette-v2-filter"
+                data-on={filter() === f.id ? "1" : undefined}
+                aria-selected={filter() === f.id}
+                onClick={() => {
+                  setFilter(f.id)
+                  setActive(0)
+                }}
+              >
+                {f.label}
+              </button>
+            )}
+          </For>
         </div>
         <ScrollView class="command-palette-v2-scroll" viewportRef={(el) => (resultsRef = el)}>
           <div class="command-palette-v2-results" role="listbox">
@@ -285,6 +331,35 @@ function PaletteRow(props: {
           </div>
         }
       >
+        {/* An IRIS CLI command (#186546). It needs its own branch: the fallback draws a FILE —
+            icon plus path — and a cli entry has no path, so the rows rendered as blank lines
+            with a file icon. Monospace, because it is a line you are going to type. */}
+        <Match when={props.item.type === "cli"}>
+          <div class="command-palette-v2-row-main">
+            {/* THE COMMAND NEVER TRUNCATES. It shared one ellipsis budget with its description,
+                so the thing you are searching for lost to the prose about it: "iris hive doct…"
+                beside a full sentence. The command holds its width; the description gives way. */}
+            <div class="command-palette-v2-row-text command-palette-v2-cli">
+              <span class="command-palette-v2-title command-palette-v2-cli-cmd">{props.item.title}</span>
+              <Show when={props.item.description}>
+                <span class="command-palette-v2-description">{props.item.description}</span>
+              </Show>
+            </div>
+          </div>
+          {/* An icon, not the word "copy" — the label repeated on every row and said the same
+              thing each time. aria-label keeps it announced for a screen reader. */}
+          <span class="command-palette-v2-cli-copy shrink-0" aria-label="Copy command" title="Copy command">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <rect x="5.75" y="5.75" width="7.5" height="7.5" rx="1.75" stroke="currentColor" stroke-width="1.3" />
+              <path
+                d="M10.25 5.5v-1.75A1.75 1.75 0 008.5 2h-4.75A1.75 1.75 0 002 3.75V8.5a1.75 1.75 0 001.75 1.75H5.5"
+                stroke="currentColor"
+                stroke-width="1.3"
+                stroke-linecap="round"
+              />
+            </svg>
+          </span>
+        </Match>
         <Match when={props.item.type === "command"}>
           <div class="command-palette-v2-row-main">
             <div class="command-palette-v2-row-text">

@@ -1638,3 +1638,40 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
 .iris-file__table th, .iris-file__table td { max-width: 32ch; min-width: 6ch; vertical-align: top; line-height: 1.4; }
 .iris-file__table th { position: sticky; top: 0; z-index: 1; background: var(--background-base); font-weight: 600; white-space: nowrap; }
 .iris-file__table td { font-size: 11px; }
+
+/* A machine that is UP, and a peer connection that is LIVE.
+   Green because that is the thing you open this list to find, and breathing because a heartbeat
+   is what it represents — the node reports in, and the dot says it recently did. Offline is a
+   hollow ring rather than a dimmer green: absent and present must not differ only in brightness.
+   The pulse runs once per 2s, slow enough to read as alive rather than as an alarm, and stops
+   entirely under prefers-reduced-motion, where the colour still carries the state. */
+.iris-hive__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: block;
+  box-sizing: border-box;
+  border: 1.5px solid var(--border-weak-base, #6b6b6b);
+  background: transparent;
+}
+.iris-hive__dot[data-on="1"] {
+  border-color: transparent;
+  background: #3fb950;
+  animation: iris-hive-pulse 2s ease-out infinite;
+}
+@keyframes iris-hive-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, #3fb950 55%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 5px color-mix(in srgb, #3fb950 0%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, #3fb950 0%, transparent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .iris-hive__dot[data-on="1"] {
+    animation: none;
+  }
+}

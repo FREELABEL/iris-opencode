@@ -102,6 +102,11 @@ export const dict = {
   "palette.search.placeholder.home": "Search commands and sessions",
   "palette.empty": "No results found",
   "palette.group.commands": "Commands",
+  // The IRIS CLI's own commands, fetched from the installed binary (#186546).
+  "palette.group.iris": "IRIS CLI",
+  "palette.filter.all": "All",
+  "palette.filter.commands": "Commands",
+  "palette.filter.files": "Files",
   "palette.group.files": "Files",
 
   "dialog.provider.search.placeholder": "Search providers",

@@ -742,6 +742,8 @@ export const IrisPaths = {
   playbookInstall: `${root}/playbooks/install`,
   catalog: `${root}/catalog`,
   integrationConnect: `${root}/integrations/connect`,
+  cliCommands: `${root}/commands`,
+  hivePeers: `${root}/hive/peers`,
   graph: `${root}/graph`,
   graphBoard: `${root}/graph/:bloqID`,
   pageDoc: `${root}/page/:pageID`,
@@ -1622,6 +1624,63 @@ export const IrisApi = HttpApi.make("iris").add(
         OpenApi.annotations({
           identifier: "iris.artifactPublish",
           summary: "Publish a Genesis artifact as a Genesis page",
+        }),
+      ),
+      HttpApiEndpoint.get("cliCommands", IrisPaths.cliCommands, {
+        query: Schema.Struct({
+          q: described(Schema.optional(Schema.String), "What the person typed. Passed to the CLI as ONE argv item, never through a shell."),
+          limit: Schema.optional(Schema.NumberFromString),
+        }),
+        success: described(
+          Schema.Struct({
+            ...Measured,
+            commands: Schema.Array(
+              Schema.Struct({
+                name: Schema.String,
+                describe: Schema.optional(Schema.String),
+                run: described(Schema.String, "The line to type, e.g. `iris leads`."),
+                aliases: Schema.optional(Schema.Array(Schema.String)),
+              }),
+            ),
+          }).annotate({ identifier: "IrisCliCommands" }),
+          "Commands the installed IRIS CLI offers",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.cliCommands",
+          summary: "Search the IRIS CLI's commands",
+          description:
+            "Asks the INSTALLED CLI (`iris find --kind command --json`). This binary does not have them: the desktop engine carries 28 command modules and none of the platform ones, so the palette could only ever show the app's own three. measured=false with a reason when the CLI is not installed — an empty list would read as 'there are no commands'.",
+        }),
+      ),
+      HttpApiEndpoint.get("hivePeers", IrisPaths.hivePeers, {
+        query: PageQuery,
+        success: described(
+          Schema.Struct({
+            ...Paged,
+            ...Measured,
+            peers: Schema.Array(
+              Schema.Struct({
+                id: Schema.String,
+                name: Schema.String,
+                status: described(Schema.String, "active | pending | revoked. PENDING is an invite nobody has accepted, not a lesser active."),
+                active: Schema.Boolean,
+                inviter: described(Schema.Boolean, "Whose invite it was — 'you invited them' and 'they invited you' are different relationships."),
+                inviteCode: described(Schema.optional(Schema.String), "Only while pending: what you send the other person."),
+                permissions: Schema.Array(Schema.String),
+                acceptedAt: Schema.optional(Schema.String),
+                expiresAt: Schema.optional(Schema.String),
+              }),
+            ),
+          }).annotate({ identifier: "IrisHivePeers" }),
+          "The people you are connected to on Hive",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.hivePeers",
+          summary: "List Hive peer connections",
+          description:
+            "The other half of Hive: the panel could only ever show YOUR machines. Active connections sort first — a live one is what you act on, a pending code is a reminder.",
         }),
       ),
       HttpApiEndpoint.get("agentTasks", IrisPaths.agentTasks, {

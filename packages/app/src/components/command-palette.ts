@@ -10,6 +10,8 @@ import { useLanguage } from "@/context/language"
 import { useLayout, type LocalProject } from "@/context/layout"
 import { ServerConnection } from "@/context/server"
 import { useServerSDK } from "@/context/server-sdk"
+import { usePlatform } from "@/context/platform"
+import { showToast } from "@/utils/toast"
 import { useTabs } from "@/context/tabs"
 import { displayName, projectForSession } from "@/pages/layout/helpers"
 import { createSessionTabs } from "@/pages/session/helpers"
@@ -18,7 +20,8 @@ import { normalizeSessionInfo } from "@/utils/session"
 
 export type CommandPaletteEntry = {
   id: string
-  type: "command" | "file" | "session"
+  /** "cli" is an IRIS CLI command (#186546) — it lives in another binary, see iris-cli-search.ts. */
+  type: "command" | "file" | "session" | "cli"
   title: string
   description?: string
   keybind?: string
@@ -31,6 +34,8 @@ export type CommandPaletteEntry = {
   project?: LocalProject
   archived?: number
   updated?: number
+  /** For a "cli" entry: the line to type, e.g. `iris leads`. */
+  run?: string
 }
 
 const ENTRY_LIMIT = 5
@@ -50,6 +55,27 @@ export function uniqueCommandPaletteEntries(items: CommandPaletteEntry[]) {
     seen.add(item.id)
     return true
   })
+}
+
+/**
+ * One IRIS CLI command in the palette (#186546).
+ *
+ * The palette could only ever show three entries — New session, Toggle terminal, Toggle review —
+ * because the app's own commands are all this binary has. The 1,664 IRIS commands are in the
+ * INSTALLED CLI, which the sidecar asks on our behalf.
+ */
+export function createCommandPaletteCliEntry(
+  cmd: { name: string; describe?: string; run: string },
+  category: string,
+): CommandPaletteEntry {
+  return {
+    id: "cli:" + cmd.name,
+    type: "cli",
+    title: cmd.run,
+    description: cmd.describe,
+    category,
+    run: cmd.run,
+  }
 }
 
 export function createCommandPaletteFileEntry(path: string, category: string): CommandPaletteEntry {
@@ -85,10 +111,37 @@ export function createCommandPaletteModel(props: { filesOnly?: () => boolean; on
   const file = useFile()
   const dialog = useDialog()
   const serverSDK = useServerSDK()()
+  const platform = usePlatform()
   const serverCtx = global.ensureServerCtx(serverSDK.server)
   const appTabs = useTabs()
   const { tabs: sessionTabs } = useSessionLayout()
   const openFile = createCommandPaletteFileOpener(props.onOpenFile)
+
+  /**
+   * IRIS CLI commands (#186546). Fetched, not enumerated: they are not in this binary — the
+   * desktop engine carries 28 command modules and none of the platform ones — so the sidecar
+   * asks the installed CLI (`iris find --kind command --json`) for us.
+   *
+   * Failures are silent HERE and loud in the route: the palette keeps working with the app's own
+   * commands rather than showing an error where someone is typing.
+   */
+  const searchCliCommands = async (query: string): Promise<CommandPaletteEntry[]> => {
+    try {
+      const base = serverSDK.url.replace(/\/$/, "")
+      const res = await (platform.fetch ?? fetch)(
+        `${base}/iris/commands?q=${encodeURIComponent(query)}&limit=${query ? 30 : 12}`,
+        { headers: { Accept: "application/json" } },
+      )
+      const body = (await res.json().catch(() => null)) as
+        | { measured?: boolean; commands?: { name: string; describe?: string; run: string }[] }
+        | null
+      if (!body?.measured || !Array.isArray(body.commands)) return []
+      const category = language.t("palette.group.iris")
+      return body.commands.map((c) => createCommandPaletteCliEntry(c, category))
+    } catch {
+      return []
+    }
+  }
   const state = { cleanup: undefined as (() => void) | void, committed: false }
   const filesOnly = () => props.filesOnly?.() ?? false
 
@@ -167,6 +220,16 @@ export function createCommandPaletteModel(props: { filesOnly?: () => boolean; on
       item.option?.onSelect?.("palette")
       return
     }
+    if (item.type === "cli") {
+      // COPY, not run. Executing an arbitrary CLI command from a search box needs the same care
+      // as the shell lane — arguments, a working directory, a confirmation for destructive ones —
+      // and that is the open question on #186546. Copying is useful today and decides nothing.
+      if (item.run) {
+        void navigator.clipboard?.writeText(item.run)
+        showToast(`Copied: ${item.run}`)
+      }
+      return
+    }
     if (item.type === "session") {
       if (!item.sessionID || !item.server) return
       const directory = item.project?.worktree ?? item.directory
@@ -191,6 +254,7 @@ export function createCommandPaletteModel(props: { filesOnly?: () => boolean; on
   })
 
   return {
+    searchCliCommands,
     language,
     file,
     commandEntries,

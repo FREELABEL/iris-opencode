@@ -218,3 +218,69 @@
     max-width: 100%;
   }
 }
+
+/* IRIS CLI rows (#186546).
+   The command is what someone is scanning for, so it keeps its full width and the DESCRIPTION
+   absorbs the overflow. Both shared one budget before, and the command lost. */
+.command-palette-v2-cli {
+  flex: 1;
+  min-width: 0;
+  gap: 8px;
+}
+.command-palette-v2-cli-cmd {
+  flex: 0 0 auto;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12.5px;
+}
+.command-palette-v2-cli .command-palette-v2-description {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Quiet until the row is hovered or active: one copy glyph per row, 40 rows deep. */
+.command-palette-v2-cli-copy {
+  display: flex;
+  align-items: center;
+  color: var(--v2-text-text-muted);
+  opacity: 0.45;
+}
+[data-active="true"] .command-palette-v2-cli-copy,
+.command-palette-v2-row:hover .command-palette-v2-cli-copy {
+  opacity: 1;
+}
+/* On a narrow palette the row stacks; the command still must not be cut. */
+@media (max-width: 640px) {
+  .command-palette-v2-cli-cmd {
+    white-space: normal;
+  }
+}
+
+/* All · Commands · Files. A filter over what loaded, so switching never costs a round trip. */
+.command-palette-v2-filters {
+  display: flex;
+  gap: 6px;
+  padding: 0 12px 8px;
+}
+.command-palette-v2-filter {
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--v2-border-border-muted, rgba(255, 255, 255, 0.12));
+  background: transparent;
+  color: var(--v2-text-text-muted);
+  font-size: 12px;
+  line-height: 16px;
+  cursor: pointer;
+}
+.command-palette-v2-filter:hover {
+  color: var(--v2-text-text-base);
+}
+.command-palette-v2-filter[data-on="1"] {
+  background: var(--v2-background-bg-layer-04, rgba(255, 255, 255, 0.1));
+  color: var(--v2-text-text-base);
+  border-color: transparent;
+}

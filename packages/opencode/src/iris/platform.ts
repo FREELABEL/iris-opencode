@@ -379,6 +379,64 @@ export interface HiveNode {
   hardwareDetectedAt?: string
 }
 
+/**
+ * PEERS — the people you are connected to, and whose machines can carry your work (#186xxx).
+ *
+ * The Hive tab showed only YOUR machines, which is half of what Hive is: the other half is a
+ * peer connection, and the panel had no way to see one. `iris hive connections` has listed them
+ * all along, from /api/v6/nodes/connections/.
+ *
+ * A PENDING connection is not a lesser active one — it is an invite code nobody has accepted,
+ * and the code is the only thing that makes it useful — so the status travels with the row
+ * rather than being flattened into "connected: false".
+ */
+export interface HivePeer {
+  id: string
+  name: string
+  status: string
+  active: boolean
+  /** Whose invite it was. "you invited them" and "they invited you" are different relationships. */
+  inviter: boolean
+  /** Only meaningful while pending: what you send the other person. */
+  inviteCode?: string
+  permissions: string[]
+  acceptedAt?: string
+  expiresAt?: string
+}
+
+export async function fetchHivePeers(): Promise<PlatformResult<{ peers: HivePeer[] }>> {
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { peers: [] } }
+  try {
+    const res = await irisFetch(`/api/v6/nodes/connections/?user_id=${userId}`, IRIS_API)
+    if (!res.ok) return { measured: false, reason: `iris-api ${res.status}`, data: { peers: [] } }
+    const json: any = await res.json()
+    const peers: HivePeer[] = (json?.connections ?? []).map((c: any) => {
+      const status = String(c?.status ?? "unknown")
+      return {
+        id: String(c?.id ?? ""),
+        // A pending invite has no peer yet. Saying "pending invite" is the truth; inventing a
+        // name would make an unaccepted code look like a person who is there.
+        name: c?.peer_name ? String(c.peer_name) : status === "pending" ? "Pending invite" : "Unnamed peer",
+        status,
+        active: status === "active",
+        inviter: Boolean(c?.is_inviter),
+        inviteCode: status === "pending" && c?.invite_code ? String(c.invite_code) : undefined,
+        permissions: Object.entries(c?.permissions ?? {})
+          .filter(([, v]) => !!v)
+          .map(([k]) => k),
+        acceptedAt: c?.accepted_at ? String(c.accepted_at) : undefined,
+        expiresAt: c?.expires_at ? String(c.expires_at) : undefined,
+      }
+    })
+    // Active first: a live connection is the one you act on; a pending code is a reminder.
+    peers.sort((a, b) => Number(b.active) - Number(a.active) || a.name.localeCompare(b.name))
+    return { measured: true, data: { peers } }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { peers: [] } }
+  }
+}
+
 export async function fetchHiveNodes(): Promise<PlatformResult<{ nodes: HiveNode[] }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { nodes: [] } }
