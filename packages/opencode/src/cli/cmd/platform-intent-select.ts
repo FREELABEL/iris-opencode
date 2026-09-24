@@ -86,7 +86,9 @@ export function candidatePools(
   // PLAYBOOKS are answers too: "build a website" is best served by a playbook, not a raw command.
   // Offered as GUIDED PROJECTS, so a single action ("report a bug") still goes to its command:
   // unlabelled, playbooks won 3 of 20 simple requests from the right command (measured).
-  const playbooks = searchCapabilities(index(), q, "playbook", 2).map(({ e, s }) => ({
+  // Top 5 playbooks (#186666 A5): the first 2 are offered for the PICK (more let playbooks steal
+  // single-action requests — 3 of 20, measured), all 5 go to the ranked list, where Jev scores them.
+  const playbooks = searchCapabilities(index(), q, "playbook", 5).map(({ e, s }) => ({
     name: `playbook run ${e.name}`,
     describe: `GUIDED PROJECT, not a single action — choose only when the request is a whole multi-step job: ${e.describe}`,
     run: `iris playbook run ${e.name}`,
@@ -98,7 +100,7 @@ export function candidatePools(
       const e = index().entries.find((x) => x.kind === "command" && x.name === name)
       return e ? [{ name, describe: e.describe, run: e.run, score: 0 }] : []
     })
-  const pick = [...leaves.slice(0, pickLimit), ...playbooks]
+  const pick = [...leaves.slice(0, pickLimit), ...playbooks.slice(0, 2)]
   const pool = [...leaves.slice(0, poolLimit), ...playbooks]
   return { pick: [...pick, ...general(pick)], pool: [...pool, ...general(pool)] }
 }

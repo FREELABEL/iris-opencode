@@ -35,5 +35,9 @@
   ["manage the events calendar for Locals Only", [], [641]],
   ["run a backtest of the DELO trading strategy", [], [605, 604]],
   ["write a tips article for streamers", [], [632]],
-  ["fix a bug in the iris CLI", [], [679, 678, 630]]
+  ["fix a bug in the iris CLI", [], [679, 678, 630]],
+  ["plan my meals for the week", ["playbook run meal-plan-week"]],
+  ["plan a trip to tokyo and budget it", ["playbook run trip-plan-and-budget"]],
+  ["write today's diary entry about what I shipped", ["playbook run daily-diary", "diary"]],
+  ["run a competitive gap analysis on a competitor's product", ["playbook run competitive-gap-analysis"]]
 ]
