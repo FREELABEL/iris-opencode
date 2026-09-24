@@ -1,7 +1,9 @@
-import { transcribeLocal } from "./transcription"
+import { transcribeLocal, resolveFfmpeg } from "./transcription"
 import { irisFetch, IRIS_API } from "../cmd/iris-api"
-import { existsSync, readFileSync } from "fs"
-import { resolve, extname, basename } from "path"
+import { existsSync, readFileSync, mkdtempSync, readdirSync, rmSync, mkdirSync, writeFileSync } from "fs"
+import { resolve, extname, basename, join, dirname } from "path"
+import { tmpdir } from "os"
+import { spawnSync } from "child_process"
 
 // ============================================================================
 // Shared front half of every "I talked through it, now make me something" command.
@@ -47,6 +49,110 @@ export async function fetchGlossary(brandId?: number): Promise<string | undefine
 
 export function isAudio(path: string): boolean {
   return AUDIO_EXT.has(extname(path).toLowerCase())
+}
+
+const VIDEO_EXT = new Set([".mp4", ".mov", ".webm", ".mkv", ".m4v"])
+
+export function isVideo(path: string): boolean {
+  return VIDEO_EXT.has(extname(path).toLowerCase())
+}
+
+// ============================================================================
+// Keyframes — what the screen showed, for the steps nobody said out loud
+//
+// Narration-only drafting loses every step done silently (Loom's AI SOPs have the same hole).
+// The tools that get this right look at one frame per screen CHANGE, not every frame and not
+// the whole file: scene detection picks the moments something happened, and a dozen of those
+// at low detail is the entire vision budget for a draft.
+// ============================================================================
+
+export interface Keyframe {
+  /** Seconds into the recording. */
+  t: number
+  jpeg: Buffer
+  /** Where the command writes it, relative to the drafted document — the SOP links to it. */
+  ref: string
+}
+
+/** Frames larger than this are skipped rather than sent; the server refuses ~700KB of base64. */
+const MAX_FRAME_BYTES = 450_000
+const SCENE_THRESHOLD = "0.2"
+const SCENE_CANDIDATES = 60
+const KEYFRAME_TIMEOUT_MS = 10 * 60_000
+
+function runFrames(ffmpeg: string, video: string, dir: string, filter: string, limit: number) {
+  const r = spawnSync(
+    ffmpeg,
+    ["-hide_banner", "-nostats", "-i", video, "-vf", filter, "-fps_mode", "vfr", "-q:v", "6", "-frames:v", String(limit), join(dir, "%03d.jpg")],
+    { encoding: "utf8", timeout: KEYFRAME_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 },
+  )
+  const err = r.stderr ?? ""
+  const times = [...err.matchAll(/Parsed_showinfo[^\n]*pts_time:([\d.]+)/g)].map((m) => Number(m[1]))
+  const files = existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(".jpg")).sort() : []
+  const d = err.match(/Duration: (\d+):(\d+):([\d.]+)/)
+  const duration = d ? Number(d[1]) * 3600 + Number(d[2]) * 60 + Number(d[3]) : 0
+  return { times, files, duration, status: r.status, err }
+}
+
+/** Spread `max` picks evenly across `n` candidates, always keeping the first and last. */
+export function evenlyPick<T>(xs: T[], max: number): T[] {
+  if (xs.length <= max) return xs
+  if (max <= 1) return xs.slice(0, 1)
+  const out: T[] = []
+  for (let i = 0; i < max; i++) out.push(xs[Math.round((i * (xs.length - 1)) / (max - 1))])
+  return [...new Set(out)]
+}
+
+/**
+ * Up to `max` frames from a video, at the moments the screen changed.
+ *
+ * Never throws: a draft from the narration alone is still a draft, and losing it because frame
+ * extraction failed would be the wrong trade. `note` says why there are fewer frames than asked.
+ */
+export function extractKeyframes(video: string, max: number): { frames: Keyframe[]; note?: string } {
+  if (max <= 0) return { frames: [] }
+  const ff = resolveFfmpeg()
+  if (!ff.bin) return { frames: [], note: ff.diagnosis || "ffmpeg unavailable — drafted from narration only" }
+
+  const dir = mkdtempSync(join(tmpdir(), "iris-frames-"))
+  try {
+    // Pass 1: the first frame plus every scene change, capped. showinfo runs before scale so the
+    // timestamps are the source's.
+    let run = runFrames(ff.bin, video, dir, `select='eq(n\\,0)+gt(scene\\,${SCENE_THRESHOLD})',showinfo,scale='min(1024\\,iw)':-2`, SCENE_CANDIDATES)
+
+    // A screen recording that barely changes (one long form, a terminal) gives almost no scene
+    // cuts. Fall back to evenly spaced frames rather than drafting blind.
+    if (run.files.length < 3 && run.duration > 0) {
+      for (const f of run.files) rmSync(join(dir, f), { force: true })
+      const rate = Math.max(max, 1) / run.duration
+      run = runFrames(ff.bin, video, dir, `fps=${rate.toFixed(6)},showinfo,scale='min(1024\\,iw)':-2`, max)
+    }
+
+    if (run.files.length === 0) {
+      return { frames: [], note: `no frames could be read from this video${run.err ? ": " + run.err.trim().split("\n").slice(-1)[0] : ""}` }
+    }
+
+    const all = run.files.map((f, i) => ({ file: f, t: run.times[i] ?? 0 }))
+    const used = new Set<string>()
+    const frames: Keyframe[] = []
+    let skipped = 0
+    for (const c of evenlyPick(all, max)) {
+      const jpeg = readFileSync(join(dir, c.file))
+      if (jpeg.length > MAX_FRAME_BYTES) {
+        skipped++
+        continue
+      }
+      let ref = `frames/${String(Math.round(c.t)).padStart(4, "0")}.jpg`
+      for (let k = 2; used.has(ref); k++) ref = `frames/${String(Math.round(c.t)).padStart(4, "0")}-${k}.jpg`
+      used.add(ref)
+      frames.push({ t: Math.round(c.t * 10) / 10, jpeg, ref })
+    }
+    return { frames, note: skipped ? `${skipped} frame(s) too large to send were skipped` : undefined }
+  } catch (e) {
+    return { frames: [], note: `frame extraction failed: ${e instanceof Error ? e.message : String(e)}` }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 }
 
 export function slugify(s: string): string {
@@ -97,6 +203,41 @@ export async function resolveWalkthrough(
   }
 
   return { transcript, source, hinted }
+}
+
+/** Hard ceiling the server enforces; asking for more is clamped, not refused. */
+export const MAX_FRAMES = 12
+
+/**
+ * Frames for a draft, or none. Only a video has a screen to read; `max` 0 opts out.
+ * Frames are images of the screen and they go to the drafting model, unlike the audio.
+ */
+export function framesFor(input: string, max: number): { frames: Keyframe[]; note?: string } {
+  if (!(max > 0) || !isVideo(input)) return { frames: [] }
+  return extractKeyframes(resolve(input), Math.min(Math.floor(max), MAX_FRAMES))
+}
+
+/**
+ * Write the frames beside the drafted document and point its image links at them.
+ *
+ * The server links screens as `frames/<t>.jpg`. A playbook owns its folder, so that is right as
+ * is; SOPs share one folder, so each gets `<name>-frames/` and the links are rewritten to match —
+ * otherwise the second SOP drafted overwrites the first one's screenshots.
+ */
+export function writeFrames(frames: Keyframe[], docPath: string, markdown: string, dirName = "frames"): string {
+  const base = dirname(docPath)
+  for (const f of frames) {
+    const out = join(base, f.ref.replace(/^frames\//, `${dirName}/`))
+    mkdirSync(dirname(out), { recursive: true })
+    writeFileSync(out, f.jpeg)
+  }
+  return dirName === "frames" ? markdown : markdown.split("](frames/").join(`](${dirName}/`)
+}
+
+/** Steps the model recovered from the screen alone — the ones a reviewer should check first. */
+export function seenOnlyCount(doc: StructuredWalkthrough): number {
+  const steps = Array.isArray(doc.structured?.steps) ? doc.structured.steps : []
+  return steps.filter((s: any) => s?.seen_only === true).length
 }
 
 export interface TreatedTranscript {
@@ -164,6 +305,8 @@ export interface StructuredWalkthrough {
   title: string
   markdown: string
   structured: Record<string, any>
+  /** How many frames the server actually used. Absent on servers older than frame support. */
+  frames_used?: number
 }
 
 /**
@@ -184,12 +327,20 @@ export async function structureWalkthrough(
   transcript: string,
   format: "sop" | "playbook",
   model?: string,
+  frames: Keyframe[] = [],
 ): Promise<StructuredWalkthrough> {
   const res = await irisFetch(
     "/api/v1/walkthrough/structure",
     {
       method: "POST",
-      body: JSON.stringify({ transcript, format, ...(model ? { model } : {}) }),
+      body: JSON.stringify({
+        transcript,
+        format,
+        ...(model ? { model } : {}),
+        ...(frames.length
+          ? { frames: frames.map((f) => ({ t: f.t, image: `data:image/jpeg;base64,${f.jpeg.toString("base64")}`, ref: f.ref })) }
+          : {}),
+      }),
     },
     IRIS_API,
   )

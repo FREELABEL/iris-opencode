@@ -2,7 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { dim, bold, success, highlight, printDivider, requireAuth, writeJson } from "./iris-api"
-import { resolveWalkthrough, structureWalkthrough, slugify } from "../lib/walkthrough"
+import { resolveWalkthrough, structureWalkthrough, slugify, framesFor, writeFrames, seenOnlyCount, isVideo } from "../lib/walkthrough"
 import { existsSync, mkdirSync, writeFileSync } from "fs"
 import { join, resolve } from "path"
 
@@ -22,14 +22,17 @@ import { join, resolve } from "path"
 
 export const PlaybookDraftCommand = cmd({
   command: "draft <input>",
-  describe: "draft a playbook from a recorded walkthrough (audio file or transcript)",
+  describe: "draft a playbook from a recorded walkthrough (video, audio or transcript)",
   builder: (yargs) =>
     yargs
       .positional("input", {
         type: "string",
         demandOption: true,
-        describe: "Audio file to transcribe, or a .txt/.md transcript",
+        describe: "Video or audio recording to transcribe, or a .txt/.md transcript",
       })
+      // Screen frames, so steps done without being said still land in the draft. Only a video
+      // has a screen; audio and transcripts ignore this.
+      .option("frames", { type: "number", default: 10, describe: "Screen frames to read from a video (0 = narration only, max 12). Frames are sent to the model" })
       .option("name", { type: "string", describe: "Override the generated playbook name" })
       // The proxy namespaces models by provider; a bare "gpt-4.1-nano" 404s. Nano-only per the
       // standing rule — this is extraction from a transcript, not reasoning.
@@ -65,13 +68,21 @@ export const PlaybookDraftCommand = cmd({
       prompts.outro("Done")
       return
     }
+    // ---- 1b. Screen --------------------------------------------------------------
+    const spf = prompts.spinner()
+    const wantsFrames = Number(args.frames) > 0 && isVideo(String(args.input))
+    if (wantsFrames) spf.start("Reading the screen…")
+    const kf = framesFor(String(args.input), Number(args.frames))
+    if (wantsFrames) spf.stop(kf.frames.length ? `${kf.frames.length} screen frames` : "No screen frames — narration only")
+    if (kf.note) prompts.log.warn(kf.note)
+
     // ---- 2. Structure it -------------------------------------------------------
     // Server-side, so the CLI and the CardEditor produce the same document from the same words.
     const sp2 = prompts.spinner()
     sp2.start("Drafting the procedure…")
     let doc
     try {
-      doc = await structureWalkthrough(walk.transcript, "playbook", String(args.model))
+      doc = await structureWalkthrough(walk.transcript, "playbook", String(args.model), kf.frames)
       sp2.stop("Drafted")
     } catch (e) {
       sp2.stop("Failed", 1)
@@ -98,10 +109,10 @@ export const PlaybookDraftCommand = cmd({
     }
 
     mkdirSync(join(target, ".."), { recursive: true })
-    writeFileSync(target, doc.markdown)
+    writeFileSync(target, writeFrames(kf.frames, target, doc.markdown))
 
     if (args.json) {
-      await writeJson({ name, path: target, steps: steps.length, notes: doc.structured?.notes ?? [] })
+      await writeJson({ name, path: target, steps: steps.length, notes: doc.structured?.notes ?? [], frames: doc.frames_used ?? 0, seen_only: seenOnlyCount(doc) })
       prompts.outro("Done")
       return
     }
@@ -109,6 +120,11 @@ export const PlaybookDraftCommand = cmd({
     printDivider()
     console.log(`  ${bold("Drafted:")}  ${highlight(name)}  ${dim(`${steps.length} steps`)}`)
     console.log(`  ${bold("Written:")}  ${highlight(target)}`)
+    if (kf.frames.length) {
+      const seen = seenOnlyCount(doc)
+      if (doc.frames_used === undefined) console.log(`  ${dim("Screens:")}  server ignored the frames — it predates frame support; drafted from narration only`)
+      else console.log(`  ${bold("Screens:")}  ${doc.frames_used} frames read${seen ? ` · ${highlight(String(seen))} step(s) seen on screen but never said — check those first` : ""}`)
+    }
     printDivider()
     console.log()
     for (const s of steps) console.log(`  ${dim("·")} ${s.title}`)
