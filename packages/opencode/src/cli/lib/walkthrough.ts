@@ -76,7 +76,10 @@ export interface Keyframe {
 
 /** Frames larger than this are skipped rather than sent; the server refuses ~700KB of base64. */
 const MAX_FRAME_BYTES = 450_000
-const SCENE_THRESHOLD = "0.2"
+// Screen recordings change a little at a time. Measured on a three-screen recording (text on a
+// white page): the two real screen changes scored 0.058 and 0.060, an unchanged screen ~0.00005.
+// A camera-style 0.2–0.4 threshold registered neither change. 0.02 sits well clear of both.
+const SCENE_THRESHOLD = "0.02"
 const SCENE_CANDIDATES = 60
 const KEYFRAME_TIMEOUT_MS = 10 * 60_000
 
@@ -132,12 +135,19 @@ export function extractKeyframes(video: string, max: number): { frames: Keyframe
       return { frames: [], note: `no frames could be read from this video${run.err ? ": " + run.err.trim().split("\n").slice(-1)[0] : ""}` }
     }
 
-    const all = run.files.map((f, i) => ({ file: f, t: run.times[i] ?? 0 }))
+    // Drop a frame identical to the one before it. The evenly spaced fallback lands several
+    // frames on one unchanged screen, and each duplicate is model input that says nothing new.
+    const all: Array<{ t: number; jpeg: Buffer }> = []
+    for (const [i, f] of run.files.entries()) {
+      const jpeg = readFileSync(join(dir, f))
+      if (all.length && all[all.length - 1].jpeg.equals(jpeg)) continue
+      all.push({ t: run.times[i] ?? 0, jpeg })
+    }
     const used = new Set<string>()
     const frames: Keyframe[] = []
     let skipped = 0
     for (const c of evenlyPick(all, max)) {
-      const jpeg = readFileSync(join(dir, c.file))
+      const jpeg = c.jpeg
       if (jpeg.length > MAX_FRAME_BYTES) {
         skipped++
         continue

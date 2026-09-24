@@ -58,13 +58,29 @@ describe.skipIf(!ffmpeg)("extractKeyframes", () => {
     }
   })
 
-  test("a screen that never changes still yields evenly spaced frames", () => {
+  test("a screen that never changes is one frame, not the same frame five times", () => {
     const dir = mkdtempSync(join(tmpdir(), "kf-test-"))
     try {
       const src = video(dir, "static.mp4", "[0]null[v]", ["-f", "lavfi", "-i", "color=c=gray:s=320x240:d=10"])
       const { frames } = extractKeyframes(src, 5)
-      expect(frames.length).toBeGreaterThanOrEqual(3)
-      expect(frames.length).toBeLessThanOrEqual(5)
+      expect(frames.length).toBe(1)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("text changing on a white screen registers as screen changes", () => {
+    // The real case: a screen recording, where a new page is a small change in pixels. At a
+    // camera-style threshold none of these cuts registered and the draft got evenly spaced
+    // frames that missed them.
+    const dir = mkdtempSync(join(tmpdir(), "kf-test-"))
+    try {
+      const box = (x: number) => `color=c=white:s=320x240:d=3,drawbox=x=${x}:y=20:w=60:h=14:color=black:t=fill`
+      const src = video(dir, "text.mp4", "[0][1][2]concat=n=3:v=1:a=0[v]", [
+        "-f", "lavfi", "-i", box(20), "-f", "lavfi", "-i", box(120), "-f", "lavfi", "-i", box(220),
+      ])
+      const { frames } = extractKeyframes(src, 10)
+      expect(frames.map((f) => Math.round(f.t))).toEqual([0, 3, 6])
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
