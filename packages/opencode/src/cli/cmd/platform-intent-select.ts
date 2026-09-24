@@ -38,14 +38,41 @@ const decideUrl = () => (process.env.DECIDE_URL || "http://127.0.0.1:3210").repl
  */
 const GENERAL = ["web-search", "atlas search"]
 
+/**
+ * A command GROUP ("genesis", "geo") only lists its subcommands; offered as an answer, Decide took
+ * `iris genesis` for "build a website" at 31% (measured). A candidate is dropped when another
+ * command extends its name — unless nothing else matched.
+ */
+export function leafOnly(cands: Candidate[], allNames: string[]): Candidate[] {
+  const leaves = cands.filter(
+    (c) => c.name.includes("playbook run ") || !allNames.some((n) => n.startsWith(c.name + " ")),
+  )
+  return leaves.length ? leaves : cands
+}
+
 export function candidatesFor(text: string, limit: number): Candidate[] {
   const index = loadIndex()
-  const hits = searchCapabilities(index, text.toLowerCase(), "command", limit).map(({ e, s }) => ({
+  const q = text.toLowerCase()
+  const commands = searchCapabilities(index, q, "command", limit + 6).map(({ e, s }) => ({
     name: e.name,
     describe: e.describe,
     run: e.run || `iris ${e.name}`,
     score: s,
   }))
+  const allNames = index.entries.filter((e) => e.kind === "command").map((e) => e.name)
+  const hits = leafOnly(commands, allNames).slice(0, limit)
+  // PLAYBOOKS are answers too: "build a website" is best served by a playbook, not a raw command.
+  // Offered as GUIDED PROJECTS, so a single action ("report a bug") still goes to its command:
+  // unlabelled, playbooks won 3 of 20 simple requests from the right command (measured).
+  for (const { e, s } of searchCapabilities(index, q, "playbook", 2)) {
+    hits.push({
+      name: `playbook run ${e.name}`,
+      describe: `GUIDED PROJECT, not a single action — choose only when the request is a whole multi-step job: ${e.describe}`,
+      run: `iris playbook run ${e.name}`,
+      score: s,
+    })
+  }
+
   for (const name of GENERAL) {
     const e = index.entries.find((x) => x.kind === "command" && x.name === name)
     if (e && !hits.some((h) => h.name === name)) hits.push({ name, describe: e.describe, run: e.run, score: 0 })
@@ -78,9 +105,28 @@ export function commandOf(line: string, candidates: Candidate[]): Candidate | un
   return best
 }
 
-export function decidePayload(text: string, candidates: Candidate[]) {
+/**
+ * A request can be several jobs: "transcribe this video and build a website from it" is a
+ * transcribe AND a Genesis page, and one `choice` can only name one of them (measured: it named
+ * transcribe and dropped the website). Split on "and"/"then" before a verb; at most 3 steps.
+ */
+const STEP_VERBS =
+  "build|make|create|transcribe|publish|send|write|schedule|connect|find|search|add|run|post|email|book|generate|turn|summari[sz]e|draft|deploy|upload|share|clip|translate|post|design|launch|set up|setup|import|export|analy[sz]e"
+export function splitSteps(text: string): string[] {
+  const re = new RegExp(
+    `\\s*(?:,\\s*)?(?:\\band then\\b|\\bthen\\b|\\bafter that\\b|\\band\\b)\\s+(?=(?:${STEP_VERBS})\\b)`,
+    "i",
+  )
+  const parts = text
+    .split(re)
+    .map((p) => p.trim())
+    .filter(Boolean)
+  return parts.length > 1 ? parts.slice(0, 3) : [text]
+}
+
+export function decidePayload(text: string, candidates: Candidate[], full = text, extras = true) {
   return {
-    state: `User request: "${text}"`,
+    state: full === text ? `User request: "${text}"` : `User request: "${full}"\nThis step of it: "${text}"`,
     questions: {
       command: {
         type: "choice",
@@ -99,10 +145,21 @@ export function decidePayload(text: string, candidates: Candidate[]) {
   }
 }
 
+function withoutExtras(payload: ReturnType<typeof decidePayload>) {
+  const { command } = payload.questions
+  return { ...payload, questions: { command } }
+}
+
+export const EXTRA_MIN = 0.65
+
 /** Decide's yes/no answers -> the extra commands they add beside its pick. */
 export function extrasFrom(answers: any, picked: string, candidates: Candidate[]): string[] {
   const out: string[] = []
-  const yes = (k: string) => answers?.[k]?.value === true
+  // A CONFIDENT yes only. At 0.5 it added a web search to "transcribe <url>" (p=0.52) and an
+  // Atlas search for favourite foods to a coffee-shop website.
+  const yes = (k: string) =>
+    answers?.[k]?.value === true &&
+    Number(answers?.[k]?.probabilities?.true ?? answers?.[k]?.confidence ?? 0) >= EXTRA_MIN
   if (yes("web") && picked !== "web-search" && candidates.some((c) => c.name === "web-search")) out.push("web-search")
   if (yes("atlas") && picked !== "atlas search" && candidates.some((c) => c.name === "atlas search"))
     out.push("atlas search")
@@ -113,12 +170,19 @@ export function extrasFrom(answers: any, picked: string, candidates: Candidate[]
 export const byName = (name: unknown, candidates: Candidate[]) =>
   typeof name === "string" ? candidates.find((c) => c.name === name.trim()) : undefined
 
-async function viaDecide(text: string, candidates: Candidate[], timeoutMs: number): Promise<Pick | string> {
+async function viaDecide(
+  text: string,
+  candidates: Candidate[],
+  timeoutMs: number,
+  full = text,
+  extras = true,
+): Promise<Pick | string> {
   try {
+    const payload = decidePayload(text, candidates, full)
     const res = await fetch(`${decideUrl()}/decide`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(decidePayload(text, candidates)),
+      body: JSON.stringify(extras ? payload : withoutExtras(payload)),
       signal: AbortSignal.timeout(timeoutMs),
     })
     if (!res.ok) return `Decide: HTTP ${res.status}`
@@ -168,12 +232,25 @@ const allCommands = () =>
     .entries.filter((e) => e.kind === "command")
     .map((e) => ({ name: e.name, describe: e.describe, run: e.run, score: 0 })))
 
-/** The command with its first placeholder filled by the request itself — the no-model fallback. */
+/**
+ * The no-model fallback: fill a placeholder only from what the request actually supplies — a URL
+ * for <url>, the request for a [query]. Anything else stays a placeholder (and --run refuses it);
+ * pasting the whole sentence into `transcribe [url]` was worse than asking.
+ */
 export function heuristicFill(c: Candidate, text: string): string {
+  const url = /https?:\/\/\S+/.exec(text)?.[0]
   const q = `"${text.replace(/"/g, "'")}"`
-  return /<[^>]+>|\[[^\]]+\]/.test(c.run)
-    ? c.run.replace(/<[^>]+>|\[[^\]]+\]/, q).replace(/\s*(<[^>]+>|\[[^\]]+\])/g, "")
-    : c.run
+  let used = false
+  return c.run
+    .replace(/<([^>]+)>|\[([^\]]+)\]/g, (m, req, opt) => {
+      const name = String(req ?? opt).toLowerCase()
+      if (used) return opt ? "" : m
+      if (/url|link|file|path|source/.test(name) && url) return ((used = true), url)
+      if (/query|text|search|q\b|message|topic|prompt|question|term/.test(name)) return ((used = true), q)
+      return opt ? "" : m
+    })
+    .replace(/\s+/g, " ")
+    .trim()
 }
 
 /**
@@ -203,8 +280,10 @@ async function fillArguments(text: string, chosen: Candidate[]): Promise<{ lines
               content:
                 "Fill in the arguments of the given IRIS CLI commands for the request. Use exactly these commands, in this " +
                 "order, and no others. Replace every <placeholder> or [optional] argument with concrete text (double-quote " +
-                "multi-word arguments). For `iris atlas search`, give up to 2 searches for PERSONAL context the user may " +
-                'have saved that shapes the answer (for places to eat: "favorite foods" and "family"). ' +
+                "multi-word arguments). Use only values the request gives or clearly implies; if a required value is " +
+                "missing (a URL, a file), keep its <placeholder>. For `iris atlas search`, give up to 2 searches for " +
+                "PERSONAL context the user may have saved that is about THIS request (e.g. for places to eat: favourite " +
+                "foods, family). Playbook commands take no arguments. " +
                 'Answer JSON: {"commands":["iris ..."]}.',
             },
             { role: "user", content: `Commands:\n${spec}\n\nRequest: ${text}` },
@@ -219,11 +298,17 @@ async function fillArguments(text: string, chosen: Candidate[]): Promise<{ lines
     // chosen `leads` but is a different command — the filler must not change Decide's decision.
     const lines = [...new Set(commandLines(content).map((l) => l.trim()))].filter((l) => {
       const c = commandOf(l, chosen)
-      return c && commandOf(l, allCommands())?.name === c.name && !/[;&|`$<>]/.test(l.replace(/"[^"]*"/g, ""))
+      if (!c || c.name.startsWith("playbook run ")) return false
+      const bare = l.replace(/"[^"]*"/g, "").replace(/<[^>\s]+>/g, "")
+      return commandOf(l, allCommands())?.name === c.name && !/[;&|`$<>]/.test(bare)
     })
     // Every chosen command appears: filled if the model covered it, heuristically if it did not.
     const out: string[] = []
     for (const c of chosen) {
+      if (c.name.startsWith("playbook run ")) {
+        out.push(c.run)
+        continue
+      }
       const mine = lines.filter((l) => commandOf(l, chosen) === c).slice(0, c.name === "atlas search" ? 2 : 1)
       out.push(...(mine.length ? mine : [heuristicFill(c, text)]))
     }
@@ -263,30 +348,48 @@ export async function selectTool(a: {
   timeout?: number
 }) {
   const text = a.text.trim()
-  const candidates = candidatesFor(text, a.limit || 12)
-  if (!candidates.length) {
+  const steps = splitSteps(text)
+  const perStep = steps.map((step) => candidatesFor(step, a.limit || 12))
+  const candidates = [...new Map(perStep.flat().map((c) => [c.name, c])).values()]
+  if (!perStep.some((c) => c.length)) {
     if (a.json) console.log(JSON.stringify({ query: text, choice: null, run: null, candidates: [] }, null, 2))
     else UI.error(`no iris command matches "${text}" — try: iris find "${text}"`)
     process.exitCode = 1
     return
   }
 
+  // One decision per step. The web / notes questions are asked once, with the first step, about
+  // the WHOLE request.
   const misses: string[] = []
-  let pick: Pick | undefined
-  if (candidates.length === 1) pick = { candidate: candidates[0], by: "only candidate" }
-  if (!pick && a.decide !== false) {
-    const r = await viaDecide(text, candidates, a.timeout || 20000)
-    if (typeof r === "string") misses.push(r)
-    else pick = r
+  const picks: Pick[] = []
+  for (const [i, step] of steps.entries()) {
+    const cands = perStep[i]
+    if (!cands.length) continue
+    let pick: Pick | undefined
+    if (cands.length === 1) pick = { candidate: cands[0], by: "only candidate" }
+    if (!pick && a.decide !== false) {
+      const r = await viaDecide(step, cands, a.timeout || 20000, text, i === 0)
+      if (typeof r === "string") misses.push(r)
+      else pick = r
+    }
+    if (!pick && a.platform !== false) {
+      const r = await viaPlatform(step, cands)
+      if (typeof r === "string") misses.push(r)
+      else pick = r
+    }
+    picks.push(pick ?? { candidate: cands[0], by: "keyword" })
   }
-  if (!pick && a.platform !== false) {
-    const r = await viaPlatform(text, candidates)
-    if (typeof r === "string") misses.push(r)
-    else pick = r
-  }
-  const chosen = pick ?? { candidate: candidates[0], by: "keyword" }
+  const chosen = picks[0]
   const best = chosen.candidate
-  const picked = [best, ...(chosen.extras ?? []).map((n) => candidates.find((c) => c.name === n)!).filter(Boolean)]
+  const extras = picks.flatMap((p) => p.extras ?? [])
+  const picked = [
+    ...new Map(
+      [
+        ...picks.map((p) => p.candidate),
+        ...extras.map((n) => candidates.find((c) => c.name === n)!).filter(Boolean),
+      ].map((c) => [c.name, c]),
+    ).values(),
+  ]
   const filled =
     a.fill === false
       ? { lines: picked.map((c) => heuristicFill(c, text)), filled: false }
@@ -303,6 +406,7 @@ export async function selectTool(a: {
           commands,
           decided_by: chosen.by,
           decided: picked.map((c) => c.name),
+          steps,
           arguments_by: filled.filled ? FILL_MODEL : "request text",
           confidence: chosen.confidence ?? null,
           ms: chosen.ms ?? null,
@@ -326,7 +430,8 @@ export async function selectTool(a: {
       .join(" · ")
     console.log(`  ${bold(best.name)}  ${dim(`(${detail})`)}`)
     if (best.describe) console.log(`  ${dim(best.describe)}`)
-    if (!pick && misses.length) console.log(`  ${dim(`fell back to keyword order — ${misses.join("; ")}`)}`)
+    if (picks.some((p) => p.by === "keyword") && misses.length)
+      console.log(`  ${dim(`fell back to keyword order — ${misses.join("; ")}`)}`)
     console.log()
     for (const line of commands) console.log(`  ${highlight(`→ ${line}`)}`)
     printDivider()

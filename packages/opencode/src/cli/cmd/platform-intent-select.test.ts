@@ -32,11 +32,16 @@ describe("iris intent — tool selection", () => {
 test("Decide's yes/no answers add web-search and atlas search beside its pick", async () => {
   const { extrasFrom } = await import("./platform-intent-select")
   const pool = [c("geo nearby"), c("web-search"), c("atlas search")]
-  expect(extrasFrom({ web: { value: true }, atlas: { value: true } }, "geo nearby", pool)).toEqual([
-    "web-search",
-    "atlas search",
-  ])
-  expect(extrasFrom({ web: { value: true }, atlas: { value: false } }, "web-search", pool)).toEqual([])
+  expect(
+    extrasFrom(
+      { web: { value: true, probabilities: { true: 0.8 } }, atlas: { value: true, probabilities: { true: 0.7 } } },
+      "geo nearby",
+      pool,
+    ),
+  ).toEqual(["web-search", "atlas search"])
+  expect(
+    extrasFrom({ web: { value: true, probabilities: { true: 0.8 } }, atlas: { value: false } }, "web-search", pool),
+  ).toEqual([])
 })
 test("no model: the request fills the first placeholder", async () => {
   const { heuristicFill } = await import("./platform-intent-select")
@@ -44,4 +49,34 @@ test("no model: the request fills the first placeholder", async () => {
     heuristicFill({ name: "web-search", describe: "", run: "iris web-search [query]", score: 0 }, "places to eat"),
   ).toBe('iris web-search "places to eat"')
   expect(heuristicFill({ name: "monitor", describe: "", run: "iris monitor", score: 0 }, "x")).toBe("iris monitor")
+})
+
+test("a barely-yes (p=0.52) adds nothing", async () => {
+  const { extrasFrom } = await import("./platform-intent-select")
+  expect(
+    extrasFrom({ web: { value: true, probabilities: { true: 0.52 } } }, "transcribe", [
+      c("transcribe"),
+      c("web-search"),
+    ]),
+  ).toEqual([])
+})
+test("multi-step requests split before a verb, not on every 'and'", async () => {
+  const { splitSteps } = await import("./platform-intent-select")
+  expect(splitSteps("transcribe this video and build a website from it")).toEqual([
+    "transcribe this video",
+    "build a website from it",
+  ])
+  expect(splitSteps("salt and pepper shaker ideas")).toEqual(["salt and pepper shaker ideas"])
+})
+test("a command group is not an answer when a real command matched", async () => {
+  const { leafOnly } = await import("./platform-intent-select")
+  expect(leafOnly([c("genesis"), c("genesis create")], ["genesis", "genesis create"]).map((x) => x.name)).toEqual([
+    "genesis create",
+  ])
+})
+test("the no-model fill uses a URL for <url> and never pastes the sentence where it does not belong", async () => {
+  const { heuristicFill } = await import("./platform-intent-select")
+  const t = { name: "transcribe", describe: "", run: "iris transcribe [url]", score: 0 }
+  expect(heuristicFill(t, "transcribe https://youtu.be/x please")).toBe("iris transcribe https://youtu.be/x")
+  expect(heuristicFill({ ...t, run: "iris transcribe <url>" }, "transcribe this video")).toBe("iris transcribe <url>")
 })
