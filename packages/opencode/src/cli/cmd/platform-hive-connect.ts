@@ -6,6 +6,7 @@ import { homedir, platform } from "os"
 import { existsSync } from "fs"
 import { execSync } from "child_process"
 import { ensureNodeOnPath } from "../lib/node-path"
+import { ensureAutostart } from "./platform-hive-autostart"
 // ============================================================================
 // iris hive connect  —  enroll THIS machine, outbound, in one command
 //
@@ -150,9 +151,14 @@ const HiveConnectCommand = cmd({
     const sp = prompts.spinner()
     sp.start("Connecting this machine…")
     const nodeId = await wakeHiveNode({ quiet: true, restart: !!args.force })
+    // Registered BEFORE reporting, so what is printed is what is true. #186663: the installer
+    // only registers autostart when it installs the daemon, which it skips without Node.js —
+    // so a machine enrolled here had no autostart and stopped being a node at the next reboot.
+    const autostart = nodeId ? ensureAutostart({ platform: platform(), daemonCmd: daemonCtl() }) : null
+
     if (args.json) {
       sp.stop(nodeId ? "Online" : "Not online", nodeId ? 0 : 1)
-      console.log(JSON.stringify({ node_id: nodeId, online: !!nodeId }))
+      console.log(JSON.stringify({ node_id: nodeId, online: !!nodeId, autostart: autostart ? { ok: autostart.ok, skipped: autostart.skipped ?? null, reason: autostart.reason ?? null } : null }))
       return
     }
     if (!nodeId) {
@@ -165,6 +171,15 @@ const HiveConnectCommand = cmd({
     sp.stop(success(`Online  ${dim(`(${nodeId})`)}`))
     console.log()
     console.log(`  ${bold("This machine is now controllable from anywhere.")}`)
+    // A node that will not come back after a reboot must never be reported as one that will.
+    if (autostart?.ok) {
+      console.log(`  ${dim("Comes back after a reboot:")} ${dim(`scheduled task "IRIS Hive Node"`)}`)
+    } else if (autostart?.reason) {
+      console.log(`  ${dim("Note: autostart could not be registered —")} ${autostart.reason}`)
+      console.log(`  ${dim("This machine is online now, but will NOT rejoin by itself after a reboot.")}`)
+    } else if (platform() === "win32" && autostart?.skipped) {
+      console.log(`  ${dim("Note: no autostart —")} ${autostart.skipped}`)
+    }
     console.log(`  ${dim("See the fleet:")}   ${highlight("iris hive board")}`)
     console.log(`  ${dim("Send it work:")}    ${highlight("iris hive tasks")}`)
     prompts.outro("Done")
