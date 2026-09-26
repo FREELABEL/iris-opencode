@@ -110,6 +110,9 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   // here, and `find` was absent — so the one command that answers "what can this thing do"
   // appeared in no help output at all (#183479).
   find: "knowledge",
+  // `find` SEARCHES the command list; `intent` PICKS from it. Absent from this map, it appeared in
+  // no help output — the same gap `find` had (#183479), found again by the readiness gate (#186677).
+  intent: "knowledge",
   atlas: "knowledge",
   memory: "knowledge",
   boards: "knowledge",

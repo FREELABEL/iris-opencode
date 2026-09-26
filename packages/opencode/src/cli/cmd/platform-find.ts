@@ -273,6 +273,8 @@ export const PlatformFindCommand = cmd({
     }
     printDivider()
     console.log(`  ${dim("machine-readable:")} ${highlight(`iris find "${raw}" --json`)}`)
+    // find lists; intent picks. The one line that tells a person the second exists (#186677).
+    console.log(`  ${dim("pick one for me:  ")} ${highlight(`iris intent "${raw}"`)}`)
     UI.empty()
   },
 })

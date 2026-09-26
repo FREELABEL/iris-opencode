@@ -97,6 +97,19 @@
       "docs",
       "instructions"
     ],
+    "intent": [
+      "which command",
+      "what command",
+      "which tool",
+      "what tool",
+      "what should i run",
+      "what do i run",
+      "pick a command",
+      "choose a command",
+      "tool selection",
+      "in plain english",
+      "natural language"
+    ],
     "memory": [
       "remember",
       "recall",

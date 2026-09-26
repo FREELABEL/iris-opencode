@@ -510,6 +510,9 @@ const TERMS: Record<string, string[]> = {
   // "sync team skills into claude code and cursor" found production-deploy (#186212).
   playbook: ["workflow", "recipe", "automation", "runbook", "skills", "team skills", "shared rules", "claude code", "cursor", "agents.md"],
   "how-to": ["guide", "tutorial", "documentation", "docs", "instructions"],
+  // "which command should I use" found atlas use / genesis / deliver:carousel — never `intent`,
+  // the command that answers exactly that (#186677).
+  intent: ["which command", "what command", "which tool", "what tool", "what should i run", "what do i run", "pick a command", "choose a command", "tool selection", "in plain english", "natural language"],
   memory: ["remember", "recall", "knowledge base", "rag"],
   bug: ["issue", "report a problem", "defect", "ticket"],
   // A published note reads at /n/<uuid> and `atlas use` is the ONLY verb that returns its
