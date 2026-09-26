@@ -313,7 +313,7 @@ async function viaDecide(
     if (!c) return "Decide: answer was not a candidate"
     return {
       candidate: c,
-      by: `decide${r?.meta?.engine ? `:${r.meta.engine}` : ""}${sent.via === "platform" ? " (platform)" : ""}`,
+      by: `decide${r?.meta?.engine ? `:${r.meta.engine}` : ""}${sent.via === "platform" ? ` (platform${r?.meta?.cache === "hit" ? ", cached" : ""})` : ""}`,
       confidence: r?.answers?.command?.confidence,
       ms: r?.meta?.latency_ms,
       extras: extrasFrom(r?.answers, c.name, candidates),
