@@ -469,6 +469,12 @@
       "dest": "how-to/kinetics.md",
       "managed": true,
       "purpose": "Decide which agent may move which body — seal an agent into an identity hash, couple it to a camera/OBS/phone/node with an allowed verb list and a budget, then check or revoke it. Node-local, works offline."
+    },
+    {
+      "src": "how-to/iris-intent.md",
+      "dest": "how-to/iris-intent.md",
+      "managed": true,
+      "purpose": "Say what you want in plain English and get the IRIS command that does it — iris intent decides (Decide, powered by Jev), iris find only searches. Best pick first with arguments filled, then a ranked list."
     }
   ]
 }
