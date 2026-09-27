@@ -47,6 +47,8 @@ export namespace ACP {
     private config: ACPConfig
     private sdk: OpencodeClient
     private sessionManager
+    /** Sessions with a `session/prompt` in flight — the only turns a steer may join. */
+    private running = new Set<string>()
 
     constructor(connection: AgentSideConnection, config: ACPConfig) {
       this.connection = connection
@@ -757,6 +759,49 @@ export namespace ACP {
     }
 
     async prompt(params: PromptRequest) {
+      this.running.add(params.sessionId)
+      try {
+        return await this.runPrompt(params)
+      } finally {
+        this.running.delete(params.sessionId)
+      }
+    }
+
+    /**
+     * Buzz's steering extension (`_session/steering`): a message that arrives while a turn is
+     * running joins THAT turn instead of cancelling it. Without it, buzz-acp cancels the
+     * in-flight turn and re-prompts with both messages merged — 2026-09-26, a user's second
+     * message threw away several minutes of work. SDK 0.5.1 strips the leading underscore
+     * before calling extMethod; newer SDKs may not, so both spellings are accepted.
+     */
+    async extMethod(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
+      if (method === "session/steering" || method === "_session/steering") return this.steer(params)
+      throw RequestError.methodNotFound(method)
+    }
+
+    private async steer(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+      const sessionID = String(params.sessionId ?? "")
+      // Not -32601: any other error makes buzz deliver the message as a normal next prompt.
+      if (!this.running.has(sessionID)) throw new RequestError(-32000, "No turn is running to steer")
+      const session = this.sessionManager.get(sessionID)
+      const parts = promptParts((params.prompt ?? []) as PromptRequest["prompt"])
+      if (parts.length === 0) throw RequestError.invalidParams("steering prompt has no content")
+      // noReply: store the message and return; the running loop sees a user message newer
+      // than its last answer and takes another step instead of exiting.
+      await this.sdk.session.prompt({
+        sessionID,
+        parts,
+        noReply: true,
+        directory: session.cwd,
+        ...(session.modeId ? { agent: session.modeId } : {}),
+      })
+      // The turn could have ended between the check and the insert. Then nothing will read
+      // the message, so refuse (non -32601) and let buzz redeliver it as a fresh prompt.
+      if (!this.running.has(sessionID)) throw new RequestError(-32000, "Turn ended before the steer landed")
+      return { outcome: "injected" }
+    }
+
+    private async runPrompt(params: PromptRequest) {
       const sessionID = params.sessionId
       const session = this.sessionManager.get(sessionID)
       const directory = session.cwd
@@ -768,55 +813,7 @@ export namespace ACP {
       }
       const agent = session.modeId ?? (await AgentModule.defaultAgent())
 
-      const parts: Array<
-        { type: "text"; text: string } | { type: "file"; url: string; filename: string; mime: string }
-      > = []
-      for (const part of params.prompt) {
-        switch (part.type) {
-          case "text":
-            parts.push({
-              type: "text" as const,
-              text: part.text,
-            })
-            break
-          case "image":
-            if (part.data) {
-              parts.push({
-                type: "file",
-                url: `data:${part.mimeType};base64,${part.data}`,
-                filename: "image",
-                mime: part.mimeType,
-              })
-            } else if (part.uri && part.uri.startsWith("http:")) {
-              parts.push({
-                type: "file",
-                url: part.uri,
-                filename: "image",
-                mime: part.mimeType,
-              })
-            }
-            break
-
-          case "resource_link":
-            const parsed = parseUri(part.uri)
-            parts.push(parsed)
-
-            break
-
-          case "resource":
-            const resource = part.resource
-            if ("text" in resource) {
-              parts.push({
-                type: "text",
-                text: resource.text,
-              })
-            }
-            break
-
-          default:
-            break
-        }
-      }
+      const parts = promptParts(params.prompt)
 
       log.info("parts", { parts })
 
@@ -894,6 +891,61 @@ export namespace ACP {
         { throwOnError: true },
       )
     }
+  }
+
+  type PromptPart =
+    | { type: "text"; text: string }
+    | { type: "file"; url: string; filename: string; mime: string }
+
+  function promptParts(prompt: PromptRequest["prompt"]): PromptPart[] {
+    const parts: PromptPart[] = []
+    for (const part of prompt) {
+      switch (part.type) {
+        case "text":
+          parts.push({
+            type: "text" as const,
+            text: part.text,
+          })
+          break
+        case "image":
+          if (part.data) {
+            parts.push({
+              type: "file",
+              url: `data:${part.mimeType};base64,${part.data}`,
+              filename: "image",
+              mime: part.mimeType,
+            })
+          } else if (part.uri && part.uri.startsWith("http:")) {
+            parts.push({
+              type: "file",
+              url: part.uri,
+              filename: "image",
+              mime: part.mimeType,
+            })
+          }
+          break
+
+        case "resource_link":
+          const parsed = parseUri(part.uri)
+          parts.push(parsed)
+
+          break
+
+        case "resource":
+          const resource = part.resource
+          if ("text" in resource) {
+            parts.push({
+              type: "text",
+              text: resource.text,
+            })
+          }
+          break
+
+        default:
+          break
+      }
+    }
+    return parts
   }
 
   function toToolKind(toolName: string): ToolKind {
@@ -1089,5 +1141,7 @@ export function initializeResponse(params: InitializeRequest, version: string): 
       name: "IRIS",
       version,
     },
+    // buzz-acp reads /_meta/steering/supported off the initialize RESULT, not agentCapabilities.
+    _meta: { steering: { supported: true } },
   }
 }
