@@ -22,6 +22,7 @@ describe("autostartDecision — who registers, and who is told why not", () => {
     for (const p of ["darwin", "linux"]) {
       const d = autostartDecision({ platform: p, daemonCmd: "/Users/x/.iris/bin/iris-daemon" })
       expect(d.action).toBe("skip")
+      if (d.action !== "skip") throw new Error("expected a skip decision")
       expect(d.reason).toMatch(/windows/i)
     }
   })
@@ -34,6 +35,7 @@ describe("autostartDecision — who registers, and who is told why not", () => {
   test("skips with a reason when there is no daemon launcher to start", () => {
     const d = autostartDecision({ platform: "win32", daemonCmd: null })
     expect(d.action).toBe("skip")
+    if (d.action !== "skip") throw new Error("expected a skip decision")
     expect(d.reason).toMatch(/daemon/i)
     expect(d.reason).toMatch(/not installed|nothing to start/i)
   })
