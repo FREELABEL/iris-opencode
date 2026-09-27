@@ -326,43 +326,7 @@ export namespace ACP {
 
     async initialize(params: InitializeRequest): Promise<InitializeResponse> {
       log.info("initialize", { protocolVersion: params.protocolVersion })
-
-      const authMethod: AuthMethod = {
-        description: "Run `opencode auth login` in the terminal",
-        name: "Login with opencode",
-        id: "opencode-login",
-      }
-
-      // If client supports terminal-auth capability, use that instead.
-      if (params.clientCapabilities?._meta?.["terminal-auth"] === true) {
-        authMethod._meta = {
-          "terminal-auth": {
-            command: "opencode",
-            args: ["auth", "login"],
-            label: "OpenCode Login",
-          },
-        }
-      }
-
-      return {
-        protocolVersion: 1,
-        agentCapabilities: {
-          loadSession: true,
-          mcpCapabilities: {
-            http: true,
-            sse: true,
-          },
-          promptCapabilities: {
-            embeddedContext: true,
-            image: true,
-          },
-        },
-        authMethods: [authMethod],
-        agentInfo: {
-          name: "OpenCode",
-          version: Installation.VERSION,
-        },
-      }
+      return initializeResponse(params, Installation.VERSION)
     }
 
     async authenticate(_params: AuthenticateRequest) {
@@ -1082,5 +1046,48 @@ export namespace ACP {
         text: uri,
       }
     }
+  }
+}
+
+/**
+ * The ACP handshake. Exported so a test can pin the identity: this binary ships as IRIS, and a
+ * client that shows the agent's name (Buzz, Zed) must never tell a user to run `opencode`.
+ */
+export function initializeResponse(params: InitializeRequest, version: string): InitializeResponse {
+  const authMethod: AuthMethod = {
+    description: "Run `iris auth login` in the terminal",
+    name: "Log in to IRIS",
+    id: "iris-login",
+  }
+
+  // If client supports terminal-auth capability, use that instead.
+  if (params.clientCapabilities?._meta?.["terminal-auth"] === true) {
+    authMethod._meta = {
+      "terminal-auth": {
+        command: "iris",
+        args: ["auth", "login"],
+        label: "IRIS Login",
+      },
+    }
+  }
+
+  return {
+    protocolVersion: 1,
+    agentCapabilities: {
+      loadSession: true,
+      mcpCapabilities: {
+        http: true,
+        sse: true,
+      },
+      promptCapabilities: {
+        embeddedContext: true,
+        image: true,
+      },
+    },
+    authMethods: [authMethod],
+    agentInfo: {
+      name: "IRIS",
+      version,
+    },
   }
 }
