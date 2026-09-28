@@ -58,6 +58,20 @@ export function isRecording(): boolean {
 export function startCapture(device?: string): { startedAt: number } {
   if (active) throw new TranscribeError("Already recording.")
 
+  // PLATFORM FIRST, ffmpeg SECOND. This order is the whole bug on Windows.
+  //
+  // inputArgs() below has no dshow/wasapi branch — the sidecar cannot record on Windows at
+  // all, by design, because the Chromium webview records in-page there. But the ffmpeg lookup
+  // used to run BEFORE that, so a Windows user whose window had been denied the microphone was
+  // told "Recording needs ffmpeg ... winget install Gyan.FFmpeg". They would install it and get
+  // the identical error next time — resolveBin was broken on Windows too — and had it ever
+  // succeeded the very next line would have thrown "not implemented on win32" anyway.
+  //
+  // So: ask whether this platform can use the sidecar at all before naming a missing tool.
+  // Nothing to install can fix a microphone permission, and an error that survives its own
+  // remedy is worse than one that admits what it does not know.
+  inputArgs(device)
+
   const ffmpeg = resolveBin("ffmpeg")
   if (!ffmpeg) {
     // Name a remedy that exists on THIS operating system. The previous message said

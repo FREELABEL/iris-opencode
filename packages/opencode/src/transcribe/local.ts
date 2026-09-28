@@ -37,7 +37,47 @@ const EXTRA_BIN_DIRS = [
   "/bin",
 ]
 
+/**
+ * Windows equivalents of the two POSIX assumptions above.
+ *
+ * `which` IS NOT A WINDOWS COMMAND (it is `where.exe`), every path in EXTRA_BIN_DIRS is a
+ * POSIX one that cannot exist on Windows, and a Windows executable is `ffmpeg.exe`, not
+ * `ffmpeg`. All three had to hold for this function to work, and none of them do — so on
+ * Windows it returned null for EVERY binary, including ones plainly on PATH.
+ *
+ * That is why the ffmpeg error there was unfixable by following its own advice: the message
+ * said `winget install Gyan.FFmpeg`, the user installed it, and the next attempt still could
+ * not see it. An error that survives its own remedy reads as the app being broken, which is
+ * fair, because it was.
+ */
+const WINDOWS_BIN_DIRS = [
+  `${process.env.LOCALAPPDATA ?? ""}\\Microsoft\\WinGet\\Links`,
+  `${process.env.ProgramData ?? ""}\\chocolatey\\bin`,
+  `${process.env.ProgramFiles ?? ""}\\ffmpeg\\bin`,
+  "C:\\ffmpeg\\bin",
+].filter((d) => !d.startsWith("\\") && d.length > 3)
+
+/** PATHEXT decides what "executable" means on Windows; default it rather than assume .exe. */
+function windowsExts(): string[] {
+  const raw = process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD"
+  return raw.split(";").map((e) => e.trim().toLowerCase()).filter(Boolean)
+}
+
 export function resolveBin(bin: string): string | null {
+  if (process.platform === "win32") {
+    const r = spawnSync("where", [bin], { encoding: "utf8", shell: true })
+    const first = r.stdout?.split(/\r?\n/).map((l) => l.trim()).find(Boolean)
+    if (first && r.status === 0 && existsSync(first)) return first
+    const dirs = [...WINDOWS_BIN_DIRS, ...(process.env.PATH ?? "").split(";").filter(Boolean)]
+    for (const dir of dirs) {
+      for (const ext of ["", ...windowsExts()]) {
+        const candidate = join(dir, bin + ext)
+        if (existsSync(candidate)) return candidate
+      }
+    }
+    return null
+  }
+
   const r = spawnSync("which", [bin], { encoding: "utf8" })
   const found = r.stdout?.trim()
   if (found && r.status === 0) return found
