@@ -235,7 +235,7 @@ export class PageSession {
    * screenshot-and-click loop misses when a banner shifts the layout by ten pixels.
    */
   async elements(limit = 150): Promise<
-    Array<{ ref: number; role: string; name: string; tag: string; value?: string; enabled: boolean; inViewport: boolean }>
+    Array<{ ref: number; role: string; name: string; tag: string; value?: string; enabled: boolean; inViewport: boolean; options?: string[] }>
   > {
     const js = `(() => {
       const SEL = 'a[href], button, input, select, textarea, [role=button], [role=link], [role=tab], [role=checkbox], [role=radio], [role=switch], [role=menuitem], [contenteditable=true]'
