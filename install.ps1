@@ -97,12 +97,29 @@ if ($RequestedVersion) {
     $SpecificVersion = $RequestedVersion
     $Url = "https://github.com/FREELABEL/iris-opencode/releases/download/v$RequestedVersion/$Filename"
 
-    # Verify release exists
+    # Verify the release exists AND actually carries this platform's asset.
+    #
+    # Checking only the tag page was not enough. A release is created before its assets
+    # finish uploading, and this repo also publishes desktop-v* tags that contain no iris-*
+    # binaries at all — so the tag can be perfectly real while $Filename is absent. The
+    # download then 404s and the beacon reports it as `download / Not Found`, which reads as
+    # a network problem rather than "that version has no Windows build".
+    #
+    # The no-VERSION branch below already resolved this by enumerating assets; the comment
+    # there even names the client who hit it on 1.3.222. That fix was never applied to this
+    # branch, so pinning a version kept the bug.
     try {
-        $resp = Invoke-WebRequest -Uri "https://github.com/FREELABEL/iris-opencode/releases/tag/v$RequestedVersion" -Method Head -UseBasicParsing -ErrorAction Stop
+        $Rel = Invoke-RestMethod -Uri "https://api.github.com/repos/FREELABEL/iris-opencode/releases/tags/v$RequestedVersion" -UseBasicParsing -ErrorAction Stop
     } catch {
         Write-Host "Error: Release v$RequestedVersion not found" -ForegroundColor Red
         Write-Host "Available releases: https://github.com/FREELABEL/iris-opencode/releases" -ForegroundColor DarkGray
+        exit 1
+    }
+    if (-not ($Rel.assets | Where-Object { $_.name -eq $Filename })) {
+        Write-Host "Release v$RequestedVersion exists but has no $Filename." -ForegroundColor Red
+        Write-Host "It may still be uploading, or that version shipped no Windows build." -ForegroundColor DarkGray
+        Write-Host "Assets on that release: $(($Rel.assets | ForEach-Object { $_.name }) -join ', ')" -ForegroundColor DarkGray
+        Send-InstallBeacon -EventType "install_failed" -Step "resolve_version" -Reason "asset $Filename absent from v$RequestedVersion"
         exit 1
     }
 } else {
@@ -144,6 +161,112 @@ if ($RequestedVersion) {
         Write-Host "Check your internet connection or install a specific version:" -ForegroundColor DarkGray
         Write-Host '  $env:VERSION="1.3.223"; irm https://heyiris.io/install-code.ps1 | iex' -ForegroundColor DarkGray
         exit 1
+    }
+}
+
+# ─── Invoke-IrisDownload must be DEFINED BEFORE the top-level call below ──────
+#
+# PowerShell does not hoist functions. `irm … | iex` parses the whole script and then
+# executes it top to bottom, so a function called at top level before its `function`
+# statement has run does not exist yet. This one was defined at line 423 and called at
+# line 165, and every Windows CLI install failed with:
+#
+#     The term 'Invoke-IrisDownload' is not recognized as the name of a cmdlet
+#
+# which the caller's catch reported as a DOWNLOAD failure — so the beacons blamed the
+# network. Introduced by cf6bd05591, the commit that added the progress line.
+#
+# Anything called at top level belongs above the first top-level statement that uses it.
+# The two calls inside functions (Install-IrisDaemonSource) were always fine: those run
+# when the function is invoked, which is after every definition.
+
+function Invoke-IrisDownload {
+    <#
+      A download that SAYS SOMETHING WHILE IT RUNS.
+
+      The installer silenced PowerShell's own progress bar because, on PS 5.1, Write-Progress
+      repaints per byte and makes a download roughly ten times slower -- true, and it left a
+      multi-megabyte fetch printing nothing at all. Measured 2026-09-22 on a client's Windows
+      machine: the install worked, took minutes, looked hung, and was reported as stuck. A
+      silent slow step and a hung one are indistinguishable, and the person watching picks the
+      worse reading every time.
+
+      So this streams the body itself and prints its own line -- no Write-Progress, none of its
+      cost. It returns a RESULT rather than throwing: a failure here is the caller's to report,
+      and a half-written file is removed so a retry cannot resume onto garbage.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Url,
+        [Parameter(Mandatory)][string]$OutFile,
+        [string]$Label = "Downloading"
+    )
+
+    $result = [pscustomobject]@{ Ok = $false; Bytes = 0; Reason = $null }
+    # Redirected output (a piped install, CI) must not receive a carriage-return repaint per
+    # tick — it would arrive as one unreadable line. There, print a line every few seconds.
+    $live = $false
+    try { $live = -not [Console]::IsOutputRedirected } catch { $live = $false }
+
+    $client = $null; $resp = $null; $in = $null; $out = $null
+    try {
+        Add-Type -AssemblyName System.Net.Http -ErrorAction SilentlyContinue
+        $client = [System.Net.Http.HttpClient]::new()
+        $client.Timeout = [TimeSpan]::FromMinutes(30)
+        $client.DefaultRequestHeaders.Add("User-Agent", "iris-installer")
+
+        # ResponseHeadersRead: start writing as bytes arrive rather than buffering it all first.
+        $resp = $client.GetAsync($Url, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+        if (-not $resp.IsSuccessStatusCode) { throw "HTTP $([int]$resp.StatusCode) $($resp.ReasonPhrase)" }
+
+        $total = $resp.Content.Headers.ContentLength    # $null when the server sends chunked
+        $in  = $resp.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
+        $out = [System.IO.File]::Create($OutFile)
+
+        $buffer = [byte[]]::new(128KB)
+        $done = 0L
+        $started = Get-Date
+        $lastTick = [datetime]::MinValue
+        $tick = if ($live) { [TimeSpan]::FromMilliseconds(200) } else { [TimeSpan]::FromSeconds(3) }
+
+        while (($read = $in.Read($buffer, 0, $buffer.Length)) -gt 0) {
+            $out.Write($buffer, 0, $read)
+            $done += $read
+            if (((Get-Date) - $lastTick) -ge $tick) {
+                $lastTick = Get-Date
+                $mb = [math]::Round($done / 1MB, 1)
+                if ($total) {
+                    # A percentage is only printed when a total was actually declared. Inventing
+                    # one from a guess is how a progress bar comes to sit at 99% for a minute.
+                    $totalMb = [math]::Round($total / 1MB, 1)
+                    $pct = [math]::Floor(($done / $total) * 100)
+                    $line = "  $Label  $mb MB / $totalMb MB  $pct%"
+                } else {
+                    $line = "  $Label  $mb MB"
+                }
+                if ($live) { Write-Host "`r$line".PadRight(64) -NoNewline -ForegroundColor DarkGray }
+                else { Write-Host $line -ForegroundColor DarkGray }
+            }
+        }
+        $out.Close(); $out = $null
+
+        $secs = [math]::Max(1, [int]((Get-Date) - $started).TotalSeconds)
+        $mb = [math]::Round($done / 1MB, 1)
+        if ($live) { Write-Host "`r".PadRight(66) -NoNewline }
+        Write-Host "`r  $Label  $mb MB in ${secs}s" -ForegroundColor DarkGray
+
+        $result.Ok = $true
+        $result.Bytes = $done
+        return $result
+    } catch {
+        $result.Reason = "$_"
+        return $result
+    } finally {
+        if ($out) { try { $out.Close() } catch {} }
+        if ($in) { try { $in.Dispose() } catch {} }
+        if ($resp) { try { $resp.Dispose() } catch {} }
+        if ($client) { try { $client.Dispose() } catch {} }
+        # No half-written file: the next run must not mistake a truncated zip for a download.
+        if (-not $result.Ok -and (Test-Path $OutFile)) { Remove-Item -Force $OutFile -ErrorAction SilentlyContinue }
     }
 }
 
@@ -216,7 +339,30 @@ try {
         }
     }
 
-    Copy-Item -Path $Binary.FullName -Destination $Dest -Force
+    # THE RENAME ABOVE IS NOT THE WHOLE STORY. It only runs when Test-Path saw a file, and
+    # the lock can land on the COPY instead: the daemon respawns between the two statements,
+    # an antivirus scanner opens the freshly-renamed image, or a second shell is mid-install.
+    # Observed on a client machine as
+    #     extract | The process cannot access the file 'C:\Users\...\.iris\bin...
+    # reported at step `extract`, because this Copy-Item sits inside that try block.
+    #
+    # So retry, and treat a locked destination the same way the rename does — move it aside
+    # and try again. Sleeping is the whole fix for a scanner holding a handle for a second.
+    $copied = $false
+    for ($attempt = 1; $attempt -le 4; $attempt++) {
+        try {
+            Copy-Item -Path $Binary.FullName -Destination $Dest -Force -ErrorAction Stop
+            $copied = $true
+            break
+        } catch {
+            if ($attempt -eq 4) { throw }
+            if (Test-Path $Dest) {
+                try { Rename-Item -Path $Dest -NewName "iris.exe.old-$(Get-Random)" -Force -ErrorAction Stop } catch {}
+            }
+            Start-Sleep -Milliseconds (400 * $attempt)
+        }
+    }
+    if (-not $copied) { throw "could not write $Dest after 4 attempts" }
 } catch {
     Send-InstallBeacon -EventType "install_failed" -Step "extract" -Reason "$_"
     Write-Host "Error extracting archive: $_" -ForegroundColor Red
@@ -420,95 +566,6 @@ function Install-IrisDaemonSource {
 # system-wide task store. A task that needs admin to install is also a task most
 # clients simply will not have, and an installer that demands elevation for an
 # optional convenience is one people stop running.
-function Invoke-IrisDownload {
-    <#
-      A download that SAYS SOMETHING WHILE IT RUNS.
-
-      The installer silenced PowerShell's own progress bar because, on PS 5.1, Write-Progress
-      repaints per byte and makes a download roughly ten times slower — true, and it left a
-      multi-megabyte fetch printing nothing at all. Measured 2026-09-22 on a client's Windows
-      machine: the install worked, took minutes, looked hung, and was reported as stuck. A
-      silent slow step and a hung one are indistinguishable, and the person watching picks the
-      worse reading every time.
-
-      So this streams the body itself and prints its own line — no Write-Progress, none of its
-      cost. It returns a RESULT rather than throwing: a failure here is the caller's to report,
-      and a half-written file is removed so a retry cannot resume onto garbage.
-    #>
-    param(
-        [Parameter(Mandatory)][string]$Url,
-        [Parameter(Mandatory)][string]$OutFile,
-        [string]$Label = "Downloading"
-    )
-
-    $result = [pscustomobject]@{ Ok = $false; Bytes = 0; Reason = $null }
-    # Redirected output (a piped install, CI) must not receive a carriage-return repaint per
-    # tick — it would arrive as one unreadable line. There, print a line every few seconds.
-    $live = $false
-    try { $live = -not [Console]::IsOutputRedirected } catch { $live = $false }
-
-    $client = $null; $resp = $null; $in = $null; $out = $null
-    try {
-        Add-Type -AssemblyName System.Net.Http -ErrorAction SilentlyContinue
-        $client = [System.Net.Http.HttpClient]::new()
-        $client.Timeout = [TimeSpan]::FromMinutes(30)
-        $client.DefaultRequestHeaders.Add("User-Agent", "iris-installer")
-
-        # ResponseHeadersRead: start writing as bytes arrive rather than buffering it all first.
-        $resp = $client.GetAsync($Url, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
-        if (-not $resp.IsSuccessStatusCode) { throw "HTTP $([int]$resp.StatusCode) $($resp.ReasonPhrase)" }
-
-        $total = $resp.Content.Headers.ContentLength    # $null when the server sends chunked
-        $in  = $resp.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
-        $out = [System.IO.File]::Create($OutFile)
-
-        $buffer = [byte[]]::new(128KB)
-        $done = 0L
-        $started = Get-Date
-        $lastTick = [datetime]::MinValue
-        $tick = if ($live) { [TimeSpan]::FromMilliseconds(200) } else { [TimeSpan]::FromSeconds(3) }
-
-        while (($read = $in.Read($buffer, 0, $buffer.Length)) -gt 0) {
-            $out.Write($buffer, 0, $read)
-            $done += $read
-            if (((Get-Date) - $lastTick) -ge $tick) {
-                $lastTick = Get-Date
-                $mb = [math]::Round($done / 1MB, 1)
-                if ($total) {
-                    # A percentage is only printed when a total was actually declared. Inventing
-                    # one from a guess is how a progress bar comes to sit at 99% for a minute.
-                    $totalMb = [math]::Round($total / 1MB, 1)
-                    $pct = [math]::Floor(($done / $total) * 100)
-                    $line = "  $Label  $mb MB / $totalMb MB  $pct%"
-                } else {
-                    $line = "  $Label  $mb MB"
-                }
-                if ($live) { Write-Host "`r$line".PadRight(64) -NoNewline -ForegroundColor DarkGray }
-                else { Write-Host $line -ForegroundColor DarkGray }
-            }
-        }
-        $out.Close(); $out = $null
-
-        $secs = [math]::Max(1, [int]((Get-Date) - $started).TotalSeconds)
-        $mb = [math]::Round($done / 1MB, 1)
-        if ($live) { Write-Host "`r".PadRight(66) -NoNewline }
-        Write-Host "`r  $Label  $mb MB in ${secs}s" -ForegroundColor DarkGray
-
-        $result.Ok = $true
-        $result.Bytes = $done
-        return $result
-    } catch {
-        $result.Reason = "$_"
-        return $result
-    } finally {
-        if ($out) { try { $out.Close() } catch {} }
-        if ($in) { try { $in.Dispose() } catch {} }
-        if ($resp) { try { $resp.Dispose() } catch {} }
-        if ($client) { try { $client.Dispose() } catch {} }
-        # No half-written file: the next run must not mistake a truncated zip for a download.
-        if (-not $result.Ok -and (Test-Path $OutFile)) { Remove-Item -Force $OutFile -ErrorAction SilentlyContinue }
-    }
-}
 
 function Register-IrisAutostart {
     param(
