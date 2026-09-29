@@ -328,6 +328,23 @@ export function detectShadowPagesDir(usedDir: string, from: string = process.cwd
  *
  * Returns the normalized slug and whether it changed, so callers can say so.
  */
+/**
+ * The server's answer to "could the signed-in account save this page?" (#183652, #187217).
+ *
+ * fl-api computes it on every page read, with the same predicate the save enforces, so a
+ * person learns BEFORE the work that they cannot push. No command printed it. A client
+ * editor on NCMA's board finished a 17-event update and only then hit the refusal, because
+ * the page belonged to the operator account instead of the board.
+ *
+ * Null when the server does not send it (older fl-api): no answer beats a guessed one.
+ */
+export function editAccess(page: any): { ok: boolean; line: string } | null {
+  if (typeof page?.can_edit !== "boolean") return null
+  const who = page.acting_user_id != null ? ` (signed in as user #${page.acting_user_id})` : ""
+  if (page.can_edit) return { ok: true, line: `yes${who}` }
+  return { ok: false, line: `no${who} — ${page.edit_block_reason || "the server did not say why"}` }
+}
+
 export function normalizeSlugArg(input: string): { slug: string; corrected: boolean } {
   const trimmed = input.trim()
   // Basename, then drop a .json extension. Handles "pages/x.json", "./pages/x.json", "x.json".
@@ -540,6 +557,8 @@ const ViewCmd = cmd({
       printKV("URL", publicUrl(page))
       const compCount = page?.json_content?.components?.length ?? 0
       printKV("Components", compCount)
+      const access = editAccess(page)
+      if (access) printKV("Can edit", access.ok ? access.line : highlight(access.line))
       printDivider()
       prompts.outro(dim(`iris pages get ${args.slug} "components.0.props"`))
     } catch (err) {
@@ -831,6 +850,9 @@ const PullCmd = cmd({
       sp.stop(success(`Pulled → ${filePath} (${cnt} components)`))
       if (base) prompts.log.info(dim(`based on v${base.version} — push will refuse if the live page moves past it`))
       else prompts.log.warn(`This page reports no version, so push cannot detect a concurrent edit. Run ${highlight(`iris pages diff ${slug}`)} before pushing.`)
+      // Say it now, not after the edits: a push from this account will be refused.
+      const access = editAccess(page)
+      if (access && !access.ok) prompts.log.warn(`You will not be able to push this page. Can edit: ${access.line}`)
       prompts.outro(dim(`iris pages push ${slug}`))
     } catch (err) {
       sp.stop("Error", 1)
@@ -926,6 +948,17 @@ const PushCmd = cmd({
         if (!created) { sp.stop("Failed", 1); prompts.log.error(`Could not create "${slug}".`); process.exitCode = 1; prompts.outro("Done"); return }
         prompts.log.info(dim(`created page #${created.id}`))
         page = created
+      } else {
+        // Refuse before uploading, with the server's reason. The PUT would 403 anyway, but
+        // with less to go on than this read already has.
+        const access = editAccess(page)
+        if (access && !access.ok) {
+          sp.stop("Not allowed", 1)
+          prompts.log.error(`This account cannot save "${slug}". Can edit: ${access.line}`)
+          process.exitCode = 1
+          prompts.outro("Done")
+          return
+        }
       }
 
       let jsonContent: any
