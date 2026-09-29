@@ -2,7 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { dim, bold, success, highlight, printDivider, requireAuth, writeJson } from "./iris-api"
-import { resolveWalkthrough, structureWalkthrough, slugify, framesFor, writeFrames, seenOnlyCount, isVideo } from "../lib/walkthrough"
+import { resolveWalkthrough, structureWalkthrough, slugify, framesFor, writeFrames, seenOnlyCount, isVideo, frameBudget, keptFrames } from "../lib/walkthrough"
 import { existsSync, mkdirSync, writeFileSync } from "fs"
 import { join, resolve } from "path"
 
@@ -33,6 +33,9 @@ export const PlaybookDraftCommand = cmd({
       // Screen frames, so steps done without being said still land in the draft. Only a video
       // has a screen; audio and transcripts ignore this.
       .option("frames", { type: "number", default: 10, describe: "Screen frames to read from a video (0 = narration only, max 12). Frames are sent to the model" })
+      // A screenshot of a PHI system is PHI. The server also withholds frames from anyone who read
+      // PHI in the last 30 minutes; this is for the recording it cannot recognise.
+      .option("phi", { type: "boolean", default: false, describe: "The recording may show patient data: no screen frames are read, sent or saved" })
       .option("name", { type: "string", describe: "Override the generated playbook name" })
       // The proxy namespaces models by provider; a bare "gpt-4.1-nano" 404s. Nano-only per the
       // standing rule — this is extraction from a transcript, not reasoning.
@@ -70,9 +73,11 @@ export const PlaybookDraftCommand = cmd({
     }
     // ---- 1b. Screen --------------------------------------------------------------
     const spf = prompts.spinner()
-    const wantsFrames = Number(args.frames) > 0 && isVideo(String(args.input))
+    const budget = frameBudget(args.frames, args.phi)
+    if (args.phi) prompts.log.info("--phi: no screen frames are read. The transcript is still sent to the drafting model.")
+    const wantsFrames = budget > 0 && isVideo(String(args.input))
     if (wantsFrames) spf.start("Reading the screen…")
-    const kf = framesFor(String(args.input), Number(args.frames))
+    const kf = framesFor(String(args.input), budget)
     if (wantsFrames) spf.stop(kf.frames.length ? `${kf.frames.length} screen frames` : "No screen frames — narration only")
     if (kf.note) prompts.log.warn(kf.note)
 
@@ -109,10 +114,10 @@ export const PlaybookDraftCommand = cmd({
     }
 
     mkdirSync(join(target, ".."), { recursive: true })
-    writeFileSync(target, writeFrames(kf.frames, target, doc.markdown))
+    writeFileSync(target, writeFrames(keptFrames(kf.frames, doc), target, doc.markdown))
 
     if (args.json) {
-      await writeJson({ name, path: target, steps: steps.length, notes: doc.structured?.notes ?? [], frames: doc.frames_used ?? 0, seen_only: seenOnlyCount(doc) })
+      await writeJson({ name, path: target, steps: steps.length, notes: doc.structured?.notes ?? [], frames: doc.frames_used ?? 0, frames_withheld: doc.frames_withheld ?? null, seen_only: seenOnlyCount(doc) })
       prompts.outro("Done")
       return
     }
@@ -120,7 +125,9 @@ export const PlaybookDraftCommand = cmd({
     printDivider()
     console.log(`  ${bold("Drafted:")}  ${highlight(name)}  ${dim(`${steps.length} steps`)}`)
     console.log(`  ${bold("Written:")}  ${highlight(target)}`)
-    if (kf.frames.length) {
+    if (kf.frames.length && doc.frames_withheld) {
+      console.log(`  ${bold("Screens:")}  withheld — ${doc.frames_withheld}`)
+    } else if (kf.frames.length) {
       const seen = seenOnlyCount(doc)
       if (doc.frames_used === undefined) console.log(`  ${dim("Screens:")}  server ignored the frames — it predates frame support; drafted from narration only`)
       else console.log(`  ${bold("Screens:")}  ${doc.frames_used} frames read${seen ? ` · ${highlight(String(seen))} step(s) seen on screen but never said — check those first` : ""}`)

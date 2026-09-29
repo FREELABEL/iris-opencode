@@ -6,7 +6,7 @@ import { join } from "path"
 
 // walkthrough.ts talks to the API; nothing here does. Stub the client so the module loads alone.
 mock.module("../cmd/iris-api", () => ({ irisFetch: async () => new Response("{}"), IRIS_API: "", FL_API: "" }))
-const { extractKeyframes, evenlyPick, isVideo } = await import("./walkthrough")
+const { extractKeyframes, evenlyPick, isVideo, framesFor, frameBudget, keptFrames } = await import("./walkthrough")
 
 /**
  * `iris playbook draft` drafted from narration only, so every step done on screen without being
@@ -94,5 +94,36 @@ describe.skipIf(!ffmpeg)("extractKeyframes", () => {
 
   test("max 0 means narration only and does no work", () => {
     expect(extractKeyframes("/nonexistent/walk.mp4", 0)).toEqual({ frames: [] })
+  })
+})
+
+describe("PHI", () => {
+  test("--phi means no frames, whatever --frames says", () => {
+    expect(frameBudget(10, true)).toBe(0)
+    expect(frameBudget(12, "true")).toBe(0)
+    expect(frameBudget(10, false)).toBe(10)
+    expect(frameBudget(undefined, false)).toBe(0)
+    expect(frameBudget("nope", false)).toBe(0)
+  })
+
+  test("--phi on a real video extracts nothing, so there is nothing to send or save", () => {
+    const dir = mkdtempSync(join(tmpdir(), "kf-phi-"))
+    try {
+      const src = video(dir, "phi.mp4", "[0]null[v]", ["-f", "lavfi", "-i", "color=c=gray:s=320x240:d=3"])
+      expect(framesFor(src, frameBudget(10, true)).frames).toEqual([])
+      expect(framesFor(src, frameBudget(10, false)).frames.length).toBe(1)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("frames the server withheld are not saved next to the draft", () => {
+    // A playbook's folder is what `iris playbook publish` uploads. Screens the server judged to
+    // be PHI must not ride along in it.
+    const frames = [{ t: 0, jpeg: Buffer.from("x"), ref: "frames/0000.jpg" }]
+    const base = { format: "sop" as const, title: "t", markdown: "", structured: {} }
+    expect(keptFrames(frames, { ...base, frames_withheld: "This account read PHI" })).toEqual([])
+    expect(keptFrames(frames, { ...base, frames_withheld: null })).toEqual(frames)
+    expect(keptFrames(frames, base)).toEqual(frames)
   })
 })

@@ -244,6 +244,24 @@ export function writeFrames(frames: Keyframe[], docPath: string, markdown: strin
   return dirName === "frames" ? markdown : markdown.split("](frames/").join(`](${dirName}/`)
 }
 
+/**
+ * How many frames to take from the video. `--phi` means none: a screenshot of a PHI system is
+ * PHI, and a frame never extracted is one that cannot be sent, saved or published.
+ */
+export function frameBudget(frames: unknown, phi: unknown): number {
+  if (phi) return 0
+  const n = Number(frames)
+  return Number.isFinite(n) && n > 0 ? n : 0
+}
+
+/**
+ * The frames worth saving next to the draft. None when the server withheld them: it did so
+ * because they may show PHI, and a playbook's folder is what `iris playbook publish` uploads.
+ */
+export function keptFrames(frames: Keyframe[], doc: StructuredWalkthrough): Keyframe[] {
+  return doc.frames_withheld ? [] : frames
+}
+
 /** Steps the model recovered from the screen alone — the ones a reviewer should check first. */
 export function seenOnlyCount(doc: StructuredWalkthrough): number {
   const steps = Array.isArray(doc.structured?.steps) ? doc.structured.steps : []
@@ -317,6 +335,8 @@ export interface StructuredWalkthrough {
   structured: Record<string, any>
   /** How many frames the server actually used. Absent on servers older than frame support. */
   frames_used?: number
+  /** Why the server kept the frames off the model (the caller read PHI recently), or null. */
+  frames_withheld?: string | null
 }
 
 /**
