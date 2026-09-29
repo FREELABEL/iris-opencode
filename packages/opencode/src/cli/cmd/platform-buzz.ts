@@ -71,6 +71,32 @@ export function resolveIrisPath(
   return null
 }
 
+/**
+ * Turn what a community admin shares into the link the Buzz desktop app acts on.
+ * Accepts the relay's invite page (`https://<host>/invite/<code>`) or an existing
+ * `buzz://join?...` link. Buzz joins via `buzz://join?relay=<ws(s)://host>&code=<code>`
+ * (desktop/src-tauri/src/deep_link.rs at block/buzz @02753722). Returns null for anything
+ * else, rather than guessing a relay.
+ */
+export function buzzJoinLink(input: string): string | null {
+  const raw = input.trim()
+  if (!raw) return null
+  let u: URL
+  try {
+    u = new URL(raw)
+  } catch {
+    return null
+  }
+  if (u.protocol === "buzz:") {
+    return u.hostname === "join" && u.searchParams.get("relay") && u.searchParams.get("code") ? raw : null
+  }
+  if (u.protocol !== "https:" && u.protocol !== "http:") return null
+  const m = u.pathname.match(/^\/invite\/([^/]+)\/?$/)
+  if (!m) return null
+  const relay = `${u.protocol === "https:" ? "wss" : "ws"}://${u.host}`
+  return `buzz://join?relay=${encodeURIComponent(relay)}&code=${encodeURIComponent(decodeURIComponent(m[1]))}`
+}
+
 function harnessFile() {
   return path.join(buzzHarnessDir(process.platform, os.homedir(), process.env), "iris.json")
 }
@@ -81,7 +107,11 @@ const SetupCommand = cmd({
   builder: (y) =>
     y
       .option("dry-run", { type: "boolean", default: false, describe: "print what would be written, write nothing" })
-      .option("iris-path", { type: "string", describe: "absolute path to the iris binary Buzz should run" }),
+      .option("iris-path", { type: "string", describe: "absolute path to the iris binary Buzz should run" })
+      .option("community", {
+        type: "string",
+        describe: "a Buzz community invite link (https://<host>/invite/<code>) to join after setup",
+      }),
   handler: async (args) => {
     UI.empty()
     prompts.intro("◈  Buzz — add IRIS as an agent")
@@ -104,11 +134,20 @@ const SetupCommand = cmd({
       return
     }
 
+    const communityArg = args.community as string | undefined
+    const join = communityArg ? buzzJoinLink(communityArg) : null
+    if (communityArg && !join) {
+      prompts.log.error(`Not a Buzz invite link: ${communityArg}\n  Expected https://<community-host>/invite/<code>`)
+      process.exitCode = 1
+      return
+    }
+
     const file = harnessFile()
     const body = JSON.stringify(def, null, 2) + "\n"
 
     if (args["dry-run"]) {
       prompts.log.info(`would write ${file}`)
+      if (join) prompts.log.info(`would open ${join}`)
       console.log(body)
       prompts.outro(dim("dry run — nothing written"))
       return
@@ -142,6 +181,14 @@ const SetupCommand = cmd({
         "  3. @mention it in a channel",
       ].join("\n"),
     )
+    if (join) {
+      // The desktop app registers the buzz:// scheme; opening it claims the invite and adds
+      // the workspace. If nothing handles it (Buzz not installed), print it to click later.
+      const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open"
+      const r = Bun.spawnSync(process.platform === "win32" ? ["cmd", "/c", "start", "", join] : [opener, join])
+      if (r.exitCode === 0) prompts.log.success("Opening Buzz to join the community…")
+      else prompts.log.warn(`Could not open Buzz automatically. Open this link to join:\n  ${join}`)
+    }
     prompts.outro(success("IRIS is ready for Buzz"))
   },
 })

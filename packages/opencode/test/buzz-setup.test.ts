@@ -57,3 +57,32 @@ describe("resolveIrisPath — which binary Buzz should run", () => {
     expect(resolveIrisPath("/opt/bun/bin/bun", "/Users/a", none, "/usr/bin", "darwin")).toBeNull()
   })
 })
+
+import { buzzJoinLink } from "../src/cli/cmd/platform-buzz"
+
+/**
+ * `iris buzz setup --community <invite>` — promised on the 2026-09-29 X-ART call: one command
+ * installs IRIS AND joins the team's Buzz community. The relay's /invite/<code> page fires
+ * buzz://join?relay=<ws(s)://host>&code=<code>; we build the same link from the shareable URL.
+ */
+describe("buzzJoinLink — invite URL → buzz://join", () => {
+  test("an https invite page becomes a wss join link", () => {
+    expect(buzzJoinLink("https://xart.communities.buzz.xyz/invite/AbC123")).toBe(
+      "buzz://join?relay=wss%3A%2F%2Fxart.communities.buzz.xyz&code=AbC123",
+    )
+  })
+  test("a local http relay becomes ws", () => {
+    expect(buzzJoinLink("http://localhost:3100/invite/xyz")).toBe(
+      "buzz://join?relay=ws%3A%2F%2Flocalhost%3A3100&code=xyz",
+    )
+  })
+  test("an existing buzz://join link passes through", () => {
+    const l = "buzz://join?relay=wss%3A%2F%2Fa.example&code=k"
+    expect(buzzJoinLink(l)).toBe(l)
+  })
+  test("anything else is refused, not guessed", () => {
+    for (const bad of ["", "xart", "https://buzz.xyz/", "https://a.example/channel/1", "ftp://a/invite/x", "buzz://join?relay=x"]) {
+      expect(buzzJoinLink(bad)).toBeNull()
+    }
+  })
+})
