@@ -475,6 +475,12 @@
       "dest": "how-to/iris-intent.md",
       "managed": true,
       "purpose": "Say what you want in plain English and get the IRIS command that does it — iris intent decides (Decide, powered by Jev), iris find only searches. Best pick first with arguments filled, then a ranked list."
+    },
+    {
+      "src": "how-to/buzz-with-iris.md",
+      "dest": "how-to/buzz-with-iris.md",
+      "managed": true,
+      "purpose": "Put IRIS in Buzz (Block's team workspace for people + agents) in one line: iris buzz setup --install --community <invite> installs the signature-verified Buzz app, registers IRIS as an agent, and joins the team's community. Troubleshooting and the privacy caveat (no end-to-end encryption)."
     }
   ]
 }
