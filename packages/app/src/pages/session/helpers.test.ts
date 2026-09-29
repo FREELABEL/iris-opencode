@@ -167,6 +167,58 @@ describe("createSessionTabs", () => {
     })
   })
 
+  // A non-git project opened every session on "No tracked changes — Create Git repository".
+  // For a non-technical user that was the first thing on screen; the default is now IRIS (Atlas).
+  describe("reviewFirst decides the empty-panel default", () => {
+    const make = (input: { reviewFirst?: boolean; active?: string; all?: string[] }) => {
+      const [state] = createStore({ active: input.active as string | undefined, all: input.all ?? [] })
+      const tabs = createMemo(() => ({ active: () => state.active, all: () => state.all }))
+      return createSessionTabs({
+        tabs,
+        pathFromTab: (tab) => (tab.startsWith("file://") ? tab.slice(7) : undefined),
+        normalizeTab: (tab) => tab,
+        review: () => true,
+        hasReview: () => true,
+        ...(input.reviewFirst === undefined ? {} : { reviewFirst: () => input.reviewFirst! }),
+      })
+    }
+
+    test("a project that is not a git repo opens on IRIS, not an empty Review", () => {
+      createRoot((dispose) => {
+        expect(make({ reviewFirst: false }).activeTab()).toBe("iris")
+        dispose()
+      })
+    })
+
+    test("a git project still opens on Review", () => {
+      createRoot((dispose) => {
+        expect(make({ reviewFirst: true }).activeTab()).toBe("review")
+        dispose()
+      })
+    })
+
+    test("callers that do not say keep the old default", () => {
+      createRoot((dispose) => {
+        expect(make({}).activeTab()).toBe("review")
+        dispose()
+      })
+    })
+
+    test("an explicit choice of Review is kept in a non-git project", () => {
+      createRoot((dispose) => {
+        expect(make({ reviewFirst: false, active: "review" }).activeTab()).toBe("review")
+        dispose()
+      })
+    })
+
+    test("an open file still wins over the default", () => {
+      createRoot((dispose) => {
+        expect(make({ reviewFirst: false, all: ["file://a.ts"] }).activeTab()).toBe("file://a.ts")
+        dispose()
+      })
+    })
+  })
+
   test("exposes the Open File tab without treating it as a file tab", () => {
     createRoot((dispose) => {
       const [state] = createStore({

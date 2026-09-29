@@ -79,6 +79,7 @@ function renderDiff(value: ReviewDiff): value is RenderDiff {
 
 export function SessionSidePanel(props: {
   canReview: () => boolean
+  reviewFirst?: () => boolean
   diffs: () => ReviewDiff[]
   diffsReady: () => boolean
   empty: () => string
@@ -193,6 +194,7 @@ export function SessionSidePanel(props: {
     normalizeTab,
     review: reviewTab,
     hasReview: props.canReview,
+    reviewFirst: props.reviewFirst,
     fileBrowser: () => !!props.fileBrowserState,
   })
   const contextOpen = tabState.contextOpen
@@ -462,7 +464,9 @@ export function SessionSidePanel(props: {
                                   opened it" and still drives the active-tab fallback. Flipping
                                   that to always-true would make IRIS beat Review as the default
                                   tab for every session with no files open — a behaviour change
-                                  nobody asked for, smuggled in behind a cosmetic one. */}
+                                  nobody asked for, smuggled in behind a cosmetic one.
+                                  It WAS then asked for, for non-git projects only, and made
+                                  explicitly: see `reviewFirst` in helpers.ts. */}
                               <ProductTriggers />
                               <Show when={contextOpen()}>
                                 <Tabs.Trigger

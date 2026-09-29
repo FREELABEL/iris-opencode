@@ -535,6 +535,8 @@ export default function Page() {
   const info = createMemo(() => (params.id ? sync().session.get(params.id) : undefined))
   const isChildSession = createMemo(() => !!info()?.parentID)
   const canReview = createMemo(() => !!sync().project)
+  // Review defaults open only where there is something to review. See TabsInput.reviewFirst.
+  const reviewFirst = createMemo(() => sync().project?.vcs === "git")
   const reviewTab = createMemo(() => isDesktop())
   const tabState = createSessionTabs({
     tabs,
@@ -542,6 +544,7 @@ export default function Page() {
     normalizeTab,
     review: reviewTab,
     hasReview: canReview,
+    reviewFirst,
   })
   const activeTab = tabState.activeTab
   const activeFileTab = tabState.activeFileTab
@@ -2336,6 +2339,7 @@ export default function Page() {
           <Suspense>
             <SessionSidePanel
               canReview={canReview}
+              reviewFirst={reviewFirst}
               diffs={reviewDiffs}
               diffsReady={reviewReady}
               empty={reviewEmptyText}
@@ -2358,6 +2362,7 @@ export default function Page() {
                   <Suspense>
                     <SessionSidePanel
                       canReview={canReview}
+                      reviewFirst={reviewFirst}
                       diffs={reviewDiffs}
                       diffsReady={reviewReady}
                       empty={reviewEmptyText}

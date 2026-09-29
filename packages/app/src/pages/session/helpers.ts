@@ -19,6 +19,14 @@ type TabsInput = {
   normalizeTab: (tab: string) => string
   review?: Accessor<boolean>
   hasReview?: Accessor<boolean>
+  /**
+   * Whether Review is the right DEFAULT when nothing else is open. Only a git project has
+   * anything for it to show; everywhere else it opened on "No tracked changes — Create Git
+   * repository", which is the first thing a non-technical user saw in every session. When this
+   * is false the fallback is the IRIS panel (Atlas by default). Review stays one click away.
+   * Omitted = true, the old behaviour, for callers that do not know the project.
+   */
+  reviewFirst?: Accessor<boolean>
   fileBrowser?: Accessor<boolean>
 }
 
@@ -31,6 +39,7 @@ export function shouldShowFileTree(input: { visible: boolean; opened: boolean })
 export const createSessionTabs = (input: TabsInput) => {
   const review = input.review ?? (() => false)
   const hasReview = input.hasReview ?? (() => false)
+  const reviewFirst = input.reviewFirst ?? (() => true)
   const fileBrowser = input.fileBrowser ?? (() => false)
   const contextOpen = createMemo(() => input.tabs().active() === "context" || input.tabs().all().includes("context"))
   // Atlas mirrors context exactly: a named panel tab that is not a file, so it must be excluded
@@ -74,7 +83,7 @@ export const createSessionTabs = (input: TabsInput) => {
     if (first) return first
     if (contextOpen()) return "context"
     if (irisOpen()) return "iris"
-    if (review() && hasReview()) return "review"
+    if (review() && hasReview()) return reviewFirst() ? "review" : "iris"
     return "empty"
   })
   const activeFileTab = createMemo(() => {
