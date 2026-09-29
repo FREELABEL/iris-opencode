@@ -97,6 +97,97 @@ export function buzzJoinLink(input: string): string | null {
   return `buzz://join?relay=${encodeURIComponent(relay)}&code=${encodeURIComponent(decodeURIComponent(m[1]))}`
 }
 
+/** Block, Inc.'s Apple Developer team. The Buzz app we install must be signed by it. */
+export const BUZZ_TEAM_ID = "EYF346PHUG"
+
+/** The Buzz .dmg for this Mac's CPU from a GitHub release's assets, or null. */
+export function pickBuzzDmg(
+  assets: { name: string; browser_download_url: string; size?: number }[],
+  arch: string,
+): { name: string; browser_download_url: string; size?: number } | null {
+  const want = arch === "arm64" ? "_aarch64.dmg" : "_x64.dmg"
+  return assets.find((a) => a.name.startsWith("Buzz_") && a.name.endsWith(want)) ?? null
+}
+
+/**
+ * Is this app signed by Block AND accepted by Gatekeeper as notarized? Both checks, because a
+ * valid signature from ANOTHER developer passes Gatekeeper too. We are about to put a
+ * downloaded app into /Applications, so anything short of both is a refusal.
+ */
+export function isBlockSigned(codesignOut: string, spctlOut: string): boolean {
+  return (
+    codesignOut.includes(`TeamIdentifier=${BUZZ_TEAM_ID}`) &&
+    codesignOut.includes(`Authority=Developer ID Application: Block, Inc. (${BUZZ_TEAM_ID})`) &&
+    /: accepted/.test(spctlOut) &&
+    spctlOut.includes("Notarized Developer ID")
+  )
+}
+
+const BUZZ_APP = "/Applications/Buzz.app"
+
+function run(cmd: string[]): { code: number; out: string } {
+  const r = Bun.spawnSync(cmd, { stdout: "pipe", stderr: "pipe" })
+  return { code: r.exitCode ?? 1, out: r.stdout.toString() + r.stderr.toString() }
+}
+
+function appIsBlockSigned(app: string): boolean {
+  return isBlockSigned(run(["codesign", "-dv", "--verbose=2", app]).out, run(["spctl", "-a", "-vv", app]).out)
+}
+
+/**
+ * Download the latest signed Buzz desktop app from block/buzz releases and put it in
+ * /Applications. macOS only. Refuses anything not signed by Block and notarized by Apple.
+ * Returns a sentence for the user, or throws with the reason.
+ */
+async function installBuzz(reinstall: boolean): Promise<string> {
+  if (process.platform !== "darwin") {
+    throw new Error("--install supports macOS only for now. Download Buzz from https://github.com/block/buzz/releases")
+  }
+  if (!reinstall && fs.existsSync(BUZZ_APP)) {
+    if (appIsBlockSigned(BUZZ_APP)) return "Buzz is already installed (signed by Block) — skipped download"
+    throw new Error(`${BUZZ_APP} exists but is not signed by Block, Inc. Remove it or pass --reinstall.`)
+  }
+  const rel = (await (await fetch("https://api.github.com/repos/block/buzz/releases/latest")).json()) as {
+    tag_name?: string
+    assets?: { name: string; browser_download_url: string; size?: number }[]
+  }
+  const asset = pickBuzzDmg(rel.assets ?? [], process.arch)
+  if (!asset) throw new Error(`No Buzz .dmg for ${process.arch} in release ${rel.tag_name ?? "(unknown)"}`)
+
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), "iris-buzz-"))
+  const dmg = path.join(work, asset.name)
+  const mount = path.join(work, "mnt")
+  try {
+    prompts.log.info(`Downloading ${asset.name} (${Math.round((asset.size ?? 0) / 1e6)} MB)…`)
+    const res = await fetch(asset.browser_download_url)
+    if (!res.ok) throw new Error(`download failed: HTTP ${res.status}`)
+    await Bun.write(dmg, res)
+    fs.mkdirSync(mount)
+    const att = run(["hdiutil", "attach", "-nobrowse", "-readonly", "-mountpoint", mount, dmg])
+    if (att.code !== 0) throw new Error(`could not open the disk image: ${att.out.trim()}`)
+    try {
+      const src = path.join(mount, "Buzz.app")
+      if (!appIsBlockSigned(src)) throw new Error("the downloaded app is NOT signed by Block, Inc. and notarized — refusing to install")
+      if (fs.existsSync(BUZZ_APP)) fs.renameSync(BUZZ_APP, `${BUZZ_APP}.previous`)
+      const cp = run(["ditto", src, BUZZ_APP])
+      if (cp.code !== 0) throw new Error(`copy to /Applications failed: ${cp.out.trim()}`)
+      fs.rmSync(`${BUZZ_APP}.previous`, { recursive: true, force: true })
+      // Register the buzz:// scheme now, so the community join link opens without a first launch.
+      run([
+        "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister",
+        "-f",
+        BUZZ_APP,
+      ])
+    } finally {
+      run(["hdiutil", "detach", mount, "-quiet"])
+    }
+    if (!appIsBlockSigned(BUZZ_APP)) throw new Error("installed app failed the Block signature check afterwards")
+    return `Installed Buzz ${rel.tag_name?.replace("desktop-", "") ?? ""} — signed by Block, Inc. and notarized by Apple`
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true })
+  }
+}
+
 function harnessFile() {
   return path.join(buzzHarnessDir(process.platform, os.homedir(), process.env), "iris.json")
 }
@@ -111,7 +202,17 @@ const SetupCommand = cmd({
       .option("community", {
         type: "string",
         describe: "a Buzz community invite link (https://<host>/invite/<code>) to join after setup",
-      }),
+      })
+      .option("install", {
+        type: "boolean",
+        default: false,
+        describe: "download and install the Buzz desktop app first (macOS; verified as signed by Block)",
+      })
+      .option("reinstall", { type: "boolean", default: false, describe: "with --install: replace an existing Buzz" })
+      .example("iris buzz setup --install --community https://<host>/invite/<code>", "everything, in one command")
+      .example("iris buzz setup", "Buzz already installed: just add IRIS as an agent")
+      .example("iris buzz setup --dry-run --community <link>", "show what would happen, change nothing")
+      .epilog("Then in Buzz: Agents → New agent → choose IRIS. Check anytime with: iris buzz status"),
   handler: async (args) => {
     UI.empty()
     prompts.intro("◈  Buzz — add IRIS as an agent")
@@ -147,6 +248,7 @@ const SetupCommand = cmd({
 
     if (args["dry-run"]) {
       prompts.log.info(`would write ${file}`)
+      if (args.install) prompts.log.info(`would install Buzz from github.com/block/buzz (signed by Block, Inc. ${BUZZ_TEAM_ID})`)
       if (join) prompts.log.info(`would open ${join}`)
       console.log(body)
       prompts.outro(dim("dry run — nothing written"))
@@ -158,6 +260,16 @@ const SetupCommand = cmd({
     if (!token) {
       process.exitCode = 1
       return
+    }
+
+    if (args.install) {
+      try {
+        prompts.log.success(await installBuzz(Boolean(args.reinstall)))
+      } catch (e) {
+        prompts.log.error(`Buzz install: ${(e as Error).message}`)
+        process.exitCode = 1
+        return
+      }
     }
 
     const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : null
