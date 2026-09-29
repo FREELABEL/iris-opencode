@@ -25,8 +25,11 @@ See also: the `/bespoke` skill (`iris playbook run bespoke`) automates this whol
 
 | Lane | What | Use when |
 |------|------|----------|
-| **CustomHtml component** | A raw-HTML block inside a normal page (`components:[{type:CustomHtml,props:{html}}]`) | Default. Keeps the page pipeline + theme; publish with `pages:batch` |
-| **Standalone `--template=html`** | A full HTML document served by `public-html.blade.php` | You need a bare document — your own `<head>`, no framework |
+| **Standalone page** (`iris genesis publish-html <slug> --file x.html`) | A full HTML document served by `public-html.blade.php` | **Default.** Any page a person reads. Every account can publish one (untrusted accounts' pages are served in a browser sandbox) |
+| **CustomHtml component** | A raw-HTML block inside a normal page (`components:[{type:CustomHtml,props:{html}}]`) | Only when raw HTML must sit among live components. **Trusted accounts only** |
+
+Got `restricted to trusted owners` on a push? Use the standalone page — see
+`iris how-to view page-refused-trusted-owner`.
 
 ## Quick path
 
@@ -70,7 +73,9 @@ collide with the Genesis page shell in both directions. Common classes (`.card`,
   `copyright` field → `Component validation failed`. Hand-build the JSON and use `pages:batch`.
 - **Fonts:** CSP blocks font CDNs — use system stacks (`ui-monospace,…`, `-apple-system,…`), never a
   `<link>` webfont. Use `font-variant-numeric:tabular-nums` for figure columns.
-- **Trust gate:** raw HTML / `CustomHtml` from an untrusted owner is rejected (403). Owner bloq must be trusted.
+- **Trust gate:** a `CustomHtml` block (or page `css`, or an embedded artifact) from an account that is not
+  trusted is refused with a 403. Trust belongs to the publishing account, not the page's board. Publish a
+  standalone page instead: `iris how-to view page-refused-trusted-owner`.
 - **Always verify by screenshot** — Genesis has silent render gotchas (a `CodeBlock` renders blank,
   an `ImageBlock` needs `imageUrl`). Don't trust the publish log.
 
