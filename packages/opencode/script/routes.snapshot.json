@@ -4093,6 +4093,11 @@
 },
 {
 "method": "POST",
+"uri": "/api/v1/decide",
+"service": "iris-api"
+},
+{
+"method": "POST",
 "uri": "/api/v1/demo/cleanup",
 "service": "iris-api"
 },
