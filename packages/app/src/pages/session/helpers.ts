@@ -27,6 +27,12 @@ type TabsInput = {
    * Omitted = true, the old behaviour, for callers that do not know the project.
    */
   reviewFirst?: Accessor<boolean>
+  /**
+   * Whether the Review/file-tree tab is pinned (#187129). Unpinned, it is not a tab at all: it
+   * cannot be the active one and is never the default. Separate from `review` on purpose — that is
+   * "this layout has a review tab" (desktop), and mobile must not change with a desktop pin.
+   */
+  filesPinned?: Accessor<boolean>
   fileBrowser?: Accessor<boolean>
 }
 
@@ -40,6 +46,7 @@ export const createSessionTabs = (input: TabsInput) => {
   const review = input.review ?? (() => false)
   const hasReview = input.hasReview ?? (() => false)
   const reviewFirst = input.reviewFirst ?? (() => true)
+  const filesPinned = input.filesPinned ?? (() => true)
   const fileBrowser = input.fileBrowser ?? (() => false)
   const contextOpen = createMemo(() => input.tabs().active() === "context" || input.tabs().all().includes("context"))
   // Atlas mirrors context exactly: a named panel tab that is not a file, so it must be excluded
@@ -76,14 +83,14 @@ export const createSessionTabs = (input: TabsInput) => {
     if (active === "context") return active
     if (active === "iris") return active
     if (active === SESSION_OPEN_FILE_TAB && openFileOpen()) return active
-    if (active === "review" && review()) return active
+    if (active === "review" && review() && filesPinned()) return active
     if (active && input.pathFromTab(active)) return input.normalizeTab(active)
 
     const first = openedTabs()[0]
     if (first) return first
     if (contextOpen()) return "context"
     if (irisOpen()) return "iris"
-    if (review() && hasReview()) return reviewFirst() ? "review" : "iris"
+    if (review() && hasReview()) return reviewFirst() && filesPinned() ? "review" : "iris"
     return "empty"
   })
   const activeFileTab = createMemo(() => {

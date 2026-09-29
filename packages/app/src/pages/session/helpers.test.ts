@@ -170,7 +170,7 @@ describe("createSessionTabs", () => {
   // A non-git project opened every session on "No tracked changes — Create Git repository".
   // For a non-technical user that was the first thing on screen; the default is now IRIS (Atlas).
   describe("reviewFirst decides the empty-panel default", () => {
-    const make = (input: { reviewFirst?: boolean; active?: string; all?: string[] }) => {
+    const make = (input: { reviewFirst?: boolean; filesPinned?: boolean; active?: string; all?: string[] }) => {
       const [state] = createStore({ active: input.active as string | undefined, all: input.all ?? [] })
       const tabs = createMemo(() => ({ active: () => state.active, all: () => state.all }))
       return createSessionTabs({
@@ -180,8 +180,24 @@ describe("createSessionTabs", () => {
         review: () => true,
         hasReview: () => true,
         ...(input.reviewFirst === undefined ? {} : { reviewFirst: () => input.reviewFirst! }),
+        ...(input.filesPinned === undefined ? {} : { filesPinned: () => input.filesPinned! }),
       })
     }
+
+    test("an unpinned file tree is never the default, even in a git project (#187129)", () => {
+      createRoot((dispose) => {
+        expect(make({ reviewFirst: true, filesPinned: false }).activeTab()).toBe("iris")
+        dispose()
+      })
+    })
+
+    test("an unpinned file tree cannot stay active — it is not a tab (#187129)", () => {
+      createRoot((dispose) => {
+        expect(make({ reviewFirst: true, filesPinned: false, active: "review" }).activeTab()).toBe("iris")
+        expect(make({ reviewFirst: true, filesPinned: true, active: "review" }).activeTab()).toBe("review")
+        dispose()
+      })
+    })
 
     test("a project that is not a git repo opens on IRIS, not an empty Review", () => {
       createRoot((dispose) => {

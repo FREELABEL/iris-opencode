@@ -10,6 +10,7 @@ import {
   parseCsv,
   sandboxedDocument,
   publishState,
+  publishSummary,
   slugify,
   liveUrl,
   LIVE_SANDBOX,
@@ -127,7 +128,21 @@ describe("publishing an artifact as a page", () => {
     const src = readFileSync(path.join(import.meta.dir, "iris-artifact-publish.tsx"), "utf8")
     // First publish: preset is undefined (Publish…) and there is no prior page → no scope.
     expect(src).toContain("setScope(preset ?? p?.visibility)")
-    expect(src).toContain("disabled={!scope() || !slug().trim() || busy()}")
+    // …and a project is required too (#187131): no destination, no publish.
+    expect(src).toContain("disabled={!board() || !scope() || !slug().trim() || busy()}")
+  })
+  test("publishing is a modal, and the project comes before who can see it (#187131)", () => {
+    const src = readFileSync(path.join(import.meta.dir, "iris-artifact-publish.tsx"), "utf8")
+    expect(src).toContain("dialog.show(")
+    expect(src.indexOf('aria-label="Project"')).toBeLessThan(src.indexOf('aria-label="Who can see it"'))
+    expect(src).toContain("setBoard(props.bloqId)")
+  })
+  test("the consequence is one sentence: visibility, address and project", () => {
+    expect(publishSummary("public", "ncma", "NCMA Fort Worth")).toBe(
+      "Public · anyone at heyiris.io/p/ncma · saved to NCMA Fort Worth",
+    )
+    expect(publishSummary("private", "x", "NCMA")).toBe("Private · only you, not on the web · saved to NCMA")
+    expect(publishSummary(undefined, "x", undefined)).toBe("Choose who can see it · choose a project")
   })
 })
 

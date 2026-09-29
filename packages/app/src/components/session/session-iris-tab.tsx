@@ -29,7 +29,15 @@ import { promotedFiles } from "./iris-promote"
 import type { FileContent } from "./iris-file-artifact"
 import { IrisCardEditor } from "./iris-card-editor"
 import { IrisArtifacts } from "./iris-artifacts"
-import { ACCOUNT_SURFACES, panelScope, readPinnedIds, visibleTabs } from "./iris-panel-nav"
+import {
+  ACCOUNT_SURFACES,
+  FILES_PIN_KEY,
+  filesTabPinned,
+  panelScope,
+  readPinnedIds,
+  scopeChipLabel,
+  visibleTabs,
+} from "./iris-panel-nav"
 import { irisNavRequest, clearIrisNav } from "./iris-nav"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { IrisRooms } from "./iris-rooms"
@@ -967,7 +975,30 @@ export function toggleIrisPin(id: string): boolean {
   return next.includes(sid)
 }
 
-const [requestedSurface, setRequestedSurface] = createSignal<{ surface: SurfaceId; sub?: string } | undefined>()
+/** The file-tree tab's pin (#187129) — see filesTabPinned for who starts with it. */
+const [filesPinRaw, setFilesPinRaw] = createSignal<string | null>(storage(FILES_PIN_KEY))
+export const irisFilesPinned = (isGitProject: boolean) => filesTabPinned(filesPinRaw(), isGitProject)
+/** Pin or unpin the file tree. Returns whether it is now pinned. */
+export function toggleIrisFilesPin(isGitProject: boolean): boolean {
+  const next = !irisFilesPinned(isGitProject)
+  setFilesPinRaw(next ? "1" : "0")
+  try {
+    localStorage.setItem(FILES_PIN_KEY, next ? "1" : "0")
+  } catch {}
+  return next
+}
+
+/**
+ * THE SCOPE CHIP (#187130, option C). The panel's own "This session" / board row is gone; what it
+ * said now rides the side panel's product row as a chip OUTSIDE the scrolling tab list, so it
+ * never scrolls away. Module-level for the same reason as the pins: the strip draws it, this
+ * component knows what it says. `pick` is present only where there is something to choose.
+ */
+export type IrisScopeChip = { scope: "project" | "session" | "account"; label: string; pick?: () => void }
+const [scopeChipSig, setScopeChip] = createSignal<IrisScopeChip | undefined>()
+export const irisScopeChip = scopeChipSig
+
+const [requestedSurface,setRequestedSurface] = createSignal<{ surface: SurfaceId; sub?: string } | undefined>()
 
 /**
  * Open the panel on a surface, and optionally on one of its SUB-VIEWS.
@@ -1952,108 +1983,118 @@ export function SessionIrisTab() {
     } catch {}
   }
 
+  /**
+   * The board picker. A SEARCHABLE dialog, not a dropdown: this account has 153 bloqs, and you
+   * cannot find "KMG — Kristen Montero" by scrolling past a hundred and fifty siblings. `List` is
+   * the app's filtered-list primitive; dialog-select-mcp and dialog-select-file are the same shape.
+   * Opened from the scope chip in the side panel's product row (#187130), which replaced the row
+   * this button used to live in.
+   */
+  function openBoardPicker() {
+    const all = (bloqs.latest ?? bloqs())?.bloqs ?? []
+    dialog.show(() => (
+      <Dialog title="Board" description={`${all.length} boards`}>
+        <List
+          class="px-3"
+          search={{ placeholder: "Search boards or #id…", autofocus: true }}
+          emptyMessage="No boards match."
+          key={(b) => String(b?.id ?? "")}
+          items={() => all.map((b) => ({ ...b, ref: `#${b.id}` }))}
+          /* `ref` is in the filter keys so typing 674 finds the board. You refer to
+           these by number everywhere else — commits, tickets, conversation — and a
+           picker you can only search by name makes the number useless here. */
+          filterKeys={["name", "ref"]}
+          onSelect={(b) => {
+            if (!b) return
+            choose(b.id)
+            // Close it. A picker that stays open after you have picked leaves you
+            // looking at a list of things you did not choose, with the result hidden
+            // behind it — dialog-select-mcp does not close because it is a TOGGLE
+            // list you keep working in, and copying its shape brought that along.
+            dialog.close()
+          }}
+        >
+          {(b) => (
+            <div class="w-full flex items-baseline gap-2 min-w-0">
+              <span class="truncate">{b.name}</span>
+              {/* AFTER the name, muted and mono. Leading with the number would make
+                every row start with noise and wreck scanning; trailing keeps the
+                names left-aligned and the ids in a column of their own. */}
+              <span class="ms-auto shrink-0 font-mono tabular-nums text-11-regular text-text-weaker">
+                {b.ref}
+              </span>
+            </div>
+          )}
+        </List>
+      </Dialog>
+    ))
+  }
+
+  // What the scope chip in the product row says (#187130 C). Project views NAME the project and
+  // open the picker; session and account views state the scope and have nothing to pick.
+  createEffect(() => {
+    const scope = rowScope()
+    const hasBoards = ((bloqs.latest ?? bloqs())?.bloqs?.length ?? 0) > 0
+    const project = scope === "project"
+    setScopeChip({
+      scope,
+      label: scopeChipLabel(scope, project && hasBoards && activeBloq() ? activeBloqName() : undefined),
+      pick: project && hasBoards ? openBoardPicker : undefined,
+    })
+  })
+  onCleanup(() => setScopeChip(undefined))
+
   return (
     <div class="relative flex flex-col h-full min-h-0 gap-2 px-2 pb-2">
       <Show when={busy()}>
         <div class="iris-activity" aria-hidden="true" />
       </Show>
-      {/* A SEARCHABLE dialog, not a dropdown.
-          This account has 153 bloqs. A plain option list is the wrong control for that at any
-          styling — you cannot find "KMG — Kristen Montero" by scrolling past a hundred and
-          fifty siblings. `List` is the app's filtered-list primitive and gives search for
-          free; dialog-select-mcp and dialog-select-file are the same shape, so this is the
-          house answer to "pick one of many" rather than a new idea. */}
-      {/* ROW 1 — THE PROJECT. Everything below belongs to it; for a view that is not per-project
-          it says so instead of showing a picker that changes nothing. */}
-      <div class="iris-projectrow shrink-0">
-        <Show when={rowScope() !== "project"}>
-          <span class="iris-projectrow__scope" data-testid="iris-scope">
-            {rowScope() === "session" ? "This session" : "All projects"}
-            <span class="iris-projectrow__chip">{rowScope()}</span>
-          </span>
-        </Show>
-        <Show when={rowScope() === "project" && ((bloqs.latest ?? bloqs())?.bloqs?.length ?? 0) > 0}>
+      {/* TWO ROWS, NOT THREE (#187130). The scope/board row that sat here moved onto the side
+          panel's product row as a chip (irisScopeChip). What is left is the product's own views,
+          with the focus toggle at the end of that row. With no views — or in focus mode, where
+          the row is folded away — the toggle floats in the corner so there is always a way back. */}
+      <Show
+        when={!focus() && SUBVIEWS[surface()]}
+        fallback={
           <button
             type="button"
-            class="flex items-center gap-1 px-2 py-1 text-12-regular text-text-base hover:bg-background-element rounded text-start min-w-0 cursor-pointer"
-            onClick={() => {
-              const all = (bloqs.latest ?? bloqs())?.bloqs ?? []
-              dialog.show(() => (
-                <Dialog title="Board" description={`${all.length} boards`}>
-                  <List
-                    class="px-3"
-                    search={{ placeholder: "Search boards or #id…", autofocus: true }}
-                    emptyMessage="No boards match."
-                    key={(b) => String(b?.id ?? "")}
-                    items={() => all.map((b) => ({ ...b, ref: `#${b.id}` }))}
-                    /* `ref` is in the filter keys so typing 674 finds the board. You refer to
-                     these by number everywhere else — commits, tickets, conversation — and a
-                     picker you can only search by name makes the number useless here. */
-                    filterKeys={["name", "ref"]}
-                    onSelect={(b) => {
-                      if (!b) return
-                      choose(b.id)
-                      // Close it. A picker that stays open after you have picked leaves you
-                      // looking at a list of things you did not choose, with the result hidden
-                      // behind it — dialog-select-mcp does not close because it is a TOGGLE
-                      // list you keep working in, and copying its shape brought that along.
-                      dialog.close()
-                    }}
-                  >
-                    {(b) => (
-                      <div class="w-full flex items-baseline gap-2 min-w-0">
-                        <span class="truncate">{b.name}</span>
-                        {/* AFTER the name, muted and mono. Leading with the number would make
-                          every row start with noise and wreck scanning; trailing keeps the
-                          names left-aligned and the ids in a column of their own. */}
-                        <span class="ms-auto shrink-0 font-mono tabular-nums text-11-regular text-text-weaker">
-                          {b.ref}
-                        </span>
-                      </div>
-                    )}
-                  </List>
-                </Dialog>
-              ))
-            }}
+            class="iris-focusbtn iris-focusbtn--float"
+            classList={{ "iris-focusbtn--on": focus() }}
+            title={focus() ? "Show tabs (Esc)" : "Focus — hide the tab rows"}
+            aria-pressed={focus()}
+            onClick={() => setFocus((v) => !v)}
           >
-            <span class="truncate">{activeBloqName()}</span>
-            <span class="text-text-weak flex items-center shrink-0">
-              <ChevronDown />
-            </span>
+            ⤢
           </button>
-        </Show>
-        <span class="flex-1" />
-        <button
-          type="button"
-          class="iris-focusbtn"
-          classList={{ "iris-focusbtn--on": focus() }}
-          title={focus() ? "Show tabs (Esc)" : "Focus — hide the tab rows"}
-          aria-pressed={focus()}
-          onClick={() => setFocus((v) => !v)}
-        >
-          ⤢
-        </button>
-      </div>
-
-      {/* Products are no longer a row in here: each pinned product is a top-level tab in the side
-          panel's own strip (session-side-panel.tsx), and "IRIS" is not a tab of its own. */}
-      <Show when={!focus() && SUBVIEWS[surface()]}>
+        }
+      >
         {(list) => (
-          <div class="iris-subnav shrink-0" role="tablist" aria-label={`${paneLabel()} views`}>
-            <For each={list()}>
-              {(sv) => (
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={resolved().sub?.id === sv.id}
-                  class="iris-subnav__item"
-                  classList={{ "iris-subnav__item--active": resolved().sub?.id === sv.id }}
-                  onClick={() => chooseSub(sv.id)}
-                >
-                  {sv.label}
-                </button>
-              )}
-            </For>
+          <div class="iris-subrow shrink-0">
+            <div class="iris-subnav" role="tablist" aria-label={`${paneLabel()} views`}>
+              <For each={list()}>
+                {(sv) => (
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={resolved().sub?.id === sv.id}
+                    class="iris-subnav__item"
+                    classList={{ "iris-subnav__item--active": resolved().sub?.id === sv.id }}
+                    onClick={() => chooseSub(sv.id)}
+                  >
+                    {sv.label}
+                  </button>
+                )}
+              </For>
+            </div>
+            <button
+              type="button"
+              class="iris-focusbtn"
+              title="Focus — hide the tab rows"
+              aria-pressed={false}
+              onClick={() => setFocus(true)}
+            >
+              ⤢
+            </button>
           </div>
         )}
       </Show>
@@ -2737,6 +2778,7 @@ export function SessionIrisTab() {
               project={projectDir()}
               bloqId={activeBloq()}
               bloqName={activeBloqName()}
+              boards={() => ((bloqs.latest ?? bloqs())?.bloqs ?? []).map((b) => ({ id: b.id, name: b.name }))}
               listen={(fn) => serverSDK().event.listen(fn as any)}
               files={sessionFiles}
               readFile={readSessionFile}

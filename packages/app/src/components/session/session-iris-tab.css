@@ -1599,13 +1599,25 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
 .iris-publish__addr { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
 .iris-publish__url { font-size: 11px; font-family: var(--font-mono, ui-monospace, monospace); color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 
-/* ── Project first, products as tabs (#186509 nav) ── */
-.iris-projectrow { display: flex; align-items: center; gap: 6px; min-height: 30px; }
-.iris-projectrow__scope { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; font-size: 12px; color: var(--text-weak); }
-.iris-projectrow__chip { font-size: 10px; font-family: var(--font-mono, ui-monospace, monospace); color: var(--text-weaker); border: 1px solid var(--border-weak-base); border-radius: 999px; padding: 0 6px; }
-.iris-focusbtn { width: 26px; height: 24px; display: grid; place-items: center; border-radius: 6px; color: var(--text-weak); background: var(--background-element); transition: color .15s, transform .2s ease; }
+/* ── Two rows, not three (#187130) ── */
+/* The product's views and the focus toggle share one row; the views scroll, the toggle does not. */
+.iris-subrow { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.iris-subrow > .iris-subnav { flex: 1 1 0; min-width: 0; }
+.iris-focusbtn { width: 26px; height: 24px; flex-shrink: 0; display: grid; place-items: center; border-radius: 6px; color: var(--text-weak); background: var(--background-element); transition: color .15s, transform .2s ease; }
 .iris-focusbtn:hover { color: var(--text-strong); }
 .iris-focusbtn--on { color: var(--text-strong); transform: rotate(180deg); }
+/* No views row to sit in (a product without sub-views, or focus mode): the corner, above content. */
+.iris-focusbtn--float { position: absolute; top: 0; right: 8px; z-index: 5; }
+
+/* The scope chip on the side panel's product row (#187130 option C). It must not read as a tab or
+   as a property of the product beside it: a hairline before it, muted type, no underline, no tab
+   shape. It truncates before the tabs do — the tabs are navigation, the chip is context. */
+.iris-scopechip { flex: 0 1 auto; min-width: 3.5rem; max-width: 42%; display: flex; align-items: center; align-self: stretch; padding-inline-start: 8px; margin-inline-start: 2px; border-inline-start: 1px solid var(--border-weaker-base); }
+.iris-scopechip__body { display: inline-flex; align-items: center; gap: 3px; min-width: 0; max-width: 100%; padding: 2px 6px; border-radius: 6px; font-size: 11px; line-height: 16px; color: var(--text-weak); white-space: nowrap; }
+.iris-scopechip__name { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+button.iris-scopechip__body { cursor: pointer; }
+button.iris-scopechip__body:hover { color: var(--text-strong); background: var(--background-element); }
+.iris-scopechip__chev { flex-shrink: 0; opacity: .7; }
 @keyframes iris-pop { from { opacity: 0; transform: translateY(-6px) scale(.97); } to { opacity: 1; transform: none; } }
 /* One-line artifact toolbar: ‹ All ▾ │ title · author  …  Save · Publish. The publish component
    joins the row (display: contents); its form wraps onto a full-width line underneath. */
@@ -1675,3 +1687,15 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
     animation: none;
   }
 }
+/* ── Publish modal (#187131) ── */
+.iris-publish__form--modal { padding: 0 0 4px; gap: 12px; border: 0; }
+.iris-publish__dest { display: flex; flex-direction: column; gap: 6px; border: 0; padding: 0; margin: 0; }
+.iris-publish__dest > legend { font-size: 12px; color: var(--text-weak); margin-bottom: 4px; }
+.iris-publish__destrow { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 8px; border-radius: 6px; background: var(--background-element); }
+.iris-publish__destname { font-size: 13px; color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+.iris-publish__picker { display: flex; flex-direction: column; gap: 6px; }
+.iris-publish__boards { list-style: none; margin: 0; padding: 0; max-height: 180px; overflow-y: auto; }
+.iris-publish__board { width: 100%; display: flex; align-items: baseline; gap: 8px; padding: 5px 8px; border-radius: 6px; font-size: 12px; color: var(--text-base); text-align: start; cursor: pointer; }
+.iris-publish__board:hover, .iris-publish__board--on { background: var(--background-element); color: var(--text-strong); }
+.iris-publish__boardid { margin-inline-start: auto; flex-shrink: 0; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; color: var(--text-weaker); }
+.iris-publish__summary { font-size: 12px; color: var(--text-strong); padding: 8px; border-radius: 6px; border: 1px solid var(--border-weak-base); overflow-wrap: anywhere; }

@@ -168,3 +168,17 @@ export function changedSince(prev: ArtifactMeta[] | undefined, next: ArtifactMet
   const before = new Map(prev.map((m) => [m.id, m.revision]))
   return new Set(next.filter((m) => before.get(m.id) !== m.revision).map((m) => m.id))
 }
+
+/**
+ * The publish decision in one sentence (#187131): destination and visibility together, because
+ * together they ARE the decision — "Public · anyone at heyiris.io/p/x · saved to NCMA Fort Worth".
+ * Missing parts say what is missing rather than inventing a default.
+ */
+export function publishSummary(scope: Visibility | undefined, slug: string, project: string | undefined): string {
+  const where = project ? `saved to ${project}` : "choose a project"
+  const s = slug.trim() || "…"
+  if (scope === "public") return `Public · anyone at heyiris.io/p/${s} · ${where}`
+  if (scope === "unlisted") return `Unlisted · only people with the link · ${where}`
+  if (scope === "private") return `Private · only you, not on the web · ${where}`
+  return `Choose who can see it · ${where}`
+}

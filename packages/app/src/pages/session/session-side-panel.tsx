@@ -41,6 +41,9 @@ import {
   irisActiveSurface,
   irisPinned,
   toggleIrisPin,
+  irisFilesPinned,
+  toggleIrisFilesPin,
+  irisScopeChip,
 } from "@/components/session/session-iris-tab"
 
 const reviewTabID = "session-side-panel-review-tab"
@@ -122,6 +125,9 @@ export function SessionSidePanel(props: {
   const open = createMemo(() => reviewOpen() || fileOpen())
   const fileTreeWidth = createMemo(() => Math.max(FILE_TREE_WIDTH_MIN, layout.fileTree.width()))
   const reviewTab = createMemo(() => isDesktop())
+  /** The file tree is a pin like the products (#187129); unpinned, it is not in the strip. */
+  const isGitProject = () => props.reviewFirst?.() ?? true
+  const filesPinned = createMemo(() => irisFilesPinned(isGitProject()))
   const panelWidth = createMemo(() => {
     if (!open()) return "0px"
     if (reviewOpen()) return "auto"
@@ -195,6 +201,7 @@ export function SessionSidePanel(props: {
     review: reviewTab,
     hasReview: props.canReview,
     reviewFirst: props.reviewFirst,
+    filesPinned,
     fileBrowser: () => !!props.fileBrowserState,
   })
   const contextOpen = tabState.contextOpen
@@ -225,6 +232,17 @@ export function SessionSidePanel(props: {
         {language.t("command.file.open")}
       </MenuV2.Item>
       <MenuV2.Separator />
+      {/* The file tree is pinned here like any product (#187129). Pinning it also opens it. */}
+      <MenuV2.Item
+        onSelect={() => {
+          if (!toggleIrisFilesPin(isGitProject())) return
+          openReviewPanel()
+          tabs().setActive("review")
+        }}
+      >
+        <span class="inline-flex w-4 shrink-0">{filesPinned() ? "✓" : ""}</span>
+        Files &amp; changes
+      </MenuV2.Item>
       {/* PIN a product as a tab (#186509 nav). Pinning also opens it; unpinning only removes the
           tab. The ✓ is the state, so the menu answers "what is in my strip" at a glance. */}
       <For each={IRIS_SURFACE_CHOICES}>
@@ -262,6 +280,42 @@ export function SessionSidePanel(props: {
         </Tabs.Trigger>
       )}
     </For>
+  )
+
+  /**
+   * THE SCOPE CHIP (#187130, option C) — what the IRIS panel's deleted scope row said, on this row.
+   * A sibling of the tab list, never inside it: the list scrolls once five or six products are
+   * pinned, and a chip inside it would scroll away exactly when the panel is busiest.
+   */
+  const ScopeChip = () => (
+    <Show when={activeTab() === "iris" && irisScopeChip()}>
+      {(chip) => (
+        <div class="iris-scopechip" data-testid="iris-scope-chip" data-scope={chip().scope}>
+          <Show
+            when={chip().pick}
+            fallback={
+              <span class="iris-scopechip__body" title={`Scope: ${chip().label}`}>
+                <span class="iris-scopechip__name">{chip().label}</span>
+              </span>
+            }
+          >
+            {(pick) => (
+              <button
+                type="button"
+                class="iris-scopechip__body"
+                title={`Project: ${chip().label} — change`}
+                onClick={() => pick()()}
+              >
+                <span class="iris-scopechip__name">{chip().label}</span>
+                <span class="iris-scopechip__chev" aria-hidden="true">
+                  ▾
+                </span>
+              </button>
+            )}
+          </Show>
+        </div>
+      )}
+    </Show>
   )
 
   const fileTreeTab = () => layout.fileTree.tab()
@@ -435,12 +489,13 @@ export function SessionSidePanel(props: {
                         <Tabs value={stripValue()} onChange={activateTab}>
                           <div class="sticky top-0 shrink-0 flex">
                             <Tabs.List
+                              class="min-w-0 flex-1"
                               ref={(el: HTMLDivElement) => {
                                 const stop = createFileTabListSync({ el, contextOpen })
                                 onCleanup(stop)
                               }}
                             >
-                              <Show when={reviewTab() && props.canReview()}>
+                              <Show when={reviewTab() && props.canReview() && filesPinned()}>
                                 <Tabs.Trigger
                                   value="review"
                                   id={reviewTabID}
@@ -570,6 +625,7 @@ export function SessionSidePanel(props: {
                                 </MenuV2>
                               </div>
                             </Tabs.List>
+                            <ScopeChip />
                           </div>
 
                           <Show when={reviewTab() && props.canReview() && activeTab() === "review"}>
@@ -679,7 +735,7 @@ export function SessionSidePanel(props: {
                             {/* REVIEW IS THE FILE-TREE ICON. One control instead of two: the icon opens Review
                                 (with the changed-files count on it), and on Review a second click toggles the
                                 file tree — what the separate icon did. The "Files Changed N" text tab is gone. */}
-                            <Show when={reviewTab() && props.canReview()}>
+                            <Show when={reviewTab() && props.canReview() && filesPinned()}>
                               <div class="session-review-v2-sidebar-toggle-slot h-full shrink-0 sticky left-0 z-10 flex items-center justify-center bg-v2-background-bg-base">
                                 <Tabs.Trigger
                                   value="review"
@@ -823,6 +879,7 @@ export function SessionSidePanel(props: {
                               </MenuV2>
                             </div>
                           </Tabs.List>
+                          <ScopeChip />
                           <div
                             class="session-review-v2-open-in-app-slot shrink-0 flex items-center pr-3"
                             onPointerDown={(event) => event.stopPropagation()}

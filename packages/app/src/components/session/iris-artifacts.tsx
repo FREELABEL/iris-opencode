@@ -58,6 +58,8 @@ export function IrisArtifacts(props: {
   project?: string
   bloqId?: number
   bloqName?: string
+  /** Projects the publish modal can send an artifact to (#187131). */
+  boards?: () => { id: number; name: string }[]
   listen: Listen
   /** PROMOTE (#186584): documents this session made, from its changed files. */
   files?: () => PromotedFile[]
@@ -182,7 +184,9 @@ export function IrisArtifacts(props: {
               aria-expanded={listOpen()}
               onClick={() => setListOpen((v) => !v)}
             >
-              ‹ All ({total()}){fresh().size ? " •" : ""} ▾
+              {/* Named for what it lists (#187131). "‹ All (1)" read as a project picker. */}
+              {total()} {total() === 1 ? "artifact" : "artifacts"}
+              {fresh().size ? " •" : ""} ▾
             </button>
             <Show when={listOpen()}>
               <ul
@@ -283,6 +287,7 @@ export function IrisArtifacts(props: {
                     project={props.project}
                     bloqId={props.bloqId}
                     bloqName={props.bloqName}
+                    boards={props.boards}
                     onPublished={refresh}
                     live={live()}
                     onToggleLive={liveUrl((open() ?? meta()).published?.url) ? () => setLive((v) => !v) : undefined}

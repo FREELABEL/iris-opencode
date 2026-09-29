@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { panelScope, readPinnedIds, visibleTabs } from "./iris-panel-nav"
+import { filesTabPinned, panelScope, readPinnedIds, scopeChipLabel, visibleTabs } from "./iris-panel-nav"
 
 const VALID = ["atlas", "agents", "leads", "pages", "mcp", "hive", "playbooks", "integrations"]
 const DEF = ["pages", "atlas", "agents"]
@@ -32,5 +32,27 @@ describe("the project row tells the truth about scope", () => {
   })
   test("artifacts belong to the session", () => {
     expect(panelScope("pages", "artifacts")).toBe("session")
+  })
+})
+
+describe("the file tree is a pin (#187129)", () => {
+  test("nothing stored: a git project keeps it, anything else starts without it", () => {
+    expect(filesTabPinned(null, true)).toBe(true)
+    expect(filesTabPinned(null, false)).toBe(false)
+  })
+  test("a stored choice wins either way", () => {
+    expect(filesTabPinned("0", true)).toBe(false)
+    expect(filesTabPinned("1", false)).toBe(true)
+  })
+})
+
+describe("the scope chip names the project (#187130 C)", () => {
+  test("project → the name, never the word 'project'", () => {
+    expect(scopeChipLabel("project", "NCMA Fort Worth")).toBe("NCMA Fort Worth")
+    expect(scopeChipLabel("project", "  ")).toBe("choose a project")
+  })
+  test("session and account say so", () => {
+    expect(scopeChipLabel("session", "NCMA")).toBe("this session")
+    expect(scopeChipLabel("account")).toBe("account")
   })
 })
