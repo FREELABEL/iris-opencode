@@ -86,11 +86,21 @@ Each of these was learned by shipping something broken.
 ## 4 · The gate that stops you at the end
 
 ```
-Raw HTML (render_mode=html or the CustomHtml component) is restricted to trusted owners.
+Inline raw HTML (the CustomHtml component, page css on a composable page, or an embedded
+component artifact) is restricted to trusted owners.
 ```
 
-This is an **XSS boundary**, not a bug. Unsanitised markup on a multi-tenant page is a real
-attack surface, so publishing it is limited to an allowlist.
+This is an **XSS boundary**, not a bug. Inline HTML runs inside the IRIS app itself, where
+nothing can sandbox it, so it is limited to an allowlist of accounts.
+
+**Almost always, the answer is a standalone page instead** — every account can publish one, and
+an untrusted account's page is served in a browser sandbox:
+
+```
+iris genesis publish-html <slug> --file page.html
+```
+
+Full detail, including what a sandboxed page cannot do: `iris how-to view page-refused-trusted-owner`.
 
 **Do not try to route around it.** The update path checks the same predicate as publish, so
 pull/edit/push hits the identical refusal — deliberately. There is no flag that gets past it;
@@ -98,7 +108,7 @@ pull/edit/push hits the identical refusal — deliberately. There is no flag tha
 copy"* and has nothing to do with this gate. A session lost twenty minutes to that
 misreading.
 
-Two real options:
+If the page genuinely needs inline HTML among live components, two options:
 
 - **Hand the HTML to a trusted operator.** A trusted account may ship raw HTML onto a page a
   tenant created. That is a designed path, not a favour.
