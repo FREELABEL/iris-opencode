@@ -39,6 +39,39 @@ type CaptureMode = "webview" | "sidecar"
 /** Remembered across dictations; null until the first probe has run. */
 let cachedMode: CaptureMode | null = null
 
+/**
+ * Can the sidecar record on this host at all? Only where the webview is WKWebView (macOS) — or
+ * Linux, where the sidecar has an ALSA branch. On Windows the sidecar has no capture backend by
+ * design (capture.ts inputArgs), so falling back to it can only produce an error, and the one it
+ * produced was "Recording needs ffmpeg": advice about a tool the Windows path never uses, which
+ * hid the real fault (the window's own microphone request). On Windows the webview is the ONLY
+ * recorder — if it cannot open the mic, say why, and never mention ffmpeg.
+ */
+function sidecarCanRecord(): boolean {
+  if (typeof navigator === "undefined") return true
+  return !/Windows/i.test(navigator.userAgent)
+}
+
+/** Turn a getUserMedia rejection into something a person can act on. */
+function micOpenError(err: unknown): string {
+  const name = err instanceof DOMException || err instanceof Error ? err.name : ""
+  switch (name) {
+    case "NotAllowedError":
+    case "SecurityError":
+      return "IRIS was denied the microphone. Open Windows Settings > Privacy & security > Microphone, turn on \"Let desktop apps access your microphone\", then try again."
+    case "NotFoundError":
+    case "OverconstrainedError":
+      return "No microphone was found. Plug one in or pick an input device in Windows sound settings, then try again."
+    case "NotReadableError":
+    case "AbortError":
+      return "The microphone is in use by another app or the driver refused it. Close other apps using the mic and try again."
+    default: {
+      const detail = err instanceof Error ? err.message : String(err ?? "")
+      return `Could not open the microphone${detail ? `: ${detail}` : "."}`
+    }
+  }
+}
+
 export interface DictationOptions {
   /** Base URL of the local server, read as a GETTER at request time — not a snapshot. */
   url: () => string
@@ -101,6 +134,8 @@ export function createDictation(opts: DictationOptions) {
   let captured: Float32Array[] = []
   let peak = 0
   let capturedRate = TARGET_RATE
+  /** Why the last openWebviewCapture() failed — surfaced where the sidecar cannot take over. */
+  let openError: unknown
 
   const base = () => opts.url().replace(/\/$/, "")
 
@@ -127,14 +162,20 @@ export function createDictation(opts: DictationOptions) {
 
   /** Open the webview microphone. Returns false if it cannot even be opened. */
   async function openWebviewCapture(): Promise<boolean> {
-    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) return false
+    openError = undefined
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      openError = new Error("this window has no microphone API")
+      return false
+    }
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-    } catch {
+    } catch (e) {
+      openError = e
       return false
     }
     if (stream.getAudioTracks().length === 0) {
       teardownWebview()
+      openError = new DOMException("no audio track", "NotFoundError")
       return false
     }
     try {
@@ -167,7 +208,8 @@ export function createDictation(opts: DictationOptions) {
       mute.connect(audioCtx.destination)
       if (audioCtx.state === "suspended") await audioCtx.resume()
       return true
-    } catch {
+    } catch (e) {
+      openError = e
       teardownWebview()
       return false
     }
@@ -203,6 +245,12 @@ export function createDictation(opts: DictationOptions) {
     }
 
     const opened = await openWebviewCapture()
+    if (!opened && !sidecarCanRecord()) {
+      // Windows: nothing to fall back to. Report the window's own failure, and do NOT cache —
+      // the user may grant the permission and press the button again.
+      opts.onError?.(micOpenError(openError))
+      return
+    }
     if (!opened) {
       cachedMode = "sidecar"
       if (!(await startSidecar())) return
@@ -211,7 +259,9 @@ export function createDictation(opts: DictationOptions) {
       return
     }
 
-    if (cachedMode === "webview") {
+    // Where the sidecar cannot record, the webview is the only recorder: no probe, no fallback.
+    // A slow first buffer or a quiet room must not be able to route Windows to a dead end.
+    if (cachedMode === "webview" || !sidecarCanRecord()) {
       mode = "webview"
       begin()
       return
