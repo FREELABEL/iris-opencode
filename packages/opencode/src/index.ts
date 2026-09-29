@@ -689,7 +689,10 @@ try {
     span_id: Beacon.newSpanId(),
     parent_span_id: commandSpanId,
     command: commandName,
-    outcome: "ok",
+    // A command that returns normally but sets a non-zero exit code FAILED. Hardcoding "ok"
+    // here is why `iris usage` showed 192/192 integration calls ok for a user whose error
+    // log held ten failures that day — only a throw was ever counted.
+    outcome: process.exitCode ? "error" : "ok",
     duration_ms: Date.now() - commandStartedAt,
   })
 

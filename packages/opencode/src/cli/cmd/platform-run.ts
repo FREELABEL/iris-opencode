@@ -102,8 +102,15 @@ const INTEGRATION_FUNCTIONS: Record<string, { name: string; description: string 
     { name: "search_emails", description: "Search emails with Gmail query syntax" },
     { name: "send_email", description: "Send an email (to, subject, body)" },
   ],
+  // Verified against fl-iris-api GoogleDriveIntegrationService + ComposioClient. This list
+  // used to show three functions with no parameters, so an agent looking for a folder guessed
+  // FIND_FOLDER / LIST_CHILDREN / name= / q= for an hour and then read iris.exe's bytes for
+  // hints. search_files already includes Shared Drives; folders are just a mime_type.
   "google-drive": [
-    { name: "search_files", description: "Search for files by name" },
+    { name: "search_files", description: "Search name + full text (query, mime_type, limit) — folders: mime_type=application/vnd.google-apps.folder" },
+    { name: "list_files", description: "List a folder's contents or a whole Shared Drive (folder_id | drive_id, limit, pageToken)" },
+    { name: "list_shared_drives", description: "List the Shared Drives you can see (their ids feed list_files drive_id=)" },
+    { name: "get_file_info", description: "Metadata for one file or folder (fileId)" },
     { name: "export_file", description: "Export a file as plain text (file_id)" },
     { name: "read_doc", description: "Read a Google Doc (alias for export_file)" },
   ],
@@ -651,6 +658,29 @@ function displayArrayItems(items: any[], indent = "    "): void {
     }
   }
   if (items.length > 25) console.log(`${indent}${dim(`…and ${items.length - 25} more`)}`)
+}
+
+/**
+ * A call the server answered with `success: false` is a failed command. `exec` used to print
+ * the error and exit 0, so an agent driving the CLI could not tell a failure from a result,
+ * and the run beacon logged 192/192 integration calls as ok for a user whose error log held
+ * ten failures the same day.
+ */
+export function isFailedResult(result: any): boolean {
+  if (result === null || result === undefined) return true
+  if (typeof result !== "object") return false
+  if (result.success === false) return true
+  return result.success !== true && !!result.error
+}
+
+/** The function-name guess failed upstream ("Tool GOOGLEDRIVE_FIND_FOLDER not found"). */
+export function isUnknownFunctionError(result: any): boolean {
+  const err = typeof result?.error === "string" ? result.error : JSON.stringify(result?.error ?? "")
+  return /Tool_ToolNotFound|Tool \S+ not found|not a (valid|known) (action|function)/i.test(err)
+}
+
+export function knownFunctionsFor(target: string): { name: string; description: string }[] | undefined {
+  return INTEGRATION_FUNCTIONS[target] ?? INTEGRATION_FUNCTIONS[SLUG_ALIASES[target] ?? ""]
 }
 
 function displayResult(result: any, name: string): void {
@@ -1862,6 +1892,7 @@ const ExecCommand = cmd({
           jsonFromFlag = JSON.parse(paramStr)
         } catch {
           prompts.log.error("Invalid JSON in --params")
+          process.exitCode = 1
           prompts.outro("Done")
           return
         }
@@ -1914,6 +1945,7 @@ const ExecCommand = cmd({
         params = { ...fileJson }
       } catch (e) {
         prompts.log.error(`Failed to load --params-file: ${e instanceof Error ? e.message : String(e)}`)
+        process.exitCode = 1
         prompts.outro("Done")
         return
       }
@@ -1930,6 +1962,7 @@ const ExecCommand = cmd({
         }
       } catch {
         prompts.log.error("Invalid JSON in --params-json / -p")
+        process.exitCode = 1
         prompts.outro("Done")
         return
       }
@@ -1967,9 +2000,21 @@ const ExecCommand = cmd({
           integrationId: args["integration-id"] as number | undefined,
           account: args.account as string | undefined,
         }
+        // When the upstream says the function does not exist, answer with the ones that do,
+        // in the same response — the caller is usually an agent that will otherwise guess again.
+        const known = knownFunctionsFor(target)
+        const withHint = (result: any) =>
+          isFailedResult(result) && isUnknownFunctionError(result) && known
+            ? {
+                ...result,
+                hint: `${fn} is not a ${target} function. Use one of: ${known.map((f) => f.name).join(", ")}`,
+                available_functions: known,
+              }
+            : result
         if (args.json) {
-          const result = await executeIntegrationCall(target, fn, params, accountOpts)
+          const result = withHint(await executeIntegrationCall(target, fn, params, accountOpts))
           await writeJson(result)
+          if (isFailedResult(result)) process.exitCode = 1
           return
         }
         const spinner = prompts.spinner()
@@ -1979,9 +2024,16 @@ const ExecCommand = cmd({
             ? ` ${dim(`(${accountOpts.account})`)}`
             : ""
         spinner.start(`Executing ${target}.${fn}${accountLabel}…`)
-        const result = await executeIntegrationCall(target, fn, params, accountOpts)
+        const result = withHint(await executeIntegrationCall(target, fn, params, accountOpts))
         spinner.stop(`${target}.${fn}`)
         displayResult(result, `${target}.${fn}`)
+        if (isFailedResult(result)) {
+          process.exitCode = 1
+          if (result?.available_functions) {
+            prompts.log.warn(`${fn} is not a ${target} function. Available:`)
+            for (const f of result.available_functions) console.log(`  ${highlight(f.name)}  ${dim(f.description)}`)
+          }
+        }
         prompts.outro("Done")
         return
       }
@@ -2004,7 +2056,9 @@ const ExecCommand = cmd({
           process.exitCode = 1
           return
         }
-        await writeJson(await res.json())
+        const toolResult = await res.json()
+        await writeJson(toolResult)
+        if (isFailedResult(toolResult)) process.exitCode = 1
         return
       }
       const spinner = prompts.spinner()
@@ -2017,15 +2071,18 @@ const ExecCommand = cmd({
         spinner.stop("Failed", 1)
         prompts.log.error(`HTTP ${res.status}`)
         prompts.outro("Done")
+        process.exitCode = 1
         return
       }
       const result = await res.json()
       spinner.stop(target)
       displayResult(result, target)
+      if (isFailedResult(result)) process.exitCode = 1
       prompts.outro("Done")
     } catch (e) {
       prompts.log.error(e instanceof Error ? e.message : String(e))
       prompts.outro("Done")
+      process.exitCode = 1
     }
   },
 })
