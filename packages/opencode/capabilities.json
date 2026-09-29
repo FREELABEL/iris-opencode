@@ -3057,7 +3057,7 @@
       "describe": "register IRIS as an agent runtime in the Buzz desktop app",
       "aliases": [],
       "run": "iris buzz setup",
-      "haystack": "buzz setup register iris as an agent runtime in the buzz desktop app dry-run print what would be written, write nothing iris-path absolute path to the iris binary buzz should run community a buzz community invite link (https://<host>/invite/<code>) to join after setup"
+      "haystack": "buzz setup register iris as an agent runtime in the buzz desktop app dry-run print what would be written, write nothing iris-path absolute path to the iris binary buzz should run community a buzz community invite link (https://<host>/invite/<code>) to join after setup install download and install the buzz desktop app first (macos; verified as signed by block) reinstall with --install: replace an existing buzz"
     },
     {
       "kind": "command",

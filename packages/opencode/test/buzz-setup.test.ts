@@ -86,3 +86,36 @@ describe("buzzJoinLink — invite URL → buzz://join", () => {
     }
   })
 })
+
+import { pickBuzzDmg, isBlockSigned } from "../src/cli/cmd/platform-buzz"
+
+/** `--install` puts a downloaded app into /Applications, so the signature gate must refuse by default. */
+describe("Buzz one-line install — asset pick and signature gate", () => {
+  const assets = [
+    { name: "Buzz_0.5.25_aarch64.dmg", browser_download_url: "u-arm" },
+    { name: "Buzz_0.5.25_x64.dmg", browser_download_url: "u-x64" },
+    { name: "Buzz_0.5.25_aarch64.app.tar.gz", browser_download_url: "u-tar" },
+  ]
+  test("picks the dmg for this CPU", () => {
+    expect(pickBuzzDmg(assets, "arm64")?.browser_download_url).toBe("u-arm")
+    expect(pickBuzzDmg(assets, "x64")?.browser_download_url).toBe("u-x64")
+    expect(pickBuzzDmg([], "arm64")).toBeNull()
+  })
+
+  const blockSig = "Identifier=xyz.block.buzz.app\nAuthority=Developer ID Application: Block, Inc. (EYF346PHUG)\nTeamIdentifier=EYF346PHUG"
+  const notarized = "/Volumes/Buzz/Buzz.app: accepted\nsource=Notarized Developer ID\norigin=Developer ID Application: Block, Inc. (EYF346PHUG)"
+  test("accepts Block-signed + notarized (the real v0.5.24 output)", () => {
+    expect(isBlockSigned(blockSig, notarized)).toBe(true)
+  })
+  test("refuses another developer's valid, notarized signature", () => {
+    const other = "Authority=Developer ID Application: Evil LLC (ABCDE12345)\nTeamIdentifier=ABCDE12345"
+    expect(isBlockSigned(other, notarized.replaceAll("Block, Inc. (EYF346PHUG)", "Evil LLC (ABCDE12345)"))).toBe(false)
+  })
+  test("refuses Block-signed but NOT notarized / rejected by Gatekeeper", () => {
+    expect(isBlockSigned(blockSig, "/x/Buzz.app: rejected\nsource=Unnotarized Developer ID")).toBe(false)
+    expect(isBlockSigned(blockSig, "")).toBe(false)
+  })
+  test("refuses unsigned", () => {
+    expect(isBlockSigned("code object is not signed at all", "rejected")).toBe(false)
+  })
+})
