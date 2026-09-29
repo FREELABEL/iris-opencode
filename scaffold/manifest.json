@@ -183,6 +183,12 @@
       "purpose": "How to: give a bespoke render_mode:html page data and behaviour with the Genesis SDK"
     },
     {
+      "src": "how-to/genesis-html-page-live-data.md",
+      "dest": "how-to/genesis-html-page-live-data.md",
+      "managed": true,
+      "purpose": "How to: show live Atlas dataset rows on a standalone HTML page with page-level bindings, including what a sandboxed page gets"
+    },
+    {
       "src": "how-to/genesis-components.md",
       "dest": "how-to/genesis-components.md",
       "managed": true,
