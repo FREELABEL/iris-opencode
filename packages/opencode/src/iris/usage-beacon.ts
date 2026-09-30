@@ -30,20 +30,20 @@ export namespace UsageBeacon {
     return true
   }
 
-  export async function send(
-    eventType: "app_open",
-    opts: { token: string | null; apiBase: string; version: string; env?: NodeJS.ProcessEnv; home?: string; fetchImpl?: typeof fetch },
-  ): Promise<boolean> {
+  type PostOptions = { token: string | null; apiBase: string; version: string; env?: NodeJS.ProcessEnv; home?: string; fetchImpl?: typeof fetch }
+
+  export async function send(eventType: "app_open", opts: PostOptions): Promise<boolean> {
+    return post([{ source: "desktop", event_type: eventType, severity: "info" }], opts)
+  }
+
+  /** One batch of already-sanitised events (usage-tracker.ts builds them). At most 50 per call. */
+  export async function post(events: object[], opts: PostOptions): Promise<boolean> {
     try {
-      if (!enabled(opts.env, opts.home) || !opts.token) return false
+      if (events.length === 0 || !enabled(opts.env, opts.home) || !opts.token) return false
       const res = await (opts.fetchImpl ?? fetch)(`${opts.apiBase}/api/v6/telemetry/errors`, {
         method: "POST",
         headers: { Authorization: `Bearer ${opts.token}`, "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({
-          cli_version: opts.version,
-          os: process.platform,
-          events: [{ source: "desktop", event_type: eventType, severity: "info" }],
-        }),
+        body: JSON.stringify({ cli_version: opts.version, os: process.platform, events: events.slice(0, 50) }),
         signal: AbortSignal.timeout(3000),
       }).catch(() => null)
       return !!res?.ok
