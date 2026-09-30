@@ -1,5 +1,6 @@
 import { cmd } from "./cmd"
 import { irisFetch, dim, bold, IRIS_API, writeJson } from "./iris-api"
+import { formatPlatformAnalytics } from "./platform-analytics-format"
 import { readdirSync, readFileSync, statSync } from "fs"
 import { homedir } from "os"
 import { join } from "path"
@@ -323,6 +324,33 @@ async function getJson(path: string): Promise<any> {
   return JSON.parse(text)
 }
 
+/** #187316 — the fleet view. Admin-gated server-side; says so plainly instead of leaking a 403. */
+async function renderPlatformAnalytics(days: number, external: boolean, json: boolean): Promise<void> {
+  const params = new URLSearchParams({ days: String(days) })
+  if (external) params.set("external", "1")
+  let data: any
+  try {
+    data = await getJson(`/api/v6/telemetry/analytics?${params}`)
+  } catch (e: any) {
+    const msg = String(e.message)
+    if (msg.startsWith("403")) {
+      console.error("  --platform is the platform-wide operator view and needs a platform token.")
+      console.error(dim("  For your own usage, drop the flag: iris usage"))
+    } else if (msg.startsWith("404")) {
+      console.error("  This IRIS API has no platform analytics yet (needs fl-iris-api 1bb11f91 or later).")
+    } else {
+      console.error(`Could not read platform usage: ${msg}`)
+    }
+    process.exitCode = 1
+    return
+  }
+  if (json) {
+    await writeJson(data)
+    return
+  }
+  for (const line of formatPlatformAnalytics(data)) console.log(line)
+}
+
 export const PlatformUsageCommand = cmd({
   command: "usage",
   describe: "what you ran, how much of it worked, and what it cost",
@@ -333,6 +361,8 @@ export const PlatformUsageCommand = cmd({
       .option("surface", { type: "string", describe: "filter SPEND to one surface: command_bar | react_loop | heartbeat | proxy | transcription" })
       .option("user", { type: "number", describe: "another user's rows (requires a platform operator token)" })
       .option("local", { type: "boolean", default: false, describe: "local Claude Code / Codex sessions instead of the server" })
+      .option("platform", { type: "boolean", default: false, describe: "the whole platform: active users, activity, tokens and cost (platform operator token)" })
+      .option("external", { type: "boolean", default: false, describe: "with --platform: leave out internal @freelabel.net accounts" })
       .option("json", { type: "boolean", default: false, describe: "machine-readable" }),
   async handler(args) {
     // Local history is a different corpus, not a filter on the same one — the server has
@@ -340,6 +370,9 @@ export const PlatformUsageCommand = cmd({
     // totals that would then mean two different things at once.
     if (args.local) {
       return await renderLocalUsage(Number(args.days ?? 30), Boolean(args.json))
+    }
+    if (args.platform) {
+      return await renderPlatformAnalytics(Number(args.days ?? 30), Boolean(args.external), Boolean(args.json))
     }
 
     const params = new URLSearchParams({ days: String(args.days ?? 30) })
