@@ -1182,11 +1182,16 @@ const ConnectCommand = cmd({
         type: "string",
         describe: "label for this connection (e.g. \"Personal\" or \"Work\") — required when adding a 2nd account of the same type",
       })
-      // CLI-native OAuth (clio, …) — providers we drive from the binary rather
+      // CLI-native OAuth (clio, linkedin, …) — providers we drive from the binary rather
       // than through Composio or the web UI.
       .option("client-id", { type: "string", describe: "OAuth app client id (CLI-native providers; or <TYPE>_CLIENT_ID)" })
       .option("client-secret", { type: "string", describe: "OAuth app client secret (CLI-native providers; or <TYPE>_CLIENT_SECRET)" })
-      .option("port", { type: "number", default: 8787, describe: "loopback port for the OAuth callback (CLI-native providers)" })
+      // No yargs default: a provider whose redirect must be registered port-and-all
+      // (linkedin → 8765) supplies its own fixed default; the rest use 8787.
+      .option("port", { type: "number", describe: "loopback port for the OAuth callback (CLI-native providers; default 8787, linkedin 8765)" })
+      .option("org", { type: "boolean", default: false, describe: "also request company-page scopes (linkedin: needs the Community Management API product)" })
+      .option("scope-set", { type: "string", describe: "named scope set for CLI-native providers (linkedin: default | org)" })
+      .option("composio", { type: "boolean", default: false, describe: "connect through Composio instead of the CLI-native sign-in (linkedin, clio)" })
       .option("paste", { type: "boolean", default: false, describe: "paste the code instead of running a loopback listener (SSH/headless)" })
       .option("bloq", { type: "number", describe: "share this integration with a bloq" })
       .option("json", { type: "boolean", default: false, describe: "JSON output" })
@@ -1464,7 +1469,10 @@ const ConnectCommand = cmd({
 
     // CLI-native OAuth: the server has no authorize-URL case for these, so the
     // whole dance runs here (loopback listener → token exchange → persist).
-    if (isLocalOAuthProvider(type)) {
+    // LinkedIn is native by DEFAULT (2026-09-29): Composio's toolkit sent a retired
+    // LinkedIn-Version and its connections expired within seconds. --composio keeps the
+    // old path for anyone who wants it (as does `iris integrations connect-composio`).
+    if (isLocalOAuthProvider(type) && !args.composio) {
       await runLocalOAuthConnect(type, args as any)
       return
     }
