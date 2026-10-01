@@ -1,7 +1,22 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, printDivider, printKV, dim, bold, success, resolveUserId, writeJson } from "./iris-api"
+import { irisFetch, requireAuth, printDivider, printKV, dim, bold, success, resolveUserId, writeJson, IRIS_API } from "./iris-api"
+import {
+  type FoundEvent,
+  type SearchResult,
+  type SearchSource,
+  fromGoogleEvent,
+  isComplete,
+  localSource,
+  matchesQuery,
+  mergeEvents,
+  parseAppleCalendar,
+  pool,
+  readAppleCalendar,
+  readWindowsOutlook,
+  uniqueAttendees,
+} from "./calendar-search"
 import { executeIntegrationCall } from "./platform-run"
 import { firstArray } from "../../util/array"
 
@@ -1235,14 +1250,323 @@ function parseTimeString(s: string): string {
   return s
 }
 
+
+// ── SEARCH (epic #187374) ─────────────────────────────────────
+// Every connected calendar account, every calendar inside each, plus the local calendar app —
+// and a table of what was NOT searched. `list --search` filters the first N events of one
+// calendar of one account; this is the command to use when the question is "where is that invite".
+
+interface GoogleAccount {
+  conn: any
+  /** the account's real address — its primary calendar's id — else whatever the record says */
+  identity: string
+  cals: any[]
+  /** other connection records that resolved to the same account */
+  duplicates: number[]
+  error?: string
+}
+
+/**
+ * Resolve one connection record to the account it actually reaches. Several records can point at
+ * the same Google account and carry no email of their own (measured 2026-09-30: six rows, all
+ * "Google Calendar", all alex@freelabel.net) — so identity comes from the primary calendar, whose
+ * id IS the account address.
+ */
+async function resolveGoogleAccount(conn: any): Promise<GoogleAccount> {
+  const fallback = String(conn.account_email || `google-calendar #${conn.id}`)
+  try {
+    const r = await calExec("get_calendars", {}, { integrationId: Number(conn.id) })
+    if (!r?.success) throw new Error(typeof r?.error === "string" ? r.error : JSON.stringify(r?.error ?? "no response"))
+    const cals = firstArray(r.calendars, r.data?.calendars, r.data?.items, r.items)
+    const primary = cals.find((c: any) => c.primary) ?? cals.find((c: any) => String(c.id ?? "").includes("@") && c.accessRole === "owner")
+    const identity = String(conn.account_email || primary?.id || fallback).toLowerCase()
+    return { conn, identity, cals: cals.length ? cals : [{ id: "primary", summary: "primary" }], duplicates: [] }
+  } catch (err: any) {
+    return { conn, identity: fallback, cals: [], duplicates: [], error: summarizeProviderError(err?.message ?? String(err)) }
+  }
+}
+
+async function searchGoogleAccount(
+  acct: GoogleAccount,
+  query: string,
+  from: Date,
+  to: Date,
+): Promise<{ source: SearchSource; events: FoundEvent[] }> {
+  const name = acct.identity
+  const source: SearchSource = { name, kind: "google", status: "ok", count: 0, calendars: 0, integrationId: Number(acct.conn.id) }
+  if (acct.duplicates.length) source.reason = `same account as connection(s) #${acct.duplicates.join(", #")} — searched once`
+  if (acct.error) {
+    source.status = "failed"
+    source.reason = acct.error
+    return { source, events: [] }
+  }
+  const opts = { integrationId: Number(acct.conn.id) }
+  const cals = acct.cals
+  const events: FoundEvent[] = []
+  const failures: string[] = []
+  await pool(cals, 4, async (cal: any) => {
+    const calName = String(cal.summary || cal.name || cal.id)
+    try {
+      const r = await calExec(
+        "get_events",
+        { q: query, time_min: from.toISOString(), time_max: to.toISOString(), max_results: 250, calendar_id: cal.id },
+        opts,
+      )
+      if (!r?.success) throw new Error(typeof r?.error === "string" ? r.error : JSON.stringify(r?.error ?? "no response"))
+      const items = firstArray(r.events, r.data?.items, r.items)
+      for (const ev of items) {
+        const fe = fromGoogleEvent(ev, `${name} · ${calName}`)
+        // Google's q is the primary filter; re-check so every source answers the same question.
+        if (matchesQuery({ ...fe, description: ev.description }, query)) events.push(fe)
+      }
+      source.calendars = (source.calendars ?? 0) + 1
+    } catch (err: any) {
+      failures.push(`${calName}: ${summarizeProviderError(err?.message ?? String(err))}`)
+    }
+  })
+  source.count = events.length
+  if (failures.length > 0) {
+    source.status = "failed"
+    source.reason = (source.calendars ?? 0) === 0 ? failures[0] : `${failures.length} of ${cals.length} calendars failed — ${failures[0]}`
+  }
+  return { source, events }
+}
+
+function summarizeProviderError(raw: string): string {
+  if (/ConnectedAccountNotFound|not found or may have been deleted/i.test(raw)) return "connection no longer exists at the provider — reconnect it"
+  if (/revoked|invalid_grant|expired|401|unauthori[sz]ed/i.test(raw)) return "authorization expired — reconnect it"
+  const m = raw.match(/"message"\s*:\s*"([^"]{1,140})/)
+  return (m ? m[1] : raw).replace(/\s+/g, " ").slice(0, 140)
+}
+
+const CalendarSearchCommand = cmd({
+  command: "search <query..>",
+  aliases: ["find"],
+  describe: "search EVERY calendar — all connected accounts + this computer's calendar app — and list attendees",
+  builder: (yargs) =>
+    yargs
+      .positional("query", { type: "string", array: true, describe: "words to match in title, description, location or attendees" })
+      .option("days", { type: "number", default: 30, describe: "search N days back AND N days ahead" })
+      .option("since", { type: "string", describe: "start of window, YYYY-MM-DD" })
+      .option("until", { type: "string", describe: "end of window, YYYY-MM-DD" })
+      // A literal flag: src/index.ts turns yargs boolean-negation off, so `--no-local` only parses if registered (#184593).
+      .option("no-local", { type: "boolean", default: false, describe: "skip this computer's calendar app" })
+      .option("attendees", { type: "boolean", default: true, describe: "print each event's attendees" })
+      .option("to-leads", { type: "boolean", default: false, describe: "match attendees to CRM leads; preview only unless --yes" })
+      .option("yes", { type: "boolean", default: false, describe: "with --to-leads: create leads for attendees not in the CRM" })
+      .option("bloq-id", { type: "number", describe: "with --to-leads --yes: bloq for new leads (default 38)" })
+      .option("json", { type: "boolean", default: false })
+      .example('iris calendar search "constellation"', "find the invite, wherever it landed")
+      .example('iris calendar search gate --days 7 --to-leads', "attendees not yet in the CRM"),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    const query = (Array.isArray(args.query) ? args.query.join(" ") : String(args.query ?? "")).trim()
+    if (!query) {
+      prompts.log.error("Give a search term: iris calendar search <words>")
+      process.exitCode = 1
+      return
+    }
+    const dayMs = 86400000
+    const now = Date.now()
+    const day = (v: unknown, endOfDay = false) => {
+      if (typeof v !== "string" || !v.trim()) return undefined
+      const d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(v.trim()) ? `${v.trim()}T${endOfDay ? "23:59:59" : "00:00:00"}` : v.trim())
+      return Number.isNaN(d.getTime()) ? undefined : d
+    }
+    const days = Math.abs(Number(args.days ?? 30))
+    const from = day(args.since) ?? new Date(now - days * dayMs)
+    const to = day(args.until, true) ?? new Date(now + days * dayMs)
+    const json = Boolean(args.json)
+    if (!json) {
+      UI.empty()
+      prompts.intro(`◈  Calendar search — "${query}" · ${from.toISOString().slice(0, 10)} → ${to.toISOString().slice(0, 10)}`)
+    }
+    const spinner = json ? null : prompts.spinner()
+    spinner?.start("Searching every calendar…")
+
+    const sources: SearchSource[] = []
+    const found: FoundEvent[] = []
+    const selfEmails: string[] = []
+
+    // 1. Connected accounts
+    const uid = await resolveUserId()
+    let conns: any[] = []
+    try {
+      const res = await irisFetch(`/api/v1/users/${uid}/integrations`, {}, IRIS_API)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = (await res.json()) as any
+      conns = firstArray(data?.connections, data?.data, data).filter((c: any) =>
+        ["google-calendar", "outlook-calendar"].includes(String(c.type ?? "").toLowerCase()),
+      )
+    } catch (err: any) {
+      sources.push({ name: "connected accounts", kind: "google", status: "failed", count: 0, reason: `could not list connections (${err?.message ?? err}) — accounts were NOT searched` })
+    }
+    for (const c of conns) if (c.account_email) selfEmails.push(String(c.account_email))
+
+    for (const c of conns.filter((c: any) => String(c.type).toLowerCase() === "outlook-calendar")) {
+      // No calendar verb reads Outlook connections yet; say so instead of pretending it was searched.
+      sources.push({ name: String(c.account_email || c.name || `outlook-calendar #${c.id}`), kind: "outlook", status: "unsupported", count: 0, reason: "Outlook calendar search not wired yet (epic #187374 step 4)", integrationId: Number(c.id) })
+    }
+    const googleJob = (async () => {
+      const resolved = await pool(conns.filter((c: any) => String(c.type).toLowerCase() === "google-calendar"), 4, resolveGoogleAccount)
+      // One search per real account; failed records stay separate, each with its own reason.
+      const byIdentity = new Map<string, GoogleAccount>()
+      const accounts: GoogleAccount[] = []
+      for (const a of resolved) {
+        if (a.error) { accounts.push(a); continue }
+        const seen = byIdentity.get(a.identity)
+        if (seen) { seen.duplicates.push(Number(a.conn.id)); continue }
+        byIdentity.set(a.identity, a)
+        accounts.push(a)
+        if (a.identity.includes("@")) selfEmails.push(a.identity)
+      }
+      const results = await pool(accounts, 3, (a) => searchGoogleAccount(a, query, from, to))
+      for (const r of results) { sources.push(r.source); found.push(...r.events) }
+    })()
+    const jobs = [googleJob]
+
+    // 2. This computer's calendar app
+    const local = localSource()
+    const localJob = (async () => {
+      if (args["no-local"] || args.noLocal) return
+      if (local.kind === null) {
+        sources.push({ name: "local calendar", kind: "apple", status: "unsupported", count: 0, reason: local.reason })
+        return
+      }
+      const read = local.kind === "apple" ? await readAppleCalendar(from, to) : await readWindowsOutlook(from, to)
+      if (!read.ok) {
+        sources.push({ name: local.name, kind: local.kind, status: "failed", count: 0, reason: read.reason })
+        return
+      }
+      try {
+        const parsed = parseAppleCalendar(read.stdout, query, local.kind === "apple" ? "Apple Calendar" : "Outlook")
+        sources.push({
+          name: local.name,
+          kind: local.kind,
+          status: parsed.errors.length > 0 && parsed.calendars === parsed.errors.length ? "failed" : "ok",
+          count: parsed.events.length,
+          calendars: parsed.calendars,
+          ...(parsed.errors.length ? { reason: `${parsed.errors.length} calendar(s) unreadable — ${parsed.errors[0]}` } : {}),
+        })
+        found.push(...parsed.events)
+      } catch {
+        sources.push({ name: local.name, kind: local.kind, status: "failed", count: 0, reason: `unreadable output: ${read.stdout.slice(0, 120)}` })
+      }
+    })()
+
+    await Promise.all([...jobs, localJob])
+    spinner?.stop("Searched")
+
+    const events = mergeEvents(found)
+    const result: SearchResult = {
+      query,
+      window: { from: from.toISOString(), to: to.toISOString() },
+      events,
+      sources: sources.sort((a, b) => a.name.localeCompare(b.name)),
+      complete: isComplete(sources),
+    }
+    if (!result.complete) process.exitCode = 1
+
+    // 3. Attendees → CRM
+    let leadRows: Array<{ email: string; name?: string; leadId?: number; created?: boolean; error?: string }> = []
+    if (args["to-leads"] || args.toLeads) {
+      for (const a of uniqueAttendees(events, selfEmails)) {
+        const row: (typeof leadRows)[number] = { email: a.email, ...(a.name ? { name: a.name } : {}) }
+        try {
+          const r = await irisFetch(`/api/v1/leads?search=${encodeURIComponent(a.email)}&per_page=5`)
+          const list = r.ok ? firstArray(((await r.json()) as any)?.data) : []
+          const hit = list.find((l: any) => String(l.email ?? "").toLowerCase() === a.email)
+          if (hit) row.leadId = Number(hit.id)
+        } catch (err: any) {
+          row.error = `lookup failed: ${err?.message ?? err}`
+        }
+        if (!row.leadId && !row.error && args.yes) {
+          try {
+            const res = await irisFetch("/api/v1/leads", {
+              method: "POST",
+              body: JSON.stringify({
+                name: a.name || a.email.split("@")[0],
+                email: a.email,
+                bloqId: args["bloq-id"] ?? 38,
+                source: "calendar",
+              }),
+            })
+            const l = ((await res.json().catch(() => ({}))) as any)?.data
+            if (res.ok && l?.id && String(l.email ?? "").toLowerCase() === a.email) {
+              row.leadId = Number(l.id)
+              row.created = true
+            } else row.error = `create failed (HTTP ${res.status})`
+          } catch (err: any) {
+            row.error = `create failed: ${err?.message ?? err}`
+          }
+        }
+        leadRows.push(row)
+      }
+    }
+
+    if (json) {
+      await writeJson({ ...result, ...(leadRows.length ? { leads: leadRows } : {}) })
+      return
+    }
+
+    if (events.length === 0) prompts.log.info(`No events matched "${query}" in the sources below.`)
+    let lastDate = ""
+    for (const ev of events) {
+      const d = formatDate(ev.start)
+      if (d !== lastDate) {
+        printDivider()
+        console.log(`  ${bold(d)}`)
+        lastDate = d
+      }
+      const time = ev.start.includes("T") ? formatTime(ev.start) : "all day"
+      console.log(`  ${bold(time)}  ${ev.title}`)
+      console.log(`  ${dim("  in: " + ev.seenIn.join(" · "))}`)
+      if (args.attendees && ev.attendees.length) {
+        for (const a of ev.attendees)
+          console.log(`  ${dim("   ")}${a.email}${a.name ? dim(" · " + a.name) : ""}${a.organizer ? dim(" (organizer)") : ""}`)
+      }
+      console.log()
+    }
+
+    if (leadRows.length) {
+      printDivider()
+      console.log(`  ${bold("Attendees → CRM")}${args.yes ? "" : dim("  (preview — add --yes to create the missing ones)")}`)
+      for (const r of leadRows) {
+        const state = r.error ? `✗ ${r.error}` : r.created ? `created #${r.leadId}` : r.leadId ? `lead #${r.leadId}` : "not in CRM"
+        console.log(`  ${r.email.padEnd(38)} ${dim(state)}`)
+      }
+      console.log()
+    }
+
+    printDivider()
+    console.log(`  ${bold("Sources")}`)
+    for (const s of result.sources) {
+      const mark = s.status === "ok" ? success("✓") : s.status === "failed" ? "✗" : dim("–")
+      const detail =
+        s.status === "ok"
+          ? dim(`${s.count} match${s.count === 1 ? "" : "es"}${s.calendars !== undefined ? ` · ${s.calendars} calendar${s.calendars === 1 ? "" : "s"}` : ""}`)
+          : dim(`${s.status} — ${s.reason ?? ""}`)
+      console.log(`  ${mark} ${s.name.padEnd(36)} ${detail}`)
+    }
+    console.log(dim("    Only connected accounts and this computer's calendar can be searched. An invite sent to an"))
+    console.log(dim("    address that is connected nowhere will not appear — connect it: iris connect google-calendar"))
+    prompts.outro(
+      result.complete
+        ? `${success("✓")} ${events.length} event${events.length === 1 ? "" : "s"} · every known source searched`
+        : `${events.length} event${events.length === 1 ? "" : "s"} · INCOMPLETE — ${result.sources.filter((s) => s.status === "failed").length} source(s) failed`,
+    )
+  },
+})
+
 // ── ROOT COMMAND ──────────────────────────────────────────────
 export const PlatformCalendarCommand = cmd({
   command: "calendar",
   aliases: ["cal"],
-  describe: "Google Calendar — events, availability, scheduling",
+  describe: "calendar — events, availability, scheduling, and search across every account",
   builder: (yargs) =>
     yargs
       .command(CalendarListCommand)
+      .command(CalendarSearchCommand)
       .command(CalendarTodayCommand)
       .command(CalendarTomorrowCommand)
       .command(CalendarAddCommand)
