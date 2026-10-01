@@ -1342,7 +1342,7 @@ function summarizeProviderError(raw: string): string {
 const CalendarSearchCommand = cmd({
   command: "search <query..>",
   aliases: ["find"],
-  describe: "search EVERY calendar — all connected accounts + this computer's calendar app — and list attendees",
+  describe: "search EVERY calendar for a meeting or invite — all connected accounts + Apple Calendar / Outlook on this computer — and list attendee emails",
   builder: (yargs) =>
     yargs
       .positional("query", { type: "string", array: true, describe: "words to match in title, description, location or attendees" })
@@ -1562,7 +1562,7 @@ const CalendarSearchCommand = cmd({
 export const PlatformCalendarCommand = cmd({
   command: "calendar",
   aliases: ["cal"],
-  describe: "calendar — events, availability, scheduling, and search across every account",
+  describe: "calendar — Google Calendar events, availability, scheduling, and search across every account + this computer",
   builder: (yargs) =>
     yargs
       .command(CalendarListCommand)
