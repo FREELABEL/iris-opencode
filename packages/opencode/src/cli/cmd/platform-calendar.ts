@@ -1520,7 +1520,7 @@ const CalendarSearchCommand = cmd({
       }
       const time = ev.start.includes("T") ? formatTime(ev.start) : "all day"
       console.log(`  ${bold(time)}  ${ev.title}`)
-      console.log(`  ${dim("  in: " + ev.seenIn.join(" · "))}`)
+      console.log(`  ${dim("  in: " + ev.seenIn.join("  |  "))}`)
       if (args.attendees && ev.attendees.length) {
         for (const a of ev.attendees)
           console.log(`  ${dim("   ")}${a.email}${a.name ? dim(" · " + a.name) : ""}${a.organizer ? dim(" (organizer)") : ""}`)

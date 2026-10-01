@@ -270,7 +270,12 @@ export function parseAppleCalendar(stdout: string, query: string, label = "Apple
   const events: FoundEvent[] = []
   for (const e of d.events ?? []) {
     const attendees: Attendee[] = (e.attendees ?? [])
-      .map((a: any) => ({ email: norm(String(a.email).replace(/^mailto:/i, "")), ...(a.name ? { name: a.name } : {}), ...(a.response ? { response: a.response } : {}) }))
+      .map((a: any) => {
+        const email = norm(String(a.email).replace(/^mailto:/i, ""))
+        // EventKit often reports the address itself as the participant's name — that is not a name.
+        const name = a.name && norm(a.name) !== email ? String(a.name) : ""
+        return { email, ...(name ? { name } : {}), ...(a.response ? { response: a.response } : {}) }
+      })
       .filter((a: Attendee) => a.email.includes("@"))
     const ev = { title: e.title || "(no title)", description: e.description, location: e.location, attendees }
     if (!matchesQuery(ev, query)) continue

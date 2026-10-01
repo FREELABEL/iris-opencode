@@ -137,6 +137,13 @@ describe("parseAppleCalendar", () => {
   })
 })
 
+describe("parseAppleCalendar — names", () => {
+  test("a participant 'name' that is just their address is dropped (EventKit does this)", () => {
+    const out = JSON.stringify({ calendars: 1, errors: [], events: [{ calendar: "W", title: "Gate", start: "2026-10-05T17:00:00Z", attendees: [{ email: "mailto:ldorsett@aiaiholdings.com", name: "ldorsett@aiaiholdings.com" }] }] })
+    expect(parseAppleCalendar(out, "gate").events[0].attendees).toEqual([{ email: "ldorsett@aiaiholdings.com" }])
+  })
+})
+
 describe("localSource", () => {
   test("names the reader per OS, and says when there is none", () => {
     expect(localSource("darwin").kind).toBe("apple")
