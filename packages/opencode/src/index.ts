@@ -190,6 +190,7 @@ import { PlatformTelegramCommand } from "./cli/cmd/platform-telegram"
 import { PlatformInstagramCommand } from "./cli/cmd/platform-instagram"
 import { PlatformInstagramFeedCommand } from "./cli/cmd/platform-instagram-feed"
 import { PlatformCalendarCommand } from "./cli/cmd/platform-calendar"
+import { PlatformEmailCommand } from "./cli/cmd/platform-email"
 import { PlatformHeartbeatCommand } from "./cli/cmd/platform-heartbeat"
 import { PlatformInboxCommand } from "./cli/cmd/platform-inbox"
 import { PlatformDocsCommand } from "./cli/cmd/platform-docs"
@@ -515,6 +516,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformImessageCommand))
   .command(reg(PlatformWhatsappCommand))
   .command(reg(PlatformCalendarCommand))
+  .command(reg(PlatformEmailCommand))
   .command(reg(PlatformHeartbeatCommand))
   .command(reg(PlatformDocsCommand))
   .command(reg(PlatformWalletCommand))

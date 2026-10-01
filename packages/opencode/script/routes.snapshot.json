@@ -418,6 +418,11 @@
 },
 {
 "method": "GET",
+"uri": "/api/profile/{}/studio",
+"service": "iris-api"
+},
+{
+"method": "GET",
 "uri": "/api/profile/{}/twitch-status",
 "service": "iris-api"
 },
@@ -1223,6 +1228,11 @@
 },
 {
 "method": "POST",
+"uri": "/api/v1/app-data/{}/enrich",
+"service": "iris-api"
+},
+{
+"method": "POST",
 "uri": "/api/v1/app-data/{}/init",
 "service": "iris-api"
 },
@@ -1524,6 +1534,11 @@
 {
 "method": "POST",
 "uri": "/api/v1/atlas/customer-auth/send-otp",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/atlas/customer-auth/signout",
 "service": "fl-api"
 },
 {
@@ -4458,8 +4473,33 @@
 },
 {
 "method": "POST",
+"uri": "/api/v1/email/bloqs/{}/sends",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/email/bloqs/{}/templates",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/email/bloqs/{}/templates",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/email/bloqs/{}/templates/{}",
+"service": "iris-api"
+},
+{
+"method": "POST",
 "uri": "/api/v1/email/send",
 "service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/email/sends/{}",
+"service": "iris-api"
 },
 {
 "method": "POST",
@@ -5217,6 +5257,11 @@
 "service": "fl-api"
 },
 {
+"method": "POST",
+"uri": "/api/v1/integrations-temp/{}/unshare",
+"service": "fl-api"
+},
+{
 "method": "GET",
 "uri": "/api/v1/integrations/ai-context",
 "service": "fl-api"
@@ -5239,6 +5284,11 @@
 {
 "method": "GET",
 "uri": "/api/v1/integrations/catalog",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/integrations/catalog/{}",
 "service": "iris-api"
 },
 {
@@ -14078,6 +14128,11 @@
 },
 {
 "method": "GET",
+"uri": "/api/v6/telemetry/analytics",
+"service": "iris-api"
+},
+{
+"method": "GET",
 "uri": "/api/v6/telemetry/errors",
 "service": "iris-api"
 },
@@ -15174,6 +15229,11 @@
 {
 "method": "GET",
 "uri": "/p/integrations/{}",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/p/integrations/{}/og-image.png",
 "service": "iris-api"
 },
 {
