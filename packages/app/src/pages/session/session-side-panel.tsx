@@ -1,4 +1,5 @@
 import { For, Match, Show, Switch, createEffect, createMemo, onCleanup, type JSX } from "solid-js"
+import { IrisPanelBoundary } from "@/components/iris-panel-boundary"
 import { createStore } from "solid-js/store"
 import { createMediaQuery } from "@solid-primitives/media"
 import { DragDropProvider as DndKitProvider, PointerSensor } from "@dnd-kit/solid"
@@ -664,7 +665,9 @@ export function SessionSidePanel(props: {
                               inert={!irisVisible() || undefined}
                             >
                               <div class="relative pt-2 flex-1 min-h-0 overflow-hidden">
-                                <SessionIrisTab />
+                                <IrisPanelBoundary label="The IRIS panel">
+                                  <SessionIrisTab />
+                                </IrisPanelBoundary>
                               </div>
                             </div>
                           </Show>
@@ -925,7 +928,9 @@ export function SessionSidePanel(props: {
                             inert={!irisVisible() || undefined}
                           >
                             <div class="relative pt-2 flex-1 min-h-0 overflow-hidden">
-                              <SessionIrisTab />
+                              <IrisPanelBoundary label="The IRIS panel">
+                                <SessionIrisTab />
+                              </IrisPanelBoundary>
                             </div>
                           </div>
                         </Show>

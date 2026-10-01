@@ -1,4 +1,15 @@
-import { createMemo, createResource, createSignal, For, Match, onCleanup, onMount, Show, Switch } from "solid-js"
+import {
+  createMemo,
+  createResource,
+  createSignal,
+  For,
+  Match,
+  onCleanup,
+  onMount,
+  Show,
+  Switch,
+  type ResourceFetcherInfo,
+} from "solid-js"
 import { Portal } from "solid-js/web"
 import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 import { useServer } from "@/context/server"
@@ -117,9 +128,23 @@ export function TitlebarIrisPills() {
 
   const doFetch = (path: string) => (platform.fetch ?? globalThis.fetch)(`${base()}${path}`)
 
-  const [hive] = createResource(key, async () => (await (await doFetch("/iris/hive")).json()) as HiveState)
-  const [inbox] = createResource(key, async () => (await (await doFetch("/iris/inbox")).json()) as InboxState)
-  const [auth] = createResource(key, async () => (await (await doFetch("/iris/auth")).json()) as AuthState)
+  // These poll every 30s from OUTSIDE the session's error boundary, so a rejected fetch (sidecar
+  // restarting, Windows resuming from sleep) used to throw straight to app.tsx and replace the whole
+  // window with the error page. A failed poll keeps the last reading; the next tick tries again.
+  type Key = readonly [string, number]
+  const poll =
+    <T,>(path: string) =>
+    async (_: Key, info: ResourceFetcherInfo<T | undefined>): Promise<T | undefined> => {
+      try {
+        return (await (await doFetch(path)).json()) as T
+      } catch {
+        return info.value
+      }
+    }
+
+  const [hive] = createResource<HiveState | undefined, Key>(key, poll<HiveState>("/iris/hive"))
+  const [inbox] = createResource<InboxState | undefined, Key>(key, poll<InboxState>("/iris/inbox"))
+  const [auth] = createResource<AuthState | undefined, Key>(key, poll<AuthState>("/iris/auth"))
 
   const notice = createMemo(() => authNotice(auth()))
 
@@ -161,7 +186,7 @@ export function TitlebarIrisPills() {
               <span
                 class="mr-1"
                 data-slot="iris-fleet-dot"
-                classList={{ [fleetDotClass(hive(), hive.loading)]: true, "animate-pulse": (hive()?.measured === false) }}
+                classList={{ [fleetDotClass(hive(), hive.loading)]: true, "animate-pulse": hive()?.measured === false }}
               >
                 ●
               </span>
@@ -204,7 +229,7 @@ export function TitlebarIrisPills() {
                                 {n.online ? "●" : "—"}
                               </span>
                             </li>
-                           )}
+                          )}
                         </For>
                       </ul>
                     </Show>
@@ -232,7 +257,9 @@ export function TitlebarIrisPills() {
                 </>
               }
             >
-              <span data-slot="iris-inbox-pill" class="cursor-default">✉ {unread()}</span>
+              <span data-slot="iris-inbox-pill" class="cursor-default">
+                ✉ {unread()}
+              </span>
             </TooltipV2>
           </Show>
         </div>
