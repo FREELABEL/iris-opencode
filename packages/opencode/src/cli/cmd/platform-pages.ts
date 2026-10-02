@@ -4993,6 +4993,55 @@ export function buildBespokeJsonContent(
 
 
 /**
+ * The keys publish-html owns — what the HTML file decides. Both lanes' keys, so switching lane
+ * cannot carry the other lane's body across (a standalone page that kept a CustomHtml block is
+ * refused at save for an untrusted owner, and would run inline for a trusted one).
+ */
+export const PUBLISHER_KEYS = ["version", "type", "render_mode", "html", "css", "requireOtp", "theme", "components"]
+
+/**
+ * Everything ELSE on the live page survives a republish (#187241, #187461).
+ *
+ * publish-html used to PUT json_content built from the file alone. A page's dataset bindings
+ * live at `json_content.bindings` and its gate allowlist at `json_content.gate`, and neither is
+ * in the file — so every republish deleted them. The page still rendered with its layout
+ * intact; only the data vanished, which on a client dashboard reads as "you have nothing".
+ * Twice on 2026-10-01 (cottonwood-dashboard, genesis-charts).
+ */
+export function carryForward(
+  live: Record<string, any> | null | undefined,
+  fresh: Record<string, any>,
+): { json: Record<string, any>; kept: string[] } {
+  const json = { ...fresh }
+  const kept: string[] = []
+  for (const [k, v] of Object.entries(live ?? {})) {
+    if (PUBLISHER_KEYS.includes(k) || k in json) continue
+    json[k] = v
+    kept.push(k)
+  }
+  return { json, kept }
+}
+
+/**
+ * Whether the page is gated after this publish. The flag decides when it is GIVEN; otherwise an
+ * update keeps what the live page has. `--requires-auth` defaulted to false and was sent on
+ * every update, so republishing a gated page without the flag silently ungated it — the same
+ * shape as the bindings loss, on the page's access control.
+ */
+export function resolveGate(
+  flag: boolean | undefined,
+  live: { requires_auth?: unknown; json_content?: { requireOtp?: unknown } } | null | undefined,
+): { requiresAuth: boolean; requireOtp: boolean; kept: boolean } {
+  if (flag !== undefined || !live) {
+    const on = !!flag
+    return { requiresAuth: on, requireOtp: on, kept: false }
+  }
+  // Both flags, as the live page holds them: requires_auth without requireOtp is the
+  // frictionless capture form, and a republish is not the place to change which modal shows.
+  return { requiresAuth: !!live.requires_auth, requireOtp: !!live.json_content?.requireOtp, kept: true }
+}
+
+/**
  * The heads-up fl-api returns with a saved standalone page (`data.sandbox`).
  *
  * An account that is not trusted for raw HTML gets its page served in a browser sandbox, where
@@ -5041,7 +5090,8 @@ const PublishHtmlCmd = cmd({
       .option("owner-type", { describe: "owner type", type: "string", default: "bloq" })
       .option("owner-id", { describe: "owner bloq id", type: "number", default: 38 })
       .option("theme-mode", { describe: "custom lane only: light | dark", type: "string", default: "light" })
-      .option("requires-auth", { describe: "put the page behind the OTP gate", type: "boolean", default: false })
+      // No default: an update with no flag KEEPS the live page's gate (see resolveGate).
+      .option("requires-auth", { describe: "put the page behind the OTP gate (on an update, omit to keep its current gate)", type: "boolean" })
       .option("publish", { describe: "publish after upload (default)", type: "boolean", default: true })
       // boolean-negation is disabled globally (src/index.ts:224), so `--no-publish` is NOT
       // the negation of `--publish` — it is an unknown key, and `.strict()` turns it into a
@@ -5083,10 +5133,9 @@ const PublishHtmlCmd = cmd({
     // semantic document is legitimate.
     if (!doc.css.trim()) prompts.log.warn("No <style> found — the page will publish unstyled.")
 
-    const jsonContent = buildBespokeJsonContent(doc, lane, {
-      themeMode: String(args["theme-mode"]),
-      requiresAuth: !!args["requires-auth"],
-    })
+    const authFlag = args["requires-auth"] as boolean | undefined
+    const build = (requiresAuth: boolean) =>
+      buildBespokeJsonContent(doc, lane, { themeMode: String(args["theme-mode"]), requiresAuth })
 
     prompts.log.info(dim(`from ${filePath}`))
     printKV("Lane", lane === "standalone" ? "standalone (render_mode:html)" : "custom (CustomHtml component)")
@@ -5097,6 +5146,7 @@ const PublishHtmlCmd = cmd({
 
     if (args["dry-run"]) {
       console.log()
+      prompts.log.info(dim("On an update, the live page's bindings, gate and other settings are kept; only the HTML changes."))
       prompts.log.info("Dry run — nothing sent.")
       prompts.outro("Done")
       return
@@ -5109,8 +5159,11 @@ const PublishHtmlCmd = cmd({
     const sp = prompts.spinner()
     sp.start("Uploading…")
     let sandboxReport: any = undefined
+    let jsonContent: Record<string, any> = build(!!authFlag)
+    let requiresAuth = !!authFlag
     try {
-      let page = await getBySlug(slug, false)
+      // WITH json: the update below keeps what the file does not decide (carryForward).
+      let page = await getBySlug(slug, true)
 
       if (!page) {
         sp.message("No page for that slug yet — creating…")
@@ -5123,16 +5176,22 @@ const PublishHtmlCmd = cmd({
           owner_id: Number(args["owner-id"]),
           json_content: jsonContent,
           publish: shouldPublish,
-          requires_auth: !!args["requires-auth"],
+          requires_auth: requiresAuth,
         })
         if (!page) { sp.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
         sandboxReport = page.sandbox
       } else {
+        const live = typeof page.json_content === "string" ? JSON.parse(page.json_content) : page.json_content
+        const gate = resolveGate(authFlag, { requires_auth: page.requires_auth, json_content: live })
+        const carried = carryForward(live, { ...build(gate.requiresAuth), requireOtp: gate.requireOtp })
+        jsonContent = carried.json
+        requiresAuth = gate.requiresAuth
+        if (carried.kept.length) sp.message(`Keeping from the live page: ${carried.kept.join(", ")}`)
         const updateData: Record<string, unknown> = {
           json_content: jsonContent,
           title,
           seo_title: title,
-          requires_auth: !!args["requires-auth"],
+          requires_auth: requiresAuth,
         }
         if (description) updateData.seo_description = description
         const res = await pagesFetch(`/api/v1/pages/${page.id}`, { method: "PUT", body: JSON.stringify(updateData) })
@@ -5158,7 +5217,7 @@ const PublishHtmlCmd = cmd({
         writeFileSync(
           join(dir, `${slug}.json`),
           JSON.stringify(
-            { id: page.id, slug, title, seo_title: title, seo_description: description ?? null, status: shouldPublish ? "published" : "draft", owner_type: String(args["owner-type"]), owner_id: Number(args["owner-id"]), requires_auth: !!args["requires-auth"], json_content: jsonContent },
+            { id: page.id, slug, title, seo_title: title, seo_description: description ?? null, status: shouldPublish ? "published" : "draft", owner_type: String(args["owner-type"]), owner_id: Number(args["owner-id"]), requires_auth: requiresAuth, json_content: jsonContent },
             null,
             2,
           ) + "\n",
@@ -5175,6 +5234,9 @@ const PublishHtmlCmd = cmd({
       const after = await getBySlug(slug, false)
       const liveNow = after?.status === "published"
       sp.stop(success(liveNow ? "Published" : "Uploaded (draft)"))
+      const keptKeys = Object.keys(jsonContent).filter((k) => !PUBLISHER_KEYS.includes(k))
+      if (keptKeys.length) printKV("Kept", keptKeys.join(", "))
+      printKV("Gate", requiresAuth ? "on — visitors sign in" : "off — public")
 
       if (!shouldPublish && liveNow) {
         prompts.log.warn("--no-publish skips publishing; it does NOT unpublish.")
