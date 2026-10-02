@@ -454,20 +454,36 @@ jobs:
           set -euo pipefail
           TAG="${{ steps.version.outputs.tag }}"
           BASE="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
+          # The Windows updater used to download the SAME asset a human downloads
+          # (IRIS-tauri-windows-x64-setup.exe), so GitHub's download counter could not tell an
+          # auto-update from an install and "are we getting downloads?" had no answer on
+          # Windows. Ship a byte-identical copy under a separate name and point the manifest
+          # at the copy: same bytes, so the same signature validates, and the two now count
+          # separately. macOS was already distinguishable (.app.tar.gz vs .dmg/.zip).
+          if [ -f dist/IRIS-tauri-windows-x64-setup.exe ]; then
+            cp dist/IRIS-tauri-windows-x64-setup.exe dist/IRIS-tauri-windows-x64-update.exe
+            cmp dist/IRIS-tauri-windows-x64-setup.exe dist/IRIS-tauri-windows-x64-update.exe \
+              || { echo "::error::updater copy differs from the installer — its signature would not validate"; exit 1; }
+          fi
           python3 - "$TAG" "$BASE" "${{ steps.version.outputs.version }}" <<'PY'
           import json, os, sys, pathlib
           tag, base, version = sys.argv[1], sys.argv[2], sys.argv[3]
           # macOS updates from a signed .app tarball; Windows updates from the signed NSIS
           # installer itself. Different shapes, and assuming Windows matched macOS (a
           # .nsis.zip, which is the Tauri v1 layout) failed the whole Windows job once.
+          # (download asset, asset the .sig belongs to). They differ on Windows only, where
+          # the updater pulls a renamed copy so its traffic stops polluting install counts.
           targets = {
-              "darwin-aarch64": "IRIS-tauri-darwin-arm64.app.tar.gz",
-              "darwin-x86_64":  "IRIS-tauri-darwin-x64.app.tar.gz",
-              "windows-x86_64": "IRIS-tauri-windows-x64-setup.exe",
+              "darwin-aarch64": ("IRIS-tauri-darwin-arm64.app.tar.gz", "IRIS-tauri-darwin-arm64.app.tar.gz"),
+              "darwin-x86_64":  ("IRIS-tauri-darwin-x64.app.tar.gz",   "IRIS-tauri-darwin-x64.app.tar.gz"),
+              "windows-x86_64": ("IRIS-tauri-windows-x64-update.exe",  "IRIS-tauri-windows-x64-setup.exe"),
           }
           platforms = {}
-          for target, asset in targets.items():
-              sig = pathlib.Path("dist") / (asset + ".sig")
+          for target, (asset, sig_for) in targets.items():
+              if not (pathlib.Path("dist") / asset).exists():
+                  print(f"::warning::{asset} missing — {target} cannot auto-update from {tag}")
+                  continue
+              sig = pathlib.Path("dist") / (sig_for + ".sig")
               if not sig.exists():
                   print(f"::warning::no signature for {target} — that platform cannot auto-update from {tag}")
                   continue
@@ -488,7 +504,7 @@ jobs:
           # The updater assets ship alongside the installers; assets.txt drives the upload.
           shopt -s nullglob
           printf '%s\n' dist/latest.json dist/*.app.tar.gz dist/*.app.tar.gz.sig \
-                        dist/*-setup.exe.sig >> /tmp/assets.txt
+                        dist/*-setup.exe.sig dist/*-update.exe >> /tmp/assets.txt
         env:
           PUB_DATE: ${{ steps.pubdate.outputs.now }}
 
