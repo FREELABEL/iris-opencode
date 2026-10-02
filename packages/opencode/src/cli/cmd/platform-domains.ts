@@ -924,7 +924,12 @@ const DomainsBuyCommand = cmd({
       const data = (await res.json()) as any
       if (!res.ok || !data?.success) {
         sp2.stop("Refused", 1)
-        prompts.log.error(data?.error ?? "The registrar refused the registration.")
+        // A 422 from our own validation carries `errors`, not `error`. Printing the generic
+        // sentence instead sent someone to debug the registrar for a field-name typo of ours.
+        const fieldErrors = data?.errors
+          ? Object.values(data.errors as Record<string, string[]>).flat().join(" ")
+          : null
+        prompts.log.error(data?.error ?? fieldErrors ?? data?.message ?? "The registration was refused.")
         prompts.outro("Done")
         return
       }
