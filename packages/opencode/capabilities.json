@@ -7134,12 +7134,12 @@
     {
       "kind": "command",
       "name": "home",
-      "describe": "control smart-home lights — iris home living blue · iris home run party.py",
+      "describe": "turn a room's lights or lamp on/off, set a color (blue, purple, red, warm white) or brightness — iris home living blue · iris home bedroom off · iris home kitchen dim",
       "aliases": [
         "status"
       ],
       "run": "iris home [words..]",
-      "haystack": "home status control smart-home lights — iris home living blue · iris home run party.py run templates devices list pair-hue add-wiz import sync json json"
+      "haystack": "home status turn a room's lights or lamp on/off, set a color (blue, purple, red, warm white) or brightness — iris home living blue · iris home bedroom off · iris home kitchen dim run templates devices list pair-hue add-wiz import sync json json"
     },
     {
       "kind": "command",

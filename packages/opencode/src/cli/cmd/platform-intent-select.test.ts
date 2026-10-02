@@ -74,6 +74,35 @@ test("a command group is not an answer when a real command matched", async () =>
     "genesis create",
   ])
 })
+test("a group that takes its own argument is an answer, not a menu", async () => {
+  const { leafOnly, actsItself } = await import("./platform-intent-select")
+  expect(actsItself("iris home [words..]")).toBe(true)
+  expect(actsItself("iris chat [message]")).toBe(true)
+  expect(actsItself("iris genesis")).toBe(false)
+  expect(actsItself("iris prod <subcommand>")).toBe(false)
+  expect(actsItself("iris hive inbox [action]")).toBe(false)
+  const home = { name: "home", describe: "", run: "iris home [words..]", score: 0 }
+  const pair = { name: "home devices pair-hue", describe: "", run: "iris home devices pair-hue [ip]", score: 0 }
+  expect(leafOnly([home, pair], ["home", "home devices", "home devices pair-hue"]).map((x) => x.name)).toEqual([
+    "home",
+    "home devices pair-hue",
+  ])
+})
+// The reported failure: 16 light requests, bare `home` a candidate for none of them.
+test("light requests reach `iris home`, not the Hue setup command", async () => {
+  const { candidatePools } = await import("./platform-intent-select")
+  for (const text of [
+    "turn the lights blue",
+    "turn off the bedroom lights",
+    "set the lights to warm white",
+    "set brightness 50 in the bedroom",
+    "turn the lamp on",
+    "lights off",
+    "bedroom purple",
+  ]) {
+    expect([text, candidatePools(text, 12, 40).pick[0]?.name]).toEqual([text, "home"])
+  }
+})
 test("the no-model fill uses a URL for <url> and never pastes the sentence where it does not belong", async () => {
   const { heuristicFill } = await import("./platform-intent-select")
   const t = { name: "transcribe", describe: "", run: "iris transcribe [url]", score: 0 }

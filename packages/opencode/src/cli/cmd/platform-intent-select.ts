@@ -94,9 +94,22 @@ const GENERAL = ["web-search", "atlas search"]
  */
 export function leafOnly(cands: Candidate[], allNames: string[]): Candidate[] {
   const leaves = cands.filter(
-    (c) => c.name.includes("playbook run ") || !allNames.some((n) => n.startsWith(c.name + " ")),
+    (c) => c.name.includes("playbook run ") || actsItself(c.run) || !allNames.some((n) => n.startsWith(c.name + " ")),
   )
   return leaves.length ? leaves : cands
+}
+
+/**
+ * Some groups ARE the action: `iris home living blue` sets a light, and `home run`/`home devices`
+ * are its subcommands. Dropped as a "group", bare `home` was never a candidate, and 16 of 16
+ * light requests routed elsewhere — most to `home devices pair-hue`, the SETUP command (measured).
+ * A group acts itself when its run line takes a real argument; `<subcommand>`, `<command>`,
+ * `<action>` and `<cmd>` are menu placeholders, not arguments.
+ */
+export function actsItself(run: string): boolean {
+  return [...run.matchAll(/[<\[]([a-z][\w-]*)(?:\.\.)?[>\]]/gi)].some(
+    (m) => !["subcommand", "command", "action", "cmd"].includes(m[1].toLowerCase()),
+  )
 }
 
 /** The index and its command names, read ONCE per process — `intent` used to re-parse per step. */
