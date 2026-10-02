@@ -178,7 +178,7 @@ const DomainsConnectCommand = cmd({
       .option("page-id", { describe: "page ID to serve", type: "number" })
       .option("site", { describe: "site slug to serve", type: "string" })
       .option("site-id", { describe: "site ID to serve", type: "number" })
-      .option("provider", { describe: "DNS provider: cloudflare | godaddy (default: auto-detect from nameservers)", type: "string" })
+      .option("provider", { describe: "worker (default — the path that serves every live domain) | cloudflare | godaddy", type: "string" })
       .option("yes", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false })
       .check((argv) => {
         if (!argv.page && !argv["page-id"] && !argv.site && !argv["site-id"]) {
@@ -193,31 +193,16 @@ const DomainsConnectCommand = cmd({
 
     const domain = String(args.domain).toLowerCase().trim()
 
-    // Provider: honor an explicit --provider, otherwise auto-detect from the domain's
-    // nameservers so the user doesn't have to look it up at their registrar. (#156550)
-    let provider = args.provider ? String(args.provider) : ""
-    let unsupportedNs = false
-    if (!provider) {
-      const dsp = prompts.spinner()
-      dsp.start("Detecting DNS provider…")
-      const detected = await detectDnsProvider(domain)
-      if (detected.provider) {
-        provider = detected.provider
-        dsp.stop(`Detected provider: ${providerBadge(provider)} ${dim(`(${detected.nameservers.join(", ")})`)}`)
-      } else {
-        // Unknown/unsupported registrar — default to a Cloudflare zone (universal: the user
-        // switches nameservers to CF) but flag it and print the manual fallback records.
-        provider = "cloudflare"
-        unsupportedNs = true
-        if (detected.error) {
-          dsp.stop(dim(`Could not detect provider — ${detected.error}`))
-        } else {
-          dsp.stop(dim(`Unsupported nameservers: ${detected.nameservers.join(", ") || "none"}`))
-        }
-        prompts.log.warn(`No supported provider auto-detected — defaulting to ${providerBadge("cloudflare")} (you'll switch nameservers to Cloudflare)`)
-        printManualDnsFallback(domain)
-      }
-    }
+    // PROVIDER. No auto-detection (#187569). It existed to choose between three providers from
+    // the domain's nameservers — and two of those were never configured in any environment while
+    // the third, the Worker, does not care what the nameservers say today, because step one of
+    // its setup is changing them. Detecting a provider in order to pick a broken one, then
+    // reporting that broken one's missing credentials as a DNS failure, is how `connect` managed
+    // to look busy while connecting nothing.
+    //
+    // An explicit --provider is still honoured; absent one, the server defaults to `worker`.
+    const provider = args.provider ? String(args.provider) : "worker"
+    const unsupportedNs = false
 
     // If page slug provided, resolve to page_id first
     let pageId = args["page-id"] as number | undefined
@@ -311,14 +296,37 @@ const DomainsConnectCommand = cmd({
       }
 
       // DNS failed but the page is still bound — say so explicitly (the #157538 fix). (#157538)
-      if (!dnsOk) {
+      // On the worker path nothing was supposed to provision, so "DNS provisioning did not
+      // complete" would be reporting a failure that did not happen. Only warn when a provider
+      // was actually asked to do something and did not.
+      if (!dnsOk && provider !== "worker") {
         printDivider()
         prompts.log.warn(`DNS provisioning did not complete${result.dns_step ? ` (step: ${result.dns_step})` : ""} — the page is bound and will serve once DNS resolves.`)
         if (result.dns_error) prompts.log.warn(`  ${result.dns_error}`)
         if (unsupportedNs) printManualDnsFallback(domain)
       }
 
-      if (result.next_step) {
+      // THE STEPS (#187569). The Worker path writes no DNS — the records live in the client's
+      // own Cloudflare zone — so the useful output of `connect` is not a status, it is the four
+      // things a person now has to do, with the values already filled in for this domain. They
+      // used to exist only in an operator's head, which is why the command that was meant to
+      // automate this had never once connected a live domain.
+      if (result.setup?.steps?.length) {
+        UI.empty()
+        printDivider()
+        UI.println(`  ${bold(result.setup.summary ?? "Next steps")}`)
+        UI.empty()
+        for (const step of result.setup.steps) {
+          UI.println(`  ${bold(`${step.n}. ${step.title}`)}`)
+          for (const line of String(step.detail ?? "").split("\n")) {
+            UI.println(`       ${highlight(line)}`)
+          }
+          if (step.why) UI.println(`       ${dim(step.why)}`)
+          UI.empty()
+        }
+        if (result.setup.note) UI.println(`  ${dim(result.setup.note)}`)
+        printDivider()
+      } else if (result.next_step) {
         printDivider()
         prompts.log.info(result.next_step)
       }

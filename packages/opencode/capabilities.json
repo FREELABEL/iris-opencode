@@ -4908,7 +4908,7 @@
       "describe": "connect a custom domain to a page or site",
       "aliases": [],
       "run": "iris domains connect <domain>",
-      "haystack": "domains connect connect a custom domain to a page or site page page slug to serve on this domain page-id page id to serve site site slug to serve site-id site id to serve provider dns provider: cloudflare | godaddy (default: auto-detect from nameservers) yes skip confirmation prompt"
+      "haystack": "domains connect connect a custom domain to a page or site page page slug to serve on this domain page-id page id to serve site site slug to serve site-id site id to serve provider worker (default — the path that serves every live domain) | cloudflare | godaddy yes skip confirmation prompt"
     },
     {
       "kind": "command",
