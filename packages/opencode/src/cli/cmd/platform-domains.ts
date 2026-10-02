@@ -731,6 +731,295 @@ const DomainsDetectCommand = cmd({
   },
 })
 
+
+// ============================================================================
+// Buying, and leaving (#187563)
+//
+// Two commands that belong together. `buy` spends money that cannot be refunded; `release`
+// hands the domain back. They shipped in the same change on purpose — Cottonwood Creek cannot
+// change its own website today because the agency that bought their domain holds the account,
+// and that agency never had to refuse anything. It only had to not get round to letting go.
+// A service that can take a domain in and not let it out is the thing we are selling against.
+// ============================================================================
+
+const DomainsSearchCommand = cmd({
+  command: "search <name>",
+  aliases: ["find"],
+  describe: "check if a domain is available, and what it costs",
+  builder: (yargs) =>
+    yargs
+      .positional("name", { describe: "a domain, or a bare label to try across endings", type: "string" })
+      .option("also", { describe: "other endings to try with the same label, e.g. com,co,beer", type: "string" })
+      .option("json", { describe: "output as JSON", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Domain Search")
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+    const sp = prompts.spinner()
+    sp.start("Asking the registrar…")
+    try {
+      const params = new URLSearchParams({ domain: String(args.name) })
+      for (const t of String(args.also || "").split(",").map((x) => x.trim()).filter(Boolean)) {
+        params.append("also[]", t)
+      }
+
+      const res = await irisFetch(`/api/v1/domains/search?${params}`, {}, IRIS_API)
+      if (!res.ok) {
+        sp.stop("Failed", 1)
+        await handleApiError(res, "Domain search")
+        prompts.outro("Done")
+        return
+      }
+
+      const data = (await res.json()) as any
+      const results: any[] = firstArray(data?.results)
+      sp.stop(`${results.length} checked`)
+
+      if (args.json) { await writeJson(results); prompts.outro("Done"); return }
+
+      UI.empty()
+      for (const r of results) {
+        if (!r?.success) {
+          prompts.log.warn(`${r?.domain ?? "?"} — ${r?.error ?? "could not check"}`)
+          continue
+        }
+        const price = r.price != null ? `$${Number(r.price).toFixed(2)}` : "—"
+        const renew = r.renewal != null ? `$${Number(r.renewal).toFixed(2)}` : "—"
+        const line = `${String(r.domain).padEnd(32)} ${r.available ? success("available") : dim("taken")}  ${price.padEnd(9)} renews ${renew}`
+        UI.println(`  ${line}`)
+        // A promotional first year is a different product from the domain, and the difference
+        // is charged every year after. .beer is $1.54 then $26.26, measured.
+        if (r.first_year_promo) {
+          UI.println(`  ${dim("     first year only — it renews at " + renew + " every year after")}`)
+        }
+        if (r.premium) UI.println(`  ${dim("     premium name — not buyable through the API")}`)
+      }
+
+      UI.empty()
+      printKV("Buy one", `iris domains buy <domain> --for <client-email> --max-price 15`)
+    } catch (e: any) {
+      sp.stop("Failed", 1)
+      prompts.log.error(e?.message ?? String(e))
+    }
+    prompts.outro("Done")
+  },
+})
+
+const DomainsBuyCommand = cmd({
+  command: "buy <domain>",
+  describe: "register a domain in the CLIENT's name",
+  builder: (yargs) =>
+    yargs
+      .positional("domain", { describe: "the domain to register", type: "string" })
+      .option("max-price", { describe: "the most you approve paying, in dollars", type: "number" })
+      .option("years", { describe: "years to register", type: "number", default: 1 })
+      .option("for", { describe: "the client's email — they are the registrant", type: "string" })
+      .option("first", { describe: "registrant first name", type: "string" })
+      .option("last", { describe: "registrant last name", type: "string" })
+      .option("org", { describe: "registrant organisation", type: "string" })
+      .option("phone", { describe: "registrant phone", type: "string" })
+      .option("address", { describe: "street address", type: "string" })
+      .option("city", { describe: "city", type: "string" })
+      .option("state", { describe: "state or province", type: "string" })
+      .option("zip", { describe: "postal code", type: "string" })
+      .option("country", { describe: "two-letter country code", type: "string", default: "US" })
+      .option("yes", { describe: "skip the confirmation prompt", type: "boolean", default: false })
+      .option("json", { describe: "output as JSON", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Buy a Domain")
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+    const domain = String(args.domain)
+
+    // QUOTE FIRST, ALWAYS. The ceiling is meaningless unless a person sees the live price it is
+    // being compared against — and a promotional first year hides the real cost in the renewal.
+    const sp = prompts.spinner()
+    sp.start("Checking price…")
+    let quote: any
+    try {
+      const res = await irisFetch(`/api/v1/domains/search?domain=${encodeURIComponent(domain)}`, {}, IRIS_API)
+      const data = (await res.json()) as any
+      quote = firstArray(data?.results)[0]
+      if (!res.ok || !quote?.success) {
+        sp.stop("Failed", 1)
+        prompts.log.error(quote?.error ?? "Could not price that domain.")
+        prompts.outro("Done")
+        return
+      }
+    } catch (e: any) {
+      sp.stop("Failed", 1)
+      prompts.log.error(e?.message ?? String(e))
+      prompts.outro("Done")
+      return
+    }
+    sp.stop("Priced")
+
+    if (!quote.available) {
+      prompts.log.warn(`${domain} is already registered. Nothing was bought.`)
+      prompts.outro("Done")
+      return
+    }
+
+    const price = Number(quote.price ?? 0)
+    const renewal = Number(quote.renewal ?? 0)
+    UI.empty()
+    printKV("Domain", domain)
+    printKV("First year", `$${price.toFixed(2)}`)
+    printKV("Renews at", `$${renewal.toFixed(2)} / year`)
+    if (quote.first_year_promo) {
+      prompts.log.warn(`The $${price.toFixed(2)} is a first-year promotion. Every year after is $${renewal.toFixed(2)}.`)
+    }
+
+    const registrant = {
+      firstName: args.first, lastName: args.last, organization: args.org,
+      email: args.for, phone: args.phone, address1: args.address,
+      city: args.city, state: args.state, postalCode: args.zip,
+      country: String(args.country || "US").toUpperCase(),
+    }
+
+    const missing = (["firstName", "lastName", "email", "address1", "city", "state", "postalCode"] as const)
+      .filter((k) => !String((registrant as any)[k] ?? "").trim())
+    if (missing.length) {
+      UI.empty()
+      prompts.log.error(`The registrant is the CLIENT, and is missing: ${missing.join(", ")}`)
+      prompts.log.info("Registering in our name and transferring later starts an ICANN trade process and a 60-day lock.")
+      prompts.outro("Done")
+      return
+    }
+
+    const maxPrice = Number(args["max-price"] ?? 0)
+    if (!(maxPrice > 0)) {
+      UI.empty()
+      prompts.log.error("--max-price is required. It is the number you approve paying.")
+      prompts.outro("Done")
+      return
+    }
+
+    if (!args.yes) {
+      const ok = await prompts.confirm({
+        message: `Register ${domain} for ${args.first} ${args.last} at $${price.toFixed(2)}? This cannot be undone.`,
+        initialValue: false,
+      })
+      if (prompts.isCancel(ok) || !ok) {
+        prompts.log.info("Nothing was bought.")
+        prompts.outro("Done")
+        return
+      }
+    }
+
+    const sp2 = prompts.spinner()
+    sp2.start("Registering…")
+    try {
+      const res = await irisFetch(`/api/v1/domains/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          domain, years: Number(args.years ?? 1), max_price: maxPrice,
+          confirm: true, registrant,
+        }),
+      }, IRIS_API)
+
+      const data = (await res.json()) as any
+      if (!res.ok || !data?.success) {
+        sp2.stop("Refused", 1)
+        prompts.log.error(data?.error ?? "The registrar refused the registration.")
+        prompts.outro("Done")
+        return
+      }
+      sp2.stop("Registered")
+
+      if (args.json) { await writeJson(data); prompts.outro("Done"); return }
+
+      UI.empty()
+      printKV("Registered", `${data.domain} — $${Number(data.price).toFixed(2)}${data.sandbox ? "  (SANDBOX)" : ""}`)
+
+      // The warning must be louder than the success: a registered domain still in OUR name is
+      // not a failed purchase, but it is an unfinished one.
+      if (data.warning) {
+        prompts.log.error(String(data.warning))
+      } else if (data.registrant_set) {
+        prompts.log.success("Registrant, admin, tech and billing are all the client.")
+      }
+
+      UI.empty()
+      printKV("Next", `iris domains connect ${data.domain}`)
+      printKV("Theirs to take", `iris domains release ${data.domain} --for ${args.for}`)
+    } catch (e: any) {
+      sp2.stop("Failed", 1)
+      prompts.log.error(e?.message ?? String(e))
+    }
+    prompts.outro("Done")
+  },
+})
+
+const DomainsReleaseCommand = cmd({
+  command: "release <domain>",
+  aliases: ["handover"],
+  describe: "give a client everything they need to take their domain elsewhere",
+  builder: (yargs) =>
+    yargs
+      .positional("domain", { describe: "the domain to hand over", type: "string" })
+      .option("for", { describe: "the client's email — pre-fills their own registrar signup", type: "string" })
+      .option("json", { describe: "output as JSON", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Release a Domain")
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+    const sp = prompts.spinner()
+    sp.start("Preparing the handover…")
+    try {
+      const res = await irisFetch(`/api/v1/domains/release`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ domain: String(args.domain), email: args.for ?? null }),
+      }, IRIS_API)
+
+      const data = (await res.json()) as any
+      if (!res.ok || !data?.success) {
+        sp.stop("Failed", 1)
+        prompts.log.error(data?.error ?? "Could not read that domain.")
+        prompts.outro("Done")
+        return
+      }
+      sp.stop("Ready")
+
+      if (args.json) { await writeJson(data); prompts.outro("Done"); return }
+
+      UI.empty()
+      printKV("Domain", `${data.domain}   expires ${data.expires_at ?? "—"}`)
+
+      if (!data.transferable_now) {
+        prompts.log.warn(`ICANN holds a new registration for 60 days — this one can move from ${data.icann_lock_until}.`)
+        prompts.log.info("Not our rule and not one we can waive. Saying it first is the difference between a fact and a stall.")
+      } else {
+        prompts.log.success("Transferable now — no ICANN hold.")
+      }
+
+      if (data.their_account_invite) {
+        UI.empty()
+        printDivider()
+        UI.println(`  ${bold("Their own registrar account")} ${dim("(link expires in 48 hours)")}`)
+        UI.println(`  ${data.their_account_invite}`)
+        UI.println(`  ${dim("They set their own password. We never hold it — which is the difference")}`)
+        UI.println(`  ${dim("between owning a domain and being told that you own one.")}`)
+        printDivider()
+      }
+
+      UI.empty()
+      prompts.log.warn("One step is manual:")
+      UI.println(`  ${data.manual_step}`)
+      UI.println(`  ${dim("Security lock is currently: " + data.security_lock)}`)
+    } catch (e: any) {
+      sp.stop("Failed", 1)
+      prompts.log.error(e?.message ?? String(e))
+    }
+    prompts.outro("Done")
+  },
+})
+
 // ============================================================================
 // Parent command
 // ============================================================================
@@ -738,9 +1027,12 @@ const DomainsDetectCommand = cmd({
 export const PlatformDomainsCommand = cmd({
   command: "domains",
   aliases: ["domain"],
-  describe: "manage custom client domains (connect, assign, verify, detect, list, remove)",
+  describe: "buy, release and connect client domains (search, buy, release, connect, list, verify)",
   builder: (yargs) =>
     yargs
+      .command(DomainsSearchCommand)
+      .command(DomainsBuyCommand)
+      .command(DomainsReleaseCommand)
       .command(DomainsListCommand)
       .command(DomainsConnectCommand)
       .command(DomainsAssignCommand)
@@ -748,6 +1040,6 @@ export const PlatformDomainsCommand = cmd({
       .command(DomainsDetectCommand)
       .command(DomainsRemoveCommand)
       .command(DomainsStatusCommand)
-      .demandCommand(1, "specify a subcommand: list, connect, assign, verify, detect, remove, status"),
+      .demandCommand(1, "specify a subcommand: search, buy, release, list, connect, assign, verify, detect, remove, status"),
   async handler() {},
 })
