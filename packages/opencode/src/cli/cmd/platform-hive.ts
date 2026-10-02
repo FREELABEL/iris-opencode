@@ -17,6 +17,8 @@ import {
 } from "./platform-hive-nodes"
 import {
   buildTaskPayload,
+  checkContract,
+  parseDeadline,
   checkTaskRequest,
   describeApiError,
   describeTask,
@@ -1070,10 +1072,14 @@ const HiveTasksCommand = cmd({
       .option("queue", { alias: "fire-and-forget", describe: "(create) queue it and exit instead of waiting for the result", type: "boolean", default: false })
       .option("allow-fallback", { describe: "(create) let another node take it if the named one cannot", type: "boolean", default: false })
       .option("requires", { describe: "(create) only run on a node advertising this capability (repeatable)", type: "string", array: true })
+      .option("not-after", { describe: "(create) never run it after this — a duration from now (30s, 5m) or an ISO time. Late tasks EXPIRE instead of running", type: "string" })
+      .option("key", { describe: "(create) idempotency key: the same key returns the same task, and a node never runs it twice", type: "string" })
+      .option("retries", { describe: "(create) retry a failure up to N more times — needs --key, never past --not-after", type: "number" })
       .option("json", { describe: "(create) JSON output (the full task object)", type: "boolean", default: false })
       .option("user-id", { describe: "user ID", type: "number" })
       .example("iris hive tasks create --type mcp_call --node studio --config '{\"server\":\"argent\"}'", "ask a node's MCP server what tools it has")
-      .example("iris hive tasks create --type mcp_call --node studio --config '{\"server\":\"argent\",\"tool\":\"list_devices\"}'", "call one tool and print the result"),
+      .example("iris hive tasks create --type mcp_call --node studio --config '{\"server\":\"argent\",\"tool\":\"list_devices\"}'", "call one tool and print the result")
+      .example("iris hive tasks create --type sandbox_execute --node drone-01 --prompt 'dronectl goto ring --at 8' --not-after 8s --key ring-8-01 --retries 2 --queue", "deliver by T or not at all; safe to retry, never runs twice"),
   async handler(args) {
     UI.empty()
     let sub = args.subcommand as string | undefined
@@ -1109,6 +1115,23 @@ const HiveTasksCommand = cmd({
         prompts.log.error(check.error)
         if (check.hint) console.log(dim(`  ${check.hint}`))
         process.exit(1)
+      }
+
+      // The delivery contract (#187568) — checked before anything is sent.
+      const contract = checkContract({ retries: args.retries as number | undefined, key: args.key as string | undefined })
+      if (!contract.ok) {
+        prompts.log.error(contract.error)
+        console.log(dim(`  ${contract.hint}`))
+        process.exit(1)
+      }
+      let notAfter: string | undefined
+      if (args["not-after"] !== undefined) {
+        const d = parseDeadline(String(args["not-after"]))
+        if (!d.ok) {
+          prompts.log.error(d.error)
+          process.exit(1)
+        }
+        notAfter = d.iso
       }
 
       // Resolve the node BEFORE dispatching, and refuse an offline one when we are going to
@@ -1147,6 +1170,9 @@ const HiveTasksCommand = cmd({
         priority: args.priority as number | undefined,
         allowFallback: Boolean(args["allow-fallback"]),
         requiredCapabilities: firstArray(args.requires as string[] | undefined),
+        notAfter,
+        idempotencyKey: args.key as string | undefined,
+        retries: args.retries as number | undefined,
       })
 
       if (!args.json) {
@@ -1163,8 +1189,23 @@ const HiveTasksCommand = cmd({
         process.exit(1)
       }
 
-      const created = (await createRes.json()) as { task: { id: string; status: string }; dispatched?: boolean }
+      const created = (await createRes.json()) as { task: { id: string; status: string }; dispatched?: boolean; duplicate?: boolean }
       const taskId = created.task.id
+
+      // A key that already existed returns the ORIGINAL task — say so, or a re-run of a script
+      // reads as fresh work being sent when nothing new was.
+      if (created.duplicate && !args.json) {
+        console.log(`${dim("→")} key ${bold(String(args.key))} already exists — this is the original task, not a new one (status=${created.task.status})`)
+      }
+      // Its deadline had already passed: the API expired it instead of sending it anywhere.
+      if (created.task.status === "expired") {
+        if (args.json) {
+          await writeJson({ task_id: taskId, status: "expired", dispatched: false, duplicate: created.duplicate ?? false })
+        } else {
+          prompts.log.warn(`Expired before it was sent — its deadline (${notAfter ?? "given"}) had already passed. Nothing ran.`)
+        }
+        process.exit(exitCodeForStatus("expired"))
+      }
 
       if (args.queue) {
         if (args.json) {

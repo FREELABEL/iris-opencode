@@ -167,6 +167,12 @@ export interface BuildPayloadInput {
   priority?: number
   allowFallback?: boolean
   requiredCapabilities?: string[]
+  /** ISO time after which the task must never run (#187568). From parseDeadline. */
+  notAfter?: string
+  /** Same account + key = the same task: created once, run once. */
+  idempotencyKey?: string
+  /** Extra tries after a failure. Needs a key — see checkContract. */
+  retries?: number
 }
 
 /**
@@ -202,7 +208,51 @@ export function buildTaskPayload(input: BuildPayloadInput): Record<string, unkno
     payload.required_capabilities = Object.fromEntries(input.requiredCapabilities.map((c) => [c, true]))
   }
 
+  // The delivery contract (#187568). Each field is sent only when asked for, like the others.
+  if (input.notAfter) payload.not_after = input.notAfter
+  const key = typeof input.idempotencyKey === "string" ? input.idempotencyKey.trim() : ""
+  if (key) payload.idempotency_key = key.slice(0, 128)
+  if (typeof input.retries === "number" && Number.isFinite(input.retries) && input.retries > 0) {
+    // --retries N means N MORE tries after the first: N + 1 attempts, within the API's 1–10.
+    payload.max_attempts = Math.max(1, Math.min(10, Math.round(input.retries) + 1))
+  }
+
   return payload
+}
+
+/**
+ * --not-after, as people and scripts write it: a duration from now ("30s", "+5m", "2h",
+ * "1500ms", or a bare number of seconds) or an absolute time. Refused here when unreadable — an
+ * API that guesses at a deadline is a deadline nobody set.
+ */
+export function parseDeadline(raw: string, nowMs: number = Date.now()): { ok: true; iso: string } | { ok: false; error: string } {
+  const v = String(raw ?? "").trim()
+  const rel = /^\+?(\d+(?:\.\d+)?)(ms|s|m|h)?$/i.exec(v)
+  if (rel) {
+    const n = Number(rel[1])
+    const unit = (rel[2] ?? "s").toLowerCase()
+    const ms = unit === "ms" ? n : unit === "m" ? n * 60_000 : unit === "h" ? n * 3_600_000 : n * 1000
+    return { ok: true, iso: new Date(nowMs + ms).toISOString() }
+  }
+  const abs = Date.parse(v)
+  if (Number.isFinite(abs) && /\d{4}-\d{2}-\d{2}/.test(v)) return { ok: true, iso: new Date(abs).toISOString() }
+  return { ok: false, error: `--not-after "${v}" is not a time. Use a duration from now (30s, 5m, 2h) or an ISO time (2026-10-02T18:00:00Z).` }
+}
+
+/**
+ * Retries need a key. A task that "failed" may have done its work — the report was what failed
+ * (#187456) — and a retry without a key runs it again. The swarm simulator measured 7–8 commands
+ * running twice that way. The API refuses it too; saying so here costs no round trip.
+ */
+export function checkContract(input: { retries?: number; key?: string }): { ok: true } | { ok: false; error: string; hint: string } {
+  if ((input.retries ?? 0) > 0 && !(input.key && input.key.trim())) {
+    return {
+      ok: false,
+      error: "--retries needs --key: without one, a retry re-runs work that may already have run.",
+      hint: "Give the command a key that names THIS piece of work, e.g. --key ring-8-$i",
+    }
+  }
+  return { ok: true }
 }
 
 /** A few types people actually dispatch, for the hint on a rejected --type. NOT a gate: the
@@ -245,7 +295,7 @@ export function describeApiError(status: number, bodyText: string): string {
   return lines.length ? `${head}:\n  ${lines.join("\n  ")}` : head
 }
 
-export const TERMINAL_STATUSES = new Set(["succeeded", "completed", "failed", "cancelled", "timeout", "errored"])
+export const TERMINAL_STATUSES = new Set(["succeeded", "completed", "failed", "cancelled", "timeout", "errored", "expired"])
 
 /**
  * Process exit code for a finished task. `timeout` is 124 (coreutils `timeout`, and what
@@ -259,6 +309,10 @@ export function exitCodeForStatus(status: string | undefined | null): number {
       return 0
     case "timeout":
       return 124
+    // Never ran, because it would have been late (#187568). Not a failure, and not worth an
+    // automatic retry — so not 1, which a caller may retry.
+    case "expired":
+      return 4
     default:
       return 1
   }
