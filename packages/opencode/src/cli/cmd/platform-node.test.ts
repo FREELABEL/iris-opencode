@@ -2,7 +2,7 @@ import { describe, expect, test, afterAll } from "bun:test"
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { fetchDaemon, nodeVersion, PRESERVE } from "./platform-node"
+import { fetchDaemon, nodeVersion, PRESERVE, planAutostart, INSTALLER_LABEL, CLI_LABEL } from "./platform-node"
 
 /**
  * `iris node install` exists to break the loop in #184597: when the daemon was
@@ -89,5 +89,41 @@ describe("nodeVersion — the prerequisite that cost two hours", () => {
   test("reports a version or null, never throws", () => {
     const v = nodeVersion()
     expect(v === null || /^v?\d+\./.test(v)).toBe(true)
+  })
+})
+
+/**
+ * Exactly one launch agent may start the daemon. This command used to add
+ * io.heyiris.daemon.cli beside the installer's io.heyiris.daemon; the two replaced
+ * each other on every start — 20 restarts in 15 minutes, tasks run twice (2026-10-02).
+ */
+describe("planAutostart — one launch agent, never two", () => {
+  const agents = () => {
+    const d = join(tmp(), "LaunchAgents")
+    mkdirSync(d, { recursive: true })
+    return d
+  }
+
+  test("nothing installed: write our own", () => {
+    expect(planAutostart(agents())).toEqual({ label: CLI_LABEL, write: true, removeStale: null })
+  })
+
+  test("the installer's agent exists: use it, write nothing", () => {
+    const d = agents()
+    writeFileSync(join(d, `${INSTALLER_LABEL}.plist`), "<plist/>")
+    expect(planAutostart(d)).toEqual({ label: INSTALLER_LABEL, write: false, removeStale: null })
+  })
+
+  test("both exist — the broken state: keep the installer's, retire ours", () => {
+    const d = agents()
+    writeFileSync(join(d, `${INSTALLER_LABEL}.plist`), "<plist/>")
+    writeFileSync(join(d, `${CLI_LABEL}.plist`), "<plist/>")
+    expect(planAutostart(d)).toEqual({ label: INSTALLER_LABEL, write: false, removeStale: CLI_LABEL })
+  })
+
+  test("only ours exists: a re-run rewrites it in place", () => {
+    const d = agents()
+    writeFileSync(join(d, `${CLI_LABEL}.plist`), "<plist/>")
+    expect(planAutostart(d)).toEqual({ label: CLI_LABEL, write: true, removeStale: null })
   })
 })
