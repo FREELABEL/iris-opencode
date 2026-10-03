@@ -479,9 +479,27 @@ jobs:
 
       - name: Build IRIS desktop app (Tauri)
         # OPENCODE_CHANNEL here for the same reason as the other platforms: vite defaults to "dev".
+        #
+        # RETRY ONLY THE APPIMAGE TOOL DOWNLOAD. Bundling an AppImage fetches linuxdeploy from
+        # GitHub at build time; on the first proof build (iris-hive-001, 2026-10-03) that fetch
+        # answered `http status: 504` after the app and the .deb had both built. The retry reuses
+        # the compiled target, so it repeats bundling only. Anything else fails at once.
         run: |
           cd packages/desktop
-          ./node_modules/.bin/tauri build --config ./src-tauri/tauri.prod.conf.json --config '{"bundle":{"createUpdaterArtifacts":true}}' --target x86_64-unknown-linux-gnu --bundles deb,appimage
+          LOG="$RUNNER_TEMP/tauri-build.log"
+          for attempt in 1 2 3; do
+            set +e
+            ./node_modules/.bin/tauri build --config ./src-tauri/tauri.prod.conf.json --config '{"bundle":{"createUpdaterArtifacts":true}}' --target x86_64-unknown-linux-gnu --bundles deb,appimage 2>&1 | tee "$LOG"
+            rc=${PIPESTATUS[0]}
+            set -e
+            [ "$rc" -eq 0 ] && break
+            if [ "$attempt" -lt 3 ] && grep -qE 'http status: 5[0-9][0-9]' "$LOG"; then
+              echo "::warning::AppImage tool download failed (attempt $attempt) — retrying bundling"
+              sleep $((attempt * 20))
+              continue
+            fi
+            exit "$rc"
+          done
         env:
           OPENCODE_CHANNEL: latest
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
