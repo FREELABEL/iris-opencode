@@ -56,6 +56,7 @@ import { createRoom, fetchRoom, fetchRooms, sendRoomMessage } from "@/iris/rooms
 import { RootHttpApi } from "../api"
 import { markLocal, projectRoot } from "@/iris/playbook-local"
 import { Artifacts } from "@/iris/artifacts"
+import { atlasNoteUrl, probeAtlasNote, type NoteProbe } from "@/iris/atlas-note"
 import { startIntegrationConnect } from "@/iris/platform"
 import { searchCliCommands } from "@/iris/cli-commands"
 import { fetchHivePeers } from "@/iris/platform"
@@ -68,6 +69,11 @@ import { runPlaybookInstall, ttlCache } from "@/iris/playbook-install"
  * filter it in memory. "Installed here" is NOT cached — it is recomputed from disk per request.
  * An install clears it.
  */
+// Live notes only, for ten minutes: a private note may be published a minute from now, and a
+// network failure says nothing about the note, so neither is remembered.
+const liveNotes = new Map<string, { at: number; probe: NoteProbe }>()
+const LIVE_NOTE_TTL_MS = 10 * 60_000
+
 const playbookLists = ttlCache<string, Awaited<ReturnType<typeof fetchPlaybooks>>>(60_000)
 
 /**
@@ -658,6 +664,21 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
      * feature lives in config/allowance.php; this route's only job is that the webview cannot
      * reach fl-iris-api itself, because the bearer token is on disk in this process.
      */
+    // Atlas › Artifacts (#187717): is this note live, and what is it called?
+    const atlasNote = Effect.fn("IrisHttpApi.atlasNote")((ctx: { query: { url: string } }) =>
+      Effect.promise(async () => {
+        const url = atlasNoteUrl(ctx.query.url)
+        if (!url) return { state: "invalid" as const, url: null }
+        const hit = liveNotes.get(url)
+        const probe =
+          hit && Date.now() - hit.at < LIVE_NOTE_TTL_MS ? hit.probe : await probeAtlasNote(url)
+        if (probe.state === "public") liveNotes.set(url, { at: hit?.probe === probe ? hit.at : Date.now(), probe })
+        if (probe.state === "public") return { state: probe.state, url, ...(probe.title ? { title: probe.title } : {}) }
+        if (probe.state === "unavailable") return { state: probe.state, url, status: probe.status }
+        return { state: probe.state, url }
+      }),
+    )
+
     const allowance = Effect.fn("IrisHttpApi.allowance")(() =>
       Effect.promise(() => fetchAllowance()).pipe(
         Effect.map((r) => ({
@@ -677,6 +698,6 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
       ),
     )
 
-    return handlers.handle("allowance", allowance).handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("graph", graph).handle("graphBoard", graphBoard).handle("catalog", catalog).handle("integrationConnect", integrationConnect).handle("cliCommands", cliCommands).handle("hivePeers", hivePeers).handle("pageDoc", pageDoc).handle("pageSave", pageSave).handle("item", item).handle("itemSave", itemSave).handle("itemTaskAdd", itemTaskAdd).handle("itemTaskSave", itemTaskSave).handle("itemTaskDelete", itemTaskDelete).handle("cardSchema", cardSchema).handle("itemShare", itemShare).handle("itemShareVisibility", itemShareVisibility).handle("itemShareAllowlist", itemShareAllowlist).handle("itemShareInvite", itemShareInvite).handle("itemSharePermission", itemSharePermission).handle("itemShareRevoke", itemShareRevoke).handle("itemShareLink", itemShareLink).handle("itemShareLinkRevoke", itemShareLinkRevoke).handle("itemLabels", itemLabels).handle("itemAttachments", itemAttachments).handle("itemAttachmentUpload", itemAttachmentUpload).handle("itemAttachmentDelete", itemAttachmentDelete).handle("itemEvents", itemEvents).handle("itemEventAdd", itemEventAdd).handle("itemAsks", itemAsks).handle("itemAskAdd", itemAskAdd).handle("itemAskAnswer", itemAskAnswer).handle("itemChat", itemChat).handle("itemChatSend", itemChatSend).handle("rooms", rooms).handle("roomCreate", roomCreate).handle("room", room).handle("roomSend", roomSend).handle("playbookDoc", playbookDoc).handle("artifacts", artifacts).handle("artifactDoc", artifactDoc).handle("artifactPublish", artifactPublish).handle("playbookInstall", playbookInstall).handle("agentTasks", agentTasks).handle("sites", sites).handle("records", records).handle("integrations", integrations).handle("hive", hive)
+    return handlers.handle("atlasNote", atlasNote).handle("allowance", allowance).handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("graph", graph).handle("graphBoard", graphBoard).handle("catalog", catalog).handle("integrationConnect", integrationConnect).handle("cliCommands", cliCommands).handle("hivePeers", hivePeers).handle("pageDoc", pageDoc).handle("pageSave", pageSave).handle("item", item).handle("itemSave", itemSave).handle("itemTaskAdd", itemTaskAdd).handle("itemTaskSave", itemTaskSave).handle("itemTaskDelete", itemTaskDelete).handle("cardSchema", cardSchema).handle("itemShare", itemShare).handle("itemShareVisibility", itemShareVisibility).handle("itemShareAllowlist", itemShareAllowlist).handle("itemShareInvite", itemShareInvite).handle("itemSharePermission", itemSharePermission).handle("itemShareRevoke", itemShareRevoke).handle("itemShareLink", itemShareLink).handle("itemShareLinkRevoke", itemShareLinkRevoke).handle("itemLabels", itemLabels).handle("itemAttachments", itemAttachments).handle("itemAttachmentUpload", itemAttachmentUpload).handle("itemAttachmentDelete", itemAttachmentDelete).handle("itemEvents", itemEvents).handle("itemEventAdd", itemEventAdd).handle("itemAsks", itemAsks).handle("itemAskAdd", itemAskAdd).handle("itemAskAnswer", itemAskAnswer).handle("itemChat", itemChat).handle("itemChatSend", itemChatSend).handle("rooms", rooms).handle("roomCreate", roomCreate).handle("room", room).handle("roomSend", roomSend).handle("playbookDoc", playbookDoc).handle("artifacts", artifacts).handle("artifactDoc", artifactDoc).handle("artifactPublish", artifactPublish).handle("playbookInstall", playbookInstall).handle("agentTasks", agentTasks).handle("sites", sites).handle("records", records).handle("integrations", integrations).handle("hive", hive)
   }),
 )

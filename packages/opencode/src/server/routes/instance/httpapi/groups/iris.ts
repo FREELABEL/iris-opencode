@@ -774,6 +774,7 @@ export const IrisPaths = {
   roomMessages: `${root}/rooms/:roomID/messages`,
   hive: `${root}/hive`,
   allowance: `${root}/allowance`,
+  atlasNote: `${root}/atlas-note`,
 } as const
 
 export const IrisApi = HttpApi.make("iris").add(
@@ -1533,6 +1534,30 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Read a playbook's local document",
           description:
             "Local file first, published copy second. The file read must come through the sidecar because playbook content never leaves the machine and the webview cannot read a home directory; the published fallback covers the 125 of 128 not installed here. NOT an iframe of the landing page: heyiris.io sends x-frame-options SAMEORIGIN, so embedding renders blank and reads as a broken panel.",
+        }),
+      ),
+      HttpApiEndpoint.get("atlasNote", IrisPaths.atlasNote, {
+        query: Schema.Struct({
+          url: described(Schema.String, "An Atlas note URL — https://heyiris.io/n/<uuid>. Anything else answers state=invalid."),
+        }),
+        success: described(
+          Schema.Struct({
+            state: described(
+              Schema.Literals(["public", "unavailable", "unreachable", "invalid"]),
+              "public: live, with its title. unavailable: heyiris.io answered non-200 — private, or the link is wrong. unreachable: the network failed, which says nothing about the note. invalid: not a note URL; nothing was fetched.",
+            ),
+            url: Schema.NullOr(Schema.String),
+            title: Schema.optional(Schema.String),
+            status: Schema.optional(Schema.Finite),
+          }).annotate({ identifier: "IrisAtlasNote" }),
+          "Whether an Atlas note is live, and what it calls itself",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.atlasNote",
+          summary: "Check an Atlas note",
+          description:
+            "Atlas › Artifacts (#187717). Names a note that only appeared in Shell output, and tells the panel when one is private. The engine fetches it because the webview cannot read heyiris.io pages across origins. Only https://heyiris.io/n/<uuid> is ever fetched, so this is not a general proxy.",
         }),
       ),
       HttpApiEndpoint.get("artifacts", IrisPaths.artifacts, {

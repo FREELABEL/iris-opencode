@@ -6,7 +6,7 @@ This tool does NOT publish anything. Making an item public is a separate, delibe
 
 Parameters:
 - url: the note URL, exactly https://heyiris.io/n/<uuid>. Anything else is refused.
-- title: optional; defaults to the note's own title.
+- title: optional; used only when the note's page has no title of its own.
 - summary: optional one line saying what it is, shown on the card.
 
 The note must already resolve — a URL that 404s is refused rather than drawn as a card. Do not paste the note's content into your reply as well; say what it is.

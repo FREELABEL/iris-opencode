@@ -48,3 +48,31 @@ export function noteTitle(html: string): string | undefined {
     .trim()
   return t ? t.slice(0, 200) : undefined
 }
+
+export type NoteProbe =
+  | { state: "public"; url: string; title?: string }
+  | { state: "unavailable"; url: string; status: number }
+  | { state: "unreachable"; url: string; reason: string }
+
+const PROBE_TIMEOUT_MS = 8000
+
+/**
+ * Ask heyiris.io whether a note is live, and what it calls itself. Used by the `atlas_artifact`
+ * tool (refuse a dead note) and by the panel's /iris/atlas-note route (name a note that only
+ * appeared in Shell output). `url` must already have passed atlasNoteUrl.
+ *
+ * "unavailable" is not "unreachable": a 404 means the note is private or the link is wrong, which
+ * the person can fix; a network failure says nothing about the note at all.
+ */
+export async function probeAtlasNote(url: string, signal?: AbortSignal): Promise<NoteProbe> {
+  try {
+    const res = await fetch(url, {
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(PROBE_TIMEOUT_MS)]) : AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      headers: { accept: "text/html" },
+    })
+    if (res.status !== 200) return { state: "unavailable", url, status: res.status }
+    return { state: "public", url, title: noteTitle((await res.text()).slice(0, 200_000)) }
+  } catch (e) {
+    return { state: "unreachable", url, reason: e instanceof Error ? e.message : String(e) }
+  }
+}

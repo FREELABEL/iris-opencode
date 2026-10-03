@@ -1,4 +1,5 @@
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js"
+import { createStore } from "solid-js/store"
 import { LIVE_SANDBOX } from "./iris-artifacts-model"
 import { atlasNoteUrl, fallbackTitle, type AtlasNote } from "./iris-atlas-artifacts-model"
 import { clearAtlasFocus, irisAtlasFocus } from "./iris-nav"
@@ -15,8 +16,12 @@ import { clearAtlasFocus, irisAtlasFocus } from "./iris-nav"
  * The list is derived from the session (iris-atlas-artifacts-model), so it is live with the
  * transcript and needs no poll.
  */
+/** What /iris/atlas-note said about a note. Absent while it is being asked. */
+type NoteCheck = { state: "public" | "unavailable" | "unreachable" | "invalid"; title?: string }
+
 export function IrisAtlasArtifacts(props: {
   sessionId?: string
+  doFetch?: (path: string, init?: RequestInit) => Promise<Response>
   notes: () => AtlasNote[]
   openExternal?: (url: string) => void
 }) {
@@ -40,6 +45,26 @@ export function IrisAtlasArtifacts(props: {
   })
   const open = createMemo(() => notes().find((n) => n.url === openUrl()))
 
+  // Ask the engine about each note once: its real title (a note found in Shell output has none
+  // yet), and whether it is private — a private note framed here is a blank 404 with no reason.
+  const [checks, setChecks] = createStore<Record<string, NoteCheck>>({})
+  const asked = new Set<string>()
+  const check = (url: string) => {
+    const fetcher = props.doFetch
+    if (!fetcher) return
+    asked.add(url)
+    fetcher(`/iris/atlas-note?url=${encodeURIComponent(url)}`, { headers: { Accept: "application/json" } })
+      .then((r) => (r.ok ? (r.json() as Promise<NoteCheck>) : undefined))
+      .then((c) => c && setChecks(url, c))
+      .catch(() => asked.delete(url))
+  }
+  createEffect(() => {
+    for (const n of notes()) if (!asked.has(n.url)) check(n.url)
+  })
+  // The note's own title wins over what the session recorded: a model's guess, or a uuid.
+  const titleOf = (n: AtlasNote) => checks[n.url]?.title ?? n.title
+  const unavailable = (n: AtlasNote) => checks[n.url]?.state === "unavailable"
+
   createEffect(() => {
     const want = irisAtlasFocus()
     if (!want) return
@@ -59,8 +84,8 @@ export function IrisAtlasArtifacts(props: {
       </Show>
       <Show when={props.sessionId && notes().length === 0}>
         <p class="iris-artifacts__note">
-          No Atlas notes yet. When an agent in this session publishes an Atlas item (a plan, an epic, a brief) or shows
-          one with the atlas_artifact tool, it opens here — the live page, with its link.
+          No Atlas notes yet. When your agent publishes or shares an Atlas note in this conversation — a plan, an
+          epic, a brief — it opens here, live, with its link.
         </p>
       </Show>
 
@@ -99,9 +124,9 @@ export function IrisAtlasArtifacts(props: {
                               setListOpen(false)
                             }}
                           >
-                            <span class="iris-artifacts__title">{n.title}</span>
+                            <span class="iris-artifacts__title">{titleOf(n)}</span>
                             <span class="iris-artifacts__kind">note</span>
-                            <span class="iris-artifacts__by">{n.source === "tool" ? "shown by agent" : "from shell"}</span>
+                            <span class="iris-artifacts__by">{unavailable(n) ? "not public" : n.source === "tool" ? "shared in chat" : "published here"}</span>
                           </button>
                         </li>
                       )}
@@ -110,11 +135,14 @@ export function IrisAtlasArtifacts(props: {
                 </Show>
               </div>
               <span class="iris-artifacts__sep" />
-              <strong class="iris-artifacts__tbtitle">{note().title}</strong>
+              <strong class="iris-artifacts__tbtitle">{titleOf(note())}</strong>
               <span class="iris-artifacts__tbmeta iris-atlas-note__url" data-testid="atlas-note-url" title={note().url}>
                 {note().url.replace(/^https:\/\//, "")}
               </span>
-              <button type="button" class="iris-card__linkbtn" onClick={() => setReload((n) => n + 1)}>
+              <button type="button" class="iris-card__linkbtn" onClick={() => {
+                  check(note().url)
+                  setReload((n) => n + 1)
+                }}>
                 Reload
               </button>
               <Show when={props.openExternal}>
@@ -123,13 +151,19 @@ export function IrisAtlasArtifacts(props: {
                 </button>
               </Show>
             </div>
-            <div class="iris-artifacts__preview">
+            <Show when={unavailable(note())}>
+              <p class="iris-artifacts__note" data-testid="atlas-note-private">
+                This note isn't public, or the link is wrong, so there is nothing to show. Ask your agent to make it
+                public, then press Reload.
+              </p>
+            </Show>
+            <div class="iris-artifacts__preview" hidden={unavailable(note())}>
               {/* Keyed on url + reload so either one gives a fresh load of the live page. */}
               <For each={[`${note().url}#${reload()}`]}>
                 {() => (
                   <iframe
                     class="iris-artifacts__frame"
-                    title={`${note().title} — Atlas`}
+                    title={`${titleOf(note())} — Atlas`}
                     sandbox={LIVE_SANDBOX}
                     referrerpolicy="strict-origin-when-cross-origin"
                     src={note().url}

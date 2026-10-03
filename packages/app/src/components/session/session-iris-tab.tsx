@@ -2791,6 +2791,7 @@ export function SessionIrisTab() {
           <Match when={pane() === "atlas-artifacts"}>
             <IrisAtlasArtifacts
               sessionId={sessionLayout.params.id}
+              doFetch={doFetch}
               notes={sessionNotes}
               openExternal={(url) => platform.openExternal(url)}
             />

@@ -1,7 +1,7 @@
 import { Effect, Schema } from "effect"
 import * as Tool from "./tool"
 import DESCRIPTION from "./atlas-artifact.txt"
-import { atlasNoteUrl, noteTitle } from "@/iris/atlas-note"
+import { atlasNoteUrl, probeAtlasNote } from "@/iris/atlas-note"
 
 /**
  * The agent's side of Atlas › Artifacts (epic #187717) — the Atlas twin of `genesis_artifact`.
@@ -19,13 +19,11 @@ import { atlasNoteUrl, noteTitle } from "@/iris/atlas-note"
  */
 export const Parameters = Schema.Struct({
   url: Schema.String.annotate({ description: "The Atlas note URL — https://heyiris.io/n/<uuid>" }),
-  title: Schema.optional(Schema.String).annotate({ description: "Title on the card; defaults to the note's own" }),
+  title: Schema.optional(Schema.String).annotate({ description: "Used only when the note's page has no title of its own" }),
   summary: Schema.optional(Schema.String).annotate({ description: "One line saying what the note is" }),
 })
 
 type Metadata = { url?: string; title?: string; summary?: string }
-
-const FETCH_TIMEOUT_MS = 8000
 
 export const AtlasArtifactTool = Tool.define<typeof Parameters, Metadata, never>(
   "atlas_artifact",
@@ -41,25 +39,24 @@ export const AtlasArtifactTool = Tool.define<typeof Parameters, Metadata, never>
           )
         }
 
-        const page = yield* Effect.tryPromise({
-          try: async () => {
-            const res = await fetch(url, {
-              signal: AbortSignal.any([ctx.abort, AbortSignal.timeout(FETCH_TIMEOUT_MS)]),
-              headers: { accept: "text/html" },
-            })
-            return { status: res.status, html: res.ok ? (await res.text()).slice(0, 200_000) : "" }
-          },
-          catch: (e) => new Error(`could not reach ${url}: ${e instanceof Error ? e.message : String(e)}`),
-        })
-        if (page.status !== 200) {
+        const probe = yield* Effect.promise(() => probeAtlasNote(url, ctx.abort))
+        if (probe.state === "unreachable") {
+          return yield* Effect.fail(
+            new Error(`Couldn't reach heyiris.io to check this Atlas note (${probe.reason}). Try again in a moment.`),
+          )
+        }
+        if (probe.state === "unavailable") {
           return yield* Effect.fail(
             new Error(
-              `${url} answered HTTP ${page.status} — the note is missing or not public. Publish it first (iris bloqs make-public <id> --force).`,
+              `This Atlas note isn't public, or the link is wrong (heyiris.io answered HTTP ${probe.status} for ${url}). Make it public first — iris bloqs make-public <id> --force — then show it again.`,
             ),
           )
         }
 
-        const title = params.title?.trim() || noteTitle(page.html) || "Atlas note"
+        // The note's own title wins (#187717 follow-up). A title the model supplies is a guess at
+        // what the note is called — it named this epic "Epic for this Feature" — and the card is
+        // the one place a person reads it before clicking.
+        const title = probe.title || params.title?.trim() || "Atlas note"
         const summary = params.summary?.trim().slice(0, 300) || undefined
         return {
           title,

@@ -1,5 +1,10 @@
-import { describe, expect, test } from "bun:test"
-import { atlasNotesIn, atlasNoteUrl, noteTitle } from "./atlas-note"
+import { afterEach, describe, expect, test } from "bun:test"
+import { atlasNotesIn, atlasNoteUrl, noteTitle, probeAtlasNote } from "./atlas-note"
+
+const realFetch = globalThis.fetch
+afterEach(() => {
+  globalThis.fetch = realFetch
+})
 
 const UUID = "17ac82c8-ade9-4384-9311-9d48a0930f2f"
 
@@ -48,5 +53,23 @@ describe("noteTitle", () => {
   test("falls back to <title>, and to undefined when there is none", () => {
     expect(noteTitle(`<title inertia>  EPIC — Atlas  </title>`)).toBe("EPIC — Atlas")
     expect(noteTitle(`<html></html>`)).toBeUndefined()
+  })
+})
+
+describe("probeAtlasNote — private and offline are different answers", () => {
+  const url = `https://heyiris.io/n/${UUID}`
+  test("200 is public, with the page's title", async () => {
+    globalThis.fetch = (async () => new Response("<title>The plan</title>", { status: 200 })) as unknown as typeof fetch
+    expect(await probeAtlasNote(url)).toEqual({ state: "public", url, title: "The plan" })
+  })
+  test("404 is unavailable — the person can fix that", async () => {
+    globalThis.fetch = (async () => new Response("", { status: 404 })) as unknown as typeof fetch
+    expect(await probeAtlasNote(url)).toEqual({ state: "unavailable", url, status: 404 })
+  })
+  test("a network failure is unreachable, never unavailable", async () => {
+    globalThis.fetch = (async () => {
+      throw new Error("ECONNRESET")
+    }) as unknown as typeof fetch
+    expect(await probeAtlasNote(url)).toEqual({ state: "unreachable", url, reason: "ECONNRESET" })
   })
 })

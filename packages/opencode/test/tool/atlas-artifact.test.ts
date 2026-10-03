@@ -71,9 +71,17 @@ describe("atlas_artifact", () => {
     }),
   )
 
-  it.instance("an explicit title wins over the page's", () =>
+  it.instance("the note's own title wins over one the model supplies", () =>
     Effect.gen(function* () {
-      serve(200, `<title>Page title</title>`)
+      serve(200, `<title>The note</title>`)
+      const r = yield* run({ url: `https://heyiris.io/n/${UUID}`, title: "Epic for this Feature" })
+      expect(r.metadata.title).toBe("The note")
+    }),
+  )
+
+  it.instance("the model's title is used only when the page has none", () =>
+    Effect.gen(function* () {
+      serve(200, `<html><body>no title</body></html>`)
       const r = yield* run({ url: `https://heyiris.io/n/${UUID}`, title: "Mine" })
       expect(r.metadata.title).toBe("Mine")
     }),
