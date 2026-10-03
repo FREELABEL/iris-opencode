@@ -400,8 +400,138 @@ jobs:
             packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/IRIS-tauri-windows-x64-setup.exe.sig
           if-no-files-found: warn
 
+  # LINUX (x86_64): .deb + AppImage. Added 2026-10-03 for iris-hive-001, a Dell OptiPlex running
+  # Ubuntu 24.04 — the first fleet machine that is not a Mac or a PC. Advisory exactly like
+  # windows: continue-on-error, and publish does not wait on its result, so a Linux failure can
+  # never cost macOS or Windows a release. ubuntu-22.04 on purpose: an AppImage runs on distros
+  # whose glibc is at least the builder's, so building on the older one reaches more machines.
+  linux:
+    needs: plan
+    if: needs.plan.outputs.windows == 'true'
+    runs-on: ubuntu-22.04
+    continue-on-error: true
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/desktop-v}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Install Tauri's Linux system libraries
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev libxdo-dev patchelf file
+
+      # Vite 7 refuses Node < 20.19 ("crypto.hash is not a function" in the worker plugin) —
+      # measured on Ubuntu 24.04's stock Node 18 while proving this build on the OptiPlex.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Stamp the desktop app version
+        run: |
+          set -euo pipefail
+          node -e "
+            const fs = require('fs');
+            const p = 'packages/desktop/package.json';
+            const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+            j.version = process.argv[1];
+            fs.writeFileSync(p, JSON.stringify(j, null, 2) + '\n');
+            console.log('desktop version stamped ->', j.version);
+          " "${{ steps.version.outputs.version }}"
+
+      - name: Build the iris CLI (sidecar binary)
+        run: |
+          cd packages/opencode
+          bun run script/build.ts --single
+        env:
+          OPENCODE_VERSION: ${{ steps.version.outputs.version }}
+          OPENCODE_CHANNEL: latest
+
+      - name: Stage sidecar binary
+        run: |
+          set -euo pipefail
+          EXPECT=$(grep -oE '\.sidecar\("[^"]+"\)' packages/desktop/src-tauri/src/lib.rs | head -1 | sed -E 's/.*"(.*)".*/\1/')
+          BIN=$(ls packages/opencode/dist/opencode-linux-x64/bin/iris | head -1)
+          mkdir -p packages/desktop/src-tauri/sidecars
+          cp "$BIN" "packages/desktop/src-tauri/sidecars/${EXPECT}-x86_64-unknown-linux-gnu"
+          chmod +x "packages/desktop/src-tauri/sidecars/${EXPECT}-x86_64-unknown-linux-gnu"
+
+      - name: Build IRIS desktop app (Tauri)
+        # OPENCODE_CHANNEL here for the same reason as the other platforms: vite defaults to "dev".
+        #
+        # RETRY ONLY THE APPIMAGE TOOL DOWNLOAD. Bundling an AppImage fetches linuxdeploy from
+        # GitHub at build time; on the first proof build (iris-hive-001, 2026-10-03) that fetch
+        # answered `http status: 504` after the app and the .deb had both built. The retry reuses
+        # the compiled target, so it repeats bundling only. Anything else fails at once.
+        run: |
+          cd packages/desktop
+          LOG="$RUNNER_TEMP/tauri-build.log"
+          for attempt in 1 2 3; do
+            set +e
+            ./node_modules/.bin/tauri build --config ./src-tauri/tauri.prod.conf.json --config '{"bundle":{"createUpdaterArtifacts":true}}' --target x86_64-unknown-linux-gnu --bundles deb,appimage 2>&1 | tee "$LOG"
+            rc=${PIPESTATUS[0]}
+            set -e
+            [ "$rc" -eq 0 ] && break
+            if [ "$attempt" -lt 3 ] && grep -qE 'http status: 5[0-9][0-9]' "$LOG"; then
+              echo "::warning::AppImage tool download failed (attempt $attempt) — retrying bundling"
+              sleep $((attempt * 20))
+              continue
+            fi
+            exit "$rc"
+          done
+        env:
+          OPENCODE_CHANNEL: latest
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      - name: Rename bundles to the IRIS-tauri-* convention
+        # Linux's updater payload is the AppImage ITSELF, signed in place (bundle/appimage/*.AppImage
+        # + .AppImage.sig) — like Windows' NSIS installer, unlike macOS's .app.tar.gz.
+        run: |
+          set -euo pipefail
+          B=packages/desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle
+          OUT=$B/iris-linux; mkdir -p "$OUT"
+          cp "$(ls "$B"/deb/*.deb | head -1)" "$OUT/IRIS-tauri-linux-x64.deb"
+          cp "$(ls "$B"/appimage/*.AppImage | head -1)" "$OUT/IRIS-tauri-linux-x64.AppImage"
+          SIG=$(ls "$B"/appimage/*.AppImage.sig 2>/dev/null | head -1 || true)
+          if [ -n "$SIG" ]; then
+            cp "$SIG" "$OUT/IRIS-tauri-linux-x64.AppImage.sig"
+            echo "signed updater artifact ✓ ($(basename "$SIG"))"
+          else
+            echo "::warning::AppImage is unsigned — Linux will install but cannot auto-update from this release"
+          fi
+          ls -la "$OUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: IRIS-tauri-linux-x64
+          path: packages/desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/iris-linux/
+          if-no-files-found: warn
+
   publish:
-    needs: [plan, macos, windows]
+    needs: [plan, macos, windows, linux]
     if: always() && !cancelled() && needs.macos.result == 'success'
     runs-on: ubuntu-latest
     steps:
@@ -477,6 +607,7 @@ jobs:
               "darwin-aarch64": ("IRIS-tauri-darwin-arm64.app.tar.gz", "IRIS-tauri-darwin-arm64.app.tar.gz"),
               "darwin-x86_64":  ("IRIS-tauri-darwin-x64.app.tar.gz",   "IRIS-tauri-darwin-x64.app.tar.gz"),
               "windows-x86_64": ("IRIS-tauri-windows-x64-update.exe",  "IRIS-tauri-windows-x64-setup.exe"),
+              "linux-x86_64":   ("IRIS-tauri-linux-x64.AppImage",      "IRIS-tauri-linux-x64.AppImage"),
           }
           platforms = {}
           for target, (asset, sig_for) in targets.items():
@@ -505,6 +636,11 @@ jobs:
           shopt -s nullglob
           printf '%s\n' dist/latest.json dist/*.app.tar.gz dist/*.app.tar.gz.sig \
                         dist/*-setup.exe.sig dist/*-update.exe >> /tmp/assets.txt
+          # Linux (advisory job): ship whatever it produced. nullglob keeps a missing Linux build
+          # from adding a literal "dist/*.deb" that would fail the whole upload.
+          shopt -s nullglob
+          for f in dist/*.deb dist/*.AppImage dist/*.AppImage.sig; do echo "$f" >> /tmp/assets.txt; done
+          shopt -u nullglob
         env:
           PUB_DATE: ${{ steps.pubdate.outputs.now }}
 
