@@ -99,6 +99,27 @@ describe("gap 1 — the route table, so enforcement is not opt-in", () => {
   })
 })
 
+describe("hive tasks create is a dispatch, and the guard sees it", () => {
+  // It sends work to another machine exactly as `hive task` does, but the route table only knew
+  // run/task/script/send — so on a LOCKED machine, an agent could still dispatch through it.
+  test("create and new route to node:<--node> as the task verb", () => {
+    expect(routeFor(["hive", "tasks", "create", "--node", "studio-mac", "--prompt", "x"])).toEqual({ class: "node", verb: "task", instance: "studio-mac" })
+    expect(routeFor(["hive", "tasks", "new", "--node=studio-mac", "--prompt", "x"])).toEqual({ class: "node", verb: "task", instance: "studio-mac" })
+    expect(routeFor(["hive", "tasks", "create", "--node", "studio-mac"], ["hive", "tasks"])).toEqual({ class: "node", verb: "task", instance: "studio-mac" })
+  })
+
+  test("with no --node it is a class-level ask, not a free pass", () => {
+    expect(routeFor(["hive", "tasks", "create", "--prompt", "x"])).toEqual({ class: "node", verb: "task", instance: null })
+  })
+
+  test("listing and reading tasks still need no couple", () => {
+    expect(routeFor(["hive", "tasks"])).toBeNull()
+    expect(routeFor(["hive", "tasks", "get", "01a0fdca"])).toBeNull()
+    expect(routeFor(["hive", "tasks", "logs", "01a0fdca"])).toBeNull()
+    expect(routeFor(["hive", "tasks", "01a0fdca-29ca-7000-8000-000000000000"])).toBeNull()
+  })
+})
+
 describe("gap 2 — signed couples, so a fleet can be coupled centrally", () => {
   const iss = generateIssuer()
   const trusted = { [iss.issuer]: iss.publicKeyPem }

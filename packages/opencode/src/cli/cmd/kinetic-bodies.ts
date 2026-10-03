@@ -124,6 +124,18 @@ export function routeFor(argv: string[], parsed?: string[]): Route | null {
     return verb ? { class: "obs", verb, instance: "studio" } : null
   }
   if (cls === "node") {
+    // `iris hive tasks create --node <n>` dispatches work exactly as `hive task` does. It was missing
+    // from this table, so a LOCKED machine still let an agent send any task through it. Only create
+    // and new act; a bare `hive tasks`, `get` and `logs` read. The node is a FLAG here, not the next
+    // word, so read it from parts (`--node x` or `--node=x`); absent means "any capable node", which
+    // is a class-level ask — never a free pass.
+    if (sub === "tasks") {
+      if (third !== "create" && third !== "new") return null
+      const i = parts.indexOf("--node")
+      const eq = parts.find((p) => p.startsWith("--node="))
+      const node = i >= 0 && parts[i + 1] && !parts[i + 1].startsWith("-") ? parts[i + 1] : eq ? eq.slice("--node=".length) : null
+      return { class: "node", verb: "task", instance: node || null }
+    }
     // `iris hive run <node> <cmd>` — arbitrary shell on another machine, the epic's named danger.
     const verb = sub === "run" || sub === "exec" ? "run" : sub === "task" ? "task" : sub === "script" ? "script" : sub === "send" ? "send" : null
     return verb ? { class: "node", verb, instance: third && !third.startsWith("-") ? third : null } : null
