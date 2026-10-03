@@ -71,6 +71,7 @@ import {
 } from "@/pages/session/helpers"
 import { setSessionHandoff } from "@/pages/session/handoff"
 import { useSessionLayout } from "@/pages/session/session-layout"
+import { IrisProductIcon } from "@/components/session/iris-product-icon"
 import { SessionFileBrowserTab, type SessionFileBrowserState } from "@/pages/session/v2/session-file-browser-tab"
 
 type ReviewDiff = FileDiffInfo | SnapshotFileDiff | VcsFileDiff
@@ -254,7 +255,10 @@ export function SessionSidePanel(props: {
             }}
           >
             <span class="inline-flex w-4 shrink-0">{irisPinned().includes(surface.id as any) ? "✓" : ""}</span>
-            {surface.label}
+            <span class="inline-flex items-center gap-2">
+              <IrisProductIcon id={surface.id} />
+              {surface.label}
+            </span>
           </MenuV2.Item>
         )}
       </For>
@@ -275,7 +279,9 @@ export function SessionSidePanel(props: {
     <For each={productIds()}>
       {(id) => (
         <Tabs.Trigger value={`iris:${id}`} classList={{ italic: !irisPinned().includes(id as any) }}>
-          <div class="flex items-center gap-2">
+          {/* The heyiris.io nav's icon for the product, so it reads the same in both places. */}
+          <div class="flex items-center gap-1.5">
+            <IrisProductIcon id={id} />
             <div>{irisStripTabs().find((t) => t.id === id)?.label ?? id}</div>
           </div>
         </Tabs.Trigger>
