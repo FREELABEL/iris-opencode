@@ -25,7 +25,7 @@ export function visibleTabs<T extends string>(pinned: T[], active: T): T[] {
 
 /** What the project row says: the project, or honestly that this view is not per-project. */
 export function panelScope(surface: string, pane: string): "project" | "session" | "account" {
-  if (pane === "artifacts") return "session"
+  if (pane === "artifacts" || pane === "atlas-artifacts") return "session"
   if (ACCOUNT_SURFACES.has(surface) || pane === "graph" || pane === "catalog" || pane === "rooms") return "account"
   return "project"
 }

@@ -1,0 +1,12 @@
+Show an Atlas note — a public Atlas item at https://heyiris.io/n/<uuid> — beside this conversation. The chat gets a card with a live preview, and clicking it opens the IRIS panel on Atlas › Artifacts with the note loaded.
+
+Use it right after you have produced or found an Atlas note the user should look at: an epic, a plan, a spec, a brief you published with `iris atlas:item publish <file> --public --force-public` or `iris bloqs make-public <id> --force`, or a note the user named. Pass the URL that command printed.
+
+This tool does NOT publish anything. Making an item public is a separate, deliberate step the user asked for or approved; do it with the CLI first, then call this.
+
+Parameters:
+- url: the note URL, exactly https://heyiris.io/n/<uuid>. Anything else is refused.
+- title: optional; defaults to the note's own title.
+- summary: optional one line saying what it is, shown on the card.
+
+The note must already resolve — a URL that 404s is refused rather than drawn as a card. Do not paste the note's content into your reply as well; say what it is.

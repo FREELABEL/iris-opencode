@@ -40,3 +40,16 @@ export function focusArtifact(id: string) {
 export function clearArtifactFocus() {
   setArtifactFocus(null)
 }
+
+/** Atlas › Artifacts (#187717): the note (by canonical URL) the pane should show. */
+const [atlasFocus, setAtlasFocus] = createSignal<{ url: string; nonce: number } | null>(null)
+
+export const irisAtlasFocus = atlasFocus
+
+export function focusAtlasNote(url: string) {
+  setAtlasFocus({ url, nonce: Date.now() + Math.random() })
+}
+
+export function clearAtlasFocus() {
+  setAtlasFocus(null)
+}

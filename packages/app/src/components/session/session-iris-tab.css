@@ -1699,3 +1699,6 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 .iris-publish__board:hover, .iris-publish__board--on { background: var(--background-element); color: var(--text-strong); }
 .iris-publish__boardid { margin-inline-start: auto; flex-shrink: 0; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; color: var(--text-weaker); }
 .iris-publish__summary { font-size: 12px; color: var(--text-strong); padding: 8px; border-radius: 6px; border: 1px solid var(--border-weak-base); overflow-wrap: anywhere; }
+
+/* Atlas › Artifacts (#187717): the note's URL on the toolbar gives way before the buttons do. */
+.iris-atlas-note__url { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }

@@ -13,6 +13,7 @@ import { TaskTool } from "./task"
 import { Database } from "@opencode-ai/core/database/database"
 import { TodoWriteTool } from "./todo"
 import { GenesisArtifactTool } from "./genesis-artifact"
+import { AtlasArtifactTool } from "./atlas-artifact"
 import { BrowserTool } from "./browser"
 import { WebFetchTool } from "./webfetch"
 import { WriteTool } from "./write"
@@ -108,6 +109,7 @@ const layer = Layer.effect(
     const question = yield* QuestionTool
     const todo = yield* TodoWriteTool
     const artifacttool = yield* GenesisArtifactTool
+    const atlasartifacttool = yield* AtlasArtifactTool
     const browsertool = yield* BrowserTool
     const lsptool = yield* LspTool
     const plan = yield* PlanExitTool
@@ -224,6 +226,7 @@ const layer = Layer.effect(
           fetch: Tool.init(webfetch),
           todo: Tool.init(todo),
           artifact: Tool.init(artifacttool),
+          atlasArtifact: Tool.init(atlasartifacttool),
           browser: Tool.init(browsertool),
           search: Tool.init(websearch),
           skill: Tool.init(skilltool),
@@ -251,6 +254,9 @@ const layer = Layer.effect(
             // `genesis_artifact` — Genesis › Artifacts (#186508 / #186510). Scoped by its description
             // to things the user will look at; the files land in .iris/artifacts.
             tool.artifact,
+            // `atlas_artifact` — Atlas › Artifacts (#187717). Display-only: shows a published
+            // heyiris.io/n/<uuid> note in the panel; publishing stays with the CLI and its guard.
+            tool.atlasArtifact,
             // `browser` — Genesis › Browser (#186665). Read-only: open, read, find, screenshot,
             // close. The refusals (private hosts, credential URLs, off-origin) are in
             // iris/browser-verbs; the screenshot lands in the Artifacts pane above.

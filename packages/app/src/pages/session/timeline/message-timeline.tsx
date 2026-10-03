@@ -29,6 +29,8 @@ import {
 } from "@opencode-ai/session-ui/message-part"
 // Registers the `genesis_artifact` chat card (a side effect: ToolRegistry is module-global).
 import "@/components/session/genesis-artifact-card"
+// …and the `atlas_artifact` card, its Atlas twin (#187717).
+import "@/components/session/atlas-artifact-card"
 import { DiffChanges } from "@opencode-ai/ui/diff-changes"
 import { FileIcon } from "@opencode-ai/ui/file-icon"
 import { Icon } from "@opencode-ai/ui/icon"

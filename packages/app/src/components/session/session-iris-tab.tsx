@@ -29,6 +29,8 @@ import { promotedFiles } from "./iris-promote"
 import type { FileContent } from "./iris-file-artifact"
 import { IrisCardEditor } from "./iris-card-editor"
 import { IrisArtifacts } from "./iris-artifacts"
+import { IrisAtlasArtifacts } from "./iris-atlas-artifacts"
+import { atlasNotes } from "./iris-atlas-artifacts-model"
 import {
   ACCOUNT_SURFACES,
   FILES_PIN_KEY,
@@ -597,6 +599,9 @@ const SURFACES = [
 
 type SurfaceId = (typeof SURFACES)[number]["id"]
 
+/** Panes that draw and fetch for themselves; the generic row list has nothing to show for them. */
+const SELF_PANES = new Set(["rooms", "artifacts", "atlas-artifacts"])
+
 interface SubView {
   id: string
   label: string
@@ -631,6 +636,9 @@ const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
     // Board-to-board relations. Account-wide rather than this board, which the empty state
     // says out loud so it is not read as "this board has no relations".
     { id: "graph", label: "Graph", pane: "graph", path: () => `/iris/graph` },
+    // Atlas notes this SESSION produced (#187717) — the Atlas twin of Genesis › Artifacts. Owns
+    // its pane and fetches nothing: the list is derived from the session's parts.
+    { id: "artifacts", label: "Artifacts", pane: "atlas-artifacts", path: () => `/iris/artifacts` },
   ],
   agents: [
     { id: "all", label: "All", pane: "agents", path: (b) => `/iris/agents/${b}` },
@@ -1059,6 +1067,17 @@ export function SessionIrisTab() {
       return []
     }
   })
+  // Atlas › Artifacts (#187717): the session's Atlas notes, from its tool parts.
+  const sessionNotes = createMemo(() => {
+    const id = sessionLayout.params.id
+    if (!id || !dirSync) return []
+    try {
+      const data = dirSync().data
+      return atlasNotes((data.message[id] ?? []).flatMap((m: any) => (data.part[m.id] ?? []) as any[]))
+    } catch {
+      return []
+    }
+  })
   const readSessionFile = (path: string): Promise<FileContent | undefined> =>
     dirSdk
       ? dirSdk()
@@ -1212,7 +1231,7 @@ export function SessionIrisTab() {
       // The sub-view is IN the key. Without it, switching Atlas › Lists to Atlas › Schemas
       // changes nothing the resource can see and the old rows stay on screen under the new tab.
       // Rooms and Artifacts fetch for themselves; the generic row list has nothing to draw.
-      if (resolved().pane === "rooms" || resolved().pane === "artifacts") return undefined
+      if (SELF_PANES.has(resolved().pane)) return undefined
       return id ? ([base(), id, surface(), resolved().sub?.id ?? "", page(), applied()] as const) : undefined
     },
     async ([, id, , , pageNo, q], info): Promise<SurfacePayload> => {
@@ -1972,8 +1991,7 @@ export function SessionIrisTab() {
       surface() !== "integrations" &&
       pane() !== "graph" &&
       pane() !== "catalog" &&
-      pane() !== "rooms" &&
-      pane() !== "artifacts",
+      !SELF_PANES.has(pane()),
   )
 
   function choose(id: number) {
@@ -2758,8 +2776,8 @@ export function SessionIrisTab() {
         class="flex-1 min-h-0"
         classList={{
           hidden: !!openRow(),
-          "overflow-y-auto": pane() !== "graph" && pane() !== "rooms" && pane() !== "artifacts",
-          "flex flex-col overflow-hidden": pane() === "graph" || pane() === "rooms" || pane() === "artifacts",
+          "overflow-y-auto": pane() !== "graph" && !SELF_PANES.has(pane()),
+          "flex flex-col overflow-hidden": pane() === "graph" || SELF_PANES.has(pane()),
         }}
       >
         <Switch>
@@ -2770,6 +2788,13 @@ export function SessionIrisTab() {
           </Match>
           {/* Artifacts own the pane, ahead of the loading/empty states: they belong to the
               session, not the board, and must render with no board chosen. */}
+          <Match when={pane() === "atlas-artifacts"}>
+            <IrisAtlasArtifacts
+              sessionId={sessionLayout.params.id}
+              notes={sessionNotes}
+              openExternal={(url) => platform.openExternal(url)}
+            />
+          </Match>
           <Match when={pane() === "artifacts"}>
             <IrisArtifacts
               doFetch={doFetch}
@@ -3464,7 +3489,7 @@ export function SessionIrisTab() {
             server said there is one — never as a permanent button that sometimes does nothing. */}
         {/* No footer on the graph: it is never partial, so "39 of 39" and a dead Load more
             would both be noise. */}
-        <Show when={view() === "rows" && pane() !== "graph" && pane() !== "rooms" && pane() !== "artifacts"}>
+        <Show when={view() === "rows" && pane() !== "graph" && !SELF_PANES.has(pane())}>
           <div class="flex items-center gap-2 px-2 py-2 text-11-regular text-text-weaker">
             <Show when={pageSummary({ shown: rows().length, env: current() as PageEnvelope | undefined })}>
               {(text) => <span class="font-mono tabular-nums">{text()}</span>}

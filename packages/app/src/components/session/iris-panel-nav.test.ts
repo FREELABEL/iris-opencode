@@ -32,6 +32,7 @@ describe("the project row tells the truth about scope", () => {
   })
   test("artifacts belong to the session", () => {
     expect(panelScope("pages", "artifacts")).toBe("session")
+    expect(panelScope("atlas", "atlas-artifacts")).toBe("session")
   })
 })
 
