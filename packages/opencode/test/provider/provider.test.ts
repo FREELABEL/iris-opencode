@@ -2116,3 +2116,56 @@ it.effect("opencode loader keeps paid models when auth exists", () =>
     expect(keyedCount).toBeGreaterThan(0)
   }).pipe(provideMultiInstance),
 )
+
+// #187726: the bundled seed (iris-provider.json) is loaded as config. The live manifest dropped
+// models the server marks unavailable, then the config merge put every seeded one back — so the
+// picker offered GPT-5.6 Luna on a dead OpenAI account and the client retried a 429 forever.
+it.instance(
+  "iris: a model the live manifest marks unavailable is not re-added from the seed",
+  Effect.gen(function* () {
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url
+      if (url === "https://iris.test/api/v6/openai/models") {
+        return new Response(
+          JSON.stringify({
+            data: [
+              { id: "iris/gpt-6-luna", name: "GPT-6 Luna", available: true },
+              { id: "iris/gpt-5.6-luna", name: "GPT-5.6 Luna", available: false },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )
+      }
+      return realFetch(input, init)
+    }) as typeof fetch
+    try {
+      const providers = yield* list
+      const iris = providers[ProviderV2.ID.make("iris")]
+      expect(iris).toBeDefined()
+      const ids = Object.keys(iris!.models)
+      expect(ids).toContain("gpt-6-luna")
+      expect(ids).not.toContain("gpt-5.6-luna")
+      // A model the manifest never mentioned is the user's own config — keep it.
+      expect(ids).toContain("my-own-model")
+    } finally {
+      globalThis.fetch = realFetch
+    }
+  }),
+  {
+    config: {
+      provider: {
+        iris: {
+          name: "IRIS",
+          npm: "@ai-sdk/openai-compatible",
+          options: { baseURL: "https://iris.test/api/v6/openai", apiKey: "test-key" },
+          models: {
+            "gpt-5.6-luna": { name: "GPT-5.6 Luna" },
+            "gpt-6-luna": { name: "GPT-6 Luna" },
+            "my-own-model": { name: "Mine" },
+          },
+        },
+      },
+    },
+  },
+)

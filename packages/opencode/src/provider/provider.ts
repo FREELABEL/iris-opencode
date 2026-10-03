@@ -1477,6 +1477,11 @@ const layer = Layer.effect(
         // The seed (iris-provider.json) is a static fallback for offline; this fetch is the
         // source of truth when the network is available. One fetch replaces model list,
         // capabilities, and availability — no client deploy needed.
+        // Models the live manifest says are NOT available. The seed (iris-provider.json) is loaded
+        // as config, so without this the config merge below re-adds every seeded model the
+        // manifest just dropped — the picker then offers models the server will not serve
+        // (#187726: GPT-5.6 Luna on a dead OpenAI account, retried forever as a 429).
+        const irisUnavailable = new Set<string>()
         if (cfg.provider?.["iris"]) {
           try {
             const apiKey = process.env.IRIS_API_KEY
@@ -1505,7 +1510,10 @@ const layer = Layer.effect(
               if (manifestData.data?.length) {
                 const irisModels: Record<string, Model> = {}
                 for (const m of manifestData.data) {
-                  if (!m.available) continue
+                  if (!m.available) {
+                    irisUnavailable.add(m.id.replace(/^iris\//, ""))
+                    continue
+                  }
                   const modelID = m.id.replace(/^iris\//, "")
                   irisModels[modelID] = {
                     id: ModelV2.ID.make(modelID),
@@ -1615,6 +1623,7 @@ const layer = Layer.effect(
           }
 
           for (const [modelID, model] of Object.entries(provider.models ?? {})) {
+            if (providerID === "iris" && irisUnavailable.has(model.id ?? modelID)) continue
             const existingModel = parsed.models[model.id ?? modelID]
             const apiID = model.id ?? existingModel?.api.id ?? modelID
             const apiNpm =
