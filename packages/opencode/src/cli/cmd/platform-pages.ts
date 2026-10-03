@@ -3706,6 +3706,142 @@ function renderReach(page: any, v: { mode: VisibilityMode; declared: boolean }, 
   printDivider()
 }
 
+const RedirectCmd = cmd({
+  command: "redirect <slug> [target]",
+  aliases: ["forward"],
+  // WHY THIS EXISTS. A promoted post's destination url is immutable — it lives in the post
+  // body and there is no edit for it. So the /p/ address an ad was approved against is fixed
+  // forever, and re-pointing paid traffic used to mean new posts and new review (seven to nine
+  // hours, on this account). Setting a redirect turns that fixed address into a POINTER.
+  //
+  // The visit is recorded BEFORE the forward, so utm_content (which creative), twclid, and the
+  // first-touch cookie the server-side /download/{platform} route reads all survive the hop.
+  // That is the entire point: a plain DNS or edge redirect would move the traffic and lose the
+  // attribution, which is the thing that was hard to get.
+  describe:
+    "point a page at another url while still recording the visit (utm_content, twclid and the " +
+    "first-touch cookie survive the hop). Use it to re-aim an ad whose link can no longer be " +
+    "edited. Omit the target to show the current one; --clear removes it. Always a 302",
+  builder: (y) =>
+    y
+      .positional("slug", { describe: "page slug", type: "string", demandOption: true })
+      .positional("target", {
+        describe:
+          "where to forward: a site-relative path (/downloads) or an absolute https:// url. " +
+          "External hosts need a trusted owner — a redirect on this domain is a phishing " +
+          "primitive, so untrusted pages may only point at our own",
+        type: "string",
+      })
+      .option("clear", { describe: "remove the redirect and render the page normally", type: "boolean", default: false })
+      .option("json", { describe: "output as JSON", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    const slug = String(args.slug)
+    const clearing = !!args.clear
+    const target = args.target ? String(args.target).trim() : null
+
+    if (clearing && target) {
+      prompts.log.error("Pass a target or --clear, not both.")
+      process.exitCode = 1
+      return
+    }
+
+    prompts.intro(`◈  Redirect: ${slug}${clearing ? " → (cleared)" : target ? ` → ${target}` : ""}`)
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+    const sp = prompts.spinner()
+    sp.start("Loading…")
+    try {
+      const page = await getBySlug(slug, false)
+      if (!page) { sp.stop("Page not found", 1); process.exitCode = 1; prompts.outro("Done"); return }
+      const current: string | null = (page as any).redirect_to ?? null
+
+      // ---- Report mode -----------------------------------------------------
+      if (!clearing && !target) {
+        sp.stop(current ? `Forwarding to ${current}` : "No redirect — the page renders normally")
+        if (args.json) {
+          await writeJson({ slug: page.slug, id: page.id, redirect_to: current, status: page.status })
+          prompts.outro("Done")
+          return
+        }
+        if (current) {
+          prompts.log.info(
+            `${publicUrl(page)}\n  → ${current}\n\n` +
+            `  Every visit is still recorded first, so utm_content and twclid reach the target.`,
+          )
+        }
+        prompts.outro(dim(`iris genesis redirect ${slug} /downloads   ·   iris genesis redirect ${slug} --clear`))
+        return
+      }
+
+      const desired = clearing ? null : target
+      if ((current ?? null) === (desired ?? null)) {
+        sp.stop(desired ? `Already forwarding to ${desired}` : "Already has no redirect")
+        prompts.outro("Done")
+        return
+      }
+
+      sp.stop(current ? `Currently → ${current}` : "Currently no redirect")
+
+      const sp2 = prompts.spinner()
+      sp2.start(clearing ? "Clearing redirect…" : `Pointing at ${desired}…`)
+      const res = await pagesFetch(`/api/v1/pages/${page.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ redirect_to: desired }),
+      })
+      if (!(await handleApiError(res, "Set redirect"))) { sp2.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const updated = ((await res.json()) as any)?.data ?? {}
+      const after: string | null = updated.redirect_to ?? null
+
+      // Same guard the visibility command carries: a backend that predates the column
+      // accepts the PUT and drops the field, and claiming a change that did not happen is
+      // how someone spends an afternoon debugging an ad that still lands on the old page.
+      if ((after ?? null) !== (desired ?? null)) {
+        sp2.stop("Not applied", 1)
+        process.exitCode = 1
+        prompts.log.error(
+          `The API accepted the request but the page still reports redirect_to=${after ?? "(none)"}.\n` +
+          `  This backend doesn't support page redirects yet — nothing changed.`,
+        )
+        prompts.outro("Done")
+        return
+      }
+
+      // A cached render would keep serving the page body, so the redirect would appear to
+      // do nothing until the cache aged out.
+      await pagesFetch("/api/internal/cache/purge-page", {
+        method: "POST",
+        body: JSON.stringify({ slug: page.slug }),
+      }).catch(() => {})
+
+      sp2.stop(clearing ? "Redirect cleared" : `Forwarding to ${after}`)
+
+      if (args.json) {
+        await writeJson({ slug: page.slug, id: page.id, redirect_to: after, status: page.status })
+        prompts.outro("Done")
+        return
+      }
+
+      if (after) {
+        prompts.log.success(
+          `${publicUrl(page)}\n  → ${after}\n\n` +
+          `  302, so you can re-point it again later — a 301 would be cached by every browser\n` +
+          `  that saw it and could never be taken back.`,
+        )
+      } else {
+        prompts.log.success(`${publicUrl(page)} renders normally again.`)
+      }
+      prompts.outro("Done")
+    } catch (e: any) {
+      sp.stop("Failed", 1)
+      process.exitCode = 1
+      prompts.log.error(e?.message ?? String(e))
+      prompts.outro("Done")
+    }
+  },
+})
+
 const VisibilityCmd = cmd({
   command: "visibility <slug> [mode]",
   aliases: ["vis"],
@@ -5307,7 +5443,7 @@ export const PlatformPagesCommand = productCommand({
   aliases: ["pages"],
   purpose:
     "Genesis — composable pages, sites and COMPONENTS: browse the component library with its props/emits/slots, see which pages use a component before changing it, roll a component back, plus pages list/view/get/set/pull/push/diff/publish/screenshot, and export a page to a server you control (export/deploy — IRIS Edge)",
-  keywords: ["genesis", "page", "site", "component", "components", "library", "catalogue", "props", "emits", "slots", "usage", "rollback", "versions", "stale", "publish", "artifact", "landing", "screenshot", "verify", "read", "bespoke", "html", "export", "deploy", "edge", "self-host", "static", "rollback"],
+  keywords: ["genesis", "page", "site", "component", "components", "library", "catalogue", "props", "emits", "slots", "usage", "rollback", "versions", "stale", "publish", "artifact", "landing", "screenshot", "verify", "read", "bespoke", "html", "export", "deploy", "edge", "self-host", "static", "rollback", "redirect", "forward", "utm", "attribution", "ads"],
   howtos: ["genesis-design-standard", "bespoke", "genesis-sdk", "pages", "edge-publish"],
   playbooks: ["pages", "seed-pages", "edge-publish"],
   builder: (y) =>
@@ -5327,6 +5463,7 @@ export const PlatformPagesCommand = productCommand({
       .command(UnpublishCmd)
       .command(PreviewCmd)
       .command(VisibilityCmd)
+      .command(RedirectCmd)
       .command(ShareCmd)
       .command(ShareListCmd)
       .command(ShareRevokeCmd)
