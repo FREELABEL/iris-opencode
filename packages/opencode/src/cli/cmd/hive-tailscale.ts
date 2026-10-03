@@ -341,6 +341,7 @@ export async function sshRun(t: SshTarget, command: string, timeoutMs = 60_000):
 export async function ensureSshUser(
   nodeId: string,
   t: SshTarget,
+  opts: { askNode?: () => Promise<string | null> } = {},
 ): Promise<SshTarget | { error: string }> {
   const candidates: (string | null)[] = []
   if (t.user) candidates.push(t.user)
@@ -352,16 +353,32 @@ export async function ensureSshUser(
   }
 
   const tried: string[] = []
-  for (const user of candidates) {
+  const probeOne = async (user: string | null): Promise<SshTarget | null> => {
     const probe: SshTarget = { ...t, user }
     const r = await sshRun(probe, "true", 15_000)
-    if (r.ok) {
-      const cache = await readSshCache()
-      cache[nodeId] = { host: t.host, ...(user ? { user } : {}) }
-      await writeSshCache(cache)
-      return probe
+    if (!r.ok) {
+      tried.push(user ?? "(ssh_config default)")
+      return null
     }
-    tried.push(user ?? "(ssh_config default)")
+    const cache = await readSshCache()
+    cache[nodeId] = { host: t.host, ...(user ? { user } : {}) }
+    await writeSshCache(cache)
+    return probe
+  }
+  for (const user of candidates) {
+    const hit = await probeOne(user)
+    if (hit) return hit
+  }
+  // Last: ask the node who its daemon runs as. A Linux box set up by hand rarely shares a
+  // username with the Mac dialling it (iris-hive-001: siralexmayo vs mayoalexander), and
+  // every guess above then fails with an error that reads like a network problem. The
+  // node's answer is still only a CANDIDATE — it is used once the ssh login with it works.
+  if (opts.askNode) {
+    const asked = await opts.askNode().catch(() => null)
+    if (asked && !candidates.includes(asked)) {
+      const hit = await probeOne(asked)
+      if (hit) return hit
+    }
   }
   return {
     error:
