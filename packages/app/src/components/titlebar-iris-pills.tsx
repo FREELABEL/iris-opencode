@@ -14,7 +14,9 @@ import { Portal } from "solid-js/web"
 import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 import { useServer } from "@/context/server"
 import { usePlatform } from "@/context/platform"
+import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useTitlebarRightMount } from "./titlebar"
+import { DialogUpgrade } from "./dialog-upgrade"
 
 /**
  * Two pills in the titlebar: how many machines are up, and whether anything is waiting for you.
@@ -109,6 +111,8 @@ export function inboxLabel(inbox: InboxState | undefined, loading = false): stri
 interface PlanState {
   measured: boolean
   plan: string | null
+  /** From billing and licence seats (fl-iris-api dd9d0dfa). Null = could not tell. */
+  paid?: boolean | null
   upgradeUrl: string | null
 }
 
@@ -116,33 +120,23 @@ interface PlanState {
 export const TITLEBAR_UPGRADE_URL = "https://web.heyiris.io/pricing?source=desktop-titlebar"
 
 /**
- * What the plan slot shows, decided from the server's answer and nothing else.
+ * Whether to show Upgrade — ONLY to someone we KNOW has not paid.
  *
- * Unmeasured shows NOTHING, never "Upgrade": a sidecar that cannot reach the API must not tell a
- * paying customer to buy what they already have. Staff (plan null) see nothing either.
+ * Keyed on `paid`, never on `plan`. Checkout writes the plan name as the package's own name
+ * ("IRIS Solo", "Creator Plan") and the server's tier mapping turns every one of those into
+ * `free`, so a tier-keyed button told paying customers to upgrade. Paid, unknown, unmeasured,
+ * or a server too old to report `paid`: nothing at all.
  */
-export function planBadge(
-  state: PlanState | undefined,
-): { kind: "upgrade" | "label"; text: string; url: string } | null {
-  if (!state?.measured) return null
-  const url = state.upgradeUrl || TITLEBAR_UPGRADE_URL
-  switch (state.plan) {
-    case "free":
-    case "starter":
-      return { kind: "upgrade", text: "Upgrade", url }
-    case "pro":
-      return { kind: "label", text: "Pro", url }
-    case "business":
-      return { kind: "label", text: "Business", url }
-    default:
-      return null
-  }
+export function planBadge(state: PlanState | undefined): { text: string; url: string } | null {
+  if (!state?.measured || state.paid !== false) return null
+  return { text: "Upgrade", url: state.upgradeUrl || TITLEBAR_UPGRADE_URL }
 }
 
 export function TitlebarIrisPills() {
   const mount = useTitlebarRightMount()
   const server = useServer()
   const platform = usePlatform()
+  const dialog = useDialog()
 
   const base = createMemo(() => server.current?.http?.url?.replace(/\/$/, ""))
   const [tick, setTick] = createSignal(0)
@@ -283,26 +277,19 @@ export function TitlebarIrisPills() {
 
           <Show when={badge()}>
             {(b) => (
-              <TooltipV2
-                placement="bottom"
-                value={
-                  <>
-                    {b().kind === "upgrade"
-                      ? "See IRIS plans: IRIS Pro, Genesis Designer and higher limits"
-                      : `You're on IRIS ${b().text}. See plans and billing`}
-                  </>
-                }
-              >
+              <TooltipV2 placement="bottom" value={<>See IRIS plans: every product, every model, more compute</>}>
                 <button
                   type="button"
                   data-slot="iris-plan-pill"
-                  class="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium leading-4 transition-colors"
-                  classList={{
-                    "bg-v2-icon-icon-accent/20 text-v2-icon-icon-accent hover:bg-v2-icon-icon-accent/30":
-                      b().kind === "upgrade",
-                    "text-v2-text-text-weak hover:text-v2-text-text-base": b().kind === "label",
-                  }}
-                  onClick={() => platform.openExternal(b().url)}
+                  class="shrink-0 rounded-full bg-v2-icon-icon-accent/20 px-2 py-0.5 text-[11px] font-medium leading-4 text-v2-icon-icon-accent transition-colors hover:bg-v2-icon-icon-accent/30"
+                  onClick={() =>
+                    dialog.show(() => (
+                      <DialogUpgrade
+                        pricingUrl={b().url}
+                        fetchJson={async <T,>(path: string) => (await (await doFetch(path)).json()) as T}
+                      />
+                    ))
+                  }
                 >
                   {b().text}
                 </button>

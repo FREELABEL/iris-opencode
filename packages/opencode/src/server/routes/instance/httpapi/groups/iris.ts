@@ -665,10 +665,29 @@ const AllowanceResponse = Schema.Struct({
 })
 
 /** The caller's plan, read WITHOUT consuming a notice — safe to poll (title bar Upgrade button). */
+/** The IRIS plans on sale, from the same package list the web pricing page reads. */
+const PlansResponse = Schema.Struct({
+  measured: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  plans: Schema.Array(
+    Schema.Struct({
+      slug: Schema.String,
+      title: Schema.String,
+      subtitle: Schema.NullOr(Schema.String),
+      price: Schema.Number,
+      period: Schema.String,
+      features: Schema.Array(Schema.String),
+      trialDays: Schema.NullOr(Schema.Number),
+      popular: Schema.Boolean,
+    }),
+  ),
+})
+
 const PlanResponse = Schema.Struct({
   measured: described(Schema.Boolean, "FALSE means we could not ask. Never render that as the Free plan."),
   reason: Schema.optional(Schema.String),
   plan: described(Schema.NullOr(Schema.String), "free | pro | business; NULL for staff."),
+  paid: described(Schema.NullOr(Schema.Boolean), "Has this person paid. NULL = unknown; only false shows Upgrade."),
   uncapped: Schema.Boolean,
   upgradeUrl: Schema.NullOr(Schema.String),
 })
@@ -784,6 +803,7 @@ export const IrisPaths = {
   hive: `${root}/hive`,
   allowance: `${root}/allowance`,
   plan: `${root}/plan`,
+  plans: `${root}/plans`,
   atlasNote: `${root}/atlas-note`,
 } as const
 
@@ -818,6 +838,15 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Plan",
           description:
             "free, pro or business (null for staff), read with ?peek=1 so it never eats the weekly allowance notice. Safe to poll.",
+        }),
+      ),
+      HttpApiEndpoint.get("plans", IrisPaths.plans, {
+        success: described(PlansResponse, "The IRIS plans on sale"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.plans",
+          summary: "Plans",
+          description: "Self-serve IRIS plans with live prices, for the desktop Upgrade dialog.",
         }),
       ),
       HttpApiEndpoint.get("bloqs", IrisPaths.bloqs, {

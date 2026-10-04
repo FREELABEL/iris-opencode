@@ -577,8 +577,59 @@ export async function fetchAllowance(): Promise<PlatformResult<Allowance>> {
 export interface Plan {
   /** free | pro | business, or null for staff, who have no plan. */
   plan: string | null
+  /**
+   * Has this person PAID (fl-iris-api dd9d0dfa) — read from billing and licence seats, not from
+   * `plan`, which maps most paid plan names to `free`. Null when the server could not tell or is
+   * older than dd9d0dfa. Only `false` may show an Upgrade button.
+   */
+  paid: boolean | null
   uncapped: boolean
   upgradeUrl: string | null
+}
+
+export interface PlanOffer {
+  slug: string
+  title: string
+  subtitle: string | null
+  price: number
+  period: string
+  features: string[]
+  trialDays: number | null
+  popular: boolean
+}
+
+/**
+ * The IRIS plans on sale, from the same package list the web pricing page reads — so the desktop
+ * never quotes a price the website has changed. Only self-serve OS plans: public, sellable, not
+ * sales-led, brand `iris`, `features.kind === "os"`. Sorted by the catalogue's own sort_order.
+ */
+export async function fetchPlans(): Promise<PlatformResult<PlanOffer[]>> {
+  try {
+    const res = await irisFetch("/api/v1/platform/packages", FL_API)
+    if (!res.ok) return { measured: false, reason: `fl-api ${res.status}`, data: [] }
+    const rows = (((await res.json()) as any)?.data ?? []) as any[]
+    const offers = rows
+      .filter((p) => {
+        const f = p?.features ?? {}
+        return p?.brand === "iris" && p?.public && f.kind === "os" && f.sellable && !f.sales_led && !p?.archived_at
+      })
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+      .map(
+        (p): PlanOffer => ({
+          slug: String(p.slug),
+          title: String(p.title ?? p.slug),
+          subtitle: typeof p.subtitle === "string" ? p.subtitle : null,
+          price: Number(p.price) || 0,
+          period: String(p.billing_period ?? "month"),
+          features: Array.isArray(p.features?.displayFeatures) ? p.features.displayFeatures.map(String) : [],
+          trialDays: p.enable_free_trial && p.free_trial_days ? Number(p.free_trial_days) : null,
+          popular: Boolean(p.popular),
+        }),
+      )
+    return { measured: true, data: offers }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: [] }
+  }
 }
 
 /**
@@ -590,7 +641,7 @@ export interface Plan {
  * ship ahead of 4eda580d; check with scripts/deployed.sh fl-iris-api --commit 4eda580d.
  */
 export async function fetchPlan(): Promise<PlatformResult<Plan>> {
-  const empty: Plan = { plan: null, uncapped: false, upgradeUrl: null }
+  const empty: Plan = { plan: null, paid: null, uncapped: false, upgradeUrl: null }
   try {
     const res = await irisFetch("/api/v6/allowance/me?peek=1", IRIS_API)
     if (!res.ok) return { measured: false, reason: `iris-api ${res.status}`, data: empty }
@@ -600,6 +651,7 @@ export async function fetchPlan(): Promise<PlatformResult<Plan>> {
       measured: true,
       data: {
         plan: typeof j.plan === "string" ? j.plan : null,
+        paid: typeof j.paid === "boolean" ? j.paid : null,
         uncapped: Boolean(j.uncapped),
         upgradeUrl: typeof j.upgrade_url === "string" ? j.upgrade_url : null,
       },
