@@ -1,0 +1,12 @@
+[
+  ["what did AI cost me this month", ["usage"]],
+  ["charge my client for the project", ["leads collect", "invoices create", "invoices send"]],
+  ["run an ad campaign on twitter", ["playbook run x-ads"]],
+  ["set up a table for my customer records", ["atlas:datasets schemas create"]],
+  ["balance my accounts", ["playbook run bills-to-books", "mint verify"]],
+  ["get my agreement signed", ["playbook run iris-agreements", "agreements raise", "agreements issue", "contracts send"]],
+  ["build a site for my restaurant", ["playbook run genesis-bespoke", "genesis compose", "genesis create", "playbook run pages"]],
+  ["email my members the newsletter", ["newsroom send", "playbook run newsroom-newsletter-send"]],
+  ["how is the platform doing", ["monitor", "monitor overview"]],
+  ["audit the caseload at pathways", ["playbook run pathways-caseload-audit"]]
+]

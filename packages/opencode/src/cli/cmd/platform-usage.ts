@@ -353,7 +353,7 @@ async function renderPlatformAnalytics(days: number, external: boolean, json: bo
 
 export const PlatformUsageCommand = cmd({
   command: "usage",
-  describe: "what you ran, how much of it worked, and what it cost",
+  describe: "your AI spend and runs, account-wide — what you ran, how much of it worked, and what it cost",
   builder: (yargs) =>
     yargs
       .option("days", { type: "number", default: 30, describe: "window in days (1-365)" })

@@ -58,6 +58,9 @@ type Entry = {
   run: string
   /** Free-text blob that search matches against. */
   haystack: string
+  /** Set on a playbook written for ONE client (frontmatter `client:`). `intent` offers it only
+   *  when the request names that client (#187829). */
+  client?: string
 }
 
 // ── commands ────────────────────────────────────────────────────────────────
@@ -483,6 +486,7 @@ function collectMarkdown(
       // matches — a search for "atlas" should not hit every curl example whose URL contains
       // the word.
       haystack: [name, describe, prose(src)].join(" ").toLowerCase(),
+      ...(fm.client ? { client: fm.client } : {}),
     })
   }
   return out
@@ -519,6 +523,14 @@ const TERMS: Record<string, string[]> = {
   // text — but its own words ("pull a shared Atlas item's context") share nothing with how
   // anyone asks for it. Every phrasing below returned zero hits for `atlas use` on 2026-08-27,
   // which is how a five-step curl + HTML-scrape gets reinvented for a one-command job.
+  // The money paths (#187829). Each request below never reached the picker: its words share
+  // nothing with the command that answers it, so Decide was choosing among wrong answers.
+  // "how much have I spent on AI" → atlas:ledger; "get paid by a client" → invoices mark-paid;
+  // "launch a paid ad on X" → copycat-ads at 99%; "create a database" → atlas:database ddl.
+  usage: ["spent on ai", "ai spend", "how much have i spent", "ai cost", "ai bill", "token spend"],
+  collect: ["get paid", "collect payment", "take payment", "payment link", "charge a client", "charge the client"],
+  "x-ads": ["paid ad on x", "ad on x", "ads on x", "x ads", "twitter ads", "ad campaign on x"],
+  datasets: ["database", "data table", "store records", "schema"],
   "atlas use": [
     "read a note",
     "note text",

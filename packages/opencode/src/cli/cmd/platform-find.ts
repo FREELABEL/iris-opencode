@@ -39,6 +39,8 @@ export type Entry = {
   aliases: string[]
   run: string
   haystack: string
+  /** A playbook written for one client — see build-capabilities.ts. */
+  client?: string
 }
 
 export type Index = {

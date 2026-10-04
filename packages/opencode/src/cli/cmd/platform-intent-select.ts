@@ -2,7 +2,7 @@ import { spawnSync } from "child_process"
 import { UI } from "../ui"
 import { irisFetch, IRIS_API, dim, bold, highlight, printDivider } from "./iris-api"
 import { loadIndex, searchCapabilities } from "./platform-find"
-import { loadAgents, rankAgents, type AgentCandidate } from "./platform-intent-agents"
+import { loadAgents, NO_DESCRIPTION, rankAgents, type AgentCandidate } from "./platform-intent-agents"
 
 /**
  * `iris intent "<what you want to do>"` — TOOL SELECTION, by the Decide engine.
@@ -112,6 +112,14 @@ export function actsItself(run: string): boolean {
   )
 }
 
+/** True when a playbook has no client, or the request names it ("branding-champions" matches
+ *  "branding champions"; "xart" matches "x-art"). */
+export function namesClient(q: string, client?: string): boolean {
+  if (!client) return true
+  const flat = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "")
+  return flat(q).includes(flat(client))
+}
+
 /** The index and its command names, read ONCE per process — `intent` used to re-parse per step. */
 let _index: ReturnType<typeof loadIndex> | undefined
 let _names: string[] | undefined
@@ -131,13 +139,17 @@ export function candidatePools(
   poolLimit = 40,
 ): { pick: Candidate[]; pool: Candidate[] } {
   const q = text.toLowerCase()
+  // Never offered: `find` (intent IS find — it recommended itself under "reconcile my books"), and a
+  // command whose own description says it is a stub (`atlas:ledger ledger reconcile`, #187829).
   const leaves = leafOnly(
-    searchCapabilities(index(), q, "command", Math.max(pickLimit, poolLimit) + 6).map(({ e, s }) => ({
-      name: e.name,
-      describe: e.describe,
-      run: e.run || `iris ${e.name}`,
-      score: s,
-    })),
+    searchCapabilities(index(), q, "command", Math.max(pickLimit, poolLimit) + 6)
+      .filter(({ e }) => e.name !== "find" && !/\bstub\b/i.test(e.describe))
+      .map(({ e, s }) => ({
+        name: e.name,
+        describe: e.describe,
+        run: e.run || `iris ${e.name}`,
+        score: s,
+      })),
     commandNames(),
   )
   // PLAYBOOKS are answers too: "build a website" is best served by a playbook, not a raw command.
@@ -145,12 +157,18 @@ export function candidatePools(
   // unlabelled, playbooks won 3 of 20 simple requests from the right command (measured).
   // Top 5 playbooks (#186666 A5): the first 2 are offered for the PICK (more let playbooks steal
   // single-action requests — 3 of 20, measured), all 5 go to the ranked list, where Jev scores them.
-  const playbooks = searchCapabilities(index(), q, "playbook", 5).map(({ e, s }) => ({
-    name: `playbook run ${e.name}`,
-    describe: `GUIDED PROJECT, not a single action — choose only when the request is a whole multi-step job: ${e.describe}`,
-    run: `iris playbook run ${e.name}`,
-    score: s,
-  }))
+  // Rename redirects ("bespoke" → genesis-bespoke) are stubs too, and compete with what they point at.
+  // A playbook written for one client answers that client's requests only: "reconcile my books"
+  // picked the Pathways case reconcile at 33% over bills-to-books (#187829).
+  const playbooks = searchCapabilities(index(), q, "playbook", 8)
+    .filter(({ e }) => !/\bstub\b/i.test(e.describe) && namesClient(q, e.client))
+    .slice(0, 5)
+    .map(({ e, s }) => ({
+      name: `playbook run ${e.name}`,
+      describe: `GUIDED PROJECT, not a single action — choose only when the request is a whole multi-step job: ${e.describe}`,
+      run: `iris playbook run ${e.name}`,
+      score: s,
+    }))
   const general = (have: Candidate[]) =>
     GENERAL.flatMap((name) => {
       if (have.some((h) => h.name === name)) return []
@@ -545,6 +563,8 @@ export const PROMOTE_MARGIN = 0.15
  *  bare `connect` at 80% before this guard (measured). */
 export const PROMOTE_UNSURE = 0.6
 export const RELATED_FLOOR = 5
+/** A local candidate this sure keeps the general fallbacks out of the related list. */
+export const GENERAL_UNTIL = 0.6
 
 export type Related = Candidate & { p: number }
 
@@ -554,9 +574,15 @@ export function rankRelated(
   top: number,
   exclude: Set<string>,
 ): Related[] {
-  const ranked = pool
-    .map((c, i) => ({ ...c, p: probs[i] ?? 0 }))
-    .filter((c) => !exclude.has(c.name))
+  const scored = pool.map((c, i) => ({ ...c, p: probs[i] ?? 0 }))
+  // The general fallbacks (web-search, atlas search) are for when nothing here fits. Beside a
+  // confident local answer they are a row of noise — `web-search "i want to build a website"` (#187829).
+  const sure = scored.some((c) => !GENERAL.includes(c.name) && c.p >= GENERAL_UNTIL)
+  // An agent with no description stays in what Decide weighs — dropping it there flipped "check
+  // platform health" from monitor overview (45%) to doctor (47%), measured — but it is not shown:
+  // a row reading "(no description)" cannot be chosen on purpose (same rule as the MCP roster).
+  const ranked = scored
+    .filter((c) => !exclude.has(c.name) && !(sure && GENERAL.includes(c.name)) && !c.describe.endsWith(NO_DESCRIPTION))
     .sort((a, b) => b.p - a.p)
   const keep = ranked.filter((c) => c.p >= RELATED_MIN)
   const out = keep.length >= RELATED_FLOOR ? keep : ranked.slice(0, RELATED_FLOOR)
