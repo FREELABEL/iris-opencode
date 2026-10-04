@@ -8,7 +8,8 @@ import { createStore } from "solid-js/store"
 import { Portal } from "solid-js/web"
 import createPresence from "solid-presence"
 import { PromptInputV2Composer } from "@/components/prompt-input-v2"
-import { PromptGitStatus, PromptWorkspaceSelector } from "@/components/prompt-workspace-selector"
+import { PromptIntegrationsMenu } from "@/components/prompt-integrations-menu"
+import { PromptWorkspaceSelector } from "@/components/prompt-workspace-selector"
 import {
   PromptProjectAddButton,
   PromptProjectSelector,
@@ -43,26 +44,24 @@ export function NewSessionView(props: {
             <div class="mt-8 flex flex-col gap-8">
               <PromptInputV2Composer controller={props.input} />
               <Show when={props.project.empty()}>
-                <PromptProjectAddButton controller={props.project} />
+                <div class="flex min-h-7 min-w-0 items-center text-v2-text-text-faint">
+                  <PromptProjectAddButton controller={props.project} />
+                  <PromptIntegrationsMenu />
+                </div>
               </Show>
               <Show when={props.project.selected()}>
                 <div class="flex min-h-7 min-w-0 flex-col items-center justify-center gap-0 text-v2-text-text-faint sm:flex-row">
                   <PromptProjectSelector controller={props.project} placement="bottom" />
-                  <Show
-                    when={props.workspace.bar.visible()}
-                    fallback={
-                      <PromptGitStatus branch={props.workspace.bar.branch()} noGit={!props.workspace.project.git()} />
-                    }
-                  >
+                  <Show when={props.workspace.bar.visible()}>
                     <PromptWorkspaceSelector
                       value={props.workspace.selection.value()}
                       projectRoot={props.workspace.project.root()}
                       workspaces={props.workspace.project.workspaces()}
-                      branch={props.workspace.bar.branch()}
                       onChange={props.workspace.selection.set}
                       onDone={props.input.restoreFocus}
                     />
                   </Show>
+                  <PromptIntegrationsMenu />
                 </div>
               </Show>
             </div>
