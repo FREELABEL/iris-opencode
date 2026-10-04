@@ -1,18 +1,23 @@
 import { Effect, Layer, Stream } from "effect"
 import { HttpRouter, HttpServerResponse } from "effect/unstable/http"
-import { transcribeLocal, TranscribeError } from "@/transcribe/local"
 import { cancelCapture, isRecording, peakAmplitude, startCapture, stopCapture } from "@/transcribe/capture"
-import { readRemoteConfig, transcribeRemote } from "@/transcribe/remote"
-import { stripNonSpeech } from "@/transcribe/local"
+import { ChainError, transcribeWithFallback } from "@/transcribe/chain"
+import { hold, listHeld, readHeld, release, type Held } from "@/transcribe/held"
+import { readRemoteConfig } from "@/transcribe/remote"
+import { TranscribeError } from "@/transcribe/local"
 
 /**
- * POST /transcribe — on-device dictation for the desktop app.
+ * POST /transcribe — dictation for the desktop app, transcribed by Grok.
  *
- * The desktop already runs this server as its sidecar, so dictation does not need a new
- * process or a cloud account: the webview records, posts the audio here, and whisper.cpp
- * transcribes it on this machine. The audio reaches 127.0.0.1 and nothing else, and
- * `transcribe/local.ts` has no network client in it, so there is no branch that could
- * upload it (epic #182784).
+ * The webview records, posts the audio here, and this server forwards it to Grok (xAI) through
+ * the IRIS platform. The audio LEAVES THE MACHINE. Since 2026-10-04 Grok is the primary engine;
+ * other cloud engines and an already-installed on-device whisper are fallbacks (transcribe/chain.ts).
+ *
+ * Every recording is written to disk BEFORE any engine is called (transcribe/held.ts). If every
+ * engine fails, the response carries `held: { id, seconds }` and the recording waits:
+ *   GET  /transcribe/held          list recordings still waiting
+ *   POST /transcribe/retry?id=     run the chain again on one; released on success
+ *   POST /transcribe/discard?id=   delete one
  *
  * The body is the raw audio, not multipart. Both ends of this are ours, and a raw body
  * avoids a multipart parser on a path that only ever carries one file.
@@ -27,45 +32,50 @@ import { stripNonSpeech } from "@/transcribe/local"
  * callback, so WebKit never grants getUserMedia and hands back a track that emits nothing —
  * measured in the shipped app as a 10-second recording with peak 0.0000, while the app's own
  * microphone permission was granted. This process has that permission and can just record.
- *
- * Loopback-only for the same reason /transcribe is: a microphone the network can start is a
- * microphone the network can listen through.
  */
 /**
- * Transcribe with the best available engine.
+ * Run the engine chain on a recording that is already held. Shared by /transcribe,
+ * /dictate/stop and /transcribe/retry: three ways audio arrives, ONE engine policy.
  *
- * Grok first, on-device whisper as the fallback. Measured on identical audio, same machine:
- * local base.en heard "Southern transcription", grok heard "Sovereign transcription". The 0.3s
- * grok costs is nothing against being wrong.
- *
- * IRIS_TRANSCRIBE_PROVIDER=local forces on-device, which is what anything under a PHI policy
- * must use — remote means the audio leaves the machine.
- *
- * Shared by /transcribe and /dictate/stop deliberately. Those are two CAPTURE paths (the
- * webview records, or the sidecar does) with ONE transcription policy. When the choice lived in
- * /dictate/stop alone, audio captured in the webview silently skipped Grok — the same words
- * transcribed worse purely because of which process recorded them.
+ * Success releases the held file. Failure keeps it and answers 503 with the held id and every
+ * attempt, so the UI can say what failed and offer a retry instead of a re-recording.
  */
-async function transcribeBest(
+async function transcribeHeld(
+  held: Held | null,
   audio: Uint8Array,
   filename: string,
-  language?: string,
-): Promise<{ text: string; provider: string }> {
-  const prefer = process.env["IRIS_TRANSCRIBE_PROVIDER"]?.trim().toLowerCase()
-  const remote = prefer === "local" ? null : readRemoteConfig()
+  language: string | undefined,
+  extra: Record<string, unknown> = {},
+) {
+  const result = await transcribeWithFallback(audio, { filename, language, remote: readRemoteConfig() }).catch(
+    (e: unknown) => (e instanceof Error ? e : new TranscribeError(String(e))),
+  )
+  if (result instanceof Error)
+    return HttpServerResponse.jsonUnsafe(
+      {
+        error: result.message,
+        held: held ? { id: held.id, seconds: held.seconds } : undefined,
+        attempts: result instanceof ChainError ? result.attempts : [],
+        ...extra,
+      },
+      { status: 503 },
+    )
+  if (held) release(held.id)
+  return HttpServerResponse.jsonUnsafe({
+    text: result.text,
+    provider: result.provider,
+    attempts: result.attempts,
+    ...extra,
+  })
+}
 
-  if (remote) {
-    try {
-      const r = await transcribeRemote(audio, remote, { filename })
-      return { text: stripNonSpeech(r.text), provider: r.provider }
-    } catch {
-      // Never fail a dictation because the network did. Falling through to the on-device model
-      // is worse words, not no words.
-    }
+/** Holding is the safety net, not a precondition: a full disk must not also block transcription. */
+function holdOrNull(audio: Uint8Array) {
+  try {
+    return hold(audio)
+  } catch {
+    return null
   }
-
-  const result = await transcribeLocal(audio, { filename, language })
-  return { text: stripNonSpeech(result.text), provider: result.provider }
 }
 
 export const dictateRoute = HttpRouter.use((router) =>
@@ -76,10 +86,7 @@ export const dictateRoute = HttpRouter.use((router) =>
           const { startedAt } = startCapture()
           return HttpServerResponse.jsonUnsafe({ recording: true, startedAt })
         } catch (e) {
-          return HttpServerResponse.jsonUnsafe(
-            { error: e instanceof Error ? e.message : String(e) },
-            { status: 409 },
-          )
+          return HttpServerResponse.jsonUnsafe({ error: e instanceof Error ? e.message : String(e) }, { status: 409 })
         }
       }),
     )
@@ -89,8 +96,8 @@ export const dictateRoute = HttpRouter.use((router) =>
         try: async () => {
           const { audio, ms } = await stopCapture()
 
-          // whisper answers "You" to silence, confidently, every time. Refusing here means a
-          // dead input device never arrives disguised as a bad transcription.
+          // Speech models answer silence with a confident "You". Refusing here means a dead input
+          // device never arrives disguised as a bad transcription, and silence is never uploaded.
           const peak = peakAmplitude(audio)
           if (peak < 0.01) {
             return HttpServerResponse.jsonUnsafe(
@@ -102,24 +109,13 @@ export const dictateRoute = HttpRouter.use((router) =>
             )
           }
 
-          // GROK FIRST, local as the fallback.
-          //
-          const best = await transcribeBest(audio, "dictation.wav")
-          return HttpServerResponse.jsonUnsafe({
-            text: best.text,
-            provider: best.provider,
-            ms,
-            peak,
-            // Which process recorded this. The two capture paths fail in completely different
-            // ways and a transcript alone cannot tell you which one ran.
-            capture: "sidecar",
-          })
+          // `capture` names which process recorded this. The two capture paths fail in completely
+          // different ways and a transcript alone cannot tell you which one ran.
+          return transcribeHeld(holdOrNull(audio), audio, "dictation.wav", undefined, { ms, peak, capture: "sidecar" })
         },
         catch: (e) => (e instanceof TranscribeError ? e : new TranscribeError(String(e))),
       }).pipe(
-        Effect.catch((e) =>
-          Effect.succeed(HttpServerResponse.jsonUnsafe({ error: e.message }, { status: 500 })),
-        ),
+        Effect.catch((e) => Effect.succeed(HttpServerResponse.jsonUnsafe({ error: e.message }, { status: 500 }))),
       ),
     )
 
@@ -137,61 +133,72 @@ export const dictateRoute = HttpRouter.use((router) =>
 )
 
 export const transcribeRoute = HttpRouter.use((router) =>
-  router.add("POST", "/transcribe", (request) =>
-    Effect.gen(function* () {
-      const url = new URL(request.url, "http://localhost")
+  Effect.gen(function* () {
+    yield* router.add("POST", "/transcribe", (request) =>
+      Effect.gen(function* () {
+        const url = new URL(request.url, "http://localhost")
 
-      // Collect the raw body. Effect gives the request as a byte stream; there is no
-      // Content-Length to trust on a chunked upload from MediaRecorder.
-      // runFold takes a LazyArg for the seed in this Effect version, not a value.
-      const chunks: Uint8Array[] = yield* Stream.runFold(
-        request.stream,
-        (): Uint8Array[] => [],
-        (acc: Uint8Array[], chunk: Uint8Array) => {
-          acc.push(chunk)
-          return acc
-        },
-      )
-      const total = chunks.reduce((n: number, c: Uint8Array) => n + c.byteLength, 0)
+        // Collect the raw body. Effect gives the request as a byte stream; there is no
+        // Content-Length to trust on a chunked upload from MediaRecorder.
+        // runFold takes a LazyArg for the seed in this Effect version, not a value.
+        const chunks: Uint8Array[] = yield* Stream.runFold(
+          request.stream,
+          (): Uint8Array[] => [],
+          (acc: Uint8Array[], chunk: Uint8Array) => {
+            acc.push(chunk)
+            return acc
+          },
+        )
+        const total = chunks.reduce((n: number, c: Uint8Array) => n + c.byteLength, 0)
 
-      // An unbounded body on a local daemon is a way to fill someone's disk. 200MB is
-      // hours of speech; whisper itself has no limit.
-      const MAX = 200 * 1024 * 1024
-      if (total === 0) {
-        return HttpServerResponse.jsonUnsafe({ error: "no audio in request body" }, { status: 400 })
-      }
-      if (total > MAX) {
-        return HttpServerResponse.jsonUnsafe({ error: `audio exceeds ${MAX} bytes` }, { status: 413 })
-      }
+        // An unbounded body on a local daemon is a way to fill someone's disk. 200MB is
+        // hours of speech.
+        const MAX = 200 * 1024 * 1024
+        if (total === 0) {
+          return HttpServerResponse.jsonUnsafe({ error: "no audio in request body" }, { status: 400 })
+        }
+        if (total > MAX) {
+          return HttpServerResponse.jsonUnsafe({ error: `audio exceeds ${MAX} bytes` }, { status: 413 })
+        }
 
-      const audio = new Uint8Array(total)
-      let offset = 0
-      for (const c of chunks) {
-        audio.set(c, offset)
-        offset += c.byteLength
-      }
+        const audio = new Uint8Array(total)
+        let offset = 0
+        for (const c of chunks) {
+          audio.set(c, offset)
+          offset += c.byteLength
+        }
 
-      const result = yield* Effect.tryPromise({
-        try: () =>
-          // Same engine choice as /dictate/stop — see transcribeBest. Audio captured in the
-          // WEBVIEW lands here, and used to get on-device whisper only.
-          transcribeBest(
+        return yield* Effect.promise(() =>
+          transcribeHeld(
+            holdOrNull(audio),
             audio,
             url.searchParams.get("filename") ?? "dictation.wav",
             url.searchParams.get("language") ?? undefined,
           ),
-        // The message from local.ts already names the fix ("brew install whisper-cpp"), so
-        // it is surfaced verbatim rather than flattened into "transcription failed".
-        catch: (e) => (e instanceof TranscribeError ? e : new TranscribeError(String(e))),
-      }).pipe(
-        Effect.catch((e) =>
-          Effect.succeed(HttpServerResponse.jsonUnsafe({ error: e.message }, { status: 500 })),
-        ),
-      )
+        )
+      }),
+    )
 
-      if (!("text" in (result as object))) return result as HttpServerResponse.HttpServerResponse
-      const ok = result as { text: string; provider: string; ms: number }
-      return HttpServerResponse.jsonUnsafe({ text: ok.text, provider: ok.provider, ms: ok.ms })
-    }),
-  ),
+    yield* router.add("GET", "/transcribe/held", () =>
+      Effect.sync(() => HttpServerResponse.jsonUnsafe({ held: listHeld() })),
+    )
+
+    yield* router.add("POST", "/transcribe/retry", (request) =>
+      Effect.gen(function* () {
+        const id = new URL(request.url, "http://localhost").searchParams.get("id") ?? ""
+        const audio = readHeld(id)
+        if (!audio)
+          return HttpServerResponse.jsonUnsafe({ error: "That recording is no longer saved." }, { status: 404 })
+        const held = listHeld().find((h) => h.id === id) ?? { id, bytes: audio.byteLength, seconds: 0, createdAt: 0 }
+        return yield* Effect.promise(() => transcribeHeld(held, audio, "dictation.wav", undefined, { id }))
+      }),
+    )
+
+    yield* router.add("POST", "/transcribe/discard", (request) =>
+      Effect.sync(() => {
+        release(new URL(request.url, "http://localhost").searchParams.get("id") ?? "")
+        return HttpServerResponse.jsonUnsafe({ discarded: true })
+      }),
+    )
+  }),
 )

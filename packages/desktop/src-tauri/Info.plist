@@ -5,6 +5,6 @@
     <!-- macOS will not even SHOW the microphone prompt without a usage string; it terminates
          the app instead. Accurate as written: dictation is transcribed by the bundled sidecar. -->
     <key>NSMicrophoneUsageDescription</key>
-    <string>IRIS uses your microphone for dictation. Recordings are transcribed on this Mac and are never uploaded.</string>
+    <string>IRIS uses your microphone for dictation. Recordings are sent to IRIS and transcribed by Grok (xAI).</string>
 </dict>
 </plist>
