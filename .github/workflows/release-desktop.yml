@@ -528,12 +528,40 @@ jobs:
               --config '{"bundle":{"createUpdaterArtifacts":true}}' --target x86_64-unknown-linux-gnu --bundles "$1"
           }
           tb deb,rpm
+
+          # THE SIDECAR MUST NOT GO THROUGH linuxdeploy. It patchelf's every ELF in the AppDir
+          # (rpath -> $ORIGIN/../lib); on a Bun single-file executable that corrupts the binary,
+          # and its next `ldd` aborts the whole bundle ("Failed to run ldd: exited with code 1",
+          # desktop-v1.18.95 bring-up). So linuxdeploy gets a stand-in, and the real binary goes
+          # back into the finished AppImage, which is then repacked and RE-SIGNED — the signature
+          # Tauri made covers the stand-in.
+          SC=src-tauri/sidecars/$(grep -oE '\.sidecar\("[^"]+"\)' src-tauri/src/lib.rs | head -1 | sed -E 's/.*"(.*)".*/\1/')-x86_64-unknown-linux-gnu
+          SIDECAR_NAME=$(basename "$SC" -x86_64-unknown-linux-gnu)
+          cp "$SC" "$RUNNER_TEMP/sidecar.real"
+          cp /bin/true "$SC"
           set +e
           tb appimage,updater 2>&1 | tee "$RUNNER_TEMP/appimage.log"
           rc=${PIPESTATUS[0]}
           set -e
-          if [ "$rc" -ne 0 ]; then
+          cp "$RUNNER_TEMP/sidecar.real" "$SC"
+          AI=$(ls src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage 2>/dev/null | head -1 || true)
+          if [ "$rc" -ne 0 ] || [ -z "$AI" ]; then
             echo "::warning::AppImage bundling failed (exit $rc) — this release ships .deb/.rpm only, and Linux will not auto-update from it. See the linuxdeploy output above."
+            rm -f src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage*
+          else
+            AI="$PWD/$AI"
+            W=$(mktemp -d)
+            (cd "$W" && "$AI" --appimage-extract >/dev/null)
+            DEST=$(find "$W/squashfs-root" -type f -path "*/usr/bin/$SIDECAR_NAME" | head -1)
+            [ -n "$DEST" ] || { echo "::error::sidecar '$SIDECAR_NAME' not found inside the AppImage"; exit 1; }
+            cp "$RUNNER_TEMP/sidecar.real" "$DEST"; chmod +x "$DEST"
+            curl -fsSL -o "$RUNNER_TEMP/appimagetool" https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+            chmod +x "$RUNNER_TEMP/appimagetool"
+            rm -f "$AI" "$AI.sig"
+            ARCH=x86_64 "$RUNNER_TEMP/appimagetool" --no-appstream "$W/squashfs-root" "$AI"
+            ./node_modules/.bin/tauri signer sign "$AI"
+            test -f "$AI.sig" || { echo "::error::re-signing the repacked AppImage produced no .sig"; exit 1; }
+            echo "AppImage repacked with the real sidecar and re-signed ✓"
           fi
         env:
           OPENCODE_CHANNEL: latest
