@@ -217,9 +217,50 @@ import { TelemetryCommand } from "./cli/cmd/telemetry"
 import { TunnelCommand } from "./cli/cmd/tunnel"
 
 // Register a command in the grouped help registry and return it unchanged
+// Top-level command modules by name and alias, so a subcommand can be checked against what the
+// command actually declares (usage analytics; see subcommandOf below).
+const commandModules = new Map<string, any>()
+
 function reg<T>(commandModule: T): T {
   registerCommand(commandModule)
+  const m = commandModule as any
+  const name = String(Array.isArray(m?.command) ? m.command[0] : (m?.command ?? "")).split(" ")[0]
+  if (name) commandModules.set(name, m)
+  for (const a of Array.isArray(m?.aliases) ? m.aliases : []) commandModules.set(String(a), m)
   return commandModule
+}
+
+/**
+ * The subcommand of `iris <top> <sub> …`, or undefined. `argv._[1]` alone is NOT safe: an
+ * undeclared positional (`iris leads view 123 Jane`) lands there too. So the word is only
+ * returned when the top-level command DECLARES it — read by running its builder against a stub
+ * that records `.command()` calls and ignores everything else.
+ */
+function subcommandOf(args: unknown[]): string | undefined {
+  const [top, sub] = args
+  if (typeof top !== "string" || typeof sub !== "string") return undefined
+  const mod = commandModules.get(top)
+  if (typeof mod?.builder !== "function") return undefined
+  const declared = new Set<string>()
+  const stub: any = new Proxy(function () {}, {
+    get(_t, prop) {
+      if (prop === "then") return undefined
+      if (prop === "command") {
+        return (c: any) => {
+          const spec = typeof c === "string" ? c : c?.command
+          const first = String(Array.isArray(spec) ? spec[0] : (spec ?? "")).split(" ")[0]
+          if (first && first !== "$0") declared.add(first)
+          for (const a of Array.isArray(c?.aliases) ? c.aliases : []) declared.add(String(a))
+          return stub
+        }
+      }
+      return () => stub
+    },
+  })
+  try {
+    mod.builder(stub)
+  } catch {}
+  return declared.has(sub) ? sub : undefined
 }
 
 process.on("unhandledRejection", (e) => {
@@ -257,6 +298,8 @@ try {
 }
 
 const rawArgs = hideBin(process.argv)
+
+let commandSubcommand: string | undefined
 
 const cli = yargs(rawArgs)
   // boolean-negation OFF: many commands register literal `--no-*` flags
@@ -309,6 +352,12 @@ const cli = yargs(rawArgs)
     // RAW argv, not `opts._`: yargs has already eaten the positionals by here, and `iris hive run
     // studio-mac` would arrive as ["hive","run"] — without the node it is about to drive.
     await guardCommand(process.argv.slice(2), opts._.map(String))
+
+    // The subcommand (`exec` in `iris integrations exec …`) for usage analytics — only a word
+    // the command declares, never a positional value. See subcommandOf.
+    try {
+      commandSubcommand = subcommandOf(opts._)
+    } catch {}
   })
   .usage("\n" + UI.logo())
   .completion("completion", "generate shell completion script")
@@ -693,6 +742,7 @@ try {
     span_id: Beacon.newSpanId(),
     parent_span_id: commandSpanId,
     command: commandName,
+    context: commandSubcommand ? { subcommand: commandSubcommand } : undefined,
     // A command that returns normally but sets a non-zero exit code FAILED. Hardcoding "ok"
     // here is why `iris usage` showed 192/192 integration calls ok for a user whose error
     // log held ten failures that day — only a throw was ever counted.
@@ -755,6 +805,7 @@ try {
     span_id: Beacon.newSpanId(),
     parent_span_id: commandSpanId,
     command: commandName,
+    context: commandSubcommand ? { subcommand: commandSubcommand } : undefined,
     outcome: "error",
     duration_ms: Date.now() - commandStartedAt,
   })
