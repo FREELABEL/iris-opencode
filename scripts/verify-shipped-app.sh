@@ -241,6 +241,10 @@ need = {"darwin-aarch64", "darwin-x86_64", "windows-x86_64"}
 missing = need - set(plats)
 if missing:
     print("FAIL manifest is missing " + ", ".join(sorted(missing))); sys.exit(1)
+# Linux (added 2026-10-03) is reported, not required, until a release has built cleanly and been
+# launched on a real Linux machine. Then move it into `need` above.
+if "linux-x86_64" not in plats:
+    print("WARN manifest has no linux-x86_64 — Linux AppImage installs will not auto-update from this release")
 # minisign layout: 2-byte algorithm, then an 8-byte key id, then the key/signature. The id is
 # NOT present as hex text anywhere in the signature -- an earlier version of this check looked
 # for the printed "2A10681A..." comment string and would have failed every release. Compare the

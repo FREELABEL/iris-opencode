@@ -52,6 +52,7 @@ on:
         options:
           - all
           - mac-arm64-only
+          - linux-only
 
 permissions:
   contents: write
@@ -66,6 +67,7 @@ jobs:
     outputs:
       macos: ${{ steps.p.outputs.macos }}
       windows: ${{ steps.p.outputs.windows }}
+      linux: ${{ steps.p.outputs.linux }}
       partial: ${{ steps.p.outputs.partial }}
     steps:
       - id: p
@@ -76,15 +78,26 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.platforms }}" = "mac-arm64-only" ]; then
             echo "macos=[$ARM]" >> "$GITHUB_OUTPUT"
             echo "windows=false"  >> "$GITHUB_OUTPUT"
+            echo "linux=false"    >> "$GITHUB_OUTPUT"
             echo "partial=true"   >> "$GITHUB_OUTPUT"
             echo "BETA LANE: macOS arm64 only — stays a prerelease, never promoted."
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.platforms }}" = "linux-only" ]; then
+            # Bring-up lane for Linux: iterate on the Linux build without pushing an update to
+            # every macOS and Windows user each attempt. Same never-promoted rule as above.
+            echo "macos=[]"       >> "$GITHUB_OUTPUT"
+            echo "windows=false"  >> "$GITHUB_OUTPUT"
+            echo "linux=true"     >> "$GITHUB_OUTPUT"
+            echo "partial=true"   >> "$GITHUB_OUTPUT"
+            echo "BETA LANE: Linux only — stays a prerelease, never promoted."
           else
             echo "macos=[$ARM,$INTEL]" >> "$GITHUB_OUTPUT"
             echo "windows=true" >> "$GITHUB_OUTPUT"
+            echo "linux=true" >> "$GITHUB_OUTPUT"
             echo "partial=false" >> "$GITHUB_OUTPUT"
           fi
   macos:
     needs: plan
+    if: needs.plan.outputs.macos != '[]'
     strategy:
       fail-fast: false
       matrix:
@@ -400,9 +413,167 @@ jobs:
             packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/IRIS-tauri-windows-x64-setup.exe.sig
           if-no-files-found: warn
 
+  # LINUX (x86_64): AppImage, .deb and .rpm. The AppImage is also the updater payload — Tauri's
+  # updater replaces an AppImage in place and cannot update a package-manager install, so .deb
+  # and .rpm users update by installing the next package, the same way they installed this one.
+  #
+  # ubuntu-22.04, NOT ubuntu-latest: a Linux binary links against the build machine's glibc and
+  # refuses to start on anything older. Building on 22.04 (glibc 2.35) is what lets one AppImage
+  # run on Ubuntu 22.04+, Debian 12, Fedora 36+ and their derivatives.
+  #
+  # continue-on-error like the other platforms, and NOT yet required by verify-and-promote
+  # (scripts/verify-shipped-app.sh warns rather than fails when linux-x86_64 is missing). Linux
+  # was added 2026-10-03; it joins the required set once a release has built cleanly AND been
+  # installed and launched on a real Linux machine. Until then a broken Linux build cannot hold
+  # back macOS and Windows.
+  linux:
+    needs: plan
+    if: needs.plan.outputs.linux == 'true'
+    runs-on: ubuntu-22.04
+    continue-on-error: true
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/desktop-v}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Install Linux build dependencies
+        # Tauri v2's documented set for Debian/Ubuntu, plus rpm (for the .rpm bundle) and
+        # libfuse2 (linuxdeploy, which builds the AppImage, is itself an AppImage).
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev build-essential curl wget file libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf rpm libfuse2
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Stamp the desktop app version
+        run: |
+          set -euo pipefail
+          node -e "
+            const fs = require('fs');
+            const p = 'packages/desktop/package.json';
+            const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+            j.version = process.argv[1];
+            fs.writeFileSync(p, JSON.stringify(j, null, 2) + '\n');
+            console.log('desktop version stamped ->', j.version);
+          " "${{ steps.version.outputs.version }}"
+
+      - name: Build the iris CLI (sidecar binary)
+        run: |
+          cd packages/opencode
+          bun run script/build.ts --single
+        env:
+          OPENCODE_VERSION: ${{ steps.version.outputs.version }}
+          OPENCODE_CHANNEL: latest
+
+      - name: Stage sidecar binary
+        run: |
+          set -euo pipefail
+          EXPECT=$(grep -oE '\.sidecar\("[^"]+"\)' packages/desktop/src-tauri/src/lib.rs | head -1 | sed -E 's/.*"(.*)".*/\1/')
+          CONF=$(grep -oE '"sidecars/[^"]+"' packages/desktop/src-tauri/tauri.conf.json | head -1 | sed -E 's|"sidecars/(.*)"|\1|')
+          if [ "$EXPECT" != "$CONF" ]; then
+            echo "::error::sidecar name mismatch — lib.rs wants '$EXPECT' but externalBin ships '$CONF'. The app would build fine and fail to launch."
+            exit 1
+          fi
+          BIN=$(ls packages/opencode/dist/opencode-linux-x64/bin/iris)
+          mkdir -p packages/desktop/src-tauri/sidecars
+          cp "$BIN" "packages/desktop/src-tauri/sidecars/${EXPECT}-x86_64-unknown-linux-gnu"
+          chmod +x "packages/desktop/src-tauri/sidecars/${EXPECT}-x86_64-unknown-linux-gnu"
+
+      - name: Build IRIS desktop app (Tauri)
+        # OPENCODE_CHANNEL=latest for the same reason as macOS: unset, vite defaults to "dev"
+        # and the app ships with a DEV badge. APPIMAGE_EXTRACT_AND_RUN lets linuxdeploy run on
+        # a runner with no FUSE device.
+        run: |
+          cd packages/desktop
+          ./node_modules/.bin/tauri build --config ./src-tauri/tauri.prod.conf.json --config '{"bundle":{"createUpdaterArtifacts":true}}' --target x86_64-unknown-linux-gnu --bundles appimage,deb,rpm,updater
+        env:
+          OPENCODE_CHANNEL: latest
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      - name: Rename to the IRIS-tauri-* convention
+        # Tauri names these after productName and version (IRIS_1.18.94_amd64.AppImage), which
+        # would change every release and break heyiris.io/download/linux. Like Windows, the
+        # updater payload is the AppImage itself, signed in place; the .sig covers its bytes, so
+        # a byte-identical rename keeps it valid.
+        run: |
+          set -euo pipefail
+          B=packages/desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle
+          mkdir -p "$B/out"
+          AI=$(ls "$B"/appimage/*.AppImage | head -1)
+          test -f "$AI.sig" || { echo "::error::AppImage is UNSIGNED — no .AppImage.sig (createUpdaterArtifacts off, or TAURI_SIGNING_PRIVATE_KEY missing?)"; ls -la "$B/appimage"; exit 1; }
+          cp "$AI"      "$B/out/IRIS-tauri-linux-x64.AppImage"
+          cp "$AI.sig"  "$B/out/IRIS-tauri-linux-x64.AppImage.sig"
+          cp "$(ls "$B"/deb/*.deb | head -1)" "$B/out/IRIS-tauri-linux-x64.deb"
+          RPM=$(ls "$B"/rpm/*.rpm 2>/dev/null | head -1 || true)
+          if [ -n "$RPM" ]; then cp "$RPM" "$B/out/IRIS-tauri-linux-x64.rpm"; else echo "::warning::no .rpm produced"; fi
+          chmod +x "$B/out/IRIS-tauri-linux-x64.AppImage"
+          ls -la "$B/out"
+
+      - name: Smoke-test the bundle we just built
+        # Same check as macOS, against what users download: unpack the AppImage, confirm the
+        # sidecar is inside under the name lib.rs launches, check the .deb's version, then boot
+        # the sidecar and parse a real /global/health (not a status code — every unknown path
+        # returns the SPA's index.html with HTTP 200).
+        run: |
+          set -uo pipefail
+          B=packages/desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/out
+          SIDECAR=$(grep -oE '\.sidecar\("[^"]+"\)' packages/desktop/src-tauri/src/lib.rs | head -1 | sed -E 's/.*"(.*)".*/\1/')
+          DEBV=$(dpkg-deb -f "$B/IRIS-tauri-linux-x64.deb" Version)
+          if [ "$DEBV" != "${{ steps.version.outputs.version }}" ]; then
+            echo "::error::.deb reports $DEBV but this release is ${{ steps.version.outputs.version }}"
+            exit 1
+          fi
+          echo ".deb version $DEBV ✓"
+          W=$(mktemp -d); cp "$B/IRIS-tauri-linux-x64.AppImage" "$W/"; cd "$W"
+          ./IRIS-tauri-linux-x64.AppImage --appimage-extract >/dev/null || { echo "::error::AppImage will not extract"; exit 1; }
+          SC=$(find squashfs-root -type f -name "$SIDECAR" | head -1)
+          [ -n "$SC" ] && [ -x "$SC" ] || { echo "::error::AppImage is missing sidecar '$SIDECAR'"; find squashfs-root -maxdepth 3 | head -40; exit 1; }
+          echo "sidecar at $SC ✓"
+          "$SC" serve --port=47999 >/tmp/sc.log 2>&1 &
+          for _ in $(seq 1 40); do curl -s -m 2 -o /dev/null http://127.0.0.1:47999/doc && break; sleep 0.5; done
+          H=$(curl -s -m 10 http://127.0.0.1:47999/global/health)
+          kill %1 2>/dev/null || true
+          case "$H" in
+            '{'*) echo "health: $H" ;;
+            *) echo "::error::/global/health returned the SPA fallback, not JSON — API not serving"; tail -40 /tmp/sc.log; exit 1 ;;
+          esac
+          echo "$H" | grep -q '"healthy":true' || { echo "::error::engine reports unhealthy"; exit 1; }
+          echo "engine healthy ✓"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: IRIS-tauri-linux-x64
+          path: packages/desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/out/IRIS-tauri-linux-x64.*
+          if-no-files-found: warn
+
   publish:
-    needs: [plan, macos, windows]
-    if: always() && !cancelled() && needs.macos.result == 'success'
+    needs: [plan, macos, windows, linux]
+    # macOS OR Linux: the linux-only beta lane builds no macOS at all.
+    if: always() && !cancelled() && (needs.macos.result == 'success' || needs.linux.result == 'success')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -430,7 +601,8 @@ jobs:
         # every user. Fail loudly instead of publishing a shell.
         run: |
           shopt -s nullglob
-          assets=(dist/IRIS-tauri-*.zip dist/IRIS-tauri-*.dmg dist/IRIS-tauri-*.exe)
+          assets=(dist/IRIS-tauri-*.zip dist/IRIS-tauri-*.dmg dist/IRIS-tauri-*.exe \
+                  dist/IRIS-tauri-*.AppImage dist/IRIS-tauri-*.deb dist/IRIS-tauri-*.rpm)
           if [ ${#assets[@]} -eq 0 ]; then
             echo "::error::no desktop assets were built — refusing to publish an empty release"
             exit 1
@@ -465,6 +637,12 @@ jobs:
             cmp dist/IRIS-tauri-windows-x64-setup.exe dist/IRIS-tauri-windows-x64-update.exe \
               || { echo "::error::updater copy differs from the installer — its signature would not validate"; exit 1; }
           fi
+          # Linux gets the same separate updater copy, for the same reason.
+          if [ -f dist/IRIS-tauri-linux-x64.AppImage ]; then
+            cp dist/IRIS-tauri-linux-x64.AppImage dist/IRIS-tauri-linux-x64-update.AppImage
+            cmp dist/IRIS-tauri-linux-x64.AppImage dist/IRIS-tauri-linux-x64-update.AppImage \
+              || { echo "::error::Linux updater copy differs from the AppImage — its signature would not validate"; exit 1; }
+          fi
           python3 - "$TAG" "$BASE" "${{ steps.version.outputs.version }}" <<'PY'
           import json, os, sys, pathlib
           tag, base, version = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -477,6 +655,7 @@ jobs:
               "darwin-aarch64": ("IRIS-tauri-darwin-arm64.app.tar.gz", "IRIS-tauri-darwin-arm64.app.tar.gz"),
               "darwin-x86_64":  ("IRIS-tauri-darwin-x64.app.tar.gz",   "IRIS-tauri-darwin-x64.app.tar.gz"),
               "windows-x86_64": ("IRIS-tauri-windows-x64-update.exe",  "IRIS-tauri-windows-x64-setup.exe"),
+              "linux-x86_64":   ("IRIS-tauri-linux-x64-update.AppImage", "IRIS-tauri-linux-x64.AppImage"),
           }
           platforms = {}
           for target, (asset, sig_for) in targets.items():
@@ -504,7 +683,8 @@ jobs:
           # The updater assets ship alongside the installers; assets.txt drives the upload.
           shopt -s nullglob
           printf '%s\n' dist/latest.json dist/*.app.tar.gz dist/*.app.tar.gz.sig \
-                        dist/*-setup.exe.sig dist/*-update.exe >> /tmp/assets.txt
+                        dist/*-setup.exe.sig dist/*-update.exe \
+                        dist/*.AppImage.sig dist/*-update.AppImage >> /tmp/assets.txt
         env:
           PUB_DATE: ${{ steps.pubdate.outputs.now }}
 
