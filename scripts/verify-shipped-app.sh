@@ -277,8 +277,12 @@ for name, p in plats.items():
 shown = want_id[::-1].hex().upper() if want_id else "unchecked"
 print("OK manifest " + want + ", " + str(len(plats)) + " platforms, signed by " + shown)
 ' > "$WORK/m.txt" 2>&1
-  R="$(cat "$WORK/m.txt")"
+  # WARN lines are advisory and judged separately. desktop-v1.18.94 was refused promotion with
+  # every check green because the Linux WARN printed first and `case` saw a line that was not OK.
+  W="$(grep '^WARN ' "$WORK/m.txt" || true)"
+  R="$(grep -v '^WARN ' "$WORK/m.txt" || true)"
   case "$R" in OK*) pass "${R#OK }";; *) fail "${R#FAIL }";; esac
+  [ -n "$W" ] && printf '%s\n' "$W" | sed 's/^WARN /  ⚠ /'
 
   # And the binary it points at must exist. A manifest naming a 404 fails at download time,
   # on the client, silently.

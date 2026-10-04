@@ -68,6 +68,7 @@ jobs:
       macos: ${{ steps.p.outputs.macos }}
       windows: ${{ steps.p.outputs.windows }}
       linux: ${{ steps.p.outputs.linux }}
+      publish: ${{ steps.p.outputs.publish }}
       partial: ${{ steps.p.outputs.partial }}
     steps:
       - id: p
@@ -80,6 +81,7 @@ jobs:
             echo "windows=false"  >> "$GITHUB_OUTPUT"
             echo "linux=false"    >> "$GITHUB_OUTPUT"
             echo "partial=true"   >> "$GITHUB_OUTPUT"
+            echo "publish=true"   >> "$GITHUB_OUTPUT"
             echo "BETA LANE: macOS arm64 only — stays a prerelease, never promoted."
           elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.platforms }}" = "linux-only" ]; then
             # Bring-up lane for Linux: iterate on the Linux build without pushing an update to
@@ -88,11 +90,15 @@ jobs:
             echo "windows=false"  >> "$GITHUB_OUTPUT"
             echo "linux=true"     >> "$GITHUB_OUTPUT"
             echo "partial=true"   >> "$GITHUB_OUTPUT"
-            echo "BETA LANE: Linux only — stays a prerelease, never promoted."
+            # BUILD-ONLY: artifacts stay on the run (download them from the run page). Publishing
+            # would create a desktop-v* tag and burn a version number on every bring-up attempt.
+            echo "publish=false"  >> "$GITHUB_OUTPUT"
+            echo "BETA LANE: Linux only — build and smoke-test, NOT published."
           else
             echo "macos=[$ARM,$INTEL]" >> "$GITHUB_OUTPUT"
             echo "windows=true" >> "$GITHUB_OUTPUT"
             echo "linux=true" >> "$GITHUB_OUTPUT"
+            echo "publish=true" >> "$GITHUB_OUTPUT"
             echo "partial=false" >> "$GITHUB_OUTPUT"
           fi
   macos:
@@ -262,34 +268,42 @@ jobs:
           echo "signed updater artifact ✓"
 
       - name: Smoke-test the bundle we just built
-        # Do not wait for a client to discover that the app cannot start. Boot the sidecar
-        # straight out of the bundle and parse a real response. Status codes are useless
-        # here: every unknown path on that server returns the SPA's index.html with HTTP 200.
+        # Against what users download. The .deb: version, and the sidecar under the name lib.rs
+        # launches. Then BOOT that sidecar and parse a real /global/health (status codes are
+        # useless — unknown paths return the SPA with HTTP 200). If an AppImage was built, boot
+        # ITS sidecar too: that copy went through linuxdeploy, which is where a stripped Bun
+        # binary would show up as an app that installs and never starts.
         run: |
           set -uo pipefail
-          APP=packages/desktop/src-tauri/target/${{ matrix.rust_target }}/release/bundle/macos/IRIS.app
+          B=$PWD/packages/desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/out
           SIDECAR=$(grep -oE '\.sidecar\("[^"]+"\)' packages/desktop/src-tauri/src/lib.rs | head -1 | sed -E 's/.*"(.*)".*/\1/')
-          test -x "$APP/Contents/MacOS/$SIDECAR" || { echo "::error::bundle is missing sidecar '$SIDECAR'"; exit 1; }
-          PLIST=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")
-          if [ "$PLIST" != "${{ steps.version.outputs.version }}" ]; then
-            echo "::error::bundle reports $PLIST but this release is ${{ steps.version.outputs.version }}"
+          DEBV=$(dpkg-deb -f "$B/IRIS-tauri-linux-x64.deb" Version)
+          if [ "$DEBV" != "${{ steps.version.outputs.version }}" ]; then
+            echo "::error::.deb reports $DEBV but this release is ${{ steps.version.outputs.version }}"
             exit 1
           fi
-          echo "bundle version $PLIST ✓"
-          # An Intel binary cannot execute on the arm64 runner; only boot when native.
-          if [ "${{ matrix.arch }}" = "arm64" ] || [ "$(uname -m)" = "x86_64" ]; then
-            "$APP/Contents/MacOS/$SIDECAR" serve --port=47999 >/tmp/sc.log 2>&1 &
-            for _ in $(seq 1 40); do curl -s -m 2 -o /dev/null http://127.0.0.1:47999/doc && break; sleep 0.5; done
-            H=$(curl -s -m 10 http://127.0.0.1:47999/global/health)
-            kill %1 2>/dev/null || true
+          echo ".deb version $DEBV ✓"
+          boot() {
+            local sc="$1" port="$2" H
+            [ -n "$sc" ] && [ -x "$sc" ] || { echo "::error::$3 is missing sidecar '$SIDECAR'"; return 1; }
+            "$sc" serve --port="$port" >"/tmp/sc-$port.log" 2>&1 &
+            local pid=$!
+            for _ in $(seq 1 40); do curl -s -m 2 -o /dev/null "http://127.0.0.1:$port/doc" && break; sleep 0.5; done
+            H=$(curl -s -m 10 "http://127.0.0.1:$port/global/health")
+            kill "$pid" 2>/dev/null || true
             case "$H" in
-              '{'*) echo "health: $H" ;;
-              *) echo "::error::/global/health returned the SPA fallback, not JSON — API not serving"; exit 1 ;;
+              '{'*) ;;
+              *) echo "::error::$3: /global/health returned the SPA fallback, not JSON"; tail -40 "/tmp/sc-$port.log"; return 1 ;;
             esac
-            echo "$H" | grep -q '"healthy":true' || { echo "::error::engine reports unhealthy"; exit 1; }
-            echo "engine healthy ✓"
-          else
-            echo "cross-arch build — skipping boot test (cannot execute x64 here)"
+            echo "$H" | grep -q '"healthy":true' || { echo "::error::$3: engine reports unhealthy: $H"; return 1; }
+            echo "$3: engine healthy ✓"
+          }
+          W=$(mktemp -d)
+          dpkg-deb -x "$B/IRIS-tauri-linux-x64.deb" "$W/deb"
+          boot "$(find "$W/deb" -type f -name "$SIDECAR" | head -1)" 47999 ".deb" || exit 1
+          if [ -f "$B/IRIS-tauri-linux-x64.AppImage" ]; then
+            (cd "$W" && "$B/IRIS-tauri-linux-x64.AppImage" --appimage-extract >/dev/null) || { echo "::error::AppImage will not extract"; exit 1; }
+            boot "$(find "$W/squashfs-root" -type f -name "$SIDECAR" | head -1)" 47998 "AppImage" || exit 1
           fi
 
       - name: Upload artifacts
@@ -502,34 +516,63 @@ jobs:
 
       - name: Build IRIS desktop app (Tauri)
         # OPENCODE_CHANNEL=latest for the same reason as macOS: unset, vite defaults to "dev"
-        # and the app ships with a DEV badge. APPIMAGE_EXTRACT_AND_RUN lets linuxdeploy run on
-        # a runner with no FUSE device.
+        # and the app ships with a DEV badge.
+        #
+        # TWO PASSES. .deb/.rpm first, then the AppImage on its own, reusing the compiled
+        # target. desktop-v1.18.94's first Linux build compiled fine and then died in
+        # linuxdeploy ("failed to run linuxdeploy", no detail), taking the .deb with it. A
+        # failed AppImage now costs only the AppImage — and Linux auto-update for that release —
+        # with a warning, not the whole platform.
+        #
+        # NO_STRIP: linuxdeploy strips every ELF it bundles. The sidecar is a Bun single-file
+        # executable whose JavaScript is appended to the binary; stripping it deletes the app.
+        # --verbose so the next linuxdeploy failure says why. APPIMAGE_EXTRACT_AND_RUN: the
+        # runner has no FUSE device, and linuxdeploy is itself an AppImage.
         run: |
+          set -euo pipefail
           cd packages/desktop
-          ./node_modules/.bin/tauri build --config ./src-tauri/tauri.prod.conf.json --config '{"bundle":{"createUpdaterArtifacts":true}}' --target x86_64-unknown-linux-gnu --bundles appimage,deb,rpm,updater
+          tb() {
+            ./node_modules/.bin/tauri build --verbose --config ./src-tauri/tauri.prod.conf.json \
+              --config '{"bundle":{"createUpdaterArtifacts":true}}' --target x86_64-unknown-linux-gnu --bundles "$1"
+          }
+          tb deb,rpm
+          set +e
+          tb appimage,updater 2>&1 | tee "$RUNNER_TEMP/appimage.log"
+          rc=${PIPESTATUS[0]}
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "::warning::AppImage bundling failed (exit $rc) — this release ships .deb/.rpm only, and Linux will not auto-update from it. See the linuxdeploy output above."
+          fi
         env:
           OPENCODE_CHANNEL: latest
           APPIMAGE_EXTRACT_AND_RUN: '1'
+          NO_STRIP: 'true'
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Rename to the IRIS-tauri-* convention
-        # Tauri names these after productName and version (IRIS_1.18.94_amd64.AppImage), which
-        # would change every release and break heyiris.io/download/linux. Like Windows, the
-        # updater payload is the AppImage itself, signed in place; the .sig covers its bytes, so
-        # a byte-identical rename keeps it valid.
+        # Tauri names these after productName and version (IRIS_1.18.94_amd64.deb), which would
+        # change every release and break heyiris.io/download/linux. The AppImage is the updater
+        # payload, signed in place; its .sig covers the bytes, so a byte-identical copy stays valid.
+        # The .deb is required; the AppImage and .rpm are not (see the build step).
         run: |
           set -euo pipefail
           B=packages/desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle
           mkdir -p "$B/out"
-          AI=$(ls "$B"/appimage/*.AppImage | head -1)
-          test -f "$AI.sig" || { echo "::error::AppImage is UNSIGNED — no .AppImage.sig (createUpdaterArtifacts off, or TAURI_SIGNING_PRIVATE_KEY missing?)"; ls -la "$B/appimage"; exit 1; }
-          cp "$AI"      "$B/out/IRIS-tauri-linux-x64.AppImage"
-          cp "$AI.sig"  "$B/out/IRIS-tauri-linux-x64.AppImage.sig"
-          cp "$(ls "$B"/deb/*.deb | head -1)" "$B/out/IRIS-tauri-linux-x64.deb"
+          DEB=$(ls "$B"/deb/*.deb 2>/dev/null | head -1 || true)
+          [ -n "$DEB" ] || { echo "::error::no .deb produced"; ls -laR "$B" | head -50; exit 1; }
+          cp "$DEB" "$B/out/IRIS-tauri-linux-x64.deb"
           RPM=$(ls "$B"/rpm/*.rpm 2>/dev/null | head -1 || true)
           if [ -n "$RPM" ]; then cp "$RPM" "$B/out/IRIS-tauri-linux-x64.rpm"; else echo "::warning::no .rpm produced"; fi
-          chmod +x "$B/out/IRIS-tauri-linux-x64.AppImage"
+          AI=$(ls "$B"/appimage/*.AppImage 2>/dev/null | head -1 || true)
+          if [ -n "$AI" ]; then
+            test -f "$AI.sig" || { echo "::error::AppImage is UNSIGNED — no .AppImage.sig (TAURI_SIGNING_PRIVATE_KEY missing?)"; exit 1; }
+            cp "$AI"     "$B/out/IRIS-tauri-linux-x64.AppImage"
+            cp "$AI.sig" "$B/out/IRIS-tauri-linux-x64.AppImage.sig"
+            chmod +x "$B/out/IRIS-tauri-linux-x64.AppImage"
+          else
+            echo "::warning::no AppImage — Linux installs cannot auto-update from this release"
+          fi
           ls -la "$B/out"
 
       - name: Smoke-test the bundle we just built
@@ -573,7 +616,7 @@ jobs:
   publish:
     needs: [plan, macos, windows, linux]
     # macOS OR Linux: the linux-only beta lane builds no macOS at all.
-    if: always() && !cancelled() && (needs.macos.result == 'success' || needs.linux.result == 'success')
+    if: always() && !cancelled() && needs.plan.outputs.publish == 'true' && (needs.macos.result == 'success' || needs.linux.result == 'success')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
