@@ -336,6 +336,33 @@ const DaemonInstallCommand = cmd({
   },
 })
 
+const DaemonGrantAccessCommand = cmd({
+  command: "grant-access",
+  aliases: ["fix-access"],
+  describe: "give the daemon macOS Full Disk Access (Mail, Messages) — opens the pane, restarts, verifies",
+  builder: (y) =>
+    y
+      .option("json", { type: "boolean", default: false, describe: "print the permissions object; exit 0 if granted" })
+      .option("no-wait", { type: "boolean", default: false, describe: "print the instructions and exit" }),
+  async handler(args) {
+    const { daemonCtl, daemonSupportsGrantAccess, runGrantAccess, UPDATE_COMMAND } = await import("./daemon-permissions")
+    if (!daemonCtl()) {
+      prompts.log.error(`Daemon not installed. Run: ${getInstallHint()}`)
+      process.exitCode = 1
+      return
+    }
+    // A daemon from before the guided fix has no such verb; forwarding would fail with
+    // daemonctl's usage text. Say what to do instead.
+    if (!daemonSupportsGrantAccess()) {
+      prompts.log.error(`This daemon predates grant-access. Update it first: ${UPDATE_COMMAND}`)
+      process.exitCode = 1
+      return
+    }
+    const extra = [...(args.json ? ["--json"] : []), ...(args["no-wait"] ? ["--no-wait"] : [])]
+    process.exitCode = await runGrantAccess(extra)
+  },
+})
+
 const DaemonPassthroughCommand = cmd({
   command: "* [args..]",
   describe: false as any,
@@ -384,6 +411,7 @@ export const PlatformDaemonCommand = cmd({
       .command(DaemonRunsCommand)
       .command(DaemonInstallCommand)
       .command(DaemonRegisterCommand)
+      .command(DaemonGrantAccessCommand)
       .command(DaemonPassthroughCommand)
       .strict(false),
   async handler() {},

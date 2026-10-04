@@ -4,6 +4,7 @@ import { UI } from "../ui"
 import { printDivider, printKV, dim, bold, success, BRIDGE_URL, bridgeFetch, writeJson } from "./iris-api"
 import { probeWithHeal, type BridgeProbe, type BridgeHealth } from "./bridge-health"
 import { mailRows } from "./mail-response"
+import { fetchDaemonPermissions, isTccDenial, renderTccBlindSpot } from "./daemon-permissions"
 import {
   routerSend,
   describeSend,
@@ -52,6 +53,21 @@ export async function probeBridge(): Promise<BridgeHealth> {
   return health
 }
 
+/**
+ * The bridge's error, unless it is a Full Disk Access refusal — then say which program was
+ * refused and the one command that fixes it, instead of the raw 503 body.
+ */
+async function reportMailFailure(verb: string, err: string): Promise<void> {
+  if (!isTccDenial(err)) {
+    prompts.log.error(`${verb} failed: ${err}`)
+    return
+  }
+  const perms = await fetchDaemonPermissions({ waitForStartMs: 10_000 })
+  const r = renderTccBlindSpot("Mail", "daemon", perms)
+  // One message, so the fix travels with the error to wherever the log goes (stderr off a TTY).
+  prompts.log.error([`${verb} failed: ${r.headline.replace(/^blind — /, "")}`, ...r.fix].join("\n"))
+}
+
 const MailSearchCommand = cmd({
   command: "search <query>",
   aliases: ["find"],
@@ -92,7 +108,7 @@ const MailSearchCommand = cmd({
     const res = await bridgeFetch(`/api/mail/search?${params}`)
     if (!res.ok) {
       const err = await res.text().catch(() => "Unknown error")
-      prompts.log.error(`Mail search failed: ${err}`)
+      await reportMailFailure("Mail search", err)
       prompts.outro("Done")
       return
     }
@@ -171,7 +187,7 @@ const MailReadCommand = cmd({
 
     const res = await bridgeFetch(`/api/mail/search?${params}`)
     if (!res.ok) {
-      prompts.log.error(`Mail read failed: ${await res.text().catch(() => "Unknown error")}`)
+      await reportMailFailure("Mail read", await res.text().catch(() => "Unknown error"))
       prompts.outro("Done")
       return
     }

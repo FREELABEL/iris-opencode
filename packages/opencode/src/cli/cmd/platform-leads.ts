@@ -2628,7 +2628,10 @@ async function bridgeChannelHealth(name: string, path: string): Promise<ChannelH
         ok: false,
         status: "no_permission",
         error: detail || `HTTP ${res.status}`,
-        hint: "grant Full Disk Access to iris-daemon (not just your terminal), then: iris-daemon restart",
+        // The guided fix when this daemon has it; the manual one otherwise.
+        hint: (await import("./daemon-permissions")).daemonSupportsGrantAccess()
+          ? "fix once: iris-daemon grant-access"
+          : "grant Full Disk Access to iris-daemon (not just your terminal), then: iris-daemon restart",
       }
     }
 

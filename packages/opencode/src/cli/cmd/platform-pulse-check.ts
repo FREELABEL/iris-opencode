@@ -36,6 +36,19 @@ import {
   topicSlug,
   keywordVariants,
 } from "./pulse-check-sweep"
+import {
+  type DaemonPermissions,
+  fetchDaemonPermissions,
+  isTccDenial,
+  renderTccBlindSpot,
+  fdaFixJson,
+  mayPromptForFix,
+  runGrantAccess,
+  openFdaPaneFor,
+  terminalAppName,
+  RESTART_COMMAND,
+  UPDATE_COMMAND,
+} from "./daemon-permissions"
 
 const SOURCE_LABEL: Record<TopicSource, string> = {
   git: "commits",
@@ -104,6 +117,69 @@ export const PulseCheckCommand = cmd({
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
 
   async handler(args) {
+    await runPulseCheck(args as any, true)
+  },
+})
+
+/**
+ * Which blind spots are a macOS privacy refusal, and which process was refused. Mail goes
+ * through the daemon; Messages is read by sqlite3 from this process, so it is the terminal's
+ * grant. Exported for the tests.
+ */
+export interface TccBlindSpot {
+  sweep: SourceSweep
+  via: "daemon" | "terminal"
+  what: "Mail" | "Messages"
+}
+export function tccBlindSpots(sweeps: SourceSweep[]): TccBlindSpot[] {
+  return sweeps
+    .filter((s) => !s.searched && isTccDenial(s.unavailableReason))
+    .flatMap((s): TccBlindSpot[] =>
+      s.source === "email"
+        ? [{ sweep: s, via: "daemon" as const, what: "Mail" as const }]
+        : s.source === "imessage"
+          ? [{ sweep: s, via: "terminal" as const, what: "Messages" as const }]
+          : [],
+    )
+}
+
+/** The `blind_spots` array of --json, with a machine-readable fix where one exists. */
+export function blindSpotsJson(sweeps: SourceSweep[], perms: DaemonPermissions | null) {
+  const tcc = new Map(tccBlindSpots(sweeps).map((t) => [t.sweep.source, t]))
+  return sweeps
+    .filter((s) => !s.searched)
+    .map((s) => {
+      const t = tcc.get(s.source)
+      return {
+        source: s.source,
+        reason: s.unavailableReason ?? null,
+        full_disk_access: !!t,
+        fix: !t
+          ? null
+          : t.via === "daemon"
+            ? perms
+              ? fdaFixJson(perms)
+              : { process: "daemon", command: "iris-daemon grant-access" }
+            : {
+                process: "terminal",
+                app: terminalAppName(),
+                settings_url: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles",
+              },
+      }
+    })
+}
+
+/** The one line (plus fix lines) a source prints when it could not look. */
+export function blindSpotLines(label: string, s: SourceSweep, perms: DaemonPermissions | null): string[] {
+  const t = tccBlindSpots([s])[0]
+  if (!t) return [`  ${dim(label)} ${dim("not searched")} ${dim("— " + (s.unavailableReason ?? "no reason given"))}`]
+  const r = renderTccBlindSpot(t.what, t.via, t.via === "daemon" ? perms : null)
+  const pad = " ".repeat(2 + label.length + 1)
+  return [`  ${label} ${highlight(r.headline)}`, ...r.fix.map((l) => `${pad}${l}`)]
+}
+
+async function runPulseCheck(args: any, allowFix: boolean): Promise<void> {
+  {
     const keyword = (args.keyword as string[]).join(" ").trim()
     if (!keyword) {
       console.error("A keyword is required, e.g. iris pulse check \"creator os\"")
@@ -176,6 +252,12 @@ export const PulseCheckCommand = cmd({
 
     spinner?.stop(dim("swept"))
 
+    // A refused Mail search names its fix. Only asked when it matters, and bounded to 1.5s.
+    const tcc = tccBlindSpots(sweeps)
+    const perms = tcc.some((t) => t.via === "daemon")
+      ? await fetchDaemonPermissions({ bridgeUrl: BRIDGE_URL, bridgeKey: getBridgeToken() })
+      : null
+
     // ── push ────────────────────────────────────────────────────────────────
     let scored: any = null
     let pushError: string | null = null
@@ -228,6 +310,7 @@ export const PulseCheckCommand = cmd({
         pushed: push && !pushError,
         push_error: pushError,
         score: scored,
+        blind_spots: blindSpotsJson(sweeps, perms),
       })
       return
     }
@@ -262,7 +345,8 @@ export const PulseCheckCommand = cmd({
 
       if (!s.searched) {
         // Rule 1, made visible. A reader must never mistake this line for a zero.
-        console.log(`  ${dim(label)} ${dim("not searched")} ${dim("— " + (s.unavailableReason ?? "no reason given"))}`)
+        // A privacy refusal says which program was refused and what fixes it.
+        for (const line of blindSpotLines(label, s, perms)) console.log(line)
         continue
       }
 
@@ -357,5 +441,43 @@ export const PulseCheckCommand = cmd({
     // used instead.
     const rerunSources = args.sources ? ` --sources ${sources.join(",")}` : ""
     prompts.outro(dim(`iris pulse check "${keyword}" --days ${days}${rerunSources}  ·  --json`))
-  },
-})
+
+    // ── offer the fix, once ─────────────────────────────────────────────────
+    if (!allowFix || !perms || !tcc.some((t) => t.via === "daemon")) return
+    if (!mayPromptForFix({ json, stdinTTY: process.stdin.isTTY, stdoutTTY: process.stdout.isTTY })) return
+    if (perms.state === "granted" || perms.state === "daemon_down" || perms.state === "daemon_starting" || perms.state === "unknown") return
+
+    if (perms.state === "restart_needed") {
+      console.log(dim(`  Full Disk Access is granted; the daemon needs a restart to use it: ${RESTART_COMMAND}`))
+      return
+    }
+
+    if (perms.state === "old_daemon" && !perms.grantAccessSupported) {
+      // No grant-access on this daemon. Do the parts that need no daemon help, and say
+      // plainly what is left — this cannot verify, so it does not claim to.
+      if (!perms.binary) return
+      const go = await prompts.confirm({ message: "Open Full Disk Access settings for the IRIS daemon now?" })
+      if (prompts.isCancel(go) || !go) return
+      openFdaPaneFor(perms.binary, perms.settingsUrl)
+      console.log(`  Path copied to the clipboard: ${bold(perms.binary)}`)
+      console.log(dim("  In the pane: + → ⇧⌘G → paste → Open, and make sure the switch is on."))
+      console.log(dim(`  Then: ${RESTART_COMMAND}   (or update the daemon — ${UPDATE_COMMAND} — for the guided fix)`))
+      return
+    }
+
+    const go = await prompts.confirm({ message: "Fix Mail access now?" })
+    if (prompts.isCancel(go) || !go) return
+    const code = await runGrantAccess()
+    if (code === 127) {
+      console.log(highlight(`  iris-daemon is not installed here — ${UPDATE_COMMAND}`))
+      return
+    }
+    if (code !== 0) {
+      console.log(dim("  Access is not granted yet. Run iris-daemon grant-access again when you're ready."))
+      return
+    }
+    const again = await prompts.confirm({ message: `Run the pulse check for "${keyword}" again?` })
+    if (prompts.isCancel(again) || !again) return
+    await runPulseCheck(args, false)
+  }
+}
