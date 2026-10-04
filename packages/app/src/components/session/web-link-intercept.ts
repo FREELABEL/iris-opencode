@@ -2,6 +2,8 @@ import { createEffect, onCleanup } from "solid-js"
 import { useLayout } from "@/context/layout"
 import { usePlatform } from "@/context/platform"
 import { useSessionLayout } from "@/pages/session/session-layout"
+import { atlasNoteUrl } from "./iris-atlas-artifacts-model"
+import { focusAtlasNote, requestIrisNav } from "./iris-nav"
 import { linkAction, navigateWeb, WEB_TAB } from "./web-nav"
 
 /**
@@ -16,14 +18,27 @@ export function useLinksOpenInPanel(root: () => HTMLElement | undefined) {
   const { tabs, view } = useSessionLayout()
   const platform = usePlatform()
 
-  const openInPanel = (url: string) => {
-    navigateWeb(url)
-    // The same three steps as opening a Genesis artifact from its chat card: the tab only
-    // renders once it is in the list, and "other" is the source that does not close the panel.
+  // The same three steps as opening a Genesis artifact from its chat card: the tab only renders
+  // once it is in the list, and "other" is the source that does not close the panel.
+  const showTab = (tab: string) => {
     view().reviewPanel.open("other")
     if (layout.fileTree.opened() && layout.fileTree.tab() !== "all") layout.fileTree.setTab("all")
-    void tabs().open(WEB_TAB)
-    tabs().setActive(WEB_TAB)
+    void tabs().open(tab)
+    tabs().setActive(tab)
+  }
+
+  const openInPanel = (href: string) => {
+    // An Atlas note (heyiris.io/n/<uuid>) opens in Atlas › Artifacts, exactly as its chat card
+    // does: that pane knows the note's real title and explains a private one, which a bare frame
+    // shows as a blank 404 with no reason.
+    const note = atlasNoteUrl(href)
+    if (note) {
+      requestIrisNav({ surface: "atlas", sub: "artifacts" })
+      focusAtlasNote(note)
+      return showTab("iris")
+    }
+    navigateWeb(href)
+    showTab(WEB_TAB)
   }
 
   createEffect(() => {

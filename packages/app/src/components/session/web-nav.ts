@@ -48,7 +48,54 @@ export function linkAction(input: {
 
 type History = { stack: string[]; index: number; reload: number }
 
-const [history, setHistory] = createSignal<History>({ stack: [], index: -1, reload: 0 })
+/**
+ * Remembered across a reload, so the tab that comes back (tabs persist) shows the page you were
+ * on rather than an empty "click a link" note. Capped, and every read is defensive: storage can
+ * be absent, full, or hold something an older build wrote.
+ */
+const HISTORY_KEY = "iris.web.history.v1"
+const HISTORY_CAP = 50
+
+export function restoreHistory(raw: string | null | undefined): History {
+  const empty = { stack: [], index: -1, reload: 0 }
+  if (!raw) return empty
+  try {
+    const v = JSON.parse(raw) as { stack?: unknown; index?: unknown }
+    const stack = Array.isArray(v.stack)
+      ? v.stack.filter((u): u is string => typeof u === "string" && /^https?:\/\//.test(u)).slice(-HISTORY_CAP)
+      : []
+    if (!stack.length) return empty
+    // If anything was dropped, the saved index no longer points at the same page: use the last.
+    const intact = Array.isArray(v.stack) && v.stack.length === stack.length
+    const index =
+      intact && typeof v.index === "number" && v.index >= 0 && v.index < stack.length ? v.index : stack.length - 1
+    return { stack, index, reload: 0 }
+  } catch {
+    return empty
+  }
+}
+
+const [history, setHistoryRaw] = createSignal<History>(
+  restoreHistory(
+    (() => {
+      try {
+        return localStorage.getItem(HISTORY_KEY)
+      } catch {
+        return null
+      }
+    })(),
+  ),
+)
+
+function setHistory(next: (h: History) => History) {
+  const h = next(history())
+  const drop = Math.max(0, h.stack.length - HISTORY_CAP)
+  const kept = drop ? { ...h, stack: h.stack.slice(drop), index: h.index - drop } : h
+  setHistoryRaw(kept)
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify({ stack: kept.stack, index: kept.index }))
+  } catch {}
+}
 
 /** The page the Browser tab is on, or undefined before the first link. */
 export const webUrl = () => {

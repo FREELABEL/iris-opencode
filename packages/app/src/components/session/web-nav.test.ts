@@ -117,3 +117,19 @@ describe("addressToUrl / knownEmbeddable", () => {
     expect(knownEmbeddable("https://heyiris.io.evil.com/")).toBe(false)
   })
 })
+
+describe("restoreHistory", () => {
+  test("brings back the page you were on, and refuses anything that is not a web page", async () => {
+    const { restoreHistory } = await import("./web-nav")
+    expect(restoreHistory(JSON.stringify({ stack: ["https://a.com/", "https://b.com/"], index: 0 }))).toEqual({
+      stack: ["https://a.com/", "https://b.com/"],
+      index: 0,
+      reload: 0,
+    })
+    expect(
+      restoreHistory(JSON.stringify({ stack: ["javascript:alert(1)", "https://a.com/"], index: 9 })).stack,
+    ).toEqual(["https://a.com/"])
+    expect(restoreHistory("not json").index).toBe(-1)
+    expect(restoreHistory(null).stack).toEqual([])
+  })
+})
