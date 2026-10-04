@@ -29,6 +29,12 @@ import { captureIsLive } from "./dictation-probe"
  */
 
 const PROBE_MS = 400
+/**
+ * Longest dictation, in seconds — the same cap the sidecar gives ffmpeg (capture.ts MAX_SECONDS).
+ * The webview recorder had none, and the platform refuses uploads over 25 MB (~13 min of 16 kHz
+ * mono): a long take uploaded fine, failed there, and was held and retried until pruned.
+ */
+const MAX_SECONDS = 300
 /** ~-40 dBFS: quieter than speech, louder than a noise floor. */
 const SILENCE_FLOOR = 0.01
 const TARGET_RATE = 16000
@@ -130,6 +136,14 @@ export function createDictation(opts: DictationOptions) {
   const [seconds, setSeconds] = createSignal(0)
   let ticker: ReturnType<typeof setInterval> | undefined
   let mode: CaptureMode = "sidecar"
+  /**
+   * Bumped by every start() and every stop(). start() awaits — the probe, the sidecar request —
+   * and a stop or unmount can land inside any of those waits. A start() that wakes to a newer
+   * attempt must not go on to open a microphone the button no longer shows.
+   */
+  let attempt = 0
+  /** True while the first-session probe decides between webview and sidecar. */
+  let probing = false
 
   // webview capture state
   let stream: MediaStream | undefined
@@ -250,18 +264,26 @@ export function createDictation(opts: DictationOptions) {
     }
   }
 
+  /** start() was overtaken by a stop or an unmount while it waited. */
+  function superseded(id: number) {
+    return id !== attempt || disposed
+  }
+
   async function start() {
     if (phase() !== "idle") return
+    const id = ++attempt
 
     // Known-good path from a previous dictation in this session.
     if (cachedMode === "sidecar") {
       if (!(await startSidecar())) return
+      if (superseded(id)) return cancelSidecar()
       mode = "sidecar"
       begin()
       return
     }
 
     const opened = await openWebviewCapture()
+    if (superseded(id)) return teardownWebview()
     if (!opened && !sidecarCanRecord()) {
       // Windows: nothing to fall back to. Report the window's own failure, and do NOT cache —
       // the user may grant the permission and press the button again.
@@ -271,6 +293,7 @@ export function createDictation(opts: DictationOptions) {
     if (!opened) {
       cachedMode = "sidecar"
       if (!(await startSidecar())) return
+      if (superseded(id)) return cancelSidecar()
       mode = "sidecar"
       begin()
       return
@@ -288,7 +311,12 @@ export function createDictation(opts: DictationOptions) {
     // It opened without throwing, which on WKWebView proves nothing at all.
     begin()
     mode = "webview"
+    probing = true
     await new Promise((r) => setTimeout(r, PROBE_MS))
+    probing = false
+    // Stopped or unmounted during the probe: stop() already released the microphone. Going on
+    // would start the sidecar behind an idle button — a hot mic with nothing on screen.
+    if (superseded(id)) return
     if (captureIsLive(peak, captured.length)) {
       cachedMode = "webview"
       return
@@ -300,23 +328,45 @@ export function createDictation(opts: DictationOptions) {
     teardownWebview()
     captured = []
     cachedMode = "sidecar"
+    // Set before the await: a stop that lands while the sidecar is starting goes to the sidecar,
+    // not to the webview recorder just torn down. The cancel below covers either arrival order.
+    mode = "sidecar"
     if (!(await startSidecar())) {
       stopTicker()
       setPhase("idle")
       return
     }
-    mode = "sidecar"
+    if (superseded(id)) return cancelSidecar()
+  }
+
+  function cancelSidecar() {
+    void fetch(`${base()}/dictate/cancel`, { method: "POST" }).catch(() => {})
   }
 
   function begin() {
     setSeconds(0)
     setPhase("recording")
-    ticker = setInterval(() => setSeconds((n) => n + 1), 1000)
+    ticker = setInterval(() => {
+      const next = seconds() + 1
+      setSeconds(next)
+      if (next >= MAX_SECONDS) void stop()
+    }, 1000)
   }
 
   async function stop() {
     if (phase() !== "recording") return
+    attempt++
     stopTicker()
+    if (probing) {
+      // Under 400ms in, before a recorder was even chosen: there is nothing worth transcribing,
+      // and judging the mic on a cut-short probe would cache the wrong path for the session.
+      probing = false
+      captured = []
+      peak = 0
+      teardownWebview()
+      setPhase("idle")
+      return
+    }
     setPhase("transcribing")
     try {
       if (mode === "sidecar") await stopSidecar()
