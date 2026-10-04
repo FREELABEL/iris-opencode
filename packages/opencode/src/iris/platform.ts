@@ -574,6 +574,41 @@ export async function fetchAllowance(): Promise<PlatformResult<Allowance>> {
   }
 }
 
+export interface Plan {
+  /** free | pro | business, or null for staff, who have no plan. */
+  plan: string | null
+  uncapped: boolean
+  upgradeUrl: string | null
+}
+
+/**
+ * The caller's plan, WITHOUT consuming a notice (`?peek=1`, fl-iris-api 4eda580d). Unlike
+ * fetchAllowance this is safe to poll: the title bar asks every few minutes to decide between
+ * an Upgrade button and a plan label. A server without the `plan` field (older than 4eda580d)
+ * answers unmeasured, so the button stays hidden rather than guessing someone is on Free — but
+ * that older server also IGNORES ?peek=1 and would consume the notice. This client must never
+ * ship ahead of 4eda580d; check with scripts/deployed.sh fl-iris-api --commit 4eda580d.
+ */
+export async function fetchPlan(): Promise<PlatformResult<Plan>> {
+  const empty: Plan = { plan: null, uncapped: false, upgradeUrl: null }
+  try {
+    const res = await irisFetch("/api/v6/allowance/me?peek=1", IRIS_API)
+    if (!res.ok) return { measured: false, reason: `iris-api ${res.status}`, data: empty }
+    const j = (await res.json()) as any
+    if (!j || !("plan" in j)) return { measured: false, reason: "server does not report a plan", data: empty }
+    return {
+      measured: true,
+      data: {
+        plan: typeof j.plan === "string" ? j.plan : null,
+        uncapped: Boolean(j.uncapped),
+        upgradeUrl: typeof j.upgrade_url === "string" ? j.upgrade_url : null,
+      },
+    }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: empty }
+  }
+}
+
 export interface Bloq {
   id: number
   name: string

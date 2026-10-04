@@ -664,6 +664,15 @@ const AllowanceResponse = Schema.Struct({
   notice: Schema.NullOr(AllowanceNotice),
 })
 
+/** The caller's plan, read WITHOUT consuming a notice — safe to poll (title bar Upgrade button). */
+const PlanResponse = Schema.Struct({
+  measured: described(Schema.Boolean, "FALSE means we could not ask. Never render that as the Free plan."),
+  reason: Schema.optional(Schema.String),
+  plan: described(Schema.NullOr(Schema.String), "free | pro | business; NULL for staff."),
+  uncapped: Schema.Boolean,
+  upgradeUrl: Schema.NullOr(Schema.String),
+})
+
 /**
  * ARTIFACTS (epic #186508). What the agent made in this session, from the store in
  * src/iris/artifacts.ts. Both routes return JSON. Neither returns an HTML document, and none
@@ -774,6 +783,7 @@ export const IrisPaths = {
   roomMessages: `${root}/rooms/:roomID/messages`,
   hive: `${root}/hive`,
   allowance: `${root}/allowance`,
+  plan: `${root}/plan`,
   atlasNote: `${root}/atlas-note`,
 } as const
 
@@ -798,6 +808,16 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Allowance and notice policy",
           description:
             "The window, the amount, the reset instant, the threshold list and any pending notice. The thresholds travel because the client must not hold a policy the server can change without a desktop release. Fetching CONSUMES a pending notice — call it when rendering, never on a timer.",
+        }),
+      ),
+      HttpApiEndpoint.get("plan", IrisPaths.plan, {
+        success: described(PlanResponse, "The caller's plan, without consuming any notice"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.plan",
+          summary: "Plan",
+          description:
+            "free, pro or business (null for staff), read with ?peek=1 so it never eats the weekly allowance notice. Safe to poll.",
         }),
       ),
       HttpApiEndpoint.get("bloqs", IrisPaths.bloqs, {

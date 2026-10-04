@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { fleetDotClass, fleetLabel, inboxLabel } from "./titlebar-iris-pills"
+import { fleetDotClass, fleetLabel, inboxLabel, planBadge, TITLEBAR_UPGRADE_URL } from "./titlebar-iris-pills"
 
 describe("fleetDotClass", () => {
   // The dot is a verdict, so its colours must obey the same three-fact rule as the label:
@@ -63,5 +63,28 @@ describe("inboxLabel", () => {
 
   test("unread shows the count", () => {
     expect(inboxLabel({ unread: 4, unreadable: false })).toBe("4")
+  })
+})
+
+
+describe("planBadge", () => {
+  test("a Free account sees Upgrade, pointing at the server's URL when it names one", () => {
+    expect(planBadge({ measured: true, plan: "free", upgradeUrl: "https://x.test/plans" })).toEqual({
+      kind: "upgrade",
+      text: "Upgrade",
+      url: "https://x.test/plans",
+    })
+    expect(planBadge({ measured: true, plan: "starter", upgradeUrl: null })?.url).toBe(TITLEBAR_UPGRADE_URL)
+  })
+
+  test("a paying account sees its plan, never Upgrade", () => {
+    expect(planBadge({ measured: true, plan: "pro", upgradeUrl: null })?.kind).toBe("label")
+    expect(planBadge({ measured: true, plan: "business", upgradeUrl: null })?.text).toBe("Business")
+  })
+
+  test("unmeasured or staff shows nothing, so nobody is told to buy what they have", () => {
+    expect(planBadge(undefined)).toBeNull()
+    expect(planBadge({ measured: false, plan: "free", upgradeUrl: null })).toBeNull()
+    expect(planBadge({ measured: true, plan: null, upgradeUrl: null })).toBeNull()
   })
 })

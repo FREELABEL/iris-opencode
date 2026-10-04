@@ -106,6 +106,39 @@ export function inboxLabel(inbox: InboxState | undefined, loading = false): stri
   return inbox.unread > 0 ? String(inbox.unread) : null
 }
 
+interface PlanState {
+  measured: boolean
+  plan: string | null
+  upgradeUrl: string | null
+}
+
+/** Where "Upgrade" goes when the server names no URL. Same page the limit dialog sends people to. */
+export const TITLEBAR_UPGRADE_URL = "https://web.heyiris.io/pricing?source=desktop-titlebar"
+
+/**
+ * What the plan slot shows, decided from the server's answer and nothing else.
+ *
+ * Unmeasured shows NOTHING, never "Upgrade": a sidecar that cannot reach the API must not tell a
+ * paying customer to buy what they already have. Staff (plan null) see nothing either.
+ */
+export function planBadge(
+  state: PlanState | undefined,
+): { kind: "upgrade" | "label"; text: string; url: string } | null {
+  if (!state?.measured) return null
+  const url = state.upgradeUrl || TITLEBAR_UPGRADE_URL
+  switch (state.plan) {
+    case "free":
+    case "starter":
+      return { kind: "upgrade", text: "Upgrade", url }
+    case "pro":
+      return { kind: "label", text: "Pro", url }
+    case "business":
+      return { kind: "label", text: "Business", url }
+    default:
+      return null
+  }
+}
+
 export function TitlebarIrisPills() {
   const mount = useTitlebarRightMount()
   const server = useServer()
@@ -145,6 +178,15 @@ export function TitlebarIrisPills() {
   const [hive] = createResource<HiveState | undefined, Key>(key, poll<HiveState>("/iris/hive"))
   const [inbox] = createResource<InboxState | undefined, Key>(key, poll<InboxState>("/iris/inbox"))
   const [auth] = createResource<AuthState | undefined, Key>(key, poll<AuthState>("/iris/auth"))
+
+  // The plan changes when someone buys, not every 30s: ask every 10 minutes (20 ticks). /iris/plan
+  // peeks — it never consumes the weekly allowance notice, unlike /iris/allowance.
+  const planKey = createMemo(() => {
+    const b = base()
+    return b ? ([b, Math.floor(tick() / 20)] as const) : undefined
+  })
+  const [plan] = createResource<PlanState | undefined, Key>(planKey, poll<PlanState>("/iris/plan"))
+  const badge = createMemo(() => planBadge(plan()))
 
   const notice = createMemo(() => authNotice(auth()))
 
@@ -238,6 +280,35 @@ export function TitlebarIrisPills() {
               </div>
             </Show>
           </div>
+
+          <Show when={badge()}>
+            {(b) => (
+              <TooltipV2
+                placement="bottom"
+                value={
+                  <>
+                    {b().kind === "upgrade"
+                      ? "See IRIS plans: IRIS Pro, Genesis Designer and higher limits"
+                      : `You're on IRIS ${b().text}. See plans and billing`}
+                  </>
+                }
+              >
+                <button
+                  type="button"
+                  data-slot="iris-plan-pill"
+                  class="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium leading-4 transition-colors"
+                  classList={{
+                    "bg-v2-icon-icon-accent/20 text-v2-icon-icon-accent hover:bg-v2-icon-icon-accent/30":
+                      b().kind === "upgrade",
+                    "text-v2-text-text-weak hover:text-v2-text-text-base": b().kind === "label",
+                  }}
+                  onClick={() => platform.openExternal(b().url)}
+                >
+                  {b().text}
+                </button>
+              </TooltipV2>
+            )}
+          </Show>
 
           <Show when={notice()}>
             <TooltipV2 placement="bottom" value={<>{notice()!.hint}</>}>
