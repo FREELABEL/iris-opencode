@@ -6,6 +6,7 @@ import { homedir } from "os"
 import { which, retagMp3, id3Key } from "./download"
 import { analyzeAudio } from "./audio-analysis"
 import { printDivider, bold, dim } from "./iris-api"
+import { FreelabelStudioCommands } from "./platform-freelabel-studio"
 
 /** Seconds of audio in a file, via ffprobe. null when it cannot be read. */
 function durationOf(ffprobe: string, path: string): number | null {
@@ -289,7 +290,8 @@ export const CrateCommand: CommandModule = {
  */
 export const FreelabelCommand: CommandModule = {
   command: "freelabel",
-  describe: "FREELABEL brand tooling — DJ crate preparation for downloaded playlists",
-  builder: (yargs) => yargs.command(CrateCommand).demandCommand(1, "Specify: crate"),
+  describe: "FREELABEL — artist pages on freelabel.net (profile, tracks, upload) and DJ crate prep",
+  builder: (yargs) =>
+    yargs.command(CrateCommand).command(FreelabelStudioCommands as any).demandCommand(1, "Specify: profile, tracks, upload or crate"),
   handler: () => {},
 }
