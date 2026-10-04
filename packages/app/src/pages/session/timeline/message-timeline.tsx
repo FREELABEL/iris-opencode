@@ -31,6 +31,7 @@ import {
 import "@/components/session/genesis-artifact-card"
 // …and the `atlas_artifact` card, its Atlas twin (#187717).
 import "@/components/session/atlas-artifact-card"
+import { useLinksOpenInPanel } from "@/components/session/web-link-intercept"
 import { DiffChanges } from "@opencode-ai/ui/diff-changes"
 import { FileIcon } from "@opencode-ai/ui/file-icon"
 import { Icon } from "@opencode-ai/ui/icon"
@@ -569,6 +570,9 @@ export function MessageTimeline(props: {
     dismiss: null as "escape" | "outside" | null,
   })
   let more: HTMLButtonElement | undefined
+
+  // A link in the chat opens beside it, in the side panel's Browser tab (#187864).
+  useLinksOpenInPanel(listRoot)
 
   const bindListRoot = (root: HTMLDivElement) => {
     if (root === listRoot()) return

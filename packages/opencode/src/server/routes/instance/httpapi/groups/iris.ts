@@ -805,6 +805,7 @@ export const IrisPaths = {
   plan: `${root}/plan`,
   plans: `${root}/plans`,
   atlasNote: `${root}/atlas-note`,
+  frameCheck: `${root}/frame-check`,
 } as const
 
 export const IrisApi = HttpApi.make("iris").add(
@@ -1583,6 +1584,30 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Read a playbook's local document",
           description:
             "Local file first, published copy second. The file read must come through the sidecar because playbook content never leaves the machine and the webview cannot read a home directory; the published fallback covers the 125 of 128 not installed here. NOT an iframe of the landing page: heyiris.io sends x-frame-options SAMEORIGIN, so embedding renders blank and reads as a broken panel.",
+        }),
+      ),
+      HttpApiEndpoint.get("frameCheck", IrisPaths.frameCheck, {
+        query: Schema.Struct({
+          url: described(Schema.String, "The http(s) page the Browser tab wants to show."),
+          origin: described(Schema.String, "The app's own origin — the page that would frame it."),
+        }),
+        success: described(
+          Schema.Struct({
+            state: described(
+              Schema.Literals(["embeddable", "refused", "unreachable", "invalid"]),
+              "embeddable: its headers allow this origin to frame it. refused: X-Frame-Options or CSP frame-ancestors forbid it, with the reason. unreachable: the fetch failed, which says nothing about framing. invalid: not an http(s) URL; nothing was fetched.",
+            ),
+            url: Schema.NullOr(Schema.String),
+            reason: Schema.optional(Schema.String),
+          }).annotate({ identifier: "IrisFrameCheck" }),
+          "Whether a page can be shown in a frame inside the app",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.frameCheck",
+          summary: "Can a page be framed",
+          description:
+            "A refused cross-origin frame fires load like a working one, and the deciding headers are invisible to the page — so the side panel's Browser tab asks the sidecar (#187864).",
         }),
       ),
       HttpApiEndpoint.get("atlasNote", IrisPaths.atlasNote, {

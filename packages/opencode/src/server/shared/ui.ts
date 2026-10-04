@@ -8,8 +8,12 @@ let embeddedUIPromise: Promise<Record<string, string> | null> | undefined
 
 export const UI_UPSTREAM = new URL("https://app.opencode.ai")
 
+// frame-src: the side panel frames live pages — Genesis › Artifacts' "View live" (#186541) and the
+// Browser tab (#187864). Without it, default-src 'self' blocked every one of those frames in a
+// browser, while the desktop app (csp: null) showed them, so the web preview could never show
+// what desktop does. https: only, plus local dev servers; the frames are sandboxed in the app.
 export const csp = (hash = "") =>
-  `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'${hash ? ` 'sha256-${hash}'` : ""}; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; font-src 'self' data:; media-src 'self' data:; connect-src * data: blob:`
+  `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'${hash ? ` 'sha256-${hash}'` : ""}; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; font-src 'self' data:; media-src 'self' data:; connect-src * data: blob:; frame-src 'self' https: http://localhost:* http://127.0.0.1:*`
 export const DEFAULT_CSP = csp()
 
 export function themePreloadHash(body: string) {

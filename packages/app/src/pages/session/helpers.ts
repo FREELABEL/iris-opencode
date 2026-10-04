@@ -52,6 +52,8 @@ export const createSessionTabs = (input: TabsInput) => {
   // Atlas mirrors context exactly: a named panel tab that is not a file, so it must be excluded
   // from panelTabs (which is the FILE tab list) and named in activeTab/closableTab.
   const irisOpen = createMemo(() => input.tabs().active() === "iris" || input.tabs().all().includes("iris"))
+  // The Browser tab (#187864): a named tab too, opened by clicking a link in the chat.
+  const webOpen = createMemo(() => input.tabs().active() === "web" || input.tabs().all().includes("web"))
   const openFileOpen = createMemo(
     () =>
       fileBrowser() &&
@@ -64,7 +66,7 @@ export const createSessionTabs = (input: TabsInput) => {
         .tabs()
         .all()
         .flatMap((tab) => {
-          if (tab === "context" || tab === "review" || tab === "iris") return []
+          if (tab === "context" || tab === "review" || tab === "iris" || tab === "web") return []
           if (tab === SESSION_OPEN_FILE_TAB && !fileBrowser()) return []
           const value = input.pathFromTab(tab) ? input.normalizeTab(tab) : tab
           if (seen.has(value)) return []
@@ -82,6 +84,7 @@ export const createSessionTabs = (input: TabsInput) => {
     const active = input.tabs().active()
     if (active === "context") return active
     if (active === "iris") return active
+    if (active === "web") return active
     if (active === SESSION_OPEN_FILE_TAB && openFileOpen()) return active
     if (active === "review" && review() && filesPinned()) return active
     if (active && input.pathFromTab(active)) return input.normalizeTab(active)
@@ -90,6 +93,7 @@ export const createSessionTabs = (input: TabsInput) => {
     if (first) return first
     if (contextOpen()) return "context"
     if (irisOpen()) return "iris"
+    if (webOpen()) return "web"
     if (review() && hasReview()) return reviewFirst() && filesPinned() ? "review" : "iris"
     return "empty"
   })
@@ -102,6 +106,7 @@ export const createSessionTabs = (input: TabsInput) => {
     const active = activeTab()
     if (active === "context") return active
     if (active === "iris") return active
+    if (active === "web") return active
     if (active === SESSION_OPEN_FILE_TAB && openFileOpen()) return active
     if (!openedTabs().includes(active)) return
     return active
@@ -110,6 +115,7 @@ export const createSessionTabs = (input: TabsInput) => {
   return {
     contextOpen,
     irisOpen,
+    webOpen,
     openFileOpen,
     panelTabs,
     openedTabs,

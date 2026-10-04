@@ -1,0 +1,84 @@
+.session-web {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.session-web__bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 8px 6px;
+  border-bottom: 1px solid var(--border-weaker-base);
+}
+
+.session-web__address {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  margin: 0 4px;
+  padding: 0 8px;
+  border: 1px solid var(--border-weak-base);
+  border-radius: 6px;
+  background: var(--background-element);
+  color: var(--text-base);
+  font-size: 12px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  outline: none;
+}
+.session-web__address:focus {
+  border-color: var(--text-interactive-base);
+}
+
+.session-web__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* White, like the page a browser shows before the site paints — the panel's dark ground behind a
+   loading frame is what made a working load read as "it went black". */
+.session-web__frame {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  background: #fff;
+}
+
+.session-web__note {
+  margin: auto;
+  max-width: 300px;
+  padding: 24px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-weak);
+}
+.session-web__note-title {
+  color: var(--text-strong);
+  font-size: 13px;
+}
+
+.session-web__reason {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--text-weaker);
+}
+
+.session-web__open {
+  margin-top: 4px;
+  padding: 4px 12px;
+  border: 1px solid var(--border-base);
+  border-radius: 6px;
+  color: var(--text-base);
+  font-size: 12px;
+}
+.session-web__open:hover {
+  background: var(--background-element);
+}

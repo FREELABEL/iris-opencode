@@ -51,8 +51,11 @@ const reviewTabID = "session-side-panel-review-tab"
 const reviewTabPanelID = "session-side-panel-review-tabpanel"
 const fileBrowserTabPanelID = "session-side-panel-file-browser-tabpanel"
 const irisTabPanelID = "session-side-panel-iris-tabpanel"
+const webTabPanelID = "session-side-panel-web-tabpanel"
 import { SessionContextTab, SortableTab, SortableTabV2, FileVisual } from "@/components/session"
 import { OpenInAppV2 } from "@/components/session/open-in-app-v2"
+import { SessionWebTab } from "@/components/session/session-web-tab"
+import { WEB_TAB, webUrl } from "@/components/session/web-nav"
 import { useCommand } from "@/context/command"
 import { useFile, type SelectedLineRange } from "@/context/file"
 import { useLanguage } from "@/context/language"
@@ -275,6 +278,39 @@ export function SessionSidePanel(props: {
   const productIds = createMemo(() => irisStripTabs().map((t) => t.id as string), undefined, {
     equals: (a, b) => a.length === b.length && a.every((x, i) => x === b[i]),
   })
+  /** The Browser tab (#187864) — only once a link has been opened in it; closable. */
+  const webTabOpen = createMemo(() => tabs().all().includes(WEB_TAB) || tabs().active() === WEB_TAB)
+  const webHost = createMemo(() => {
+    try {
+      return new URL(webUrl() ?? "").hostname.replace(/^www\./, "")
+    } catch {
+      return ""
+    }
+  })
+  const WebTrigger = () => (
+    <Show when={webTabOpen()}>
+      <Tabs.Trigger
+        value={WEB_TAB}
+        closeButton={
+          <IconButton
+            icon="close-small"
+            variant="ghost"
+            class="h-5 w-5"
+            onClick={() => tabs().close(WEB_TAB)}
+            aria-label={language.t("common.closeTab")}
+          />
+        }
+        hideCloseButton
+        onMiddleClick={() => tabs().close(WEB_TAB)}
+      >
+        <div class="flex items-center gap-1.5 max-w-40">
+          <Icon name="square-arrow-top-right" size="small" />
+          <div class="truncate">{webHost() || "Browser"}</div>
+        </div>
+      </Tabs.Trigger>
+    </Show>
+  )
+
   const ProductTriggers = () => (
     <For each={productIds()}>
       {(id) => (
@@ -392,6 +428,10 @@ export function SessionSidePanel(props: {
   // never open it. Once opened it stays, and is hidden with `hidden`/`inert` instead.
   const irisMounted = createMemo<boolean>((prev) => prev || activeTab() === "iris", false)
   const irisVisible = createMemo(() => activeTab() === "iris")
+  // Same rule for the Browser tab: mounted once opened and kept, so leaving it and coming back
+  // does not reload the page you were reading.
+  const webMounted = createMemo<boolean>((prev) => prev || activeTab() === WEB_TAB, false)
+  const webVisible = createMemo(() => activeTab() === WEB_TAB)
   const openFileKeybind = createMemo(() => command.keybindParts("file.open"))
   const closeTabKeybind = createMemo(() => command.keybindParts("tab.close"))
   const [store, setStore] = createStore({
@@ -530,6 +570,7 @@ export function SessionSidePanel(props: {
                                   It WAS then asked for, for non-git projects only, and made
                                   explicitly: see `reviewFirst` in helpers.ts. */}
                               <ProductTriggers />
+                              <WebTrigger />
                               <Show when={contextOpen()}>
                                 <Tabs.Trigger
                                   value="context"
@@ -678,6 +719,20 @@ export function SessionSidePanel(props: {
                             </div>
                           </Show>
 
+                          <Show when={webMounted()}>
+                            <div
+                              id={webTabPanelID}
+                              role="tabpanel"
+                              data-slot="tabs-content"
+                              class="flex flex-col h-full overflow-hidden contain-strict"
+                              classList={{ hidden: !webVisible() }}
+                              inert={!webVisible() || undefined}
+                            >
+                              <div class="relative pt-2 flex-1 min-h-0 overflow-hidden">
+                                <SessionWebTab />
+                              </div>
+                            </div>
+                          </Show>
                           <Show when={activeTab() === "context"}>
                             <Tabs.Content value="context" class="flex flex-col h-full overflow-hidden contain-strict">
                               <div class="relative pt-2 flex-1 min-h-0 overflow-hidden">
@@ -784,6 +839,7 @@ export function SessionSidePanel(props: {
                                 nothing on screen; it cost a browser run to find, twice, because
                                 the session HEADER has the same shape. */}
                             <ProductTriggers />
+                            <WebTrigger />
                             <Show when={contextOpen()}>
                               <Tabs.Trigger
                                 value="context"
@@ -941,6 +997,20 @@ export function SessionSidePanel(props: {
                           </div>
                         </Show>
 
+                        <Show when={webMounted()}>
+                          <div
+                            id={webTabPanelID}
+                            role="tabpanel"
+                            data-slot="tabs-content"
+                            class="flex flex-col h-full overflow-hidden contain-strict"
+                            classList={{ hidden: !webVisible() }}
+                            inert={!webVisible() || undefined}
+                          >
+                            <div class="relative pt-2 flex-1 min-h-0 overflow-hidden">
+                              <SessionWebTab />
+                            </div>
+                          </div>
+                        </Show>
                         <Show when={activeTab() === "context"}>
                           <Tabs.Content value="context" class="flex flex-col h-full overflow-hidden contain-strict">
                             <div class="relative pt-2 flex-1 min-h-0 overflow-hidden">
