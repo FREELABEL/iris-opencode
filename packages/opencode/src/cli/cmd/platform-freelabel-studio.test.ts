@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { audioStatus, fileKeys, matchTracks, titleKey, variantPenalty } from "./platform-freelabel-studio"
+import { audioStatus, fileKeys, matchTracks, shareUrl, titleKey, variantPenalty } from "./platform-freelabel-studio"
 
 // Real titles and file names from profile 69 and its Drive folder (2026-10-04).
 const files = [
@@ -61,5 +61,13 @@ describe("freelabel upload — title matching", () => {
     expect(variantPenalty("x.mp3")).toBe(0)
     expect(audioStatus({ id: 1, title: "x", preview_url: null, embed_url: "https://w.soundcloud.com/player/?url=x" })).toBe("soundcloud")
     expect(audioStatus({ id: 1, title: "x", preview_url: null })).toBe("no audio")
+  })
+})
+
+describe("freelabel share", () => {
+  test("links the page, or one video / track on it", () => {
+    expect(shareUrl("@mayoalexander")).toBe("https://freelabel.net/mayoalexander")
+    expect(shareUrl("mayoalexander", { video: 1181 })).toBe("https://freelabel.net/mayoalexander?v=1181")
+    expect(shareUrl("mayoalexander", { track: 25453 })).toBe("https://freelabel.net/mayoalexander?t=25453")
   })
 })

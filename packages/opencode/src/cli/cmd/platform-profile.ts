@@ -199,7 +199,7 @@ const ProfileSetCommand = cmd({
 // profile links <slug>
 // ============================================================================
 
-const ProfileLinksCommand = cmd({
+export const ProfileLinksCommand = cmd({
   command: "links <slug>",
   describe: "manage profile links",
   builder: (yargs) =>
