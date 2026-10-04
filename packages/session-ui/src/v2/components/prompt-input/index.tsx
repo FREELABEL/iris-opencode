@@ -789,8 +789,9 @@ function PromptInputV2SuggestionIcon(props: { item: PromptInputV2Suggestion }) {
 }
 
 /**
- * Microphone. Records in the webview and transcribes on the LOCAL server this app already
- * runs, so the audio reaches 127.0.0.1 and nowhere else.
+ * Microphone. Records in the webview and posts to the local server this app already runs,
+ * which sends the audio to Grok (xAI) through the IRIS platform. The audio leaves the machine,
+ * so the tooltip says so.
  *
  * Recording is shown with a colour change, a pulsing icon AND a running timer. An earlier
  * version of this shipped with none of that and was indistinguishable from idle — an active
@@ -817,39 +818,77 @@ function PromptInputV2Dictate(props: {
   })
 
   return (
-    <TooltipV2
-      placement="top"
-      value={
-        error() ??
-        (dictation.phase() === "recording"
-          ? "Stop and transcribe"
-          : dictation.phase() === "transcribing"
-            ? "Transcribing on this Mac…"
-            : "Dictate (on-device)")
-      }
-    >
-      <IconButtonV2
-        type="button"
-        data-action="prompt-dictate"
-        variant="ghost-muted"
-        size="large"
-        disabled={props.disabled || dictation.phase() === "transcribing"}
-        onClick={() => dictation.toggle()}
-        aria-label="Dictate"
-        icon={
-          <span class="flex items-center gap-1">
-            <IconV2
-              name="microphone"
-              class={dictation.phase() === "recording" ? "animate-pulse text-v2-text-text-danger" : undefined}
-            />
-            <Show when={dictation.phase() === "recording"}>
-              <span class="font-mono text-[10px] tabular-nums text-v2-text-text-danger">
-                {Math.floor(dictation.seconds() / 60)}:{String(dictation.seconds() % 60).padStart(2, "0")}
-              </span>
-            </Show>
+    <>
+      <Show when={dictation.held().length > 0}>
+        <span data-slot="prompt-dictate-held" class="flex items-center gap-1 text-[11px] text-v2-text-text-muted">
+          <span class="tabular-nums">
+            {dictation.held().length === 1 ? "1 saved recording" : `${dictation.held().length} saved recordings`}
+            {dictation.retrying()
+              ? " · retrying…"
+              : dictation.nextRetryIn() !== undefined
+                ? ` · retrying in ${dictation.nextRetryIn()}s`
+                : ""}
           </span>
+          <ButtonV2
+            type="button"
+            size="small"
+            variant="ghost"
+            data-action="prompt-dictate-retry"
+            disabled={dictation.retrying()}
+            onClick={() => void dictation.retryHeld()}
+          >
+            Retry
+          </ButtonV2>
+          <ButtonV2
+            type="button"
+            size="small"
+            variant="ghost-muted"
+            data-action="prompt-dictate-discard"
+            disabled={dictation.retrying()}
+            onClick={() => {
+              setError(undefined)
+              props.onError?.(undefined)
+              void dictation.discardHeld()
+            }}
+          >
+            Discard
+          </ButtonV2>
+        </span>
+      </Show>
+      <TooltipV2
+        placement="top"
+        value={
+          error() ??
+          (dictation.phase() === "recording"
+            ? "Stop and transcribe"
+            : dictation.phase() === "transcribing"
+              ? "Transcribing with Grok…"
+              : "Dictate (transcribed by Grok)")
         }
-      />
-    </TooltipV2>
+      >
+        <IconButtonV2
+          type="button"
+          data-action="prompt-dictate"
+          variant="ghost-muted"
+          size="large"
+          disabled={props.disabled || dictation.phase() === "transcribing"}
+          onClick={() => dictation.toggle()}
+          aria-label="Dictate"
+          icon={
+            <span class="flex items-center gap-1">
+              <IconV2
+                name="microphone"
+                class={dictation.phase() === "recording" ? "animate-pulse text-v2-text-text-danger" : undefined}
+              />
+              <Show when={dictation.phase() === "recording"}>
+                <span class="font-mono text-[10px] tabular-nums text-v2-text-text-danger">
+                  {Math.floor(dictation.seconds() / 60)}:{String(dictation.seconds() % 60).padStart(2, "0")}
+                </span>
+              </Show>
+            </span>
+          }
+        />
+      </TooltipV2>
+    </>
   )
 }

@@ -33,7 +33,12 @@ const PROBE_MS = 400
 const SILENCE_FLOOR = 0.01
 const TARGET_RATE = 16000
 
+/** Waits before each automatic retry of a held recording; after the last, retries are manual. */
+const RETRY_BACKOFF_MS = [5_000, 20_000, 60_000, 180_000]
+
 export type DictationPhase = "idle" | "recording" | "transcribing"
+/** A recording the server saved because every engine failed — retryable without re-recording. */
+export type HeldRecording = { id: string; seconds: number }
 type CaptureMode = "webview" | "sidecar"
 
 /** Remembered across dictations; null until the first probe has run. */
@@ -138,6 +143,18 @@ export function createDictation(opts: DictationOptions) {
   let openError: unknown
 
   const base = () => opts.url().replace(/\/$/, "")
+
+  // Held recordings: the server keeps audio on disk when every engine fails. They are retried
+  // automatically on RETRY_BACKOFF_MS, and on demand. Recordings left from a previous run are
+  // recovered on mount but NOT auto-retried — inserting old words into whatever prompt happens to
+  // be open, unasked, would be a surprise; the person retries them by hand.
+  const [held, setHeld] = createSignal<HeldRecording[]>([])
+  const [retrying, setRetrying] = createSignal(false)
+  const [nextRetryIn, setNextRetryIn] = createSignal<number>()
+  let retryStep = 0
+  let retryTimer: ReturnType<typeof setTimeout> | undefined
+  let countdown: ReturnType<typeof setInterval> | undefined
+  let disposed = false
 
   function stopTicker() {
     if (ticker) clearInterval(ticker)
@@ -331,7 +348,7 @@ export function createDictation(opts: DictationOptions) {
     if (total === 0) {
       return opts.onError?.("No audio reached the recorder. Check the input device.")
     }
-    // whisper answers "You" to silence, confidently, every time. Refuse rather than transcribe.
+    // Speech models answer silence with a confident "You". Refuse rather than upload silence.
     if (level < SILENCE_FLOOR) {
       return opts.onError?.(
         `The microphone recorded silence (peak ${level.toFixed(4)}). Check the input device in your sound settings.`,
@@ -360,8 +377,13 @@ export function createDictation(opts: DictationOptions) {
   }
 
   function deliver(ok: boolean, body: any) {
+    if (!ok && typeof body?.held?.id === "string") {
+      setHeld((list) => [...list, { id: body.held.id, seconds: Number(body.held.seconds) || 0 }])
+      scheduleRetry()
+      return opts.onError?.(`${body.error || "Transcription failed."} Your recording is saved.`)
+    }
     if (!ok) {
-      // The server's message already names the real cause (no whisper, a dead provider, a
+      // The server's message already names the real cause (no board configured, a dead provider, a
       // silence refusal that reports the measured peak), so it is shown verbatim.
       return opts.onError?.(body?.error || "Transcription failed.")
     }
@@ -384,6 +406,85 @@ export function createDictation(opts: DictationOptions) {
     )
   }
 
+  function clearRetryTimers() {
+    if (retryTimer) clearTimeout(retryTimer)
+    if (countdown) clearInterval(countdown)
+    retryTimer = undefined
+    countdown = undefined
+    setNextRetryIn(undefined)
+  }
+
+  function scheduleRetry() {
+    clearRetryTimers()
+    const wait = RETRY_BACKOFF_MS[retryStep]
+    if (wait === undefined || disposed) return
+    retryStep++
+    const due = Date.now() + wait
+    setNextRetryIn(Math.ceil(wait / 1000))
+    countdown = setInterval(() => setNextRetryIn(Math.max(0, Math.ceil((due - Date.now()) / 1000))), 1000)
+    retryTimer = setTimeout(() => void retryHeld(true), wait)
+  }
+
+  /**
+   * Retry every held recording, oldest first, inserting each transcript as it lands. Stops at the
+   * first failure: if one recording cannot be transcribed right now, the next will not be either.
+   */
+  async function retryHeld(automatic = false) {
+    if (retrying()) return
+    clearRetryTimers()
+    if (!automatic) retryStep = 0
+    setRetrying(true)
+    try {
+      for (const item of held()) {
+        const res = await fetch(`${base()}/transcribe/retry?id=${encodeURIComponent(item.id)}`, { method: "POST" })
+        const body = await res.json().catch(() => null)
+        if (res.status === 404) {
+          setHeld((list) => list.filter((h) => h.id !== item.id))
+          continue
+        }
+        if (!res.ok || typeof body?.text !== "string") {
+          opts.onError?.(`${body?.error || "Transcription failed."} Your recording is still saved.`)
+          scheduleRetry()
+          return
+        }
+        setHeld((list) => list.filter((h) => h.id !== item.id))
+        if (body.text.trim()) opts.onTranscript(body.text.trim())
+      }
+      retryStep = 0
+    } catch (e) {
+      reachError(e)
+      scheduleRetry()
+    } finally {
+      setRetrying(false)
+    }
+  }
+
+  async function discardHeld() {
+    clearRetryTimers()
+    retryStep = 0
+    const ids = held().map((h) => h.id)
+    setHeld([])
+    await Promise.all(
+      ids.map((id) =>
+        fetch(`${base()}/transcribe/discard?id=${encodeURIComponent(id)}`, { method: "POST" }).catch(() => {}),
+      ),
+    )
+  }
+
+  // Recover recordings a previous run could not transcribe. An older server answers this route
+  // with the SPA's HTML, so anything but a list is ignored.
+  void fetch(`${base()}/transcribe/held`)
+    .then((res) => res.json())
+    .then((body) => {
+      if (disposed || !Array.isArray(body?.held)) return
+      const recovered = body.held
+        .filter((h: { id?: unknown }) => typeof h?.id === "string")
+        .map((h: { id: string; seconds?: number }) => ({ id: h.id, seconds: Number(h.seconds) || 0 }))
+      if (recovered.length)
+        setHeld((list) => [...recovered.filter((r: HeldRecording) => !list.some((h) => h.id === r.id)), ...list])
+    })
+    .catch(() => {})
+
   function toggle() {
     if (phase() === "recording") void stop()
     else if (phase() === "idle") void start()
@@ -391,6 +492,8 @@ export function createDictation(opts: DictationOptions) {
   }
 
   onCleanup(() => {
+    disposed = true
+    clearRetryTimers()
     stopTicker()
     teardownWebview()
     // Leaving the sidecar recording after the prompt unmounts is a hot microphone nobody can
@@ -400,5 +503,5 @@ export function createDictation(opts: DictationOptions) {
     }
   })
 
-  return { phase, seconds, toggle }
+  return { phase, seconds, toggle, held, retrying, nextRetryIn, retryHeld: () => retryHeld(false), discardHeld }
 }

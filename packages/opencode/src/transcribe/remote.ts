@@ -4,22 +4,16 @@ import { join } from "path"
 import { TranscribeError } from "./local"
 
 /**
- * Remote transcription — Grok (xAI) through the IRIS platform.
- *
- * ## THIS SENDS THE AUDIO OFF THE MACHINE
- *
- * The local path exists so dictation never could, and that property is worth keeping for
- * anything sensitive. This is the deliberate opposite, chosen because the local base.en model
- * is measurably worse. Measured on identical audio, same clip, same machine:
+ * Dictation transcription — Grok (xAI) through the IRIS platform. THIS SENDS THE AUDIO OFF THE
+ * MACHINE, and since 2026-10-04 it is the only dictation engine: on-device whisper was dropped
+ * after too many install and accuracy failures. Measured on identical audio, same machine:
  *
  *     local whisper base.en   0.64s   "Southern  transcription keeps the audio on the machine."
  *     grok (xai)              0.93s   "Sovereign transcription keeps the audio on the machine."
  *
- * A trade, not an upgrade: better words, at the cost of the recording leaving the device.
- * Anything under a PHI policy must stay on transcribeLocal.
- *
- * The bloq scope is required by the platform and is what applies its transcription policy.
- * There is no unscoped path, by design — an authenticated request without one is refused.
+ * The bloq scope is required by the platform and is what applies its PHI transcription policy:
+ * fl-api refuses audio filed under a PHI-marked board before it reaches xAI. There is no
+ * unscoped path, by design — a request without one is refused.
  */
 
 export interface RemoteConfig {
@@ -55,16 +49,30 @@ export function readRemoteConfig(): RemoteConfig | null {
   return { apiUrl: apiUrl.replace(/\/$/, ""), token: usable, bloqId }
 }
 
+/** A failed platform call. `status` is the HTTP status, or 0 when the platform was never reached. */
+export class RemoteTranscribeError extends TranscribeError {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message)
+  }
+}
+
+/** A hung connection must not hold a dictation forever; the retry chain needs it to fail. */
+const TIMEOUT_MS = 90_000
+
 export async function transcribeRemote(
   audio: Uint8Array,
   cfg: RemoteConfig,
-  opts: { filename?: string; provider?: string } = {},
+  opts: { filename?: string; provider?: string; language?: string } = {},
 ): Promise<{ text: string; provider: string; ms: number }> {
   const started = Date.now()
   const form = new FormData()
   form.append("audio_file", new Blob([audio as unknown as BlobPart], { type: "audio/wav" }), opts.filename ?? "dictation.wav")
   form.append("bloq_id", cfg.bloqId)
   form.append("provider", opts.provider ?? "xai")
+  if (opts.language) form.append("language", opts.language)
 
   let res: Response
   try {
@@ -72,16 +80,17 @@ export async function transcribeRemote(
       method: "POST",
       headers: cfg.token ? { Authorization: `Bearer ${cfg.token}` } : {},
       body: form,
+      signal: AbortSignal.timeout(TIMEOUT_MS),
     })
   } catch (e) {
-    throw new TranscribeError(`Could not reach ${cfg.apiUrl} for remote transcription: ${String(e)}`)
+    throw new RemoteTranscribeError(`Could not reach ${cfg.apiUrl} for remote transcription: ${String(e)}`, 0)
   }
 
   const body = (await res.json().catch(() => null)) as any
   if (!res.ok || !body?.success) {
     // The platform names the real cause (dead provider, bad scope, no credits). Surfaced
     // rather than flattened — that is exactly what let us diagnose the provider outage.
-    throw new TranscribeError(body?.message || `Remote transcription failed (HTTP ${res.status})`)
+    throw new RemoteTranscribeError(body?.message || `Remote transcription failed (HTTP ${res.status})`, res.status)
   }
   return {
     text: String(body?.data?.text ?? "").trim(),

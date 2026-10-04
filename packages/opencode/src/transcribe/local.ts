@@ -111,6 +111,18 @@ function isWhisperReadyWav(bytes: Uint8Array): boolean {
 export class TranscribeError extends Error {}
 
 /**
+ * Is on-device whisper usable RIGHT NOW, without installing or downloading anything? Dictation
+ * uses whisper only as a last resort after the cloud engines fail, and a fallback that starts a
+ * 140MB download mid-dictation is not a fallback.
+ */
+export function localWhisperReady(): boolean {
+  return (
+    !!(resolveBin("whisper-cli") || resolveBin("whisper-cpp")) &&
+    existsSync(join(homedir(), ".whisper", "ggml-base.en.bin"))
+  )
+}
+
+/**
  * A 0700 scratch directory. On macOS os.tmpdir() is already per-user 0700, but on Linux it
  * is /tmp (1777) where a 0644 WAV of someone's voice is readable by every account on the box.
  */

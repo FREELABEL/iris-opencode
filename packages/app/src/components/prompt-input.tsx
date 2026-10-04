@@ -1021,8 +1021,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     queueScroll()
   }
 
-  // Dictation. Records in the webview, transcribes on the LOCAL sidecar this app already
-  // runs — the audio goes to 127.0.0.1 and nowhere else.
+  // Dictation. Records in the webview and posts to the sidecar this app already runs, which
+  // sends the audio to Grok (xAI) through the IRIS platform — it leaves the machine.
   const [dictationError, setDictationError] = createSignal<string>()
   const dictation = createDictation({
     url: () => sdk().url,
@@ -1674,8 +1674,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                     (dictation.phase() === "recording"
                       ? "Stop and transcribe"
                       : dictation.phase() === "transcribing"
-                        ? "Transcribing on this Mac…"
-                        : "Dictate (on-device)")
+                        ? "Transcribing with Grok…"
+                        : "Dictate (transcribed by Grok)")
                   }
                 >
                   <Button
