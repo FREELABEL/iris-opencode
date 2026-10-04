@@ -49,6 +49,7 @@ FAIL=0
 
 pass() { printf '  \033[32m✓\033[0m %s\n' "$*"; }
 fail() { printf '  \033[31m✗\033[0m %s\n' "$*"; FAIL=1; }
+warn() { printf '  \033[33m!\033[0m %s\n' "$*"; }
 info() { printf '    \033[90m%s\033[0m\n' "$*"; }
 step() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 
@@ -277,7 +278,16 @@ for name, p in plats.items():
 shown = want_id[::-1].hex().upper() if want_id else "unchecked"
 print("OK manifest " + want + ", " + str(len(plats)) + " platforms, signed by " + shown)
 ' > "$WORK/m.txt" 2>&1
-  R="$(cat "$WORK/m.txt")"
+  # The checker may print WARN / ::warning:: lines BEFORE its verdict. Judge only the verdict:
+  # reading the whole output once failed desktop-v1.18.94 because "WARN manifest has no
+  # linux-x86_64" does not start with OK — turning the advisory Linux check into a hard block.
+  while IFS= read -r line; do
+    case "$line" in
+      WARN*) warn "${line#WARN }" ;;
+      ::warning::*) echo "$line" ;;
+    esac
+  done < "$WORK/m.txt"
+  R="$(grep -vE '^(WARN|::warning::)' "$WORK/m.txt" | tail -1)"
   case "$R" in OK*) pass "${R#OK }";; *) fail "${R#FAIL }";; esac
 
   # And the binary it points at must exist. A manifest naming a 404 fails at download time,
