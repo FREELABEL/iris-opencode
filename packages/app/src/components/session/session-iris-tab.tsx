@@ -8,6 +8,7 @@ import {
   on,
   onCleanup,
   Show,
+  startTransition,
   Switch,
   untrack,
 } from "solid-js"
@@ -1137,16 +1138,19 @@ export function SessionIrisTab() {
   createEffect(() => {
     const wanted = requestedSurface()
     if (!wanted) return
-    setSurface(wanted.surface)
-    // The sub-view is written through the SAME store the switcher uses, so the strip highlights
-    // where you actually are rather than where it was last time.
-    if (wanted.sub && SUBVIEWS[wanted.surface]?.some((v) => v.id === wanted.sub)) {
-      const next = { ...subviews(), [wanted.surface]: wanted.sub }
-      setSubviews(next)
-      try {
-        localStorage.setItem(LAST_SUBVIEW_KEY, JSON.stringify(next))
-      } catch {}
-    }
+    // In a transition — see chooseSurface. This is the path every product-tab click takes.
+    void startTransition(() => {
+      setSurface(wanted.surface)
+      // The sub-view is written through the SAME store the switcher uses, so the strip highlights
+      // where you actually are rather than where it was last time.
+      if (wanted.sub && SUBVIEWS[wanted.surface]?.some((v) => v.id === wanted.sub)) {
+        const next = { ...untrack(subviews), [wanted.surface]: wanted.sub }
+        setSubviews(next)
+        try {
+          localStorage.setItem(LAST_SUBVIEW_KEY, JSON.stringify(next))
+        } catch {}
+      }
+    })
     setRequestedSurface(undefined)
   })
 
@@ -1944,16 +1948,27 @@ export function SessionIrisTab() {
   onCleanup(() => document.removeEventListener("keydown", onKey))
   const rowScope = createMemo(() => panelScope(surface(), pane()))
 
+  /**
+   * SWITCHING IS A TRANSITION, OR THE PANEL GOES BLACK.
+   *
+   * The pane a switch lands on reads resources that have not loaded yet — Rooms, Artifacts, a
+   * playbook or page doc. Read outside a transition, that suspends the nearest <Suspense>, which
+   * holds the whole side panel and has no fallback: every product-tab click blanked the panel to
+   * its dark ground until the fetch returned. Inside one, the pane you were on stays up until the
+   * next one is ready.
+   */
   function chooseSurface(id: SurfaceId) {
-    setSurface(id)
+    void startTransition(() => setSurface(id))
     try {
       localStorage.setItem(LAST_SURFACE_KEY, id)
     } catch {}
   }
 
-  function chooseSub(id: string) {
-    const next = { ...subviews(), [surface()]: id }
-    setSubviews(next)
+  // `target` is explicit for a caller that has just chosen a surface: inside the transition above,
+  // surface() still reads the one being left until the switch commits.
+  function chooseSub(id: string, target: SurfaceId = surface()) {
+    const next = { ...subviews(), [target]: id }
+    void startTransition(() => setSubviews(next))
     try {
       localStorage.setItem(LAST_SUBVIEW_KEY, JSON.stringify(next))
     } catch {}
@@ -1965,8 +1980,9 @@ export function SessionIrisTab() {
     const req = irisNavRequest()
     if (!req) return
     untrack(() => {
-      if (SURFACES.some((x) => x.id === req.surface)) chooseSurface(req.surface as SurfaceId)
-      if (req.sub) chooseSub(req.sub)
+      const known = SURFACES.some((x) => x.id === req.surface)
+      if (known) chooseSurface(req.surface as SurfaceId)
+      if (req.sub) chooseSub(req.sub, known ? (req.surface as SurfaceId) : surface())
     })
     clearIrisNav()
   })

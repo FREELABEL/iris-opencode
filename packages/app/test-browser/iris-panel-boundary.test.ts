@@ -1,7 +1,7 @@
 import { plugin } from "bun"
 import { expect, test } from "bun:test"
 import { createRequire } from "node:module"
-import { createRenderEffect, createResource, ErrorBoundary } from "solid-js"
+import { createRenderEffect, createResource, ErrorBoundary, Suspense } from "solid-js"
 import { createComponent, render } from "solid-js/web"
 
 // Bun compiles .tsx with an eager JSX runtime: children are built BEFORE the boundary exists, so
@@ -82,6 +82,53 @@ test("a panel whose sidecar fetch rejects shows its own error, not the app's", a
   await tick()
   expect(host.textContent).toContain("rooms loaded")
   expect(host.querySelector('[data-slot="iris-panel-error"]')).toBeNull()
+
+  dispose()
+  host.remove()
+})
+
+// Clicking a product tab blanked the whole side panel to black until the new pane's fetch
+// returned: the pane's loading read suspended the fallback-less <Suspense> in session.tsx that
+// wraps the entire panel. A load must stop at the IRIS panel, with the tab strip still drawn.
+test("a pane that is still loading does not blank the side panel around it", async () => {
+  const host = document.createElement("div")
+  document.body.append(host)
+  let finish!: (v: string) => void
+
+  const Panel = () => {
+    const [data] = createResource(() => new Promise<string>((r) => (finish = r)))
+    const el = document.createElement("span")
+    createRenderEffect(() => (el.textContent = data() ?? ""))
+    return el
+  }
+
+  const dispose = render(
+    () =>
+      // session.tsx: <Suspense> with no fallback around SessionSidePanel.
+      createComponent(Suspense, {
+        get children() {
+          return [
+            "tab strip",
+            createComponent(IrisPanelBoundary, {
+              get children() {
+                return createComponent(Panel, {})
+              },
+            }),
+          ]
+        },
+      }),
+    host,
+  )
+
+  await tick()
+  expect(host.textContent).toContain("tab strip")
+  expect(host.querySelector('[data-slot="iris-panel-loading"]')).not.toBeNull()
+
+  finish("rooms loaded")
+  await tick()
+  expect(host.textContent).toContain("tab strip")
+  expect(host.textContent).toContain("rooms loaded")
+  expect(host.querySelector('[data-slot="iris-panel-loading"]')).toBeNull()
 
   dispose()
   host.remove()
