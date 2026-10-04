@@ -726,8 +726,16 @@ jobs:
           # lineage. desktop-v1.18.65 and desktop-v1.18.66 were both tagged on main that way
           # while their binaries were built from iris/1.18.23, so checking out the tag to debug
           # a desktop build handed you the CLI. GITHUB_SHA is the commit this run built.
+          # CREATE with RELEASE_TOKEN when it exists. Since desktop-v1.18.93 (2026-10-04) GitHub
+          # refuses to let the built-in GITHUB_TOKEN create this tag — HTTP 403 "Resource not
+          # accessible by integration", which by hand reads "workflow scope may be required".
+          # GITHUB_TOKEN can never hold `workflows`, so creation needs a token that can: a
+          # fine-grained PAT with Contents + Workflows read/write, stored as RELEASE_TOKEN.
+          # Without the secret this falls back to GITHUB_TOKEN, which works for any release
+          # that already exists (created by hand) — uploads were never the problem.
+          CREATE_TOKEN="${RELEASE_TOKEN:-$GITHUB_TOKEN}"
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
-            || gh release create "$TAG" \
+            || GH_TOKEN="$CREATE_TOKEN" gh release create "$TAG" \
                  --repo "$GITHUB_REPOSITORY" \
                  --target "$GITHUB_SHA" \
                  --title "IRIS Desktop ${{ steps.version.outputs.version }}" \
@@ -745,6 +753,7 @@ jobs:
           cat /tmp/assets.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
 
   # Promote to the landing page ONLY if the published artifact passes verification.
   #
