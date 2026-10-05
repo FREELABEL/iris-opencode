@@ -1025,8 +1025,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     queueScroll()
   }
 
-  // Dictation. Records in the webview and posts to the sidecar this app already runs, which
-  // sends the audio to Grok (xAI) through the IRIS platform — it leaves the machine.
+  // Dictation. Records in the webview and posts to the sidecar this app already runs, which sends
+  // the audio through the IRIS platform's transcription engines — it leaves the machine.
   const [dictationError, setDictationError] = createSignal<string>()
   // Same credentials as the SDK, so the mic survives a server password.
   const serverForDictation = useServerSDK()
@@ -1036,6 +1036,10 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   setDictationDevice(() => dictationSettings.voice.inputDevice())
   const dictation = createDictation({
     url: () => sdk().url,
+    // This composer has no Retry/Discard controls, so it never retries in the background: text
+    // must not appear in the prompt minutes later unannounced. Held recordings stay saved and are
+    // listed (and retried) by the new composer.
+    autoRetry: false,
     onError: setDictationError,
     onTranscript: (text) => {
       setDictationError(undefined)
@@ -1690,16 +1694,18 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                   value={
                     dictationError() ??
                     (dictation.phase() === "recording"
-                      ? "Stop and transcribe"
+                      ? language.t("ui.promptInput.dictate.stop")
                       : dictation.phase() === "transcribing"
-                        ? "Transcribing with Grok…"
-                        : `Dictate (transcribed by Grok) · ${command.keybind(DICTATE_COMMAND_ID)}, hold to talk`)
+                        ? language.t("ui.promptInput.dictate.transcribing")
+                        : language.t("ui.promptInput.dictate.startHint", {
+                            shortcut: command.keybind(DICTATE_COMMAND_ID),
+                          }))
                   }
                 >
                   <Button
                     variant="ghost"
                     size="normal"
-                    aria-label="Dictate"
+                    aria-label={language.t("ui.promptInput.dictate.start")}
                     disabled={dictation.phase() === "transcribing"}
                     onClick={() => {
                       dictation.toggle()

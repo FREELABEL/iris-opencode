@@ -174,6 +174,12 @@ export interface DictationOptions {
   onFinal?: (text: string) => void
   /** Live preview is off for this take (not configured, refused, dropped). Batch is unaffected. */
   onLiveUnavailable?: (reason: string) => void
+  /**
+   * Retry held recordings in the background (default true). A surface with no Retry/Discard
+   * controls must pass false: otherwise text can land in the prompt minutes later with nothing
+   * on screen saying a recording was waiting. Held recordings stay saved for a surface that shows them.
+   */
+  autoRetry?: boolean
 }
 
 /** Live preview state for the current take. */
@@ -436,6 +442,18 @@ export function createDictation(opts: DictationOptions) {
     resetLive()
     starting = true
     try {
+      // Fail BEFORE the person speaks: with no cloud engine configured (not signed in, no board)
+      // and no on-device whisper, every take would fail after the fact. Say why now. Unknown
+      // readiness (an older server) never blocks.
+      const pending = attempt
+      const ready = readiness() ?? (await readinessLoaded)
+      // A hold-to-talk release (or stop) while this was awaited bumps `attempt`: abandon the take
+      // rather than open a microphone nobody is holding.
+      if (attempt !== pending || disposed) return
+      if (ready && !ready.cloud.configured && !ready.local.whisper) {
+        opts.onError?.(ready.cloud.reason || "Dictation is not set up on this machine.")
+        return
+      }
       await openRecorder()
     } finally {
       starting = false
@@ -748,6 +766,7 @@ export function createDictation(opts: DictationOptions) {
 
   function scheduleRetry(atLeast = 0) {
     clearRetryTimers()
+    if (opts.autoRetry === false) return
     const step = RETRY_BACKOFF_MS[retryStep]
     if (step === undefined || disposed) return
     const wait = Math.max(step, atLeast)
