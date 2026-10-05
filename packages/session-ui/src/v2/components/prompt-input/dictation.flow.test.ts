@@ -15,6 +15,12 @@ let tracksStopped: number
 let processor: { onaudioprocess?: (e: unknown) => void } | undefined
 let holdStart: boolean
 let sidecarLevel = 0
+/** GET /transcribe/health body; undefined = an older server that does not report readiness. */
+let health: unknown
+let holdHealth: (() => void) | undefined
+let healthHeld = false
+let stopFails = false
+let gumCalls = 0
 const realFetch = globalThis.fetch
 const realInterval = globalThis.setInterval
 const realUserAgent = navigator.userAgent
@@ -28,12 +34,17 @@ beforeEach(() => {
   tracksStopped = 0
   processor = undefined
   holdStart = false
+  health = undefined
+  healthHeld = false
+  holdHealth = undefined
+  stopFails = false
+  gumCalls = 0
   setUserAgent("Mozilla/5.0 (Macintosh) AppleWebKit")
   ;(globalThis as any).window = globalThis
   Object.defineProperty(navigator, "mediaDevices", {
     configurable: true,
     value: {
-      getUserMedia: async () => ({
+      getUserMedia: async () => (gumCalls++, {
         getAudioTracks: () => [{}],
         getTracks: () => [{ stop: () => tracksStopped++ }],
       }),
@@ -57,6 +68,14 @@ beforeEach(() => {
     const call: Call = { path }
     calls.push(call)
     if (path === "/dictate/start" && holdStart) await new Promise<void>((r) => (call.resolve = r))
+    if (path === "/transcribe/health") {
+      if (healthHeld) await new Promise<void>((r) => (holdHealth = r))
+      if (health) return new Response(JSON.stringify(health), { status: 200 })
+    }
+    if (path === "/dictate/stop" && stopFails)
+      return new Response(JSON.stringify({ error: "every engine failed", held: { id: "1700000000000-abcdef", seconds: 3 } }), {
+        status: 503,
+      })
     const body =
       path === "/transcribe/held"
         ? { held: [] }
@@ -77,10 +96,10 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const posted = (path: string) => calls.filter((c) => c.path === path).length
 
 /** A fresh module per test: the capture mode is cached at module level for the session. */
-async function mount() {
+async function mount(extra: Record<string, unknown> = {}) {
   const { createDictation } = await import(`./dictation.ts?case=${Math.random()}`)
   return createRoot((dispose) => ({
-    d: createDictation({ url: () => "http://127.0.0.1:4096", onTranscript: () => {} }),
+    d: createDictation({ url: () => "http://127.0.0.1:4096", onTranscript: () => {}, ...extra }),
     dispose,
   }))
 }
@@ -344,6 +363,79 @@ describe("createDictation — extend: Keep recording lifts a running take to the
     const { d, dispose } = await mount()
     d.extend()
     expect(d.phase()).toBe("idle")
+    dispose()
+  })
+})
+
+describe("createDictation — setup that would fail is reported before anyone speaks", () => {
+  const notReady = {
+    recorder: { sidecar: true },
+    cloud: { configured: false, reason: "Sign in with `iris auth login` to dictate." },
+    local: { whisper: false },
+    engines: [],
+  }
+
+  test("no cloud engine and no on-device whisper: the take is refused and the mic never opens", async () => {
+    health = notReady
+    const errors: string[] = []
+    const { d, dispose } = await mount({ onError: (m: string) => errors.push(m) })
+    await sleep(20)
+    d.toggle()
+    await sleep(50)
+    expect(errors).toEqual(["Sign in with `iris auth login` to dictate."])
+    expect(d.phase()).toBe("idle")
+    expect(gumCalls).toBe(0)
+    expect(posted("/dictate/start")).toBe(0)
+    dispose()
+  })
+
+  test("on-device whisper alone is enough to dictate", async () => {
+    health = { ...notReady, local: { whisper: true } }
+    const { d, dispose } = await mount()
+    d.toggle()
+    await sleep(50)
+    expect(gumCalls).toBe(1)
+    dispose()
+  })
+
+  test("a hold released while readiness is still loading opens no microphone", async () => {
+    healthHeld = true
+    health = { ...notReady, cloud: { configured: true } }
+    const { d, dispose } = await mount()
+    d.press()
+    await sleep(400)
+    d.release()
+    holdHealth!()
+    await sleep(600)
+    expect(gumCalls).toBe(0)
+    expect(posted("/dictate/start")).toBe(0)
+    expect(d.phase()).toBe("idle")
+    dispose()
+  })
+})
+
+describe("createDictation — background retries of held recordings", () => {
+  async function failOneTake(extra: Record<string, unknown> = {}) {
+    stopFails = true
+    const { d, dispose } = await mount(extra)
+    d.toggle()
+    await sleep(500)
+    d.toggle()
+    await sleep(50)
+    return { d, dispose }
+  }
+
+  test("by default a failed take is held and a retry is scheduled", async () => {
+    const { d, dispose } = await failOneTake()
+    expect(d.held().map((h: { id: string }) => h.id)).toEqual(["1700000000000-abcdef"])
+    expect(d.nextRetryIn()).toBeGreaterThan(0)
+    dispose()
+  })
+
+  test("autoRetry: false holds the recording but never retries it in the background", async () => {
+    const { d, dispose } = await failOneTake({ autoRetry: false })
+    expect(d.held().map((h: { id: string }) => h.id)).toEqual(["1700000000000-abcdef"])
+    expect(d.nextRetryIn()).toBeUndefined()
     dispose()
   })
 })

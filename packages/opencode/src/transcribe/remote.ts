@@ -4,9 +4,10 @@ import { join } from "path"
 import { TranscribeError } from "./local"
 
 /**
- * Dictation transcription — Grok (xAI) through the IRIS platform. THIS SENDS THE AUDIO OFF THE
- * MACHINE, and since 2026-10-04 it is the only dictation engine: on-device whisper was dropped
- * after too many install and accuracy failures. Measured on identical audio, same machine:
+ * Dictation transcription through the IRIS platform's engines (xAI first; the order is
+ * transcribe/chain.ts). THIS SENDS THE AUDIO OFF THE MACHINE. Since 2026-10-04 the cloud is the
+ * primary path; on-device whisper is only a last resort, used when it is already installed
+ * (localWhisperReady) — never downloaded mid-dictation. Measured on identical audio, same machine:
  *
  *     local whisper base.en   0.64s   "Southern  transcription keeps the audio on the machine."
  *     grok (xai)              0.93s   "Sovereign transcription keeps the audio on the machine."
