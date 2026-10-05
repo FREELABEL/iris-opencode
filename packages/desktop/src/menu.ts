@@ -24,6 +24,19 @@ export async function createMenu() {
           await PredefinedMenuItem.new({
             item: { About: null },
           }),
+          // macOS users look for Settings here, under the app name, and nowhere else. Without it
+          // ⌘, was the only way in (#187966). Windows has Settings in its in-app menu already.
+          // The app owns the command, so the shell asks it by event rather than reimplementing it.
+          ...(isMac
+            ? [
+                await MenuItem.new({
+                  text: "Settings...",
+                  accelerator: "Cmd+,",
+                  action: () =>
+                    window.dispatchEvent(new CustomEvent("iris:native-command", { detail: "settings.open" })),
+                }),
+              ]
+            : []),
           await MenuItem.new({
             enabled: UPDATER_ENABLED,
             action: () => runUpdater({ alertOnFail: true, trigger: "manual" }),

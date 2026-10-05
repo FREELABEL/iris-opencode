@@ -12,6 +12,14 @@ const IS_MAC = typeof navigator === "object" && /(Mac|iPod|iPhone|iPad)/.test(na
 
 const PALETTE_ID = "command.palette"
 export const DEFAULT_PALETTE_KEYBIND = "mod+k,mod+shift+p"
+
+/**
+ * The native macOS menu is built by the desktop shell, outside this provider, so it cannot call
+ * trigger() directly. It dispatches this event on window instead. Allow-listed: the menu is the
+ * only intended sender, and nothing else gets a way to run arbitrary commands by name.
+ */
+export const NATIVE_COMMAND_EVENT = "iris:native-command"
+export const NATIVE_COMMANDS = new Set(["settings.open"])
 const SUGGESTED_PREFIX = "suggested."
 const EDITABLE_KEYBIND_IDS = new Set(["terminal.toggle", "terminal.new", "file.attach"])
 
@@ -421,6 +429,10 @@ export const { use: useCommand, provider: CommandProvider } = createSimpleContex
 
     onMount(() => {
       makeEventListener(document, "keydown", handleKeyDown, { capture: true })
+      makeEventListener(window, NATIVE_COMMAND_EVENT, (event) => {
+        const id = (event as CustomEvent<unknown>).detail
+        if (typeof id === "string" && NATIVE_COMMANDS.has(id)) run(id)
+      })
     })
 
     function register(cb: () => CommandOption[]): void

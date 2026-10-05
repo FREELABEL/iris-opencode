@@ -7,7 +7,13 @@ import { useSettings } from "@/context/settings"
 import { persisted } from "@/utils/persist"
 import { DialogReleaseNotes, type Highlight } from "@/components/dialog-release-notes"
 
-const CHANGELOG_URL = "https://opencode.ai/changelog.json"
+/**
+ * No changelog (#187966). This fetched OpenCode's changelog. IRIS versions never match an
+ * OpenCode tag, so the slice below spanned EVERY OpenCode release: the day OpenCode published
+ * highlights, every IRIS user who updated would have been shown OpenCode's "what's new".
+ * IRIS has no changelog in this format. Point this at one when it exists.
+ */
+const CHANGELOG_URL: string | undefined = undefined
 
 type Store = {
   version?: string
@@ -165,7 +171,7 @@ export const { use: useHighlights, provider: HighlightsProvider } = createSimple
     }
 
     const start = (previous: string) => {
-      if (!settings.general.releaseNotes()) {
+      if (!CHANGELOG_URL || !settings.general.releaseNotes()) {
         markSeen()
         return
       }

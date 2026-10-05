@@ -279,20 +279,13 @@ export const DESKTOP_MENU: DesktopMenu[] = [
     id: "help",
     labelKey: "desktop.menu.help",
     items: [
-      { type: "item", labelKey: "desktop.menu.documentation", href: "https://opencode.ai/docs" },
-      { type: "item", labelKey: "desktop.menu.supportForum", href: "https://discord.com/invite/opencode" },
+      // IRIS destinations only (#187966). These pointed at OpenCode's docs, Discord and GitHub
+      // issues. IRIS has no forum, and issues are switched off on its public repo, so a bug report
+      // goes to the contact page rather than to a link that would 404.
+      { type: "item", labelKey: "desktop.menu.documentation", href: "https://heyiris.io/docs" },
       { type: "item", labelKey: "desktop.menu.exportLogs", command: "logs.export" },
       { type: "separator" },
-      {
-        type: "item",
-        labelKey: "desktop.menu.shareFeedback",
-        href: "https://github.com/anomalyco/opencode/issues/new?template=feature_request.yml",
-      },
-      {
-        type: "item",
-        labelKey: "desktop.menu.reportBug",
-        href: "https://github.com/anomalyco/opencode/issues/new?template=bug_report.yml",
-      },
+      { type: "item", labelKey: "desktop.menu.reportBug", href: "https://heyiris.io/contact" },
     ],
   },
 ]
