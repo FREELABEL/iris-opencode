@@ -88,12 +88,9 @@ const domains = [
     target: (locale: string) => `../../../ui/src/i18n/${locale}.ts`,
     locales: appLocales,
   },
-  {
-    name: "desktop",
-    source: "../../../desktop/src/renderer/i18n/en.ts",
-    target: (locale: string) => `../../../desktop/src/renderer/i18n/${locale}.ts`,
-    locales: desktopLocales,
-  },
+  // No "desktop" domain: upstream's Electron renderer dictionaries (desktop/src/renderer/i18n) do
+  // not exist in this Tauri app, whose UI copy lives in app/ and ui/. Importing them made every
+  // run of this suite fail on "Cannot find module" before a single key was compared.
 ] as const
 
 describe("i18n parity", () => {
