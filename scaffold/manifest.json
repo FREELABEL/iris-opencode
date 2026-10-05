@@ -499,6 +499,48 @@
       "dest": "how-to/mailjet.md",
       "managed": true,
       "purpose": "How to: connect a client's own Mailjet account and build lists, send email and draft campaigns through iris integrations exec."
+    },
+    {
+      "src": "how-to/agent-trust-and-approvals.md",
+      "dest": "how-to/agent-trust-and-approvals.md",
+      "managed": true,
+      "purpose": "Set an agent's trust level (intern/specialist/lead), how held actions reach you (Slack/email confirm links), approve/reject/edit, remembered refusals and volume caps."
+    },
+    {
+      "src": "how-to/agent-pause-watch-takeover.md",
+      "dest": "how-to/agent-pause-watch-takeover.md",
+      "managed": true,
+      "purpose": "Watch an agent's live step and tool calls (CLI and Desktop Agents > Live), take over and hand back with an instruction, pause/resume/stop in every lane."
+    },
+    {
+      "src": "how-to/dataset-webhooks.md",
+      "dest": "how-to/dataset-webhooks.md",
+      "managed": true,
+      "purpose": "Signed webhooks when a dataset record is created/updated/deleted: add, list, deliveries, retries, signature verification, PHI field omission."
+    },
+    {
+      "src": "how-to/dataset-schema-draft.md",
+      "dest": "how-to/dataset-schema-draft.md",
+      "managed": true,
+      "purpose": "Draft a typed schema (with public/private/phi visibility) from a sentence; review, dry-run and create it explicitly."
+    },
+    {
+      "src": "how-to/vaults.md",
+      "dest": "how-to/vaults.md",
+      "managed": true,
+      "purpose": "iris vault / iris vaults: replicated vaults and encrypted per-workspace PHI vaults on a node — create, list, lock, unlock, destroy, 30-day retention."
+    },
+    {
+      "src": "how-to/iris-next.md",
+      "dest": "how-to/iris-next.md",
+      "managed": true,
+      "purpose": "iris next: the one next step for your account, and --site to start from an existing website."
+    },
+    {
+      "src": "how-to/review-studio-timecodes.md",
+      "dest": "how-to/review-studio-timecodes.md",
+      "managed": true,
+      "purpose": "Time-coded Review Studio notes (seek-on-click) and replacing a video render behind the same URL."
     }
   ]
 }
