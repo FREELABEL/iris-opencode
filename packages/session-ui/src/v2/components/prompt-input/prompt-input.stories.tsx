@@ -3,7 +3,7 @@ import { createStore } from "solid-js/store"
 import { PromptInputV2, type PromptInputV2PersistedState, type PromptInputV2Suggestion } from "."
 import { createPromptInputV2Controller } from "./interaction"
 import { createPromptInputV2Store } from "./store"
-import { createEffect } from "solid-js"
+import { createEffect, createSignal } from "solid-js"
 
 const agents = [
   { id: "build", label: "Build" },
@@ -105,6 +105,7 @@ const commandSuggestions: PromptInputV2Suggestion[] = [
 ]
 
 function ControlledPromptInput(props: { dictation?: boolean } = {}) {
+  const [device, setDevice] = createSignal("")
   // Agent choice is a persisted user/workspace preference in v1, not part of PromptStore.
   const [preferences, setPreferences] = createStore({ agent: "build" })
 
@@ -209,6 +210,15 @@ function ControlledPromptInput(props: { dictation?: boolean } = {}) {
         controller={controller}
         transcribeUrl={props.dictation ? () => window.location.origin : undefined}
         dictateShortcut={props.dictation ? "Ctrl+Shift+Space" : undefined}
+        dictateDevices={
+          props.dictation
+            ? {
+                list: async () => ["Microphone Array (Realtek)", "Shure MV7", "AirPods Pro"],
+                current: () => device(),
+                select: setDevice,
+              }
+            : undefined
+        }
       />
     </div>
   )

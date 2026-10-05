@@ -286,3 +286,39 @@ describe("createDictation — what the waveform draws", () => {
     dispose()
   })
 })
+
+describe("createDictation — cancel throws a take away without transcribing it", () => {
+  test("a window recording is released and nothing is uploaded", async () => {
+    setUserAgent("Mozilla/5.0 (Windows NT 10.0)")
+    const { d, dispose } = await mount()
+    d.toggle()
+    await sleep(10)
+    processor!.onaudioprocess!({ inputBuffer: { getChannelData: () => new Float32Array(4096).fill(0.3) } })
+    d.cancel()
+    await sleep(20)
+    expect(d.phase()).toBe("idle")
+    expect(tracksStopped).toBeGreaterThan(0)
+    expect(posted("/transcribe")).toBe(0)
+    dispose()
+  })
+
+  test("a sidecar recording is cancelled on the server, not stopped", async () => {
+    const { d, dispose } = await mount()
+    d.toggle() // silent probe → sidecar
+    await sleep(600)
+    d.cancel()
+    await sleep(20)
+    expect(posted("/dictate/cancel")).toBe(1)
+    expect(posted("/dictate/stop")).toBe(0)
+    expect(d.phase()).toBe("idle")
+    dispose()
+  })
+
+  test("cancel when idle does nothing", async () => {
+    const { d, dispose } = await mount()
+    d.cancel()
+    expect(posted("/dictate/cancel")).toBe(0)
+    expect(d.phase()).toBe("idle")
+    dispose()
+  })
+})

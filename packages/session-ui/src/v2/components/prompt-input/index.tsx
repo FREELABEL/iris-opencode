@@ -1,4 +1,4 @@
-import { createEffect, createMemo, For, Show, type Accessor, type JSX } from "solid-js"
+import { createEffect, createMemo, createSignal, For, Show, type Accessor, type JSX } from "solid-js"
 import { FileIcon } from "@opencode-ai/ui/file-icon"
 import { Icon } from "@opencode-ai/ui/icon"
 import { IconButton } from "@opencode-ai/ui/icon-button"
@@ -11,7 +11,7 @@ import { KeybindV2 } from "@opencode-ai/ui/v2/keybind-v2"
 import { MenuV2 } from "@opencode-ai/ui/v2/menu-v2"
 import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 import type { DictationControls } from "./dictation"
-import { PromptInputV2Dictate } from "./dictate"
+import { PromptInputV2Dictate, type DictateDevices } from "./dictate"
 import { AttachmentCardV2 } from "../attachment-card-v2"
 import { CommentCardV2 } from "../comment-card-v2"
 import { typeLabel } from "../../../components/message-file"
@@ -55,6 +55,8 @@ export type PromptInputV2Props = {
   dictateRef?: (controls: DictationControls | undefined) => void
   /** The dictation shortcut as displayed text, for the tooltip. */
   dictateShortcut?: string
+  /** Inputs the mic menu offers, and the one in use. Omit and the menu offers background recording only. */
+  dictateDevices?: DictateDevices
   variantControlVisible?: boolean
   attachKeybind?: string[]
   attachShortcut?: string
@@ -66,6 +68,9 @@ export function PromptInputV2(props: PromptInputV2Props) {
   const view = props.controller.view
   let editor: HTMLDivElement | undefined
   let localInput = false
+  // Where dictation draws while a take runs. Signals, so its portals mount once the nodes exist.
+  const [dictateLayer, setDictateLayer] = createSignal<HTMLElement>()
+  const [dictateTagLayer, setDictateTagLayer] = createSignal<HTMLElement>()
   const updateCursor = () => {
     if (!editor || !window.getSelection()?.isCollapsed) return
     props.controller.onCursor(promptInputV2Cursor(editor))
@@ -138,6 +143,9 @@ export function PromptInputV2(props: PromptInputV2Props) {
         onDragLeave={props.controller.onDragLeave}
         onDrop={props.controller.onDrop}
       >
+        <Show when={props.transcribeUrl}>
+          <div ref={setDictateLayer} data-slot="dictate-layer" class="pointer-events-none absolute inset-0 z-20" />
+        </Show>
         <Show when={state.drag === "active"}>
           <div class="pointer-events-none absolute inset-0 z-20 grid place-items-center rounded-xl bg-v2-background-bg-base/90 text-v2-text-text-base">
             {i18n.t("ui.promptInput.dropFiles")}
@@ -174,8 +182,15 @@ export function PromptInputV2(props: PromptInputV2Props) {
             spellcheck={state.mode === "normal"}
             // @ts-expect-error
             autocomplete="off"
-            class="relative z-10 block min-h-[60px] max-h-[180px] w-full overflow-y-auto whitespace-pre-wrap bg-transparent px-4 pt-4 pb-2 text-[13px] font-[440] leading-5 text-v2-text-text-base focus:outline-none empty:before:content-['\200B'] [&_[data-mention=file]]:text-syntax-property [&_[data-mention=agent]]:text-syntax-type [&_[data-mention=reference]]:text-syntax-keyword"
-            classList={{ "font-mono!": state.mode === "shell", "opacity-50": props.disabled }}
+            class="relative z-10 block min-h-[60px] max-h-[180px] w-full overflow-y-auto whitespace-pre-wrap bg-transparent px-4 pt-4 text-[13px] font-[440] leading-5 text-v2-text-text-base focus:outline-none empty:before:content-['\200B'] [&_[data-mention=file]]:text-syntax-property [&_[data-mention=agent]]:text-syntax-type [&_[data-mention=reference]]:text-syntax-keyword"
+            // With dictation the waveform's lane is reserved all the time — 30px below the text instead
+            // of 8 — so a take starting never moves the text or grows the composer.
+            classList={{
+              "font-mono!": state.mode === "shell",
+              "opacity-50": props.disabled,
+              "pb-2": !props.transcribeUrl,
+              "pb-[30px]": !!props.transcribeUrl,
+            }}
             onInput={(event) => {
               const cursor = promptInputV2Cursor(event.currentTarget)
               const prompt = parsePromptInputV2Editor(event.currentTarget)
@@ -211,7 +226,8 @@ export function PromptInputV2(props: PromptInputV2Props) {
 
         <div class="flex h-11 items-center px-2">
           <div
-            class="flex min-w-0 flex-1 items-center gap-1"
+            ref={setDictateTagLayer}
+            class="relative flex min-w-0 flex-1 items-center gap-1"
             aria-hidden={state.mode === "shell"}
             inert={state.mode === "shell" ? true : undefined}
             style={buttons()}
@@ -239,6 +255,9 @@ export function PromptInputV2(props: PromptInputV2Props) {
                   disabled={props.disabled}
                   controls={props.dictateRef}
                   shortcut={props.dictateShortcut}
+                  layer={dictateLayer}
+                  tagLayer={dictateTagLayer}
+                  devices={props.dictateDevices}
                   insert={(text) => {
                     // Append into the editor and let the component's own onInput re-parse it.
                     // Going through the real input path keeps attachments and mentions intact —

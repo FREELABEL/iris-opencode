@@ -7,7 +7,12 @@ import { KeybindV2 } from "@opencode-ai/ui/v2/keybind-v2"
 import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 import type { ReferenceInfo } from "@opencode-ai/sdk/v2/client"
 import { createEffect, createMemo, createSignal, on, Show } from "solid-js"
-import { setDictationAuth, setDictationDevice, type DictationControls } from "@opencode-ai/session-ui/v2/prompt-input/dictation"
+import {
+  listDictationDevices,
+  setDictationAuth,
+  setDictationDevice,
+  type DictationControls,
+} from "@opencode-ai/session-ui/v2/prompt-input/dictation"
 import { useSettings } from "@/context/settings"
 import { DICTATE_COMMAND_ID, dictateCommand } from "@/components/prompt-input/dictate-command"
 import { ModelSelectorPopoverV2 } from "@/components/dialog-select-model"
@@ -87,6 +92,11 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
         transcribeUrl={() => sdkForDictation().url}
         dictateRef={(controls) => setDictate(() => controls)}
         dictateShortcut={command.keybind(DICTATE_COMMAND_ID)}
+        dictateDevices={{
+          list: () => listDictationDevices(sdkForDictation().url),
+          current: () => dictationSettings.voice.inputDevice(),
+          select: (name) => dictationSettings.voice.setInputDevice(name),
+        }}
         attachKeybind={command.keybindParts("file.attach")}
         attachShortcut={command.keybind("file.attach")}
         modelControl={
