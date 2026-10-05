@@ -19,7 +19,7 @@ import {
 import { ChainError, effectiveEngines, transcribeWithFallback } from "@/transcribe/chain"
 import { hold, listHeld, readHeld, release, type Held } from "@/transcribe/held"
 import { splitWav } from "@/transcribe/segments"
-import { openLiveSession, readLiveConfig } from "@/transcribe/live"
+import { openLiveSession, resolveLiveConfig } from "@/transcribe/live"
 import { openSpeakSession } from "@/transcribe/speak"
 import { describeRemoteConfig, readRemoteConfig } from "@/transcribe/remote"
 import { localWhisperReady, TranscribeError } from "@/transcribe/local"
@@ -309,7 +309,7 @@ export const dictateRoute = HttpRouter.use((router) =>
           Queue.offerUnsafe(outbox, new Socket.CloseEvent(1000))
         }
 
-        const live = readLiveConfig()
+        const live = yield* Effect.promise(() => resolveLiveConfig())
         const session =
           "config" in live
             ? openLiveSession(live.config, {
@@ -369,7 +369,7 @@ export const dictateRoute = HttpRouter.use((router) =>
           Queue.offerUnsafe(outbox, new Socket.CloseEvent(1000))
         }
 
-        const live = readLiveConfig()
+        const live = yield* Effect.promise(() => resolveLiveConfig())
         const session =
           "config" in live
             ? openSpeakSession(live.config, {

@@ -3,7 +3,7 @@ import type { LiveConfig } from "./live"
 /**
  * Spoken replies: a text-to-speech session from this sidecar to the IRIS voice relay
  * (fl-iris-api services/stt-relay, route /v1/tts/stream), which holds the xAI key and proxies xAI
- * streaming TTS. Same relay, token and board as live dictation (readLiveConfig), so the same
+ * streaming TTS. Same relay, token and board as live dictation (resolveLiveConfig), so the same
  * sign-in and per-board privacy policy apply: a reply can be as sensitive as dictated audio.
  *
  * One session carries many replies: send text (in pieces as the assistant streams it), then

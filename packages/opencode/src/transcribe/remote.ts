@@ -21,7 +21,8 @@ export interface RemoteConfig {
   apiUrl: string
   /** Optional: the endpoint accepts a scoped request without one. */
   token?: string
-  bloqId: string
+  /** Optional: with none, the platform files the take under the person's own board (#188013). */
+  bloqId?: string
 }
 
 /** Read ~/.iris/config.json, the same file the CLI authenticates with. Env wins. */
@@ -56,12 +57,6 @@ export function describeRemoteConfig(
       config: null,
       reason: "You are not signed in to IRIS. Run iris auth login in a terminal, then try dictation again.",
     }
-  if (!bloqId)
-    return {
-      config: null,
-      reason:
-        "Dictation needs a board to file recordings under. Set default_bloq_id in ~/.iris/config.json (or IRIS_TRANSCRIBE_BLOQ_ID), then try again.",
-    }
   // The platform refuses anonymous transcription, so a person's credential is REQUIRED. The
   // node_api_key in ~/.iris/config.json is not one — the platform rejects it as a caller — so
   // only shapes the platform's guard accepts are sent; anything else is reported, not tried.
@@ -71,7 +66,7 @@ export function describeRemoteConfig(
       config: null,
       reason: "Dictation needs you signed in to IRIS. Run iris auth login in a terminal, then restart IRIS.",
     }
-  return { config: { apiUrl: apiUrl.replace(/\/$/, ""), token: usable, bloqId } }
+  return { config: { apiUrl: apiUrl.replace(/\/$/, ""), token: usable, bloqId: bloqId || undefined } }
 }
 
 /**
@@ -117,7 +112,8 @@ export async function transcribeRemote(
   const started = Date.now()
   const form = new FormData()
   form.append("audio_file", new Blob([audio as unknown as BlobPart], { type: "audio/wav" }), opts.filename ?? "dictation.wav")
-  form.append("bloq_id", cfg.bloqId)
+  // No board configured is normal: the platform files the take under the person's own board.
+  if (cfg.bloqId) form.append("bloq_id", cfg.bloqId)
   form.append("provider", opts.provider ?? "xai")
   if (opts.language) form.append("language", opts.language)
 
@@ -149,5 +145,33 @@ export async function transcribeRemote(
     // differ from the one asked for. Fall back to the one asked for, never to a hard-coded name.
     provider: String(body?.data?.provider || opts.provider || "xai"),
     ms: Date.now() - started,
+  }
+}
+
+const boardCache = new Map<string, string>()
+
+/**
+ * The board a take is filed under: the configured one, else the one the platform picks for this
+ * person (their own, never a PHI board) — asked once at /v1/transcribe/scope and remembered. For the
+ * paths that must name a board up front (the live-preview relay, spoken replies). Undefined, never
+ * a throw, when the platform cannot say: the caller reports that in words.
+ */
+export async function resolveBoard(cfg: { apiUrl: string; token?: string; bloqId?: string }): Promise<string | undefined> {
+  if (cfg.bloqId) return cfg.bloqId
+  if (!cfg.token) return undefined
+  const key = `${cfg.apiUrl}|${cfg.token}`
+  const hit = boardCache.get(key)
+  if (hit) return hit
+  try {
+    const res = await fetch(`${cfg.apiUrl}/api/v1/transcribe/scope`, {
+      headers: { Authorization: `Bearer ${cfg.token}`, Accept: "application/json" },
+      signal: AbortSignal.timeout(10_000),
+    })
+    const body = (await res.json().catch(() => null)) as any
+    const id = res.ok && body?.data?.bloq_id ? String(body.data.bloq_id) : undefined
+    if (id) boardCache.set(key, id)
+    return id
+  } catch {
+    return undefined
   }
 }
