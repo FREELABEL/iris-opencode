@@ -165,7 +165,24 @@ export interface DictationOptions {
   url: () => string
   onTranscript: (text: string) => void
   onError?: (message: string) => void
+  /**
+   * Live preview while recording (GET /dictate/live -> IRIS STT relay -> xAI streaming STT).
+   * onPartial REPLACES the in-progress utterance; onFinal appends a locked one. The batch
+   * transcript delivered to onTranscript after stop is still the text that gets inserted.
+   */
+  onPartial?: (text: string) => void
+  onFinal?: (text: string) => void
+  /** Live preview is off for this take (not configured, refused, dropped). Batch is unaffected. */
+  onLiveUnavailable?: (reason: string) => void
 }
+
+/** Live preview state for the current take. */
+export type DictationLive = "off" | "connecting" | "streaming" | "unavailable"
+
+/** Background recordings run past the inline cap, up to this (the relay's own session cap). */
+const BACKGROUND_MAX_SECONDS = 60 * 60
+/** 100 ms of 16 kHz audio: the frame size xAI's streaming STT recommends. */
+const LIVE_FRAME_SAMPLES = 1600
 
 function downsample(input: Float32Array, from: number, to: number): Float32Array {
   if (to >= from) return input
@@ -243,6 +260,15 @@ export function createDictation(opts: DictationOptions) {
   let openError: unknown
 
   const base = () => opts.url().replace(/\/$/, "")
+
+  // Live preview for the current take. See DictationOptions.onPartial.
+  const [live, setLive] = createSignal<DictationLive>("off")
+  let liveSocket: WebSocket | undefined
+  let livePending: Int16Array[] = []
+  let livePendingSamples = 0
+  let liveCloseTimer: ReturnType<typeof setTimeout> | undefined
+  /** How long this take may run: MAX_SECONDS inline, BACKGROUND_MAX_SECONDS in background mode. */
+  let maxSeconds = MAX_SECONDS
   /** Every request to the local server goes through here, so each one carries the credentials. */
   const call = (path: string, init: RequestInit = {}) =>
     fetch(`${base()}${path}`, { ...init, headers: { ...authFor?.(base()), ...(init.headers as Record<string, string>) } })
@@ -354,6 +380,8 @@ export function createDictation(opts: DictationOptions) {
         // Two bars per buffer: 4096 samples is ~85ms at 48kHz, too coarse for one bar to move well.
         const half = frame.length >> 1
         setLevels((h) => pushLevel(pushLevel(h, levelFromRms(rms(frame, 0, half))), levelFromRms(rms(frame, half))))
+        // Live preview, only once this window is confirmed as the recorder (never the probe).
+        if (!probing && mode === "webview" && phase() === "recording") sendLiveAudio(frame, capturedRate)
       }
       // The graph only pulls a processor that reaches the destination, but routing the mic to
       // the speakers would echo it. A zero-gain node keeps it pulled and silent.
@@ -374,14 +402,18 @@ export function createDictation(opts: DictationOptions) {
   async function startSidecar(): Promise<boolean> {
     try {
       const device = deviceFor?.()?.trim()
-      const res = await call(device ? `/dictate/start?device=${encodeURIComponent(device)}` : "/dictate/start", {
-        method: "POST",
-      })
+      const params = new URLSearchParams()
+      if (device) params.set("device", device)
+      if (maxSeconds !== MAX_SECONDS) params.set("max_seconds", String(maxSeconds))
+      const query = params.toString()
+      const res = await call(query ? `/dictate/start?${query}` : "/dictate/start", { method: "POST" })
       const body = await res.json().catch(() => null)
       if (!res.ok) {
         opts.onError?.(body?.error || "Could not start recording.")
         return false
       }
+      // The sidecar records; the server tees its capture to the relay. This socket only listens.
+      openLive("sidecar")
       return true
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e)
@@ -397,9 +429,11 @@ export function createDictation(opts: DictationOptions) {
     return id !== attempt || disposed
   }
 
-  async function start() {
+  async function start(startOpts: { mode?: "inline" | "background" } = {}) {
     // A second start while the first is still awaiting would open a second recorder.
     if (phase() !== "idle" || starting) return
+    maxSeconds = startOpts.mode === "background" ? BACKGROUND_MAX_SECONDS : MAX_SECONDS
+    resetLive()
     starting = true
     try {
       await openRecorder()
@@ -481,6 +515,102 @@ export function createDictation(opts: DictationOptions) {
     startLevelPoll()
   }
 
+  /**
+   * Open the live preview socket. NOTE: a browser WebSocket cannot send an Authorization header,
+   * so this works against the bundled password-less sidecar; a password-protected server would
+   * need a connect ticket like the PTY's. Failing that, live is just "unavailable".
+   */
+  function openLive(source: "window" | "sidecar") {
+    if (liveSocket || live() === "unavailable" || typeof WebSocket === "undefined") return
+    const url = new URL(`${base()}/dictate/live`)
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
+    url.searchParams.set("source", source)
+    setLive("connecting")
+    const ws = new WebSocket(url)
+    liveSocket = ws
+    ws.onopen = () => {
+      if (liveSocket !== ws) return
+      setLive("streaming")
+      for (const chunk of livePending) ws.send(tagFrame(0x00, chunk))
+      livePending = []
+      livePendingSamples = 0
+    }
+    ws.onmessage = (message) => {
+      if (liveSocket !== ws || typeof message.data !== "string") return
+      const event = parseLiveEvent(message.data)
+      if (event?.type === "partial") opts.onPartial?.(event.text)
+      if (event?.type === "final") opts.onFinal?.(event.text)
+      if (event?.type === "unavailable") liveUnavailable(event.reason)
+    }
+    ws.onerror = () => liveUnavailable("The live preview could not connect.")
+    ws.onclose = () => {
+      if (liveSocket === ws) liveSocket = undefined
+      if (live() === "connecting") liveUnavailable("The live preview could not connect.")
+    }
+  }
+
+  /** Window recorder frame (at the AudioContext rate) -> 100 ms PCM16 frames on the live socket. */
+  function sendLiveAudio(frame: Float32Array, rate: number) {
+    if (live() === "unavailable") return
+    openLive("window")
+    const pcm = toPcm16(downsample(frame, rate, TARGET_RATE))
+    livePending.push(pcm)
+    livePendingSamples += pcm.length
+    if (live() !== "streaming" || livePendingSamples < LIVE_FRAME_SAMPLES) return
+    const merged = new Int16Array(livePendingSamples)
+    let offset = 0
+    for (const chunk of livePending) {
+      merged.set(chunk, offset)
+      offset += chunk.length
+    }
+    livePending = []
+    livePendingSamples = 0
+    liveSocket?.send(tagFrame(0x00, merged))
+  }
+
+  /** Recording stopped: flush, say "audio.done", and keep listening briefly for the last finals. */
+  function endLive() {
+    const ws = liveSocket
+    if (!ws) return
+    if (ws.readyState === WebSocket.OPEN) {
+      if (livePendingSamples > 0) {
+        const merged = new Int16Array(livePendingSamples)
+        let offset = 0
+        for (const chunk of livePending) {
+          merged.set(chunk, offset)
+          offset += chunk.length
+        }
+        ws.send(tagFrame(0x00, merged))
+      }
+      ws.send(tagFrame(0x02))
+    }
+    livePending = []
+    livePendingSamples = 0
+    liveCloseTimer = setTimeout(() => closeLive(), 5000)
+  }
+
+  function closeLive() {
+    if (liveCloseTimer) clearTimeout(liveCloseTimer)
+    liveCloseTimer = undefined
+    const ws = liveSocket
+    liveSocket = undefined
+    if (ws && ws.readyState <= WebSocket.OPEN) ws.close()
+  }
+
+  function resetLive() {
+    closeLive()
+    livePending = []
+    livePendingSamples = 0
+    setLive("off")
+  }
+
+  function liveUnavailable(reason: string) {
+    if (live() === "unavailable") return
+    setLive("unavailable")
+    closeLive()
+    opts.onLiveUnavailable?.(reason)
+  }
+
   function cancelSidecar() {
     void call("/dictate/cancel", { method: "POST" }).catch(() => {})
   }
@@ -491,7 +621,7 @@ export function createDictation(opts: DictationOptions) {
     ticker = setInterval(() => {
       const next = seconds() + 1
       setSeconds(next)
-      if (next >= MAX_SECONDS) void stop()
+      if (next >= maxSeconds) void stop()
     }, 1000)
     if (mode === "sidecar") startLevelPoll()
   }
@@ -511,6 +641,7 @@ export function createDictation(opts: DictationOptions) {
       return
     }
     setPhase("transcribing")
+    endLive()
     try {
       if (mode === "sidecar") await stopSidecar()
       else await stopWebview()
@@ -739,6 +870,7 @@ export function createDictation(opts: DictationOptions) {
 
   onCleanup(() => {
     disposed = true
+    closeLive()
     clearRetryTimers()
     stopTicker()
     teardownWebview()
@@ -764,6 +896,9 @@ export function createDictation(opts: DictationOptions) {
     retryHeld: () => retryHeld(false),
     discardHeld,
     readiness,
+    live,
+    /** Start a long recording that runs past the inline cap (the background panel calls this). */
+    startBackground: () => start({ mode: "background" }),
   }
 }
 
@@ -789,4 +924,41 @@ async function preferredDeviceStream(current: MediaStream): Promise<MediaStream>
   if (!pinned) return current
   current.getTracks().forEach((t) => t.stop())
   return pinned
+}
+
+/** A client frame for /dictate/live: 1-byte tag + payload (0x00 audio, 0x01 finalize, 0x02 done). */
+function tagFrame(tag: number, pcm?: Int16Array) {
+  const body = pcm ? new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength) : new Uint8Array(0)
+  const frame = new Uint8Array(1 + body.byteLength)
+  frame[0] = tag
+  frame.set(body, 1)
+  return frame
+}
+
+/** Float samples in [-1, 1] -> little-endian PCM16, the format the relay forwards to xAI. */
+export function toPcm16(samples: Float32Array) {
+  const out = new Int16Array(samples.length)
+  for (let i = 0; i < samples.length; i++) {
+    const c = Math.max(-1, Math.min(1, samples[i]!))
+    out[i] = c < 0 ? c * 0x8000 : c * 0x7fff
+  }
+  return out
+}
+
+/** Server frame on /dictate/live, or undefined for anything else. */
+export function parseLiveEvent(
+  text: string,
+): { type: "partial" | "final"; text: string } | { type: "unavailable"; reason: string } | undefined {
+  const value = (() => {
+    try {
+      return JSON.parse(text) as { type?: unknown; text?: unknown; reason?: unknown }
+    } catch {
+      return undefined
+    }
+  })()
+  if ((value?.type === "partial" || value?.type === "final") && typeof value.text === "string")
+    return { type: value.type, text: value.text }
+  if (value?.type === "unavailable")
+    return { type: "unavailable", reason: typeof value.reason === "string" ? value.reason : "Live preview stopped." }
+  return undefined
 }
