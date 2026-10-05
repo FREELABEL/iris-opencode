@@ -39,4 +39,5 @@ semver = "1.0.27"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18.2"
-webkit2gtk = "=2.0.1"
+# v2_8: UserMediaPermissionRequest::is_for_{audio,video}_device (window_customizer.rs).
+webkit2gtk = { version = "=2.0.1", features = ["v2_8"] }
