@@ -180,6 +180,9 @@ export const dict = {
   "command.model.variant.cycle.description": "Sonraki efor seviyesine geç",
   "command.prompt.mode.shell": "Kabuk",
   "command.prompt.mode.normal": "İstem",
+  "command.prompt.dictate": "Dikte et",
+  "command.prompt.dictate.description":
+    "Dikteyi başlatmak veya durdurmak için dokunun; konuşmak için basılı tutun, durdurmak için bırakın",
   "command.permissions.autoaccept.enable": "İzinleri otomatik kabul et",
   "command.permissions.autoaccept.disable": "İzinleri otomatik kabul etmeyi durdur",
   "command.workspace.toggle": "Çalışma alanlarını aç/kapat",
@@ -204,6 +207,10 @@ export const dict = {
   "palette.search.placeholder.home": "Komut ve oturum ara",
   "palette.empty": "Sonuç bulunamadı",
   "palette.group.commands": "Komutlar",
+  "palette.group.iris": "IRIS CLI",
+  "palette.filter.all": "Tümü",
+  "palette.filter.commands": "Komutlar",
+  "palette.filter.files": "Dosyalar",
   "palette.group.files": "Dosyalar",
 
   "dialog.provider.search.placeholder": "Sağlayıcı ara",
@@ -829,6 +836,11 @@ export const dict = {
   "session.header.reveal.containingFolder": "İçeren klasörü aç",
 
   "status.popover.trigger": "Durum",
+  "status.dot.healthy": "Bağlı — motor ve hizmetleri çalışıyor",
+  "status.dot.connecting": "Motora bağlanılıyor…",
+  "status.dot.offline": "Motora bağlı değil — ayrıntılar için tıklayın",
+  "status.dot.attention": "Bir hizmet oturum açmanızı gerektiriyor — ayrıntılar için tıklayın",
+  "status.dot.issue": "Bir hizmet çalışmıyor — ayrıntılar için tıklayın",
   "status.popover.ariaLabel": "Sunucu yapılandırmaları",
   "status.popover.tab.servers": "Sunucular",
   "status.popover.tab.mcp": "MCP",
@@ -912,6 +924,12 @@ export const dict = {
   "settings.general.section.notifications": "Sistem bildirimleri",
   "settings.general.section.updates": "Güncellemeler",
   "settings.general.section.sounds": "Ses efektleri",
+  "settings.general.section.microphone": "Mikrofon",
+  "settings.general.row.microphone.title": "Dikte mikrofonu",
+  "settings.general.row.microphone.description":
+    "Diktenin kayıt yaptığı giriş. Sistem varsayılanı, bilgisayarınızın ses ayarlarını izler.",
+  "settings.general.row.microphone.systemDefault": "Sistem varsayılanı",
+  "settings.general.row.microphone.notConnected": "{{name}} (bağlı değil)",
   "settings.general.section.feed": "Akış",
   "settings.general.section.display": "Ekran",
 
@@ -986,6 +1004,10 @@ export const dict = {
 
   "settings.updates.row.startup.title": "Başlangıçta güncellemeleri kontrol et",
   "settings.updates.row.startup.description": "IRIS başladığında otomatik güncelleme kontrolü yap",
+  "settings.updates.row.auto.title": "Güncellemeleri otomatik olarak yükle",
+  "settings.updates.row.auto.description":
+    "Yeni sürümleri arka planda indirip yükler. IRIS bir sonraki başlatıldığında geçerli olur — hiçbir şey kesintiye uğramaz.",
+  "settings.updates.row.auto.descriptionAsk": "Kapalıyken IRIS her açılışta değil, her sürüm için bir kez sorar.",
   "settings.updates.row.check.title": "Güncellemeleri kontrol et",
   "settings.updates.row.check.description": "Elle güncelleme kontrolü yap ve varsa yükle",
   "settings.updates.action.checkNow": "Şimdi kontrol et",
@@ -1204,6 +1226,7 @@ export const dict = {
   "session.header.open.app.androidStudio": "Android Studio",
   "session.header.open.app.powershell": "PowerShell",
   "session.header.open.app.sublimeText": "Sublime Text",
+  "session.panel.add": "Bu panelde aç",
   "debugBar.ariaLabel": "Geliştirme performansı teşhisi",
   "debugBar.na": "yok",
   "debugBar.nav.label": "NAV",

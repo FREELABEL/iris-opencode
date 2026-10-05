@@ -176,6 +176,9 @@ export const dict = {
   "command.model.variant.cycle.description": "Cambiar al siguiente nivel de esfuerzo",
   "command.prompt.mode.shell": "Shell",
   "command.prompt.mode.normal": "Prompt",
+  "command.prompt.dictate": "Dictar",
+  "command.prompt.dictate.description":
+    "Toca para empezar o detener el dictado; mantén pulsado para hablar y suelta para detener",
   "command.permissions.autoaccept.enable": "Aceptar permisos automáticamente",
   "command.permissions.autoaccept.disable": "Dejar de aceptar permisos automáticamente",
   "command.workspace.toggle": "Activar o desactivar espacios de trabajo",
@@ -200,6 +203,10 @@ export const dict = {
   "palette.search.placeholder.home": "Buscar comandos y sesiones",
   "palette.empty": "No se encontraron resultados",
   "palette.group.commands": "Comandos",
+  "palette.group.iris": "IRIS CLI",
+  "palette.filter.all": "Todo",
+  "palette.filter.commands": "Comandos",
+  "palette.filter.files": "Archivos",
   "palette.group.files": "Archivos",
 
   "dialog.provider.search.placeholder": "Buscar proveedores",
@@ -828,6 +835,11 @@ export const dict = {
   "session.header.open.copyPath": "Copiar ruta",
 
   "status.popover.trigger": "Estado",
+  "status.dot.healthy": "Conectado: el motor y sus servicios están en ejecución",
+  "status.dot.connecting": "Conectando con el motor…",
+  "status.dot.offline": "Sin conexión con el motor: haz clic para ver detalles",
+  "status.dot.attention": "Un servicio necesita que inicies sesión: haz clic para ver detalles",
+  "status.dot.issue": "Un servicio no está en ejecución: haz clic para ver detalles",
   "status.popover.ariaLabel": "Configuraciones del servidor",
   "status.popover.tab.servers": "Servidores",
   "status.popover.tab.mcp": "MCP",
@@ -912,6 +924,12 @@ export const dict = {
   "settings.general.section.notifications": "Notificaciones del sistema",
   "settings.general.section.updates": "Actualizaciones",
   "settings.general.section.sounds": "Efectos de sonido",
+  "settings.general.section.microphone": "Micrófono",
+  "settings.general.row.microphone.title": "Micrófono de dictado",
+  "settings.general.row.microphone.description":
+    "La entrada desde la que graba el dictado. Predeterminado del sistema sigue la configuración de sonido de tu equipo.",
+  "settings.general.row.microphone.systemDefault": "Predeterminado del sistema",
+  "settings.general.row.microphone.notConnected": "{{name}} (no conectado)",
   "settings.general.section.feed": "Feed",
   "settings.general.section.display": "Pantalla",
 
@@ -986,6 +1004,11 @@ export const dict = {
 
   "settings.updates.row.startup.title": "Buscar actualizaciones al iniciar",
   "settings.updates.row.startup.description": "Buscar actualizaciones automáticamente cuando se inicia IRIS",
+  "settings.updates.row.auto.title": "Instalar actualizaciones automáticamente",
+  "settings.updates.row.auto.description":
+    "Descarga e instala las nuevas versiones en segundo plano. Se aplica la próxima vez que se inicie IRIS; no se interrumpe nada.",
+  "settings.updates.row.auto.descriptionAsk":
+    "Si está desactivado, IRIS pregunta una vez por versión en lugar de en cada inicio.",
   "settings.updates.row.check.title": "Buscar actualizaciones",
   "settings.updates.row.check.description": "Buscar actualizaciones manualmente e instalarlas si hay alguna",
   "settings.updates.action.checkNow": "Buscar ahora",
@@ -1208,6 +1231,7 @@ export const dict = {
   "session.header.open.app.androidStudio": "Android Studio",
   "session.header.open.app.powershell": "PowerShell",
   "session.header.open.app.sublimeText": "Sublime Text",
+  "session.panel.add": "Abrir en este panel",
   "debugBar.ariaLabel": "Diagnóstico de rendimiento de desarrollo",
   "debugBar.na": "n/d",
   "debugBar.nav.label": "NAV",

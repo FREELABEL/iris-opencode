@@ -176,6 +176,9 @@ export const dict = {
   "command.model.variant.cycle.description": "Beralih ke tingkat usaha berikutnya",
   "command.prompt.mode.shell": "Shell",
   "command.prompt.mode.normal": "Prompt",
+  "command.prompt.dictate": "Dikte",
+  "command.prompt.dictate.description":
+    "Ketuk untuk memulai atau menghentikan dikte; tahan untuk berbicara dan lepaskan untuk berhenti",
   "command.permissions.autoaccept.enable": "Terima izin otomatis",
   "command.permissions.autoaccept.disable": "Hentikan penerimaan izin otomatis",
   "command.workspace.toggle": "Alihkan ruang kerja",
@@ -200,6 +203,10 @@ export const dict = {
   "palette.search.placeholder.home": "Cari perintah dan sesi",
   "palette.empty": "Hasil tidak ditemukan",
   "palette.group.commands": "Perintah",
+  "palette.group.iris": "IRIS CLI",
+  "palette.filter.all": "Semua",
+  "palette.filter.commands": "Perintah",
+  "palette.filter.files": "Berkas",
   "palette.group.files": "Berkas",
 
   "dialog.provider.search.placeholder": "Cari penyedia",
@@ -862,9 +869,15 @@ export const dict = {
   "session.header.open.app.xcode": "Xcode",
   "session.header.open.app.androidStudio": "Android Studio",
   "session.header.open.app.sublimeText": "Sublime Text",
+  "session.panel.add": "Buka di panel ini",
   "session.header.open.app.powershell": "PowerShell",
 
   "status.popover.trigger": "Status",
+  "status.dot.healthy": "Terhubung — mesin dan layanannya sedang berjalan",
+  "status.dot.connecting": "Menghubungkan ke mesin…",
+  "status.dot.offline": "Tidak terhubung ke mesin — klik untuk detail",
+  "status.dot.attention": "Sebuah layanan memerlukan Anda untuk masuk — klik untuk detail",
+  "status.dot.issue": "Sebuah layanan tidak berjalan — klik untuk detail",
   "status.popover.ariaLabel": "Konfigurasi server",
   "status.popover.tab.servers": "Server",
   "status.popover.tab.mcp": "MCP",
@@ -1000,6 +1013,12 @@ export const dict = {
   "settings.general.section.notifications": "Notifikasi sistem",
   "settings.general.section.updates": "Pembaruan",
   "settings.general.section.sounds": "Efek suara",
+  "settings.general.section.microphone": "Mikrofon",
+  "settings.general.row.microphone.title": "Mikrofon dikte",
+  "settings.general.row.microphone.description":
+    "Input yang digunakan dikte untuk merekam. Bawaan sistem mengikuti pengaturan suara komputer Anda.",
+  "settings.general.row.microphone.systemDefault": "Bawaan sistem",
+  "settings.general.row.microphone.notConnected": "{{name}} (tidak terhubung)",
   "settings.general.section.feed": "Umpan",
   "settings.general.section.display": "Tampilan",
 
@@ -1071,6 +1090,11 @@ export const dict = {
 
   "settings.updates.row.startup.title": "Periksa pembaruan saat dimulai",
   "settings.updates.row.startup.description": "Secara otomatis memeriksa pembaruan saat IRIS diluncurkan",
+  "settings.updates.row.auto.title": "Instal pembaruan secara otomatis",
+  "settings.updates.row.auto.description":
+    "Unduh dan instal versi baru di latar belakang. Berlaku saat IRIS dijalankan berikutnya — tidak ada yang terganggu.",
+  "settings.updates.row.auto.descriptionAsk":
+    "Jika nonaktif, IRIS bertanya sekali per versi, bukan setiap kali diluncurkan.",
   "settings.updates.row.check.title": "Periksa pembaruan",
   "settings.updates.row.check.description": "Periksa pembaruan secara manual dan instal jika tersedia",
   "settings.updates.action.checkNow": "Periksa sekarang",

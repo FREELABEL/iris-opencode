@@ -174,6 +174,9 @@ export const dict = {
   "command.model.variant.cycle.description": "Bytt til neste innsatsnivå",
   "command.prompt.mode.shell": "Shell",
   "command.prompt.mode.normal": "Prompt",
+  "command.prompt.dictate": "Dikter",
+  "command.prompt.dictate.description":
+    "Trykk for å starte eller stoppe diktering; hold inne for å snakke, og slipp for å stoppe",
   "command.permissions.autoaccept.enable": "Aksepter tillatelser automatisk",
   "command.permissions.autoaccept.disable": "Stopp automatisk akseptering av tillatelser",
   "command.workspace.toggle": "Veksle arbeidsområder",
@@ -198,6 +201,10 @@ export const dict = {
   "palette.search.placeholder.home": "Søk i kommandoer og sesjoner",
   "palette.empty": "Ingen resultater funnet",
   "palette.group.commands": "Kommandoer",
+  "palette.group.iris": "IRIS CLI",
+  "palette.filter.all": "Alle",
+  "palette.filter.commands": "Kommandoer",
+  "palette.filter.files": "Filer",
   "palette.group.files": "Filer",
 
   "dialog.provider.search.placeholder": "Søk etter leverandører",
@@ -688,6 +695,11 @@ export const dict = {
   "session.header.open.copyPath": "Kopier bane",
 
   "status.popover.trigger": "Status",
+  "status.dot.healthy": "Tilkoblet — motoren og tjenestene kjører",
+  "status.dot.connecting": "Kobler til motoren…",
+  "status.dot.offline": "Ikke koblet til motoren — klikk for detaljer",
+  "status.dot.attention": "En tjeneste krever at du logger på — klikk for detaljer",
+  "status.dot.issue": "En tjeneste kjører ikke — klikk for detaljer",
   "status.popover.ariaLabel": "Serverkonfigurasjoner",
   "status.popover.tab.servers": "Servere",
   "status.popover.tab.mcp": "MCP",
@@ -769,6 +781,12 @@ export const dict = {
   "settings.general.section.notifications": "Systemvarsler",
   "settings.general.section.updates": "Oppdateringer",
   "settings.general.section.sounds": "Lydeffekter",
+  "settings.general.section.microphone": "Mikrofon",
+  "settings.general.row.microphone.title": "Dikteringsmikrofon",
+  "settings.general.row.microphone.description":
+    "Inngangen som diktering tar opp fra. Systemstandard følger lydinnstillingene på datamaskinen.",
+  "settings.general.row.microphone.systemDefault": "Systemstandard",
+  "settings.general.row.microphone.notConnected": "{{name}} (ikke tilkoblet)",
   "settings.general.section.feed": "Feed",
   "settings.general.section.display": "Skjerm",
 
@@ -808,6 +826,11 @@ export const dict = {
 
   "settings.updates.row.startup.title": "Se etter oppdateringer ved oppstart",
   "settings.updates.row.startup.description": "Se automatisk etter oppdateringer når IRIS starter",
+  "settings.updates.row.auto.title": "Installer oppdateringer automatisk",
+  "settings.updates.row.auto.description":
+    "Last ned og installer nye versjoner i bakgrunnen. Trer i kraft neste gang IRIS starter — ingenting blir avbrutt.",
+  "settings.updates.row.auto.descriptionAsk":
+    "Når dette er av, spør IRIS én gang per versjon i stedet for ved hver oppstart.",
   "settings.updates.row.check.title": "Se etter oppdateringer",
   "settings.updates.row.check.description": "Se etter oppdateringer manuelt og installer hvis tilgjengelig",
   "settings.updates.action.checkNow": "Sjekk nå",
@@ -1027,6 +1050,7 @@ export const dict = {
   "session.header.open.app.androidStudio": "Android Studio",
   "session.header.open.app.powershell": "PowerShell",
   "session.header.open.app.sublimeText": "Sublime Text",
+  "session.panel.add": "Åpne i dette panelet",
   "debugBar.ariaLabel": "Utviklingsytelsesdiagnostikk",
   "debugBar.na": "i/t",
   "debugBar.nav.label": "NAV",
