@@ -626,6 +626,55 @@ const ChatSendResponse = Schema.Struct({
   message: Schema.optional(ChatMessageSchema),
 }).annotate({ identifier: "IrisChatSendResponse" })
 
+// A live view of a running agent + take over / hand back (#187921). Argument VALUES never
+// appear: iris-api serves each argument's type and length only, so this cannot leak PHI.
+const LiveToolCallSchema = Schema.Struct({
+  tool: Schema.String,
+  iteration: Schema.Finite,
+  args: described(Schema.Record(Schema.String, Schema.String), "Argument key → value type and length, never the value."),
+  fingerprint: described(Schema.String, "Same fingerprint twice = the same call repeated."),
+  status: Schema.Literals(["running", "success", "error", "held", "skipped"]),
+  error: Schema.optional(Schema.String),
+  startedAt: Schema.String,
+  durationMs: Schema.optional(Schema.Finite),
+}).annotate({ identifier: "IrisLiveToolCall" })
+const LiveTakeoverSchema = Schema.Struct({
+  id: Schema.Finite,
+  status: Schema.Literals(["pause_requested", "paused", "resuming", "resumed", "cancelled", "expired"]),
+  pausedAtIteration: Schema.optional(Schema.Finite),
+}).annotate({ identifier: "IrisLiveTakeover" })
+const LiveRunSchema = Schema.Struct({
+  runId: Schema.String,
+  workflowId: Schema.optional(Schema.String),
+  agentId: Schema.optional(Schema.Finite),
+  status: Schema.String,
+  startedAt: Schema.optional(Schema.String),
+  finishedAt: Schema.optional(Schema.String),
+  lastEventAt: Schema.optional(Schema.String),
+  secondsSinceLastEvent: Schema.optional(Schema.Finite),
+  step: Schema.NullOr(
+    Schema.Struct({
+      iteration: Schema.Finite,
+      maxIterations: Schema.optional(Schema.Finite),
+      phase: Schema.String,
+      tool: Schema.optional(Schema.String),
+      since: Schema.optional(Schema.String),
+      secondsOnStep: Schema.optional(Schema.Finite),
+    }),
+  ),
+  toolCalls: Schema.Array(LiveToolCallSchema),
+  takeover: Schema.NullOr(LiveTakeoverSchema),
+}).annotate({ identifier: "IrisLiveRun" })
+const AgentLiveResponse = Schema.Struct({ ...Measured, run: Schema.NullOr(LiveRunSchema) }).annotate({
+  identifier: "IrisAgentLiveResponse",
+})
+const RunControlResponse = Schema.Struct({
+  ok: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  message: Schema.optional(Schema.String),
+  takeover: Schema.optional(Schema.NullOr(LiveTakeoverSchema)),
+}).annotate({ identifier: "IrisRunControlResponse" })
+
 const root = "/iris"
 
 /**
@@ -763,6 +812,9 @@ export const IrisPaths = {
   records: `${root}/records/:bloqID/:slug`,
   sites: `${root}/sites/:bloqID`,
   agentTasks: `${root}/agents/:agentID/tasks`,
+  agentLive: `${root}/agents/:agentID/live`,
+  runTakeOver: `${root}/runs/:runID/take-over`,
+  runHandBack: `${root}/runs/:runID/hand-back`,
   playbookDoc: `${root}/playbooks/doc/:name`,
   artifacts: `${root}/artifacts`,
   artifactDoc: `${root}/artifacts/:artifactID`,
@@ -1788,6 +1840,27 @@ export const IrisApi = HttpApi.make("iris").add(
             "The other half of Hive: the panel could only ever show YOUR machines. Active connections sort first — a live one is what you act on, a pending code is a reminder.",
         }),
       ),
+      HttpApiEndpoint.get("agentLive", IrisPaths.agentLive, {
+        params: { agentID: Schema.NumberFromString },
+        query: Schema.Struct({ limit: Schema.optional(Schema.String) }),
+        success: described(AgentLiveResponse, "The agent's current run: its step and last tool calls"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.agentLive",
+          summary: "Is it stuck? A live view of an agent's run",
+          description:
+            "#187921. The current step (iteration, phase, seconds on it), seconds since the run last did anything, and the last N tool calls with status and duration. 'Thinking' for 75 minutes is answered by this.",
+        }),
+      ),
+      HttpApiEndpoint.post("runTakeOver", IrisPaths.runTakeOver, {
+        params: { runID: Schema.String },
+        success: described(RunControlResponse, "The take-over; the run pauses after its current step"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.runTakeOver", summary: "Take over a running agent" })),
+      HttpApiEndpoint.post("runHandBack", IrisPaths.runHandBack, {
+        params: { runID: Schema.String },
+        payload: Schema.Struct({ message: Schema.optional(Schema.String) }),
+        success: described(RunControlResponse, "The run resumes from where it paused; the message is what the agent is told"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.runHandBack", summary: "Hand a taken-over run back" })),
       HttpApiEndpoint.get("agentTasks", IrisPaths.agentTasks, {
         params: { agentID: Schema.NumberFromString },
         query: Schema.Struct({ includeDone: Schema.optional(Schema.String) }),

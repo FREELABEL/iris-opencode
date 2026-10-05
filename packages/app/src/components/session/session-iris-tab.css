@@ -1702,3 +1702,24 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 
 /* Atlas › Artifacts (#187717): the note's URL on the toolbar gives way before the buttons do. */
 .iris-atlas-note__url { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
+
+/* Agents › Live (#187921) — is it stuck? */
+.iris-live { display: flex; flex-direction: column; height: 100%; min-height: 0; padding: 6px 8px; gap: 6px; overflow-y: auto; }
+.iris-live__bar { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: center; flex-shrink: 0; }
+.iris-live__picker { font-size: 12px; min-width: 0; }
+.iris-live__verdict { font-size: 13px; padding: 6px 8px; border-radius: 6px; background: var(--background-element); color: var(--text-strong); }
+.iris-live__verdict--warn { border-inline-start: 3px solid var(--border-warning-base, #d4a017); }
+.iris-live__verdict--paused { border-inline-start: 3px solid var(--border-interactive-base, #3b82f6); }
+.iris-live__verdict--idle { color: var(--text-weak); }
+.iris-live__meta { display: flex; gap: 12px; font-size: 11px; color: var(--text-weak); }
+.iris-live__handback { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: end; }
+.iris-live__message { font-size: 12px; resize: vertical; min-height: 48px; }
+.iris-live__note, .iris-live__error, .iris-live__empty { font-size: 12px; color: var(--text-weak); }
+.iris-live__heading { font-size: 11px; color: var(--text-weak); text-transform: uppercase; letter-spacing: 0.04em; margin-top: 4px; }
+.iris-live__calls { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.iris-live__call { font-size: 12px; font-family: var(--font-mono, monospace); padding: 2px 4px; border-radius: 4px; }
+.iris-live__call--error { color: var(--text-danger, #c0392b); }
+.iris-live__call--running { color: var(--text-strong); background: var(--background-element); }
+.iris-live__call--skipped, .iris-live__call--held { color: var(--text-weak); }
+.iris-live__step { color: var(--text-weaker); }
+.iris-live__callerr { font-size: 11px; white-space: normal; }
