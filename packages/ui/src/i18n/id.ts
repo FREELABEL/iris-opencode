@@ -155,7 +155,7 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.microphone": "Mikrofon",
   "ui.promptInput.dictate.systemDefault": "Bawaan sistem",
   "ui.promptInput.dictate.dismiss": "Tutup",
-  "ui.promptInput.dictate.saved.one": "1 rekaman tersimpan",
+  "ui.promptInput.dictate.saved.one": "{{count}} rekaman tersimpan",
   "ui.promptInput.dictate.saved.other": "{{count}} rekaman tersimpan",
   "ui.promptInput.dictate.retryIn": "mencoba ulang dalam {{seconds}} dtk",
   "ui.promptInput.dictate.retrying": "mencoba ulang…",

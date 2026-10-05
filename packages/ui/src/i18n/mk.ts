@@ -144,7 +144,7 @@ export const dict = {
   "ui.promptInput.dictate.microphone": "Микрофон",
   "ui.promptInput.dictate.systemDefault": "Системски стандарден",
   "ui.promptInput.dictate.dismiss": "Затвори",
-  "ui.promptInput.dictate.saved.one": "1 зачувана снимка",
+  "ui.promptInput.dictate.saved.one": "{{count}} зачувана снимка",
   "ui.promptInput.dictate.saved.other": "{{count}} зачувани снимки",
   "ui.promptInput.dictate.retryIn": "повторен обид за {{seconds}} с",
   "ui.promptInput.dictate.retrying": "повторен обид…",

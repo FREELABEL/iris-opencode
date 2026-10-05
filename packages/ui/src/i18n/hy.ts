@@ -144,7 +144,7 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.microphone": "Խոսափող",
   "ui.promptInput.dictate.systemDefault": "Համակարգի լռելյայն",
   "ui.promptInput.dictate.dismiss": "Փակել",
-  "ui.promptInput.dictate.saved.one": "1 պահված ձայնագրություն",
+  "ui.promptInput.dictate.saved.one": "{{count}} պահված ձայնագրություն",
   "ui.promptInput.dictate.saved.other": "{{count}} պահված ձայնագրություն",
   "ui.promptInput.dictate.retryIn": "կրկին փորձ {{seconds}} վ-ից",
   "ui.promptInput.dictate.retrying": "կրկին փորձ…",

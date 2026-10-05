@@ -145,7 +145,7 @@ export const dict = {
   "ui.promptInput.dictate.microphone": "មីក្រូហ្វូន",
   "ui.promptInput.dictate.systemDefault": "លំនាំដើមប្រព័ន្ធ",
   "ui.promptInput.dictate.dismiss": "ច្រានចោល",
-  "ui.promptInput.dictate.saved.one": "ការថតដែលបានរក្សាទុក 1",
+  "ui.promptInput.dictate.saved.one": "ការថតដែលបានរក្សាទុក {{count}}",
   "ui.promptInput.dictate.saved.other": "ការថតដែលបានរក្សាទុក {{count}}",
   "ui.promptInput.dictate.retryIn": "ព្យាយាមម្តងទៀតក្នុងរយៈពេល {{seconds}} វិនាទី",
   "ui.promptInput.dictate.retrying": "កំពុងព្យាយាមម្តងទៀត…",

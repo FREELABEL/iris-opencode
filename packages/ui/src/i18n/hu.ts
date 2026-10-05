@@ -146,7 +146,7 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.microphone": "Mikrofon",
   "ui.promptInput.dictate.systemDefault": "Rendszer alapértelmezése",
   "ui.promptInput.dictate.dismiss": "Bezárás",
-  "ui.promptInput.dictate.saved.one": "1 mentett felvétel",
+  "ui.promptInput.dictate.saved.one": "{{count}} mentett felvétel",
   "ui.promptInput.dictate.saved.other": "{{count}} mentett felvétel",
   "ui.promptInput.dictate.retryIn": "újrapróbálkozás {{seconds}} mp múlva",
   "ui.promptInput.dictate.retrying": "újrapróbálkozás…",

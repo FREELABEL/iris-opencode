@@ -151,7 +151,7 @@ export const dict = {
   "ui.promptInput.dictate.microphone": "麦克风",
   "ui.promptInput.dictate.systemDefault": "系统默认",
   "ui.promptInput.dictate.dismiss": "忽略",
-  "ui.promptInput.dictate.saved.one": "1 条已保存的录音",
+  "ui.promptInput.dictate.saved.one": "{{count}} 条已保存的录音",
   "ui.promptInput.dictate.saved.other": "{{count}} 条已保存的录音",
   "ui.promptInput.dictate.retryIn": "{{seconds}} 秒后重试",
   "ui.promptInput.dictate.retrying": "正在重试…",

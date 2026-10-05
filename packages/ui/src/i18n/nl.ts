@@ -144,7 +144,7 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.microphone": "Microfoon",
   "ui.promptInput.dictate.systemDefault": "Systeemstandaard",
   "ui.promptInput.dictate.dismiss": "Negeren",
-  "ui.promptInput.dictate.saved.one": "1 opgeslagen opname",
+  "ui.promptInput.dictate.saved.one": "{{count}} opgeslagen opname",
   "ui.promptInput.dictate.saved.other": "{{count}} opgeslagen opnames",
   "ui.promptInput.dictate.retryIn": "opnieuw proberen over {{seconds}} s",
   "ui.promptInput.dictate.retrying": "opnieuw proberen…",

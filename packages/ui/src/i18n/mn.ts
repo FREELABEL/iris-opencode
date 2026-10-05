@@ -144,7 +144,7 @@ export const dict = {
   "ui.promptInput.dictate.microphone": "Микрофон",
   "ui.promptInput.dictate.systemDefault": "Системийн өгөгдмөл",
   "ui.promptInput.dictate.dismiss": "Хаах",
-  "ui.promptInput.dictate.saved.one": "1 хадгалсан бичлэг",
+  "ui.promptInput.dictate.saved.one": "{{count}} хадгалсан бичлэг",
   "ui.promptInput.dictate.saved.other": "{{count}} хадгалсан бичлэг",
   "ui.promptInput.dictate.retryIn": "{{seconds}} секундын дараа дахин оролдоно",
   "ui.promptInput.dictate.retrying": "дахин оролдож байна…",

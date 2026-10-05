@@ -155,7 +155,7 @@ export const dict = {
   "ui.promptInput.dictate.microphone": "Mikrofon",
   "ui.promptInput.dictate.systemDefault": "Sistem varsayılanı",
   "ui.promptInput.dictate.dismiss": "Kapat",
-  "ui.promptInput.dictate.saved.one": "1 kaydedilmiş kayıt",
+  "ui.promptInput.dictate.saved.one": "{{count}} kaydedilmiş kayıt",
   "ui.promptInput.dictate.saved.other": "{{count}} kaydedilmiş kayıt",
   "ui.promptInput.dictate.retryIn": "{{seconds}} sn içinde yeniden denenecek",
   "ui.promptInput.dictate.retrying": "yeniden deneniyor…",

@@ -229,7 +229,7 @@ export const dict = {
   "ui.promptInput.dictate.microphone": "Mikrofon",
   "ui.promptInput.dictate.systemDefault": "Systemstandard",
   "ui.promptInput.dictate.dismiss": "Luk",
-  "ui.promptInput.dictate.saved.one": "1 gemt optagelse",
+  "ui.promptInput.dictate.saved.one": "{{count}} gemt optagelse",
   "ui.promptInput.dictate.saved.other": "{{count}} gemte optagelser",
   "ui.promptInput.dictate.retryIn": "prøver igen om {{seconds}} s",
   "ui.promptInput.dictate.retrying": "prøver igen…",

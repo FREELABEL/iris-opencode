@@ -149,7 +149,7 @@ export const dict = {
   "ui.promptInput.dictate.microphone": "ไมโครโฟน",
   "ui.promptInput.dictate.systemDefault": "ค่าเริ่มต้นของระบบ",
   "ui.promptInput.dictate.dismiss": "ปิด",
-  "ui.promptInput.dictate.saved.one": "การบันทึกที่บันทึกไว้ 1 รายการ",
+  "ui.promptInput.dictate.saved.one": "การบันทึกที่บันทึกไว้ {{count}} รายการ",
   "ui.promptInput.dictate.saved.other": "การบันทึกที่บันทึกไว้ {{count}} รายการ",
   "ui.promptInput.dictate.retryIn": "ลองใหม่ใน {{seconds}} วินาที",
   "ui.promptInput.dictate.retrying": "กำลังลองใหม่…",

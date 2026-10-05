@@ -144,7 +144,7 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.microphone": "Micrô",
   "ui.promptInput.dictate.systemDefault": "Mặc định của hệ thống",
   "ui.promptInput.dictate.dismiss": "Bỏ qua",
-  "ui.promptInput.dictate.saved.one": "1 bản ghi âm đã lưu",
+  "ui.promptInput.dictate.saved.one": "{{count}} bản ghi âm đã lưu",
   "ui.promptInput.dictate.saved.other": "{{count}} bản ghi âm đã lưu",
   "ui.promptInput.dictate.retryIn": "thử lại sau {{seconds}} giây",
   "ui.promptInput.dictate.retrying": "đang thử lại…",
