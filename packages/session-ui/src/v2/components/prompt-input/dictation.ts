@@ -713,6 +713,24 @@ export function createDictation(opts: DictationOptions) {
     else if (starting) attempt++
   }
 
+  /**
+   * Throw the take away: release the microphone and upload nothing. Discarding a background take
+   * must not send audio nobody wants to a transcription service.
+   */
+  function cancel() {
+    if (phase() !== "recording") return
+    attempt++
+    probing = false
+    pressedAt = undefined
+    setHolding(false)
+    stopTicker()
+    if (mode === "sidecar") cancelSidecar()
+    captured = []
+    peak = 0
+    teardownWebview()
+    setPhase("idle")
+  }
+
   function toggle() {
     if (phase() === "recording") void stop()
     else if (phase() === "idle") void start()
@@ -739,6 +757,7 @@ export function createDictation(opts: DictationOptions) {
     toggle,
     press,
     release,
+    cancel,
     held,
     retrying,
     nextRetryIn,
