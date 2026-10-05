@@ -10,6 +10,7 @@ import { AgentsBenchCommand } from "./platform-agents-bench"
 import { AgentsExportCommand } from "./platform-agents-export"
 import { AgentsJoinCommand, AgentsLeaveCommand } from "./platform-agents-rooms"
 import { AgentsPauseCommand, AgentsResumeCommand, AgentsStopCommand } from "./platform-agents-governance"
+import { AgentsHandBackCommand, AgentsTakeOverCommand, AgentsWatchCommand } from "./platform-agents-watch"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join } from "path"
 import { firstArray } from "../../util/array"
@@ -1889,6 +1890,9 @@ export const PlatformAgentsCommand = cmd({
       .command(AgentsPauseCommand)
       .command(AgentsResumeCommand)
       .command(AgentsStopCommand)
+      .command(AgentsWatchCommand)
+      .command(AgentsTakeOverCommand)
+      .command(AgentsHandBackCommand)
       .command(AgentsChatCommand)
       .command(AgentsProveCommand)
       .command(AgentsAssignCommand)
