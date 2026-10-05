@@ -35,6 +35,11 @@ const PROBE_MS = 400
  * mono): a long take uploaded fine, failed there, and was held and retried until pruned.
  */
 const MAX_SECONDS = 300
+/**
+ * A shortcut held at least this long is push-to-talk: letting go stops. Anything shorter is a
+ * tap, which toggles — the recording keeps going until the next press.
+ */
+const HOLD_MS = 350
 /** ~-40 dBFS: quieter than speech, louder than a noise floor. */
 const SILENCE_FLOOR = 0.01
 const TARGET_RATE = 16000
@@ -144,6 +149,10 @@ export function createDictation(opts: DictationOptions) {
   let attempt = 0
   /** True while the first-session probe decides between webview and sidecar. */
   let probing = false
+  /** start() is between its first await and its last — no recorder may be running yet. */
+  let starting = false
+  /** When the shortcut that started this recording went down; cleared by its release. */
+  let pressedAt: number | undefined
 
   // webview capture state
   let stream: MediaStream | undefined
@@ -270,7 +279,17 @@ export function createDictation(opts: DictationOptions) {
   }
 
   async function start() {
-    if (phase() !== "idle") return
+    // A second start while the first is still awaiting would open a second recorder.
+    if (phase() !== "idle" || starting) return
+    starting = true
+    try {
+      await openRecorder()
+    } finally {
+      starting = false
+    }
+  }
+
+  async function openRecorder() {
     const id = ++attempt
 
     // Known-good path from a previous dictation in this session.
@@ -535,6 +554,29 @@ export function createDictation(opts: DictationOptions) {
     })
     .catch(() => {})
 
+  /** Shortcut went down. While recording it stops; while idle it starts and arms push-to-talk. */
+  function press() {
+    if (phase() === "recording") {
+      pressedAt = undefined
+      void stop()
+      return
+    }
+    if (phase() !== "idle" || starting) return
+    pressedAt = Date.now()
+    void start()
+  }
+
+  /** Shortcut came up. Held long enough, that ends the recording; a tap leaves it running. */
+  function release() {
+    if (pressedAt === undefined) return
+    const held = Date.now() - pressedAt
+    pressedAt = undefined
+    if (held < HOLD_MS) return
+    if (phase() === "recording") void stop()
+    // Let go before any recorder came up: abandon the start rather than record unheld.
+    else if (starting) attempt++
+  }
+
   function toggle() {
     if (phase() === "recording") void stop()
     else if (phase() === "idle") void start()
@@ -553,5 +595,8 @@ export function createDictation(opts: DictationOptions) {
     }
   })
 
-  return { phase, seconds, toggle, held, retrying, nextRetryIn, retryHeld: () => retryHeld(false), discardHeld }
+  return { phase, seconds, toggle, press, release, held, retrying, nextRetryIn, retryHeld: () => retryHeld(false), discardHeld }
 }
+
+/** What a keyboard shortcut needs from a mounted dictation control. */
+export type DictationControls = Pick<ReturnType<typeof createDictation>, "toggle" | "press" | "release" | "phase">

@@ -48,6 +48,7 @@ import { ModelSelectorPopover, ModelSelectorPopoverV2 } from "@/components/dialo
 import { DialogSelectModelUnpaid } from "@/components/dialog-select-model-unpaid"
 import { DialogSelectModelUnpaidV2 } from "@/components/dialog-select-model-unpaid-v2"
 import { useCommand } from "@/context/command"
+import { DICTATE_COMMAND_ID, dictateCommand } from "@/components/prompt-input/dictate-command"
 import { usePermission } from "@/context/permission"
 import { useLanguage } from "@/context/language"
 import { usePlatform } from "@/context/platform"
@@ -1039,6 +1040,14 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       setCursorPosition(editorRef, (editorRef.textContent ?? "").length)
     },
   })
+  command.register("prompt-dictate", () => [
+    dictateCommand({
+      controls: () => dictation,
+      title: language.t("command.prompt.dictate"),
+      description: language.t("command.prompt.dictate.description"),
+      category: language.t("command.category.session"),
+    }),
+  ])
 
   const addPart = (part: ContentPart) => {
     if (part.type === "image") return false
@@ -1675,7 +1684,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                       ? "Stop and transcribe"
                       : dictation.phase() === "transcribing"
                         ? "Transcribing with Grok…"
-                        : "Dictate (transcribed by Grok)")
+                        : `Dictate (transcribed by Grok) · ${command.keybind(DICTATE_COMMAND_ID)}, hold to talk`)
                   }
                 >
                   <Button

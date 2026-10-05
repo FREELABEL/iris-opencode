@@ -6,7 +6,9 @@ import { Icon } from "@opencode-ai/ui/v2/icon"
 import { KeybindV2 } from "@opencode-ai/ui/v2/keybind-v2"
 import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 import type { ReferenceInfo } from "@opencode-ai/sdk/v2/client"
-import { createEffect, createMemo, on, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, on, Show } from "solid-js"
+import type { DictationControls } from "@opencode-ai/session-ui/v2/prompt-input/dictation"
+import { DICTATE_COMMAND_ID, dictateCommand } from "@/components/prompt-input/dictate-command"
 import { ModelSelectorPopoverV2 } from "@/components/dialog-select-model"
 import { DialogSelectModelUnpaidV2 } from "@/components/dialog-select-model-unpaid-v2"
 import type { PromptInputProps } from "@/components/prompt-input/contracts"
@@ -55,6 +57,15 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
   const dialog = useDialog()
   const command = useCommand()
   const language = useLanguage()
+  const [dictate, setDictate] = createSignal<DictationControls>()
+  command.register("prompt-dictate", () => [
+    dictateCommand({
+      controls: dictate,
+      title: language.t("command.prompt.dictate"),
+      description: language.t("command.prompt.dictate.description"),
+      category: language.t("command.category.session"),
+    }),
+  ])
 
   return (
     <div class="flex flex-col gap-3">
@@ -65,6 +76,8 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
         class={props.class}
         variantControlVisible={!props.controller.model.loading}
         transcribeUrl={() => sdkForDictation().url}
+        dictateRef={(controls) => setDictate(() => controls)}
+        dictateShortcut={command.keybind(DICTATE_COMMAND_ID)}
         attachKeybind={command.keybindParts("file.attach")}
         attachShortcut={command.keybind("file.attach")}
         modelControl={
