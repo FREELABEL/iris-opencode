@@ -18,8 +18,8 @@ const relay = Bun.serve<Seen>({
       const m = JSON.parse(String(message))
       ws.data.received.push(m)
       if (m.type === "text.delta" && m.delta === "FAIL")
-        return ws.send(JSON.stringify({ type: "relay.error", code: "x", message: "Upstream said no." }))
-      if (m.type === "text.delta") ws.send(JSON.stringify({ type: "audio.delta", delta: Buffer.from(m.delta).toString("base64") }))
+        ws.send(JSON.stringify({ type: "relay.error", code: "x", message: "Upstream said no." }))
+      else if (m.type === "text.delta") ws.send(JSON.stringify({ type: "audio.delta", delta: Buffer.from(m.delta).toString("base64") }))
       if (m.type === "text.done") ws.send(JSON.stringify({ type: "audio.done" }))
     },
   },
