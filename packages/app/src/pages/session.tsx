@@ -37,6 +37,7 @@ import { createAutoScroll } from "@opencode-ai/ui/hooks"
 import { previewSelectedLines } from "@opencode-ai/session-ui/pierre/selection-bridge"
 import { Button } from "@opencode-ai/ui/button"
 import { showToast } from "@/utils/toast"
+import { useSpokenReplies } from "@/context/spoken-replies"
 import { base64Encode, checksum } from "@opencode-ai/core/util/encode"
 import { useLocation, useNavigate, useParams, useSearchParams } from "@solidjs/router"
 import { NewSessionView, SessionHeader } from "@/components/session"
@@ -1097,6 +1098,17 @@ export default function Page() {
     const next = list[0]
     if (!next) return
     view().review.setMode(next)
+  })
+
+  useSpokenReplies({
+    enabled: () => settings.voice.speakReplies(),
+    sessionID: () => params.id,
+    messages: (id) => sync().data.message[id],
+    parts: (id) => sync().data.part[id],
+    base: () => sdk().url,
+    voice: () => settings.voice.speakVoice() || undefined,
+    onUnavailable: (reason) =>
+      showToast({ variant: "error", title: language.t("settings.general.row.speakReplies.unavailable"), description: reason }),
   })
 
   createEffect(

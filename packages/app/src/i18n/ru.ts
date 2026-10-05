@@ -927,6 +927,9 @@ export const dict = {
     "Вход, с которого записывается диктовка. «Системный по умолчанию» следует настройкам звука вашего компьютера.",
   "settings.general.row.microphone.systemDefault": "Системный по умолчанию",
   "settings.general.row.microphone.notConnected": "{{name}} (не подключён)",
+  "settings.general.row.speakReplies.title": "Озвучивать ответы",
+  "settings.general.row.speakReplies.description": "Читает ответы вслух по мере поступления через голосовой сервис IRIS. Код пропускается.",
+  "settings.general.row.speakReplies.unavailable": "Озвучивание ответов остановлено",
   "settings.general.section.feed": "Лента",
   "settings.general.section.display": "Экран",
 

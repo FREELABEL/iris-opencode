@@ -259,3 +259,68 @@ describe("server password", () => {
     })
   })
 })
+
+describe("WS /voice/speak", () => {
+  test("relays the window's text to the voice relay and streams PCM back as binary frames", async () => {
+    configured()
+    const received: unknown[] = []
+    let auth: string | null = null
+    const tts = Bun.serve({
+      port: 0,
+      fetch(req, server) {
+        auth = req.headers.get("authorization")
+        return server.upgrade(req) ? undefined : new Response("no", { status: 400 })
+      },
+      websocket: {
+        message(ws, message) {
+          const m = JSON.parse(String(message))
+          received.push(m)
+          if (m.type === "text.delta") ws.send(JSON.stringify({ type: "audio.delta", delta: Buffer.from([1, 0, 2, 0]).toString("base64") }))
+          if (m.type === "text.done") ws.send(JSON.stringify({ type: "audio.done" }))
+        },
+      },
+    })
+    process.env["IRIS_STT_RELAY_URL"] = `http://127.0.0.1:${tts.port}`
+    try {
+      await withServer(async (base) => {
+        const frames = await new Promise<(string | number[])[]>((resolve, reject) => {
+          const out: (string | number[])[] = []
+          const ws = new WebSocket(`${base.replace("http", "ws")}/voice/speak`)
+          ws.binaryType = "arraybuffer"
+          ws.onopen = () => {
+            ws.send(JSON.stringify({ type: "text.delta", delta: "Hello there. " }))
+            ws.send(JSON.stringify({ type: "text.done" }))
+          }
+          ws.onmessage = (m) => {
+            out.push(typeof m.data === "string" ? m.data : Array.from(new Uint8Array(m.data as ArrayBuffer)))
+            if (m.data === JSON.stringify({ type: "done" })) (ws.close(), resolve(out))
+          }
+          ws.onerror = () => reject(new Error("socket error"))
+          setTimeout(() => reject(new Error(`timed out with ${JSON.stringify(out)}`)), 5000)
+        })
+        expect(frames).toEqual([[1, 0, 2, 0], JSON.stringify({ type: "done" })])
+        expect(received).toEqual([{ type: "text.delta", delta: "Hello there. " }, { type: "text.done" }])
+        expect(auth).toBe(`Bearer ${"t".repeat(64)}`)
+      })
+    } finally {
+      tts.stop(true)
+    }
+  })
+
+  test("signed out: one unavailable event, then the socket closes", async () => {
+    process.env["IRIS_API_KEY"] = ""
+    process.env["HOME"] = dir
+    await withServer(async (base) => {
+      const result = await new Promise<{ messages: string[]; closed: boolean }>((resolve) => {
+        const messages: string[] = []
+        const ws = new WebSocket(`${base.replace("http", "ws")}/voice/speak`)
+        ws.onmessage = (m) => messages.push(String(m.data))
+        ws.onclose = () => resolve({ messages, closed: true })
+        setTimeout(() => resolve({ messages, closed: false }), 5000)
+      })
+      expect(result.closed).toBe(true)
+      expect(result.messages).toHaveLength(1)
+      expect(JSON.parse(result.messages[0]!).type).toBe("unavailable")
+    })
+  })
+})

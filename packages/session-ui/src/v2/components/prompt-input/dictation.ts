@@ -93,6 +93,16 @@ export function setDictationAuth(resolve: ((url: string) => Record<string, strin
 }
 
 /**
+ * The Basic credential for `base`, for the query-string `auth_token` a browser WebSocket has to use
+ * (it cannot send an Authorization header). Undefined when the server has no password.
+ */
+export function voiceSocketToken(base: string) {
+  return Object.entries(authFor?.(base) ?? {})
+    .find(([name]) => name.toLowerCase() === "authorization")?.[1]
+    ?.match(/^Basic\s+(.+)$/i)?.[1]
+}
+
+/**
  * The preferred microphone, by device NAME ("" or undefined = system default). Set once by the app
  * from its settings. A name, not an id, because the two recorders do not share an id space: the
  * window resolves it against enumerateDevices() labels, the sidecar against ffmpeg's device list.
@@ -544,9 +554,7 @@ export function createDictation(opts: DictationOptions) {
     const url = new URL(`${base()}/dictate/live`)
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
     url.searchParams.set("source", source)
-    const basic = Object.entries(authFor?.(base()) ?? {})
-      .find(([name]) => name.toLowerCase() === "authorization")?.[1]
-      ?.match(/^Basic\s+(.+)$/i)?.[1]
+    const basic = voiceSocketToken(base())
     if (basic) url.searchParams.set("auth_token", basic)
     setLive("connecting")
     const ws = new WebSocket(url)

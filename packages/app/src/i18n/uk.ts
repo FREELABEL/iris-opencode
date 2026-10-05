@@ -1033,6 +1033,9 @@ export const dict = {
     "Вхід, з якого записується диктування. «Системний за замовчуванням» відповідає налаштуванням звуку вашого комп’ютера.",
   "settings.general.row.microphone.systemDefault": "Системний за замовчуванням",
   "settings.general.row.microphone.notConnected": "{{name}} (не підключено)",
+  "settings.general.row.speakReplies.title": "Озвучувати відповіді",
+  "settings.general.row.speakReplies.description": "Читає відповіді вголос, щойно вони надходять, через голосовий сервіс IRIS. Код пропускається.",
+  "settings.general.row.speakReplies.unavailable": "Озвучування відповідей зупинено",
   "settings.general.section.feed": "Стрічка",
   "settings.general.section.display": "Дисплей",
 

@@ -14,6 +14,7 @@ import {
   type DictationControls,
 } from "@opencode-ai/session-ui/v2/prompt-input/dictation"
 import { useSettings } from "@/context/settings"
+import { stopSpokenReply } from "@/context/spoken-replies"
 import { DICTATE_COMMAND_ID, dictateCommand } from "@/components/prompt-input/dictate-command"
 import { ModelSelectorPopoverV2 } from "@/components/dialog-select-model"
 import { DialogSelectModelUnpaidV2 } from "@/components/dialog-select-model-unpaid-v2"
@@ -72,6 +73,10 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
   const command = useCommand()
   const language = useLanguage()
   const [dictate, setDictate] = createSignal<DictationControls>()
+  // Starting to dictate interrupts a reply being read aloud, so the mic does not hear it.
+  createEffect(() => {
+    if (dictate()?.phase() === "recording") stopSpokenReply()
+  })
   command.register("prompt-dictate", () => [
     dictateCommand({
       controls: dictate,

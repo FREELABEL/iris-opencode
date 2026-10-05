@@ -215,6 +215,7 @@ const SoundsSection: Component<{ controller: SoundSettingsController }> = (props
 
 const MicrophoneSection = () => {
   const language = useLanguage()
+  const settings = useSettings()
   const controller = createMicrophoneSettingsController()
   const label = (option: MicrophoneOption) => {
     if (!option.name) return language.t("settings.general.row.microphone.systemDefault")
@@ -241,6 +242,17 @@ const MicrophoneSection = () => {
             placement="bottom-end"
             gutter={6}
           />
+        </SettingsRowV2>
+        <SettingsRowV2
+          title={language.t("settings.general.row.speakReplies.title")}
+          description={language.t("settings.general.row.speakReplies.description")}
+        >
+          <div data-action="settings-speak-replies">
+            <Switch
+              checked={settings.voice.speakReplies()}
+              onChange={(checked) => settings.voice.setSpeakReplies(checked)}
+            />
+          </div>
         </SettingsRowV2>
       </SettingsListV2>
     </div>

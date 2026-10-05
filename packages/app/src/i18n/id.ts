@@ -1019,6 +1019,9 @@ export const dict = {
     "Input yang digunakan dikte untuk merekam. Bawaan sistem mengikuti pengaturan suara komputer Anda.",
   "settings.general.row.microphone.systemDefault": "Bawaan sistem",
   "settings.general.row.microphone.notConnected": "{{name}} (tidak terhubung)",
+  "settings.general.row.speakReplies.title": "Bacakan balasan",
+  "settings.general.row.speakReplies.description": "Membacakan balasan saat tiba, menggunakan layanan suara IRIS. Kode dilewati.",
+  "settings.general.row.speakReplies.unavailable": "Pembacaan balasan berhenti",
   "settings.general.section.feed": "Umpan",
   "settings.general.section.display": "Tampilan",
 

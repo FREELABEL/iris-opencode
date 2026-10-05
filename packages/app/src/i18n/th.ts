@@ -911,6 +911,9 @@ export const dict = {
     "อินพุตที่ใช้บันทึกเสียงเมื่อบอกให้พิมพ์ ค่าเริ่มต้นของระบบจะเป็นไปตามการตั้งค่าเสียงของคอมพิวเตอร์",
   "settings.general.row.microphone.systemDefault": "ค่าเริ่มต้นของระบบ",
   "settings.general.row.microphone.notConnected": "{{name}} (ไม่ได้เชื่อมต่อ)",
+  "settings.general.row.speakReplies.title": "อ่านคำตอบออกเสียง",
+  "settings.general.row.speakReplies.description": "อ่านคำตอบออกเสียงเมื่อได้รับ โดยใช้บริการเสียงของ IRIS ข้ามส่วนที่เป็นโค้ด",
+  "settings.general.row.speakReplies.unavailable": "หยุดอ่านคำตอบแล้ว",
   "settings.general.section.feed": "ฟีด",
   "settings.general.section.display": "การแสดงผล",
 

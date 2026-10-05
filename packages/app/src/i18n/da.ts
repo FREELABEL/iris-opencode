@@ -801,6 +801,9 @@ export const dict = {
     "Den indgang, som diktering optager fra. Systemstandard følger din computers lydindstillinger.",
   "settings.general.row.microphone.systemDefault": "Systemstandard",
   "settings.general.row.microphone.notConnected": "{{name}} (ikke forbundet)",
+  "settings.general.row.speakReplies.title": "Læs svar højt",
+  "settings.general.row.speakReplies.description": "Læser svar højt, når de kommer, via IRIS-stemmetjenesten. Kode springes over.",
+  "settings.general.row.speakReplies.unavailable": "Oplæsning af svar stoppede",
   "settings.general.section.feed": "Feed",
   "settings.general.section.display": "Skærm",
 
