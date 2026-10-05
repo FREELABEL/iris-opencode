@@ -56,16 +56,61 @@ type CaptureMode = "webview" | "sidecar"
 let cachedMode: CaptureMode | null = null
 
 /**
- * Can the sidecar record on this host at all? Only where the webview is WKWebView (macOS) — or
- * Linux, where the sidecar has an ALSA branch. On Windows the sidecar has no capture backend by
- * design (capture.ts inputArgs), so falling back to it can only produce an error, and the one it
- * produced was "Recording needs ffmpeg": advice about a tool the Windows path never uses, which
- * hid the real fault (the window's own microphone request). On Windows the webview is the ONLY
- * recorder — if it cannot open the mic, say why, and never mention ffmpeg.
+ * GET /transcribe/health — what the local server can do right now. `reason` strings are written
+ * for a person on THIS platform. The composer is built against exactly this shape.
  */
-function sidecarCanRecord(): boolean {
-  if (typeof navigator === "undefined") return true
-  return !/Windows/i.test(navigator.userAgent)
+export type DictationReadiness = {
+  recorder: { sidecar: boolean; reason?: string }
+  cloud: { configured: boolean; reason?: string }
+  local: { whisper: boolean }
+  /** The engines a dictation would try, in order. */
+  engines: string[]
+}
+
+function isReadiness(body: unknown): body is DictationReadiness {
+  const b = body as Partial<DictationReadiness> | null
+  return (
+    typeof b?.recorder?.sidecar === "boolean" &&
+    typeof b?.cloud?.configured === "boolean" &&
+    typeof b?.local?.whisper === "boolean" &&
+    Array.isArray(b?.engines)
+  )
+}
+
+/**
+ * Credentials for the local server, by base URL — the same Authorization header the app's SDK
+ * sends (Basic, from the server connection's password). Set once by the app; unset means none,
+ * which is today's sidecar (spawned without OPENCODE_SERVER_PASSWORD).
+ */
+let authFor: ((url: string) => Record<string, string> | undefined) | undefined
+
+export function setDictationAuth(resolve: ((url: string) => Record<string, string> | undefined) | undefined) {
+  authFor = resolve
+}
+
+function isWindows() {
+  return typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent)
+}
+
+/**
+ * May the sidecar take over from the webview on this host? Everywhere but Windows, yes — macOS's
+ * WKWebView needs it, Linux has ALSA/PulseAudio. On Windows only when the server SAYS it can record
+ * (ffmpeg present, a DirectShow microphone found). Without that, falling back produced "Recording
+ * needs ffmpeg" — advice that hid the real fault (the window's own microphone permission). So
+ * where the sidecar cannot record, the webview is the ONLY recorder: say why, never mention ffmpeg.
+ */
+function sidecarCanRecord(ready: DictationReadiness | undefined): boolean {
+  if (!isWindows()) return true
+  return ready?.recorder.sidecar === true
+}
+
+/** Retry-After (seconds or HTTP-date) in ms, or 0. */
+function retryAfterMs(res: Response) {
+  const value = res.headers.get("retry-after")?.trim()
+  if (!value) return 0
+  if (/^\d+$/.test(value)) return Number(value) * 1000
+  const at = Date.parse(value)
+  return Number.isNaN(at) ? 0 : Math.max(0, at - Date.now())
 }
 
 /** Turn a getUserMedia rejection into something a person can act on. */
@@ -166,6 +211,20 @@ export function createDictation(opts: DictationOptions) {
   let openError: unknown
 
   const base = () => opts.url().replace(/\/$/, "")
+  /** Every request to the local server goes through here, so each one carries the credentials. */
+  const call = (path: string, init: RequestInit = {}) =>
+    fetch(`${base()}${path}`, { ...init, headers: { ...authFor?.(base()), ...(init.headers as Record<string, string>) } })
+
+  // What the server can do. Fetched once on mount for the composer; the Windows fallback below
+  // waits on it, since the first press can land before it arrives.
+  const [readiness, setReadiness] = createSignal<DictationReadiness>()
+  const readinessLoaded = call("/transcribe/health")
+    .then((res) => (res.ok ? res.json() : undefined))
+    .then((body: unknown) => {
+      if (isReadiness(body) && !disposed) setReadiness(body)
+      return readiness()
+    })
+    .catch(() => undefined)
 
   // Held recordings: the server keeps audio on disk when every engine fails. They are retried
   // automatically on RETRY_BACKOFF_MS, and on demand. Recordings left from a previous run are
@@ -257,7 +316,7 @@ export function createDictation(opts: DictationOptions) {
 
   async function startSidecar(): Promise<boolean> {
     try {
-      const res = await fetch(`${base()}/dictate/start`, { method: "POST" })
+      const res = await call("/dictate/start", { method: "POST" })
       const body = await res.json().catch(() => null)
       if (!res.ok) {
         opts.onError?.(body?.error || "Could not start recording.")
@@ -303,7 +362,9 @@ export function createDictation(opts: DictationOptions) {
 
     const opened = await openWebviewCapture()
     if (superseded(id)) return teardownWebview()
-    if (!opened && !sidecarCanRecord()) {
+    const ready = !opened && isWindows() ? (readiness() ?? (await readinessLoaded)) : undefined
+    if (superseded(id)) return teardownWebview()
+    if (!opened && !sidecarCanRecord(ready)) {
       // Windows: nothing to fall back to. Report the window's own failure, and do NOT cache —
       // the user may grant the permission and press the button again.
       opts.onError?.(micOpenError(openError))
@@ -318,9 +379,10 @@ export function createDictation(opts: DictationOptions) {
       return
     }
 
-    // Where the sidecar cannot record, the webview is the only recorder: no probe, no fallback.
-    // A slow first buffer or a quiet room must not be able to route Windows to a dead end.
-    if (cachedMode === "webview" || !sidecarCanRecord()) {
+    // Windows' WebView2 is Chromium: a microphone it opens records. No probe — a slow first buffer
+    // or a quiet room must not be able to route Windows away from a working recorder. The sidecar
+    // there is only for an open that FAILED (above).
+    if (cachedMode === "webview" || isWindows()) {
       mode = "webview"
       begin()
       return
@@ -359,7 +421,7 @@ export function createDictation(opts: DictationOptions) {
   }
 
   function cancelSidecar() {
-    void fetch(`${base()}/dictate/cancel`, { method: "POST" }).catch(() => {})
+    void call("/dictate/cancel", { method: "POST" }).catch(() => {})
   }
 
   function begin() {
@@ -397,9 +459,9 @@ export function createDictation(opts: DictationOptions) {
 
   async function stopSidecar() {
     try {
-      const res = await fetch(`${base()}/dictate/stop`, { method: "POST" })
+      const res = await call("/dictate/stop", { method: "POST" })
       const body = await res.json().catch(() => null)
-      deliver(res.ok, body)
+      deliver(res.ok, body, retryAfterMs(res))
     } catch (e) {
       reachError(e)
     }
@@ -433,22 +495,25 @@ export function createDictation(opts: DictationOptions) {
     const blob = encodeWav(downsample(merged, rate, TARGET_RATE), TARGET_RATE)
 
     try {
-      const res = await fetch(`${base()}/transcribe?filename=dictation.wav`, {
+      const res = await call("/transcribe?filename=dictation.wav", {
         method: "POST",
         headers: { "Content-Type": "audio/wav" },
         body: blob,
       })
       const body = await res.json().catch(() => null)
-      deliver(res.ok, body)
+      deliver(res.ok, body, retryAfterMs(res))
     } catch (e) {
       reachError(e)
     }
   }
 
-  function deliver(ok: boolean, body: any) {
+  /** `wait` is the server's Retry-After: the automatic retry comes no sooner. */
+  function deliver(ok: boolean, body: any, wait = 0) {
+    // A 413 (over the platform's size limit) carries no `held`: nothing is kept, nothing retried,
+    // and the server's message — which names the limit — is shown as is, below.
     if (!ok && typeof body?.held?.id === "string") {
       setHeld((list) => [...list, { id: body.held.id, seconds: Number(body.held.seconds) || 0 }])
-      scheduleRetry()
+      scheduleRetry(wait)
       return opts.onError?.(`${body.error || "Transcription failed."} Your recording is saved.`)
     }
     if (!ok) {
@@ -483,10 +548,11 @@ export function createDictation(opts: DictationOptions) {
     setNextRetryIn(undefined)
   }
 
-  function scheduleRetry() {
+  function scheduleRetry(atLeast = 0) {
     clearRetryTimers()
-    const wait = RETRY_BACKOFF_MS[retryStep]
-    if (wait === undefined || disposed) return
+    const step = RETRY_BACKOFF_MS[retryStep]
+    if (step === undefined || disposed) return
+    const wait = Math.max(step, atLeast)
     retryStep++
     const due = Date.now() + wait
     setNextRetryIn(Math.ceil(wait / 1000))
@@ -505,15 +571,21 @@ export function createDictation(opts: DictationOptions) {
     setRetrying(true)
     try {
       for (const item of held()) {
-        const res = await fetch(`${base()}/transcribe/retry?id=${encodeURIComponent(item.id)}`, { method: "POST" })
+        const res = await call(`/transcribe/retry?id=${encodeURIComponent(item.id)}`, { method: "POST" })
         const body = await res.json().catch(() => null)
         if (res.status === 404) {
           setHeld((list) => list.filter((h) => h.id !== item.id))
           continue
         }
+        // Over the size limit: the server has let it go, and no retry would take it.
+        if (res.status === 413) {
+          setHeld((list) => list.filter((h) => h.id !== item.id))
+          opts.onError?.(body?.error || "That recording is too long to transcribe.")
+          continue
+        }
         if (!res.ok || typeof body?.text !== "string") {
           opts.onError?.(`${body?.error || "Transcription failed."} Your recording is still saved.`)
-          scheduleRetry()
+          scheduleRetry(retryAfterMs(res))
           return
         }
         setHeld((list) => list.filter((h) => h.id !== item.id))
@@ -535,14 +607,14 @@ export function createDictation(opts: DictationOptions) {
     setHeld([])
     await Promise.all(
       ids.map((id) =>
-        fetch(`${base()}/transcribe/discard?id=${encodeURIComponent(id)}`, { method: "POST" }).catch(() => {}),
+        call(`/transcribe/discard?id=${encodeURIComponent(id)}`, { method: "POST" }).catch(() => {}),
       ),
     )
   }
 
   // Recover recordings a previous run could not transcribe. An older server answers this route
   // with the SPA's HTML, so anything but a list is ignored.
-  void fetch(`${base()}/transcribe/held`)
+  void call("/transcribe/held")
     .then((res) => res.json())
     .then((body) => {
       if (disposed || !Array.isArray(body?.held)) return
@@ -591,11 +663,23 @@ export function createDictation(opts: DictationOptions) {
     // Leaving the sidecar recording after the prompt unmounts is a hot microphone nobody can
     // see or stop. Fire-and-forget: unmount must not wait on the network.
     if (phase() === "recording" && mode === "sidecar") {
-      void fetch(`${base()}/dictate/cancel`, { method: "POST" }).catch(() => {})
+      void call("/dictate/cancel", { method: "POST" }).catch(() => {})
     }
   })
 
-  return { phase, seconds, toggle, press, release, held, retrying, nextRetryIn, retryHeld: () => retryHeld(false), discardHeld }
+  return {
+    phase,
+    seconds,
+    toggle,
+    press,
+    release,
+    held,
+    retrying,
+    nextRetryIn,
+    retryHeld: () => retryHeld(false),
+    discardHeld,
+    readiness,
+  }
 }
 
 /** What a keyboard shortcut needs from a mounted dictation control. */
