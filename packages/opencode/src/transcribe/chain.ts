@@ -23,6 +23,8 @@ export interface Attempt {
   /** HTTP status from the platform; 0 = never reached. Absent for on-device whisper. */
   status?: number
   error?: string
+  /** A 429's Retry-After, in ms, as the platform sent it (uncapped). */
+  retryAfterMs?: number
   ms: number
 }
 
@@ -91,12 +93,13 @@ export async function transcribeWithFallback(
         return { text: stripNonSpeech(result.text), provider: result.provider, attempts }
       }
       const status = result instanceof RemoteTranscribeError ? result.status : 0
-      attempts.push({ engine: provider, ok: false, status, error: result.message, ms: Date.now() - started })
+      const retryAfterMs = result instanceof RemoteTranscribeError ? result.retryAfterMs : undefined
+      attempts.push({ engine: provider, ok: false, status, error: result.message, retryAfterMs, ms: Date.now() - started })
       // Over the size limit: every engine sits behind the same limit, and a held copy would be
       // retried into the same refusal for a week. Stop here and say what the limit is.
       if (status === 413) throw new ChainError(tooLargeMessage(result.message), attempts, true, 413)
-      if (status === 429 && result instanceof RemoteTranscribeError && result.retryAfterMs !== undefined)
-        owed = Math.min(result.retryAfterMs, opts.maxRetryAfterMs ?? MAX_RETRY_AFTER_MS)
+      if (status === 429 && retryAfterMs !== undefined)
+        owed = Math.min(retryAfterMs, opts.maxRetryAfterMs ?? MAX_RETRY_AFTER_MS)
       if (!retryable(status)) break
     }
   }
