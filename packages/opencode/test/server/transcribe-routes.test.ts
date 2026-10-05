@@ -49,6 +49,8 @@ afterEach(async () => {
 function configured() {
   process.env["IRIS_API_URL"] = `http://127.0.0.1:${platform.port}`
   process.env["IRIS_TRANSCRIBE_BLOQ_ID"] = "42"
+  // the platform requires a person's credential; this is the shape of the desktop's SDK token
+  process.env["IRIS_API_KEY"] = "t".repeat(64)
   process.env["IRIS_FFMPEG"] = join(dir, "ffmpeg")
   delete process.env["IRIS_TRANSCRIBE_PROVIDERS"]
 }

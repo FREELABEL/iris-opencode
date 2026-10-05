@@ -61,11 +61,26 @@ export function describeRemoteConfig(
       reason:
         "Dictation needs a board to file recordings under. Set default_bloq_id in ~/.iris/config.json (or IRIS_TRANSCRIBE_BLOQ_ID), then try again.",
     }
-  // The token is OPTIONAL. ~/.iris/config.json holds a node_api_key, which this endpoint
-  // rejects ("Invalid token format. Expected JWT or valid API token") — sending it turns a
-  // working request into a 401. The scope is what the endpoint actually requires.
-  const usable = token && /^(ey|iris_|fl_)/.test(token) ? token : undefined
+  // The platform refuses anonymous transcription, so a person's credential is REQUIRED. The
+  // node_api_key in ~/.iris/config.json is not one — the platform rejects it as a caller — so
+  // only shapes the platform's guard accepts are sent; anything else is reported, not tried.
+  const usable = token && isPersonToken(token) ? token : undefined
+  if (!usable)
+    return {
+      config: null,
+      reason: "Dictation needs you signed in to IRIS. Run iris auth login in a terminal, then restart IRIS.",
+    }
   return { config: { apiUrl: apiUrl.replace(/\/$/, ""), token: usable, bloqId } }
+}
+
+/**
+ * Credentials the platform accepts as a person: a Passport JWT, the 64-character SDK token the
+ * desktop is launched with (~/.iris/sdk/.env), or a prefixed iris_/fl_ API token.
+ */
+export function isPersonToken(token: string): boolean {
+  if (/^ey[\w-]+\.[\w-]+\.[\w-]+$/.test(token)) return true
+  if (/^[A-Za-z0-9]{64}$/.test(token)) return true
+  return /^(iris_|fl_)[A-Za-z0-9_-]{8,}$/.test(token)
 }
 
 /** A failed platform call. `status` is the HTTP status, or 0 when the platform was never reached. */
