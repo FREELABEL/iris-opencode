@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, Show, type Accessor, type JSX } from "solid-js"
+import { createEffect, createMemo, createSignal, For, onCleanup, Show, type Accessor, type JSX } from "solid-js"
 import { FileIcon } from "@opencode-ai/ui/file-icon"
 import { Icon } from "@opencode-ai/ui/icon"
 import { IconButton } from "@opencode-ai/ui/icon-button"
@@ -10,7 +10,7 @@ import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
 import { KeybindV2 } from "@opencode-ai/ui/v2/keybind-v2"
 import { MenuV2 } from "@opencode-ai/ui/v2/menu-v2"
 import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
-import { createDictation } from "./dictation"
+import { createDictation, type DictationControls } from "./dictation"
 import { AttachmentCardV2 } from "../attachment-card-v2"
 import { CommentCardV2 } from "../comment-card-v2"
 import { typeLabel } from "../../../components/message-file"
@@ -50,6 +50,10 @@ export type PromptInputV2Props = {
    * Omit and the microphone is not rendered at all.
    */
   transcribeUrl?: () => string
+  /** Hands the mounted dictation control to whoever owns the shortcut; undefined on unmount. */
+  dictateRef?: (controls: DictationControls | undefined) => void
+  /** The dictation shortcut as displayed text, for the tooltip. */
+  dictateShortcut?: string
   variantControlVisible?: boolean
   attachKeybind?: string[]
   attachShortcut?: string
@@ -248,6 +252,8 @@ export function PromptInputV2(props: PromptInputV2Props) {
                 <PromptInputV2Dictate
                   url={url()}
                   disabled={props.disabled}
+                  controls={props.dictateRef}
+                  shortcut={props.dictateShortcut}
                   onError={(message) => setDictateError(message)}
                   insert={(text) => {
                     // Append into the editor and let the component's own onInput re-parse it.
@@ -802,6 +808,8 @@ function PromptInputV2Dictate(props: {
   disabled?: boolean
   insert: (text: string) => void
   onError?: (message: string | undefined) => void
+  controls?: (controls: DictationControls | undefined) => void
+  shortcut?: string
 }) {
   const [error, setError] = createSignal<string>()
   const dictation = createDictation({
@@ -816,6 +824,9 @@ function PromptInputV2Dictate(props: {
       props.insert(text)
     },
   })
+  props.controls?.(dictation)
+  onCleanup(() => props.controls?.(undefined))
+  const hint = () => (props.shortcut ? ` · ${props.shortcut}, hold to talk` : "")
 
   return (
     <>
@@ -863,7 +874,7 @@ function PromptInputV2Dictate(props: {
             ? "Stop and transcribe"
             : dictation.phase() === "transcribing"
               ? "Transcribing with Grok…"
-              : "Dictate (transcribed by Grok)")
+              : `Dictate (transcribed by Grok)${hint()}`)
         }
       >
         <IconButtonV2

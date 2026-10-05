@@ -57,6 +57,17 @@ function signatureFromEvent(event: KeyboardEvent) {
   return signature(normalizeKey(event.key), event.ctrlKey, event.metaKey, event.shiftKey, event.altKey)
 }
 
+const MODIFIER_KEYS = new Set(["control", "meta", "shift", "alt"])
+
+/**
+ * Does this keyup end a held combo? The combo's own key, or any modifier: macOS sends no keyup
+ * for a key released while Cmd is down, so for mod+… the modifier's keyup is the only signal.
+ */
+export function releasesHold(heldKey: string, event: KeyboardEvent) {
+  const key = normalizeKey(event.key)
+  return key === heldKey || MODIFIER_KEYS.has(key)
+}
+
 function isAllowedEditableKeybind(id: string | undefined) {
   if (!id) return false
   return EDITABLE_KEYBIND_IDS.has(actionId(id))
@@ -84,6 +95,11 @@ export interface CommandOption {
   hidden?: boolean
   when?: (event: KeyboardEvent) => boolean
   onSelect?: (source?: "palette" | "keybind" | "slash") => void
+  /**
+   * Makes the keybind a hold: it fires once per press (auto-repeat is swallowed) and this runs
+   * when the combo is let go — any of its keys coming up, or the window losing focus.
+   */
+  onRelease?: () => void
   onHighlight?: () => (() => void) | void
 }
 
@@ -394,6 +410,14 @@ export const { use: useCommand, provider: CommandProvider } = createSimpleContex
       run(PALETTE_ID, "palette")
     }
 
+    /** The hold-style keybind currently down, if any. */
+    let held: { key: string; release: () => void } | undefined
+    const letGo = () => {
+      const current = held
+      held = undefined
+      current?.release()
+    }
+
     const handleKeyDown = (event: KeyboardEvent) => {
       if (suspended() || dialog.active) return
 
@@ -416,11 +440,25 @@ export const { use: useCommand, provider: CommandProvider } = createSimpleContex
       if (!option) return
       event.preventDefault()
       event.stopPropagation()
+      if (option.onRelease) {
+        // Auto-repeat of a held key is the hold itself, not another press.
+        if (event.repeat) return
+        // A fresh press while one is still held means its keyup was lost: close that one first.
+        letGo()
+        held = { key: normalizeKey(event.key), release: option.onRelease }
+      }
       option.onSelect?.("keybind")
+    }
+
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (held && releasesHold(held.key, event)) letGo()
     }
 
     onMount(() => {
       makeEventListener(document, "keydown", handleKeyDown, { capture: true })
+      makeEventListener(document, "keyup", handleKeyUp, { capture: true })
+      // A key released while another window has focus never reaches us; treat focus loss as let go.
+      makeEventListener(window, "blur", letGo)
     })
 
     function register(cb: () => CommandOption[]): void

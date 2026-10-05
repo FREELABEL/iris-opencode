@@ -150,3 +150,82 @@ describe("createDictation — length cap", () => {
     dispose()
   })
 })
+
+describe("createDictation — the shortcut: tap toggles, hold is push-to-talk", () => {
+  const realNow = Date.now
+  let now = 0
+  beforeEach(() => {
+    now = 1_000_000
+    Date.now = () => now
+    setUserAgent("Mozilla/5.0 (Windows NT 10.0)") // webview recorder: starts without a probe
+  })
+  afterEach(() => {
+    Date.now = realNow
+  })
+
+  test("a tap starts recording and leaves it running", async () => {
+    const { d, dispose } = await mount()
+    d.press()
+    await sleep(10)
+    now += 120
+    d.release()
+    expect(d.phase()).toBe("recording")
+    dispose()
+  })
+
+  test("the next press after a tap stops it", async () => {
+    const { d, dispose } = await mount()
+    d.press()
+    await sleep(10)
+    now += 120
+    d.release()
+    processor!.onaudioprocess!({ inputBuffer: { getChannelData: () => new Float32Array(4096).fill(0.3) } })
+    d.press()
+    await sleep(20)
+    expect(posted("/transcribe")).toBe(1)
+    expect(d.phase()).toBe("idle")
+    dispose()
+  })
+
+  test("a hold stops on release and transcribes what was said", async () => {
+    const { d, dispose } = await mount()
+    d.press()
+    await sleep(10)
+    processor!.onaudioprocess!({ inputBuffer: { getChannelData: () => new Float32Array(4096).fill(0.3) } })
+    now += 2_000
+    d.release()
+    await sleep(20)
+    expect(posted("/transcribe")).toBe(1)
+    expect(d.phase()).toBe("idle")
+    dispose()
+  })
+
+  test("letting go of a hold before the sidecar is up abandons the start", async () => {
+    setUserAgent("Mozilla/5.0 (Macintosh) AppleWebKit")
+    holdStart = true
+    const { d, dispose } = await mount()
+    d.toggle() // first dictation: probe finds silence, caches the sidecar
+    await sleep(500)
+    calls.find((c) => c.path === "/dictate/start")!.resolve!()
+    await sleep(10)
+    d.toggle()
+    await sleep(20)
+    // Second dictation goes straight to the sidecar, whose start we hold open.
+    d.press()
+    await sleep(10)
+    now += 1_000
+    d.release()
+    calls.filter((c) => c.path === "/dictate/start")[1]!.resolve!()
+    await sleep(20)
+    expect(posted("/dictate/cancel")).toBeGreaterThanOrEqual(1)
+    expect(d.phase()).toBe("idle")
+    dispose()
+  })
+
+  test("a release with no press is ignored", async () => {
+    const { d, dispose } = await mount()
+    d.release()
+    expect(d.phase()).toBe("idle")
+    dispose()
+  })
+})

@@ -79,6 +79,8 @@ export const dict = {
   "command.model.variant.cycle.description": "Switch to the next effort level",
   "command.prompt.mode.shell": "Shell",
   "command.prompt.mode.normal": "Prompt",
+  "command.prompt.dictate": "Dictate",
+  "command.prompt.dictate.description": "Tap to start or stop dictating; hold to talk and let go to stop",
   "command.permissions.autoaccept.enable": "Auto-accept permissions",
   "command.permissions.autoaccept.disable": "Stop auto-accepting permissions",
   "command.workspace.toggle": "Toggle workspaces",
