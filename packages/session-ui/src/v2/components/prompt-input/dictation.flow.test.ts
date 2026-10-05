@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { createRoot } from "solid-js"
+import { LEVEL_HISTORY, levelFromRms } from "./dictate-visual"
 
 /**
  * createDictation awaits several times before a recorder is running — the 400ms probe, the
@@ -13,6 +14,7 @@ let calls: Call[]
 let tracksStopped: number
 let processor: { onaudioprocess?: (e: unknown) => void } | undefined
 let holdStart: boolean
+let sidecarLevel = 0
 const realFetch = globalThis.fetch
 const realInterval = globalThis.setInterval
 const realUserAgent = navigator.userAgent
@@ -55,7 +57,12 @@ beforeEach(() => {
     const call: Call = { path }
     calls.push(call)
     if (path === "/dictate/start" && holdStart) await new Promise<void>((r) => (call.resolve = r))
-    const body = path === "/transcribe/held" ? { held: [] } : { text: "hello" }
+    const body =
+      path === "/transcribe/held"
+        ? { held: [] }
+        : path === "/dictate/level"
+          ? { level: sidecarLevel, seconds: 1 }
+          : { text: "hello" }
     return new Response(JSON.stringify(body), { status: 200 })
   }) as typeof fetch
 })
@@ -226,6 +233,56 @@ describe("createDictation — the shortcut: tap toggles, hold is push-to-talk", 
     const { d, dispose } = await mount()
     d.release()
     expect(d.phase()).toBe("idle")
+    dispose()
+  })
+})
+
+describe("createDictation — what the waveform draws", () => {
+  const loud = { inputBuffer: { getChannelData: () => new Float32Array(4096).fill(0.3) } }
+
+  test("levels is a fixed-length history that starts silent", async () => {
+    const { d, dispose } = await mount()
+    expect(d.levels().length).toBe(LEVEL_HISTORY)
+    expect(d.levels().every((v: number) => v === 0)).toBe(true)
+    dispose()
+  })
+
+  test("the window recorder feeds levels from the audio it captures", async () => {
+    setUserAgent("Mozilla/5.0 (Windows NT 10.0)")
+    const { d, dispose } = await mount()
+    d.toggle()
+    await sleep(10)
+    processor!.onaudioprocess!(loud)
+    const levels = d.levels()
+    expect(levels.length).toBe(LEVEL_HISTORY)
+    expect(levels[levels.length - 1]).toBeCloseTo(levelFromRms(0.3))
+    dispose()
+  })
+
+  test("the sidecar recorder's level is polled while it records, and polling stops after", async () => {
+    sidecarLevel = 0.05
+    const { d, dispose } = await mount()
+    d.toggle() // probe hears silence → sidecar
+    await sleep(700)
+    expect(posted("/dictate/level")).toBeGreaterThan(0)
+    expect(d.levels()[LEVEL_HISTORY - 1]).toBeCloseTo(levelFromRms(0.05))
+    d.toggle()
+    await sleep(50)
+    const polls = posted("/dictate/level")
+    await sleep(300)
+    expect(posted("/dictate/level")).toBe(polls)
+    expect(d.levels().every((v: number) => v === 0)).toBe(true)
+    dispose()
+  })
+
+  test("holding is true only while the shortcut is down", async () => {
+    setUserAgent("Mozilla/5.0 (Windows NT 10.0)")
+    const { d, dispose } = await mount()
+    expect(d.holding()).toBe(false)
+    d.press()
+    expect(d.holding()).toBe(true)
+    d.release()
+    expect(d.holding()).toBe(false)
     dispose()
   })
 })

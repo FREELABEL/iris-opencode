@@ -1,5 +1,6 @@
 import { createSignal, onCleanup } from "solid-js"
 import { captureIsLive } from "./dictation-probe"
+import { emptyLevels, levelFromRms, pushLevel, rms } from "./dictate-visual"
 
 /**
  * Push-to-talk dictation.
@@ -34,7 +35,7 @@ const PROBE_MS = 400
  * The webview recorder had none, and the platform refuses uploads over 25 MB (~13 min of 16 kHz
  * mono): a long take uploaded fine, failed there, and was held and retried until pruned.
  */
-const MAX_SECONDS = 300
+export const MAX_SECONDS = 300
 /**
  * A shortcut held at least this long is push-to-talk: letting go stops. Anything shorter is a
  * tap, which toggles — the recording keeps going until the next press.
@@ -43,6 +44,9 @@ const HOLD_MS = 350
 /** ~-40 dBFS: quieter than speech, louder than a noise floor. */
 const SILENCE_FLOOR = 0.01
 const TARGET_RATE = 16000
+
+/** How often the sidecar's level is read while it records — fast enough for the waveform to move. */
+const LEVEL_POLL_MS = 60
 
 /** Waits before each automatic retry of a held recording; after the last, retries are manual. */
 const RETRY_BACKOFF_MS = [5_000, 20_000, 60_000, 180_000]
@@ -153,6 +157,11 @@ export function createDictation(opts: DictationOptions) {
   let starting = false
   /** When the shortcut that started this recording went down; cleared by its release. */
   let pressedAt: number | undefined
+  /** The shortcut is down right now — the UI says "release to stop" instead of "press to stop". */
+  const [holding, setHolding] = createSignal(false)
+  /** Recent loudness, oldest first, for the waveform. Always LEVEL_HISTORY long. */
+  const [levels, setLevels] = createSignal<number[]>(emptyLevels())
+  let levelPoll: ReturnType<typeof setInterval> | undefined
 
   // webview capture state
   let stream: MediaStream | undefined
@@ -182,6 +191,27 @@ export function createDictation(opts: DictationOptions) {
   function stopTicker() {
     if (ticker) clearInterval(ticker)
     ticker = undefined
+    stopLevelPoll()
+    setLevels(emptyLevels())
+  }
+
+  /** The sidecar records in another process; its level comes over HTTP. An older one has no route. */
+  function startLevelPoll() {
+    stopLevelPoll()
+    levelPoll = setInterval(() => {
+      void fetch(`${base()}/dictate/level`)
+        .then((res) => (res.ok ? res.json() : Promise.reject(res.status)))
+        .then((body) => {
+          if (!levelPoll || typeof body?.level !== "number") return
+          setLevels((h) => pushLevel(h, levelFromRms(body.level)))
+        })
+        .catch(() => stopLevelPoll())
+    }, LEVEL_POLL_MS)
+  }
+
+  function stopLevelPoll() {
+    if (levelPoll) clearInterval(levelPoll)
+    levelPoll = undefined
   }
 
   function teardownWebview() {
@@ -238,6 +268,9 @@ export function createDictation(opts: DictationOptions) {
           const v = Math.abs(frame[i]!)
           if (v > peak) peak = v
         }
+        // Two bars per buffer: 4096 samples is ~85ms at 48kHz, too coarse for one bar to move well.
+        const half = frame.length >> 1
+        setLevels((h) => pushLevel(pushLevel(h, levelFromRms(rms(frame, 0, half))), levelFromRms(rms(frame, half))))
       }
       // The graph only pulls a processor that reaches the destination, but routing the mic to
       // the speakers would echo it. A zero-gain node keeps it pulled and silent.
@@ -328,8 +361,8 @@ export function createDictation(opts: DictationOptions) {
 
     // First dictation of the session: find out whether this webview actually captures.
     // It opened without throwing, which on WKWebView proves nothing at all.
-    begin()
     mode = "webview"
+    begin()
     probing = true
     await new Promise((r) => setTimeout(r, PROBE_MS))
     probing = false
@@ -356,6 +389,7 @@ export function createDictation(opts: DictationOptions) {
       return
     }
     if (superseded(id)) return cancelSidecar()
+    startLevelPoll()
   }
 
   function cancelSidecar() {
@@ -370,6 +404,7 @@ export function createDictation(opts: DictationOptions) {
       setSeconds(next)
       if (next >= MAX_SECONDS) void stop()
     }, 1000)
+    if (mode === "sidecar") startLevelPoll()
   }
 
   async function stop() {
@@ -563,6 +598,7 @@ export function createDictation(opts: DictationOptions) {
     }
     if (phase() !== "idle" || starting) return
     pressedAt = Date.now()
+    setHolding(true)
     void start()
   }
 
@@ -571,6 +607,7 @@ export function createDictation(opts: DictationOptions) {
     if (pressedAt === undefined) return
     const held = Date.now() - pressedAt
     pressedAt = undefined
+    setHolding(false)
     if (held < HOLD_MS) return
     if (phase() === "recording") void stop()
     // Let go before any recorder came up: abandon the start rather than record unheld.
@@ -595,7 +632,7 @@ export function createDictation(opts: DictationOptions) {
     }
   })
 
-  return { phase, seconds, toggle, press, release, held, retrying, nextRetryIn, retryHeld: () => retryHeld(false), discardHeld }
+  return { phase, seconds, levels, holding, toggle, press, release, held, retrying, nextRetryIn, retryHeld: () => retryHeld(false), discardHeld }
 }
 
 /** What a keyboard shortcut needs from a mounted dictation control. */
