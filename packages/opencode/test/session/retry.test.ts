@@ -146,6 +146,49 @@ describe("session.retry.delay", () => {
       expect(attempts).toStrictEqual([1, 2, 3, 4, 5])
     }),
   )
+
+  it.instance("policy publishes the IRIS limit action once, then stops", () =>
+    Effect.gen(function* () {
+      // Regression: the terminal guard used to run before the status was published, and since
+      // attempts start at 1 it stopped on the first pass — the limit dialog could never open.
+      const published: { attempt: number; reason?: string }[] = []
+      const error = Schema.decodeUnknownSync(SessionV1.APIError.Schema)(
+        new SessionV1.APIError({
+          message: "IRIS daily spending limit of $1 exceeded.",
+          isRetryable: true,
+          statusCode: 429,
+          responseBody: JSON.stringify({
+            error: {
+              message: "IRIS daily spending limit of $1 exceeded.",
+              limit_source: "iris_billing_gate",
+              retryable: false,
+              period: "daily",
+              cap_usd: 1,
+              resets_at: "2026-10-06T00:00:00+00:00",
+              upgrade_url: "https://web.heyiris.io/pricing?source=desktop-limit",
+            },
+          }),
+        }).toObject(),
+      )
+      const step = yield* Schedule.toStepWithMetadata(
+        SessionRetry.policy({
+          provider: "iris",
+          parse: Schema.decodeUnknownSync(SessionV1.APIError.Schema),
+          set: (info) =>
+            Effect.sync(() => {
+              published.push({ attempt: info.attempt, reason: info.action?.reason })
+            }),
+        }),
+      )
+
+      const first = yield* Effect.exit(step(error))
+
+      // Published on the first pass, so the dialog has its event...
+      expect(published).toStrictEqual([{ attempt: 1, reason: "iris_budget_exceeded" }])
+      // ...and stopped rather than scheduling another attempt against the wall.
+      expect(first._tag).toBe("Failure")
+    }),
+  )
 })
 
 describe("session.retry.retryable", () => {

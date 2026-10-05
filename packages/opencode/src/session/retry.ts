@@ -249,10 +249,6 @@ export function policy(opts: {
       const retry = retryable(error, opts.provider)
       if (!retry) return Cause.done(meta.attempt)
       if (meta.attempt > RETRY_MAX_RETRIES) return Cause.done(meta.attempt)
-      // A terminal retryable publishes its action on the first pass — which is what raises the
-      // dialog — and then stops. Without the first pass there is no status event and no dialog
-      // at all; without the stop we would retry a wall that cannot clear for hours.
-      if (retry.terminal && meta.attempt >= 1) return Cause.done(meta.attempt)
       return Effect.gen(function* () {
         const wait = delay(meta.attempt, SessionV1.APIError.isInstance(error) ? error : undefined)
         const now = yield* Clock.currentTimeMillis
@@ -262,6 +258,12 @@ export function policy(opts: {
           action: retry.action,
           next: now + wait,
         })
+        // A terminal retryable publishes its action — which is what raises the dialog — and then
+        // stops without scheduling another attempt. Publish BEFORE stopping: attempts start at 1,
+        // so the old guard above this block (`attempt >= 1`) stopped on the first pass and the
+        // limit dialog could never open. Without the stop we would retry a wall that cannot
+        // clear for hours.
+        if (retry.terminal) return yield* Cause.done(meta.attempt)
         return [meta.attempt, Duration.millis(wait)] as [number, Duration.Duration]
       })
     }),
