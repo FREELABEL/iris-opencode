@@ -166,6 +166,22 @@ describe("POST /transcribe over the platform's size limit", () => {
   })
 })
 
+describe("rate limits", () => {
+  test("a held failure that ended on a 429 passes the platform's Retry-After on to the app", async () => {
+    configured()
+    process.env["IRIS_TRANSCRIBE_PROVIDERS"] = "xai"
+    platformReply = () =>
+      Response.json({ success: false, message: "Too many requests" }, { status: 429, headers: { "retry-after": "1" } })
+    await withServer(async (base) => {
+      const res = await fetch(`${base}/transcribe?filename=d.wav`, { method: "POST", body: wav() })
+      expect(res.status).toBe(503)
+      expect(res.headers.get("retry-after")).toBe("1")
+      const id = (await res.json()).held.id
+      await fetch(`${base}/transcribe/discard?id=${id}`, { method: "POST" })
+    })
+  }, 20_000)
+})
+
 describe("loopback only", () => {
   test("isLoopbackAddress", () => {
     for (const a of ["127.0.0.1", "127.8.9.1", "::1", "::ffff:127.0.0.1"]) expect(isLoopbackAddress(a)).toBe(true)

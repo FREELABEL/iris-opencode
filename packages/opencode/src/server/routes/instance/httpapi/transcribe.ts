@@ -162,7 +162,11 @@ async function transcribeHeld(
       { status: result.status ?? 413 },
     )
   }
-  if (result instanceof Error)
+  if (result instanceof Error) {
+    // Ended on a rate limit: tell the app when the platform said to come back, so its automatic
+    // retry of the held recording does not arrive early into the same 429.
+    const last = result instanceof ChainError ? result.attempts.at(-1) : undefined
+    const wait = last?.status === 429 ? last.retryAfterMs : undefined
     return HttpServerResponse.jsonUnsafe(
       {
         error: result.message,
@@ -170,8 +174,9 @@ async function transcribeHeld(
         attempts: result instanceof ChainError ? result.attempts : [],
         ...extra,
       },
-      { status: 503 },
+      { status: 503, headers: wait !== undefined ? { "retry-after": String(Math.ceil(wait / 1000)) } : undefined },
     )
+  }
   if (held) release(held.id)
   return HttpServerResponse.jsonUnsafe({
     text: result.text,
