@@ -176,6 +176,9 @@ export const dict = {
   "command.model.variant.cycle.description": "Перемкнути на наступний рівень зусилля",
   "command.prompt.mode.shell": "Команда",
   "command.prompt.mode.normal": "Запит",
+  "command.prompt.dictate": "Диктувати",
+  "command.prompt.dictate.description":
+    "Торкніться, щоб почати або зупинити диктування; утримуйте, щоб говорити, і відпустіть, щоб зупинити",
   "command.permissions.autoaccept.enable": "Автоматично приймати дозволи",
   "command.permissions.autoaccept.disable": "Зупинити автоматичне прийняття дозволів",
   "command.workspace.toggle": "Перемкнути робочі області",
@@ -200,6 +203,10 @@ export const dict = {
   "palette.search.placeholder.home": "Пошук команд і сесій",
   "palette.empty": "Результатів не знайдено",
   "palette.group.commands": "Команди",
+  "palette.group.iris": "IRIS CLI",
+  "palette.filter.all": "Усі",
+  "palette.filter.commands": "Команди",
+  "palette.filter.files": "Файли",
   "palette.group.files": "Файли",
 
   "dialog.provider.search.placeholder": "Пошук провайдерів",
@@ -873,8 +880,14 @@ export const dict = {
   "session.header.open.app.androidStudio": "Android Studio",
   "session.header.open.app.powershell": "PowerShell",
   "session.header.open.app.sublimeText": "Sublime Text",
+  "session.panel.add": "Відкрити в цій панелі",
 
   "status.popover.trigger": "Статус",
+  "status.dot.healthy": "Підключено — рушій і його служби працюють",
+  "status.dot.connecting": "Підключення до рушія…",
+  "status.dot.offline": "Немає підключення до рушія — натисніть, щоб дізнатися більше",
+  "status.dot.attention": "Службі потрібен вхід — натисніть, щоб дізнатися більше",
+  "status.dot.issue": "Служба не працює — натисніть, щоб дізнатися більше",
   "status.popover.ariaLabel": "Конфігурації серверів",
   "status.popover.tab.servers": "Сервери",
   "status.popover.tab.mcp": "MCP",
@@ -1014,6 +1027,12 @@ export const dict = {
   "settings.general.section.notifications": "Системні сповіщення",
   "settings.general.section.updates": "Оновлення",
   "settings.general.section.sounds": "Звукові ефекти",
+  "settings.general.section.microphone": "Мікрофон",
+  "settings.general.row.microphone.title": "Мікрофон для диктування",
+  "settings.general.row.microphone.description":
+    "Вхід, з якого записується диктування. «Системний за замовчуванням» відповідає налаштуванням звуку вашого комп’ютера.",
+  "settings.general.row.microphone.systemDefault": "Системний за замовчуванням",
+  "settings.general.row.microphone.notConnected": "{{name}} (не підключено)",
   "settings.general.section.feed": "Стрічка",
   "settings.general.section.display": "Дисплей",
 
@@ -1087,6 +1106,11 @@ export const dict = {
 
   "settings.updates.row.startup.title": "Перевіряти оновлення під час запуску",
   "settings.updates.row.startup.description": "Автоматично перевіряти наявність оновлень під час запуску IRIS",
+  "settings.updates.row.auto.title": "Автоматично встановлювати оновлення",
+  "settings.updates.row.auto.description":
+    "Завантажувати та встановлювати нові версії у фоновому режимі. Зміни набудуть чинності під час наступного запуску IRIS — нічого не буде перервано.",
+  "settings.updates.row.auto.descriptionAsk":
+    "Якщо вимкнено, IRIS запитує один раз для кожної версії, а не під час кожного запуску.",
   "settings.updates.row.check.title": "Перевірити оновлення",
   "settings.updates.row.check.description": "Вручну перевірити наявність оновлень і встановити, якщо доступні",
   "settings.updates.action.checkNow": "Перевірити зараз",

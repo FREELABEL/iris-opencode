@@ -175,6 +175,9 @@ export const dict = {
   "command.model.variant.cycle.description": "Переключиться к следующему уровню усилий",
   "command.prompt.mode.shell": "Оболочка",
   "command.prompt.mode.normal": "Промпт",
+  "command.prompt.dictate": "Диктовать",
+  "command.prompt.dictate.description":
+    "Нажмите, чтобы начать или остановить диктовку; удерживайте, чтобы говорить, и отпустите, чтобы остановить",
   "command.permissions.autoaccept.enable": "Автоматически принимать разрешения",
   "command.permissions.autoaccept.disable": "Остановить автоматическое принятие разрешений",
   "command.workspace.toggle": "Переключить рабочие пространства",
@@ -199,6 +202,10 @@ export const dict = {
   "palette.search.placeholder.home": "Поиск команд и сессий",
   "palette.empty": "Ничего не найдено",
   "palette.group.commands": "Команды",
+  "palette.group.iris": "IRIS CLI",
+  "palette.filter.all": "Все",
+  "palette.filter.commands": "Команды",
+  "palette.filter.files": "Файлы",
   "palette.group.files": "Файлы",
 
   "dialog.provider.search.placeholder": "Поиск провайдеров",
@@ -825,6 +832,11 @@ export const dict = {
   "session.header.open.copyPath": "Копировать путь",
 
   "status.popover.trigger": "Статус",
+  "status.dot.healthy": "Подключено — движок и его службы работают",
+  "status.dot.connecting": "Подключение к движку…",
+  "status.dot.offline": "Нет подключения к движку — нажмите, чтобы узнать подробности",
+  "status.dot.attention": "Службе требуется вход — нажмите, чтобы узнать подробности",
+  "status.dot.issue": "Служба не работает — нажмите, чтобы узнать подробности",
   "status.popover.ariaLabel": "Настройки серверов",
   "status.popover.tab.servers": "Серверы",
   "status.popover.tab.mcp": "MCP",
@@ -909,6 +921,12 @@ export const dict = {
   "settings.general.section.notifications": "Системные уведомления",
   "settings.general.section.updates": "Обновления",
   "settings.general.section.sounds": "Звуковые эффекты",
+  "settings.general.section.microphone": "Микрофон",
+  "settings.general.row.microphone.title": "Микрофон для диктовки",
+  "settings.general.row.microphone.description":
+    "Вход, с которого записывается диктовка. «Системный по умолчанию» следует настройкам звука вашего компьютера.",
+  "settings.general.row.microphone.systemDefault": "Системный по умолчанию",
+  "settings.general.row.microphone.notConnected": "{{name}} (не подключён)",
   "settings.general.section.feed": "Лента",
   "settings.general.section.display": "Экран",
 
@@ -982,6 +1000,11 @@ export const dict = {
 
   "settings.updates.row.startup.title": "Проверять обновления при запуске",
   "settings.updates.row.startup.description": "Автоматически проверять обновления при запуске IRIS",
+  "settings.updates.row.auto.title": "Устанавливать обновления автоматически",
+  "settings.updates.row.auto.description":
+    "Загружать и устанавливать новые версии в фоновом режиме. Изменения вступят в силу при следующем запуске IRIS — ничего не будет прервано.",
+  "settings.updates.row.auto.descriptionAsk":
+    "Если выключено, IRIS спрашивает один раз для каждой версии, а не при каждом запуске.",
   "settings.updates.row.check.title": "Проверить обновления",
   "settings.updates.row.check.description": "Проверить обновления вручную и установить, если доступны",
   "settings.updates.action.checkNow": "Проверить сейчас",
@@ -1205,6 +1228,7 @@ export const dict = {
   "session.header.open.app.androidStudio": "Android Studio",
   "session.header.open.app.powershell": "PowerShell",
   "session.header.open.app.sublimeText": "Sublime Text",
+  "session.panel.add": "Открыть в этой панели",
   "debugBar.ariaLabel": "Диагностика производительности разработки",
   "debugBar.na": "н/д",
   "debugBar.nav.label": "NAV",

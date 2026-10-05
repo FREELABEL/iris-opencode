@@ -174,6 +174,8 @@ export const dict = {
   "command.model.variant.cycle.description": "สลับไปยังระดับความพยายามถัดไป",
   "command.prompt.mode.shell": "เชลล์",
   "command.prompt.mode.normal": "พรอมต์",
+  "command.prompt.dictate": "บอกให้พิมพ์",
+  "command.prompt.dictate.description": "แตะเพื่อเริ่มหรือหยุดการบอกให้พิมพ์ กดค้างไว้เพื่อพูดแล้วปล่อยเพื่อหยุด",
   "command.permissions.autoaccept.enable": "ยอมรับสิทธิ์โดยอัตโนมัติ",
   "command.permissions.autoaccept.disable": "หยุดยอมรับสิทธิ์โดยอัตโนมัติ",
   "command.workspace.toggle": "สลับพื้นที่ทำงาน",
@@ -198,6 +200,10 @@ export const dict = {
   "palette.search.placeholder.home": "ค้นหาคำสั่งและเซสชัน",
   "palette.empty": "ไม่พบผลลัพธ์",
   "palette.group.commands": "คำสั่ง",
+  "palette.group.iris": "IRIS CLI",
+  "palette.filter.all": "ทั้งหมด",
+  "palette.filter.commands": "คำสั่ง",
+  "palette.filter.files": "ไฟล์",
   "palette.group.files": "ไฟล์",
 
   "dialog.provider.search.placeholder": "ค้นหาผู้ให้บริการ",
@@ -813,6 +819,11 @@ export const dict = {
   "session.header.open.copyPath": "คัดลอกเส้นทาง",
 
   "status.popover.trigger": "สถานะ",
+  "status.dot.healthy": "เชื่อมต่อแล้ว — เอนจินและบริการต่างๆ กำลังทำงาน",
+  "status.dot.connecting": "กำลังเชื่อมต่อกับเอนจิน…",
+  "status.dot.offline": "ไม่ได้เชื่อมต่อกับเอนจิน — คลิกเพื่อดูรายละเอียด",
+  "status.dot.attention": "มีบริการที่ต้องให้คุณลงชื่อเข้าใช้ — คลิกเพื่อดูรายละเอียด",
+  "status.dot.issue": "มีบริการที่ไม่ได้ทำงาน — คลิกเพื่อดูรายละเอียด",
   "status.popover.ariaLabel": "การกำหนดค่าเซิร์ฟเวอร์",
   "status.popover.tab.servers": "เซิร์ฟเวอร์",
   "status.popover.tab.mcp": "MCP",
@@ -894,6 +905,12 @@ export const dict = {
   "settings.general.section.notifications": "การแจ้งเตือนระบบ",
   "settings.general.section.updates": "การอัปเดต",
   "settings.general.section.sounds": "เสียงเอฟเฟกต์",
+  "settings.general.section.microphone": "ไมโครโฟน",
+  "settings.general.row.microphone.title": "ไมโครโฟนสำหรับบอกให้พิมพ์",
+  "settings.general.row.microphone.description":
+    "อินพุตที่ใช้บันทึกเสียงเมื่อบอกให้พิมพ์ ค่าเริ่มต้นของระบบจะเป็นไปตามการตั้งค่าเสียงของคอมพิวเตอร์",
+  "settings.general.row.microphone.systemDefault": "ค่าเริ่มต้นของระบบ",
+  "settings.general.row.microphone.notConnected": "{{name}} (ไม่ได้เชื่อมต่อ)",
   "settings.general.section.feed": "ฟีด",
   "settings.general.section.display": "การแสดงผล",
 
@@ -961,6 +978,10 @@ export const dict = {
 
   "settings.updates.row.startup.title": "ตรวจสอบการอัปเดตเมื่อเริ่มต้น",
   "settings.updates.row.startup.description": "ตรวจสอบการอัปเดตโดยอัตโนมัติเมื่อ IRIS เปิดใช้งาน",
+  "settings.updates.row.auto.title": "ติดตั้งการอัปเดตโดยอัตโนมัติ",
+  "settings.updates.row.auto.description":
+    "ดาวน์โหลดและติดตั้งเวอร์ชันใหม่ในเบื้องหลัง มีผลในครั้งถัดไปที่ IRIS เริ่มทำงาน — ไม่มีสิ่งใดถูกขัดจังหวะ",
+  "settings.updates.row.auto.descriptionAsk": "เมื่อปิด IRIS จะถามหนึ่งครั้งต่อเวอร์ชัน แทนที่จะถามทุกครั้งที่เปิด",
   "settings.updates.row.check.title": "ตรวจสอบการอัปเดต",
   "settings.updates.row.check.description": "ตรวจสอบการอัปเดตด้วยตนเองและติดตั้งหากมี",
   "settings.updates.action.checkNow": "ตรวจสอบทันที",
@@ -1181,6 +1202,7 @@ export const dict = {
   "session.header.open.app.androidStudio": "Android Studio",
   "session.header.open.app.powershell": "PowerShell",
   "session.header.open.app.sublimeText": "Sublime Text",
+  "session.panel.add": "เปิดในแผงนี้",
   "debugBar.ariaLabel": "การวินิจฉัยประสิทธิภาพการพัฒนา",
   "debugBar.na": "n/a",
   "debugBar.nav.label": "NAV",

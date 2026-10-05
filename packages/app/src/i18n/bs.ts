@@ -176,6 +176,9 @@ export const dict = {
   "command.model.variant.cycle.description": "Prebaci na sljedeći nivo",
   "command.prompt.mode.shell": "Shell",
   "command.prompt.mode.normal": "Prompt",
+  "command.prompt.dictate": "Diktiraj",
+  "command.prompt.dictate.description":
+    "Dodirnite da pokrenete ili zaustavite diktiranje; držite da govorite i pustite da zaustavite",
   "command.permissions.autoaccept.enable": "Automatski prihvati dozvole",
   "command.permissions.autoaccept.disable": "Zaustavi automatsko prihvatanje dozvola",
   "command.workspace.toggle": "Prikaži/sakrij radne prostore",
@@ -200,6 +203,10 @@ export const dict = {
   "palette.search.placeholder.home": "Pretraži komande i sesije",
   "palette.empty": "Nema rezultata",
   "palette.group.commands": "Komande",
+  "palette.group.iris": "IRIS CLI",
+  "palette.filter.all": "Sve",
+  "palette.filter.commands": "Komande",
+  "palette.filter.files": "Datoteke",
   "palette.group.files": "Datoteke",
 
   "dialog.provider.search.placeholder": "Pretraži provajdere",
@@ -825,6 +832,11 @@ export const dict = {
   "session.header.open.copyPath": "Kopiraj putanju",
 
   "status.popover.trigger": "Status",
+  "status.dot.healthy": "Povezano — pogon i njegove usluge rade",
+  "status.dot.connecting": "Povezivanje s pogonom…",
+  "status.dot.offline": "Nije povezano s pogonom — kliknite za detalje",
+  "status.dot.attention": "Usluga zahtijeva da se prijavite — kliknite za detalje",
+  "status.dot.issue": "Usluga ne radi — kliknite za detalje",
   "status.popover.ariaLabel": "Konfiguracije servera",
   "status.popover.tab.servers": "Serveri",
   "status.popover.tab.mcp": "MCP",
@@ -907,6 +919,12 @@ export const dict = {
   "settings.general.section.notifications": "Sistemske obavijesti",
   "settings.general.section.updates": "Ažuriranja",
   "settings.general.section.sounds": "Zvučni efekti",
+  "settings.general.section.microphone": "Mikrofon",
+  "settings.general.row.microphone.title": "Mikrofon za diktiranje",
+  "settings.general.row.microphone.description":
+    "Ulaz s kojeg diktiranje snima. Sistemski podrazumijevani prati postavke zvuka na vašem računaru.",
+  "settings.general.row.microphone.systemDefault": "Sistemski podrazumijevani",
+  "settings.general.row.microphone.notConnected": "{{name}} (nije povezan)",
   "settings.general.section.feed": "Feed",
   "settings.general.section.display": "Prikaz",
 
@@ -979,6 +997,11 @@ export const dict = {
 
   "settings.updates.row.startup.title": "Provjeri ažuriranja pri pokretanju",
   "settings.updates.row.startup.description": "Automatski provjerava ažuriranja kada se IRIS pokrene",
+  "settings.updates.row.auto.title": "Automatski instaliraj ažuriranja",
+  "settings.updates.row.auto.description":
+    "Preuzmi i instaliraj nove verzije u pozadini. Stupa na snagu pri sljedećem pokretanju IRIS-a — ništa se ne prekida.",
+  "settings.updates.row.auto.descriptionAsk":
+    "Kada je isključeno, IRIS pita jednom po verziji umjesto pri svakom pokretanju.",
   "settings.updates.row.check.title": "Provjeri ažuriranja",
   "settings.updates.row.check.description": "Ručno provjeri ažuriranja i instaliraj ako su dostupna",
   "settings.updates.action.checkNow": "Provjeri sada",
@@ -1200,6 +1223,7 @@ export const dict = {
   "session.header.open.app.androidStudio": "Android Studio",
   "session.header.open.app.powershell": "PowerShell",
   "session.header.open.app.sublimeText": "Sublime Text",
+  "session.panel.add": "Otvori u ovom panelu",
   "debugBar.ariaLabel": "Dijagnostika performansi razvoja",
   "debugBar.na": "n/a",
   "debugBar.nav.label": "NAV",
