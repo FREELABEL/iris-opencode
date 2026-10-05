@@ -54,9 +54,21 @@ export class RemoteTranscribeError extends TranscribeError {
   constructor(
     message: string,
     readonly status: number,
+    /** The platform's Retry-After, in ms, when it sent one (429/503). Unbounded here; the chain caps it. */
+    readonly retryAfterMs?: number,
   ) {
     super(message)
   }
+}
+
+/** Retry-After is either delta-seconds or an HTTP-date (RFC 9110 §10.2.3). */
+export function parseRetryAfter(value: string | null, now = Date.now()): number | undefined {
+  if (!value) return undefined
+  const trimmed = value.trim()
+  if (/^\d+$/.test(trimmed)) return Number(trimmed) * 1000
+  const at = Date.parse(trimmed)
+  if (Number.isNaN(at)) return undefined
+  return Math.max(0, at - now)
 }
 
 /** A hung connection must not hold a dictation forever; the retry chain needs it to fail. */
@@ -90,11 +102,17 @@ export async function transcribeRemote(
   if (!res.ok || !body?.success) {
     // The platform names the real cause (dead provider, bad scope, no credits). Surfaced
     // rather than flattened — that is exactly what let us diagnose the provider outage.
-    throw new RemoteTranscribeError(body?.message || `Remote transcription failed (HTTP ${res.status})`, res.status)
+    throw new RemoteTranscribeError(
+      body?.message || `Remote transcription failed (HTTP ${res.status})`,
+      res.status,
+      parseRetryAfter(res.headers.get("retry-after")),
+    )
   }
   return {
     text: String(body?.data?.text ?? "").trim(),
-    provider: String(body?.data?.provider ?? opts.provider ?? "xai"),
+    // The platform names the engine that actually answered — with a server-side chain that can
+    // differ from the one asked for. Fall back to the one asked for, never to a hard-coded name.
+    provider: String(body?.data?.provider || opts.provider || "xai"),
     ms: Date.now() - started,
   }
 }
