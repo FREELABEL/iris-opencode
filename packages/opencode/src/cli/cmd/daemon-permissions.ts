@@ -69,6 +69,18 @@ export interface FetchOptions {
 }
 
 /** A TCC refusal, as the daemon and sqlite3 phrase it — not "Mail is not installed". */
+/**
+ * Operator mode: the people who run IRIS (IRIS_OPERATOR=1). They get the exact file, the
+ * grant-access command and the offer to fix it. Clients do not, because the fix today means approving
+ * a stock `node` binary, which gives every Node program on the Mac Full Disk Access. That is
+ * an operator's call to make, not a prompt to put in front of a client (client-ready gate,
+ * 2026-10-04; the client path is epic #187965, a signed "IRIS" approval).
+ */
+export function operatorMode(env: Record<string, string | undefined> = process.env): boolean {
+  const v = (env.IRIS_OPERATOR ?? "").toLowerCase()
+  return v === "1" || v === "true" || v === "yes"
+}
+
 export function isTccDenial(message: string | null | undefined): boolean {
   if (!message) return false
   return /no permission to read|full disk access|operation not permitted|authorization denied/i.test(message)
@@ -293,6 +305,7 @@ export function mayPromptForFix(o: {
   env?: Record<string, string | undefined>
 }): boolean {
   const env = o.env ?? process.env
+  if (!operatorMode(env)) return false
   if (o.json) return false
   if (!o.stdinTTY || !o.stdoutTTY) return false
   if (env.CI && env.CI !== "false" && env.CI !== "0") return false
@@ -363,6 +376,13 @@ export function renderTccBlindSpot(
   perms: DaemonPermissions | null,
   env: Record<string, string | undefined> = process.env,
 ): BlindSpotRender {
+  if (!operatorMode(env)) {
+    // One calm line, no paths and no program names. The source is skipped, not "failing".
+    return {
+      headline: `skipped — ${what} isn't connected to IRIS on this Mac yet`,
+      fix: [],
+    }
+  }
   if (via === "terminal") {
     const app = terminalAppName(env)
     return {

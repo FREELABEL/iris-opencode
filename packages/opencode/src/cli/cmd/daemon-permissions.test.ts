@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test"
+import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import {
   fetchDaemonPermissions,
   classifyPermissions,
@@ -210,6 +210,25 @@ describe("pulse blind spot", () => {
   }
   const down: SourceSweep = { source: "email", searched: false, unavailableReason: "IRIS bridge not reachable", hits: 0, items: [] }
 
+  // The detailed fix (exact file, grant-access) is OPERATOR-only: for a client it would mean
+  // approving a stock `node` binary for Full Disk Access (client-ready gate, 2026-10-04).
+  const prevOp = process.env.IRIS_OPERATOR
+  beforeEach(() => { process.env.IRIS_OPERATOR = "1" })
+  afterEach(() => { if (prevOp === undefined) delete process.env.IRIS_OPERATOR; else process.env.IRIS_OPERATOR = prevOp })
+
+  test("CLIENT: one calm line — no file path, no program name, no command", () => {
+    delete process.env.IRIS_OPERATOR
+    for (const [label, sweep] of [["Apple Mail", mail], ["iMessage", imsg]] as const) {
+      const out = blindSpotLines(label.padEnd(12), sweep, perms({})).join("\n")
+      expect(out).toContain("isn't connected to IRIS on this Mac yet")
+      expect(out).not.toContain(BIN)
+      expect(out).not.toContain("node")
+      expect(out).not.toContain("grant-access")
+      expect(out).not.toContain("Full Disk Access")
+      expect(out).not.toContain("503")
+    }
+  })
+
   test("Mail refusal renders the fix, not the raw 503", () => {
     const out = blindSpotLines("Apple Mail".padEnd(12), mail, perms({})).join("\n")
     expect(out).toContain("isn't allowed to read Mail")
@@ -253,9 +272,12 @@ describe("pulse blind spot", () => {
 })
 
 describe("mayPromptForFix", () => {
-  const tty = { stdinTTY: true, stdoutTTY: true, env: {} }
-  test("interactive terminal → may ask", () => {
+  const tty = { stdinTTY: true, stdoutTTY: true, env: { IRIS_OPERATOR: "1" } as Record<string, string> }
+  test("interactive terminal, operator → may ask", () => {
     expect(mayPromptForFix(tty)).toBe(true)
+  })
+  test("a CLIENT is never prompted to approve node", () => {
+    expect(mayPromptForFix({ ...tty, env: {} })).toBe(false)
   })
   test("never under --json", () => {
     expect(mayPromptForFix({ ...tty, json: true })).toBe(false)
@@ -265,7 +287,7 @@ describe("mayPromptForFix", () => {
     expect(mayPromptForFix({ ...tty, stdinTTY: false })).toBe(false)
   })
   test("never in CI", () => {
-    expect(mayPromptForFix({ ...tty, env: { CI: "true" } })).toBe(false)
-    expect(mayPromptForFix({ ...tty, env: { CI: "false" } })).toBe(true)
+    expect(mayPromptForFix({ ...tty, env: { IRIS_OPERATOR: "1", CI: "true" } })).toBe(false)
+    expect(mayPromptForFix({ ...tty, env: { IRIS_OPERATOR: "1", CI: "false" } })).toBe(true)
   })
 })

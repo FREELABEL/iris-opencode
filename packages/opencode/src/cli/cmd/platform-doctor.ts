@@ -456,10 +456,20 @@ export const PlatformDoctorCommand = cmd({
         // Ask the daemon itself first (`/daemon/permissions`, iris-daemon PR #10): it knows which binary it
         // runs as and whether a fresh process of it would be granted — the one fact a channel
         // probe cannot tell you ("granted, restart pending" looks exactly like "denied").
-        const { fetchDaemonPermissions, fdaFixLines, GRANT_COMMAND, RESTART_COMMAND } = await import("./daemon-permissions")
+        const { fetchDaemonPermissions, fdaFixLines, operatorMode, GRANT_COMMAND, RESTART_COMMAND } = await import("./daemon-permissions")
         const perms = await fetchDaemonPermissions({ waitForStartMs: 10_000 })
         const NAME = "Full Disk Access — iris-daemon"
-        if (perms.state === "granted") {
+        const notGranted = perms.state !== "granted" && (perms.state === "denied" || perms.state === "restart_needed" || denied.length > 0)
+        if (!operatorMode() && notGranted) {
+          // Clients: optional, nothing to do, no program names. The only fix today is approving
+          // a stock `node` binary, an operator decision (see operatorMode).
+          allResults.push({
+            name: "Mail & Messages access",
+            ok: true,
+            detail: "not connected on this Mac (optional) — IRIS skips Mail and Messages",
+            category: "permission",
+          })
+        } else if (perms.state === "granted") {
           allResults.push({
             name: NAME,
             ok: true,

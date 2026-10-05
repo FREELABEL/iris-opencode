@@ -64,6 +64,12 @@ async function reportMailFailure(verb: string, err: string): Promise<void> {
   }
   const perms = await fetchDaemonPermissions({ waitForStartMs: 10_000 })
   const r = renderTccBlindSpot("Mail", "daemon", perms)
+  if (r.headline.startsWith("skipped — ")) {
+    // Client wording: a plain sentence, not "search failed: skipped".
+    const line = r.headline.replace(/^skipped — /, "")
+    prompts.log.warn(line.charAt(0).toUpperCase() + line.slice(1) + ".")
+    return
+  }
   // One message, so the fix travels with the error to wherever the log goes (stderr off a TTY).
   prompts.log.error([`${verb} failed: ${r.headline.replace(/^blind — /, "")}`, ...r.fix].join("\n"))
 }
