@@ -27,7 +27,9 @@ import {
 } from "@/context/prompt"
 import { useLayout } from "@/context/layout"
 import { useSDK } from "@/context/sdk"
-import { createDictation } from "@opencode-ai/session-ui/v2/prompt-input/dictation"
+import { createDictation, setDictationAuth } from "@opencode-ai/session-ui/v2/prompt-input/dictation"
+import { useServerSDK } from "@/context/server-sdk"
+import { dictationAuthFor } from "@/utils/dictation-auth"
 import { useSync } from "@/context/sync"
 import { useComments } from "@/context/comments"
 import { Button } from "@opencode-ai/ui/button"
@@ -1025,6 +1027,9 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   // Dictation. Records in the webview and posts to the sidecar this app already runs, which
   // sends the audio to Grok (xAI) through the IRIS platform — it leaves the machine.
   const [dictationError, setDictationError] = createSignal<string>()
+  // Same credentials as the SDK, so the mic survives a server password.
+  const serverForDictation = useServerSDK()
+  setDictationAuth((url) => dictationAuthFor(serverForDictation().server.http, url))
   const dictation = createDictation({
     url: () => sdk().url,
     onError: setDictationError,
