@@ -104,7 +104,7 @@ const commandSuggestions: PromptInputV2Suggestion[] = [
   },
 ]
 
-function ControlledPromptInput() {
+function ControlledPromptInput(props: { dictation?: boolean } = {}) {
   // Agent choice is a persisted user/workspace preference in v1, not part of PromptStore.
   const [preferences, setPreferences] = createStore({ agent: "build" })
 
@@ -205,7 +205,11 @@ function ControlledPromptInput() {
 
   return (
     <div class="mx-auto flex max-w-[760px] flex-col gap-4 pt-32">
-      <PromptInputV2 controller={controller} />
+      <PromptInputV2
+        controller={controller}
+        transcribeUrl={props.dictation ? () => window.location.origin : undefined}
+        dictateShortcut={props.dictation ? "Ctrl+Shift+Space" : undefined}
+      />
     </div>
   )
 }
@@ -218,4 +222,9 @@ export default {
 
 export const ControlledComposition = {
   render: () => <ControlledPromptInput />,
+}
+
+/** The microphone control. In a browser started with a fake media device the waveform moves. */
+export const Dictation = {
+  render: () => <ControlledPromptInput dictation />,
 }

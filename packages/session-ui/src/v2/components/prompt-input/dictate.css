@@ -1,0 +1,290 @@
+/*
+ * Dictation control. The button is a fixed 32px square in every state; nothing about it may
+ * change size, or the toolbar after it moves. Everything variable is in the strip, which is
+ * absolutely positioned beside it.
+ */
+[data-slot="dictate"] {
+  --dictate-rec: var(--v2-state-fg-danger);
+  --dictate-accent: var(--v2-text-text-accent);
+  --dictate-level: 0;
+  position: relative;
+  flex: none;
+  width: 32px;
+  height: 32px;
+}
+
+[data-slot="dictate-button"] {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--v2-icon-icon-muted);
+  cursor: pointer;
+  transition:
+    color 160ms ease,
+    background-color 160ms ease;
+}
+[data-slot="dictate-button"]:hover:not(:disabled) {
+  color: var(--v2-icon-icon-base);
+  background: var(--v2-overlay-simple-overlay-hover);
+}
+[data-slot="dictate-button"]:focus-visible {
+  outline: 2px solid var(--v2-border-border-focus);
+  outline-offset: 1px;
+}
+[data-slot="dictate-button"]:disabled {
+  cursor: default;
+}
+[data-slot="dictate-button"] svg {
+  overflow: visible;
+}
+
+/* glyphs */
+[data-slot="dictate-mic"] {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  transform-origin: 16px 16px;
+  transition:
+    opacity 140ms ease,
+    transform 220ms cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+[data-slot="dictate-stop"] {
+  fill: var(--dictate-rec);
+  opacity: 0;
+  transform-origin: 16px 16px;
+  transform: scale(0.4);
+  transition:
+    opacity 140ms ease,
+    transform 220ms cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+[data-slot="dictate-track"],
+[data-slot="dictate-ring"] {
+  fill: none;
+  stroke-width: 2;
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+[data-slot="dictate-track"] {
+  stroke: var(--v2-border-border-base);
+}
+[data-slot="dictate-ring"] {
+  stroke: var(--dictate-rec);
+  stroke-linecap: round;
+  transform: rotate(-90deg);
+  transform-origin: 16px 16px;
+  transition:
+    stroke-dashoffset 900ms linear,
+    opacity 160ms ease,
+    stroke 160ms ease;
+}
+[data-slot="dictate-halo"] {
+  fill: var(--dictate-rec);
+  opacity: 0;
+  transform-origin: 16px 16px;
+  transform: scale(calc(0.85 + var(--dictate-level) * 0.55));
+  transition:
+    transform 90ms linear,
+    opacity 160ms ease;
+}
+
+/* recording: mic → stop, ring fills toward the cap, halo breathes with the voice */
+[data-slot="dictate"][data-phase="recording"] [data-slot="dictate-button"] {
+  color: var(--dictate-rec);
+}
+[data-phase="recording"] [data-slot="dictate-mic"] {
+  opacity: 0;
+  transform: scale(0.6);
+}
+[data-phase="recording"] [data-slot="dictate-stop"] {
+  opacity: 1;
+  transform: scale(1);
+}
+[data-phase="recording"] [data-slot="dictate-track"],
+[data-phase="recording"] [data-slot="dictate-ring"] {
+  opacity: 1;
+}
+[data-phase="recording"] [data-slot="dictate-halo"] {
+  opacity: calc(0.08 + var(--dictate-level) * 0.22);
+}
+
+/* transcribing: the ring becomes a spinner */
+[data-phase="transcribing"] [data-slot="dictate-mic"] {
+  opacity: 0.35;
+}
+[data-phase="transcribing"] [data-slot="dictate-ring"] {
+  opacity: 1;
+  stroke: var(--dictate-accent);
+  animation: dictate-spin 900ms linear infinite;
+}
+@keyframes dictate-spin {
+  to {
+    transform: rotate(270deg);
+  }
+}
+
+[data-slot="dictate-badge"] {
+  position: absolute;
+  top: 2px;
+  right: 1px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--v2-state-fg-warning);
+  color: var(--v2-text-text-inverse);
+  font: 600 9px/14px ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  text-align: center;
+  pointer-events: none;
+}
+
+/* the strip: floats beside the button, never in the flow */
+[data-slot="dictate-strip"] {
+  position: absolute;
+  z-index: 30;
+  top: 50%;
+  left: calc(100% + 6px);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: max-content;
+  max-width: 300px;
+  height: 30px;
+  padding: 0 12px 0 10px;
+  overflow: hidden;
+  border: 1px solid var(--v2-border-border-base);
+  border-radius: 999px;
+  background: var(--v2-background-bg-base);
+  box-shadow: var(--v2-elevation-raised);
+  color: var(--v2-text-text-muted);
+  font-size: 11.5px;
+  line-height: 1;
+  white-space: nowrap;
+  transform: translateY(-50%);
+  transform-origin: left center;
+  animation: dictate-reveal 200ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@keyframes dictate-reveal {
+  from {
+    opacity: 0;
+    clip-path: inset(0 100% 0 0 round 999px);
+  }
+  to {
+    opacity: 1;
+    clip-path: inset(0 0 0 0 round 999px);
+  }
+}
+
+[data-slot="dictate-wave"] {
+  flex: none;
+  color: var(--dictate-rec);
+}
+[data-slot="dictate-wave"] rect {
+  transition:
+    height 80ms linear,
+    y 80ms linear;
+}
+[data-kind="transcribing"] [data-slot="dictate-wave"] {
+  color: var(--dictate-accent);
+  -webkit-mask-image: linear-gradient(90deg, transparent 0%, #000 35%, #000 65%, transparent 100%);
+  mask-image: linear-gradient(90deg, transparent 0%, #000 35%, #000 65%, transparent 100%);
+  -webkit-mask-size: 200% 100%;
+  mask-size: 200% 100%;
+  animation: dictate-sweep 1100ms linear infinite;
+}
+@keyframes dictate-sweep {
+  from {
+    -webkit-mask-position: 150% 0;
+    mask-position: 150% 0;
+  }
+  to {
+    -webkit-mask-position: -50% 0;
+    mask-position: -50% 0;
+  }
+}
+
+[data-slot="dictate-clock"] {
+  flex: none;
+  min-width: 3.2ch;
+  color: var(--v2-text-text-base);
+  font: 500 11.5px/1 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+[data-slot="dictate-hint"] {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+[data-slot="dictate-cap"] {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  height: 2px;
+  background: var(--dictate-rec);
+  opacity: 0.55;
+  transform: scaleX(var(--dictate-cap, 0));
+  transform-origin: left center;
+  transition: transform 900ms linear;
+}
+[data-kind="transcribing"] [data-slot="dictate-cap"] {
+  opacity: 0;
+}
+
+[data-kind="error"] {
+  color: var(--v2-state-fg-danger);
+  border-color: var(--v2-state-border-danger);
+}
+[data-slot="dictate-dot"] {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+[data-slot="dictate-message"] {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+[data-slot="dictate-dismiss"] {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin-right: -6px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+[data-slot="dictate-dismiss"]:hover {
+  background: var(--v2-overlay-simple-overlay-hover);
+}
+[data-slot="dictate-dismiss"] path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="dictate-strip"],
+  [data-phase="transcribing"] [data-slot="dictate-ring"],
+  [data-kind="transcribing"] [data-slot="dictate-wave"] {
+    animation: none;
+  }
+  [data-slot="dictate-halo"],
+  [data-slot="dictate-wave"] rect,
+  [data-slot="dictate-ring"],
+  [data-slot="dictate-cap"] {
+    transition: none;
+  }
+}
