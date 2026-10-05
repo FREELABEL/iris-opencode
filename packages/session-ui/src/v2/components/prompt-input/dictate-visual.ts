@@ -1,5 +1,5 @@
 /** Bars in the waveform. Fixed, so the strip never changes width as audio arrives. */
-export const LEVEL_HISTORY = 40
+export const LEVEL_HISTORY = 120
 
 /** dBFS mapped onto 0..1: below FLOOR is the room, above CEIL is shouting. */
 const FLOOR_DB = -60
@@ -38,7 +38,8 @@ export function waveformBars(levels: readonly number[], box: { width: number; he
   const n = levels.length
   if (n === 0) return []
   const w = Math.max(0.5, (box.width - box.gap * (n - 1)) / n)
-  const min = Math.min(box.height, Math.max(1.5, w))
+  // a thin stub, not a square: at lane widths a w-high minimum reads as a row of beads
+  const min = Math.min(box.height, 1.5)
   return levels.map((level, i) => {
     const h = min + (box.height - min) * Math.min(1, Math.max(0, level))
     return { x: i * (w + box.gap), y: (box.height - h) / 2, w, h }
