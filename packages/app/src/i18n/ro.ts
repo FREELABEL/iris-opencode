@@ -163,6 +163,7 @@ export const dict = {
   "command.prompt.mode.shell": "Shell",
   "command.prompt.mode.normal": "Solicitare",
   "command.prompt.dictate": "Dictează",
+  "command.voice.stopSpeaking": "Oprește citirea",
   "command.prompt.dictate.description":
     "Atinge pentru a porni sau opri dictarea; ține apăsat pentru a vorbi și eliberează pentru a opri",
   "command.permissions.autoaccept.enable": "Acceptă automat permisiunile",
@@ -947,6 +948,8 @@ export const dict = {
   "settings.general.row.speakReplies.title": "Citește răspunsurile cu voce tare",
   "settings.general.row.speakReplies.description": "Citește răspunsurile cu voce tare pe măsură ce sosesc, prin serviciul vocal IRIS. Codul este omis.",
   "settings.general.row.speakReplies.unavailable": "Citirea răspunsurilor s-a oprit",
+  "settings.general.row.speakVoice.title": "Vocea răspunsurilor",
+  "settings.general.row.speakVoice.description": "Vocea folosită pentru a citi răspunsurile cu voce tare.",
   "settings.general.section.feed": "Flux",
   "settings.general.section.display": "Afișare",
   "settings.general.row.language.title": "Limbă",

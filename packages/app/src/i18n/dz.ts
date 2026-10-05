@@ -166,6 +166,7 @@ export const dict: Record<string, string> = {
   "command.prompt.mode.shell": "Shell",
   "command.prompt.mode.normal": "འདི་འཕྲོ་ལས",
   "command.prompt.dictate": "སྐད་ཀྱིས་འབྲི།",
+  "command.voice.stopSpeaking": "ལྷག་ནི་བཀག",
   "command.prompt.dictate.description":
     "སྐད་ཀྱིས་འབྲི་ནི་འགོ་བཙུགས་ནི་ཡང་ན་བཀག་ནིའི་དོན་ལུ་ཨེབ། ཁ་སླབ་ནིའི་དོན་ལུ་ཨེབ་སྟེ་བཞག ཚུ་བཀག་ནིའི་དོན་ལུ་བཏང་།",
   "command.permissions.autoaccept.enable": "རང་བཞིན་ངོས་ལེན་གནང་བ་ཚུ།",
@@ -958,6 +959,8 @@ export const dict: Record<string, string> = {
   "settings.general.row.speakReplies.title": "ལན་ཚུ་སྐད་གསལ་བོར་ལྷག",
   "settings.general.row.speakReplies.description": "ལན་ཚུ་འབྱོར་ཚེ་ IRIS སྐད་ཞབས་ཏོག་གིས་སྐད་གསལ་བོར་ལྷགཔ་ཨིན། ཀོཌི་བཤོལ་ནི་ཨིན།",
   "settings.general.row.speakReplies.unavailable": "ལན་ལྷག་ནི་བཀག་ཡི",
+  "settings.general.row.speakVoice.title": "ལན་གྱི་སྐད",
+  "settings.general.row.speakVoice.description": "ལན་ཚུ་སྐད་གསལ་བོར་ལྷག་ནིའི་དོན་ལུ་ལག་ལེན་འཐབ་མི་སྐད།",
   "settings.general.section.feed": "བྱིན་ནི",
   "settings.general.section.display": "གསལ༌སྟོན",
   "settings.general.row.language.title": "སྐད༌ཡིག",

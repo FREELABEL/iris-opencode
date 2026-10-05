@@ -170,6 +170,7 @@ export const dict = {
   "command.prompt.mode.shell": "Terminal",
   "command.prompt.mode.normal": "Prompt",
   "command.prompt.dictate": "Dyktuj",
+  "command.voice.stopSpeaking": "Przestań czytać",
   "command.prompt.dictate.description":
     "Stuknij, aby rozpocząć lub zatrzymać dyktowanie; przytrzymaj, aby mówić, i puść, aby zatrzymać",
   "command.permissions.autoaccept.enable": "Automatycznie akceptuj uprawnienia",
@@ -865,6 +866,8 @@ export const dict = {
   "settings.general.row.speakReplies.title": "Czytaj odpowiedzi na głos",
   "settings.general.row.speakReplies.description": "Czyta odpowiedzi na głos, gdy nadchodzą, przez usługę głosową IRIS. Kod jest pomijany.",
   "settings.general.row.speakReplies.unavailable": "Czytanie odpowiedzi zostało zatrzymane",
+  "settings.general.row.speakVoice.title": "Głos odpowiedzi",
+  "settings.general.row.speakVoice.description": "Głos, którym odpowiedzi są czytane na głos.",
   "settings.general.section.feed": "Kanał",
   "settings.general.section.display": "Ekran",
   "settings.general.row.language.title": "Język",

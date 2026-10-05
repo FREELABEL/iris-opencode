@@ -163,6 +163,7 @@ export const dict = {
   "command.prompt.mode.shell": "Shell",
   "command.prompt.mode.normal": "Prompt",
   "command.prompt.dictate": "Diktovat",
+  "command.voice.stopSpeaking": "Zastavit předčítání",
   "command.prompt.dictate.description":
     "Klepnutím spustíte nebo zastavíte diktování; podržením mluvíte a uvolněním zastavíte",
   "command.permissions.autoaccept.enable": "Automaticky přijímat oprávnění",
@@ -948,6 +949,8 @@ export const dict = {
   "settings.general.row.speakReplies.title": "Předčítat odpovědi",
   "settings.general.row.speakReplies.description": "Předčítá odpovědi, jakmile dorazí, pomocí hlasové služby IRIS. Kód se přeskakuje.",
   "settings.general.row.speakReplies.unavailable": "Předčítání odpovědí se zastavilo",
+  "settings.general.row.speakVoice.title": "Hlas odpovědí",
+  "settings.general.row.speakVoice.description": "Hlas, kterým se odpovědi předčítají.",
   "settings.general.section.feed": "Krmivo",
   "settings.general.section.display": "Displej",
   "settings.general.row.language.title": "Jazyk",

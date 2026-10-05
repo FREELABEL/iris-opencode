@@ -164,6 +164,7 @@ export const dict = {
   "command.prompt.mode.shell": "Shell",
   "command.prompt.mode.normal": "Промпт",
   "command.prompt.dictate": "Диктант кардан",
+  "command.voice.stopSpeaking": "Қатъ кардани хондан",
   "command.prompt.dictate.description":
     "Барои оғоз ё қатъ кардани диктант зер кунед; барои гап задан пахш карда нигоҳ доред ва барои қатъ кардан раҳо кунед",
   "command.permissions.autoaccept.enable": "Иҷозатҳоро худкор қабул кунед",
@@ -946,6 +947,8 @@ export const dict = {
   "settings.general.row.speakReplies.title": "Ҷавобҳоро бо овоз хондан",
   "settings.general.row.speakReplies.description": "Ҷавобҳоро ҳангоми расидан бо хидмати овозии IRIS бо овоз мехонад. Код гузаронида мешавад.",
   "settings.general.row.speakReplies.unavailable": "Хондани ҷавобҳо қатъ шуд",
+  "settings.general.row.speakVoice.title": "Овози ҷавобҳо",
+  "settings.general.row.speakVoice.description": "Овозе, ки бо он ҷавобҳо бо овоз хонда мешаванд.",
   "settings.general.section.feed": "Ғизо",
   "settings.general.section.display": "Намоиш",
   "settings.general.row.language.title": "Забон",

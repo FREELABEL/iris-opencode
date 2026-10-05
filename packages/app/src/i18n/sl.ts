@@ -163,6 +163,7 @@ export const dict = {
   "command.prompt.mode.shell": "školjka",
   "command.prompt.mode.normal": "Poziv",
   "command.prompt.dictate": "Narekuj",
+  "command.voice.stopSpeaking": "Ustavi branje",
   "command.prompt.dictate.description":
     "Tapnite za začetek ali ustavitev narekovanja; pridržite za govor in spustite za ustavitev",
   "command.permissions.autoaccept.enable": "Samodejno sprejemanje dovoljenj",
@@ -947,6 +948,8 @@ export const dict = {
   "settings.general.row.speakReplies.title": "Beri odgovore na glas",
   "settings.general.row.speakReplies.description": "Bere odgovore na glas, ko prispejo, prek glasovne storitve IRIS. Koda se preskoči.",
   "settings.general.row.speakReplies.unavailable": "Branje odgovorov se je ustavilo",
+  "settings.general.row.speakVoice.title": "Glas odgovorov",
+  "settings.general.row.speakVoice.description": "Glas, s katerim se odgovori berejo na glas.",
   "settings.general.section.feed": "Krma",
   "settings.general.section.display": "Zaslon",
   "settings.general.row.language.title": "Jezik",

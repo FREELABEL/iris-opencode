@@ -164,6 +164,7 @@ export const dict: Record<string, string> = {
   "command.prompt.mode.shell": "शेल",
   "command.prompt.mode.normal": "प्रम्प्ट",
   "command.prompt.dictate": "डिक्टेट गर्नुहोस्",
+  "command.voice.stopSpeaking": "पढ्न रोक्नुहोस्",
   "command.prompt.dictate.description":
     "डिक्टेसन सुरु वा बन्द गर्न ट्याप गर्नुहोस्; बोल्न थिचिराख्नुहोस् र रोक्न छोड्नुहोस्",
   "command.permissions.autoaccept.enable": "अनुमतिहरू स्वत: स्वीकार गर्नुहोस्",
@@ -942,6 +943,8 @@ export const dict: Record<string, string> = {
   "settings.general.row.speakReplies.title": "जवाफहरू ठूलो स्वरमा पढ्नुहोस्",
   "settings.general.row.speakReplies.description": "जवाफ आउनासाथ IRIS भ्वाइस सेवाबाट ठूलो स्वरमा पढ्छ। कोड छोडिन्छ।",
   "settings.general.row.speakReplies.unavailable": "जवाफ पढ्न रोकियो",
+  "settings.general.row.speakVoice.title": "जवाफको आवाज",
+  "settings.general.row.speakVoice.description": "जवाफ ठूलो स्वरमा पढ्न प्रयोग हुने आवाज।",
   "settings.general.section.feed": "फिड",
   "settings.general.section.display": "प्रदर्शन",
   "settings.general.row.language.title": "भाषा",

@@ -177,6 +177,7 @@ export const dict = {
   "command.prompt.mode.shell": "Shell",
   "command.prompt.mode.normal": "Prompt",
   "command.prompt.dictate": "Dikte",
+  "command.voice.stopSpeaking": "Berhenti membacakan",
   "command.prompt.dictate.description":
     "Ketuk untuk memulai atau menghentikan dikte; tahan untuk berbicara dan lepaskan untuk berhenti",
   "command.permissions.autoaccept.enable": "Terima izin otomatis",
@@ -1022,6 +1023,8 @@ export const dict = {
   "settings.general.row.speakReplies.title": "Bacakan balasan",
   "settings.general.row.speakReplies.description": "Membacakan balasan saat tiba, menggunakan layanan suara IRIS. Kode dilewati.",
   "settings.general.row.speakReplies.unavailable": "Pembacaan balasan berhenti",
+  "settings.general.row.speakVoice.title": "Suara balasan",
+  "settings.general.row.speakVoice.description": "Suara yang digunakan untuk membacakan balasan.",
   "settings.general.section.feed": "Umpan",
   "settings.general.section.display": "Tampilan",
 

@@ -213,6 +213,9 @@ const SoundsSection: Component<{ controller: SoundSettingsController }> = (props
   )
 }
 
+/** xAI streaming TTS voices; the first is xAI's default. Names are proper names, not translated. */
+const SPEAK_VOICES = ["eve", "ara", "rex", "sal", "leo"]
+
 const MicrophoneSection = () => {
   const language = useLanguage()
   const settings = useSettings()
@@ -253,6 +256,22 @@ const MicrophoneSection = () => {
               onChange={(checked) => settings.voice.setSpeakReplies(checked)}
             />
           </div>
+        </SettingsRowV2>
+        <SettingsRowV2
+          title={language.t("settings.general.row.speakVoice.title")}
+          description={language.t("settings.general.row.speakVoice.description")}
+        >
+          <SelectV2
+            appearance="inline"
+            data-action="settings-speak-voice"
+            options={SPEAK_VOICES}
+            current={settings.voice.speakVoice() || SPEAK_VOICES[0]}
+            value={(voice) => voice}
+            label={(voice) => voice.charAt(0).toUpperCase() + voice.slice(1)}
+            onSelect={(voice) => voice && settings.voice.setSpeakVoice(voice)}
+            placement="bottom-end"
+            gutter={6}
+          />
         </SettingsRowV2>
       </SettingsListV2>
     </div>

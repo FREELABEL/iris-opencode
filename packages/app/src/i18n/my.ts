@@ -165,6 +165,7 @@ export const dict = {
   "command.prompt.mode.shell": "Shell",
   "command.prompt.mode.normal": "Prompt",
   "command.prompt.dictate": "အသံဖြင့်ရေးရန်",
+  "command.voice.stopSpeaking": "ဖတ်ခြင်း ရပ်ရန်",
   "command.prompt.dictate.description":
     "အသံဖြင့်ရေးခြင်းကို စတင်ရန် သို့မဟုတ် ရပ်ရန် တို့ပါ။ ပြောရန် ဖိထားပြီး ရပ်ရန် လွှတ်ပါ",
   "command.permissions.autoaccept.enable": "ခွင့်ပြုချက်များကို အလိုအလျောက် လက်ခံသည်။",
@@ -955,6 +956,8 @@ export const dict = {
   "settings.general.row.speakReplies.title": "အဖြေများကို အသံထွက်ဖတ်ရန်",
   "settings.general.row.speakReplies.description": "အဖြေများ ရောက်လာသည်နှင့် IRIS အသံဝန်ဆောင်မှုဖြင့် အသံထွက်ဖတ်ပေးသည်။ ကုဒ်ကို ကျော်သည်။",
   "settings.general.row.speakReplies.unavailable": "အဖြေဖတ်ခြင်း ရပ်သွားသည်",
+  "settings.general.row.speakVoice.title": "အဖြေအသံ",
+  "settings.general.row.speakVoice.description": "အဖြေများကို အသံထွက်ဖတ်ရာတွင် သုံးသည့်အသံ။",
   "settings.general.section.feed": "ကျွေးမွေးခြင်း။",
   "settings.general.section.display": "မျက်နှာပြင်",
   "settings.general.row.language.title": "ဘာသာစကား",

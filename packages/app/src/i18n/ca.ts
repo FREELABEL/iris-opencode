@@ -165,6 +165,7 @@ export const dict = {
   "command.prompt.mode.shell": "Shell",
   "command.prompt.mode.normal": "Indicació",
   "command.prompt.dictate": "Dicta",
+  "command.voice.stopSpeaking": "Deixa de llegir",
   "command.prompt.dictate.description":
     "Toca per començar o aturar el dictat; mantén premut per parlar i deixa anar per aturar",
   "command.permissions.autoaccept.enable": "Permisos d'acceptació automàtica",
@@ -952,6 +953,8 @@ export const dict = {
   "settings.general.row.speakReplies.title": "Llegeix les respostes en veu alta",
   "settings.general.row.speakReplies.description": "Llegeix les respostes en veu alta a mesura que arriben, amb el servei de veu d'IRIS. El codi s'omet.",
   "settings.general.row.speakReplies.unavailable": "S'ha aturat la lectura de respostes",
+  "settings.general.row.speakVoice.title": "Veu de les respostes",
+  "settings.general.row.speakVoice.description": "La veu amb què es llegeixen les respostes en veu alta.",
   "settings.general.section.feed": "Alimentació",
   "settings.general.section.display": "Mostra",
   "settings.general.row.language.title": "Llengua",

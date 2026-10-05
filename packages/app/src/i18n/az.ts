@@ -165,6 +165,7 @@ export const dict = {
   "command.prompt.mode.shell": "Shell",
   "command.prompt.mode.normal": "Prompt",
   "command.prompt.dictate": "Diktə et",
+  "command.voice.stopSpeaking": "Oxumağı dayandır",
   "command.prompt.dictate.description":
     "Diktəni başlatmaq və ya dayandırmaq üçün toxunun; danışmaq üçün basılı saxlayın, dayandırmaq üçün buraxın",
   "command.permissions.autoaccept.enable": "İcazələri avtomatik qəbul et",
@@ -952,6 +953,8 @@ export const dict = {
   "settings.general.row.speakReplies.title": "Cavabları səsli oxu",
   "settings.general.row.speakReplies.description": "Cavabları gəldikcə IRIS səs xidməti ilə səsli oxuyur. Kod ötürülür.",
   "settings.general.row.speakReplies.unavailable": "Cavabların səsli oxunması dayandı",
+  "settings.general.row.speakVoice.title": "Cavab səsi",
+  "settings.general.row.speakVoice.description": "Cavabları səsli oxumaq üçün istifadə olunan səs.",
   "settings.general.section.feed": "Lenta",
   "settings.general.section.display": "Ekran",
   "settings.general.row.language.title": "Dil",

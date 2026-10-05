@@ -163,6 +163,7 @@ export const dict = {
   "command.prompt.mode.shell": "Čaula",
   "command.prompt.mode.normal": "Uzvedne",
   "command.prompt.dictate": "Diktēt",
+  "command.voice.stopSpeaking": "Pārtraukt lasīšanu",
   "command.prompt.dictate.description":
     "Pieskarieties, lai sāktu vai apturētu diktēšanu; turiet, lai runātu, un atlaidiet, lai apturētu",
   "command.permissions.autoaccept.enable": "Automātiski pieņemt atļaujas",
@@ -948,6 +949,8 @@ export const dict = {
   "settings.general.row.speakReplies.title": "Lasīt atbildes skaļi",
   "settings.general.row.speakReplies.description": "Lasa atbildes skaļi, tiklīdz tās pienāk, izmantojot IRIS balss pakalpojumu. Kods tiek izlaists.",
   "settings.general.row.speakReplies.unavailable": "Atbilžu lasīšana apturēta",
+  "settings.general.row.speakVoice.title": "Atbilžu balss",
+  "settings.general.row.speakVoice.description": "Balss, ar kuru atbildes tiek lasītas skaļi.",
   "settings.general.section.feed": "Plūsma",
   "settings.general.section.display": "Displejs",
   "settings.general.row.language.title": "Valoda",

@@ -164,6 +164,7 @@ export const dict = {
   "command.prompt.mode.shell": "Shell",
   "command.prompt.mode.normal": "Kërkesë",
   "command.prompt.dictate": "Dikto",
+  "command.voice.stopSpeaking": "Ndalo leximin",
   "command.prompt.dictate.description":
     "Prek për të nisur ose ndalur diktimin; mbaj shtypur për të folur dhe lësho për të ndalur",
   "command.permissions.autoaccept.enable": "Prano automatikisht lejet",
@@ -946,6 +947,8 @@ export const dict = {
   "settings.general.row.speakReplies.title": "Lexo përgjigjet me zë",
   "settings.general.row.speakReplies.description": "Lexon përgjigjet me zë sapo mbërrijnë, me shërbimin zanor të IRIS. Kodi anashkalohet.",
   "settings.general.row.speakReplies.unavailable": "Leximi i përgjigjeve ndaloi",
+  "settings.general.row.speakVoice.title": "Zëri i përgjigjeve",
+  "settings.general.row.speakVoice.description": "Zëri që përdoret për të lexuar përgjigjet me zë.",
   "settings.general.section.feed": "Prurja",
   "settings.general.section.display": "Ekrani",
   "settings.general.row.language.title": "Gjuha",

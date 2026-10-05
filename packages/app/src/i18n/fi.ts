@@ -70,6 +70,7 @@ export const dict = {
   "command.prompt.mode.shell": "Shell",
   "command.prompt.mode.normal": "Kehote",
   "command.prompt.dictate": "Sanele",
+  "command.voice.stopSpeaking": "Lopeta lukeminen",
   "command.prompt.dictate.description":
     "Aloita tai lopeta sanelu napauttamalla; pidä painettuna puhuessasi ja lopeta päästämällä irti",
   "command.permissions.autoaccept.enable": "Hyväksy käyttöoikeudet automaattisesti",
@@ -842,6 +843,8 @@ export const dict = {
   "settings.general.row.speakReplies.title": "Lue vastaukset ääneen",
   "settings.general.row.speakReplies.description": "Lukee vastaukset ääneen niiden saapuessa IRIS-puhepalvelun avulla. Koodi ohitetaan.",
   "settings.general.row.speakReplies.unavailable": "Vastausten ääneen lukeminen pysähtyi",
+  "settings.general.row.speakVoice.title": "Vastausten ääni",
+  "settings.general.row.speakVoice.description": "Ääni, jolla vastaukset luetaan ääneen.",
   "settings.general.section.feed": "Syöte",
   "settings.general.section.display": "Näyttö",
   "settings.general.row.language.title": "Kieli",

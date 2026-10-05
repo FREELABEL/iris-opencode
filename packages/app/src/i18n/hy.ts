@@ -165,6 +165,7 @@ export const dict = {
   "command.prompt.mode.shell": "Shell",
   "command.prompt.mode.normal": "Հուշում",
   "command.prompt.dictate": "Թելադրել",
+  "command.voice.stopSpeaking": "Դադարեցնել ընթերցումը",
   "command.prompt.dictate.description":
     "Հպեք՝ թելադրումը սկսելու կամ դադարեցնելու համար, պահեք՝ խոսելու համար, և բաց թողեք՝ դադարեցնելու համար",
   "command.permissions.autoaccept.enable": "Ավտոմատ ընդունել թույլտվությունները",
@@ -950,6 +951,8 @@ export const dict = {
   "settings.general.row.speakReplies.title": "Կարդալ պատասխանները բարձրաձայն",
   "settings.general.row.speakReplies.description": "Կարդում է պատասխանները բարձրաձայն, երբ դրանք գալիս են, IRIS ձայնային ծառայությամբ։ Կոդը բաց է թողնվում։",
   "settings.general.row.speakReplies.unavailable": "Պատասխանների ընթերցումը դադարեց",
+  "settings.general.row.speakVoice.title": "Պատասխանների ձայն",
+  "settings.general.row.speakVoice.description": "Ձայնը, որով պատասխանները կարդացվում են բարձրաձայն։",
   "settings.general.section.feed": "Fed",
   "settings.general.section.display": "Ցուցադրել",
   "settings.general.row.language.title": "Լեզու",

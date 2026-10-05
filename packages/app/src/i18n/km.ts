@@ -163,6 +163,7 @@ export const dict = {
   "command.prompt.mode.shell": "សែល",
   "command.prompt.mode.normal": "ប្រអប់បញ្ចូល",
   "command.prompt.dictate": "សរសេរតាមសំឡេង",
+  "command.voice.stopSpeaking": "ឈប់អាន",
   "command.prompt.dictate.description":
     "ចុចដើម្បីចាប់ផ្ដើម ឬបញ្ឈប់ការសរសេរតាមសំឡេង; ចុចសង្កត់ដើម្បីនិយាយ ហើយលែងដើម្បីបញ្ឈប់",
   "command.permissions.autoaccept.enable": "ការអនុញ្ញាតដោយស្វ័យប្រវត្តិ",
@@ -940,6 +941,8 @@ export const dict = {
   "settings.general.row.speakReplies.title": "អានចម្លើយឮៗ",
   "settings.general.row.speakReplies.description": "អានចម្លើយឮៗ ពេលវាមកដល់ ដោយប្រើសេវាសំឡេង IRIS។ កូដត្រូវបានរំលង។",
   "settings.general.row.speakReplies.unavailable": "ការអានចម្លើយបានឈប់",
+  "settings.general.row.speakVoice.title": "សំឡេងចម្លើយ",
+  "settings.general.row.speakVoice.description": "សំឡេងដែលប្រើសម្រាប់អានចម្លើយឮៗ។",
   "settings.general.section.feed": "មតិព័ត៌មាន",
   "settings.general.section.display": "បង្ហាញ",
   "settings.general.row.language.title": "ភាសា",

@@ -199,6 +199,7 @@ export const dict = {
   "command.prompt.mode.shell": "Shell",
   "command.prompt.mode.normal": "Prompt",
   "command.prompt.dictate": "听写",
+  "command.voice.stopSpeaking": "停止朗读",
   "command.prompt.dictate.description": "轻点开始或停止听写；按住说话，松开即停止",
 
   "command.permissions.autoaccept.enable": "自动接受权限",
@@ -911,6 +912,8 @@ export const dict = {
   "settings.general.row.speakReplies.title": "朗读回复",
   "settings.general.row.speakReplies.description": "回复到达时通过 IRIS 语音服务朗读。代码会被跳过。",
   "settings.general.row.speakReplies.unavailable": "回复朗读已停止",
+  "settings.general.row.speakVoice.title": "回复语音",
+  "settings.general.row.speakVoice.description": "朗读回复时使用的声音。",
   "settings.general.section.feed": "动态",
   "settings.general.section.display": "显示",
   "settings.general.row.language.title": "语言",

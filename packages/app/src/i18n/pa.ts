@@ -169,6 +169,7 @@ export const dict = {
   "command.prompt.mode.shell": "Shell",
   "command.prompt.mode.normal": "پرامپٹ",
   "command.prompt.dictate": "بول کے لکھو",
+  "command.voice.stopSpeaking": "ਬੋਲਣਾ ਬੰਦ ਕਰੋ",
   "command.prompt.dictate.description":
     "بول کے لکھنا شروع یا بند کرن لئی ٹیپ کرو؛ بولن لئی دبا کے رکھو تے بند کرن لئی چھڈ دیو",
   "command.permissions.autoaccept.enable": "خودکار اجازتاں قبول کرو",
@@ -949,6 +950,8 @@ export const dict = {
   "settings.general.row.speakReplies.title": "ਜਵਾਬ ਬੋਲ ਕੇ ਸੁਣਾਓ",
   "settings.general.row.speakReplies.description": "ਜਵਾਬ ਆਉਂਦੇ ਹੀ IRIS ਵੌਇਸ ਸੇਵਾ ਨਾਲ ਬੋਲ ਕੇ ਸੁਣਾਉਂਦਾ ਹੈ। ਕੋਡ ਛੱਡ ਦਿੱਤਾ ਜਾਂਦਾ ਹੈ।",
   "settings.general.row.speakReplies.unavailable": "ਜਵਾਬ ਸੁਣਾਉਣਾ ਰੁਕ ਗਿਆ",
+  "settings.general.row.speakVoice.title": "ਜਵਾਬ ਦੀ ਆਵਾਜ਼",
+  "settings.general.row.speakVoice.description": "ਜਵਾਬ ਬੋਲ ਕੇ ਸੁਣਾਉਣ ਲਈ ਵਰਤੀ ਜਾਣ ਵਾਲੀ ਆਵਾਜ਼।",
   "settings.general.section.feed": "فیڈ",
   "settings.general.section.display": "ڈسپلے",
   "settings.general.row.language.title": "بولی",

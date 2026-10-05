@@ -166,6 +166,7 @@ export const dict = {
   "command.prompt.mode.shell": "ޝެލް",
   "command.prompt.mode.normal": "ޕްރޮމްޕްޓް",
   "command.prompt.dictate": "ޑިކްޓޭޓް ކުރުން",
+  "command.voice.stopSpeaking": "ކިޔުން ހުއްޓާ",
   "command.prompt.dictate.description":
     "ޑިކްޓޭޝަން ފެށުމަށް ނުވަތަ ހުއްޓުމަށް ޓެޕް ކުރޭ؛ ވާހަކަދެއްކުމަށް ފިއްތާލާފައި ހިފަހައްޓާ، ހުއްޓުމަށް ދޫކޮށްލާ",
   "command.permissions.autoaccept.enable": "އޮޓޯ އެކްސެޕްޓް ހުއްދަތައް",
@@ -957,6 +958,8 @@ export const dict = {
   "settings.general.row.speakReplies.title": "ޖަވާބުތައް އަޑުން ކިޔާ",
   "settings.general.row.speakReplies.description": "ޖަވާބުތައް ލިބެމުން IRIS ވޮއިސް ޚިދުމަތުން އަޑުން ކިޔައިދެއެވެ. ކޯޑު ދޫކޮށްލެވޭނެއެވެ.",
   "settings.general.row.speakReplies.unavailable": "ޖަވާބުތައް ކިޔުން ހުއްޓުނު",
+  "settings.general.row.speakVoice.title": "ޖަވާބުގެ އަޑު",
+  "settings.general.row.speakVoice.description": "ޖަވާބުތައް އަޑުން ކިޔުމަށް ބޭނުންކުރާ އަޑު.",
   "settings.general.section.feed": "ކާންދިނުން",
   "settings.general.section.display": "ޑިސްޕްލޭ",
   "settings.general.row.language.title": "ބަސް",
