@@ -13,6 +13,9 @@ import { readRemoteConfig } from "./remote"
  * final twice in a row, so a repeated final is dropped.
  */
 
+/** fl-iris-api services/stt-relay, deployed as the iris-stt-relay Railway service (2026-10-05). */
+const DEFAULT_RELAY_URL = "https://iris-stt-relay-production.up.railway.app"
+
 export type LiveEvent =
   | { type: "partial"; text: string }
   | { type: "final"; text: string }
@@ -36,8 +39,9 @@ export interface LiveConfig {
 
 /** Relay URL, IRIS user token and board, or the reason live dictation cannot start. */
 export function readLiveConfig(): { config: LiveConfig } | { reason: string } {
-  const relayUrl = process.env["IRIS_STT_RELAY_URL"]?.trim()
-  if (!relayUrl) return { reason: "Live transcription is not configured on this machine." }
+  // Production relay by default; IRIS_STT_RELAY_URL overrides it, and "off" turns live preview off.
+  const relayUrl = process.env["IRIS_STT_RELAY_URL"]?.trim() || DEFAULT_RELAY_URL
+  if (relayUrl === "off") return { reason: "Live transcription is turned off on this machine." }
   // The same signed-in person token and board the batch path uses (remote.ts isPersonToken): the
   // relay validates it with fl-api whoami and checks the board's cloud policy with it.
   const remote = readRemoteConfig()
