@@ -930,6 +930,9 @@ export const dict = {
     "La entrada desde la que graba el dictado. Predeterminado del sistema sigue la configuración de sonido de tu equipo.",
   "settings.general.row.microphone.systemDefault": "Predeterminado del sistema",
   "settings.general.row.microphone.notConnected": "{{name}} (no conectado)",
+  "settings.general.row.speakReplies.title": "Leer respuestas en voz alta",
+  "settings.general.row.speakReplies.description": "Lee las respuestas en voz alta a medida que llegan, con el servicio de voz de IRIS. El código se omite.",
+  "settings.general.row.speakReplies.unavailable": "Se detuvo la lectura de respuestas",
   "settings.general.section.feed": "Feed",
   "settings.general.section.display": "Pantalla",
 

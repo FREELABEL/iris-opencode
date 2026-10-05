@@ -924,6 +924,9 @@ export const dict = {
     "The input dictation records from. System default follows your computer's sound settings.",
   "settings.general.row.microphone.systemDefault": "System default",
   "settings.general.row.microphone.notConnected": "{{name}} (not connected)",
+  "settings.general.row.speakReplies.title": "Speak replies",
+  "settings.general.row.speakReplies.description": "Read replies aloud as they arrive, using the IRIS voice service. Code is skipped.",
+  "settings.general.row.speakReplies.unavailable": "Spoken replies stopped",
   "settings.general.section.feed": "Feed",
   "settings.general.section.display": "Display",
 

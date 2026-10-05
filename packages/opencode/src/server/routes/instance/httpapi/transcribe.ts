@@ -20,6 +20,7 @@ import { ChainError, effectiveEngines, transcribeWithFallback } from "@/transcri
 import { hold, listHeld, readHeld, release, type Held } from "@/transcribe/held"
 import { splitWav } from "@/transcribe/segments"
 import { openLiveSession, readLiveConfig } from "@/transcribe/live"
+import { openSpeakSession } from "@/transcribe/speak"
 import { describeRemoteConfig, readRemoteConfig } from "@/transcribe/remote"
 import { localWhisperReady, TranscribeError } from "@/transcribe/local"
 
@@ -351,6 +352,62 @@ export const dictateRoute = HttpRouter.use((router) =>
       }),
     )
 
+    // Spoken replies: a WebSocket from the window, bridged to the relay's /v1/tts/stream.
+    //   client -> server: JSON text frames {"type":"text.delta","delta"}, {"type":"text.done"},
+    //                     {"type":"text.clear"} (the socket layer hands them over as bytes; they are
+    //                     decoded as UTF-8 JSON — this socket never carries client audio)
+    //   server -> client: BINARY frames of 24 kHz mono PCM16, and JSON {"type":"done"|"cleared"|
+    //                     "unavailable"}. Every failure is one "unavailable" and a close.
+    yield* add(router, "GET", "/voice/speak", (request) =>
+      Effect.gen(function* () {
+        const url = new URL(request.url, "http://localhost")
+        const socket = yield* Effect.orDie(request.upgrade)
+        const write = yield* socket.writer
+        const outbox = yield* Queue.unbounded<string | Uint8Array | Socket.CloseEvent>()
+        const closeWith = (event?: { type: "unavailable"; reason: string }) => {
+          if (event) Queue.offerUnsafe(outbox, JSON.stringify(event))
+          Queue.offerUnsafe(outbox, new Socket.CloseEvent(1000))
+        }
+
+        const live = readLiveConfig()
+        const session =
+          "config" in live
+            ? openSpeakSession(live.config, {
+                voice: url.searchParams.get("voice") ?? undefined,
+                language: url.searchParams.get("language") ?? undefined,
+                onAudio: (pcm) => Queue.offerUnsafe(outbox, pcm),
+                onEvent: (event) =>
+                  event.type === "unavailable" ? closeWith(event) : Queue.offerUnsafe(outbox, JSON.stringify(event)),
+                onClose: () => closeWith(),
+              })
+            : undefined
+        if (!session) closeWith({ type: "unavailable", reason: "reason" in live ? live.reason : "unavailable" })
+
+        const drain = Effect.gen(function* () {
+          while (true) {
+            const item = yield* Queue.take(outbox)
+            yield* write(item)
+            if (item instanceof Socket.CloseEvent) return
+          }
+        })
+        yield* Effect.race(
+          drain,
+          socket.runRaw((message) => {
+            if (!session) return
+            const frame = decodeSpeakFrame(message)
+            if (frame?.type === "text.delta") session.text(frame.delta)
+            if (frame?.type === "text.done") session.done()
+            if (frame?.type === "text.clear") session.clear()
+          }),
+        ).pipe(
+          Effect.catchReason("SocketError", "SocketCloseError", () => Effect.void),
+          Effect.ensuring(Effect.sync(() => session?.close())),
+          Effect.orDie,
+        )
+        return HttpServerResponse.empty()
+      }),
+    )
+
     // Microphone names for the Settings picker, behind the same loopback guard as every voice route.
     yield* add(router, "GET", "/dictate/devices", () =>
       Effect.sync(() => HttpServerResponse.jsonUnsafe({ devices: listInputDevices().map((name) => ({ name })) })),
@@ -444,5 +501,23 @@ export function decodeLiveFrame(
   if (bytes[0] === 0x00) return bytes.byteLength > 1 ? { kind: "audio", pcm: bytes.subarray(1) } : undefined
   if (bytes[0] === 0x01) return { kind: "finalize" }
   if (bytes[0] === 0x02) return { kind: "done" }
+  return undefined
+}
+
+/** A client frame on /voice/speak: UTF-8 JSON, allowlisted to the three speech messages. */
+export function decodeSpeakFrame(
+  message: string | Uint8Array,
+): { type: "text.delta"; delta: string } | { type: "text.done" } | { type: "text.clear" } | undefined {
+  const text = typeof message === "string" ? message : new TextDecoder().decode(message)
+  const value = (() => {
+    try {
+      return JSON.parse(text) as { type?: unknown; delta?: unknown }
+    } catch {
+      return undefined
+    }
+  })()
+  if (value?.type === "text.delta" && typeof value.delta === "string" && value.delta) return { type: "text.delta", delta: value.delta }
+  if (value?.type === "text.done") return { type: "text.done" }
+  if (value?.type === "text.clear") return { type: "text.clear" }
   return undefined
 }

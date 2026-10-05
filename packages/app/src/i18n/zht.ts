@@ -902,6 +902,9 @@ export const dict = {
   "settings.general.row.microphone.description": "聽寫時用來錄音的輸入裝置。「系統預設」會依照電腦的聲音設定。",
   "settings.general.row.microphone.systemDefault": "系統預設",
   "settings.general.row.microphone.notConnected": "{{name}}（未連線）",
+  "settings.general.row.speakReplies.title": "朗讀回覆",
+  "settings.general.row.speakReplies.description": "回覆送達時透過 IRIS 語音服務朗讀。程式碼會略過。",
+  "settings.general.row.speakReplies.unavailable": "回覆朗讀已停止",
   "settings.general.section.feed": "資訊流",
   "settings.general.section.display": "顯示",
 

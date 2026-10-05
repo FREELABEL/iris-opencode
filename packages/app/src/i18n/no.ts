@@ -787,6 +787,9 @@ export const dict = {
     "Inngangen som diktering tar opp fra. Systemstandard følger lydinnstillingene på datamaskinen.",
   "settings.general.row.microphone.systemDefault": "Systemstandard",
   "settings.general.row.microphone.notConnected": "{{name}} (ikke tilkoblet)",
+  "settings.general.row.speakReplies.title": "Les opp svar",
+  "settings.general.row.speakReplies.description": "Leser opp svar etter hvert som de kommer, via IRIS-taletjenesten. Kode hoppes over.",
+  "settings.general.row.speakReplies.unavailable": "Opplesing av svar stoppet",
   "settings.general.section.feed": "Feed",
   "settings.general.section.display": "Skjerm",
 
