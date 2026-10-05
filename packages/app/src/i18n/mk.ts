@@ -164,6 +164,7 @@ export const dict = {
   "command.prompt.mode.shell": "Школка",
   "command.prompt.mode.normal": "Прашај",
   "command.prompt.dictate": "Диктирај",
+  "command.voice.stopSpeaking": "Престани со читање",
   "command.prompt.dictate.description":
     "Допрете за да започнете или запрете со диктирањето; држете за да зборувате и пуштете за да запрете",
   "command.permissions.autoaccept.enable": "Автоматско прифаќање дозволи",
@@ -947,6 +948,8 @@ export const dict = {
   "settings.general.row.speakReplies.title": "Читај ги одговорите гласно",
   "settings.general.row.speakReplies.description": "Ги чита одговорите гласно штом ќе пристигнат, преку гласовната услуга на IRIS. Кодот се прескокнува.",
   "settings.general.row.speakReplies.unavailable": "Читањето на одговорите запре",
+  "settings.general.row.speakVoice.title": "Глас за одговорите",
+  "settings.general.row.speakVoice.description": "Гласот со кој одговорите се читаат гласно.",
   "settings.general.section.feed": "Довод",
   "settings.general.section.display": "Приказ",
   "settings.general.row.language.title": "Јазик",

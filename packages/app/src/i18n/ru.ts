@@ -176,6 +176,7 @@ export const dict = {
   "command.prompt.mode.shell": "Оболочка",
   "command.prompt.mode.normal": "Промпт",
   "command.prompt.dictate": "Диктовать",
+  "command.voice.stopSpeaking": "Остановить озвучивание",
   "command.prompt.dictate.description":
     "Нажмите, чтобы начать или остановить диктовку; удерживайте, чтобы говорить, и отпустите, чтобы остановить",
   "command.permissions.autoaccept.enable": "Автоматически принимать разрешения",
@@ -930,6 +931,8 @@ export const dict = {
   "settings.general.row.speakReplies.title": "Озвучивать ответы",
   "settings.general.row.speakReplies.description": "Читает ответы вслух по мере поступления через голосовой сервис IRIS. Код пропускается.",
   "settings.general.row.speakReplies.unavailable": "Озвучивание ответов остановлено",
+  "settings.general.row.speakVoice.title": "Голос ответов",
+  "settings.general.row.speakVoice.description": "Голос, которым зачитываются ответы.",
   "settings.general.section.feed": "Лента",
   "settings.general.section.display": "Экран",
 

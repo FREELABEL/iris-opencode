@@ -163,6 +163,7 @@ export const dict = {
   "command.prompt.mode.shell": "Shell",
   "command.prompt.mode.normal": "მოთხოვნა",
   "command.prompt.dictate": "კარნახი",
+  "command.voice.stopSpeaking": "კითხვის შეწყვეტა",
   "command.prompt.dictate.description":
     "შეეხეთ კარნახის დასაწყებად ან შესაჩერებლად; ლაპარაკისთვის დააჭირეთ და გეჭიროთ, შესაჩერებლად კი გაუშვით",
   "command.permissions.autoaccept.enable": "ნებართვების ავტომატური მიღება",
@@ -942,6 +943,8 @@ export const dict = {
   "settings.general.row.speakReplies.title": "პასუხების ხმამაღლა წაკითხვა",
   "settings.general.row.speakReplies.description": "კითხულობს პასუხებს ხმამაღლა მათი მოსვლისთანავე IRIS-ის ხმოვანი სერვისით. კოდი გამოტოვებულია.",
   "settings.general.row.speakReplies.unavailable": "პასუხების წაკითხვა შეჩერდა",
+  "settings.general.row.speakVoice.title": "პასუხების ხმა",
+  "settings.general.row.speakVoice.description": "ხმა, რომლითაც პასუხები ხმამაღლა იკითხება.",
   "settings.general.section.feed": "არხი",
   "settings.general.section.display": "ჩვენება",
   "settings.general.row.language.title": "ენა",

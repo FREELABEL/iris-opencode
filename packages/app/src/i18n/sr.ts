@@ -164,6 +164,7 @@ export const dict = {
   "command.prompt.mode.shell": "Shell",
   "command.prompt.mode.normal": "Промпт",
   "command.prompt.dictate": "Диктирај",
+  "command.voice.stopSpeaking": "Заустави читање",
   "command.prompt.dictate.description":
     "Додирните да бисте покренули или зауставили диктирање; држите да бисте говорили и пустите да бисте зауставили",
   "command.permissions.autoaccept.enable": "Аутоматско прихватање дозвола",
@@ -946,6 +947,8 @@ export const dict = {
   "settings.general.row.speakReplies.title": "Читај одговоре наглас",
   "settings.general.row.speakReplies.description": "Чита одговоре наглас чим стигну, преко IRIS гласовне услуге. Код се прескаче.",
   "settings.general.row.speakReplies.unavailable": "Читање одговора је заустављено",
+  "settings.general.row.speakVoice.title": "Глас одговора",
+  "settings.general.row.speakVoice.description": "Глас којим се одговори читају наглас.",
   "settings.general.section.feed": "Феед",
   "settings.general.section.display": "Приказ",
   "settings.general.row.language.title": "Језик",

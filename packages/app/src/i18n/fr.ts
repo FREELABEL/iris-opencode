@@ -171,6 +171,7 @@ export const dict = {
   "command.prompt.mode.shell": "Shell",
   "command.prompt.mode.normal": "Invite",
   "command.prompt.dictate": "Dicter",
+  "command.voice.stopSpeaking": "Arrêter la lecture",
   "command.prompt.dictate.description":
     "Appuyez pour démarrer ou arrêter la dictée ; maintenez pour parler et relâchez pour arrêter",
   "command.permissions.autoaccept.enable": "Accepter automatiquement les permissions",
@@ -869,6 +870,8 @@ export const dict = {
   "settings.general.row.speakReplies.title": "Lire les réponses à voix haute",
   "settings.general.row.speakReplies.description": "Lit les réponses à voix haute dès leur arrivée, via le service vocal IRIS. Le code est ignoré.",
   "settings.general.row.speakReplies.unavailable": "La lecture des réponses s'est arrêtée",
+  "settings.general.row.speakVoice.title": "Voix des réponses",
+  "settings.general.row.speakVoice.description": "La voix utilisée pour lire les réponses à voix haute.",
   "settings.general.section.feed": "Flux",
   "settings.general.section.display": "Affichage",
   "settings.general.row.language.title": "Langue",

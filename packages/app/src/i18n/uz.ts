@@ -165,6 +165,7 @@ export const dict = {
   "command.prompt.mode.shell": "Shell",
   "command.prompt.mode.normal": "Tezkor",
   "command.prompt.dictate": "Diktovka qilish",
+  "command.voice.stopSpeaking": "O‘qishni to‘xtatish",
   "command.prompt.dictate.description":
     "Diktovkani boshlash yoki to'xtatish uchun bosing; gapirish uchun bosib turing va to'xtatish uchun qo'yib yuboring",
   "command.permissions.autoaccept.enable": "Ruxsatlarni avtomatik qabul qilish",
@@ -950,6 +951,8 @@ export const dict = {
   "settings.general.row.speakReplies.title": "Javoblarni ovoz chiqarib o‘qish",
   "settings.general.row.speakReplies.description": "Javoblarni kelishi bilan IRIS ovoz xizmati orqali ovoz chiqarib o‘qiydi. Kod o‘tkazib yuboriladi.",
   "settings.general.row.speakReplies.unavailable": "Javoblarni o‘qish to‘xtadi",
+  "settings.general.row.speakVoice.title": "Javoblar ovozi",
+  "settings.general.row.speakVoice.description": "Javoblarni ovoz chiqarib o‘qishda ishlatiladigan ovoz.",
   "settings.general.section.feed": "Oziqlantirish",
   "settings.general.section.display": "Displey",
   "settings.general.row.language.title": "Til",

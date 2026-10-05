@@ -74,4 +74,22 @@ describe("reply reader", () => {
     h.reader.update([user("u1"), reply("a1", 1), user("u2"), reply("a2")], (id) => [text(id, "New one. ")])
     expect(h.said).toEqual(["New one."])
   })
+
+  test("a manual stop silences the reply and the rest of it is never resumed", () => {
+    const h = harness()
+    h.reader.update([user("u1"), reply("a1")], () => [text("a1", "One. ")])
+    h.reader.stop()
+    h.reader.update([user("u1"), reply("a1")], () => [text("a1", "One. Two. Three.")])
+    h.reader.update([user("u1"), reply("a1", 4)], () => [text("a1", "One. Two. Three. End")])
+    expect(h.said).toEqual(["One."])
+    expect(h.calls).toEqual(["speak", "stop"])
+  })
+
+  test("stop also silences a reply that finished streaming but is still playing", () => {
+    const h = harness()
+    h.reader.update([user("u1"), reply("a1")], () => [text("a1", "Hi. ")])
+    h.reader.update([user("u1"), reply("a1", 2)], () => [text("a1", "Hi. Bye.")])
+    h.reader.stop()
+    expect(h.calls).toEqual(["speak", "speak", "finish", "stop"])
+  })
 })

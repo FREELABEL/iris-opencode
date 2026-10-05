@@ -165,6 +165,7 @@ export const dict = {
   "command.prompt.mode.shell": "Shell",
   "command.prompt.mode.normal": "подкана",
   "command.prompt.dictate": "Диктувай",
+  "command.voice.stopSpeaking": "Спри четенето",
   "command.prompt.dictate.description":
     "Докоснете, за да започнете или спрете диктовката; задръжте, за да говорите, и пуснете, за да спрете",
   "command.permissions.autoaccept.enable": "Автоматично приемане на разрешения",
@@ -949,6 +950,8 @@ export const dict = {
   "settings.general.row.speakReplies.title": "Четене на отговорите на глас",
   "settings.general.row.speakReplies.description": "Чете отговорите на глас, щом пристигнат, чрез гласовата услуга на IRIS. Кодът се пропуска.",
   "settings.general.row.speakReplies.unavailable": "Четенето на отговорите спря",
+  "settings.general.row.speakVoice.title": "Глас за отговорите",
+  "settings.general.row.speakVoice.description": "Гласът, с който отговорите се четат на глас.",
   "settings.general.section.feed": "Храна",
   "settings.general.section.display": "Дисплей",
   "settings.general.row.language.title": "език",

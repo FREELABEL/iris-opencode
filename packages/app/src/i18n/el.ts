@@ -164,6 +164,7 @@ export const dict = {
   "command.prompt.mode.shell": "Shell",
   "command.prompt.mode.normal": "Προτροπή",
   "command.prompt.dictate": "Υπαγόρευση",
+  "command.voice.stopSpeaking": "Διακοπή ανάγνωσης",
   "command.prompt.dictate.description":
     "Πατήστε για έναρξη ή διακοπή της υπαγόρευσης· κρατήστε πατημένο για να μιλήσετε και αφήστε για διακοπή",
   "command.permissions.autoaccept.enable": "Αυτόματη αποδοχή δικαιωμάτων",
@@ -953,6 +954,8 @@ export const dict = {
   "settings.general.row.speakReplies.title": "Ανάγνωση απαντήσεων",
   "settings.general.row.speakReplies.description": "Διαβάζει δυνατά τις απαντήσεις μόλις φτάνουν, μέσω της φωνητικής υπηρεσίας IRIS. Ο κώδικας παραλείπεται.",
   "settings.general.row.speakReplies.unavailable": "Η ανάγνωση απαντήσεων σταμάτησε",
+  "settings.general.row.speakVoice.title": "Φωνή απαντήσεων",
+  "settings.general.row.speakVoice.description": "Η φωνή που διαβάζει δυνατά τις απαντήσεις.",
   "settings.general.section.feed": "Ροή",
   "settings.general.section.display": "Εμφάνιση",
   "settings.general.row.language.title": "Γλώσσα",

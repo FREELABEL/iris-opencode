@@ -1,4 +1,4 @@
-import { createEffect, on, onCleanup } from "solid-js"
+import { createEffect, createRoot, createSignal, on, onCleanup } from "solid-js"
 import type { Message, Part } from "@opencode-ai/sdk/v2/client"
 import { createSpeechPlayer, type SpeechPlayer } from "@opencode-ai/session-ui/v2/prompt-input/speech"
 import { nextSpeakable } from "@/utils/speakable"
@@ -19,9 +19,11 @@ export function createReplyReader(speaker: Speaker) {
   let lastUser: string | undefined
   let primed = false
 
+  // Also silences a reply that finished streaming but is still playing.
   const stop = () => {
-    if (current && !current.done) speaker.stop()
-    if (current) current.done = true
+    if (!current) return
+    speaker.stop()
+    current.done = true
   }
 
   return {
@@ -62,10 +64,15 @@ export function createReplyReader(speaker: Speaker) {
 }
 
 let active: Pick<SpeechPlayer, "stop"> | undefined
+const [speaking, setSpeaking] = createRoot(() => createSignal(false))
 
-/** Barge-in from outside the session view, e.g. the composer when dictation starts. */
+/** True while a reply is being read aloud — drives the composer's Stop speaking control. */
+export const isSpeaking = speaking
+
+/** Barge-in from outside the session view: the Stop control, its shortcut, or dictation starting. */
 export function stopSpokenReply() {
   active?.stop()
+  setSpeaking(false)
 }
 
 export function useSpokenReplies(opts: {
@@ -84,16 +91,18 @@ export function useSpokenReplies(opts: {
         base: opts.base,
         voice: opts.voice,
         onState: (state, reason) => {
+          setSpeaking(state === "speaking")
           if (state === "unavailable") opts.onUnavailable(reason ?? "")
         },
       })
-      active = player
+      active = handle
       player.speak(text)
     },
     finish: () => player?.finish(),
     stop: () => player?.stop(),
   }
   const reader = createReplyReader(speaker)
+  const handle = { stop: () => reader.stop() }
 
   createEffect(on([opts.enabled, opts.sessionID], () => reader.reset()))
   createEffect(() => {
@@ -104,6 +113,6 @@ export function useSpokenReplies(opts: {
   onCleanup(() => {
     reader.reset()
     player?.dispose()
-    if (active === player) active = undefined
+    if (active === handle) (active = undefined), setSpeaking(false)
   })
 }

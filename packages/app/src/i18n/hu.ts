@@ -167,6 +167,7 @@ export const dict = {
   "command.prompt.mode.shell": "Shell",
   "command.prompt.mode.normal": "Utasítás",
   "command.prompt.dictate": "Diktálás",
+  "command.voice.stopSpeaking": "Felolvasás leállítása",
   "command.prompt.dictate.description":
     "Koppintson a diktálás indításához vagy leállításához; tartsa lenyomva a beszédhez, és engedje fel a leállításhoz",
   "command.permissions.autoaccept.enable": "Engedélyek automatikus elfogadása",
@@ -951,6 +952,8 @@ export const dict = {
   "settings.general.row.speakReplies.title": "Válaszok felolvasása",
   "settings.general.row.speakReplies.description": "A válaszokat érkezéskor felolvassa az IRIS hangszolgáltatással. A kódot kihagyja.",
   "settings.general.row.speakReplies.unavailable": "A válaszok felolvasása leállt",
+  "settings.general.row.speakVoice.title": "Válaszok hangja",
+  "settings.general.row.speakVoice.description": "A hang, amellyel a válaszok felolvasásra kerülnek.",
   "settings.general.section.feed": "Takarmány",
   "settings.general.section.display": "Kijelző",
   "settings.general.row.language.title": "Nyelv",

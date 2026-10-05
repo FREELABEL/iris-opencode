@@ -76,6 +76,7 @@ export const dict = {
   "command.prompt.mode.shell": "Shell",
   "command.prompt.mode.normal": "Prompt",
   "command.prompt.dictate": "Dikter",
+  "command.voice.stopSpeaking": "Stop oplæsning",
   "command.prompt.dictate.description":
     "Tryk for at starte eller stoppe diktering; hold nede for at tale, og slip for at stoppe",
   "command.permissions.autoaccept.enable": "Accepter tilladelser automatisk",
@@ -804,6 +805,8 @@ export const dict = {
   "settings.general.row.speakReplies.title": "Læs svar højt",
   "settings.general.row.speakReplies.description": "Læser svar højt, når de kommer, via IRIS-stemmetjenesten. Kode springes over.",
   "settings.general.row.speakReplies.unavailable": "Oplæsning af svar stoppede",
+  "settings.general.row.speakVoice.title": "Stemme til svar",
+  "settings.general.row.speakVoice.description": "Stemmen, der bruges til at læse svar højt.",
   "settings.general.section.feed": "Feed",
   "settings.general.section.display": "Skærm",
 

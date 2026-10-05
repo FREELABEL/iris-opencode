@@ -164,6 +164,7 @@ export const dict: Record<string, string> = {
   "command.prompt.mode.shell": "শেল",
   "command.prompt.mode.normal": "প্রম্পট",
   "command.prompt.dictate": "ডিক্টেট করুন",
+  "command.voice.stopSpeaking": "পড়া বন্ধ করুন",
   "command.prompt.dictate.description":
     "ডিক্টেশন শুরু বা বন্ধ করতে ট্যাপ করুন; কথা বলতে চেপে ধরে রাখুন এবং থামাতে ছেড়ে দিন",
   "command.permissions.autoaccept.enable": "স্বয়ংক্রিয়ভাবে অনুমতি গ্রহণ করুন",
@@ -941,6 +942,8 @@ export const dict: Record<string, string> = {
   "settings.general.row.speakReplies.title": "উত্তর পড়ে শোনাও",
   "settings.general.row.speakReplies.description": "উত্তর আসামাত্র IRIS ভয়েস পরিষেবা দিয়ে পড়ে শোনায়। কোড বাদ দেওয়া হয়।",
   "settings.general.row.speakReplies.unavailable": "উত্তর পড়ে শোনানো বন্ধ হয়েছে",
+  "settings.general.row.speakVoice.title": "উত্তরের কণ্ঠ",
+  "settings.general.row.speakVoice.description": "উত্তর পড়ে শোনাতে যে কণ্ঠ ব্যবহার হয়।",
   "settings.general.section.feed": "খাওয়ান",
   "settings.general.section.display": "প্রদর্শন",
   "settings.general.row.language.title": "ভাষা",

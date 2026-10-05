@@ -167,6 +167,7 @@ export const dict = {
   "command.prompt.mode.shell": "Apvalkalas",
   "command.prompt.mode.normal": "Užklausa",
   "command.prompt.dictate": "Diktuoti",
+  "command.voice.stopSpeaking": "Nustoti skaityti",
   "command.prompt.dictate.description":
     "Bakstelėkite, kad pradėtumėte arba sustabdytumėte diktavimą; laikykite, kad kalbėtumėte, ir atleiskite, kad sustabdytumėte",
   "command.permissions.autoaccept.enable": "Automatiškai priimti leidimus",
@@ -957,6 +958,8 @@ export const dict = {
   "settings.general.row.speakReplies.title": "Skaityti atsakymus balsu",
   "settings.general.row.speakReplies.description": "Skaito atsakymus balsu, kai tik jie gaunami, naudojant IRIS balso paslaugą. Kodas praleidžiamas.",
   "settings.general.row.speakReplies.unavailable": "Atsakymų skaitymas sustabdytas",
+  "settings.general.row.speakVoice.title": "Atsakymų balsas",
+  "settings.general.row.speakVoice.description": "Balsas, kuriuo atsakymai skaitomi garsiai.",
   "settings.general.section.feed": "Pašaras",
   "settings.general.section.display": "Ekranas",
   "settings.general.row.language.title": "Kalba",

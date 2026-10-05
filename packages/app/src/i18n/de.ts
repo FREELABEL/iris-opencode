@@ -74,6 +74,7 @@ export const dict = {
   "command.prompt.mode.shell": "Shell",
   "command.prompt.mode.normal": "Prompt",
   "command.prompt.dictate": "Diktieren",
+  "command.voice.stopSpeaking": "Vorlesen stoppen",
   "command.prompt.dictate.description":
     "Tippen, um das Diktieren zu starten oder zu beenden; gedrückt halten zum Sprechen und loslassen zum Beenden",
   "command.permissions.autoaccept.enable": "Berechtigungen automatisch akzeptieren",
@@ -755,6 +756,8 @@ export const dict = {
   "settings.general.row.speakReplies.title": "Antworten vorlesen",
   "settings.general.row.speakReplies.description": "Liest Antworten beim Eintreffen über den IRIS-Sprachdienst vor. Code wird übersprungen.",
   "settings.general.row.speakReplies.unavailable": "Vorlesen der Antworten wurde beendet",
+  "settings.general.row.speakVoice.title": "Stimme für Antworten",
+  "settings.general.row.speakVoice.description": "Die Stimme, mit der Antworten vorgelesen werden.",
   "settings.general.section.feed": "Feed",
   "settings.general.section.display": "Anzeige",
   "settings.general.row.language.title": "Sprache",

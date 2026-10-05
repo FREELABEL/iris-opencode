@@ -167,6 +167,7 @@ export const dict = {
   "command.prompt.mode.shell": "Ljuska",
   "command.prompt.mode.normal": "Upit",
   "command.prompt.dictate": "Diktiraj",
+  "command.voice.stopSpeaking": "Prestani čitati",
   "command.prompt.dictate.description":
     "Dodirnite za pokretanje ili zaustavljanje diktiranja; držite za govor i otpustite za zaustavljanje",
   "command.permissions.autoaccept.enable": "Automatsko prihvaćanje dopuštenja",
@@ -951,6 +952,8 @@ export const dict = {
   "settings.general.row.speakReplies.title": "Čitaj odgovore naglas",
   "settings.general.row.speakReplies.description": "Čita odgovore naglas čim stignu, putem IRIS glasovne usluge. Kod se preskače.",
   "settings.general.row.speakReplies.unavailable": "Čitanje odgovora je zaustavljeno",
+  "settings.general.row.speakVoice.title": "Glas odgovora",
+  "settings.general.row.speakVoice.description": "Glas kojim se odgovori čitaju naglas.",
   "settings.general.section.feed": "hraniti se",
   "settings.general.section.display": "Prikaz",
   "settings.general.row.language.title": "Jezik",

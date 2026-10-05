@@ -164,6 +164,7 @@ export const dict = {
   "command.prompt.mode.shell": "Shell",
   "command.prompt.mode.normal": "Prompt",
   "command.prompt.dictate": "Sesli ýaz",
+  "command.voice.stopSpeaking": "Okamagy bes et",
   "command.prompt.dictate.description":
     "Sesli ýazmagy başlatmak ýa-da togtatmak üçin basyň; gürlemek üçin basyp saklaň we togtatmak üçin goýberiň",
   "command.permissions.autoaccept.enable": "Rugsatlary awtomatiki kabul ediň",
@@ -943,6 +944,8 @@ export const dict = {
   "settings.general.row.speakReplies.title": "Jogaplary sesli oka",
   "settings.general.row.speakReplies.description": "Jogaplary gelen badyna IRIS ses hyzmaty arkaly sesli okaýar. Kod geçilýär.",
   "settings.general.row.speakReplies.unavailable": "Jogaplary sesli okamak togtady",
+  "settings.general.row.speakVoice.title": "Jogap sesi",
+  "settings.general.row.speakVoice.description": "Jogaplary sesli okamak üçin ulanylýan ses.",
   "settings.general.section.feed": "Iýmit",
   "settings.general.section.display": "Ekran",
   "settings.general.row.language.title": "Dil",

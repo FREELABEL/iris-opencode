@@ -175,6 +175,7 @@ export const dict = {
   "command.prompt.mode.shell": "เชลล์",
   "command.prompt.mode.normal": "พรอมต์",
   "command.prompt.dictate": "บอกให้พิมพ์",
+  "command.voice.stopSpeaking": "หยุดอ่าน",
   "command.prompt.dictate.description": "แตะเพื่อเริ่มหรือหยุดการบอกให้พิมพ์ กดค้างไว้เพื่อพูดแล้วปล่อยเพื่อหยุด",
   "command.permissions.autoaccept.enable": "ยอมรับสิทธิ์โดยอัตโนมัติ",
   "command.permissions.autoaccept.disable": "หยุดยอมรับสิทธิ์โดยอัตโนมัติ",
@@ -914,6 +915,8 @@ export const dict = {
   "settings.general.row.speakReplies.title": "อ่านคำตอบออกเสียง",
   "settings.general.row.speakReplies.description": "อ่านคำตอบออกเสียงเมื่อได้รับ โดยใช้บริการเสียงของ IRIS ข้ามส่วนที่เป็นโค้ด",
   "settings.general.row.speakReplies.unavailable": "หยุดอ่านคำตอบแล้ว",
+  "settings.general.row.speakVoice.title": "เสียงอ่านคำตอบ",
+  "settings.general.row.speakVoice.description": "เสียงที่ใช้อ่านคำตอบออกเสียง",
   "settings.general.section.feed": "ฟีด",
   "settings.general.section.display": "การแสดงผล",
 

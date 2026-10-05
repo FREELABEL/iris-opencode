@@ -163,6 +163,7 @@ export const dict = {
   "command.prompt.mode.shell": "Shell",
   "command.prompt.mode.normal": "Viip",
   "command.prompt.dictate": "Dikteeri",
+  "command.voice.stopSpeaking": "Lõpeta ettelugemine",
   "command.prompt.dictate.description":
     "Puuduta dikteerimise alustamiseks või lõpetamiseks; hoia all, et rääkida, ja vabasta lõpetamiseks",
   "command.permissions.autoaccept.enable": "Lubade automaatne aktsepteerimine",
@@ -939,6 +940,8 @@ export const dict = {
   "settings.general.row.speakReplies.title": "Loe vastused ette",
   "settings.general.row.speakReplies.description": "Loeb vastused saabumisel IRIS-e kõneteenusega ette. Kood jäetakse vahele.",
   "settings.general.row.speakReplies.unavailable": "Vastuste ettelugemine peatus",
+  "settings.general.row.speakVoice.title": "Vastuste hääl",
+  "settings.general.row.speakVoice.description": "Hääl, millega vastused ette loetakse.",
   "settings.general.section.feed": "Sööda",
   "settings.general.section.display": "Ekraan",
   "settings.general.row.language.title": "Keel",

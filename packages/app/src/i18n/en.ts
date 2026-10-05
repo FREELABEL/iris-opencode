@@ -80,6 +80,7 @@ export const dict = {
   "command.prompt.mode.shell": "Shell",
   "command.prompt.mode.normal": "Prompt",
   "command.prompt.dictate": "Dictate",
+  "command.voice.stopSpeaking": "Stop speaking",
   "command.prompt.dictate.description": "Tap to start or stop dictating; hold to talk and let go to stop",
   "command.permissions.autoaccept.enable": "Auto-accept permissions",
   "command.permissions.autoaccept.disable": "Stop auto-accepting permissions",
@@ -927,6 +928,8 @@ export const dict = {
   "settings.general.row.speakReplies.title": "Speak replies",
   "settings.general.row.speakReplies.description": "Read replies aloud as they arrive, using the IRIS voice service. Code is skipped.",
   "settings.general.row.speakReplies.unavailable": "Spoken replies stopped",
+  "settings.general.row.speakVoice.title": "Reply voice",
+  "settings.general.row.speakVoice.description": "The voice used to read replies aloud.",
   "settings.general.section.feed": "Feed",
   "settings.general.section.display": "Display",
 
