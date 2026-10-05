@@ -6,8 +6,10 @@ import {
   currentLevel,
   ffmpegPath,
   isRecording,
+  listInputDevices,
   peakAmplitude,
   recorderReadiness,
+  resolveCaptureDevice,
   soundSettingsHint,
   startCapture,
   stopCapture,
@@ -197,11 +199,19 @@ function holdOrNull(audio: Uint8Array) {
 
 export const dictateRoute = HttpRouter.use((router) =>
   Effect.gen(function* () {
-    yield* add(router, "POST", "/dictate/start", () =>
+    yield* add(router, "POST", "/dictate/start", (request) =>
       Effect.sync(() => {
         try {
-          const { startedAt } = startCapture()
-          return HttpServerResponse.jsonUnsafe({ recording: true, startedAt })
+          // ?device=<name> is the Settings choice. A mic that is not plugged in records from the
+          // default instead of failing the take, and the response says so.
+          const requested = new URL(request.url, "http://localhost").searchParams.get("device")?.trim() || undefined
+          const device = resolveCaptureDevice(requested)
+          const { startedAt } = startCapture(device)
+          return HttpServerResponse.jsonUnsafe({
+            recording: true,
+            startedAt,
+            device: requested ? { requested, found: device !== undefined } : undefined,
+          })
         } catch (e) {
           return HttpServerResponse.jsonUnsafe({ error: e instanceof Error ? e.message : String(e) }, { status: 409 })
         }
@@ -249,6 +259,11 @@ export const dictateRoute = HttpRouter.use((router) =>
 
     // RMS of the last ~50 ms of the sidecar recording, for the composer's level meter; {0, 0} idle.
     yield* add(router, "GET", "/dictate/level", () => Effect.sync(() => HttpServerResponse.jsonUnsafe(currentLevel())))
+
+    // Microphone names for the Settings picker, behind the same loopback guard as every voice route.
+    yield* add(router, "GET", "/dictate/devices", () =>
+      Effect.sync(() => HttpServerResponse.jsonUnsafe({ devices: listInputDevices().map((name) => ({ name })) })),
+    )
   }),
 )
 

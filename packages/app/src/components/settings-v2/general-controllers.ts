@@ -2,6 +2,7 @@ import { createMemo, createResource, onMount, type Accessor } from "solid-js"
 import type { ColorScheme } from "@opencode-ai/ui/theme/context"
 import { useTheme } from "@opencode-ai/ui/theme/context"
 import { usePermission } from "@/context/permission"
+import { listDictationDevices } from "@opencode-ai/session-ui/v2/prompt-input/dictation"
 import { useServerSDK } from "@/context/server-sdk"
 import { useServerSync } from "@/context/server-sync"
 import {
@@ -189,7 +190,7 @@ export function createMicrophoneSettingsController() {
   const serverSdk = useServerSDK()
   const [devices, { refetch }] = createResource(
     async () => {
-      const [sidecar, window] = await Promise.all([sidecarDevices(serverSdk().url), windowDevices()])
+      const [sidecar, window] = await Promise.all([listDictationDevices(serverSdk().url), windowDevices()])
       return [...new Set([...sidecar, ...window])]
     },
     { initialValue: [] as string[] },
@@ -212,15 +213,6 @@ export function createMicrophoneSettingsController() {
     },
     refresh: () => void refetch(),
   }
-}
-
-async function sidecarDevices(base: string) {
-  const res = await fetch(`${base.replace(/\/$/, "")}/dictate/devices`).catch(() => undefined)
-  const body = await res?.json().catch(() => undefined)
-  if (!Array.isArray(body?.devices)) return []
-  return body.devices
-    .map((device: { name?: unknown }) => (typeof device?.name === "string" ? device.name.trim() : ""))
-    .filter((name: string) => name.length > 0)
 }
 
 async function windowDevices() {

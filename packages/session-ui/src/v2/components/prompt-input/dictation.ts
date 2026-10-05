@@ -88,6 +88,29 @@ export function setDictationAuth(resolve: ((url: string) => Record<string, strin
   authFor = resolve
 }
 
+/**
+ * The preferred microphone, by device NAME ("" or undefined = system default). Set once by the app
+ * from its settings. A name, not an id, because the two recorders do not share an id space: the
+ * window resolves it against enumerateDevices() labels, the sidecar against ffmpeg's device list.
+ * Read at start time, so a change in Settings applies to the next dictation without a remount.
+ */
+let deviceFor: (() => string | undefined) | undefined
+
+export function setDictationDevice(resolve: (() => string | undefined) | undefined) {
+  deviceFor = resolve
+}
+
+/** Microphone names the sidecar can record from. Empty when the server cannot list them. */
+export async function listDictationDevices(base: string): Promise<string[]> {
+  const url = base.replace(/\/$/, "")
+  const res = await fetch(`${url}/dictate/devices`, { headers: { ...authFor?.(url) } }).catch(() => undefined)
+  const body = await res?.json().catch(() => undefined)
+  if (!Array.isArray(body?.devices)) return []
+  return body.devices
+    .map((device: { name?: unknown }) => (typeof device?.name === "string" ? device.name.trim() : ""))
+    .filter((name: string) => name.length > 0)
+}
+
 function isWindows() {
   return typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent)
 }
@@ -277,6 +300,7 @@ export function createDictation(opts: DictationOptions) {
       openError = new DOMException("no audio track", "NotFoundError")
       return false
     }
+    stream = await preferredDeviceStream(stream)
     try {
       const Ctor: typeof AudioContext =
         (window as unknown as { AudioContext: typeof AudioContext }).AudioContext ??
@@ -316,7 +340,10 @@ export function createDictation(opts: DictationOptions) {
 
   async function startSidecar(): Promise<boolean> {
     try {
-      const res = await call("/dictate/start", { method: "POST" })
+      const device = deviceFor?.()?.trim()
+      const res = await call(device ? `/dictate/start?device=${encodeURIComponent(device)}` : "/dictate/start", {
+        method: "POST",
+      })
       const body = await res.json().catch(() => null)
       if (!res.ok) {
         opts.onError?.(body?.error || "Could not start recording.")
@@ -684,3 +711,24 @@ export function createDictation(opts: DictationOptions) {
 
 /** What a keyboard shortcut needs from a mounted dictation control. */
 export type DictationControls = Pick<ReturnType<typeof createDictation>, "toggle" | "press" | "release" | "phase">
+
+/**
+ * Swap a default-device stream for the preferred microphone, when one is set and present.
+ *
+ * The default device is opened FIRST on purpose: enumerateDevices() only reveals labels after the
+ * page holds a microphone grant, and the preference is stored by label. If the preferred mic is
+ * missing (unplugged) or will not open, the default stream is kept rather than failing the take.
+ */
+async function preferredDeviceStream(current: MediaStream): Promise<MediaStream> {
+  const wanted = deviceFor?.()?.trim()
+  if (!wanted || !navigator.mediaDevices?.enumerateDevices) return current
+  const devices = await navigator.mediaDevices.enumerateDevices().catch(() => [] as MediaDeviceInfo[])
+  const match = devices.find((d) => d.kind === "audioinput" && d.label.trim() === wanted && d.deviceId !== "default")
+  if (!match || current.getAudioTracks()[0]?.getSettings().deviceId === match.deviceId) return current
+  const pinned = await navigator.mediaDevices
+    .getUserMedia({ audio: { deviceId: { exact: match.deviceId } } })
+    .catch(() => undefined)
+  if (!pinned) return current
+  current.getTracks().forEach((t) => t.stop())
+  return pinned
+}
