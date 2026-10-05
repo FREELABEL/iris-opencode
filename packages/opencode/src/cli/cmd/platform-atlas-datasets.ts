@@ -6,6 +6,7 @@ import { irisFetch, requireAuth, handleApiError, dim, bold, FL_API, isNonInterac
 import * as fs from "fs"
 import * as path from "path"
 import { firstArray } from "../../util/array"
+import { DatasetHooksGroup } from "./platform-atlas-dataset-hooks"
 
 // ============================================================================
 // Atlas Datasets CLI — Schema-driven generic data platform
@@ -1747,6 +1748,6 @@ export const PlatformAtlasDatasetsCommand = cmd({
   describe: "Schema-driven datasets — define once, store anything, no migrations",
   builder: (y) =>
     y.command(SchemasGroup).command(RecordsGroup).command(ImportCommand).command(AggregateCommand).command(DeriveCommand)
-     .command(FeedsGroup).command(ExportCommand).command(AuditCommand).command(ApiCommand).command(EconomicsGroup).demandCommand(),
+     .command(FeedsGroup).command(DatasetHooksGroup).command(ExportCommand).command(AuditCommand).command(ApiCommand).command(EconomicsGroup).demandCommand(),
   async handler() {},
 })
