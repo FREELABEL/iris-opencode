@@ -278,7 +278,10 @@
 /* ---------- quick take: the tag in the toolbar's free space ---------- */
 [data-slot="dictate-tag"] {
   position: absolute;
-  top: 50%;
+  /* centred with margins, not a transform: the fade-in animates transform and would undo it */
+  top: 0;
+  bottom: 0;
+  margin-block: auto;
   right: 0;
   display: flex;
   align-items: center;
@@ -291,7 +294,6 @@
   font-size: 11px;
   white-space: nowrap;
   pointer-events: auto;
-  transform: translateY(-50%);
   animation: dictate-fade-in 180ms ease both;
 }
 [data-slot="dictate-clock"] {

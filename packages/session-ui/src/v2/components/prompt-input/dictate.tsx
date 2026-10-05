@@ -188,7 +188,7 @@ export function PromptInputV2Dictate(props: {
         </linearGradient>
       </defs>
       <g fill={`url(#${fade})`}>
-        <Index each={p.bars}>{(bar) => <rect x={bar().x} y={bar().y} width={bar().w} height={bar().h} rx={bar().w / 2} />}</Index>
+        <Index each={p.bars}>{(bar) => <rect x={bar().x} y={bar().y} width={bar().w} height={bar().h} rx={Math.min(1, bar().w / 2)} />}</Index>
       </g>
     </svg>
   )
