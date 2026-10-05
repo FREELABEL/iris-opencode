@@ -213,7 +213,9 @@ if [ "$ASSUME_YES" != true ]; then
 fi
 
 # 1. Bump version
-sed -i '' "s/\"version\": \"$PKG_VERSION\"/\"version\": \"$TARGET\"/" "$PKG"
+# perl -pi, not `sed -i ''`: BSD sed needs the empty suffix and GNU sed reads it as the script,
+# so the old line only worked on macOS and released nothing from Linux (Hive nodes, cloud boxes).
+perl -pi -e "s/\"version\": \"\Q$PKG_VERSION\E\"/\"version\": \"$TARGET\"/" "$PKG"
 if ! grep -q "\"version\": \"$TARGET\"" "$PKG"; then
   echo "Error: failed to write $TARGET into $PKG (it said $PKG_VERSION) — nothing tagged."
   exit 1
