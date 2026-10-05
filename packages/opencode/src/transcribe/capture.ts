@@ -1,5 +1,5 @@
 import { spawn, spawnSync, type ChildProcess } from "child_process"
-import { existsSync } from "fs"
+import { existsSync, readFileSync } from "fs"
 import { dirname, join } from "path"
 import { resolveBin, TranscribeError } from "./local"
 
@@ -346,6 +346,79 @@ function noMicrophoneMessage(platform: string, device?: string) {
   return `No microphone was found. Plug one in, or turn one on in ${soundSettingsHint(platform)}, then try again.`
 }
 
+/**
+ * Microphones this host can record from, by NAME — what the Settings picker shows and stores.
+ * Names, not ids: the window recorder sees browser deviceIds and this recorder sees ffmpeg devices,
+ * so a name is the only key both sides can resolve (see resolveCaptureDevice).
+ */
+export function listInputDevices(platform: string = process.platform, ffmpeg = ffmpegPath()): string[] {
+  if (platform === "linux") return alsaCaptureDevices().map((d) => d.name)
+  if (!ffmpeg) return []
+  if (platform === "win32") return listDshowAudioDevices(ffmpeg).map((d) => d.name)
+  if (platform !== "darwin") return []
+  const r = spawnSync(ffmpeg, ["-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", ""], {
+    encoding: "utf8",
+    timeout: 5000,
+  })
+  return parseAvfoundationAudioDevices(r.stderr ?? "")
+}
+
+/**
+ * The device argument inputCandidates() wants for a microphone NAME, or undefined when that mic
+ * is not present (the caller then records from the default rather than failing the take).
+ * avfoundation and dshow take the name itself; ALSA wants a hardware id.
+ */
+export function resolveCaptureDevice(
+  name: string | undefined,
+  platform: string = process.platform,
+  ffmpeg = ffmpegPath(),
+): string | undefined {
+  const wanted = name?.trim()
+  if (!wanted) return undefined
+  if (platform === "linux") return alsaCaptureDevices().find((d) => d.name === wanted)?.id
+  return listInputDevices(platform, ffmpeg).includes(wanted) ? wanted : undefined
+}
+
+/** `ffmpeg -f avfoundation -list_devices true -i ""` stderr: the entries under the audio header. */
+export function parseAvfoundationAudioDevices(stderr: string): string[] {
+  const out: string[] = []
+  let inAudio = false
+  for (const line of stderr.split("\n")) {
+    if (/AVFoundation audio devices/i.test(line)) {
+      inAudio = true
+      continue
+    }
+    if (/AVFoundation video devices/i.test(line)) {
+      inAudio = false
+      continue
+    }
+    const m = inAudio ? line.match(/\]\s*\[(\d+)\]\s+(.+?)\s*$/) : undefined
+    if (m) out.push(m[2]!.trim())
+  }
+  return out
+}
+
+/**
+ * ALSA capture PCMs from /proc/asound/pcm, e.g. "00-02: ALC3234 Alt Analog : ALC3234 Alt Analog :
+ * capture 1" -> { id: "plughw:0,2", name: "ALC3234 Alt Analog" }. plughw (not hw) so ALSA converts to
+ * the 16 kHz mono the recorder asks for. Reading /proc needs no extra tool (arecord is often absent).
+ */
+export function parseAlsaPcm(text: string): Array<{ id: string; name: string }> {
+  return text
+    .split("\n")
+    .map((line) => line.match(/^(\d+)-(\d+):\s*([^:]+?)\s*:.*\bcapture\b/))
+    .filter((m): m is RegExpMatchArray => m !== null)
+    .map((m) => ({ id: `plughw:${Number(m[1])},${Number(m[2])}`, name: m[3]!.trim() }))
+}
+
+function alsaCaptureDevices() {
+  try {
+    return parseAlsaPcm(readFileSync("/proc/asound/pcm", "utf8"))
+  } catch {
+    return []
+  }
+}
+
 function listDshowAudioDevices(ffmpeg: string) {
   const r = spawnSync(ffmpeg, ["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"], {
     encoding: "utf8",
@@ -428,36 +501,6 @@ export function peakAmplitude(wav: Uint8Array): number {
     if (v > peak) peak = v
   }
   return peak
-}
-
-/**
- * Audio input devices, so a silent capture can be answered with "pick a different one"
- * rather than a shrug. Channel 0 of an aggregate device is not always the live microphone.
- */
-export function listInputDevices(): Array<{ index: string; name: string }> {
-  const ffmpeg = ffmpegPath()
-  if (!ffmpeg) return []
-  // On Windows the "index" is the device's DirectShow alternative name, which startCapture accepts.
-  if (process.platform === "win32")
-    return listDshowAudioDevices(ffmpeg).map((d) => ({ index: d.alternative ?? d.name, name: d.name }))
-  if (process.platform !== "darwin") return []
-  const r = spawnSync(ffmpeg, ["-f", "avfoundation", "-list_devices", "true", "-i", ""], { encoding: "utf8" })
-  const out: Array<{ index: string; name: string }> = []
-  let inAudio = false
-  for (const line of (r.stderr || "").split("\n")) {
-    if (/AVFoundation audio devices/i.test(line)) {
-      inAudio = true
-      continue
-    }
-    if (/AVFoundation video devices/i.test(line)) {
-      inAudio = false
-      continue
-    }
-    if (!inAudio) continue
-    const m = line.match(/\[(\d+)\]\s+(.+?)\s*$/)
-    if (m) out.push({ index: m[1]!, name: m[2]!.trim() })
-  }
-  return out
 }
 
 /** Wrap raw 16 kHz mono s16le PCM in a RIFF header, so whisper gets a normal WAV. */

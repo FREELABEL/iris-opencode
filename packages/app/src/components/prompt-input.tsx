@@ -27,7 +27,8 @@ import {
 } from "@/context/prompt"
 import { useLayout } from "@/context/layout"
 import { useSDK } from "@/context/sdk"
-import { createDictation, setDictationAuth } from "@opencode-ai/session-ui/v2/prompt-input/dictation"
+import { createDictation, setDictationAuth, setDictationDevice } from "@opencode-ai/session-ui/v2/prompt-input/dictation"
+import { useSettings } from "@/context/settings"
 import { useServerSDK } from "@/context/server-sdk"
 import { dictationAuthFor } from "@/utils/dictation-auth"
 import { useSync } from "@/context/sync"
@@ -1030,6 +1031,9 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   // Same credentials as the SDK, so the mic survives a server password.
   const serverForDictation = useServerSDK()
   setDictationAuth((url) => dictationAuthFor(serverForDictation().server.http, url))
+  // The Settings > Microphone choice, read at the start of each take.
+  const dictationSettings = useSettings()
+  setDictationDevice(() => dictationSettings.voice.inputDevice())
   const dictation = createDictation({
     url: () => sdk().url,
     onError: setDictationError,
