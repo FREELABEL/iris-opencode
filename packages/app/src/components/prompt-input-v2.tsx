@@ -7,7 +7,7 @@ import { KeybindV2 } from "@opencode-ai/ui/v2/keybind-v2"
 import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 import type { ReferenceInfo } from "@opencode-ai/sdk/v2/client"
 import { createEffect, createMemo, createSignal, on, Show } from "solid-js"
-import type { DictationControls } from "@opencode-ai/session-ui/v2/prompt-input/dictation"
+import { setDictationAuth, type DictationControls } from "@opencode-ai/session-ui/v2/prompt-input/dictation"
 import { DICTATE_COMMAND_ID, dictateCommand } from "@/components/prompt-input/dictate-command"
 import { ModelSelectorPopoverV2 } from "@/components/dialog-select-model"
 import { DialogSelectModelUnpaidV2 } from "@/components/dialog-select-model-unpaid-v2"
@@ -25,6 +25,8 @@ import { usePermission } from "@/context/permission"
 import { type ImageAttachmentPart, usePrompt } from "@/context/prompt"
 import { usePlatform } from "@/context/platform"
 import { useSDK } from "@/context/sdk"
+import { useServerSDK } from "@/context/server-sdk"
+import { dictationAuthFor } from "@/utils/dictation-auth"
 import { useSync } from "@/context/sync"
 import { createSessionTabs } from "@/pages/session/helpers"
 import { showToast } from "@/utils/toast"
@@ -54,6 +56,9 @@ export type PromptInputV2ComposerController = PromptInputV2Interaction & {
 export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
   // Read at request time, not captured: the selected server can change while mounted.
   const sdkForDictation = useSDK()
+  // Dictation's fetches carry the same credentials as the SDK, so the mic survives a server password.
+  const serverForDictation = useServerSDK()
+  setDictationAuth((url) => dictationAuthFor(serverForDictation().server.http, url))
   const dialog = useDialog()
   const command = useCommand()
   const language = useLanguage()
