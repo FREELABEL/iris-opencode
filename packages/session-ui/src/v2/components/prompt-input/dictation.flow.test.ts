@@ -322,3 +322,28 @@ describe("createDictation — cancel throws a take away without transcribing it"
     dispose()
   })
 })
+
+describe("createDictation — extend: Keep recording lifts a running take to the background cap", () => {
+  test("a window take extended past 5:00 keeps recording", async () => {
+    setUserAgent("Mozilla/5.0 (Windows NT 10.0)")
+    const ticks: Array<() => void> = []
+    globalThis.setInterval = ((fn: () => void) => {
+      ticks.push(fn)
+      return 0 as any
+    }) as any
+    const { d, dispose } = await mount()
+    d.toggle()
+    await sleep(10)
+    d.extend()
+    for (let i = 0; i < 400; i++) ticks[0]!()
+    expect(d.phase()).toBe("recording")
+    dispose()
+  })
+
+  test("extend when idle does nothing", async () => {
+    const { d, dispose } = await mount()
+    d.extend()
+    expect(d.phase()).toBe("idle")
+    dispose()
+  })
+})

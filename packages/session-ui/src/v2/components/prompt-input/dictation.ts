@@ -862,6 +862,16 @@ export function createDictation(opts: DictationOptions) {
     setPhase("idle")
   }
 
+  /**
+   * Lift a running take to the background cap ("Keep recording"). The window recorder honours it
+   * at once; a sidecar take keeps the limit ffmpeg was launched with (-t), so it still ends at
+   * the inline cap and its transcript goes to review.
+   */
+  function extend() {
+    if (phase() !== "recording") return
+    maxSeconds = BACKGROUND_MAX_SECONDS
+  }
+
   function toggle() {
     if (phase() === "recording") void stop()
     else if (phase() === "idle") void start()
@@ -890,6 +900,7 @@ export function createDictation(opts: DictationOptions) {
     press,
     release,
     cancel,
+    extend,
     held,
     retrying,
     nextRetryIn,

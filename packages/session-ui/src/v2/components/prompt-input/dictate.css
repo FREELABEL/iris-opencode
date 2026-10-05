@@ -535,6 +535,10 @@
   margin: 0;
   white-space: pre-wrap;
 }
+/* words still being heard: grey until the engine locks them */
+[data-slot="dictate-partial"] {
+  color: var(--v2-text-text-faint);
+}
 [data-slot="dictate-panel"] [data-slot="dictate-wave"] {
   display: block;
   width: calc(100% - 24px);

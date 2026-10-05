@@ -49,9 +49,18 @@ export function PromptInputV2Dictate(props: {
   const [voice, setVoice] = createSignal(initialVoice)
   const send = (event: VoiceEvent) => setVoice((s) => voiceReducer(s, event))
   let settled = false
+  // Live preview from the streaming engine, for this take only. The batch transcript at the end
+  // is still what gets inserted; these words are a preview it replaces.
+  const [finals, setFinals] = createSignal<string[]>([])
+  const [partial, setPartial] = createSignal("")
 
   const dictation = createDictation({
     url: props.url,
+    onPartial: (text) => setPartial(text),
+    onFinal: (text) => {
+      setFinals((list) => [...list, text])
+      setPartial("")
+    },
     onError: (message) => {
       setError(message)
       props.onError?.(message)
@@ -72,7 +81,11 @@ export function PromptInputV2Dictate(props: {
   // before the recorder was up. Without this the mode would wait for a transcript forever.
   createEffect(
     on(phase, (now, before) => {
-      if (now === "recording") settled = false
+      if (now === "recording" && before !== "recording") {
+        settled = false
+        setFinals([])
+        setPartial("")
+      }
       if (now === "idle" && before && before !== "idle" && !settled && (mode() === "quick" || mode() === "background"))
         send({ type: "failed" })
     }),
@@ -111,10 +124,14 @@ export function PromptInputV2Dictate(props: {
 
   function startBackground() {
     setMenu(false)
-    if (mode() === "quick") return send({ type: "keep" })
+    if (mode() === "quick") return keep()
     if (mode() !== "idle" || phase() !== "idle") return
     send({ type: "background" })
-    dictation.toggle()
+    void dictation.startBackground()
+  }
+  function keep() {
+    dictation.extend()
+    send({ type: "keep" })
   }
   const dismiss = () => {
     setError(undefined)
@@ -292,7 +309,7 @@ export function PromptInputV2Dictate(props: {
                   type="button"
                   data-slot="dictate-keep"
                   title={i18n.t("ui.promptInput.dictate.keepHint")}
-                  onClick={() => send({ type: "keep" })}
+                  onClick={keep}
                 >
                   <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
                     <path d="M3 7l4-4M4 3h3v3" stroke="currentColor" fill="none" stroke-width="1.3" stroke-linecap="round" />
@@ -385,11 +402,25 @@ export function PromptInputV2Dictate(props: {
                 <Show
                   when={mode() === "review"}
                   fallback={
-                    <p data-slot="dictate-panel-hint">
-                      {phase() === "recording"
-                        ? i18n.t("ui.promptInput.dictate.background.waiting")
-                        : i18n.t("ui.promptInput.dictate.transcribing")}
-                    </p>
+                    <Show
+                      when={finals().length > 0 || partial()}
+                      fallback={
+                        <p data-slot="dictate-panel-hint">
+                          {phase() !== "recording"
+                            ? i18n.t("ui.promptInput.dictate.transcribing")
+                            : dictation.live() === "streaming" || dictation.live() === "connecting"
+                              ? i18n.t("ui.promptInput.dictate.background.listening")
+                              : i18n.t("ui.promptInput.dictate.background.waiting")}
+                        </p>
+                      }
+                    >
+                      <p data-slot="dictate-panel-text">
+                        {finals().join(" ")}
+                        <Show when={partial()}>
+                          <span data-slot="dictate-partial"> {partial()}</span>
+                        </Show>
+                      </p>
+                    </Show>
                   }
                 >
                   <p data-slot="dictate-panel-text">{voice().result}</p>
