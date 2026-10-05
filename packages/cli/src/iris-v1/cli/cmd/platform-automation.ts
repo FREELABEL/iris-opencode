@@ -1,0 +1,781 @@
+import { cmd } from "./cmd"
+import * as prompts from "./clack"
+import { UI } from "../ui"
+import {
+  irisFetch,
+  requireAuth,
+  requireUserId,
+  printDivider,
+  printKV,
+  dim,
+  bold,
+  success,
+  highlight,
+  isNonInteractive, writeJson } from "./iris-api"
+
+// ============================================================================
+// Endpoint constants — the real fl-api routes the V6 backend exposes.
+// ============================================================================
+//
+//   create:  POST   /api/v1/users/{userId}/bloqs/workflow-templates  (WorkflowTemplateController::store)
+//   execute: POST   /api/v1/workflows/{id}/execute/v6
+//   status:  GET    /api/v1/workflows/runs/{runId}
+//   runs:    GET    /api/v1/workflows/runs?...
+//   list:    GET    /api/v1/users/{userId}/bloqs/workflow-templates?...
+//   delete:  DELETE /api/v1/workflows/{id}
+//   cancel:  POST   /api/v1/workflows/runs/{runId}/cancel
+//
+// NOTE (#157794): create/list/execute MUST all stay on the workflow-TEMPLATE plane
+// (WorkflowTemplate is STI over bloq_workflows with a workflow_type='template' global
+// scope; list + execute/v6 both findOrFail template-scoped). `create` used to 422
+// because WorkflowTemplateController::store hard-required a `steps` array. That
+// endpoint now treats `steps` as nullable and persists the agentic fields
+// (execution_mode/agent_id/agent_config/max_iterations) for goal-driven agentic_v6
+// automations, so a created row is immediately listable AND executable. Routing
+// create to bloqs/workflows instead would create a workflow_type='workflow' row that
+// list/execute (template-scoped) can't see — a silent orphan. See buildAutomationCreatePayload.
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+function safeJsonParse<T = unknown>(raw: string, label: string): T {
+  try {
+    return JSON.parse(raw) as T
+  } catch (err) {
+    throw new Error(`Invalid JSON in --${label}: ${(err as Error).message}`)
+  }
+}
+
+// ============================================================================
+// Shared create contract (#157794)
+//
+// Used by BOTH `iris automation create` and `iris automation:test` so the two
+// code paths can never diverge again — previously `create` 422'd (generic
+// template endpoint, steps required) while `automation:test` 404'd (a nonexistent
+// /api/v1/workflows/templates route). Both now flow through the SAME endpoint +
+// payload builder below.
+// ============================================================================
+
+export const AUTOMATION_EXECUTION_MODE = "agentic_v6"
+
+export interface AutomationCreateInput {
+  name: string
+  agentId: number
+  goal: string
+  outcomes: unknown
+  successCriteria?: unknown
+  maxIterations?: number
+  description?: string
+  /** Optional explicit steps. Agentic_v6 automations are goal-driven and do NOT
+   *  require steps; when omitted an empty array is sent (accepted as nullable). */
+  steps?: unknown[]
+}
+
+export function automationCreatePath(userId: number | string): string {
+  return `/api/v1/users/${userId}/bloqs/workflow-templates`
+}
+
+export function buildAutomationCreatePayload(input: AutomationCreateInput): Record<string, unknown> {
+  const maxIterations = input.maxIterations ?? 10
+  return {
+    name: input.name,
+    description: input.description ?? "",
+    execution_mode: AUTOMATION_EXECUTION_MODE,
+    // agent_id is sent both top-level (column) and inside agent_config (JSON blob)
+    // so it survives regardless of which the backend persists.
+    agent_id: input.agentId,
+    agent_config: {
+      agent_id: input.agentId,
+      goal: input.goal,
+      outcomes: input.outcomes,
+      success_criteria: input.successCriteria ?? [],
+      max_iterations: maxIterations,
+    },
+    max_iterations: maxIterations,
+    steps: Array.isArray(input.steps) ? input.steps : [],
+  }
+}
+
+/**
+ * POST a create request for a V6 automation and return the raw Response so the
+ * caller can surface the HTTP status. Both `create` and `automation:test` MUST
+ * use this to guarantee identical endpoint + payload (#157794).
+ */
+export async function requestAutomationCreate(
+  userId: number | string,
+  input: AutomationCreateInput,
+): Promise<Response> {
+  return irisFetch(automationCreatePath(userId), {
+    method: "POST",
+    body: JSON.stringify(buildAutomationCreatePayload(input)),
+  })
+}
+
+function statusColor(status?: string): string {
+  switch (status) {
+    case "completed":
+      return UI.Style.TEXT_SUCCESS
+    case "running":
+      return UI.Style.TEXT_WARNING ?? UI.Style.TEXT_HIGHLIGHT
+    case "failed":
+      return UI.Style.TEXT_DANGER
+    default:
+      return UI.Style.TEXT_DIM
+  }
+}
+
+function colorStatus(status?: string): string {
+  return `${statusColor(status)}${status ?? "unknown"}${UI.Style.TEXT_NORMAL}`
+}
+
+// ============================================================================
+// Subcommands
+// ============================================================================
+
+const CreateCommand = cmd({
+  command: "create",
+  describe: "create a V6 automation (goal-driven workflow)",
+  builder: (yargs) =>
+    yargs
+      .option("name", { describe: "automation name", type: "string" })
+      .option("agent-id", { describe: "agent ID", type: "number" })
+      .option("goal", { describe: "goal description", type: "string" })
+      .option("outcomes", { describe: "outcomes JSON array", type: "string" })
+      .option("success-criteria", { describe: "success criteria JSON array", type: "string" })
+      .option("max-iterations", { describe: "max ReAct iterations", type: "number", default: 10 })
+      .option("description", { describe: "automation description", type: "string" })
+      .option("steps", {
+        describe: "steps JSON array (optional — agentic_v6 is goal-driven and does not require steps)",
+        type: "string",
+      })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+
+    // Hard-validate required flags up front so non-TTY callers fail fast
+    const missing: string[] = []
+    if (!args.name) missing.push("name")
+    if (!args["agent-id"]) missing.push("agent-id")
+    if (!args.goal) missing.push("goal")
+    if (!args.outcomes) missing.push("outcomes")
+    if (missing.length > 0) {
+      const msg = `Missing required: ${missing.map((m) => "--" + m).join(", ")}`
+      if (args.json) console.log(JSON.stringify({ ok: false, error: msg }))
+      else {
+        prompts.log.error(msg)
+        console.log(`  ${dim("Example:")}`)
+        console.log(`  ${dim("  iris automation create --name='Email' --agent-id=55 \\")}`)
+        console.log(`  ${dim("    --goal='Send email to client' \\")}`)
+        console.log(`  ${dim("    --outcomes='[{\"type\":\"email\",\"description\":\"Sent\"}]'")}`)
+      }
+      process.exitCode = 2
+      return
+    }
+
+    let outcomes: unknown
+    try {
+      outcomes = safeJsonParse(args.outcomes as string, "outcomes")
+    } catch (err) {
+      const msg = (err as Error).message
+      if (args.json) console.log(JSON.stringify({ ok: false, error: msg }))
+      else prompts.log.error(msg)
+      process.exitCode = 1
+      return
+    }
+
+    let successCriteria: unknown = []
+    if (args["success-criteria"]) {
+      try {
+        successCriteria = safeJsonParse(args["success-criteria"] as string, "success-criteria")
+      } catch (err) {
+        const msg = (err as Error).message
+        if (args.json) console.log(JSON.stringify({ ok: false, error: msg }))
+        else prompts.log.error(msg)
+        process.exitCode = 1
+        return
+      }
+    }
+
+    let steps: unknown[] | undefined
+    if (args.steps) {
+      try {
+        const parsed = safeJsonParse(args.steps as string, "steps")
+        if (!Array.isArray(parsed)) throw new Error("Invalid JSON in --steps: must be a JSON array")
+        steps = parsed as unknown[]
+      } catch (err) {
+        const msg = (err as Error).message
+        if (args.json) console.log(JSON.stringify({ ok: false, error: msg }))
+        else prompts.log.error(msg)
+        process.exitCode = 1
+        return
+      }
+    }
+
+    if (!args.json) {
+      UI.empty()
+      prompts.intro("◈  Create V6 Automation")
+      printDivider()
+      printKV("Name", args.name)
+      printKV("Agent ID", args["agent-id"])
+      printKV("Goal", args.goal)
+      printKV("Outcomes", Array.isArray(outcomes) ? `${(outcomes as unknown[]).length} outcome(s)` : "1")
+      printKV("Max iterations", args["max-iterations"])
+      printDivider()
+    }
+
+    try {
+      const userId = await requireUserId()
+      if (!userId) { prompts.outro("Done"); return }
+      const res = await requestAutomationCreate(userId, {
+        name: args.name as string,
+        agentId: args["agent-id"] as number,
+        goal: args.goal as string,
+        outcomes,
+        successCriteria,
+        maxIterations: args["max-iterations"] as number,
+        description: args.description as string | undefined,
+        steps,
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        if (args.json) console.log(JSON.stringify({ ok: false, status: res.status, error: text.slice(0, 300) }))
+        else {
+          prompts.log.error(`Failed (HTTP ${res.status})`)
+          console.log(`  ${dim(text.slice(0, 300))}`)
+          prompts.outro("Done")
+        }
+        process.exitCode = 1
+        return
+      }
+      const automation = (await res.json()) as any
+      if (args.json) {
+        await writeJson(automation)
+        return
+      }
+      const id = automation?.id ?? automation?.data?.id ?? "N/A"
+      console.log(`  ${success("✓")} Automation created`)
+      printKV("ID", id)
+      prompts.outro(dim(`iris automation execute ${id}`))
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (args.json) console.log(JSON.stringify({ ok: false, error: msg }))
+      else prompts.log.error(`Failed: ${msg}`)
+      process.exitCode = 1
+    }
+  },
+})
+
+const ExecuteCommand = cmd({
+  command: "execute <id>",
+  aliases: ["run"],
+  describe: "execute an automation by ID",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "automation ID", type: "number", demandOption: true })
+      .option("inputs", { describe: "execution inputs JSON object", type: "string" })
+      .option("wait", { describe: "wait for completion", type: "boolean", default: false })
+      .option("interval", { describe: "poll interval seconds (with --wait)", type: "number", default: 2 })
+      .option("timeout", { describe: "timeout seconds (with --wait)", type: "number", default: 300 })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+
+    const id = args.id as number
+    let inputs: unknown = {}
+    if (args.inputs) {
+      try {
+        inputs = safeJsonParse(args.inputs as string, "inputs")
+      } catch (err) {
+        const msg = (err as Error).message
+        if (args.json) console.log(JSON.stringify({ ok: false, error: msg }))
+        else prompts.log.error(msg)
+        process.exitCode = 1
+        return
+      }
+    }
+
+    if (!args.json) {
+      UI.empty()
+      prompts.intro(`◈  Execute Automation #${id}`)
+    }
+
+    try {
+      const res = await irisFetch(`/api/v1/workflows/${id}/execute/v6`, {
+        method: "POST",
+        body: JSON.stringify({ inputs }),
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        if (args.json) console.log(JSON.stringify({ ok: false, status: res.status, error: text.slice(0, 300) }))
+        else prompts.log.error(`Failed (HTTP ${res.status}): ${text.slice(0, 200)}`)
+        process.exitCode = 1
+        return
+      }
+      const run = (await res.json()) as any
+      const runId = run?.run_id ?? run?.data?.run_id
+
+      if (args.json) {
+        await writeJson(run)
+        if (args.wait && runId) {
+          await pollUntilDone(String(runId), args.timeout as number, args.interval as number, true)
+        }
+        return
+      }
+
+      console.log(`  ${success("✓")} Execution started`)
+      printDivider()
+      printKV("Run ID", runId ?? "N/A")
+      printKV("Automation", run?.workflow_id ?? "N/A")
+      printKV("Status", colorStatus(run?.status))
+      printKV("Progress", `${run?.progress ?? 0}%`)
+      printDivider()
+
+      if (args.wait && runId) {
+        console.log()
+        prompts.log.info("Waiting for completion (Ctrl+C to stop)…")
+        const final = await pollUntilDone(String(runId), args.timeout as number, args.interval as number, false)
+        if (final?.status === "completed") {
+          console.log(`  ${success("✓")} Completed`)
+          prompts.outro("Done")
+        } else {
+          prompts.log.error(`Run ${final?.status ?? "did not complete"}`)
+          prompts.outro("Done")
+          process.exitCode = 1
+        }
+      } else {
+        prompts.outro(dim(`iris automation monitor ${runId}`))
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (args.json) console.log(JSON.stringify({ ok: false, error: msg }))
+      else prompts.log.error(`Failed: ${msg}`)
+      process.exitCode = 1
+    }
+  },
+})
+
+async function pollUntilDone(
+  runId: string,
+  timeoutSeconds: number,
+  intervalSeconds: number,
+  jsonOutput: boolean,
+): Promise<any | null> {
+  const deadline = Date.now() + timeoutSeconds * 1000
+  while (Date.now() < deadline) {
+    const res = await irisFetch(`/api/v1/workflows/runs/${runId}`)
+    if (!res.ok) {
+      throw new Error(`Status fetch failed (HTTP ${res.status})`)
+    }
+    const status = (await res.json()) as any
+    if (jsonOutput) {
+      console.log(JSON.stringify(status))
+    } else {
+      const ts = new Date().toISOString().slice(11, 19)
+      console.log(`  ${dim(`[${ts}]`)} ${colorStatus(status?.status)}  ${dim(`progress ${status?.progress ?? 0}%`)}`)
+    }
+    if (status?.status === "completed" || status?.status === "failed") {
+      return status
+    }
+    await new Promise((r) => setTimeout(r, intervalSeconds * 1000))
+  }
+  throw new Error(`Timed out after ${timeoutSeconds}s waiting for run ${runId}`)
+}
+
+const StatusCommand = cmd({
+  command: "status <runId>",
+  aliases: ["get"],
+  describe: "get automation run status",
+  builder: (yargs) =>
+    yargs
+      .positional("runId", { describe: "run ID", type: "string", demandOption: true })
+      .option("detailed", { alias: "d", describe: "show tool result details", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+    const runId = args.runId as string
+
+    try {
+      const res = await irisFetch(`/api/v1/workflows/runs/${runId}`)
+      if (!res.ok) {
+        const text = await res.text()
+        if (args.json) console.log(JSON.stringify({ ok: false, status: res.status, error: text.slice(0, 200) }))
+        else prompts.log.error(`Failed to get status (HTTP ${res.status})`)
+        process.exitCode = 1
+        return
+      }
+      const status = (await res.json()) as any
+
+      if (args.json) {
+        await writeJson(status)
+        return
+      }
+
+      UI.empty()
+      prompts.intro(`◈  Run ${runId}`)
+      printDivider()
+      printKV("Status", colorStatus(status.status))
+      printKV("Automation", status.workflow_name ?? "N/A")
+      printKV("Progress", `${status.progress ?? 0}%`)
+      printKV("Started", status.started_at ?? "N/A")
+      printKV("Completed", status.completed_at ?? "N/A")
+      printDivider()
+
+      const results = status.results
+      if (status.status === "completed" && results) {
+        console.log()
+        console.log(`  ${bold("Results")}`)
+        printKV("Iterations", results.iterations)
+        printKV("Tools used", (results.tools_used ?? []).join(", "))
+
+        if (results.content) {
+          console.log()
+          console.log(`  ${bold("Content")}`)
+          console.log(`  ${dim(String(results.content).slice(0, 500))}`)
+        }
+
+        if (Array.isArray(results.outcomes_delivered)) {
+          console.log()
+          console.log(`  ${bold("Outcomes Delivered")}`)
+          for (const outcome of results.outcomes_delivered) {
+            console.log(`  ${success("✓")} ${outcome.description}`)
+            if (outcome.data && typeof outcome.data === "object") {
+              for (const [k, v] of Object.entries(outcome.data)) {
+                console.log(`     ${dim(k + ":")} ${v}`)
+              }
+            }
+          }
+        }
+
+        if (args.detailed && Array.isArray(results.tool_results)) {
+          console.log()
+          console.log(`  ${bold("Tool Results (detailed)")}`)
+          // for..of rather than forEach: writeJson is awaited (#180735), and a sync callback
+          // cannot await — the payload would go out unflushed again.
+          for (const [i, tr] of results.tool_results.entries()) {
+            console.log(`  ${highlight(`Call #${i + 1}:`)}`)
+            await writeJson(tr)
+          }
+        }
+      }
+
+      if (status.status === "failed" && status.error) {
+        console.log()
+        prompts.log.error(String(status.error))
+      }
+
+      prompts.outro("Done")
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (args.json) console.log(JSON.stringify({ ok: false, error: msg }))
+      else prompts.log.error(`Failed: ${msg}`)
+      process.exitCode = 1
+    }
+  },
+})
+
+const MonitorCommand = cmd({
+  command: "monitor <runId>",
+  aliases: ["watch"],
+  describe: "monitor an automation run with live updates",
+  builder: (yargs) =>
+    yargs
+      .positional("runId", { describe: "run ID", type: "string", demandOption: true })
+      .option("interval", { describe: "polling interval seconds", type: "number", default: 2 })
+      .option("timeout", { describe: "timeout seconds", type: "number", default: 300 })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+    const runId = args.runId as string
+
+    if (!args.json) {
+      UI.empty()
+      prompts.intro(`◈  Monitor ${runId}`)
+      console.log(`  ${dim("Press Ctrl+C to stop")}`)
+      console.log()
+    }
+
+    try {
+      const final = await pollUntilDone(runId, args.timeout as number, args.interval as number, args.json as boolean)
+      if (!args.json) {
+        console.log()
+        if (final?.status === "completed") {
+          console.log(`  ${success("✓")} Completed`)
+        } else {
+          prompts.log.error(`Run ${final?.status}`)
+        }
+        prompts.outro("Done")
+      }
+      if (final?.status !== "completed") process.exitCode = 1
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (args.json) console.log(JSON.stringify({ ok: false, error: msg }))
+      else prompts.log.error(msg)
+      process.exitCode = 1
+    }
+  },
+})
+
+const ListCommand = cmd({
+  command: "list",
+  aliases: ["ls"],
+  describe: "list all automations",
+  builder: (yargs) =>
+    yargs
+      .option("agent-id", { describe: "filter by agent ID", type: "number" })
+      .option("page", { describe: "page number", type: "number", default: 1 })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+    const userId = await requireUserId()
+    if (!userId) return
+
+    const params = new URLSearchParams()
+    if (args["agent-id"]) params.set("agent_id", String(args["agent-id"]))
+    if (args.page) params.set("page", String(args.page))
+    const qs = params.toString() ? `?${params.toString()}` : ""
+
+    try {
+      const res = await irisFetch(`/api/v1/users/${userId}/bloqs/workflow-templates${qs}`)
+      if (!res.ok) {
+        const text = await res.text()
+        if (args.json) console.log(JSON.stringify({ ok: false, status: res.status, error: text.slice(0, 200) }))
+        else prompts.log.error(`Failed (HTTP ${res.status})`)
+        process.exitCode = 1
+        return
+      }
+      const result = (await res.json()) as any
+      if (args.json) {
+        await writeJson(result)
+        return
+      }
+      const automations = result?.data ?? []
+      UI.empty()
+      prompts.intro("◈  V6 Automations")
+      if (automations.length === 0) {
+        prompts.log.warn("No automations found.")
+        prompts.outro(dim("Create one: iris automation create --help"))
+        return
+      }
+      printDivider()
+      for (const a of automations) {
+        const goal = String(a.agent_config?.goal ?? "").slice(0, 80)
+        const outcomesCount = (a.agent_config?.outcomes ?? []).length
+        console.log(`  ${bold(a.name ?? `#${a.id}`)}  ${dim("#" + a.id)}`)
+        console.log(`     ${dim("Agent:")} ${a.agent_id ?? "N/A"}  ${dim("Outcomes:")} ${outcomesCount}`)
+        if (goal) console.log(`     ${dim("Goal:")}  ${goal}`)
+        console.log()
+      }
+      printDivider()
+      if (result.pagination) {
+        const p = result.pagination
+        console.log(`  ${dim(`Page ${p.current_page} of ${p.last_page} (${p.total} total)`)}`)
+      }
+      prompts.outro("Done")
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (args.json) console.log(JSON.stringify({ ok: false, error: msg }))
+      else prompts.log.error(`Failed: ${msg}`)
+      process.exitCode = 1
+    }
+  },
+})
+
+const RunsCommand = cmd({
+  command: "runs",
+  aliases: ["history"],
+  describe: "list automation runs",
+  builder: (yargs) =>
+    yargs
+      .option("automation-id", { describe: "filter by automation ID", type: "number" })
+      .option("status", { describe: "filter by status", choices: ["pending", "running", "completed", "failed"] as const })
+      .option("page", { describe: "page number", type: "number", default: 1 })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+
+    const params = new URLSearchParams()
+    if (args["automation-id"]) params.set("automation_id", String(args["automation-id"]))
+    if (args.status) params.set("status", String(args.status))
+    if (args.page) params.set("page", String(args.page))
+    const qs = params.toString() ? `?${params.toString()}` : ""
+
+    try {
+      const res = await irisFetch(`/api/v1/workflows/runs${qs}`)
+      if (!res.ok) {
+        const text = await res.text()
+        if (args.json) console.log(JSON.stringify({ ok: false, status: res.status, error: text.slice(0, 200) }))
+        else prompts.log.error(`Failed (HTTP ${res.status})`)
+        process.exitCode = 1
+        return
+      }
+      const result = (await res.json()) as any
+      if (args.json) {
+        await writeJson(result)
+        return
+      }
+      const runs = result?.data ?? []
+      UI.empty()
+      prompts.intro("◈  Automation Runs")
+      if (runs.length === 0) {
+        prompts.log.warn("No runs found.")
+        prompts.outro("Done")
+        return
+      }
+      printDivider()
+      for (const r of runs) {
+        const shortRun = String(r.run_id ?? "").slice(0, 8)
+        console.log(`  ${bold(shortRun)}  ${colorStatus(r.status)}  ${dim(`${r.progress ?? 0}%`)}`)
+        console.log(`     ${dim("Workflow:")} ${r.workflow_name ?? "N/A"}`)
+        console.log(`     ${dim("Started:")}  ${r.started_at ?? "N/A"}`)
+        console.log()
+      }
+      printDivider()
+      if (result.pagination) {
+        const p = result.pagination
+        console.log(`  ${dim(`Page ${p.current_page} of ${p.last_page} (${p.total} total)`)}`)
+      }
+      prompts.outro("Done")
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (args.json) console.log(JSON.stringify({ ok: false, error: msg }))
+      else prompts.log.error(`Failed: ${msg}`)
+      process.exitCode = 1
+    }
+  },
+})
+
+const CancelCommand = cmd({
+  command: "cancel <runId>",
+  aliases: ["stop"],
+  describe: "cancel a running automation",
+  builder: (yargs) =>
+    yargs
+      .positional("runId", { describe: "run ID", type: "string", demandOption: true })
+      .option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+
+    if (!args.force) {
+      if (isNonInteractive()) {
+        const msg = "Refusing to cancel without --yes in non-interactive mode."
+        if (args.json) console.log(JSON.stringify({ ok: false, error: msg }))
+        else prompts.log.error(msg)
+        process.exitCode = 2
+        return
+      }
+      const confirmed = await prompts.confirm({ message: `Cancel automation run ${args.runId}?` })
+      if (!confirmed || prompts.isCancel(confirmed)) {
+        if (!args.json) prompts.outro("Cancelled")
+        return
+      }
+    }
+
+    try {
+      const res = await irisFetch(`/api/v1/workflows/runs/${args.runId}/cancel`, { method: "POST" })
+      if (!res.ok) {
+        const text = await res.text()
+        if (args.json) console.log(JSON.stringify({ ok: false, status: res.status, error: text.slice(0, 200) }))
+        else prompts.log.error(`Failed (HTTP ${res.status})`)
+        process.exitCode = 1
+        return
+      }
+      if (args.json) console.log(JSON.stringify({ ok: true }))
+      else console.log(`  ${success("✓")} Cancelled run ${args.runId}`)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (args.json) console.log(JSON.stringify({ ok: false, error: msg }))
+      else prompts.log.error(`Failed: ${msg}`)
+      process.exitCode = 1
+    }
+  },
+})
+
+const DeleteCommand = cmd({
+  command: "delete <id>",
+  aliases: ["rm"],
+  describe: "delete an automation",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "automation ID", type: "number", demandOption: true })
+      .option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+
+    if (!args.force) {
+      if (isNonInteractive()) {
+        const msg = "Refusing to delete without --yes in non-interactive mode."
+        if (args.json) console.log(JSON.stringify({ ok: false, error: msg }))
+        else prompts.log.error(msg)
+        process.exitCode = 2
+        return
+      }
+      const confirmed = await prompts.confirm({ message: `Delete automation #${args.id}? This cannot be undone.` })
+      if (!confirmed || prompts.isCancel(confirmed)) {
+        if (!args.json) prompts.outro("Cancelled")
+        return
+      }
+    }
+
+    try {
+      const res = await irisFetch(`/api/v1/workflows/${args.id}`, { method: "DELETE" })
+      if (!res.ok && res.status !== 204) {
+        const text = await res.text()
+        if (args.json) console.log(JSON.stringify({ ok: false, status: res.status, error: text.slice(0, 200) }))
+        else prompts.log.error(`Failed (HTTP ${res.status})`)
+        process.exitCode = 1
+        return
+      }
+      if (args.json) console.log(JSON.stringify({ ok: true }))
+      else console.log(`  ${success("✓")} Automation #${args.id} deleted`)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (args.json) console.log(JSON.stringify({ ok: false, error: msg }))
+      else prompts.log.error(`Failed: ${msg}`)
+      process.exitCode = 1
+    }
+  },
+})
+
+// ============================================================================
+// Root command
+// ============================================================================
+
+export const PlatformAutomationCommand = cmd({
+  command: "automation",
+  aliases: ["automations"],
+  describe: "manage V6 Automations (goal-driven workflows)",
+  builder: (yargs) =>
+    yargs
+      .command(CreateCommand)
+      .command(ExecuteCommand)
+      .command(StatusCommand)
+      .command(MonitorCommand)
+      .command(ListCommand)
+      .command(RunsCommand)
+      .command(CancelCommand)
+      .command(DeleteCommand)
+      .demandCommand(1),
+  async handler() {},
+})
+
+// The top-level `iris automation` verb, kept working and marked for what it is.
+//
+// P0b: `automation` and `workflows` were two trees over the same /v1/workflows family,
+// and a user had no way to tell which to reach for. The tree now lives under `workflows`;
+// this stays so nobody's script breaks, with a describe that says where it went. Renaming
+// a user-facing verb is hard to walk back — deprecate in help first, remove on evidence.
+export const PlatformAutomationAliasCommand = cmd({
+  ...PlatformAutomationCommand,
+  describe: "deprecated — use `iris workflows automation`",
+})

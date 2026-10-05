@@ -1,0 +1,739 @@
+import { cmd } from "./cmd"
+import * as prompts from "./clack"
+import { UI } from "../ui"
+import { irisFetch, requireAuth, handleApiError, printDivider, dim, bold, FL_API, IRIS_API, resolveUserId, streamAgentChat, requireUserId} from "./iris-api"
+import { captureMic, discardRecording, speak, listMics } from "../lib/voice"
+import { transcribeLocal, which } from "../lib/transcription"
+import { createInterface } from "readline"
+import { ChatTracer, toTraceLevel, type TraceStep } from "./chat-trace"
+import { firstArray } from "../../util/array"
+
+/**
+ * Which conversation this turn joins.
+ *
+ * --thread <id>  pin an explicit conversation (resume it, or keep a workstream separate)
+ * --fresh        isolate: a thread id nothing has ever written to, so the agent starts blank
+ * neither        the agent's DEFAULT shared thread — inherits every prior message to it
+ *
+ * `--fresh` is done client-side because ChatStreamController's validator accepts `thread_id`
+ * but not `fresh_thread`, even though ReactLoopService supports a freshThread flag. A novel
+ * id reaches the same branch: the loop uses it verbatim and finds no history under it.
+ */
+export function resolveThreadId(args: { thread?: string; fresh?: boolean }): string | undefined {
+  if (args.thread) return args.thread
+  if (args.fresh) return `fresh_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`
+  return undefined
+}
+
+
+// ============================================================================
+// Polling helper
+// ============================================================================
+
+interface WorkflowRun {
+  status: string
+  summary?: string
+  response?: string
+  output?: string
+  error?: string
+  requires_approval?: boolean
+  iteration_count?: number
+  model?: string
+  tokens_used?: number
+  elapsed_ms?: number
+}
+
+async function pollWorkflow(workflowId: string, timeoutSecs = 300): Promise<WorkflowRun> {
+  const start = Date.now()
+  let dots = 0
+  while (true) {
+    if ((Date.now() - start) / 1000 > timeoutSecs) {
+      throw new Error(`Timed out after ${timeoutSecs}s. Workflow ID: ${workflowId}`)
+    }
+    const res = await irisFetch(`/api/workflows/${workflowId}`, {}, IRIS_API)
+    if (!res.ok) throw new Error(`HTTP ${res.status} polling workflow`)
+    // The status endpoint wraps the run in { data: {...} }. Unwrap it, else
+    // status/summary read as undefined → poll times out + "(no response)".
+    const body = (await res.json()) as { data?: WorkflowRun }
+    const run = (body.data ?? body) as WorkflowRun
+
+    if (run.status === "completed") return run
+    if (run.status === "failed") {
+      throw new Error(run.error ?? run.summary ?? "Workflow failed")
+    }
+    if (run.status === "paused" && run.requires_approval) return run
+
+    // Animate spinner manually via process.stdout (no clack spinner inside clack intro)
+    dots = (dots + 1) % 4
+    process.stderr.write(`\r  ${UI.Style.TEXT_DIM}${"◌◎◉●"[dots]} thinking…${UI.Style.TEXT_NORMAL}   `)
+    await Bun.sleep(600)
+  }
+}
+
+// ============================================================================
+// Shared chat execution
+// ============================================================================
+
+// Exported so `iris agents chat` can be a thin alias over the SAME path (#137420)
+// — one canonical chat implementation, identical transport, flags, and output.
+export async function executeChat(args: {
+  message: string
+  agent?: number
+  bloq?: number
+  "user-id"?: number
+  timeout: number
+  "no-rag": boolean
+  thread?: string
+  fresh?: boolean
+  json?: boolean
+  continue?: string
+  model?: string
+  "max-iterations"?: number
+  // -V / -VV. 0 = today's behaviour, 1 = the run's shape, 2 = the payloads too.
+  verbose?: number
+}): Promise<void> {
+  const isJson = args.json === true
+  const traceLevel = toTraceLevel(args.verbose)
+
+  if (!isJson) {
+    UI.empty()
+    prompts.intro("◈  IRIS Chat")
+  }
+
+  const token = await requireAuth()
+  if (!token) {
+    if (!isJson) prompts.outro("Done")
+    return
+  }
+
+  // If continuing a previous conversation, poll for it
+  if (args.continue) {
+    if (!isJson) {
+      prompts.log.info(`Resuming workflow ${dim(args.continue)}`)
+    }
+    try {
+      const run = await pollWorkflow(args.continue, args.timeout)
+      process.stderr.write("\r" + " ".repeat(40) + "\r")
+      outputResult(run, args.continue, args.agent, isJson)
+    } catch (err) {
+      process.stderr.write("\r" + " ".repeat(40) + "\r")
+      if (isJson) {
+        console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }))
+      } else {
+        prompts.log.error(err instanceof Error ? err.message : String(err))
+        prompts.outro("Done")
+      }
+    }
+    return
+  }
+
+  // Resolve agent ID if not provided
+  let agentId = args.agent
+  if (!agentId && !isJson) {
+    const spinner = prompts.spinner()
+    spinner.start("Loading agents…")
+    try {
+      // /api/v1/bloqs/agents has never existed. The 404 fell into the `res.ok` branch below
+      // and the picker reported "0 agent(s) found" — an account with 363 agents looked empty.
+      // This is the path `iris agents list` uses and it works. (#181136)
+      const userId = await requireUserId()
+      const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents?per_page=20`)
+      if (res.ok) {
+        const data = (await res.json()) as { data?: any[] }
+        const agents: any[] = firstArray(data?.data)
+        spinner.stop(`${agents.length} agent(s) found`)
+        if (agents.length > 0) {
+          const selected = await prompts.select({
+            message: "Select an agent",
+            options: agents.slice(0, 15).map((a: any) => ({
+              label: a.name ?? `Agent #${a.id}`,
+              value: String(a.id),
+              hint: a.description ? String(a.description).slice(0, 60) : "",
+            })),
+          })
+          if (prompts.isCancel(selected)) {
+            prompts.outro("Cancelled")
+            return
+          }
+          agentId = parseInt(selected as string, 10)
+        }
+      } else {
+        spinner.stop("Could not load agents", 1)
+      }
+    } catch (err) {
+      spinner.stop("Error loading agents", 1)
+      if (!isJson) prompts.log.error(err instanceof Error ? err.message : String(err))
+      if (!isJson) prompts.outro("Done")
+      return
+    }
+  }
+
+  if (!agentId) {
+    if (isJson) {
+      console.log(JSON.stringify({ error: "No agent selected. Use --agent <id>" }))
+    } else {
+      prompts.log.warn("No agent selected. Use --agent <id>")
+      prompts.log.info(`Try: ${dim("iris agents list")} to see available agents`)
+      prompts.outro("Done")
+    }
+    return
+  }
+
+  const userId = await resolveUserId()
+
+  if (!isJson) {
+    prompts.log.info(
+      `Sending to ${bold(`Agent #${agentId}`)}${args.bloq ? `  ${dim(`bloq:${args.bloq}`)}` : ""}`,
+    )
+  }
+
+  // A clack spinner owns the last terminal line and repaints it every tick, so it
+  // erases trace lines as fast as they are written. Verbose mode replaces it: the
+  // timeline IS the progress indicator, and a better one — it says what is slow.
+  const spinner = isJson || traceLevel > 0 ? null : prompts.spinner()
+  spinner?.start("Thinking…")
+  const startTime = Date.now()
+
+  // Trace goes to stderr so `iris chat -V ... > answer.txt` still yields a clean
+  // answer on stdout. (#181195 tracks the inverse problem elsewhere in the CLI.)
+  const tracer = new ChatTracer(
+    traceLevel,
+    (line) => process.stderr.write(line + "\n"),
+    { dim: (t) => `${UI.Style.TEXT_DIM}${t}${UI.Style.TEXT_NORMAL}`, bold: (t) => bold(t) },
+  )
+  if (tracer.enabled && !isJson) {
+    console.log()
+    console.log(`  ${dim(traceLevel >= 2 ? "trace (heavy) — payloads included" : "trace — use -VV for tool arguments and results")}`)
+  }
+
+  // Elapsed heartbeat so a slow run never looks stuck (#137419). The latest tool
+  // event wins the label; otherwise we show "Thinking… (Ns)" ticking every second.
+  let lastActivity = "Thinking…"
+  const heartbeat = isJson ? null : setInterval(() => {
+    const secs = Math.floor((Date.now() - startTime) / 1000)
+    spinner?.message(`${lastActivity} (${secs}s)`)
+  }, 1000)
+
+  try {
+    // Faithful V6 ReactLoop path — same engine + toolset as the Slack channel (#137387).
+    // NOT stateless — this comment used to claim it was. The CLI resumes no client session,
+    // but the V6 loop loads the agent-scoped thread "user_{id}_agent_{id}" on EVERY call, so
+    // a turn inherits every earlier message to that agent, from any session. Verified in the
+    // run trace: `context: conversation_history` reporting 20 messages loaded.
+    // --thread pins a specific conversation; --fresh isolates this one turn.
+    const result = await streamAgentChat({
+      threadId: resolveThreadId(args),
+      agentId,
+      message: args.message,
+      userId,
+      bloqId: args.bloq,
+      overrideModel: args.model,
+      maxIterations: args["max-iterations"],
+      timeoutSecs: args.timeout,
+      enableRag: !args["no-rag"],
+      onEvent: (evt) => {
+        // Collected even under --json: the trace is the payload's `trace` key there.
+        tracer.handle(evt)
+        if (isJson) return
+        if (evt.type === "tool_call" && evt.tool) lastActivity = `Using ${evt.tool}…`
+        else if (evt.type === "tool_result" && evt.tool) lastActivity = `${evt.tool} ✓`
+        else if (evt.type === "thinking") lastActivity = "Thinking…"
+      },
+    })
+
+    if (heartbeat) clearInterval(heartbeat)
+
+    if (!result.ok) {
+      // Distinct exit codes so automation can branch (#137418): 2 = timeout, 1 = other failure.
+      const elapsed = Math.floor((Date.now() - startTime) / 1000)
+      const msg = result.timedOut
+        ? `Timed out after ${elapsed}s — the agent didn't respond in time. Try again or raise --timeout.`
+        : (result.error ?? "Chat failed — no answer delivered.")
+      spinner?.stop(result.timedOut ? "Timed out" : "Failed", 1)
+      if (isJson) {
+        console.log(JSON.stringify({ status: result.timedOut ? "timeout" : "failed", error: msg }))
+      } else {
+        prompts.log.error(msg)
+        prompts.outro("Done")
+      }
+      process.exitCode = result.timedOut ? 2 : 1
+      return
+    }
+
+    spinner?.stop("Done")
+
+    const run: WorkflowRun = {
+      status: "completed",
+      summary: result.content,
+      iteration_count: result.iterations,
+      elapsed_ms: Date.now() - startTime,
+    }
+
+    // No server-side workflow id in the sync stream path → pass "" (suppresses --continue).
+    outputResult(run, "", agentId, isJson, result.toolsUsed, tracer.enabled ? tracer.steps : undefined)
+  } catch (err) {
+    if (heartbeat) clearInterval(heartbeat)
+    process.stderr.write("\r" + " ".repeat(40) + "\r")
+    const msg = err instanceof Error ? err.message : String(err)
+    if (isJson) {
+      console.log(JSON.stringify({ status: "failed", error: msg }))
+    } else {
+      prompts.log.error(msg)
+      prompts.outro("Done")
+    }
+    process.exitCode = 1
+  }
+}
+
+// ============================================================================
+// Voice chat — local, free, real-time conversation loop.
+//
+// mic (ffmpeg) → transcribeLocal (whisper.cpp) → streamAgentChat → speak (say).
+// Push-to-talk turn-taking; multi-turn via conversation_history (no server
+// session, so no cross-turn poisoning — same guarantee as text chat). All STT
+// + TTS runs on-device; only the agent call leaves the machine. (#158044/#158045)
+// ============================================================================
+
+export async function runVoiceChat(args: {
+  agent?: number
+  bloq?: number
+  timeout: number
+  "no-rag": boolean
+  model?: string
+  "max-iterations"?: number
+  mic?: string
+  tts?: string
+  "tts-voice"?: string
+}): Promise<void> {
+  UI.empty()
+  prompts.intro("◈  IRIS Voice Chat")
+
+  const token = await requireAuth()
+  if (!token) { prompts.outro("Done"); return }
+
+  const agentId = args.agent
+  if (!agentId) {
+    prompts.log.warn("Voice chat needs an explicit agent. Use --agent <id>.")
+    prompts.log.info(`Try: ${dim("iris agents list")} to find one (e.g. --agent 642 for TOBI)`)
+    prompts.outro("Done")
+    return
+  }
+
+  if (!which("ffmpeg") || (!which("whisper-cli") && !which("whisper-cpp"))) {
+    prompts.log.error("Local voice needs ffmpeg + whisper-cpp.")
+    prompts.log.info(`Install: ${dim("brew install ffmpeg whisper-cpp")}`)
+    prompts.outro("Done")
+    return
+  }
+
+  const userId = await resolveUserId()
+  const mics = listMics()
+  const micLabel = args.mic
+    ? mics.find((m) => m.index === args.mic)?.name ?? `device :${args.mic}`
+    : "system default"
+  const ttsLabel = args.tts ?? (process.platform === "darwin" ? "say" : "piper")
+
+  prompts.log.info(`${bold(`Agent #${agentId}`)}  ${dim(`· mic: ${micLabel} · tts: ${ttsLabel}`)}`)
+  prompts.log.info(dim("ENTER starts recording · ENTER again stops & sends · q + ENTER quits"))
+
+  // One readline for the whole session, and BOTH the start and stop are plain
+  // rl.question() calls — deterministic, no missed keystrokes, no way to hang.
+  // (Silence auto-detection was removed: thresholds were unreliable across rooms.)
+  const rl = createInterface({ input: process.stdin, output: process.stderr })
+  const ask = (q: string) => new Promise<string>((resolve) => rl.question(q, resolve))
+
+  // Per-turn nudge so replies are speakable: short, plain, no markdown/lists.
+  // Appended to the query only (not stored/displayed) so it works on any backend
+  // without depending on a "system" role in conversation_history.
+  const VOICE_HINT =
+    "\n\n[Voice call — reply in 1-2 short spoken sentences. No markdown, lists, headings, or emoji. " +
+    "If the full answer is long, give the one-line version and offer to expand.]"
+
+  const history: Array<{ role: string; content: string }> = []
+
+  console.log()
+  try {
+    while (true) {
+      // START — wait for ENTER (or q).
+      const key = (await ask(`  ${dim("🎙️  ENTER to record  ·  q to quit: ")}`)).trim()
+      if (key.toLowerCase() === "q") break
+
+      // RECORD — the STOP is the next rl.question(); pressing ENTER resolves it,
+      // which stops ffmpeg. Deterministic: the keystroke can't be missed.
+      let text = ""
+      let wav: string | null = null
+      try {
+        const stopAsked = ask(`  ${bold("🔴 recording…")}  ${dim("speak, then press ENTER to send")}`)
+        wav = await captureMic({ mic: args.mic, stopSignal: stopAsked.then(() => {}) })
+        await stopAsked
+        process.stderr.write(`  ${dim("📝 transcribing…")}`)
+        text = await transcribeLocal(wav)
+        process.stderr.write("\r" + " ".repeat(56) + "\r")
+      } catch (err) {
+        console.log(`  ${dim("⚠ " + (err instanceof Error ? err.message : String(err)))}`)
+        continue
+      } finally {
+        // The recording dies with the turn — on success, on a transcription error,
+        // and on the `continue` above, which is why this is a finally and not a
+        // trailing statement.
+        discardRecording(wav)
+      }
+
+      if (!text || text.replace(/[^a-z0-9]/gi, "").length < 2 || /^\[.*\]$/.test(text)) {
+        console.log(`  ${dim("(didn't catch that — try again)")}`)
+        continue
+      }
+      console.log(`  ${bold("You:")} ${text}`)
+      if (/^\s*(good\s?bye|hang up|end (the )?call|quit|exit)\b/i.test(text)) break
+
+      history.push({ role: "user", content: text })
+      const startTime = Date.now()
+      let lastActivity = "thinking…"
+      const heartbeat = setInterval(() => {
+        process.stderr.write(`\r  ${dim(`🤖 ${lastActivity} (${Math.floor((Date.now() - startTime) / 1000)}s)`)}   `)
+      }, 1000)
+
+      try {
+        const result = await streamAgentChat({
+          agentId,
+          message: text + VOICE_HINT,
+          userId,
+          bloqId: args.bloq,
+          overrideModel: args.model,
+          maxIterations: args["max-iterations"],
+          timeoutSecs: args.timeout,
+          enableRag: !args["no-rag"],
+          conversationHistory: history.slice(0, -1),
+          onEvent: (evt) => {
+            if (evt.type === "tool_call" && evt.tool) lastActivity = `using ${evt.tool}…`
+            else if (evt.type === "tool_result" && evt.tool) lastActivity = `${evt.tool} ✓`
+            else if (evt.type === "thinking") lastActivity = "thinking…"
+          },
+        })
+        clearInterval(heartbeat)
+        process.stderr.write("\r" + " ".repeat(56) + "\r")
+
+        if (!result.ok) {
+          console.log(`  ${dim("⚠ " + (result.error ?? (result.timedOut ? "timed out" : "no answer")))}`)
+          history.pop() // drop the unanswered turn so history stays consistent
+          continue
+        }
+
+        const reply = result.content || "(no response)"
+        history.push({ role: "assistant", content: reply })
+        console.log(`  ${bold("Agent:")} ${reply.split("\n").join("\n  ")}`)
+        await speak(reply, { tts: args.tts, voice: args["tts-voice"] })
+      } catch (err) {
+        clearInterval(heartbeat)
+        process.stderr.write("\r" + " ".repeat(56) + "\r")
+        console.log(`  ${dim("⚠ " + (err instanceof Error ? err.message : String(err)))}`)
+        history.pop()
+      }
+    }
+  } finally {
+    rl.close()
+  }
+
+  prompts.outro("Call ended 👋")
+}
+
+function outputResult(run: WorkflowRun, workflowId: string, agentId: number | undefined, isJson: boolean, toolsUsed: string[] = [], trace?: TraceStep[]): void {
+  const response = run.summary ?? run.response ?? run.output ?? "(no response)"
+
+  if (isJson) {
+    console.log(JSON.stringify({
+      workflow_id: workflowId || undefined,
+      status: run.status,
+      response,
+      model: run.model,
+      tokens: run.tokens_used,
+      iterations: run.iteration_count,
+      tools_used: toolsUsed,
+      elapsed_ms: run.elapsed_ms,
+      requires_approval: run.requires_approval ?? false,
+      // Present only under -V. Absent (not empty) otherwise, so a consumer can tell
+      // "not traced" from "traced and nothing happened".
+      trace,
+    }))
+    return
+  }
+
+  printDivider()
+  console.log()
+  console.log(`  ${bold("Agent:")} ${response.split("\n").join("\n  ")}`)
+  console.log()
+
+  // Surface the real toolset that ran — proof the harness is faithful (#137387).
+  if (toolsUsed.length > 0) {
+    console.log(`  ${dim(`tools used: ${toolsUsed.join(", ")}`)}`)
+    console.log()
+  }
+
+  // Metrics
+  const metrics: string[] = []
+  if (run.model) metrics.push(`model: ${run.model}`)
+  if (run.tokens_used) metrics.push(`tokens: ${run.tokens_used}`)
+  if (run.iteration_count) metrics.push(`iterations: ${run.iteration_count}`)
+  if (run.elapsed_ms) metrics.push(`time: ${(run.elapsed_ms / 1000).toFixed(1)}s`)
+  if (metrics.length > 0) {
+    console.log(`  ${dim(metrics.join("  ·  "))}`)
+    console.log()
+  }
+
+  printDivider()
+
+  if (run.status === "paused" && run.requires_approval) {
+    prompts.log.warn("Workflow paused — requires approval")
+    prompts.log.info(`Approve: ${dim(`iris chat approve ${workflowId}`)}`)
+  }
+
+  // --continue resumes a legacy workflow; only offer it when we have a workflow id.
+  const followUp = `${dim("iris chat --agent=" + (agentId ?? "?") + ' "follow up"')}`
+  prompts.outro(
+    workflowId ? `${followUp}  ·  ${dim(`iris chat --continue ${workflowId}`)}` : followUp,
+  )
+}
+
+// ============================================================================
+// Approve subcommand
+// ============================================================================
+
+const ChatApproveCommand = cmd({
+  command: "approve <workflow-id>",
+  describe: "approve a paused workflow (human-in-the-loop)",
+  builder: (yargs) =>
+    yargs
+      .positional("workflow-id", {
+        describe: "workflow ID to approve",
+        type: "string",
+        demandOption: true,
+      })
+      .option("json", {
+        describe: "output as JSON",
+        type: "boolean",
+        default: false,
+      })
+      .option("timeout", {
+        describe: "max seconds to wait after approval",
+        type: "number",
+        default: 300,
+      }),
+  async handler(args) {
+    const isJson = args.json === true
+    if (!isJson) {
+      UI.empty()
+      prompts.intro("◈  IRIS Chat — Approve")
+    }
+
+    const token = await requireAuth()
+    if (!token) {
+      if (!isJson) prompts.outro("Done")
+      return
+    }
+
+    const workflowId = args["workflow-id"]
+
+    if (!isJson) {
+      const spinner = prompts.spinner()
+      spinner.start("Sending approval…")
+
+      try {
+        const res = await irisFetch(`/api/chat/resume`, {
+          method: "POST",
+          body: JSON.stringify({ workflow_id: workflowId, action: "approve" }),
+        }, IRIS_API)
+        const ok = await handleApiError(res, "Approve")
+        if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+        spinner.stop("Approved — waiting for completion…")
+      } catch (err) {
+        spinner.stop("Error", 1)
+        prompts.log.error(err instanceof Error ? err.message : String(err))
+        prompts.outro("Done")
+        return
+      }
+    } else {
+      const res = await irisFetch(`/api/chat/resume`, {
+        method: "POST",
+        body: JSON.stringify({ workflow_id: workflowId, action: "approve" }),
+      }, IRIS_API)
+      const ok = await handleApiError(res, "Approve")
+      if (!ok) {
+        console.log(JSON.stringify({ error: "Failed to approve workflow" }))
+        return
+      }
+    }
+
+    // Poll for final result
+    try {
+      const run = await pollWorkflow(workflowId, args.timeout)
+      process.stderr.write("\r" + " ".repeat(40) + "\r")
+      outputResult(run, workflowId, undefined, isJson)
+    } catch (err) {
+      process.stderr.write("\r" + " ".repeat(40) + "\r")
+      if (isJson) {
+        console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }))
+      } else {
+        prompts.log.error(err instanceof Error ? err.message : String(err))
+        prompts.outro("Done")
+      }
+    }
+  },
+})
+
+// ============================================================================
+// Chat command (root)
+// ============================================================================
+
+export const PlatformChatCommand = cmd({
+  command: "chat [message]",
+  aliases: ["c"],
+  describe: "chat with an IRIS agent",
+  builder: (yargs) =>
+    yargs
+      .positional("message", {
+        describe: "message to send",
+        type: "string",
+      })
+      .option("agent", {
+        alias: "a",
+        describe: "agent ID",
+        type: "number",
+      })
+      .option("bloq", {
+        alias: "b",
+        describe: "knowledge base (bloq) ID",
+        type: "number",
+      })
+      .option("user-id", {
+        describe: "your IRIS user ID (or set IRIS_USER_ID env var)",
+        type: "number",
+      })
+      .option("timeout", {
+        describe: "max seconds to wait for response",
+        type: "number",
+        default: 300,
+      })
+      .option("thread", {
+        describe:
+          "conversation thread id — pin a specific conversation instead of the agent's default shared one",
+        type: "string",
+      })
+      .option("fresh", {
+        describe:
+          "isolate this turn in a brand-new thread — the agent starts with no prior conversation",
+        type: "boolean",
+        default: false,
+      })
+      .option("no-rag", {
+        describe: "disable RAG/knowledge base lookup",
+        type: "boolean",
+        default: false,
+      })
+      .option("json", {
+        describe: "output response as JSON",
+        type: "boolean",
+        default: false,
+      })
+      .option("continue", {
+        describe: "resume a previous workflow by ID (legacy V5.5 workflow engine)",
+        type: "string",
+      })
+      .option("model", {
+        alias: "m",
+        describe: "override model (nano/flash only; keeps cost low)",
+        type: "string",
+      })
+      .option("max-iterations", {
+        describe: "cap ReactLoop iterations",
+        type: "number",
+      })
+      .option("verbose", {
+        alias: "V",
+        describe: "trace the run: -V shows iterations, tool calls and results; -VV adds the payloads",
+        type: "count",
+      })
+      .option("voice", {
+        describe: "voice mode — talk to the agent via mic + local speech (free, on-device)",
+        type: "boolean",
+        default: false,
+      })
+      .option("mic", {
+        describe: "input device (macOS index from --list-mics, or ALSA name); default = system mic",
+        type: "string",
+      })
+      .option("tts", {
+        describe: "speech backend for replies: say | piper | none",
+        type: "string",
+        choices: ["say", "piper", "none"],
+      })
+      .option("tts-voice", {
+        describe: "TTS voice name (e.g. macOS `say -v` voice)",
+        type: "string",
+      })
+      .option("list-mics", {
+        describe: "list available input devices and exit",
+        type: "boolean",
+        default: false,
+      })
+      .command(ChatApproveCommand),
+
+  async handler(args) {
+    if (args["list-mics"]) {
+      UI.empty()
+      prompts.intro("◈  IRIS Voice — Input Devices")
+      const mics = listMics()
+      if (mics.length === 0) {
+        prompts.log.info("No devices enumerated (device listing is macOS-only; on Linux pass --mic <alsa-name>).")
+      } else {
+        for (const m of mics) console.log(`  ${bold(`:${m.index}`)}  ${m.name}`)
+      }
+      prompts.outro(`Use: ${dim("iris chat --voice --agent <id> --mic <index>")}`)
+      return
+    }
+
+    if (args.voice) {
+      await runVoiceChat({
+        agent: args.agent,
+        bloq: args.bloq,
+        timeout: args.timeout,
+        "no-rag": args["no-rag"],
+        model: args.model,
+        "max-iterations": args["max-iterations"],
+        mic: args.mic,
+        tts: args.tts,
+        "tts-voice": args["tts-voice"],
+      })
+      return
+    }
+
+    if (!args.message && !args.continue) {
+      UI.empty()
+      prompts.intro("◈  IRIS Chat")
+      prompts.log.warn("No message provided.")
+      prompts.log.info(`Usage: ${dim('iris chat "your message"')}`)
+      prompts.log.info(`       ${dim("iris chat approve <workflow-id>")}`)
+      prompts.log.info(`       ${dim("iris chat --continue <workflow-id>")}`)
+      prompts.outro("Done")
+      return
+    }
+
+    await executeChat({
+      message: args.message ?? "",
+      agent: args.agent,
+      bloq: args.bloq,
+      "user-id": args["user-id"],
+      timeout: args.timeout,
+      "no-rag": args["no-rag"],
+      // Forwarded explicitly. This handler maps argv field by field, so a new option is
+      // registered, shows up in --help, and is silently DROPPED unless it is added here —
+      // which is exactly how --thread/--fresh first shipped doing nothing.
+      thread: args.thread as string | undefined,
+      fresh: args.fresh as boolean | undefined,
+      json: args.json,
+      continue: args.continue,
+      model: args.model,
+      "max-iterations": args["max-iterations"],
+      verbose: args.verbose as number | undefined,
+    })
+  },
+})

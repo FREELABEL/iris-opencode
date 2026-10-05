@@ -1,0 +1,688 @@
+import { cmd } from "./cmd"
+import * as prompts from "./clack"
+import { UI } from "../ui"
+import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, FL_API, IRIS_API, writeJson } from "./iris-api"
+import { PathwaysCommand } from "./platform-integrations-pathways"
+import { firstArray } from "../../util/array"
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+function statusBadge(status: string): string {
+  switch (status) {
+    case "active": return `${UI.Style.TEXT_SUCCESS}active${UI.Style.TEXT_NORMAL}`
+    case "error": return `${UI.Style.TEXT_DANGER}error${UI.Style.TEXT_NORMAL}`
+    case "inactive": return dim("inactive")
+    default: return dim(status)
+  }
+}
+
+// ============================================================================
+// Subcommands
+// ============================================================================
+
+const IntegrationsListCommand = cmd({
+  command: "list",
+  aliases: ["ls"],
+  describe: "list connected integrations",
+  builder: (yargs) =>
+    yargs
+      .option("bloq", { alias: "b", describe: "filter by bloq ID (show bloq-shared integrations)", type: "number" })
+      .option("all", { describe: "show all integrations (personal + bloq-shared)", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro("◈  IRIS Integrations") }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Loading integrations…")
+
+    try {
+      const params = new URLSearchParams()
+      if (args.bloq) params.set("bloq_id", String(args.bloq))
+
+      // THERE ARE TWO INTEGRATION STORES. fl-api and iris-api each keep their own
+      // `integrations` table, and BOTH expose /api/v1/users/{id}/integrations. irisFetch
+      // defaults to FL_API despite its name, so this command only ever showed fl-api's rows
+      // — while e.g. the Vagaro connection lived in iris-api's. That produced a confident
+      // "not connected" for a credential that had been stored for eight months (#181228).
+      // Read both, label every row with the store that holds it, and never report a bare
+      // negative.
+      const stores: Array<{ label: string; base: string }> = [
+        { label: "fl-api", base: FL_API },
+        { label: "iris-api", base: IRIS_API },
+      ]
+
+      const integrations: any[] = []
+      const unreachable: string[] = []
+      for (const store of stores) {
+        try {
+          const r = await irisFetch(`/api/v1/users/${userId}/integrations?${params}`, {}, store.base)
+          if (!r.ok) { unreachable.push(`${store.label} (HTTP ${r.status})`); continue }
+          const body = (await r.json()) as Record<string, any>
+          const rows: any[] = firstArray(body?.connections, body?.data, (Array.isArray(body) ? body : []))
+          for (const row of rows) integrations.push({ ...row, store: store.label })
+        } catch (e) {
+          unreachable.push(`${store.label} (${e instanceof Error ? e.message : String(e)})`)
+        }
+      }
+
+      if (unreachable.length === stores.length) {
+        if (spinner) spinner.stop("Failed", 1)
+        prompts.log.error(`Could not reach any integration store: ${unreachable.join(", ")}`)
+        return
+      }
+      if (unreachable.length > 0) {
+        prompts.log.warn(`Only searched ${stores.length - unreachable.length} of ${stores.length} stores — could not reach ${unreachable.join(", ")}`)
+      }
+
+      if (spinner) spinner.stop(`${integrations.length} integration(s)`)
+
+      if (args.json) {
+        await writeJson(integrations)
+        return
+      }
+
+      if (integrations.length === 0) {
+        prompts.log.warn(`No integrations connected (searched: ${stores.map((s) => s.label).join(", ")})`)
+        prompts.outro(dim("iris integrations connect <type>"))
+        return
+      }
+
+      // Group by scope
+      const personal = integrations.filter((i: any) => !i.bloq_id)
+      const shared = integrations.filter((i: any) => !!i.bloq_id)
+
+      const renderRow = (i: any, suffix = "") => {
+        const idLabel = i.id ? dim(`#${i.id}`) : dim("(no id)")
+        const account = i.account_email ?? i.name ?? null
+        const accountLabel = account ? `  ${dim("→")} ${bold(String(account))}` : ""
+        const provider = i.provider && i.provider !== "native" ? dim(` via ${i.provider}`) : ""
+        const tail = suffix ? `  ${dim(suffix)}` : ""
+        const store = i.store ? dim(` [${i.store}]`) : ""
+        console.log(`  ${bold(String(i.type))}  ${idLabel}${store}  ${statusBadge(i.status)}${accountLabel}${provider}${tail}`)
+      }
+
+      if (personal.length > 0) {
+        console.log()
+        console.log(`  ${bold("Personal")} ${dim("(your account only)")}`)
+        printDivider()
+        for (const i of personal) renderRow(i, i.category ?? "")
+      }
+
+      if (shared.length > 0) {
+        console.log()
+        console.log(`  ${bold("Shared")} ${dim("(bloq-level, accessible by all members)")}`)
+        printDivider()
+        for (const i of shared) renderRow(i, `bloq:${i.bloq_id}`)
+      }
+
+      console.log()
+      printDivider()
+      prompts.outro(dim("Target a specific account: iris integrations exec <type> <fn> --account=<email>  (or --integration-id=<id>)"))
+    } catch (err) {
+      if (spinner) spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      if (!args.json) prompts.outro("Done")
+    }
+  },
+})
+
+const IntegrationsConnectCommand = cmd({
+  command: "connect <type>",
+  describe: "connect an integration (optionally share with a bloq)",
+  builder: (yargs) =>
+    yargs
+      .positional("type", { describe: "integration type (e.g., slack, google-drive, discord)", type: "string", demandOption: true })
+      .option("bloq", { alias: "b", describe: "share this integration with a bloq", type: "number" })
+      .option("api-key", { describe: "API key (for key-based integrations)", type: "string" })
+      .option("token", { describe: "access token (for token-based integrations)", type: "string" })
+      .option("webhook-url", { describe: "webhook URL (for webhook-based integrations)", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Connect Integration: ${args.type}`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    // Build credentials from flags
+    const credentials: Record<string, string> = {}
+    if (args["api-key"]) credentials.api_key = args["api-key"] as string
+    if (args.token) credentials.token = args.token as string
+    if (args["webhook-url"]) credentials.webhook_url = args["webhook-url"] as string
+
+    // If no credentials provided and interactive, prompt
+    if (Object.keys(credentials).length === 0 && process.stdin.isTTY && !args.json) {
+      const credType = (await prompts.select({
+        message: "Credential type",
+        options: [
+          { value: "api_key", label: "API Key" },
+          { value: "token", label: "Access Token" },
+          { value: "webhook_url", label: "Webhook URL" },
+          { value: "oauth", label: "OAuth (open browser)" },
+        ],
+      })) as string
+      if (prompts.isCancel(credType)) { prompts.outro("Cancelled"); return }
+
+      if (credType === "oauth") {
+        prompts.log.info("OAuth integrations must be connected via the web UI.")
+        prompts.log.info(dim("Go to: Settings → Integrations → Connect"))
+        prompts.outro("Done")
+        return
+      }
+
+      const value = (await prompts.text({
+        message: `Enter ${credType.replace("_", " ")}`,
+        validate: (v) => (!v || v.length < 3 ? "Required (min 3 chars)" : undefined),
+      })) as string
+      if (prompts.isCancel(value)) { prompts.outro("Cancelled"); return }
+      credentials[credType] = value
+    }
+
+    if (Object.keys(credentials).length === 0 && !args.json) {
+      prompts.log.error("No credentials provided. Use --api-key, --token, or --webhook-url")
+      process.exitCode = 1
+      prompts.outro("Done")
+      return
+    }
+
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Connecting…")
+
+    try {
+      const payload: Record<string, unknown> = {
+        type: args.type,
+        credentials,
+        status: "active",
+      }
+      if (args.bloq) payload.bloq_id = args.bloq
+
+      const res = await irisFetch(`/api/v1/users/${userId}/integrations`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      })
+      const ok = await handleApiError(res, "Connect integration")
+      if (!ok) { if (spinner) spinner.stop("Failed", 1); process.exitCode = 1; return }
+
+      const data = (await res.json()) as Record<string, any>
+      const integration = data?.data ?? data
+
+      if (args.json) {
+        await writeJson(integration)
+        return
+      }
+
+      spinner!.stop(`${success("✓")} Connected: ${bold(String(args.type))}`)
+      printDivider()
+      printKV("ID", integration.id)
+      printKV("Type", integration.type)
+      printKV("Status", integration.status)
+      if (args.bloq) printKV("Shared with", `Bloq #${args.bloq}`)
+      else printKV("Scope", "Personal")
+      printDivider()
+
+      prompts.outro(dim("iris integrations list"))
+    } catch (err) {
+      if (spinner) spinner.stop("Error", 1)
+      process.exitCode = 1
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      if (!args.json) prompts.outro("Done")
+    }
+  },
+})
+
+export const IntegrationsShareCommand = cmd({
+  command: "share <id> [bloq-id]",
+  describe: "share an existing integration with a bloq, or with an organization (--org)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "integration ID", type: "number", demandOption: true })
+      .positional("bloq-id", { describe: "bloq ID to share with (project scope)", type: "number" })
+      .option("org", { describe: "organization ID to share with (organization scope)", type: "number" })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    UI.empty()
+
+    // Exactly one target. Sharing to both would mean two scopes on one row, and the
+    // resolver reads project BEFORE organization — so the org argument would be silently
+    // ignored rather than refused, which is the failure mode this whole area keeps hitting.
+    const bloqId = args["bloq-id"] as number | undefined
+    const orgId = args.org as number | undefined
+    if ((bloqId == null) === (orgId == null)) {
+      prompts.intro(`◈  Share Integration #${args.id}`)
+      prompts.log.error(
+        bloqId == null
+          ? "Name a target: a bloq id for project scope, or --org <id> for organization scope."
+          : "Pick one: a bloq id OR --org <id>, not both.",
+      )
+      prompts.outro(dim("iris integrations share <id> <bloq-id>   ·   iris integrations share <id> --org <org-id>"))
+      return
+    }
+
+    const toOrg = orgId != null
+    prompts.intro(`◈  Share Integration #${args.id} → ${toOrg ? `Organization #${orgId}` : `Bloq #${bloqId}`}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Updating…")
+
+    try {
+      // Organization scope promotes the row IN PLACE through its own endpoint, which
+      // enforces owner/admin and refuses with a named reason. Project scope is a plain
+      // field update on the integration.
+      const res = toOrg
+        ? await irisFetch(`/api/v1/integrations-temp/${args.id}/share`, {
+            method: "POST",
+            body: JSON.stringify({ organization_id: orgId }),
+          })
+        : await irisFetch(`/api/v1/users/${userId}/integrations/${args.id}`, {
+            method: "PUT",
+            body: JSON.stringify({ bloq_id: bloqId }),
+          })
+
+      if (toOrg && !res.ok) {
+        // The endpoint names WHY it refused. Passing the raw status through would turn
+        // four distinct, fixable situations into one "failed".
+        const body: any = await res.json().catch(() => ({}))
+        const hint: Record<string, string> = {
+          not_owner: "Only the person who connected a credential can share it.",
+          already_scoped: "Already shared. Disconnect and reconnect to move it to another scope.",
+          role_insufficient: "You need owner or admin on that organization — membership is not enough.",
+          not_a_member: "You are not a member of that organization.",
+          org_already_has_type: "That organization already holds an integration of this type.",
+        }
+        spinner.stop("Refused", 1)
+        prompts.log.error(body?.message ?? `Share failed (HTTP ${res.status})`)
+        if (body?.reason && hint[body.reason]) prompts.log.info(dim(hint[body.reason]))
+        if (body?.existing_id) prompts.log.info(dim(`Existing integration: #${body.existing_id}`))
+        prompts.outro("Done")
+        return
+      }
+
+      const ok = await handleApiError(res, "Share integration")
+      if (!ok) { spinner.stop("Failed", 1); return }
+
+      if (toOrg) {
+        spinner.stop(`${success("✓")} Integration #${args.id} shared with Organization #${orgId}`)
+        prompts.log.info(dim("Every active member of that organization can now use it."))
+        // The tier only fires for work the ORG OWNS. Saying so here is the difference
+        // between a share that works and one that looks applied and resolves to personal.
+        prompts.log.warn("The org must also OWN THE PROJECT for this to resolve — attach the bloq, then prove it.")
+        prompts.outro(dim("There is no unshare for org scope."))
+      } else {
+        spinner.stop(`${success("✓")} Integration #${args.id} shared with Bloq #${bloqId}`)
+        prompts.log.info(dim("All agents and users in this bloq can now use this integration."))
+        prompts.outro(dim("iris integrations list --bloq=" + bloqId))
+      }
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+export const IntegrationsUnshareCommand = cmd({
+  command: "unshare <id>",
+  describe: "remove bloq sharing from an integration (make personal again)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "integration ID", type: "number", demandOption: true })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Unshare Integration #${args.id}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Updating…")
+
+    try {
+      const res = await irisFetch(`/api/v1/users/${userId}/integrations/${args.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ bloq_id: null }),
+      })
+      const ok = await handleApiError(res, "Unshare integration")
+      if (!ok) { spinner.stop("Failed", 1); return }
+
+      spinner.stop(`${success("✓")} Integration #${args.id} is now personal only`)
+      prompts.outro(dim("iris integrations list"))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+export const IntegrationsDisconnectCommand = cmd({
+  command: "disconnect <id>",
+  aliases: ["rm", "delete"],
+  describe: "disconnect an integration",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "integration ID", type: "number", demandOption: true })
+      .option("force", { alias: "f", describe: "skip confirmation", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Disconnect Integration #${args.id}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    if (!args.force) {
+      const confirmed = await prompts.confirm({ message: `Disconnect integration #${args.id}? This cannot be undone.` })
+      if (!confirmed || prompts.isCancel(confirmed)) { prompts.outro("Cancelled"); return }
+    }
+
+    const spinner = prompts.spinner()
+    spinner.start("Disconnecting…")
+
+    try {
+      const res = await irisFetch(`/api/v1/users/${userId}/integrations/${args.id}`, {
+        method: "DELETE",
+      })
+      const ok = await handleApiError(res, "Disconnect integration")
+      if (!ok) { spinner.stop("Failed", 1); return }
+
+      spinner.stop(`${success("✓")} Integration #${args.id} disconnected`)
+      prompts.outro(dim("iris integrations list"))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+export const IntegrationsSetupNativeCommand = cmd({
+  command: "setup-native <type>",
+  describe: "create a native API-key integration (mailjet, slack, smtp-email, …)",
+  builder: (yargs) =>
+    yargs
+      .positional("type", { describe: "integration type (mailjet, slack, smtp-email, mailchimp, …)", type: "string", demandOption: true })
+      .option("key", { describe: "API key / public key", type: "string" })
+      .option("secret", { describe: "API secret / private key", type: "string" })
+      .option("cred", { describe: "extra credential as key=value (repeatable)", type: "array" })
+      .option("name", { describe: "display name (defaults to the type)", type: "string" })
+      .option("category", { describe: "category (auto-detected from type if omitted)", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Setup Native Integration: ${args.type}`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    // Build credentials from flags. --key/--secret cover the common api_key/api_secret
+    // pair; --cred key=value adds anything else a given integration needs.
+    const credentials: Record<string, string> = {}
+    if (args.key) credentials.api_key = String(args.key)
+    if (args.secret) credentials.api_secret = String(args.secret)
+    for (const pair of ((args.cred as string[] | undefined) ?? [])) {
+      const s = String(pair)
+      const idx = s.indexOf("=")
+      if (idx > 0) credentials[s.slice(0, idx).trim()] = s.slice(idx + 1)
+    }
+
+    if (Object.keys(credentials).length === 0) {
+      if (args.json) console.log(JSON.stringify({ error: "no credentials provided" }))
+      else { prompts.log.error("No credentials. Use --key/--secret or --cred key=value"); prompts.outro("Done") }
+      process.exitCode = 1
+      return
+    }
+
+    const payload: Record<string, unknown> = {
+      name: args.name ?? String(args.type),
+      type: args.type,
+      status: "active",
+      credentials,
+    }
+    if (args.category) payload.category = args.category
+
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start("Creating integration…")
+    try {
+      // Native API-key integrations live on iris-api (it writes the encrypted
+      // Integration record directly, scoped to the {userId} in the path).
+      const res = await irisFetch(`/api/v1/users/${userId}/integrations/native`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }, IRIS_API)
+      const ok = await handleApiError(res, "Setup native integration")
+      if (!ok) { spinner?.stop("Failed", 1); process.exitCode = 1; if (!args.json) prompts.outro("Done"); return }
+
+      const data = (await res.json().catch(() => ({}))) as { data?: { id?: number; type?: string } }
+      if (args.json) { console.log(JSON.stringify(data)); return }
+      spinner?.stop(`${success("✓")} ${bold(String(args.type))} integration created${data?.data?.id ? ` (#${data.data.id})` : ""}`)
+      prompts.outro(dim("iris integrations list"))
+    } catch (err) {
+      spinner?.stop("Error", 1)
+      process.exitCode = 1
+      if (args.json) console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }))
+      else { prompts.log.error(err instanceof Error ? err.message : String(err)); prompts.outro("Done") }
+    }
+  },
+})
+
+const IntegrationsExecCommand = cmd({
+  command: "call <type> <function>",
+  aliases: ["exec"],
+  describe: "execute a function on an integration (e.g. iris integrations call pathways calculate_settlement)",
+  builder: (yargs) =>
+    yargs
+      .positional("type", { describe: "integration type (e.g., pathways, gmail, atlas-os)", type: "string", demandOption: true })
+      .positional("function", { describe: "function name to execute (e.g., calculate_settlement)", type: "string", demandOption: true })
+      .option("params", { alias: "p", describe: "JSON params string (e.g. '{\"case_id\":\"CAS100\"}')", type: "string" })
+      .option("case-id", { describe: "shorthand: sets params.case_id", type: "string" })
+      .option("check-amount", { describe: "shorthand: sets params.check_amount", type: "number" })
+      .option("stage-filter", { describe: "shorthand: sets params.stage_filter", type: "string" })
+      .option("integration-id", { describe: "target a specific integration record ID (multi-account)", type: "number" })
+      .option("account", { alias: "a", describe: "target account by email (e.g. alex@freelabel.net)", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro(`◈  ${bold(String(args.type))} → ${bold(String(args.function))}`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    // Build params: explicit JSON > shorthand flags > empty
+    let params: Record<string, unknown> = {}
+    if (args.params) {
+      try { params = JSON.parse(args.params) } catch { prompts.log.error("Invalid JSON in --params"); process.exitCode = 1; return }
+    }
+    if (args["case-id"]) params.case_id = args["case-id"]
+    if (args["check-amount"] !== undefined) params.check_amount = args["check-amount"]
+    if (args["stage-filter"]) params.stage_filter = args["stage-filter"]
+
+    // Resolve --account to integration_id (if provided and no explicit --integration-id)
+    let integrationId = args["integration-id"] as number | undefined
+    if (args.account && !integrationId) {
+      const needle = String(args.account).toLowerCase()
+      try {
+        const listRes = await irisFetch(`/api/v1/users/${userId}/integrations`)
+        if (listRes.ok) {
+          const listData = (await listRes.json()) as any
+          const items: any[] = firstArray(listData?.connections, listData?.data, listData)
+          const match = items.find((i: any) => {
+            if (String(i.type ?? "").toLowerCase() !== String(args.type).toLowerCase()) return false
+            const email = String(i.account_email ?? "").toLowerCase()
+            const name = String(i.name ?? "").toLowerCase()
+            return email === needle || name === needle || email.includes(needle) || name.includes(needle)
+          })
+          if (match) integrationId = Number(match.id)
+        }
+      } catch { /* fall through */ }
+      if (!integrationId) {
+        prompts.log.error(`No ${args.type} integration found for account "${args.account}"`)
+        process.exitCode = 1
+        if (!args.json) prompts.outro("Done")
+        return
+      }
+    }
+
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start(`Executing ${args.type}.${args.function}…`)
+
+    try {
+      const body: Record<string, unknown> = {
+        integration: args.type,
+        action: args.function,
+        params,
+      }
+      if (integrationId) body.integration_id = integrationId
+
+      const res = await irisFetch(`/api/v1/users/${userId}/integrations/execute-direct`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }, IRIS_API)
+      const data = await res.json() as Record<string, any>
+
+      if (!res.ok) {
+        if (spinner) spinner.stop("Failed", 1)
+        process.exitCode = 1
+        prompts.log.error(data?.error ?? data?.message ?? `HTTP ${res.status}`)
+        if (!args.json) prompts.outro("Done")
+        return
+      }
+
+      if (args.json) {
+        await writeJson(data)
+        return
+      }
+
+      const ok = data?.success !== false
+      if (spinner) spinner.stop(ok ? `${success("✓")} Success` : "Completed with issues")
+
+      // Pretty-print key results
+      if (data.providers && Array.isArray(data.providers)) {
+        console.log()
+        console.log(`  ${bold("Settlement Breakdown")}`)
+        printDivider()
+        for (const p of data.providers) {
+          const pct = p.percentage !== undefined ? dim(` (${p.percentage}%)`) : ""
+          console.log(`  ${p.name}  ${bold("$" + Number(p.settlement).toFixed(2))}  billed: $${Number(p.billed).toFixed(2)}${pct}`)
+        }
+        printDivider()
+        if (data.reduction_percentage !== undefined) printKV("Reduction %", `${data.reduction_percentage}%`)
+        if (data.check_amount !== undefined) printKV("Check Amount", `$${Number(data.check_amount).toFixed(2)}`)
+        if (data.total_billed !== undefined) printKV("Total Billed", `$${Number(data.total_billed).toFixed(2)}`)
+      } else if (data.pipeline && Array.isArray(data.pipeline)) {
+        console.log()
+        console.log(`  ${bold("Pipeline Summary")}`)
+        printDivider()
+        for (const stage of data.pipeline) {
+          console.log(`  ${bold(stage.stage)}  ${stage.count} case(s)  ${dim("$" + Number(stage.total_value).toFixed(2))}`)
+        }
+        printDivider()
+        if (data.totals) {
+          printKV("Total Cases", data.totals.cases)
+          printKV("Total Value", `$${Number(data.totals.value).toFixed(2)}`)
+        }
+        if (data.audit_flag_count > 0) printKV("Audit Flags", `${data.audit_flag_count} ⚠`)
+      } else if (data.flags && Array.isArray(data.flags)) {
+        console.log()
+        console.log(`  ${bold("Audit Results")}  ${data.status === "clean" ? success("✓ Clean") : "⚠ Needs Attention"}`)
+        printDivider()
+        for (const flag of data.flags) {
+          const icon = flag.severity === "error" ? "✗" : flag.severity === "warning" ? "⚠" : "ℹ"
+          console.log(`  ${icon}  ${flag.message}`)
+        }
+        if (data.flags.length === 0) console.log(`  ${success("✓")} No issues found`)
+        printDivider()
+      } else if (data.format === "iif") {
+        console.log()
+        console.log(`  ${bold("QuickBooks IIF Export")}`)
+        printDivider()
+        if (data.filename) printKV("File", data.filename)
+        if (data.instructions) printKV("Import", data.instructions)
+        if (data.provider_count !== undefined) printKV("Providers", data.provider_count)
+        if (data.amount !== undefined) printKV("Amount", `$${Number(data.amount).toFixed(2)}`)
+        printDivider()
+        console.log()
+        console.log(dim("--- IIF Content ---"))
+        console.log(data.content)
+        console.log(dim("--- End IIF ---"))
+      } else {
+        // Generic output
+        console.log()
+        await writeJson(data)
+      }
+
+      // Report bundle attachment (shown after any of the above)
+      if (data.report_bundle) {
+        const rb = data.report_bundle
+        console.log()
+        console.log(`  ${bold("Report Bundle")}  ${rb.success ? success("✓ Generated") : "✗ Failed"}`)
+        printDivider()
+        if (rb.zip_url) printKV("Download", rb.zip_url)
+        if (rb.bloq_item_url) printKV("View", rb.bloq_item_url)
+        if (rb.formats) printKV("Formats", rb.formats.join(", "))
+        if (rb.error) printKV("Error", rb.error)
+        printDivider()
+      }
+
+      console.log()
+      if (!args.json) prompts.outro(dim(`iris integrations call ${args.type} ${args.function} --json`))
+    } catch (err) {
+      if (spinner) spinner.stop("Error", 1)
+      process.exitCode = 1
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      if (!args.json) prompts.outro("Done")
+    }
+  },
+})
+
+// ============================================================================
+// Root command
+// ============================================================================
+
+export const PlatformIntegrationsCommand = cmd({
+  command: "integrations",
+  aliases: ["int", "connect", "apps"],
+  describe: "manage integrations — connect, call, share, list, disconnect",
+  builder: (yargs) =>
+    yargs
+      .command(IntegrationsListCommand)
+      .command(IntegrationsExecCommand)
+      .command(PathwaysCommand)
+      .command(IntegrationsConnectCommand)
+      .command(IntegrationsSetupNativeCommand)
+      .command(IntegrationsShareCommand)
+      .command(IntegrationsUnshareCommand)
+      .command(IntegrationsDisconnectCommand)
+      .demandCommand(),
+  async handler() {},
+})

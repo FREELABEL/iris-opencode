@@ -1,0 +1,1061 @@
+import { cmd } from "./cmd"
+import { productCommand } from "./product-command"
+import * as prompts from "./clack"
+import { UI } from "../ui"
+import { irisFetch, requireAuth, handleApiError, resolveUserId, IRIS_API, bold, dim, success, highlight, writeJson } from "./iris-api"
+import { SomCampaignCommand } from "./platform-som-campaign"
+import * as fs from "fs"
+import * as os from "os"
+import * as pathNode from "path"
+
+// ============================================================================
+// SOM Campaign Overview + Edit — mirrors PHP som:overview and som:edit
+// ============================================================================
+
+const RAICHU = process.env.IRIS_FL_API_URL ?? process.env.FL_API_URL ?? "https://raichu.heyiris.io"
+
+// Inline fallback — used when API is unreachable
+const INLINE_CAMPAIGNS: Record<string, { board: number; strategy: string; ig: string; label: string; audience: string }> = {
+  courses:      { board: 38,  strategy: "AI Course | V3",                  ig: "heyiris.io",        label: "AI Course Outreach",    audience: "AI builders, tech founders" },
+  creators:     { board: 80,  strategy: "Creator Outreach | V1",           ig: "thediscoverpage_",  label: "Creator Outreach",      audience: "Artists, creators, hip-hop culture" },
+  beatbox:      { board: 224, strategy: "DJ Outreach | V3",                ig: "thebeatbox__",      label: "DJ Outreach",           audience: "DJs, producers, beatmakers" },
+  mayo:         { board: 176, strategy: "Mayo Outreach | V2",              ig: "hourdemayo",        label: "Mayo Outreach",         audience: "Creators, influencers, foodies" },
+  venues:       { board: 292, strategy: "Venue Partnership | V1",          ig: "freelabelnet",      label: "Venue Partnership",     audience: "Cafes, venues, event spaces" },
+  freelabelnet: { board: 355, strategy: "Artist Outreach | FFAT V1",       ig: "freelabelnet",      label: "FFAT Artists (Austin)", audience: "Visual artists, muralists, performers" },
+  atxbeauty:    { board: 283, strategy: "Beauty & Wellness Outreach | V1", ig: "atxbeautylab.lisa", label: "ATX Beauty Outreach",   audience: "Estheticians, salons, wellness" },
+  gooddeals:    { board: 302, strategy: "LinkedIn Founder Outreach | V1",  ig: "",                  label: "Good Deals Outreach",   audience: "Startup founders, small biz owners" },
+}
+
+type CampaignEntry = { board: number; strategy: string; ig: string; label: string; audience: string }
+
+let _cachedCampaigns: Record<string, CampaignEntry> | null = null
+
+async function loadCampaigns(): Promise<Record<string, CampaignEntry>> {
+  if (_cachedCampaigns) return _cachedCampaigns
+  try {
+    const resp = await irisFetch("/api/v1/som/campaigns", {}, RAICHU)
+    if (resp.ok) {
+      const body = await resp.json() as any
+      const list = body?.data?.campaigns ?? body?.data ?? []
+      if (Array.isArray(list) && list.length > 0) {
+        const result: Record<string, CampaignEntry> = {}
+        for (const c of list) {
+          result[c.name] = {
+            board: Number(c.bloq_id),
+            strategy: c.strategy_name || "",
+            ig: c.ig_account || "",
+            label: c.label || c.name,
+            audience: c.metadata?.audience || "",
+          }
+        }
+        _cachedCampaigns = result
+        return result
+      }
+    }
+  } catch { /* fall through to inline */ }
+  _cachedCampaigns = INLINE_CAMPAIGNS
+  return INLINE_CAMPAIGNS
+}
+
+// Kept for backward compat in commands that reference it synchronously
+const CAMPAIGNS = INLINE_CAMPAIGNS
+
+function channelLabel(type: string): string {
+  const map: Record<string, string> = { instagram: "IG DM", email: "Email", sms: "SMS", phone: "Phone", linkedin: "LinkedIn" }
+  return map[type] ?? type
+}
+
+async function fetchStrategyByName(boardId: number, name: string): Promise<Record<string, unknown> | null> {
+  const resp = await irisFetch(`/api/v1/bloqs/${boardId}/outreach-strategy-templates`, {}, RAICHU)
+  if (!resp.ok) return null
+  const body = await resp.json()
+  const templates = body.data?.templates ?? body.templates ?? []
+  return templates.find((t: any) => t.name === name) ?? null
+}
+
+async function fetchLeadCount(boardId: number): Promise<number | string> {
+  try {
+    const resp = await irisFetch(`/api/v1/leads?bloq_id=${boardId}&per_page=1`, {}, RAICHU)
+    if (!resp.ok) return "?"
+    const body = await resp.json()
+    return body.total ?? body.data?.total ?? "?"
+  } catch { return "?" }
+}
+
+// ── Overview ──
+
+const SomOverviewCommand = cmd({
+  command: "overview",
+  describe: "view all SOM campaigns, strategies, and scripts at a glance",
+  builder: (yargs) =>
+    yargs
+      .option("campaign", { alias: "c", describe: "show only one campaign", type: "string" })
+      .option("scripts", { alias: "s", describe: "show full script text", type: "boolean" })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    await requireAuth()
+
+    const allCampaigns = await loadCampaigns()
+    let campaignNames = Object.keys(allCampaigns)
+    if (args.campaign) {
+      if (!allCampaigns[args.campaign as string]) {
+        prompts.log.error(`Unknown campaign: ${args.campaign}. Options: ${campaignNames.join(", ")}`)
+        return
+      }
+      campaignNames = [args.campaign as string]
+    }
+
+    const allData: Record<string, unknown> = {}
+
+    for (const name of campaignNames) {
+      const cfg = allCampaigns[name]
+      const strategy = await fetchStrategyByName(cfg.board, cfg.strategy)
+      const leads = await fetchLeadCount(cfg.board)
+
+      allData[name] = { config: cfg, strategy, total_leads: leads }
+    }
+
+    if (args.json) {
+      await writeJson(allData)
+      return
+    }
+
+    console.log("")
+    console.log(bold("SOM — Outreach Campaign Overview"))
+    console.log("")
+
+    for (const name of campaignNames) {
+      const data = allData[name] as any
+      const cfg = data.config
+      const strat = data.strategy
+      const leads = data.total_leads
+
+      console.log(bold(`${name.toUpperCase()} — ${cfg.label}`))
+      console.log(`  Board: #${cfg.board}  |  IG: @${cfg.ig}  |  Leads: ${leads}`)
+      console.log(`  Audience: ${cfg.audience}`)
+
+      if (!strat) {
+        console.log(`  ${UI.Style.TEXT_DANGER}Strategy "${cfg.strategy}" NOT FOUND${UI.Style.TEXT_NORMAL}`)
+        console.log("")
+        continue
+      }
+
+      const stats = (strat.metadata as any)?.stats ?? {}
+      const replyRate = stats.reply_rate != null ? `${stats.reply_rate}%` : "-"
+      const convRate = stats.conversion_rate != null ? `${stats.conversion_rate}%` : "-"
+      const sent = stats.sent ?? 0
+      const statsLine = sent > 0 ? `  ${dim(`Sent: ${sent}  |  Reply: ${replyRate}  |  Conv: ${convRate}`)}` : ""
+      console.log(`  Strategy: ${strat.name} (id:${strat.id}, ${strat.usage_count ?? 0} uses)`)
+      if (statsLine) console.log(statsLine)
+
+      const steps = (strat.steps ?? []) as any[]
+      if (steps.length === 0) {
+        console.log(`  ${UI.Style.TEXT_WARNING}No steps defined!${UI.Style.TEXT_NORMAL}`)
+        console.log("")
+        continue
+      }
+
+      for (const step of steps) {
+        const num = (step.order ?? 0) + 1
+        const delay = (step.delay_hours ?? 0) > 0 ? dim(` (+${step.delay_hours}h)`) : ""
+        const ch = channelLabel(step.type ?? "other")
+        console.log(`  Step ${num}: ${step.title} ${dim(`[${ch}]`)}${delay}`)
+
+        const script = (step.instructions ?? "").trim()
+        if (script) {
+          if (args.scripts) {
+            // Full script, word-wrapped
+            const lines = script.match(/.{1,90}(\s|$)/g) ?? [script]
+            for (const line of lines) {
+              console.log(`    ${line.trim()}`)
+            }
+          } else {
+            // Hook (first sentence) + truncated preview
+            const hook = script.split(/[.!?—]\s/)[0] ?? ""
+            console.log(`    ${dim("Hook:")} ${hook}`)
+            const preview = script.length > 120 ? script.slice(0, 120) + "..." : script
+            console.log(`    ${dim("Script:")} ${preview}`)
+          }
+        } else {
+          console.log(`    ${dim("(no script)")}`)
+        }
+
+        const prompt = (step.ai_prompt ?? "").trim()
+        if (prompt) {
+          const p = prompt.length > 80 ? prompt.slice(0, 80) + "..." : prompt
+          console.log(`    ${dim("AI:")} ${p}`)
+        }
+      }
+
+      console.log("")
+    }
+  },
+})
+
+// ── Edit ──
+
+const SomEditCommand = cmd({
+  command: "edit <campaign>",
+  describe: "edit a campaign's outreach scripts inline",
+  builder: (yargs) =>
+    yargs
+      .positional("campaign", { describe: "courses|creators|beatbox|venues", type: "string", demandOption: true })
+      .option("step", { describe: "step number (1-based)", type: "number" })
+      .option("field", { describe: "script|ai|title", type: "string" }),
+  async handler(args) {
+    await requireAuth()
+
+    const allCampaigns = await loadCampaigns()
+    const name = args.campaign as string
+    const cfg = allCampaigns[name]
+    if (!cfg) {
+      prompts.log.error(`Unknown campaign: ${name}. Options: ${Object.keys(allCampaigns).join(", ")}`)
+      return
+    }
+
+    const strategy = await fetchStrategyByName(cfg.board, cfg.strategy)
+    if (!strategy) {
+      prompts.log.error(`Strategy "${cfg.strategy}" not found on board ${cfg.board}`)
+      return
+    }
+
+    const steps = (strategy.steps ?? []) as any[]
+    if (steps.length === 0) {
+      prompts.log.error("No steps to edit")
+      return
+    }
+
+    // Sort by order
+    steps.sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0))
+
+    let stepIdx = args.step ? (args.step as number) - 1 : -1
+
+    // If no step specified, let user pick
+    if (stepIdx < 0) {
+      const choices = steps.map((s: any, i: number) => ({
+        value: i,
+        label: `Step ${i + 1}: ${s.title} [${channelLabel(s.type)}] — "${(s.instructions ?? "").slice(0, 50)}..."`,
+      }))
+
+      const picked = await prompts.select({ message: "Which step?", options: choices })
+      if (prompts.isCancel(picked)) return
+      stepIdx = picked as number
+    }
+
+    if (stepIdx < 0 || stepIdx >= steps.length) {
+      prompts.log.error(`Invalid step. This strategy has ${steps.length} steps.`)
+      return
+    }
+
+    const step = steps[stepIdx]
+    console.log("")
+    console.log(bold(`Step ${stepIdx + 1}: ${step.title} [${channelLabel(step.type)}]`))
+    console.log("")
+
+    if (step.instructions) {
+      console.log(dim("Current script:"))
+      console.log(step.instructions)
+      console.log("")
+    }
+
+    if (step.ai_prompt) {
+      console.log(dim("Current AI prompt:"))
+      console.log(step.ai_prompt)
+      console.log("")
+    }
+
+    // Determine field to edit
+    let field = args.field as string | undefined
+    if (!field) {
+      const picked = await prompts.select({
+        message: "What to edit?",
+        options: [
+          { value: "script", label: "Script (the DM/email text)" },
+          { value: "ai", label: "AI prompt (personalization instructions)" },
+          { value: "both", label: "Script + AI prompt" },
+          { value: "title", label: "Step title" },
+        ],
+      })
+      if (prompts.isCancel(picked)) return
+      field = picked as string
+    }
+
+    let updated = false
+
+    if (field === "script" || field === "both") {
+      const newScript = await prompts.text({ message: "New script:", initialValue: step.instructions ?? "" })
+      if (!prompts.isCancel(newScript) && newScript && newScript !== step.instructions) {
+        steps[stepIdx].instructions = newScript
+        updated = true
+      }
+    }
+
+    if (field === "ai" || field === "both") {
+      const newPrompt = await prompts.text({ message: "New AI prompt:", initialValue: step.ai_prompt ?? "" })
+      if (!prompts.isCancel(newPrompt) && newPrompt && newPrompt !== step.ai_prompt) {
+        steps[stepIdx].ai_prompt = newPrompt
+        updated = true
+      }
+    }
+
+    if (field === "title") {
+      const newTitle = await prompts.text({ message: "New title:", initialValue: step.title ?? "" })
+      if (!prompts.isCancel(newTitle) && newTitle && newTitle !== step.title) {
+        steps[stepIdx].title = newTitle
+        updated = true
+      }
+    }
+
+    if (!updated) {
+      prompts.log.info("No changes made.")
+      return
+    }
+
+    // Push
+    const cleanSteps = steps.map((s: any) => ({
+      title: s.title,
+      type: s.type,
+      instructions: s.instructions ?? null,
+      order: s.order ?? 0,
+      delay_hours: s.delay_hours ?? 0,
+      ai_prompt: s.ai_prompt ?? null,
+    }))
+
+    const resp = await irisFetch(
+      `/api/v1/bloqs/${cfg.board}/outreach-strategy-templates/${strategy.id}`,
+      { method: "PUT", body: JSON.stringify({ steps: cleanSteps }) },
+      RAICHU,
+    )
+
+    if (!resp.ok) {
+      await handleApiError(resp, "update strategy")
+      return
+    }
+
+    prompts.log.success(`${cfg.strategy} updated! Verify: iris som -c ${name}`)
+  },
+})
+
+// ── Help ──
+
+const SomHelpCommand = cmd({
+  command: "help",
+  describe: "show the full SOM outreach management guide",
+  builder: (yargs) => yargs,
+  async handler() {
+    const b = bold
+    const d = dim
+
+    console.log("")
+    console.log(b("SOM — Sales Outreach Machine"))
+    console.log(d("Automated Instagram DM outreach across all campaigns"))
+    console.log("")
+
+    console.log(b("CAMPAIGNS"))
+    console.log("  Run " + d("iris som") + " to see all active campaigns (loaded from API)")
+    console.log("  Examples: courses, creators, beatbox, mayo, venues, freelabelnet, atxbeauty, gooddeals")
+    console.log("")
+
+    console.log(b("DASHBOARD"))
+    console.log("  iris som                       Overview of all campaigns")
+    console.log("  iris som -s                    With full script text")
+    console.log("  iris som -c creators           Just one campaign")
+    console.log("  iris som --json                JSON output for scripting")
+    console.log("")
+
+    console.log(b("EDIT SCRIPTS"))
+    console.log("  iris som edit creators          Interactive — pick a step to edit")
+    console.log("  iris som edit creators --step=1 Jump to step 1")
+    console.log("  iris som edit beatbox --step=1 --field=script   Edit DM text")
+    console.log("  iris som edit beatbox --step=1 --field=ai       Edit AI prompt")
+    console.log("  iris som edit beatbox --step=1 --field=both     Edit both")
+    console.log("")
+
+    console.log(b("STRATEGY CRUD"))
+    console.log("  iris outreach list 80           List strategies on a board")
+    console.log("  iris outreach show 80 18        Show strategy + all steps")
+    console.log("  iris outreach create 80 --from-json=file.json")
+    console.log("  iris outreach update 80 18 --from-json=file.json")
+    console.log("  iris outreach apply 80 18 412   Apply strategy to a lead")
+    console.log("  iris outreach delete 80 18      Delete a strategy")
+    console.log("")
+
+    console.log(b("RUN BATCHES"))
+    console.log("  npm run som:all -- limit=15 enrich=1    All active campaigns")
+    console.log("  npm run som:creators -- limit=20        Just creators")
+    console.log("  npm run som:beatbox -- limit=5 dry=1    Dry run (no DMs)")
+    console.log("")
+
+    console.log(b("LEAD GENERATION"))
+    console.log("  npm run leadgen:custom -- custom mode=comments \\")
+    console.log("    post=https://instagram.com/p/XXX/ ig=heyiris.io board=80 limit=200")
+    console.log("")
+
+    console.log(b("SCRIPT BEST PRACTICES"))
+    console.log("  " + d("1.") + " No URLs in Step 1 — triggers Instagram spam filters")
+    console.log("  " + d("2.") + " No income claims — triggers skepticism + spam detection")
+    console.log("  " + d("3.") + " Lead with monetization — what they get paid for, not your tech")
+    console.log("  " + d("4.") + " Single audience per campaign — don't list multiple personas")
+    console.log("  " + d("5.") + " Soft CTA — \"What are you working on?\" not \"Sign up now\"")
+    console.log("  " + d("6.") + " Under 4 sentences — mobile DMs are small")
+    console.log("  " + d("7.") + " AI prompt does the heavy lifting — template + personalization")
+    console.log("")
+
+    console.log(b("LEDGER & DEBUG"))
+    console.log("  iris som ledger                     All campaigns, today")
+    console.log("  iris som ledger courses             One campaign")
+    console.log("  iris som ledger --retryable          Only retryable failures")
+    console.log("  iris som ledger --date 2026-05-16    Specific date")
+    console.log("  iris som retry courses               Show retryable leads + retry command")
+    console.log("  iris som debug courses 21995         Print debug command for one lead")
+    console.log("")
+
+    console.log(b("TROUBLESHOOTING"))
+    console.log("  \"All leads already have outreach\"  → Scrape fresh leads")
+    console.log("  \"No Instagram handle — skipping\"   → Venue/business lead without IG")
+    console.log("  \"Lead map API timed out\"            → API slow under parallel load")
+    console.log("  \"No Open Instagram btn\"             → Lead has no IG handle in system")
+    console.log("  \"No Send message in menu\"           → Private account or DMs blocked")
+    console.log("")
+  },
+})
+
+// ── Toggle command ──
+
+const SomToggleCommand = cmd({
+  command: "toggle <campaign> [state]",
+  describe: "turn a campaign on or off (updates DB)",
+  builder: (yargs) =>
+    yargs
+      .positional("campaign", { describe: "campaign name", type: "string", demandOption: true })
+      .positional("state", { describe: "on or off (toggles if omitted)", type: "string" }),
+  async handler(args) {
+    await requireAuth()
+    UI.empty()
+    prompts.intro("◈  SOM Toggle")
+
+    const allCampaigns = await loadCampaigns()
+    const campaign = (args.campaign as string).toLowerCase()
+
+    if (!allCampaigns[campaign]) {
+      prompts.log.error(`Unknown campaign: ${campaign}. Options: ${Object.keys(allCampaigns).join(", ")}`)
+      prompts.outro("Done")
+      return
+    }
+
+    // Fetch current state from API
+    const getResp = await irisFetch(`/api/v1/som/campaigns/${campaign}`, {}, RAICHU)
+    if (!getResp.ok) {
+      await handleApiError(getResp, "fetch campaign")
+      prompts.outro("Done")
+      return
+    }
+    const getBody = (await getResp.json()) as any
+    const campaignData = getBody?.data?.campaign ?? getBody?.data ?? getBody
+    const currentState = !!campaignData.active
+
+    let newState: boolean
+    if (args.state === "on") newState = true
+    else if (args.state === "off") newState = false
+    else newState = !currentState
+
+    if (currentState === newState) {
+      prompts.log.info(`${campaign} is already ${newState ? "ON" : "OFF"}`)
+      prompts.outro("Done")
+      return
+    }
+
+    // Update via API
+    const putResp = await irisFetch(`/api/v1/som/campaigns/${campaign}`, {
+      method: "PUT",
+      body: JSON.stringify({ active: newState }),
+    }, RAICHU)
+
+    if (!putResp.ok) {
+      await handleApiError(putResp, "update campaign")
+      prompts.outro("Done")
+      return
+    }
+
+    prompts.log.info(`${bold(campaign)} ${currentState ? "ON → OFF" : "OFF → ON"}`)
+
+    // Show all campaign states from API
+    _cachedCampaigns = null // bust cache
+    const listResp = await irisFetch("/api/v1/som/campaigns", {}, RAICHU)
+    if (listResp.ok) {
+      const body = (await listResp.json()) as any
+      const list = body?.data?.campaigns ?? body?.data ?? []
+      if (Array.isArray(list)) {
+        console.log("")
+        let on = 0, off = 0
+        for (const c of list) {
+          const a = !!c.active
+          console.log(`  ${a ? "✅" : "❌"} ${c.name}`)
+          a ? on++ : off++
+        }
+        console.log("")
+        prompts.log.info(dim(`${on} active, ${off} off`))
+      }
+    }
+
+    prompts.outro(dim("Change is live — no deploy needed"))
+  },
+})
+
+const SomStatusCommand = cmd({
+  command: "status",
+  describe: "show which campaigns are on/off (from DB)",
+  builder: (yargs) => yargs,
+  async handler() {
+    await requireAuth()
+    UI.empty()
+    prompts.intro("◈  SOM Status")
+
+    const resp = await irisFetch("/api/v1/som/campaigns", {}, RAICHU)
+    if (!resp.ok) {
+      await handleApiError(resp, "fetch campaigns")
+      prompts.outro("Done")
+      return
+    }
+
+    const body = (await resp.json()) as any
+    const list = body?.data?.campaigns ?? body?.data ?? []
+
+    if (!Array.isArray(list) || list.length === 0) {
+      prompts.log.warn("No campaigns found in DB")
+      prompts.outro("Done")
+      return
+    }
+
+    let on = 0, off = 0
+    for (const c of list) {
+      const a = !!c.active
+      console.log(`  ${a ? "✅" : "❌"} ${c.name} ${dim(`(board #${c.bloq_id})`)}`)
+      a ? on++ : off++
+    }
+    console.log("")
+    prompts.outro(`${on} active, ${off} off`)
+  },
+})
+
+// ── Update script (non-interactive) ──
+
+const SomUpdateScriptCommand = cmd({
+  command: "script <campaign> <text>",
+  describe: "update a step's script for a campaign (non-interactive)",
+  builder: (yargs) =>
+    yargs
+      .positional("campaign", { describe: "campaign name", type: "string", demandOption: true })
+      .positional("text", { describe: "new script text (quote it)", type: "string", demandOption: true })
+      .option("step", { describe: "step number (default: 1)", type: "number", default: 1 }),
+  async handler(args) {
+    await requireAuth()
+    UI.empty()
+    prompts.intro(`◈  Update Script — ${args.campaign}`)
+
+    const allCampaigns = await loadCampaigns()
+    const camp = allCampaigns[args.campaign as string]
+    if (!camp) {
+      prompts.log.error(`Unknown campaign: ${args.campaign}. Options: ${Object.keys(allCampaigns).join(", ")}`)
+      prompts.outro("Done")
+      return
+    }
+
+    const strategy = await fetchStrategyByName(camp.board, camp.strategy)
+    if (!strategy) {
+      prompts.log.error(`Strategy "${camp.strategy}" not found on board ${camp.board}`)
+      prompts.outro("Done")
+      return
+    }
+
+    const steps = ((strategy.steps ?? []) as any[]).sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0))
+    const stepIdx = (args.step as number) - 1
+    if (stepIdx < 0 || stepIdx >= steps.length) {
+      prompts.log.error(`Step ${args.step} doesn't exist (${steps.length} steps total)`)
+      prompts.outro("Done")
+      return
+    }
+
+    const oldScript = steps[stepIdx].instructions ?? ""
+    steps[stepIdx].instructions = args.text as string
+
+    const resp = await irisFetch(
+      `/api/v1/bloqs/${camp.board}/outreach-strategy-templates/${(strategy as any).id}`,
+      { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ steps }) },
+      RAICHU
+    )
+
+    if (resp.ok) {
+      prompts.log.info(`${bold(args.campaign as string)} Step ${args.step} updated`)
+      console.log(dim(`  Old: ${oldScript.slice(0, 80)}...`))
+      console.log(`  New: ${(args.text as string).slice(0, 80)}...`)
+    } else {
+      prompts.log.error(`Failed: HTTP ${resp.status}`)
+    }
+    prompts.outro("Done")
+  },
+})
+
+// ── Clear AI prompt ──
+
+const SomClearAiCommand = cmd({
+  command: "clearai <campaign>",
+  describe: "clear ai_prompt from all steps (lightweight variation instead)",
+  builder: (yargs) =>
+    yargs
+      .positional("campaign", { type: "string" })
+      .option("step", { type: "number" }),
+  async handler(args) {
+    await requireAuth()
+    UI.empty()
+    prompts.intro(`◈  Clear AI Prompt — ${args.campaign}`)
+
+    const allCampaigns = await loadCampaigns()
+    const camp = allCampaigns[args.campaign as string]
+    if (!camp) {
+      prompts.log.error(`Unknown campaign: ${args.campaign}. Options: ${Object.keys(allCampaigns).join(", ")}`)
+      prompts.outro("Done")
+      return
+    }
+
+    const strategy = await fetchStrategyByName(camp.board, camp.strategy)
+    if (!strategy) {
+      prompts.log.error(`Strategy "${camp.strategy}" not found`)
+      prompts.outro("Done")
+      return
+    }
+
+    const steps = ((strategy.steps ?? []) as any[]).sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0))
+    let cleared = 0
+
+    for (let i = 0; i < steps.length; i++) {
+      if (args.step && (args.step as number) !== i + 1) continue
+      if (steps[i].ai_prompt) {
+        steps[i].ai_prompt = null
+        cleared++
+        console.log(`  Step ${i + 1}: ${steps[i].title} — ai_prompt cleared`)
+      }
+    }
+
+    if (cleared === 0) {
+      prompts.log.info("No steps had ai_prompt set")
+      prompts.outro("Done")
+      return
+    }
+
+    const resp = await irisFetch(
+      `/api/v1/bloqs/${camp.board}/outreach-strategy-templates/${(strategy as any).id}`,
+      { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ steps }) },
+      RAICHU
+    )
+
+    if (resp.ok) {
+      prompts.log.info(`Cleared ai_prompt on ${cleared} step(s)`)
+    } else {
+      prompts.log.error(`Failed: HTTP ${resp.status}`)
+    }
+    prompts.outro(dim("Vary It will now do word swaps instead of full rewrites"))
+  },
+})
+
+// ── Ledger command ──
+
+const LEDGER_DIR = pathNode.join(os.homedir(), ".iris", "som-ledger")
+
+const SomLedgerCommand = cmd({
+  command: "ledger [campaign]",
+  describe: "view per-lead outreach results from today's ledger",
+  builder: (yargs) =>
+    yargs
+      .positional("campaign", { describe: "campaign name (omit for all)", type: "string" })
+      .option("date", { describe: "date (YYYY-MM-DD, default today)", type: "string" })
+      .option("retryable", { describe: "show only retryable failures", type: "boolean" })
+      .option("failures", { describe: "show only failures", type: "boolean" })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    const date = (args.date as string) || new Date().toISOString().slice(0, 10)
+    const campaign = args.campaign as string | undefined
+
+    // Find matching ledger files
+    let files: string[] = []
+    try {
+      const allFiles = fs.readdirSync(LEDGER_DIR).filter(f => f.endsWith(".jsonl") && f.includes(date))
+      if (campaign) {
+        files = allFiles.filter(f => f.startsWith(`${campaign}-`))
+      } else {
+        files = allFiles
+      }
+    } catch {
+      console.log(dim(`No ledger directory at ${LEDGER_DIR}`))
+      return
+    }
+
+    if (files.length === 0) {
+      console.log(dim(`No ledger files for ${campaign ?? "any campaign"} on ${date}`))
+      return
+    }
+
+    type Entry = { ts: string; campaign: string; lead_id: number | null; ig_handle: string | null; lead_name: string; step: number | null; result: string; retryable: boolean; error_detail: string | null; duration_s: number; dm_text: string | null; dry_run: boolean }
+    const allEntries: Entry[] = []
+
+    for (const file of files) {
+      const lines = fs.readFileSync(pathNode.join(LEDGER_DIR, file), "utf-8").trim().split("\n").filter(Boolean)
+      for (const line of lines) {
+        try { allEntries.push(JSON.parse(line)) } catch {}
+      }
+    }
+
+    // Apply filters
+    let entries = allEntries
+    if (args.retryable) entries = entries.filter(e => e.retryable && e.result !== "dm_sent")
+    if (args.failures) entries = entries.filter(e => e.result !== "dm_sent")
+
+    if (args.json) {
+      await writeJson(entries)
+      return
+    }
+
+    // Summary
+    const sent = allEntries.filter(e => e.result === "dm_sent").length
+    const retryable = allEntries.filter(e => e.retryable && e.result !== "dm_sent").length
+    const permanent = allEntries.filter(e => !e.retryable && e.result !== "dm_sent").length
+
+    console.log("")
+    console.log(bold(`SOM Ledger — ${date}`))
+    console.log(`  ${allEntries.length} total  |  ${sent} sent  |  ${retryable} retryable  |  ${permanent} permanent`)
+    console.log("")
+
+    // Result breakdown
+    const resultCounts: Record<string, number> = {}
+    for (const e of allEntries) resultCounts[e.result] = (resultCounts[e.result] || 0) + 1
+    for (const [result, count] of Object.entries(resultCounts).sort((a, b) => b[1] - a[1])) {
+      const icon = result === "dm_sent" ? "+" : RETRYABLE_SET.has(result) ? "~" : "-"
+      console.log(`  ${icon} ${result.padEnd(22)} ${count}`)
+    }
+    console.log("")
+
+    // Per-entry listing
+    for (const e of entries) {
+      const icon = e.result === "dm_sent" ? "+" : e.retryable ? "~" : "-"
+      const id = e.lead_id ? `#${e.lead_id}` : ""
+      const handle = e.ig_handle ? `@${e.ig_handle}` : ""
+      const detail = e.error_detail ? dim(` (${e.error_detail.slice(0, 60)})`) : ""
+      const dur = e.duration_s > 0 ? dim(` ${e.duration_s.toFixed(0)}s`) : ""
+      console.log(`  ${icon} ${e.lead_name.padEnd(20)} ${e.result.padEnd(20)} ${id.padEnd(8)} ${handle}${dur}${detail}`)
+    }
+    console.log("")
+  },
+})
+
+const RETRYABLE_SET = new Set([
+  "no_dm_input", "no_ig_button", "no_send_message", "panel_failed",
+  "no_play_button", "outreach_timeout", "timeout", "browser_closed", "session_expired", "error",
+])
+
+// ── Retry command ──
+
+const SomRetryCommand = cmd({
+  command: "retry <campaign>",
+  describe: "show retryable failures from today's ledger and print retry command",
+  builder: (yargs) =>
+    yargs
+      .positional("campaign", { describe: "campaign name", type: "string", demandOption: true })
+      .option("date", { describe: "date (YYYY-MM-DD, default today)", type: "string" }),
+  async handler(args) {
+    const date = (args.date as string) || new Date().toISOString().slice(0, 10)
+    const campaign = args.campaign as string
+    const ledgerFile = pathNode.join(LEDGER_DIR, `${campaign}-${date}.jsonl`)
+
+    if (!fs.existsSync(ledgerFile)) {
+      console.log(dim(`No ledger file: ${ledgerFile}`))
+      return
+    }
+
+    const lines = fs.readFileSync(ledgerFile, "utf-8").trim().split("\n").filter(Boolean)
+    type Entry = { lead_id: number | null; lead_name: string; result: string; retryable: boolean }
+    const entries: Entry[] = lines.map(l => { try { return JSON.parse(l) } catch { return null } }).filter(Boolean)
+
+    const sentIds = new Set(entries.filter(e => e.result === "dm_sent").map(e => e.lead_id))
+    const retryable = entries.filter(e => e.retryable && e.lead_id && !sentIds.has(e.lead_id))
+    const uniqueIds = [...new Set(retryable.map(e => e.lead_id))]
+
+    if (uniqueIds.length === 0) {
+      console.log(dim("No retryable failures in today's ledger."))
+      return
+    }
+
+    console.log("")
+    console.log(bold(`SOM Retry — ${campaign} (${date})`))
+    console.log(`  ${uniqueIds.length} retryable leads:`)
+    console.log("")
+    for (const id of uniqueIds) {
+      const entry = retryable.find(e => e.lead_id === id)!
+      console.log(`    #${id} ${entry.lead_name.padEnd(20)} ${entry.result}`)
+    }
+    console.log("")
+    console.log(highlight("Run:"))
+    console.log(`  node som.js ${campaign} retry=1`)
+    console.log("")
+  },
+})
+
+// ── Debug command ──
+
+const SomDebugCommand = cmd({
+  command: "debug <campaign> <lead_id>",
+  describe: "launch single-lead debug mode with screenshots at every step",
+  builder: (yargs) =>
+    yargs
+      .positional("campaign", { describe: "campaign name", type: "string", demandOption: true })
+      .positional("lead_id", { describe: "lead ID to debug", type: "number", demandOption: true }),
+  async handler(args) {
+    const campaign = args.campaign as string
+    const leadId = args.lead_id as number
+
+    const allCampaigns = await loadCampaigns()
+    if (!allCampaigns[campaign]) {
+      prompts.log.error(`Unknown campaign: ${campaign}. Options: ${Object.keys(allCampaigns).join(", ")}`)
+      return
+    }
+
+    console.log("")
+    console.log(bold(`SOM Debug — ${campaign} lead #${leadId}`))
+    console.log(`  Screenshots will be saved to: ${LEDGER_DIR}/debug/`)
+    console.log("")
+    console.log(highlight("Run:"))
+    console.log(`  node som.js ${campaign} debug_lead=${leadId}`)
+    console.log("")
+  },
+})
+
+// ── Sync — populate the local campaign cache from the DB (bug #133634) ──
+// The bridge's som-all.js reads campaigns synchronously from a disk cache
+// (~/.iris/bridge/som/.som-campaigns-cache.json). On a fresh machine that cache
+// is empty, so SOM no-ops. This pulls the DB-authoritative campaign templates
+// (the same ones managed in the web UI) and writes the cache the daemon reads.
+const SomSyncCommand = cmd({
+  command: "sync",
+  describe: "Sync SOM campaigns from the DB into the local cache the daemon reads",
+  builder: (yargs) =>
+    yargs.option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    const userId = await resolveUserId()
+    if (!userId) {
+      console.error(dim("Could not resolve your user id — run: iris auth login"))
+      process.exit(1)
+    }
+
+    const res = await irisFetch(`/api/v1/campaign-templates/daemon-configs?user_id=${userId}`, {}, IRIS_API)
+    if (!res.ok) {
+      await handleApiError(res, "sync SOM campaigns")
+      process.exit(1)
+    }
+
+    const body = (await res.json()) as { configs?: Record<string, any>; active_accounts?: any[]; source?: string }
+    const configs = body?.configs ?? {}
+    const count = Object.keys(configs).length
+
+    if (count === 0) {
+      console.error(dim(`No SOM campaigns found for user ${userId}. Create them in the web UI (Campaign Templates) first.`))
+      process.exit(1)
+    }
+
+    // Write the cache to the bundled bridge som dir (what the daemon spawns), and
+    // also to the dev checkout if present, so local runs pick it up too.
+    const payload = JSON.stringify({ syncedAt: new Date().toISOString(), campaigns: configs }, null, 2)
+    const targets = [
+      pathNode.join(os.homedir(), ".iris", "bridge", "som"),
+      pathNode.join(os.homedir(), "Sites", "freelabel", "fl-docker-dev", "coding-agent-bridge", "som"),
+    ]
+    const written: string[] = []
+    for (const dir of targets) {
+      try {
+        // Only create the bundled dir; skip the dev dir if its checkout is absent
+        const isBundled = dir.includes(pathNode.join(".iris", "bridge"))
+        if (!fs.existsSync(dir)) {
+          if (!isBundled) continue
+          fs.mkdirSync(dir, { recursive: true })
+        }
+        const cacheFile = pathNode.join(dir, ".som-campaigns-cache.json")
+        fs.writeFileSync(cacheFile, payload)
+        written.push(cacheFile)
+      } catch { /* best-effort per target */ }
+    }
+
+    if (args.json) {
+      await writeJson({ synced: count, source: body?.source ?? "database", written })
+      return
+    }
+
+    console.log(success(`Synced ${count} SOM campaign${count === 1 ? "" : "s"} (source: ${body?.source ?? "database"})`))
+    for (const [id, c] of Object.entries(configs)) {
+      const active = (c as any).active === false ? dim(" (off)") : ""
+      console.log(`  ${bold(id)} — board ${(c as any).boardId ?? "?"} · ${(c as any).strategy ?? "?"}${active}`)
+    }
+    console.log("")
+    for (const f of written) console.log(dim(`  → ${f}`))
+    if (written.length === 0) console.log(dim("  (no cache target writable — is ~/.iris/bridge installed?)"))
+  },
+})
+
+// ── Browser-session distribution (encrypted cloud ↔ any node) ─────────────────
+// Sessions live encrypted in the user's cloud (platform_credentials, keyed by
+// bloq_id+platform). push-sessions seeds the cloud from a machine that has the
+// local IG logins; pull-sessions distributes them to any node. This is what lets
+// SOM actually RUN on a fresh machine that has no instagram-auth-*.json.
+
+// The som dirs the bridge/daemon read session files from (bundled install + dev).
+function somSessionDirs(): string[] {
+  return [
+    pathNode.join(os.homedir(), ".iris", "bridge", "som"),
+    pathNode.join(os.homedir(), "Sites", "freelabel", "fl-docker-dev", "coding-agent-bridge", "som"),
+  ]
+}
+
+// Active SOM campaigns (deduped by igAccount) with their board + IG account.
+async function fetchSomIgCampaigns(userId: number): Promise<Array<{ id: string; boardId: string; igAccount: string }>> {
+  const res = await irisFetch(`/api/v1/campaign-templates/daemon-configs?user_id=${userId}`, {}, IRIS_API)
+  if (!res.ok) { await handleApiError(res, "fetch SOM campaigns"); return [] }
+  const body = (await res.json()) as { configs?: Record<string, any> }
+  const seen = new Set<string>()
+  const out: Array<{ id: string; boardId: string; igAccount: string }> = []
+  for (const [id, c] of Object.entries(body?.configs ?? {})) {
+    const ig = (c as any).igAccount
+    const board = (c as any).boardId
+    if (!ig || !board || seen.has(ig)) continue
+    seen.add(ig)
+    out.push({ id, boardId: String(board), igAccount: String(ig) })
+  }
+  return out
+}
+
+function findLocalSession(igAccount: string): string | null {
+  for (const dir of somSessionDirs()) {
+    const f = pathNode.join(dir, `instagram-auth-${igAccount}.json`)
+    if (fs.existsSync(f)) return f
+  }
+  return null
+}
+
+const SomPushSessionsCommand = cmd({
+  command: "push-sessions",
+  describe: "Upload this machine's local IG sessions to your encrypted cloud store",
+  builder: (yargs) =>
+    yargs
+      .option("account", { describe: "only this IG account", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    const userId = await resolveUserId()
+    if (!userId) { console.error(dim("Could not resolve your user id — run: iris auth login")); process.exit(1) }
+
+    let campaigns = await fetchSomIgCampaigns(userId)
+    if (args.account) campaigns = campaigns.filter((c) => c.igAccount === args.account)
+    if (campaigns.length === 0) { console.error(dim("No SOM campaigns with an IG account found.")); process.exit(1) }
+
+    const results: Array<{ account: string; board: string; status: string }> = []
+    for (const c of campaigns) {
+      const file = findLocalSession(c.igAccount)
+      if (!file) { results.push({ account: c.igAccount, board: c.boardId, status: "no local session" }); continue }
+      let storageState: any
+      try { storageState = JSON.parse(fs.readFileSync(file, "utf8")) } catch { results.push({ account: c.igAccount, board: c.boardId, status: "unreadable file" }); continue }
+      const res = await irisFetch(`/api/v1/project-credentials`, {
+        method: "POST",
+        body: JSON.stringify({ bloq_id: Number(c.boardId), user_id: userId, platform: "instagram", credential_type: "browser_session", credentials: storageState }),
+      }, IRIS_API)
+      results.push({ account: c.igAccount, board: c.boardId, status: res.ok ? "uploaded" : `failed (${res.status})` })
+    }
+
+    if (args.json) { await writeJson({ results }); return }
+    const ok = results.filter((r) => r.status === "uploaded").length
+    console.log(success(`Pushed ${ok}/${results.length} IG session${results.length === 1 ? "" : "s"} to the cloud`))
+    for (const r of results) {
+      const mark = r.status === "uploaded" ? "✓" : "•"
+      console.log(`  ${mark} ${bold(r.account)} ${dim(`(board ${r.board})`)} — ${r.status}`)
+    }
+  },
+})
+
+const SomPullSessionsCommand = cmd({
+  command: "pull-sessions",
+  describe: "Download your cloud IG sessions onto this node so SOM can run",
+  builder: (yargs) =>
+    yargs
+      .option("account", { describe: "only this IG account", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    const userId = await resolveUserId()
+    if (!userId) { console.error(dim("Could not resolve your user id — run: iris auth login")); process.exit(1) }
+
+    let campaigns = await fetchSomIgCampaigns(userId)
+    if (args.account) campaigns = campaigns.filter((c) => c.igAccount === args.account)
+    if (campaigns.length === 0) { console.error(dim("No SOM campaigns with an IG account found.")); process.exit(1) }
+
+    const results: Array<{ account: string; board: string; status: string }> = []
+    for (const c of campaigns) {
+      const res = await irisFetch(`/api/v1/project-credentials/session?bloq_id=${c.boardId}&platform=instagram&user_id=${userId}`, {}, IRIS_API)
+      if (res.status === 404) { results.push({ account: c.igAccount, board: c.boardId, status: "no cloud session — run: iris som push-sessions" }); continue }
+      if (res.status === 410) { results.push({ account: c.igAccount, board: c.boardId, status: "expired — re-authenticate" }); continue }
+      if (!res.ok) { results.push({ account: c.igAccount, board: c.boardId, status: `failed (${res.status})` }); continue }
+      const body = (await res.json()) as { credentials?: any }
+      if (!body?.credentials) { results.push({ account: c.igAccount, board: c.boardId, status: "empty session" }); continue }
+      const data = JSON.stringify(body.credentials, null, 2)
+      let wrote = false
+      for (const dir of somSessionDirs()) {
+        const isBundled = dir.includes(pathNode.join(".iris", "bridge"))
+        if (!fs.existsSync(dir)) { if (!isBundled) continue; fs.mkdirSync(dir, { recursive: true }) }
+        fs.writeFileSync(pathNode.join(dir, `instagram-auth-${c.igAccount}.json`), data)
+        wrote = true
+      }
+      results.push({ account: c.igAccount, board: c.boardId, status: wrote ? "pulled" : "no writable som dir" })
+    }
+
+    if (args.json) { await writeJson({ results }); return }
+    const ok = results.filter((r) => r.status === "pulled").length
+    console.log(success(`Pulled ${ok}/${results.length} IG session${results.length === 1 ? "" : "s"} from the cloud`))
+    for (const r of results) {
+      const mark = r.status === "pulled" ? "✓" : "•"
+      console.log(`  ${mark} ${bold(r.account)} ${dim(`(board ${r.board})`)} — ${r.status}`)
+    }
+    if (ok > 0) console.log(dim("\n  Sessions written to ~/.iris/bridge/som/ — SOM can now run on this node."))
+  },
+})
+
+// ── Parent command ──
+
+export const PlatformSomCommand = productCommand({
+  name: "som",
+  purpose:
+    "SOM — the outreach dashboard: every campaign at a glance, editable in place",
+  keywords: ["som", "outreach", "campaign", "dashboard", "pipeline", "sequence", "prospect"],
+  howtos: ["outreach-campaign"],
+  playbooks: ["som-outreach"],
+  builder: (yargs) =>
+    yargs
+      .command(SomOverviewCommand)
+      .command(SomEditCommand)
+      .command(SomToggleCommand)
+      .command(SomStatusCommand)
+      .command(SomHelpCommand)
+      .command(SomLedgerCommand)
+      .command(SomRetryCommand)
+      .command(SomDebugCommand)
+      .command(SomSyncCommand)
+      .command(SomPushSessionsCommand)
+      .command(SomPullSessionsCommand)
+      // Campaign registry CRUD — wires a strategy template to a board so it joins
+      // the SOM rotation (#143033: this command existed but was never mounted).
+      .command(SomCampaignCommand)
+      // Default to overview when no subcommand
+      .option("campaign", { alias: "c", describe: "show only one campaign", type: "string" })
+      .option("scripts", { alias: "s", describe: "show full script text", type: "boolean" })
+      .option("json", { describe: "JSON output", type: "boolean" })
+      .demandCommand(0),
+  async handler(args) {
+    // Default behavior: run overview
+    await SomOverviewCommand.handler(args as any)
+  },
+})

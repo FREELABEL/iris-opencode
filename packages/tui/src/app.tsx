@@ -608,23 +608,23 @@ function App() {
     if (!terminalTitleEnabled()) return
 
     if (route.data.type === "home") {
-      renderer.setTerminalTitle("OpenCode")
+      renderer.setTerminalTitle("IRIS CLI") /* [IRIS] */
       return
     }
 
     if (route.data.type === "session") {
       const title = session?.title
       if (!title || isFallbackTitle(title)) {
-        renderer.setTerminalTitle("OpenCode")
+        renderer.setTerminalTitle("IRIS CLI") /* [IRIS] */
         return
       }
 
-      renderer.setTerminalTitle(`OC | ${title.length > 40 ? title.slice(0, 37) + "…" : title}`)
+      renderer.setTerminalTitle(`IRIS | ${title.length > 40 ? title.slice(0, 37) + "…" : title}`)
       return
     }
 
     if (route.data.type === "plugin") {
-      renderer.setTerminalTitle(`OC | ${route.data.name}`)
+      renderer.setTerminalTitle(`IRIS | ${route.data.name}`)
     }
   })
 

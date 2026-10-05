@@ -1,0 +1,1020 @@
+// Shared logic for publishing/sharing bloq items, used by both the `bloqs` and
+// branded `atlas:item` command families so they never drift.
+import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold, success, isNonInteractive, FL_API } from "./iris-api"
+import * as prompts from "./clack"
+import { UI } from "../ui"
+import { confirmWiden, type Tier } from "./exposure-gate"
+import matter from "gray-matter"
+import { divergenceRefusal } from "./atlas-item-sync"
+import { readFileSync, writeFileSync, existsSync } from "fs"
+import path from "path"
+
+const DEFAULT_BLOQ_NAME = "Published Docs"
+const DEFAULT_LIST_NAME = "Published"
+
+// ── API helpers ─────────────────────────────────────────────────────────────
+
+async function unwrap(res: Response): Promise<any> {
+  const j = (await res.json().catch(() => null)) as any
+  return j?.data ?? j
+}
+
+export interface ShareOptions {
+  password?: string
+  expires?: string // ISO date/time, or e.g. "30d" handled server-side via expires_at
+  allowedEmails?: string[] // gate the link to these named, address-verified emails
+  allowedDomains?: string[] // gate the link to these bare domains
+}
+
+export async function apiMakePublic(
+  userId: number,
+  itemId: number,
+  opts: ShareOptions = {},
+): Promise<{ public_url: string | null; public_uuid: string | null; access_level?: string; expires_at?: string | null } | null> {
+  const payload: Record<string, unknown> = {}
+  if (opts.password) payload.password = opts.password
+  if (opts.expires) payload.expires_at = opts.expires
+  if (opts.allowedEmails?.length) payload.allowed_emails = opts.allowedEmails
+  if (opts.allowedDomains?.length) payload.allowed_domains = opts.allowedDomains
+  const res = await irisFetch(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/make-public`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    await handleApiError(res, "Make public")
+    return null
+  }
+  const d = await unwrap(res)
+  return {
+    public_url: d?.public_url ?? null,
+    public_uuid: d?.public_uuid ?? null,
+    access_level: d?.access_level,
+    expires_at: d?.expires_at ?? null,
+  }
+}
+
+export async function apiMakePrivate(userId: number, itemId: number): Promise<boolean> {
+  const res = await irisFetch(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/make-private`, {
+    method: "POST",
+    body: "{}",
+  })
+  if (!res.ok) {
+    await handleApiError(res, "Make private")
+    return false
+  }
+  return true
+}
+
+async function apiDeleteItem(itemId: number): Promise<boolean> {
+  const res = await irisFetch(`/api/v1/user/bloqs/list/item/${itemId}`, { method: "DELETE" })
+  if (!res.ok) {
+    await handleApiError(res, "Delete item")
+    return false
+  }
+  return true
+}
+
+async function fetchItems(userId: number, bloqId: number): Promise<any[]> {
+  const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}/items?per_page=500`)
+  if (!res.ok) return []
+  const j = (await res.json()) as { data?: any }
+  const raw = j?.data
+  return Array.isArray(raw) ? raw : (raw?.items ?? [])
+}
+
+// Fetch a single item (by scanning its bloq's items). Kept as the FALLBACK only — see below.
+async function fetchItem(userId: number, bloqId: number, itemId: number): Promise<any | null> {
+  const items = await fetchItems(userId, bloqId)
+  return items.find((it) => Number(it.id) === Number(itemId)) ?? null
+}
+
+/**
+ * Read one item by id alone.
+ *
+ * There IS a single-item GET endpoint — `bloqs get-item` has always used it. The comment here used
+ * to say there wasn't, and that belief is what made the divergence guard depend on knowing the
+ * bloq: a file without `iris_bloq_id` could not be checked, so it was not checked, so it
+ * overwrote whatever was on the server (measured 2026-09-20 with a pulled file).
+ */
+async function fetchItemById(itemId: number): Promise<any | null> {
+  try {
+    const res = await irisFetch(`/api/v1/user/bloqs/list/item/${itemId}`)
+    if (!res.ok) return null
+    const j = (await res.json()) as { data?: any }
+    return j?.data ?? j ?? null
+  } catch {
+    return null
+  }
+}
+
+async function fetchBloqs(userId: number): Promise<any[]> {
+  const res = await irisFetch(`/api/v1/user/${userId}/bloqs?per_page=100&simplified=1`)
+  if (!res.ok) return []
+  const j = (await res.json()) as { data?: any[] }
+  return j?.data ?? []
+}
+
+async function fetchLists(userId: number, bloqId: number): Promise<any[]> {
+  const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}/lists`)
+  if (!res.ok) return []
+  const j = (await res.json()) as { data?: any[] }
+  return j?.data ?? []
+}
+
+async function createList(userId: number, bloqId: number, name: string): Promise<any | null> {
+  const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}/lists`, {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  })
+  if (!res.ok) return null
+  return unwrap(res)
+}
+
+async function createBloq(userId: number, name: string): Promise<any | null> {
+  const res = await irisFetch(`/api/v1/user/${userId}/bloqs`, {
+    method: "POST",
+    body: JSON.stringify({ name, description: "Documents published via iris atlas:item publish" }),
+  })
+  if (!res.ok) return null
+  return unwrap(res)
+}
+
+async function createItem(
+  userId: number,
+  bloqId: number,
+  listId: number,
+  title: string,
+  content: string,
+  contentFormat?: ContentFormat,
+): Promise<any | null> {
+  const payload: Record<string, unknown> = { content }
+  if (title) payload.title = title
+  // Only ever SENT for html. Omitting it leaves the column NULL, which the backend
+  // reads as "infer as before" — so markdown keeps its existing behaviour exactly.
+  if (contentFormat === "html") payload.content_format = "html"
+  const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}/lists/${listId}/items`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    await handleApiError(res, "Create item")
+    return null
+  }
+  // store() now returns { data: { id, ... } } like every other create path (bug #178531);
+  // it used to double-nest as { data: { data: { id } } }. unwrap() strips one layer, so
+  // `d?.data ?? d` normalizes to the item itself against either API version.
+  const d = await unwrap(res)
+  return d?.data ?? d
+}
+
+// Returns the updated item, the sentinel "NOT_FOUND" if the item was deleted
+// upstream (so the caller can recreate), or null on any other failure.
+async function updateItem(itemId: number, title: string, content: string, contentFormat?: ContentFormat): Promise<any | "NOT_FOUND" | null> {
+  const payload: Record<string, unknown> = { content }
+  if (title) payload.title = title
+  if (contentFormat === "html") payload.content_format = "html"
+  const res = await irisFetch(`/api/v1/user/bloqs/list/item/${itemId}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  })
+  if (res.ok) {
+    const d = await unwrap(res)
+    return d?.data ?? d
+  }
+  // A deleted item updates as HTTP 500 "Resource not found" (backend findOrFail
+  // throws instead of 404), so detect "not found" in the body too — the caller
+  // then recreates it and rewrites the frontmatter.
+  const text = await res.text().catch(() => "")
+  if (process.argv.includes("--print-logs")) console.error(`[updateItem] HTTP ${res.status} body=${text.slice(0, 200)}`)
+  // Laravel returns either "not found" or "No query results for model" when the
+  // item is gone (soft-deleted) — both mean recreate.
+  if (res.status === 404 || /not[\s_-]*found|no query results/i.test(text)) return "NOT_FOUND"
+  prompts.log.error(`Update item failed (HTTP ${res.status})`)
+  return null
+}
+
+// ── Destination resolution (the fallback cascade) ───────────────────────────
+
+function isNumericId(v: unknown): boolean {
+  const n = Number(v)
+  return Number.isInteger(n) && String(n) === String(v)
+}
+
+async function resolveListForBloq(
+  userId: number,
+  bloqId: number,
+  listArg: string | number | undefined,
+): Promise<number | null> {
+  const lists = await fetchLists(userId, bloqId)
+  if (listArg !== undefined && listArg !== null && listArg !== "") {
+    if (isNumericId(listArg)) return Number(listArg)
+    const found = lists.find((l) => String(l.name).toLowerCase() === String(listArg).toLowerCase())
+    if (found) return found.id
+    const created = await createList(userId, bloqId, String(listArg))
+    return created?.id ?? null
+  }
+  if (lists.length > 0) return lists[0].id
+  const created = await createList(userId, bloqId, DEFAULT_LIST_NAME)
+  return created?.id ?? null
+}
+
+async function resolveDestination(
+  userId: number,
+  args: PublishArgs,
+): Promise<{ bloqId: number; listId: number } | null> {
+  // 1. explicit --bloq
+  if (args.bloq) {
+    const listId = await resolveListForBloq(userId, args.bloq, args.list)
+    if (!listId) return null
+    return { bloqId: args.bloq, listId }
+  }
+  // 2. interactive prompt
+  if (!isNonInteractive() && !args.json) {
+    const bloqs = await fetchBloqs(userId)
+    if (bloqs.length > 0) {
+      const pick = await prompts.select({
+        message: "Publish to which bloq?",
+        options: bloqs.slice(0, 50).map((b) => ({ value: b.id, label: `${b.name} (#${b.id})` })),
+      })
+      if (prompts.isCancel(pick)) return null
+      const listId = await resolveListForBloq(userId, Number(pick), args.list)
+      if (!listId) return null
+      return { bloqId: Number(pick), listId }
+    }
+  }
+  // 3. non-interactive default: find-or-create "Published Docs"
+  const bloqs = await fetchBloqs(userId)
+  let target = bloqs.find((b) => String(b.name).toLowerCase() === DEFAULT_BLOQ_NAME.toLowerCase())
+  if (!target) target = await createBloq(userId, DEFAULT_BLOQ_NAME)
+  if (!target?.id) return null
+  const listId = await resolveListForBloq(userId, target.id, args.list)
+  if (!listId) return null
+  return { bloqId: target.id, listId }
+}
+
+// ── Local image upload (so relative image paths resolve on the public page) ──
+
+function isLocalPath(url: string): boolean {
+  return !/^(https?:|data:|\/\/|#|mailto:)/i.test(url.trim())
+}
+
+/** Find every image reference (markdown ![](url) + <img src>) in the body. */
+function findImageUrls(body: string): string[] {
+  const urls = new Set<string>()
+  let m: RegExpExecArray | null
+  const md = /!\[[^\]]*\]\(\s*([^)\s]+)(?:\s+"[^"]*")?\s*\)/g
+  while ((m = md.exec(body))) urls.add(m[1])
+  const html = /<img\b[^>]*?\ssrc=["']([^"']+)["']/gi
+  while ((m = html.exec(body))) urls.add(m[1])
+  return [...urls]
+}
+
+async function uploadImage(localPath: string, userId: number, token: string): Promise<string | null> {
+  try {
+    const buf = readFileSync(localPath)
+    const form = new FormData()
+    form.append("file", new Blob([new Uint8Array(buf)]), path.basename(localPath))
+    form.append("type", "digital_product")
+    form.append("user_id", String(userId))
+    const res = await fetch(`${FL_API}/api/v1/cloud-files/upload`, {
+      method: "POST",
+      body: form,
+      headers: { Accept: "application/json", Authorization: `Bearer ${token}` },
+    })
+    if (!res.ok) return null
+    const data = (await res.json()) as any
+    const r = data?.data ?? data
+    return r?.cdn_url ?? r?.url ?? r?.filepath ?? null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Upload any LOCAL images referenced in the markdown to the CDN and rewrite the
+ * body to point at the CDN URLs (so they render on the public page). Rewrites are
+ * persisted back to the file too, so re-publishing is idempotent (https → skipped).
+ */
+async function uploadLocalImages(
+  body: string,
+  baseDir: string,
+  userId: number,
+  token: string,
+  warn: (s: string) => void,
+): Promise<string> {
+  const local = findImageUrls(body).filter(isLocalPath)
+  if (local.length === 0) return body
+
+  // Upload each distinct FILE once (dedup by resolved path), map original url → CDN.
+  const byPath: Record<string, string | null> = {}
+  const urlToCdn: Record<string, string> = {}
+  for (const url of local) {
+    const abs = path.isAbsolute(url) ? url : path.resolve(baseDir, url)
+    if (!(abs in byPath)) {
+      if (!existsSync(abs)) { byPath[abs] = null; warn(`image not found, left as-is: ${url}`) }
+      else {
+        byPath[abs] = await uploadImage(abs, userId, token)
+        if (!byPath[abs]) warn(`image upload failed, left as-is: ${url}`)
+      }
+    }
+    if (byPath[abs]) urlToCdn[url] = byPath[abs]!
+  }
+
+  // Replace ONLY within image references, matching the exact URL (no substring
+  // bleed into already-rewritten CDN URLs).
+  let out = body.replace(/(!\[[^\]]*\]\(\s*)([^)\s]+)(\s*(?:"[^"]*")?\s*\))/g,
+    (full, pre, url, post) => (urlToCdn[url] ? `${pre}${urlToCdn[url]}${post}` : full))
+  out = out.replace(/(<img\b[^>]*?\ssrc=["'])([^"']+)(["'])/gi,
+    (full, pre, url, post) => (urlToCdn[url] ? `${pre}${urlToCdn[url]}${post}` : full))
+  return out
+}
+
+function deriveTitle(explicit: unknown, fmTitle: unknown, body: string, file: string): string {
+  if (explicit) return String(explicit)
+  if (fmTitle) return String(fmTitle)
+  const h1 = body.match(/^\s*#\s+(.+)$/m)
+  if (h1) return h1[1].trim()
+  return path.basename(file, path.extname(file))
+}
+
+// ── Content format ──────────────────────────────────────────────────────────
+//
+// An Atlas item's body is an untyped LONGTEXT, and every reader used to re-derive
+// its type by guessing (`json_decode` succeeded → data, otherwise → prose). HTML
+// loses that guess: it is not JSON, so it was treated as markdown, which meant its
+// first line became the title and the renderer stripped the <style> and <svg> the
+// artifact is mostly made of. `content_format` is the declaration that ends the
+// guessing, and this is the only client that can set it.
+//
+// NULL still means "infer exactly as before", so markdown publishes are unchanged
+// and nothing has to be backfilled.
+
+type ContentFormat = "html" | "markdown"
+
+function detectFormat(file: string, explicit?: string): ContentFormat {
+  if (explicit) {
+    const f = String(explicit).toLowerCase()
+    if (f === "html" || f === "htm") return "html"
+    return "markdown"
+  }
+  return /\.html?$/i.test(file) ? "html" : "markdown"
+}
+
+/**
+ * Sync markers for an HTML artifact.
+ *
+ * The markdown path stores them in YAML frontmatter, which gray-matter would happily
+ * prepend to an .html file too — and that would put a bare `---` block above the
+ * doctype, so opening the artifact in a browser renders the bookkeeping as text. An
+ * HTML comment is the equivalent affordance in this format: invisible to a browser,
+ * and still round-trips through a re-publish.
+ */
+const HTML_MARKER = /^\s*<!--\s*iris:(\{[\s\S]*?\})\s*-->\s*/
+
+function readHtmlMarkers(raw: string): { data: Record<string, any>; content: string } {
+  const m = raw.match(HTML_MARKER)
+  if (!m) return { data: {}, content: raw }
+  try {
+    return { data: JSON.parse(m[1]) as Record<string, any>, content: raw.slice(m[0].length) }
+  } catch {
+    // A corrupted marker must not cost the user their artifact — treat it as absent
+    // and let the publish recreate it rather than aborting.
+    return { data: {}, content: raw }
+  }
+}
+
+function writeHtmlMarkers(file: string, content: string, data: Record<string, any>): void {
+  writeFileSync(file, `<!-- iris:${JSON.stringify(data)} -->\n${content.replace(HTML_MARKER, "")}`)
+}
+
+/** Title for an artifact: <title>, then the first heading, then the filename. */
+function deriveHtmlTitle(explicit: unknown, fmTitle: unknown, body: string, file: string): string {
+  if (explicit) return String(explicit)
+  if (fmTitle) return String(fmTitle)
+  const t = body.match(/<title[^>]*>([\s\S]*?)<\/title>/i)
+  if (t && t[1].trim()) return t[1].trim()
+  const h = body.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i)
+  if (h) {
+    const text = h[1].replace(/<[^>]+>/g, "").trim()
+    if (text) return text
+  }
+  return path.basename(file, path.extname(file))
+}
+
+// ── Public command handlers ─────────────────────────────────────────────────
+
+export interface PublishArgs {
+  file: string
+  bloq?: number
+  list?: string | number
+  title?: string
+  // Sharing is OPT-IN (private by default). Any of these makes the item public.
+  public?: boolean
+  password?: string
+  expires?: string
+  private?: boolean // explicit private (back-compat / override)
+  new?: boolean // publish a SECOND item even though one with this title already exists in the list (#181502)
+  update?: number // sync into this existing item id instead of creating a new one (#181502)
+  force?: boolean // overwrite even if the item was edited in the UI after last publish (#154763)
+  format?: string // "html" | "markdown"; inferred from the file extension when omitted
+  "no-frontmatter"?: boolean
+  json?: boolean
+  "user-id"?: number
+}
+
+/** Resolve whether this publish should share the item, and with what gates. */
+function shareIntent(args: PublishArgs): { share: boolean; opts: ShareOptions } {
+  if (args.private) return { share: false, opts: {} }
+  const share = !!(args.public || args.password || args.expires)
+  return { share, opts: { password: args.password, expires: args.expires } }
+}
+
+/** Publish a markdown file as a bloq item + public URL. Idempotent re-sync via frontmatter. */
+export async function executePublish(args: PublishArgs): Promise<void> {
+  const json = !!args.json
+  if (!json) {
+    UI.empty()
+    prompts.intro(`◈  Publish ${path.basename(args.file)}`)
+  }
+
+  const token = await requireAuth()
+  if (!token) { if (!json) prompts.outro("Done"); return }
+  const userId = await requireUserId(args["user-id"])
+  if (!userId) { if (!json) prompts.outro("Done"); return }
+
+  // DO WHAT WAS ASKED. `publish` takes a file; `make-public` takes an item id.
+  // The words read as synonyms, so "publish this as a public URL" lands here with
+  // an id. Rather than refuse, delegate — make-public carries every guard
+  // (classification, allowlists, the exposure ladder), so nothing is bypassed by
+  // arriving through this door. Erroring instead is what sent an agent improvising
+  // until a PHI-classified SOP was world-readable (#183518).
+  const idArg = String((args as any)["bloq-item"] ?? (args as any).item ?? args.file ?? "")
+  if (/^\d{3,}$/.test(idArg) && !existsSync(idArg)) {
+    if (!args.json) {
+      prompts.log.info(`#${idArg} is an item id — sharing the existing item rather than creating a new one.`)
+    }
+    await executeMakePublic({ ...(args as any), "item-id": Number(idArg) })
+    return
+  }
+
+  if (!existsSync(args.file)) {
+    // `publish` takes a FILE and creates a new item. `make-public` takes an
+    // EXISTING item id and gives it a URL. Asked to "publish this as a public
+    // URL", an agent reaches for `publish`, passes the item id, and gets
+    // "File not found: 180288" — which names neither the confusion nor the
+    // command that does what was asked. It then improvises: copy the content to
+    // a temp file, publish into another board, strip the classification. That is
+    // how a PHI-classified SOP ended up world-readable (#183518).
+    const looksLikeAnItemId = /^\d{3,}$/.test(String(args.file ?? ""))
+    const msg = looksLikeAnItemId
+      ? `"${args.file}" is not a file — it looks like an ITEM ID.\n` +
+        `  To give an existing item a shareable URL:\n` +
+        `    iris bloqs make-public ${args.file}\n` +
+        `  A PHI-classified item refuses an open link — share it to named people instead:\n` +
+        `    iris bloqs make-public ${args.file} --allowed-emails someone@example.com\n` +
+        `  publish is for turning a local markdown FILE into a new item.`
+      : `File not found: ${args.file}`
+    if (json) console.log(JSON.stringify({ success: false, error: msg }))
+    else { prompts.log.error(msg); prompts.outro("Done") }
+    process.exitCode = 2
+    return
+  }
+
+  const raw = readFileSync(args.file, "utf8")
+  // An .html file is an ARTIFACT, not prose: its markers live in an HTML comment and
+  // its title comes from <title>/<h1>. Everything downstream is shared with markdown.
+  const format = detectFormat(args.file, (args as any).format)
+  const parsed = format === "html" ? readHtmlMarkers(raw) : matter(raw)
+  const fm: Record<string, any> = (parsed as any).data || {}
+  const body = (parsed as any).content.trim()
+  const title = format === "html"
+    ? deriveHtmlTitle(args.title, fm.title, body, args.file)
+    : deriveTitle(args.title, fm.title, body, args.file)
+  // --update <id> is the escape hatch the #181502 duplicate-guard error message points
+  // people at: it anchors this publish to a specific item even though the file's own
+  // frontmatter has no (or a stale) iris_item_id.
+  const existingItemId = args.update ? Number(args.update) : (fm.iris_item_id ? Number(fm.iris_item_id) : null)
+
+  if (!body) {
+    const msg = "File has no content to publish (empty body)."
+    if (json) console.log(JSON.stringify({ success: false, error: msg }))
+    else { prompts.log.error(msg); prompts.outro("Done") }
+    process.exitCode = 2
+    return
+  }
+
+  const spinner = json ? null : prompts.spinner()
+  spinner?.start(existingItemId ? `Updating item #${existingItemId}…` : "Creating item…")
+
+  try {
+    let itemId: number | null = null
+    let bloqId = fm.iris_bloq_id ? Number(fm.iris_bloq_id) : args.bloq ?? null
+    let listId = fm.iris_list_id ? Number(fm.iris_list_id) : null
+
+    // Upload any LOCAL images to the CDN and rewrite the body so they render publicly.
+    let content = body
+    const localImages = findImageUrls(body).filter(isLocalPath)
+    if (localImages.length > 0) {
+      spinner?.message?.(`Uploading ${localImages.length} local image(s)…`)
+      content = await uploadLocalImages(body, path.dirname(args.file), userId, token, (s) => { if (!json) prompts.log.warn(s) })
+    }
+
+    // Tracks the server's updated_at right after our write, so the NEXT publish can
+    // detect UI edits made in the meantime (#154763).
+    let serverUpdatedAt: string | null = null
+    // The item as the server sees it right after this write — carries the REAL
+    // is_public/public_url/access_level so a plain resync can report actual state
+    // instead of guessing from stale frontmatter (#181502, #176517).
+    let updatedItem: any = null
+
+    // Re-sync path: try to update the item the file already points at.
+    if (existingItemId) {
+      // #154763: a blind PUT here is last-write-wins — if someone edited this item in
+      // the Elon UI after we last published, we'd silently clobber their edits. Guard
+      // by comparing the server item's updated_at against the marker we stored on the
+      // last publish (atlas_published_at). Newer server timestamp ⇒ diverged ⇒ require
+      // --force. No prior marker (first sync / legacy file) ⇒ can't detect ⇒ proceed.
+      // The check no longer needs the bloq: read the item by its own id, and fall back to the
+      // bloq scan only if that fails. A file we cannot check is a file we must not silently clobber.
+      const guardBloqId = fm.iris_bloq_id ? Number(fm.iris_bloq_id) : (bloqId ?? null)
+      if (fm.atlas_published_at && !args.force) {
+        const serverItem =
+          (await fetchItemById(existingItemId)) ??
+          (guardBloqId ? await fetchItem(userId, Number(guardBloqId), existingItemId) : null)
+        const refusal = divergenceRefusal({
+          itemId: existingItemId,
+          markerIso: String(fm.atlas_published_at),
+          serverIso: serverItem?.updated_at ?? null,
+          force: Boolean(args.force),
+        })
+        if (refusal) {
+          const msg = refusal
+          spinner?.stop("Diverged — refusing to overwrite", 1)
+          if (json) console.log(JSON.stringify({ success: false, error: msg, diverged: true, server_updated_at: serverItem.updated_at, published_at: fm.atlas_published_at }))
+          else { prompts.log.warn(msg); prompts.outro("Done") }
+          process.exitCode = 1
+          return
+        }
+      }
+
+      const updated = await updateItem(existingItemId, title, content, format)
+      if (updated === "NOT_FOUND") {
+        // Item was deleted upstream — fall through and recreate it.
+        spinner?.message?.(`Item #${existingItemId} was deleted — recreating…`)
+      } else if (!updated) {
+        spinner?.stop("Update failed", 1)
+        if (json) console.log(JSON.stringify({ success: false, error: "Update failed" }))
+        else prompts.outro("Done")
+        return
+      } else {
+        itemId = existingItemId
+        serverUpdatedAt = updated?.updated_at ?? null
+        updatedItem = updated
+      }
+    }
+
+    // Create path: brand-new file, or the previous item was deleted upstream.
+    if (!itemId) {
+      const dest = await resolveDestination(userId, args)
+      if (!dest) {
+        const msg = args.bloq
+          ? `Bloq ${args.bloq} not found or has no writable list.`
+          : "Could not resolve a destination — pass --bloq <id>."
+        spinner?.stop(msg, 1)
+        if (json) console.log(JSON.stringify({ success: false, error: msg }))
+        else prompts.outro("Done")
+        return
+      }
+      bloqId = dest.bloqId
+      listId = dest.listId
+
+      // #181502: the frontmatter anchor (iris_item_id) is how "re-run to sync" works, and any
+      // workflow that REWRITES the file rather than appending to it silently drops that anchor.
+      // We then land here and cheerfully create a SECOND item with the same title in the same
+      // list, leaving the already-shared URL serving stale content. Refuse instead, and name the
+      // item we would have updated so the fix is one flag away.
+      if (!args.new) {
+        const siblings = await fetchItems(userId, Number(bloqId))
+        const clash = siblings.find(
+          (it: any) => String(it?.title ?? "").trim() === title.trim() && Number(it?.bloq_list_id ?? it?.list_id) === Number(listId),
+        )
+        if (clash?.id) {
+          const msg =
+            `An item titled "${title}" already exists in this list (#${clash.id}). ` +
+            `This file has no iris_item_id, so publishing would create a duplicate rather than update it. ` +
+            `Re-run with --update ${clash.id} to sync into it, or --new to publish a separate copy.`
+          spinner?.stop("Refusing to create a duplicate", 1)
+          if (json) console.log(JSON.stringify({ success: false, error: msg, duplicate_of: clash.id, title }))
+          else { prompts.log.error(msg); prompts.outro("Done") }
+          process.exitCode = 2
+          return
+        }
+      }
+
+      const created = await createItem(userId, bloqId, listId, title, content, format)
+      if (!created?.id) {
+        spinner?.stop("Failed to create item", 1)
+        if (json) console.log(JSON.stringify({ success: false, error: "Create item failed" }))
+        else prompts.outro("Done")
+        return
+      }
+      itemId = created.id
+      serverUpdatedAt = created?.updated_at ?? null
+    }
+
+    // Resolve the server's post-write updated_at for the divergence marker. Prefer the
+    // write response; fall back to a re-fetch if it didn't include the timestamp.
+    if (!serverUpdatedAt && bloqId && itemId) {
+      const fresh = await fetchItem(userId, Number(bloqId), Number(itemId))
+      serverUpdatedAt = fresh?.updated_at ?? null
+    }
+
+    // Sharing is OPT-IN now (private by default). --public / --password / --expires share it.
+    const { share, opts } = shareIntent(args)
+    let publicUrl: string | null = null
+    let publicUuid: string | null = null
+    let accessLevel: string | undefined
+    if (share) {
+      // #182344 G-04 — widening confirms here too. NOTE: this command's `--force`
+      // already means "overwrite an item edited in the UI" (#154763), so the exposure
+      // consent flag is `--force-public`. Overloading one flag with two unrelated
+      // meanings would be its own bug; the asymmetry is deliberate.
+      const verdict = await confirmWiden({
+        noun: "note",
+        name: title ?? path.basename(args.file),
+        from: "private",
+        to: opts.password || args.expires ? "gated" : "public",
+        force: !!(args as any)["force-public"],
+        forceFlag: "force-public",
+      })
+      if (!verdict.ok) {
+        spinner?.stop("Refused — item stays private", 1)
+        process.exitCode = verdict.reason === "needs-force" ? 1 : 0
+        if (json) console.log(JSON.stringify({ success: false, refused: verdict.reason, item_id: itemId }))
+        else prompts.outro("Nothing was shared")
+        return
+      }
+      const pub = await apiMakePublic(userId, itemId!, opts)
+      if (pub) { publicUrl = pub.public_url; publicUuid = pub.public_uuid; accessLevel = pub.access_level }
+      else {
+        // #181343: sharing was explicitly requested (--public/--password/--expires) and
+        // the make-public call failed. apiMakePublic() already reported the underlying
+        // error (via handleApiError, which is json-mode-aware itself — do not print a
+        // second one here). The item's content did save; reporting blanket success:true
+        // for the whole command would still hide that the one thing actually asked for
+        // (a public URL) did not happen, so stop here instead of falling through.
+        if (!json) {
+          spinner?.stop(`Item #${itemId} was ${existingItemId ? "updated" : "published"}, but making it public failed. Content is saved — re-run: iris bloqs make-public ${itemId}`, 1)
+          prompts.outro("Done")
+        }
+        process.exitCode = 1
+        return
+      }
+    } else if (existingItemId && itemId === existingItemId && !(args.private || args.public || args.password || args.expires)) {
+      // #181502 (defect 4) / #176517: a plain resync with no sharing flag doesn't touch
+      // the item's share state server-side — it must not be reported/written back as
+      // "private" when the item is still public (e.g. shared separately via
+      // `make-public`, which never touched this file's frontmatter). Trust what the
+      // update response says the item actually is right now, not a guess from
+      // frontmatter that may never have been written. (Only when this call actually
+      // re-synced the SAME item; a fallback recreate below starts private like any
+      // new item — updatedItem stays null in that path.)
+      if (updatedItem?.is_public) {
+        publicUrl = updatedItem.public_url ?? fm.iris_public_url ?? null
+        publicUuid = updatedItem.public_uuid ?? fm.iris_public_uuid ?? null
+        accessLevel = updatedItem.access_level ?? fm.iris_access_level ?? undefined
+      }
+    }
+
+    if (!args["no-frontmatter"]) {
+      const newData: Record<string, any> = { ...fm, iris_item_id: itemId }
+      if (bloqId) newData.iris_bloq_id = bloqId
+      if (listId) newData.iris_list_id = listId
+      if (publicUrl) newData.iris_public_url = publicUrl
+      else { delete newData.iris_public_url } // no longer shared → drop stale URL
+      if (accessLevel) newData.iris_access_level = accessLevel
+      else { delete newData.iris_access_level }
+      // #154763: stamp the server's updated_at so the NEXT publish can detect UI edits
+      // made in the meantime and refuse to clobber them without --force.
+      newData.atlas_published_at = serverUpdatedAt ?? new Date().toISOString()
+      if (format === "html") writeHtmlMarkers(args.file, content, newData)
+      else writeFileSync(args.file, matter.stringify(content, newData))
+    }
+
+    if (json) {
+      console.log(JSON.stringify({
+        success: true, item_id: itemId, bloq_id: bloqId, list_id: listId,
+        public_url: publicUrl, public_uuid: publicUuid, is_public: !!publicUrl, access_level: accessLevel ?? "private",
+        ...(publicUrl ? {} : { hint: `Item is private. Re-run with --public, or: iris bloqs make-public ${itemId}` }),
+      }))
+      return
+    }
+
+    spinner?.stop(`${success("✓")} ${existingItemId ? "Updated" : "Published"} "${title}" (#${itemId})`)
+    if (publicUrl) {
+      console.log()
+      console.log(`  ${bold("Public URL")}  ${publicUrl}`)
+      if (accessLevel && accessLevel !== "public") console.log(`  ${dim(`access: ${accessLevel}`)}`)
+      console.log()
+    } else {
+      prompts.log.info("Saved privately. Add --public (or --password / --expires) to share.")
+    }
+    prompts.outro(dim(args["no-frontmatter"] ? "edit + re-run to sync" : "frontmatter updated — edit + re-run to sync the same URL"))
+  } catch (err) {
+    spinner?.stop("Error", 1)
+    if (json) console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) }))
+    else { prompts.log.error(err instanceof Error ? err.message : String(err)); prompts.outro("Done") }
+  }
+}
+
+/** Publish one or many markdown files (shells expand globs like ./docs/*.md). */
+export async function executePublishMany(args: PublishArgs & { files: string[] }): Promise<void> {
+  const files = (args.files ?? []).filter(Boolean)
+  if (files.length <= 1) {
+    await executePublish({ ...args, file: files[0] ?? args.file })
+    return
+  }
+  const results: any[] = []
+  for (const file of files) {
+    // Capture each file's JSON result so we can print a single summary.
+    const captured: string[] = []
+    const orig = console.log
+    console.log = (...a: any[]) => captured.push(a.join(" "))
+    try {
+      await executePublish({ ...args, file, json: true })
+    } finally {
+      console.log = orig
+    }
+    let r: any = null
+    try { r = JSON.parse(captured[captured.length - 1] ?? "null") } catch {}
+    results.push({ file, ...(r ?? { success: false }) })
+  }
+  if (args.json) { console.log(JSON.stringify({ success: true, count: results.length, results })); return }
+  UI.empty()
+  prompts.intro(`◈  Published ${results.filter((r) => r.success).length}/${results.length} files`)
+  for (const r of results) {
+    if (r.success) prompts.log.success(`${path.basename(r.file)} → ${r.public_url ?? "(private)"}`)
+    else prompts.log.error(`${path.basename(r.file)} → ${r.error ?? "failed"}`)
+  }
+  prompts.outro("Done")
+}
+
+export interface ItemActionArgs {
+  "item-id": number
+  password?: string
+  expires?: string
+  "allowed-emails"?: string[]
+  "allowed-domains"?: string[]
+  json?: boolean
+  "user-id"?: number
+  force?: boolean
+  yes?: boolean
+}
+
+/**
+ * Which rung this actually lands on. A password, a named-email list or a domain
+ * list means the reader has to prove something, so it is `gated` rather than open —
+ * and the prompt should not claim internet exposure it does not cause.
+ */
+export function tierForShare(args: ItemActionArgs): Tier {
+  const conditioned =
+    !!args.password ||
+    (args["allowed-emails"]?.length ?? 0) > 0 ||
+    (args["allowed-domains"]?.length ?? 0) > 0
+  return conditioned ? "gated" : "public"
+}
+
+export async function executeMakePublic(args: ItemActionArgs): Promise<void> {
+  const json = !!args.json
+  if (!json) { UI.empty(); prompts.intro(`◈  Share Item #${args["item-id"]}`) }
+  const token = await requireAuth()
+  if (!token) { if (!json) prompts.outro("Done"); return }
+  const userId = await requireUserId(args["user-id"])
+  if (!userId) { if (!json) prompts.outro("Done"); return }
+
+  // #182344 G-04 — widening confirms, and refuses without a terminal. An item is
+  // private until this command runs, so `from` is private by definition.
+  const verdict = await confirmWiden({
+    noun: "note",
+    name: `#${args["item-id"]}`,
+    from: "private",
+    to: tierForShare(args),
+    force: !!args.force,
+    yes: !!args.yes,
+  })
+  if (!verdict.ok) {
+    process.exitCode = verdict.reason === "needs-force" ? 1 : 0
+    if (json) console.log(JSON.stringify({ success: false, refused: verdict.reason }))
+    else prompts.outro(verdict.reason === "needs-force" ? "Refused — nothing changed" : "Cancelled — nothing changed")
+    return
+  }
+
+  const spinner = json ? null : prompts.spinner()
+  spinner?.start("Making item public…")
+  const pub = await apiMakePublic(userId, args["item-id"], {
+    password: args.password,
+    expires: args.expires,
+    allowedEmails: args["allowed-emails"],
+    allowedDomains: args["allowed-domains"],
+  })
+  if (!pub) { spinner?.stop("Failed", 1); if (json) console.log(JSON.stringify({ success: false })); else prompts.outro("Done"); return }
+
+  if (json) { console.log(JSON.stringify({ success: true, ...pub, is_public: true })); return }
+  spinner?.stop(`${success("✓")} Item is now public`)
+  if (pub.public_url) {
+    console.log()
+    console.log(`  ${bold("Public URL")}  ${pub.public_url}`)
+    if (pub.access_level && pub.access_level !== "public") console.log(`  ${dim(`access: ${pub.access_level}${pub.expires_at ? ` · expires ${pub.expires_at}` : ""}`)}`)
+    console.log(`  ${dim(`uuid: ${pub.public_uuid ?? "?"}`)}`)
+    console.log()
+  } else {
+    prompts.log.warn("Item made public but no URL was returned")
+  }
+  prompts.outro("Done")
+}
+
+export async function executeMakePrivate(args: ItemActionArgs): Promise<void> {
+  const json = !!args.json
+  if (!json) { UI.empty(); prompts.intro(`◈  Unshare Item #${args["item-id"]}`) }
+  const token = await requireAuth()
+  if (!token) { if (!json) prompts.outro("Done"); return }
+  const userId = await requireUserId(args["user-id"])
+  if (!userId) { if (!json) prompts.outro("Done"); return }
+
+  const spinner = json ? null : prompts.spinner()
+  spinner?.start("Making item private…")
+  const ok = await apiMakePrivate(userId, args["item-id"])
+  if (!ok) { spinner?.stop("Failed", 1); if (json) console.log(JSON.stringify({ success: false })); else prompts.outro("Done"); return }
+  if (json) { console.log(JSON.stringify({ success: true, is_public: false })); return }
+  spinner?.stop(`${success("✓")} Item is now private`)
+  prompts.outro("Done")
+}
+
+export interface UnpublishArgs {
+  file: string
+  delete?: boolean
+  json?: boolean
+  "user-id"?: number
+}
+
+/** Unpublish (make private) the item a markdown file points at; optionally delete it. */
+export async function executeUnpublish(args: UnpublishArgs): Promise<void> {
+  const json = !!args.json
+  if (!json) { UI.empty(); prompts.intro(`◈  Unpublish ${path.basename(args.file)}`) }
+  const token = await requireAuth()
+  if (!token) { if (!json) prompts.outro("Done"); return }
+  const userId = await requireUserId(args["user-id"])
+  if (!userId) { if (!json) prompts.outro("Done"); return }
+
+  // DO WHAT WAS ASKED. `publish` takes a file; `make-public` takes an item id.
+  // The words read as synonyms, so "publish this as a public URL" lands here with
+  // an id. Rather than refuse, delegate — make-public carries every guard
+  // (classification, allowlists, the exposure ladder), so nothing is bypassed by
+  // arriving through this door. Erroring instead is what sent an agent improvising
+  // until a PHI-classified SOP was world-readable (#183518).
+  const idArg = String((args as any)["bloq-item"] ?? (args as any).item ?? args.file ?? "")
+  if (/^\d{3,}$/.test(idArg) && !existsSync(idArg)) {
+    if (!args.json) {
+      prompts.log.info(`#${idArg} is an item id — sharing the existing item rather than creating a new one.`)
+    }
+    await executeMakePublic({ ...(args as any), "item-id": Number(idArg) })
+    return
+  }
+
+  if (!existsSync(args.file)) {
+    // `publish` takes a FILE and creates a new item. `make-public` takes an
+    // EXISTING item id and gives it a URL. Asked to "publish this as a public
+    // URL", an agent reaches for `publish`, passes the item id, and gets
+    // "File not found: 180288" — which names neither the confusion nor the
+    // command that does what was asked. It then improvises: copy the content to
+    // a temp file, publish into another board, strip the classification. That is
+    // how a PHI-classified SOP ended up world-readable (#183518).
+    const looksLikeAnItemId = /^\d{3,}$/.test(String(args.file ?? ""))
+    const msg = looksLikeAnItemId
+      ? `"${args.file}" is not a file — it looks like an ITEM ID.\n` +
+        `  To give an existing item a shareable URL:\n` +
+        `    iris bloqs make-public ${args.file}\n` +
+        `  A PHI-classified item refuses an open link — share it to named people instead:\n` +
+        `    iris bloqs make-public ${args.file} --allowed-emails someone@example.com\n` +
+        `  publish is for turning a local markdown FILE into a new item.`
+      : `File not found: ${args.file}`
+    if (json) console.log(JSON.stringify({ success: false, error: msg }))
+    else { prompts.log.error(msg); prompts.outro("Done") }
+    process.exitCode = 2
+    return
+  }
+
+  // Read the markers from wherever THIS format keeps them. Parsing an artifact as
+  // markdown finds no frontmatter and would report "it hasn't been published" about a
+  // file that plainly has been — a false statement about the user's own file.
+  const unpubFormat = detectFormat(args.file, (args as any).format)
+  const fm: Record<string, any> =
+    (unpubFormat === "html"
+      ? readHtmlMarkers(readFileSync(args.file, "utf8")).data
+      : matter(readFileSync(args.file, "utf8")).data) || {}
+  const itemId = fm.iris_item_id ? Number(fm.iris_item_id) : null
+  if (!itemId) {
+    const msg = unpubFormat === "html"
+      ? "No iris marker comment in this file — it hasn't been published."
+      : "No iris_item_id in this file's frontmatter — it hasn't been published."
+    if (json) console.log(JSON.stringify({ success: false, error: msg }))
+    else { prompts.log.error(msg); prompts.outro("Done") }
+    return
+  }
+
+  const spinner = json ? null : prompts.spinner()
+  spinner?.start(args.delete ? `Deleting item #${itemId}…` : `Making item #${itemId} private…`)
+  const priv = await apiMakePrivate(userId, itemId)
+  let deleted = false
+  if (args.delete && priv) deleted = await apiDeleteItem(itemId)
+
+  if (!priv) { spinner?.stop("Failed", 1); if (json) console.log(JSON.stringify({ success: false })); else prompts.outro("Done"); return }
+
+  // Drop the public-url marker from the file (it's no longer reachable).
+  if (!args.delete) {
+    const { iris_public_url, ...rest } = fm
+    if (unpubFormat === "html") {
+      const body = readHtmlMarkers(readFileSync(args.file, "utf8")).content
+      writeHtmlMarkers(args.file, body, rest)
+    } else {
+      const body = matter(readFileSync(args.file, "utf8")).content
+      writeFileSync(args.file, matter.stringify(body, rest))
+    }
+  }
+
+  if (json) { console.log(JSON.stringify({ success: true, item_id: itemId, is_public: false, deleted })); return }
+  spinner?.stop(`${success("✓")} ${args.delete ? "Deleted" : "Unpublished"} item #${itemId}`)
+  prompts.outro("Done")
+}
+
+export interface ListArgs {
+  bloq?: number
+  json?: boolean
+  "user-id"?: number
+}
+
+/** List the caller's published (public) bloq items + their URLs. */
+export interface PublishedItem {
+  id: number
+  title: string
+  bloq_id: number
+  public_url: string
+  access_level?: string | null
+}
+
+/**
+ * Every item of this user's that is currently reachable by a stranger.
+ *
+ * Extracted so `iris exposure audit` and `atlas:item list` cannot drift — two
+ * commands answering "what is public?" differently is the ambiguity epic #182344
+ * exists to remove.
+ *
+ * NOTE the 50-bloq cap, inherited from the original: it is a real bound on the
+ * answer, so callers that present this as an audit must SAY it is capped rather
+ * than imply completeness.
+ */
+export const PUBLISHED_SCAN_BLOQ_CAP = 50
+
+export async function collectPublishedItems(userId: number, bloqId?: number): Promise<PublishedItem[]> {
+  const bloqs = bloqId ? [{ id: bloqId }] : (await fetchBloqs(userId)).slice(0, PUBLISHED_SCAN_BLOQ_CAP)
+  const out: PublishedItem[] = []
+  for (const b of bloqs) {
+    const items = await fetchItems(userId, b.id)
+    for (const it of items) {
+      if (it.is_public && (it.public_url || it.public_uuid)) {
+        out.push({
+          id: it.id,
+          title: it.title ?? "(untitled)",
+          bloq_id: b.id,
+          public_url: it.public_url ?? it.public_uuid,
+          access_level: it.access_level ?? null,
+        })
+      }
+    }
+  }
+  return out
+}
+
+export async function executeListPublished(args: ListArgs): Promise<void> {
+  const json = !!args.json
+  if (!json) { UI.empty(); prompts.intro("◈  Published items") }
+  const token = await requireAuth()
+  if (!token) { if (!json) prompts.outro("Done"); return }
+  const userId = await requireUserId(args["user-id"])
+  if (!userId) { if (!json) prompts.outro("Done"); return }
+
+  const spinner = json ? null : prompts.spinner()
+  spinner?.start("Scanning for published items…")
+
+  const published = await collectPublishedItems(userId, args.bloq)
+
+  if (json) { spinner?.stop(); console.log(JSON.stringify({ success: true, count: published.length, items: published })); return }
+  spinner?.stop(`${published.length} published item(s)`)
+  console.log()
+  for (const p of published) {
+    console.log(`  ${dim(`#${p.id}`)}  ${bold(p.title)}`)
+    console.log(`      ${p.public_url}`)
+  }
+  console.log()
+  prompts.outro(dim("iris atlas:item unpublish <file>  |  iris atlas:item make-private <id>"))
+}

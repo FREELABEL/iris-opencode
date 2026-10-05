@@ -4,9 +4,41 @@
   "compilerOptions": {
     "jsx": "preserve",
     "jsxImportSource": "@opentui/solid",
-    "lib": ["ESNext", "DOM", "DOM.Iterable", "DOM.AsyncIterable"],
-    "noUncheckedIndexedAccess": false
+    "lib": [
+      "ESNext",
+      "DOM",
+      "DOM.Iterable",
+      "DOM.AsyncIterable"
+    ],
+    "noUncheckedIndexedAccess": false,
+    "paths": {
+      "@/*": [
+        "./src/iris-v1/*"
+      ],
+      "@tui/*": [
+        "./src/iris-v1/cli/cmd/tui/*"
+      ],
+      "@opencode-ai/sdk": [
+        "./src/iris-v1/vendor/js/src/index.ts"
+      ],
+      "@opencode-ai/util/binary": [
+        "./src/iris-v1/vendor/binary.ts"
+      ],
+      "@opencode-ai/util/*": [
+        "./src/iris-v1/vendor/*.ts"
+      ],
+      "@opencode-ai/sdk/v2": [
+        "./src/iris-v1/vendor/js/src/v2/index.ts"
+      ]
+    }
   },
-  "exclude": ["dist", "dist-node"],
-  "references": [{ "path": "../core" }]
+  "exclude": [
+    "dist",
+    "dist-node"
+  ],
+  "references": [
+    {
+      "path": "../core"
+    }
+  ]
 }

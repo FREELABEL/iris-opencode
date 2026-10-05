@@ -1,0 +1,1395 @@
+import { cmd } from "./cmd"
+import * as prompts from "./clack"
+import { UI } from "../ui"
+import {
+  irisFetch,
+  requireAuth,
+  requireUserId,
+  handleApiError,
+  dim,
+  bold,
+  success,
+  highlight,
+  printDivider,
+  printKV,
+  FL_API,
+  IRIS_API, writeJson } from "./iris-api"
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from "fs"
+import { join } from "path"
+import { spawnSync, execFileSync } from "child_process"
+import { ensureYtDlp } from "./download"
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+const SYNC_DIR = "content"
+
+function resolveSyncDir(): string {
+  let dir = process.cwd()
+  for (let i = 0; i < 10; i++) {
+    if (existsSync(join(dir, "fl-docker-dev"))) return join(dir, SYNC_DIR)
+    const parent = join(dir, "..")
+    if (parent === dir) break
+    dir = parent
+  }
+  return join(process.cwd(), SYNC_DIR)
+}
+
+function contentFilename(type: string, id: number | string): string {
+  return `${type}-${id}.json`
+}
+
+function findLocalFile(dir: string, type: string, id: number | string): string | undefined {
+  const name = contentFilename(type, id)
+  const full = join(dir, name)
+  return existsSync(full) ? full : undefined
+}
+
+function stripHtml(s: string): string {
+  return s.replace(/<[^>]*>/g, "").trim()
+}
+
+function detectContentType(url: string): { type: string; mediaId?: string } {
+  if (/youtube\.com|youtu\.be/.test(url)) {
+    const id = url.match(/(?:v=|\/live\/|youtu\.be\/|\/shorts\/|\/embed\/)([^?&#]+)/)?.[1]
+    return { type: "video", mediaId: id }
+  }
+  if (/spotify\.com\/track/.test(url)) return { type: "track" }
+  if (/soundcloud\.com/.test(url)) return { type: "track" }
+  if (/instagram\.com\/reel/.test(url)) return { type: "video" }
+  if (/tiktok\.com/.test(url)) return { type: "video" }
+  if (/\.(mp4|mov|avi|webm)$/i.test(url)) return { type: "video" }
+  if (/\.(mp3|wav|flac|ogg)$/i.test(url)) return { type: "track" }
+  return { type: "unknown" }
+}
+
+async function resolveProfileId(
+  nameOrPk: string,
+  userId: number,
+): Promise<{ pk: number; name: string } | null> {
+  // Numeric = exact pk (must be positive)
+  if (/^\d+$/.test(nameOrPk) && Number(nameOrPk) > 0) {
+    return { pk: Number(nameOrPk), name: `Profile #${nameOrPk}` }
+  }
+  if (/^\d+$/.test(nameOrPk) && Number(nameOrPk) === 0) {
+    return null
+  }
+  // Search by name
+  const params = new URLSearchParams({ search: nameOrPk })
+  const res = await irisFetch(`/api/v1/my/profiles?${params}`)
+  if (!res.ok) return null
+  const body = (await res.json()) as any
+  const profiles = body?.data ?? body
+  if (!Array.isArray(profiles) || profiles.length === 0) return null
+  if (profiles.length === 1) return { pk: profiles[0].pk, name: profiles[0].name }
+
+  // Multiple matches — pick interactively or first in non-interactive
+  const isTTY = process.stdout.isTTY
+  if (!isTTY) return { pk: profiles[0].pk, name: profiles[0].name }
+
+  const choice = await prompts.select({
+    message: "Multiple profiles match. Pick one:",
+    options: profiles.slice(0, 5).map((p: any) => ({
+      value: String(p.pk),
+      label: `${p.name} (pk=${p.pk}) ${p.instagram ?? ""}`,
+    })),
+  })
+  if (prompts.isCancel(choice)) return null
+  const picked = profiles.find((p: any) => String(p.pk) === choice)
+  return picked ? { pk: picked.pk, name: picked.name } : null
+}
+
+async function verifyUrl(url: string): Promise<boolean> {
+  try {
+    const res = await fetch(url, { method: "HEAD", redirect: "follow" })
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
+function truncate(s: string, max: number): string {
+  return s.length > max ? s.slice(0, max - 3) + "..." : s
+}
+
+const commonOpts = (yargs: any) =>
+  yargs
+    .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
+    .option("json", { describe: "output raw JSON", type: "boolean", default: false })
+
+// ---------------------------------------------------------------------------
+// Subcommands: Profiles
+// ---------------------------------------------------------------------------
+
+const ProfilesListCommand = cmd({
+  command: "list",
+  describe: "list YOUR content profiles (user-scoped)",
+  builder: (y: any) =>
+    commonOpts(y).option("search", { alias: "s", describe: "filter by name", type: "string" }),
+  async handler(args: any) {
+    UI.empty()
+    prompts.intro(`${bold("content profiles list")}`)
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Loading profiles...")
+    try {
+      const params = new URLSearchParams()
+      if (args.search) params.set("search", args.search)
+      const res = await irisFetch(`/api/v1/my/profiles?${params}`)
+      const ok = await handleApiError(res, "my/profiles")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const body = (await res.json()) as any
+      const profiles = body?.data ?? body
+      spinner.stop(`${profiles.length} profile(s)`)
+
+      if (args.json) {
+        await writeJson(profiles)
+      } else {
+        if (!Array.isArray(profiles) || profiles.length === 0) {
+          prompts.log.info("No profiles found.")
+        } else {
+          console.log()
+          console.log(
+            `  ${dim("pk".padEnd(8))}${dim("name".padEnd(25))}${dim("city".padEnd(15))}${dim("ig".padEnd(18))}${dim("vid")}  ${dim("art")}  ${dim("trk")}`,
+          )
+          for (const p of profiles) {
+            const pk = String(p.pk).padEnd(8)
+            const name = truncate(p.name ?? "", 23).padEnd(25)
+            const city = truncate(p.city ?? "", 13).padEnd(15)
+            const ig = truncate(p.instagram ?? "", 16).padEnd(18)
+            const vid = String(p.videos_count ?? 0).padStart(3)
+            const art = String(p.articles_count ?? 0).padStart(3)
+            const trk = String(p.tracks_count ?? 0).padStart(3)
+            console.log(`  ${bold(pk)}${name}${city}${ig}${vid}  ${art}  ${trk}`)
+          }
+        }
+      }
+      prompts.outro("Done")
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const ProfilesGetCommand = cmd({
+  command: "get <name>",
+  describe: "show profile detail + content counts",
+  builder: (y: any) => commonOpts(y).positional("name", { type: "string", demandOption: true }),
+  async handler(args: any) {
+    UI.empty()
+    prompts.intro(`${bold("content profiles get")}`)
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Resolving profile...")
+    const profile = await resolveProfileId(args.name, userId)
+    if (!profile) {
+      spinner.stop("Not found", 1)
+      prompts.log.error(`No profile matching '${args.name}'. Run: iris content profiles list`)
+      prompts.outro("Done")
+      return
+    }
+
+    // Fetch full profile detail
+    const res = await irisFetch(`/api/v1/profile/${profile.pk}`)
+    const ok = await handleApiError(res, "profile get")
+    if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+    const body = (await res.json()) as any
+    const p = body?.data ?? body
+    spinner.stop("Done")
+
+    if (args.json) {
+      await writeJson(p)
+    } else {
+      console.log()
+      console.log(`  ${dim("pk:")} ${bold(String(p.pk))}`)
+      console.log(`  ${dim("name:")} ${p.name}`)
+      console.log(`  ${dim("bio:")} ${truncate(p.bio ?? "", 200)}`)
+      console.log(`  ${dim("city:")} ${p.city ?? ""} ${p.state ?? ""}`)
+      console.log(`  ${dim("instagram:")} ${p.instagram ?? ""}`)
+      console.log(`  ${dim("twitter:")} ${p.twitter ?? ""}`)
+      console.log(`  ${dim("photo:")} ${p.photo ?? ""}`)
+      const publicUrl = p.public_url ?? p.getPublicURL?.() ?? ""
+      if (publicUrl) {
+        const urlOk = await verifyUrl(publicUrl)
+        console.log(`  ${dim("public_url:")} ${publicUrl} ${urlOk ? success("200 OK") : "\x1b[31m! unreachable\x1b[0m"}`)
+      }
+    }
+    prompts.outro("Done")
+  },
+})
+
+const ProfilesCommand = cmd({
+  command: "profiles",
+  describe: "manage content creator profiles",
+  builder: (yargs: any) =>
+    yargs
+      .command(ProfilesListCommand)
+      .command(ProfilesGetCommand)
+      .demandCommand(),
+  async handler() {},
+})
+
+// ---------------------------------------------------------------------------
+// Subcommands: Upload
+// ---------------------------------------------------------------------------
+
+const UploadCommand = cmd({
+  command: "upload <url>",
+  describe: "smart upload (auto-detect type + metadata from URL)",
+  builder: (y: any) =>
+    commonOpts(y)
+      .positional("url", { type: "string", demandOption: true })
+      .option("profile", { alias: "p", describe: "profile name or pk", type: "string", demandOption: true })
+      .option("type", { describe: "force content type", type: "string", choices: ["video", "article", "track"] })
+      .option("title", { describe: "override title", type: "string" })
+      .option("description", { describe: "override description", type: "string" })
+      .option("draft", { describe: "create as draft (status=0)", type: "boolean", default: false })
+      .option("publish", { describe: "also publish to social (comma-separated: ig,tiktok,x)", type: "string" }),
+  async handler(args: any) {
+    UI.empty()
+    prompts.intro(`${bold("content upload")}`)
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    // Guard: profile is required
+    if (!args.profile) {
+      prompts.log.error("--profile is required. Specify a profile name or pk.")
+      prompts.outro("Done")
+      return
+    }
+
+    // 1. Detect content type
+    const detected = detectContentType(args.url)
+    const contentType = args.type ?? detected.type
+    if (contentType === "unknown") {
+      prompts.log.error("Could not detect content type from URL. Use --type video|article|track")
+      prompts.outro("Done")
+      return
+    }
+
+    // 2. Resolve profile
+    const spinner = prompts.spinner()
+    spinner.start("Resolving profile...")
+    const profile = await resolveProfileId(args.profile, userId)
+    if (!profile) {
+      spinner.stop("Not found", 1)
+      prompts.log.error(`No profile matching '${args.profile}'. Run: iris content profiles list`)
+      prompts.outro("Done")
+      return
+    }
+    spinner.stop(`Profile: ${profile.name} (pk=${profile.pk})`)
+
+    // 3. Fetch metadata (YouTube auto-populate)
+    let title = args.title ?? ""
+    let description = args.description ?? ""
+    const mediaId = detected.mediaId ?? ""
+
+    if (contentType === "video" && detected.mediaId && !args.title) {
+      const metaSpinner = prompts.spinner()
+      metaSpinner.start("Fetching YouTube metadata...")
+      try {
+        // The API expects media_url (full URL), not just the video ID
+        const ytUrl = `https://www.youtube.com/watch?v=${detected.mediaId}`
+        const ytRes = await irisFetch(`/api/youtube/get-video-data?media_url=${encodeURIComponent(ytUrl)}`)
+        if (ytRes.ok) {
+          const ytBody = (await ytRes.json()) as any
+          const ytData = ytBody?.data?.video ?? ytBody?.data ?? ytBody
+          title = title || ytData?.title || ""
+          description = description || ytData?.description || ytData?.channelTitle || ""
+          metaSpinner.stop(title ? `"${truncate(title, 60)}"` : "No metadata")
+        } else {
+          metaSpinner.stop("No YouTube metadata", 1)
+        }
+      } catch {
+        metaSpinner.stop("Metadata fetch failed", 1)
+      }
+    }
+
+    // Sanitize inputs — strip HTML to prevent XSS
+    title = stripHtml(title)
+    description = stripHtml(description)
+
+    if (!title) {
+      prompts.log.error("Title is required. Use --title or provide a YouTube URL for auto-detection.")
+      prompts.outro("Done")
+      return
+    }
+
+    // 4. Duplicate check
+    if (contentType === "video" && mediaId) {
+      const dupSpinner = prompts.spinner()
+      dupSpinner.start("Checking for duplicates...")
+      const dupRes = await irisFetch(`/api/v1/videos?profile_id=${profile.pk}&per_page=100`)
+      if (dupRes.ok) {
+        const dupBody = (await dupRes.json()) as any
+        const videos = dupBody?.data?.data ?? dupBody?.data ?? []
+        const existing = Array.isArray(videos) ? videos.find((v: any) => v.media_id === mediaId) : null
+        if (existing) {
+          dupSpinner.stop("Duplicate found")
+          prompts.log.warn(`Video already exists: #${existing.id} "${existing.title}"`)
+          prompts.log.info(`public_url: ${existing.public_url ?? `https://web.freelabel.net/content/video/${existing.id}`}`)
+          prompts.outro("Done")
+          return
+        }
+      }
+      dupSpinner.stop("No duplicates")
+    }
+
+    // 5. Create record
+    const createSpinner = prompts.spinner()
+    createSpinner.start("Creating content record...")
+    try {
+      let createRes: Response
+      if (contentType === "video") {
+        createRes = await irisFetch("/api/v1/videos", {
+          method: "POST",
+          body: JSON.stringify({
+            profile_id: profile.pk,
+            title,
+            description,
+            media_id: mediaId,
+            thumbnail_url: mediaId ? `https://i.ytimg.com/vi/${mediaId}/maxresdefault.jpg` : undefined,
+            status: args.draft ? 0 : 1,
+          }),
+        })
+      } else {
+        // For tracks/articles, use generic content endpoint
+        createRes = await irisFetch(`/api/v1/${contentType}s`, {
+          method: "POST",
+          body: JSON.stringify({
+            profile_id: profile.pk,
+            title,
+            description,
+            media_id: mediaId || args.url,
+            status: args.draft ? 0 : 1,
+          }),
+        })
+      }
+
+      const createOk = await handleApiError(createRes, "create content")
+      if (!createOk) { createSpinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const createBody = (await createRes.json()) as any
+      const created = createBody?.data?.data ?? createBody?.data ?? createBody
+      createSpinner.stop("Created")
+
+      if (args.json) {
+        await writeJson(created)
+      } else {
+        console.log()
+        console.log(`  ${dim("id:")} ${bold(String(created.id))}`)
+        console.log(`  ${dim("title:")} ${created.title}`)
+        console.log(`  ${dim("type:")} ${contentType}`)
+        console.log(`  ${dim("profile:")} ${profile.name} (pk=${profile.pk})`)
+        console.log(`  ${dim("status:")} ${args.draft ? "draft" : "published"}`)
+
+        const publicUrl = `https://web.freelabel.net/content/${contentType}/${created.id}`
+        const urlOk = await verifyUrl(publicUrl)
+        console.log(`  ${dim("public_url:")} ${publicUrl} ${urlOk ? success("200 OK") : "\x1b[31m! unreachable\x1b[0m"}`)
+      }
+
+      // 6. Social publish bridge
+      if (args.publish) {
+        const platforms = args.publish.split(",").map((s: string) => s.trim())
+        const pubSpinner = prompts.spinner()
+        pubSpinner.start(`Publishing to ${platforms.join(", ")}...`)
+        try {
+          const pubRes = await irisFetch(`/api/v1/users/${userId}/integrations/execute`, {
+            method: "POST",
+            body: JSON.stringify({
+              integration: "copycat-ai",
+              action: "publish_to_social_media",
+              parameters: {
+                video_url: args.url,
+                platforms,
+                caption: title,
+              },
+            }),
+          })
+          const pubOk = await handleApiError(pubRes, "social publish")
+          pubSpinner.stop(pubOk ? "Queued" : "Failed", pubOk ? 0 : 1)
+        } catch {
+          pubSpinner.stop("Publish failed", 1)
+        }
+      }
+
+      prompts.outro("Done")
+    } catch (err) {
+      createSpinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ---------------------------------------------------------------------------
+// Subcommands: List / Get / Delete / Search
+// ---------------------------------------------------------------------------
+
+const ListCommand = cmd({
+  command: "list",
+  describe: "list content (videos by default)",
+  builder: (y: any) =>
+    commonOpts(y)
+      .option("type", { alias: "t", describe: "content type", type: "string", default: "video", choices: ["video", "article", "track"] })
+      .option("profile", { alias: "p", describe: "filter by profile name or pk", type: "string" })
+      .option("search", { alias: "s", describe: "search query", type: "string" }),
+  async handler(args: any) {
+    UI.empty()
+    prompts.intro(`${bold("content list")}`)
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    const params = new URLSearchParams({ per_page: "20" })
+
+    // Resolve profile if provided
+    if (args.profile) {
+      spinner.start("Resolving profile...")
+      const profile = await resolveProfileId(args.profile, userId)
+      if (!profile) {
+        spinner.stop("Not found", 1)
+        prompts.log.error(`No profile matching '${args.profile}'.`)
+        prompts.outro("Done")
+        return
+      }
+      params.set("profile_id", String(profile.pk))
+      spinner.stop(`Profile: ${profile.name}`)
+    }
+
+    const listSpinner = prompts.spinner()
+    listSpinner.start("Loading...")
+    try {
+      // fl-api serves content at /api/v1/content/{type}/{id} — SINGULAR type as a path
+    // segment. There is no /api/v1/{type}s resource; only POST /v1/{type}s to create.
+    const base = `/api/v1/content/${args.type}`
+      const res = await irisFetch(`${base}?${params}`)
+      const ok = await handleApiError(res, "list content")
+      if (!ok) { listSpinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const body = (await res.json()) as any
+      const items = body?.data?.data ?? body?.data ?? []
+      const total = body?.data?.meta?.total ?? items.length
+      listSpinner.stop(`${total} ${args.type}(s)`)
+
+      if (args.json) {
+        await writeJson(items)
+      } else if (!Array.isArray(items) || items.length === 0) {
+        prompts.log.info(`No ${args.type}s found.`)
+      } else {
+        console.log()
+        console.log(`  ${dim("id".padEnd(8))}${dim("title".padEnd(45))}${dim("views".padStart(8))}  ${dim("status")}`)
+        for (const item of items) {
+          const id = String(item.id).padEnd(8)
+          const t = truncate(item.title ?? "", 43).padEnd(45)
+          const views = String(item.views ?? 0).padStart(8)
+          const status = item.status === 0 ? dim("(draft)") : ""
+          console.log(`  ${bold(id)}${t}${views}  ${status}`)
+        }
+      }
+      prompts.outro("Done")
+    } catch (err) {
+      listSpinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const GetCommand = cmd({
+  command: "get <id>",
+  describe: "show content detail + verified public_url",
+  builder: (y: any) =>
+    commonOpts(y)
+      .positional("id", { type: "number", demandOption: true })
+      .option("type", { alias: "t", describe: "content type", type: "string", default: "video", choices: ["video", "article", "track"] }),
+  async handler(args: any) {
+    UI.empty()
+    prompts.intro(`${bold("content get")}`)
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Loading...")
+    // fl-api serves content at /api/v1/content/{type}/{id} — SINGULAR type as a path
+    // segment. There is no /api/v1/{type}s resource; only POST /v1/{type}s to create.
+    const base = `/api/v1/content/${args.type}`
+    const res = await irisFetch(`${base}/${args.id}`)
+    const ok = await handleApiError(res, "get content")
+    if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+    const body = (await res.json()) as any
+    const item = body?.data?.data ?? body?.data ?? body
+    spinner.stop("Done")
+
+    if (args.json) {
+      await writeJson(item)
+    } else {
+      console.log()
+      console.log(`  ${dim("id:")} ${bold(String(item.id))}`)
+      console.log(`  ${dim("title:")} ${item.title}`)
+      console.log(`  ${dim("type:")} ${args.type}`)
+      console.log(`  ${dim("description:")} ${truncate(item.description ?? "", 200)}`)
+      console.log(`  ${dim("profile_id:")} ${item.profile_id}`)
+      console.log(`  ${dim("views:")} ${item.views ?? 0}`)
+      console.log(`  ${dim("status:")} ${item.status === 0 ? "draft" : "published"}`)
+      console.log(`  ${dim("created_at:")} ${item.created_at}`)
+      if (item.thumbnail_url) console.log(`  ${dim("thumbnail:")} ${item.thumbnail_url}`)
+      if (item.media_id) console.log(`  ${dim("media_id:")} ${item.media_id}`)
+
+      const publicUrl = item.public_url ?? `https://web.freelabel.net/content/${args.type}/${item.id}`
+      const urlOk = await verifyUrl(publicUrl)
+      console.log(`  ${dim("public_url:")} ${publicUrl} ${urlOk ? success("200 OK") : "\x1b[31m! unreachable\x1b[0m"}`)
+    }
+    prompts.outro("Done")
+  },
+})
+
+const DeleteCommand = cmd({
+  command: "delete <id>",
+  describe: "delete a content record",
+  builder: (y: any) =>
+    commonOpts(y)
+      .positional("id", { type: "number", demandOption: true })
+      .option("type", { alias: "t", type: "string", default: "video", choices: ["video", "article", "track"] })
+      .option("force", { describe: "skip confirmation", type: "boolean", default: false }),
+  async handler(args: any) {
+    UI.empty()
+    prompts.intro(`${bold("content delete")}`)
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    if (!args.force) {
+      const confirmed = await prompts.confirm({ message: `Delete ${args.type} #${args.id}?` })
+      if (prompts.isCancel(confirmed) || !confirmed) {
+        prompts.outro("Cancelled")
+        return
+      }
+    }
+
+    const spinner = prompts.spinner()
+    spinner.start("Deleting...")
+    // fl-api serves content at /api/v1/content/{type}/{id} — SINGULAR type as a path
+    // segment. There is no /api/v1/{type}s resource; only POST /v1/{type}s to create.
+    const base = `/api/v1/content/${args.type}`
+    const res = await irisFetch(`${base}/${args.id}`, { method: "DELETE" })
+    const ok = await handleApiError(res, "delete")
+    spinner.stop(ok ? "Deleted" : "Failed", ok ? 0 : 1)
+    prompts.outro("Done")
+  },
+})
+
+const SearchCommand = cmd({
+  command: "search <query>",
+  describe: "full-text search across all content types",
+  builder: (y: any) =>
+    commonOpts(y).positional("query", { type: "string", demandOption: true }),
+  async handler(args: any) {
+    UI.empty()
+    prompts.intro(`${bold("content search")}`)
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start(`Searching "${args.query}"...`)
+    const params = new URLSearchParams({ q: args.query, types: "videos,articles,tracks" })
+    const res = await irisFetch(`/api/v1/content/search?${params}`)
+    if (!res.ok) {
+      // Fall back to individual type searches
+      spinner.stop("Searching per type...")
+      const results: any[] = []
+      // Same fix as everywhere else in this file: the per-type fallback used a pluralised
+      // path that fl-api does not serve, so this fallback ALWAYS returned nothing — which
+      // is why `content search` reported "No results." for a title that was demonstrably
+      // live on a profile. A silent empty is the worst failure mode for a search.
+      for (const type of ["video", "article", "track"]) {
+        const r = await irisFetch(`/api/v1/content/${type}?search=${encodeURIComponent(args.query)}&per_page=5`)
+        if (r.ok) {
+          const b = (await r.json()) as any
+          const items = b?.data?.data ?? b?.data ?? []
+          if (Array.isArray(items)) {
+            for (const item of items) results.push({ ...item, _type: type })
+          }
+        }
+      }
+      if (args.json) {
+        await writeJson(results)
+      } else if (results.length === 0) {
+        prompts.log.info("No results.")
+      } else {
+        console.log()
+        for (const item of results) {
+          console.log(`  ${dim(`[${item._type}]`)} ${bold(`#${item.id}`)} ${truncate(item.title ?? "", 60)}`)
+        }
+      }
+    } else {
+      const body = (await res.json()) as any
+      spinner.stop("Done")
+      if (args.json) {
+        await writeJson(body)
+      } else {
+        const items = body?.data ?? body
+        if (!Array.isArray(items) || items.length === 0) {
+          prompts.log.info("No results.")
+        } else {
+          console.log()
+          for (const item of items) {
+            console.log(`  ${dim(`[${item.type ?? "?"}]`)} ${bold(`#${item.id}`)} ${truncate(item.title ?? "", 60)}`)
+          }
+        }
+      }
+    }
+    prompts.outro("Done")
+  },
+})
+
+// ---------------------------------------------------------------------------
+// Subcommands: Pull / Push / Diff
+// ---------------------------------------------------------------------------
+
+const PullCommand = cmd({
+  command: "pull <id>",
+  describe: "download content JSON to local ./content/",
+  builder: (y: any) =>
+    commonOpts(y)
+      .positional("id", { type: "number", demandOption: true })
+      .option("type", { alias: "t", type: "string", default: "video", choices: ["video", "article", "track"] }),
+  async handler(args: any) {
+    UI.empty()
+    prompts.intro(`${bold("content pull")}`)
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Fetching...")
+    // fl-api serves content at /api/v1/content/{type}/{id} — SINGULAR type as a path
+    // segment. There is no /api/v1/{type}s resource; only POST /v1/{type}s to create.
+    const base = `/api/v1/content/${args.type}`
+    const res = await irisFetch(`${base}/${args.id}`)
+    const ok = await handleApiError(res, "pull")
+    if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+    const body = (await res.json()) as any
+    const item = body?.data?.data ?? body?.data ?? body
+    spinner.stop("Fetched")
+
+    const dir = resolveSyncDir()
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+    const filename = contentFilename(args.type, args.id)
+    const filepath = join(dir, filename)
+    writeFileSync(filepath, JSON.stringify(item, null, 2) + "\n")
+    prompts.log.success(`Written to ${filepath}`)
+    prompts.outro("Done")
+  },
+})
+
+const PushCommand = cmd({
+  command: "push <id>",
+  describe: "upload local JSON changes to API",
+  builder: (y: any) =>
+    commonOpts(y)
+      .positional("id", { type: "number", demandOption: true })
+      .option("type", { alias: "t", type: "string", default: "video", choices: ["video", "article", "track"] }),
+  async handler(args: any) {
+    UI.empty()
+    prompts.intro(`${bold("content push")}`)
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const dir = resolveSyncDir()
+    const filepath = findLocalFile(dir, args.type, args.id)
+    if (!filepath) {
+      prompts.log.error(`No local file found. Run: iris content pull ${args.id} --type ${args.type}`)
+      prompts.outro("Done")
+      return
+    }
+
+    const local = JSON.parse(readFileSync(filepath, "utf8"))
+    const spinner = prompts.spinner()
+    spinner.start("Pushing...")
+    // fl-api serves content at /api/v1/content/{type}/{id} — SINGULAR type as a path
+    // segment. There is no /api/v1/{type}s resource; only POST /v1/{type}s to create.
+    const base = `/api/v1/content/${args.type}`
+    const res = await irisFetch(`${base}/${args.id}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        title: local.title,
+        description: local.description,
+        thumbnail_url: local.thumbnail_url,
+        twitter: local.twitter,
+        instagram: local.instagram,
+        status: local.status,
+      }),
+    })
+    const ok = await handleApiError(res, "push")
+    spinner.stop(ok ? "Updated" : "Failed", ok ? 0 : 1)
+    prompts.outro("Done")
+  },
+})
+
+const DiffCommand = cmd({
+  command: "diff <id>",
+  describe: "compare local vs remote content",
+  builder: (y: any) =>
+    commonOpts(y)
+      .positional("id", { type: "number", demandOption: true })
+      .option("type", { alias: "t", type: "string", default: "video", choices: ["video", "article", "track"] }),
+  async handler(args: any) {
+    UI.empty()
+    prompts.intro(`${bold("content diff")}`)
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const dir = resolveSyncDir()
+    const filepath = findLocalFile(dir, args.type, args.id)
+    if (!filepath) {
+      prompts.log.error(`No local file found. Run: iris content pull ${args.id} --type ${args.type}`)
+      prompts.outro("Done")
+      return
+    }
+
+    const local = JSON.parse(readFileSync(filepath, "utf8"))
+
+    const spinner = prompts.spinner()
+    spinner.start("Fetching remote...")
+    // fl-api serves content at /api/v1/content/{type}/{id} — SINGULAR type as a path
+    // segment. There is no /api/v1/{type}s resource; only POST /v1/{type}s to create.
+    const base = `/api/v1/content/${args.type}`
+    const res = await irisFetch(`${base}/${args.id}`)
+    const ok = await handleApiError(res, "diff")
+    if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+    const body = (await res.json()) as any
+    const remote = body?.data?.data ?? body?.data ?? body
+    spinner.stop("Comparing")
+
+    const compareFields = ["title", "description", "thumbnail_url", "twitter", "instagram", "status"]
+    let hasDiff = false
+    console.log()
+    for (const field of compareFields) {
+      const l = String(local[field] ?? "")
+      const r = String(remote[field] ?? "")
+      if (l !== r) {
+        hasDiff = true
+        console.log(`  ${bold(field)}:`)
+        console.log(`    ${dim("local:")}  ${truncate(l, 120)}`)
+        console.log(`    ${dim("remote:")} ${truncate(r, 120)}`)
+      }
+    }
+    if (!hasDiff) {
+      prompts.log.success("No differences.")
+    }
+    prompts.outro("Done")
+  },
+})
+
+// ---------------------------------------------------------------------------
+// Event Content — Instagram import & flyer updates
+// ---------------------------------------------------------------------------
+
+// Locate the local authenticated IG fetcher shipped with the coding-agent-bridge.
+function resolveIgFetchScript(): string | null {
+  const rel = "fl-docker-dev/coding-agent-bridge/som/ig-fetch-post.js"
+  const candidates = [
+    process.env.IRIS_IG_FETCH_SCRIPT,
+    join(process.cwd(), rel),
+    join(process.env.HOME || "", "Sites/freelabel", rel),
+  ].filter(Boolean) as string[]
+  for (const c of candidates) { if (existsSync(c)) return c }
+  return null
+}
+
+// Primary IG fetch path (#152145): the fl-api web_scraper runs from a datacenter IP
+// with no IG session, so Instagram serves a login wall and returns nothing. The
+// coding-agent-bridge has logged-in IG sessions on a residential IP — run the fetch
+// there. Returns null (caller falls back to web_scraper) if the bridge isn't present.
+function fetchInstagramViaBridge(igUrl: string): { caption: string; images: string[]; flyerUrl: string | null } | null {
+  const script = resolveIgFetchScript()
+  if (!script) return null
+  const account = process.env.IRIS_IG_ACCOUNT || "heyiris.io"
+  try {
+    const stdout = execFileSync("node", [script, igUrl, account], {
+      timeout: 60000, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"],
+    })
+    const line = String(stdout).trim().split("\n").filter(Boolean).pop() || ""
+    const data = JSON.parse(line)
+    if (!data?.ok) return null
+    const images: string[] = Array.isArray(data.images) ? data.images : []
+    return { caption: data.caption || "", images, flyerUrl: data.flyerUrl ?? (images[0] ?? null) }
+  } catch {
+    return null
+  }
+}
+
+// Re-host an external image URL on our own CDN so it doesn't expire (#152262).
+// Instagram CDN URLs carry a short-lived signature (?oe=…) and 404 after a while —
+// fatal for a stored event flyer. Returns the permanent cdn_url, or null on failure
+// (caller keeps the original URL). Reuses the proven `iris cloud:upload --url` path.
+function rehostImageUrl(imageUrl: string): string | null {
+  const irisCmd = join(process.env.HOME || "", ".iris/bin/iris")
+  if (!existsSync(irisCmd)) return null
+  try {
+    const stdout = execFileSync(irisCmd, ["cloud:upload", "--url", imageUrl, "--expires", "never", "--json"], {
+      timeout: 90000, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"],
+    })
+    // cloud:upload --json pretty-prints (multi-line) after some progress text — grab
+    // the JSON object, not just the last line.
+    const m = String(stdout).match(/\{[\s\S]*\}/)
+    if (!m) return null
+    const data = JSON.parse(m[0])
+    return data?.cdn_url || null
+  } catch {
+    return null
+  }
+}
+
+// True for transient social-CDN URLs that must be re-hosted before we store them.
+function isEphemeralImageUrl(url: string | null): boolean {
+  return !!url && /cdninstagram\.com|fbcdn\.net|scontent/i.test(url)
+}
+
+export async function scrapeInstagramPost(igUrl: string, userId: number): Promise<{ caption: string; images: string[]; flyerUrl: string | null; location: any } | null> {
+  // Try the authenticated local bridge fetch first — it gets past IG's login wall (#152145).
+  const viaBridge = fetchInstagramViaBridge(igUrl)
+  if (viaBridge && (viaBridge.caption || viaBridge.flyerUrl)) {
+    let { flyerUrl, images } = viaBridge
+    // Re-host the flyer to our CDN so it survives IG's URL expiry (#152262).
+    if (isEphemeralImageUrl(flyerUrl)) {
+      const cdn = rehostImageUrl(flyerUrl!)
+      if (cdn) {
+        images = images.map((i) => (i === flyerUrl ? cdn : i))
+        flyerUrl = cdn
+      }
+    }
+    return { caption: viaBridge.caption, images, flyerUrl, location: null }
+  }
+
+  // Fallback: fl-api web_scraper.
+  // /api/v1/tools/execute requires `params` (not `input`) + `user_id` — see BloqItemController.
+  const scrapeRes = await irisFetch("/api/v1/tools/execute", {
+    method: "POST",
+    body: JSON.stringify({ tool: "web_scraper", params: { url: igUrl, extract: "all" }, user_id: userId })
+  }, IRIS_API)
+  const ok = await handleApiError(scrapeRes, "Scrape Instagram")
+  if (!ok) return null
+
+  const scrapeData = (await scrapeRes.json()) as any
+  const result = scrapeData?.result ?? scrapeData?.data ?? scrapeData
+
+  const caption = result?.text ?? result?.content ?? result?.description ?? ""
+  const rawImages = result?.images ?? result?.media ?? []
+  const location = result?.location ?? result?.place ?? null
+
+  const images: string[] = []
+  if (Array.isArray(rawImages)) {
+    for (const img of rawImages) {
+      const url = typeof img === "string" ? img : img?.url ?? img?.src
+      if (url) images.push(url)
+    }
+  }
+
+  const flyerUrl = images.length > 0
+    ? images[0]
+    : (result?.image ?? result?.thumbnail ?? null)
+
+  return { caption, images, flyerUrl, location }
+}
+
+function extractTitleFromCaption(caption: string): string | null {
+  if (!caption) return null
+  const firstLine = caption.split("\n")[0].trim()
+  if (firstLine.length > 5 && firstLine.length < 120) return firstLine
+  const firstSentence = caption.split(/[.!?]/)[0].trim()
+  if (firstSentence.length > 5 && firstSentence.length < 120) return firstSentence
+  return caption.slice(0, 80).trim()
+}
+
+function extractDateFromCaption(caption: string): string | null {
+  if (!caption) return null
+  const isoMatch = caption.match(/(\d{4}-\d{2}-\d{2})/)
+  if (isoMatch) return isoMatch[1]
+  const slashMatch = caption.match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})/)
+  if (slashMatch) {
+    const year = slashMatch[3].length === 2 ? `20${slashMatch[3]}` : slashMatch[3]
+    return `${year}-${slashMatch[1].padStart(2, "0")}-${slashMatch[2].padStart(2, "0")}`
+  }
+  const months = ["january","february","march","april","may","june","july","august","september","october","november","december"]
+  const monthPattern = new RegExp(`(${months.join("|")})\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:[,\\s]+(\\d{4}))?`, "i")
+  const monthMatch = caption.match(monthPattern)
+  if (monthMatch) {
+    const monthIdx = months.indexOf(monthMatch[1].toLowerCase()) + 1
+    const day = monthMatch[2].padStart(2, "0")
+    const year = monthMatch[3] || new Date().getFullYear().toString()
+    return `${year}-${String(monthIdx).padStart(2, "0")}-${day}`
+  }
+  return null
+}
+
+const EventImportFromIgCommand = cmd({
+  command: "import-from-ig <url>",
+  aliases: ["from-ig", "ig"],
+  describe: "create an event from an Instagram post URL (scrapes flyer, caption, location)",
+  builder: (yargs: any) =>
+    yargs
+      .positional("url", { describe: "Instagram post URL", type: "string", demandOption: true })
+      .option("title", { describe: "override event title", type: "string" })
+      .option("date", { describe: "event date YYYY-MM-DD", type: "string" })
+      .option("time", { describe: "event time HH:MM", type: "string" })
+      .option("venue", { describe: "venue name", type: "string" })
+      .option("city", { describe: "city", type: "string" })
+      .option("state", { describe: "state", type: "string" })
+      .option("type", { describe: "event type", type: "string", default: "showcase" })
+      .option("bloq-id", { describe: "associated bloq ID", type: "number" })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
+      .option("dry-run", { describe: "show extracted data without creating event", type: "boolean" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args: any) {
+    UI.empty()
+    prompts.intro(`${bold("iris content event")} import-from-ig`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const igUrl = String(args.url)
+    if (!igUrl.includes("instagram.com")) {
+      prompts.log.error("URL must be an Instagram post URL (instagram.com/p/... or instagram.com/reel/...)")
+      prompts.outro("Done")
+      return
+    }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Scraping Instagram post...")
+
+    try {
+      const scraped = await scrapeInstagramPost(igUrl, userId)
+      if (!scraped) { spinner.stop("Scrape failed", 1); prompts.outro("Done"); return }
+
+      spinner.stop(success("Scraped"))
+
+      printDivider()
+      printKV("Source", igUrl)
+      printKV("Caption", scraped.caption ? scraped.caption.slice(0, 120) + (scraped.caption.length > 120 ? "..." : "") : dim("(none)"))
+      printKV("Flyer", scraped.flyerUrl ? highlight(scraped.flyerUrl.slice(0, 80)) : dim("(no image found)"))
+      printKV("Location", scraped.location ? String(scraped.location.name ?? scraped.location) : dim("(none)"))
+      printKV("Images", `${scraped.images.length} found`)
+      printDivider()
+
+      if (args["dry-run"]) {
+        if (args.json) { await writeJson(scraped) }
+        prompts.outro(dim("Dry run -- no event created"))
+        return
+      }
+
+      const eventTitle = args.title || extractTitleFromCaption(scraped.caption) || "Untitled Event"
+      const eventDate = args.date || extractDateFromCaption(scraped.caption)
+      const eventVenue = args.venue || (scraped.location?.name ?? (typeof scraped.location === "string" ? scraped.location : null))
+
+      const spinner2 = prompts.spinner()
+      spinner2.start("Creating event...")
+
+      const payload: Record<string, unknown> = {
+        title: eventTitle,
+        description: scraped.caption,
+        status: "1",
+        event_type: args.type || "showcase",
+        flyer: scraped.flyerUrl,
+        photo: scraped.flyerUrl,
+        external_source: igUrl,
+      }
+      if (scraped.images.length > 1) {
+        payload.metadata = { gallery: scraped.images }
+      }
+      if (eventDate) payload.start_date = eventDate
+      if (args.time) payload.start_time = args.time
+      if (eventVenue) payload.venue_name = eventVenue
+      if (args.city) payload.city = args.city
+      if (args.state) payload.state = args.state
+      if (args["bloq-id"]) payload.bloq_id = args["bloq-id"]
+
+      const res = await irisFetch("/api/v1/events", { method: "POST", body: JSON.stringify(payload) })
+      const createOk = await handleApiError(res, "Create event")
+      if (!createOk) { spinner2.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const data = (await res.json()) as any
+      const e = data?.event ?? data?.data ?? data
+      spinner2.stop(`${success("Created")}: ${bold(String(e.title ?? e.id))}`)
+
+      if (args.json) {
+        await writeJson(e)
+        prompts.outro("Done")
+        return
+      }
+
+      printDivider()
+      printKV("ID", e.id)
+      printKV("Title", e.title)
+      printKV("Date", e.start_date || dim("(not set)"))
+      printKV("Venue", e.venue_name || dim("(not set)"))
+      printKV("Flyer", e.flyer ? highlight("attached") : dim("(not attached)"))
+      printKV("Gallery", scraped.images.length > 1 ? `${scraped.images.length} images` : dim("single image"))
+      printKV("IG Source", igUrl)
+      printDivider()
+
+      prompts.outro(dim(`iris events get ${e.id}  |  iris events push ${e.id}`))
+    } catch (err: any) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const EventUpdateFlyerCommand = cmd({
+  command: "update-flyer <event-id> <url>",
+  aliases: ["flyer"],
+  describe: "pull flyer image from an Instagram post and attach it to an existing event",
+  builder: (yargs: any) =>
+    yargs
+      .positional("event-id", { describe: "event ID to update", type: "number", demandOption: true })
+      .positional("url", { describe: "Instagram post URL", type: "string", demandOption: true })
+      .option("gallery", { describe: "store all images as gallery in metadata", type: "boolean", default: true })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
+      .option("dry-run", { describe: "show what would be updated without saving", type: "boolean" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args: any) {
+    UI.empty()
+    prompts.intro(`${bold("iris content event")} update-flyer`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const eventId = Number(args["event-id"])
+    const igUrl = String(args.url)
+    if (!igUrl.includes("instagram.com")) {
+      prompts.log.error("URL must be an Instagram post URL")
+      prompts.outro("Done")
+      return
+    }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Scraping Instagram post for flyer...")
+
+    try {
+      const scraped = await scrapeInstagramPost(igUrl, userId)
+      if (!scraped) { spinner.stop("Scrape failed", 1); prompts.outro("Done"); return }
+
+      if (!scraped.flyerUrl) {
+        spinner.stop("No images found in post", 1)
+        prompts.outro("Done")
+        return
+      }
+
+      spinner.stop(success("Scraped"))
+
+      printDivider()
+      printKV("Event ID", String(eventId))
+      printKV("Flyer URL", highlight(scraped.flyerUrl.slice(0, 80)))
+      printKV("Images", `${scraped.images.length} found`)
+      printDivider()
+
+      if (args["dry-run"]) {
+        if (args.json) {
+          await writeJson({ event_id: eventId, flyer: scraped.flyerUrl, gallery: scraped.images })
+        }
+        prompts.outro(dim("Dry run -- no changes made"))
+        return
+      }
+
+      const spinner2 = prompts.spinner()
+      spinner2.start(`Updating event #${eventId}...`)
+
+      const payload: Record<string, unknown> = {
+        flyer: scraped.flyerUrl,
+        photo: scraped.flyerUrl,
+        external_source: igUrl,
+      }
+      if (args.gallery && scraped.images.length > 1) {
+        payload.metadata = { gallery: scraped.images }
+      }
+
+      const res = await irisFetch(`/api/v1/events/${eventId}`, { method: "PUT", body: JSON.stringify(payload) })
+      const updateOk = await handleApiError(res, "Update event")
+      if (!updateOk) { spinner2.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const data = (await res.json()) as any
+      const e = data?.event ?? data?.data ?? data
+
+      const galleryCount = scraped.images.length > 1 ? ` + ${scraped.images.length} gallery images` : ""
+      spinner2.stop(`${success("Updated")} event #${eventId} with flyer${galleryCount}`)
+
+      if (args.json) {
+        await writeJson(e)
+        prompts.outro("Done")
+        return
+      }
+
+      printDivider()
+      printKV("ID", e.id ?? eventId)
+      printKV("Title", e.title ?? dim("(unknown)"))
+      printKV("Flyer", highlight("attached"))
+      printKV("Gallery", scraped.images.length > 1 ? `${scraped.images.length} images stored` : dim("single image"))
+      printKV("IG Source", igUrl)
+      printDivider()
+
+      prompts.outro(dim(`iris events get ${eventId}`))
+    } catch (err: any) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const EventSubCommand = cmd({
+  command: "event",
+  aliases: ["events"],
+  describe: "import and enrich event content from external sources (flyers, IG posts)",
+  builder: (yargs: any) =>
+    yargs
+      .command(EventImportFromIgCommand)
+      .command(EventUpdateFlyerCommand)
+      .demandCommand(),
+  async handler() {},
+})
+
+// ---------------------------------------------------------------------------
+// Root Command
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// ingest-channel — a creator's back catalogue as an agent training corpus
+// ---------------------------------------------------------------------------
+
+interface ChannelVideo {
+  id: string
+  title: string
+  date: string
+  duration: number
+  views: number
+  likes: number
+  comments: number
+}
+
+const num = (v: string): number => {
+  const n = Number(v)
+  return Number.isFinite(n) ? n : 0
+}
+
+/** Enumerate a channel's catalogue with the per-video performance metrics. */
+function fetchChannelCatalogue(ytdlp: string, url: string, limit?: number): ChannelVideo[] {
+  const args = [
+    "--skip-download",
+    "--no-warnings",
+    "--ignore-errors",
+    ...(limit ? ["--playlist-end", String(limit)] : []),
+    "--print",
+    "%(id)s%(title)s%(upload_date)s%(duration)s%(view_count)s%(like_count)s%(comment_count)s",
+    url,
+  ]
+  const r = spawnSync(ytdlp, args, { encoding: "utf8", timeout: 900_000, maxBuffer: 64 * 1024 * 1024 })
+  return (r.stdout || "")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [id, title, date, duration, views, likes, comments] = line.split("")
+      return {
+        id,
+        title: title ?? "",
+        date: date && date !== "NA" ? date : "",
+        duration: num(duration),
+        views: num(views),
+        likes: num(likes),
+        comments: num(comments),
+      }
+    })
+    .filter((v) => v.id && v.id !== "NA")
+}
+
+/** Strip WebVTT timing/markup down to plain prose. */
+function vttToText(vtt: string): string {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (let line of vtt.split("\n")) {
+    line = line.trim()
+    if (!line) continue
+    if (line.startsWith("WEBVTT") || line.startsWith("Kind:") || line.startsWith("Language:")) continue
+    if (line.includes("-->") || /^\d+$/.test(line)) continue
+    line = line.replace(/<[^>]*>/g, "").replace(/&nbsp;/g, " ").trim()
+    if (!line || seen.has(line)) continue
+    seen.add(line)
+    out.push(line)
+  }
+  return out.join(" ").replace(/\s+/g, " ").trim()
+}
+
+/** Pull a video's auto-captions and return them as plain text (null when absent). */
+function fetchTranscript(ytdlp: string, videoId: string, workDir: string): string | null {
+  const outTpl = join(workDir, "%(id)s.%(ext)s")
+  spawnSync(
+    ytdlp,
+    [
+      "--skip-download",
+      "--no-warnings",
+      "--ignore-errors",
+      "--write-auto-subs",
+      "--write-subs",
+      "--sub-lang",
+      "en.*",
+      "--sub-format",
+      "vtt",
+      "-o",
+      outTpl,
+      `https://www.youtube.com/watch?v=${videoId}`,
+    ],
+    { encoding: "utf8", timeout: 300_000 },
+  )
+  const hit = readdirSync(workDir).find((f) => f.startsWith(videoId) && f.endsWith(".vtt"))
+  if (!hit) return null
+  const text = vttToText(readFileSync(join(workDir, hit), "utf8"))
+  return text.length > 0 ? text : null
+}
+
+const IngestChannelCommand = cmd({
+  command: "ingest-channel <url>",
+  aliases: ["channel-corpus"],
+  describe: "ingest a creator's whole back catalogue into a bloq as an agent training corpus",
+  builder: (yargs: any) =>
+    yargs
+      .positional("url", { describe: "channel or playlist URL", type: "string", demandOption: true })
+      .option("bloq", { alias: "b", describe: "target bloq ID (required)", type: "number", demandOption: true })
+      .option("limit", { describe: "only the N most recent videos", type: "number" })
+      .option("no-transcripts", { describe: "metadata only, skip caption pulls", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args: any) {
+    UI.empty()
+    prompts.intro(`◈  Ingest channel into Bloq #${args.bloq}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    const ytdlp = ensureYtDlp()
+    if (!ytdlp) { prompts.outro("Done"); return }
+
+    const sp = prompts.spinner()
+    sp.start("Reading the catalogue…")
+    const videos = fetchChannelCatalogue(ytdlp, args.url, args.limit)
+    if (videos.length === 0) {
+      sp.stop("No videos found — check the URL is a channel or playlist", 1)
+      prompts.outro("Done")
+      return
+    }
+    sp.stop(`${success("✓")} ${videos.length} video(s)`)
+
+    const workDir = join(process.cwd(), `.iris-channel-${Date.now()}`)
+    mkdirSync(workDir, { recursive: true })
+
+    // Performance table first — the questions creators actually ask are comparative
+    // ("which episodes worked and why"), and that needs numbers, not just prose.
+    const sorted = [...videos].sort((a, b) => (a.date < b.date ? 1 : -1))
+    const totalViews = videos.reduce((s, v) => s + v.views, 0)
+    const median = [...videos].map((v) => v.views).sort((a, b) => a - b)[Math.floor(videos.length / 2)] ?? 0
+    const best = [...videos].sort((a, b) => b.views - a.views)[0]
+
+    let md = `# Channel corpus — ${args.url}\n\n`
+    md += `Ingested ${new Date().toISOString().slice(0, 10)} · ${videos.length} videos · `
+    md += `${totalViews} total views · median ${median} · best "${best?.title}" at ${best?.views}\n\n`
+    md += `| Date | Title | Runtime | Views | Likes | Comments |\n|---|---|---|---|---|---|\n`
+    for (const v of sorted) {
+      const d = v.date ? `${v.date.slice(0, 4)}-${v.date.slice(4, 6)}-${v.date.slice(6, 8)}` : "—"
+      md += `| ${d} | ${v.title.replace(/\|/g, "/")} | ${Math.round(v.duration / 60)}m | ${v.views} | ${v.likes} | ${v.comments} |\n`
+    }
+    const perfPath = join(workDir, "channel-performance.md")
+    writeFileSync(perfPath, md)
+
+    const uploads: string[] = [perfPath]
+
+    if (!args["no-transcripts"]) {
+      let done = 0
+      let missing = 0
+      const tsp = prompts.spinner()
+      tsp.start(`Pulling transcripts 0/${videos.length}…`)
+      for (const v of videos) {
+        // Prefer existing captions over paid transcription — free, instant, and for a
+        // 20-episode back catalogue the difference is minutes vs hours (#178766).
+        const text = fetchTranscript(ytdlp, v.id, workDir)
+        done++
+        tsp.message(`Pulling transcripts ${done}/${videos.length}…`)
+        if (!text) { missing++; continue }
+        const d = v.date ? v.date : "unknown"
+        const safe = v.title.replace(/[^a-zA-Z0-9]+/g, "-").slice(0, 60).replace(/^-|-$/g, "")
+        const p = join(workDir, `${d}_${safe || v.id}.txt`)
+        writeFileSync(p, `${v.title}\nhttps://youtu.be/${v.id}\nViews: ${v.views}\n\n${text}`)
+        uploads.push(p)
+      }
+      tsp.stop(`${success("✓")} ${done - missing} transcript(s)${missing ? dim(` · ${missing} without captions`) : ""}`)
+    }
+
+    const usp = prompts.spinner()
+    let ok = 0
+    let failed = 0
+    for (const [i, p] of uploads.entries()) {
+      const filename = p.split("/").pop() as string
+      usp.start(`Uploading ${i + 1}/${uploads.length} ${dim(filename)}…`)
+      try {
+        const fd = new FormData()
+        fd.append("file", new Blob([new Uint8Array(readFileSync(p))]), filename)
+        fd.append("user_id", String(userId))
+        fd.append("bloq_id", String(args.bloq))
+        const res = await fetch(`${FL_API}/api/v1/cloud-files/upload`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+          body: fd,
+        })
+        if (res.ok) ok++
+        else failed++
+      } catch { failed++ }
+    }
+    usp.stop(`${success("✓")} ${ok} file(s) ingested${failed ? ` · ${failed} failed` : ""}`, failed ? 1 : 0)
+
+    try { rmSync(workDir, { recursive: true, force: true }) } catch {}
+
+    printDivider()
+    printKV("Videos", String(videos.length))
+    printKV("Files ingested", String(ok))
+    printKV("Bloq", String(args.bloq))
+    prompts.outro(dim(`iris bloqs get ${args.bloq}`))
+  },
+})
+
+export const PlatformContentCommand = cmd({
+  command: "content",
+  aliases: ["ct"],
+  describe: "Content management -- profiles, upload, list, pull/push/diff",
+  builder: (yargs: any) =>
+    yargs
+      .command(EventSubCommand)
+      .command(ProfilesCommand)
+      .command(UploadCommand)
+      .command(IngestChannelCommand)
+      .command(ListCommand)
+      .command(GetCommand)
+      .command(DeleteCommand)
+      .command(SearchCommand)
+      .command(PullCommand)
+      .command(PushCommand)
+      .command(DiffCommand)
+      .demandCommand(),
+  async handler() {},
+})

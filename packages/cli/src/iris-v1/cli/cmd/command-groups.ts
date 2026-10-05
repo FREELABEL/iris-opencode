@@ -1,0 +1,273 @@
+export interface CommandCategory {
+  name: string
+  description: string
+  order: number
+}
+
+export const CATEGORIES: Record<string, CommandCategory> = {
+  crm: {
+    name: "CRM & Sales",
+    description: "Leads, pulse health scoring, payment gates, outreach, delivery",
+    order: 1,
+  },
+  atlas: {
+    name: "Atlas OS",
+    description: "Ledger, staff, inventory, meetings, brand kit, deals",
+    order: 2,
+  },
+  knowledge: {
+    name: "Knowledge & Content",
+    description: "Bloqs, memory, boards, context, how-to recipes",
+    order: 3,
+  },
+  pages: {
+    name: "Pages & Publishing",
+    description: "Composable pages, partials, copycat, remotion, uploads",
+    order: 4,
+  },
+  agents: {
+    name: "Agents & Automation",
+    description: "Platform agents, chat, automations, workflows, schedules",
+    order: 5,
+  },
+  integrations: {
+    name: "Integrations & Tools",
+    description: "OAuth connect, n8n, skills, tools, marketplace",
+    order: 6,
+  },
+  entities: {
+    name: "Entity Management",
+    description: "Brands, products, services, events, venues, programs",
+    order: 7,
+  },
+  communication: {
+    name: "Communication",
+    description: "Phone, voice, email (Apple Mail), iMessage, calendar, transcription",
+    order: 8,
+  },
+  bounty: {
+    name: "Bounty OS",
+    description: "Opportunities, bounty campaigns, hunters, submissions, payouts, ledger",
+    order: 9,
+  },
+  finance: {
+    name: "Finance",
+    description: "Wallets, payments, commerce sales + payouts, Good Deals planning",
+    order: 10,
+  },
+  compute: {
+    name: "Hive & Compute",
+    description: "Hive nodes, tasks, projects, IRIS-hosted apps",
+    order: 11,
+  },
+  system: {
+    name: "System & Admin",
+    description: "Users, config, bug reports, SDK calls, eval, diary, SOPs",
+    order: 12,
+  },
+  core: {
+    name: "Core CLI",
+    description: "Run, auth, models, sessions, export/import, MCP, ACP",
+    order: 13,
+  },
+}
+
+export const COMMAND_CATEGORY_MAP: Record<string, string> = {
+  // CRM & Sales
+  pulse: "crm",
+  leads: "crm",
+  "leads:meeting": "crm",
+  deals: "crm",
+  reachr: "crm",
+  lexicon: "knowledge",
+  "outreach-campaign": "crm",
+  "outreach-send": "crm",
+  "outreach-approve": "crm",
+  som: "crm",
+  invoices: "crm",
+  deliver: "crm",
+  "deliver:carousel": "crm",
+
+  // Atlas OS
+  "atlas:ledger": "atlas",
+  "atlas:staff": "atlas",
+  "atlas:inventory": "atlas",
+  "atlas:meetings": "atlas",
+  meetings: "atlas",
+  "atlas:brand-kit": "atlas",
+  "atlas:comms": "atlas",
+  "atlas:datasets": "atlas",
+  onboarding: "atlas",
+  "atlas:projections": "atlas",
+  "good-deals": "atlas",
+
+  // Knowledge & Content
+  content: "knowledge",
+  search: "knowledge",
+  // The open web, next to the verb people try first for it (#185571).
+  "web-search": "knowledge",
+  // `find` searches the CLI's OWN verbs; `search` searches what you have written. Both belong
+  // here, and `find` was absent — so the one command that answers "what can this thing do"
+  // appeared in no help output at all (#183479).
+  find: "knowledge",
+  // `find` SEARCHES the command list; `intent` PICKS from it. Absent from this map, it appeared in
+  // no help output — the same gap `find` had (#183479), found again by the readiness gate (#186677).
+  intent: "knowledge",
+  atlas: "knowledge",
+  memory: "knowledge",
+  boards: "knowledge",
+  bloq: "knowledge",
+  "bloq-ingest": "knowledge",
+  "data-sources": "knowledge",
+  "bloq-members": "knowledge",
+  share: "knowledge",
+  invite: "knowledge",
+  "how-to": "knowledge",
+
+  // Pages & Publishing
+  domains: "pages",
+  genesis: "pages",
+  "pages:batch": "pages",
+  partials: "pages",
+  copycat: "pages",
+  "editorial": "pages",
+  remotion: "pages",
+  release: "pages",
+  "cloud:upload": "pages",
+
+  // Agents & Automation
+  agents: "agents",
+  chat: "agents",
+  automation: "agents",
+  "automation:test": "agents",
+  workflows: "agents",
+  schedules: "agents",
+  monitor: "agents",
+  personality: "agents",
+  recall: "knowledge",
+  home: "integrations",
+
+  // Playbooks & Workflows
+  playbook: "agents",
+
+  // Integrations & Tools
+  integrations: "integrations",
+  connect: "integrations",
+  "list-connected": "integrations",
+  "list-available": "integrations",
+  tools: "integrations",
+  skills: "integrations",
+  n8n: "integrations",
+
+  // Entity Management
+  brands: "entities",
+  products: "entities",
+  services: "entities",
+  events: "entities",
+  venues: "entities",
+  programs: "entities",
+  discover: "entities",
+  // Bounty OS is a PRODUCT (IrisProducts::PRODUCTS['bounty-os']), not an entity type. Filed
+  // under "entities" it never appeared as a coherent thing in grouped help, which is most of
+  // why its control surfaces felt like they were hiding under `opportunities`.
+  opportunities: "bounty",
+  opps: "bounty",
+  bounty: "bounty",
+  bounties: "bounty",
+  tutorials: "entities",
+  packages: "entities",
+  profile: "entities",
+  magazine: "entities",
+  mag: "entities",
+
+  // Communication
+  msg: "communication",
+  obs: "communication",
+  phone: "communication",
+  voice: "communication",
+  download: "communication",
+  transcribe: "communication",
+  mail: "communication",
+  senders: "communication",
+  imessage: "communication",
+  whatsapp: "communication",
+  discord: "communication",
+  slack: "communication",
+  gmail: "communication",
+  telegram: "communication",
+  instagram: "communication",
+  calendar: "communication",
+
+  // Finance
+  wallet: "finance",
+  payments: "finance",
+  commerce: "finance",
+
+  // Hive & Compute
+  hive: "compute",
+  app: "compute",
+
+  // System & Admin
+  users: "system",
+  config: "system",
+  bug: "system",
+  claude: "system",
+  doctor: "system",
+  "system:apps-scan": "system",
+  ideas: "crm",
+  "sdk:call": "system",
+  eval: "system",
+  diary: "system",
+  sop: "system",
+
+  // Core CLI
+  completion: "core",
+  acp: "core",
+  mcp: "core",
+  a2a: "core",
+  marketplace: "core",
+  attach: "core",
+  run: "core",
+  generate: "core",
+  debug: "core",
+  auth: "core",
+  agent: "core",
+  upgrade: "core",
+  uninstall: "core",
+  serve: "core",
+  web: "core",
+  models: "core",
+  stats: "core",
+  export: "core",
+  import: "core",
+  github: "core",
+  pr: "core",
+  session: "core",
+}
+
+export interface RegisteredCommand {
+  name: string
+  describe: string
+  aliases: string[]
+}
+
+const registry: RegisteredCommand[] = []
+
+export function registerCommand(commandModule: any): void {
+  const cmdStr = String(commandModule.command ?? "")
+  const name = cmdStr.split(/\s/)[0]
+  if (!name || name === "$0") return
+  // `describe: false` is yargs' own way of saying "runnable, not advertised". Honour it here
+  // too, or a command hidden from `--help` still shows up in the grouped listing and the
+  // hiding is only half done (#182938). One convention, both surfaces.
+  if (commandModule.describe === false) return
+  registry.push({
+    name,
+    describe: commandModule.describe ?? "",
+    aliases: Array.isArray(commandModule.aliases) ? commandModule.aliases : [],
+  })
+}
+
+export function getRegistry(): RegisteredCommand[] {
+  return registry
+}

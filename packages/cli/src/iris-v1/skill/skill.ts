@@ -1,0 +1,145 @@
+import z from "zod"
+import { Config } from "../config/config"
+import { Instance } from "../project/instance"
+import { NamedError } from "@opencode-ai/util/error"
+import { ConfigMarkdown } from "../config/markdown"
+import { Log } from "../util/log"
+import { Global } from "@/global"
+import { Filesystem } from "@/util/filesystem"
+import { exists } from "fs/promises"
+import path from "path"
+
+// Re-export v2 execution engine for convenience
+export { parsePlan, executeSkill, validatePlan, resolveArgs } from "./executor"
+export type { SkillPlan, StepDef, StepResult, SkillResult, ExecuteOptions } from "./executor"
+
+export namespace Skill {
+  const log = Log.create({ service: "skill" })
+  export const Info = z.object({
+    name: z.string(),
+    description: z.string(),
+    location: z.string(),
+  })
+  export type Info = z.infer<typeof Info>
+
+  export const InvalidError = NamedError.create(
+    "SkillInvalidError",
+    z.object({
+      path: z.string(),
+      message: z.string().optional(),
+      issues: z.custom<z.core.$ZodIssue[]>().optional(),
+    }),
+  )
+
+  export const NameMismatchError = NamedError.create(
+    "SkillNameMismatchError",
+    z.object({
+      path: z.string(),
+      expected: z.string(),
+      actual: z.string(),
+    }),
+  )
+
+  // Scan patterns — playbooks first (new), then skills (legacy)
+  const PLAYBOOK_GLOB = new Bun.Glob("playbooks/**/PLAYBOOK.md")
+  const CLAUDE_SKILL_GLOB = new Bun.Glob("skills/**/SKILL.md")
+  const OPENCODE_SKILL_GLOB = new Bun.Glob("{skill,skills}/**/SKILL.md")
+
+  export const state = Instance.state(async () => {
+    const skills: Record<string, Info> = {}
+    // Every match for a name, in scan order — not just the winner. A second
+    // PLAYBOOK.md/SKILL.md for the same name (a stray global copy, an old
+    // clone) silently shadows the real one; `get`/`all` only ever see the
+    // first, so nothing before this said the shadow existed at all.
+    const allMatches: Record<string, Info[]> = {}
+
+    const addSkill = async (match: string) => {
+      const md = await ConfigMarkdown.parse(match)
+      if (!md) {
+        return
+      }
+
+      const parsed = Info.pick({ name: true, description: true }).safeParse(md.data)
+      if (!parsed.success) return
+
+      const info: Info = {
+        name: parsed.data.name,
+        description: parsed.data.description,
+        location: match,
+      }
+      ;(allMatches[parsed.data.name] ??= []).push(info)
+
+      // First-found wins (playbooks scanned before skills = playbook takes priority)
+      if (skills[parsed.data.name]) {
+        return
+      }
+
+      skills[parsed.data.name] = info
+    }
+
+    // Helper to scan a glob inside multiple directories
+    const scanGlob = async (glob: InstanceType<typeof Bun.Glob>, dirs: string[]) => {
+      for (const dir of dirs) {
+        const matches = await Array.fromAsync(
+          glob.scan({ cwd: dir, absolute: true, onlyFiles: true, followSymlinks: true, dot: true }),
+        ).catch(() => [])
+        for (const match of matches) {
+          await addSkill(match)
+        }
+      }
+    }
+
+    // Collect project-level directories (walk up from cwd to worktree root)
+    const irisDirs: string[] = []
+    const claudeDirs: string[] = []
+
+    for await (const dir of Filesystem.up({ targets: [".iris"], start: Instance.directory, stop: Instance.worktree })) {
+      irisDirs.push(dir)
+    }
+    for await (const dir of Filesystem.up({ targets: [".claude"], start: Instance.directory, stop: Instance.worktree })) {
+      claudeDirs.push(dir)
+    }
+
+    // Global dirs
+    const globalIris = `${Global.Path.home}/.iris`
+    // Outside a git repo the project walk runs to "/", so it can already have visited ~/.iris.
+    // Scanning it twice made every global playbook look like its own shadow copy.
+    const seen = (list: string[], dir: string) => list.some((d) => path.resolve(d) === path.resolve(dir))
+    if ((await exists(globalIris)) && !seen(irisDirs, globalIris)) irisDirs.push(globalIris)
+    const globalClaude = `${Global.Path.home}/.claude`
+    if ((await exists(globalClaude)) && !seen(claudeDirs, globalClaude)) claudeDirs.push(globalClaude)
+
+    // Scan in priority order: playbooks first, then skills (first-found wins)
+    await scanGlob(PLAYBOOK_GLOB, irisDirs)       // 1. .iris/playbooks/**/PLAYBOOK.md
+    await scanGlob(CLAUDE_SKILL_GLOB, claudeDirs)  // 2. .claude/skills/**/SKILL.md (legacy)
+
+    // Scan .opencode/skill/ directories (lowest priority)
+    for (const dir of await Config.directories()) {
+      for await (const match of OPENCODE_SKILL_GLOB.scan({ cwd: dir, absolute: true, onlyFiles: true, followSymlinks: true })) {
+        await addSkill(match)
+      }
+    }
+
+    return { skills, allMatches }
+  })
+
+  export async function get(name: string) {
+    return state().then((x) => x.skills[name])
+  }
+
+  export async function all() {
+    return state().then((x) => Object.values(x.skills))
+  }
+
+  /** Every discovered location for `name`, in scan/priority order — [0] is the winner `get()` returns. */
+  export async function locations(name: string): Promise<Info[]> {
+    return state().then((x) => x.allMatches[name] ?? [])
+  }
+
+  /** Every name with more than one discovered location, i.e. a shadow copy exists somewhere. */
+  export async function duplicates(): Promise<Record<string, Info[]>> {
+    return state().then((x) =>
+      Object.fromEntries(Object.entries(x.allMatches).filter(([, v]) => v.length > 1)),
+    )
+  }
+}

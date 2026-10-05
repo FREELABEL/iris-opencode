@@ -1,0 +1,1028 @@
+import { useSync } from "@tui/context/sync"
+import { createMemo, createSignal, For, Show, Switch, Match } from "solid-js"
+import { createStore } from "solid-js/store"
+import { useTheme } from "../../context/theme"
+import { Locale } from "@/util/locale"
+import path from "path"
+import type { AssistantMessage } from "@opencode-ai/sdk/v2"
+import { Installation } from "@/installation"
+import { useDirectory } from "../../context/directory"
+import { useKV } from "../../context/kv"
+import { TodoItem } from "../../component/todo-item"
+import { useIrisData } from "../../iris/api"
+import type { IrisPlaybook } from "../../iris/api"
+import type { IrisAgent, AtlasItem, IrisContact, IrisPage } from "../../iris/types"
+import { useHiveInbox } from "../../iris/hive-inbox"
+
+/**
+ * How wide the panel is, and who decides.
+ *
+ * It used to be two different numbers: this file rendered the box at 80 while
+ * routes/session/index.tsx reserved 42 when computing the transcript's width. The main column
+ * therefore laid itself out as if the sidebar were 38 columns narrower than it actually is,
+ * which is why the conversation looked clipped beside it. One value now drives both, it is
+ * chosen by the person using it, and it persists.
+ */
+export const SIDEBAR_WIDTHS = [44, 56, 68, 80, 92] as const
+export const SIDEBAR_WIDTH_DEFAULT = 68
+
+export function clampSidebarWidth(width: number): number {
+  // A width outside the ladder (a hand-edited kv value, an older build's number) must not put
+  // the panel off-screen or at two columns. Snap to the nearest step we know renders.
+  if (!Number.isFinite(width)) return SIDEBAR_WIDTH_DEFAULT
+  return SIDEBAR_WIDTHS.reduce(
+    (best, w) => (Math.abs(w - width) < Math.abs(best - width) ? w : best),
+    SIDEBAR_WIDTH_DEFAULT,
+  )
+}
+
+type SidebarTab = "agents" | "playbooks" | "contacts" | "pages" | "atlas" | "session" | "hive"
+
+const TAB_LABELS: Record<SidebarTab, string> = {
+  agents: "Agents",
+  playbooks: "Playbooks",
+  contacts: "Contacts",
+  pages: "Pages",
+  atlas: "Atlas",
+  session: "Sess",
+  hive: "Hive",
+}
+
+const TABS: SidebarTab[] = ["atlas", "agents", "hive", "contacts", "playbooks", "pages", "session"]
+
+/** A persisted tab name from an older build (or a hand-edited kv) must not render nothing. */
+function normalizeTab(value: unknown): SidebarTab {
+  return TABS.includes(value as SidebarTab) ? (value as SidebarTab) : "atlas"
+}
+
+export function Sidebar(props: { sessionID: string; width?: number; onCollapse?: () => void }) {
+  const sync = useSync()
+  const { theme } = useTheme()
+  const session = createMemo(() => sync.session.get(props.sessionID)!)
+  const diff = createMemo(() => sync.data.session_diff[props.sessionID] ?? [])
+  const todo = createMemo(() => sync.data.todo[props.sessionID] ?? [])
+  const messages = createMemo(() => sync.data.message[props.sessionID] ?? [])
+
+  const kv = useKV()
+  // The tab you were last on, not always Atlas. Somebody watching the Hive had to re-select
+  // it on every launch, which is how a panel gets ignored.
+  const [activeTab, setActiveTab] = createSignal<SidebarTab>(normalizeTab(kv.get("sidebar_tab", "atlas")))
+  const iris = useIrisData()
+  // Polls ~/.iris/hive/inbox/.manifest.jsonl — a stat() every few seconds, and a read only
+  // when it actually changed. Local file, no network. See iris/hive-inbox.ts.
+  const inbox = useHiveInbox()
+  /** The manifest number of the top unread row — the same number `hive inbox read` takes. */
+  const firstUnread = createMemo(() => inbox().items.find((i) => !i.read)?.index ?? 1)
+  const [bloqPickerOpen, setBloqPickerOpen] = createSignal(false)
+  const [expandedLists, setExpandedLists] = createSignal<Set<number>>(new Set())
+  const [activeDoc, setActiveDoc] = createSignal<AtlasItem | null>(null)
+  const [hoveredItemId, setHoveredItemId] = createSignal<number | null>(null)
+  const [hoveredBloqId, setHoveredBloqId] = createSignal<number | null>(null)
+  const [hoveredListId, setHoveredListId] = createSignal<number | null>(null)
+  const [hoveredRowId, setHoveredRowId] = createSignal<string | null>(null)
+  const [searchQuery, setSearchQuery] = createSignal("")
+  let searchInput: any
+
+  const matchesSearch = (text: string) => {
+    const q = searchQuery().toLowerCase()
+    if (!q) return true
+    return text.toLowerCase().includes(q)
+  }
+
+  const toggleList = (listId: number) => {
+    setExpandedLists((prev) => {
+      const next = new Set(prev)
+      if (next.has(listId)) next.delete(listId)
+      else next.add(listId)
+      return next
+    })
+  }
+
+  // Wrap selectBloq to also reset sidebar state
+  const handleSelectBloq = (bloqId: number) => {
+    iris.selectBloq(bloqId)
+    setExpandedLists(new Set<number>())
+    setActiveDoc(null)
+    setActiveContact(null)
+  }
+
+  const selectedBloqName = createMemo(() => {
+    const id = iris.data.selectedBloqId
+    return iris.data.bloqList.find((b) => b.id === id)?.name ?? "Select BLOQ..."
+  })
+
+  const [expanded, setExpanded] = createStore({
+    heartbeat: true,
+    standard: false,
+    diff: true,
+    todo: true,
+  })
+
+  const heartbeatAgents = createMemo(() =>
+    iris.data.agents.filter((a) => a.type === "heartbeat" && matchesSearch(a.name)),
+  )
+  const standardAgents = createMemo(() =>
+    iris.data.agents.filter((a) => a.type === "standard" && matchesSearch(a.name)),
+  )
+  const filteredPlaybooks = createMemo(() =>
+    iris.data.playbooks.filter((p) => matchesSearch(p.name) || matchesSearch(p.description)),
+  )
+
+  const attachedPlaybooks = createMemo(() => filteredPlaybooks().filter((p) => p.attached))
+  const globalPlaybooks = createMemo(() => filteredPlaybooks().filter((p) => !p.attached))
+
+  /** One playbook row. Shared so the two sections cannot drift apart visually. */
+  const playbookRow = (pb: IrisPlaybook) => {
+    const key = `pb-${pb.name}`
+    const hovered = () => hoveredRowId() === key
+    return (
+      <box
+        backgroundColor={hovered() ? theme.backgroundElement : undefined}
+        onMouseOver={() => setHoveredRowId(key)}
+        onMouseOut={() => hoveredRowId() === key && setHoveredRowId(null)}
+      >
+        <box flexDirection="row" gap={1}>
+          <text flexShrink={0} fg={pb.attached ? theme.accent : theme.textMuted}>
+            {pb.attached ? "*" : "-"}
+          </text>
+          <text fg={hovered() ? theme.accent : theme.text} wrapMode="word">
+            {pb.name}
+          </text>
+        </box>
+        <Show when={pb.description}>
+          <text fg={theme.textMuted} wrapMode="word">
+            {pb.description}
+          </text>
+        </Show>
+      </box>
+    )
+  }
+
+  const filteredAtlas = createMemo(() => {
+    const q = searchQuery().toLowerCase()
+    if (!q) return iris.data.atlas
+    return iris.data.atlas
+      .map((list) => ({
+        ...list,
+        items: list.items.filter((i) => i.title.toLowerCase().includes(q)),
+      }))
+      .filter((list) => list.name.toLowerCase().includes(q) || list.items.length > 0)
+  })
+  const filteredContacts = createMemo(() =>
+    iris.data.contacts.filter(
+      (c) => matchesSearch(c.name) || matchesSearch(c.email ?? "") || matchesSearch(c.company ?? ""),
+    ),
+  )
+  const filteredPages = createMemo(() => iris.data.pages.filter((p) => matchesSearch(p.title) || matchesSearch(p.slug)))
+  const filteredBloqs = createMemo(() => iris.data.bloqList.filter((b) => matchesSearch(b.name)))
+  const [activeContact, setActiveContact] = createSignal<IrisContact | null>(null)
+  const cost = createMemo(() => {
+    const total = messages().reduce((sum, x) => sum + (x.role === "assistant" ? x.cost : 0), 0)
+    return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(total)
+  })
+
+  const context = createMemo(() => {
+    const last = messages().findLast((x) => x.role === "assistant" && x.tokens.output > 0) as AssistantMessage
+    if (!last) return
+    const total =
+      last.tokens.input + last.tokens.output + last.tokens.reasoning + last.tokens.cache.read + last.tokens.cache.write
+    const model = sync.data.provider.find((x) => x.id === last.providerID)?.models[last.modelID]
+    return {
+      tokens: total.toLocaleString(),
+      percentage: model?.limit.context ? Math.round((total / model.limit.context) * 100) : null,
+    }
+  })
+
+  const directory = useDirectory()
+
+  const agentColor = (status: IrisAgent["status"]) =>
+    ({ active: theme.success, idle: theme.textMuted, paused: theme.warning, error: theme.error })[status] ??
+    theme.textMuted
+
+  theme.textMuted
+
+  return (
+    <Show when={session()}>
+      <box
+        backgroundColor={theme.backgroundPanel}
+        width={clampSidebarWidth(props.width ?? SIDEBAR_WIDTH_DEFAULT)}
+        paddingTop={1}
+        paddingBottom={1}
+        paddingLeft={2}
+        paddingRight={2}
+      >
+        {/* WHY EVERY BIT OF CHROME AROUND THE SCROLLBOX CARRIES zIndex.
+            opentui writes its mouse hit grid from each renderable's OWN bounds —
+            `addToHitGrid(this.x, this.y, this.width, this.height, this.num)` in
+            @opentui/core — and nothing clips that to the parent's viewport. A scrollbox
+            scrolls by setting `content.translateY = -scrollTop`, so once you scroll the
+            content's box extends above the viewport (and below it, being taller), and its
+            hit region silently covers the tabs, the search field and the footer. They keep
+            rendering and stop being clickable: measured 2026-09-12, one wheel click still
+            let you hit a tab, twelve did not.
+            Hit IDs are written in z-order and the last write wins, so lifting the chrome
+            above the scrollbox is the whole fix. It changes nothing visually — the viewport
+            already clips the DRAW correctly; only the hit grid was wrong. */}
+        {/* IRIS brand header + bloq selector */}
+        <box flexShrink={0} zIndex={1} paddingBottom={1}>
+          {/* The collapse control lives here because this is where you are looking when you
+              want the space back. The keybind (<leader>b) and the command palette entry both
+              predate this and neither was visible, so the panel read as fixed furniture. */}
+          <box flexDirection="row" gap={1}>
+            <text fg={theme.accent}>
+              <b>◈ IRIS</b>
+            </text>
+            <box flexGrow={1} />
+            <Show when={props.onCollapse}>
+              {/* A filled background on hover, not just a colour change on the glyphs. In a
+                  terminal there is no cursor shape to tell you a thing is clickable, so the
+                  block of colour IS the affordance. */}
+              <box
+                flexShrink={0}
+                paddingLeft={1}
+                paddingRight={1}
+                backgroundColor={hoveredRowId() === "collapse" ? theme.backgroundElement : undefined}
+                onMouseOver={() => setHoveredRowId("collapse")}
+                onMouseOut={() => hoveredRowId() === "collapse" && setHoveredRowId(null)}
+                onMouseDown={() => props.onCollapse?.()}
+              >
+                <text fg={hoveredRowId() === "collapse" ? theme.accent : theme.textMuted}>{"› hide"}</text>
+              </box>
+            </Show>
+          </box>
+          <Show when={iris.data.bloqList.length > 0}>
+            <box
+              onMouseDown={() => {
+                setBloqPickerOpen(!bloqPickerOpen())
+                if (!bloqPickerOpen()) {
+                  setTimeout(() => searchInput?.focus(), 10)
+                }
+              }}
+              flexDirection="row"
+              gap={1}
+            >
+              <text fg={theme.accent}>◈</text>
+              <text fg={theme.text}>{selectedBloqName()}</text>
+              <Show when={iris.data.selectedBloqId}>
+                <text fg={theme.textMuted}> #{iris.data.selectedBloqId}</text>
+              </Show>
+              <text fg={theme.textMuted}>{bloqPickerOpen() ? "▲" : "▼"}</text>
+            </box>
+            <Show when={bloqPickerOpen()}>
+              <box paddingLeft={2}>
+                <For each={filteredBloqs()}>
+                  {(bloq) => {
+                    const isSelected = () => bloq.id === iris.data.selectedBloqId
+                    const isHovered = () => hoveredBloqId() === bloq.id
+                    return (
+                      <box
+                        backgroundColor={isHovered() ? theme.backgroundElement : undefined}
+                        onMouseOver={() => setHoveredBloqId(bloq.id)}
+                        onMouseOut={() => hoveredBloqId() === bloq.id && setHoveredBloqId(null)}
+                        onMouseDown={() => {
+                          handleSelectBloq(bloq.id)
+                          setBloqPickerOpen(false)
+                        }}
+                      >
+                        <text fg={isSelected() || isHovered() ? theme.accent : theme.textMuted}>
+                          {isSelected() ? "● " : "○ "}
+                          {bloq.name}
+                        </text>
+                      </box>
+                    )
+                  }}
+                </For>
+              </box>
+            </Show>
+          </Show>
+          <Show when={iris.data.bloqList.length === 0 && iris.data.status === "loaded"}>
+            <text fg={theme.textMuted}>No projects</text>
+          </Show>
+        </box>
+
+        {/* Tab bar */}
+        <box flexShrink={0} zIndex={1} flexDirection="row" gap={2} paddingBottom={1}>
+          <For each={TABS}>
+            {(tab) => (
+              <text
+                fg={activeTab() === tab ? theme.accent : theme.textMuted}
+                onMouseDown={() => {
+                  setActiveTab(tab)
+                  kv.set("sidebar_tab", tab)
+                  setSearchQuery("")
+                }}
+              >
+                {activeTab() === tab ? `[${TAB_LABELS[tab]}]` : TAB_LABELS[tab]}
+              </text>
+            )}
+          </For>
+        </box>
+
+        {/* Search */}
+        <Show when={activeTab() !== "session"}>
+          <box
+            flexShrink={0}
+            zIndex={1}
+            paddingBottom={2}
+            onMouseDown={() => {
+              searchInput?.focus()
+            }}
+          >
+            <input
+              ref={(r) => {
+                searchInput = r
+              }}
+              onInput={(e) => {
+                setSearchQuery(e)
+              }}
+              focusedBackgroundColor={theme.backgroundElement}
+              cursorColor={theme.accent}
+              focusedTextColor={theme.text}
+              placeholder={`Search ${TAB_LABELS[activeTab()].toLowerCase()}...`}
+            />
+          </box>
+        </Show>
+
+        {/* Tab content */}
+        <scrollbox flexGrow={1}>
+          <box flexShrink={0} gap={1} paddingRight={1}>
+            <Switch>
+              {/* ── AGENTS ── */}
+              <Match when={activeTab() === "agents"}>
+                <Show when={iris.data.status === "loading"}>
+                  <text fg={theme.textMuted}>Loading...</text>
+                </Show>
+                <Show when={iris.data.status === "no-auth" || iris.data.status === "error"}>
+                  <box gap={1}>
+                    <text fg={theme.textMuted}>Not connected</text>
+                    <text fg={theme.textMuted}>Run: iris auth login</text>
+                  </box>
+                </Show>
+                <Show when={iris.data.status === "loaded" && iris.data.agents.length === 0}>
+                  <text fg={theme.textMuted}>No agents found</text>
+                </Show>
+                <Show when={searchQuery() && heartbeatAgents().length === 0 && standardAgents().length === 0}>
+                  <text fg={theme.textMuted}>No matches for "{searchQuery()}"</text>
+                </Show>
+                <box gap={1}>
+                  {/* Heartbeat agents */}
+                  <box>
+                    <box flexDirection="row" gap={1} onMouseDown={() => setExpanded("heartbeat", !expanded.heartbeat)}>
+                      <text fg={theme.text}>{expanded.heartbeat ? "▼" : "▶"}</text>
+                      <text fg={theme.text}>
+                        <b>Heartbeat</b>
+                      </text>
+                      <text fg={theme.textMuted}>
+                        {heartbeatAgents().filter((a) => a.status === "active").length} active
+                      </text>
+                    </box>
+                    <Show when={expanded.heartbeat}>
+                      <For each={heartbeatAgents()}>
+                        {(agent) => {
+                          const key = `ha-${agent.id}`
+                          const hovered = () => hoveredRowId() === key
+                          return (
+                            <box
+                              backgroundColor={hovered() ? theme.backgroundElement : undefined}
+                              onMouseOver={() => setHoveredRowId(key)}
+                              onMouseOut={() => hoveredRowId() === key && setHoveredRowId(null)}
+                            >
+                              <box flexDirection="row" justifyContent="space-between">
+                                <box flexDirection="row" gap={1}>
+                                  <text flexShrink={0} fg={agentColor(agent.status)}>
+                                    •
+                                  </text>
+                                  <text fg={hovered() ? theme.accent : theme.text}>{agent.name}</text>
+                                </box>
+                                <Show when={agent.schedule}>
+                                  <text fg={theme.textMuted}>{agent.schedule}</text>
+                                </Show>
+                              </box>
+                              <Show when={agent.nextRun || agent.lastRun}>
+                                <text fg={theme.textMuted}>
+                                  {"   "}
+                                  {agent.nextRun ? `next ${agent.nextRun}` : ""}
+                                  {agent.nextRun && agent.lastRun ? "  ·  " : ""}
+                                  {agent.lastRun ?? ""}
+                                </text>
+                              </Show>
+                            </box>
+                          )
+                        }}
+                      </For>
+                    </Show>
+                  </box>
+
+                  {/* Standard agents */}
+                  <box>
+                    <box flexDirection="row" gap={1} onMouseDown={() => setExpanded("standard", !expanded.standard)}>
+                      <text fg={theme.text}>{expanded.standard ? "▼" : "▶"}</text>
+                      <text fg={theme.text}>
+                        <b>Agents</b>
+                      </text>
+                    </box>
+                    <Show when={expanded.standard}>
+                      <For each={standardAgents()}>
+                        {(agent) => {
+                          const key = `sa-${agent.id}`
+                          const hovered = () => hoveredRowId() === key
+                          return (
+                            <box
+                              flexDirection="row"
+                              justifyContent="space-between"
+                              backgroundColor={hovered() ? theme.backgroundElement : undefined}
+                              onMouseOver={() => setHoveredRowId(key)}
+                              onMouseOut={() => hoveredRowId() === key && setHoveredRowId(null)}
+                            >
+                              <box flexDirection="row" gap={1}>
+                                <text flexShrink={0} fg={agentColor(agent.status)}>
+                                  •
+                                </text>
+                                <text fg={hovered() ? theme.accent : theme.text}>{agent.name}</text>
+                              </box>
+                              <text fg={theme.textMuted}>{agent.status}</text>
+                            </box>
+                          )
+                        }}
+                      </For>
+                    </Show>
+                  </box>
+                </box>
+              </Match>
+
+              {/* ── WORKFLOWS ── */}
+              <Match when={activeTab() === "playbooks"}>
+                <Show when={iris.data.status === "loading"}>
+                  <text fg={theme.textMuted}>Loading...</text>
+                </Show>
+                <Show when={iris.data.status === "no-auth" || iris.data.status === "error"}>
+                  <box gap={1}>
+                    <text fg={theme.textMuted}>Not connected</text>
+                    <text fg={theme.textMuted}>Run: iris auth login</text>
+                  </box>
+                </Show>
+                <Show when={iris.data.status === "loaded" && iris.data.playbooks.length === 0}>
+                  <text fg={theme.textMuted}>No playbooks found</text>
+                </Show>
+                <Show when={searchQuery() && filteredPlaybooks().length === 0 && iris.data.playbooks.length > 0}>
+                  <text fg={theme.textMuted}>No matches for "{searchQuery()}"</text>
+                </Show>
+
+                {/* TWO SECTIONS, NOT A FALLBACK. This project's playbooks on top, then
+                    everything else the account can reach. It used to show one or the other,
+                    which meant a project with attachments could not reach its own user-scoped
+                    or marketplace playbooks at all, and a project without them listed all the
+                    globals under a single disclaimer line. Each row's scope is now visible
+                    from the section it sits in. */}
+                <box gap={1}>
+                  <Show when={attachedPlaybooks().length > 0}>
+                    <box gap={1}>
+                      <box flexDirection="row" gap={1}>
+                        <text fg={theme.text}>
+                          <b>This project</b>
+                        </text>
+                        <text fg={theme.textMuted}>{attachedPlaybooks().length}</text>
+                      </box>
+                      <For each={attachedPlaybooks()}>{playbookRow}</For>
+                    </box>
+                  </Show>
+
+                  <Show when={globalPlaybooks().length > 0}>
+                    <box gap={1}>
+                      <box flexDirection="row" gap={1}>
+                        <text fg={theme.text}>
+                          <b>All playbooks</b>
+                        </text>
+                        <text fg={theme.textMuted}>{globalPlaybooks().length}</text>
+                      </box>
+                      {/* Only worth saying when the section above is empty — otherwise the
+                          header already tells you which list you are in. */}
+                      <Show when={attachedPlaybooks().length === 0}>
+                        <text fg={theme.textMuted}>none attached to this project</text>
+                      </Show>
+                      <For each={globalPlaybooks()}>{playbookRow}</For>
+                    </box>
+                  </Show>
+                </box>
+              </Match>
+
+              {/* ── CONTACTS ── */}
+              <Match when={activeTab() === "contacts"}>
+                <Show when={iris.data.status === "loading"}>
+                  <text fg={theme.textMuted}>Loading...</text>
+                </Show>
+                <Show when={iris.data.status === "no-auth" || iris.data.status === "error"}>
+                  <box gap={1}>
+                    <text fg={theme.textMuted}>Not connected</text>
+                    <text fg={theme.textMuted}>Run: iris auth login</text>
+                  </box>
+                </Show>
+                <Show when={iris.data.status === "loaded" && iris.data.contacts.length === 0}>
+                  <text fg={theme.textMuted}>No contacts in this project</text>
+                </Show>
+                <Show when={searchQuery() && filteredContacts().length === 0 && iris.data.contacts.length > 0}>
+                  <text fg={theme.textMuted}>No matches for "{searchQuery()}"</text>
+                </Show>
+
+                {/* Contact detail view */}
+                <Show when={activeContact()}>
+                  {(contact) => (
+                    <box gap={1}>
+                      <text fg={theme.accent} onMouseDown={() => setActiveContact(null)}>
+                        ← Back
+                      </text>
+                      <text fg={theme.text}>
+                        <b>{contact().name}</b>
+                      </text>
+                      <Show when={contact().company}>
+                        <text fg={theme.textMuted}>{contact().company}</text>
+                      </Show>
+                      <Show when={contact().email}>
+                        <text fg={theme.text}>{contact().email}</text>
+                      </Show>
+                      <Show when={contact().phone}>
+                        <text fg={theme.text}>{contact().phone}</text>
+                      </Show>
+                      <box paddingTop={1}>
+                        <text fg={theme.textMuted}>Status: {contact().status ?? "None"}</text>
+                        <text fg={theme.textMuted}>Source: {contact().source ?? "Unknown"}</text>
+                        <text fg={theme.textMuted}>
+                          Score: {contact().leadScore}
+                          {contact().isHot ? " 🔥" : ""}
+                        </text>
+                      </box>
+                    </box>
+                  )}
+                </Show>
+
+                {/* Contact list */}
+                <Show when={!activeContact()}>
+                  <box gap={1}>
+                    <For each={filteredContacts()}>
+                      {(contact) => {
+                        const key = `ct-${contact.id}`
+                        const hovered = () => hoveredRowId() === key
+                        return (
+                          <box
+                            backgroundColor={hovered() ? theme.backgroundElement : undefined}
+                            onMouseOver={() => setHoveredRowId(key)}
+                            onMouseOut={() => hoveredRowId() === key && setHoveredRowId(null)}
+                            onMouseDown={() => setActiveContact(contact)}
+                          >
+                            <box flexDirection="row" gap={1}>
+                              <text flexShrink={0} fg={contact.isHot ? theme.warning : theme.success}>
+                                •
+                              </text>
+                              <text fg={hovered() ? theme.accent : theme.text}>
+                                {contact.name} <span style={{ fg: theme.textMuted }}>#{contact.id}</span>
+                              </text>
+                              <Show when={contact.status}>
+                                <text flexShrink={0} fg={theme.textMuted}>
+                                  {contact.status}
+                                </text>
+                              </Show>
+                            </box>
+                            <Show when={contact.email || contact.company}>
+                              <text fg={theme.textMuted}>
+                                {"   "}
+                                {contact.company ? `${contact.company}  ·  ` : ""}
+                                {contact.email ?? ""}
+                              </text>
+                            </Show>
+                          </box>
+                        )
+                      }}
+                    </For>
+                  </box>
+                </Show>
+              </Match>
+
+              {/* ── PAGES ── */}
+              <Match when={activeTab() === "pages"}>
+                <Show when={iris.data.pages.length === 0 && iris.data.status === "loaded"}>
+                  <text fg={theme.textMuted}>No pages found</text>
+                </Show>
+                <Show when={searchQuery() && filteredPages().length === 0 && iris.data.pages.length > 0}>
+                  <text fg={theme.textMuted}>No matches for "{searchQuery()}"</text>
+                </Show>
+                <box gap={1}>
+                  <For each={filteredPages()}>
+                    {(page) => {
+                      const key = `pg-${page.id}`
+                      const hovered = () => hoveredRowId() === key
+                      const statusColor = () => (page.status === "published" ? theme.success : theme.textMuted)
+                      return (
+                        <box
+                          backgroundColor={hovered() ? theme.backgroundElement : undefined}
+                          onMouseOver={() => setHoveredRowId(key)}
+                          onMouseOut={() => hoveredRowId() === key && setHoveredRowId(null)}
+                        >
+                          <box flexDirection="row" gap={1}>
+                            <text flexShrink={0} fg={statusColor()}>
+                              {page.status === "published" ? "●" : "○"}
+                            </text>
+                            <text fg={hovered() ? theme.accent : theme.text} wrapMode="word">
+                              {page.title}
+                            </text>
+                          </box>
+                          <text fg={theme.textMuted}>
+                            {"   "}/{page.slug} · v{page.version} · {page.updatedAt}
+                          </text>
+                        </box>
+                      )
+                    }}
+                  </For>
+                </box>
+              </Match>
+
+              {/* ── ATLAS (lists + items for selected bloq) ── */}
+              <Match when={activeTab() === "atlas"}>
+                <Show when={iris.data.status === "loading"}>
+                  <text fg={theme.textMuted}>Loading...</text>
+                </Show>
+                <Show when={iris.data.status === "no-auth" || iris.data.status === "error"}>
+                  <box gap={1}>
+                    <text fg={theme.textMuted}>Not connected</text>
+                    <text fg={theme.textMuted}>Run: iris auth login</text>
+                  </box>
+                </Show>
+                <Show when={iris.data.status === "loaded" && iris.data.atlas.length === 0}>
+                  <text fg={theme.textMuted}>No lists in this project</text>
+                </Show>
+                <Show when={searchQuery() && filteredAtlas().length === 0 && iris.data.atlas.length > 0}>
+                  <text fg={theme.textMuted}>No matches for "{searchQuery()}"</text>
+                </Show>
+
+                {/* Document view — shown when an item is clicked */}
+                <Show when={activeDoc()}>
+                  {(doc) => (
+                    <box gap={1}>
+                      <box flexDirection="row" gap={1}>
+                        <text fg={theme.accent} onMouseDown={() => setActiveDoc(null)}>
+                          ← Back
+                        </text>
+                      </box>
+                      <text fg={theme.text}>
+                        <b>{doc().title}</b>
+                      </text>
+                      <Show when={doc().type}>
+                        <text fg={theme.textMuted}>{doc().type}</text>
+                      </Show>
+                      <Show when={doc().description}>
+                        <box paddingTop={1}>
+                          <text fg={theme.textMuted} wrapMode="word">
+                            {doc().description}
+                          </text>
+                        </box>
+                      </Show>
+                      <Show when={doc().content}>
+                        <box paddingTop={1}>
+                          <text fg={theme.text} wrapMode="word">
+                            {doc().content}
+                          </text>
+                        </box>
+                      </Show>
+                      <Show when={!doc().content && !doc().description}>
+                        <text fg={theme.textMuted}>No content</text>
+                      </Show>
+                    </box>
+                  )}
+                </Show>
+
+                {/* List view — default */}
+                <Show when={!activeDoc()}>
+                  <box gap={1}>
+                    <For each={filteredAtlas()}>
+                      {(list) => {
+                        const isOpen = () => expandedLists().has(list.id)
+                        return (
+                          <box>
+                            <box
+                              flexDirection="row"
+                              gap={1}
+                              backgroundColor={hoveredListId() === list.id ? theme.backgroundElement : undefined}
+                              onMouseOver={() => list.items.length > 0 && setHoveredListId(list.id)}
+                              onMouseOut={() => hoveredListId() === list.id && setHoveredListId(null)}
+                              onMouseDown={() => list.items.length > 0 && toggleList(list.id)}
+                            >
+                              <text fg={hoveredListId() === list.id ? theme.accent : theme.text}>
+                                {list.items.length === 0 ? " " : isOpen() ? "▼" : "▶"}
+                              </text>
+                              <text fg={hoveredListId() === list.id ? theme.accent : theme.text}>
+                                <b>{list.name}</b>
+                              </text>
+                              <text fg={theme.textMuted}>{list.items.length}</text>
+                            </box>
+                            <Show when={isOpen() && list.items.length > 0}>
+                              <box paddingLeft={2}>
+                                <For each={list.items}>
+                                  {(item) => (
+                                    <box
+                                      flexDirection="row"
+                                      gap={1}
+                                      backgroundColor={
+                                        hoveredItemId() === item.id ? theme.backgroundElement : undefined
+                                      }
+                                      onMouseOver={() => setHoveredItemId(item.id)}
+                                      onMouseOut={() => hoveredItemId() === item.id && setHoveredItemId(null)}
+                                      onMouseDown={() => setActiveDoc(item)}
+                                    >
+                                      <text
+                                        flexShrink={0}
+                                        fg={item.status === "active" ? theme.success : theme.textMuted}
+                                      >
+                                        {item.status === "completed" ? "✓" : "·"}
+                                      </text>
+                                      <text
+                                        fg={hoveredItemId() === item.id ? theme.accent : theme.text}
+                                        wrapMode="word"
+                                      >
+                                        {item.title}
+                                      </text>
+                                      <Show when={item.type}>
+                                        <text flexShrink={0} fg={theme.textMuted}>
+                                          {item.type}
+                                        </text>
+                                      </Show>
+                                    </box>
+                                  )}
+                                </For>
+                              </box>
+                            </Show>
+                          </box>
+                        )
+                      }}
+                    </For>
+                  </box>
+                </Show>
+              </Match>
+
+              {/* ── HIVE ── */}
+              <Match when={activeTab() === "hive"}>
+                <box gap={1}>
+                  {/* INBOX FIRST. The roster below is the machines you can reach; the inbox is
+                      work someone has sent YOU, and that is the thing nobody was seeing. On
+                      2026-09-11 four messages that changed what a client's agent was building
+                      sat unread until someone said "run iris hive inbox read" out loud on a
+                      call. Listing them beats printing that instruction again. */}
+                  <box>
+                    <box flexDirection="row" gap={1}>
+                      <text fg={theme.text}>
+                        <b>Inbox</b>
+                      </text>
+                      <Switch>
+                        {/* unread === null means the manifest exists and could not be read.
+                            Rendering that as 0 would look exactly like a healthy empty inbox. */}
+                        <Match when={inbox().unreadable}>
+                          <text fg={theme.error}>unreadable</text>
+                        </Match>
+                        <Match when={(inbox().unread ?? 0) > 0}>
+                          <text fg={theme.warning}>{inbox().unread} unread</text>
+                        </Match>
+                        <Match when={true}>
+                          <text fg={theme.textMuted}>nothing waiting</text>
+                        </Match>
+                      </Switch>
+                    </box>
+                    {/* Above the list, not below it: a <For> and a static sibling do not
+                        render in source order here — the sibling came out first — so these
+                        lines sit where they actually appear.
+
+                        And the command names a REAL number, not a placeholder. "read <n>"
+                        was the obvious wording and could not be written: the text renderer
+                        treats "<" as markup and escapes it, so it printed "read &lt;n>" on
+                        screen. Naming the first unread item is better anyway — it is the
+                        command, ready to run, instead of a template to fill in. */}
+                    <Show when={(inbox().unread ?? 0) > 0}>
+                      <text fg={theme.textMuted}>
+                        {"  read: iris hive inbox read "}
+                        {firstUnread()}
+                      </text>
+                    </Show>
+                    <Show when={inbox().items.length > 6}>
+                      <text fg={theme.textMuted}>
+                        {"  showing 6 of "}
+                        {inbox().items.length}
+                      </text>
+                    </Show>
+                    <For each={inbox().items.slice(0, 6)}>
+                      {(item) => (
+                        <box paddingLeft={2}>
+                          <box flexDirection="row" gap={1}>
+                            <text flexShrink={0} fg={item.read ? theme.textMuted : theme.warning}>
+                              {item.read ? " " : "●"}
+                            </text>
+                            <text flexShrink={0} fg={theme.textMuted}>
+                              {item.index}
+                            </text>
+                            <text fg={item.read ? theme.textMuted : theme.text} wrapMode="word">
+                              {item.from}
+                            </text>
+                            <text flexShrink={0} fg={theme.textMuted}>
+                              {item.age}
+                            </text>
+                          </box>
+                          <text fg={theme.textMuted} wrapMode="word">
+                            {"  "}
+                            {item.label}
+                          </text>
+                        </box>
+                      )}
+                    </For>
+                  </box>
+
+                  {/* MACHINES. This used to be a list of local tmux sessions, which is about
+                      driving one machine and said "No active tmux sessions" on a fleet of three
+                      online nodes. Same endpoint as `iris hive nodes list`. */}
+                  <box>
+                    <box flexDirection="row" gap={1}>
+                      <text fg={theme.text}>
+                        <b>Machines</b>
+                      </text>
+                      <Switch>
+                        {/* An errored fetch must never render as "0 online" — that is the one
+                            answer that looks fine and is unverified. */}
+                        <Match when={iris.data.hiveStatus === "loading"}>
+                          <text fg={theme.textMuted}>checking…</text>
+                        </Match>
+                        <Match when={iris.data.hiveStatus === "no-auth"}>
+                          <text fg={theme.textMuted}>not connected</text>
+                        </Match>
+                        <Match when={iris.data.hiveStatus === "error"}>
+                          <text fg={theme.error}>unreachable</text>
+                        </Match>
+                        <Match when={true}>
+                          <text fg={theme.textMuted}>
+                            {iris.data.hiveNodes.filter((n) => n.online).length}/{iris.data.hiveNodes.length} online
+                          </text>
+                        </Match>
+                      </Switch>
+                    </box>
+                    <For each={iris.data.hiveNodes}>
+                      {(node) => (
+                        <box paddingLeft={2}>
+                          <box flexDirection="row" gap={1}>
+                            <text flexShrink={0} fg={node.online ? theme.success : theme.textMuted}>
+                              {node.online ? "●" : "○"}
+                            </text>
+                            <text fg={theme.text} wrapMode="word">
+                              {node.name}
+                            </text>
+                            {/* "(you?)" when the match came from a hostname guess — macOS
+                                renames hosts on mDNS collision, so this can be wrong. */}
+                            <Show when={node.isLocal}>
+                              <text flexShrink={0} fg={theme.success}>
+                                {node.localUncertain ? "(you?)" : "(you)"}
+                              </text>
+                            </Show>
+                          </box>
+                          <text fg={theme.textMuted}>
+                            {"  "}
+                            {node.activeTasks}/{node.maxConcurrent} tasks
+                            {node.sessions > 0 ? ` · ${node.sessions} sessions` : ""}
+                            {node.lastHeartbeat ? ` · ${node.lastHeartbeat}` : " · never seen"}
+                          </text>
+                        </box>
+                      )}
+                    </For>
+                    <Show when={iris.data.hiveStatus === "loaded" && iris.data.hiveNodes.length === 0}>
+                      <text fg={theme.textMuted}>{"  "}no machines registered</text>
+                    </Show>
+                  </box>
+
+                  {/* PEERS — other people's Hives linked to this one. */}
+                  <Show when={iris.data.hivePeers.length > 0 || iris.data.hivePendingInvites > 0}>
+                    <box>
+                      <box flexDirection="row" gap={1}>
+                        <text fg={theme.text}>
+                          <b>Peers</b>
+                        </text>
+                        <text fg={theme.textMuted}>{iris.data.hivePeers.filter((p) => p.active).length} active</text>
+                      </box>
+                      <For each={iris.data.hivePeers}>
+                        {(peer) => (
+                          <box paddingLeft={2} flexDirection="row" gap={1}>
+                            <text flexShrink={0} fg={peer.active ? theme.success : theme.textMuted}>
+                              {peer.active ? "●" : "○"}
+                            </text>
+                            <text fg={theme.text} wrapMode="word">
+                              {peer.name}
+                            </text>
+                            <Show when={peer.permissions}>
+                              <text flexShrink={0} fg={theme.textMuted}>
+                                {peer.permissions}
+                              </text>
+                            </Show>
+                          </box>
+                        )}
+                      </For>
+                      {/* An invite nobody accepted is not a peer, and not nothing either. */}
+                      <Show when={iris.data.hivePendingInvites > 0}>
+                        <text fg={theme.textMuted}>
+                          {"  "}◌ {iris.data.hivePendingInvites} invite
+                          {iris.data.hivePendingInvites === 1 ? "" : "s"} pending
+                        </text>
+                      </Show>
+                    </box>
+                  </Show>
+                </box>
+              </Match>
+
+              {/* ── SESSION ── */}
+              <Match when={activeTab() === "session"}>
+                <box gap={1}>
+                  <box>
+                    <text fg={theme.text}>
+                      <b>Context</b>
+                    </text>
+                    <text fg={theme.textMuted}>{context()?.tokens ?? 0} tokens</text>
+                    <text fg={theme.textMuted}>{context()?.percentage ?? 0}% used</text>
+                    <text fg={theme.textMuted}>{cost()} spent</text>
+                  </box>
+                  <Show when={todo().length > 0 && todo().some((t) => t.status !== "completed")}>
+                    <box>
+                      <box
+                        flexDirection="row"
+                        gap={1}
+                        onMouseDown={() => todo().length > 2 && setExpanded("todo", !expanded.todo)}
+                      >
+                        <Show when={todo().length > 2}>
+                          <text fg={theme.text}>{expanded.todo ? "▼" : "▶"}</text>
+                        </Show>
+                        <text fg={theme.text}>
+                          <b>Todo</b>
+                        </text>
+                      </box>
+                      <Show when={todo().length <= 2 || expanded.todo}>
+                        <For each={todo()}>{(item) => <TodoItem status={item.status} content={item.content} />}</For>
+                      </Show>
+                    </box>
+                  </Show>
+                  <Show when={diff().length > 0}>
+                    <box>
+                      <box
+                        flexDirection="row"
+                        gap={1}
+                        onMouseDown={() => diff().length > 2 && setExpanded("diff", !expanded.diff)}
+                      >
+                        <Show when={diff().length > 2}>
+                          <text fg={theme.text}>{expanded.diff ? "▼" : "▶"}</text>
+                        </Show>
+                        <text fg={theme.text}>
+                          <b>Modified Files</b>
+                        </text>
+                      </box>
+                      <Show when={diff().length <= 2 || expanded.diff}>
+                        <For each={diff() || []}>
+                          {(item) => {
+                            const file = createMemo(() => {
+                              const splits = item.file.split(path.sep).filter(Boolean)
+                              const last = splits.at(-1)!
+                              const rest = splits.slice(0, -1).join(path.sep)
+                              if (!rest) return last
+                              return Locale.truncateMiddle(rest, 30 - last.length) + "/" + last
+                            })
+                            return (
+                              <box flexDirection="row" gap={1} justifyContent="space-between">
+                                <text fg={theme.textMuted} wrapMode="char">
+                                  {file()}
+                                </text>
+                                <box flexDirection="row" gap={1} flexShrink={0}>
+                                  <Show when={item.additions}>
+                                    <text fg={theme.diffAdded}>+{item.additions}</text>
+                                  </Show>
+                                  <Show when={item.deletions}>
+                                    <text fg={theme.diffRemoved}>-{item.deletions}</text>
+                                  </Show>
+                                </box>
+                              </box>
+                            )
+                          }}
+                        </For>
+                      </Show>
+                    </box>
+                  </Show>
+                </box>
+              </Match>
+            </Switch>
+          </box>
+        </scrollbox>
+
+        {/* Footer */}
+        <box flexShrink={0} zIndex={1} gap={1} paddingTop={1}>
+          <text>
+            <span style={{ fg: theme.textMuted }}>{directory().split("/").slice(0, -1).join("/")}/</span>
+            <span style={{ fg: theme.text }}>{directory().split("/").at(-1)}</span>
+          </text>
+          <text fg={theme.textMuted}>
+            <span style={{ fg: theme.success }}>•</span> <b>IRIS</b>
+            <span style={{ fg: theme.text }}>
+              <b> CLI</b>
+            </span>{" "}
+            <span>{Installation.VERSION}</span>
+          </text>
+        </box>
+      </box>
+    </Show>
+  )
+}

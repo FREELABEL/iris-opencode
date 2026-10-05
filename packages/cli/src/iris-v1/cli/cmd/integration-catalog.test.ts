@@ -1,0 +1,299 @@
+import { describe, expect, test } from "bun:test"
+import {
+  normalizeEntry, normalizeCatalog, findEntry, isOAuthEntry,
+  requiredFields, missingRequired, parseFieldFlags, connectCommandHint, groupByCategory,
+  isKnownIntegration, hasNothingToCollect,
+} from "./integration-catalog"
+
+/** The real shape returned by /api/v1/integrations-temp/registry on 2026-08-28. */
+const WIX = {
+  type: "wix",
+  name: "Wix",
+  description: "Manage Wix CMS collections and data items via native REST API.",
+  category: "website",
+  functions: ["list_collections", "query_items", "insert_item"],
+  isLive: true,
+  isConnected: false,
+  source: "yml",
+  auth: {
+    type: "api_key",
+    fields: [
+      { name: "api_key", label: "Wix API Key", description: "Generate at manage.wix.com/account/api-keys.", required: true },
+      { name: "site_id", label: "Wix Site ID", description: "Found in your Wix dashboard URL after /dashboard/.", required: true },
+    ],
+  },
+}
+
+const GMAIL = { type: "gmail", name: "Gmail", category: "communication", isLive: true, auth: { type: "oauth2" } }
+
+describe("normalizeEntry", () => {
+  test("keeps the declared credential fields, labels and help text", () => {
+    const e = normalizeEntry(WIX)!
+    expect(e.type).toBe("wix")
+    expect(e.authType).toBe("api_key")
+    expect(e.fields.map((f) => f.name)).toEqual(["api_key", "site_id"])
+    expect(e.fields[1].description).toContain("/dashboard/")
+  })
+
+  test("a missing auth block defaults to oauth2 rather than inventing a prompt", () => {
+    expect(normalizeEntry({ type: "x" })!.authType).toBe("oauth2")
+  })
+
+  test("only an explicit required:false makes a field optional", () => {
+    const e = normalizeEntry({ type: "x", auth: { type: "api_key", fields: [{ name: "a" }, { name: "b", required: false }] } })!
+    expect(requiredFields(e).map((f) => f.name)).toEqual(["a"])
+  })
+
+  test("a row with no type is not an integration", () => {
+    expect(normalizeEntry({ name: "Nameless" })).toBeNull()
+    expect(normalizeEntry(null)).toBeNull()
+  })
+
+  test("type is lowercased so lookups cannot miss on case", () => {
+    expect(normalizeEntry({ type: "Wix" })!.type).toBe("wix")
+  })
+})
+
+describe("normalizeCatalog", () => {
+  test("reads the registry envelope", () => {
+    expect(normalizeCatalog({ success: true, data: [WIX, GMAIL], count: 2 })).toHaveLength(2)
+  })
+
+  test("accepts a bare array and an integrations key too", () => {
+    expect(normalizeCatalog([WIX])).toHaveLength(1)
+    expect(normalizeCatalog({ integrations: [WIX] })).toHaveLength(1)
+  })
+
+  test("dedupes by type — the registry merges yml and composio sources", () => {
+    expect(normalizeCatalog({ data: [WIX, { ...WIX, source: "composio-appmap" }] })).toHaveLength(1)
+  })
+
+  test("junk yields an empty catalog, never a crash", () => {
+    expect(normalizeCatalog(null)).toEqual([])
+    expect(normalizeCatalog({ data: "nope" })).toEqual([])
+  })
+})
+
+describe("isOAuthEntry", () => {
+  test("gmail authorises in a browser", () => {
+    expect(isOAuthEntry(normalizeEntry(GMAIL)!)).toBe(true)
+  })
+
+  test("WIX DOES NOT — this is the bug. It is api_key with two fields", () => {
+    expect(isOAuthEntry(normalizeEntry(WIX)!)).toBe(false)
+  })
+
+  test("declared fields beat the auth label — anything with fields is answered by collecting them", () => {
+    const odd = normalizeEntry({ type: "odd", auth: { type: "oauth2", fields: [{ name: "token" }] } })!
+    expect(isOAuthEntry(odd)).toBe(false)
+  })
+})
+
+describe("missingRequired + parseFieldFlags", () => {
+  test("names exactly what is still needed", () => {
+    const e = normalizeEntry(WIX)!
+    expect(missingRequired(e, {}).map((f) => f.name)).toEqual(["api_key", "site_id"])
+    expect(missingRequired(e, { api_key: "k" }).map((f) => f.name)).toEqual(["site_id"])
+    expect(missingRequired(e, { api_key: "k", site_id: "s" })).toEqual([])
+  })
+
+  test("blank and whitespace are not values", () => {
+    expect(missingRequired(normalizeEntry(WIX)!, { api_key: "  ", site_id: "" })).toHaveLength(2)
+  })
+
+  test("parses repeated --field flags, keeping = inside the value", () => {
+    expect(parseFieldFlags(["api_key=abc=123", "site_id=99"])).toEqual({ api_key: "abc=123", site_id: "99" })
+  })
+
+  test("ignores malformed pairs instead of inventing keys", () => {
+    expect(parseFieldFlags(["nonsense", "=novalue", ""])).toEqual({})
+    expect(parseFieldFlags(undefined)).toEqual({})
+  })
+})
+
+describe("connectCommandHint", () => {
+  test("gives the command that actually works, not --api-key/--token/--webhook-url", () => {
+    expect(connectCommandHint(normalizeEntry(WIX)!)).toBe(
+      "iris integrations connect wix --field api_key=<api_key> --field site_id=<site_id>",
+    )
+  })
+
+  test("an OAuth integration needs no flags", () => {
+    expect(connectCommandHint(normalizeEntry(GMAIL)!)).toBe("iris integrations connect gmail")
+  })
+})
+
+describe("groupByCategory", () => {
+  test("groups and sorts so a browsable catalog is browsable", () => {
+    const g = groupByCategory(normalizeCatalog({ data: [WIX, GMAIL] }))
+    expect(g.map(([k]) => k)).toEqual(["communication", "website"])
+  })
+
+  test("an entry with no category is not dropped", () => {
+    const g = groupByCategory(normalizeCatalog({ data: [{ type: "lonely" }] }))
+    expect(g[0][0]).toBe("other")
+  })
+})
+
+/**
+ * The real registry rows for two connectors that were unreachable on 2026-09-06, verbatim from
+ * /api/v1/integrations-temp/registry. Both declare api_key auth and NO fields — which is the
+ * whole bug, so the fixtures must keep it.
+ */
+const RECLAIM = { type: "reclaim", name: "Reclaim.ai", category: "productivity", isLive: true, auth: { type: "api_key" }, functions: [] }
+const MAILJET = { type: "mailjet", name: "Mailjet", category: "email", isLive: true, auth: { type: "api_key" }, functions: [] }
+
+describe("isKnownIntegration", () => {
+  const COMPILED = ["gmail", "mercury", "googledrive"]
+  const ALIASES = { googledrive: "google-drive", "google-drive": "googledrive" }
+
+  test("a type the binary was compiled with needs no registry", () => {
+    expect(isKnownIntegration("mercury", COMPILED, ALIASES, [])).toBe(true)
+  })
+
+  test("a type ONLY the live registry knows still resolves", () => {
+    // This is the bug: reclaim shipped after this binary, so the compiled list cannot contain
+    // it, and `exec reclaim list_tasks` fell through to the tool path and lost the function.
+    expect(isKnownIntegration("reclaim", COMPILED, ALIASES, [])).toBe(false)
+    expect(isKnownIntegration("reclaim", COMPILED, ALIASES, normalizeCatalog([RECLAIM]))).toBe(true)
+  })
+
+  test("case and surrounding space do not decide it", () => {
+    expect(isKnownIntegration("  Reclaim  ", COMPILED, ALIASES, normalizeCatalog([RECLAIM]))).toBe(true)
+  })
+
+  test("something that is genuinely a system tool stays false", () => {
+    // searchPlaces must keep routing to the V6 tool path, registry present or not.
+    expect(isKnownIntegration("searchPlaces", COMPILED, ALIASES, normalizeCatalog([RECLAIM]))).toBe(false)
+  })
+
+  test("an empty registry degrades to the compiled list, not to nothing", () => {
+    expect(isKnownIntegration("gmail", COMPILED, ALIASES, [])).toBe(true)
+  })
+
+  test("an empty target is not an integration", () => {
+    expect(isKnownIntegration("", COMPILED, ALIASES, normalizeCatalog([RECLAIM]))).toBe(false)
+  })
+})
+
+describe("hasNothingToCollect", () => {
+  test("an api_key entry with no declared fields and nothing supplied would post an empty credential", () => {
+    expect(hasNothingToCollect(normalizeEntry(RECLAIM)!, {})).toBe(true)
+    expect(hasNothingToCollect(normalizeEntry(MAILJET)!, {})).toBe(true)
+  })
+
+  test("naming the field yourself is enough to proceed", () => {
+    expect(hasNothingToCollect(normalizeEntry(RECLAIM)!, { api_key: "sk-live" })).toBe(false)
+  })
+
+  test("an entry that declares its fields is handled by the normal prompt, not by this guard", () => {
+    expect(hasNothingToCollect(normalizeEntry(WIX)!, {})).toBe(false)
+  })
+
+  test("OAuth never collects fields, and must not be blocked", () => {
+    expect(hasNothingToCollect(normalizeEntry(GMAIL)!, {})).toBe(false)
+  })
+})
+
+/**
+ * Every row below is a real registry entry that the FIRST version of this guard matched.
+ * Run against the live catalogue it flagged 28 of 95 connectors, and 16 of them were working
+ * correctly — the guard would have broken `connect` for each one. They are here because
+ * measuring found them and reasoning did not.
+ */
+describe("hasNothingToCollect — the connectors that must NOT be blocked", () => {
+  test("auth: none holds no credential by design", () => {
+    // atlas-os, genesis, pathways, macos and ~12 more are in-process.
+    const inProcess = { type: "atlas-os", name: "Atlas OS", isLive: true, auth: { type: "none" }, functions: [] }
+    expect(hasNothingToCollect(normalizeEntry(inProcess)!, {})).toBe(false)
+  })
+
+  test("a field declared OPTIONAL still counts as something to collect", () => {
+    // courtlistener works unauthenticated at a lower rate limit, so its api_token is
+    // required: false. Blocking it would take away a connector that needs no credential.
+    const optional = {
+      type: "courtlistener", name: "CourtListener", isLive: true, functions: [],
+      auth: { type: "api_key", fields: [{ name: "api_token", label: "API Token (Optional)", required: false }] },
+    }
+    expect(hasNothingToCollect(normalizeEntry(optional)!, {})).toBe(false)
+  })
+
+  test("an auth scheme this guard has no evidence about is left alone", () => {
+    // savelife-ai is keycloak. Not OAuth by name, not something measured — so not blocked.
+    const keycloak = { type: "savelife-ai", name: "SaveLife AI", isLive: true, functions: [], auth: { type: "keycloak" } }
+    expect(hasNothingToCollect(normalizeEntry(keycloak)!, {})).toBe(false)
+  })
+})
+
+describe("auth fields spelled `key` instead of `name`", () => {
+  /** tradovate's real registry row — the only one in 95 that uses `key`. */
+  const TRADOVATE = {
+    type: "tradovate", name: "Tradovate", isLive: true, functions: [],
+    auth: {
+      type: "api_key",
+      fields: [
+        { key: "username", label: "Tradovate Username", required: true },
+        { key: "password", label: "Tradovate Password", required: true },
+        { key: "cid", label: "API Client ID (CID)", required: true },
+        { key: "sec", label: "API Secret (SEC)", required: true },
+        { key: "base_url", label: "API Base URL", required: false },
+      ],
+    },
+  }
+
+  test("all five credentials are read, not dropped", () => {
+    // Reading only `name` filtered every field out, so the CLI saw a connector with nothing
+    // to ask for and posted an empty credential — five required values, silently discarded.
+    const e = normalizeEntry(TRADOVATE)!
+    expect(e.fields.map((f) => f.name)).toEqual(["username", "password", "cid", "sec", "base_url"])
+    expect(requiredFields(e).map((f) => f.name)).toEqual(["username", "password", "cid", "sec"])
+  })
+
+  test("so it takes the normal prompt path rather than the empty-credential guard", () => {
+    expect(hasNothingToCollect(normalizeEntry(TRADOVATE)!, {})).toBe(false)
+    expect(missingRequired(normalizeEntry(TRADOVATE)!, { username: "u" }).map((f) => f.name))
+      .toEqual(["password", "cid", "sec"])
+  })
+})
+
+/**
+ * "Where do I get this key?" — the answer was already in version control and reached nobody.
+ *
+ * Measured against the live registry 2026-09-06: 18 connectors publish `auth.setup_url`, and
+ * NOTHING read it — not this CLI, not iris-api. Separately, 13 of the 14 connectors that
+ * documented their credential fields wrote `help_text`, and normalizeEntry read only
+ * `description`, so every one of those lines — including the URLs inside them — was dropped.
+ *
+ * Both are the same failure as an unlisted tool: the work was done, and no surface showed it.
+ */
+describe("where the customer gets their key", () => {
+  const STRIPE = {
+    type: "stripe", name: "Stripe", isLive: true, functions: [],
+    auth: {
+      type: "api_key",
+      setup_url: "https://dashboard.stripe.com/apikeys",
+      fields: [{ name: "api_key", label: "Secret Key", help_text: "Starts with sk_live_ or sk_test_." }],
+    },
+  }
+
+  test("setup_url survives normalization", () => {
+    expect(normalizeEntry(STRIPE)!.setupUrl).toBe("https://dashboard.stripe.com/apikeys")
+  })
+
+  test("a field's help_text is read, not just its description", () => {
+    // The ymls write help_text; only wix writes description. Reading one and not the other
+    // threw away the guidance for 13 of 14 connectors.
+    expect(normalizeEntry(STRIPE)!.fields[0].description).toBe("Starts with sk_live_ or sk_test_.")
+  })
+
+  test("description still wins where a yml uses it", () => {
+    expect(normalizeEntry(WIX)!.fields[0].description).toContain("manage.wix.com")
+  })
+
+  test("a connector that declares neither is left undefined, not blank-stringed", () => {
+    const bare = { type: "x", name: "X", isLive: true, auth: { type: "api_key", fields: [{ name: "api_key" }] } }
+    const e = normalizeEntry(bare)!
+    expect(e.setupUrl).toBeUndefined()
+    expect(e.fields[0].description).toBeUndefined()
+  })
+})

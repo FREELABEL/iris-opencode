@@ -1,0 +1,1860 @@
+import { cmd } from "./cmd"
+import { assessScheduler, printDegradations } from "./subsystem-health"
+import * as prompts from "./clack"
+import { UI } from "../ui"
+import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, IRIS_API, writeJson, failNoOp} from "./iris-api"
+import { firstArray } from "../../util/array"
+
+// ============================================================================
+// Execution-verification helpers (#146511) — `run` reports "dispatched", then
+// optionally confirms the worker actually EXECUTED it, instead of unconditional
+// success. Pure + unit-tested.
+// ============================================================================
+
+/** Highest execution id in a list (the baseline before we trigger a new run). */
+export function latestExecId(runs: any[]): number {
+  if (!Array.isArray(runs) || runs.length === 0) return 0
+  return Math.max(...runs.map((r) => Number(r?.id) || 0))
+}
+
+/** The newest execution created AFTER the baseline — i.e. the run we just dispatched. */
+export function pickFreshExecution(runs: any[], baselineId: number): any | null {
+  if (!Array.isArray(runs)) return null
+  const fresh = runs.filter((r) => (Number(r?.id) || 0) > baselineId)
+  if (fresh.length === 0) return null
+  return fresh.reduce((a, b) => ((Number(b?.id) || 0) > (Number(a?.id) || 0) ? b : a))
+}
+
+const TERMINAL_RUN_STATES = ["completed", "failed", "cancelled", "running"]
+
+/** Has the execution reached a state that proves the worker picked it up? */
+export function isExecutionObserved(run: any | null): boolean {
+  if (!run) return false
+  return TERMINAL_RUN_STATES.includes(String(run.status ?? "").toLowerCase())
+}
+
+// ============================================================================
+// Display helpers
+// ============================================================================
+
+function statusColor(status: string): string {
+  const colors: Record<string, string> = {
+    active: UI.Style.TEXT_SUCCESS,
+    enabled: UI.Style.TEXT_SUCCESS,
+    disabled: UI.Style.TEXT_DIM,
+    paused: UI.Style.TEXT_WARNING,
+    running: UI.Style.TEXT_HIGHLIGHT,
+    failed: UI.Style.TEXT_DANGER,
+    completed: UI.Style.TEXT_SUCCESS,
+  }
+  const c = colors[status?.toLowerCase()] ?? UI.Style.TEXT_DIM
+  return `${c}${status}${UI.Style.TEXT_NORMAL}`
+}
+
+function timeUntil(dateStr: string | null | undefined): string {
+  if (!dateStr) return ""
+  const now = Date.now()
+  const target = new Date(String(dateStr)).getTime()
+  const diff = target - now
+  if (isNaN(target)) return ""
+  if (diff < 0) return "overdue"
+  if (diff < 60_000) return `${Math.round(diff / 1000)}s`
+  if (diff < 3600_000) return `${Math.round(diff / 60_000)}m`
+  if (diff < 86400_000) return `${Math.round(diff / 3600_000)}h`
+  return `${Math.round(diff / 86400_000)}d`
+}
+
+/**
+ * How long ago a PAST timestamp was.
+ *
+ * timeUntil() counts down to a future moment, and its `diff < 0` branch returns the bare
+ * string "overdue" — correct for a next_run_at that has slipped, and useless for a run that
+ * already happened, because it discards the magnitude. Both run-history callers used to pass
+ * a past timestamp into it and render the resulting "overdue" as "just now", so EVERY
+ * completed run read as if it had finished seconds ago: `schedules list --latest` printed
+ * "just now" for 350 of 350 rows, and `schedules history` gave the same answer for runs 114
+ * days apart. The data was never wrong — `--json` carried correct timestamps throughout.
+ *
+ * Elapsed time is a different question from remaining time, so it gets its own function
+ * rather than a sign flag on that one. Keep them separate: a future timestamp asks "how
+ * long until", a past one asks "how long since", and conflating them is what produced a
+ * dashboard that could not tell a live schedule from one dead since May.
+ */
+export function timeSince(dateStr: string | null | undefined): string {
+  if (!dateStr) return ""
+  const then = new Date(String(dateStr)).getTime()
+  if (isNaN(then)) return ""
+  const diff = Date.now() - then
+  // A clock skew or a timestamp a hair in the future is "just now", not a negative age.
+  if (diff < 60_000) return "just now"
+  if (diff < 3600_000) return `${Math.round(diff / 60_000)}m ago`
+  if (diff < 86400_000) return `${Math.round(diff / 3600_000)}h ago`
+  if (diff < 30 * 86400_000) {
+    const days = diff / 86400_000
+    return `${days < 10 ? days.toFixed(1) : Math.round(days)}d ago`
+  }
+  return `${Math.round(diff / (30 * 86400_000))}mo ago`
+}
+
+function taskLabel(s: Record<string, any>): string {
+  const data = s.data ?? {}
+  return data.task_type ?? data.type ?? s.task_name ?? ""
+}
+
+function executionEnv(s: Record<string, any>): { label: string; icon: string } {
+  const data = s.data ?? {}
+  const taskName = String(s.task_name ?? "")
+  const dataType = String(data.type ?? "")
+  const taskType = String(data.task_type ?? "")
+
+  // Hive = dispatched to local daemon on user's machine
+  if (dataType === "hive_task_dispatch" || taskName === "hive_task_dispatch"
+      || ["discover", "som_batch", "som", "social_stats_sync", "leadgen"].includes(taskType)) {
+    return { label: "hive", icon: "⬡" }
+  }
+
+  // Heartbeat = runs on iris-api
+  if (dataType === "heartbeat" || taskName === "heartbeat") {
+    return { label: "iris", icon: "◉" }
+  }
+
+  // Agent task = spawned by heartbeat or scheduler, runs on fl-api
+  if (dataType === "agent_task") {
+    const source = String(data.source ?? data.created_from ?? "")
+    if (source.includes("heartbeat")) return { label: "auto", icon: "⟳" }
+    return { label: "cloud", icon: "☁" }
+  }
+
+  // Listener = event-driven
+  if (dataType === "listener") {
+    return { label: "hook", icon: "⚡" }
+  }
+
+  // Unknown / legacy (no type set)
+  return { label: "cloud", icon: "☁" }
+}
+
+function printSchedule(s: Record<string, any>, showCountdown = true): void {
+  const name = bold(String(s.name ?? s.title ?? s.task_name ?? `Schedule #${s.id}`))
+  const id = dim(`#${s.id}`)
+  const status = s.status ? `  ${statusColor(String(s.status))}` : ""
+  const freq = s.frequency ?? s.cron_expression ?? s.interval
+  const freqStr = freq ? `  ${dim(String(freq))}` : ""
+
+  // Task type label
+  const tl = taskLabel(s)
+  const typeStr = tl ? `  ${dim(`[${tl}]`)}` : ""
+
+  // Countdown to next run
+  let countdown = ""
+  if (showCountdown && s.next_run_at && s.status === "scheduled") {
+    const until = timeUntil(String(s.next_run_at))
+    countdown = until ? `  ${UI.Style.TEXT_HIGHLIGHT}⏱ ${until}${UI.Style.TEXT_NORMAL}` : ""
+  }
+
+  console.log(`  ${name}  ${id}${status}${freqStr}${typeStr}${countdown}`)
+
+  // Show prompt/description on second line
+  const prompt = s.data?.prompt ?? s.prompt ?? s.description ?? ""
+  if (prompt) {
+    console.log(`    ${dim(String(prompt).slice(0, 100))}`)
+  }
+}
+
+// ============================================================================
+// Subcommands
+// ============================================================================
+
+const SchedulesListCommand = cmd({
+  command: "list",
+  aliases: ["ls"],
+  describe: "list scheduled jobs",
+  builder: (yargs) =>
+    yargs
+      .option("limit", { describe: "results per page", type: "number", default: 50 })
+      .option("page", { alias: "p", describe: "page number", type: "number", default: 1 })
+      .option("active", { describe: "show only active/scheduled/running jobs (hide completed one-offs)", type: "boolean", default: false })
+      .option("overdue", { describe: "show only overdue schedules", type: "boolean", default: false })
+      .option("latest", { describe: "include latest execution result for each job", type: "boolean", default: false })
+      .option("agent-id", { describe: "filter by agent ID", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean" })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  IRIS Schedules")
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Loading schedules…")
+
+    try {
+      const params = new URLSearchParams({ per_page: String(args.limit), page: String(args.page) })
+      if (args["agent-id"]) params.set("agent_id", String(args["agent-id"]))
+
+      const res = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs?${params}`)
+      const ok = await handleApiError(res, "List schedules")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const data = (await res.json()) as Record<string, any>
+      const allSchedules: any[] = firstArray(data?.data)
+      let schedules: any[] = allSchedules
+
+      // Assess the scheduler against the UNFILTERED set (#180927). Doing it
+      // after --active/--overdue would let the filters hide the outage: running
+      // `schedules list --overdue` during a scheduler failure is exactly when
+      // you most need to be told the scheduler is the cause, and that filter
+      // would otherwise leave a suspiciously tidy list with no explanation.
+      const schedulerHealth = assessScheduler(allSchedules)
+
+      // --active: filter to scheduled/running/paused only (skip completed/cancelled one-offs)
+      if (args.active) {
+        schedules = schedules.filter((s: any) => {
+          const status = String(s.status ?? "").toLowerCase()
+          return ["scheduled", "running", "paused", "active", "enabled"].includes(status)
+        })
+      }
+
+      // --overdue: only show schedules past their next_run_at
+      if (args.overdue) {
+        const now = Date.now()
+        schedules = schedules.filter((s: any) => {
+          if (!s.next_run_at) return false
+          return new Date(String(s.next_run_at)).getTime() < now
+        })
+      }
+
+      // Resolve bloq names in one batch
+      const bloqIds = [...new Set(schedules.map((s: any) => s.bloq_id).filter(Boolean))]
+      const bloqNames: Record<number, string> = {}
+      if (bloqIds.length > 0) {
+        try {
+          const bloqRes = await irisFetch(`/api/v1/user/${userId}/bloqs?ids=${bloqIds.join(",")}`)
+          if (bloqRes.ok) {
+            const bloqData = (await bloqRes.json()) as any
+            for (const b of (bloqData?.data ?? bloqData ?? [])) {
+              if (b?.id && b?.name) bloqNames[b.id] = b.name
+            }
+          }
+        } catch {}
+      }
+
+      // --latest: fetch last execution for each job (parallel)
+      const latestExecs: Record<number, any> = {}
+      if (args.latest && schedules.length > 0) {
+        const execPromises = schedules.map(async (s: any) => {
+          try {
+            const execRes = await irisFetch(
+              `/api/v1/users/${userId}/bloqs/scheduled-jobs/${s.id}/executions?per_page=1`
+            )
+            if (execRes.ok) {
+              const execData = (await execRes.json()) as any
+              const execs = execData?.data ?? []
+              if (execs.length > 0) latestExecs[s.id] = execs[0]
+            }
+          } catch {}
+        })
+        await Promise.all(execPromises)
+      }
+
+      const totalCount = data?.total ?? data?.meta?.total ?? schedules.length
+      const filterLabel = [args.active && "active", args.overdue && "overdue"].filter(Boolean).join(", ")
+      const pageLabel = totalCount > schedules.length ? ` — page ${args.page}/${Math.ceil(totalCount / args.limit)}` : ""
+      spinner.stop(`${schedules.length} schedule(s)${filterLabel ? ` (${filterLabel})` : ""}${pageLabel}`)
+
+      if (args.json) {
+        // Machine consumers need the degradation too — a monitoring script that
+        // only reads the rows would have missed the June outage exactly as the
+        // humans did.
+        if (schedulerHealth) {
+          await writeJson({ degraded: [schedulerHealth], schedules: schedules.map((s: any) => ({
+            id: s.id,
+            name: s.name ?? s.title ?? s.task_name,
+            status: s.status,
+            next_run_at: s.next_run_at,
+            last_run_at: s.last_run_at,
+          })) })
+          prompts.outro("Done")
+          return
+        }
+        await writeJson(schedules.map((s: any) => ({
+          id: s.id,
+          name: s.name ?? s.title ?? s.task_name,
+          status: s.status,
+          env: executionEnv(s).label,
+          bloq_id: s.bloq_id ?? null,
+          bloq_name: s.bloq_id ? (bloqNames[s.bloq_id] ?? null) : null,
+          frequency: s.frequency,
+          task_type: taskLabel(s),
+          prompt: s.data?.prompt ?? s.prompt,
+          next_run_at: s.next_run_at,
+          time_until: timeUntil(s.next_run_at),
+          last_run_at: s.last_run_at,
+        })))
+        prompts.outro("Done")
+        return
+      }
+
+      printDegradations([schedulerHealth])
+
+      if (schedules.length === 0) {
+        prompts.log.warn(args.active ? "No active schedules. Use without --active to see all." : "No schedules found")
+        prompts.outro("Done")
+        return
+      }
+
+      // Group by execution environment
+      const groups: Record<string, { icon: string; label: string; description: string; items: any[] }> = {
+        hive: { icon: "⬡", label: "HIVE", description: "local machine", items: [] },
+        iris: { icon: "◉", label: "IRIS", description: "cloud heartbeats", items: [] },
+        auto: { icon: "⟳", label: "AUTO", description: "spawned by heartbeat", items: [] },
+        cloud: { icon: "☁", label: "CLOUD", description: "agent tasks", items: [] },
+        hook: { icon: "⚡", label: "HOOKS", description: "event listeners", items: [] },
+      }
+
+      for (const s of schedules) {
+        const env = executionEnv(s)
+        const group = groups[env.label] ?? groups["cloud"]
+        group.items.push(s)
+      }
+
+      // Render each group
+      for (const [, group] of Object.entries(groups)) {
+        if (group.items.length === 0) continue
+
+        console.log()
+        console.log(`  ${group.icon} ${bold(group.label)} ${dim(`(${group.description})`)}`)
+        printDivider()
+
+        for (const s of group.items) {
+          const id = dim(`#${s.id}`)
+          const status = String(s.status ?? "").toLowerCase()
+
+          // Status badge — detect stuck jobs (running + once + old)
+          let badge = ""
+          if (status === "running") {
+            const freq = String(s.frequency ?? "").toLowerCase()
+            const createdAt = s.created_at ? new Date(String(s.created_at)).getTime() : 0
+            const age = Date.now() - createdAt
+            const isStuck = freq === "once" && age > 3600_000 // once + older than 1 hour
+            if (isStuck) {
+              badge = `${UI.Style.TEXT_DANGER}⚠ stuck${UI.Style.TEXT_NORMAL}`
+            } else {
+              badge = `${UI.Style.TEXT_HIGHLIGHT}running${UI.Style.TEXT_NORMAL}`
+            }
+          } else if (status === "paused") {
+            badge = `${UI.Style.TEXT_WARNING}paused${UI.Style.TEXT_NORMAL}`
+          } else if (status === "scheduled") {
+            const until = timeUntil(s.next_run_at)
+            if (until === "overdue") {
+              // Show how long overdue
+              const overdueMs = s.next_run_at ? Date.now() - new Date(String(s.next_run_at)).getTime() : 0
+              const overdueH = Math.floor(overdueMs / 3600_000)
+              const overdueStr = overdueH > 24 ? `${Math.floor(overdueH / 24)}d` : overdueH > 0 ? `${overdueH}h` : `${Math.floor(overdueMs / 60_000)}m`
+              badge = `${UI.Style.TEXT_DANGER}⚠ overdue ${overdueStr}${UI.Style.TEXT_NORMAL}`
+            } else {
+              badge = `${UI.Style.TEXT_HIGHLIGHT}⏱ ${until}${UI.Style.TEXT_NORMAL}`
+            }
+          } else {
+            badge = statusColor(status)
+          }
+
+          // Frequency — clean up ugly underscores
+          const freq = String(s.frequency ?? "").replace(/_/g, " ")
+
+          // Name — prefer agent name from data, avoid repeating task_name as prompt
+          const agentName = s.data?.agent_name ?? ""
+          const name = agentName || String(s.name ?? s.title ?? s.task_name ?? "").slice(0, 50)
+
+          // Origin tag — show where this task came from
+          const createdFrom = String(s.data?.created_from ?? s.data?.source ?? "")
+          const originTag = createdFrom.includes("heartbeat") ? dim(" (via heartbeat)") : ""
+
+          // Description — short, one line, no repeats
+          const tl = taskLabel(s)
+          const prompt = s.data?.prompt ?? s.prompt ?? ""
+          let desc = ""
+          if (tl && tl !== name && tl !== s.task_name) desc = tl
+          if (prompt && prompt !== name && prompt !== s.task_name && !prompt.startsWith(name)) {
+            // Deduplicate — if prompt just repeats task_name multiple times, skip it
+            const unique = [...new Set(prompt.split(/[.!?\n]+/).map((s: string) => s.trim()).filter(Boolean))]
+            const cleaned = unique.slice(0, 2).join(". ").slice(0, 60)
+            if (cleaned && cleaned !== name) {
+              desc = desc ? `${desc}: ${cleaned}` : cleaned
+            }
+          }
+
+          // Bloq context — try eager-loaded relationship first, then batch lookup
+          const bloqId = s.bloq_id as number | null
+          const bloqName = s.bloq?.name ?? (bloqId ? bloqNames[bloqId] : null)
+          const bloqTag = bloqName ? dim(` → ${bloqName}`) : bloqId ? dim(` → bloq #${bloqId}`) : ""
+
+          console.log(`  ${id}  ${badge.padEnd(12)}  ${dim(freq.padEnd(12))}  ${bold(name)}${originTag}`)
+          if (bloqTag || desc) {
+            const parts = [bloqTag, desc ? dim(desc) : ""].filter(Boolean)
+            console.log(`        ${parts.join("  ")}`)
+          }
+
+          // Latest execution result
+          const exec = latestExecs[s.id]
+          if (exec) {
+            const execStatus = exec.status === "completed"
+              ? `${UI.Style.TEXT_SUCCESS}✓${UI.Style.TEXT_NORMAL}`
+              : exec.status === "failed"
+              ? `${UI.Style.TEXT_DANGER}✗${UI.Style.TEXT_NORMAL}`
+              : dim(exec.status ?? "?")
+            const whenAgo = timeSince(exec.completed_at)
+            const when = whenAgo ? dim(whenAgo) : ""
+            const model = exec.model_used ? dim(`[${exec.model_used}]`) : ""
+            const tokens = exec.tokens_used ? dim(`${Number(exec.tokens_used).toLocaleString()} tok`) : ""
+            const preview = String(exec.response_preview ?? exec.response ?? "").replace(/\n/g, " ").slice(0, 70)
+
+            console.log(`        ${execStatus} ${when}  ${model}  ${tokens}`)
+            if (preview) console.log(`        ${dim(`"${preview}${preview.length >= 70 ? "…" : ""}"`)}`)
+          }
+        }
+      }
+
+      // Pagination hints
+      const total = data?.total ?? data?.meta?.total ?? schedules.length
+      const lastPage = Math.ceil(total / args.limit)
+      console.log()
+      if (lastPage > 1) {
+        console.log(`  ${dim(`Page ${args.page}/${lastPage} (${total} total)`)}`)
+        if (args.page < lastPage) console.log(`  ${dim(`iris schedules list --page=${args.page + 1} — next page`)}`)
+        if (args.page > 1) console.log(`  ${dim(`iris schedules list --page=${args.page - 1} — previous page`)}`)
+      }
+      prompts.outro(
+        `${dim("iris schedules get <id>")}  ·  ${dim("iris schedules history <id>")}`,
+      )
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const SchedulesGetCommand = cmd({
+  command: "get <id>",
+  describe: "show schedule details",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "schedule ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Schedule #${args.id}`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Loading…")
+
+    try {
+      const res = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs/${args.id}`)
+      const ok = await handleApiError(res, "Get schedule")
+      if (!ok) { if (spinner) spinner.stop("Failed", 1); process.exitCode = 1; return }
+
+      const raw = (await res.json()) as Record<string, any>
+      const s = raw.task_name ? raw : (raw.data ?? raw)
+
+      if (args.json) {
+        await writeJson(s)
+        return
+      }
+
+      const name = s.task_name ?? s.name ?? s.title ?? `Schedule #${s.id}`
+      const agentName = s.agent?.name ?? `Agent #${s.agent_id}`
+      spinner!.stop(String(name))
+
+      printDivider()
+      printKV("ID", s.id)
+      printKV("Name", name)
+      printKV("Agent", agentName)
+      printKV("Status", s.status)
+      printKV("Frequency", s.frequency ?? s.cron_expression ?? s.interval)
+      printKV("Model", s.agent?.config?.model ?? s.agent?.settings?.model)
+      printKV("Run Count", s.run_count)
+      printKV("Last Run", s.last_run_at)
+      printKV("Next Run", s.next_run_at)
+      printKV("Emails", s.data?.report_emails?.join(", "))
+      printKV("Created", s.created_at)
+      console.log()
+      printDivider()
+
+      prompts.outro(dim(`iris schedules run ${args.id}`))
+    } catch (err) {
+      if (spinner) spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      if (!args.json) prompts.outro("Done")
+    }
+  },
+})
+
+const SchedulesRunCommand = cmd({
+  command: "run <id>",
+  describe: "trigger a schedule to run now (use --wait to verify it actually executes)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "schedule ID", type: "number", demandOption: true })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
+      .option("wait", { alias: "w", describe: "wait and confirm the worker actually executes it (not just enqueues)", type: "boolean", default: false })
+      .option("timeout", { describe: "seconds to wait for execution when --wait", type: "number", default: 30 }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Run Schedule #${args.id}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    const execUrl = `/api/v1/users/${userId}/bloqs/scheduled-jobs/${args.id}/executions?per_page=10`
+    const fetchExecs = async (): Promise<any[]> => {
+      try {
+        const r = await irisFetch(execUrl)
+        if (!r.ok) return []
+        return ((await r.json()) as { data?: any[] })?.data ?? []
+      } catch { return [] }
+    }
+
+    const spinner = prompts.spinner()
+    spinner.start("Dispatching…")
+
+    try {
+      // Baseline the latest execution BEFORE triggering so --wait can detect the
+      // new run rather than mistaking a prior execution for ours.
+      const baselineId = args.wait ? latestExecId(await fetchExecs()) : 0
+
+      const res = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs/${args.id}/run`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      })
+      const ok = await handleApiError(res, "Run schedule")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const data = (await res.json()) as { data?: any; message?: string }
+      const runId = data?.data?.run_id ?? data?.data?.id
+
+      // HONESTY (#146511): a 2xx means the job was ENQUEUED, not executed. Say so —
+      // don't claim "triggered" (which reads as "it ran") when the worker may be
+      // stalled and the job never drains.
+      spinner.stop(`${success("✓")} Dispatched to queue${runId ? ` ${dim(`(run ${runId})`)}` : ""}`)
+      if (data?.message) prompts.log.info(data.message)
+
+      if (!args.wait) {
+        prompts.log.info(dim("Dispatched ≠ executed — the worker runs it asynchronously."))
+        prompts.outro(dim(`verify it ran:  iris schedules run ${args.id} --wait   |   iris schedules history ${args.id}`))
+        return
+      }
+
+      // Verify the worker actually picks it up (converts "unconditional success"
+      // into real exec status). Surfaces a stalled queue instead of hiding it.
+      const verify = prompts.spinner()
+      verify.start("Verifying execution…")
+      const start = Date.now()
+      let observed: any = null
+      while (Date.now() - start < args.timeout * 1000) {
+        await new Promise((r) => setTimeout(r, 3000))
+        const fresh = pickFreshExecution(await fetchExecs(), baselineId)
+        if (fresh) {
+          observed = fresh
+          verify.message(`run #${fresh.id}: ${fresh.status ?? "queued"}`)
+          if (isExecutionObserved(fresh)) break
+        } else {
+          verify.message("queued — waiting for worker…")
+        }
+      }
+
+      if (!isExecutionObserved(observed)) {
+        verify.stop(`${UI.Style.TEXT_DANGER}⚠ no execution after ${args.timeout}s${UI.Style.TEXT_NORMAL}`, 1)
+        prompts.log.warn(`Dispatched but the worker produced no execution within ${args.timeout}s — the heartbeat/queue worker may be stalled (#146511), not a successful run.`)
+        process.exitCode = 1
+        prompts.outro(dim(`check:  iris schedules history ${args.id}`))
+        return
+      }
+
+      const done = String(observed.status).toLowerCase() === "completed"
+      verify.stop(`${done ? success("✓") : "⚠"} run #${observed.id}: ${observed.status}`)
+      prompts.outro(dim(`iris schedules history ${args.id}`))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const SchedulesHistoryCommand = cmd({
+  command: "history <id>",
+  describe: "show run history for a schedule",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "schedule ID", type: "number", demandOption: true })
+      .option("limit", { describe: "max results", type: "number", default: 10 })
+      .option("full", { describe: "show full response (not just preview)", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean" })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Schedule History #${args.id}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Loading history…")
+
+    try {
+      const params = new URLSearchParams({ per_page: String(args.limit) })
+      const res = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs/${args.id}/executions?${params}`)
+      const ok = await handleApiError(res, "Get schedule history")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const data = (await res.json()) as { data?: any[] }
+      const runs: any[] = firstArray(data?.data)
+      spinner.stop(`${runs.length} run(s)`)
+
+      if (runs.length === 0) {
+        prompts.log.warn("No history found")
+        prompts.outro("Done")
+        return
+      }
+
+      if (args.json) {
+        await writeJson(runs)
+        prompts.outro("Done")
+        return
+      }
+
+      for (const r of runs) {
+        const statusBadge = r.status === "completed"
+          ? `${UI.Style.TEXT_SUCCESS}✓ completed${UI.Style.TEXT_NORMAL}`
+          : r.status === "failed"
+          ? `${UI.Style.TEXT_DANGER}✗ failed${UI.Style.TEXT_NORMAL}`
+          : statusColor(String(r.status ?? "?"))
+
+        const when = r.completed_at ?? r.started_at ?? r.created_at
+        const ago = when ? timeSince(String(when)) : ""
+        const agoStr = ago ? dim(ago) : ""
+
+        console.log()
+        printDivider()
+        console.log(`  ${bold(`Run #${r.id}`)}  ${statusBadge}  ${agoStr}`)
+
+        // Metadata line
+        const meta: string[] = []
+        if (r.model_used) meta.push(`model: ${r.model_used}`)
+        if (r.tokens_used) meta.push(`${Number(r.tokens_used).toLocaleString()} tokens`)
+        if (r.started_at && r.completed_at) {
+          const dur = Math.round((new Date(r.completed_at).getTime() - new Date(r.started_at).getTime()) / 1000)
+          meta.push(`${dur}s`)
+        }
+        if (r.execution_source) meta.push(r.execution_source)
+        if (meta.length) console.log(`  ${dim(meta.join("  ·  "))}`)
+
+        // Tools used
+        if (r.functions_executed) {
+          try {
+            const tools = JSON.parse(r.functions_executed)
+            if (Array.isArray(tools) && tools.length > 0) {
+              console.log(`  ${dim("tools: " + tools.join(", "))}`)
+            }
+          } catch {}
+        }
+
+        // Error
+        if (r.error_message) {
+          console.log(`  ${UI.Style.TEXT_DANGER}error: ${String(r.error_message).slice(0, 200)}${UI.Style.TEXT_NORMAL}`)
+        }
+
+        // Response
+        const response = String(r.response ?? r.response_preview ?? r.summary ?? "")
+        if (response) {
+          console.log()
+          if (args.full) {
+            // Full response with word wrap
+            const lines = response.split("\n")
+            for (const line of lines) {
+              console.log(`  ${dim(line)}`)
+            }
+          } else {
+            // Preview (first 3 lines or 200 chars)
+            const preview = response.replace(/\n/g, " ").slice(0, 200)
+            console.log(`  ${dim(`"${preview}${response.length > 200 ? "…" : ""}"`)}`)
+          }
+        }
+      }
+      console.log()
+      printDivider()
+
+      if (!args.full) {
+        prompts.log.info(dim(`Tip: iris schedules history ${args.id} --full  — show complete responses`))
+      }
+      prompts.outro("Done")
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ============================================================================
+// Inspect — show agent config, system prompt, model, tools for a schedule
+// ============================================================================
+
+const SchedulesInspectCommand = cmd({
+  command: "inspect <id>",
+  describe: "show the agent config, system prompt, and tools for a scheduled job",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "schedule ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean" })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Inspect Schedule #${args.id}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Loading…")
+
+    try {
+      // Fetch all schedules and find the one we want (the individual GET returns only data column)
+      const res = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs?per_page=200`)
+      const ok = await handleApiError(res, "Get schedules")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const allData = (await res.json()) as { data?: any[] }
+      const schedule = (allData?.data ?? []).find((s: any) => s.id === args.id)
+      if (!schedule) {
+        spinner.stop("Not found", 1)
+        process.exitCode = 1
+        prompts.log.error(`Schedule #${args.id} not found`)
+        prompts.outro("Done")
+        return
+      }
+
+      // Fetch agent details if agent_id exists
+      let agent: any = null
+      if (schedule.agent_id) {
+        try {
+          const agentRes = await irisFetch(`/api/v1/users/${userId}/bloqs/agents/${schedule.agent_id}`)
+          if (agentRes.ok) {
+            const agentData = (await agentRes.json()) as any
+            agent = agentData?.data ?? agentData
+          }
+        } catch {}
+      }
+
+      spinner.stop(bold(schedule.task_name ?? `Schedule #${args.id}`))
+
+      if (args.json) {
+        await writeJson({ schedule, agent })
+        prompts.outro("Done")
+        return
+      }
+
+      // Schedule info
+      printDivider()
+      printKV("ID", schedule.id)
+      printKV("Status", schedule.status)
+      printKV("Frequency", schedule.frequency)
+      printKV("Next run", schedule.next_run_at)
+      printKV("Bloq", schedule.bloq?.name ?? (schedule.bloq_id ? `#${schedule.bloq_id}` : null))
+      printKV("Created", schedule.created_at)
+      printDivider()
+
+      // Agent config
+      if (agent) {
+        console.log()
+        console.log(`  ${bold("Agent Config")}`)
+        printDivider()
+        printKV("Agent ID", agent.id)
+        printKV("Name", agent.name)
+        printKV("Model", agent.model ?? agent.settings?.model)
+        printKV("Heartbeat mode", agent.heartbeat_mode)
+        printKV("Heartbeat freq", agent.settings?.heartbeat_frequency ?? agent.settings?.frequency)
+
+        // System prompt
+        const systemPrompt = agent.system_prompt ?? agent.instructions ?? agent.settings?.system_prompt
+        if (systemPrompt) {
+          console.log()
+          console.log(`  ${bold("System Prompt")}`)
+          printDivider()
+          const lines = String(systemPrompt).split("\n").slice(0, 20)
+          for (const line of lines) {
+            console.log(`  ${dim(line)}`)
+          }
+          if (String(systemPrompt).split("\n").length > 20) {
+            console.log(`  ${dim(`... (${String(systemPrompt).split("\\n").length} total lines)`)}`)
+          }
+        }
+
+        // Tools / capabilities
+        const tools = agent.settings?.tools ?? agent.capabilities ?? agent.settings?.capabilities
+        if (tools && (Array.isArray(tools) ? tools.length : Object.keys(tools).length)) {
+          console.log()
+          console.log(`  ${bold("Tools / Capabilities")}`)
+          printDivider()
+          const toolList = Array.isArray(tools) ? tools : Object.keys(tools)
+          console.log(`  ${dim(toolList.join(", "))}`)
+        }
+
+        // Integrations
+        const integrations = agent.settings?.integrations ?? []
+        if (Array.isArray(integrations) && integrations.length) {
+          console.log()
+          console.log(`  ${bold("Integrations")}`)
+          printDivider()
+          console.log(`  ${dim(integrations.join(", "))}`)
+        }
+
+        printDivider()
+      }
+
+      // Task prompt
+      const prompt = schedule.prompt ?? schedule.data?.prompt
+      if (prompt) {
+        console.log()
+        console.log(`  ${bold("Task Prompt")}`)
+        printDivider()
+        for (const line of String(prompt).split("\n").slice(0, 10)) {
+          console.log(`  ${dim(line)}`)
+        }
+      }
+
+      console.log()
+      prompts.log.info(dim(`Edit agent: iris agents update ${schedule.agent_id}`))
+      prompts.log.info(dim(`Run history: iris schedules history ${args.id} --full`))
+      prompts.outro("Done")
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const SchedulesToggleCommand = cmd({
+  command: "toggle <id>",
+  describe: "enable or disable a schedule",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "schedule ID", type: "number", demandOption: true })
+      .option("disable", { describe: "disable the schedule", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    const action = args.disable ? "Disable" : "Enable"
+    prompts.intro(`◈  ${action} Schedule #${args.id}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start(`${action === "Enable" ? "Enabling" : "Disabling"}…`)
+
+    try {
+      // Send `status`, which is the field the API has always actually read. This command used
+      // to send only `is_active` — a field the controller did not know — so the write fell
+      // through, the job saved unchanged, a 200 came back, and this printed a checkmark while
+      // the schedule kept firing (#179802). The API now accepts is_active as an alias too, so
+      // both are sent: `status` is correct, `is_active` keeps older backends working.
+      const endpoint = `/api/v1/users/${userId}/bloqs/scheduled-jobs/${args.id}`
+      const wanted = args.disable ? "paused" : "scheduled"
+
+      const res = await irisFetch(endpoint, {
+        method: "PUT",
+        body: JSON.stringify({ status: wanted, is_active: !args.disable }),
+      })
+      const ok = await handleApiError(res, `${action} schedule`)
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      // VERIFY THE WRITE LANDED. Disabling a schedule is the emergency brake — it is what you
+      // reach for when an agent is looping or burning tokens. A checkmark the operator trusts
+      // and does not re-check is worse than an error, so success is now asserted against the
+      // server's own view rather than against a 200.
+      let landed: string | null = null
+      try {
+        const body = (await res.json()) as any
+        landed = body?.data?.status ?? body?.status ?? null
+      } catch {
+        // Non-JSON body — fall through to the explicit re-read below.
+      }
+      if (landed === null) {
+        try {
+          const check = await irisFetch(endpoint)
+          const body = (await check.json()) as any
+          landed = body?.data?.status ?? body?.status ?? null
+        } catch {
+          landed = null
+        }
+      }
+
+      if (landed !== null && landed !== wanted) {
+        spinner.stop("Not applied", 1)
+        prompts.log.error(
+          `The API accepted the request but the schedule is still '${landed}', not '${wanted}'.\n` +
+            `Nothing was changed. Stop it with: iris schedules delete ${args.id} --yes`,
+        )
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
+
+      spinner.stop(`${success("✓")} Schedule ${action.toLowerCase()}d${landed ? dim(` (status: ${landed})`) : ""}`)
+      if (landed === null) {
+        // Could not confirm — say so rather than implying it is done.
+        prompts.log.warn(`Could not read the schedule back to confirm. Check: iris schedules get ${args.id}`)
+      }
+      prompts.outro(dim(`iris schedules get ${args.id}`))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const SchedulesCreateCommand = cmd({
+  command: "create",
+  describe: "create a scheduled job (any type: agent, heartbeat, competitor crawl, SEO check, hive)",
+  builder: (yargs) =>
+    yargs
+      .option("type", {
+        describe: "job type",
+        type: "string",
+        choices: ["agent_task", "heartbeat", "competitor_intelligence", "seo_rank_check", "hive_task_dispatch", "custom_script", "code_workflow", "browser_workflow", "agentic_browser"],
+        demandOption: true,
+      })
+      .option("frequency", {
+        describe: "run frequency",
+        type: "string",
+        choices: ["once", "hourly", "every_2_hours", "every_4_hours", "every_6_hours", "every_8_hours", "every_12_hours", "daily", "weekdays", "weekly", "monthly"],
+        default: "daily",
+      })
+      .option("agent", { describe: "agent ID (required — used for scheduling)", type: "number", demandOption: true })
+      .option("name", { describe: "job name/task_name", type: "string" })
+      .option("prompt", { describe: "task prompt (for agent_task type)", type: "string" })
+      .option("time", { describe: "time of day to run (HH:MM, 24h)", type: "string", default: "09:00" })
+      .option("timezone", { describe: "timezone", type: "string", default: "America/New_York" })
+      .option("max-runs", { describe: "max number of executions (null = unlimited)", type: "number" })
+      .option("params", { describe: "JSON params for tool jobs (e.g., sources, keywords, domain)", type: "string" })
+      // ── Human-in-the-loop approval gating (bug #157532) ──────────────────
+      // autonomous = run everything unattended (existing behaviour, DEFAULT — unchanged)
+      // gated      = run safe tools automatically, but PAUSE risky tools (send/merge/pay/
+      //              publish) into an approval queue until a human approves via
+      //              `iris schedules approvals approve <id>`.
+      .option("approval-mode", {
+        describe: "human-in-the-loop gating for risky tool calls",
+        type: "string",
+        choices: ["autonomous", "gated"],
+        default: "autonomous",
+      })
+      .option("risky-tools", {
+        describe: "comma-separated tool names to gate (overrides server default risky set). Only used with --approval-mode gated",
+        type: "string",
+      })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Create Schedule: ${args.type}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    // Parse params JSON
+    let params: Record<string, unknown> = {}
+    if (args.params) {
+      try {
+        params = JSON.parse(args.params)
+      } catch {
+        prompts.log.error("Invalid JSON in --params")
+        prompts.outro("Done")
+        return
+      }
+    }
+
+    // Build default names based on type
+    const typeNames: Record<string, string> = {
+      agent_task: "Scheduled Agent Task",
+      heartbeat: "Heartbeat",
+      competitor_intelligence: "Competitor Intelligence Crawl",
+      seo_rank_check: "SEO Rank Check",
+      hive_task_dispatch: "Hive Task Dispatch",
+      custom_script: "Custom Script",
+      code_workflow: "Code Workflow",
+      browser_workflow: "Browser Workflow",
+      agentic_browser: "AI Browser Agent",
+    }
+    const taskName = args.name ?? typeNames[args.type] ?? args.type
+
+    // Build default prompts based on type
+    const typePrompts: Record<string, string> = {
+      agent_task: args.prompt ?? "Execute scheduled task",
+      heartbeat: "Run heartbeat check",
+      competitor_intelligence: "Crawl competitor sources and ingest into knowledge base",
+      seo_rank_check: "Check keyword rankings vs competitors",
+      hive_task_dispatch: "Dispatch Hive campaign task",
+      custom_script: "Execute custom script on Hive node",
+      code_workflow: "Execute code workflow on Hive node",
+      browser_workflow: "Execute Playwright browser automation on Hive node",
+      agentic_browser: "AI browser agent — give it a goal, it navigates autonomously",
+    }
+    const prompt = args.prompt ?? typePrompts[args.type] ?? taskName
+
+    // Human-in-the-loop approval gating (bug #157532).
+    // Carried in data.approval_mode so it travels with the schedule and is read
+    // server-side at tool-dispatch time. "autonomous" is the unchanged default.
+    const approvalMode = String(args["approval-mode"] ?? "autonomous")
+    const riskyTools = args["risky-tools"]
+      ? String(args["risky-tools"]).split(",").map((t) => t.trim()).filter(Boolean)
+      : undefined
+
+    const payload: Record<string, unknown> = {
+      agent_id: args.agent,
+      task_name: taskName,
+      prompt,
+      time: args.time,
+      frequency: args.frequency,
+      timezone: args.timezone,
+      data: {
+        type: args.type,
+        approval_mode: approvalMode,
+        ...(riskyTools ? { risky_tools: riskyTools } : {}),
+        params,
+        ...params,
+      },
+    }
+
+    if (args["max-runs"]) {
+      payload.max_runs = args["max-runs"]
+    }
+
+    const spinner = prompts.spinner()
+    spinner.start("Creating schedule…")
+
+    try {
+      const res = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      })
+      const ok = await handleApiError(res, "Create schedule")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const data = (await res.json()) as { data?: any }
+      const job = data?.data ?? data
+      spinner.stop(success(`Created #${job.id ?? "?"}`))
+
+      printDivider()
+      printKV("ID", job.id)
+      printKV("Type", args.type)
+      printKV("Name", taskName)
+      printKV("Frequency", args.frequency)
+      printKV("Time", args.time)
+      printKV("Agent", args.agent)
+      printKV("Approval", approvalMode === "gated" ? "gated (risky tools held for approval)" : "autonomous")
+      if (riskyTools) printKV("Risky Tools", riskyTools.join(", "))
+      printKV("Status", job.status ?? "scheduled")
+      printKV("Next Run", job.next_run_at ?? "pending")
+      if (Object.keys(params).length > 0) {
+        printKV("Params", JSON.stringify(params).slice(0, 100))
+      }
+      printDivider()
+
+      prompts.log.info(dim(`iris schedule list   — view all schedules`))
+      prompts.log.info(dim(`iris schedule run ${job.id ?? "<id>"}  — trigger now`))
+      if (approvalMode === "gated") {
+        prompts.log.info(dim(`iris schedule approvals list  — review risky actions this loop pauses on`))
+      }
+      prompts.outro(success("Schedule created"))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const SchedulesDeleteCommand = cmd({
+  command: "delete <id>",
+  aliases: ["rm"],
+  describe: "delete a scheduled job",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "schedule ID", type: "number", demandOption: true })
+      .option("dry-run", { describe: "show what would be deleted without deleting", type: "boolean", default: false })
+      // `yes` aliased because that is what every other tool calls it, and the reporter of
+      // #179802 concluded there was no such flag while `--force` sat right here.
+      .option("force", { alias: ["f", "yes", "y"], describe: "skip confirmation", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Delete Schedule #${args.id}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    // Fetch schedule details first (for dry-run preview and confirmation)
+    const spinner = prompts.spinner()
+    spinner.start("Loading…")
+
+    try {
+      const getRes = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs/${args.id}`)
+      if (getRes.ok) {
+        const raw = (await getRes.json()) as Record<string, any>
+        const s = raw.task_name ? raw : (raw.data ?? raw)
+        const name = s.task_name ?? s.name ?? `Schedule #${s.id}`
+        spinner.stop(String(name))
+        printDivider()
+        printKV("ID", s.id)
+        printKV("Name", name)
+        printKV("Agent", s.agent?.name ?? `#${s.agent_id}`)
+        printKV("Status", s.status)
+        printKV("Frequency", s.frequency)
+        printDivider()
+      } else {
+        spinner.stop(`Schedule #${args.id}`)
+      }
+
+      if (args["dry-run"]) {
+        console.log(`\n  ${dim("Dry run — schedule not deleted.")}`)
+        prompts.outro("Done")
+        return
+      }
+
+      if (!args.force) {
+        // Deleting is the only mechanism that reliably STOPS a schedule, so it is what a script
+        // reaches for in an incident. Prompting with no TTY hung the process instead of failing
+        // — the worst outcome available: a runaway job keeps firing while the operator's script
+        // sits waiting on a question nobody can answer (#179802).
+        if (isNonInteractive()) {
+          prompts.log.error(
+            `Refusing to prompt with no TTY. Re-run with --yes to confirm:\n  iris schedules delete ${args.id} --yes`,
+          )
+          process.exitCode = 1
+          prompts.outro("Done")
+          return
+        }
+        const confirmed = await prompts.confirm({ message: `Delete schedule #${args.id}? This cannot be undone.` })
+        if (!confirmed || prompts.isCancel(confirmed)) { prompts.outro("Cancelled"); return }
+      }
+
+      const delSpinner = prompts.spinner()
+      delSpinner.start("Deleting…")
+
+      const res = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs/${args.id}`, {
+        method: "DELETE",
+      })
+      const ok = await handleApiError(res, "Delete schedule")
+      if (!ok) { delSpinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      delSpinner.stop(success("Deleted"))
+      prompts.outro("Done")
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ============================================================================
+// Root command
+// ============================================================================
+
+// ============================================================================
+// Diagnose — test the full execution chain for a scheduled job
+// ============================================================================
+
+const SchedulesDiagnoseCommand = cmd({
+  command: "diagnose [id]",
+  describe: "test the full execution chain — scheduler, dispatch, worker, daemon",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "schedule ID to diagnose (or omit for full system check)", type: "number" })
+      .option("user-id", { describe: "user ID", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Schedule Diagnostics")
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    const checks: { name: string; status: "pass" | "fail" | "warn"; detail: string }[] = []
+
+    const check = (name: string, status: "pass" | "fail" | "warn", detail: string) => {
+      checks.push({ name, status, detail })
+      const icon = status === "pass" ? `${UI.Style.TEXT_SUCCESS}✓${UI.Style.TEXT_NORMAL}` :
+                   status === "fail" ? `${UI.Style.TEXT_DANGER}✗${UI.Style.TEXT_NORMAL}` :
+                   `${UI.Style.TEXT_WARNING}⚠${UI.Style.TEXT_NORMAL}`
+      console.log(`  ${icon} ${bold(name)}: ${dim(detail)}`)
+    }
+
+    console.log()
+
+    // 1. fl-api health (scheduler runs here)
+    try {
+      const res = await irisFetch("/api/v1/pages?per_page=1")
+      check("fl-api", res.ok ? "pass" : "fail", res.ok ? "reachable" : `HTTP ${res.status}`)
+    } catch (e) {
+      check("fl-api", "fail", `unreachable: ${e instanceof Error ? e.message : String(e)}`)
+    }
+
+    // 2. iris-api health (heartbeat executor runs here)
+    try {
+      const res = await irisFetch("/api/health", {}, IRIS_API)
+      if (res.ok) {
+        const data = await res.json() as any
+        check("iris-api", "pass", `DB: ${data.database ?? "?"}, AI: ${Object.keys(data).filter(k => k.startsWith("ai_")).map(k => `${k.replace("ai_","")}=${(data[k] as any)?.status ?? "?"}`).join(", ") || "not checked"}`)
+      } else {
+        check("iris-api", "fail", `HTTP ${res.status}`)
+      }
+    } catch (e) {
+      check("iris-api", "fail", `unreachable: ${e instanceof Error ? e.message : String(e)}`)
+    }
+
+    // 3. Local daemon (hive tasks execute here)
+    try {
+      const res = await fetch("http://localhost:3200/health", { signal: AbortSignal.timeout(3000) })
+      if (res.ok) {
+        const data = await res.json() as any
+        const daemon = data.daemon ?? {}
+        check("daemon", "pass", `node: ${daemon.node_id?.slice(0, 12) ?? "?"}, status: ${daemon.status ?? "?"}`)
+      } else {
+        check("daemon", "fail", `HTTP ${res.status}`)
+      }
+    } catch {
+      check("daemon", "fail", "not running on localhost:3200 — run: iris-daemon start")
+    }
+
+    // 4. Daemon Pusher connection
+    try {
+      const res = await fetch("http://localhost:3200/health", { signal: AbortSignal.timeout(3000) })
+      if (res.ok) {
+        const data = await res.json() as any
+        const configRes = await fetch("http://localhost:3200/daemon/queue", { signal: AbortSignal.timeout(3000) })
+        if (configRes.ok) {
+          const q = await configRes.json() as any
+          check("daemon-queue", q.paused ? "warn" : "pass", `active: ${q.active_tasks ?? 0}, paused: ${q.paused ? "YES" : "no"}, capacity: ${q.capacity ?? "?"}`)
+        }
+      }
+    } catch {}
+
+    // 5. Redis (queue backend)
+    try {
+      const res = await irisFetch("/api/health", {}, IRIS_API)
+      if (res.ok) {
+        check("redis-queue", "pass", "iris-api is up (Redis is the queue backend)")
+      }
+    } catch {
+      check("redis-queue", "warn", "could not verify")
+    }
+
+    // 6. If specific job ID given, check its state
+    if (args.id) {
+      console.log()
+      console.log(`  ${bold("Job #" + args.id)}`)
+      printDivider()
+
+      try {
+        const res = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs?per_page=200`)
+        if (res.ok) {
+          const all = ((await res.json()) as any)?.data ?? []
+          const job = all.find((s: any) => s.id === args.id)
+          if (job) {
+            const env = executionEnv(job)
+            check("job-exists", "pass", `${job.task_name ?? "?"} | ${job.frequency ?? "?"} | ${env.icon} ${env.label}`)
+            check("job-status", job.status === "scheduled" ? "pass" : job.status === "running" ? "warn" : "fail",
+              `${job.status}${job.status === "running" ? " (may be stuck — check run_count)" : ""}`)
+
+            const nextRun = job.next_run_at ? new Date(job.next_run_at) : null
+            if (nextRun) {
+              const until = timeUntil(job.next_run_at)
+              check("next-run", until === "overdue" ? "warn" : "pass", `${job.next_run_at} (${until})`)
+            }
+
+            // Agent check
+            if (job.agent_id) {
+              const agent = job.agent
+              if (agent) {
+                check("agent", "pass", `#${agent.id} ${agent.name} | mode: ${agent.heartbeat_mode} | model: ${agent.config?.model ?? agent.settings?.model ?? "default"}`)
+                if (agent.initial_prompt) check("agent-mission", "pass", `${String(agent.initial_prompt).slice(0, 80)}...`)
+                else check("agent-mission", "warn", "no initial_prompt set — using generic heartbeat prompt")
+                if (agent.settings?.system_prompt) check("agent-identity", "pass", "custom system_prompt set")
+                if (agent.settings?.heartbeat_tools) check("agent-tools", "pass", `filtered: ${JSON.stringify(agent.settings.heartbeat_tools)}`)
+              }
+            }
+
+            // Bloq check
+            if (job.bloq) {
+              check("bloq", "pass", `#${job.bloq.id} ${job.bloq.name}`)
+            } else if (job.bloq_id) {
+              check("bloq", "warn", `#${job.bloq_id} (name not loaded)`)
+            }
+
+            // Execution check
+            try {
+              const execRes = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs/${args.id}/executions?per_page=1`)
+              if (execRes.ok) {
+                const execs = ((await execRes.json()) as any)?.data ?? []
+                if (execs.length > 0) {
+                  const e = execs[0]
+                  check("last-execution", e.status === "completed" ? "pass" : "fail",
+                    `#${e.id} ${e.status} | ${e.model_used ?? "?"} | ${e.tokens_used ? Number(e.tokens_used).toLocaleString() + " tok" : "?"}`)
+                  if (e.error_message) check("last-error", "fail", String(e.error_message).slice(0, 120))
+                } else {
+                  check("last-execution", "warn", "no executions yet")
+                }
+              }
+            } catch {}
+          } else {
+            check("job-exists", "fail", `job #${args.id} not found`)
+          }
+        }
+      } catch (e) {
+        check("job-lookup", "fail", `${e instanceof Error ? e.message : String(e)}`)
+      }
+    }
+
+    // Summary
+    console.log()
+    printDivider()
+    const passed = checks.filter(c => c.status === "pass").length
+    const failed = checks.filter(c => c.status === "fail").length
+    const warned = checks.filter(c => c.status === "warn").length
+    console.log(`  ${passed} passed, ${warned} warnings, ${failed} failed`)
+
+    if (failed > 0) {
+      console.log()
+      console.log(`  ${bold("Fix these:")}`)
+      for (const c of checks.filter(c => c.status === "fail")) {
+        console.log(`    ${UI.Style.TEXT_DANGER}✗${UI.Style.TEXT_NORMAL} ${c.name}: ${c.detail}`)
+      }
+    }
+
+    prompts.outro("Done")
+  },
+})
+
+const SchedulesUpdateCommand = cmd({
+  command: "update <id>",
+  describe: "update a scheduled job's frequency or status",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "job ID", type: "number", demandOption: true })
+      .option("frequency", {
+        alias: "f",
+        describe: "new frequency",
+        type: "string",
+        choices: ["every_5_minutes", "every_10_minutes", "every_15_minutes", "every_30_minutes", "hourly", "every_2_hours", "every_4_hours", "every_6_hours", "every_12_hours", "daily", "weekly"],
+      }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Update schedule #${args.id}`)
+
+
+    const userId = await requireUserId()
+    if (!userId) { prompts.outro("Done"); return }
+
+    const payload: Record<string, unknown> = {}
+    if (args.frequency) payload.frequency = args.frequency
+
+    if (Object.keys(payload).length === 0) {
+      failNoOp("update", "Use --frequency to set a new frequency.")
+    }
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Updating…")
+
+    try {
+      const res = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs/${args.id}`, {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      })
+
+      if (!res.ok) {
+        const body = await res.text().catch(() => "")
+        spinner.stop("Failed", 1)
+        prompts.log.error(`HTTP ${res.status}: ${body.slice(0, 200)}`)
+        prompts.outro("Done")
+        return
+      }
+
+      const data = (await res.json()) as any
+      const job = data?.data ?? data
+      spinner.stop(`${success("✓")} Schedule #${args.id} updated`)
+      if (job?.frequency) printKV("Frequency", job.frequency)
+      if (job?.next_run_at) printKV("Next Run", job.next_run_at)
+      prompts.outro(dim(`iris schedules get ${args.id}`))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const SchedulesFrequencyCommand = cmd({
+  command: "frequency <id> <freq>",
+  aliases: ["freq"],
+  describe: "update frequency for a scheduled job (by job ID) or heartbeat agent (by agent ID)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "job ID or agent ID", type: "number", demandOption: true })
+      .positional("freq", {
+        describe: "frequency",
+        type: "string",
+        demandOption: true,
+        choices: ["every_5_minutes", "every_10_minutes", "every_15_minutes", "every_30_minutes", "hourly", "every_2_hours", "every_4_hours", "every_6_hours", "every_12_hours", "daily", "weekly"],
+      })
+      .option("agent", { describe: "treat <id> as agent ID (heartbeat mode)", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Set frequency → ${args.freq}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Updating…")
+
+    try {
+      // Try heartbeat endpoint first if --agent flag or as fallback
+      if (args.agent) {
+        const res = await irisFetch(`/api/v1/monitor/enable-heartbeat`, {
+          method: "POST",
+          body: JSON.stringify({ agent_id: args.id, frequency: args.freq }),
+        }, IRIS_API)
+
+        if (res.ok) {
+          const data = (await res.json()) as any
+          spinner.stop(`${success("✓")} ${data?.data?.agent_name ?? `Agent #${args.id}`} → ${args.freq}`)
+          prompts.outro(dim("iris schedules list --latest"))
+          return
+        }
+      }
+
+      // Generic: update scheduled job by job ID
+      const userId = await requireUserId()
+      if (!userId) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const res = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs/${args.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ frequency: args.freq }),
+      })
+
+      if (!res.ok) {
+        const body = await res.text().catch(() => "")
+        spinner.stop("Failed", 1)
+        prompts.log.error(`HTTP ${res.status}: ${body.slice(0, 200)}`)
+        prompts.outro(dim("Use --agent flag if this is an agent ID, not a job ID"))
+        return
+      }
+
+      const data = (await res.json()) as any
+      const job = data?.data ?? data
+      spinner.stop(`${success("✓")} Schedule #${args.id} → ${args.freq}`)
+      if (job?.next_run_at) printKV("Next Run", job.next_run_at)
+      prompts.outro(dim("iris schedules list --latest"))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const VALID_DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"] as const
+
+const SchedulesHoursCommand = cmd({
+  command: "hours <agent-id>",
+  describe: "set working days and active hours for an agent's heartbeat schedule",
+  builder: (yargs) =>
+    yargs
+      .positional("agent-id", { describe: "agent ID", type: "number", demandOption: true })
+      .option("days", {
+        alias: "d",
+        describe: "working days (comma-separated: mon,tue,wed or monday,tuesday,wednesday)",
+        type: "string",
+      })
+      .option("start", {
+        alias: "s",
+        describe: "active hours start (HH:MM, 24h format)",
+        type: "string",
+      })
+      .option("end", {
+        alias: "e",
+        describe: "active hours end (HH:MM, 24h format)",
+        type: "string",
+      })
+      .option("timezone", {
+        alias: "tz",
+        describe: "timezone (e.g. America/New_York)",
+        type: "string",
+        default: "America/New_York",
+      })
+      .option("clear", {
+        describe: "remove all schedule constraints (run 24/7)",
+        type: "boolean",
+        default: false,
+      })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
+      .example("iris schedules hours 604 --days mon,tue,wed --start 09:00 --end 16:00", "Market hours Mon-Wed")
+      .example("iris schedules hours 604 --days weekdays --start 09:00 --end 17:00", "Business hours M-F")
+      .example("iris schedules hours 604 --clear", "Remove constraints, run 24/7"),
+  async handler(args) {
+    UI.empty()
+    const agentId = args["agent-id"]!
+    prompts.intro(`◈  Set Working Hours — Agent #${agentId}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+
+    // Step 1: Fetch current agent settings
+    spinner.start("Fetching agent…")
+    let agent: Record<string, any>
+    try {
+      const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents/${agentId}`, { method: "GET" })
+      const ok = await handleApiError(res, "Fetch agent")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const json = (await res.json()) as { data?: any }
+      agent = json?.data ?? json
+      spinner.stop(`${success("✓")} ${bold(String(agent.name ?? `Agent #${agentId}`))}`)
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+      return
+    }
+
+    // Step 2: Build schedule config
+    const currentSettings = agent.settings ?? {}
+    const currentSchedule = currentSettings.schedule ?? {}
+
+    if (args.clear) {
+      // Remove schedule constraints
+      currentSettings.schedule = { enabled: false }
+      prompts.log.info("Clearing schedule constraints — agent will run 24/7")
+    } else {
+      if (!args.days && !args.start && !args.end) {
+        // Show current schedule
+        const sched = currentSchedule
+        printDivider()
+        printKV("Enabled", sched.enabled ? "yes" : "no")
+        printKV("Working Days", sched.working_days?.join(", ") || "(all days)")
+        printKV("Active Hours", sched.active_hours ? `${sched.active_hours.start} – ${sched.active_hours.end}` : "(24h)")
+        printKV("Timezone", sched.timezone || "UTC")
+        printDivider()
+        prompts.outro(dim("Use --days, --start, --end to update"))
+        return
+      }
+
+      // Parse days
+      let workingDays: string[] = firstArray(currentSchedule.working_days)
+      if (args.days) {
+        const dayAbbrevs: Record<string, string> = {
+          mon: "monday", tue: "tuesday", wed: "wednesday", thu: "thursday",
+          fri: "friday", sat: "saturday", sun: "sunday",
+        }
+        if (args.days === "weekdays") {
+          workingDays = ["monday", "tuesday", "wednesday", "thursday", "friday"]
+        } else if (args.days === "all") {
+          workingDays = []
+        } else {
+          workingDays = args.days.split(",").map((d: string) => {
+            const lower = d.trim().toLowerCase()
+            return dayAbbrevs[lower] ?? lower
+          })
+          const invalid = workingDays.filter(d => !(VALID_DAYS as readonly string[]).includes(d))
+          if (invalid.length > 0) {
+            prompts.log.error(`Invalid days: ${invalid.join(", ")}. Use: ${VALID_DAYS.join(", ")} or abbreviations (mon,tue,wed...)`)
+            prompts.outro("Done")
+            return
+          }
+        }
+      }
+
+      // Validate time format
+      const timeRegex = /^\d{2}:\d{2}$/
+      if (args.start && !timeRegex.test(args.start)) {
+        prompts.log.error(`Invalid start time: ${args.start}. Use HH:MM format (e.g., 09:00)`)
+        prompts.outro("Done")
+        return
+      }
+      if (args.end && !timeRegex.test(args.end)) {
+        prompts.log.error(`Invalid end time: ${args.end}. Use HH:MM format (e.g., 16:00)`)
+        prompts.outro("Done")
+        return
+      }
+
+      const activeHours = (args.start || args.end) ? {
+        start: args.start ?? currentSchedule.active_hours?.start ?? "09:00",
+        end: args.end ?? currentSchedule.active_hours?.end ?? "17:00",
+      } : currentSchedule.active_hours ?? null
+
+      currentSettings.schedule = {
+        enabled: true,
+        working_days: workingDays.length > 0 ? workingDays : undefined,
+        active_hours: activeHours ?? undefined,
+        timezone: args.timezone ?? currentSchedule.timezone ?? "America/New_York",
+      }
+    }
+
+    // Step 3: Update agent
+    spinner.start("Updating…")
+    try {
+      const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents/${agentId}`, {
+        method: "PUT",
+        body: JSON.stringify({ settings: currentSettings }),
+      })
+      const ok = await handleApiError(res, "Update agent")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      spinner.stop(`${success("✓")} Schedule updated`)
+
+      const sched = currentSettings.schedule
+      printDivider()
+      printKV("Enabled", sched.enabled ? "yes" : "no")
+      if (sched.working_days) printKV("Working Days", sched.working_days.join(", "))
+      if (sched.active_hours) printKV("Active Hours", `${sched.active_hours.start} – ${sched.active_hours.end}`)
+      if (sched.timezone) printKV("Timezone", sched.timezone)
+      printDivider()
+
+      prompts.outro(dim("Heartbeats will only fire during these windows"))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ============================================================================
+// Approval queue — human-in-the-loop gating for autonomous heartbeats (#157532)
+//
+// When a schedule is created with `--approval-mode gated`, the backend agent
+// loop runs safe tools automatically but, instead of dispatching a *risky* tool
+// (send / merge / pay / publish), it persists a PENDING approval and halts that
+// step. A human reviews the queued action here and approves/rejects it; on
+// approval the backend resumes and dispatches the held tool call.
+//
+// Proposed backend contract (see design notes in the bug — backend not yet built):
+//   GET    /api/v1/users/{userId}/bloqs/scheduled-jobs/approvals            ?status=pending
+//   POST   /api/v1/users/{userId}/bloqs/scheduled-jobs/approvals/{id}/approve  { notes? }
+//   POST   /api/v1/users/{userId}/bloqs/scheduled-jobs/approvals/{id}/reject   { notes? }
+// ============================================================================
+
+interface PendingApproval {
+  id: number
+  schedule_id: number
+  run_id?: number | null
+  agent_id?: number | null
+  tool_name: string
+  tool_args?: Record<string, unknown> | null
+  risk_reason?: string | null
+  status: string
+  created_at?: string | null
+  expires_at?: string | null
+}
+
+async function fetchApprovals(userId: number, status: string): Promise<PendingApproval[]> {
+  const res = await irisFetch(
+    `/api/v1/users/${userId}/bloqs/scheduled-jobs/approvals?status=${encodeURIComponent(status)}`,
+    {},
+    IRIS_API,
+  )
+  if (!res.ok) {
+    await handleApiError(res, "fetch approvals")
+    return []
+  }
+  const body = (await res.json()) as { data?: PendingApproval[] }
+  return body.data ?? []
+}
+
+async function reviewApproval(
+  userId: number,
+  id: number,
+  action: "approve" | "reject",
+  notes?: string,
+): Promise<boolean> {
+  const res = await irisFetch(
+    `/api/v1/users/${userId}/bloqs/scheduled-jobs/approvals/${id}/${action}`,
+    { method: "POST", body: JSON.stringify({ notes: notes ?? null }) },
+    IRIS_API,
+  )
+  if (!res.ok) {
+    await handleApiError(res, `${action} approval #${id}`)
+    return false
+  }
+  return true
+}
+
+const ApprovalsListCommand = cmd({
+  command: "list",
+  aliases: ["ls"],
+  describe: "list risky actions paused by gated schedules awaiting your approval",
+  builder: (yargs) =>
+    yargs
+      .option("status", { describe: "filter by status", type: "string", choices: ["pending", "approved", "rejected", "all"], default: "pending" })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Schedule Approvals")
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Loading pending approvals…")
+    const items = await fetchApprovals(userId, String(args.status))
+    spinner.stop(`${items.length} ${args.status} approval(s)`)
+
+    if (items.length === 0) {
+      prompts.log.info(dim("Nothing waiting. Gated loops only queue risky tools (send/merge/pay/publish)."))
+      prompts.outro("Done")
+      return
+    }
+
+    for (const a of items) {
+      printDivider()
+      printKV("ID", a.id)
+      printKV("Schedule", `#${a.schedule_id}`)
+      printKV("Tool", highlight(a.tool_name))
+      if (a.risk_reason) printKV("Why gated", a.risk_reason)
+      if (a.tool_args) printKV("Args", JSON.stringify(a.tool_args).slice(0, 160))
+      printKV("Status", a.status)
+      if (a.expires_at) printKV("Expires", a.expires_at)
+    }
+    printDivider()
+    prompts.log.info(dim(`iris schedule approvals approve <id>   — let it run`))
+    prompts.log.info(dim(`iris schedule approvals reject <id>    — block it`))
+    prompts.outro("Done")
+  },
+})
+
+const ApprovalsApproveCommand = cmd({
+  command: "approve <id>",
+  describe: "approve a paused risky action — the loop resumes and runs it",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "approval ID", type: "number", demandOption: true })
+      .option("notes", { describe: "optional note recorded with the decision", type: "string" })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Approve action #${args.id}`)
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Approving…")
+    const ok = await reviewApproval(userId, Number(args.id), "approve", args.notes)
+    spinner.stop(ok ? success("Approved") : "Failed", ok ? 0 : 1)
+    prompts.outro(ok ? success(`Action #${args.id} approved — loop will resume it`) : "Done")
+  },
+})
+
+const ApprovalsRejectCommand = cmd({
+  command: "reject <id>",
+  aliases: ["decline"],
+  describe: "reject a paused risky action — the loop skips it and continues",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "approval ID", type: "number", demandOption: true })
+      .option("notes", { describe: "optional reason recorded with the decision", type: "string" })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Reject action #${args.id}`)
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Rejecting…")
+    const ok = await reviewApproval(userId, Number(args.id), "reject", args.notes)
+    spinner.stop(ok ? success("Rejected") : "Failed", ok ? 0 : 1)
+    prompts.outro(ok ? success(`Action #${args.id} rejected — loop will skip it`) : "Done")
+  },
+})
+
+const SchedulesApprovalsCommand = cmd({
+  command: "approvals",
+  aliases: ["approval"],
+  describe: "review risky actions paused by gated schedules (human-in-the-loop)",
+  builder: (yargs) =>
+    yargs
+      .command(ApprovalsListCommand)
+      .command(ApprovalsApproveCommand)
+      .command(ApprovalsRejectCommand)
+      .demandCommand(),
+  async handler() {},
+})
+
+export const PlatformSchedulesCommand = cmd({
+  command: "schedules",
+  aliases: ["schedule"],
+  describe: "manage scheduled jobs — create, list, run, toggle, delete (all job types)",
+  builder: (yargs) =>
+    yargs
+      .command(SchedulesCreateCommand)
+      .command(SchedulesListCommand)
+      .command(SchedulesGetCommand)
+      .command(SchedulesRunCommand)
+      .command(SchedulesHistoryCommand)
+      .command(SchedulesInspectCommand)
+      .command(SchedulesToggleCommand)
+      .command(SchedulesDeleteCommand)
+      .command(SchedulesDiagnoseCommand)
+      .command(SchedulesUpdateCommand)
+      .command(SchedulesFrequencyCommand)
+      .command(SchedulesHoursCommand)
+      .command(SchedulesApprovalsCommand)
+      .demandCommand(),
+  async handler() {},
+})

@@ -1,6 +1,7 @@
+// [IRIS] the IRIS CLI wordmark from v1's component/logo.tsx (was the OpenCode wordmark).
 export const logo = {
-  left: ["                   ", "█▀▀█ █▀▀█ █▀▀█ █▀▀▄", "█__█ █__█ █^^^ █__█", "▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀~~▀"],
-  right: ["             ▄     ", "█▀▀▀ █▀▀█ █▀▀█ █▀▀█", "█___ █__█ █__█ █^^^", "▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀"],
+  left: ["                 ", "▀█▀ █▀▀█ ▀█▀ █▀▀▀", " █  █▄▄▀  █  ▀▀▀█", "▀▀▀ ▀ ▀▀ ▀▀▀ ▀▀▀▀"],
+  right: ["             ", "█▀▀▀ █___ ▀█▀", "█___ █___  █ ", "▀▀▀▀ ▀▀▀▀ ▀▀▀"],
 }
 
 export const go = {

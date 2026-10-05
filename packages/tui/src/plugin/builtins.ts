@@ -28,4 +28,6 @@ export const builtins = [
   // normal launches and register it only for OPENCODE_STORY runs.
   ...(process.env.OPENCODE_STORY ? [Storybook] : []),
   DiffViewer,
+  // [IRIS] plugins the IRIS entry registers before starting the TUI (packages/cli/src/iris-entry.ts).
+  ...(((globalThis as any).__IRIS_TUI_PLUGINS as any[]) ?? []),
 ]

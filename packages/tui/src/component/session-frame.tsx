@@ -19,9 +19,10 @@ import { useStorage } from "../context/storage"
 import { useDialog } from "../ui/dialog"
 import { Session } from "../routes/session"
 import { Sidebar } from "../routes/session/sidebar"
-import { clampSessionPaneWidth, SESSION_SIDEBAR_WIDTH } from "../ui/layout"
+import { clampSessionPaneWidth, clampSidebarWidth, IRIS_SIDEBAR_WIDTH, stepSidebarWidth } from "../ui/layout"
 import { createPaneResize } from "../ui/pane-resize"
 import { PaneResizeHandle } from "../ui/pane-resize-handle"
+import { useTheme } from "../context/theme" // [IRIS] for the collapsed-sidebar strip
 import { useToast } from "../ui/toast"
 import { TerminalPane } from "./terminal-pane"
 import { PanelHost } from "./panel-host"
@@ -39,7 +40,7 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
   const dialog = useDialog()
   const availableWidth = () => Math.max(0, dimensions().width - props.verticalTabsWidth)
   const defaultPaneWidth = () => Math.max(1, Math.floor(panels.width() / 2))
-  const [layout, updateLayout] = useStorage().store<{ paneWidth?: number; terminalWidth?: number }>("layout", {
+  const [layout, updateLayout] = useStorage().store<{ paneWidth?: number; terminalWidth?: number; sidebarWidth?: number }>("layout", {
     initial: {},
   })
   const paneResize = createPaneResize({
@@ -54,8 +55,29 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
       }).catch((error) => console.error("Failed to persist TUI layout", error))
     },
   })
+  // [IRIS] The sidebar gets its own resize, persisted beside the pane width. Same mechanics as
+  // the terminal/panel pane: drag the left edge, double-click it to reset.
+  const sidebarResize = createPaneResize({
+    value: () => layout.sidebarWidth ?? IRIS_SIDEBAR_WIDTH,
+    defaultValue: () => IRIS_SIDEBAR_WIDTH,
+    clamp: (width) => clampSidebarWidth(width, availableWidth()),
+    fromMouse: (event) => dimensions().width - event.x - 1,
+    contains: (event, width) => event.x >= dimensions().width - width - 1 && event.x <= dimensions().width - width,
+    onCommit: (width) => {
+      void updateLayout((draft) => {
+        draft.sidebarWidth = width
+      }).catch((error) => console.error("Failed to persist TUI layout", error))
+    },
+  })
+  const stepSidebar = (direction: 1 | -1) => {
+    const next = clampSidebarWidth(stepSidebarWidth(sidebarResize.size(), direction), availableWidth())
+    void updateLayout((draft) => {
+      draft.sidebarWidth = next
+    }).catch((error) => console.error("Failed to persist TUI layout", error))
+  }
   let resizeRelease = false
   const finishPaneResize = (event: MouseEvent) => {
+    sidebarResize.onMouseUp(event)
     if (paneResize.resizing()) {
       // A captured drag-end can be followed by mouse-up on the focus overlay.
       resizeRelease = true
@@ -66,6 +88,7 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
     paneResize.onMouseUp(event)
   }
   const [sidebarOpen, setSidebarOpen] = createSignal(false)
+  const theme = useTheme()
   const [sessionWidth, setSessionWidth] = createSignal<number>()
   const [activePane, setActivePane] = createSignal<"session" | "right">("session")
   const [restoreTerminalFocus, setRestoreTerminalFocus] = createSignal(false)
@@ -184,6 +207,22 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
     mode: "global",
     commands: [
       {
+        id: "session.sidebar.wider",
+        title: "Widen sidebar",
+        group: "Session",
+        palette: true,
+        enabled: rightPane() === "sidebar",
+        run: () => stepSidebar(1),
+      },
+      {
+        id: "session.sidebar.narrower",
+        title: "Narrow sidebar",
+        group: "Session",
+        palette: true,
+        enabled: rightPane() === "sidebar",
+        run: () => stepSidebar(-1),
+      },
+      {
         id: "session.sidebar.toggle",
         title: rightPane() === "sidebar" ? "Hide sidebar" : "Show sidebar",
         group: "Session",
@@ -265,7 +304,10 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
       minHeight={0}
       flexDirection="row"
       position="relative"
-      onMouseDrag={paneResize.onMouseDrag}
+      onMouseDrag={(event) => {
+        paneResize.onMouseDrag(event)
+        sidebarResize.onMouseDrag(event)
+      }}
       onMouseDragEnd={finishPaneResize}
       onMouseUp={finishPaneResize}
     >
@@ -315,7 +357,7 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
             }}
             // Consume the release before revealing permission buttons underneath.
             onMouseUp={() => {
-              if (paneResize.resizing() || resizeRelease) return
+              if (paneResize.resizing() || sidebarResize.resizing() || resizeRelease) return
               focusSession()
             }}
           />
@@ -326,7 +368,7 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
           ref={(value: BoxRenderable) => (rightNode = value)}
           flexShrink={0}
           width={
-            fullscreen() ? availableWidth() : rightPane() === "sidebar" ? SESSION_SIDEBAR_WIDTH : paneResize.size()
+            fullscreen() ? availableWidth() : rightPane() === "sidebar" ? sidebarResize.size() : paneResize.size()
           }
           minWidth={0}
           minHeight={0}
@@ -374,12 +416,30 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
               </Show>
             }
           >
-            <Sidebar sessionID={props.sessionID} />
+            <Sidebar sessionID={props.sessionID} width={sidebarResize.size()} />
           </Show>
         </box>
       </Show>
       <Show when={!fullscreen() && (rightPane() === "terminal" || rightPane() === "panel") && availableWidth() >= 3}>
         <PaneResizeHandle resize={paneResize} left={availableWidth() - paneResize.size() - 1} highlight="right" />
+      </Show>
+      <Show when={!fullscreen() && rightPane() === "sidebar" && wide() && availableWidth() >= 3}>
+        <PaneResizeHandle resize={sidebarResize} left={availableWidth() - sidebarResize.size() - 1} highlight="right" />
+      </Show>
+      {/* [IRIS] A hidden sidebar used to be reachable only by keybind. This one-column strip on
+          the right edge brings it back with a click (v1 had a visible "› hide" / show pair). */}
+      <Show when={!fullscreen() && rightPane() === undefined && wide() && !data.session.get(props.sessionID)?.parentID}>
+        <box
+          position="absolute"
+          right={0}
+          top={0}
+          width={1}
+          height="100%"
+          zIndex={10}
+          onMouseUp={() => toggleSidebar()}
+        >
+          <text fg={theme.text.muted}>‹</text>
+        </box>
       </Show>
       <Show when={rightPane() === "sidebar" && !wide()}>
         <box
