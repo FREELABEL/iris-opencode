@@ -44,6 +44,7 @@ import {
 import { irisNavRequest, clearIrisNav } from "./iris-nav"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { IrisRooms } from "./iris-rooms"
+import { IrisAgentLive } from "./iris-agent-live"
 import { itemCommands, renderMarkdown } from "./iris-item"
 import {
   ATLAS_EDITED,
@@ -601,7 +602,7 @@ const SURFACES = [
 type SurfaceId = (typeof SURFACES)[number]["id"]
 
 /** Panes that draw and fetch for themselves; the generic row list has nothing to show for them. */
-const SELF_PANES = new Set(["rooms", "artifacts", "atlas-artifacts"])
+const SELF_PANES = new Set(["rooms", "artifacts", "atlas-artifacts", "agent-live"])
 
 interface SubView {
   id: string
@@ -648,6 +649,9 @@ const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
     // Threaded multi-agent chat with @mention (#186511). Account-wide like Graph — a room is an
     // iris-api thread, not a board row — and it owns its pane: IrisRooms fetches for itself.
     { id: "rooms", label: "Rooms", pane: "rooms", path: () => `/iris/rooms` },
+    // "Is it stuck?" (#187921): the picked agent's current step and last tool calls, live, with
+    // Take over / Hand back. Owns its pane: IrisAgentLive polls for itself.
+    { id: "live", label: "Live", pane: "agent-live", path: () => `/iris/agents/live` },
   ],
   pages: [
     { id: "pages", label: "Pages", pane: "pages", path: (b) => `/iris/pages/${b}` },
@@ -2801,6 +2805,9 @@ export function SessionIrisTab() {
               rooms, and "empty" must still show the New room button. */}
           <Match when={pane() === "rooms"}>
             <IrisRooms doFetch={doFetch} bloqId={activeBloq()} />
+          </Match>
+          <Match when={pane() === "agent-live"}>
+            <IrisAgentLive doFetch={doFetch} bloqId={activeBloq()} />
           </Match>
           {/* Artifacts own the pane, ahead of the loading/empty states: they belong to the
               session, not the board, and must render with no board chosen. */}
