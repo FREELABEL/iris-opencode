@@ -52,6 +52,14 @@ export interface Settings {
   }
   notifications: NotificationSettings
   sounds: SoundSettings
+  voice: {
+    /**
+     * Preferred microphone, by device NAME; "" follows the system default. A name, not an id,
+     * because the two recorders do not share an id space: the window recorder sees browser
+     * deviceIds and the sidecar sees ffmpeg devices. Each resolves the name to its own id.
+     */
+    inputDevice: string
+  }
 }
 
 export const monoDefault = "System Mono"
@@ -218,6 +226,9 @@ const defaultSettings: Settings = {
     permissions: "staplebops-02",
     errorsEnabled: true,
     errors: "nope-03",
+  },
+  voice: {
+    inputDevice: "",
   },
 }
 
@@ -540,6 +551,13 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         errors: withFallback(() => store.sounds?.errors, defaultSettings.sounds.errors),
         setErrors(value: string) {
           setStore("sounds", "errors", value)
+        },
+      },
+      voice: {
+        inputDevice: withFallback(() => store.voice?.inputDevice, defaultSettings.voice.inputDevice),
+        setInputDevice(value: string) {
+          // Settings saved before this group existed have no `voice` object to set a path in.
+          setStore("voice", (voice) => ({ ...voice, inputDevice: value }))
         },
       },
     }

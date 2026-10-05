@@ -18,8 +18,10 @@ import {
   createPermissionScopeController,
   createShellOptions,
   createShellSettingsController,
+  createMicrophoneSettingsController,
   createSoundSettingsController,
   soundOptions,
+  type MicrophoneOption,
   type AppearanceSettingsController,
   type PermissionScopeController,
   type ShellSettingsController,
@@ -214,6 +216,40 @@ const SoundsSection: Component<{ controller: SoundSettingsController }> = (props
         <SoundSetting kind="agent" channel={props.controller.agent} />
         <SoundSetting kind="permissions" channel={props.controller.permissions} />
         <SoundSetting kind="errors" channel={props.controller.errors} />
+      </SettingsListV2>
+    </div>
+  )
+}
+
+const MicrophoneSection = () => {
+  const language = useLanguage()
+  const controller = createMicrophoneSettingsController()
+  const label = (option: MicrophoneOption) => {
+    if (!option.name) return language.t("settings.general.row.microphone.systemDefault")
+    if (!option.connected) return language.t("settings.general.row.microphone.notConnected", { name: option.name })
+    return option.name
+  }
+  return (
+    <div class="settings-v2-section">
+      <h3 class="settings-v2-section-title">{language.t("settings.general.section.microphone")}</h3>
+      <SettingsListV2>
+        <SettingsRowV2
+          title={language.t("settings.general.row.microphone.title")}
+          description={language.t("settings.general.row.microphone.description")}
+        >
+          <SelectV2
+            appearance="inline"
+            data-action="settings-microphone"
+            options={controller.options()}
+            current={controller.current()}
+            value={(option) => option.name}
+            label={label}
+            onOpenChange={(open: boolean) => open && controller.refresh()}
+            onSelect={controller.select}
+            placement="bottom-end"
+            gutter={6}
+          />
+        </SettingsRowV2>
       </SettingsListV2>
     </div>
   )
@@ -584,6 +620,7 @@ export const SettingsGeneralV2: Component<{
         <NotificationsSection />
 
         <SoundsSection controller={sounds} />
+        <MicrophoneSection />
 
         <Show when={desktop()}>
           <UpdatesSection />
