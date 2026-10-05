@@ -1142,10 +1142,27 @@ const ApiCommand = cmd({
   builder: (y) =>
     y
       .positional("slug", { type: "string", demandOption: true })
-      .option("json", { type: "boolean", default: false }),
+      .option("json", { type: "boolean", default: false })
+      // #187899. fl-api serves an OpenAPI 3.1 document per dataset (78c34406); the ticket's
+      // done-check was `iris datasets api <slug> --openapi > o.json`, and no such flag existed.
+      // Prints ONLY the document on stdout so redirecting it gives a file a linter or a
+      // no-code builder (FlutterFlow, WeWeb, Postman) can import as-is.
+      .option("openapi", { type: "boolean", default: false, describe: "print the dataset's OpenAPI 3.1 document (JSON) and nothing else" }),
   async handler(args) {
     const token = await requireAuth()
     if (!token) return
+
+    if (args.openapi) {
+      const res = await irisFetch(`/api/v1/atlas/datasets/${encodeURIComponent(String(args.slug))}/openapi.json`)
+      if (!res.ok) {
+        const detail = res.status === 404 ? `no dataset '${args.slug}' on this account` : `HTTP ${res.status}`
+        process.stderr.write(`Could not fetch the OpenAPI document: ${detail}\n`)
+        process.exitCode = 1
+        return
+      }
+      process.stdout.write(JSON.stringify(await res.json(), null, 2) + "\n")
+      return
+    }
 
     const url = `${FL_API}/api/v1/atlas/datasets/${args.slug}`
 
