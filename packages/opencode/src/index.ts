@@ -135,6 +135,7 @@ import { PlatformIdentityCommand } from "./cli/cmd/platform-identity"
 import { PlatformSystemAppsScanCommand } from "./cli/cmd/platform-system-apps-scan"
 import { PlatformIdeasCommand } from "./cli/cmd/platform-ideas"
 import { PlatformOnboardCommand } from "./cli/cmd/platform-onboard"
+import { PlatformNextCommand } from "./cli/cmd/platform-next"
 import { PlatformInitCommand } from "./cli/cmd/platform-init"
 import { PlatformOnboardFlowsCommand } from "./cli/cmd/platform-onboard-flows"
 import { PlatformProposalsCommand } from "./cli/cmd/platform-proposals"
@@ -519,6 +520,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformAndroidCommand))
   .command(reg(PlatformIntentCommand))
   .command(reg(PlatformOnboardCommand))
+  .command(reg(PlatformNextCommand)) // #187930: one next move
   .command(reg(PlatformInitCommand))
   .command(reg(PlatformOnboardFlowsCommand))
   .command(reg(PlatformProposalsCommand))
