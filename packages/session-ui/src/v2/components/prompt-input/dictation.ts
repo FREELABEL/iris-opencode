@@ -516,15 +516,20 @@ export function createDictation(opts: DictationOptions) {
   }
 
   /**
-   * Open the live preview socket. NOTE: a browser WebSocket cannot send an Authorization header,
-   * so this works against the bundled password-less sidecar; a password-protected server would
-   * need a connect ticket like the PTY's. Failing that, live is just "unavailable".
+   * Open the live preview socket. A browser WebSocket cannot send an Authorization header, so on
+   * a password-protected server the same Basic credential goes as `auth_token` — the query form
+   * the server's authorization middleware already accepts (app entry.tsx uses it at startup).
+   * The voice routes only answer loopback callers, so the credential never leaves this machine.
    */
   function openLive(source: "window" | "sidecar") {
     if (liveSocket || live() === "unavailable" || typeof WebSocket === "undefined") return
     const url = new URL(`${base()}/dictate/live`)
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
     url.searchParams.set("source", source)
+    const basic = Object.entries(authFor?.(base()) ?? {})
+      .find(([name]) => name.toLowerCase() === "authorization")?.[1]
+      ?.match(/^Basic\s+(.+)$/i)?.[1]
+    if (basic) url.searchParams.set("auth_token", basic)
     setLive("connecting")
     const ws = new WebSocket(url)
     liveSocket = ws
