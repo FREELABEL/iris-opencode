@@ -1,4 +1,5 @@
-import { Effect, Layer, Stream } from "effect"
+import { Effect, Layer, Queue, Stream } from "effect"
+import * as Socket from "effect/unstable/socket/Socket"
 import { Option } from "effect"
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import {
@@ -7,6 +8,7 @@ import {
   ffmpegPath,
   isRecording,
   listInputDevices,
+  onCaptureChunk,
   peakAmplitude,
   recorderReadiness,
   resolveCaptureDevice,
@@ -16,6 +18,8 @@ import {
 } from "@/transcribe/capture"
 import { ChainError, effectiveEngines, transcribeWithFallback } from "@/transcribe/chain"
 import { hold, listHeld, readHeld, release, type Held } from "@/transcribe/held"
+import { splitWav } from "@/transcribe/segments"
+import { openLiveSession, readLiveConfig } from "@/transcribe/live"
 import { describeRemoteConfig, readRemoteConfig } from "@/transcribe/remote"
 import { localWhisperReady, TranscribeError } from "@/transcribe/local"
 
@@ -153,8 +157,8 @@ async function transcribeHeld(
   language: string | undefined,
   extra: Record<string, unknown> = {},
 ) {
-  const result = await transcribeWithFallback(audio, { filename, language, remote: readRemoteConfig() }).catch(
-    (e: unknown) => (e instanceof Error ? e : new TranscribeError(String(e))),
+  const result = await transcribeSegments(audio, filename, language).catch((e: unknown) =>
+    e instanceof Error ? e : new TranscribeError(String(e)),
   )
   // Over the platform's size limit: no engine and no retry will take it, so it is not kept.
   if (result instanceof ChainError && result.final) {
@@ -188,6 +192,27 @@ async function transcribeHeld(
   })
 }
 
+/**
+ * The engine chain over a recording too long for one upload (background takes run up to an hour):
+ * consecutive segments, text joined in order. Any segment failing fails the whole take, so the held
+ * recording is kept until every part has a transcript.
+ */
+async function transcribeSegments(audio: Uint8Array, filename: string, language: string | undefined) {
+  const remote = readRemoteConfig()
+  const parts = splitWav(audio)
+  if (parts.length === 1) return transcribeWithFallback(audio, { filename, language, remote })
+  const results = []
+  for (const part of parts) results.push(await transcribeWithFallback(part, { filename, language, remote }))
+  return {
+    text: results
+      .map((r) => r.text.trim())
+      .filter(Boolean)
+      .join(" "),
+    provider: results[0]!.provider,
+    attempts: results.flatMap((r) => r.attempts),
+  }
+}
+
 /** Holding is the safety net, not a precondition: a full disk must not also block transcription. */
 function holdOrNull(audio: Uint8Array) {
   try {
@@ -204,9 +229,12 @@ export const dictateRoute = HttpRouter.use((router) =>
         try {
           // ?device=<name> is the Settings choice. A mic that is not plugged in records from the
           // default instead of failing the take, and the response says so.
-          const requested = new URL(request.url, "http://localhost").searchParams.get("device")?.trim() || undefined
+          const params = new URL(request.url, "http://localhost").searchParams
+          const requested = params.get("device")?.trim() || undefined
           const device = resolveCaptureDevice(requested)
-          const { startedAt } = startCapture(device)
+          // ?max_seconds= lifts the 5-minute cap for background recordings; capture.ts bounds it.
+          const maxSeconds = Number(params.get("max_seconds")) || undefined
+          const { startedAt } = startCapture(device, maxSeconds)
           return HttpServerResponse.jsonUnsafe({
             recording: true,
             startedAt,
@@ -259,6 +287,69 @@ export const dictateRoute = HttpRouter.use((router) =>
 
     // RMS of the last ~50 ms of the sidecar recording, for the composer's level meter; {0, 0} idle.
     yield* add(router, "GET", "/dictate/level", () => Effect.sync(() => HttpServerResponse.jsonUnsafe(currentLevel())))
+
+    // Live dictation preview: a WebSocket from the composer, bridged to the IRIS STT relay.
+    //   ?source=window   the client sends 16 kHz PCM16 frames as it records
+    //   ?source=sidecar  this server feeds the relay from its own capture (onCaptureChunk)
+    // Client frames carry a 1-byte tag (see decodeLiveFrame) — the socket layer delivers text and
+    // binary frames alike as bytes, so a JSON control message would otherwise be forwarded as audio
+    // (measured: audio.done arrived at the relay as 21 bytes of "audio"). Server frames: LiveEvent
+    // JSON ({type:"partial"|"final"|"unavailable"}). Every failure becomes one "unavailable" and a
+    // close — the batch transcription of the held recording is the result that counts.
+    yield* add(router, "GET", "/dictate/live", (request) =>
+      Effect.gen(function* () {
+        const url = new URL(request.url, "http://localhost")
+        const fromSidecar = url.searchParams.get("source") === "sidecar"
+        const socket = yield* Effect.orDie(request.upgrade)
+        const write = yield* socket.writer
+        const outbox = yield* Queue.unbounded<string | Socket.CloseEvent>()
+        const closeWith = (event?: { type: "unavailable"; reason: string }) => {
+          if (event) Queue.offerUnsafe(outbox, JSON.stringify(event))
+          Queue.offerUnsafe(outbox, new Socket.CloseEvent(1000))
+        }
+
+        const live = readLiveConfig()
+        const session =
+          "config" in live
+            ? openLiveSession(live.config, {
+                language: url.searchParams.get("language") ?? undefined,
+                onEvent: (event) =>
+                  event.type === "unavailable" ? closeWith(event) : Queue.offerUnsafe(outbox, JSON.stringify(event)),
+                onClose: () => closeWith(),
+              })
+            : undefined
+        if (!session) closeWith({ type: "unavailable", reason: "reason" in live ? live.reason : "unavailable" })
+        const unsubscribe = session && fromSidecar ? onCaptureChunk((pcm) => session.send(pcm)) : undefined
+
+        const drain = Effect.gen(function* () {
+          while (true) {
+            const item = yield* Queue.take(outbox)
+            yield* write(item)
+            if (item instanceof Socket.CloseEvent) return
+          }
+        })
+        yield* Effect.race(
+          drain,
+          socket.runRaw((message) => {
+            if (!session) return
+            const frame = decodeLiveFrame(message)
+            if (frame?.kind === "audio") session.send(frame.pcm)
+            if (frame?.kind === "finalize") session.finalize()
+            if (frame?.kind === "done") session.done()
+          }),
+        ).pipe(
+          Effect.catchReason("SocketError", "SocketCloseError", () => Effect.void),
+          Effect.ensuring(
+            Effect.sync(() => {
+              unsubscribe?.()
+              session?.close()
+            }),
+          ),
+          Effect.orDie,
+        )
+        return HttpServerResponse.empty()
+      }),
+    )
 
     // Microphone names for the Settings picker, behind the same loopback guard as every voice route.
     yield* add(router, "GET", "/dictate/devices", () =>
@@ -339,3 +430,19 @@ export const transcribeRoute = HttpRouter.use((router) =>
     )
   }),
 )
+
+/**
+ * A client frame on /dictate/live: byte 0 is the tag, the rest the payload.
+ *   0x00 + PCM16 audio   0x01 + "finalize"   0x02 + "audio.done"
+ * Strings are accepted too (the same tag as a character) for clients whose sockets send text.
+ */
+export function decodeLiveFrame(
+  message: string | Uint8Array,
+): { kind: "audio"; pcm: Uint8Array } | { kind: "finalize" } | { kind: "done" } | undefined {
+  const bytes = typeof message === "string" ? new TextEncoder().encode(message) : message
+  if (bytes.byteLength === 0) return undefined
+  if (bytes[0] === 0x00) return bytes.byteLength > 1 ? { kind: "audio", pcm: bytes.subarray(1) } : undefined
+  if (bytes[0] === 0x01) return { kind: "finalize" }
+  if (bytes[0] === 0x02) return { kind: "done" }
+  return undefined
+}

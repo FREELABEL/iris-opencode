@@ -19,6 +19,8 @@ import { resolveBin, TranscribeError } from "./local"
  */
 
 const MAX_SECONDS = 300
+/** Background recordings (the composer's long-take mode) may run this long; inline stays at MAX_SECONDS. */
+export const MAX_BACKGROUND_SECONDS = 60 * 60
 /** 16 kHz × 16-bit mono. */
 const BYTES_PER_SECOND = 32000
 /** The level meter's window: ~50 ms of audio. */
@@ -48,9 +50,22 @@ interface Active {
   startedAt: number
   /** ffmpeg's own words. Without these, every capture failure is just "no audio". */
   stderr: string[]
+  /** ffmpeg -t for this take: MAX_SECONDS inline, up to MAX_BACKGROUND_SECONDS in background mode. */
+  maxSeconds: number
 }
 
 let active: Active | undefined
+
+const chunkListeners = new Set<(pcm: Uint8Array) => void>()
+
+/**
+ * Receive the sidecar recording as it is captured: 16 kHz mono PCM16, straight from ffmpeg's
+ * stdout. Returns the unsubscribe. Used by live dictation; the recording itself is unaffected.
+ */
+export function onCaptureChunk(listener: (pcm: Uint8Array) => void) {
+  chunkListeners.add(listener)
+  return () => void chunkListeners.delete(listener)
+}
 
 export function isRecording(): boolean {
   return Boolean(active)
@@ -145,7 +160,7 @@ export function recorderReadiness(
 }
 
 /** Begin capture. Streams 16 kHz mono PCM — already exactly what whisper wants. */
-export function startCapture(device?: string): { startedAt: number } {
+export function startCapture(device?: string, maxSeconds = MAX_SECONDS): { startedAt: number } {
   if (active) throw new TranscribeError("Already recording.")
 
   // PLATFORM FIRST, ffmpeg SECOND. A Windows user was once told to install ffmpeg on a build that
@@ -156,7 +171,17 @@ export function startCapture(device?: string): { startedAt: number } {
   if (!ffmpeg) throw new TranscribeError(missingFfmpegMessage(process.platform))
   const [first, ...fallbacks] = inputCandidates(process.platform, ffmpeg, device)
 
-  active = { proc: undefined as unknown as ChildProcess, ffmpeg, input: first!, fallbacks, chunks: [], bytes: 0, startedAt: Date.now(), stderr: [] }
+  active = {
+    proc: undefined as unknown as ChildProcess,
+    ffmpeg,
+    input: first!,
+    fallbacks,
+    chunks: [],
+    bytes: 0,
+    startedAt: Date.now(),
+    stderr: [],
+    maxSeconds: Math.min(Math.max(1, Math.floor(maxSeconds)), MAX_BACKGROUND_SECONDS),
+  }
   spawnInput(active, first!)
   return { startedAt: active.startedAt }
 }
@@ -192,7 +217,7 @@ function spawnInput(session: Active, input: CaptureInput) {
       "1",
       // A hard cap so a forgotten recording cannot run forever.
       "-t",
-      String(MAX_SECONDS),
+      String(session.maxSeconds),
       // STDOUT, not a file: the same bytes feed the level meter (GET /dictate/level) and the
       // recording, with no second process and nothing of someone's voice left on disk.
       "pipe:1",
@@ -205,6 +230,13 @@ function spawnInput(session: Active, input: CaptureInput) {
   proc.stdout?.on("data", (b: Buffer) => {
     session.chunks.push(b)
     session.bytes += b.length
+    // Live dictation tees the same PCM to the relay. A listener that throws must never cost the
+    // recording, which is the source of truth.
+    for (const listener of chunkListeners) {
+      try {
+        listener(new Uint8Array(b.buffer, b.byteOffset, b.byteLength))
+      } catch {}
+    }
   })
   proc.stderr?.on("data", (b: Buffer) => {
     session.stderr.push(b.toString())
