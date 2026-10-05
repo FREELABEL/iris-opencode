@@ -25,14 +25,23 @@ export interface RemoteConfig {
 
 /** Read ~/.iris/config.json, the same file the CLI authenticates with. Env wins. */
 export function readRemoteConfig(): RemoteConfig | null {
+  return describeRemoteConfig().config
+}
+
+/**
+ * The remote config, or — when there is none — what is missing, in words a person can act on.
+ * GET /transcribe/health reports the reason as `cloud.reason`.
+ */
+export function describeRemoteConfig(
+  configPath = join(homedir(), ".iris", "config.json"),
+): { config: RemoteConfig | null; reason?: string } {
   let apiUrl = process.env["IRIS_API_URL"]?.trim() || ""
   let token = process.env["IRIS_API_KEY"]?.trim() || ""
   let bloqId = process.env["IRIS_TRANSCRIBE_BLOQ_ID"]?.trim() || ""
 
   try {
-    const p = join(homedir(), ".iris", "config.json")
-    if (existsSync(p)) {
-      const cfg = JSON.parse(readFileSync(p, "utf8")) as Record<string, unknown>
+    if (existsSync(configPath)) {
+      const cfg = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>
       apiUrl = apiUrl || String(cfg["api_url"] ?? "")
       token = token || String(cfg["node_api_key"] ?? "")
       bloqId = bloqId || String(cfg["default_bloq_id"] ?? "")
@@ -41,12 +50,37 @@ export function readRemoteConfig(): RemoteConfig | null {
     /* an unreadable config is the same as no config */
   }
 
-  // The token is OPTIONAL. ~/.iris/config.json holds a node_api_key, which this endpoint
-  // rejects ("Invalid token format. Expected JWT or valid API token") — sending it turns a
-  // working request into a 401. The scope is what the endpoint actually requires.
-  if (!apiUrl || !bloqId) return null
-  const usable = token && /^(ey|iris_|fl_)/.test(token) ? token : undefined
-  return { apiUrl: apiUrl.replace(/\/$/, ""), token: usable, bloqId }
+  if (!apiUrl)
+    return {
+      config: null,
+      reason: "You are not signed in to IRIS. Run iris auth login in a terminal, then try dictation again.",
+    }
+  if (!bloqId)
+    return {
+      config: null,
+      reason:
+        "Dictation needs a board to file recordings under. Set default_bloq_id in ~/.iris/config.json (or IRIS_TRANSCRIBE_BLOQ_ID), then try again.",
+    }
+  // The platform refuses anonymous transcription, so a person's credential is REQUIRED. The
+  // node_api_key in ~/.iris/config.json is not one — the platform rejects it as a caller — so
+  // only shapes the platform's guard accepts are sent; anything else is reported, not tried.
+  const usable = token && isPersonToken(token) ? token : undefined
+  if (!usable)
+    return {
+      config: null,
+      reason: "Dictation needs you signed in to IRIS. Run iris auth login in a terminal, then restart IRIS.",
+    }
+  return { config: { apiUrl: apiUrl.replace(/\/$/, ""), token: usable, bloqId } }
+}
+
+/**
+ * Credentials the platform accepts as a person: a Passport JWT, the 64-character SDK token the
+ * desktop is launched with (~/.iris/sdk/.env), or a prefixed iris_/fl_ API token.
+ */
+export function isPersonToken(token: string): boolean {
+  if (/^ey[\w-]+\.[\w-]+\.[\w-]+$/.test(token)) return true
+  if (/^[A-Za-z0-9]{64}$/.test(token)) return true
+  return /^(iris_|fl_)[A-Za-z0-9_-]{8,}$/.test(token)
 }
 
 /** A failed platform call. `status` is the HTTP status, or 0 when the platform was never reached. */
@@ -54,9 +88,21 @@ export class RemoteTranscribeError extends TranscribeError {
   constructor(
     message: string,
     readonly status: number,
+    /** The platform's Retry-After, in ms, when it sent one (429/503). Unbounded here; the chain caps it. */
+    readonly retryAfterMs?: number,
   ) {
     super(message)
   }
+}
+
+/** Retry-After is either delta-seconds or an HTTP-date (RFC 9110 §10.2.3). */
+export function parseRetryAfter(value: string | null, now = Date.now()): number | undefined {
+  if (!value) return undefined
+  const trimmed = value.trim()
+  if (/^\d+$/.test(trimmed)) return Number(trimmed) * 1000
+  const at = Date.parse(trimmed)
+  if (Number.isNaN(at)) return undefined
+  return Math.max(0, at - now)
 }
 
 /** A hung connection must not hold a dictation forever; the retry chain needs it to fail. */
@@ -90,11 +136,17 @@ export async function transcribeRemote(
   if (!res.ok || !body?.success) {
     // The platform names the real cause (dead provider, bad scope, no credits). Surfaced
     // rather than flattened — that is exactly what let us diagnose the provider outage.
-    throw new RemoteTranscribeError(body?.message || `Remote transcription failed (HTTP ${res.status})`, res.status)
+    throw new RemoteTranscribeError(
+      body?.message || `Remote transcription failed (HTTP ${res.status})`,
+      res.status,
+      parseRetryAfter(res.headers.get("retry-after")),
+    )
   }
   return {
     text: String(body?.data?.text ?? "").trim(),
-    provider: String(body?.data?.provider ?? opts.provider ?? "xai"),
+    // The platform names the engine that actually answered — with a server-side chain that can
+    // differ from the one asked for. Fall back to the one asked for, never to a hard-coded name.
+    provider: String(body?.data?.provider || opts.provider || "xai"),
     ms: Date.now() - started,
   }
 }

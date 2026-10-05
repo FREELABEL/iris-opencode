@@ -2,6 +2,7 @@ import { createMemo, createResource, onMount, type Accessor } from "solid-js"
 import type { ColorScheme } from "@opencode-ai/ui/theme/context"
 import { useTheme } from "@opencode-ai/ui/theme/context"
 import { usePermission } from "@/context/permission"
+import { listDictationDevices } from "@opencode-ai/session-ui/v2/prompt-input/dictation"
 import { useServerSDK } from "@/context/server-sdk"
 import { useServerSync } from "@/context/server-sync"
 import {
@@ -171,3 +172,57 @@ export type PermissionScopeController = ReturnType<typeof createPermissionScopeC
 export type ShellSettingsController = ReturnType<typeof createShellSettingsController>
 export type AppearanceSettingsController = ReturnType<typeof createAppearanceSettingsController>
 export type SoundSettingsController = ReturnType<typeof createSoundSettingsController>
+
+export type MicrophoneOption = { name: string; connected: boolean }
+
+/**
+ * Microphone picker. The choice is stored by device NAME ("" = system default) because the two
+ * dictation recorders do not share an id space: the window recorder sees browser deviceIds, the
+ * sidecar sees ffmpeg devices. So the list is the union of both views of the hardware.
+ *
+ * The window's list is only labelled once the page has been granted the microphone, and on macOS
+ * the window's capture returns silence anyway — so the sidecar's list (GET /dictate/devices) is
+ * the one that matters there. A server without that route answers with the SPA's HTML; anything
+ * that is not a device list is ignored rather than shown as an error.
+ */
+export function createMicrophoneSettingsController() {
+  const settings = useSettings()
+  const serverSdk = useServerSDK()
+  const [devices, { refetch }] = createResource(
+    async () => {
+      const [sidecar, window] = await Promise.all([listDictationDevices(serverSdk().url), windowDevices()])
+      return [...new Set([...sidecar, ...window])]
+    },
+    { initialValue: [] as string[] },
+  )
+  const options = createMemo<MicrophoneOption[]>(() => {
+    const listed = devices.latest.map((name) => ({ name, connected: true }))
+    const saved = settings.voice.inputDevice()
+    // A saved mic that is unplugged right now stays visible, so the setting is not silently
+    // rewritten to "System default" by opening the picker.
+    const missing = saved && !devices.latest.includes(saved) ? [{ name: saved, connected: false }] : []
+    return [{ name: "", connected: true }, ...listed, ...missing]
+  })
+
+  return {
+    options,
+    current: createMemo(() => options().find((option) => option.name === settings.voice.inputDevice()) ?? options()[0]),
+    select: (option: MicrophoneOption | null) => {
+      if (!option) return
+      settings.voice.setInputDevice(option.name)
+    },
+    refresh: () => void refetch(),
+  }
+}
+
+async function windowDevices() {
+  if (typeof navigator === "undefined" || !navigator.mediaDevices?.enumerateDevices) return []
+  const all = await navigator.mediaDevices.enumerateDevices().catch(() => [])
+  return (
+    all
+      .filter((device) => device.kind === "audioinput" && device.label)
+      // Chromium lists the default and communications devices twice, under these pseudo-ids.
+      .filter((device) => device.deviceId !== "default" && device.deviceId !== "communications")
+      .map((device) => device.label.trim())
+  )
+}

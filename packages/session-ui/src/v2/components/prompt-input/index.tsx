@@ -10,7 +10,8 @@ import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
 import { KeybindV2 } from "@opencode-ai/ui/v2/keybind-v2"
 import { MenuV2 } from "@opencode-ai/ui/v2/menu-v2"
 import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
-import { createDictation } from "./dictation"
+import type { DictationControls } from "./dictation"
+import { PromptInputV2Dictate, type DictateDevices } from "./dictate"
 import { AttachmentCardV2 } from "../attachment-card-v2"
 import { CommentCardV2 } from "../comment-card-v2"
 import { typeLabel } from "../../../components/message-file"
@@ -50,21 +51,26 @@ export type PromptInputV2Props = {
    * Omit and the microphone is not rendered at all.
    */
   transcribeUrl?: () => string
+  /** Hands the mounted dictation control to whoever owns the shortcut; undefined on unmount. */
+  dictateRef?: (controls: DictationControls | undefined) => void
+  /** The dictation shortcut as displayed text, for the tooltip. */
+  dictateShortcut?: string
+  /** Inputs the mic menu offers, and the one in use. Omit and the menu offers background recording only. */
+  dictateDevices?: DictateDevices
   variantControlVisible?: boolean
   attachKeybind?: string[]
   attachShortcut?: string
 }
 
 export function PromptInputV2(props: PromptInputV2Props) {
-  // Dictation failures used to live only in a tooltip. A microphone that records, stops, and
-  // then silently does nothing is indistinguishable from a broken one — the error has to be
-  // on screen without hovering anything.
-  const [dictateError, setDictateError] = createSignal<string>()
   const i18n = useI18n()
   const state = props.controller.state
   const view = props.controller.view
   let editor: HTMLDivElement | undefined
   let localInput = false
+  // Where dictation draws while a take runs. Signals, so its portals mount once the nodes exist.
+  const [dictateLayer, setDictateLayer] = createSignal<HTMLElement>()
+  const [dictateTagLayer, setDictateTagLayer] = createSignal<HTMLElement>()
   const updateCursor = () => {
     if (!editor || !window.getSelection()?.isCollapsed) return
     props.controller.onCursor(promptInputV2Cursor(editor))
@@ -137,6 +143,9 @@ export function PromptInputV2(props: PromptInputV2Props) {
         onDragLeave={props.controller.onDragLeave}
         onDrop={props.controller.onDrop}
       >
+        <Show when={props.transcribeUrl}>
+          <div ref={setDictateLayer} data-slot="dictate-layer" class="pointer-events-none absolute inset-0 z-20" />
+        </Show>
         <Show when={state.drag === "active"}>
           <div class="pointer-events-none absolute inset-0 z-20 grid place-items-center rounded-xl bg-v2-background-bg-base/90 text-v2-text-text-base">
             {i18n.t("ui.promptInput.dropFiles")}
@@ -173,8 +182,15 @@ export function PromptInputV2(props: PromptInputV2Props) {
             spellcheck={state.mode === "normal"}
             // @ts-expect-error
             autocomplete="off"
-            class="relative z-10 block min-h-[60px] max-h-[180px] w-full overflow-y-auto whitespace-pre-wrap bg-transparent px-4 pt-4 pb-2 text-[13px] font-[440] leading-5 text-v2-text-text-base focus:outline-none empty:before:content-['\200B'] [&_[data-mention=file]]:text-syntax-property [&_[data-mention=agent]]:text-syntax-type [&_[data-mention=reference]]:text-syntax-keyword"
-            classList={{ "font-mono!": state.mode === "shell", "opacity-50": props.disabled }}
+            class="relative z-10 block min-h-[60px] max-h-[180px] w-full overflow-y-auto whitespace-pre-wrap bg-transparent px-4 pt-4 text-[13px] font-[440] leading-5 text-v2-text-text-base focus:outline-none empty:before:content-['\200B'] [&_[data-mention=file]]:text-syntax-property [&_[data-mention=agent]]:text-syntax-type [&_[data-mention=reference]]:text-syntax-keyword"
+            // With dictation the waveform's lane is reserved all the time — 30px below the text instead
+            // of 8 — so a take starting never moves the text or grows the composer.
+            classList={{
+              "font-mono!": state.mode === "shell",
+              "opacity-50": props.disabled,
+              "pb-2": !props.transcribeUrl,
+              "pb-[30px]": !!props.transcribeUrl,
+            }}
             onInput={(event) => {
               const cursor = promptInputV2Cursor(event.currentTarget)
               const prompt = parsePromptInputV2Editor(event.currentTarget)
@@ -210,7 +226,8 @@ export function PromptInputV2(props: PromptInputV2Props) {
 
         <div class="flex h-11 items-center px-2">
           <div
-            class="flex min-w-0 flex-1 items-center gap-1"
+            ref={setDictateTagLayer}
+            class="relative flex min-w-0 flex-1 items-center gap-1"
             aria-hidden={state.mode === "shell"}
             inert={state.mode === "shell" ? true : undefined}
             style={buttons()}
@@ -231,24 +248,16 @@ export function PromptInputV2(props: PromptInputV2Props) {
               integrationsLabel={props.onIntegrations ? i18n.t("ui.promptInput.integrations") : undefined}
               onIntegrations={props.onIntegrations}
             />
-            <Show when={dictateError()}>
-              {(message) => (
-                <div
-                  data-slot="prompt-dictate-error"
-                  role="status"
-                  class="mr-1 max-w-[320px] truncate text-[11px] text-v2-text-text-danger"
-                  title={message()}
-                >
-                  {message()}
-                </div>
-              )}
-            </Show>
             <Show when={props.transcribeUrl}>
               {(url) => (
                 <PromptInputV2Dictate
                   url={url()}
                   disabled={props.disabled}
-                  onError={(message) => setDictateError(message)}
+                  controls={props.dictateRef}
+                  shortcut={props.dictateShortcut}
+                  layer={dictateLayer}
+                  tagLayer={dictateTagLayer}
+                  devices={props.dictateDevices}
                   insert={(text) => {
                     // Append into the editor and let the component's own onInput re-parse it.
                     // Going through the real input path keeps attachments and mentions intact —
@@ -788,107 +797,3 @@ function PromptInputV2SuggestionIcon(props: { item: PromptInputV2Suggestion }) {
   )
 }
 
-/**
- * Microphone. Records in the webview and posts to the local server this app already runs,
- * which sends the audio to Grok (xAI) through the IRIS platform. The audio leaves the machine,
- * so the tooltip says so.
- *
- * Recording is shown with a colour change, a pulsing icon AND a running timer. An earlier
- * version of this shipped with none of that and was indistinguishable from idle — an active
- * microphone nobody can see is the failure this control exists to prevent.
- */
-function PromptInputV2Dictate(props: {
-  url: () => string
-  disabled?: boolean
-  insert: (text: string) => void
-  onError?: (message: string | undefined) => void
-}) {
-  const [error, setError] = createSignal<string>()
-  const dictation = createDictation({
-    url: props.url,
-    onError: (message) => {
-      setError(message)
-      props.onError?.(message)
-    },
-    onTranscript: (text) => {
-      setError(undefined)
-      props.onError?.(undefined)
-      props.insert(text)
-    },
-  })
-
-  return (
-    <>
-      <Show when={dictation.held().length > 0}>
-        <span data-slot="prompt-dictate-held" class="flex items-center gap-1 text-[11px] text-v2-text-text-muted">
-          <span class="tabular-nums">
-            {dictation.held().length === 1 ? "1 saved recording" : `${dictation.held().length} saved recordings`}
-            {dictation.retrying()
-              ? " · retrying…"
-              : dictation.nextRetryIn() !== undefined
-                ? ` · retrying in ${dictation.nextRetryIn()}s`
-                : ""}
-          </span>
-          <ButtonV2
-            type="button"
-            size="small"
-            variant="ghost"
-            data-action="prompt-dictate-retry"
-            disabled={dictation.retrying()}
-            onClick={() => void dictation.retryHeld()}
-          >
-            Retry
-          </ButtonV2>
-          <ButtonV2
-            type="button"
-            size="small"
-            variant="ghost-muted"
-            data-action="prompt-dictate-discard"
-            disabled={dictation.retrying()}
-            onClick={() => {
-              setError(undefined)
-              props.onError?.(undefined)
-              void dictation.discardHeld()
-            }}
-          >
-            Discard
-          </ButtonV2>
-        </span>
-      </Show>
-      <TooltipV2
-        placement="top"
-        value={
-          error() ??
-          (dictation.phase() === "recording"
-            ? "Stop and transcribe"
-            : dictation.phase() === "transcribing"
-              ? "Transcribing with Grok…"
-              : "Dictate (transcribed by Grok)")
-        }
-      >
-        <IconButtonV2
-          type="button"
-          data-action="prompt-dictate"
-          variant="ghost-muted"
-          size="large"
-          disabled={props.disabled || dictation.phase() === "transcribing"}
-          onClick={() => dictation.toggle()}
-          aria-label="Dictate"
-          icon={
-            <span class="flex items-center gap-1">
-              <IconV2
-                name="microphone"
-                class={dictation.phase() === "recording" ? "animate-pulse text-v2-text-text-danger" : undefined}
-              />
-              <Show when={dictation.phase() === "recording"}>
-                <span class="font-mono text-[10px] tabular-nums text-v2-text-text-danger">
-                  {Math.floor(dictation.seconds() / 60)}:{String(dictation.seconds() % 60).padStart(2, "0")}
-                </span>
-              </Show>
-            </span>
-          }
-        />
-      </TooltipV2>
-    </>
-  )
-}

@@ -18,7 +18,7 @@ use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 use tokio::net::TcpSocket;
 
-use crate::window_customizer::PinchZoomDisablePlugin;
+use crate::window_customizer::{LinuxMicrophonePlugin, PinchZoomDisablePlugin};
 
 #[derive(Clone)]
 struct ServerState(Arc<Mutex<Option<CommandChild>>>);
@@ -780,6 +780,7 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(PinchZoomDisablePlugin)
+        .plugin(LinuxMicrophonePlugin)
         .invoke_handler(tauri::generate_handler![
             kill_sidecar,
             copy_logs_to_clipboard,

@@ -3,7 +3,7 @@ import { createStore } from "solid-js/store"
 import { PromptInputV2, type PromptInputV2PersistedState, type PromptInputV2Suggestion } from "."
 import { createPromptInputV2Controller } from "./interaction"
 import { createPromptInputV2Store } from "./store"
-import { createEffect } from "solid-js"
+import { createEffect, createSignal } from "solid-js"
 
 const agents = [
   { id: "build", label: "Build" },
@@ -104,7 +104,8 @@ const commandSuggestions: PromptInputV2Suggestion[] = [
   },
 ]
 
-function ControlledPromptInput() {
+function ControlledPromptInput(props: { dictation?: boolean } = {}) {
+  const [device, setDevice] = createSignal("")
   // Agent choice is a persisted user/workspace preference in v1, not part of PromptStore.
   const [preferences, setPreferences] = createStore({ agent: "build" })
 
@@ -205,7 +206,20 @@ function ControlledPromptInput() {
 
   return (
     <div class="mx-auto flex max-w-[760px] flex-col gap-4 pt-32">
-      <PromptInputV2 controller={controller} />
+      <PromptInputV2
+        controller={controller}
+        transcribeUrl={props.dictation ? () => window.location.origin : undefined}
+        dictateShortcut={props.dictation ? "Ctrl+Shift+Space" : undefined}
+        dictateDevices={
+          props.dictation
+            ? {
+                list: async () => ["Microphone Array (Realtek)", "Shure MV7", "AirPods Pro"],
+                current: () => device(),
+                select: setDevice,
+              }
+            : undefined
+        }
+      />
     </div>
   )
 }
@@ -218,4 +232,9 @@ export default {
 
 export const ControlledComposition = {
   render: () => <ControlledPromptInput />,
+}
+
+/** The microphone control. In a browser started with a fake media device the waveform moves. */
+export const Dictation = {
+  render: () => <ControlledPromptInput dictation />,
 }

@@ -23,6 +23,8 @@ export interface Attempt {
   /** HTTP status from the platform; 0 = never reached. Absent for on-device whisper. */
   status?: number
   error?: string
+  /** A 429's Retry-After, in ms, as the platform sent it (uncapped). */
+  retryAfterMs?: number
   ms: number
 }
 
@@ -30,9 +32,27 @@ export class ChainError extends TranscribeError {
   constructor(
     message: string,
     readonly attempts: Attempt[],
+    /**
+     * True when no engine and no retry can succeed on THIS recording (a 413: it is over the
+     * platform's size limit). The caller must not hold it for a retry that would fail the same way.
+     */
+    readonly final = false,
+    /** The HTTP status that made it final, when there was one. */
+    readonly status?: number,
   ) {
     super(message)
   }
+}
+
+/** Longest a Retry-After may hold one dictation inside the chain. The person is waiting. */
+export const MAX_RETRY_AFTER_MS = 5000
+
+/** Default engine order. Grok primary; OpenRouter second as the multi-model aggregator. */
+const DEFAULT_PROVIDERS = "xai,openrouter,openai"
+
+/** The engines a dictation would try right now, in order — what /transcribe/health reports. */
+export function effectiveEngines(opts: { remote: RemoteConfig | null; local: boolean; providers?: string[] }) {
+  return [...(opts.remote ? (opts.providers ?? defaultProviders()) : []), ...(opts.local ? ["whisper-local"] : [])]
 }
 
 export async function transcribeWithFallback(
@@ -45,16 +65,23 @@ export async function transcribeWithFallback(
     local?: boolean
     /** Waits between retries of ONE engine; its length is the retry count. */
     backoffMs?: number[]
+    /** Cap on a server's Retry-After; defaults to MAX_RETRY_AFTER_MS. */
+    maxRetryAfterMs?: number
   },
 ) {
   const attempts: Attempt[] = []
   const backoff = opts.backoffMs ?? [400, 1200]
   const remote = opts.remote
+  // A 429's Retry-After, owed before the NEXT request — same engine or the next one, since the
+  // limit may be the platform's own and every engine sits behind it.
+  let owed = 0
 
   for (const provider of remote ? (opts.providers ?? defaultProviders()) : []) {
     if (!remote) break
     for (const wait of [0, ...backoff]) {
-      if (wait) await Bun.sleep(wait)
+      const pause = Math.max(wait, owed)
+      owed = 0
+      if (pause) await Bun.sleep(pause)
       const started = Date.now()
       const result = await transcribeRemote(audio, remote, {
         filename: opts.filename,
@@ -66,7 +93,13 @@ export async function transcribeWithFallback(
         return { text: stripNonSpeech(result.text), provider: result.provider, attempts }
       }
       const status = result instanceof RemoteTranscribeError ? result.status : 0
-      attempts.push({ engine: provider, ok: false, status, error: result.message, ms: Date.now() - started })
+      const retryAfterMs = result instanceof RemoteTranscribeError ? result.retryAfterMs : undefined
+      attempts.push({ engine: provider, ok: false, status, error: result.message, retryAfterMs, ms: Date.now() - started })
+      // Over the size limit: every engine sits behind the same limit, and a held copy would be
+      // retried into the same refusal for a week. Stop here and say what the limit is.
+      if (status === 413) throw new ChainError(tooLargeMessage(result.message), attempts, true, 413)
+      if (status === 429 && retryAfterMs !== undefined)
+        owed = Math.min(retryAfterMs, opts.maxRetryAfterMs ?? MAX_RETRY_AFTER_MS)
       if (!retryable(status)) break
     }
   }
@@ -90,9 +123,17 @@ function retryable(status: number) {
   return status === 0 || status === 408 || status === 429 || status >= 500
 }
 
-/** IRIS_TRANSCRIBE_PROVIDERS=xai,openai — platform provider names, tried in order. */
+/**
+ * The platform refuses uploads over 25 MB — about 13 minutes of the 16 kHz mono WAV both capture
+ * paths produce. Named in the message so the person knows to split the take, not to retry it.
+ */
+function tooLargeMessage(platform: string) {
+  return `That recording is too long to transcribe: the platform accepts up to 25 MB of audio (about 13 minutes). Record it in shorter parts.${platform ? ` (${platform})` : ""}`
+}
+
+/** IRIS_TRANSCRIBE_PROVIDERS=xai,openrouter,openai — platform provider names, tried in order. */
 function defaultProviders() {
-  const list = (process.env["IRIS_TRANSCRIBE_PROVIDERS"] ?? "xai,openai")
+  const list = (process.env["IRIS_TRANSCRIBE_PROVIDERS"] ?? DEFAULT_PROVIDERS)
     .split(",")
     .map((p) => p.trim())
     .filter(Boolean)
