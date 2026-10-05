@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "fs"
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "fs"
 import { homedir } from "os"
 import path from "path"
 
@@ -208,7 +208,7 @@ export namespace Artifacts {
   export function ensureIgnored(rootDir: string) {
     const file = path.join(rootDir, ".gitignore")
     if (existsSync(file)) return
-    mkdirSync(rootDir, { recursive: true })
+    ensureDir(rootDir)
     writeFileSync(
       file,
       "# IRIS Genesis artifacts are local drafts — publish them from the app, don't commit them.\n*\n",
@@ -230,10 +230,36 @@ export namespace Artifacts {
     return "a" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7)
   }
 
+  /**
+   * Write via a temp file and rename, so a reader never sees half a file. On Windows, renaming
+   * over an existing file can fail with EEXIST/EPERM — seen in a project under OneDrive, where
+   * every artifact UPDATE failed while creates worked. Then write the file in place instead:
+   * one plain write beats refusing the update.
+   */
   function writeAtomic(file: string, data: string) {
     const tmp = file + ".tmp-" + process.pid
     writeFileSync(tmp, data)
-    renameSync(tmp, file)
+    try {
+      renameSync(tmp, file)
+    } catch (e) {
+      rmSync(tmp, { force: true })
+      if (!replaceRefused(e)) throw e
+      writeFileSync(file, data)
+    }
+  }
+
+  function replaceRefused(e: unknown) {
+    const code = (e as { code?: unknown } | null)?.code
+    return code === "EEXIST" || code === "EPERM" || code === "EACCES" || code === "EBUSY"
+  }
+
+  /** mkdir -p that accepts an existing folder, which Bun on Windows can report as EEXIST (OneDrive). */
+  function ensureDir(dir: string) {
+    try {
+      mkdirSync(dir, { recursive: true })
+    } catch (e) {
+      if ((e as { code?: unknown } | null)?.code !== "EEXIST" || !statSync(dir).isDirectory()) throw e
+    }
   }
 
   /**
@@ -273,7 +299,7 @@ export namespace Artifacts {
       throw new Conflict(id, prev?.revision ?? 0, input.baseRevision, prev?.author)
     }
     const author = input.author ? readAuthor(input.author) : undefined
-    mkdirSync(dir, { recursive: true })
+    ensureDir(dir)
     const filename = prev && prev.kind === input.kind ? prev.filename : `content.${EXT[input.kind]}`
     const stamp = now.toISOString()
     const meta: Meta = {
