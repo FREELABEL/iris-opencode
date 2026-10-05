@@ -235,7 +235,7 @@ export const dict = {
   "ui.promptInput.dictate.microphone": "Mikrofon",
   "ui.promptInput.dictate.systemDefault": "Systemstandard",
   "ui.promptInput.dictate.dismiss": "Schließen",
-  "ui.promptInput.dictate.saved.one": "1 gespeicherte Aufnahme",
+  "ui.promptInput.dictate.saved.one": "{{count}} gespeicherte Aufnahme",
   "ui.promptInput.dictate.saved.other": "{{count}} gespeicherte Aufnahmen",
   "ui.promptInput.dictate.retryIn": "erneuter Versuch in {{seconds}} s",
   "ui.promptInput.dictate.retrying": "erneuter Versuch…",

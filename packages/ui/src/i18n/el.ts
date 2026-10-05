@@ -144,7 +144,7 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.microphone": "Μικρόφωνο",
   "ui.promptInput.dictate.systemDefault": "Προεπιλογή συστήματος",
   "ui.promptInput.dictate.dismiss": "Κλείσιμο",
-  "ui.promptInput.dictate.saved.one": "1 αποθηκευμένη ηχογράφηση",
+  "ui.promptInput.dictate.saved.one": "{{count}} αποθηκευμένη ηχογράφηση",
   "ui.promptInput.dictate.saved.other": "{{count}} αποθηκευμένες ηχογραφήσεις",
   "ui.promptInput.dictate.retryIn": "νέα προσπάθεια σε {{seconds}} δ",
   "ui.promptInput.dictate.retrying": "νέα προσπάθεια…",

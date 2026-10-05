@@ -144,7 +144,7 @@ export const dict = {
   "ui.promptInput.dictate.microphone": "Микрофон",
   "ui.promptInput.dictate.systemDefault": "Пешфарзи система",
   "ui.promptInput.dictate.dismiss": "Пӯшидан",
-  "ui.promptInput.dictate.saved.one": "1 сабти захирашуда",
+  "ui.promptInput.dictate.saved.one": "{{count}} сабти захирашуда",
   "ui.promptInput.dictate.saved.other": "{{count}} сабти захирашуда",
   "ui.promptInput.dictate.retryIn": "кӯшиши такрорӣ пас аз {{seconds}} с",
   "ui.promptInput.dictate.retrying": "кӯшиши такрорӣ…",

@@ -144,7 +144,7 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.microphone": "Hljóðnemi",
   "ui.promptInput.dictate.systemDefault": "Sjálfgefið kerfisins",
   "ui.promptInput.dictate.dismiss": "Loka",
-  "ui.promptInput.dictate.saved.one": "1 vistuð upptaka",
+  "ui.promptInput.dictate.saved.one": "{{count}} vistuð upptaka",
   "ui.promptInput.dictate.saved.other": "{{count}} vistaðar upptökur",
   "ui.promptInput.dictate.retryIn": "reynir aftur eftir {{seconds}} sek.",
   "ui.promptInput.dictate.retrying": "reynir aftur…",

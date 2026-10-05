@@ -143,7 +143,7 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.microphone": "ማይክሮፎን",
   "ui.promptInput.dictate.systemDefault": "የስርዓት ነባሪ",
   "ui.promptInput.dictate.dismiss": "ዝጋ",
-  "ui.promptInput.dictate.saved.one": "1 የተቀመጠ ቀረጻ",
+  "ui.promptInput.dictate.saved.one": "{{count}} የተቀመጠ ቀረጻ",
   "ui.promptInput.dictate.saved.other": "{{count}} የተቀመጡ ቀረጻዎች",
   "ui.promptInput.dictate.retryIn": "በ{{seconds}} ሰከንድ ውስጥ እንደገና ይሞከራል",
   "ui.promptInput.dictate.retrying": "እንደገና በመሞከር ላይ…",

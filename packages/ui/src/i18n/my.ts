@@ -145,7 +145,7 @@ export const dict = {
   "ui.promptInput.dictate.microphone": "မိုက်ခရိုဖုန်း",
   "ui.promptInput.dictate.systemDefault": "စနစ်မူရင်း",
   "ui.promptInput.dictate.dismiss": "ပယ်ရန်",
-  "ui.promptInput.dictate.saved.one": "သိမ်းထားသော အသံဖမ်းမှု 1 ခု",
+  "ui.promptInput.dictate.saved.one": "သိမ်းထားသော အသံဖမ်းမှု {{count}} ခု",
   "ui.promptInput.dictate.saved.other": "သိမ်းထားသော အသံဖမ်းမှု {{count}} ခု",
   "ui.promptInput.dictate.retryIn": "{{seconds}} စက္ကန့်အတွင်း ပြန်ကြိုးစားမည်",
   "ui.promptInput.dictate.retrying": "ပြန်ကြိုးစားနေသည်…",

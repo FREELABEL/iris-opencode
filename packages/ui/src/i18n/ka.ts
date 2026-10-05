@@ -144,7 +144,7 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.microphone": "მიკროფონი",
   "ui.promptInput.dictate.systemDefault": "სისტემის ნაგულისხმევი",
   "ui.promptInput.dictate.dismiss": "დახურვა",
-  "ui.promptInput.dictate.saved.one": "1 შენახული ჩანაწერი",
+  "ui.promptInput.dictate.saved.one": "{{count}} შენახული ჩანაწერი",
   "ui.promptInput.dictate.saved.other": "{{count}} შენახული ჩანაწერი",
   "ui.promptInput.dictate.retryIn": "ხელახლა ცდა {{seconds}} წმ-ში",
   "ui.promptInput.dictate.retrying": "ხელახლა ცდა…",

@@ -146,7 +146,7 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.microphone": "སྐད་སྒྲོག་འཕྲུལ་ཆས།",
   "ui.promptInput.dictate.systemDefault": "ལམ་ལུགས་སྔོན་སྒྲིག",
   "ui.promptInput.dictate.dismiss": "ཁ་བསྡམས།",
-  "ui.promptInput.dictate.saved.one": "སྲུང་བཞག་འབད་ཡོད་པའི་སྐད་བསྡུ་ 1",
+  "ui.promptInput.dictate.saved.one": "སྲུང་བཞག་འབད་ཡོད་པའི་སྐད་བསྡུ་ {{count}}",
   "ui.promptInput.dictate.saved.other": "སྲུང་བཞག་འབད་ཡོད་པའི་སྐད་བསྡུ་ {{count}}",
   "ui.promptInput.dictate.retryIn": "སྐར་ཆ་ {{seconds}} ནང་ལོག་འབད་རྩོལ་བསྐྱེད་འོང་།",
   "ui.promptInput.dictate.retrying": "ལོག་འབད་རྩོལ་བསྐྱེད་དོ།…",

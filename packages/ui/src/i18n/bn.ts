@@ -146,7 +146,7 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.microphone": "মাইক্রোফোন",
   "ui.promptInput.dictate.systemDefault": "সিস্টেম ডিফল্ট",
   "ui.promptInput.dictate.dismiss": "বন্ধ করুন",
-  "ui.promptInput.dictate.saved.one": "1টি সংরক্ষিত রেকর্ডিং",
+  "ui.promptInput.dictate.saved.one": "{{count}}টি সংরক্ষিত রেকর্ডিং",
   "ui.promptInput.dictate.saved.other": "{{count}}টি সংরক্ষিত রেকর্ডিং",
   "ui.promptInput.dictate.retryIn": "{{seconds}} সেকেন্ডে আবার চেষ্টা করা হবে",
   "ui.promptInput.dictate.retrying": "আবার চেষ্টা করা হচ্ছে…",

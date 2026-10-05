@@ -211,7 +211,7 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.microphone": "Mikrofoni",
   "ui.promptInput.dictate.systemDefault": "Järjestelmän oletus",
   "ui.promptInput.dictate.dismiss": "Sulje",
-  "ui.promptInput.dictate.saved.one": "1 tallennettu äänite",
+  "ui.promptInput.dictate.saved.one": "{{count}} tallennettu äänite",
   "ui.promptInput.dictate.saved.other": "{{count}} tallennettua äänitettä",
   "ui.promptInput.dictate.retryIn": "yritetään uudelleen {{seconds}} s kuluttua",
   "ui.promptInput.dictate.retrying": "yritetään uudelleen…",

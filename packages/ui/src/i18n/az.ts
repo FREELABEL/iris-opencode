@@ -144,7 +144,7 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.microphone": "Mikrofon",
   "ui.promptInput.dictate.systemDefault": "Sistem standartı",
   "ui.promptInput.dictate.dismiss": "Bağla",
-  "ui.promptInput.dictate.saved.one": "1 yadda saxlanmış yazı",
+  "ui.promptInput.dictate.saved.one": "{{count}} yadda saxlanmış yazı",
   "ui.promptInput.dictate.saved.other": "{{count}} yadda saxlanmış yazı",
   "ui.promptInput.dictate.retryIn": "{{seconds}} san. sonra yenidən cəhd",
   "ui.promptInput.dictate.retrying": "yenidən cəhd edilir…",

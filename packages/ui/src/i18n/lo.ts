@@ -144,7 +144,7 @@ export const dict = {
   "ui.promptInput.dictate.microphone": "ໄມໂຄຣໂຟນ",
   "ui.promptInput.dictate.systemDefault": "ຄ່າເລີ່ມຕົ້ນຂອງລະບົບ",
   "ui.promptInput.dictate.dismiss": "ປິດ",
-  "ui.promptInput.dictate.saved.one": "ການບັນທຶກທີ່ບັນທຶກໄວ້ 1 ລາຍການ",
+  "ui.promptInput.dictate.saved.one": "ການບັນທຶກທີ່ບັນທຶກໄວ້ {{count}} ລາຍການ",
   "ui.promptInput.dictate.saved.other": "ການບັນທຶກທີ່ບັນທຶກໄວ້ {{count}} ລາຍການ",
   "ui.promptInput.dictate.retryIn": "ລອງໃໝ່ໃນ {{seconds}} ວິນາທີ",
   "ui.promptInput.dictate.retrying": "ກຳລັງລອງໃໝ່…",

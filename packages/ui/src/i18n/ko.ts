@@ -125,7 +125,7 @@ export const dict = {
   "ui.promptInput.dictate.microphone": "마이크",
   "ui.promptInput.dictate.systemDefault": "시스템 기본값",
   "ui.promptInput.dictate.dismiss": "닫기",
-  "ui.promptInput.dictate.saved.one": "저장된 녹음 1개",
+  "ui.promptInput.dictate.saved.one": "저장된 녹음 {{count}}개",
   "ui.promptInput.dictate.saved.other": "저장된 녹음 {{count}}개",
   "ui.promptInput.dictate.retryIn": "{{seconds}}초 후 재시도",
   "ui.promptInput.dictate.retrying": "재시도 중…",

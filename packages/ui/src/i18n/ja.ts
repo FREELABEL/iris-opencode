@@ -148,7 +148,7 @@ export const dict = {
   "ui.promptInput.dictate.microphone": "マイク",
   "ui.promptInput.dictate.systemDefault": "システムのデフォルト",
   "ui.promptInput.dictate.dismiss": "閉じる",
-  "ui.promptInput.dictate.saved.one": "保存済みの録音 1 件",
+  "ui.promptInput.dictate.saved.one": "保存済みの録音 {{count}} 件",
   "ui.promptInput.dictate.saved.other": "保存済みの録音 {{count}} 件",
   "ui.promptInput.dictate.retryIn": "{{seconds}} 秒後に再試行",
   "ui.promptInput.dictate.retrying": "再試行中…",
