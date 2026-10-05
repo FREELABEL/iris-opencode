@@ -2,11 +2,12 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { confirmWiden } from "./exposure-gate"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, dim, bold, FL_API, isNonInteractive, writeJson, failNoOp} from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, dim, bold, FL_API, IRIS_API, isNonInteractive, writeJson, failNoOp} from "./iris-api"
 import * as fs from "fs"
 import * as path from "path"
 import { firstArray } from "../../util/array"
 import { DatasetHooksGroup } from "./platform-atlas-dataset-hooks"
+import { DRAFT_SYSTEM_PROMPT, checkFields, fieldsForCreate, normalizeDraft, parseModelJson } from "./atlas-schema-draft"
 
 // ============================================================================
 // Atlas Datasets CLI — Schema-driven generic data platform
@@ -123,18 +124,28 @@ const SchemaCreateCommand = cmd({
       .option("name", { type: "string", demandOption: true, describe: "schema name" })
       .option("slug", { type: "string", describe: "url-safe slug (auto from name if omitted)" })
       .option("bloq", { type: "number", describe: "bloq ID to scope to" })
-      .option("fields", { type: "string", describe: "JSON fields definition or path to .json file" })
-      .option("settings", { type: "string", describe: "JSON settings blob or path to .json file — an onboarding flow lives here" }),
+      // nargs: 1 so yargs takes a bare `-` as the value instead of an unknown positional.
+      .option("fields", { type: "string", nargs: 1, describe: "JSON fields definition, path to .json file, or - for stdin (e.g. a `schemas draft --json`)" })
+      .option("settings", { type: "string", describe: "JSON settings blob or path to .json file — an onboarding flow lives here" })
+      .option("dry-run", { type: "boolean", default: false, describe: "check and print what would be created; write nothing" }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Create Schema")
-    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    // A dry run writes nothing and reads nothing from the server, so it needs no token (#187903):
+    // reviewing a draft must not depend on being signed in.
+    const dryRun = Boolean(args["dry-run"])
+    if (!dryRun) {
+      const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    }
 
     let fields: any = null
     if (args.fields) {
       try {
-        // Try as file path first
-        if (args.fields.endsWith(".json") && fs.existsSync(args.fields)) {
+        // `-` reads the definition from stdin, so a draft pipes straight in (#187903).
+        if (args.fields === "-") {
+          fields = JSON.parse(fs.readFileSync(0, "utf8"))
+        } else if (args.fields.endsWith(".json") && fs.existsSync(args.fields)) {
+          // Try as file path first
           fields = JSON.parse(fs.readFileSync(args.fields, "utf8"))
         } else {
           fields = JSON.parse(args.fields)
@@ -158,8 +169,9 @@ const SchemaCreateCommand = cmd({
       }
     }
 
-    // Normalize: wrap bare arrays so API receives { fields: [...] }
-    const normalizedFields = Array.isArray(fields) ? { fields } : fields
+    // Normalize: wrap bare arrays so API receives { fields: [...] }; a `schemas draft` is
+    // unwrapped to its fields so its review notes are not stored in the schema (#187903).
+    const normalizedFields = fieldsForCreate(fields)
     const settingsArg = readJsonArg(args.settings as string | undefined, "settings")
     if (!settingsArg.ok) { prompts.outro("Done"); return }
 
@@ -167,6 +179,21 @@ const SchemaCreateCommand = cmd({
     if (args.slug) body.slug = args.slug
     if (args.bloq != null) body.bloq_id = args.bloq
     if (settingsArg.value !== undefined) body.settings = settingsArg.value
+
+    if (dryRun) {
+      // The refusals fl-api would give (#185139: every field declares visibility), WITHOUT the
+      // write. Non-zero on a problem, so `draft | create --dry-run` is a usable gate in a script.
+      const problems = checkFields(normalizedFields)
+      if (problems.length) {
+        for (const p of problems) prompts.log.error(p)
+        prompts.outro("Dry run — would be refused; nothing written")
+        process.exitCode = 1
+        return
+      }
+      prompts.log.info(JSON.stringify(body, null, 2))
+      prompts.outro(`Dry run — ${normalizedFields.fields.length} field(s) OK; nothing written. Drop --dry-run to create.`)
+      return
+    }
 
     const spinner = prompts.spinner()
     spinner.start("Creating…")
@@ -184,6 +211,82 @@ const SchemaCreateCommand = cmd({
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
+  },
+})
+
+// #187903 — a prompt DRAFTS a schema; it never creates one. See atlas-schema-draft.ts for why
+// the guarantees (visibility on every field, PHI hints only raise) live outside the model.
+const SchemaDraftCommand = cmd({
+  command: "draft <sentence..>",
+  describe: "draft a typed schema from a sentence — prints it for review, creates nothing",
+  builder: (y) =>
+    y
+      .positional("sentence", { type: "string", array: true, describe: 'e.g. "patient intake with insurance"' })
+      .option("json", { type: "boolean", default: false, describe: "print the draft as JSON (pipe to `schemas create --fields - --dry-run`)" })
+      .option("model", { type: "string", default: "iris/gpt-4o-mini", describe: "IRIS model id (served through the IRIS model route)" }),
+  async handler(args) {
+    const sentence = ((args.sentence as unknown as string[]) ?? []).join(" ").trim()
+    const json = Boolean(args.json)
+    if (!sentence) failNoOp("draft", 'describe the dataset, e.g. iris datasets schemas draft "patient intake with insurance"')
+    if (!json) { UI.empty(); prompts.intro("◈  Draft Schema") }
+    const token = await requireAuth(); if (!token) { if (!json) prompts.outro("Done"); return }
+
+    const spinner = json ? null : prompts.spinner()
+    spinner?.start("Drafting…")
+    let raw: unknown = null
+    try {
+      // THE IRIS MODEL ROUTE, never a provider: it is where the PHI egress guard and metering
+      // live. The sentence is a description, not data, but a CLI that skips the route for
+      // "harmless" prompts is how the guard stops covering the harmful ones.
+      const res = await irisFetch("/api/v6/openai/chat/completions", {
+        method: "POST",
+        body: JSON.stringify({
+          model: args.model,
+          temperature: 0.2,
+          max_tokens: 2000,
+          response_format: { type: "json_object" },
+          messages: [
+            { role: "system", content: DRAFT_SYSTEM_PROMPT },
+            { role: "user", content: sentence },
+          ],
+        }),
+      }, IRIS_API)
+      const ok = await handleApiError(res, "Draft schema")
+      if (!ok) { spinner?.stop("Failed", 1); process.exitCode = 1; return }
+      const content: string = ((await res.json()) as any)?.choices?.[0]?.message?.content ?? ""
+      raw = parseModelJson(content)
+    } catch (err) {
+      spinner?.stop("Error", 1)
+      const msg = err instanceof Error ? err.message : String(err)
+      if (json) await writeJson({ success: false, error: msg })
+      else prompts.log.error(msg)
+      process.exitCode = 1
+      return
+    }
+
+    const draft = normalizeDraft(raw, sentence)
+    if (!draft.fields.length) {
+      // An empty draft is a failure to draft, not a schema with no fields — say so, non-zero.
+      spinner?.stop("No usable fields", 1)
+      if (json) await writeJson({ success: false, error: "The model returned no usable fields", draft })
+      else prompts.log.error("The model returned no usable fields — try a more specific sentence.")
+      process.exitCode = 1
+      return
+    }
+
+    if (json) { await writeJson(draft); return }
+    spinner?.stop(`Drafted ${bold(draft.name)} — ${draft.fields.length} field(s), not created`)
+    printDivider()
+    for (const f of draft.fields) {
+      const why = draft.review.find((r) => r.key === f.key)?.why ?? ""
+      const vis = f.visibility === "phi" ? bold("phi") : f.visibility
+      console.log(`  ${f.key.padEnd(28)} ${f.type.padEnd(9)} ${String(vis).padEnd(8)} ${dim(why)}`)
+    }
+    printDivider()
+    prompts.outro(
+      `Review, then create explicitly:\n  iris datasets schemas draft ${JSON.stringify(sentence)} --json | ` +
+      `iris datasets schemas create --name ${JSON.stringify(draft.name)} --fields - --dry-run`,
+    )
   },
 })
 
@@ -329,7 +432,7 @@ const SchemasGroup = cmd({
   command: "schemas",
   aliases: ["schema"],
   describe: "manage dataset schemas",
-  builder: (y) => y.command(SchemaListCommand).command(SchemaShowCommand).command(SchemaCreateCommand).command(SchemaUpdateCommand).command(SchemaDeleteCommand).demandCommand(),
+  builder: (y) => y.command(SchemaListCommand).command(SchemaShowCommand).command(SchemaCreateCommand).command(SchemaDraftCommand).command(SchemaUpdateCommand).command(SchemaDeleteCommand).demandCommand(),
   async handler() {},
 })
 
