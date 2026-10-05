@@ -44,6 +44,7 @@ import { HiveConnectCommandExport } from "./platform-hive-connect"
 import { exitCodeForResult, verdictForResult, renderOutput, type ScriptRunResult } from "./hive-script-result"
 import { runLocalOAuthConnect } from "./integration-oauth-connect"
 import { HiveKeysCommandExport } from "./platform-hive-keys"
+import { HiveVaultsCommandExport } from "./platform-hive-vaults"
 import { HiveHostCommandExport } from "./platform-hive-host"
 import {
   HiveSendCommand,
@@ -5001,6 +5002,8 @@ export const PlatformHiveCommand = productCommand({
       .command(HiveReleaseCommand)
       .command(HiveProvidersCommand)
       .command(VaultCommandExport)
+      // Encrypted, per-bloq vaults for PHI task data on a node (create/list/lock/unlock/destroy).
+      .command(HiveVaultsCommandExport)
       // Envelope encryption keys (#177946 phase 3) — a node must register one before it can
       // RECEIVE an envelope transfer; the send path fails closed rather than falling back.
       .command(HiveKeysCommandExport)
