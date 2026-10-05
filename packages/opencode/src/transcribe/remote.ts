@@ -25,14 +25,23 @@ export interface RemoteConfig {
 
 /** Read ~/.iris/config.json, the same file the CLI authenticates with. Env wins. */
 export function readRemoteConfig(): RemoteConfig | null {
+  return describeRemoteConfig().config
+}
+
+/**
+ * The remote config, or — when there is none — what is missing, in words a person can act on.
+ * GET /transcribe/health reports the reason as `cloud.reason`.
+ */
+export function describeRemoteConfig(
+  configPath = join(homedir(), ".iris", "config.json"),
+): { config: RemoteConfig | null; reason?: string } {
   let apiUrl = process.env["IRIS_API_URL"]?.trim() || ""
   let token = process.env["IRIS_API_KEY"]?.trim() || ""
   let bloqId = process.env["IRIS_TRANSCRIBE_BLOQ_ID"]?.trim() || ""
 
   try {
-    const p = join(homedir(), ".iris", "config.json")
-    if (existsSync(p)) {
-      const cfg = JSON.parse(readFileSync(p, "utf8")) as Record<string, unknown>
+    if (existsSync(configPath)) {
+      const cfg = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>
       apiUrl = apiUrl || String(cfg["api_url"] ?? "")
       token = token || String(cfg["node_api_key"] ?? "")
       bloqId = bloqId || String(cfg["default_bloq_id"] ?? "")
@@ -41,12 +50,22 @@ export function readRemoteConfig(): RemoteConfig | null {
     /* an unreadable config is the same as no config */
   }
 
+  if (!apiUrl)
+    return {
+      config: null,
+      reason: "You are not signed in to IRIS. Run iris auth login in a terminal, then try dictation again.",
+    }
+  if (!bloqId)
+    return {
+      config: null,
+      reason:
+        "Dictation needs a board to file recordings under. Set default_bloq_id in ~/.iris/config.json (or IRIS_TRANSCRIBE_BLOQ_ID), then try again.",
+    }
   // The token is OPTIONAL. ~/.iris/config.json holds a node_api_key, which this endpoint
   // rejects ("Invalid token format. Expected JWT or valid API token") — sending it turns a
   // working request into a 401. The scope is what the endpoint actually requires.
-  if (!apiUrl || !bloqId) return null
   const usable = token && /^(ey|iris_|fl_)/.test(token) ? token : undefined
-  return { apiUrl: apiUrl.replace(/\/$/, ""), token: usable, bloqId }
+  return { config: { apiUrl: apiUrl.replace(/\/$/, ""), token: usable, bloqId } }
 }
 
 /** A failed platform call. `status` is the HTTP status, or 0 when the platform was never reached. */
