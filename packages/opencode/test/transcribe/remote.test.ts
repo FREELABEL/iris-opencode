@@ -104,11 +104,15 @@ describe("describeRemoteConfig — what /transcribe/health says about the cloud"
 
   test("configured has no reason", () => {
     clear()
+    const key = process.env["IRIS_API_KEY"]
+    process.env["IRIS_API_KEY"] = "k".repeat(64)
     try {
       expect(describeRemoteConfig(write({ api_url: "https://x/", default_bloq_id: 7 }))).toEqual({
-        config: { apiUrl: "https://x", token: undefined, bloqId: "7" },
+        config: { apiUrl: "https://x", token: "k".repeat(64), bloqId: "7" },
       })
     } finally {
+      if (key === undefined) delete process.env["IRIS_API_KEY"]
+      else process.env["IRIS_API_KEY"] = key
       restore()
     }
   })
@@ -120,5 +124,63 @@ describe("parseRetryAfter", () => {
     expect(parseRetryAfter(new Date(10_000).toUTCString(), 4_000)).toBe(6000)
     expect(parseRetryAfter("soon")).toBeUndefined()
     expect(parseRetryAfter(null)).toBeUndefined()
+  })
+})
+
+describe("describeRemoteConfig — the platform now requires a person's credential", () => {
+  const { mkdtempSync, writeFileSync } = require("node:fs") as typeof import("node:fs")
+  const { tmpdir } = require("node:os") as typeof import("node:os")
+  const { join } = require("node:path") as typeof import("node:path")
+  const dir = mkdtempSync(join(tmpdir(), "iris-remote-"))
+  const cfg = (o: object) => {
+    const p = join(dir, `c-${Math.random()}.json`)
+    writeFileSync(p, JSON.stringify(o))
+    return p
+  }
+  const withKey = <T>(key: string | undefined, fn: () => T): T => {
+    const prev = process.env["IRIS_API_KEY"]
+    const url = process.env["IRIS_API_URL"]
+    const bloq = process.env["IRIS_TRANSCRIBE_BLOQ_ID"]
+    delete process.env["IRIS_API_URL"]
+    delete process.env["IRIS_TRANSCRIBE_BLOQ_ID"]
+    if (key === undefined) delete process.env["IRIS_API_KEY"]
+    else process.env["IRIS_API_KEY"] = key
+    try {
+      return fn()
+    } finally {
+      if (prev === undefined) delete process.env["IRIS_API_KEY"]
+      else process.env["IRIS_API_KEY"] = prev
+      if (url !== undefined) process.env["IRIS_API_URL"] = url
+      if (bloq !== undefined) process.env["IRIS_TRANSCRIBE_BLOQ_ID"] = bloq
+    }
+  }
+  const base = { api_url: "https://x", default_bloq_id: 7 }
+  const sdk = "a".repeat(40) + "B9".repeat(12)
+
+  test("the 64-character SDK token the desktop is launched with is sent", () => {
+    const r = withKey(sdk, () => describeRemoteConfig(cfg(base)))
+    expect(r.config?.token).toBe(sdk)
+  })
+
+  test("a Passport JWT is sent", () => {
+    const jwt = "eyJhbGciOi.eyJzdWIiOjE5M30.c2lnbmF0dXJl"
+    expect(withKey(jwt, () => describeRemoteConfig(cfg(base))).config?.token).toBe(jwt)
+  })
+
+  test("the node_api_key is never sent — the platform rejects it as a caller", () => {
+    const r = withKey(undefined, () => describeRemoteConfig(cfg({ ...base, node_api_key: "node_live_abc123" })))
+    expect(r.config).toBeNull()
+    expect(r.reason).toMatch(/sign/i)
+  })
+
+  test("no usable credential means cloud dictation is not ready, and says how to fix it", () => {
+    const r = withKey(undefined, () => describeRemoteConfig(cfg(base)))
+    expect(r.config).toBeNull()
+    expect(r.reason).toMatch(/iris auth login/)
+  })
+
+  test("a short or malformed token is not mistaken for one", () => {
+    expect(withKey("abc123", () => describeRemoteConfig(cfg(base))).config).toBeNull()
+    expect(withKey("eyNotAJwt", () => describeRemoteConfig(cfg(base))).config).toBeNull()
   })
 })
