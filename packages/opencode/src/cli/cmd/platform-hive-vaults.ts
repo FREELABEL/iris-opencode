@@ -121,7 +121,7 @@ const CreateCommand = cmd({
       if (args.json) return console.log(JSON.stringify(r.vault, null, 2))
       console.log(`  ${success("✓")} Created encrypted vault ${bold(r.vault.name)}${r.vault.bloq_id ? ` for bloq ${r.vault.bloq_id}` : ""}`)
       console.log(`  ${dim(`key: ${r.vault.key_source} · escrow: ${r.vault.escrow}${r.vault.escrow === "pending" ? " (retried on the next PHI task)" : ""}`)}`)
-      if (r.vault.key_source === "passphrase") console.log(`  ${dim("Locks on every daemon restart — PHI tasks for this bloq wait until: iris hive vaults unlock " + r.vault.name)}`)
+      if (r.vault.key_source === "passphrase") console.log(`  ${dim("Locks on every daemon restart — PHI tasks for this bloq wait until: iris vault unlock " + r.vault.name)}`)
     } catch (e) { fail(e) }
   },
 })
@@ -155,7 +155,18 @@ const ListCommand = cmd({
       if (!r.vaults.length) return console.log(`  ${dim("No encrypted vaults on this node. A PHI task creates one for its bloq automatically.")}`)
       for (const v of r.vaults as VaultSummary[]) console.log(`  ${formatVaultRow(v)}`)
       console.log(`  ${dim(`PHI working copies are crypto-shredded after ${r.retention_days} days (HIVE_PHI_RETENTION_DAYS).`)}`)
-    } catch (e) { fail(e) }
+    } catch (e) {
+      // Embedded in `iris vault list`: the replicated listing already printed, so explain and
+      // return instead of exiting the whole command over the half it could not reach.
+      if ((args as any)._embedded) {
+        const msg = (e as Error).message || ""
+        console.log(`  ${dim(/404/.test(msg)
+          ? "This node's daemon predates encrypted vaults — update it: iris bridge restart (after iris update)"
+          : "Daemon not reachable — start it with: iris bridge start")}`)
+        return
+      }
+      fail(e)
+    }
   },
 })
 
@@ -211,6 +222,16 @@ const DestroyCommand = cmd({
     } catch (e) { fail(e) }
   },
 })
+
+// Exposed so `iris vault` (platform-vault.ts) can serve both kinds under one noun. The
+// standalone group below is kept for compatibility but is no longer registered on its own.
+export const NodeVaultCommands = {
+  create: CreateCommand,
+  list: ListCommand,
+  lock: LockCommand,
+  unlock: UnlockCommand,
+  destroy: DestroyCommand,
+}
 
 export const HiveVaultsCommandExport = cmd({
   command: "vaults",
