@@ -7148,7 +7148,10 @@ const LeadsTasksDismissCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("lead-id", { type: "number", demandOption: true })
-      .positional("task-id", { type: "number", demandOption: true }),
+      .positional("task-id", { type: "number", demandOption: true })
+      // #187910: the agent reads the reason on its next heartbeat; a category stops that kind of task.
+      .option("reason", { type: "string", describe: "why — fed to the agent's next heartbeat" })
+      .option("category", { type: "string", describe: "suppress this kind of task (e.g. its pulse signal)" }),
   async handler(args) {
     UI.empty()
     if (!(await requireAuth())) {
@@ -7160,6 +7163,7 @@ const LeadsTasksDismissCommand = cmd({
     try {
       const res = await irisFetch(`/api/v6/workspace/heartbeat/tasks/${args["task-id"]}/dismiss`, {
         method: "DELETE",
+        body: JSON.stringify({ reason: args.reason ?? null, category: args.category ?? null }),
       }, IRIS_API)
       if (!res.ok) {
         spinner.stop("Failed", 1)
@@ -7175,7 +7179,7 @@ const LeadsTasksDismissCommand = cmd({
         prompts.outro("Done")
         return
       }
-      spinner.stop(success(`✓ Task #${args["task-id"]} dismissed (48h cooldown set)`))
+      spinner.stop(success(`✓ Task #${args["task-id"]} dismissed (48h cooldown set)${args.reason ? " — the agent will read why" : ""}`))
       prompts.outro(dim(`iris leads tasks list ${args["lead-id"]} --pending`))
     } catch (err) {
       spinner.stop("Error", 1)
