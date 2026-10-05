@@ -9,6 +9,7 @@ import { executeChat } from "./platform-chat"
 import { AgentsBenchCommand } from "./platform-agents-bench"
 import { AgentsExportCommand } from "./platform-agents-export"
 import { AgentsJoinCommand, AgentsLeaveCommand } from "./platform-agents-rooms"
+import { AgentsPauseCommand, AgentsResumeCommand, AgentsStopCommand } from "./platform-agents-governance"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join } from "path"
 import { firstArray } from "../../util/array"
@@ -1824,7 +1825,7 @@ const AgentsInboxCommand = cmd({
 
 export const PlatformAgentsCommand = cmd({
   command: "agents",
-  describe: "manage IRIS platform agents — pull, push, diff, CRUD, assign",
+  describe: "manage IRIS platform agents — pull, push, diff, CRUD, assign, pause/resume/stop",
   builder: (yargs) =>
     yargs
       .command(AgentsListCommand)
@@ -1836,6 +1837,9 @@ export const PlatformAgentsCommand = cmd({
       .command(AgentsDiffCommand)
       .command(AgentsDeleteCommand)
       .command(AgentsBulkDeleteCommand)
+      .command(AgentsPauseCommand)
+      .command(AgentsResumeCommand)
+      .command(AgentsStopCommand)
       .command(AgentsChatCommand)
       .command(AgentsProveCommand)
       .command(AgentsAssignCommand)
