@@ -1,5 +1,5 @@
 ---
-category: Data
+category: Data & Atlas
 level: beginner
 tags: [atlas, datasets, schema, draft, ai, phi, visibility, create, dry-run]
 duration_min: 3

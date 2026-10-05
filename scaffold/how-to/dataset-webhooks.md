@@ -1,5 +1,5 @@
 ---
-category: Data
+category: Data & Atlas
 level: intermediate
 tags: [atlas, datasets, webhooks, hooks, events, records, signed, hmac, integration, automation, backend]
 duration_min: 10

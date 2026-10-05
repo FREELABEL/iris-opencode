@@ -1,5 +1,5 @@
 ---
-category: Content
+category: Content & Media
 level: beginner
 tags: [review-studio, video, notes, timecode, feedback, remotion, re-render, replace, cdn]
 duration_min: 4

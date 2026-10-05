@@ -1,5 +1,5 @@
 ---
-category: Agents
+category: Agents & Automation
 level: beginner
 tags: [agents, pause, resume, stop, kill-switch, watch, live, stuck, take-over, hand-back, desktop, monitoring]
 duration_min: 5

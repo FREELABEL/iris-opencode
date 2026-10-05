@@ -1,5 +1,5 @@
 ---
-category: Agents
+category: Agents & Automation
 level: intermediate
 tags: [agents, approvals, trust, autonomy, intern, specialist, lead, hitl, human-in-the-loop, safety, rate-limit, slack, email]
 duration_min: 8
