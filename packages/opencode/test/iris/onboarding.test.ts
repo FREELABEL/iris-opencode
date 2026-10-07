@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test"
-import { digest, waiting, type MailThread } from "../../src/iris/onboarding"
+import { mkdtempSync, statSync } from "node:fs"
+import { tmpdir } from "node:os"
+import path from "node:path"
+import { digest, slugify, waiting, workspace, type MailThread } from "../../src/iris/onboarding"
 
 // D4 #188245 — the pure halves of "Here's what I see". The network halves (mail, ground) return
 // PlatformResult and are exercised against the live endpoints, not mocked here.
@@ -40,5 +43,24 @@ describe("digest", () => {
     const d = digest(many)
     expect(d.length).toBeLessThanOrEqual(4500)
     expect(d.endsWith("\n")).toBe(true) // whole lines only, never a half-cut thread
+  })
+})
+
+describe("workspace", () => {
+  test("slugs a business name into one safe folder name", () => {
+    expect(slugify("Bright Smile Dental — Austin")).toBe("bright-smile-dental-austin")
+    expect(slugify("Café Señor")).toBe("cafe-senor")
+    expect(slugify("../../etc/passwd")).toBe("etc-passwd") // never a path
+    expect(slugify("   ")).toBe("workspace")
+  })
+
+  test("creates the folder under the root, and reuses it on a second run", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "iris-onb-"))
+    const a = workspace("Bright Smile Dental", root)
+    const b = workspace("Bright Smile Dental", root)
+    expect(a.measured).toBe(true)
+    expect(a.data.path).toBe(path.join(root, "bright-smile-dental"))
+    expect(b.data.path).toBe(a.data.path)
+    expect(statSync(a.data.path).isDirectory()).toBe(true)
   })
 })

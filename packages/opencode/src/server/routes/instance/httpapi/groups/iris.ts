@@ -825,6 +825,8 @@ export const IrisPaths = {
   onboardingState: `${root}/onboarding/state`,
   onboardingMail: `${root}/onboarding/mail`,
   onboardingGround: `${root}/onboarding/ground`,
+  onboardingWorkspace: `${root}/onboarding/workspace`,
+  onboardingTrack: `${root}/onboarding/track`,
   cliCommands: `${root}/commands`,
   hivePeers: `${root}/hive/peers`,
   graph: `${root}/graph`,
@@ -1830,6 +1832,29 @@ export const IrisApi = HttpApi.make("iris").add(
           identifier: "iris.onboardingGround",
           summary: "Ground IRIS on recent mail",
           description: "Sends a compact digest (sender name, subject, snippet; under 5,000 chars) to workflow-generation/business-summary. Nobody is asked to describe their business: the inbox is the description.",
+        }),
+      ),
+      HttpApiEndpoint.post("onboardingWorkspace", IrisPaths.onboardingWorkspace, {
+        payload: Schema.Struct({ name: Schema.String }),
+        success: described(
+          Schema.Struct({ ...Measured, path: Schema.String }).annotate({ identifier: "IrisOnboardingWorkspace" }),
+          "The folder the first session runs in",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.onboardingWorkspace",
+          summary: "Create the first workspace",
+          description: "Creates ~/IRIS/<slug of name> (reused if present). A new user never meets an empty folder picker before IRIS has done anything for them.",
+        }),
+      ),
+      HttpApiEndpoint.post("onboardingTrack", IrisPaths.onboardingTrack, {
+        payload: Schema.Struct({ event: Schema.String, label: Schema.optional(Schema.String) }),
+        success: described(Schema.Struct({ ok: Schema.Boolean }), "Always ok — measurement never fails a step"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.onboardingTrack",
+          summary: "Record an onboarding step",
+          description: "Posts one of the app-side onboarding steps to the desktop funnel with this machine's install id. Unknown names are ignored.",
         }),
       ),
       HttpApiEndpoint.post("artifactPublish", IrisPaths.artifactPublish, {

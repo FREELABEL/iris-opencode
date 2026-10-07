@@ -1,4 +1,4 @@
-import { createEffect } from "solid-js"
+import { Show, createEffect, createMemo, createSignal } from "solid-js"
 import { ScrollView } from "@opencode-ai/ui/scroll-view"
 import { useTabs } from "@/context/tabs"
 import { createHomeController } from "./home/home-controller"
@@ -9,6 +9,8 @@ import { createHomeScrollController } from "./home/home-scroll-controller"
 import { createHomeSessionSearchController } from "./home/home-session-search-controller"
 import { createHomeSessionsController } from "./home/home-sessions-controller"
 import { HomeSessions } from "./home/home-sessions"
+import { HomeFirstRun, firstRunPending } from "./home/home-first-run"
+import { ServerConnection } from "@/context/server"
 
 /**
  * Cold-boot routing runs ONCE per app load, not once per visit to "/".
@@ -58,6 +60,23 @@ export function NewHome() {
     home.project.openProjectNewSession(conn, project.worktree)
   })
 
+  // First run (D4/D5 #188245/#188243): a brand-new install — no tabs, no project, onboarding
+  // neither finished nor skipped — gets "Connect your inbox → Here's what I see → Start" instead
+  // of an empty project list. Anyone with a project never sees it.
+  const [firstRun, setFirstRun] = createSignal(firstRunPending())
+  const showFirstRun = createMemo(
+    () => firstRun() && tabs.ready() && tabs.store.length === 0 && !home.project.newSession(),
+  )
+  const startFirstSession = (directory: string, prompt: string) => {
+    const conn = home.server.focused()
+    if (!conn) return
+    const ctx = home.server.context(conn)
+    ctx.projects.open(directory)
+    ctx.projects.touch(directory)
+    bootRouted = true
+    void tabs.newDraft({ server: ServerConnection.key(conn), directory }, prompt)
+  }
+
   const projects = createHomeProjectsController(home)
   const sessions = createHomeSessionsController(home)
   const search = createHomeSessionSearchController(home, sessions)
@@ -77,7 +96,11 @@ export function NewHome() {
         onScroll={(event) => scroll.viewport.update(event.currentTarget.scrollTop)}
         onWheel={scroll.viewport.containOuterWheel}
       >
+        <Show when={showFirstRun()}>
+          <HomeFirstRun onStart={startFirstSession} onDone={() => setFirstRun(false)} />
+        </Show>
         <div
+          classList={{ hidden: showFirstRun() }}
           class={`
             mx-auto grid min-h-full w-full max-w-[1080px] grid-rows-[auto_minmax(0,1fr)_auto] gap-4 px-3
             lg:grid-cols-[280px_minmax(0,720px)] lg:grid-rows-1 lg:gap-8 lg:px-6

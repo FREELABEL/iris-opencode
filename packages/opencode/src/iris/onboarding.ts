@@ -13,6 +13,9 @@
  * Every function returns a PlatformResult: `measured: false` with a reason is a real answer the UI
  * can show ("couldn't read your mail: …"), never an exception that leaves a spinner turning.
  */
+import { mkdirSync, readFileSync } from "node:fs"
+import { homedir } from "node:os"
+import path from "node:path"
 import { IRIS_API, fetchIntegrations, irisFetch, resolveUserId, tokenSource, type PlatformResult } from "./platform"
 
 /** Mail providers in the order we prefer them. Outlook arrives with D2 #188248. */
@@ -158,5 +161,66 @@ export async function ground(threads: MailThread[]): Promise<PlatformResult<Grou
     }
   } catch (e) {
     return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { choices: [] } }
+  }
+}
+
+/** "Bright Smile Dental — Austin" → "bright-smile-dental-austin". Never empty, never a path. */
+export function slugify(name: string): string {
+  const s = name
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48)
+    .replace(/-+$/g, "")
+  return s || "workspace"
+}
+
+/**
+ * ~/IRIS/<business>: the folder the first session runs in. Created, not picked — a brand-new user
+ * should never meet an empty folder dialog before IRIS has done anything for them. Reused if it
+ * already exists, so a second run of onboarding does not make "-2" copies.
+ */
+export function workspace(name: string, root = path.join(homedir(), "IRIS")): PlatformResult<{ path: string }> {
+  try {
+    const dir = path.join(root, slugify(name))
+    mkdirSync(dir, { recursive: true })
+    return { measured: true, data: { path: dir } }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { path: "" } }
+  }
+}
+
+/**
+ * The steps after sign-in, onto the same funnel the desktop shell writes (D7 #188247). Sent from
+ * here, not from the webview: the webview's origin is not in iris-api's CORS list. Uses the same
+ * install id the shell created (~/.iris/install-id), so one install is one row of the funnel.
+ * Only names on fl-iris-api's GenesisEvent::DESKTOP_ONBOARDING are accepted there.
+ */
+const APP_STEPS = new Set([
+  "onboarding.mail_read",
+  "onboarding.grounded",
+  "onboarding.question_answered",
+  "onboarding.workspace_created",
+  "onboarding.working",
+])
+
+export async function track(event: string, label?: string): Promise<void> {
+  if (!APP_STEPS.has(event)) return
+  let visitor: string | undefined
+  try {
+    visitor = readFileSync(path.join(homedir(), ".iris", "install-id"), "utf8").trim()
+  } catch {
+    return // no install id: the shell has not run, so there is no funnel row to join
+  }
+  try {
+    await irisFetch(`/api/v1/genesis/events`, IRIS_API, {
+      method: "POST",
+      body: JSON.stringify({ event, visitor_id: visitor, label, path: "desktop" }),
+      signal: AbortSignal.timeout(3000),
+    })
+  } catch {
+    // Measurement never breaks onboarding.
   }
 }
