@@ -1,4 +1,5 @@
 mod cli;
+mod google_signin;
 mod login;
 mod onboarding;
 mod window_customizer;
@@ -794,7 +795,8 @@ pub fn run() {
             login::save_iris_token,
             login::restart_app,
             login::open_login_window,
-            onboarding::track_onboarding
+            onboarding::track_onboarding,
+            google_signin::google_sign_in
         ])
         .setup(move |app| {
             let app = app.handle().clone();

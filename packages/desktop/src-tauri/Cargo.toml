@@ -36,6 +36,11 @@ tokio = "1.48.0"
 listeners = "0.3"
 tauri-plugin-os = "2"
 semver = "1.0.27"
+# D1 #188246 — PKCE for desktop Google sign-in. All three were already in the tree
+# transitively; these pin the locked versions rather than adding anything new.
+sha2 = "0.10"
+getrandom = "0.2"
+base64 = "0.22"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18.2"
