@@ -3511,7 +3511,8 @@ const BloqsUpdateItemCommand = cmd({
       })
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        // #188294: --json reported success:false and exited 0, so `iris ... --json && next` ran next.
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); process.exitCode = 1; return }
         await handleApiError(res, "Update item")
         prompts.outro("Done")
         return
@@ -3530,8 +3531,9 @@ const BloqsUpdateItemCommand = cmd({
       prompts.outro("Done")
     } catch (err) {
       spinner?.stop("Error", 1)
-      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); process.exitCode = 1; return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
+      process.exitCode = 1
       prompts.outro("Done")
     }
   },
