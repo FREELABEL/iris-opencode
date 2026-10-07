@@ -273,9 +273,12 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
         </Match>
       </Switch>
 
-      <button class="text-v2-text-text-muted w-fit text-[13px] hover:underline" onClick={() => finish("skipped")}>
-        Skip — I'll open a folder myself
-      </button>
+      {/* Not while the workspace is being made: skipping half-way would leave a folder and no session. */}
+      <Show when={step().kind !== "starting"}>
+        <button class="text-v2-text-text-muted w-fit text-[13px] hover:underline" onClick={() => finish("skipped")}>
+          Skip — I'll open a folder myself
+        </button>
+      </Show>
     </div>
   )
 }

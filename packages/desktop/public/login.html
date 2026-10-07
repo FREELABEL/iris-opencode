@@ -124,7 +124,7 @@
 </svg>
 
 <h1>Sign in to IRIS</h1>
-<p class="sub" id="sub">We'll email you a 6-digit code. No password.</p>
+<p class="sub" id="sub">One click with Google, or a 6-digit code by email. No password.</p>
 
 <div id="step-email">
   <button class="google" id="google" type="button">
@@ -343,7 +343,7 @@ on this machine.</p>
   $("back").onclick = () => {
     $("step-code").hidden = true;
     $("step-email").hidden = false;
-    $("sub").textContent = "We'll email you a 6-digit code. No password.";
+    $("sub").textContent = "One click with Google, or a 6-digit code by email. No password.";
     msg("");
   };
 
