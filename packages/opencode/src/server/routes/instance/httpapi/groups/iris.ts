@@ -822,6 +822,9 @@ export const IrisPaths = {
   playbookInstall: `${root}/playbooks/install`,
   catalog: `${root}/catalog`,
   integrationConnect: `${root}/integrations/connect`,
+  onboardingState: `${root}/onboarding/state`,
+  onboardingMail: `${root}/onboarding/mail`,
+  onboardingGround: `${root}/onboarding/ground`,
   cliCommands: `${root}/commands`,
   hivePeers: `${root}/hive/peers`,
   graph: `${root}/graph`,
@@ -1749,6 +1752,84 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Start connecting an integration",
           description:
             "Asks the platform for the authorize URL and hands it back. measured=false carries the API's own words — 'no OAuth flow for this type' and 'connecting for an organization requires owner or admin' are different problems and the person has to read which. Scope is personal: fl-api treats an absent organization_id that way on purpose, because silence must never promote a credential to shared.",
+        }),
+      ),
+      // First-run onboarding, screen 2 "Here's what I see" (D4 #188245, EPIC #188210).
+      HttpApiEndpoint.get("onboardingState", IrisPaths.onboardingState, {
+        success: described(
+          Schema.Struct({
+            ...Measured,
+            signedIn: Schema.Boolean,
+            mail: Schema.Struct({
+              connected: Schema.Boolean,
+              type: Schema.optional(Schema.String),
+              account: Schema.optional(Schema.String),
+            }),
+          }).annotate({ identifier: "IrisOnboardingState" }),
+          "Whether onboarding has anything to do yet",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.onboardingState",
+          summary: "Onboarding state",
+          description: "Signed in, and whether a mail account (gmail, then outlook) is connected. Safe to poll while a connect is pending in the browser — that is how the app learns the OAuth round trip finished.",
+        }),
+      ),
+      HttpApiEndpoint.get("onboardingMail", IrisPaths.onboardingMail, {
+        success: described(
+          Schema.Struct({
+            ...Measured,
+            account: Schema.optional(Schema.String),
+            threads: Schema.Array(Schema.Struct({
+              id: Schema.String,
+              threadId: Schema.optional(Schema.String),
+              subject: Schema.String,
+              from: Schema.String,
+              date: Schema.optional(Schema.String),
+              snippet: Schema.String,
+            })),
+            waiting: Schema.Array(Schema.Struct({
+              id: Schema.String,
+              threadId: Schema.optional(Schema.String),
+              subject: Schema.String,
+              from: Schema.String,
+              date: Schema.optional(Schema.String),
+              snippet: Schema.String,
+            })),
+          }).annotate({ identifier: "IrisOnboardingMail" }),
+          "Recent inbox threads, and the few most likely waiting on this person",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.onboardingMail",
+          summary: "Read recent mail",
+          description: "The first real data pull: up to 10 recent inbox threads via iris-api execute-direct. Also what stamps users.activated_at server-side (T1). measured=false carries the reason (not connected, token expired) so the screen can say what to do.",
+        }),
+      ),
+      HttpApiEndpoint.post("onboardingGround", IrisPaths.onboardingGround, {
+        payload: Schema.Struct({ threads: Schema.Array(Schema.Struct({
+              id: Schema.String,
+              threadId: Schema.optional(Schema.String),
+              subject: Schema.String,
+              from: Schema.String,
+              date: Schema.optional(Schema.String),
+              snippet: Schema.String,
+            })) }),
+        success: described(
+          Schema.Struct({
+            ...Measured,
+            industry: Schema.optional(Schema.String),
+            businessType: Schema.optional(Schema.String),
+            line: Schema.optional(described(Schema.String, "One sentence for the headline.")),
+            choices: described(Schema.Array(Schema.String), "Answers to 'What do you want off your plate first?', taken from what was found."),
+          }).annotate({ identifier: "IrisOnboardingGround" }),
+          "Who this person is, from their own inbox",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.onboardingGround",
+          summary: "Ground IRIS on recent mail",
+          description: "Sends a compact digest (sender name, subject, snippet; under 5,000 chars) to workflow-generation/business-summary. Nobody is asked to describe their business: the inbox is the description.",
         }),
       ),
       HttpApiEndpoint.post("artifactPublish", IrisPaths.artifactPublish, {
