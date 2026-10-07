@@ -742,6 +742,23 @@ const PlanResponse = Schema.Struct({
 })
 
 /**
+ * Settings > Account (#187966 K1 + K2). Identity, plan and allowance in one read, so the tab
+ * cannot show one person's name beside another's usage. The allowance is read with ?peek=1, so
+ * opening Settings never consumes the weekly notice.
+ */
+const MeResponse = Schema.Struct({
+  measured: described(Schema.Boolean, "FALSE means we could not ask who you are. Not the same as signed out."),
+  reason: Schema.optional(Schema.String),
+  signedIn: Schema.Boolean,
+  tokenSource: described(Schema.String, "Where the credential came from. A Hive node key is not a person."),
+  id: Schema.NullOr(Schema.Finite),
+  name: Schema.NullOr(Schema.String),
+  email: Schema.NullOr(Schema.String),
+  plan: PlanResponse,
+  allowance: AllowanceResponse,
+})
+
+/**
  * ARTIFACTS (epic #186508). What the agent made in this session, from the store in
  * src/iris/artifacts.ts. Both routes return JSON. Neither returns an HTML document, and none
  * ever may (ADR-01): the panel places `content` into a sandboxed `srcdoc` iframe, and an iframe
@@ -855,6 +872,7 @@ export const IrisPaths = {
   hive: `${root}/hive`,
   allowance: `${root}/allowance`,
   plan: `${root}/plan`,
+  me: `${root}/me`,
   plans: `${root}/plans`,
   atlasNote: `${root}/atlas-note`,
   frameCheck: `${root}/frame-check`,
@@ -891,6 +909,16 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Plan",
           description:
             "free, pro or business (null for staff), read with ?peek=1 so it never eats the weekly allowance notice. Safe to poll.",
+        }),
+      ),
+      HttpApiEndpoint.get("me", IrisPaths.me, {
+        success: described(MeResponse, "Who the app is acting as, their plan, and their allowance"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.me",
+          summary: "Account",
+          description:
+            "Identity from fl-api, plan and allowance from fl-iris-api. The allowance is peeked, so this never consumes the weekly notice and is safe to call whenever Settings opens.",
         }),
       ),
       HttpApiEndpoint.get("plans", IrisPaths.plans, {

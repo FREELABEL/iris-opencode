@@ -535,9 +535,11 @@ const EMPTY_ALLOWANCE: Allowance = {
  * is a deliberate server-side design — asking whether a notice is due and marking it delivered
  * cannot be two steps without a race — and it makes this function unusual enough to say twice.
  */
-export async function fetchAllowance(): Promise<PlatformResult<Allowance>> {
+export async function fetchAllowance(opts: { peek?: boolean } = {}): Promise<PlatformResult<Allowance>> {
   try {
-    const res = await irisFetch("/api/v6/allowance/me", IRIS_API)
+    // peek: the same numbers without consuming the notice (fl-iris-api 4eda580d). The Account tab
+    // reads with it, because opening Settings must not eat somebody's only warning of the week.
+    const res = await irisFetch(opts.peek ? "/api/v6/allowance/me?peek=1" : "/api/v6/allowance/me", IRIS_API)
     if (!res.ok) return { measured: false, reason: `iris-api ${res.status}`, data: EMPTY_ALLOWANCE }
     const j = (await res.json()) as any
     const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null)
@@ -571,6 +573,37 @@ export async function fetchAllowance(): Promise<PlatformResult<Allowance>> {
     }
   } catch (e) {
     return { measured: false, reason: e instanceof Error ? e.message : String(e), data: EMPTY_ALLOWANCE }
+  }
+}
+
+/**
+ * Who the app is acting as (#187966 K1). Read from /api/v1/auth/whoami, the route `iris auth whoami`
+ * reads, so Settings and the CLI cannot name the same credential differently. /api/user would
+ * have worked too, and it does disagree: for user 193 it says "FREELABEL", whoami says "admin".
+ */
+export interface Me {
+  id: number | null
+  name: string | null
+  email: string | null
+}
+
+export async function fetchMe(): Promise<PlatformResult<Me>> {
+  const empty: Me = { id: null, name: null, email: null }
+  try {
+    const res = await irisFetch("/api/v1/auth/whoami")
+    if (!res.ok) return { measured: false, reason: `fl-api ${res.status}`, data: empty }
+    const u = ((await res.json()) as any)?.data
+    const text = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null)
+    return {
+      measured: true,
+      data: {
+        id: typeof u?.id === "number" ? u.id : null,
+        name: text(u?.name),
+        email: text(u?.email),
+      },
+    }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: empty }
   }
 }
 
