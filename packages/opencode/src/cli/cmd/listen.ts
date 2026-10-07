@@ -7,6 +7,7 @@ import { UI } from "../ui"
 import { bold, dim, highlight, success } from "./iris-api"
 import { runLocalWhisper } from "./transcribe"
 import { listAudioDevices, silenceWarning, startRecording } from "../lib/mic"
+import { livePreviewLine, startLivePreview, type LivePreview } from "../lib/live-dictation"
 
 /**
  * iris listen — talk to the machine, watch it hear you.
@@ -107,6 +108,22 @@ export const PlatformListenCommand = cmd({
     let unit = 0
     let peak = 0
 
+    // Live preview of the words as they are spoken (lib/live-dictation). Only when there is a
+    // terminal to draw it on and not in --json: audio sent off the machine for a preview nobody
+    // sees is egress for nothing. It is a preview — the transcript below is still the batch one.
+    let live: LivePreview | undefined
+    let liveNote = ""
+    if (canDraw && !args.json) {
+      live = startLivePreview({
+        language: args.language as string | undefined,
+        // Setup reasons (policy, switched off, not signed in) are the normal case on a sovereign
+        // machine and are not printed on every run. A stream that FAILED is worth a word.
+        onUnavailable: (reason, phase) => {
+          if (phase === "stream") liveNote = `live preview unavailable — ${reason}`
+        },
+      })
+    }
+
     let rec
     try {
       rec = await startRecording({
@@ -116,8 +133,10 @@ export const PlatformListenCommand = cmd({
           unit = u
           if (u > peak) peak = u
         },
+        onPcm: live ? (pcm) => live?.push(pcm) : undefined,
       })
     } catch (e) {
+      live?.stop()
       prompts.log.error(e instanceof Error ? e.message : String(e))
       prompts.outro("Done")
       process.exitCode = 1
@@ -126,6 +145,9 @@ export const PlatformListenCommand = cmd({
 
     const started = Date.now()
     let drew = false
+    // The live line sits UNDER the meter. Once it has been drawn, every frame redraws both and
+    // returns the cursor to the meter line, so the two never smear into the scrollback.
+    let liveDrawn = false
 
     if (canDraw) {
       console.log(`  ${dim("device")}  ${bold(rec.device.name)}`)
@@ -138,7 +160,14 @@ export const PlatformListenCommand = cmd({
     const timer = setInterval(
       () => {
         if (!canDraw) return
-        process.stdout.write(`\r\x1b[2K${renderMeter(unit, peak, Date.now() - started)}`)
+        const meter = `\r\x1b[2K${renderMeter(unit, peak, Date.now() - started)}`
+        const words = live?.text() || liveNote
+        if (words || liveDrawn) {
+          const width = Math.max(10, (process.stdout.columns || 80) - 4)
+          const line = live?.text() ? livePreviewLine(words, width) : dim(livePreviewLine(words, width))
+          process.stdout.write(`${meter}\n\r\x1b[2K  ${line}\x1b[1A\r`)
+          liveDrawn = true
+        } else process.stdout.write(meter)
         drew = true
         peak = Math.max(0, peak - 0.04) // decay, so the tick trails the voice rather than sticking
       },
@@ -160,6 +189,7 @@ export const PlatformListenCommand = cmd({
     }
 
     const { elapsedMs, stderr } = await rec.stop()
+    live?.stop()
 
     clearInterval(timer)
     process.off("SIGINT", onSigint)
@@ -170,7 +200,7 @@ export const PlatformListenCommand = cmd({
         /* noop */
       }
     }
-    if (canDraw && drew) process.stdout.write("\r\x1b[2K")
+    if (canDraw && drew) process.stdout.write(liveDrawn ? "\r\x1b[2K\n\r\x1b[2K\x1b[1A\r" : "\r\x1b[2K")
 
     if (!existsSync(rec.path)) {
       prompts.log.error(
