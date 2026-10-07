@@ -767,9 +767,23 @@ jobs:
             echo "::warning::No desktop assets to upload (desktop build skipped or failed)"
             exit 0
           fi
+          # Checksum HERE, in the job that uploads these files. The release job checksums only
+          # what exists when it runs, and it waits for the CLI build alone — so whenever the
+          # desktop build finished after it (v1.3.308, v1.3.309), the desktop zip shipped with
+          # no .sha256 and the installer silently skipped verification. Same rule as the release
+          # job: the digest describes the exact bytes being uploaded, basename only.
+          set -euo pipefail
+          cd desktop
+          sums=()
+          for f in IRIS-app-*.zip; do
+            sha256sum "$f" > "$f.sha256"
+            sha256sum -c "$f.sha256" >/dev/null
+            sums+=("desktop/$f.sha256")
+          done
+          cd ..
           # --repo is required: this job has no checkout, so gh can't infer the
           # repo from a local .git ("fatal: not a git repository" otherwise).
-          gh release upload "${{ steps.version.outputs.tag }}" "${assets[@]}" --clobber --repo "${{ github.repository }}"
+          gh release upload "${{ steps.version.outputs.tag }}" "${assets[@]}" "${sums[@]}" --clobber --repo "${{ github.repository }}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
