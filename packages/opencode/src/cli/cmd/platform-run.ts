@@ -1,3 +1,4 @@
+import { offerFirstPull } from "./integration-first-pull"
 import { cmd } from "./cmd"
 import {
   IntegrationsShareCommand,
@@ -1161,7 +1162,7 @@ const ListAvailableCommand = cmd({
   },
 })
 
-const ConnectCommand = cmd({
+export const ConnectCommand = cmd({
   command: "connect <type>",
   describe: "start OAuth or show API-key instructions for an integration",
   builder: (y) =>
@@ -1448,6 +1449,7 @@ const ConnectCommand = cmd({
             const body = await r.json().catch(() => null)
             if (isProbeSuccess(body)) {
               vs.stop(`${success("✓")} ${bold(entry.type)} connected — verified by ${probe.label}`)
+              await offerFirstPull(String(entry.type), Number(userId))
             } else if (isProbeInconclusive(r.status, body)) {
               vs.stop(`${dim("Stored — could not verify from here (not an authorization failure)")}`)
             } else {
@@ -1828,6 +1830,8 @@ const ConnectCommand = cmd({
           ? `${success("✓")} ${bold(type)} connected — verified by ${verifiedBy}`
           : `${success("✓")} ${bold(type)} connected successfully!`,
       )
+      // T3 #188213: the next move after a connect is the person's own data, not a list command.
+      if (pollUserId) await offerFirstPull(String(type), Number(pollUserId))
       if (!verifiedBy && probe) {
         // Say which half we proved. A row exists; nobody has shown the credential works.
         console.log()

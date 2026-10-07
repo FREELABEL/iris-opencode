@@ -162,6 +162,15 @@ const IntegrationsConnectCommand = cmd({
     if (args.token) credentials.token = args.token as string
     if (args["webhook-url"]) credentials.webhook_url = args["webhook-url"] as string
 
+    // No credential flags: hand off to `iris connect`, which runs OAuth in the browser, takes an
+    // API key, and then offers the first data pull (T3 #188213). This command used to tell
+    // OAuth users to "connect via the web UI" — a UI that is being retired, and a dead end for
+    // the exact command the activation definition names (EPIC #188210 ADR-03).
+    if (Object.keys(credentials).length === 0 && !args.json) {
+      const { ConnectCommand } = await import("./platform-run")
+      return (ConnectCommand as any).handler({ ...args, _: args._ ?? [], $0: args.$0 ?? "iris" })
+    }
+
     // If no credentials provided and interactive, prompt
     if (Object.keys(credentials).length === 0 && process.stdin.isTTY && !args.json) {
       const credType = (await prompts.select({
