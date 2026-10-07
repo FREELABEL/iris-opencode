@@ -74,7 +74,7 @@ export function NewHome() {
     ctx.projects.open(directory)
     ctx.projects.touch(directory)
     bootRouted = true
-    void tabs.newDraft({ server: ServerConnection.key(conn), directory }, prompt)
+    void tabs.newDraft({ server: ServerConnection.key(conn), directory }, prompt, undefined, { send: true })
   }
 
   const projects = createHomeProjectsController(home)

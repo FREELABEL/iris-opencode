@@ -16,7 +16,7 @@ export function createNewSessionDraftController(workspace: { worktree: () => str
   const comments = useComments()
   const local = useLocal()
   const route = useSessionKey()
-  const [searchParams, setSearchParams] = useSearchParams<{ draftId?: string; prompt?: string }>()
+  const [searchParams, setSearchParams] = useSearchParams<{ draftId?: string; prompt?: string; send?: string }>()
   const model = createPromptModelSelection({ agent: () => local.agent.current() })
 
   useComposerCommands({ model })
@@ -46,6 +46,21 @@ export function createNewSessionDraftController(workspace: { worktree: () => str
       if (!text) return
       prompt.set([{ type: "text", content: text, start: 0, end: text.length }], text.length)
       setSearchParams({ ...searchParams, prompt: undefined })
+    })
+  })
+
+  // `?send=1` (first run, D5 #188243): submit the prefilled prompt once, through the same path
+  // as pressing Enter. The flag is cleared first so a re-render or a back-navigation can never
+  // send twice. If submitting fails, the prompt is still there and Enter still works.
+  let sent = false
+  createEffect(() => {
+    if (!prompt.ready() || searchParams.send !== "1" || sent) return
+    untrack(() => {
+      sent = true
+      setSearchParams({ ...searchParams, send: undefined })
+      const text = prompt.current().map((p) => ("content" in p ? p.content : "")).join("").trim()
+      if (!text) return
+      setTimeout(() => input.submit(), 0)
     })
   })
 

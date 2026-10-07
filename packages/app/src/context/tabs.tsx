@@ -206,7 +206,17 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
         if (!tab || tab.type !== "draft") throw new Error(`Draft not found: ${draftID}`)
         return tab
       },
-      async newDraft(draft: Omit<DraftTab, "type" | "draftID">, prompt?: string, model?: PromptModel) {
+      /**
+       * `opts.send`: submit the prefilled prompt as soon as the draft opens, through the same
+       * submit path as pressing Enter. Used by first run (D5 #188243), where the person has
+       * already said what they want and should watch IRIS start rather than press Enter.
+       */
+      async newDraft(
+        draft: Omit<DraftTab, "type" | "draftID">,
+        prompt?: string,
+        model?: PromptModel,
+        opts?: { send?: boolean },
+      ) {
         const draftID = uuid()
         const tab = { type: "draft" as const, draftID, ...draft }
         memory.ensure(tabKey(tab), "prompt", () => createDraftPromptSession(draftID, { prompt, model }))
@@ -216,7 +226,7 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
               tabs.push(tab)
             }),
           )
-          navigate(draftHref(draftID))
+          navigate(draftHref(draftID) + (opts?.send && prompt ? "&send=1" : ""))
         })
         return tab
       },
