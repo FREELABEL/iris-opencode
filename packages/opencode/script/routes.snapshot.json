@@ -1033,6 +1033,11 @@
 },
 {
 "method": "GET",
+"uri": "/api/v1/agents/{}/live",
+"service": "iris-api"
+},
+{
+"method": "GET",
 "uri": "/api/v1/agents/{}/logs",
 "service": "fl-api"
 },
@@ -1207,11 +1212,6 @@
 "service": "iris-api"
 },
 {
-"method": "POST",
-"uri": "/api/v1/api-proxy",
-"service": "fl-api"
-},
-{
 "method": "GET",
 "uri": "/api/v1/app-data/renter-document/{}/{}",
 "service": "iris-api"
@@ -1345,6 +1345,16 @@
 "method": "GET",
 "uri": "/api/v1/appointments/import-bookings",
 "service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/approval-links/{}",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/approval-links/{}",
+"service": "iris-api"
 },
 {
 "method": "GET",
@@ -1608,7 +1618,37 @@
 },
 {
 "method": "POST",
+"uri": "/api/v1/atlas/datasets/{}/export",
+"service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/atlas/datasets/{}/hooks",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/atlas/datasets/{}/hooks",
+"service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/atlas/datasets/{}/hooks/deliveries",
+"service": "fl-api"
+},
+{
+"method": "DELETE",
+"uri": "/api/v1/atlas/datasets/{}/hooks/{}",
+"service": "fl-api"
+},
+{
+"method": "POST",
 "uri": "/api/v1/atlas/datasets/{}/import",
+"service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/atlas/datasets/{}/openapi.json",
 "service": "fl-api"
 },
 {
@@ -1617,8 +1657,33 @@
 "service": "fl-api"
 },
 {
+"method": "GET",
+"uri": "/api/v1/atlas/datasets/{}/trash",
+"service": "fl-api"
+},
+{
+"method": "DELETE",
+"uri": "/api/v1/atlas/datasets/{}/trash/{}",
+"service": "fl-api"
+},
+{
 "method": "POST",
 "uri": "/api/v1/atlas/datasets/{}/upsert",
+"service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/atlas/datasets/{}/write-tokens",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/atlas/datasets/{}/write-tokens",
+"service": "fl-api"
+},
+{
+"method": "DELETE",
+"uri": "/api/v1/atlas/datasets/{}/write-tokens/{}",
 "service": "fl-api"
 },
 {
@@ -1634,6 +1699,21 @@
 {
 "method": "PATCH",
 "uri": "/api/v1/atlas/datasets/{}/{}",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/atlas/datasets/{}/{}/restore",
+"service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/atlas/exports",
+"service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/atlas/exports/{}",
 "service": "fl-api"
 },
 {
@@ -1749,6 +1829,11 @@
 {
 "method": "PATCH",
 "uri": "/api/v1/atlas/schemas/{}",
+"service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/atlas/search",
 "service": "fl-api"
 },
 {
@@ -2555,6 +2640,16 @@
 "method": "GET",
 "uri": "/api/v1/bloqs/{}/agents",
 "service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/bloqs/{}/agents/pause",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/bloqs/{}/agents/resume",
+"service": "iris-api"
 },
 {
 "method": "POST",
@@ -5147,9 +5242,19 @@
 "service": "fl-api"
 },
 {
+"method": "GET",
+"uri": "/api/v1/hive/nodes/{}/vault-credentials",
+"service": "iris-api"
+},
+{
 "method": "POST",
 "uri": "/api/v1/hive/register-node",
 "service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/hive/vault-credentials",
+"service": "iris-api"
 },
 {
 "method": "GET",
@@ -9553,6 +9658,21 @@
 },
 {
 "method": "POST",
+"uri": "/api/v1/runs/{}/hand-back",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/runs/{}/live",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/runs/{}/take-over",
+"service": "iris-api"
+},
+{
+"method": "POST",
 "uri": "/api/v1/salad/transcribe",
 "service": "fl-api"
 },
@@ -10333,11 +10453,6 @@
 },
 {
 "method": "GET",
-"uri": "/api/v1/spotify/track/{}/complete-data",
-"service": "fl-api"
-},
-{
-"method": "GET",
 "uri": "/api/v1/spotify/track/{}/recommendations",
 "service": "fl-api"
 },
@@ -10579,6 +10694,21 @@
 {
 "method": "GET",
 "uri": "/api/v1/transcribe/glossary",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/transcribe/policy",
+"service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/transcribe/readiness",
+"service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/transcribe/scope",
 "service": "iris-api"
 },
 {
@@ -11464,6 +11594,11 @@
 {
 "method": "POST",
 "uri": "/api/v1/user/{}/bloqs/list/item/{}/make-public",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/user/{}/bloqs/list/item/{}/media/replace",
 "service": "fl-api"
 },
 {
@@ -12917,6 +13052,11 @@
 "service": "iris-api"
 },
 {
+"method": "POST",
+"uri": "/api/v1/vapi/outreach-steps/{}/call",
+"service": "iris-api"
+},
+{
 "method": "GET",
 "uri": "/api/v1/vapi/phone-numbers",
 "service": "iris-api"
@@ -13914,6 +14054,26 @@
 {
 "method": "POST",
 "uri": "/api/v6/node-agent/tasks/{}/result",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/api/v6/node-agent/tasks/{}/steps",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/api/v6/node-agent/vaults/audit",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/api/v6/node-agent/vaults/escrow-targets",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/api/v6/node-agent/vaults/{}/escrow-wraps",
 "service": "iris-api"
 },
 {
@@ -15807,6 +15967,36 @@
 "service": "iris-api"
 },
 {
+"method": "DELETE",
+"uri": "/terms",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/terms",
+"service": "iris-api"
+},
+{
+"method": "OPTIONS",
+"uri": "/terms",
+"service": "iris-api"
+},
+{
+"method": "PATCH",
+"uri": "/terms",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/terms",
+"service": "iris-api"
+},
+{
+"method": "PUT",
+"uri": "/terms",
+"service": "iris-api"
+},
+{
 "method": "GET",
 "uri": "/tickets/{}/{}",
 "service": "iris-api"
@@ -15904,16 +16094,6 @@
 {
 "method": "GET",
 "uri": "/{}/og-image.png",
-"service": "iris-api"
-},
-{
-"method": "GET",
-"uri": "/api/v1/hive/vault-credentials",
-"service": "iris-api"
-},
-{
-"method": "GET",
-"uri": "/api/v1/hive/nodes/{}/vault-credentials",
 "service": "iris-api"
 }
 ]
