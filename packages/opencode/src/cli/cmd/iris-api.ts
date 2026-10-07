@@ -184,7 +184,7 @@ async function readSdkEnv(): Promise<Record<string, string>> {
 let _cachedToken: string | undefined
 let _cachedTokenSource: string | undefined
 
-async function resolveToken(): Promise<string> {
+export async function resolveToken(): Promise<string> {
   if (_cachedToken !== undefined) return _cachedToken
   _cachedToken = await resolveTokenUncached()
   return _cachedToken

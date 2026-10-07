@@ -1,6 +1,7 @@
 import { createSignal, onCleanup } from "solid-js"
 import { silenceWarning, startRecording, type Recording } from "@/cli/lib/mic"
 import { transcribeAudio } from "@/cli/lib/transcription"
+import { startLivePreview, type LivePreview } from "@/cli/lib/live-dictation"
 import { unlinkSync } from "fs"
 
 /**
@@ -44,6 +45,8 @@ export interface DictationOptions {
    * So this stays — for that reason, not the one it was first written for.
    */
   onFrame?: () => void
+  /** Injection point for tests; defaults to lib/live-dictation's startLivePreview. */
+  livePreview?: typeof startLivePreview
 }
 
 export function createDictation(opts: DictationOptions) {
@@ -51,8 +54,15 @@ export function createDictation(opts: DictationOptions) {
   const [transcribing, setTranscribing] = createSignal(false)
   const [level, setLevel] = createSignal(0)
   const [elapsed, setElapsed] = createSignal(0)
+  /**
+   * The words so far, from lib/live-dictation — a PREVIEW. What lands in the prompt is still the
+   * batch transcript of the wav, exactly as before; this only shows that you are being heard.
+   * Empty when live dictation is off (sovereign policy, switched off, not signed in) or failed.
+   */
+  const [live, setLive] = createSignal("")
 
   let rec: Recording | undefined
+  let preview: LivePreview | undefined
   let flush: ReturnType<typeof setInterval> | undefined
   let pending = 0
   let startedAt = 0
@@ -64,14 +74,25 @@ export function createDictation(opts: DictationOptions) {
 
   async function start() {
     if (active() || transcribing()) return
+    // Setup reasons (policy, off, not signed in) stay quiet — on a sovereign machine they are
+    // the normal case. A stream that started and then failed gets one info notice.
+    const current = (opts.livePreview ?? startLivePreview)({
+      onUnavailable: (reason, phase) => {
+        if (phase === "stream") opts.onNotice(`Live preview unavailable — ${reason}`, "info")
+      },
+    })
+    preview = current
     try {
       rec = await startRecording({
         onLevel: (u) => {
           // Peak, not last: a clipping spike that lands between two flushes still shows.
           if (u > pending) pending = u
         },
+        onPcm: (pcm) => current.push(pcm),
       })
     } catch (e) {
+      current.stop()
+      preview = undefined
       opts.onNotice(e instanceof Error ? e.message : String(e), "error")
       return
     }
@@ -79,10 +100,14 @@ export function createDictation(opts: DictationOptions) {
     startedAt = Date.now()
     setLevel(0)
     setElapsed(0)
+    setLive("")
     setActive(true)
 
     flush = setInterval(
       () => {
+        // Read on the same 10 Hz tick as the meter rather than per relay message, so a burst of
+        // partials costs one repaint, not one each.
+        setLive(current.text())
         setLevel(pending)
         pending = Math.max(0, pending - 0.08) // decay so the bar falls rather than sticking
         setElapsed(Date.now() - startedAt)
@@ -98,10 +123,13 @@ export function createDictation(opts: DictationOptions) {
     clearTimers()
     setActive(false)
     setLevel(0)
+    setLive("")
     opts.onFrame?.()
 
     const { elapsedMs, stderr } = await current.stop()
     rec = undefined
+    preview?.stop()
+    preview = undefined
 
     if (elapsedMs < 400) {
       // Too short to contain speech, and whisper will hallucinate something plausible on it —
@@ -167,9 +195,10 @@ export function createDictation(opts: DictationOptions) {
     // Leaving ffmpeg holding the microphone after the TUI exits is the one failure here with
     // consequences outside this process — the mic indicator stays lit and the device stays busy.
     if (rec) void rec.stop().catch(() => {})
+    preview?.stop()
   })
 
-  return { active, transcribing, level, elapsed, toggle, start, stop }
+  return { active, transcribing, level, elapsed, live, toggle, start, stop }
 }
 
 /** mm:ss for the dictation clock. */
