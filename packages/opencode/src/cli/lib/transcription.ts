@@ -1,7 +1,7 @@
 import { firstArray } from "../../util/array"
 import { spawnSync } from "child_process"
 import { existsSync, mkdirSync, readFileSync } from "fs"
-import { homedir } from "os"
+import { homedir, cpus } from "os"
 import { join, basename, resolve, dirname } from "path"
 import { irisFetch, FL_API } from "../cmd/iris-api"
 import {
@@ -40,6 +40,86 @@ export function which(bin: string): string | null {
   const r = spawnSync("which", [bin], { encoding: "utf8" })
   const p = r.stdout.trim()
   return p && r.status === 0 ? p : null
+}
+
+/**
+ * Where `iris transcribe --install-local` puts whisper-cli. Not on PATH by default, so it is
+ * looked up explicitly: an engine that installed fine and then "could not be found" is the same
+ * dead end as one that never installed (#188318).
+ */
+export const LOCAL_WHISPER_DIR = join(homedir(), ".iris", "bin")
+
+/** whisper-cli (Homebrew's name), whisper-cpp (the older name), or the one we built. */
+export function resolveWhisper(): string | null {
+  const own = join(LOCAL_WHISPER_DIR, "whisper-cli")
+  return which("whisper-cli") || which("whisper-cpp") || (existsSync(own) ? own : null)
+}
+
+/**
+ * The install line for THIS machine. It used to say "brew install whisper-cpp" everywhere,
+ * including Linux Hive nodes that have no brew — so a sovereign-policy node could neither
+ * upload nor install, and the advice was the dead end (#188318).
+ */
+export function localWhisperInstallHint(platform: NodeJS.Platform = process.platform): string {
+  if (platform === "darwin") return "brew install whisper-cpp"
+  if (platform === "linux") return "iris transcribe --install-local   (builds whisper-cli into ~/.iris/bin — about a minute, no sudo)"
+  return "download whisper-cli from github.com/ggml-org/whisper.cpp/releases and put it on your PATH"
+}
+
+/** Pinned so every node builds the same engine. Bump deliberately. */
+const WHISPER_CPP_TAG = "v1.9.5"
+const CMAKE_VERSION = "3.30.5"
+
+/**
+ * Build whisper-cli on Linux into ~/.iris/bin, with no root: a portable CMake from Kitware into
+ * ~/.iris/tools, whisper.cpp at a pinned tag, a static Release build of the one target we use.
+ * Proven 2026-10-07 on a 4-core Linux Hive node: 70 s to build, then a 32 s clip transcribed in
+ * 10 s under the sovereign policy. macOS uses Homebrew. Runs only when asked (--install-local).
+ */
+export function installLocalWhisper(say: (msg: string) => void = () => {}): { ok: boolean; path?: string; detail: string } {
+  if (process.platform === "darwin") {
+    if (!which("brew")) return { ok: false, detail: "Homebrew is not installed. Install it from brew.sh, then: brew install whisper-cpp" }
+    say("brew install whisper-cpp")
+    const r = spawnSync("brew", ["install", "whisper-cpp"], { encoding: "utf8", timeout: 15 * 60 * 1000 })
+    const path = resolveWhisper()
+    return path ? { ok: true, path, detail: "installed with Homebrew" } : { ok: false, detail: (r.stderr || "brew install failed").slice(-500) }
+  }
+  if (process.platform !== "linux") return { ok: false, detail: localWhisperInstallHint() }
+
+  const missing = ["git", "curl", "tar", "make", "cc", "c++"].filter((b) => !which(b))
+  if (missing.length) return { ok: false, detail: `Missing build tools: ${missing.join(", ")} (e.g. sudo apt install build-essential git curl)` }
+  if (process.arch !== "x64" && process.arch !== "arm64") return { ok: false, detail: `No portable CMake for ${process.arch}` }
+
+  const tools = join(homedir(), ".iris", "tools")
+  mkdirSync(tools, { recursive: true })
+  mkdirSync(LOCAL_WHISPER_DIR, { recursive: true })
+  const cmakeArch = process.arch === "x64" ? "x86_64" : "aarch64"
+  const cmakeDir = join(tools, `cmake-${CMAKE_VERSION}-linux-${cmakeArch}`)
+  const cmake = join(cmakeDir, "bin", "cmake")
+  const run = (label: string, cmd: string, args: string[], cwd?: string) => {
+    say(label)
+    const r = spawnSync(cmd, args, { cwd, encoding: "utf8", timeout: 20 * 60 * 1000 })
+    if (r.status !== 0) throw new Error(`${label} failed: ${(r.stderr || r.stdout || "").slice(-400)}`)
+  }
+  try {
+    if (!existsSync(cmake)) {
+      const url = `https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-${cmakeArch}.tar.gz`
+      run("Fetching CMake", "sh", ["-c", `curl -fsSL "${url}" | tar xz -C "${tools}"`])
+    }
+    const src = join(tools, `whisper.cpp-${WHISPER_CPP_TAG}`)
+    if (!existsSync(src)) run(`Fetching whisper.cpp ${WHISPER_CPP_TAG}`, "git", ["clone", "-q", "--depth", "1", "--branch", WHISPER_CPP_TAG, "https://github.com/ggml-org/whisper.cpp.git", src])
+    run("Configuring", cmake, ["-B", "build", "-DCMAKE_BUILD_TYPE=Release", "-DBUILD_SHARED_LIBS=OFF", "-DWHISPER_BUILD_TESTS=OFF"], src)
+    const jobs = String(Math.max(1, (cpus()?.length ?? 2)))
+    run("Building whisper-cli (about a minute)", cmake, ["--build", "build", "-j", jobs, "--target", "whisper-cli"], src)
+    const built = join(src, "build", "bin", "whisper-cli")
+    const dest = join(LOCAL_WHISPER_DIR, "whisper-cli")
+    run("Installing", "install", ["-m", "0755", built, dest])
+    const v = spawnSync(dest, ["--help"], { encoding: "utf8", timeout: 30_000 })
+    if (v.status !== 0 && !/usage/i.test((v.stdout || "") + (v.stderr || ""))) return { ok: false, detail: "built, but whisper-cli does not run" }
+    return { ok: true, path: dest, detail: `built whisper.cpp ${WHISPER_CPP_TAG}` }
+  } catch (e) {
+    return { ok: false, detail: e instanceof Error ? e.message : String(e) }
+  }
 }
 
 export interface TranscribeOptions {
@@ -184,9 +264,9 @@ export async function transcribeLocal(
   const ff = resolveFfmpeg()
   // whisper-cli is what Homebrew's whisper-cpp formula actually installs; whisper-cpp is the
   // older name. Both accepted — this one was already right.
-  const whisper = which("whisper-cli") || which("whisper-cpp")
+  const whisper = resolveWhisper()
   if (!ff.bin) throw new Error(ff.diagnosis || "ffmpeg unavailable")
-  if (!whisper) throw new Error("Local transcription requires whisper-cpp. Install: brew install whisper-cpp")
+  if (!whisper) throw new Error(`Local transcription requires whisper.cpp. Install: ${localWhisperInstallHint()}`)
   const ffmpeg = ff.bin
 
   // Ensure model

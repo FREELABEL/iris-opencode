@@ -13,7 +13,7 @@ import {
   highlight, writeJson } from "./iris-api"
 import { spawnSync } from "child_process"
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs"
-import { transcribeLocal, resolveFfmpeg } from "../lib/transcription"
+import { transcribeLocal, resolveFfmpeg, resolveWhisper, localWhisperInstallHint, installLocalWhisper } from "../lib/transcription"
 import { resolveSttPolicy } from "../lib/stt-policy"
 import { treatTranscript, listTreatments, structureWalkthrough } from "../lib/walkthrough"
 import {
@@ -79,10 +79,11 @@ async function fetchGlossary(brandId?: number): Promise<string | undefined> {
  * libraries. So the advice pointed at the one thing that was fine.
  */
 function localDepAdvice(): string | null {
-  const whisper = which("whisper-cli") || which("whisper-cpp")
+  const whisper = resolveWhisper()
   const ff = resolveFfmpeg()
-  if (!whisper && !ff.bin) return `Install local transcription:  brew install whisper-cpp ffmpeg`
-  if (!whisper) return `Install local transcription:  brew install whisper-cpp`
+  const ffHint = process.platform === "darwin" ? "brew install ffmpeg" : "sudo apt install ffmpeg"
+  if (!whisper && !ff.bin) return `Install local transcription:  ${localWhisperInstallHint()}\n  and ffmpeg:  ${ffHint}`
+  if (!whisper) return `Install local transcription:  ${localWhisperInstallHint()}`
   if (!ff.bin) return ff.diagnosis || "ffmpeg is unavailable"
   // Both present and working — whatever failed was not a missing dependency, and claiming
   // otherwise would send someone to reinstall tools that are fine.
@@ -130,7 +131,7 @@ async function transcribeViaServer(
       sp.stop("Too large for the server", 1)
       prompts.log.error(
         `${sizeMb.toFixed(1)}MB exceeds the ${SERVER_MAX_MB}MB server limit.\n` +
-          `For files this size install local transcription: brew install whisper-cpp`,
+          `For files this size install local transcription: ${localWhisperInstallHint()}`,
       )
       return null
     }
@@ -543,10 +544,34 @@ export const PlatformTranscribeCommand = cmd({
         alias: "o",
         describe: "Write the transcript here (file or dir). Default: ~/.iris/transcripts",
       })
+      .option("install-local", {
+        type: "boolean",
+        default: false,
+        describe: "Install the on-device engine (whisper.cpp) for this machine, then exit. Linux builds it into ~/.iris/bin with no sudo",
+      })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Transcribe")
+
+    // #188318: a sovereign machine with no local engine could neither upload nor transcribe,
+    // and the only advice was a package manager Linux does not have.
+    if (args["install-local"]) {
+      const have = resolveWhisper()
+      if (have) {
+        prompts.log.info(`Already installed: ${have}`)
+        prompts.outro("Done")
+        return
+      }
+      const r = installLocalWhisper((m) => prompts.log.step(m))
+      if (r.ok) prompts.log.success(`On-device transcription ready: ${r.path} (${r.detail})`)
+      else {
+        prompts.log.error(r.detail)
+        process.exitCode = 1
+      }
+      prompts.outro("Done")
+      return
+    }
 
     // Answer "what can I do with a recording" without needing one.
     if (args["list-treatments"]) {
