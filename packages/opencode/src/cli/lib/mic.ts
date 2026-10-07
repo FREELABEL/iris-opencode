@@ -96,6 +96,11 @@ export interface Recording {
   peakSeen(): number
   /** Finish, flush the WAV header, and resolve when ffmpeg has exited. */
   stop(): Promise<{ ok: boolean; elapsedMs: number; stderr: string }>
+  /**
+   * Resolve when ffmpeg exits ON ITS OWN — a `seconds` limit reached, or the device gone —
+   * without asking it to stop. Waiting on stop() instead ends the recording on the spot.
+   */
+  done(): Promise<void>
 }
 
 export interface StartOptions {
@@ -253,6 +258,7 @@ export function spawnCapture(
     path,
     device,
     peakSeen: () => peak,
+    done: () => exited.then(() => undefined),
     async stop() {
       // `q` is ffmpeg's graceful shutdown: it finalises the WAV header. A SIGKILL leaves a
       // file whose length says zero, which whisper reads as an empty recording — the exact
