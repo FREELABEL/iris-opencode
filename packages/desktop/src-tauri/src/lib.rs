@@ -1,5 +1,6 @@
 mod cli;
 mod login;
+mod onboarding;
 mod window_customizer;
 
 use cli::{cli_health, install_cli, sync_cli};
@@ -364,6 +365,8 @@ fn require_sign_in(app: &AppHandle) {
     // On the main thread because window creation requires it, and setup() already is the main
     // thread — run_on_main_thread here is a no-op in the common case and correct if that
     // changes.
+    onboarding::track(app, onboarding::SIGNIN_SHOWN, Some("required".into()));
+
     let app_inner = app.clone();
     let _ = app.run_on_main_thread(move || {
         login::show_login_window(&app_inner, true);
@@ -790,7 +793,8 @@ pub fn run() {
             iris_action,
             login::save_iris_token,
             login::restart_app,
-            login::open_login_window
+            login::open_login_window,
+            onboarding::track_onboarding
         ])
         .setup(move |app| {
             let app = app.handle().clone();
@@ -806,6 +810,9 @@ pub fn run() {
             // cause is invisible because nothing in the install path signs anyone in.
             //
             // So this REQUIRES rather than suggests. First launch is the sign-in screen.
+            // Counted before anything else can fail: the top of the desktop funnel (D7 #188247).
+            onboarding::track(&app, onboarding::LAUNCH, None);
+
             require_sign_in(&app);
 
             // Initialize log state

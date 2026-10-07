@@ -148,6 +148,10 @@ on this machine.</p>
   const invoke = window.__TAURI__.core.invoke;
   const $ = (id) => document.getElementById(id);
   const msg = (t, cls) => { $("msg").textContent = t; $("msg").className = "msg " + (cls || ""); };
+  // Onboarding steps for the desktop funnel (D7 #188247). Sent by Rust (onboarding.rs), which
+  // only accepts the four names this window may report. Never awaited for its result and never
+  // allowed to throw: measurement must not be able to break sign-in.
+  const track = (event, label) => { try { invoke("track_onboarding", { event, label: label || null }).catch(() => {}); } catch (_) {} };
 
   let email = "";
 
@@ -173,6 +177,7 @@ on this machine.</p>
     let trialNote = "";
     $("send").disabled = true;
     msg("Sending…");
+    track("onboarding.signin_method", "code");
     try {
       // Exactly the CLI's payload. `email` alone returns 422 — auto_create is what lets a
       // new client sign in at all, and method/expiration are required by the endpoint.
@@ -185,6 +190,7 @@ on this machine.</p>
         // blank optional field into a visible error.
         ...(promo ? { promo_code: promo } : {}),
       });
+      track("onboarding.code_sent");
       const t = data?.data?.trial;
       trialNote = t?.granted
         ? (t.kind === "license"
@@ -264,6 +270,7 @@ on this machine.</p>
       await listen("setup-step", (e) => { if (!settled) msg(e.payload + "…", "ok"); });
       await listen("setup-done", (e) => {
         const o = (e && e.payload) || {};
+        track("onboarding.setup_done", o.cli === "ready" ? "cli_ready" : "cli_failed");
         if (o.cli === "ready") {
           $("sub").textContent = "You're signed in on this machine. The iris CLI is signed in too.";
           return finish("Setup complete.", 3);
@@ -276,6 +283,9 @@ on this machine.</p>
 
       msg("Signed in. Finishing setup…", "ok");
       await invoke("save_iris_token", { token });
+      // After the save, not before: Rust attaches the token now on disk, which is what lets the
+      // server join this install to the person (genesis_events.user_id).
+      track("onboarding.signed_in", "code");
 
       // Backstop: if no event ever arrives (older build, dead thread), still finish rather
       // than stranding the user on a dead window. Long enough for a slow CLI download — the

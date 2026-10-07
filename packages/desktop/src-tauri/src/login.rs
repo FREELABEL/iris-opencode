@@ -281,7 +281,7 @@ pub fn restart_app(app: AppHandle) {
 /// module, would fail there with "Could not resolve home directory". Same defect as lib.rs
 /// had until earlier today (#182738), reintroduced in a new file because the helper was
 /// copied rather than shared.
-fn dirs_next_home() -> Option<std::path::PathBuf> {
+pub(crate) fn dirs_next_home() -> Option<std::path::PathBuf> {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(std::path::PathBuf::from)
