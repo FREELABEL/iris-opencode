@@ -60,22 +60,57 @@ pub fn save_iris_token(app: AppHandle, token: String) -> Result<(), String> {
         let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
     }
 
-    // Signing in is not finishing setup. Do the rest here, so "download the app" is the whole
-    // instruction rather than the first of four.
-    finish_setup_in_background(app);
+    // D3 #188249: setup (the ~120MB CLI download, the daemon) no longer runs HERE, while the
+    // person watches the sign-in window. It used to hold that window for minutes and end in a
+    // countdown. Now the window restarts the app at once and setup runs after the restart, in
+    // the background, from this marker. The marker is the hand-off: if the restart never comes,
+    // the next launch still finishes setup.
+    if let Some(home) = dirs_next_home() {
+        let _ = std::fs::write(setup_marker(&home), b"1");
+    }
+    // The sign-in window restarts the app itself in a moment. Hold the key watcher off so it
+    // does not race the window into a second restart.
+    hold_engine_restart(std::time::Duration::from_secs(30));
+    let _ = app;
 
     Ok(())
 }
 
-/// How long the engine re-key waits on the post-sign-in setup before acting on its own.
-///
-/// While setup runs, the sign-in window owns the restart (it narrates progress and restarts
-/// when setup reports done). The watcher in lib.rs only steps in if that never happens — a
-/// dead thread, a window that was closed — and this is how long "never" is.
-const SETUP_MAX: std::time::Duration = std::time::Duration::from_secs(12 * 60);
-/// After setup reports, how long the sign-in window has to show the outcome before the
-/// watcher restarts regardless. The window's own countdown is shorter than this.
-const SETUP_GRACE: std::time::Duration = std::time::Duration::from_secs(30);
+fn setup_marker(home: &std::path::Path) -> std::path::PathBuf {
+    home.join(".iris").join("setup-pending")
+}
+
+/// On launch: if a sign-in left setup pending, finish it now, in the background (D3 #188249).
+/// Nothing waits on it. If it does not complete, say so in a dialog with the one command to run;
+/// IRIS itself is already working, because the key was saved before the restart.
+pub fn resume_pending_setup(app: &AppHandle) {
+    let Some(home) = dirs_next_home() else { return };
+    let marker = setup_marker(&home);
+    if !marker.exists() {
+        return;
+    }
+    let _ = std::fs::remove_file(&marker);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let outcome = run_setup_steps(&app);
+        println!("setup (after sign-in): cli={} {}", outcome.cli, outcome.detail);
+        crate::onboarding::track(
+            &app,
+            crate::onboarding::SETUP_DONE,
+            Some(if outcome.cli == "ready" { "cli_ready".into() } else { "cli_failed".into() }),
+        );
+        if outcome.cli != "ready" {
+            use tauri_plugin_dialog::DialogExt;
+            let msg = format!(
+                "IRIS is signed in and ready. One part of setup didn't finish: {}{}",
+                outcome.detail,
+                outcome.recovery.map(|r| format!("\n\n{r}")).unwrap_or_default()
+            );
+            app.dialog().message(msg).title("Finish setting up the iris CLI").show(|_| {});
+        }
+    });
+}
+
 
 static SETUP_HOLD_UNTIL: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
 
@@ -107,44 +142,9 @@ struct SetupOutcome {
     recovery: Option<String>,
 }
 
-/// Install the CLI, install the Hive daemon, and register this machine — after sign-in.
-///
-/// Every one of these already worked; nothing ever ran them in order. That gap is what a
-/// client walked on 2026-08-31: install the app, then a terminal one-liner for the CLI,
-/// another for the daemon, a third command to register, and a dependency discovered at each
-/// step from an error that did not name it.
-///
-/// Runs AFTER sign-in because the daemon needs a credential to register, and BACKGROUND
-/// because none of it should freeze the window — the app is usable while this proceeds.
-///
-/// Every step is idempotent and self-checking: the CLI install is skipped when a platform CLI
-/// is already present (identity-checked, not merely a file at the path),
-/// `daemon install` refuses to reinstall over an existing daemon, and `register` is safe to
-/// repeat. So a re-login costs nothing, and a partial previous attempt is completed rather
-/// than duplicated.
-///
-/// THE CREDENTIAL IS NEVER HOSTAGE TO THIS (#186013). This used to emit `setup-failed` and
-/// RETURN when the CLI install failed, and the window then left itself open "so the message
-/// stays visible" — so the app was never restarted, and the engine, spawned before sign-in
-/// with IRIS_API_KEY="", kept answering every chat message with "Unauthorized: Provide a
-/// Bearer token" while the token sat correctly in ~/.iris/sdk/.env. On Windows the install
-/// ALWAYS failed, so sign-in could never take effect. Measured live on a client's machine
-/// 2026-09-18: TUI working, Desktop chat 401 on every message, same account, same file.
-///
-/// Now: every exit path sends `setup-done` with the outcome, the window restarts on every
-/// outcome (after showing it), and independently the engine watcher in lib.rs restarts the
-/// app whenever the key on disk differs from the key the engine was spawned with — held off
-/// only while this thread is running, and never longer than SETUP_MAX.
-fn finish_setup_in_background(app: AppHandle) {
-    hold_engine_restart(SETUP_MAX);
-    std::thread::spawn(move || {
-        let outcome = run_setup_steps(&app);
-        println!("setup: done -> cli={} {}", outcome.cli, outcome.detail);
-        // Give the window time to show the outcome; after that the watcher may restart.
-        hold_engine_restart(SETUP_GRACE);
-        let _ = app.emit("setup-done", outcome);
-    });
-}
+/// THE CREDENTIAL IS NEVER HOSTAGE TO SETUP (#186013). The key is saved before any setup step
+/// runs, and setup now runs only after the restart (resume_pending_setup), so a failed CLI
+/// install — which on Windows used to be every install — can no longer leave the engine keyless.
 
 fn run_setup_steps(app: &AppHandle) -> SetupOutcome {
     // Report each step to the sign-in window. Silence for ten seconds after a click reads

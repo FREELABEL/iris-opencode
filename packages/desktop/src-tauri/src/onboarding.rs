@@ -23,6 +23,7 @@ const ENDPOINT: &str = "https://heyiris.io/api/v1/genesis/events";
 
 pub const LAUNCH: &str = "onboarding.launch";
 pub const SIGNIN_SHOWN: &str = "onboarding.signin_shown";
+pub const SETUP_DONE: &str = "onboarding.setup_done";
 
 /// The steps the login window may report. Anything else from the webview is ignored here,
 /// before it costs a request.

@@ -817,6 +817,10 @@ pub fn run() {
 
             require_sign_in(&app);
 
+            // A sign-in that just restarted the app left setup (CLI, daemon) to finish here, in
+            // the background, instead of in front of the person (D3 #188249).
+            login::resume_pending_setup(&app);
+
             // Initialize log state
             app.manage(LogState(Arc::new(Mutex::new(VecDeque::new()))));
 

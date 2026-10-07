@@ -229,65 +229,19 @@ on this machine.</p>
   // and Google paths cannot drift: save → setup (CLI, daemon) → restart.
   async function finishSignIn(token, method) {
     $("step-code").hidden = true;
-    // Only what is true YET. This line used to add "The iris CLI is signed in too" before
-    // setup had run — shown on Windows machines that had no CLI at all (#186013). The CLI
-    // line is added below, once setup has actually asked the CLI who it is.
     $("sub").textContent = "You're signed in on this machine.";
-
-    // Sign-in kicks off the rest of setup (CLI, daemon, registration) in Rust. Follow it
-    // here so the window narrates real progress instead of sitting on one static line —
-    // and so the restart WAITS for that work to finish rather than racing it.
-    const listen = window.__TAURI__.event.listen;
-    let settled = false;
-
-    // EVERY outcome ends in a restart. It used to be only success: on a failed CLI install
-    // the window stayed open "so the message stays visible" — and the app was never
-    // restarted, so the engine never received the credential that had just been saved and
-    // every chat message 401'd (#186013). The message is still shown; it just no longer
-    // costs the user their sign-in. A failed outcome gets a longer countdown to read it.
-    const finish = async (label, seconds, cls) => {
-      if (settled) return;
-      settled = true;
-      // Count down visibly. A window that vanishes unannounced reads as a crash.
-      for (let n = seconds; n > 0; n--) {
-        msg(`${label} Restarting IRIS in ${n}…`, cls || "ok");
-        await new Promise((r) => setTimeout(r, 1000));
-      }
-      msg("Restarting…", cls || "ok");
-      await invoke("restart_app");
-    };
-
-    const showRecovery = (text) => {
-      if (!text) return;
-      $("recovery").textContent = text;
-      $("recovery").hidden = false;
-    };
-
-    await listen("setup-step", (e) => { if (!settled) msg(e.payload + "…", "ok"); });
-    await listen("setup-done", (e) => {
-      const o = (e && e.payload) || {};
-      track("onboarding.setup_done", o.cli === "ready" ? "cli_ready" : "cli_failed");
-      if (o.cli === "ready") {
-        $("sub").textContent = "You're signed in on this machine. The iris CLI is signed in too.";
-        return finish("Setup complete.", 3);
-      }
-      // Signed in either way — say so first, then what did not work and what to run.
-      $("sub").textContent = "You're signed in on this machine.";
-      showRecovery(o.recovery);
-      finish((o.detail || "Setup did not finish.") + " IRIS itself is ready.", 15, "err");
-    });
-
-    msg("Signed in. Finishing setup…", "ok");
+    msg("Signed in. Opening IRIS…", "ok");
     await invoke("save_iris_token", { token });
     // After the save, not before: Rust attaches the token now on disk, which is what lets the
     // server join this install to the person (genesis_events.user_id).
     track("onboarding.signed_in", method);
-
-    // Backstop: if no event ever arrives (older build, dead thread), still finish rather
-    // than stranding the user on a dead window. Long enough for a slow CLI download — the
-    // setup thread bounds each of its own steps, so this only fires if it has died.
-    setTimeout(() => finish("Signed in.", 3), 11 * 60 * 1000);
+    // D3 #188249: restart NOW. The CLI download and daemon setup used to run here, holding this
+    // window for minutes and ending in a countdown; they now finish after the restart, in the
+    // background. The engine still needs the restart: it reads the key once, at start.
+    await new Promise((r) => setTimeout(r, 600)); // let the funnel event leave
+    await invoke("restart_app");
   }
+
 
   $("google").onclick = async () => {
     $("google").disabled = true; $("send").disabled = true;
