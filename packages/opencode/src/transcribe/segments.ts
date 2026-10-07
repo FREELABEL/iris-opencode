@@ -23,7 +23,7 @@ export function splitWav(audio: Uint8Array, segmentSeconds = SEGMENT_SECONDS): U
 }
 
 /** 16 kHz mono PCM16 WAV -> where its samples are; undefined for any other audio. */
-function wavFormat(audio: Uint8Array) {
+export function wavFormat(audio: Uint8Array) {
   if (audio.byteLength < 44) return undefined
   const view = new DataView(audio.buffer, audio.byteOffset, audio.byteLength)
   const tag = (offset: number) => String.fromCharCode(...audio.subarray(offset, offset + 4))

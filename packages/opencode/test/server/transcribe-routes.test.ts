@@ -6,6 +6,7 @@ import { join } from "path"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { Server } from "../../src/server/server"
 import { isLoopbackAddress, isLoopbackHost } from "../../src/server/routes/instance/httpapi/transcribe"
+import { wrapPcmAsWav } from "../../src/transcribe/capture"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances } from "../fixture/fixture"
 
@@ -164,6 +165,36 @@ describe("POST /transcribe over the platform's size limit", () => {
       const id = (await res.json()).held.id
       expect(typeof id).toBe("string")
       await fetch(`${base}/transcribe/discard?id=${id}`, { method: "POST" })
+    })
+  })
+})
+
+describe("POST /transcribe with no speech in it", () => {
+  // Ten seconds of quiet room noise as a real 16 kHz mono WAV — the idle take the gate exists for.
+  const roomNoise = () => {
+    let seed = 7
+    const pcm = new Int16Array(160000)
+    for (let i = 0; i < pcm.length; i++) {
+      seed = (seed * 1664525 + 1013904223) >>> 0
+      pcm[i] = Math.round((seed / 0x100000000 - 0.5) * 2 * 0x7fff * 0.003)
+    }
+    // copied so its type is a plain ArrayBuffer-backed body fetch accepts
+    return new Uint8Array(wrapPcmAsWav(new Uint8Array(pcm.buffer)))
+  }
+
+  test("answers 200 noSpeech, never reaches an engine, and holds nothing", async () => {
+    configured()
+    let calls = 0
+    platformReply = () => {
+      calls++
+      return Response.json({ success: true, data: { text: "You", provider: "xai" } })
+    }
+    await withServer(async (base) => {
+      const res = await fetch(`${base}/transcribe?filename=d.wav`, { method: "POST", body: roomNoise() })
+      expect(res.status).toBe(200)
+      expect(await res.json()).toMatchObject({ text: "", noSpeech: true, attempts: [] })
+      expect(calls).toBe(0)
+      expect((await (await fetch(`${base}/transcribe/held`)).json()).held).toEqual([])
     })
   })
 })
