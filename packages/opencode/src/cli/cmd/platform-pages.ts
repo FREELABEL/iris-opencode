@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { brandContract, brandContractCss, applyBrandBlock } from "./brand-contract"
 import { productCommand } from "./product-command"
 import { buildListEnvelope, projectFields, LIST_FIELDS } from "./list-envelope"
 import * as prompts from "./clack"
@@ -2067,7 +2068,30 @@ const RebrandCmd = cmd({
 
       sp.message("Rebranding…")
       const { json, leaks } = rebrandJsonContent(jsonContent, target)
+      // #188409: a hand-written HTML page keeps its identity in CSS, which the composable rebrand
+      // above never touches. A TEMPLATE marks its brand values in one block; replace that block.
+      // A page without one is not a template, and saying so beats reporting a rebrand that left
+      // every colour where it was.
+      let brandBlockNote = ""
+      if (json?.render_mode === "html") {
+        const tr = await irisFetch(`/api/v1/public/brands/${encodeURIComponent(String(args.brand))}/design-tokens`)
+        const td = tr.ok ? ((await tr.json()) as { name?: string; design_tokens?: Record<string, unknown> }) : {}
+        const { values, missing } = brandContract(td?.design_tokens ?? {})
+        const block = brandContractCss(values, td?.name ?? String(args.brand))
+        let replaced = 0
+        for (const key of ["css", "html", "head"] as const) {
+          if (typeof json[key] === "string") {
+            const r = applyBrandBlock(json[key], block)
+            json[key] = r.text
+            replaced += r.replaced
+          }
+        }
+        brandBlockNote = replaced
+          ? `brand block replaced (${Object.keys(values).length} values${missing.length ? `; kept the template's own: ${missing.join(", ")}` : ""})`
+          : "NOT A TEMPLATE: this HTML page has no /* brand-tokens:start */ block, so its colours and fonts are unchanged"
+      }
       sp.stop(leaks.length ? `${leaks.length} possible leak(s)` : success("Rebranded — clean"))
+      if (brandBlockNote) (brandBlockNote.startsWith("NOT") ? prompts.log.warn : prompts.log.info)(brandBlockNote)
 
       // --- Safety gate: refuse to create/publish if source PII survived ---
       if (leaks.length > 0) {
