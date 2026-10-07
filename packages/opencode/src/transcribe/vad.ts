@@ -42,22 +42,11 @@ export type SpeechVerdict = {
 export function detectSpeech(audio: Uint8Array): SpeechVerdict {
   const format = wavFormat(audio)
   if (!format) return { speech: true, reason: "unreadable" }
-  const view = new DataView(audio.buffer, audio.byteOffset + format.dataOffset, format.dataBytes)
-  const frames = Math.floor(format.dataBytes / 2 / FRAME_SAMPLES)
+  const db = frameLoudness(audio.subarray(format.dataOffset, format.dataOffset + format.dataBytes))
   // Shorter than one syllable run: nothing to measure a floor against. The TUI and the composer
   // already refuse takes this short; anything else reaching here is sent.
-  if (frames < MIN_RUN_FRAMES * 2) return { speech: true, reason: "too-short" }
-
-  const db = new Float64Array(frames)
-  for (let f = 0; f < frames; f++) {
-    let sum = 0
-    for (let i = 0; i < FRAME_SAMPLES; i++) {
-      const v = view.getInt16((f * FRAME_SAMPLES + i) * 2, true) / 0x8000
-      sum += v * v
-    }
-    const rms = Math.sqrt(sum / FRAME_SAMPLES)
-    db[f] = rms > 0 ? 20 * Math.log10(rms) : -120
-  }
+  if (db.length < MIN_RUN_FRAMES * 2) return { speech: true, reason: "too-short" }
+  const frames = db.length
 
   const floorDb = percentile(db, 0.1)
   if (floorDb > AMBIGUOUS_FLOOR_DB) return { speech: true, reason: "loud-throughout", floorDb }
@@ -77,6 +66,23 @@ export function detectSpeech(audio: Uint8Array): SpeechVerdict {
   return speechMs >= MIN_SPEECH_MS
     ? { speech: true, reason: "speech", speechMs, floorDb }
     : { speech: false, reason: "no-speech", speechMs, floorDb }
+}
+
+/** Loudness of each 30 ms frame of 16 kHz mono PCM16, in dBFS (-120 for digital silence). */
+export function frameLoudness(pcm: Uint8Array): Float64Array {
+  const view = new DataView(pcm.buffer, pcm.byteOffset, pcm.byteLength)
+  const frames = Math.floor(pcm.byteLength / 2 / FRAME_SAMPLES)
+  const db = new Float64Array(frames)
+  for (let f = 0; f < frames; f++) {
+    let sum = 0
+    for (let i = 0; i < FRAME_SAMPLES; i++) {
+      const v = view.getInt16((f * FRAME_SAMPLES + i) * 2, true) / 0x8000
+      sum += v * v
+    }
+    const rms = Math.sqrt(sum / FRAME_SAMPLES)
+    db[f] = rms > 0 ? 20 * Math.log10(rms) : -120
+  }
+  return db
 }
 
 function percentile(values: Float64Array, p: number) {

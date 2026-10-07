@@ -211,13 +211,15 @@ async function transcribeSegments(audio: Uint8Array, filename: string, language:
   const parts = splitWav(audio)
   if (parts.length === 1) return transcribeWithFallback(audio, { filename, language, remote })
   const results = []
-  for (const part of parts) results.push(await transcribeWithFallback(part, { filename, language, remote }))
+  // A long background take is mostly not speech; its silent stretches are not uploaded either.
+  for (const part of parts)
+    if (detectSpeech(part).speech) results.push(await transcribeWithFallback(part, { filename, language, remote }))
   return {
     text: results
       .map((r) => r.text.trim())
       .filter(Boolean)
       .join(" "),
-    provider: results[0]!.provider,
+    provider: results[0]?.provider ?? "none",
     attempts: results.flatMap((r) => r.attempts),
   }
 }
