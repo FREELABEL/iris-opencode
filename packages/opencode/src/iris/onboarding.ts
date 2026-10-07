@@ -44,6 +44,53 @@ export interface Grounding {
   choices: string[]
 }
 
+/**
+ * How to read each provider's inbox. Gmail is a native service (read_emails); Outlook is
+ * Composio-managed and declares list_messages (config/integrations/outlook.yml, read-only).
+ */
+const READ_INBOX: Record<string, { action: string; params: (n: number) => Record<string, unknown> }> = {
+  gmail: { action: "read_emails", params: (n) => ({ max_results: n, query: "in:inbox" }) },
+  outlook: {
+    action: "list_messages",
+    params: (n) => ({
+      folder: "Inbox",
+      top: n,
+      orderby: ["receivedDateTime desc"],
+      select: ["id", "conversationId", "subject", "from", "receivedDateTime", "bodyPreview"],
+    }),
+  },
+}
+
+/**
+ * One thread shape from either provider. Gmail returns {emails:[{subject, from, snippet}]};
+ * Outlook returns Microsoft Graph messages ({value:[{subject, from:{emailAddress}, bodyPreview}]})
+ * wherever Composio nests them. Present-but-empty stays empty — the caller says so.
+ */
+export function toThreads(body: any): MailThread[] {
+  const pick = (...c: any[]) => c.find((x) => Array.isArray(x)) ?? []
+  const raw: any[] = pick(
+    body?.emails, body?.data?.emails, body?.value, body?.data?.value, body?.data?.data?.value,
+    body?.messages, body?.data?.messages, body?.data,
+  )
+  return raw.map((e) => {
+    const addr = e?.from?.emailAddress
+    const from =
+      typeof e?.from === "string"
+        ? e.from
+        : addr
+          ? addr.name && addr.address ? `${addr.name} <${addr.address}>` : String(addr.name ?? addr.address ?? "")
+          : ""
+    return {
+      id: String(e?.id ?? ""),
+      threadId: e?.thread_id ?? e?.conversationId ?? undefined,
+      subject: String(e?.subject ?? "(no subject)"),
+      from,
+      date: e?.date ?? e?.receivedDateTime ?? undefined,
+      snippet: String(e?.snippet ?? e?.bodyPreview ?? ""),
+    }
+  })
+}
+
 export async function state(): Promise<PlatformResult<OnboardingState>> {
   const userId = await resolveUserId()
   if (!userId) {
@@ -80,23 +127,16 @@ export async function mail(limit = 10): Promise<PlatformResult<{ threads: MailTh
   const type = s.data.mail.type!
 
   try {
+    const read = READ_INBOX[type] ?? READ_INBOX.gmail
     const res = await irisFetch(`/api/v1/users/${userId}/integrations/execute-direct`, IRIS_API, {
       method: "POST",
-      body: JSON.stringify({ integration: type, action: "read_emails", params: { max_results: limit, query: "in:inbox" } }),
+      body: JSON.stringify({ integration: type, action: read.action, params: read.params(limit) }),
     })
     const body = (await res.json().catch(() => null)) as any
     if (!res.ok || body?.success === false) {
       return { measured: false, reason: String(body?.error ?? body?.message ?? `HTTP ${res.status}`), data: { threads: [] } }
     }
-    const raw: any[] = body?.emails ?? body?.data?.emails ?? body?.data ?? []
-    const threads: MailThread[] = (Array.isArray(raw) ? raw : []).map((e) => ({
-      id: String(e.id ?? ""),
-      threadId: e.thread_id ?? undefined,
-      subject: String(e.subject ?? "(no subject)"),
-      from: String(e.from ?? ""),
-      date: e.date ?? undefined,
-      snippet: String(e.snippet ?? ""),
-    }))
+    const threads = toThreads(body)
     return { measured: true, data: { threads, account: s.data.mail.account } }
   } catch (e) {
     return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { threads: [] } }

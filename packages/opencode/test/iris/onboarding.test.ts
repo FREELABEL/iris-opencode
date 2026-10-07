@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdtempSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { digest, slugify, waiting, workspace, type MailThread } from "../../src/iris/onboarding"
+import { digest, slugify, toThreads, waiting, workspace, type MailThread } from "../../src/iris/onboarding"
 
 // D4 #188245 — the pure halves of "Here's what I see". The network halves (mail, ground) return
 // PlatformResult and are exercised against the live endpoints, not mocked here.
@@ -62,5 +62,24 @@ describe("workspace", () => {
     expect(a.data.path).toBe(path.join(root, "bright-smile-dental"))
     expect(b.data.path).toBe(a.data.path)
     expect(statSync(a.data.path).isDirectory()).toBe(true)
+  })
+})
+
+describe("toThreads", () => {
+  test("Gmail and Outlook come out as the same thread shape", () => {
+    const gmail = toThreads({ success: true, emails: [{ id: "g1", thread_id: "t1", subject: "Invoice", from: "Ann <a@x.test>", snippet: "Due Friday" }] })
+    const outlook = toThreads({
+      successful: true,
+      data: { value: [{ id: "o1", conversationId: "c1", subject: "Invoice", from: { emailAddress: { name: "Ann", address: "a@x.test" } }, bodyPreview: "Due Friday", receivedDateTime: "2026-10-06T10:00:00Z" }] },
+    })
+    expect(outlook[0]).toEqual({ id: "o1", threadId: "c1", subject: "Invoice", from: "Ann <a@x.test>", date: "2026-10-06T10:00:00Z", snippet: "Due Friday" })
+    expect(gmail[0].from).toBe(outlook[0].from)
+    expect(gmail[0].snippet).toBe(outlook[0].snippet)
+  })
+
+  test("an empty or unexpected body is zero threads, not a crash", () => {
+    expect(toThreads({ success: true, data: { value: [] } })).toEqual([])
+    expect(toThreads(null)).toEqual([])
+    expect(toThreads({ success: true, message: "ok" })).toEqual([])
   })
 })

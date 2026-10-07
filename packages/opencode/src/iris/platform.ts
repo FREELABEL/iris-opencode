@@ -1779,6 +1779,22 @@ export async function startIntegrationConnect(
   try {
     const res = await irisFetch(`/api/v1/integrations/oauth-url/${encodeURIComponent(type)}`, FL_API)
     const body = await res.json().catch(() => null)
+    // D2 #188248: fl-api only knows the integrations it runs OAuth for itself. Composio-managed
+    // ones (Outlook among them: "OAuth not configured for outlook") get their authorize URL
+    // from iris-api — the same endpoint `iris connect` uses. Without this the desktop could
+    // not connect Outlook at all, while the CLI could.
+    const flUrl = body?.oauth_url ?? body?.url ?? body?.data?.oauth_url ?? body?.data?.url
+    if (!res.ok || !flUrl) {
+      const viaComposio = await irisFetch(
+        `/api/v1/integrations-temp/oauth-url/${encodeURIComponent(type)}?user_id=${userId}`,
+        IRIS_API,
+      ).catch(() => null)
+      const cb = viaComposio ? await viaComposio.json().catch(() => null) : null
+      const cUrl = cb?.data?.oauth_url ?? cb?.oauth_url ?? cb?.url
+      if (viaComposio?.ok && typeof cUrl === "string" && /^https?:/i.test(cUrl)) {
+        return { measured: true, data: { url: cUrl, mode } }
+      }
+    }
     if (!res.ok) {
       // The API's own words, not ours: it distinguishes "no OAuth for this type" from "you may
       // not connect for that organization", and both are things the person needs to read.

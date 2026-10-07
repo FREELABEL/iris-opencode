@@ -83,7 +83,7 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
     setStep({ kind: "connect" })
   }
 
-  async function connect(type: "gmail") {
+  async function connect(type: "gmail" | "outlook") {
     const r = await post("/iris/integrations/connect", { type }).catch(() => null)
     if (!r?.measured || !r.url) {
       return setStep({ kind: "connect", note: r?.reason ?? "Couldn't start the connection. Try again." })
@@ -187,8 +187,11 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
               >
                 Connect Gmail
               </button>
-              <button disabled class="rounded-[10px] border border-v2-border-border-base px-4 py-3 text-[15px] opacity-50">
-                Outlook — coming soon
+              <button
+                class="rounded-[10px] border border-v2-border-border-base px-4 py-3 text-[15px] hover:bg-v2-background-bg-subtle"
+                onClick={() => void connect("outlook")}
+              >
+                Connect Outlook
               </button>
               <Show when={s().note}>
                 <p class="text-v2-text-text-muted text-[13px]">{s().note}</p>
