@@ -174,11 +174,16 @@ export const PlatformListenCommand = cmd({
       Math.round(1000 / FPS),
     )
 
+    // The take ends when the person says so (Enter, Ctrl-C) or when ffmpeg finishes a --seconds
+    // take by itself. This used to `await rec.stop()` right here, and stop() sends ffmpeg its `q`
+    // at once — so every recording, fixed-length or not, ended within milliseconds of starting.
     let stopped = false
+    let requested!: () => void
+    const stopRequested = new Promise<void>((r) => (requested = r))
     const finish = () => {
       if (stopped) return
       stopped = true
-      void rec.stop()
+      requested()
     }
     const onSigint = () => finish()
     process.on("SIGINT", onSigint)
@@ -188,6 +193,7 @@ export const PlatformListenCommand = cmd({
       process.stdin.once("data", () => finish())
     }
 
+    await Promise.race([stopRequested, rec.done()])
     const { elapsedMs, stderr } = await rec.stop()
     live?.stop()
 
