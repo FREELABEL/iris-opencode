@@ -2375,6 +2375,61 @@ const BloqsComposeCommand = cmd({
  * phrase is nowhere in your items"), whereas a silently-omitted section reads as "no such
  * capability". Same rule federated-search.ts states for skipped sources.
  */
+/** Types the server's /api/v1/atlas/search accepts (fl-api AtlasSearchController::TYPES). */
+export const ATLAS_TYPES = ["items", "boards", "pages", "files", "leads", "agents", "workflows"] as const
+
+/**
+ * Which atlas types one `search` invocation asks for. --type wins; otherwise the two legacy
+ * narrowing flags; otherwise items + boards + pages — pages because "atlas search should
+ * search everything" (#187964) and they were the one kind of record it could not reach.
+ * Unknown names are returned separately so the caller can say so instead of dropping them.
+ */
+export function atlasTypesFor(args: { type?: string; "boards-only"?: boolean; "items-only"?: boolean }): {
+  types: string[]
+  unknown: string[]
+} {
+  if (args.type) {
+    const asked = String(args.type).split(",").map((t) => t.trim().toLowerCase()).filter(Boolean)
+    return {
+      types: asked.filter((t) => (ATLAS_TYPES as readonly string[]).includes(t)),
+      unknown: asked.filter((t) => !(ATLAS_TYPES as readonly string[]).includes(t)),
+    }
+  }
+  if (args["boards-only"]) return { types: ["boards"], unknown: [] }
+  if (args["items-only"]) return { types: ["items"], unknown: [] }
+  return { types: ["items", "boards", "pages"], unknown: [] }
+}
+
+/**
+ * Split /atlas/search rows into the shapes this command already prints. Items keep the
+ * legacy field names (bloq_name, list_name, bloq_id, content) so the item printer and the
+ * --json contract don't change underneath existing callers.
+ */
+export function splitAtlasResults(rows: any[]): { items: any[]; boards: any[]; pages: any[]; other: any[] } {
+  const items: any[] = []
+  const boards: any[] = []
+  const pages: any[] = []
+  const other: any[] = []
+  for (const r of Array.isArray(rows) ? rows : []) {
+    if (r?.type === "item")
+      items.push({
+        id: r.id,
+        title: r.title,
+        bloq_id: r.board_id,
+        bloq_name: r.board,
+        list_name: r.list,
+        content: r.snippet,
+        updated_at: r.updated_at,
+        score: r.score,
+        found_by: r.found_by,
+      })
+    else if (r?.type === "board") boards.push({ id: r.id, name: r.title, found_by: r.found_by })
+    else if (r?.type === "page") pages.push(r)
+    else if (r) other.push(r)
+  }
+  return { items, boards, pages, other }
+}
+
 export const BloqsSearchCommand = cmd({
   command: "search <query>",
   aliases: ["find", "q"],
@@ -2386,6 +2441,10 @@ export const BloqsSearchCommand = cmd({
       .option("boards-only", { describe: "only match board names/descriptions (the old behaviour)", type: "boolean", default: false })
       .option("items-only", { describe: "only match item titles/content", type: "boolean", default: false })
       .option("bloq", { describe: "restrict item matches to one board ID", type: "number" })
+      .option("type", {
+        describe: `what to search, comma-separated: ${ATLAS_TYPES.join(", ")} (default items,boards,pages)`,
+        type: "string",
+      })
       // #180715: the multi-source fan-out was only reachable from `bloqs items <bloq-id>
       // --include-all`, which needs an ID you do not have when you are searching FOR something.
       // It is the same engine; it just had no front door at the top level.
@@ -2428,12 +2487,53 @@ export const BloqsSearchCommand = cmd({
     const spinner = args.json ? null : prompts.spinner()
     spinner?.start("Searching…")
 
-    // ── boards (name + description) ──
-    // The index endpoint ACCEPTS ?search= and ignores it, returning every board — so the
-    // filter has to happen here or every board would report as a match. Same tokenized
-    // AND-match `bloqs list --search` uses, so the two agree.
+    // ── your records: one call to the shared words engine (#187964 S2) ──
+    // /api/v1/atlas/search matches EVERY word, ranks by match, and covers boards you were added
+    // to (scoped as the board UI scopes them) — the content-items feed this used to read only
+    // saw boards you own (#187962) and sorted newest first. With --bloq the board-scoped
+    // endpoint stays exact. A server without the endpoint (404) gets the old two calls.
+    const { types, unknown } = atlasTypesFor(args as any)
+    if (unknown.length) {
+      const msg = `Unknown --type ${unknown.join(", ")}. Use any of: ${ATLAS_TYPES.join(", ")}`
+      spinner?.stop("Search not run")
+      if (args.json) await writeJson({ error: msg })
+      else prompts.outro(msg)
+      process.exitCode = 1
+      return
+    }
     let boards: any[] = []
-    if (wantBoards) {
+    let items: any[] = []
+    let pages: any[] = []
+    let otherTypes: any[] = []
+    let lanes: Record<string, string> | undefined
+    let recordsError: string | undefined
+    let usedAtlas = false
+
+    if (!args.bloq && types.length) {
+      try {
+        const params = new URLSearchParams({ q: query, type: types.join(","), limit: String(limit) })
+        const res = await irisFetch(`/api/v1/atlas/search?${params}`)
+        if (res.ok) {
+          const data = (await res.json()) as any
+          const split = splitAtlasResults(data?.results)
+          items = split.items
+          boards = split.boards
+          pages = split.pages
+          otherTypes = split.other
+          lanes = data?.lanes
+          if (Array.isArray(data?.failed_types) && data.failed_types.length)
+            recordsError = `could not search: ${data.failed_types.join(", ")}`
+          usedAtlas = true
+        } else if (res.status !== 404) {
+          recordsError = `atlas search HTTP ${res.status}`
+        }
+      } catch (e: any) {
+        recordsError = String(e?.message ?? e).slice(0, 120)
+      }
+    }
+
+    // Legacy path: --bloq, or a server that predates /atlas/search.
+    if (!usedAtlas && wantBoards && !args.type) {
       try {
         const res = await irisFetch(`/api/v1/user/${userId}/bloqs`)
         if (res.ok) {
@@ -2445,13 +2545,9 @@ export const BloqsSearchCommand = cmd({
         }
       } catch { /* reported as 0 below — never silently narrowed */ }
     }
-
-    // ── items (title + content, every board) ──
-    let items: any[] = []
-    if (wantItems) {
+    if (!usedAtlas && wantItems && (!args.type || types.includes("items"))) {
       try {
         const params = new URLSearchParams({ search: query, per_page: String(limit) })
-        // A board-scoped item search has its own endpoint; reuse it so --bloq is exact.
         const url = args.bloq
           ? `/api/v1/user/${userId}/bloqs/${args.bloq}/items?${params}`
           : `/api/v1/user/${userId}/bloqs/content-items?${params}`
@@ -2463,6 +2559,9 @@ export const BloqsSearchCommand = cmd({
         }
       } catch { /* same */ }
     }
+    const showItems = usedAtlas ? types.includes("items") : wantItems
+    const showBoards = usedAtlas ? types.includes("boards") : wantBoards && !args.type
+    const showPages = usedAtlas && types.includes("pages")
 
     // ── external sources (Obsidian, Drive) ──
     // Only when asked. `bloq` is excluded from the fan-out here because the cross-board item
@@ -2484,7 +2583,10 @@ export const BloqsSearchCommand = cmd({
     }
 
     spinner?.stop(
-      `${boards.length} board(s), ${items.length} item(s)` + (fanOut ? `, ${external.length} external` : ""),
+      `${items.length} item(s), ${boards.length} board(s)` +
+        (showPages ? `, ${pages.length} page(s)` : "") +
+        (otherTypes.length ? `, ${otherTypes.length} other` : "") +
+        (fanOut ? `, ${external.length} external` : ""),
     )
 
     if (args.json) {
@@ -2492,16 +2594,26 @@ export const BloqsSearchCommand = cmd({
         query,
         boards,
         items,
+        pages,
+        other: otherTypes,
         external,
+        // What actually ran on the server — "meaning: not built yet" is not the same as "no matches".
+        lanes: lanes ?? null,
+        records_error: recordsError ?? null,
         // Report every source's outcome, including failures — a source that errored must not
         // be indistinguishable from a source that found nothing.
         source_outcomes: outcomes,
-        counts: { boards: boards.length, items: items.length, external: external.length },
+        counts: { boards: boards.length, items: items.length, pages: pages.length, other: otherTypes.length, external: external.length },
       })
       return
     }
 
-    if (wantItems) {
+    if (recordsError) {
+      printDivider()
+      console.log(`  ${bold("Your records")} ${dim(`— ${recordsError}`)}`)
+    }
+
+    if (showItems) {
       printDivider()
       console.log(`  ${bold("Items")} ${dim(`(${items.length})`)}`)
       if (!items.length) console.log(`  ${dim(`No item matches for "${query}"`)}`)
@@ -2514,7 +2626,7 @@ export const BloqsSearchCommand = cmd({
       }
     }
 
-    if (wantBoards) {
+    if (showBoards) {
       printDivider()
       console.log(`  ${bold("Boards")} ${dim(`(${boards.length})`)}`)
       if (!boards.length) console.log(`  ${dim(`No board-name matches for "${query}"`)}`)
@@ -2522,6 +2634,33 @@ export const BloqsSearchCommand = cmd({
         console.log(`  ${dim(`#${b.id}`)} ${bold(b.name ?? "(untitled)")}`)
         if (b.description) console.log(`      ${dim(String(b.description).slice(0, 110))}`)
       }
+    }
+
+    if (showPages) {
+      printDivider()
+      console.log(`  ${bold("Pages")} ${dim(`(${pages.length})`)}`)
+      if (!pages.length) console.log(`  ${dim(`No page matches for "${query}"`)}`)
+      for (const p of pages) {
+        console.log(`  ${dim(`#${p.id}`)} ${bold(String(p.title ?? p.slug ?? "(untitled)"))}${p.status ? dim(`  ·  ${p.status}`) : ""}`)
+        console.log(`      ${dim(`/p/${p.slug}`)}`)
+        if (p.snippet) console.log(`      ${dim(String(p.snippet).replace(/\s+/g, " ").slice(0, 110))}`)
+      }
+    }
+
+    for (const t of ["files", "leads", "agents", "workflows"]) {
+      if (!usedAtlas || !types.includes(t)) continue
+      const rows = otherTypes.filter((r) => `${r.type}s` === t)
+      printDivider()
+      console.log(`  ${bold(t[0].toUpperCase() + t.slice(1))} ${dim(`(${rows.length})`)}`)
+      if (!rows.length) console.log(`  ${dim(`No ${t} match "${query}"`)}`)
+      for (const r of rows) {
+        console.log(`  ${dim(`#${r.id}`)} ${bold(String(r.title ?? "(untitled)"))}`)
+        if (r.snippet) console.log(`      ${dim(String(r.snippet).replace(/\s+/g, " ").slice(0, 110))}`)
+      }
+    }
+
+    if (usedAtlas && lanes) {
+      console.log(`  ${dim(`matched by: words${lanes.meaning && !/^ran/.test(lanes.meaning) ? "  ·  meaning search not built yet" : ""}`)}`)
     }
 
     if (fanOut) {
