@@ -5,7 +5,7 @@ import { onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useSessionLayout } from "./session-layout"
 import { useDialog } from "@opencode-ai/ui/context"
-import { DialogUsageExceeded } from "@/components/dialog-usage-exceeded"
+import { DialogUsageExceeded, UPGRADE_GUARANTEE } from "@/components/dialog-usage-exceeded"
 import { useI18n } from "@opencode-ai/ui/context"
 
 const GO_UPSELL_FREE_TIER_LAST_SEEN_AT = "go_upsell_last_seen_at"
@@ -113,6 +113,7 @@ export function useUsageExceededDialogs() {
             description={isEnglish() ? action.message : t("dialog.usageExceeded.freeTier.description")}
             actionLabel={isEnglish() ? action.label : t("dialog.usageExceeded.freeTier.actionLabel")}
             link={action.link}
+            guarantee={action.link ? UPGRADE_GUARANTEE : undefined}
             onClose={(dontShowAgain) => {
               setGoUpsellState(keys.lastSeenAt, Date.now())
               if (dontShowAgain) setGoUpsellState(keys.dontShow, Date.now())
@@ -136,6 +137,7 @@ export function useUsageExceededDialogs() {
             description={action.message}
             actionLabel={action.label}
             link={action.link}
+            guarantee={action.link ? UPGRADE_GUARANTEE : undefined}
             onClose={(dontShowAgain) => {
               setGoUpsellState(keys.lastSeenAt, Date.now())
               if (dontShowAgain) setGoUpsellState(keys.dontShow, Date.now())
@@ -149,6 +151,7 @@ export function useUsageExceededDialogs() {
             description={isEnglish() ? action.message : t("dialog.usageExceeded.accountRateLimit.description")}
             actionLabel={isEnglish() ? action.label : t("dialog.usageExceeded.accountRateLimit.actionLabel")}
             link={action.link}
+            guarantee={action.link ? UPGRADE_GUARANTEE : undefined}
             onClose={(dontShowAgain) => {
               setGoUpsellState(keys.lastSeenAt, Date.now())
               if (dontShowAgain) setGoUpsellState(keys.dontShow, Date.now())

@@ -5,11 +5,20 @@ import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { JSX } from "solid-js"
 
+/**
+ * Shown under the upgrade button on every prompt that leads to paying. One string, here, so the
+ * promise cannot drift between prompts. It is a commitment to customers: the Terms page and the
+ * refund process must say the same thing.
+ */
+export const UPGRADE_GUARANTEE = "30-day money-back guarantee — full refund, no questions asked."
+
 export type DialogGoUpsellProps = {
   title: string
   description: JSX.Element
   link?: string
   actionLabel: string
+  /** Risk reversal next to the ask. Pass UPGRADE_GUARANTEE when the action leads to paying. */
+  guarantee?: string
   onClose?: (dontShowAgain?: boolean) => void
 }
 
@@ -40,6 +49,7 @@ export function DialogUsageExceeded(props: DialogGoUpsellProps) {
             {props.actionLabel}
           </Button>
         </div>
+        {props.guarantee && <p class="text-right text-12-regular text-text-weak">{props.guarantee}</p>}
       </div>
     </Dialog>
   )
