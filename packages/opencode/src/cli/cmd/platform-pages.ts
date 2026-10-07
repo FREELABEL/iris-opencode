@@ -2127,11 +2127,19 @@ const RebrandCmd = cmd({
 
       // Save local file
       const filePath = join(pagesDir("./pages"), `${args.as}.json`)
-      writeFileSync(filePath, JSON.stringify({
-        id: p.id, slug: args.as, title,
-        seo_title: payload.seo_title, seo_description: payload.seo_description, og_image: payload.og_image,
-        status: p.status, owner_type: payload.owner_type, owner_id: payload.owner_id, json_content: json,
-      }, null, 2))
+      // The page already exists on the server; the local copy is a convenience. Run outside a
+      // project folder (no ./pages) and writeFileSync threw ENOENT, which jumped to the catch,
+      // SKIPPED --publish, and still ended on "Done" (found verifying templates, 2026-10-07).
+      try {
+        mkdirSync(dirname(filePath), { recursive: true })
+        writeFileSync(filePath, JSON.stringify({
+          id: p.id, slug: args.as, title,
+          seo_title: payload.seo_title, seo_description: payload.seo_description, og_image: payload.og_image,
+          status: p.status, owner_type: payload.owner_type, owner_id: payload.owner_id, json_content: json,
+        }, null, 2))
+      } catch (e) {
+        prompts.log.warn(`Page created, but its local copy was not saved (${e instanceof Error ? e.message : String(e)}). Pull it later: iris pages pull ${args.as}`)
+      }
 
       // Optional: attach to a site (sites live on FL_API)
       if (args.site != null) {
@@ -2162,6 +2170,7 @@ const RebrandCmd = cmd({
     } catch (err) {
       sp.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
+      process.exitCode = 1
       prompts.outro("Done")
     }
   },
