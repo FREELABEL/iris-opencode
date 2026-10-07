@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { brandContract, brandContractCss } from "./brand-contract"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, writeJson, failNoOp} from "./iris-api"
@@ -1204,6 +1205,10 @@ const DesignTokensExportCommand = cmd({
     yargs
       .positional("slug", { describe: "brand slug", type: "string", demandOption: true })
       .option("format", { describe: "css|json|md", type: "string", default: "json" })
+      .option("prefix", {
+        describe: "css only: 'brand' prints the brand-neutral template block (--brand-accent, --brand-font-display…) that Genesis templates read and rebrand replaces",
+        type: "string",
+      })
       .option("output", { describe: "output file path (default: stdout)", type: "string" }),
   async handler(args) {
     UI.empty()
@@ -1226,7 +1231,13 @@ const DesignTokensExportCommand = cmd({
 
       let output: string
       const fmt = String(args.format).toLowerCase()
-      if (fmt === "css") {
+      if (fmt === "css" && String(args.prefix ?? "").toLowerCase() === "brand") {
+        // #188413: brand-prefixed names (--iris-primary-DEFAULT) cannot be referenced by a template
+        // meant for any brand. This is the neutral block a template carries and rebrand swaps.
+        const { values, missing } = brandContract(tokens)
+        output = brandContractCss(values, brandName) + "\n"
+        if (missing.length) process.stderr.write(`  not in ${args.slug}'s tokens (template keeps its own): ${missing.join(", ")}\n`)
+      } else if (fmt === "css") {
         output = tokensToCSS(tokens, String(args.slug))
       } else if (fmt === "md" || fmt === "markdown") {
         output = tokensToMarkdown(tokens, brandName)
