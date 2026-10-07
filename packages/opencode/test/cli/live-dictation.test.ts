@@ -197,15 +197,40 @@ describe("the STT policy is the ceiling", () => {
     expect(reasons).toEqual([[expect.stringContaining("sovereign"), "setup"]])
   })
 
-  test("no policy set at all resolves to sovereign, so live is off by default", async () => {
+  test("no policy set at all is standard, so live is ON by default — as on Desktop (#187808)", async () => {
     const saved = process.env.IRIS_TRANSCRIPTION_POLICY
     delete process.env.IRIS_TRANSCRIPTION_POLICY
     try {
-      const r = await resolveLiveConfig({ env: {}, configPath, token: async () => TOKEN })
-      expect("reason" in r).toBe(true)
+      // The fixture config names board 571, and a configured board wins over the platform's pick.
+      const r = await resolveLiveConfig({ env: { IRIS_STT_RELAY_URL: "http://relay.test" }, configPath, token: async () => TOKEN, board: async () => "77" })
+      expect("config" in r && r.config.bloqId).toBe("571")
     } finally {
       if (saved !== undefined) process.env.IRIS_TRANSCRIPTION_POLICY = saved
     }
+  })
+
+  test("no board configured: asks the platform for the person's own board, as Desktop does", async () => {
+    const asked: string[] = []
+    const r = await resolveLiveConfig({
+      env: { IRIS_STT_RELAY_URL: "http://relay.test" },
+      policy: "standard",
+      configPath: "/nonexistent/config.json",
+      token: async () => TOKEN,
+      board: async (t) => (asked.push(t), "4242"),
+    })
+    expect(asked).toEqual([TOKEN])
+    expect("config" in r && r.config.bloqId).toBe("4242")
+  })
+
+  test("no board configured and the platform cannot name one -> unavailable, not unscoped", async () => {
+    const r = await resolveLiveConfig({
+      env: { IRIS_STT_RELAY_URL: "http://relay.test" },
+      policy: "standard",
+      configPath: "/nonexistent/config.json",
+      token: async () => TOKEN,
+      board: async () => undefined,
+    })
+    expect("reason" in r).toBe(true)
   })
 
   test("standard policy + person token + board -> configured", async () => {

@@ -53,6 +53,8 @@ export interface LiveConfigDeps {
   /** The CLI's signed-in token. Defaults to iris-api's resolveToken (auth store → env → sdk .env → config). */
   token?: () => Promise<string>
   configPath?: string
+  /** The person's default board when none is configured. Defaults to asking the platform. */
+  board?: (token: string) => Promise<string | undefined>
 }
 
 /**
@@ -110,9 +112,12 @@ export async function resolveLiveConfig(
   } catch {
     token = ""
   }
+  if (!token || !isPersonToken(token))
+    return { reason: "Live transcription needs you signed in to IRIS — run: iris auth login" }
   // The relay checks the board's cloud (PHI) policy with this board, so there is no unscoped path.
-  if (!token || !isPersonToken(token) || !bloqId)
-    return { reason: "Live transcription needs you signed in to IRIS (iris auth login) with default_bloq_id set." }
+  // No board configured is normal, as on Desktop: the platform names the person's own board.
+  if (!bloqId) bloqId = (await (deps.board ?? (async (t: string) => defaultBoard(t, env, deps.configPath)))(token)) ?? ""
+  if (!bloqId) return { reason: "Live transcription could not find a board to file this under." }
 
   return { config: { relayUrl: relayUrl.replace(/\/$/, ""), token, bloqId } }
 }
@@ -360,4 +365,11 @@ export function livePreviewLine(text: string, width: number): string {
   if (width <= 1) return ""
   if (clean.length <= width) return clean
   return "…" + clean.slice(clean.length - (width - 1))
+}
+
+/** The board the platform files this person's takes under when none is configured (#188013). */
+async function defaultBoard(token: string, env: Record<string, string | undefined>, configPath?: string): Promise<string | undefined> {
+  const { resolvePlatformConfig, resolveBoard } = await import("./platform-transcribe")
+  const p = await resolvePlatformConfig({ env, configPath, token: async () => token })
+  return "config" in p ? resolveBoard(p.config) : undefined
 }

@@ -12,6 +12,7 @@ import {
   sha256File,
   secureTempDir,
 } from "./stt-policy"
+import { resolvePlatformConfig, transcribePlatformChain, PlatformTranscribeError } from "./platform-transcribe"
 
 // ============================================================================
 // Transcription lib — the single client-side seam (Layer 2).
@@ -371,10 +372,28 @@ export async function transcribeLocal(
 }
 
 /**
+ * On-device whisper is usable RIGHT NOW: ffmpeg, a whisper binary and the model all present.
+ * The fallback after the platform only runs when this is true — a 150 MB model download in the
+ * middle of a dictation is not a fallback, it is a second failure (Desktop's localWhisperReady).
+ */
+export function localWhisperReady(): boolean {
+  return (
+    Boolean(resolveFfmpeg().bin) &&
+    Boolean(which("whisper-cli") || which("whisper-cpp")) &&
+    existsSync(join(homedir(), ".whisper", "ggml-base.en.bin"))
+  )
+}
+
+/**
  * Provider-agnostic transcription. Selection: opts.provider → env
- * IRIS_TRANSCRIPTION_PROVIDER → default "whisper-local".
+ * IRIS_TRANSCRIPTION_PROVIDER → the DEFAULT, which is IRIS Desktop's order (#187808):
+ * the IRIS platform (Grok first, board-scoped, PHI-gated) → on-device whisper if installed.
+ * Under `IRIS_TRANSCRIPTION_POLICY=sovereign` the default is whisper-local, as before.
  */
 export async function transcribeAudio(audioPath: string, opts: TranscribeOptions = {}): Promise<TranscriptionResult> {
+  if (!opts.provider && !process.env.IRIS_TRANSCRIPTION_PROVIDER && resolveSttPolicy() === "standard") {
+    return transcribeDefault(audioPath, opts)
+  }
   // `explicit` distinguishes a flag the user typed from an env var they inherited.
   // The first is refused loudly; the second is clamped with a warning. Silently
   // ignoring a typed flag would leave `provider: whisper-local` in the output as
@@ -427,4 +446,41 @@ export async function transcribeAudio(audioPath: string, opts: TranscribeOptions
     }
     throw err
   }
+}
+
+/**
+ * The default path, the same as IRIS Desktop's chain: the platform first, on-device whisper only
+ * when it is already installed. Each attempt is audited, cloud or local.
+ */
+async function transcribeDefault(audioPath: string, opts: TranscribeOptions): Promise<TranscriptionResult> {
+  const abs = resolve(audioPath)
+  if (!existsSync(abs)) throw new Error(`File not found: ${abs}`)
+  const platform = await resolvePlatformConfig()
+  let cloudError = "reason" in platform ? platform.reason : ""
+
+  if ("config" in platform) {
+    const started = Date.now()
+    const { sha256: digest, bytes } = await sha256File(abs)
+    try {
+      const r = await transcribePlatformChain(new Uint8Array(readFileSync(abs)), platform.config, {
+        filename: basename(abs),
+        language: opts.language,
+      })
+      auditTranscription({ provider: r.provider, policy: "standard", bytes, sha256: digest, ms: Date.now() - started, ok: true })
+      return { text: r.text, provider: r.provider, meta: { on_device: false } }
+    } catch (e) {
+      cloudError = e instanceof Error ? e.message : String(e)
+      const status = e instanceof PlatformTranscribeError ? e.status : 0
+      auditTranscription({ provider: "iris-platform", policy: "standard", bytes, sha256: digest, ms: Date.now() - started, ok: false, error: status ? `HTTP ${status}` : cloudError.slice(0, 120) })
+      // A refusal the platform made on purpose (a PHI board, a bad scope) is not routed around by
+      // falling back — on-device whisper never leaves the machine, so it is allowed, but only
+      // because it is local, and only when it is already installed.
+    }
+  }
+
+  if (localWhisperReady()) {
+    const text = await transcribeLocal(audioPath, { language: opts.language })
+    return { text, provider: "whisper-local", meta: { on_device: true, cloud_error: cloudError || null } }
+  }
+  throw new Error(cloudError || "No transcription engine is available.")
 }

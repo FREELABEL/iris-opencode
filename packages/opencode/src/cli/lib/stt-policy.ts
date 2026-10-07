@@ -24,17 +24,24 @@ export function isLocalProvider(provider: string): boolean {
 }
 
 /**
- * The machine's policy ceiling. Defaults to `sovereign`: audio stays on the box
- * unless someone deliberately opens it. Defaulting the other way would mean a
- * fresh install uploads voice on the first misconfiguration, and the failure is
- * silent — you cannot un-send audio.
+ * The machine's policy ceiling. Defaults to `standard` — the same logic as IRIS Desktop:
+ * Grok (xAI) through the IRIS platform first, on-device whisper last (decision #187808,
+ * 2026-10-04: "i don't want this local first anymore … we need to use grok voice").
+ *
+ * What still guards the audio is the PLATFORM, not this default: every cloud take is filed
+ * under a board, and the platform refuses audio for a PHI-marked board before it reaches any
+ * provider (see platform-transcribe.ts). `IRIS_TRANSCRIPTION_POLICY=sovereign` still closes
+ * every egress on a machine that must never upload — that ceiling is unchanged.
+ *
+ * This was `sovereign` by default until then (epic #182784), and that is why a fresh CLI
+ * install showed no live dictation while Desktop did: the two products had drifted.
  */
 export function resolveSttPolicy(): SttPolicy {
   const raw = (process.env.IRIS_TRANSCRIPTION_POLICY ?? "").trim().toLowerCase()
-  if (raw === "standard") return "standard"
-  if (raw === "sovereign" || raw === "") return "sovereign"
-  // An unrecognised policy must fail CLOSED. Treating a typo as "standard" would
-  // turn `POLICY=soverign` into a silent egress.
+  if (raw === "standard" || raw === "") return "standard"
+  if (raw === "sovereign") return "sovereign"
+  // An unrecognised policy must still fail CLOSED. Someone who typed `POLICY=soverign` was
+  // asking for the ceiling; treating the typo as permission would be a silent egress.
   return "sovereign"
 }
 
