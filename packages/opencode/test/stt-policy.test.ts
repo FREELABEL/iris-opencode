@@ -22,14 +22,21 @@ afterEach(() => {
 })
 
 describe("policy resolution fails closed", () => {
-  test("defaults to sovereign when unset", () => {
+  test("defaults to standard when unset or blank — the same as IRIS Desktop (#187808)", () => {
     delete process.env.IRIS_TRANSCRIPTION_POLICY
+    expect(resolveSttPolicy()).toBe("standard")
+    process.env.IRIS_TRANSCRIPTION_POLICY = "  "
+    expect(resolveSttPolicy()).toBe("standard")
+  })
+
+  test("sovereign, asked for, is still the ceiling", () => {
+    process.env.IRIS_TRANSCRIPTION_POLICY = "Sovereign"
     expect(resolveSttPolicy()).toBe("sovereign")
   })
 
   test("an unrecognised policy is treated as sovereign, not as permission", () => {
     // `soverign` (typo) must not read as "not sovereign" and open an egress.
-    for (const v of ["soverign", "SOVERIGN", "yes", "true", "off", "  "]) {
+    for (const v of ["soverign", "SOVERIGN", "yes", "true", "off"]) {
       process.env.IRIS_TRANSCRIPTION_POLICY = v
       expect(resolveSttPolicy()).toBe("sovereign")
     }
@@ -105,9 +112,12 @@ describe("static guard — every transcribe egress is policy-gated", () => {
 
     for await (const file of glob.scan(".")) {
       const src = await Bun.file(file).text()
-      if (!src.includes("/api/v1/transcribe")) continue
+      if (!src.includes("/api/v1/transcribe") && !src.includes("/api/v1/genesis/transcribe")) continue
       // The glossary lookup is a GET of text, not an audio upload.
-      const uploads = /["'`]\/api\/v1\/transcribe["'`]/.test(src) && /method:\s*["']POST["']/.test(src)
+      // Two upload routes now: fl-api's /api/v1/transcribe and iris-api's /api/v1/genesis/transcribe
+      // (the Desktop-parity default, #188304). Both are egress; both must consult the policy.
+      const uploads =
+        /\/api\/v1\/(genesis\/)?transcribe["'`]/.test(src) && /method:\s*["']POST["']/.test(src)
       if (!uploads) continue
       const gated = src.includes("resolveSttPolicy") || src.includes("clampProvider")
       if (!gated) offenders.push(file)
