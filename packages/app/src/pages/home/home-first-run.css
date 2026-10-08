@@ -1,6 +1,35 @@
 /* First-run screen (EPIC #188210). Everything is scoped under [data-component="first-run"]. */
 
 [data-component="first-run"] {
+  /* The IRIS signature glow — same values as heyiris.io/download (.dl --glow / --grad). */
+  --fr-g1: #a855f7;
+  --fr-g2: #3b82f6;
+  --fr-g3: #06b6d4;
+  --fr-grad: linear-gradient(90deg, var(--fr-g1), var(--fr-g2) 55%, var(--fr-g3));
+  --fr-glow: linear-gradient(90deg, rgba(168, 85, 247, 0.5), rgba(59, 130, 246, 0.5), rgba(6, 182, 212, 0.5));
+
+  .fr-hero {
+    position: relative;
+    isolation: isolate;
+    width: 100%;
+    display: flex;
+    justify-content: center;
+  }
+  .fr-hero::before {
+    content: "";
+    position: absolute;
+    left: 8%;
+    right: 8%;
+    top: 34%;
+    height: 120px;
+    background: var(--fr-glow);
+    filter: blur(64px);
+    border-radius: 999px;
+    opacity: 0.55;
+    pointer-events: none;
+    z-index: -1;
+  }
+
   /* ── Steps ─────────────────────────────────────────────── */
   .fr-steps {
     display: flex;
@@ -14,7 +43,8 @@
     transition: background 300ms ease;
   }
   .fr-steps > span[data-on] {
-    background: var(--v2-text-text-base);
+    background: var(--fr-grad);
+    box-shadow: 0 0 12px -2px rgba(168, 85, 247, 0.7);
   }
 
   /* ── Hero art ─────────────────────────────────────────── */
@@ -54,8 +84,8 @@
   }
   .fr-ring {
     fill: var(--v2-background-bg-base);
-    stroke: var(--v2-border-border-base);
-    stroke-width: 1.2;
+    stroke: url(#fr-ring-grad);
+    stroke-width: 1.4;
   }
   .fr-flow {
     fill: none;
@@ -120,8 +150,10 @@
   }
   .fr-tile:hover:not(:disabled) {
     transform: translateY(-2px);
-    box-shadow: var(--v2-elevation-floating);
-    border-color: var(--v2-text-text-muted);
+    border-color: rgba(168, 85, 247, 0.55);
+    box-shadow:
+      0 0 0 1px rgba(255, 255, 255, 0.06),
+      0 22px 60px -16px rgba(168, 85, 247, 0.7);
   }
   .fr-tile:active:not(:disabled) {
     transform: translateY(0) scale(0.99);
@@ -136,10 +168,16 @@
   .fr-tile[data-state="idle-other"] {
     opacity: 0.45;
   }
-  .fr-tile[data-state="waiting"],
+  .fr-tile[data-state="waiting"] {
+    border-color: rgba(168, 85, 247, 0.8);
+    box-shadow:
+      0 0 0 4px rgba(168, 85, 247, 0.15),
+      0 0 50px -16px rgba(168, 85, 247, 0.5),
+      0 0 90px -30px rgba(34, 211, 238, 0.4);
+  }
   .fr-tile[data-state="connected"] {
-    border-color: var(--v2-text-text-muted);
-    box-shadow: var(--v2-elevation-floating);
+    border-color: rgba(22, 163, 74, 0.7);
+    box-shadow: 0 0 0 4px rgba(22, 163, 74, 0.14);
   }
   .fr-logo {
     width: 44px;

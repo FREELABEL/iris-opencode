@@ -65,9 +65,15 @@ export function InboxArt(props: { reading?: boolean }) {
     <svg class="fr-art" classList={{ "is-reading": !!props.reading }} viewBox="0 0 400 150" aria-hidden="true">
       <defs>
         <radialGradient id="fr-glow">
-          <stop offset="0" stop-color="currentColor" stop-opacity=".22" />
-          <stop offset="1" stop-color="currentColor" stop-opacity="0" />
+          <stop offset="0" stop-color="#a855f7" stop-opacity=".45" />
+          <stop offset=".55" stop-color="#3b82f6" stop-opacity=".16" />
+          <stop offset="1" stop-color="#06b6d4" stop-opacity="0" />
         </radialGradient>
+        <linearGradient id="fr-ring-grad" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#a855f7" />
+          <stop offset=".55" stop-color="#3b82f6" />
+          <stop offset="1" stop-color="#06b6d4" />
+        </linearGradient>
       </defs>
 
       {/* Your mail */}

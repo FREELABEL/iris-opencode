@@ -179,7 +179,7 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
         <Match when={step().kind === "loading" || step().kind === "reading" || step().kind === "starting"}>
           <div class="fr-rise flex flex-col items-center gap-2 text-center">
             <Show when={step().kind === "reading"}>
-              <div class="mb-4 flex w-full justify-center">
+              <div class="fr-hero mb-4">
                 <InboxArt reading />
               </div>
             </Show>
@@ -199,7 +199,9 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
           {(s) => (
             <div class="fr-rise flex flex-col gap-7">
               <div class="flex flex-col items-center gap-5 text-center">
-                <InboxArt />
+                <div class="fr-hero">
+                  <InboxArt />
+                </div>
                 <div class="flex flex-col gap-2">
                   <h1 class="text-v2-text-text-base text-[26px] leading-tight [font-weight:650]">Connect your inbox</h1>
                   <p class="text-v2-text-text-muted mx-auto max-w-[460px] text-[15px] leading-relaxed">
