@@ -433,7 +433,7 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
       {/* Not while the workspace is being made: skipping half-way would leave a folder and no session. */}
       <Show when={step().kind !== "starting" && step().kind !== "signin"}>
         <button class="text-v2-text-text-muted mx-auto w-fit text-[13px] hover:underline" onClick={() => finish("skipped")}>
-          Skip — I'll open a folder myself
+          Skip — I'll set this up myself
         </button>
       </Show>
     </div>
