@@ -1,5 +1,5 @@
 ---
-category: Productivity
+category: Getting Started
 level: beginner
 tags: [look, screen, screenshot, vision, ask, ocr]
 duration_min: 3
