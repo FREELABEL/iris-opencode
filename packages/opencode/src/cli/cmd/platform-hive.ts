@@ -63,6 +63,7 @@ import {
 // Agent-to-agent work (epic #184516): hand a work item to another agent's inbox, and decide
 // who may reach a machine at all.
 import { HiveHandoffCommand } from "./platform-hive-handoff"
+import { runNodeVault } from "./hive-node-vault"
 import { HiveAccessCommand } from "./platform-hive-access"
 import {
   HiveSearchCommand,
@@ -3398,11 +3399,22 @@ const HiveExecCommand = cmd({
 // ============================================================================
 
 const HiveCredentialsListCommand = cmd({
-  command: "list <bloq-id>",
-  describe: "list project credentials",
+  command: "list [bloq-id]",
+  describe: "list project credentials (--local: this machine's node vault)",
   builder: (yargs) =>
-    yargs.positional("bloq-id", { describe: "bloq/project ID", type: "number", demandOption: true }),
+    yargs
+      .positional("bloq-id", { describe: "bloq/project ID", type: "number" })
+      .option("local", { describe: "list names in THIS machine's node vault (never values)", type: "boolean", default: false })
+      .option("json", { describe: "JSON output (with --local)", type: "boolean", default: false })
+      .check((a) => {
+        if (!a.local && a["bloq-id"] === undefined) return "bloq-id is required (or pass --local)"
+        return true
+      }),
   async handler(args) {
+    if (args.local) {
+      process.exitCode = runNodeVault("list", undefined, { json: !!args.json })
+      return
+    }
     const token = await requireAuth()
     if (!token) return
 
@@ -3436,15 +3448,48 @@ const HiveCredentialsListCommand = cmd({
 })
 
 const HiveCredentialsAddCommand = cmd({
-  command: "add",
-  describe: "store a new project credential",
+  command: "add [name]",
+  describe: "store a new project credential (--local: in THIS machine's node vault, never uploaded)",
   builder: (yargs) =>
     yargs
-      .option("bloq-id", { describe: "bloq/project ID", type: "number", demandOption: true })
-      .option("platform", { describe: "platform (n8n, youtube, instagram, twitter, linkedin, email)", type: "string", demandOption: true })
-      .option("type", { describe: "credential type", type: "string", choices: ["api_key", "browser_session"], default: "api_key" })
-      .option("key", { describe: "key=value pairs for api_key type (repeatable)", type: "array" }),
+      .positional("name", { describe: "vault name for --local (what tasks reference as node_credential)", type: "string" })
+      .option("local", {
+        describe: "keep it on this machine: sealed by the OS keystore, only its name is ever sent. Required for portals with patient data",
+        type: "boolean",
+        default: false,
+      })
+      .option("bloq-id", { describe: "bloq/project ID", type: "number" })
+      .option("platform", { describe: "platform (n8n, youtube, instagram, twitter, linkedin, email)", type: "string" })
+      .option("type", { describe: "credential type (login with --local)", type: "string", choices: ["api_key", "browser_session", "login"] })
+      .option("key", { describe: "key=value pairs for api_key type (repeatable)", type: "array" })
+      .option("username", { describe: "--local: portal username", type: "string" })
+      .option("url", { describe: "--local: portal login URL", type: "string" })
+      .option("totp", { describe: "--local: also prompt for a TOTP seed (codes are generated on this machine)", type: "boolean", default: false })
+      .option("totp-secret", { describe: "--local: TOTP seed (lands in shell history — prefer --totp)", type: "string" })
+      .option("password-stdin", { describe: "--local: read password (line 1) and TOTP seed (line 2) from stdin", type: "boolean", default: false })
+      .check((a) => {
+        if (a.local) {
+          if (!a.name) return "--local needs a name:  iris hive creds add <name> --local --username U --url URL"
+          if (a.type && a.type !== "login") return "--local stores logins only (--type login)"
+          return true
+        }
+        if (a["bloq-id"] === undefined || !a.platform) return "--bloq-id and --platform are required (or pass --local)"
+        if (a.type === "login") return "--type login is node-vault only — add --local"
+        return true
+      }),
   async handler(args) {
+    if (args.local) {
+      process.exitCode = runNodeVault("add", args.name as string, {
+        type: "login",
+        username: args.username as string | undefined,
+        url: args.url as string | undefined,
+        totp: !!args.totp,
+        totpSecret: args["totp-secret"] as string | undefined,
+        passwordStdin: !!args["password-stdin"],
+      })
+      return
+    }
+    if (!args.type) args.type = "api_key"
     const token = await requireAuth()
     if (!token) return
 
@@ -3517,7 +3562,8 @@ const HiveCredentialsAddCommand = cmd({
     printKV("Bloq", args["bloq-id"])
     printKV("Keys", Object.keys(credentials).join(", "))
     printDivider()
-    console.log(success("Credential stored — available to all Hive nodes for this project"))
+    console.log(success("Credential stored on the server — available to all Hive nodes for this project"))
+    console.log(dim("  For a portal login that should never leave this machine:  iris hive creds add <name> --local"))
     console.log("")
   },
 })
@@ -3630,10 +3676,16 @@ const HiveCredentialsSaveSessionCommand = cmd({
 
 const HiveCredentialsRemoveCommand = cmd({
   command: "remove <id>",
-  describe: "revoke a project credential",
+  describe: "revoke a project credential (--local: delete from this machine's node vault by name)",
   builder: (yargs) =>
-    yargs.positional("id", { describe: "credential ID", type: "string", demandOption: true }),
+    yargs
+      .positional("id", { describe: "credential ID (or vault name with --local)", type: "string", demandOption: true })
+      .option("local", { describe: "remove from THIS machine's node vault", type: "boolean", default: false }),
   async handler(args) {
+    if (args.local) {
+      process.exitCode = runNodeVault("remove", String(args.id))
+      return
+    }
     const token = await requireAuth()
     if (!token) return
 
