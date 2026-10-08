@@ -6576,26 +6576,26 @@
     {
       "kind": "command",
       "name": "hive credentials add",
-      "describe": "store a new project credential",
+      "describe": "store a new project credential (--local: in THIS machine's node vault, never uploaded)",
       "aliases": [],
-      "run": "iris hive credentials add",
-      "haystack": "hive credentials add store a new project credential bloq-id bloq/project id platform platform (n8n, youtube, instagram, twitter, linkedin, email) type credential type key key=value pairs for api_key type (repeatable)"
+      "run": "iris hive credentials add [name]",
+      "haystack": "hive credentials add store a new project credential (--local: in this machine's node vault, never uploaded) local keep it on this machine: sealed by the os keystore, only its name is ever sent. required for portals with patient data bloq-id bloq/project id platform platform (n8n, youtube, instagram, twitter, linkedin, email) type credential type (login with --local) key key=value pairs for api_key type (repeatable) username --local: portal username url --local: portal login url totp --local: also prompt for a totp seed (codes are generated on this machine) totp-secret --local: totp seed (lands in shell history — prefer --totp) password-stdin --local: read password (line 1) and totp seed (line 2) from stdin"
     },
     {
       "kind": "command",
       "name": "hive credentials list",
-      "describe": "list project credentials",
+      "describe": "list project credentials (--local: this machine's node vault)",
       "aliases": [],
-      "run": "iris hive credentials list <bloq-id>",
-      "haystack": "hive credentials list list project credentials"
+      "run": "iris hive credentials list [bloq-id]",
+      "haystack": "hive credentials list list project credentials (--local: this machine's node vault) local list names in this machine json json output (with --local)"
     },
     {
       "kind": "command",
       "name": "hive credentials remove",
-      "describe": "revoke a project credential",
+      "describe": "revoke a project credential (--local: delete from this machine's node vault by name)",
       "aliases": [],
       "run": "iris hive credentials remove <id>",
-      "haystack": "hive credentials remove revoke a project credential"
+      "haystack": "hive credentials remove revoke a project credential (--local: delete from this machine's node vault by name) local remove from this machine"
     },
     {
       "kind": "command",
