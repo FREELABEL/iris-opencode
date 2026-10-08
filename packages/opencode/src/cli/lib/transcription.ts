@@ -379,7 +379,9 @@ export async function transcribeLocal(
 export function localWhisperReady(): boolean {
   return (
     Boolean(resolveFfmpeg().bin) &&
-    Boolean(which("whisper-cli") || which("whisper-cpp")) &&
+    // resolveWhisper, not `which`: it also finds the engine `iris transcribe --install-local`
+    // builds into ~/.iris/bin, which is not on PATH (#188318).
+    Boolean(resolveWhisper()) &&
     existsSync(join(homedir(), ".whisper", "ggml-base.en.bin"))
   )
 }
