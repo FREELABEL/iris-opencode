@@ -63,7 +63,9 @@ export function patchIndex(source: string): string {
 
 async function extract(treeRef: string, paths: string[], into: string) {
   const tar = path.join(into, "src.tar")
-  await $`git -C ${repoRoot} archive --format=tar -o ${tar} ${treeRef} ${paths}`.quiet()
+  // core.autocrlf=false: on Windows runners autocrlf is on, and git archive would hand back CRLF
+  // files — index.ts's exact-line patch then matches nothing and the sync refuses (beta.2).
+  await $`git -c core.autocrlf=false -C ${repoRoot} archive --format=tar -o ${tar} ${treeRef} ${paths}`.quiet()
   // Relative name, run from inside the folder: GNU tar on Windows reads "C:\…" as host:path.
   await $`tar -xf src.tar`.cwd(into).quiet()
   await fs.rm(tar)
