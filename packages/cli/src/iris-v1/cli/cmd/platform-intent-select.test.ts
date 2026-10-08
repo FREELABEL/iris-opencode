@@ -118,6 +118,44 @@ test("related: ranked by Decide, p ≥ 0.25 kept, at least 5, never the pick its
   expect(rankRelated(pool, [0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9], 3, new Set()).length).toBe(3)
 })
 
+describe("related-list noise (#187829)", () => {
+  test("web-search and atlas search stay out beside a confident local answer, and come back without one", async () => {
+    const { rankRelated } = await import("./platform-intent-select")
+    const pool = ["pick", "a", "b", "web-search", "atlas search"].map(c)
+    const sure = rankRelated(pool, [0.9, 0.7, 0.3, 0.8, 0.5], 10, new Set(["pick"])).map((x) => x.name)
+    expect(sure).not.toContain("web-search")
+    expect(sure).not.toContain("atlas search")
+    const unsure = rankRelated(pool, [0.5, 0.4, 0.3, 0.55, 0.5], 10, new Set(["pick"])).map((x) => x.name)
+    expect(unsure).toContain("web-search")
+  })
+  test("an agent with no description is never shown", async () => {
+    const { rankRelated } = await import("./platform-intent-select")
+    const { NO_DESCRIPTION } = await import("./platform-intent-agents")
+    const mute = {
+      ...c("agent 242 · Game Assistant"),
+      describe: `AGENT — hand the whole job to this agent: ${NO_DESCRIPTION}`,
+    }
+    const out = rankRelated([c("a"), mute, c("b")], [0.5, 0.95, 0.4], 10, new Set()).map((x) => x.name)
+    expect(out).toEqual(["a", "b"])
+  })
+  test("a client's playbook needs the request to name the client", async () => {
+    const { namesClient } = await import("./platform-intent-select")
+    expect(namesClient("reconcile my books", "pathways")).toBe(false)
+    expect(namesClient("reconcile pathways patient payables", "pathways")).toBe(true)
+    expect(namesClient("run the branding champions payout", "branding-champions")).toBe(true)
+    expect(namesClient("an x-art exhibit deck", "xart")).toBe(true)
+    expect(namesClient("reconcile my books", undefined)).toBe(true)
+  })
+  test("the index never offers `find`, a stub, or another client's playbook", async () => {
+    const { candidatePools } = await import("./platform-intent-select")
+    const names = candidatePools("reconcile my books", 12).pool.map((x) => x.name)
+    expect(names).not.toContain("find")
+    expect(names).not.toContain("atlas:ledger ledger reconcile")
+    expect(names.filter((n) => n.startsWith("playbook run pathways-"))).toEqual([])
+    expect(names).toContain("playbook run bills-to-books")
+  })
+})
+
 test("the fallback query is the request's topic, not its verb", async () => {
   const { topicOf, heuristicFill } = await import("./platform-intent-select")
   expect(topicOf("find places to eat in austin texas")).toBe("places to eat in austin texas")

@@ -1,5 +1,5 @@
 import { cmd } from "./cmd"
-import { requireAuth, requireUserId, writeJson, dim, bold, success } from "./iris-api"
+import { requireAuth, requireUserId, writeJson, dim, bold, success, warn } from "./iris-api"
 import { hiveFetch } from "./platform-hive-nodes"
 import os from "os"
 
@@ -22,6 +22,34 @@ type Session = {
   git_branch: string | null
   project_path: string | null
   updated_at: string | null
+  /** The question a person is being waited on for (#188536) — set by iris-daemon from the transcript. */
+  waiting?: Waiting | null
+}
+
+type Waiting = {
+  kind: string
+  asked_at?: string | null
+  questions?: Array<{ question?: string; header?: string | null; options?: Array<{ label?: string }> }>
+}
+
+/**
+ * The lines printed under a `needs_you` row: the question, then its options numbered the way the
+ * agent will read them. Exported for the test; anything malformed prints nothing rather than a
+ * half-question.
+ */
+export function waitingLines(w: Waiting | null | undefined): string[] {
+  if (!w || w.kind !== "question" || !Array.isArray(w.questions)) return []
+  const out: string[] = []
+  for (const q of w.questions) {
+    if (!q || typeof q.question !== "string" || !q.question.trim()) continue
+    const text = q.question.replace(/\s+/g, " ").trim()
+    out.push(`? ${text.length > 110 ? text.slice(0, 109) + "…" : text}`)
+    const opts = Array.isArray(q.options) ? q.options : []
+    opts.forEach((o, i) => {
+      if (o && typeof o.label === "string" && o.label.trim()) out.push(`  ${i + 1}. ${o.label.trim().slice(0, 100)}`)
+    })
+  }
+  return out
 }
 
 function age(iso: string | null): string {
@@ -57,7 +85,8 @@ function label(s: Session): string {
   return `${proj} · ${s.session_id.slice(-8)}`
 }
 
-const STATUS_ORDER: Record<string, number> = { active: 0, idle: 1, unknown: 2, stale: 3 }
+// needs_you first: a session blocked on a person is the one row on this screen worth acting on.
+const STATUS_ORDER: Record<string, number> = { needs_you: -1, active: 0, idle: 1, unknown: 2, stale: 3 }
 
 const SessionsCommand = cmd({
   command: "sessions",
@@ -65,7 +94,7 @@ const SessionsCommand = cmd({
   builder: (yargs) =>
     yargs
       .option("node", { describe: "only this node", type: "string" })
-      .option("status", { describe: "active | idle | stale | unknown", type: "string" })
+      .option("status", { describe: "needs_you | active | idle | stale | unknown", type: "string" })
       .option("all", { describe: "include stale sessions (hidden by default)", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID", type: "number" })
@@ -138,20 +167,29 @@ const SessionsCommand = cmd({
     }
 
     console.log(
-      `  ${dim("node".padEnd(16))} ${dim("status".padEnd(8))} ${dim("age".padEnd(5))} ${dim("provider".padEnd(12))} ${dim("model".padEnd(20))} ${dim("session")}`,
+      `  ${dim("node".padEnd(16))} ${dim("status".padEnd(9))} ${dim("age".padEnd(5))} ${dim("provider".padEnd(12))} ${dim("model".padEnd(20))} ${dim("session")}`,
     )
     for (const r of shown) {
-      const st = r.status === "active" ? success(r.status.padEnd(8)) : dim(r.status.padEnd(8))
+      const st =
+        r.status === "needs_you"
+          ? warn("needs you")
+          : r.status === "active"
+            ? success(r.status.padEnd(9))
+            : dim(r.status.padEnd(9))
       const branch = r.git_branch ? dim(` (${r.git_branch})`) : ""
       const model = r.model ? String(r.model).slice(0, 20).padEnd(20) : dim("—".padEnd(20))
       console.log(
         `  ${String(r.node).slice(0, 16).padEnd(16)} ${st} ${age(r.updated_at).padEnd(5)} ${String(r.provider).padEnd(12)} ${model} ${bold(label(r))}${branch}`,
       )
+      if (r.status === "needs_you") for (const line of waitingLines(r.waiting)) console.log(`  ${" ".repeat(16)} ${" ".repeat(9)} ${warn(line)}`)
     }
     console.log()
     const live = shown.filter((r) => r.status === "active").length
+    const waiting = shown.filter((r) => r.status === "needs_you").length
     console.log(
-      dim(`  ${shown.length} shown · ${live} active${staleCount && !argv.all ? ` · ${staleCount} stale hidden (--all)` : ""}`),
+      dim(
+        `  ${shown.length} shown · ${waiting ? `${waiting} need you · ` : ""}${live} active${staleCount && !argv.all ? ` · ${staleCount} stale hidden (--all)` : ""}`,
+      ),
     )
     console.log()
   },

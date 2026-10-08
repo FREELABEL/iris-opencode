@@ -1,4 +1,6 @@
 import { cmd } from "./cmd"
+import { brandContract, brandContractCss, applyBrandBlock } from "./brand-contract"
+import { TEMPLATE_GALLERY_SLUG, briefQuestions, findTemplate, parseTemplateCatalogue, type TemplateRow } from "./genesis-templates"
 import { productCommand } from "./product-command"
 import { buildListEnvelope, projectFields, LIST_FIELDS } from "./list-envelope"
 import * as prompts from "./clack"
@@ -2043,7 +2045,12 @@ const RebrandCmd = cmd({
       .option("owner-id", { describe: "owner id (defaults to source)", type: "number" })
       .option("site", { describe: "attach the cloned page to this site id", type: "number" })
       .option("publish", { describe: "publish immediately", type: "boolean", default: false })
-      .option("force", { describe: "proceed even if PII leaks are detected", type: "boolean", default: false }),
+      .option("force", { describe: "proceed even if PII leaks are detected", type: "boolean", default: false })
+      .option("source-name", {
+        describe: "a name the source page must not carry into the clone (the client's business or people) — repeatable. HTML pages have no structured name, so without this their names are not checked",
+        type: "string",
+        array: true,
+      }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Rebrand ${args.source} → ${args.as}  ${dim(`(brand: ${args.brand})`)}`)
@@ -2066,8 +2073,37 @@ const RebrandCmd = cmd({
       }
 
       sp.message("Rebranding…")
-      const { json, leaks } = rebrandJsonContent(jsonContent, target)
-      sp.stop(leaks.length ? `${leaks.length} possible leak(s)` : success("Rebranded — clean"))
+      const { json, leaks, namesChecked } = rebrandJsonContent(jsonContent, target, { sourceNames: (args["source-name"] as string[] | undefined) ?? [] })
+      // #188409: a hand-written HTML page keeps its identity in CSS, which the composable rebrand
+      // above never touches. A TEMPLATE marks its brand values in one block; replace that block.
+      // A page without one is not a template, and saying so beats reporting a rebrand that left
+      // every colour where it was.
+      let brandBlockNote = ""
+      if (json?.render_mode === "html") {
+        const tr = await irisFetch(`/api/v1/public/brands/${encodeURIComponent(String(args.brand))}/design-tokens`)
+        const td = tr.ok ? ((await tr.json()) as { name?: string; design_tokens?: Record<string, unknown> }) : {}
+        const { values, missing } = brandContract(td?.design_tokens ?? {})
+        const block = brandContractCss(values, td?.name ?? String(args.brand))
+        let replaced = 0
+        for (const key of ["css", "html", "head"] as const) {
+          if (typeof json[key] === "string") {
+            const r = applyBrandBlock(json[key], block)
+            json[key] = r.text
+            replaced += r.replaced
+          }
+        }
+        brandBlockNote = replaced
+          ? `brand block replaced (${Object.keys(values).length} values${missing.length ? `; kept the template's own: ${missing.join(", ")}` : ""})`
+          : "NOT A TEMPLATE: this HTML page has no /* brand-tokens:start */ block, so its colours and fonts are unchanged"
+      }
+      sp.stop(
+        leaks.length
+          ? `${leaks.length} possible leak(s)`
+          : namesChecked
+            ? success("Rebranded — clean")
+            : "Rebranded — no phones or emails leaked; NAMES NOT CHECKED (this page has no structured brand name — pass --source-name)",
+      )
+      if (brandBlockNote) (brandBlockNote.startsWith("NOT") ? prompts.log.warn : prompts.log.info)(brandBlockNote)
 
       // --- Safety gate: refuse to create/publish if source PII survived ---
       if (leaks.length > 0) {
@@ -2103,11 +2139,19 @@ const RebrandCmd = cmd({
 
       // Save local file
       const filePath = join(pagesDir("./pages"), `${args.as}.json`)
-      writeFileSync(filePath, JSON.stringify({
-        id: p.id, slug: args.as, title,
-        seo_title: payload.seo_title, seo_description: payload.seo_description, og_image: payload.og_image,
-        status: p.status, owner_type: payload.owner_type, owner_id: payload.owner_id, json_content: json,
-      }, null, 2))
+      // The page already exists on the server; the local copy is a convenience. Run outside a
+      // project folder (no ./pages) and writeFileSync threw ENOENT, which jumped to the catch,
+      // SKIPPED --publish, and still ended on "Done" (found verifying templates, 2026-10-07).
+      try {
+        mkdirSync(dirname(filePath), { recursive: true })
+        writeFileSync(filePath, JSON.stringify({
+          id: p.id, slug: args.as, title,
+          seo_title: payload.seo_title, seo_description: payload.seo_description, og_image: payload.og_image,
+          status: p.status, owner_type: payload.owner_type, owner_id: payload.owner_id, json_content: json,
+        }, null, 2))
+      } catch (e) {
+        prompts.log.warn(`Page created, but its local copy was not saved (${e instanceof Error ? e.message : String(e)}). Pull it later: iris pages pull ${args.as}`)
+      }
 
       // Optional: attach to a site (sites live on FL_API)
       if (args.site != null) {
@@ -2138,9 +2182,116 @@ const RebrandCmd = cmd({
     } catch (err) {
       sp.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
+      process.exitCode = 1
       prompts.outro("Done")
     }
   },
+})
+
+// ============================================================================
+// genesis template — starter templates (#188411, epic #188359)
+// ============================================================================
+
+async function loadTemplateCatalogue(): Promise<TemplateRow[] | null> {
+  try {
+    const res = await fetch(`${publicUrl(TEMPLATE_GALLERY_SLUG)}?catalogue=${Date.now()}`)
+    if (!res.ok) return null
+    return parseTemplateCatalogue(await res.text())
+  } catch {
+    return null
+  }
+}
+
+const TemplateListCmd = cmd({
+  command: "list",
+  aliases: ["ls"],
+  describe: "list the Genesis starter templates (from the public gallery /p/genesis-templates)",
+  builder: (y) => y.option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    const rows = await loadTemplateCatalogue()
+    if (rows === null) {
+      if (args.json) console.log(JSON.stringify({ success: false, error: "template gallery unreachable" }))
+      else prompts.log.error(`Could not read the template gallery (${publicUrl(TEMPLATE_GALLERY_SLUG)}).`)
+      process.exitCode = 1
+      return
+    }
+    if (args.json) {
+      console.log(JSON.stringify({ success: true, templates: rows }))
+      return
+    }
+    UI.empty()
+    prompts.intro("◈  Genesis starter templates")
+    if (!rows.length) prompts.log.warn("The gallery has no templates yet.")
+    for (const r of rows) {
+      console.log(`  ${bold(r.slug)}  ${dim(r.archetype ?? "")}${r.audit_score ? dim(`  · audit ${r.audit_score}/10`) : ""}`)
+      if (r.description) console.log(`    ${r.description}`)
+    }
+    console.log()
+    console.log(`  ${dim("Use one:")} iris genesis template use <slug> --brand <brand> --as <new-slug> --bloq <your board>`)
+    prompts.outro("Done")
+  },
+})
+
+const TemplateUseCmd = cmd({
+  command: "use <template>",
+  describe: "clone a starter template in a brand's identity, onto YOUR board, then print its subject brief",
+  builder: (y) =>
+    y
+      .positional("template", { describe: "template slug or short name (iris genesis template list)", type: "string", demandOption: true })
+      .option("brand", { describe: "brand slug whose identity to apply", type: "string", demandOption: true })
+      .option("as", { describe: "slug for your new page", type: "string", demandOption: true })
+      .option("bloq", {
+        describe: "your board (bloq id) that will own the page. Required: the template lives on someone else's board",
+        type: "number",
+        demandOption: true,
+      })
+      .option("title", { describe: "page title (defaults to the brand name)", type: "string" })
+      .option("publish", { describe: "publish immediately", type: "boolean", default: false })
+      .option("force", { describe: "proceed even if the leak check finds the template's own names", type: "boolean", default: false }),
+  async handler(args) {
+    const rows = await loadTemplateCatalogue()
+    if (rows === null) {
+      prompts.log.error(`Could not read the template gallery (${publicUrl(TEMPLATE_GALLERY_SLUG)}).`)
+      process.exitCode = 1
+      return
+    }
+    const row = findTemplate(rows, String(args.template))
+    if (!row) {
+      prompts.log.error(`No template named "${args.template}". See: iris genesis template list`)
+      process.exitCode = 1
+      return
+    }
+    // One clone path. The owner is ALWAYS the caller's board: rebrand defaults the clone's owner
+    // to the SOURCE page's owner, which for a shared template is not the person using it.
+    await (RebrandCmd.handler as (a: Record<string, unknown>) => Promise<void>)({
+      ...args,
+      source: row.slug,
+      "owner-type": "bloq",
+      "owner-id": Number(args.bloq),
+    })
+    if (Number(process.exitCode ?? 0) !== 0) return
+    const own = String(row.source_names ?? "").split(",").map((n) => n.trim()).filter(Boolean)
+    if (own.length) {
+      console.log()
+      console.log(`  ${bold("The copy still names the template's owner:")} ${own.join(", ")}  ${dim("— expected; rewrite it")}`)
+    }
+    const qs = briefQuestions(row)
+    if (qs.length) {
+      console.log()
+      console.log(`  ${bold("Now make it about this business")} ${dim("(the colours are done; the subject is not)")}`)
+      qs.forEach((q, i) => console.log(`  ${dim(String(i + 1).padStart(2, " ") + ".")} ${q}`))
+      console.log(`  ${dim("Edit:")} iris pages pull ${args.as}  ${dim("→ change the copy →")}  iris pages push ${args.as}`)
+      console.log()
+    }
+  },
+})
+
+const TemplateCmd = cmd({
+  command: "template",
+  aliases: ["templates"],
+  describe: "Genesis starter templates — list them, or clone one in a brand's identity",
+  builder: (y) => y.command(TemplateListCmd).command(TemplateUseCmd).demandCommand(1),
+  async handler() {},
 })
 
 const ComponentsCmd = cmd({
@@ -3407,7 +3558,7 @@ const CacheClearCmd = cmd({
 const ReassignCmd = cmd({
   command: "reassign <slug>",
   aliases: ["chown"],
-  describe: "change page ownership (owner_type + owner_id)",
+  describe: "move a page to another bloq, user or lead — change who owns it",
   builder: (y) =>
     y
       .positional("slug", { describe: "page slug", type: "string", demandOption: true })
@@ -3705,6 +3856,142 @@ function renderReach(page: any, v: { mode: VisibilityMode; declared: boolean }, 
   }
   printDivider()
 }
+
+const RedirectCmd = cmd({
+  command: "redirect <slug> [target]",
+  aliases: ["forward"],
+  // WHY THIS EXISTS. A promoted post's destination url is immutable — it lives in the post
+  // body and there is no edit for it. So the /p/ address an ad was approved against is fixed
+  // forever, and re-pointing paid traffic used to mean new posts and new review (seven to nine
+  // hours, on this account). Setting a redirect turns that fixed address into a POINTER.
+  //
+  // The visit is recorded BEFORE the forward, so utm_content (which creative), twclid, and the
+  // first-touch cookie the server-side /download/{platform} route reads all survive the hop.
+  // That is the entire point: a plain DNS or edge redirect would move the traffic and lose the
+  // attribution, which is the thing that was hard to get.
+  describe:
+    "point a page at another url while still recording the visit (utm_content, twclid and the " +
+    "first-touch cookie survive the hop). Use it to re-aim an ad whose link can no longer be " +
+    "edited. Omit the target to show the current one; --clear removes it. Always a 302",
+  builder: (y) =>
+    y
+      .positional("slug", { describe: "page slug", type: "string", demandOption: true })
+      .positional("target", {
+        describe:
+          "where to forward: a site-relative path (/downloads) or an absolute https:// url. " +
+          "External hosts need a trusted owner — a redirect on this domain is a phishing " +
+          "primitive, so untrusted pages may only point at our own",
+        type: "string",
+      })
+      .option("clear", { describe: "remove the redirect and render the page normally", type: "boolean", default: false })
+      .option("json", { describe: "output as JSON", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    const slug = String(args.slug)
+    const clearing = !!args.clear
+    const target = args.target ? String(args.target).trim() : null
+
+    if (clearing && target) {
+      prompts.log.error("Pass a target or --clear, not both.")
+      process.exitCode = 1
+      return
+    }
+
+    prompts.intro(`◈  Redirect: ${slug}${clearing ? " → (cleared)" : target ? ` → ${target}` : ""}`)
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+    const sp = prompts.spinner()
+    sp.start("Loading…")
+    try {
+      const page = await getBySlug(slug, false)
+      if (!page) { sp.stop("Page not found", 1); process.exitCode = 1; prompts.outro("Done"); return }
+      const current: string | null = (page as any).redirect_to ?? null
+
+      // ---- Report mode -----------------------------------------------------
+      if (!clearing && !target) {
+        sp.stop(current ? `Forwarding to ${current}` : "No redirect — the page renders normally")
+        if (args.json) {
+          await writeJson({ slug: page.slug, id: page.id, redirect_to: current, status: page.status })
+          prompts.outro("Done")
+          return
+        }
+        if (current) {
+          prompts.log.info(
+            `${publicUrl(page)}\n  → ${current}\n\n` +
+            `  Every visit is still recorded first, so utm_content and twclid reach the target.`,
+          )
+        }
+        prompts.outro(dim(`iris genesis redirect ${slug} /downloads   ·   iris genesis redirect ${slug} --clear`))
+        return
+      }
+
+      const desired = clearing ? null : target
+      if ((current ?? null) === (desired ?? null)) {
+        sp.stop(desired ? `Already forwarding to ${desired}` : "Already has no redirect")
+        prompts.outro("Done")
+        return
+      }
+
+      sp.stop(current ? `Currently → ${current}` : "Currently no redirect")
+
+      const sp2 = prompts.spinner()
+      sp2.start(clearing ? "Clearing redirect…" : `Pointing at ${desired}…`)
+      const res = await pagesFetch(`/api/v1/pages/${page.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ redirect_to: desired }),
+      })
+      if (!(await handleApiError(res, "Set redirect"))) { sp2.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const updated = ((await res.json()) as any)?.data ?? {}
+      const after: string | null = updated.redirect_to ?? null
+
+      // Same guard the visibility command carries: a backend that predates the column
+      // accepts the PUT and drops the field, and claiming a change that did not happen is
+      // how someone spends an afternoon debugging an ad that still lands on the old page.
+      if ((after ?? null) !== (desired ?? null)) {
+        sp2.stop("Not applied", 1)
+        process.exitCode = 1
+        prompts.log.error(
+          `The API accepted the request but the page still reports redirect_to=${after ?? "(none)"}.\n` +
+          `  This backend doesn't support page redirects yet — nothing changed.`,
+        )
+        prompts.outro("Done")
+        return
+      }
+
+      // A cached render would keep serving the page body, so the redirect would appear to
+      // do nothing until the cache aged out.
+      await pagesFetch("/api/internal/cache/purge-page", {
+        method: "POST",
+        body: JSON.stringify({ slug: page.slug }),
+      }).catch(() => {})
+
+      sp2.stop(clearing ? "Redirect cleared" : `Forwarding to ${after}`)
+
+      if (args.json) {
+        await writeJson({ slug: page.slug, id: page.id, redirect_to: after, status: page.status })
+        prompts.outro("Done")
+        return
+      }
+
+      if (after) {
+        prompts.log.success(
+          `${publicUrl(page)}\n  → ${after}\n\n` +
+          `  302, so you can re-point it again later — a 301 would be cached by every browser\n` +
+          `  that saw it and could never be taken back.`,
+        )
+      } else {
+        prompts.log.success(`${publicUrl(page)} renders normally again.`)
+      }
+      prompts.outro("Done")
+    } catch (e: any) {
+      sp.stop("Failed", 1)
+      process.exitCode = 1
+      prompts.log.error(e?.message ?? String(e))
+      prompts.outro("Done")
+    }
+  },
+})
 
 const VisibilityCmd = cmd({
   command: "visibility <slug> [mode]",
@@ -5307,7 +5594,7 @@ export const PlatformPagesCommand = productCommand({
   aliases: ["pages"],
   purpose:
     "Genesis — composable pages, sites and COMPONENTS: browse the component library with its props/emits/slots, see which pages use a component before changing it, roll a component back, plus pages list/view/get/set/pull/push/diff/publish/screenshot, and export a page to a server you control (export/deploy — IRIS Edge)",
-  keywords: ["genesis", "page", "site", "component", "components", "library", "catalogue", "props", "emits", "slots", "usage", "rollback", "versions", "stale", "publish", "artifact", "landing", "screenshot", "verify", "read", "bespoke", "html", "export", "deploy", "edge", "self-host", "static", "rollback"],
+  keywords: ["genesis", "page", "site", "component", "components", "library", "catalogue", "props", "emits", "slots", "usage", "rollback", "versions", "stale", "publish", "artifact", "landing", "screenshot", "verify", "read", "bespoke", "html", "export", "deploy", "edge", "self-host", "static", "rollback", "redirect", "forward", "utm", "attribution", "ads"],
   howtos: ["genesis-design-standard", "bespoke", "genesis-sdk", "pages", "edge-publish"],
   playbooks: ["pages", "seed-pages", "edge-publish"],
   builder: (y) =>
@@ -5327,6 +5614,7 @@ export const PlatformPagesCommand = productCommand({
       .command(UnpublishCmd)
       .command(PreviewCmd)
       .command(VisibilityCmd)
+      .command(RedirectCmd)
       .command(ShareCmd)
       .command(ShareListCmd)
       .command(ShareRevokeCmd)
@@ -5334,6 +5622,7 @@ export const PlatformPagesCommand = productCommand({
       .command(DuplicateCmd)
       .command(CheckPublicCmd)
       .command(RebrandCmd)
+      .command(TemplateCmd)
       .command(ComponentsCmd)
       .command(ComposeCmd)
       .command(ComponentRegistryCmd)

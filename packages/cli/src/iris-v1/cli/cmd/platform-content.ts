@@ -242,7 +242,7 @@ const ProfilesCommand = cmd({
 // Subcommands: Upload
 // ---------------------------------------------------------------------------
 
-const UploadCommand = cmd({
+export const UploadCommand = cmd({
   command: "upload <url>",
   describe: "smart upload (auto-detect type + metadata from URL)",
   builder: (y: any) =>

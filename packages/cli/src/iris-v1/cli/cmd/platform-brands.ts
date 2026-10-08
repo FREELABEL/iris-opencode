@@ -1,4 +1,6 @@
 import { cmd } from "./cmd"
+import { brandContract, brandContractCss, MOTION_PRESETS, parseDurationMs, safeEase, type BrandMotion } from "./brand-contract"
+import { fetchSite, parseDesignMd, siteImport } from "./brand-import"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, writeJson, failNoOp} from "./iris-api"
@@ -977,6 +979,12 @@ function tokensToCSS(tokens: Record<string, unknown>, brandSlug: string): string
       lines.push(`  --${prefix}-font-sans: ${JSON.stringify(b.family)}, ${b.fallback || "sans-serif"};`)
     }
   }
+  const motion = tokens.motion as Record<string, unknown> | undefined
+  const ease = safeEase(motion?.ease)
+  const ms = parseDurationMs(motion?.duration_ms)
+  if (ease || ms !== undefined) lines.push("")
+  if (ease) lines.push(`  --${prefix}-ease: ${ease};`)
+  if (ms !== undefined) lines.push(`  --${prefix}-duration: ${ms}ms;`)
   lines.push("}")
   return lines.join("\n") + "\n"
 }
@@ -1044,6 +1052,16 @@ function tokensToMarkdown(tokens: Record<string, unknown>, brandName: string): s
     }
   }
 
+  if (tokens.motion && typeof tokens.motion === "object") {
+    const m = tokens.motion as BrandMotion
+    lines.push("## Motion", "")
+    if (m.character) lines.push(`- **Character**: ${m.character}`)
+    if (m.ease) lines.push(`- **Ease**: \`${m.ease}\``)
+    if (m.duration_ms !== undefined) lines.push(`- **Base duration**: ${m.duration_ms}ms`)
+    if (m.spring) lines.push(`- **Spring**: stiffness ${m.spring.stiffness}, damping ${m.spring.damping}`)
+    lines.push("", "Every animation for this brand uses this curve and duration (scale the duration, never the curve).", "")
+  }
+
   if (Array.isArray(tokens.donts) && tokens.donts.length > 0) {
     lines.push("## Don'ts", "")
     for (const d of tokens.donts) lines.push(`- ${d}`)
@@ -1102,6 +1120,12 @@ function printTokenSummary(tokens: Record<string, unknown>): void {
         console.log(`  ${bold(comp)}  ${dim(pairs)}`)
       }
     }
+    console.log()
+  }
+  if (tokens.motion && typeof tokens.motion === "object") {
+    const m = tokens.motion as BrandMotion
+    const parts = [m.character, m.ease, m.duration_ms !== undefined ? `${m.duration_ms}ms` : undefined, m.spring ? `spring ${m.spring.stiffness}/${m.spring.damping}` : undefined].filter(Boolean)
+    console.log(`${bold("Motion:")} ${parts.join(" · ")}`)
     console.log()
   }
   if (tokens.voice && typeof tokens.voice === "object") {
@@ -1204,6 +1228,10 @@ const DesignTokensExportCommand = cmd({
     yargs
       .positional("slug", { describe: "brand slug", type: "string", demandOption: true })
       .option("format", { describe: "css|json|md", type: "string", default: "json" })
+      .option("prefix", {
+        describe: "css only: 'brand' prints the brand-neutral template block (--brand-accent, --brand-font-display…) that Genesis templates read and rebrand replaces",
+        type: "string",
+      })
       .option("output", { describe: "output file path (default: stdout)", type: "string" }),
   async handler(args) {
     UI.empty()
@@ -1226,7 +1254,13 @@ const DesignTokensExportCommand = cmd({
 
       let output: string
       const fmt = String(args.format).toLowerCase()
-      if (fmt === "css") {
+      if (fmt === "css" && String(args.prefix ?? "").toLowerCase() === "brand") {
+        // #188413: brand-prefixed names (--iris-primary-DEFAULT) cannot be referenced by a template
+        // meant for any brand. This is the neutral block a template carries and rebrand swaps.
+        const { values, missing } = brandContract(tokens)
+        output = brandContractCss(values, brandName) + "\n"
+        if (missing.length) process.stderr.write(`  not in ${args.slug}'s tokens (template keeps its own): ${missing.join(", ")}\n`)
+      } else if (fmt === "css") {
         output = tokensToCSS(tokens, String(args.slug))
       } else if (fmt === "md" || fmt === "markdown") {
         output = tokensToMarkdown(tokens, brandName)
@@ -1249,96 +1283,229 @@ const DesignTokensExportCommand = cmd({
   },
 })
 
+/** The original --css path: group CSS custom properties by prefix (--sp-emerald-800 → colors.emerald.800). */
+function cssFileTokens(cssContent: string): Record<string, unknown> {
+  const parsed = parseCssVars(cssContent)
+  const colors: Record<string, Record<string, string>> = {}
+  const semantic: Record<string, string> = {}
+  const typography: Record<string, unknown> = {}
+  const motion: Record<string, unknown> = {}
+
+  for (const [group, shades] of Object.entries(parsed)) {
+    // Semantic tokens (bg-*, fg-*, border-*, status-*)
+    if (["bg", "fg", "border", "status"].some((p) => group === p)) {
+      for (const [k, v] of Object.entries(shades)) {
+        semantic[`${group}_${k.replace(/-/g, "_")}`] = v
+      }
+    // Typography
+    } else if (group === "font") {
+      for (const [k, v] of Object.entries(shades)) {
+        if (k === "serif" || k === "sans" || k === "icon") {
+          const family = v.replace(/^"([^"]+)".*/, "$1")
+          const fallback = v.replace(/^"[^"]+"[, ]*/, "")
+          if (k === "serif") typography.heading = { family, fallback, weights: [400, 700] }
+          else if (k === "sans") typography.body = { family, fallback, weights: [300, 400, 700] }
+        }
+      }
+    // Motion (#188412): the first ease curve and the first duration become the brand's motion.
+    } else if (group === "ease") {
+      const e = Object.values(shades).map(safeEase).find(Boolean)
+      if (e && !motion.ease) motion.ease = e
+    } else if (group === "dur" || group === "duration") {
+      const d = Object.values(shades).map(parseDurationMs).find((n) => n !== undefined)
+      if (d !== undefined && motion.duration_ms === undefined) motion.duration_ms = d
+    // Skip spacing/radius/shadow/text-size (layout tokens, not brand identity)
+    } else if (["space", "radius", "shadow", "text"].includes(group)) {
+      continue
+    // Everything else is a color group
+    } else {
+      colors[group] = shades
+    }
+  }
+
+  const tokens: Record<string, unknown> = {}
+  if (Object.keys(colors).length > 0) tokens.colors = colors
+  if (Object.keys(semantic).length > 0) tokens.semantic = semantic
+  if (Object.keys(typography).length > 0) tokens.typography = typography
+  if (Object.keys(motion).length > 0) tokens.motion = motion
+  return tokens
+}
+
 const DesignTokensImportCommand = cmd({
   command: "import <slug>",
-  describe: "import design tokens from a CSS custom properties file",
+  describe: "import design tokens from a CSS file, a live site (--url), or a DESIGN.md (--design-md)",
   builder: (yargs) =>
     yargs
       .positional("slug", { describe: "brand slug", type: "string", demandOption: true })
-      .option("css", { describe: "path to CSS file with custom properties", type: "string", demandOption: true }),
+      .option("css", { describe: "path to a CSS file with custom properties", type: "string" })
+      .option("url", {
+        describe: "the client's OWN site: reads the CSS it serves (custom properties, body/h1 rules, theme-color). Respects robots.txt",
+        type: "string",
+      })
+      .option("design-md", { describe: "path to a DESIGN.md (YAML front matter tokens, or named colours/fonts in prose)", type: "string" })
+      .option("dry-run", { describe: "show what would be imported; write nothing", type: "boolean", default: false })
+      .option("json", { describe: "print the tokens as JSON", type: "boolean", default: false })
+      .check((a) => {
+        const n = [a.css, a.url, a["design-md"]].filter(Boolean).length
+        if (n !== 1) throw new Error("give exactly one of --css <file>, --url <site>, --design-md <file>")
+        return true
+      }),
   async handler(args) {
     UI.empty()
-    prompts.intro(`◈  Import CSS → Design Tokens — ${args.slug}`)
-    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    const source = args.url ? "site" : args["design-md"] ? "DESIGN.md" : "CSS"
+    prompts.intro(`◈  Import ${source} → Design Tokens — ${args.slug}`)
+    if (!args["dry-run"]) {
+      const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    }
 
-    let cssContent: string
+    let tokens: Record<string, unknown>
     try {
-      cssContent = readFileSync(args.css!, "utf-8")
+      if (args.url) {
+        const spin = prompts.spinner()
+        spin.start(`Reading ${args.url}…`)
+        const site = await fetchSite(String(args.url))
+        spin.stop(`${site.url} — ${site.sheets.length} stylesheet(s)`)
+        for (const n of site.notes) prompts.log.warn(n)
+        const read = siteImport(site.html, site.sheets)
+        tokens = read.tokens
+        for (const n of read.notes) prompts.log.warn(n)
+      } else {
+        const file = String(args.css ?? args["design-md"])
+        const content = readFileSync(file, "utf-8")
+        tokens = args.css ? cssFileTokens(content) : parseDesignMd(content)
+      }
     } catch (e) {
-      prompts.log.error(`Failed to read ${args.css}: ${e instanceof Error ? e.message : String(e)}`)
+      prompts.log.error(e instanceof Error ? e.message : String(e))
+      process.exitCode = 1
       prompts.outro("Done"); return
     }
 
-    const parsed = parseCssVars(cssContent)
-    const groupCount = Object.keys(parsed).length
-    const varCount = Object.values(parsed).reduce((n, g) => n + Object.keys(g).length, 0)
-    prompts.log.info(`Parsed ${varCount} CSS variables across ${groupCount} groups`)
-
-    // Build token schema from parsed CSS groups
-    const colors: Record<string, Record<string, string>> = {}
-    const semantic: Record<string, string> = {}
-    const typography: Record<string, unknown> = {}
-
-    for (const [group, shades] of Object.entries(parsed)) {
-      // Semantic tokens (bg-*, fg-*, border-*, status-*)
-      if (["bg", "fg", "border", "status"].some((p) => group === p)) {
-        for (const [k, v] of Object.entries(shades)) {
-          semantic[`${group}_${k.replace(/-/g, "_")}`] = v
-        }
-      // Typography
-      } else if (group === "font") {
-        for (const [k, v] of Object.entries(shades)) {
-          if (k === "serif" || k === "sans" || k === "icon") {
-            const family = v.replace(/^"([^"]+)".*/, "$1")
-            const fallback = v.replace(/^"[^"]+"[, ]*/, "")
-            if (k === "serif") typography.heading = { family, fallback, weights: [400, 700] }
-            else if (k === "sans") typography.body = { family, fallback, weights: [300, 400, 700] }
-          }
-        }
-      // Skip spacing/radius/shadow/text-size/ease/dur (layout tokens, not brand identity)
-      } else if (["space", "radius", "shadow", "text", "ease", "dur"].includes(group)) {
-        continue
-      // Everything else is a color group
-      } else {
-        colors[group] = shades
-      }
+    if (Object.keys(tokens).length === 0) {
+      prompts.log.error(
+        args.url
+          ? "Nothing found. This site likely builds its styles in JavaScript at runtime — export its CSS and use --css."
+          : "Nothing found to import.",
+      )
+      process.exitCode = 1
+      prompts.outro("Done"); return
     }
 
-    const tokens: Record<string, unknown> = {}
-    if (Object.keys(colors).length > 0) tokens.colors = colors
-    if (Object.keys(semantic).length > 0) tokens.semantic = semantic
-    if (Object.keys(typography).length > 0) tokens.typography = typography
+    // What a Genesis template will actually receive, key by key — found, or left to the template.
+    const { values, missing } = brandContract(tokens)
+    for (const [k, v] of Object.entries(values)) console.log(`  ${dim(`--brand-${k}`.padEnd(22))} ${v}`)
+    if (missing.length) console.log(`  ${dim("not found:".padEnd(22))} ${dim(missing.join(", "))}`)
+    console.log()
+    if (args.json) process.stdout.write(JSON.stringify(tokens, null, 2) + "\n")
 
-    prompts.log.info(`Built token schema: ${Object.keys(tokens).join(", ")}`)
-
-    // Resolve brand ID
+    // The API replaces each top-level section sent. colours/type/motion are identity and are
+    // replaced; spacing also holds layout values this import does not see, so it is merged.
     const spinner = prompts.spinner()
-    spinner.start("Resolving brand…")
     try {
-      const listRes = await irisFetch(`/api/v1/brands?slug=${args.slug}&per_page=1`)
-      const listOk = await handleApiError(listRes, "Find brand"); if (!listOk) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
-      const listData = (await listRes.json()) as { data?: any }
-      const brands: any[] = firstArray(listData?.data?.data, listData?.data)
-      if (brands.length === 0) { spinner.stop("Not found", 1); prompts.log.error(`Brand "${args.slug}" not found`); prompts.outro("Done"); return }
-      const brandId = brands[0].id
+      if (tokens.spacing && !args["dry-run"]) {
+        const current = await fetchPublicTokens(String(args.slug))
+        const existing = (current?.tokens.spacing ?? {}) as Record<string, unknown>
+        tokens.spacing = { ...existing, ...(tokens.spacing as Record<string, unknown>) }
+      }
+      prompts.log.info(`Replaces sections: ${Object.keys(tokens).filter((k) => k !== "spacing").join(", ") || "none"}${tokens.spacing ? " · merges: spacing" : ""}`)
+      if (args["dry-run"]) { prompts.outro("Dry run — nothing written"); return }
+
+      spinner.start("Resolving brand…")
+      const brandId = await resolveBrandId(String(args.slug))
+      if (!brandId) { spinner.stop("Not found", 1); prompts.log.error(`Brand "${args.slug}" not found`); process.exitCode = 1; prompts.outro("Done"); return }
 
       spinner.message("Uploading tokens…")
       const res = await irisFetch(`/api/v1/brands/${brandId}/design-tokens`, {
         method: "PATCH",
         body: JSON.stringify(tokens),
       })
-      const ok = await handleApiError(res, "Import tokens"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const ok = await handleApiError(res, "Import tokens"); if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
       spinner.stop("Tokens imported")
 
       printDivider()
       printTokenSummary(tokens)
       printDivider()
-      prompts.outro(`${dim(`iris brands design-tokens get ${args.slug}`)}`)
+      prompts.outro(`${dim(`iris brands design-tokens export ${args.slug} --format css --prefix brand`)}`)
     } catch (err) {
       spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
+      process.exitCode = 1
       prompts.outro("Done")
     }
+  },
+})
+
+const DesignTokensMotionCommand = cmd({
+  command: "motion <slug>",
+  describe: "show or set how a brand MOVES — ease curve, base duration, spring — so its films and pages move alike",
+  builder: (yargs) =>
+    yargs
+      .positional("slug", { describe: "brand slug", type: "string", demandOption: true })
+      .option("character", { describe: "start from a preset", type: "string", choices: ["snappy", "smooth", "heavy"] })
+      .option("ease", { describe: "CSS easing, e.g. 'cubic-bezier(.45,0,.15,1)'", type: "string" })
+      .option("duration", { describe: "base duration: 320, 320ms or 0.32s", type: "string" })
+      .option("stiffness", { describe: "spring stiffness (for physics-driven motion)", type: "number" })
+      .option("damping", { describe: "spring damping", type: "number" })
+      .option("clear", { describe: "remove the brand's motion token", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Brand Motion — ${args.slug}`)
+    const current = await fetchPublicTokens(String(args.slug))
+    const existing = ((current?.tokens.motion ?? {}) as BrandMotion)
+    const writing = args.character || args.ease || args.duration || args.stiffness !== undefined || args.damping !== undefined || args.clear
+
+    const show = (m: BrandMotion) => {
+      if (!m || !Object.keys(m).length) { prompts.log.info("No motion token yet. Pages use their own; films default to cubic-bezier(.45,0,.15,1)."); return }
+      if (m.character) printKV("Character", m.character)
+      if (m.ease) printKV("Ease", m.ease)
+      if (m.duration_ms !== undefined) printKV("Duration", `${m.duration_ms}ms`)
+      if (m.spring) printKV("Spring", `stiffness ${m.spring.stiffness} · damping ${m.spring.damping}`)
+    }
+
+    if (!writing) {
+      if (!current) { prompts.log.error(`Brand "${args.slug}" not found`); process.exitCode = 1; prompts.outro("Done"); return }
+      show(existing)
+      prompts.outro(dim(`set: iris brands dt motion ${args.slug} --character snappy|smooth|heavy [--ease …] [--duration …]`))
+      return
+    }
+
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    let motion: BrandMotion | Record<string, never>
+    if (args.clear) motion = {}
+    else {
+      const base: BrandMotion = args.character
+        ? { character: args.character, ...MOTION_PRESETS[args.character as keyof typeof MOTION_PRESETS] }
+        : { ...existing }
+      if (args.ease !== undefined) {
+        const e = safeEase(args.ease)
+        if (!e) { prompts.log.error(`Not an easing a browser accepts: ${args.ease}`); process.exitCode = 1; prompts.outro("Done"); return }
+        base.ease = e
+      }
+      if (args.duration !== undefined) {
+        const d = parseDurationMs(args.duration)
+        if (d === undefined) { prompts.log.error(`Not a duration between 0 and 10s: ${args.duration}`); process.exitCode = 1; prompts.outro("Done"); return }
+        base.duration_ms = d
+      }
+      if (args.stiffness !== undefined || args.damping !== undefined) {
+        const st = args.stiffness ?? base.spring?.stiffness
+        const dm = args.damping ?? base.spring?.damping
+        if (!(Number(st) > 0 && Number(dm) > 0)) { prompts.log.error("A spring needs both --stiffness and --damping, each above 0"); process.exitCode = 1; prompts.outro("Done"); return }
+        base.spring = { stiffness: Number(st), damping: Number(dm) }
+      }
+      // A hand-set value no longer matches the preset's name.
+      if (!args.character && (args.ease || args.duration || args.stiffness !== undefined || args.damping !== undefined)) delete base.character
+      motion = base
+    }
+
+    const brandId = await resolveBrandId(String(args.slug))
+    if (!brandId) { prompts.log.error(`Brand "${args.slug}" not found`); process.exitCode = 1; prompts.outro("Done"); return }
+    const res = await irisFetch(`/api/v1/brands/${brandId}/design-tokens`, { method: "PATCH", body: JSON.stringify({ motion }) })
+    const ok = await handleApiError(res, "Set motion"); if (!ok) { process.exitCode = 1; prompts.outro("Done"); return }
+    if (args.clear) prompts.log.success("Motion token removed")
+    else {
+      prompts.log.success("Motion saved")
+      show(motion as BrandMotion)
+    }
+    prompts.outro(dim(`templates read it as var(--brand-ease) / var(--brand-duration): iris brands dt export ${args.slug} --format css --prefix brand`))
   },
 })
 
@@ -1654,6 +1821,7 @@ const DesignTokensGroup = cmd({
       .command(DesignTokensSetCommand)
       .command(DesignTokensExportCommand)
       .command(DesignTokensImportCommand)
+      .command(DesignTokensMotionCommand)
       .command(DesignTokensPullCommand)
       .command(DesignTokensPushCommand)
       .command(DesignTokensDiffCommand)

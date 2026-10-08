@@ -11,6 +11,7 @@ function warning(t: string): string {
 }
 import { join, basename, resolve } from "path"
 import { homedir } from "os"
+import { NotesCommand, NoteCommand, ReplaceCommand } from "./platform-remotion-review"
 
 // ============================================================================
 // Helpers
@@ -755,11 +756,14 @@ export const PlatformRemotionCommand = cmd({
       .command(CarouselCommand)
       .command(AutoCarouselCommand)
       .command(RegisterCommand)
+      .command(NotesCommand) // #187928
+      .command(NoteCommand) // #187928
+      .command(ReplaceCommand) // #187929
       .command(PreviewCommand)
       .command(ListCommand)
       .command(InitCommand)
       .command(UpdateCommand)
-      .demandCommand(1, "Specify a subcommand: render, still, carousel, auto-carousel, register, preview, list, init, update"),
+      .demandCommand(1, "Specify a subcommand: render, still, carousel, auto-carousel, register, notes, note, replace, preview, list, init, update"),
   async handler() {
     // handled by subcommands
   },

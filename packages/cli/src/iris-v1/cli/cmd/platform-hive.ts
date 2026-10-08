@@ -32,6 +32,8 @@ import { HiveBrowserCommand } from "./platform-hive-browser"
 import { runRemoteDoctor } from "./platform-hive-doctor"
 import { HiveSelftestCommandExport } from "./platform-hive-selftest"
 import { HiveSessionsCommand, HiveSendInputCommand } from "./platform-hive-sessions"
+import { HiveTunnelCommand } from "./platform-hive-tunnel"
+import { HiveAnswerCommand, HiveAnswerHookCommand, HiveAnswersCommand, HiveAwayCommand } from "./platform-hive-answer"
 import { HiveRentCommand, HiveRentalsCommand, HiveReleaseCommand, HiveProvidersCommand } from "./platform-hive-rent"
 import { VaultCommandExport } from "./platform-vault"
 import {
@@ -4994,6 +4996,11 @@ export const PlatformHiveCommand = productCommand({
       .command(HiveSelftestCommandExport)
       .command(HiveSessionsCommand)
       .command(HiveSendInputCommand)
+      .command(HiveTunnelCommand)
+      .command(HiveAnswerCommand)
+      .command(HiveAnswersCommand)
+      .command(HiveAwayCommand)
+      .command(HiveAnswerHookCommand)
       // Rentals — long-lived machines a customer pays for, distinct from the ephemeral task
       // workers behind `hive nodes`. Separate verbs because they are a separate product.
       .command(HiveRentCommand)
@@ -5001,6 +5008,8 @@ export const PlatformHiveCommand = productCommand({
       .command(HiveReleaseCommand)
       .command(HiveProvidersCommand)
       .command(VaultCommandExport)
+      // Encrypted per-bloq PHI vaults now live under the unified `vault` command above
+      // (`iris hive vault create --encrypted`, with `vaults` as an alias).
       // Envelope encryption keys (#177946 phase 3) — a node must register one before it can
       // RECEIVE an envelope transfer; the send path fails closed rather than falling back.
       .command(HiveKeysCommandExport)

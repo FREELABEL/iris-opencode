@@ -9,9 +9,12 @@ import { executeChat } from "./platform-chat"
 import { AgentsBenchCommand } from "./platform-agents-bench"
 import { AgentsExportCommand } from "./platform-agents-export"
 import { AgentsJoinCommand, AgentsLeaveCommand } from "./platform-agents-rooms"
+import { AgentsPauseCommand, AgentsResumeCommand, AgentsStopCommand } from "./platform-agents-governance"
+import { AgentsHandBackCommand, AgentsTakeOverCommand, AgentsWatchCommand } from "./platform-agents-watch"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join } from "path"
 import { firstArray } from "../../util/array"
+import { AUTONOMY_CHOICES, AUTONOMY_LEVELS, CLI_DEFAULT_AUTONOMY, describeAutonomy, parseAutonomy } from "./agent-autonomy"
 
 /**
  * Resolve a mission argument to its text.
@@ -335,6 +338,10 @@ const AgentsGetCommand = cmd({
       printKV("Description", a.description)
       printKV("Bloq ID", a.bloq_id)
       printKV("Heartbeat", a.heartbeat_mode)
+      // TRUST LEVEL (#187906). What this agent may do without a person saying yes — the server
+      // holds a call by the tool's declared effect at this level. "not set" is spelled out
+      // because it means "as before", not "full trust" and not "no trust".
+      printKV("Autonomy", describeAutonomy(a.config).label)
       printKV("Active", a.active)
       printKV("Created", a.created_at)
 
@@ -393,6 +400,7 @@ const AgentsCreateCommand = cmd({
       // Same enum as `agents update` (#146506 flagged the create/update mismatch).
       .option("heartbeat-mode", { describe: "heartbeat mode: off, passive, reactive, autonomous, briefing", type: "string", choices: ["off", "passive", "reactive", "autonomous", "briefing"] })
       .option("heartbeat-tools", { describe: "comma-separated tool names for heartbeat", type: "string" })
+      .option("autonomy", { describe: `trust level: ${AUTONOMY_LEVELS.join(", ")} (default ${CLI_DEFAULT_AUTONOMY}) — what it may do without approval`, type: "string", choices: [...AUTONOMY_LEVELS] })
       .option("json", { describe: "JSON output", type: "boolean" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
@@ -467,6 +475,10 @@ const AgentsCreateCommand = cmd({
       // to the name+description persona and behaving like a generic assistant (#178763).
       const config: Record<string, unknown> = { model, modelName: model }
       if (settings.system_prompt) config.system_prompt = settings.system_prompt
+      // #187906: an agent made from the CLI starts as a SPECIALIST — it works in its own space
+      // unasked and asks before shared writes, sends and payments. (Agents that never set a level
+      // keep today's behaviour; that default is for the 668 that predate this, not for new ones.)
+      config.autonomy = (args.autonomy as string | undefined) ?? CLI_DEFAULT_AUTONOMY
       payload.config = config
 
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents`, {
@@ -492,6 +504,7 @@ const AgentsCreateCommand = cmd({
       printKV("Model", (a.config as any)?.model ?? (a.settings as Record<string, unknown>)?.model ?? a.model)
       if (a.bloq_id) printKV("Bloq", a.bloq_id)
       if (args["heartbeat-mode"]) printKV("Heartbeat", args["heartbeat-mode"])
+      printKV("Autonomy", describeAutonomy(a.config ?? config).label)
       printDivider()
 
       if (!nonInteractive) {
@@ -577,6 +590,7 @@ const AgentsUpdateCommand = cmd({
       .option("disable-integration", { describe: "disable an integration (removes it from settings.integrations)", type: "string" })
       .option("add-tools", { describe: "comma-separated tool names to ADD to the agent's allowlist (config.tools)", type: "string" })
       .option("remove-tools", { describe: "comma-separated tool names to REMOVE from the allowlist (config.tools)", type: "string" })
+      .option("autonomy", { describe: `trust level (config.autonomy): ${AUTONOMY_LEVELS.join(", ")}, or none to clear it (back to the pre-level behaviour)`, type: "string", choices: [...AUTONOMY_CHOICES] })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
     UI.empty()
@@ -609,10 +623,14 @@ const AgentsUpdateCommand = cmd({
     // both need the current value to safely modify (the API replaces config wholesale).
     const wantsIntegration = !!(args["enable-integration"] || args["disable-integration"])
     const wantsTools = !!(args["add-tools"] || args["remove-tools"])
-    const needsCurrent = wantsSettings || wantsIntegration || wantsTools
+    // config.autonomy (#187906). Validated here as well as by yargs `choices`, so a caller that
+    // builds args programmatically still cannot write a level the server would read as intern.
+    const wantsAutonomy = args.autonomy !== undefined
+    const autonomy = wantsAutonomy ? parseAutonomy(args.autonomy) : null
+    const needsCurrent = wantsSettings || wantsIntegration || wantsTools || wantsAutonomy
 
     if (Object.keys(payload).length === 0 && !needsCurrent) {
-      failNoOp("update", "Use --name, --description, --bloq, --model, --system-prompt, --initial-prompt/--mission, --heartbeat-tools, --heartbeat-mode, --enable-integration, --disable-integration, --add-tools, --remove-tools, or --reset-health")
+      failNoOp("update", "Use --name, --description, --bloq, --model, --system-prompt, --initial-prompt/--mission, --heartbeat-tools, --heartbeat-mode, --enable-integration, --disable-integration, --add-tools, --remove-tools, --autonomy, or --reset-health")
     }
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
@@ -660,10 +678,15 @@ const AgentsUpdateCommand = cmd({
           // ── config.* — the system prompt, the model and the tools allowlist all live
           // here. config can be a list OR a dict in the wild (#); coerce to a dict so
           // $agent->config['system_prompt'] / ['tools'] resolve server-side.
-          if (wantsTools || wantsSettings) {
+          if (wantsTools || wantsSettings || wantsAutonomy) {
             const curConfig: any = a?.config
             const baseConfig: Record<string, unknown> =
               curConfig && !Array.isArray(curConfig) && typeof curConfig === "object" ? { ...curConfig } : {}
+            // The API replaces config wholesale, so the level rides on the merged copy.
+            if (wantsAutonomy) {
+              if (autonomy === null) delete baseConfig.autonomy
+              else baseConfig.autonomy = autonomy
+            }
 
             // V6 reads the system prompt from config.system_prompt ONLY — writing it to
             // settings.system_prompt alone leaves the agent on the name+description
@@ -694,6 +717,14 @@ const AgentsUpdateCommand = cmd({
         } else {
           // Fall back to top-level if we can't read current settings
           if (args.model) payload.model = args.model
+          // Never write config blind: it would wipe the prompt, model and allowlist.
+          if (wantsAutonomy) {
+            spinner.stop("Failed", 1)
+            prompts.log.error(`Could not read agent #${args.id} to merge config.autonomy safely — nothing was changed.`)
+            process.exitCode = 1
+            prompts.outro("Done")
+            return
+          }
         }
       }
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents/${args.id}`, {
@@ -739,6 +770,25 @@ const AgentsUpdateCommand = cmd({
         }
       }
 
+      // Same rule as the model check above: the response echoes the payload, so only a re-read
+      // proves the level persisted.
+      if (wantsAutonomy) {
+        try {
+          const check = await irisFetch(`/api/v1/users/${userId}/bloqs/agents/${args.id}`)
+          const body = (await check.json()) as any
+          const fresh = body?.data ?? body
+          if (fresh?.id) a = fresh
+        } catch {}
+        const landed = describeAutonomy(a.config).level
+        if (landed !== autonomy) {
+          spinner.stop("Not applied", 1)
+          prompts.log.error(`The API accepted the request but the agent's autonomy is '${landed ?? "not set"}', not '${autonomy ?? "not set"}'. Check: iris agents get ${args.id}`)
+          process.exitCode = 1
+          prompts.outro("Done")
+          return
+        }
+      }
+
       spinner.stop(`${success("✓")} Updated: ${bold(String(a.name ?? a.id))}`)
 
       printDivider()
@@ -755,6 +805,7 @@ const AgentsUpdateCommand = cmd({
         const tools = Array.isArray(cfg?.tools) ? cfg.tools : (Array.isArray(cfg) ? cfg : [])
         printKV("Allowlist", tools.length ? `${tools.length} tools` : "(none)")
       }
+      if (wantsAutonomy) printKV("Autonomy", describeAutonomy(a.config).label)
       printDivider()
 
       prompts.outro(dim(`iris agents get ${args.id}`))
@@ -1824,7 +1875,7 @@ const AgentsInboxCommand = cmd({
 
 export const PlatformAgentsCommand = cmd({
   command: "agents",
-  describe: "manage IRIS platform agents — pull, push, diff, CRUD, assign",
+  describe: "manage IRIS platform agents — pull, push, diff, CRUD, assign, pause/resume/stop",
   builder: (yargs) =>
     yargs
       .command(AgentsListCommand)
@@ -1836,6 +1887,12 @@ export const PlatformAgentsCommand = cmd({
       .command(AgentsDiffCommand)
       .command(AgentsDeleteCommand)
       .command(AgentsBulkDeleteCommand)
+      .command(AgentsPauseCommand)
+      .command(AgentsResumeCommand)
+      .command(AgentsStopCommand)
+      .command(AgentsWatchCommand)
+      .command(AgentsTakeOverCommand)
+      .command(AgentsHandBackCommand)
       .command(AgentsChatCommand)
       .command(AgentsProveCommand)
       .command(AgentsAssignCommand)
