@@ -5207,7 +5207,10 @@ export interface ParsedHtmlDoc {
  */
 export function parseHtmlDocument(src: string): ParsedHtmlDoc {
   const titleMatch = src.match(/<title[^>]*>([\s\S]*?)<\/title>/i)
-  const descMatch = src.match(/<meta\s+[^>]*name\s*=\s*["']description["'][^>]*content\s*=\s*["']([\s\S]*?)["']/i)
+  // The value closes on the SAME quote that opened it. Accepting either quote ended
+  // content="Tonight's menu…" at the apostrophe — a template went live described as "Tonight" (#188610).
+  const descRaw = src.match(/<meta\s+[^>]*name\s*=\s*["']description["'][^>]*content\s*=\s*(["'])([\s\S]*?)\1/i)
+  const descMatch = descRaw ? [descRaw[0], descRaw[2]] : null
 
   const styles: string[] = []
   const styleRe = /<style[^>]*>([\s\S]*?)<\/style>/gi
