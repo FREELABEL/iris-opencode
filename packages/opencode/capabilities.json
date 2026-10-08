@@ -9090,6 +9090,14 @@
     },
     {
       "kind": "command",
+      "name": "look",
+      "describe": "drag over any part of your screen and ask about it",
+      "aliases": [],
+      "run": "iris look [question..]",
+      "haystack": "look drag over any part of your screen and ask about it image ask about an image you already have instead of capturing keep keep the capture and print its path (deleted by default) model json"
+    },
+    {
+      "kind": "command",
       "name": "loop",
       "describe": "run a playbook on an autonomous verify→iterate loop (burst now, or on a heartbeat)",
       "aliases": [],
