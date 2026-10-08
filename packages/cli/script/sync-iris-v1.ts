@@ -64,7 +64,8 @@ export function patchIndex(source: string): string {
 async function extract(treeRef: string, paths: string[], into: string) {
   const tar = path.join(into, "src.tar")
   await $`git -C ${repoRoot} archive --format=tar -o ${tar} ${treeRef} ${paths}`.quiet()
-  await $`tar -xf ${tar} -C ${into}`.quiet()
+  // Relative name, run from inside the folder: GNU tar on Windows reads "C:\…" as host:path.
+  await $`tar -xf src.tar`.cwd(into).quiet()
   await fs.rm(tar)
 }
 
