@@ -2,7 +2,7 @@ import { createEffect, createMemo, createSignal, Match, on, Show, Switch } from 
 import { IconButton } from "@opencode-ai/ui/icon-button"
 import { useServerSDK } from "@/context/server-sdk"
 import { usePlatform } from "@/context/platform"
-import {
+import { needsSystemBrowser,
   addressToUrl,
   knownEmbeddable,
   navigateWeb,
@@ -40,7 +40,7 @@ const WEB_SANDBOX = "allow-scripts allow-same-origin allow-forms allow-popups al
 type Check =
   | { state: "checking" }
   | { state: "embeddable" }
-  | { state: "refused"; reason: string }
+  | { state: "refused"; reason: string; opened?: boolean }
   | { state: "unknown" }
 
 export function SessionWebTab() {
@@ -55,6 +55,12 @@ export function SessionWebTab() {
       setAddress(url ?? "")
       if (!url) return
       if (knownEmbeddable(url)) return setCheck({ state: "embeddable" })
+      // A sign-in page that reached the panel some other way (typed, pasted, opened by an agent)
+      // goes to the browser too — it cannot complete in a frame (#188639).
+      if (needsSystemBrowser(url)) {
+        platform.openExternal(url)
+        return setCheck({ state: "refused", reason: "sign-in pages open in your browser", opened: true })
+      }
       setCheck({ state: "checking" })
       const q = `url=${encodeURIComponent(url)}&origin=${encodeURIComponent(location.origin)}`
       ;(platform.fetch ?? globalThis.fetch)(`${base()}/iris/frame-check?${q}`, {
@@ -63,8 +69,12 @@ export function SessionWebTab() {
         .then((r) => (r.ok ? r.json() : undefined))
         .then((body: { state?: string; reason?: string } | undefined) => {
           if (webUrl() !== url) return // a later link won the race
-          if (body?.state === "refused")
-            return setCheck({ state: "refused", reason: body.reason ?? "the site refuses" })
+          // A page that forbids framing is opened in the browser once, automatically: the only
+          // thing the user could do from the refusal screen was click "Open in browser" (#188639).
+          if (body?.state === "refused") {
+            platform.openExternal(url)
+            return setCheck({ state: "refused", reason: body.reason ?? "the site refuses", opened: true })
+          }
           if (body?.state === "embeddable") return setCheck({ state: "embeddable" })
           setCheck({ state: "unknown" })
         })
@@ -153,11 +163,13 @@ export function SessionWebTab() {
           <Match when={check().state === "refused" && (check() as { reason: string })}>
             {(refused) => (
               <div class="session-web__note" data-slot="web-refused">
-                <div class="session-web__note-title">{host()} can't be shown inside IRIS</div>
-                <div>The site doesn't allow other apps to show it.</div>
+                <div class="session-web__note-title">
+                  {(refused() as { opened?: boolean }).opened ? `Opened ${host()} in your browser` : `${host()} can't be shown inside IRIS`}
+                </div>
+                <div>The site doesn't allow other apps to show it{(refused() as { opened?: boolean }).opened ? ", so it opened there instead." : "."}</div>
                 <div class="session-web__reason">{refused().reason}</div>
                 <button type="button" class="session-web__open" onClick={openOutside}>
-                  Open in browser
+                  {(refused() as { opened?: boolean }).opened ? "Open it again" : "Open in browser"}
                 </button>
               </div>
             )}

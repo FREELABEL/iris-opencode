@@ -3,6 +3,7 @@ import {
   addressToUrl,
   knownEmbeddable,
   linkAction,
+  needsSystemBrowser,
   navigateWeb,
   webBack,
   webCanBack,
@@ -131,5 +132,27 @@ describe("restoreHistory", () => {
     ).toEqual(["https://a.com/"])
     expect(restoreHistory("not json").index).toBe(-1)
     expect(restoreHistory(null).stack).toEqual([])
+  })
+})
+
+describe("sign-in pages open in the system browser (#188639)", () => {
+  test("Composio connect, Google, Microsoft and OAuth paths are never framed", () => {
+    for (const u of [
+      "https://backend.composio.dev/api/v3/s/2zvCydoI",
+      "https://accounts.google.com/o/oauth2/v2/auth?client_id=x",
+      "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+      "https://github.com/login/oauth/authorize?client_id=x",
+      "https://www.facebook.com/v19.0/dialog/oauth?x=1",
+      "https://app.example.com/oauth/authorize",
+    ])
+      expect(needsSystemBrowser(u)).toBe(true)
+  })
+  test("ordinary pages still open in the panel", () => {
+    for (const u of ["https://heyiris.io/p/x", "https://www.facebook.com/somepage", "https://docs.example.com/authoring-guide", "https://github.com/FREELABEL"])
+      expect(needsSystemBrowser(u)).toBe(false)
+  })
+  test("a click on a sign-in link is a system open, not a panel open", () => {
+    expect(click("https://backend.composio.dev/api/v3/s/2zvCydoI")).toBe("system")
+    expect(click("https://heyiris.io/p/x")).toBe("panel")
   })
 })
