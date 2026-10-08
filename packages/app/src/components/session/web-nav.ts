@@ -42,6 +42,9 @@ export function linkAction(input: {
   if (url.origin === input.appOrigin) return "default"
   // Cmd-click (Ctrl on Windows/Linux) is the way out to the real browser, as it always was.
   if (input.meta || input.ctrl) return "system"
+  // Sign-in pages go straight to the real browser (#188639): they need its cookies, popups and
+  // redirects, and every one of them refuses to be framed anyway.
+  if (needsSystemBrowser(url.href)) return "system"
   if (input.shift || input.alt) return "default"
   return "panel"
 }
@@ -154,4 +157,35 @@ export function knownEmbeddable(url: string): boolean {
   } catch {
     return false
   }
+}
+
+/**
+ * Sign-in and connect pages: always the system browser, never the panel (#188639).
+ *
+ * 2026-10-08: a navigator connecting Gmail clicked a Composio connect link and got "can't be shown
+ * inside IRIS — X-Frame-Options: DENY". An OAuth page can never complete in an iframe — it needs
+ * the browser's own Google session and its redirect back — so showing it in the panel is a dead
+ * end by construction, not a page that might load.
+ */
+const SIGN_IN_HOSTS = [
+  /(^|\.)composio\.dev$/i,
+  /^accounts\.google\.com$/i,
+  /^login\.microsoftonline\.com$/i,
+  /^login\.live\.com$/i,
+  /^appleid\.apple\.com$/i,
+  /^(www\.)?facebook\.com$/i, // only its OAuth paths below; plain facebook.com is not sign-in
+]
+const SIGN_IN_PATHS = /\/(oauth2?|authorize|auth\/callback|login\/oauth|signin|sso|connect\/[^/]+\/(start|authorize))(\/|$|\?)|\/api\/v3\/s\//i
+
+export function needsSystemBrowser(href: string): boolean {
+  let u: URL
+  try {
+    u = new URL(href)
+  } catch {
+    return false
+  }
+  if (u.protocol !== "https:" && u.protocol !== "http:") return false
+  const hostHit = SIGN_IN_HOSTS.some((re) => re.test(u.hostname))
+  if (hostHit && !/facebook\.com$/i.test(u.hostname)) return true
+  return SIGN_IN_PATHS.test(u.pathname)
 }
