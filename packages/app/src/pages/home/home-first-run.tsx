@@ -362,7 +362,8 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
 
         <Match when={step().kind === "seen" && (step() as Extract<Step, { kind: "seen" }>)}>
           {(s) => {
-            const people = () => s().threads.filter((t) => !t.automated).length
+            const people = () => s().threads.filter((t) => (t.kind ?? (t.automated ? "fyi" : "person")) === "person").length
+            const todo = () => s().threads.filter((t) => t.kind === "action").length
             return (
               <div class="fr-rise flex flex-col gap-5">
                 <div class="flex flex-col gap-2">
@@ -373,7 +374,9 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
                         ? `Looks like you work in ${s().industry}.`
                         : people()
                           ? "Here's who's waiting on you. Pick one and IRIS starts on it."
-                          : "Nobody's waiting on a reply. Want IRIS to go through the rest?")}
+                          : todo()
+                            ? `Nobody's waiting on a reply, but ${todo() === 1 ? "one thing needs" : `${todo()} things need`} you.`
+                            : "Nobody's waiting on a reply. Want IRIS to go through the rest?")}
                   </h1>
                 </div>
 

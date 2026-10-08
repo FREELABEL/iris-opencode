@@ -18,7 +18,11 @@ export type InboxThread = {
   date?: string
   unread?: boolean
   automated?: boolean
+  kind?: "person" | "action" | "fyi"
 }
+
+const kindOf = (t: InboxThread) => t.kind ?? (t.automated ? "fyi" : "person")
+const UPDATES_SHOWN = 8
 
 export type InboxAction = { text: string; focus: InboxThread[] }
 
@@ -82,8 +86,11 @@ export function InboxTriage(props: {
   onAct: (a: InboxAction) => void
 }) {
   const mine = (t: InboxThread) => !!props.account && senderAddress(t.from) === props.account.toLowerCase()
-  const needs = createMemo(() => props.threads.filter((t) => !t.automated && !mine(t)).slice(0, 5))
-  const updates = createMemo(() => props.threads.filter((t) => t.automated))
+  // People first, then automated mail that asks for something. Purple = a person, amber = a task.
+  const people = createMemo(() => props.threads.filter((t) => kindOf(t) === "person" && !mine(t)).slice(0, 5))
+  const actions = createMemo(() => props.threads.filter((t) => kindOf(t) === "action").slice(0, 3))
+  const needs = createMemo(() => [...people(), ...actions()])
+  const updates = createMemo(() => props.threads.filter((t) => kindOf(t) === "fyi"))
   const [picked, setPicked] = createSignal<Set<string>>(new Set())
   const [open, setOpen] = createSignal<string | undefined>(needs()[0]?.id)
   const [showUpdates, setShowUpdates] = createSignal(false)
@@ -97,7 +104,9 @@ export function InboxTriage(props: {
   const chosen = () => needs().filter((t) => picked().has(t.id))
 
   const draft = (t: InboxThread) =>
-    props.onAct({ text: `Draft a reply to ${senderName(t.from)}'s email "${t.subject}".`, focus: [t] })
+    kindOf(t) === "action"
+      ? props.onAct({ text: `Help me deal with ${senderName(t.from)}'s "${t.subject}": what do I need to do, and can you do it?`, focus: [t] })
+      : props.onAct({ text: `Draft a reply to ${senderName(t.from)}'s email "${t.subject}".`, focus: [t] })
   const summarise = (t: InboxThread) =>
     props.onAct({ text: `Summarise ${senderName(t.from)}'s email "${t.subject}" and tell me what it needs from me.`, focus: [t] })
 
@@ -112,10 +121,14 @@ export function InboxTriage(props: {
         <span class="fr-mono truncate text-[12.5px] text-v2-text-text-muted">{props.account ?? "Inbox"}</span>
         <span class="flex-1" />
         <span class="fr-mono text-[12px]">
-          <span class="fr-count-needs">{needs().length} need you</span>
-          <Show when={updates().length}>
-            <span class="text-v2-text-text-faint"> · {updates().length} updates</span>
-          </Show>
+          {/* Only groups with something in them: "0 need you" is noise. */}
+          {[
+            people().length ? <span class="fr-count-needs">{people().length} need you</span> : null,
+            actions().length ? <span class="fr-count-action">{actions().length} to do</span> : null,
+            updates().length ? <span class="text-v2-text-text-faint">{updates().length} updates</span> : null,
+          ]
+            .filter(Boolean)
+            .flatMap((el, i) => (i ? [<span class="text-v2-text-text-faint"> · </span>, el] : [el]))}
         </span>
       </header>
 
@@ -123,7 +136,7 @@ export function InboxTriage(props: {
         when={needs().length}
         fallback={
           <p class="px-4 py-5 text-[14px] text-v2-text-text-muted">
-            Nothing from a person is waiting on a reply. Ask IRIS to go through your updates below.
+            Nothing from a person is waiting on a reply, and nothing needs doing. Ask IRIS to go through your updates below.
           </p>
         }
       >
@@ -147,13 +160,16 @@ export function InboxTriage(props: {
                       </svg>
                     </button>
                     <button class="fr-row-body" onClick={() => setOpen(isOpen() ? undefined : t.id)} aria-expanded={isOpen()}>
-                      <Avatar from={t.from} />
+                      <Avatar from={t.from} muted={kindOf(t) === "action"} />
                       <span class="min-w-0 flex-1">
                         <span class="flex items-baseline gap-2">
                           <span class="truncate text-[14px] text-v2-text-text-base" classList={{ "[font-weight:650]": t.unread !== false }}>
                             {senderName(t.from)}
                           </span>
-                          <Show when={t.unread}>
+                          <Show when={kindOf(t) === "action"}>
+                            <span class="fr-tag-action">Action</span>
+                          </Show>
+                          <Show when={t.unread && kindOf(t) === "person"}>
                             <span class="fr-unread" aria-label="Unread" />
                           </Show>
                           <span class="flex-1" />
@@ -172,7 +188,7 @@ export function InboxTriage(props: {
                         <svg viewBox="0 0 16 16" aria-hidden="true">
                           <path d="M6.5 4L2.5 8l4 4M3 8h6.5a4 4 0 0 1 4 4v.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
                         </svg>
-                        Draft reply
+                        {kindOf(t) === "action" ? "Handle it" : "Draft reply"}
                       </button>
                       <button class="fr-act" onClick={() => summarise(t)}>
                         <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -213,7 +229,7 @@ export function InboxTriage(props: {
         </button>
         <Show when={showUpdates()}>
           <ul class="fr-rows fr-rows-compact">
-            <For each={updates()}>
+            <For each={updates().slice(0, UPDATES_SHOWN)}>
               {(t) => (
                 <li class="fr-row-compact">
                   <Avatar from={t.from} muted />
@@ -223,6 +239,11 @@ export function InboxTriage(props: {
                 </li>
               )}
             </For>
+            <Show when={updates().length > UPDATES_SHOWN}>
+              <li class="fr-row-compact fr-mono text-[12px] text-v2-text-text-faint">
+                and {updates().length - UPDATES_SHOWN} more
+              </li>
+            </Show>
           </ul>
         </Show>
       </Show>

@@ -401,6 +401,23 @@
   .fr-count-needs {
     color: #a855f7;
   }
+  /* Amber only ever means "something to do". */
+  .fr-count-action {
+    color: #f59e0b;
+  }
+  .fr-tag-action {
+    flex-shrink: 0;
+    align-self: center;
+    padding: 1px 7px;
+    border-radius: 999px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #f59e0b;
+    background: rgba(245, 158, 11, 0.12);
+    border: 1px solid rgba(245, 158, 11, 0.35);
+  }
   .fr-rows {
     list-style: none;
     margin: 0;
@@ -476,11 +493,15 @@
     color: hsl(var(--h) 70% 82%);
     background: hsl(var(--h) 45% 26%);
   }
-  .fr-avatar-muted {
+  .fr-rows-compact .fr-avatar-muted {
     width: 24px;
     height: 24px;
     font-size: 10px;
     opacity: 0.7;
+  }
+  .fr-avatar-muted {
+    opacity: 0.8;
+    filter: saturate(0.5);
   }
   .fr-unread {
     width: 7px;

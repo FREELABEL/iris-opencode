@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdtempSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { digest, isAutomated, pickMailConnection, slugify, toThreads, waiting, workspace, type MailThread } from "../../src/iris/onboarding"
+import { classify, digest, inferAccount, isAutomated, pickMailConnection, slugify, toThreads, waiting, workspace, type MailThread } from "../../src/iris/onboarding"
 
 // D4 #188245 — the pure halves of "Here's what I see". The network halves (mail, ground) return
 // PlatformResult and are exercised against the live endpoints, not mocked here.
@@ -72,7 +72,7 @@ describe("toThreads", () => {
       successful: true,
       data: { value: [{ id: "o1", conversationId: "c1", subject: "Invoice", from: { emailAddress: { name: "Ann", address: "a@x.test" } }, bodyPreview: "Due Friday", receivedDateTime: "2026-10-06T10:00:00Z" }] },
     })
-    expect(outlook[0]).toEqual({ id: "o1", threadId: "c1", subject: "Invoice", from: "Ann <a@x.test>", date: "2026-10-06T10:00:00Z", snippet: "Due Friday", unread: undefined, automated: false })
+    expect(outlook[0]).toEqual({ id: "o1", threadId: "c1", subject: "Invoice", from: "Ann <a@x.test>", date: "2026-10-06T10:00:00Z", snippet: "Due Friday", unread: undefined, automated: false, kind: "person", to: undefined })
     expect(gmail[0].from).toBe(outlook[0].from)
     expect(gmail[0].snippet).toBe(outlook[0].snippet)
   })
@@ -170,5 +170,38 @@ describe("isAutomated", () => {
   })
   test("a reply thread about a report is a person", () => {
     expect(isAutomated("Dev <dev@example.com>", [], "Re: the Q3 report")).toBe(false)
+  })
+})
+
+describe("classify — person / action / fyi", () => {
+  // The first real inbox (2026-10-08): ten automated messages, two of which needed doing.
+  const auto = (from: string, subject: string, snippet = "") => classify({ from, subject, snippet, automated: true })
+
+  test("an automated message asking for something is an action", () => {
+    expect(auto("Mercury <hello@mercury.com>", "Your transaction at Apple Wallet requires a receipt")).toBe("action")
+    expect(auto("OpenRouter <noreply@openrouter.ai>", "Unrecognized device signed in to your OpenRouter account")).toBe("action")
+    expect(auto("Stripe <billing@stripe.com>", "Payment failed for invoice 123")).toBe("action")
+  })
+
+  test("reports, promotions and social are fyi", () => {
+    expect(auto("Discover Curator (Heartbeat) <agent@freelabel.net>", "Heartbeat Report: Discover Media Platform — Completed")).toBe("fyi")
+    expect(auto("Gamma <team@gamma.app>", "The new Gamma has arrived")).toBe("fyi")
+    expect(auto("Instagram <no-reply@mail.instagram.com>", "kmginc accepted your follow request")).toBe("fyi")
+    expect(auto("TikTok Shop <shop@email.tiktok.com>", "Alex Mayo, you left something behind!")).toBe("fyi")
+  })
+
+  test("a person is a person", () => {
+    expect(classify({ from: "Maria <maria@example.com>", subject: "Can we move Thursday?", snippet: "", automated: false })).toBe("person")
+  })
+
+  test("waiting(): people first, then actions, never fyi", () => {
+    const th = (id: string, kind: "person" | "action" | "fyi"): MailThread => ({ ...t(id, `${id}@x.test`), kind, automated: kind !== "person" })
+    expect(waiting([th("a", "action"), th("f", "fyi"), th("p", "person")], undefined, 5).map((x) => x.id)).toEqual(["p", "a"])
+  })
+
+  test("inferAccount picks the address mail was sent to", () => {
+    const th = (to: string): MailThread => ({ ...t("x", "s@x.test"), to })
+    expect(inferAccount([th("Alex <alex@freelabel.net>"), th("alex@freelabel.net"), th("team@other.test")])).toBe("alex@freelabel.net")
+    expect(inferAccount([])).toBeUndefined()
   })
 })

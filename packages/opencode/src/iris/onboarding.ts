@@ -34,8 +34,26 @@ export interface MailThread {
   date?: string
   snippet: string
   unread?: boolean
-  /** Newsletters, notifications, reports: real mail, but nobody is waiting on a reply. */
+  /** Not from a person: newsletters, notifications, reports, alerts. */
   automated?: boolean
+  /**
+   * person — someone is waiting on a reply.
+   * action — automated, but asks the reader to DO something (security alert, receipt required,
+   *          failed payment, verify). Measured on the first real inbox: 2 of 10 were these, and
+   *          filing them with newsletters hid the only things that needed attention.
+   * fyi    — reports, newsletters, promotions, social.
+   */
+  kind?: "person" | "action" | "fyi"
+  /** Recipient, used to infer the account when the provider does not report one. */
+  to?: string
+}
+
+const ACTION_REQUIRED =
+  /\b(action (is )?required|requires? (a |your )?\w*|verify|verification|confirm your|unrecognized|new (sign[- ]?in|device|login)|security alert|suspicious|password|failed|declined|overdue|past due|expir(es|ing|ed)|suspend|unpaid|payment (due|failed)|receipt required|reset)\b/i
+
+export function classify(t: { from: string; subject: string; snippet: string; automated?: boolean }): "person" | "action" | "fyi" {
+  if (!t.automated) return "person"
+  return ACTION_REQUIRED.test(`${t.subject} ${t.snippet.slice(0, 200)}`) ? "action" : "fyi"
 }
 
 /** Gmail's own sorting, when the provider passes labels through. */
@@ -108,6 +126,7 @@ export function toThreads(body: any): MailThread[] {
       .replace(/\s+/g, " ")
       .trim()
       .slice(0, 400)
+    const automated = isAutomated(from, labels, subject)
     return {
       id: String(e?.id ?? e?.messageId ?? ""),
       threadId: e?.thread_id ?? e?.threadId ?? e?.conversationId ?? undefined,
@@ -116,7 +135,9 @@ export function toThreads(body: any): MailThread[] {
       date: e?.date ?? e?.receivedDateTime ?? e?.messageTimestamp ?? undefined,
       snippet,
       unread: labels.length ? labels.includes("UNREAD") : e?.isRead === false ? true : undefined,
-      automated: isAutomated(from, labels, subject),
+      automated,
+      kind: classify({ from, subject, snippet, automated }),
+      to: typeof e?.to === "string" ? e.to : undefined,
     }
   })
 }
@@ -177,7 +198,7 @@ function sameAddress(from: string, account?: string): boolean {
   return from.toLowerCase().includes(account.toLowerCase())
 }
 
-export async function mail(limit = 10): Promise<PlatformResult<{ threads: MailThread[]; account?: string }>> {
+export async function mail(limit = 40): Promise<PlatformResult<{ threads: MailThread[]; account?: string }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { threads: [] } }
 
@@ -196,7 +217,7 @@ export async function mail(limit = 10): Promise<PlatformResult<{ threads: MailTh
       return { measured: false, reason: String(body?.error ?? body?.message ?? `HTTP ${res.status}`), data: { threads: [] } }
     }
     const threads = toThreads(body)
-    return { measured: true, data: { threads, account: s.data.mail.account } }
+    return { measured: true, data: { threads, account: s.data.mail.account ?? inferAccount(threads) } }
   } catch (e) {
     return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { threads: [] } }
   }
@@ -204,7 +225,19 @@ export async function mail(limit = 10): Promise<PlatformResult<{ threads: MailTh
 
 /** Threads someone else started, newest first — the ones most likely waiting on this person. */
 export function waiting(threads: MailThread[], account?: string, n = 3): MailThread[] {
-  return threads.filter((t) => !t.automated && !sameAddress(t.from, account)).slice(0, n)
+  const mine = (t: MailThread) => sameAddress(t.from, account)
+  const people = threads.filter((t) => (t.kind ?? (t.automated ? "fyi" : "person")) === "person" && !mine(t))
+  const actions = threads.filter((t) => t.kind === "action" && !mine(t))
+  return [...people, ...actions].slice(0, n)
+}
+
+/** The address most of these messages were sent TO — the account, when the provider is silent. */
+export function inferAccount(threads: MailThread[]): string | undefined {
+  const count = new Map<string, number>()
+  for (const t of threads) {
+    for (const a of (t.to ?? "").match(/[^\s<>,"]+@[^\s<>,"]+/g) ?? []) count.set(a.toLowerCase(), (count.get(a.toLowerCase()) ?? 0) + 1)
+  }
+  return [...count.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
 }
 
 /** Subject, sender and snippet only, under the endpoint's 5,000-character prompt limit. */
