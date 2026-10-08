@@ -3440,7 +3440,7 @@ const CacheClearCmd = cmd({
 const ReassignCmd = cmd({
   command: "reassign <slug>",
   aliases: ["chown"],
-  describe: "change page ownership (owner_type + owner_id)",
+  describe: "move a page to another bloq, user or lead — change who owns it",
   builder: (y) =>
     y
       .positional("slug", { describe: "page slug", type: "string", demandOption: true })

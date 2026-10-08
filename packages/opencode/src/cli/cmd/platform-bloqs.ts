@@ -551,7 +551,7 @@ const BloqsGetCommand = cmd({
 
 const BloqsCreateCommand = cmd({
   command: "create",
-  describe: "create a new knowledge base",
+  describe: "create a new bloq — a board / knowledge base for a project",
   builder: (yargs) =>
     yargs
       .option("name", { describe: "bloq name", type: "string" })

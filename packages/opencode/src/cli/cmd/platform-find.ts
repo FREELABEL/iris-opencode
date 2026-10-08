@@ -141,6 +141,11 @@ function score(e: Entry, terms: string[], raw: string, rarity: Map<string, numbe
   return s
 }
 
+/** "bugs" → "bug", "bloqs" → "bloq". Deliberately crude: only a trailing -s on words over 3 letters, never -ss. */
+export function singular(w: string): string {
+  return w.length > 3 && w.endsWith("s") && !w.endsWith("ss") ? w.slice(0, -1) : w
+}
+
 /**
  * The ranking behind `iris find`, callable in-process — `iris intent` reranks its top commands.
  * Keyword + terminology-map + rarity scoring; highest first.
@@ -162,12 +167,21 @@ export function searchCapabilities(
   for (const [noun, synonyms] of Object.entries(index.terms)) {
     // WHOLE WORDS, not substrings: "web-SITE" used to fire the pages synonym "site", so a sales
     // question containing "website" returned page-building tools (2026-09-19).
-    if (synonyms.some((s) => phraseIn(raw, s)) || terms.includes(noun)) {
+    // Plural-blind matching (#188492): "bugs" never met the key `bug`, so `bug report` was not
+    // retrieved at all for "log bugs". A word matches a key when it IS the key or the key's plural.
+    // Only that direction: singularising every query word (tried first) let "agents" match
+    // "agent" and "members" match "member" across the haystack and lost 6 of 86 stress cases.
+    if (synonyms.some((s) => phraseIn(raw, s)) || terms.some((t) => t === noun || singular(t) === noun)) {
       expanded.add(noun)
       topicHits.set(noun, synonyms.filter((s) => phraseIn(raw, s)).length)
       for (const s of synonyms) for (const w of s.split(/\s+/)) expanded.add(w)
     }
   }
+
+  // People say "bloq"; every bloq command is indexed under its canonical name `atlas` (#188493).
+  // Added only when the word is TYPED — as a synonym it also fired on "project" and lifted all 60
+  // atlas commands over `hive deploy` for "deploy this project to the macbook node".
+  if (terms.some((t) => t === "bloq" || t === "bloqs")) expanded.add("atlas")
 
   let pool = index.entries
   if (kind) pool = pool.filter((e) => e.kind === kind)
