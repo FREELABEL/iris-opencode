@@ -20,6 +20,8 @@ export const DEFAULT_PALETTE_KEYBIND = "mod+k,mod+shift+p"
  */
 export const NATIVE_COMMAND_EVENT = "iris:native-command"
 export const NATIVE_COMMANDS = new Set(["settings.open"])
+/** How long a menu command waits for its screen to register it (#188510). */
+export const NATIVE_PENDING_MS = 5000
 const SUGGESTED_PREFIX = "suggested."
 const EDITABLE_KEYBIND_IDS = new Set(["terminal.toggle", "terminal.new", "file.attach"])
 
@@ -414,6 +416,20 @@ export const { use: useCommand, provider: CommandProvider } = createSimpleContex
       option?.onSelect?.(source)
     }
 
+    let pendingNative: { id: string; until: number } | undefined
+    createEffect(() => {
+      const map = optionMap()
+      const pending = pendingNative
+      if (!pending) return
+      if (Date.now() > pending.until) {
+        pendingNative = undefined
+        return
+      }
+      if (!map.has(pending.id)) return
+      pendingNative = undefined
+      run(pending.id)
+    })
+
     const showPalette = () => {
       run(PALETTE_ID, "palette")
     }
@@ -469,7 +485,12 @@ export const { use: useCommand, provider: CommandProvider } = createSimpleContex
       makeEventListener(window, "blur", letGo)
       makeEventListener(window, NATIVE_COMMAND_EVENT, (event) => {
         const id = (event as CustomEvent<unknown>).detail
-        if (typeof id === "string" && NATIVE_COMMANDS.has(id)) run(id)
+        if (typeof id !== "string" || !NATIVE_COMMANDS.has(id)) return
+        // The menu works from the moment the window exists; screens register their commands
+        // a little later. A Settings… click in between used to vanish (#188510). Hold it for a
+        // few seconds and run it as soon as the command appears.
+        if (optionMap().has(id)) return run(id)
+        pendingNative = { id, until: Date.now() + NATIVE_PENDING_MS }
       })
     })
 

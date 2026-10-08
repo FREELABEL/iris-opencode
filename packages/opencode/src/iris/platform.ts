@@ -67,7 +67,10 @@ export function dataDir(): string {
  * rather than failing loudly. Kept as named constants for that reason.
  */
 export const FL_API = process.env.IRIS_FL_API_URL ?? "https://raichu.heyiris.io"
-export const IRIS_API = process.env.IRIS_API_URL ?? "https://freelabel.net"
+// heyiris.io, not freelabel.net (#188508): IRIS never sends people to freelabel.net, which is kept
+// for the FREELABEL creator app. Same fl-iris-api behind both hosts; measured 2026-10-08, every
+// endpoint this module uses answered byte-identically on both, including streaming chat.
+export const IRIS_API = process.env.IRIS_API_URL ?? "https://heyiris.io"
 /** Where a board share link is REDEEMED — Elon's /invite/{token}. fl-api returns the token, never the URL. */
 export const ELON_WEB = process.env.IRIS_ELON_URL ?? "https://elon.freelabel.net"
 
@@ -611,9 +614,7 @@ export interface Me {
   rejected: boolean
 }
 
-export async function fetchMe(
-  opts: { token?: string | null; signal?: AbortSignal } = {},
-): Promise<PlatformResult<Me>> {
+export async function fetchMe(opts: { token?: string | null; signal?: AbortSignal } = {}): Promise<PlatformResult<Me>> {
   const empty: Me = { id: null, name: null, email: null, rejected: false }
   try {
     const res = await irisFetch(
@@ -3359,7 +3360,7 @@ export interface Integration {
  * `logo_attribution` string, because attribution is a CONDITION of the Logo.dev free tier. One
  * source means the desktop cannot end up showing marks without the credit that pays for them.
  *
- * Fetched from IRIS_API, not FL_API: /api/v1/integrations/catalog is 200 on freelabel.net and
+ * Fetched from IRIS_API, not FL_API: /api/v1/integrations/catalog is 200 on heyiris.io and
  * 404 on raichu.
  */
 /** Health, usage and function counts from the same catalogue call — one request, not three. */

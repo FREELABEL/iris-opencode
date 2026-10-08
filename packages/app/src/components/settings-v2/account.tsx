@@ -41,42 +41,75 @@ export interface AccountState {
 export type MeterView =
   | { kind: "unknown"; text: string }
   | { kind: "uncapped"; text: string }
-  | { kind: "meter"; percent: number; text: string; resets: string | null; marks: number[] }
+  | { kind: "meter"; percent: number; alert: boolean; text: string; resets: string | null; marks: number[] }
 
 const usd = (n: number) => `$${n.toFixed(2)}`
+const UNKNOWN: MeterView = { kind: "unknown", text: "Usage is unavailable right now. This is not zero." }
+const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v)
 
 /**
  * One meter, read from the gate (ADR-01). "Could not ask" and "no limit" each get their own words.
  * Neither is ever drawn as an empty bar, which would tell someone they have used nothing.
+ *
+ * Edge cases from the 2026-10-07 stress test (#188509): a cap of 0 or below is not an empty
+ * allowance, it is unknown; the percent is FLOORED, so 89.5% does not read as 90% and turn red
+ * before the server's 90% notice has fired; red follows the server's own threshold, not 90
+ * hard-coded; over the cap says so instead of "100%".
  */
 export function meterView(a: AccountState["allowance"] | undefined, now = new Date()): MeterView {
-  if (!a?.measured) return { kind: "unknown", text: "Usage is unavailable right now. This is not zero." }
+  if (!a?.measured) return UNKNOWN
   if (a.uncapped || a.capUsd === null) return { kind: "uncapped", text: "No weekly limit on this account." }
-  if (a.fraction === null || a.spendUsd === null)
-    return { kind: "unknown", text: "Usage is unavailable right now. This is not zero." }
-  const percent = Math.max(0, Math.min(100, Math.round(a.fraction * 100)))
+  if (!isNum(a.capUsd) || a.capUsd <= 0 || !isNum(a.fraction) || !isNum(a.spendUsd)) return UNKNOWN
+  if (a.fraction < 0 || a.spendUsd < 0) return UNKNOWN
+
+  const marks = [...new Set((a.thresholds ?? []).filter((t) => isNum(t) && t > 0 && t < 1))].sort((x, y) => x - y)
+  const over = a.fraction >= 1
+  const percent = Math.min(100, Math.floor(a.fraction * 100))
+  const window = a.window || "week"
   return {
     kind: "meter",
     percent,
-    text: `${usd(a.spendUsd)} of ${usd(a.capUsd)} this ${a.window} (${percent}%)`,
+    alert: over || (marks.length > 0 && a.fraction >= marks[0]),
+    text: over
+      ? `${usd(a.spendUsd)} of ${usd(a.capUsd)} this ${window}, over the limit`
+      : `${usd(a.spendUsd)} of ${usd(a.capUsd)} this ${window} (${percent}%)`,
     resets: resetsText(a.resetsAt, now),
-    marks: a.thresholds.filter((t) => t > 0 && t < 1).map((t) => Math.round(t * 100)),
+    marks: marks.map((t) => Math.round(t * 100)),
   }
 }
 
+/** Date AND time, in the viewer's zone: 00:00 UTC is still Saturday evening in the US. */
 function resetsText(iso: string | null, now: Date): string | null {
   if (!iso) return null
   const at = new Date(iso)
   if (Number.isNaN(at.getTime())) return null
-  const day = at.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" })
-  return at.getTime() <= now.getTime() ? "Resets now" : `Resets ${day}`
+  if (at.getTime() <= now.getTime()) return "Resets now"
+  const when = at.toLocaleString(undefined, {
+    weekday: "long",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  })
+  return `Resets ${when}`
 }
 
-/** The server reports staff as plan null (fl-iris-api 4eda580d). An unmeasured plan is "Unknown", never "Free". */
+/**
+ * The server reports staff as plan null (fl-iris-api 4eda580d). An unmeasured plan is "Unknown",
+ * never "Free". Slugs are humanised ("pro_monthly" reads "Pro Monthly"); an empty or non-string
+ * plan is "Unknown" rather than a blank label (#188509).
+ */
 export function planLabel(p: AccountState["plan"] | undefined): string {
   if (!p?.measured) return "Unknown"
   if (p.plan === null) return "Staff"
-  return p.plan.charAt(0).toUpperCase() + p.plan.slice(1)
+  if (typeof p.plan !== "string" || !p.plan.trim()) return "Unknown"
+  return p.plan
+    .trim()
+    .toLowerCase()
+    .split(/[_\-\s]+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ")
 }
 
 /**
@@ -311,10 +344,9 @@ export const SettingsAccountV2: Component = () => {
                               width: `${m().percent}%`,
                               height: "100%",
                               "border-radius": "4px",
-                              background:
-                                m().percent >= 90
-                                  ? "var(--icon-critical-base, #d14343)"
-                                  : "var(--icon-interactive-base, #3b82f6)",
+                              background: m().alert
+                                ? "var(--icon-critical-base, #d14343)"
+                                : "var(--icon-interactive-base, #3b82f6)",
                             }}
                           />
                           {m().marks.map((mark) => (
