@@ -1,0 +1,254 @@
+name: Release iris2 (preview)
+
+# iris2 — IRIS on the opencode v2 engine — ships BESIDE the stable `iris`, never in place of it
+# (#188596). Users opt in with `iris iris2 install`; `iris2 upgrade` moves them forward.
+#
+# Why it cannot disturb stable, checked against the code that ships on main:
+#   - main's release.yml fires on `v*` tags. This fires on `iris2-v*`, which `v*` does not match.
+#   - `iris update` (installation/pick-release.ts) only accepts tags matching ^v\d+\.\d+\.\d+$,
+#     and the installer takes the newest `v*` tag — an iris2 tag is never a candidate.
+#   - Assets are `iris2-<os>-<arch>.*`; stable downloads exactly `iris-<os>-<arch>.*`.
+#   - Every iris2 release is a PRERELEASE with make_latest=false. GitHub's "latest" is what the
+#     Electron desktop download reads (releases/latest/download/IRIS-app-*), so an iris2 release
+#     that became latest would 404 that link.
+#
+# The v1 platform layer is synced from main at build time (packages/cli/script/sync-iris-v1.ts),
+# resolved ONCE in `prepare` so every platform builds the same main commit. The release notes
+# record which one. Requires main to contain packages/opencode/src/cli/cmd/iris2.ts (the iris2
+# updater the front door imports) — the build fails loudly if it does not.
+#
+# Cut one:  git tag iris2-v1.5.0-beta.1 <commit-on-the-iris2-branch> && git push origin iris2-v1.5.0-beta.1
+
+on:
+  push:
+    tags:
+      - 'iris2-v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-iris2-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      main_sha: ${{ steps.main.outputs.sha }}
+    steps:
+      - name: Version from tag
+        id: v
+        run: |
+          set -euo pipefail
+          V="${GITHUB_REF_NAME#iris2-v}"
+          # Prerelease semver only: 1.5.0-beta.N. A bare 1.5.0 is reserved for the switch-over,
+          # when this build replaces `iris` through main's release.yml under a v1.5.0 tag.
+          if ! [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+$ ]]; then
+            echo "::error::iris2 tags must be iris2-vX.Y.Z-<pre> (e.g. iris2-v1.5.0-beta.1); got $GITHUB_REF_NAME"
+            exit 1
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+      - name: Resolve main
+        id: main
+        run: |
+          set -euo pipefail
+          SHA=$(git ls-remote "https://github.com/${{ github.repository }}" refs/heads/main | cut -f1)
+          [ -n "$SHA" ] || { echo "::error::could not resolve main"; exit 1; }
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "v1 platform layer from main @ \`$SHA\`" >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: darwin-arm64
+          - os: macos-15-intel
+            target: darwin-x64
+          - os: ubuntu-latest
+            target: linux-x64
+          - os: ubuntu-24.04-arm
+            target: linux-arm64
+          - os: windows-latest
+            target: windows-x64
+            optional: true
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.optional == true }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch the main commit to sync from
+        shell: bash
+        run: git fetch --no-tags origin ${{ needs.prepare.outputs.main_sha }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      # The bundled web UI is built with vite/rolldown, which needs Node >= 20 (node:util styleText).
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Sync the v1 platform layer from main
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd packages/cli
+          bun script/sync-iris-v1.ts --ref=${{ needs.prepare.outputs.main_sha }}
+          test -f src/iris-v1/cli/cmd/iris2.ts || {
+            echo "::error::main does not contain packages/opencode/src/cli/cmd/iris2.ts — merge feat/iris2-channel first; iris2 cannot update itself without it"
+            exit 1
+          }
+
+      - name: Build
+        shell: bash
+        run: |
+          cd packages/cli
+          bun run script/build-iris.ts --single --outdir=dist-iris2
+        env:
+          OPENCODE_VERSION: ${{ needs.prepare.outputs.version }}
+          # `iris` keeps the -iris DB suffix the spike used (#187712 I4), so preview users keep
+          # their history when this build later becomes the stable `iris`.
+          OPENCODE_CHANNEL: iris
+          IRIS_CLI_NAME: iris2
+
+      - name: Locate binary
+        id: bin
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd packages/cli/dist-iris2
+          # Prefer the plain native variant — on Linux --single can also emit -musl/-baseline.
+          EXE=iris; [ "${{ runner.os }}" = "Windows" ] && EXE=iris.exe
+          BIN=$(ls -d cli-*/bin/$EXE 2>/dev/null | grep -v -- '-musl' | grep -v -- '-baseline' | head -1 || true)
+          [ -n "$BIN" ] || { echo "::error::no binary built"; ls -R .; exit 1; }
+          echo "path=$(pwd)/$BIN" >> "$GITHUB_OUTPUT"
+
+      # The compiled binary must answer as iris2, carry the platform commands, and be able to
+      # search its capability index (the v1.3.156 lesson: files read at runtime are not bundled).
+      # Run from / so nothing in the build tree can fake a pass.
+      - name: Smoke test
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="${{ steps.bin.outputs.path }}"
+          cd /
+          V=$("$BIN" --version)
+          [ "$V" = "${{ needs.prepare.outputs.version }}" ] || { echo "::error::--version says '$V'"; exit 1; }
+          HELP=$("$BIN" --help)
+          echo "$HELP" | head -3
+          echo "$HELP" | grep -q '^iris2 ' || { echo "::error::help does not identify as iris2"; exit 1; }
+          echo "$HELP" | grep -q atlas && echo "$HELP" | grep -q bloq || { echo "::error::platform commands missing from help"; exit 1; }
+          "$BIN" find "genesis bespoke html page" --json | grep -q '"matched": [1-9]' || { echo "::error::capability discovery is dead in this build"; exit 1; }
+          "$BIN" iris2 --help | grep -q 'install' || { echo "::error::the iris2 updater is not in this build"; exit 1; }
+          echo "ok"
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out pkg
+          cp "${{ steps.bin.outputs.path }}" pkg/iris2
+          chmod 755 pkg/iris2
+          if [[ "${{ matrix.target }}" == linux-* ]]; then
+            tar -czf "out/iris2-${{ matrix.target }}.tar.gz" -C pkg iris2
+          else
+            (cd pkg && zip -q "../out/iris2-${{ matrix.target }}.zip" iris2)
+          fi
+          ls -la out
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path out, pkg | Out-Null
+          Copy-Item "${{ steps.bin.outputs.path }}" pkg/iris2.exe
+          & pkg/iris2.exe --version
+          if ($LASTEXITCODE -ne 0) { throw "iris2.exe --version failed" }
+          Compress-Archive -Path pkg/iris2.exe -DestinationPath "out/iris2-${{ matrix.target }}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: iris2-${{ matrix.target }}
+          path: out/*
+
+  release:
+    needs: [prepare, build]
+    if: always() && !cancelled() && needs.prepare.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      # Same rule as stable: publish what built, flag what did not, refuse an empty release.
+      - name: Verify assets
+        id: assets
+        run: |
+          set -euo pipefail
+          MISSING=""
+          PRESENT=0
+          for a in iris2-darwin-arm64.zip iris2-darwin-x64.zip iris2-linux-x64.tar.gz iris2-linux-arm64.tar.gz iris2-windows-x64.zip; do
+            if [ -f "artifacts/$a" ]; then PRESENT=$((PRESENT+1)); else MISSING="$MISSING $a"; fi
+          done
+          [ "$PRESENT" -gt 0 ] || { echo "::error::nothing built — refusing to publish"; exit 1; }
+          if [ -n "$MISSING" ]; then
+            echo "::warning::partial iris2 release — missing:$MISSING"
+            echo "note=> [!WARNING] Not built for:$MISSING — \`iris iris2 install\` on those platforms reports no asset." >> "$GITHUB_OUTPUT"
+          else
+            echo "note=" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Checksums computed here, from the exact files uploaded. `iris iris2 install` refuses any
+      # download that does not match. Basename inside, so `sha256sum -c` works in any directory.
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          cd artifacts
+          for f in *.zip *.tar.gz; do sha256sum "$f" > "$f.sha256"; done
+          for f in *.zip *.tar.gz; do sha256sum -c "$f.sha256" >/dev/null; done
+          { echo '### Checksums'; echo '```'; cat *.sha256; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish (prerelease, never latest)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: iris2 v${{ needs.prepare.outputs.version }} (preview)
+          draft: false
+          prerelease: true
+          make_latest: false
+          body: |
+            **iris2 preview** — IRIS on the opencode v2 engine. Installs beside your stable `iris`, which is not changed.
+
+            ```
+            iris iris2 install     # first time
+            iris2 upgrade          # later
+            iris iris2 remove      # to take it off
+            ```
+
+            Platform commands synced from `main` @ `${{ needs.prepare.outputs.main_sha }}`.
+            Known gaps: chat history from `iris` does not carry over; you may need to log in once; not every command is verified yet. Tracking: #188596.
+
+            ${{ steps.assets.outputs.note }}
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.zip
+            artifacts/*.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
