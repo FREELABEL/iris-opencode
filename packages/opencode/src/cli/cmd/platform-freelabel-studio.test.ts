@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { audioStatus, fileKeys, matchTracks, shareUrl, titleKey, variantPenalty } from "./platform-freelabel-studio"
+import { audioStatus, fileKeys, matchTracks, shareUrl, spotifyArtistId, titleKey, variantPenalty } from "./platform-freelabel-studio"
 
 // Real titles and file names from profile 69 and its Drive folder (2026-10-04).
 const files = [
@@ -69,5 +69,17 @@ describe("freelabel share", () => {
     expect(shareUrl("@mayoalexander")).toBe("https://freelabel.net/mayoalexander")
     expect(shareUrl("mayoalexander", { video: 1181 })).toBe("https://freelabel.net/mayoalexander?v=1181")
     expect(shareUrl("mayoalexander", { track: 25453 })).toBe("https://freelabel.net/mayoalexander?t=25453")
+  })
+})
+
+describe("spotifyArtistId — same rule as fl-api SpotifyClaim::artistIdFrom", () => {
+  const id = "0HGEhUnQmhVrW4lgMLvndh"
+  test("artist links, URIs and bare ids", () => {
+    for (const ref of [`https://open.spotify.com/artist/${id}`, `https://open.spotify.com/artist/${id}?si=x`, `https://open.spotify.com/intl-de/artist/${id}`, `spotify:artist:${id}`, id, ` ${id} `])
+      expect(spotifyArtistId(ref)).toBe(id)
+  })
+  test("a track or album is not an identity; junk is refused", () => {
+    for (const ref of ["https://open.spotify.com/track/1DpC4L3JjsGRW7y6eTHaMj", "https://open.spotify.com/album/1DpC4L3JjsGRW7y6eTHaMj", "Selena Gomez", "", null])
+      expect(spotifyArtistId(ref as any)).toBeNull()
   })
 })

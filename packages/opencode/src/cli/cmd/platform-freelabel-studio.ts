@@ -151,6 +151,7 @@ export function gaps(studio: any): string[] {
   if (!studio.profile?.bio) g.push("no bio — iris profile set <handle> bio \"…\"")
   if (!(studio.links ?? []).length) g.push("no links — iris freelabel links <handle> --add --title … --url …")
   if (silent) g.push(`${silent} of ${tracks.length} tracks have no audio — iris freelabel tracks upload <handle> <folder>`)
+  if (!studio.profile?.spotify) g.push("no Spotify artist — iris freelabel claim spotify <handle> <artist link>")
   if (!(studio.videos ?? []).length) g.push("no videos")
   if (!(studio.events ?? []).length) g.push("no tour dates")
   if (!(studio.memberships ?? []).length && !(studio.merch ?? []).length && !(studio.releases ?? []).length)
@@ -349,7 +350,8 @@ export const UploadCmd: CommandModule = {
 async function studioApi(path: string, method = "GET", body?: unknown): Promise<any | null> {
   const res = await irisFetch(`/api/v1/studio/${path}`, { method, ...(body ? { body: JSON.stringify(body) } : {}) })
   if (res.status === 403) {
-    console.error("  You can only manage your own page.")
+    const m = ((await res.json().catch(() => null)) as any)?.message
+    console.error(`  ${m || "You can only manage your own page."}`)
     return null
   }
   if (!(await handleApiError(res, `Studio ${method}`))) return null
@@ -519,4 +521,114 @@ const ShareCmd: CommandModule = {
   },
 }
 
-export const FreelabelStudioCommands = [PageCmd, TracksCmd, VideosCmd, ShareCmd, { ...UploadCmd, describe: "shortcut for: tracks upload" }]
+// ── Spotify identity: claimed by the artist, approved by an admin (FL-CO-30/31) ─────────
+// spotify_id decides which page owns a Spotify artist's tracks, so nobody sets it on their own
+// page: the artist files a claim, an admin checks it, and approval files the catalogue.
+
+/** The 22-char artist id from a link, a spotify:artist: URI or the bare id — same rule as fl-api. */
+export function spotifyArtistId(ref: string | undefined | null): string | null {
+  const s = String(ref ?? "").trim()
+  const m = s.match(/(?:open\.spotify\.com\/(?:intl-[a-z]{2}\/)?artist\/|spotify:artist:)([0-9A-Za-z]{22})/)
+  if (m) return m[1]
+  return /^[0-9A-Za-z]{22}$/.test(s) ? s : null
+}
+
+function printPreview(p: any) {
+  if (!p) return
+  console.log(`  ${dim("tracks it files")}   ${p.tracks_to_file ?? 0}`)
+  if (p.tracks_already_on_page) console.log(`  ${dim("already on page")}   ${p.tracks_already_on_page}`)
+  if (p.conflict_profile) console.log(`  ${dim("conflict")}          page ${p.conflict_profile} already holds this artist — an admin resolves it first`)
+}
+
+const ClaimSpotifyCmd: CommandModule = {
+  command: "spotify <handle> <link>",
+  describe: "claim your Spotify artist — an admin approves, then your catalogue lands on the page",
+  builder: (y) => y.positional("handle", { type: "string", demandOption: true }).positional("link", { type: "string", demandOption: true, describe: "https://open.spotify.com/artist/…" }),
+  handler: async (args: any) => {
+    const id = spotifyArtistId(args.link)
+    if (!id) {
+      console.error("  That is not a Spotify artist link — open your artist page on Spotify and copy its link (…/artist/…).")
+      return process.exit(1)
+    }
+    if (!(await requireAuth())) return
+    const r = await studioApi(`${handleOf(args.handle)}/spotify-claim`, "POST", { spotify: args.link })
+    if (!r) return process.exit(1)
+    if (args.json || isJsonMode()) return writeJson(r)
+    if (!r.claim) return console.log(`  ${success("Already yours")} this page carries Spotify artist ${id}`)
+    console.log(`  ${success("Claim sent")} Spotify artist ${id} — an admin confirms it, usually within a day`)
+    printPreview(r.preview)
+  },
+}
+
+const ClaimStatusCmd: CommandModule = {
+  command: "status <handle>",
+  describe: "the page's Spotify claim, if any",
+  builder: (y) => y.positional("handle", { type: "string", demandOption: true }),
+  handler: async (args: any) => {
+    if (!(await requireAuth())) return
+    const r = await studioApi(handleOf(args.handle))
+    if (!r) return process.exit(1)
+    const c = r.settings?.spotify_claim
+    if (args.json || isJsonMode()) return writeJson(c ?? null)
+    if (!c) return console.log(`  ${dim("No Spotify claim on this page.")}`)
+    console.log(`  ${bold(String(c.status))}  Spotify artist ${c.spotify_artist_id}  ${dim(String(c.requested_at ?? ""))}`)
+    if (c.status === "approved") console.log(`  ${dim("tracks filed")} ${c.tracks_filed ?? 0}`)
+  },
+}
+
+const ClaimWithdrawCmd: CommandModule = {
+  command: "withdraw <handle>",
+  describe: "withdraw the pending claim (an admin doing this rejects it)",
+  builder: (y) => y.positional("handle", { type: "string", demandOption: true }),
+  handler: async (args: any) => {
+    if (!(await requireAuth())) return
+    const r = await studioApi(`${handleOf(args.handle)}/spotify-claim`, "DELETE")
+    if (!r) return process.exit(1)
+    console.log(`  ${success("Closed")} the Spotify claim`)
+  },
+}
+
+const ClaimListCmd: CommandModule = {
+  command: "list",
+  describe: "admin: every pending Spotify claim",
+  handler: async (args: any) => {
+    if (!(await requireAuth())) return
+    const r = await studioApi("spotify-claims")
+    if (!r) return process.exit(1)
+    const claims: any[] = r.claims ?? []
+    if (args.json || isJsonMode()) return writeJson(claims)
+    if (!claims.length) return console.log(`  ${dim("No pending claims.")}`)
+    for (const c of claims)
+      console.log(`  ${bold(c.handle)}  ${dim("pk " + c.profile)}  → Spotify ${c.claim?.spotify_artist_id}  ${dim("open.spotify.com/artist/" + c.claim?.spotify_artist_id)}`)
+    printDivider()
+    console.log(`  ${dim("check each artist, then: iris freelabel claim approve <handle> --apply")}`)
+  },
+}
+
+const ClaimApproveCmd: CommandModule = {
+  command: "approve <handle>",
+  describe: "admin: approve a Spotify claim and file the catalogue — dry run unless --apply",
+  builder: (y) => y.positional("handle", { type: "string", demandOption: true }).option("apply", { type: "boolean", default: false }),
+  handler: async (args: any) => {
+    if (!(await requireAuth())) return
+    const path = `${handleOf(args.handle)}/spotify-claim/approve${args.apply ? "" : "?dry_run=1"}`
+    const r = await studioApi(path, "POST")
+    if (!r) return process.exit(1)
+    if (args.json || isJsonMode()) return writeJson(r)
+    if (!args.apply) {
+      console.log(`  ${bold("DRY RUN")} — Spotify artist ${r.claim?.spotify_artist_id} for ${args.handle}`)
+      printPreview(r.preview)
+      return console.log(`  ${dim("re-run with --apply to approve")}`)
+    }
+    console.log(`  ${success("Approved")} ${r.result?.tracks_filed ?? 0} tracks filed under ${args.handle}`)
+  },
+}
+
+export const ClaimCmd: CommandModule = {
+  command: "claim",
+  describe: "your Spotify artist identity — claim it, check it, (admins) approve it",
+  builder: (y) => y.command(ClaimSpotifyCmd).command(ClaimStatusCmd).command(ClaimWithdrawCmd).command(ClaimListCmd).command(ClaimApproveCmd).demandCommand(1),
+  handler: () => {},
+}
+
+export const FreelabelStudioCommands = [PageCmd, TracksCmd, VideosCmd, ShareCmd, ClaimCmd, { ...UploadCmd, describe: "shortcut for: tracks upload" }]
