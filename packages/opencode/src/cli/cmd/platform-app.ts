@@ -23,6 +23,29 @@ import {
   readdirSync,
 } from "fs"
 import { join, resolve, basename, relative } from "path"
+import { fetchDatasetRecords } from "./platform-atlas-datasets"
+import { dispatchTaskAndWait, fetchNodes, resolveNode, type HiveNode } from "./platform-hive-nodes"
+import { buildTaskPayload } from "./hive-task-create"
+import { describeUptime } from "./hive-uptime"
+import { exitCodeForResult, fromHiveTask, type HiveTaskLike } from "./hive-script-result"
+import {
+  RUN_EXIT,
+  buildRunScript,
+  buildVerifyScript,
+  containerName,
+  kitSlug,
+  matchKits,
+  noKitAdvice,
+  parsePort,
+  parseVerifyOutput,
+  reachHint,
+  recordText,
+  recordTitle,
+  runnableReason,
+  safeInstanceName,
+  stopCommand,
+  type Kit,
+} from "./apps-kits"
 
 // ============================================================================
 // Templates (basic / react / vue)
@@ -225,24 +248,314 @@ function collectFiles(dir: string): Record<string, Buffer> {
 }
 
 // ============================================================================
+// IRIS Hive Apps — `iris apps create "<need>" --node <node>` (EPIC #188312)
+//
+// Matches a kit from the public `hive-app-kits` dataset, runs it on one of the person's own
+// Hive machines (127.0.0.1 only), proves it answers, and records it on bloq #736. Every
+// decision that needs no network lives in apps-kits.ts, with its tests.
+// ============================================================================
+
+const HIVE_APPS_BLOQ = 736
+const HIVE_APPS_RUNNING_LIST = 2735 // "In Progress" — what is running where
+const HIVE_APP_KITS_SCHEMA = "hive-app-kits"
+const DEFAULT_HIVE_APP_PORT = 8090
+
+interface HiveAppArgs {
+  name: string
+  node?: string
+  kit?: string
+  port?: number
+  as?: string
+  replace?: boolean
+  "dry-run"?: boolean
+  wait?: number
+  "skip-record"?: boolean
+  json?: boolean
+  "user-id"?: number
+}
+
+/**
+ * Hive-app mode when any Hive flag is given, or when the "name" is a sentence. A bare
+ * one-word name with no flags keeps meaning what it always meant: scaffold a directory.
+ */
+function isHiveAppRequest(args: Record<string, unknown>, name: string): boolean {
+  if (/\s/.test(name.trim())) return true
+  return ["node", "kit", "port", "as"].some((k) => args[k] !== undefined && args[k] !== "") ||
+    args.replace === true || args["dry-run"] === true
+}
+
+async function createHiveApp(args: HiveAppArgs): Promise<void> {
+  const need = String(args.name).trim()
+  const json = !!args.json
+  const say = (line = "") => { if (!json) console.log(line) }
+  const fail = async (code: number, error: string, extra: Record<string, unknown> = {}, lines: string[] = []) => {
+    if (json) await writeJson({ ok: false, error, ...extra })
+    else {
+      prompts.log.error(error)
+      for (const l of lines) console.log(l)
+    }
+    process.exitCode = code
+  }
+
+  await requireAuth()
+  const userId = await requireUserId(args["user-id"])
+  if (!userId) { process.exitCode = 1; return }
+
+  if (!json) { UI.empty(); prompts.intro(`◈  IRIS Hive Apps — ${need}`) }
+
+  // ── match ────────────────────────────────────────────────────────────
+  let kits: Kit[]
+  try {
+    const { records } = await fetchDatasetRecords(HIVE_APP_KITS_SCHEMA, { limit: 200, all: true })
+    kits = records.map((r: any) => ({ external_id: r.external_id ?? undefined, ...(r.data ?? r) }))
+  } catch (err) {
+    return fail(1, `Could not read the kit catalogue (dataset ${HIVE_APP_KITS_SCHEMA}): ${err instanceof Error ? err.message : String(err)}`)
+  }
+
+  const matches = matchKits(need, kits, args.kit)
+  if (matches.length === 0) {
+    const lines = args.kit
+      ? [`No kit is named "${args.kit}". Kits: ${kits.map((k) => k.name).join(", ")}`]
+      : noKitAdvice(need, kits)
+    if (json) {
+      await writeJson({ ok: false, error: "no_kit", need, advice: lines })
+      process.exitCode = 2
+      return
+    }
+    for (const l of lines) console.log(`  ${l}`)
+    prompts.outro("No kit — nothing was run")
+    process.exitCode = 2
+    return
+  }
+
+  const best = matches[0]!
+  say(`  ${bold("Kit")}      ${best.kit.name}  ${dim(`matched: ${best.matched.join(", ")}`)}`)
+  say(`  ${dim("replaces")} ${best.kit.replaces ?? "?"}`)
+  say(`  ${dim("licence")}  ${best.kit.licence ?? "unknown"}`)
+  if (matches.length > 1) say(`  ${dim("also:")}    ${matches.slice(1, 4).map((m) => m.kit.name).join(", ")}  ${dim("(pick one with --kit)")}`)
+
+  const runnable = runnableReason(best.kit)
+  if (!runnable.ok) {
+    // Do NOT fall through to a lower-ranked kit that happens to be runnable — that would be
+    // running the wrong app for the job. Say why and stop.
+    return fail(1, `Not a one-command kit: ${runnable.reason}`, { kit: best.kit.name }, [
+      dim(`  File it: iris bloqs add-item ${HIVE_APPS_BLOQ} 2734 --title "Make ${best.kit.name} a one-command kit"`),
+    ])
+  }
+
+  const instance = safeInstanceName(args.as ?? kitSlug(best.kit))
+  if (!instance) return fail(2, `--as "${args.as}" is not a usable name (lowercase letters, digits, - _ . only)`)
+  const container = containerName(instance)
+  const hostPort = parsePort(args.port ?? DEFAULT_HIVE_APP_PORT)
+  if (!hostPort) return fail(2, `--port ${args.port} must be a whole number from 1024 to 65535`)
+
+  // ── node ─────────────────────────────────────────────────────────────
+  let node: HiveNode | null = null
+  if (args.node) {
+    node = await resolveNode(userId, args.node)
+    if (!node) return fail(1, `No Hive node matches "${args.node}". Run: iris hive nodes list`)
+  } else {
+    const nodes = await fetchNodes(userId)
+    // Online, has a container runtime, and is not crash-looping — a looping node accepts the
+    // task and then hangs it to its timeout, which reads as "the app is slow".
+    node = nodes.find((n) =>
+      n.connection_status === "online" &&
+      (n as any).permissions?.isolation?.available === true &&
+      describeUptime(n as any, Date.now()).kind !== "looping",
+    ) ?? null
+    if (!node) return fail(1, "No online, stable Hive machine with a container sandbox. Bring one up (iris hive connect) or name one with --node.")
+  }
+  if (node.connection_status !== "online") {
+    return fail(1, `Node "${node.name}" is ${node.connection_status} — it cannot run anything right now.`)
+  }
+  if (describeUptime(node as any, Date.now()).kind === "looping") {
+    say(`  ${dim(`warning: ${node.name} is crash-looping — the run may hang to its timeout`)}`)
+  }
+
+  const runScript = buildRunScript({
+    container,
+    image: runnable.image,
+    hostPort,
+    containerPort: runnable.port,
+    slug: kitSlug(best.kit),
+    replace: !!args.replace,
+  })
+  const waitSec = Math.max(10, Math.min(900, Number(args.wait) || 120))
+  const verifyScript = buildVerifyScript(hostPort, waitSec)
+
+  say(`  ${bold("Machine")}  ${node.name}  ${dim(node.id.slice(0, 8))}`)
+  say(`  ${bold("Runs as")}  ${container}  ${dim(`${runnable.image} → 127.0.0.1:${hostPort} (local only)`)}`)
+
+  if (args["dry-run"]) {
+    const plan = {
+      ok: true,
+      dry_run: true,
+      need,
+      kit: best.kit.name,
+      matched: best.matched,
+      node: node.name,
+      node_id: node.id,
+      container,
+      image: runnable.image,
+      bind: `127.0.0.1:${hostPort}`,
+      container_port: runnable.port,
+      run_script: runScript,
+      verify_script: verifyScript,
+      record: args["skip-record"] ? null : { bloq: HIVE_APPS_BLOQ, list: HIVE_APPS_RUNNING_LIST, title: recordTitle(best.kit, node.name, hostPort, need) },
+    }
+    if (json) { await writeJson(plan); return }
+    say()
+    say(bold("─── would run on the node ───"))
+    say(runScript)
+    say(bold("─── then verify (on the node) ───"))
+    say(verifyScript)
+    say()
+    say(dim(args["skip-record"] ? "  Would not record (--skip-record)." : `  Then record it on bloq #${HIVE_APPS_BLOQ}: "${plan.record!.title}"`))
+    prompts.outro("Dry run — nothing was run")
+    return
+  }
+
+  // ── run ──────────────────────────────────────────────────────────────
+  const spinner = json ? null : prompts.spinner()
+  spinner?.start(`Starting ${best.kit.name} on ${node.name}…`)
+  let runTask: { taskId: string; final: Record<string, unknown> | null }
+  try {
+    runTask = await dispatchTaskAndWait(userId, buildTaskPayload({
+      userId, type: "shell", nodeId: node.id, prompt: runScript, title: `Hive App: ${instance}`, config: {}, timeoutSec: 900,
+    }))
+  } catch (err) {
+    spinner?.stop("Failed", 1)
+    return fail(1, err instanceof Error ? err.message : String(err))
+  }
+  const runResult = fromHiveTask(runTask.final as HiveTaskLike)
+  const runOut = `${runResult.stdout ?? ""}${runResult.stderr ? `\n${runResult.stderr}` : ""}`.trim()
+  const runCode = runTask.final ? exitCodeForResult(runResult) : 124
+  if (runCode !== 0) {
+    spinner?.stop("Did not start", 1)
+    const hints: string[] = []
+    if (runCode === RUN_EXIT.EXISTS) {
+      hints.push(`  It may already be running — check it: iris hive run ${node.name} "docker ps --filter name=${container}"`)
+      hints.push(`  Run a second copy: --as ${instance}-2 --port ${hostPort + 1}    Replace it: --replace`)
+    } else if (/port is already allocated|address already in use/i.test(runOut)) {
+      hints.push(`  Port ${hostPort} is taken on ${node.name} — pick another with --port.`)
+    } else if (!runTask.final) {
+      hints.push(`  Still running at the time limit — read it: iris hive tasks get ${runTask.taskId}`)
+    }
+    return fail(runCode === 124 ? 124 : 1, `Starting ${best.kit.name} on ${node.name} failed (exit ${runCode}).`,
+      { task_id: runTask.taskId, output: runOut }, [runOut ? dim(runOut.split("\n").slice(-15).map((l) => `  ${l}`).join("\n")) : "", ...hints])
+  }
+  spinner?.stop(`Started ${container} on ${node.name}`)
+
+  // ── verify ───────────────────────────────────────────────────────────
+  spinner?.start(`Waiting for it to answer on 127.0.0.1:${hostPort} (up to ${waitSec}s)…`)
+  let verifyTask: { taskId: string; final: Record<string, unknown> | null }
+  try {
+    verifyTask = await dispatchTaskAndWait(userId, buildTaskPayload({
+      userId, type: "shell", nodeId: node.id, prompt: verifyScript, title: `Hive App: verify ${instance}`, config: {}, timeoutSec: waitSec + 30,
+    }))
+  } catch (err) {
+    spinner?.stop("Could not verify", 1)
+    return fail(1, err instanceof Error ? err.message : String(err), { container, node: node.name })
+  }
+  const verifyOut = String(fromHiveTask(verifyTask.final as HiveTaskLike).stdout ?? "")
+  const verdict = parseVerifyOutput(verifyOut)
+  if (!verdict.ready) {
+    spinner?.stop("Started, but it does not answer", 1)
+    // Started is not working. Leave it in place (it may be slow) but say how to remove it.
+    return fail(1, `${best.kit.name} started on ${node.name} but did not answer on 127.0.0.1:${hostPort} within ${waitSec}s (last HTTP ${verdict.http ?? "none"}).`,
+      { container, node: node.name, verify_output: verifyOut.trim() },
+      [dim(`  Logs:   iris hive run ${node.name} "docker logs --tail 50 ${container}"`), dim(`  Remove: ${stopCommand(node.name, container)}`)])
+  }
+  const verifiedText = `HTTP ${verdict.http} from 127.0.0.1:${hostPort}/ on ${node.name} after ${verdict.afterSec}s`
+  spinner?.stop(`It answers — ${verifiedText}`)
+
+  // ── record ───────────────────────────────────────────────────────────
+  let recordId: number | null = null
+  let recordError: string | null = null
+  if (!args["skip-record"]) {
+    try {
+      const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${HIVE_APPS_BLOQ}/items`, {
+        method: "POST",
+        body: JSON.stringify({
+          title: recordTitle(best.kit, node.name, hostPort, need),
+          content: recordText(best.kit, node.name, hostPort, container, new Date().toISOString().slice(0, 16) + "Z", verifiedText),
+          list_id: HIVE_APPS_RUNNING_LIST,
+          type: "default",
+        }),
+      })
+      if (res.ok) {
+        const body = (await res.json().catch(() => null)) as { data?: any; id?: any } | null
+        recordId = Number(body?.data?.id ?? body?.data?.data?.id ?? body?.id) || null
+      } else recordError = `HTTP ${res.status}`
+    } catch (err) {
+      recordError = err instanceof Error ? err.message : String(err)
+    }
+  }
+
+  if (json) {
+    await writeJson({
+      ok: true, need, kit: best.kit.name, node: node.name, node_id: node.id, container,
+      bind: `127.0.0.1:${hostPort}`, verified: { http: verdict.http, after_sec: verdict.afterSec },
+      record_item_id: recordId, record_error: recordError,
+      run_task_id: runTask.taskId, verify_task_id: verifyTask.taskId,
+      stop: stopCommand(node.name, container),
+    })
+    return
+  }
+  printDivider()
+  printKV("Running", `${best.kit.name} on ${node.name}`)
+  printKV("Local", `http://127.0.0.1:${hostPort}  (on ${node.name} only)`)
+  printKV("Reach it", reachHint(node.name, hostPort))
+  printKV("Stop it", stopCommand(node.name, container))
+  if (recordId) printKV("Recorded", `bloq #${HIVE_APPS_BLOQ} item #${recordId}`)
+  else if (recordError) printKV("Recorded", `NO — ${recordError} (it is running; add it by hand)`)
+  printDivider()
+  console.log(dim("  Exposing it to other people (Tailscale serve, a domain) is a separate, deliberate step — several kits have no login."))
+  prompts.outro("Done")
+}
+
+// ============================================================================
 // Subcommands
 // ============================================================================
 
 const CreateCommand = cmd({
   command: "create <name>",
-  describe: "scaffold a new IRIS-hosted app",
+  describe:
+    'run an app you own on a Hive machine instead of paying for one — `iris apps create "edit and merge PDFs" --node <node>` (IRIS Hive Apps). A single-word name with no Hive flags scaffolds an IRIS-hosted app directory instead',
   builder: (yargs) =>
     yargs
-      .positional("name", { describe: "app name (becomes directory)", type: "string", demandOption: true })
+      .positional("name", {
+        describe: 'the job in plain words ("edit and merge PDFs") — or, for a scaffold, the app directory name',
+        type: "string",
+        demandOption: true,
+      })
+      .option("node", { describe: "Hive machine to run it on (default: first online node with a container sandbox)", type: "string" })
+      .option("kit", { describe: "skip matching and use this kit by name (e.g. Stirling-PDF)", type: "string" })
+      .option("port", { describe: "port on the machine; the app binds to 127.0.0.1 only", type: "number" })
+      .option("as", { describe: "instance name — the container is hiveapp-<as> (default: the kit's name)", type: "string" })
+      .option("replace", { describe: "replace an existing container of the same name", type: "boolean", default: false })
+      .option("dry-run", { describe: "show the plan (kit, machine, exact command) without running anything", type: "boolean", default: false })
+      .option("wait", { describe: "seconds to wait for the app to answer", type: "number", default: 120 })
+      .option("skip-record", { describe: "do not record it on the Hive Apps board (bloq #736)", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID", type: "number" })
       .option("template", {
         alias: "t",
-        describe: "template",
+        describe: "scaffold template (scaffold mode only; default basic)",
         choices: ["basic", "react", "vue"] as const,
-        default: "basic" as const,
       }),
   async handler(args) {
     const name = args.name as string
-    const template = args.template as string
+    if (isHiveAppRequest(args as Record<string, unknown>, name)) {
+      if (args.template) {
+        prompts.log.error("--template scaffolds a local app directory; it cannot be combined with Hive App flags (--node, --kit, --port, --as, --replace, --dry-run).")
+        process.exitCode = 2
+        return
+      }
+      await createHiveApp(args as unknown as HiveAppArgs)
+      return
+    }
+    const template = (args.template as string | undefined) ?? "basic"
 
     UI.empty()
     prompts.intro(`◈  Create IRIS App: ${name}`)
@@ -576,7 +889,7 @@ const DeleteCommand = cmd({
 export const PlatformAppCommand = cmd({
   command: "app",
   aliases: ["apps"],
-  describe: "manage IRIS-hosted apps (create, deploy, list, delete)",
+  describe: "apps you own: run one on your Hive instead of paying for it (create \"<job>\" --node), or scaffold/deploy an IRIS-hosted app",
   builder: (yargs) =>
     yargs
       .command(CreateCommand)
