@@ -825,6 +825,7 @@ export const IrisPaths = {
   onboardingState: `${root}/onboarding/state`,
   onboardingMail: `${root}/onboarding/mail`,
   onboardingGround: `${root}/onboarding/ground`,
+  onboardingCapabilities: `${root}/onboarding/capabilities`,
   onboardingWorkspace: `${root}/onboarding/workspace`,
   onboardingTrack: `${root}/onboarding/track`,
   cliCommands: `${root}/commands`,
@@ -1841,6 +1842,45 @@ export const IrisApi = HttpApi.make("iris").add(
           identifier: "iris.onboardingGround",
           summary: "Ground IRIS on recent mail",
           description: "Sends a compact digest (sender name, subject, snippet; under 5,000 chars) to workflow-generation/business-summary. Nobody is asked to describe their business: the inbox is the description.",
+        }),
+      ),
+      HttpApiEndpoint.post("onboardingCapabilities", IrisPaths.onboardingCapabilities, {
+        payload: Schema.Struct({
+          id: Schema.Literals(["reply", "admin", "catchup", "leads", "custom"]),
+          goal: Schema.String,
+        }),
+        success: described(
+          Schema.Struct({
+            ...Measured,
+            capabilities: Schema.Array(
+              Schema.Struct({
+                id: Schema.String,
+                title: Schema.String,
+                detail: Schema.String,
+                tool: Schema.String,
+                evidence: Schema.Struct({
+                  kinds: Schema.Array(Schema.Literals(["person", "action", "fyi"])),
+                  pattern: Schema.optional(Schema.String),
+                }),
+                source: Schema.Literals(["catalog", "intent"]),
+                primary: Schema.optional(Schema.Boolean),
+              }),
+            ),
+            intent: Schema.optional(
+              Schema.Struct({
+                choice: Schema.optional(Schema.String),
+                confidence: Schema.optional(Schema.Number),
+                commands: Schema.Array(Schema.String),
+              }),
+            ),
+          }).annotate({ identifier: "IrisOnboardingCapabilities" }),
+          "What IRIS can do toward the person's stated goal",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.onboardingCapabilities",
+          summary: "Capabilities for a stated goal",
+          description: "The goal is the truth: options come from the curated catalog of first-class IRIS tools plus `iris intent --json` on the goal (confident picks only). The inbox is not read here; the app uses it afterwards only as evidence under each option.",
         }),
       ),
       HttpApiEndpoint.post("onboardingWorkspace", IrisPaths.onboardingWorkspace, {

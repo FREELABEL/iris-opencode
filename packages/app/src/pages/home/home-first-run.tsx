@@ -4,8 +4,8 @@ import { usePlatform } from "@/context/platform"
 import { Check, GmailLogo, InboxArt, OutlookLogo, Spinner } from "./home-first-run-art"
 import { SignInPanel } from "./home-first-run-signin"
 import type { InboxThread } from "./home-first-run-inbox"
-import { INTENTS, IntentPicker, planFor, type Intent } from "./home-first-run-intent"
-import { ClarifyStep } from "./home-first-run-clarify"
+import { INTENTS, IntentPicker, type Intent } from "./home-first-run-intent"
+import { ClarifyStep, type Capability } from "./home-first-run-clarify"
 import "./home-first-run.css"
 
 /**
@@ -95,6 +95,7 @@ type Step =
       account?: string
       line?: string
       industry?: string
+      capabilities: Capability[]
       choices: string[]
     }
   | { kind: "starting" }
@@ -130,9 +131,15 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
   // Known from state(): an inbox connected before this screen. Shown on Connect, never skipped
   // silently — but once they have answered, an existing connection goes straight to the read.
   let connected: { type: Provider; account?: string } | undefined
+  // What IRIS can do toward the goal: asked the moment they answer, alongside connect and the
+  // read, so the 2-4 s `iris intent` takes is hidden behind work that happens anyway.
+  let caps: Promise<Capability[]> = Promise.resolve([])
   const pick = (i: Intent) => {
     setIntent(i)
     track("onboarding.question_answered", `${i.id}: ${i.text.slice(0, 100)}`)
+    caps = post("/iris/onboarding/capabilities", { id: i.id, goal: i.text })
+      .then((r) => (Array.isArray(r?.capabilities) ? (r.capabilities as Capability[]) : []))
+      .catch(() => [])
     if (connected) return void read()
     setStep({ kind: "connect" })
   }
@@ -217,16 +224,16 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
     }
     track("onboarding.mail_read", String(m.threads.length))
 
-    const g = await post("/iris/onboarding/ground", { threads: m.threads }).catch(() => null)
-    if (g?.measured) track("onboarding.grounded", g.industry)
+    // No "ground on the inbox" step: guessing who someone is from mail they did not point us at is
+    // the assumption the goal replaces. The inbox is evidence under each capability, nothing more.
+    const capabilities = await caps
     setStep({
       kind: "seen",
       threads: m.threads,
       account: m.account,
       waiting: m.waiting ?? [],
-      line: g?.line,
-      industry: g?.industry,
-      choices: g?.choices?.length ? g.choices : ["Reply to what's waiting on me", "Summarise my week", "Find what I've missed"],
+      capabilities,
+      choices: [],
     })
   }
 
@@ -435,21 +442,23 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
 
         <Match when={step().kind === "seen" && (step() as Extract<Step, { kind: "seen" }>)}>
           {(s) => {
-            const plan = () => planFor(intent(), s().threads)
+
             return (
               <div class="fr-rise flex flex-col gap-5">
                 <div class="flex flex-col gap-2">
                   <p class="fr-mono text-v2-text-text-muted text-[11.5px] uppercase tracking-[0.14em]">
                     {intent().id === "custom" ? "You asked" : intent().text}
                   </p>
-                  <h1 class="text-v2-text-text-base text-[24px] leading-snug [font-weight:650]">{plan().title}</h1>
-                  <Show when={s().line}>
-                    <p class="text-v2-text-text-muted text-[14px]">{s().line}</p>
-                  </Show>
+                  <h1 class="text-v2-text-text-base text-[24px] leading-snug [font-weight:650]">Here's what IRIS can do for that.</h1>
                 </div>
 
                 <p class="text-v2-text-text-muted -mt-2 text-[14px]">Pick what IRIS should do. Nothing goes out without you.</p>
-                <ClarifyStep intent={intent()} threads={s().threads} onStart={(prompt, focus) => void start(s(), prompt, focus)} />
+                <ClarifyStep
+                  intent={intent()}
+                  threads={s().threads}
+                  capabilities={s().capabilities}
+                  onStart={(prompt, focus) => void start(s(), prompt, focus)}
+                />
               </div>
             )
           }}

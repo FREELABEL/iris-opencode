@@ -1,6 +1,17 @@
 import { For, Show, createMemo, createSignal } from "solid-js"
 import { senderName, type InboxThread } from "./home-first-run-inbox"
-import { planFor, type Intent } from "./home-first-run-intent"
+import type { Intent } from "./home-first-run-intent"
+
+/** What IRIS can do toward the goal — from /iris/onboarding/capabilities (catalog + `iris intent`). */
+export type Capability = {
+  id: string
+  title: string
+  detail: string
+  tool: string
+  evidence: { kinds: Array<"person" | "action" | "fyi">; pattern?: string }
+  source: "catalog" | "intent"
+  primary?: boolean
+}
 
 /**
  * Clarifying questions, after the read (EPIC #188210). The shape is Elon's ClarifyingQuestionsStep
@@ -8,14 +19,15 @@ import { planFor, type Intent } from "./home-first-run-intent"
  * is the one that worked. The difference is where the options come from: not a model's guesses
  * about a workflow, but the person's own inbox, filtered by what they said they want.
  *
- * The inbox is never shown as "here is everything I read". It appears only as the things IRIS can
- * do toward the answer they gave — which is the privacy line Alex drew (2026-10-08).
+ * Order of truth (Alex, 2026-10-08): the GOAL decides; the options are what IRIS can really do
+ * toward it (first-class CLI tools, via the catalog and `iris intent`); the INBOX only cross-checks
+ * — evidence under an option, never an option itself. An option with no evidence still shows.
  */
 
 type Kind = NonNullable<InboxThread["kind"]>
 const kindOf = (t: InboxThread): Kind => t.kind ?? (t.automated ? "fyi" : "person")
 
-type Option = { id: string; label: string; description?: string; thread?: InboxThread }
+type Option = { id: string; label: string; description?: string; cap?: Capability; evidence?: InboxThread[] }
 type Question = { id: string; question: string; type: "multi" | "single"; options: Option[]; hint?: string }
 
 const TONES: Option[] = [
@@ -28,46 +40,58 @@ const MODES: Option[] = [
   { id: "simple", label: "Send the simple ones", description: "draft anything that needs a decision" },
 ]
 
-function actionLabel(intent: Intent, t: InboxThread): string {
-  const who = senderName(t.from)
-  if (kindOf(t) === "action") return `Handle ${who}`
-  if (intent.id === "leads") return `Follow up with ${who}`
-  return `Reply to ${who}`
+/** The cross-check: which of their threads this capability would act on. */
+export function evidenceFor(cap: Capability, threads: InboxThread[]): InboxThread[] {
+  let re: RegExp | undefined
+  try {
+    re = cap.evidence.pattern ? new RegExp(`\\b(${cap.evidence.pattern})`, "i") : undefined
+  } catch {
+    re = undefined
+  }
+  return threads.filter((t) => cap.evidence.kinds.includes(kindOf(t)) && (!re || re.test(`${t.subject} ${t.snippet}`)))
 }
+
+const REPLIES = new Set(["draft-replies", "follow-up-leads"])
 
 export function ClarifyStep(props: {
   intent: Intent
   threads: InboxThread[]
+  capabilities: Capability[]
   onStart: (prompt: string, focus: InboxThread[]) => void
 }) {
-  const plan = createMemo(() => planFor(props.intent, props.threads))
-  const candidates = createMemo(() => {
-    const focus = plan().focus.filter((t) => kindOf(t) !== "fyi")
-    const rest = props.threads.filter((t) => kindOf(t) !== "fyi" && !focus.some((f) => f.id === t.id))
-    return [...focus, ...rest].slice(0, 7)
-  })
-  const updates = createMemo(() => props.threads.filter((t) => kindOf(t) === "fyi"))
-
-  const [picked, setPicked] = createSignal<Set<string>>(
-    new Set([
-      ...plan()
-        .focus.filter((t) => kindOf(t) !== "fyi")
-        .slice(0, 5)
-        .map((t) => t.id),
-      ...(props.intent.id === "catchup" && updates().length ? ["updates"] : []),
-    ]),
+  // Capabilities lead; an empty answer from the engine still offers the goal itself, planned together.
+  const caps = createMemo<Capability[]>(() =>
+    props.capabilities.length
+      ? props.capabilities
+      : [
+          {
+            id: "plan-with-you",
+            title: props.intent.text,
+            detail: "IRIS works out the steps with you",
+            tool: "iris session",
+            evidence: { kinds: ["person", "action"] },
+            source: "catalog",
+            primary: true,
+          },
+        ],
   )
+  const evidence = createMemo(() => new Map(caps().map((c) => [c.id, evidenceFor(c, props.threads)])))
+
+  // Ticked by default: the primary answers to the goal. Evidence never ticks something on its own.
+  const [picked, setPicked] = createSignal<Set<string>>(new Set(caps().filter((c) => c.primary).map((c) => c.id)))
   const [tone, setTone] = createSignal("warm")
   const [mode, setMode] = createSignal("draft")
   const [notes, setNotes] = createSignal("")
 
-  const actions = (): Option[] => [
-    ...candidates().map((t) => ({ id: t.id, label: actionLabel(props.intent, t), description: t.subject, thread: t })),
-    ...(updates().length
-      ? [{ id: "updates", label: `Summarise my ${updates().length} updates`, description: "newsletters, reports and notifications" }]
-      : []),
-  ]
-  const replying = () => actions().some((o) => picked().has(o.id) && o.thread && kindOf(o.thread) === "person")
+  const actions = (): Option[] =>
+    caps().map((c) => ({
+      id: c.id,
+      label: c.title.charAt(0).toUpperCase() + c.title.slice(1),
+      description: c.detail,
+      cap: c,
+      evidence: evidence().get(c.id) ?? [],
+    }))
+  const replying = () => [...picked()].some((id) => REPLIES.has(id))
 
   const questions = (): Question[] => [
     { id: "do", question: "What should IRIS do?", type: "multi", hint: "Select all that apply", options: actions() },
@@ -91,10 +115,15 @@ export function ClarifyStep(props: {
 
   function go() {
     const chosen = actions().filter((o) => picked().has(o.id))
-    const focus = chosen.flatMap((o) => (o.thread ? [o.thread] : o.id === "updates" ? updates() : []))
-    const lines = chosen.map((o) => `- ${o.label}${o.description ? ` — ${o.description}` : ""}`).join("\n")
+    const focus = [...new Map(chosen.flatMap((o) => o.evidence ?? []).map((t) => [t.id, t])).values()].slice(0, 15)
+    const lines = chosen
+      .map((o) => {
+        const ev = (o.evidence ?? []).slice(0, 5).map((t) => `${senderName(t.from)} ("${t.subject}")`)
+        return `- ${o.label} — use \`${o.cap?.tool ?? "iris"}\`${ev.length ? `. Relevant mail: ${ev.join("; ")}` : ""}`
+      })
+      .join("\n")
     const prompt =
-      `${props.intent.text}\n\nDo these:\n${lines}\n\n` +
+      `My goal: ${props.intent.text}\n\nDo these, with these IRIS tools:\n${lines}\n\n` +
       (replying() ? `Replies should sound ${TONES.find((t) => t.id === tone())!.label.toLowerCase()}.\n` : "") +
       (mode() === "draft"
         ? "Draft everything for me to review. Don't send anything."
@@ -132,11 +161,22 @@ export function ClarifyStep(props: {
                     </span>
                     <span class="min-w-0 flex-1">
                       <span class="text-[14px] text-v2-text-text-base">{o.label}</span>
-                      <Show when={o.thread && kindOf(o.thread) === "action"}>
-                        <span class="fr-tag-action ml-2">Action</span>
-                      </Show>
                       <Show when={o.description}>
-                        <span class="block truncate text-[12.5px] text-v2-text-text-muted">{o.description}</span>
+                        <span class="block text-[12.5px] text-v2-text-text-muted">{o.description}</span>
+                      </Show>
+                      <Show when={o.cap}>
+                        <span class="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+                          <span class="fr-tool">{o.cap!.tool}</span>
+                          <Show
+                            when={o.evidence?.length}
+                            fallback={<span class="text-[12px] text-v2-text-text-faint">Nothing for this in your recent mail</span>}
+                          >
+                            <span class="fr-evidence">
+                              In your inbox: {o.evidence!.slice(0, 3).map((t) => senderName(t.from)).join(", ")}
+                              {o.evidence!.length > 3 ? ` +${o.evidence!.length - 3}` : ""}
+                            </span>
+                          </Show>
+                        </span>
                       </Show>
                     </span>
                   </button>
