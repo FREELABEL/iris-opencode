@@ -30,25 +30,12 @@
     -webkit-font-smoothing: antialiased;
   }
 
-  /* The mark: an iris. It is the aperture that opens to admit light, which is what this
-     screen does — the one visual idea here that could not be transplanted onto another
-     product. Motion happens ONCE, on arrival: the pupil contracts as light enters. */
-  .mark { display: block; width: 76px; height: 76px; margin: 4px auto 22px; }
-  .rim  { fill: none; stroke: var(--line-lit); stroke-width: 1.5; }
-  .fib  { stroke: var(--primary); stroke-width: 1.9; stroke-linecap: round; opacity: 0;
-           animation: fib 620ms ease-out forwards; }
-  .fib-s { stroke: var(--primary-dim); stroke-width: 1.5; }
-  /* The limbal ring — the darker edge every real iris has. It is what stops 12 spokes
-     from reading as a cog. */
-  .limbal { fill: none; stroke: var(--primary-dim); stroke-width: 1; opacity: .55; }
-  .pupil { fill: var(--bg); stroke: var(--primary-dim); stroke-width: 1;
-            transform-origin: 50% 50%; animation: pupil 900ms 220ms cubic-bezier(.2,.8,.2,1) forwards; }
-  @keyframes fib { to { opacity: .85; } }
-  @keyframes pupil { from { transform: scale(1.5); } to { transform: scale(1); } }
-  @media (prefers-reduced-motion: reduce) {
-    .fib { animation: none; opacity: .85; }
-    .pupil { animation: none; }
-  }
+  /* The official IRIS mark: the isometric cube from heyiris.io/iris-logo.png and the app icon,
+     same geometry as IrisMark in packages/app titlebar.tsx. Three faces at the SAME value; the
+     gaps between them are the seams. Shading the faces differently makes it a different logo. */
+  .mark { display: block; width: 72px; height: 72px; margin: 4px auto 22px; padding: 14px;
+          border-radius: 18px; background: #16161a; border: 1px solid var(--line-lit);
+          color: #e4e4ea; box-sizing: border-box; }
 
   h1 { font-size: 23px; margin: 0 0 7px; letter-spacing: -0.02em; font-weight: 600;
        text-align: center; }
@@ -103,24 +90,10 @@
           color: var(--dim); font-size: 11.5px; line-height: 1.55; text-align: center; }
 </style>
 
-<svg class="mark" viewBox="0 0 100 100" aria-hidden="true">
-  <circle class="rim" cx="50" cy="50" r="34" />
-  <g>
-      <line class="fib" x1="50" y1="17" x2="50" y2="28" transform="rotate(0 50 50)" style="animation-delay:0ms" />
-      <line class="fib fib-s" x1="50" y1="19.5" x2="50" y2="27" transform="rotate(30 50 50)" style="animation-delay:35ms" />
-      <line class="fib" x1="50" y1="17" x2="50" y2="28" transform="rotate(60 50 50)" style="animation-delay:70ms" />
-      <line class="fib fib-s" x1="50" y1="19.5" x2="50" y2="27" transform="rotate(90 50 50)" style="animation-delay:105ms" />
-      <line class="fib" x1="50" y1="17" x2="50" y2="28" transform="rotate(120 50 50)" style="animation-delay:140ms" />
-      <line class="fib fib-s" x1="50" y1="19.5" x2="50" y2="27" transform="rotate(150 50 50)" style="animation-delay:175ms" />
-      <line class="fib" x1="50" y1="17" x2="50" y2="28" transform="rotate(180 50 50)" style="animation-delay:210ms" />
-      <line class="fib fib-s" x1="50" y1="19.5" x2="50" y2="27" transform="rotate(210 50 50)" style="animation-delay:245ms" />
-      <line class="fib" x1="50" y1="17" x2="50" y2="28" transform="rotate(240 50 50)" style="animation-delay:280ms" />
-      <line class="fib fib-s" x1="50" y1="19.5" x2="50" y2="27" transform="rotate(270 50 50)" style="animation-delay:315ms" />
-      <line class="fib" x1="50" y1="17" x2="50" y2="28" transform="rotate(300 50 50)" style="animation-delay:350ms" />
-      <line class="fib fib-s" x1="50" y1="19.5" x2="50" y2="27" transform="rotate(330 50 50)" style="animation-delay:385ms" />
-  </g>
-  <circle class="limbal" cx="50" cy="50" r="19" />
-  <circle class="pupil" cx="50" cy="50" r="12" />
+<svg class="mark" viewBox="0 0 24 24" role="img" aria-label="IRIS" fill="currentColor">
+  <path d="M12 2.4 21.4 7 12 11.6 2.6 7Z" />
+  <path d="M2.6 8.1 11.6 12.6 11.6 21.6 2.6 17.1Z" />
+  <path d="M21.4 8.1 12.4 12.6 12.4 21.6 21.4 17.1Z" />
 </svg>
 
 <h1>Sign in to IRIS</h1>
