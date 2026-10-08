@@ -724,8 +724,49 @@ export function isUnknownFunctionError(result: any): boolean {
   return /Tool_ToolNotFound|Tool \S+ not found|not a (valid|known) (action|function)/i.test(err)
 }
 
+/** The bundled list — an OFFLINE fallback only. The server's catalogue is the list (see below). */
 export function knownFunctionsFor(target: string): { name: string; description: string }[] | undefined {
   return INTEGRATION_FUNCTIONS[target] ?? INTEGRATION_FUNCTIONS[SLUG_ALIASES[target] ?? ""]
+}
+
+/**
+ * A connector's actions FROM THE SERVER — GET /api/v1/integrations/catalog/{type}, built from the
+ * connector's yml, the single source (fl-iris-api App\Support\IntegrationActions, 0aadaeca).
+ *
+ * 2026-10-08: the Gmail list existed in seven places that disagreed; this CLI's copy said 16 while
+ * the server had 20, and an agent concluded delete_label did not exist. Cached a day under
+ * ~/.iris/cache; the bundled list answers only when the server cannot be asked.
+ */
+export async function knownFunctionsLive(target: string): Promise<{ name: string; description: string }[] | undefined> {
+  const type = SLUG_ALIASES[target] ?? target
+  const fs = await import("fs/promises")
+  const path = await import("path")
+  const file = path.join(os.homedir(), ".iris", "cache", `catalog-${type.replace(/[^a-z0-9-]/gi, "")}.json`)
+  const fresh = async () => {
+    try {
+      const st = await fs.stat(file)
+      if (Date.now() - st.mtimeMs < 24 * 3600 * 1000) return JSON.parse(await fs.readFile(file, "utf8"))
+    } catch {}
+    return null
+  }
+  let list: { name: string; description: string }[] | null = await fresh()
+  if (!list) {
+    try {
+      const res = await irisFetch(`/api/v1/integrations/catalog/${encodeURIComponent(type)}`, {}, IRIS_API)
+      const body: any = res.ok ? await res.json() : null
+      const commands: any[] = body?.data?.commands ?? []
+      if (body?.data?.detailed && commands.length) {
+        list = commands.map((c) => ({
+          name: String(c.name),
+          description: `${String(c.description ?? c.label ?? "").split(/(?<=\.)\s/)[0]}${c.writes ? " — WRITE" : ""}`.trim(),
+        }))
+        await fs.mkdir(path.dirname(file), { recursive: true }).catch(() => {})
+        await fs.writeFile(file, JSON.stringify(list)).catch(() => {})
+      }
+    } catch {}
+  }
+
+  return list ?? knownFunctionsFor(target)
 }
 
 function displayResult(result: any, name: string): void {
@@ -2045,7 +2086,7 @@ const ExecCommand = cmd({
       if (await isIntegrationLive(target)) {
         if (!fn) {
           // Show available functions for this integration
-          const functions = INTEGRATION_FUNCTIONS[target] ?? INTEGRATION_FUNCTIONS[SLUG_ALIASES[target] ?? ""]
+          const functions = await knownFunctionsLive(target)
           if (functions) {
             prompts.log.warn(`No function specified for ${target}. Available functions:`)
             console.log()
@@ -2067,7 +2108,7 @@ const ExecCommand = cmd({
         }
         // When the upstream says the function does not exist, answer with the ones that do,
         // in the same response — the caller is usually an agent that will otherwise guess again.
-        const known = knownFunctionsFor(target)
+        const known = await knownFunctionsLive(target)
 
         // DRY RUN BY DEFAULT for anything that is not a read (integration-write-gate.ts). A name this
         // CLI does not know is stopped FIRST, before even a rehearsal: rehearsing a guessed name would
