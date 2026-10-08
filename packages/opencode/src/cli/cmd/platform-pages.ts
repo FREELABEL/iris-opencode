@@ -2045,7 +2045,12 @@ const RebrandCmd = cmd({
       .option("owner-id", { describe: "owner id (defaults to source)", type: "number" })
       .option("site", { describe: "attach the cloned page to this site id", type: "number" })
       .option("publish", { describe: "publish immediately", type: "boolean", default: false })
-      .option("force", { describe: "proceed even if PII leaks are detected", type: "boolean", default: false }),
+      .option("force", { describe: "proceed even if PII leaks are detected", type: "boolean", default: false })
+      .option("source-name", {
+        describe: "a name the source page must not carry into the clone (the client's business or people) — repeatable. HTML pages have no structured name, so without this their names are not checked",
+        type: "string",
+        array: true,
+      }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Rebrand ${args.source} → ${args.as}  ${dim(`(brand: ${args.brand})`)}`)
@@ -2068,7 +2073,7 @@ const RebrandCmd = cmd({
       }
 
       sp.message("Rebranding…")
-      const { json, leaks } = rebrandJsonContent(jsonContent, target)
+      const { json, leaks, namesChecked } = rebrandJsonContent(jsonContent, target, { sourceNames: (args["source-name"] as string[] | undefined) ?? [] })
       // #188409: a hand-written HTML page keeps its identity in CSS, which the composable rebrand
       // above never touches. A TEMPLATE marks its brand values in one block; replace that block.
       // A page without one is not a template, and saying so beats reporting a rebrand that left
@@ -2091,7 +2096,13 @@ const RebrandCmd = cmd({
           ? `brand block replaced (${Object.keys(values).length} values${missing.length ? `; kept the template's own: ${missing.join(", ")}` : ""})`
           : "NOT A TEMPLATE: this HTML page has no /* brand-tokens:start */ block, so its colours and fonts are unchanged"
       }
-      sp.stop(leaks.length ? `${leaks.length} possible leak(s)` : success("Rebranded — clean"))
+      sp.stop(
+        leaks.length
+          ? `${leaks.length} possible leak(s)`
+          : namesChecked
+            ? success("Rebranded — clean")
+            : "Rebranded — no phones or emails leaked; NAMES NOT CHECKED (this page has no structured brand name — pass --source-name)",
+      )
       if (brandBlockNote) (brandBlockNote.startsWith("NOT") ? prompts.log.warn : prompts.log.info)(brandBlockNote)
 
       // --- Safety gate: refuse to create/publish if source PII survived ---
@@ -2259,6 +2270,11 @@ const TemplateUseCmd = cmd({
       "owner-id": Number(args.bloq),
     })
     if (Number(process.exitCode ?? 0) !== 0) return
+    const own = String(row.source_names ?? "").split(",").map((n) => n.trim()).filter(Boolean)
+    if (own.length) {
+      console.log()
+      console.log(`  ${bold("The copy still names the template's owner:")} ${own.join(", ")}  ${dim("— expected; rewrite it")}`)
+    }
     const qs = briefQuestions(row)
     if (qs.length) {
       console.log()

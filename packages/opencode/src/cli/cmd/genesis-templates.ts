@@ -18,6 +18,8 @@ export type TemplateRow = {
   audit_score?: number | string
   order?: number | string
   preview_url?: string
+  /** Names the template's own sample copy contains — shown after a clone as "rewrite these". */
+  source_names?: string
 }
 
 /** Pull the rows out of a published bespoke page's <script id="iris-bindings"> block. */
