@@ -74,7 +74,14 @@ const STEP_INDEX: Record<string, number> = { signin: 0, loading: 0, connect: 0, 
 type Step =
   | { kind: "loading" }
   | { kind: "signin" }
-  | { kind: "connect"; note?: string; waiting?: Provider; connected?: { type: Provider; account?: string } }
+  | {
+      kind: "connect"
+      note?: string
+      waiting?: Provider
+      connected?: { type: Provider; account?: string }
+      /** Already connected before this screen opened: shown, never skipped — the person chooses. */
+      ready?: { type: Provider; account?: string }
+    }
   | { kind: "reading" }
   | {
       kind: "seen"
@@ -129,9 +136,12 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
     const s = await call("/iris/onboarding/state").catch(() => null)
     if (!s) return setStep({ kind: "error", reason: "IRIS isn't answering yet.", retry: begin })
     if (s.signedIn === false) return waitForSignIn()
+    // Already connected: still show step two. Jumping from sign-in straight to "reading your mail"
+    // hid the Gmail/Outlook choice entirely for anyone connected before (2026-10-08).
     if (s.mail?.connected) {
-      if (s.mail.type === "outlook") setProvider("outlook")
-      return read()
+      const type: Provider = s.mail.type === "outlook" ? "outlook" : "gmail"
+      setProvider(type)
+      return setStep({ kind: "connect", ready: { type, account: s.mail.account } })
     }
     setStep({ kind: "connect" })
   }
@@ -301,6 +311,7 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
                     const state = () => {
                       const c = s()
                       if (c.connected) return c.connected.type === t.type ? "connected" : "idle-other"
+                      if (c.ready && c.ready.type === t.type && !c.waiting) return "connected"
                       if (c.waiting) return c.waiting === t.type ? "waiting" : "idle-other"
                       return "idle"
                     }
@@ -308,8 +319,8 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
                       <button
                         class="fr-tile"
                         data-state={state()}
-                        disabled={state() === "connected"}
-                        onClick={() => void connect(t.type)}
+                        disabled={state() === "connected" && !s().ready}
+                        onClick={() => (state() === "connected" && s().ready ? void read() : void connect(t.type))}
                       >
                         <span class="fr-logo">
                           <t.Logo />
@@ -322,7 +333,7 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
                             <Switch fallback={t.detail}>
                               <Match when={state() === "waiting"}>Waiting for your browser…</Match>
                               <Match when={state() === "connected"}>
-                                {s().connected?.account ?? "Reading your mail next"}
+                                {s().connected?.account ?? s().ready?.account ?? "Reading your mail next"}
                               </Match>
                             </Switch>
                           </span>
@@ -348,6 +359,15 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
                   }}
                 </For>
               </div>
+
+              <Show when={s().ready && !s().waiting}>
+                <div class="flex flex-col items-center gap-2">
+                  <button class="fr-primary px-6" onClick={() => void read()}>
+                    Continue with {s().ready!.account ?? (s().ready!.type === "outlook" ? "Outlook" : "Gmail")}
+                  </button>
+                  <span class="text-[12.5px] text-v2-text-text-faint">or connect the other inbox instead</span>
+                </div>
+              </Show>
 
               <Show when={s().note}>
                 <p class="text-v2-text-text-muted text-center text-[13px]" aria-live="polite">
