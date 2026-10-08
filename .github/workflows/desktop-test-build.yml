@@ -49,8 +49,11 @@ jobs:
       - name: Build IRIS desktop app
         run: |
           cd packages/desktop
-          ./node_modules/.bin/tauri build --debug --config ./src-tauri/tauri.prod.conf.json --config '{"bundle":{"createUpdaterArtifacts":false}}' --target aarch64-apple-darwin --bundles app,dmg
+          ./node_modules/.bin/tauri build --debug --config ./src-tauri/tauri.prod.conf.json --config '{"identifier":"io.heyiris.desktop.test","bundle":{"createUpdaterArtifacts":false}}' --target aarch64-apple-darwin --bundles app,dmg
 
+      # Test builds get their own identifier (io.heyiris.desktop.test). With the production one they
+      # shared WebKit storage, app data and the single-instance lock with the real IRIS install:
+      # test runs wrote into the real app's state, and wiping a test profile never reset it.
       - name: Zip the .app bundle
         run: |
           cd packages/desktop/src-tauri/target/aarch64-apple-darwin/debug/bundle/macos
@@ -113,7 +116,7 @@ jobs:
       - name: Build IRIS desktop app
         run: |
           cd packages/desktop
-          ./node_modules/.bin/tauri build --debug --config ./src-tauri/tauri.prod.conf.json --config '{"bundle":{"createUpdaterArtifacts":false}}' --target x86_64-pc-windows-msvc --bundles nsis
+          ./node_modules/.bin/tauri build --debug --config ./src-tauri/tauri.prod.conf.json --config '{"identifier":"io.heyiris.desktop.test","bundle":{"createUpdaterArtifacts":false}}' --target x86_64-pc-windows-msvc --bundles nsis
 
       - name: List bundle output (debug aid)
         run: find packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/debug/bundle -maxdepth 2 | sort
