@@ -1,4 +1,5 @@
 import { createEffect, createMemo, createSignal, For, Show, type Accessor, type JSX } from "solid-js"
+import { isLiveDictation, showLiveText } from "./live-text"
 import { FileIcon } from "@opencode-ai/ui/file-icon"
 import { Icon } from "@opencode-ai/ui/icon"
 import { IconButton } from "@opencode-ai/ui/icon-button"
@@ -67,6 +68,8 @@ export function PromptInputV2(props: PromptInputV2Props) {
   const state = props.controller.state
   const view = props.controller.view
   let editor: HTMLDivElement | undefined
+  /** Live dictation words, while a quick take is being spoken (see the Dictate `live` prop). */
+  let liveSpan: HTMLElement | undefined
   let localInput = false
   // Where dictation draws while a take runs. Signals, so its portals mount once the nodes exist.
   const [dictateLayer, setDictateLayer] = createSignal<HTMLElement>()
@@ -258,10 +261,17 @@ export function PromptInputV2(props: PromptInputV2Props) {
                   layer={dictateLayer}
                   tagLayer={dictateTagLayer}
                   devices={props.dictateDevices}
+                  live={(text) => {
+                    // The take, typed into the chat box while it is spoken (live-text.ts). Kept out
+                    // of prompt state — no input event — so the final transcript is what is sent.
+                    if (editor) liveSpan = showLiveText(editor, liveSpan, text)
+                  }}
                   insert={(text) => {
                     // Append into the editor and let the component's own onInput re-parse it.
                     // Going through the real input path keeps attachments and mentions intact —
                     // writing prompt state directly would have to reconstruct them.
+                    liveSpan?.remove() // the final transcript takes the live words' place
+                    liveSpan = undefined
                     if (!editor) return
                     const existing = editor.textContent ?? ""
                     const gap = existing.length > 0 && !/\s$/.test(existing) ? " " : ""
@@ -402,6 +412,9 @@ function parsePromptInputV2Editor(editor: HTMLDivElement) {
       return
     }
     if (!(node instanceof HTMLElement)) return
+    // Live dictation words are on screen, not in the prompt: the final transcript replaces them.
+    // Reading them here would put them in the prompt twice once it lands.
+    if (isLiveDictation(node)) return
     if (node.dataset.mention) {
       mention(node)
       return

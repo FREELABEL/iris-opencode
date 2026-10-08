@@ -535,6 +535,22 @@
   margin: 0;
   white-space: pre-wrap;
 }
+/* a quick take typed into the chat box as it is spoken — in progress until the transcript lands */
+[data-slot="dictate-live"] {
+  color: var(--v2-text-text-faint);
+  user-select: none;
+}
+[data-slot="dictate-live"]::after {
+  content: "▍";
+  margin-left: 1px;
+  animation: dictate-live-caret 1s steps(2, start) infinite;
+}
+@keyframes dictate-live-caret {
+  to { visibility: hidden; }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="dictate-live"]::after { animation: none; }
+}
 /* words still being heard: grey until the engine locks them */
 [data-slot="dictate-partial"] {
   color: var(--v2-text-text-faint);
