@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
-  "version": "1.3.327",
+  "version": "1.3.328",
   "name": "opencode",
   "displayName": "iris-agent-cli",
   "type": "module",
