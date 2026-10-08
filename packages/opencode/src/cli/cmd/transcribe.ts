@@ -13,7 +13,7 @@ import {
   highlight, writeJson } from "./iris-api"
 import { spawnSync } from "child_process"
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs"
-import { transcribeLocal, resolveFfmpeg, resolveWhisper, localWhisperInstallHint, installLocalWhisper } from "../lib/transcription"
+import { transcribeLocal, resolveFfmpeg, resolveWhisper, localWhisperInstallHint, installLocalWhisper, noAudioVerdict } from "../lib/transcription"
 import { resolveSttPolicy } from "../lib/stt-policy"
 import { treatTranscript, listTreatments, structureWalkthrough } from "../lib/walkthrough"
 import {
@@ -196,6 +196,16 @@ export async function runLocalWhisper(
 ): Promise<boolean> {
   const abs = resolve(filePath)
   let provider = "whisper.cpp (local)"
+
+  // A silent video has nothing to transcribe; say so before any engine (or the fallback between
+  // them) turns it into a misleading error (#188550).
+  const silent = noAudioVerdict(abs)
+  if (silent) {
+    if (asJson) await writeJson({ success: false, error: "no_audio_track", message: silent })
+    else prompts.log.error(silent)
+    process.exitCode = 1
+    return false
+  }
 
   // --remote skips the device entirely. Handled here rather than in a parallel branch so the
   // save location, JSON shape, and knowledge-base sync stay in ONE place — a second copy of

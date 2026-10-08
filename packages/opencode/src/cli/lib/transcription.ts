@@ -161,6 +161,42 @@ export interface FfmpegResolution {
   diagnosis?: string
 }
 
+/**
+ * A video with no audio track is not a broken ffmpeg (#188550).
+ *
+ * Measured 2026-10-08 on a silent launch clip (ffprobe: one video stream, nothing else): ffmpeg
+ * exited with "Error opening output file …/audio.wav. Error opening output files: Invalid argument",
+ * and that is what the user saw — a sentence that reads like a disk or permissions fault. ffmpeg's
+ * own stderr already lists the input's streams, so read them: video present, no audio stream,
+ * means there is nothing to transcribe, and the person should read the frames instead.
+ */
+export function explainNoAudio(stderr: string): string | null {
+  const streams = String(stderr ?? "").split("\n").filter((l) => /Stream #\d+:\d+/.test(l))
+  if (streams.length === 0) return null
+  const hasAudio = streams.some((l) => /:\s*Audio:/.test(l))
+  const hasVideo = streams.some((l) => /:\s*Video:/.test(l))
+  if (hasAudio || !hasVideo) return null
+  return "This video has no audio track — there is nothing to transcribe. Read what is on screen instead: extract frames (ffmpeg -i <file> -vf fps=1/3 frame_%02d.jpg) or run `iris look --image <frame>`."
+}
+
+/**
+ * Probe a file BEFORE choosing an engine: the no-audio verdict, or null. Asked once, up front,
+ * because every engine fails differently on a silent file — local ffmpeg says "Invalid argument",
+ * the server says "xAI … Failed to decode audio" — and the local→server fallback turned the first
+ * misleading error into a second one (measured 2026-10-08). Null when ffmpeg is unavailable: then
+ * the engines report as before.
+ */
+export function noAudioVerdict(file: string): string | null {
+  const ff = resolveFfmpeg()
+  if (!ff.bin) return null
+  const r = spawnSync(ff.bin, ["-hide_banner", "-i", file], {
+    encoding: "utf8",
+    timeout: 20_000,
+    env: ff.env ? { ...process.env, ...ff.env } : process.env,
+  })
+  return explainNoAudio(r.stderr || "")
+}
+
 function ffmpegRuns(bin: string, env?: NodeJS.ProcessEnv): { ok: boolean; err: string } {
   const r = spawnSync(bin, ["-version"], {
     encoding: "utf8",
@@ -299,6 +335,7 @@ export async function transcribeLocal(
       const detail = (conv.stderr || "").trim()
       throw new Error(
         explainLoadFailure(detail) ||
+          explainNoAudio(detail) ||
           `ffmpeg could not convert this audio${detail ? `: ${detail.slice(-400)}` : ""}`,
       )
     }
