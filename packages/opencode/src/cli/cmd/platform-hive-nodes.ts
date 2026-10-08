@@ -22,7 +22,7 @@ export async function hiveFetch(path: string, options: RequestInit = {}) {
   return irisFetch(path, options, IRIS_API)
 }
 
-interface HiveNode {
+export interface HiveNode {
   id: string
   name: string
   status: string
@@ -81,6 +81,45 @@ export async function resolveNode(userId: number, target: string): Promise<HiveN
     nodes.find((n) => n.name.toLowerCase().startsWith(target.toLowerCase())) ??
     null
   )
+}
+
+/**
+ * Dispatch one task and wait for it to finish — the create-then-poll that `hive run` and
+ * `hive tasks create` each do inline, as a function another command can call. Same endpoints,
+ * same terminal set, same bound (the task's own timeout plus 30 s of slack). Returns the final
+ * task, or `null` when it was still running at the bound (the task is NOT cancelled).
+ */
+export async function dispatchTaskAndWait(
+  userId: number,
+  payload: Record<string, unknown>,
+  onStatus?: (status: string) => void,
+): Promise<{ taskId: string; final: Record<string, unknown> | null }> {
+  const createRes = await hiveFetch(`/api/v6/nodes/tasks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  })
+  if (!createRes.ok) throw new Error(`Task creation failed: HTTP ${createRes.status} ${(await createRes.text().catch(() => "")).slice(0, 500)}`)
+  const created = (await createRes.json()) as { task: { id: string; status: string } }
+  const taskId = created.task.id
+  const timeoutSec = Number(payload.timeout_seconds ?? 300)
+  const deadline = Date.now() + (timeoutSec + 30) * 1000
+  const terminal = new Set(["succeeded", "completed", "failed", "cancelled", "timeout", "errored", "expired"])
+  let last = created.task.status
+  onStatus?.(last)
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 1500))
+    const r = await hiveFetch(`/api/v6/nodes/tasks/${taskId}?user_id=${userId}`)
+    if (!r.ok) throw new Error(`Poll failed for task ${taskId}: HTTP ${r.status}`)
+    const t = ((await r.json()) as { task: Record<string, unknown> }).task
+    const st = String(t.status ?? "")
+    if (st !== last) {
+      last = st
+      onStatus?.(st)
+    }
+    if (terminal.has(st)) return { taskId, final: t }
+  }
+  return { taskId, final: null }
 }
 
 // ============================================================================
