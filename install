@@ -720,6 +720,57 @@ download_and_install() {
         exit 1
     fi
 
+    # Verify the download against the checksum published beside it (#185158).
+    #
+    # The two guards above catch an EMPTY file and an HTML error page. Neither can see a
+    # download that succeeded and is simply the wrong or altered bytes, and `set -euo
+    # pipefail` cannot either: it only catches what makes a tool exit non-zero. Measured
+    # on a deliberately undersized volume, unzip returns 50 and nothing installs -- that
+    # path is fine. A complete transfer of the wrong build exits 0 everywhere.
+    #
+    # Not hypothetical in this repo: the desktop app shipped its own opencode sidecar as
+    # `iris` for two weeks (#183738), and nothing between the release and the user asked
+    # what the bytes were.
+    #
+    # A MISSING checksum is reported, not silently skipped. Releases before this existed
+    # have none, so failing closed would break every install of an older version -- but a
+    # skip nobody is told about is how "verified" quietly becomes decorative. Say which
+    # one happened.
+    checksum_url="${url}.sha256"
+    if curl -fsSL --max-time 30 -o "$tmp_dir/$filename.sha256" "$checksum_url" 2>/dev/null \
+       && [ -s "$tmp_dir/$filename.sha256" ]; then
+        _sum_cmd=""
+        if command -v sha256sum >/dev/null 2>&1; then _sum_cmd="sha256sum"
+        elif command -v shasum >/dev/null 2>&1; then _sum_cmd="shasum -a 256"; fi
+    
+        if [ -z "$_sum_cmd" ]; then
+            echo -e "${ORANGE}Warning: a checksum was published but neither sha256sum nor shasum is installed.${NC}"
+            echo -e "${MUTED}  The download was NOT verified. Install coreutils to enable this check.${NC}"
+        else
+            # The published file holds the basename, so verify from inside tmp_dir.
+            _want=$(cut -d" " -f1 < "$tmp_dir/$filename.sha256" | tr -d "[:space:]")
+            _got=$(cd "$tmp_dir" && $_sum_cmd "$filename" | cut -d" " -f1 | tr -d "[:space:]")
+            if [ -z "$_want" ] || [ -z "$_got" ]; then
+                echo -e "${RED}Error: could not compute or read a checksum (want='${_want}' got='${_got}').${NC}"
+                echo -e "${MUTED}  Refusing to install unverified bytes. Re-run to try again.${NC}"
+                rm -rf "$tmp_dir"
+                exit 1
+            fi
+            if [ "$_want" != "$_got" ]; then
+                echo -e "${RED}Error: CHECKSUM MISMATCH - refusing to install.${NC}"
+                echo -e "${MUTED}  expected ${_want}${NC}"
+                echo -e "${MUTED}  actual   ${_got}${NC}"
+                echo -e "${MUTED}  These bytes are not the ones this release published. Do not use them.${NC}"
+                echo -e "${MUTED}  Retry the install; if it persists, report it with the two digests above.${NC}"
+                rm -rf "$tmp_dir"
+                exit 1
+            fi
+            echo -e "${MUTED}  checksum verified (sha256 ${_got})${NC}"
+        fi
+    else
+        echo -e "${MUTED}  no checksum published for this release - integrity NOT verified${NC}"
+    fi
+
     if [ "$os" = "linux" ]; then
         tar -xzf "$tmp_dir/$filename" -C "$tmp_dir"
     else
@@ -807,7 +858,6 @@ install_from_binary() {
     if [ "$(uname -s)" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then
         codesign --force --deep --sign - "${INSTALL_DIR}/iris" 2>/dev/null || true
     fi
-
     # --binary is the flag that caused #183738: the desktop app pointed it at its own
     # opencode sidecar and overwrote the product on every launch. The app no longer passes
     # it, but the flag still exists and anyone can hand it the wrong file — so this path
@@ -860,46 +910,102 @@ fi
 if [[ "$no_modify_path" != "true" ]]; then
     XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}
 
-    # Find the right shell config file
+    # Which files get the source line. EVERY one listed, not the first that exists (#184675).
+    # The old loop stopped at ~/.zshrc, which only INTERACTIVE zsh reads — so `zsh -c`, login
+    # shells, launchd, cron and GUI-launched MCP clients never had iris on PATH. ~/.zshenv is
+    # read by every zsh. For bash: ~/.bashrc (interactive) plus the login file — but never create
+    # ~/.bash_profile beside an existing ~/.profile, which would stop bash reading ~/.profile.
+    # Files marked "!" are created if missing; the rest are only written if they already exist.
     case $current_shell in
-        fish) config_files="$HOME/.config/fish/config.fish" ;;
-        zsh)  config_files="$HOME/.zshrc $HOME/.zshenv" ;;
-        bash) config_files="$HOME/.bashrc $HOME/.bash_profile $HOME/.profile" ;;
-        *)    config_files="$HOME/.bashrc $HOME/.profile" ;;
+        fish) config_files="!$HOME/.config/fish/config.fish" ;;
+        zsh)  config_files="!$HOME/.zshenv $HOME/.zshrc" ;;
+        bash)
+            if [[ -f "$HOME/.bash_profile" ]]; then login_file="$HOME/.bash_profile"; else login_file="$HOME/.profile"; fi
+            config_files="!$HOME/.bashrc !$login_file" ;;
+        *)    config_files="!$HOME/.profile $HOME/.bashrc" ;;
     esac
 
-    config_file=""
-    for file in $config_files; do
-        if [[ -f $file ]]; then
-            config_file=$file
-            break
-        fi
-    done
-
-    # Create default config file if none exists
-    if [[ -z $config_file ]]; then
-        case $current_shell in
-            zsh)  config_file="$HOME/.zshrc" ;;
-            bash) config_file="$HOME/.bashrc" ;;
-            fish) mkdir -p "$HOME/.config/fish" 2>/dev/null; config_file="$HOME/.config/fish/config.fish" ;;
-            *)    config_file="$HOME/.profile" ;;
-        esac
-        touch "$config_file" 2>/dev/null || true
-    fi
-
-    # Add source line if not already present
     if [ "$current_shell" = "fish" ]; then
         source_line="source \"$IRIS_ENV_FILE\""
     else
         source_line=". \"$HOME/.iris/env\""
     fi
 
-    if [[ -f "$config_file" ]] && ! grep -q "\.iris/env" "$config_file" 2>/dev/null; then
-        echo "" >> "$config_file"
-        echo "# IRIS CLI" >> "$config_file"
-        echo "$source_line" >> "$config_file"
-    fi
+    for entry in $config_files; do
+        config_file="${entry#!}"
+        if [[ ! -f "$config_file" ]]; then
+            [[ "$entry" == !* ]] || continue
+            mkdir -p "$(dirname "$config_file")" 2>/dev/null
+            touch "$config_file" 2>/dev/null || continue
+        fi
+        if ! grep -q "\.iris/env" "$config_file" 2>/dev/null; then
+            echo "" >> "$config_file"
+            echo "# IRIS CLI" >> "$config_file"
+            echo "$source_line" >> "$config_file"
+        fi
+    done
 fi
+
+# Persist a directory on PATH for FUTURE shells by appending to ~/.iris/env — the one
+# sourceable file the block above already wired into the user's shell config.
+#
+# #184930: install_node used to end with `add_to_path "$config_file" ... 2>/dev/null || true`.
+# No function of that name has ever existed in this script — grep found exactly one hit in
+# 3,011 lines, the call itself — and the redirect swallowed "command not found". So a fresh
+# install put Node on PATH for the installer's own session and nowhere else: the daemon then
+# died on the next reboot with `node` not found, while `iris-daemon start` still reported
+# success. ("$config_file" was also unbound under `set -u` whenever --no-modify-path was
+# passed, so the dead call had a second way to fail.)
+#
+# Appending here rather than editing .zshrc again on purpose: a second writer to shell
+# configs is how the first one stops being trustworthy. One mechanism, one file.
+persist_path_in_iris_env() {
+    local dir="$1"
+
+    if [ ! -f "$IRIS_ENV_FILE" ]; then
+        print_message warning "Could not put $dir on PATH: $IRIS_ENV_FILE is missing."
+        print_message info "  Add this to your shell config by hand: export PATH=\"$dir:\$PATH\""
+        return 1
+    fi
+
+    if grep -qF "$dir" "$IRIS_ENV_FILE" 2>/dev/null; then
+        return 0
+    fi
+
+    if [ "$current_shell" = "fish" ]; then
+        {
+            printf '\n'
+            printf 'if not contains "%s" $PATH\n' "$dir"
+            printf '    set -gx PATH "%s" $PATH\n' "$dir"
+            printf 'end\n'
+        } >> "$IRIS_ENV_FILE" 2>/dev/null || true
+    else
+        {
+            printf '\n'
+            printf 'case ":${PATH}:" in\n'
+            printf '    *:"%s":*) ;;\n' "$dir"
+            printf '    *) export PATH="%s:$PATH" ;;\n' "$dir"
+            printf 'esac\n'
+        } >> "$IRIS_ENV_FILE" 2>/dev/null || true
+    fi
+
+    # Read it back. The append is the claim; this is the observation.
+    if ! grep -qF "$dir" "$IRIS_ENV_FILE" 2>/dev/null; then
+        print_message warning "Could not write PATH setup to $IRIS_ENV_FILE."
+        print_message info "  Add this to your shell config by hand: export PATH=\"$dir:\$PATH\""
+        return 1
+    fi
+
+    # --no-modify-path means nothing sources ~/.iris/env automatically, so the line above
+    # is inert for new shells. Say so rather than letting the user find out at reboot.
+    if [ "$no_modify_path" = "true" ]; then
+        print_message warning "--no-modify-path: $dir is on PATH for this session only."
+        print_message info "  Add \`. \"$IRIS_ENV_FILE\"\` to your shell config to make it permanent."
+        return 1
+    fi
+
+    return 0
+}
 
 # ─── Node.js ──────────────────────────────────────────────────────────────────
 #
@@ -939,7 +1045,12 @@ install_node() {
 
     if [ -x "$NODE_HOME/bin/node" ]; then
         export PATH="$NODE_HOME/bin:$PATH"
-        node_ok && return 0
+        # Re-runs land here. Persist on this path too: otherwise a second install over an
+        # already-unpacked Node leaves future shells exactly as broken as the first one did.
+        if node_ok; then
+            persist_path_in_iris_env "$NODE_HOME/bin" || true
+            return 0
+        fi
     fi
 
     node_url="https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-$os-$arch.tar.gz"
@@ -958,7 +1069,9 @@ install_node() {
     rm -rf "$node_tmp"
 
     export PATH="$NODE_HOME/bin:$PATH"
-    add_to_path "$config_file" "export PATH=$NODE_HOME/bin:\$PATH" 2>/dev/null || true
+    if ! persist_path_in_iris_env "$NODE_HOME/bin"; then
+        print_message warning "  Until then the Hive daemon will die on reboot: node will not be on PATH."
+    fi
     node_ok
 }
 
@@ -1331,6 +1444,70 @@ fi
 
 # ─── Component 5: Coding Agent Bridge + Hive Daemon ─────────────────────────
 
+# ─── Fetch the daemon source WITHOUT git ─────────────────────────────────────
+#
+# Git was a hard prerequisite and only ever moved bytes: clone on install, pull on
+# update. Nothing read the history. A client without Git got no Hive node at all.
+#
+# Git IS still needed at RUNTIME by two features (reference-repo indexing and
+# exchange/bounty tasks) — those name it themselves when it is missing. This only
+# stops it blocking an install that would otherwise work.
+#
+# Stages into a temp dir and only then moves into place, so a failed download leaves
+# an existing install exactly as it was. The old code `rm -rf`'d first and re-cloned,
+# which turned a network blip into a wiped node_modules.
+BRIDGE_FETCH_ERROR=""
+fetch_daemon_source() {
+    fetch_repo_archive \
+        "${IRIS_DAEMON_ARCHIVE_URL:-https://github.com/FREELABEL/iris-daemon/archive/refs/heads/main.tar.gz}" \
+        "$1" "daemon.js"
+}
+
+# url, dest, sentinel — the file that must exist in the archive for it to be the
+# right thing. A 200 that serves an error page is still a 200.
+fetch_repo_archive() {
+    local url="$1"
+    local dest="$2"
+    local sentinel="$3"
+    local tmp; tmp="$(mktemp -d 2>/dev/null)" || { BRIDGE_FETCH_ERROR="could not create a temp directory"; return 1; }
+    BRIDGE_FETCH_ERROR=""
+
+    if ! curl -fsSL --max-time 180 "$url" -o "$tmp/daemon.tar.gz" 2>/dev/null; then
+        BRIDGE_FETCH_ERROR="could not download $url"
+        rm -rf "$tmp"; return 1
+    fi
+    if ! tar -xzf "$tmp/daemon.tar.gz" -C "$tmp" 2>/dev/null; then
+        BRIDGE_FETCH_ERROR="the downloaded archive could not be extracted"
+        rm -rf "$tmp"; return 1
+    fi
+
+    # GitHub wraps the tree in one <repo>-<branch> directory.
+    local root; root="$(find "$tmp" -mindepth 1 -maxdepth 1 -type d | head -1)"
+    # A 200 that serves an error page is still a 200. Refuse anything that is not the
+    # daemon rather than overwriting a working install with it.
+    if [ -z "$root" ] || [ ! -f "$root/$sentinel" ]; then
+        BRIDGE_FETCH_ERROR="the downloaded archive has no $sentinel — refusing to overwrite the install"
+        rm -rf "$tmp"; return 1
+    fi
+
+    mkdir -p "$dest"
+    # Remove only what the repo owns. node_modules, logs, .git from older clone-based
+    # installs, and .env belong to the machine.
+    local keep
+    for entry in "$dest"/* "$dest"/.[!.]*; do
+        [ -e "$entry" ] || continue
+        keep=0
+        case "$(basename "$entry")" in
+            node_modules|daemon.log|bridge.log|test-results|.git|.env) keep=1 ;;
+        esac
+        [ "$keep" -eq 1 ] || rm -rf "$entry"
+    done
+
+    cp -R "$root"/. "$dest"/ 2>/dev/null || { BRIDGE_FETCH_ERROR="could not copy the daemon into $dest"; rm -rf "$tmp"; return 1; }
+    rm -rf "$tmp"
+    return 0
+}
+
 install_bridge() {
     # Requires Node.js
     if ! command -v node >/dev/null 2>&1; then
@@ -1344,38 +1521,29 @@ install_bridge() {
     local bridge_dir="$HOME/.iris/bridge"
     local bridge_updated=false
 
-    if [ -d "$bridge_dir" ] && [ -f "$bridge_dir/index.js" ] && [ -f "$bridge_dir/daemon.js" ]; then
-        # Update existing installation
-        print_message info "${MUTED}Bridge already installed, updating...${NC}"
-        if ! (cd "$bridge_dir" && git reset --hard HEAD 2>/dev/null && git pull --quiet 2>/dev/null && npm install --production --silent 2>/dev/null); then
-            # git pull failed (dirty tree, conflicts, detached HEAD) — nuke and re-clone
-            print_message info "${MUTED}Bridge update failed, re-cloning...${NC}"
-            rm -rf "$bridge_dir"
-            git clone --quiet https://github.com/FREELABEL/iris-daemon.git "$bridge_dir" 2>/dev/null && \
-                (cd "$bridge_dir" && npm install --production --silent 2>/dev/null) || true
-        fi
-        # Safety check: if daemon.js still has stale DO URL, force re-clone
-        if grep -q 'ondigitalocean\.app' "$bridge_dir/daemon.js" 2>/dev/null; then
-            print_message info "${MUTED}Stale daemon detected, re-cloning...${NC}"
-            rm -rf "$bridge_dir"
-            git clone --quiet https://github.com/FREELABEL/iris-daemon.git "$bridge_dir" 2>/dev/null && \
-                (cd "$bridge_dir" && npm install --production --silent 2>/dev/null) || true
-        fi
+    # NO GIT — one path for install and update.
+    #
+    # This was three paths: `git pull`, a `rm -rf` + re-clone when the pull failed, and
+    # another `rm -rf` + re-clone when daemon.js still held a stale DigitalOcean URL.
+    # Each `rm -rf "$bridge_dir"` also destroyed node_modules and daemon.log, so the
+    # recovery path was the expensive one. And the whole thing needed Git, which was
+    # only ever moving bytes — nothing read the history.
+    if [ -f "$bridge_dir/daemon.js" ]; then
         bridge_updated=true
-    else
-        # Fresh clone from public repo
-        if git clone --quiet https://github.com/FREELABEL/iris-daemon.git "$bridge_dir" 2>/dev/null; then
-            (cd "$bridge_dir" && npm install --production --silent 2>/dev/null) || {
-                print_message warning "${ORANGE}npm install had issues — bridge may need manual setup${NC}"
-            }
-            if [ ! -d "$bridge_dir/node_modules/dotenv" ]; then
-                print_message warning "${ORANGE}Bridge dependencies incomplete. Run: cd ~/.iris/bridge && npm install${NC}"
-            fi
-        else
-            print_message info "${MUTED}[5/7] Agent Bridge .......................... could not download${NC}"
-            print_message info "${MUTED}      Try manually: ${NC}git clone https://github.com/FREELABEL/iris-daemon.git ~/.iris/bridge"
-            return 0
-        fi
+        print_message info "${MUTED}Bridge already installed, updating...${NC}"
+    fi
+
+    if ! fetch_daemon_source "$bridge_dir"; then
+        print_message info "${MUTED}[5/7] Agent Bridge .......................... could not download${NC}"
+        print_message info "${MUTED}      ${NC}${BRIDGE_FETCH_ERROR:-the daemon archive could not be downloaded}"
+        return 0
+    fi
+
+    (cd "$bridge_dir" && npm install --production --silent 2>/dev/null) || {
+        print_message warning "${ORANGE}npm install had issues — bridge may need manual setup${NC}"
+    }
+    if [ ! -d "$bridge_dir/node_modules/dotenv" ]; then
+        print_message warning "${ORANGE}Bridge dependencies incomplete. Run: cd ~/.iris/bridge && npm install${NC}"
     fi
 
     # Create bridgectl convenience script
@@ -1408,15 +1576,14 @@ esac
 BCTL
     chmod 755 "$bridge_dir/bridgectl"
 
-    # iris-daemon control script: use the one that ships IN the daemon repo (FREELABEL/iris-daemon).
+    # iris-daemon control script: use the one that ships IN the daemon archive.
     #
-    # This used to write its own ~250-line copy here, over the tracked file. The copy's `status`
-    # ran `node daemon.js --status || echo "Not running"`, so from launchd, the app menu or cron —
-    # none of which have node on PATH — a running daemon reported "Not running" (bloq #628). The
-    # real daemonctl finds node itself (iris-daemon 5e48a29), and the CLI installer on main already
-    # stopped overwriting it. One daemonctl, owned by FREELABEL/iris-daemon.
+    # This used to write its own ~260-line copy here, over the real one. The two drifted — the copy
+    # still minted node keys through a different endpoint with no machine fingerprint after the
+    # daemon became the one writer of the node key (#185896), so every install silently undid it.
+    # One daemonctl, owned by FREELABEL/iris-daemon.
     if [ ! -f "$bridge_dir/daemonctl" ]; then
-        print_message error "Daemon repo is missing daemonctl — the download is incomplete. Re-run the installer."
+        print_message error "Daemon archive is missing daemonctl — the download is incomplete. Re-run the installer."
     fi
     chmod 755 "$bridge_dir/daemonctl"
 
@@ -1425,12 +1592,23 @@ BCTL
     ln -sf "$bridge_dir/daemonctl" "$INSTALL_DIR/iris-daemon"
 
     # ── macOS LaunchAgent: auto-start daemon on login ──
+    #
+    # #184931: this block used to finish with `launchctl load "$plist_dest" 2>/dev/null || true`
+    # and the summary below printed "Auto-start: enabled (starts on login)" unconditionally.
+    # A client whose clone shipped without installers/macos/ was told auto-start was enabled
+    # for a plist that was never written and a job launchd had never heard of. The defect is
+    # a status line that cannot say "no"; the discarded stderr only hid it.
+    local autostart_ok="false"
+    local autostart_reason=""
+
     if [ "$(uname)" = "Darwin" ]; then
         local plist_name="io.heyiris.daemon.plist"
+        local plist_label="io.heyiris.daemon"
         local plist_src="$bridge_dir/installers/macos/$plist_name"
         local plist_dest="$HOME/Library/LaunchAgents/$plist_name"
         local wrapper_src="$bridge_dir/installers/macos/iris-daemon-wrapper.sh"
         local wrapper_dest="$HOME/.iris/iris-daemon-wrapper.sh"
+        local lc_err=""
 
         # Copy and configure wrapper script
         if [ -f "$wrapper_src" ]; then
@@ -1440,15 +1618,49 @@ BCTL
             chmod 755 "$wrapper_dest"
         fi
 
-        # Install plist with HOME path substitution
-        if [ -f "$plist_src" ]; then
-            sed "s|__HOME__|$HOME|g" "$plist_src" > "$plist_dest"
-            # Also fix daemon path to bridge
-            sed -i '' "s|/.iris/daemon|/.iris/bridge|g" "$plist_dest" 2>/dev/null || true
+        if ! command -v launchctl >/dev/null 2>&1; then
+            autostart_reason="launchctl not found"
+        elif [ ! -f "$plist_src" ]; then
+            # This is the case that printed "enabled" for a client in the bug report.
+            autostart_reason="plist template missing from this build ($plist_src)"
+        elif [ ! -f "$wrapper_src" ]; then
+            autostart_reason="daemon wrapper missing from this build ($wrapper_src)"
+        else
+            mkdir -p "$HOME/Library/LaunchAgents" 2>/dev/null || true
 
-            # Load (unload first if already loaded)
-            launchctl unload "$plist_dest" 2>/dev/null || true
-            launchctl load "$plist_dest" 2>/dev/null || true
+            # Install plist with HOME path substitution
+            if ! sed "s|__HOME__|$HOME|g" "$plist_src" > "$plist_dest" 2>/dev/null; then
+                autostart_reason="could not write $plist_dest"
+            else
+                # Also fix daemon path to bridge
+                sed -i '' "s|/.iris/daemon|/.iris/bridge|g" "$plist_dest" 2>/dev/null || true
+
+                if command -v plutil >/dev/null 2>&1 && ! plutil -lint "$plist_dest" >/dev/null 2>&1; then
+                    autostart_reason="generated plist is malformed ($plist_dest)"
+                else
+                    # bootout first: `bootstrap` refuses a label that is already loaded.
+                    launchctl bootout "gui/$(id -u)/$plist_label" 2>/dev/null \
+                      || launchctl unload "$plist_dest" 2>/dev/null || true
+
+                    # Keep stderr. "Load failed: 5: Input/output error" is the whole diagnosis,
+                    # and 2>/dev/null is what made this bug invisible for as long as it was.
+                    # -w on the legacy fallback so a previously-disabled job is re-enabled.
+                    lc_err=$(launchctl bootstrap "gui/$(id -u)" "$plist_dest" 2>&1) \
+                      || lc_err=$(launchctl load -w "$plist_dest" 2>&1) \
+                      || true
+
+                    # Ask launchd what it has, rather than trusting the exit code: legacy
+                    # `launchctl load` returns 0 for jobs it never actually registered.
+                    if launchctl list 2>/dev/null | grep -q "$plist_label"; then
+                        autostart_ok="true"
+                    else
+                        autostart_reason="launchd did not register $plist_label"
+                        if [ -n "$lc_err" ]; then
+                            autostart_reason="$autostart_reason — $(printf '%s' "$lc_err" | head -1)"
+                        fi
+                    fi
+                fi
+            fi
         fi
     fi
 
@@ -1468,7 +1680,15 @@ BCTL
     print_message info "${MUTED}      Bridge:  ${NC}iris-bridge start|stop|status"
     print_message info "${MUTED}      Daemon:  ${NC}iris-daemon start|stop|status|register${MUTED} (Hive compute node)${NC}"
     if [ "$(uname)" = "Darwin" ]; then
-        print_message info "${MUTED}      Auto-start: ${NC}enabled${MUTED} (starts on login)${NC}"
+        if [ "$autostart_ok" = "true" ]; then
+            print_message info "${MUTED}      Auto-start: ${NC}enabled${MUTED} (starts on login)${NC}"
+        else
+            # Deliberately a warning, not a failure: the CLI is fully usable without the
+            # daemon — only Hive compute needs it — so aborting the install would be worse
+            # than saying plainly that this one piece did not get set up.
+            print_message warning "      Auto-start: ${ORANGE}not enabled${NC} — ${autostart_reason:-unknown reason}"
+            print_message info "${MUTED}      Start the daemon yourself when you need it: ${NC}iris-daemon start"
+        fi
     fi
 }
 
@@ -1515,33 +1735,18 @@ print(d)" 2>/dev/null || echo ""
 }
 
 register_hive() {
-    local token="$1" user_id="$2"
-    local hostname_label; hostname_label=$(hostname -s 2>/dev/null || echo "My-Machine")
-    local has_docker; has_docker=$(command -v docker >/dev/null 2>&1 && echo "true" || echo "false")
-    local tmpfile; tmpfile=$(mktemp 2>/dev/null || echo "/tmp/iris-reg-$$")
-    local http_code; http_code=$(curl -sL --max-time 10 -o "$tmpfile" -w "%{http_code}" \
-        -H "Authorization: Bearer $token" \
-        -H "Content-Type: application/json" \
-        -d "{\"name\": \"$(echo "$hostname_label" | sed 's/[\"\\]/\\&/g')\", \"capabilities\": {\"docker\": $has_docker}}" \
-        "$API_BASE/api/v1/hive/register-node" 2>/dev/null || echo "000")
-    local resp; resp=$(cat "$tmpfile" 2>/dev/null || echo '{}'); rm -f "$tmpfile"
-    local node_key; node_key=$(json_field "$resp" "node_key")
-    if [ -n "$node_key" ] && [ "$node_key" != "null" ]; then
-        mkdir -p "$IRIS_DIR"
-        printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://freelabel.net"}\n' "$node_key" "${user_id:-0}" > "$CONFIG_JSON"
-        chmod 600 "$CONFIG_JSON"
-        echo -e "  ${GREEN}Machine registered as Hive compute node${NC}"
+    # The daemon is the ONE writer of the node key (#185896): it enrolls this machine itself using
+    # the account this login just saved. All login does is wake it if it is not already online.
+    # (This used to mint a key itself — via a proxy endpoint, no machine fingerprint, and a `>` that
+    # truncated config.json — and a key minted here could be one the hub did not know.)
+    if curl -s --max-time 3 http://localhost:3200/health 2>/dev/null | grep -q '"node_id":"'; then
         return 0
     fi
-    # Registration failed — show why
-    case "$http_code" in
-        000) echo -e "  ${MUTED}Hive registration skipped (network unreachable).${NC}" ;;
-        401) echo -e "  ${MUTED}Hive registration skipped (token not authorized). Re-run ${NC}iris-login${MUTED} to refresh.${NC}" ;;
-        404) echo -e "  ${MUTED}Hive registration endpoint not found. The API may be updating.${NC}" ;;
-        5*) echo -e "  ${MUTED}Hive registration skipped (server error $http_code). Try later: ${NC}iris-daemon register" ;;
-        *)  echo -e "  ${MUTED}Hive registration skipped (HTTP $http_code). Try later: ${NC}iris-daemon register" ;;
-    esac
-    return 1
+    if [ -x "$HOME/.iris/bin/iris-daemon" ]; then
+        "$HOME/.iris/bin/iris-daemon" restart >/dev/null 2>&1 || true
+        echo -e "  ${GREEN}Hive: this machine is connecting — it will show online in a minute.${NC}"
+    fi
+    return 0
 }
 
 # Parse flags
@@ -2137,17 +2342,17 @@ install_remotion() {
 
     local remotion_dir="$HOME/.iris/remotion"
 
-    if [ -d "$remotion_dir/.git" ]; then
-        # Update existing installation
-        (cd "$remotion_dir" && git pull --quiet 2>/dev/null) || true
-        print_message info "${MUTED}      Compositions updated from upstream${NC}"
+    if [ -d "$remotion_dir" ] && [ -f "$remotion_dir/package.json" ]; then
+        if fetch_repo_archive "https://github.com/FREELABEL/iris-remotion/archive/refs/heads/main.tar.gz" "$remotion_dir" "package.json"; then
+            print_message info "${MUTED}      Compositions updated from upstream${NC}"
+        fi
     else
-        # Fresh clone (source only — NO npm install, that's lazy)
-        if git clone --quiet --depth 1 https://github.com/FREELABEL/iris-remotion.git "$remotion_dir" 2>/dev/null; then
+        # Fresh fetch (source only — NO npm install, that's lazy). No git needed.
+        if fetch_repo_archive "https://github.com/FREELABEL/iris-remotion/archive/refs/heads/main.tar.gz" "$remotion_dir" "package.json"; then
             : # success
         else
             print_message info "${MUTED}[7/7] Remotion ............................. could not download${NC}"
-            print_message info "${MUTED}      Try manually: ${NC}git clone https://github.com/FREELABEL/iris-remotion.git ~/.iris/remotion"
+            print_message info "${MUTED}      Retry with: ${NC}iris node install --remotion"
             return 0
         fi
     fi
@@ -2221,10 +2426,29 @@ case "${1:-help}" in
         if [ -f "$REMOTION_DIR/package.json" ]; then
             OLD_HASH=$(md5 -q "$REMOTION_DIR/package.json" 2>/dev/null || md5sum "$REMOTION_DIR/package.json" 2>/dev/null | cut -d' ' -f1 || echo "")
         fi
-        (cd "$REMOTION_DIR" && git pull 2>&1) || {
-            echo "git pull failed. Try manually: cd ~/.iris/remotion && git pull"
-            exit 1
-        }
+        # No git. Stage into a temp dir, verify it is really the compositions, then
+        # swap — so a failed download leaves the working copy alone. node_modules and
+        # any local renders are preserved.
+        TMP=$(mktemp -d) || { echo "could not create a temp directory"; exit 1; }
+        if ! curl -fsSL --max-time 180 "https://github.com/FREELABEL/iris-remotion/archive/refs/heads/main.tar.gz" -o "$TMP/r.tar.gz" 2>/dev/null; then
+            echo "Could not download the compositions. Check your connection and retry."
+            rm -rf "$TMP"; exit 1
+        fi
+        tar -xzf "$TMP/r.tar.gz" -C "$TMP" 2>/dev/null || { echo "The download could not be extracted."; rm -rf "$TMP"; exit 1; }
+        SRC=$(find "$TMP" -mindepth 1 -maxdepth 1 -type d | head -1)
+        if [ -z "$SRC" ] || [ ! -f "$SRC/package.json" ]; then
+            echo "That download was not the Remotion compositions — leaving your copy alone."
+            rm -rf "$TMP"; exit 1
+        fi
+        for entry in "$REMOTION_DIR"/* "$REMOTION_DIR"/.[!.]*; do
+            [ -e "$entry" ] || continue
+            case "$(basename "$entry")" in
+                node_modules|out|renders|.env|.git) ;;
+                *) rm -rf "$entry" ;;
+            esac
+        done
+        cp -R "$SRC"/. "$REMOTION_DIR"/ 2>/dev/null || { echo "Could not update $REMOTION_DIR"; rm -rf "$TMP"; exit 1; }
+        rm -rf "$TMP"
         NEW_HASH=$(md5 -q "$REMOTION_DIR/package.json" 2>/dev/null || md5sum "$REMOTION_DIR/package.json" 2>/dev/null | cut -d' ' -f1 || echo "")
         if [ -d "$REMOTION_DIR/node_modules" ] && [ "$OLD_HASH" != "$NEW_HASH" ]; then
             echo "Dependencies changed — reinstalling..."
@@ -2456,23 +2680,9 @@ ENVFILE
     AUTH_SUCCESS=true
     echo -e "  ${GREEN}Authenticated via pre-seeded token${NC}"
 
-    # Auto-register this machine as a Hive compute node
-    HOSTNAME_LABEL=$(hostname -s 2>/dev/null || echo "My-Machine")
-    HAS_DOCKER=$(command -v docker >/dev/null 2>&1 && echo "true" || echo "false")
-    NODE_RESPONSE=$(curl -sL --fail --max-time 10 \
-        -H "Authorization: Bearer $SDK_TOKEN" \
-        -H "Content-Type: application/json" \
-        --data-raw "{\"name\": \"$(echo "$HOSTNAME_LABEL" | sed 's/[\"\\]/\\&/g')\", \"capabilities\": {\"docker\": $HAS_DOCKER}}" \
-        "https://raichu.heyiris.io/api/v1/hive/register-node" 2>/dev/null || echo '{}')
-    NODE_KEY=$(json_field "$NODE_RESPONSE" "node_key")
-    if [ -n "$NODE_KEY" ] && [ "$NODE_KEY" != "null" ]; then
-        mkdir -p "$HOME/.iris"
-        printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://freelabel.net"}\n' "$NODE_KEY" "$USER_ID" > "$HOME/.iris/config.json"
-        chmod 600 "$HOME/.iris/config.json"
-        echo -e "  ${GREEN}Machine registered as Hive compute node${NC}"
-    else
-        echo -e "  ${MUTED}Hive auto-registration skipped. Register later: ${NC}iris-daemon register"
-    fi
+    # No node registration here: the daemon enrolls this machine itself from the account just
+    # saved — it is the ONE writer of the node key (#185896). This block minted keys through a
+    # different endpoint, with no machine fingerprint, and truncated config.json with `>`.
 fi
 
 tty_available=false
@@ -2567,23 +2777,9 @@ ENVFILE
                             echo -e "  ${MUTED}Dashboard:${NC} ${CYAN}${DASHBOARD_URL}${NC}"
                         fi
 
-                        # Auto-register this machine as a Hive compute node
-                        HOSTNAME_LABEL=$(hostname -s 2>/dev/null || echo "My-Machine")
-                        HAS_DOCKER=$(command -v docker >/dev/null 2>&1 && echo "true" || echo "false")
-                        NODE_RESPONSE=$(curl -sL --fail --max-time 10 \
-                            -H "Authorization: Bearer $SDK_TOKEN" \
-                            -H "Content-Type: application/json" \
-                            --data-raw "{\"name\": \"$(echo "$HOSTNAME_LABEL" | sed 's/[\"\\]/\\&/g')\", \"capabilities\": {\"docker\": $HAS_DOCKER}}" \
-                            "https://raichu.heyiris.io/api/v1/hive/register-node" 2>/dev/null || echo '{}')
-                        NODE_KEY=$(json_field "$NODE_RESPONSE" "node_key")
-                        if [ -n "$NODE_KEY" ] && [ "$NODE_KEY" != "null" ]; then
-                            mkdir -p "$HOME/.iris"
-                            printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://freelabel.net"}\n' "$NODE_KEY" "$USER_ID" > "$HOME/.iris/config.json"
-                            chmod 600 "$HOME/.iris/config.json"
-                            echo -e "  ${GREEN}Machine registered as Hive compute node${NC}"
-                        else
-                            echo -e "  ${MUTED}Hive auto-registration skipped. Register later: ${NC}iris-daemon register"
-                        fi
+                        # No node registration here: the daemon enrolls this machine itself from the account just
+                        # saved — it is the ONE writer of the node key (#185896). This block minted keys through a
+                        # different endpoint, with no machine fingerprint, and truncated config.json with `>`.
                     else
                         # Login succeeded but SDK token wasn't generated
                         AUTH_SUCCESS=true

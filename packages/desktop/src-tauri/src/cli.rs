@@ -326,7 +326,7 @@ fn install_cli_unix() -> Result<(), String> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Install script failed: {}", stderr));
+        return Err(format!("Install script failed: {}", install_error_summary(&stderr)));
     }
     Ok(())
 }
@@ -632,5 +632,46 @@ mod tests {
         assert_eq!(o.status.code(), Some(3));
         assert!(String::from_utf8_lossy(&o.stdout).contains("out"));
         assert!(String::from_utf8_lossy(&o.stderr).contains("err"));
+    }
+}
+
+/// The last few lines of the installer's stderr that say something. curl writes its progress
+/// bar to stderr, so the raw stream put forty lines of `####  35.5%` in the sign-in dialog
+/// above the one line that was the actual error.
+pub(crate) fn install_error_summary(stderr: &str) -> String {
+    let is_progress = |l: &str| {
+        let t = l.trim();
+        t.is_empty()
+            || t.chars().all(|c| matches!(c, '#' | '=' | '-' | 'O' | ' ' | '.' | '%') || c.is_ascii_digit())
+    };
+    let lines: Vec<&str> = stderr
+        .split(['\n', '\r'])
+        .filter(|l| !is_progress(l))
+        .collect();
+    let tail = &lines[lines.len().saturating_sub(3)..];
+    if tail.is_empty() {
+        "no error output".to_string()
+    } else {
+        tail.join("\n")
+    }
+}
+
+#[cfg(test)]
+mod install_error_summary_tests {
+    use super::install_error_summary;
+
+    #[test]
+    fn drops_curl_progress_and_keeps_the_error() {
+        let stderr = "#=#=#\n##O#-#\n\r0.7%\r######    9.5%\r#####################  100.0%\n\
+                      /tmp/iris-install.sh: line 1445: /x/Library/LaunchAgents/io.heyiris.daemon.plist: No such file or directory\n";
+        assert_eq!(
+            install_error_summary(stderr),
+            "/tmp/iris-install.sh: line 1445: /x/Library/LaunchAgents/io.heyiris.daemon.plist: No such file or directory"
+        );
+    }
+
+    #[test]
+    fn says_so_when_there_is_nothing_but_progress() {
+        assert_eq!(install_error_summary("###### 100.0%\n"), "no error output");
     }
 }
