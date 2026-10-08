@@ -74,3 +74,37 @@ export function sizeRefusal(bytes: number, limit: number): string | null {
   if (bytes <= limit) return null
   return `That image is ${mb(bytes)} and the limit is ${mb(limit)} — it travels base64-encoded, which makes it ~33% larger again. Crop it, scale it down, or split the page.`
 }
+
+/**
+ * One call to the IRIS gateway's vision lane — shared by `iris ocr` and `iris look` so there is one
+ * copy of the request, the refusal wording and the <think> stripping, not two that drift.
+ * Never throws: every failure comes back as `{ ok: false, error }` in words a person can act on.
+ */
+export async function askVision(opts: {
+  base: string
+  token: string
+  model: string
+  messages: OcrMessage[]
+  maxTokens: number
+  fetchImpl?: typeof fetch
+}): Promise<{ ok: true; text: string; usage: any } | { ok: false; error: string }> {
+  const model = opts.model.replace(/^iris\//, "")
+  let res: Response
+  try {
+    res = await (opts.fetchImpl ?? fetch)(`${opts.base}/api/v6/openai/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${opts.token}` },
+      body: JSON.stringify({ model, messages: opts.messages, max_tokens: opts.maxTokens }),
+    })
+  } catch (e: any) {
+    return { ok: false, error: `Could not reach ${opts.base}: ${e?.message ?? e}` }
+  }
+  if (!res.ok) {
+    const said = (await res.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 300)
+    return { ok: false, error: `HTTP ${res.status} from the model gateway${said ? `: ${said}` : ""}` }
+  }
+  const body = (await res.json().catch(() => null)) as any
+  // An image with no text in it is an ANSWER; a model that said nothing at all is not.
+  if (!body?.choices?.length) return { ok: false, error: "The model returned no reply." }
+  return { ok: true, text: cleanOcrText(body.choices[0]?.message?.content ?? ""), usage: body?.usage ?? null }
+}

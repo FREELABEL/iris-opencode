@@ -105,6 +105,7 @@ import { PlatformRunCommand, PlatformConnectCommand, PlatformListConnectedComman
 import { PlatformListenCommand } from "./cli/cmd/listen"
 import { PlatformTranscribeCommand } from "./cli/cmd/transcribe"
 import { PlatformOcrCommand } from "./cli/cmd/platform-ocr"
+import { PlatformLookCommand } from "./cli/cmd/platform-look"
 import { PlatformDownloadCommand } from "./cli/cmd/download"
 import { PlatformBugCommand } from "./cli/cmd/platform-bug"
 import { PlatformFeatureCommand } from "./cli/cmd/platform-feature"
@@ -483,6 +484,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformListIntegrationsCommand))
   .command(reg(PlatformTranscribeCommand))
   .command(reg(PlatformOcrCommand))
+  .command(reg(PlatformLookCommand))
   .command(reg(PlatformListenCommand))
   .command(reg(PlatformDownloadCommand))
   .command(reg(PlatformConnectCommand))
