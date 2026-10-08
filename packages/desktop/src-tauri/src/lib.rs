@@ -8,7 +8,10 @@ use cli::{cli_health, install_cli, sync_cli};
 use std::{
     collections::VecDeque,
     net::{SocketAddr, TcpListener},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant},
 };
 use tauri::{
@@ -368,10 +371,31 @@ fn require_sign_in(app: &AppHandle) {
     // changes.
     onboarding::track(app, onboarding::SIGNIN_SHOWN, Some("required".into()));
 
+    // First run signs in INSIDE the main window now (home-first-run-signin.tsx), which claims it
+    // with `signin_in_app`. The window is the fallback, and it must stay one: if the webview
+    // never loads, or this is a returning user whose key went missing (first run already done,
+    // so nothing claims it), they still get a way in — a few seconds late, never not at all.
     let app_inner = app.clone();
-    let _ = app.run_on_main_thread(move || {
-        login::show_login_window(&app_inner, true);
+    std::thread::spawn(move || {
+        std::thread::sleep(SIGNIN_CLAIM_WAIT);
+        if SIGNIN_IN_APP.load(Ordering::SeqCst) || iris_env_value("IRIS_API_KEY").is_some() {
+            return;
+        }
+        let app_main = app_inner.clone();
+        let _ = app_inner.run_on_main_thread(move || {
+            login::show_login_window(&app_main, true);
+        });
     });
+}
+
+/// How long the main window has to claim sign-in before the standalone window opens instead.
+const SIGNIN_CLAIM_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+static SIGNIN_IN_APP: AtomicBool = AtomicBool::new(false);
+
+/// The main window is showing sign-in itself; don't open the separate window over it.
+#[tauri::command]
+fn signin_in_app() {
+    SIGNIN_IN_APP.store(true, Ordering::SeqCst);
 }
 
 fn warn_if_translocated(app: &AppHandle) -> bool {
@@ -796,7 +820,8 @@ pub fn run() {
             login::restart_app,
             login::open_login_window,
             onboarding::track_onboarding,
-            google_signin::google_sign_in
+            google_signin::google_sign_in,
+            signin_in_app
         ])
         .setup(move |app| {
             let app = app.handle().clone();

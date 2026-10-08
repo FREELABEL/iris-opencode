@@ -233,43 +233,130 @@
     color: var(--v2-icon-icon-muted);
   }
 
-  /* Signed out: the art stays, dimmed, so the screen reads as "next" rather than "empty". */
-  .fr-locked {
-    opacity: 0.3;
-    filter: saturate(0.6);
+  /* The landing page's ambient light (heyiris.io hero): purple low-left, cyan high-right,
+     behind everything, full bleed. */
+  .fr-ambient {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
     pointer-events: none;
+    background:
+      radial-gradient(60% 50% at 18% 78%, rgba(168, 85, 247, 0.2), transparent 70%),
+      radial-gradient(50% 45% at 50% 55%, rgba(59, 130, 246, 0.12), transparent 70%),
+      radial-gradient(55% 50% at 88% 30%, rgba(6, 182, 212, 0.14), transparent 70%);
   }
-  .fr-gate {
+
+  /* ── In-app sign-in ───────────────────────────────────── */
+  .fr-signin {
     display: flex;
     flex-direction: column;
-    align-items: center;
-    gap: 10px;
-    padding: 22px 26px 24px;
+    gap: 14px;
+    padding: 22px;
     border-radius: 16px;
-    border: 1px solid rgba(168, 85, 247, 0.45);
+    border: 1px solid rgba(168, 85, 247, 0.35);
     background: var(--v2-background-bg-base);
     box-shadow:
-      0 0 0 4px rgba(168, 85, 247, 0.1),
-      0 0 50px -16px rgba(168, 85, 247, 0.5),
-      0 0 90px -30px rgba(34, 211, 238, 0.4);
+      0 0 0 4px rgba(168, 85, 247, 0.08),
+      0 0 60px -18px rgba(168, 85, 247, 0.5),
+      0 0 100px -34px rgba(34, 211, 238, 0.4);
   }
-  .fr-gate-btn {
-    margin-top: 6px;
-    padding: 9px 16px;
+  .fr-google {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 12px;
     border-radius: 10px;
-    font-size: 14px;
+    background: #fff;
+    color: #1f1f1f;
+    font-size: 15px;
+    font-weight: 600;
+    transition: background 140ms ease, transform 140ms ease;
+  }
+  .fr-google {
+    border: 1px solid var(--v2-border-border-base);
+    box-shadow: var(--v2-elevation-button-neutral, 0 1px 2px rgba(0, 0, 0, 0.06));
+  }
+  .fr-google:hover:not(:disabled) {
+    background: #f1f1f1;
+  }
+  .fr-google:disabled,
+  .fr-primary:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+  .fr-or {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: var(--v2-text-text-faint);
+    font-size: 12px;
+  }
+  .fr-or::before,
+  .fr-or::after {
+    content: "";
+    flex: 1;
+    border-top: 1px solid var(--v2-border-border-base);
+  }
+  .fr-input {
+    width: 100%;
+    padding: 11px 13px;
+    border-radius: 10px;
+    border: 1px solid var(--v2-border-border-base);
+    background: var(--v2-background-bg-deep);
+    color: var(--v2-text-text-base);
+    font-size: 15px;
+    outline: none;
+    transition: border-color 140ms ease, box-shadow 140ms ease;
+  }
+  .fr-input::placeholder {
+    color: var(--v2-text-text-faint);
+    opacity: 1;
+  }
+  .fr-input:focus {
+    border-color: rgba(168, 85, 247, 0.7);
+    box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.16);
+  }
+  .fr-mono {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    letter-spacing: 0.06em;
+  }
+  .fr-primary {
+    padding: 12px;
+    border-radius: 10px;
+    font-size: 15px;
     font-weight: 600;
     color: #fff;
     background: linear-gradient(90deg, #9333ea, #2563eb);
     transition: background 160ms ease, box-shadow 160ms ease;
   }
-  .fr-gate-btn:hover {
+  .fr-primary:hover:not(:disabled) {
     background: linear-gradient(90deg, #7e22ce, #1d4ed8);
-    box-shadow: 0 12px 34px -12px rgba(168, 85, 247, 0.7);
+    box-shadow: 0 14px 40px -14px rgba(168, 85, 247, 0.7);
   }
-  .fr-gate-btn:focus-visible {
+  .fr-link {
+    width: fit-content;
+    font-size: 12.5px;
+    color: var(--v2-text-text-muted);
+    text-decoration: underline;
+    text-decoration-color: var(--v2-border-border-base);
+    text-underline-offset: 3px;
+  }
+  .fr-link:hover {
+    color: var(--v2-text-text-base);
+    text-decoration-color: currentColor;
+  }
+  .fr-google:focus-visible,
+  .fr-primary:focus-visible,
+  .fr-link:focus-visible {
     outline: 2px solid var(--v2-border-border-focus);
     outline-offset: 2px;
+  }
+  .fr-err {
+    color: var(--v2-state-fg-danger, #f87171);
+  }
+  .fr-ok {
+    color: #34d399;
   }
 
   .fr-rise {

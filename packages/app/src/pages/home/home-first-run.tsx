@@ -2,6 +2,7 @@ import { For, Match, Show, Switch, createMemo, createSignal, onCleanup, onMount 
 import { useServerSDK } from "@/context/server-sdk"
 import { usePlatform } from "@/context/platform"
 import { Check, GmailLogo, InboxArt, OutlookLogo, Spinner } from "./home-first-run-art"
+import { SignInPanel } from "./home-first-run-signin"
 import "./home-first-run.css"
 
 /**
@@ -123,9 +124,8 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
     }, POLL_MS)
   }
 
-  // Signed out: the sign-in window is open on top. Everything here is locked behind it rather
-  // than offered — a Connect button that can only fail with "not signed in" is worse than none.
-  // Sign-in restarts the app, so this poll is the fallback, not the main path.
+  // Signed out: sign in here, as step one. Sign-in restarts the app (the engine reads the key at
+  // start), so this poll only matters if the fallback window finished it instead.
   function waitForSignIn() {
     setStep({ kind: "signin" })
     stopPoll()
@@ -136,12 +136,6 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
         void begin()
       }
     }, POLL_MS)
-  }
-
-  const showSignIn = () => {
-    try {
-      void (window as any).__TAURI__?.core?.invoke?.("open_login_window")
-    } catch {}
   }
 
   async function read() {
@@ -194,7 +188,9 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
   onMount(begin)
 
   return (
-    <div data-component="first-run" class="mx-auto flex w-full max-w-[640px] flex-col gap-6 px-6 py-14">
+    <div data-component="first-run" class="relative min-h-screen w-full">
+    <div class="fr-ambient" aria-hidden="true" />
+    <div class="relative mx-auto flex w-full max-w-[640px] flex-col gap-6 px-6 py-14">
       <div class="fr-steps" role="progressbar" aria-valuemin={1} aria-valuemax={3} aria-valuenow={STEP_INDEX[step().kind] + 1}>
         <For each={[0, 1, 2]}>{(i) => <span data-on={i <= STEP_INDEX[step().kind] ? "" : undefined} />}</For>
       </div>
@@ -219,23 +215,18 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
         </Match>
 
         <Match when={step().kind === "signin"}>
-          <div class="fr-rise relative flex flex-col items-center gap-6 text-center">
-            <div class="fr-locked fr-hero" aria-hidden="true">
+          <div class="fr-rise flex flex-col items-center gap-6 text-center">
+            <div class="fr-hero">
               <InboxArt />
             </div>
-            <div class="fr-gate">
-              <div class="flex items-center gap-2 text-v2-text-text-muted text-[13px]">
-                <Spinner />
-                Waiting for you to sign in
-              </div>
-              <h1 class="text-v2-text-text-base text-[24px] leading-tight [font-weight:650]">Finish signing in</h1>
-              <p class="text-v2-text-text-muted max-w-[400px] text-[15px] leading-relaxed">
-                Use the <span class="text-v2-text-text-base">Sign in to IRIS</span> window. This screen picks up as soon as
-                you're in, and your inbox is next.
+            <div class="flex flex-col gap-2">
+              <h1 class="text-v2-text-text-base text-[26px] leading-tight [font-weight:650]">Sign in to IRIS</h1>
+              <p class="text-v2-text-text-muted mx-auto max-w-[440px] text-[15px] leading-relaxed">
+                One click with Google, or a code by email. Your inbox is next.
               </p>
-              <button class="fr-gate-btn" onClick={showSignIn}>
-                Show the sign-in window
-              </button>
+            </div>
+            <div class="w-full max-w-[400px] text-left">
+              <SignInPanel />
             </div>
           </div>
         </Match>
@@ -429,6 +420,7 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
           Skip — I'll open a folder myself
         </button>
       </Show>
+    </div>
     </div>
   )
 }
