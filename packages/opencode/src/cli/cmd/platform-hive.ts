@@ -38,6 +38,7 @@ import { HiveDriveCommand } from "./platform-hive-drive"
 import { HiveAnswerCommand, HiveAnswerHookCommand, HiveAnswersCommand, HiveAwayCommand } from "./platform-hive-answer"
 import { HiveTriggerCommand } from "./platform-hive-trigger"
 import { HiveClaimCommand } from "./platform-hive-claim"
+import { HiveProofCommand } from "./platform-hive-proof"
 import { HiveRentCommand, HiveRentalsCommand, HiveReleaseCommand, HiveProvidersCommand } from "./platform-hive-rent"
 import { VaultCommandExport } from "./platform-vault"
 import {
@@ -5042,6 +5043,7 @@ export const PlatformHiveCommand = productCommand({
       .command(HiveAnswerCommand)
       .command(HiveTriggerCommand)
       .command(HiveClaimCommand)
+      .command(HiveProofCommand)
       .command(HiveAnswersCommand)
       .command(HiveAwayCommand)
       .command(HiveAnswerHookCommand)

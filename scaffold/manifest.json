@@ -477,6 +477,12 @@
       "purpose": "Recipe for taking a product from a spoken idea to a live URL inside IRIS alone — Atlas, Genesis and Hive, with agents on two machines passing work. Written from a session that did it, including where a step cost an hour."
     },
     {
+      "src": "how-to/hive-proof-video.md",
+      "dest": "how-to/hive-proof-video.md",
+      "managed": true,
+      "purpose": "Recipe for iris hive proof — check a machine is ready, record a page working, and post the video on a pull request."
+    },
+    {
       "src": "how-to/edge-publish.md",
       "dest": "how-to/edge-publish.md",
       "managed": true,
