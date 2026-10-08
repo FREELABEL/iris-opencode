@@ -3,7 +3,9 @@ import { useServerSDK } from "@/context/server-sdk"
 import { usePlatform } from "@/context/platform"
 import { Check, GmailLogo, InboxArt, OutlookLogo, Spinner } from "./home-first-run-art"
 import { SignInPanel } from "./home-first-run-signin"
-import { InboxTriage, type InboxThread } from "./home-first-run-inbox"
+import type { InboxThread } from "./home-first-run-inbox"
+import { INTENTS, IntentPicker, planFor, type Intent } from "./home-first-run-intent"
+import { ClarifyStep } from "./home-first-run-clarify"
 import "./home-first-run.css"
 
 /**
@@ -70,7 +72,9 @@ const TILES: Tile[] = [
   { type: "outlook", name: "Outlook", detail: "Outlook and Microsoft 365", Logo: OutlookLogo },
 ]
 
-const STEP_INDEX: Record<string, number> = { signin: 0, loading: 0, connect: 0, reading: 1, seen: 1, starting: 2, error: 1 }
+// Sign in → What do you want → Connect (for that) → What IRIS can do. Asked first, read second:
+// the inbox is used toward an answer the person gave, never scanned to see what's there.
+const STEP_INDEX: Record<string, number> = { signin: 0, loading: 0, intent: 1, connect: 2, reading: 3, seen: 3, starting: 3, error: 3 }
 type Step =
   | { kind: "loading" }
   | { kind: "signin" }
@@ -82,6 +86,7 @@ type Step =
       /** Already connected before this screen opened: shown, never skipped — the person chooses. */
       ready?: { type: Provider; account?: string }
     }
+  | { kind: "intent" }
   | { kind: "reading" }
   | {
       kind: "seen"
@@ -120,6 +125,17 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
   const [step, setStep] = createSignal<Step>({ kind: "loading" })
   const [answer, setAnswer] = createSignal("")
   const [provider, setProvider] = createSignal<"gmail" | "outlook">("gmail")
+  const [intent, setIntent] = createSignal<Intent>({ id: "reply", text: INTENTS[0].label })
+
+  // Known from state(): an inbox connected before this screen. Shown on Connect, never skipped
+  // silently — but once they have answered, an existing connection goes straight to the read.
+  let connected: { type: Provider; account?: string } | undefined
+  const pick = (i: Intent) => {
+    setIntent(i)
+    track("onboarding.question_answered", `${i.id}: ${i.text.slice(0, 100)}`)
+    if (connected) return void read()
+    setStep({ kind: "connect" })
+  }
   let poll: ReturnType<typeof setInterval> | undefined
   const stopPoll = () => poll && clearInterval(poll)
   onCleanup(stopPoll)
@@ -136,14 +152,10 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
     const s = await call("/iris/onboarding/state").catch(() => null)
     if (!s) return setStep({ kind: "error", reason: "IRIS isn't answering yet.", retry: begin })
     if (s.signedIn === false) return waitForSignIn()
-    // Already connected: still show step two. Jumping from sign-in straight to "reading your mail"
-    // hid the Gmail/Outlook choice entirely for anyone connected before (2026-10-08).
-    if (s.mail?.connected) {
-      const type: Provider = s.mail.type === "outlook" ? "outlook" : "gmail"
-      setProvider(type)
-      return setStep({ kind: "connect", ready: { type, account: s.mail.account } })
-    }
-    setStep({ kind: "connect" })
+    if (s.mail?.connected) setProvider(s.mail.type === "outlook" ? "outlook" : "gmail")
+    connected = s.mail?.connected ? { type: s.mail.type === "outlook" ? "outlook" : "gmail", account: s.mail.account } : undefined
+    // The question comes first. The inbox is only touched once there is an answer to work toward.
+    setStep({ kind: "intent" })
   }
 
   async function connect(type: Provider) {
@@ -221,7 +233,6 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
   async function start(seen: Extract<Step, { kind: "seen" }>, text: string, focus?: Thread[]) {
     const want = text.trim()
     if (!want) return
-    track("onboarding.question_answered", want.slice(0, 120))
     setStep({ kind: "starting" })
 
     const ws = await post("/iris/onboarding/workspace", { name: seen.industry || "my-work" }).catch(() => null)
@@ -249,8 +260,8 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
     <div data-component="first-run" class="relative min-h-screen w-full">
     <div class="fr-ambient" aria-hidden="true" />
     <div class="relative mx-auto flex w-full max-w-[640px] flex-col gap-6 px-6 py-14">
-      <div class="fr-steps" role="progressbar" aria-valuemin={1} aria-valuemax={3} aria-valuenow={STEP_INDEX[step().kind] + 1}>
-        <For each={[0, 1, 2]}>{(i) => <span data-on={i <= STEP_INDEX[step().kind] ? "" : undefined} />}</For>
+      <div class="fr-steps" role="progressbar" aria-valuemin={1} aria-valuemax={4} aria-valuenow={STEP_INDEX[step().kind] + 1}>
+        <For each={[0, 1, 2, 3]}>{(i) => <span data-on={i <= STEP_INDEX[step().kind] ? "" : undefined} />}</For>
       </div>
       <Switch>
         <Match when={step().kind === "loading" || step().kind === "reading" || step().kind === "starting"}>
@@ -261,10 +272,10 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
               </div>
             </Show>
             <h1 class="text-v2-text-text-base text-[22px] [font-weight:600]">
-              {step().kind === "reading" ? "Reading your recent mail…" : step().kind === "starting" ? "Setting up your workspace…" : "One moment…"}
+              {step().kind === "reading" ? `Working on: ${intent().text.toLowerCase()}…` : step().kind === "starting" ? "Setting up your workspace…" : "One moment…"}
             </h1>
             <p class="text-v2-text-text-muted text-[14px]">
-              {step().kind === "reading" ? "Only to see what's waiting on you. Nothing is sent." : ""}
+              {step().kind === "reading" ? "Using your inbox only for this. Nothing is sent." : ""}
             </p>
             <Show when={step().kind !== "reading"}>
               <Spinner class="mt-2 text-v2-text-text-muted" />
@@ -297,10 +308,11 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
                   <InboxArt />
                 </div>
                 <div class="flex flex-col gap-2">
-                  <h1 class="text-v2-text-text-base text-[26px] leading-tight [font-weight:650]">Connect your inbox</h1>
+                  <p class="fr-mono text-v2-text-text-muted text-[11.5px] uppercase tracking-[0.14em]">{intent().text}</p>
+                  <h1 class="text-v2-text-text-base text-[26px] leading-tight [font-weight:650]">Connect your inbox to do that</h1>
                   <p class="text-v2-text-text-muted mx-auto max-w-[460px] text-[15px] leading-relaxed">
-                    IRIS reads your recent mail, finds what's waiting on you, and drafts the replies. You decide what
-                    gets sent.
+                    IRIS uses your mail only for what you just asked, and drafts the work for you to approve. You decide
+                    what gets sent.
                   </p>
                 </div>
               </div>
@@ -406,61 +418,38 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
           )}
         </Match>
 
+        <Match when={step().kind === "intent"}>
+          <div class="fr-rise flex flex-col gap-6">
+            <div class="flex flex-col gap-2 text-center">
+              <p class="fr-mono text-v2-text-text-muted text-[11.5px] uppercase tracking-[0.14em]">You're signed in</p>
+              <h1 class="text-v2-text-text-base text-[26px] leading-tight [font-weight:650]">
+                What do you want IRIS to take off your plate?
+              </h1>
+              <p class="text-v2-text-text-muted mx-auto max-w-[460px] text-[15px] leading-relaxed">
+                Pick one. IRIS works toward exactly that, and comes back with what it can do.
+              </p>
+            </div>
+            <IntentPicker onPick={pick} />
+          </div>
+        </Match>
+
         <Match when={step().kind === "seen" && (step() as Extract<Step, { kind: "seen" }>)}>
           {(s) => {
-            const people = () => s().threads.filter((t) => (t.kind ?? (t.automated ? "fyi" : "person")) === "person").length
-            const todo = () => s().threads.filter((t) => t.kind === "action").length
+            const plan = () => planFor(intent(), s().threads)
             return (
               <div class="fr-rise flex flex-col gap-5">
                 <div class="flex flex-col gap-2">
-                  <p class="fr-mono text-v2-text-text-muted text-[11.5px] uppercase tracking-[0.14em]">Here's what I see</p>
-                  <h1 class="text-v2-text-text-base text-[24px] leading-snug [font-weight:650]">
-                    {s().line ??
-                      (s().industry
-                        ? `Looks like you work in ${s().industry}.`
-                        : people()
-                          ? "Here's who's waiting on you. Pick one and IRIS starts on it."
-                          : todo()
-                            ? `Nobody's waiting on a reply, but ${todo() === 1 ? "one thing needs" : `${todo()} things need`} you.`
-                            : "Nobody's waiting on a reply. Want IRIS to go through the rest?")}
-                  </h1>
+                  <p class="fr-mono text-v2-text-text-muted text-[11.5px] uppercase tracking-[0.14em]">
+                    {intent().id === "custom" ? "You asked" : intent().text}
+                  </p>
+                  <h1 class="text-v2-text-text-base text-[24px] leading-snug [font-weight:650]">{plan().title}</h1>
+                  <Show when={s().line}>
+                    <p class="text-v2-text-text-muted text-[14px]">{s().line}</p>
+                  </Show>
                 </div>
 
-                <InboxTriage
-                  account={s().account}
-                  provider={provider()}
-                  threads={s().threads}
-                  onAct={(a) => void start(s(), a.text, a.focus)}
-                />
-
-                <div class="flex flex-col gap-2.5">
-                  <form
-                    class="flex gap-2"
-                    onSubmit={(e) => {
-                      e.preventDefault()
-                      void start(s(), answer())
-                    }}
-                  >
-                    <input
-                      class="fr-input flex-1"
-                      placeholder="Or ask IRIS anything about your inbox…"
-                      value={answer()}
-                      onInput={(e) => setAnswer(e.currentTarget.value)}
-                    />
-                    <button class="fr-primary px-5" type="submit" disabled={!answer().trim()}>
-                      Start
-                    </button>
-                  </form>
-                  <div class="flex flex-wrap gap-2">
-                    <For each={s().choices}>
-                      {(c) => (
-                        <button class="fr-chip" onClick={() => void start(s(), c)}>
-                          {c}
-                        </button>
-                      )}
-                    </For>
-                  </div>
-                </div>
+                <p class="text-v2-text-text-muted -mt-2 text-[14px]">Pick what IRIS should do. Nothing goes out without you.</p>
+                <ClarifyStep intent={intent()} threads={s().threads} onStart={(prompt, focus) => void start(s(), prompt, focus)} />
               </div>
             )
           }}

@@ -84,15 +84,22 @@ export function InboxTriage(props: {
   provider?: "gmail" | "outlook"
   threads: InboxThread[]
   onAct: (a: InboxAction) => void
+  /** What the person asked for, turned into one action over the threads it applies to. */
+  plan?: { cta: string; focus: InboxThread[]; onGo: () => void }
 }) {
   const mine = (t: InboxThread) => !!props.account && senderAddress(t.from) === props.account.toLowerCase()
   // People first, then automated mail that asks for something. Purple = a person, amber = a task.
   const people = createMemo(() => props.threads.filter((t) => kindOf(t) === "person" && !mine(t)).slice(0, 5))
   const actions = createMemo(() => props.threads.filter((t) => kindOf(t) === "action").slice(0, 3))
-  const needs = createMemo(() => [...people(), ...actions()])
+  // The threads the person's answer is about lead the list.
+  const focusIds = createMemo(() => new Set((props.plan?.focus ?? []).map((t) => t.id)))
+  const needs = createMemo(() => {
+    const all = [...people(), ...actions()]
+    return [...all.filter((t) => focusIds().has(t.id)), ...all.filter((t) => !focusIds().has(t.id))]
+  })
   const updates = createMemo(() => props.threads.filter((t) => kindOf(t) === "fyi"))
   const [picked, setPicked] = createSignal<Set<string>>(new Set())
-  const [open, setOpen] = createSignal<string | undefined>(needs()[0]?.id)
+  const [open, setOpen] = createSignal<string | undefined>(undefined)
   const [showUpdates, setShowUpdates] = createSignal(false)
 
   const toggle = (id: string) =>
@@ -132,6 +139,27 @@ export function InboxTriage(props: {
         </span>
       </header>
 
+      <Show when={props.plan}>
+        <div class="fr-plan">
+          <span class="fr-plan-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 2.4 21.4 7 12 11.6 2.6 7Z" />
+              <path d="M2.6 8.1 11.6 12.6 11.6 21.6 2.6 17.1Z" />
+              <path d="M21.4 8.1 12.4 12.6 12.4 21.6 21.4 17.1Z" />
+            </svg>
+          </span>
+          <span class="min-w-0 flex-1 text-[13.5px] text-v2-text-text-muted">
+            IRIS can do this now
+            <Show when={props.plan!.focus.length}>
+              <span class="fr-mono text-v2-text-text-faint"> · {props.plan!.focus.length} emails</span>
+            </Show>
+          </span>
+          <button class="fr-act fr-act-primary" onClick={() => props.plan!.onGo()}>
+            {props.plan!.cta}
+          </button>
+        </div>
+      </Show>
+
       <Show
         when={needs().length}
         fallback={
@@ -146,7 +174,7 @@ export function InboxTriage(props: {
               const isOpen = () => open() === t.id
               const isPicked = () => picked().has(t.id)
               return (
-                <li class="fr-row" classList={{ "is-open": isOpen(), "is-picked": isPicked() }}>
+                <li class="fr-row" classList={{ "is-open": isOpen(), "is-picked": isPicked(), "is-focus": focusIds().has(t.id) }}>
                   <div class="fr-row-main">
                     <button
                       class="fr-check"
