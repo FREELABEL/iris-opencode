@@ -99,7 +99,8 @@ const INTEGRATION_FUNCTIONS: Record<string, { name: string; description: string 
     { name: "create_custom_audience", description: "Create a custom audience" },
     { name: "get_insights", description: "Performance data for a campaign/ad set/ad" },
   ],
-  // Verified 2026-10-08 against fl-iris-api GmailIntegrationService (MAILBOX_ACTIONS + native).
+  // Verified 2026-10-08 against fl-iris-api GmailIntegrationService::actions() (20). This list is a
+  // HELP list only: since v1.3.327 a dry run asks the server, which is the authority on what exists.
   // This list showed three functions while the backend had sixteen, so a desktop agent guessed
   // label-action names for an hour and one "probe" created a real label in a client's mailbox.
   "gmail": [
@@ -119,6 +120,10 @@ const INTEGRATION_FUNCTIONS: Record<string, { name: string; description: string 
     { name: "archive_emails", description: "Archive emails (message_ids) — WRITE" },
     { name: "move_to_inbox", description: "Move emails back to the inbox (message_ids) — WRITE" },
     { name: "trash_emails", description: "Move emails to trash (message_ids) — WRITE" },
+    { name: "list_attachments", description: "List an email's attachments + Drive links (message_id)" },
+    { name: "read_attachment", description: "Read an attachment's TEXT — PDF, .docx, .eml, txt/csv/ics/html (message_id, filename | attachment_id | index)" },
+    { name: "delete_label", description: "Delete a user label entirely; emails keep everything else (label_name) — WRITE" },
+    { name: "rename_label", description: "Rename a user label (label_name, new_name) — WRITE" },
   ],
   // Verified against fl-iris-api GoogleDriveIntegrationService + ComposioClient. This list
   // used to show three functions with no parameters, so an agent looking for a folder guessed
