@@ -3,10 +3,11 @@
 // ./index.ts runs when dynamically imported from another entrypoint inside a single
 // Bun.build({compile}).
 //
-// iris2 ships BESIDE the stable `iris` as an opt-in preview (#188596). It must never write the
-// stable binary: `upgrade`/`update` are claimed here and go to the iris2 updater, which only
-// ever replaces a file named iris2 (iris-v1/cli/cmd/iris2.ts, the same code stable's
-// `iris iris2 install` runs).
+// iris2 ships BESIDE the stable `iris` as an opt-in preview (#188596). `upgrade`/`update` are
+// claimed here and go to selfUpdate (iris-v1/cli/cmd/iris2.ts, the same module stable's
+// `iris iris2 install` runs). It replaces only the running binary and picks the release by slot
+// + channel: as iris2 it follows previews; copied in as `iris` (canary) it follows previews too,
+// and `--channel stable` rolls that slot back to the stable build.
 
 import fs from "node:fs"
 import os from "node:os"
@@ -38,7 +39,7 @@ function helpText(): string {
     "  run          Non-interactive run",
     "  serve        Start the server",
     "  session      Session management",
-    "  upgrade      Update iris2 to the newest preview (never touches `iris`)",
+    "  upgrade      Update this binary (iris2: newest preview · --channel stable|preview · --check)",
     "",
     "Run `iris2 <command> --help` for command-specific help.",
     "",
@@ -139,7 +140,7 @@ if (first === "--version" || first === "-v" || first === "-V") {
   process.exit(0)
 }
 
-// ── Updates are iris2's own (#188596 A3) ──────────────────────────────────────
+// ── Updates replace this binary only (#188596 A3) ─────────────────────────────
 // Before this, `upgrade` fell through to v1's updater, which downloads the STABLE asset and
 // writes `iris` in this binary's directory — `iris2 upgrade` would have replaced the user's
 // stable iris. v2's `upgrade` would instead install upstream OpenCode (I3). Neither may run.
