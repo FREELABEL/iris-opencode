@@ -306,7 +306,7 @@ pub fn show_login_window(app: &AppHandle, required: bool) {
 
     let mut builder = WebviewWindow::builder(app, "iris-login", WebviewUrl::App("login.html".into()))
         .title("Sign in to IRIS")
-        .inner_size(420.0, 560.0)
+        .inner_size(420.0, 620.0)
         .resizable(false)
         .center();
 

@@ -25,7 +25,7 @@
   }
   * { box-sizing: border-box; }
   body {
-    margin: 0; padding: 34px 34px 28px; background: var(--bg); color: var(--fg);
+    margin: 0; padding: 26px 34px 22px; background: var(--bg); color: var(--fg);
     font: 15px/1.5 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
   }
@@ -33,7 +33,7 @@
   /* The official IRIS mark: the isometric cube from heyiris.io/iris-logo.png and the app icon,
      same geometry as IrisMark in packages/app titlebar.tsx. Three faces at the SAME value; the
      gaps between them are the seams. Shading the faces differently makes it a different logo. */
-  .mark { display: block; width: 72px; height: 72px; margin: 4px auto 22px; padding: 14px;
+  .mark { display: block; width: 60px; height: 60px; margin: 0 auto 16px; padding: 12px;
           border-radius: 18px; background: #16161a; border: 1px solid var(--line-lit);
           color: #e4e4ea; box-sizing: border-box; }
 
@@ -71,6 +71,11 @@
      "optional but probably required" and people hunt for a key nobody sent them. */
   .hint { color: var(--dim); font-size: 12px; line-height: 1.5; margin: 8px 0 0; }
   .back:hover { color: var(--fg); background: none; }
+  .links { display: flex; justify-content: center; margin-top: 14px; }
+  .link { background: none; border: 0; padding: 0; margin: 0; width: auto; font-family: inherit;
+          font-size: 12.5px; font-weight: 500; color: var(--dim); cursor: pointer;
+          text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; }
+  .link:hover:not(:disabled) { color: var(--fg); background: none; text-decoration-color: currentColor; }
   /* True, and unique to this product: one sign-in covers the app and the CLI. Worth saying
      where someone can act on it, rather than in a doc they will not read. */
   /* The command a user may have to run themselves. Mono, selectable, wraps on a narrow window. */
@@ -86,7 +91,7 @@
   .or { display: flex; align-items: center; gap: 12px; margin: 20px 0 6px; color: var(--dim);
         font-size: 12px; }
   .or::before, .or::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
-  .foot { margin-top: 26px; padding-top: 16px; border-top: 1px solid var(--line);
+  .foot { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--line);
           color: var(--dim); font-size: 11.5px; line-height: 1.55; text-align: center; }
 </style>
 
@@ -109,12 +114,17 @@
   <label for="email">Email</label>
   <input id="email" type="email" autocomplete="email" placeholder="you@example.com" autofocus />
 
-  <label for="promo" style="margin-top:18px">Start a free trial <span class="opt">optional</span></label>
-  <input id="promo" placeholder="Trial code or licence key" autocapitalize="characters" />
-  <p class="hint">If someone sent you a key, put it here. Without one you can still sign in and
-    use IRIS on the free allowance.</p>
+  <!-- Most people have no key, so the field stays out of the way until someone asks for it. -->
+  <div id="promo-wrap" hidden>
+    <label for="promo" style="margin-top:18px">Trial code or licence key</label>
+    <input id="promo" placeholder="Code or key" autocapitalize="characters" />
+    <p class="hint">Without one you still sign in and use IRIS on the free allowance.</p>
+  </div>
 
   <button id="send">Send code</button>
+  <div class="links">
+    <button class="link" id="promo-toggle" type="button">Have a trial code or licence key?</button>
+  </div>
 </div>
 
 <div id="step-code" hidden>
@@ -141,6 +151,12 @@ on this machine.</p>
   const track = (event, label) => { try { invoke("track_onboarding", { event, label: label || null }).catch(() => {}); } catch (_) {} };
 
   let email = "";
+
+  $("promo-toggle").onclick = () => {
+    $("promo-wrap").hidden = false;
+    $("promo-toggle").hidden = true;
+    $("promo").focus();
+  };
 
   async function post(path, body) {
     const r = await fetch(API + path, {
