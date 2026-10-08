@@ -3566,6 +3566,10 @@ const BloqsUpdateItemCommand = cmd({
         describe: "merge key=value into content, preserving other fields (repeatable; dotted keys nest; e.g. --merge rate_cents=7900)",
         type: "array",
       })
+      .option("append", {
+        describe: "add text to the end of a TEXT item's content (a markdown section, a status line) — the safe way to add to an epic or ticket body",
+        type: "string",
+      })
       .option("due", { describe: "due date (ISO, e.g. 2026-07-22; 'none' to clear)", type: "string" })
       // MOVE. The API has accepted `bloq_id` and `bloq_list_id` on this endpoint for a while —
       // its own comment says there was no way to move an item "at any layer, not the CLI, not
@@ -3632,8 +3636,43 @@ const BloqsUpdateItemCommand = cmd({
       }
     }
 
+    // --merge onto a TEXT body used to replace the body with the merged keys (the server took
+    // the undecodable text as {}), erasing five epic/ticket bodies on 2026-10-08. --append is
+    // the operation that was wanted. Both need the current content, so read it once.
+    if (args.append !== undefined || args.merge) {
+      const conflict = args.append !== undefined && (args.content !== undefined || args.merge)
+      if (conflict) {
+        const emsg = "--append cannot be combined with --content or --merge"
+        if (args.json) console.log(JSON.stringify({ success: false, error: emsg }))
+        else prompts.log.error(emsg)
+        process.exitCode = 2
+        if (!args.json) prompts.outro("Done")
+        return
+      }
+      const cur = await irisFetch(`/api/v1/user/bloqs/list/item/${args["item-id"]}`)
+      if (!cur.ok) {
+        const emsg = `Could not read item ${args["item-id"]} (HTTP ${cur.status})`
+        if (args.json) console.log(JSON.stringify({ success: false, error: emsg }))
+        else prompts.log.error(emsg)
+        process.exitCode = 1
+        if (!args.json) prompts.outro("Done")
+        return
+      }
+      const body = (await cur.json()) as any
+      const existing = (body?.data ?? body)?.content
+      const plan = planContentEdit(existing, args.append !== undefined ? { append: String(args.append) } : { merge: true })
+      if ("error" in plan) {
+        if (args.json) console.log(JSON.stringify({ success: false, error: plan.error }))
+        else prompts.log.error(plan.error)
+        process.exitCode = 2
+        if (!args.json) prompts.outro("Done")
+        return
+      }
+      if (plan.content !== undefined) payload.content = plan.content
+    }
+
     if (Object.keys(payload).length === 0) {
-      const emsg = "Provide at least one of: --status, --title, --content, --merge, --due"
+      const emsg = "Provide at least one of: --status, --title, --content, --merge, --append, --due"
       if (args.json) console.log(JSON.stringify({ success: false, error: emsg }))
       else { prompts.log.error(emsg); prompts.outro("Done") }
       process.exitCode = 2
@@ -3653,6 +3692,7 @@ const BloqsUpdateItemCommand = cmd({
         // #188294: --json reported success:false and exited 0, so `iris ... --json && next` ran next.
         if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); process.exitCode = 1; return }
         await handleApiError(res, "Update item")
+        process.exitCode = 1
         prompts.outro("Done")
         return
       }
@@ -3663,6 +3703,7 @@ const BloqsUpdateItemCommand = cmd({
       if (args.status) parts.push(`status → ${payload.status}`)
       if (args.title) parts.push(`title updated`)
       if (args.content) parts.push(`content replaced`)
+      if (args.append !== undefined) parts.push(`text appended`)
       if (args.merge) parts.push(`content merged (${Object.keys(payload.content_merge as object).length} field(s))`)
       if (payload.due_date !== undefined) parts.push(payload.due_date === null ? `due cleared` : `due → ${payload.due_date}`)
 
@@ -3681,6 +3722,41 @@ const BloqsUpdateItemCommand = cmd({
 // ============================================================================
 // Helpers
 // ============================================================================
+
+/** Stored content is TEXT when it is non-empty and not a JSON object/array (mirrors fl-api's guard). */
+export function contentIsText(content: unknown): boolean {
+  if (content === null || content === undefined) return false
+  if (typeof content === "object") return false
+  const s = String(content)
+  if (!s.trim()) return false
+  try {
+    const v = JSON.parse(s)
+    return !(v && typeof v === "object")
+  } catch {
+    return true
+  }
+}
+
+/**
+ * What an --append or --merge should send, given the item's current content.
+ * --merge is refused on a text body (it would erase it); --append is refused on a fields
+ * item (it would turn the map into text).
+ */
+export function planContentEdit(
+  existing: unknown,
+  op: { append: string } | { merge: true },
+): { content?: string } | { error: string } {
+  if ("merge" in op) {
+    return contentIsText(existing)
+      ? { error: "This item's content is text, not fields — --merge would erase it. Use --append \"…\" to add to it, or --content to replace it." }
+      : {}
+  }
+  if (!op.append.trim()) return { error: "--append needs some text" }
+  if (existing !== null && existing !== undefined && String(existing).trim() && !contentIsText(existing))
+    return { error: "This item's content is fields (JSON), not text — use --merge key=value to change a field." }
+  const base = existing === null || existing === undefined ? "" : String(existing).replace(/\s+$/, "")
+  return { content: base ? `${base}\n\n${op.append}` : op.append }
+}
 
 // #169753: parse repeatable `--merge key=value` pairs into a partial content object
 // for the backend's content_merge deep-merge. Values are JSON-parsed when possible
