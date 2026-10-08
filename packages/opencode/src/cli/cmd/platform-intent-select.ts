@@ -491,6 +491,29 @@ const filledScore = (lines: string[] = []) => lines.filter((l) => !/<[^>]+>/.tes
  * otherwise, at the 12s limit, each command takes the best line either call produced. A command
  * neither covered gets heuristicFill — the request's topic, never the whole sentence.
  */
+/**
+ * Commands that can carry a destination project (#188392). "transcribe this IG for IRIS ORBIT"
+ * routed to `iris transcribe <url>` and the "for IRIS ORBIT" half — the reason for asking — was
+ * dropped. Only commands listed here get `--for`, so "search for coffee" is never touched.
+ */
+export const TAKES_FOR = new Set(["transcribe", "copycat transcribe"])
+
+/** "… for IRIS ORBIT https://…" → "IRIS ORBIT". The last "for <words>", URLs and trailing punctuation removed. */
+export function destinationOf(text: string): string | undefined {
+  const t = text.replace(/https?:\/\/\S+/g, " ").replace(/\s+/g, " ").trim()
+  const m = /\bfor\s+(?:the\s+|my\s+|our\s+)?([^,;:]+?)\s*(?:project|bloq|board)?[?.!]*$/i.exec(t)
+  const dest = m?.[1]?.trim()
+  // "for me", "for later", "for now" are not projects.
+  if (!dest || /^(me|us|later|now|today|tomorrow|this|that|it)$/i.test(dest)) return undefined
+  return dest
+}
+
+export function withDestination(line: string, c: Candidate, text: string): string {
+  if (!TAKES_FOR.has(c.name) || /\s--for\b/.test(line)) return line
+  const dest = destinationOf(text)
+  return dest ? `${line} --for "${dest.replace(/"/g, "'")}"` : line
+}
+
 export async function fillArguments(text: string, chosen: Candidate[]): Promise<{ lines: string[]; filled: boolean }> {
   const needs = chosen.filter((c) => !prebuilt(c))
   const results: Map<string, string[]>[] = []
@@ -589,28 +612,52 @@ export function rankRelated(
   return out.slice(0, top)
 }
 
+/**
+ * The hosted Decide validates `questions` at max 64 (JevDecide::MAX_QUESTIONS). The pool here is
+ * the union of every step's candidates plus agents, and an ordinary two-step ask overran it —
+ * "log bugs and build an atlas epic of the gaps" was refused before any model saw it (#188391).
+ * Chunk under the limit and ask the chunks in parallel: same one round trip of latency.
+ */
+export const DECIDE_MAX_QUESTIONS = 64
+
+export function chunk<T>(items: T[], size: number): T[][] {
+  const out: T[][] = []
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
+  return out
+}
+
 async function viaRelevance(
   text: string,
   pool: Candidate[],
   timeoutMs: number,
 ): Promise<(number | undefined)[] | string> {
-  const questions = Object.fromEntries(
-    pool.map((c, i) => [
-      `c${i}`,
-      {
-        type: "boolean",
-        instructions: `Would running \`${c.run}\` (${c.describe.slice(0, 140)}) help with this request?`,
-      },
-    ]),
-  )
-  try {
+  const ask = async (part: Candidate[], offset: number): Promise<(number | undefined)[] | string> => {
+    const questions = Object.fromEntries(
+      part.map((c, i) => [
+        `c${offset + i}`,
+        {
+          type: "boolean",
+          instructions: `Would running \`${c.run}\` (${c.describe.slice(0, 140)}) help with this request?`,
+        },
+      ]),
+    )
     const sent = await postDecide({ state: `User request: "${text}"`, questions }, timeoutMs)
     if (typeof sent === "string") return sent.replace(/^Decide:/, "Decide relevance:")
     const r = sent.json as any
-    return pool.map((_, i) => {
-      const p = r?.answers?.[`c${i}`]?.probabilities?.true
+    return part.map((_, i) => {
+      const p = r?.answers?.[`c${offset + i}`]?.probabilities?.true
       return typeof p === "number" ? p : undefined
     })
+  }
+  try {
+    const parts = await Promise.all(
+      chunk(pool, DECIDE_MAX_QUESTIONS).map((part, n) => ask(part, n * DECIDE_MAX_QUESTIONS)),
+    )
+    // One failed chunk fails the ranking: a list scored on half the pool would rank the
+    // unscored half as p=0 and read as a confident answer.
+    const failed = parts.find((p): p is string => typeof p === "string")
+    if (failed) return failed
+    return (parts as (number | undefined)[][]).flat()
   } catch (e) {
     return `Decide relevance: ${e instanceof Error ? e.message : String(e)}`
   }
@@ -740,7 +787,11 @@ export async function selectTool(a: {
     : { lines: picked.map((c) => heuristicFill(c, text)), filled: false }
   timing.fill_ms = Date.now() - tf
   timing.total_ms = Date.now() - t0
-  const commands = filled.lines
+  // Both fill paths, instant and --fill, then carry the destination (#188392).
+  const commands = filled.lines.map((l) => {
+    const c = [...picked].sort((x, y) => y.name.length - x.name.length).find((x) => l.startsWith(`iris ${x.name}`))
+    return c ? withDestination(l, c, text) : l
+  })
 
   const exclude = new Set(picked.map((c) => c.name))
   const related =

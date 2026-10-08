@@ -23,6 +23,7 @@ import {
   isStructuredTreatment,
 } from "../lib/transcribe-outcome"
 import { homedir, tmpdir } from "os"
+import { fileToProject } from "../lib/file-to-project"
 import { join, basename, extname, resolve } from "path"
 
 const WHISPER_MODEL_URL =
@@ -252,6 +253,9 @@ export async function runLocalWhisper(
  * Persist, sync, and print a finished transcript. Shared by every route into the command so
  * "where did it save" has one answer regardless of which engine produced the text.
  */
+/** Set from --for (#188392). Module-level because every route funnels through finishTranscript. */
+let fileFor: string | undefined
+
 async function finishTranscript(
   abs: string,
   text: string,
@@ -346,13 +350,33 @@ async function finishTranscript(
     // Silent — server sync is best-effort
   }
 
+  // --for <project> (#188392): file the transcript where the person said it was for. A failure
+  // here is reported and sets a non-zero exit — the transcript itself is still saved above, so
+  // nothing is lost, but "filed" must never be implied when it was not.
+  let filed: Awaited<ReturnType<typeof fileToProject>> | undefined
+  if (fileFor && text) {
+    const src = syncUrl ?? basename(abs)
+    const title = `Transcript — ${src}`
+    const content = [`**Source:** ${src}`, `**Transcribed by:** ${provider}`, "", text].join("\n")
+    filed = await fileToProject(fileFor, title, content)
+    if (!filed.ok) process.exitCode = 1
+  }
+
   if (asJson) {
-    await writeJson({ provider, file: abs, transcript_path: txtPath, text })
+    await writeJson({
+      provider,
+      file: abs,
+      transcript_path: txtPath,
+      text,
+      ...(filed ? { filed: filed.ok ? { id: filed.id, bloq_id: filed.bloq.id, list_id: filed.listId } : { error: filed.error } } : {}),
+    })
     return true
   }
 
   printDivider()
   if (txtPath) console.log(`  ${bold("Saved:")}  ${highlight(txtPath)}`)
+  if (filed?.ok) console.log(`  ${bold("Filed:")}  ${highlight(`#${filed.id}`)} in ${filed.bloq.name} (#${filed.bloq.id})`)
+  else if (filed) console.log(`  ${bold("Not filed:")}  ${filed.error}`)
   printDivider()
   console.log()
   console.log(text)
@@ -385,18 +409,64 @@ function ensureDep(name: string, installCmd: string): string | null {
 // Local video download via yt-dlp (runs on user's machine, uses their cookies)
 // ============================================================================
 
+/**
+ * Where yt-dlp may live when `which` cannot see it. The CLI's PATH can be minimal (#187135: a
+ * Homebrew yt-dlp reported "not found" on a Mac that had it), and the standalone build this
+ * command installs on machines with no brew goes to ~/.iris/bin, which is on nobody's PATH.
+ */
+const YTDLP_SELF = join(homedir(), ".iris", "bin", "yt-dlp")
+export function findYtDlp(exists: (p: string) => boolean = existsSync): string | null {
+  const onPath = which("yt-dlp")
+  if (onPath) return onPath
+  for (const p of [YTDLP_SELF, "/opt/homebrew/bin/yt-dlp", "/usr/local/bin/yt-dlp", join(homedir(), ".local", "bin", "yt-dlp")]) {
+    if (exists(p)) return p
+  }
+  return null
+}
+
+/** The official standalone release asset for this machine — no Python, no package manager. */
+export function ytDlpAsset(platform: string = process.platform, arch: string = process.arch): string | null {
+  if (platform === "darwin") return "yt-dlp_macos"
+  if (platform === "linux") return arch === "arm64" ? "yt-dlp_linux_aarch64" : arch === "x64" ? "yt-dlp_linux" : null
+  if (platform === "win32") return "yt-dlp.exe"
+  return null
+}
+
+/**
+ * #188318 row 5: the only install path was `brew install yt-dlp`, so a Linux Hive node with no
+ * brew could not transcribe any social URL — it printed "Install: brew install yt-dlp" on a
+ * machine where that command does not exist. Fall back to the project's own release binary.
+ */
+async function installYtDlpStandalone(): Promise<string | null> {
+  const asset = ytDlpAsset()
+  if (!asset) return null
+  try {
+    const res = await fetch(`https://github.com/yt-dlp/yt-dlp/releases/latest/download/${asset}`, { redirect: "follow" })
+    if (!res.ok) return null
+    mkdirSync(join(homedir(), ".iris", "bin"), { recursive: true })
+    writeFileSync(YTDLP_SELF, Buffer.from(await res.arrayBuffer()), { mode: 0o755 })
+    const ok = spawnSync(YTDLP_SELF, ["--version"], { stdio: "pipe", timeout: 30_000 }).status === 0
+    return ok ? YTDLP_SELF : null
+  } catch {
+    return null
+  }
+}
+
 async function downloadVideoLocally(url: string): Promise<string | null> {
-  let ytdlp = which("yt-dlp")
+  let ytdlp = findYtDlp()
   if (!ytdlp) {
     prompts.log.info("Installing yt-dlp…")
-    const install = spawnSync("brew", ["install", "yt-dlp"], { stdio: "pipe", timeout: 120_000 })
-    if (install.status !== 0) {
-      // Try pip fallback
+    if (which("brew")) spawnSync("brew", ["install", "yt-dlp"], { stdio: "pipe", timeout: 120_000 })
+    ytdlp = findYtDlp()
+    if (!ytdlp && which("pip3")) {
       spawnSync("pip3", ["install", "--user", "yt-dlp"], { stdio: "pipe", timeout: 60_000 })
+      ytdlp = findYtDlp()
     }
-    ytdlp = which("yt-dlp")
+    if (!ytdlp) ytdlp = await installYtDlpStandalone()
     if (!ytdlp) {
-      prompts.log.error("yt-dlp not found. Install: brew install yt-dlp")
+      prompts.log.error(
+        `yt-dlp not found and could not be installed. Get it from https://github.com/yt-dlp/yt-dlp/releases and put it on your PATH or at ${YTDLP_SELF}`,
+      )
       return null
     }
   }
@@ -549,10 +619,15 @@ export const PlatformTranscribeCommand = cmd({
         default: false,
         describe: "Install the on-device engine (whisper.cpp) for this machine, then exit. Linux builds it into ~/.iris/bin with no sudo",
       })
+      .option("for", {
+        type: "string",
+        describe: "Project to file the transcript into, by name or id (e.g. --for \"Iris Orbit\")",
+      })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Transcribe")
+    fileFor = typeof args.for === "string" && args.for.trim() ? args.for.trim() : undefined
 
     // #188318: a sovereign machine with no local engine could neither upload nor transcribe,
     // and the only advice was a package manager Linux does not have.
