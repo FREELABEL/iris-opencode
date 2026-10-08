@@ -389,7 +389,9 @@ fn require_sign_in(app: &AppHandle) {
 }
 
 /// How long the main window has to claim sign-in before the standalone window opens instead.
-const SIGNIN_CLAIM_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+// 20 s, not 10: the page can only claim sign-in after asking the engine, which may still be
+// starting on a cold launch — a 10 s window lost that race and opened the window over the page.
+const SIGNIN_CLAIM_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
 static SIGNIN_IN_APP: AtomicBool = AtomicBool::new(false);
 
 /// The main window is showing sign-in itself; don't open the separate window over it.

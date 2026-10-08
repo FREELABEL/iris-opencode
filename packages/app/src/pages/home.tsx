@@ -9,7 +9,7 @@ import { createHomeScrollController } from "./home/home-scroll-controller"
 import { createHomeSessionSearchController } from "./home/home-session-search-controller"
 import { createHomeSessionsController } from "./home/home-sessions-controller"
 import { HomeSessions } from "./home/home-sessions"
-import { HomeFirstRun, firstRunPending } from "./home/home-first-run"
+import { HomeFirstRun, createSignedOut, firstRunPending } from "./home/home-first-run"
 import { ServerConnection } from "@/context/server"
 
 /**
@@ -24,6 +24,7 @@ let bootRouted = false
 export function NewHome() {
   const tabs = useTabs()
   const home = createHomeController()
+  const signedOut = createSignedOut()
 
   // On launch, land where the user actually was — not on a list of everything.
   //
@@ -43,6 +44,14 @@ export function NewHome() {
   //                         correct first screen for a brand-new install.
   createEffect(() => {
     if (bootRouted) return
+    // Signed out: stay on Home, where sign-in is. Wait for the answer rather than routing a
+    // signed-out person into a session that cannot authenticate.
+    const out = signedOut()
+    if (out === undefined) return
+    if (out) {
+      bootRouted = true
+      return
+    }
     // Both stores are async-loaded; acting before they settle would read "no tabs" for a
     // user who has plenty and strand them in a new draft on every launch.
     if (!tabs.ready() || !tabs.recentReady()) return
@@ -64,8 +73,11 @@ export function NewHome() {
   // neither finished nor skipped — gets "Connect your inbox → Here's what I see → Start" instead
   // of an empty project list. Anyone with a project never sees it.
   const [firstRun, setFirstRun] = createSignal(firstRunPending())
+  // Signed out always means sign-in, here, whatever the first-run flag or the tabs say.
   const showFirstRun = createMemo(
-    () => firstRun() && tabs.ready() && tabs.store.length === 0 && !home.project.newSession(),
+    () =>
+      signedOut() === true ||
+      (firstRun() && tabs.ready() && tabs.store.length === 0 && !home.project.newSession()),
   )
   const startFirstSession = (directory: string, prompt: string) => {
     const conn = home.server.focused()

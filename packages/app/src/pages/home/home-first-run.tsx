@@ -27,6 +27,32 @@ import "./home-first-run.css"
 
 export const FIRST_RUN_KEY = "iris.onboarding.v1"
 
+/**
+ * Signed out → true, signed in → false, not known yet → undefined.
+ *
+ * Asked of the engine, because the first-run flag cannot answer it: that flag lives in the
+ * webview's storage, which outlives the credential (reinstall, sign-out, expired key, a test
+ * that wipes ~/.iris). Gating sign-in on "first run not done" sent exactly those people to an
+ * empty project list, and 10 s later the fallback window — the chain this replaces (2026-10-08).
+ */
+export function createSignedOut() {
+  const serverSDK = useServerSDK()
+  const platform = usePlatform()
+  const [signedOut, setSignedOut] = createSignal<boolean | undefined>(undefined)
+  let tries = 0
+  const check = async () => {
+    const res = await (platform.fetch ?? globalThis.fetch)(`${serverSDK().url.replace(/\/$/, "")}/iris/onboarding/state`, {
+      headers: { Accept: "application/json" },
+    }).catch(() => null)
+    const body = res?.ok ? await res.json().catch(() => null) : null
+    if (body && typeof body.signedIn === "boolean") return setSignedOut(!body.signedIn)
+    // The engine may still be starting. Keep asking for a while; never decide on silence.
+    if (++tries < 30) setTimeout(check, 1000)
+  }
+  onMount(() => void check())
+  return signedOut
+}
+
 export function firstRunPending(): boolean {
   try {
     return !localStorage.getItem(FIRST_RUN_KEY)
