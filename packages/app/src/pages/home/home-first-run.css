@@ -1,0 +1,289 @@
+/* First-run screen (EPIC #188210). Everything is scoped under [data-component="first-run"]. */
+
+[data-component="first-run"] {
+  /* ── Steps ─────────────────────────────────────────────── */
+  .fr-steps {
+    display: flex;
+    gap: 6px;
+  }
+  .fr-steps > span {
+    height: 3px;
+    flex: 1;
+    border-radius: 2px;
+    background: var(--v2-border-border-base);
+    transition: background 300ms ease;
+  }
+  .fr-steps > span[data-on] {
+    background: var(--v2-text-text-base);
+  }
+
+  /* ── Hero art ─────────────────────────────────────────── */
+  .fr-art {
+    width: 100%;
+    max-width: 420px;
+    height: auto;
+    color: var(--v2-text-text-base);
+    overflow: visible;
+  }
+  .fr-card {
+    fill: var(--v2-background-bg-base);
+    stroke: var(--v2-border-border-base);
+    stroke-width: 1.2;
+  }
+  .fr-stroke {
+    fill: none;
+    stroke: var(--v2-text-text-muted);
+    stroke-width: 1.6;
+    stroke-linejoin: round;
+  }
+  .fr-faint {
+    fill: var(--v2-border-border-base);
+  }
+  .fr-ink {
+    fill: var(--v2-text-text-muted);
+  }
+  .fr-chip {
+    fill: none;
+    stroke: var(--v2-text-text-muted);
+    stroke-width: 1;
+  }
+  .fr-chip-text {
+    fill: var(--v2-text-text-muted);
+    font: 600 7px var(--v2-font-family-sans);
+    letter-spacing: 0.02em;
+  }
+  .fr-ring {
+    fill: var(--v2-background-bg-base);
+    stroke: var(--v2-border-border-base);
+    stroke-width: 1.2;
+  }
+  .fr-flow {
+    fill: none;
+    stroke: var(--v2-text-text-muted);
+    stroke-width: 1.4;
+    stroke-dasharray: 3 5;
+    stroke-linecap: round;
+    opacity: 0.6;
+  }
+
+  /* Arrival, once: mail slides in, IRIS lights, the draft appears. */
+  .fr-env {
+    opacity: 0;
+    animation: fr-env-in 520ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+    animation-delay: calc(var(--i) * 90ms);
+  }
+  .fr-flow {
+    animation: fr-flow 1.6s linear infinite;
+  }
+  .fr-cube {
+    transform-origin: 200px 75px;
+    animation: fr-cube-in 600ms 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .fr-halo {
+    transform-origin: 200px 75px;
+    animation: fr-halo 3.2s ease-in-out infinite;
+  }
+  .fr-draft {
+    opacity: 0;
+    animation: fr-draft-in 520ms 620ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  }
+
+  /* Reading: the mail keeps travelling into IRIS until the answer is back. */
+  .fr-art.is-reading .fr-env {
+    animation: fr-env-read 1.8s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+    animation-delay: calc(var(--i) * 300ms);
+  }
+  .fr-art.is-reading .fr-draft {
+    animation: fr-draft-wait 1.8s ease-in-out infinite;
+    opacity: 0.35;
+  }
+
+  /* ── Provider tiles ───────────────────────────────────── */
+  .fr-tile {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 18px;
+    border-radius: 14px;
+    border: 1px solid var(--v2-border-border-base);
+    background: var(--v2-background-bg-base);
+    box-shadow: var(--v2-elevation-raised);
+    text-align: left;
+    cursor: pointer;
+    transition:
+      transform 160ms cubic-bezier(0.22, 1, 0.36, 1),
+      box-shadow 160ms ease,
+      border-color 160ms ease,
+      opacity 160ms ease;
+  }
+  .fr-tile:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: var(--v2-elevation-floating);
+    border-color: var(--v2-text-text-muted);
+  }
+  .fr-tile:active:not(:disabled) {
+    transform: translateY(0) scale(0.99);
+  }
+  .fr-tile:focus-visible {
+    outline: 2px solid var(--v2-border-border-focus);
+    outline-offset: 2px;
+  }
+  .fr-tile:disabled {
+    cursor: default;
+  }
+  .fr-tile[data-state="idle-other"] {
+    opacity: 0.45;
+  }
+  .fr-tile[data-state="waiting"],
+  .fr-tile[data-state="connected"] {
+    border-color: var(--v2-text-text-muted);
+    box-shadow: var(--v2-elevation-floating);
+  }
+  .fr-logo {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    display: grid;
+    place-items: center;
+    background: var(--v2-background-bg-deep);
+    border: 1px solid var(--v2-border-border-muted);
+  }
+  .fr-logo svg {
+    width: 28px;
+    height: 28px;
+  }
+  .fr-arrow {
+    position: absolute;
+    top: 18px;
+    right: 18px;
+    color: var(--v2-text-text-faint);
+    transition: transform 160ms ease, color 160ms ease;
+  }
+  .fr-tile:hover:not(:disabled) .fr-arrow {
+    transform: translateX(3px);
+    color: var(--v2-text-text-base);
+  }
+
+  .fr-spin {
+    width: 16px;
+    height: 16px;
+    animation: fr-spin 0.8s linear infinite;
+  }
+  .fr-check {
+    width: 18px;
+    height: 18px;
+    animation: fr-pop 360ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  }
+
+  .fr-trust {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 18px;
+    color: var(--v2-text-text-muted);
+    font-size: 12.5px;
+  }
+  .fr-trust > span {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .fr-trust svg {
+    width: 14px;
+    height: 14px;
+    color: var(--v2-icon-icon-muted);
+  }
+
+  .fr-rise {
+    animation: fr-rise 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+}
+
+/* `translate`, not `transform`: these are SVG groups placed by their transform attribute, which
+   the CSS transform property would replace. The individual property composes with it. */
+@keyframes fr-env-in {
+  from {
+    opacity: 0;
+    translate: -14px 0;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+@keyframes fr-env-read {
+  0% {
+    opacity: 1;
+    translate: 0 0;
+  }
+  55% {
+    opacity: 0.25;
+    translate: 34px 0;
+  }
+  100% {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+@keyframes fr-flow {
+  to {
+    stroke-dashoffset: -16;
+  }
+}
+@keyframes fr-cube-in {
+  from {
+    opacity: 0;
+    transform: scale(0.6) rotate(-12deg);
+  }
+}
+@keyframes fr-halo {
+  50% {
+    transform: scale(1.08);
+    opacity: 0.7;
+  }
+}
+@keyframes fr-draft-in {
+  from {
+    opacity: 0;
+    translate: -10px 0;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+@keyframes fr-draft-wait {
+  50% {
+    opacity: 0.7;
+  }
+}
+@keyframes fr-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes fr-pop {
+  from {
+    transform: scale(0.4);
+    opacity: 0;
+  }
+}
+@keyframes fr-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-component="first-run"] *,
+  [data-component="first-run"] .fr-art.is-reading * {
+    animation: none !important;
+    transition: none !important;
+  }
+  [data-component="first-run"] .fr-env,
+  [data-component="first-run"] .fr-draft {
+    opacity: 1;
+  }
+}

@@ -1,6 +1,8 @@
 import { For, Match, Show, Switch, createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import { useServerSDK } from "@/context/server-sdk"
 import { usePlatform } from "@/context/platform"
+import { Check, GmailLogo, InboxArt, OutlookLogo, Spinner } from "./home-first-run-art"
+import "./home-first-run.css"
 
 /**
  * First run, inside the app (D4 #188245 + D5 #188243, EPIC #188210).
@@ -32,9 +34,18 @@ export function firstRunPending(): boolean {
 }
 
 type Thread = { id: string; subject: string; from: string; snippet: string }
+type Provider = "gmail" | "outlook"
+type Tile = { type: Provider; name: string; detail: string; Logo: (p: { class?: string }) => any }
+
+const TILES: Tile[] = [
+  { type: "gmail", name: "Gmail", detail: "Gmail and Google Workspace", Logo: GmailLogo },
+  { type: "outlook", name: "Outlook", detail: "Outlook and Microsoft 365", Logo: OutlookLogo },
+]
+
+const STEP_INDEX: Record<string, number> = { loading: 0, connect: 0, reading: 1, seen: 1, starting: 2, error: 1 }
 type Step =
   | { kind: "loading" }
-  | { kind: "connect"; note?: string }
+  | { kind: "connect"; note?: string; waiting?: Provider; connected?: { type: Provider; account?: string } }
   | { kind: "reading" }
   | { kind: "seen"; threads: Thread[]; waiting: Thread[]; line?: string; industry?: string; choices: string[] }
   | { kind: "starting" }
@@ -83,13 +94,14 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
     setStep({ kind: "connect" })
   }
 
-  async function connect(type: "gmail" | "outlook") {
+  async function connect(type: Provider) {
+    setStep({ kind: "connect", waiting: type, note: "Opening your browser…" })
     const r = await post("/iris/integrations/connect", { type }).catch(() => null)
     if (!r?.measured || !r.url) {
       return setStep({ kind: "connect", note: r?.reason ?? "Couldn't start the connection. Try again." })
     }
     platform.openExternal(r.url)
-    setStep({ kind: "connect", note: "Approve IRIS in your browser — this page continues on its own." })
+    setStep({ kind: "connect", waiting: type, note: "Approve IRIS in your browser. This page continues on its own." })
 
     // Poll, don't ask them to come back and click: the old menu said "reopen this menu".
     stopPoll()
@@ -102,7 +114,9 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
       const s = await call("/iris/onboarding/state").catch(() => null)
       if (s?.mail?.connected) {
         stopPoll()
-        void read()
+        // Let the person SEE it worked before the screen moves on.
+        setStep({ kind: "connect", connected: { type, account: s.mail.account } })
+        setTimeout(() => void read(), 900)
       }
     }, POLL_MS)
   }
@@ -157,45 +171,131 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
   onMount(begin)
 
   return (
-    <div class="mx-auto flex w-full max-w-[640px] flex-col gap-6 px-6 py-14">
+    <div data-component="first-run" class="mx-auto flex w-full max-w-[640px] flex-col gap-6 px-6 py-14">
+      <div class="fr-steps" role="progressbar" aria-valuemin={1} aria-valuemax={3} aria-valuenow={STEP_INDEX[step().kind] + 1}>
+        <For each={[0, 1, 2]}>{(i) => <span data-on={i <= STEP_INDEX[step().kind] ? "" : undefined} />}</For>
+      </div>
       <Switch>
         <Match when={step().kind === "loading" || step().kind === "reading" || step().kind === "starting"}>
-          <div class="flex flex-col gap-2">
+          <div class="fr-rise flex flex-col items-center gap-2 text-center">
+            <Show when={step().kind === "reading"}>
+              <div class="mb-4 flex w-full justify-center">
+                <InboxArt reading />
+              </div>
+            </Show>
             <h1 class="text-v2-text-text-base text-[22px] [font-weight:600]">
               {step().kind === "reading" ? "Reading your recent mail…" : step().kind === "starting" ? "Setting up your workspace…" : "One moment…"}
             </h1>
             <p class="text-v2-text-text-muted text-[14px]">
               {step().kind === "reading" ? "Only to see what's waiting on you. Nothing is sent." : ""}
             </p>
-            <div class="mt-2 h-1 w-full overflow-hidden rounded bg-v2-background-bg-subtle">
-              <div class="h-full w-1/3 animate-pulse rounded bg-v2-text-text-muted" />
-            </div>
+            <Show when={step().kind !== "reading"}>
+              <Spinner class="mt-2 text-v2-text-text-muted" />
+            </Show>
           </div>
         </Match>
 
         <Match when={step().kind === "connect" && (step() as Extract<Step, { kind: "connect" }>)}>
           {(s) => (
-            <div class="flex flex-col gap-4">
-              <h1 class="text-v2-text-text-base text-[24px] [font-weight:600]">Connect your inbox</h1>
-              <p class="text-v2-text-text-muted text-[15px] leading-relaxed">
-                IRIS reads your recent mail to see what's waiting on you, then gets to work on it. It drafts — it
-                never sends without you.
-              </p>
-              <button
-                class="rounded-[10px] bg-white px-4 py-3 text-[15px] text-[#1f1f1f] [font-weight:600] hover:bg-[#f1f1f1]"
-                onClick={() => void connect("gmail")}
-              >
-                Connect Gmail
-              </button>
-              <button
-                class="rounded-[10px] border border-v2-border-border-base px-4 py-3 text-[15px] hover:bg-v2-background-bg-subtle"
-                onClick={() => void connect("outlook")}
-              >
-                Connect Outlook
-              </button>
+            <div class="fr-rise flex flex-col gap-7">
+              <div class="flex flex-col items-center gap-5 text-center">
+                <InboxArt />
+                <div class="flex flex-col gap-2">
+                  <h1 class="text-v2-text-text-base text-[26px] leading-tight [font-weight:650]">Connect your inbox</h1>
+                  <p class="text-v2-text-text-muted mx-auto max-w-[460px] text-[15px] leading-relaxed">
+                    IRIS reads your recent mail, finds what's waiting on you, and drafts the replies. You decide what
+                    gets sent.
+                  </p>
+                </div>
+              </div>
+
+              <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <For each={TILES}>
+                  {(t) => {
+                    const state = () => {
+                      const c = s()
+                      if (c.connected) return c.connected.type === t.type ? "connected" : "idle-other"
+                      if (c.waiting) return c.waiting === t.type ? "waiting" : "idle-other"
+                      return "idle"
+                    }
+                    return (
+                      <button
+                        class="fr-tile"
+                        data-state={state()}
+                        disabled={state() === "connected"}
+                        onClick={() => void connect(t.type)}
+                      >
+                        <span class="fr-logo">
+                          <t.Logo />
+                        </span>
+                        <span class="flex flex-col gap-0.5">
+                          <span class="text-v2-text-text-base text-[16px] [font-weight:600]">
+                            {state() === "connected" ? `${t.name} connected` : `Connect ${t.name}`}
+                          </span>
+                          <span class="text-v2-text-text-muted text-[13px]">
+                            <Switch fallback={t.detail}>
+                              <Match when={state() === "waiting"}>Waiting for your browser…</Match>
+                              <Match when={state() === "connected"}>
+                                {s().connected?.account ?? "Reading your mail next"}
+                              </Match>
+                            </Switch>
+                          </span>
+                        </span>
+                        <span class="fr-arrow">
+                          <Switch
+                            fallback={
+                              <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+                                <path d="M6 3l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                              </svg>
+                            }
+                          >
+                            <Match when={state() === "waiting"}>
+                              <Spinner />
+                            </Match>
+                            <Match when={state() === "connected"}>
+                              <Check />
+                            </Match>
+                          </Switch>
+                        </span>
+                      </button>
+                    )
+                  }}
+                </For>
+              </div>
+
               <Show when={s().note}>
-                <p class="text-v2-text-text-muted text-[13px]">{s().note}</p>
+                <p class="text-v2-text-text-muted text-center text-[13px]" aria-live="polite">
+                  {s().note}
+                  <Show when={s().waiting}>
+                    {" "}
+                    <button class="underline hover:text-v2-text-text-base" onClick={() => void connect(s().waiting!)}>
+                      Open it again
+                    </button>
+                  </Show>
+                </p>
               </Show>
+
+              <div class="fr-trust justify-center">
+                <span>
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M4.5 7V5a3.5 3.5 0 0 1 7 0v2" fill="none" stroke="currentColor" stroke-width="1.5" />
+                    <rect x="3" y="7" width="10" height="7" rx="2" fill="currentColor" />
+                  </svg>
+                  Official Google & Microsoft sign-in
+                </span>
+                <span>
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M3 11.5l6.8-6.8 1.5 1.5-6.8 6.8H3z M10.5 4l1.5-1.5 1.5 1.5L12 5.5z" fill="currentColor" />
+                  </svg>
+                  Never sends on its own
+                </span>
+                <span>
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M8 2a6 6 0 1 0 0 12A6 6 0 0 0 8 2zm-3 5.25h6v1.5H5z" fill="currentColor" />
+                  </svg>
+                  Disconnect anytime
+                </span>
+              </div>
             </div>
           )}
         </Match>
@@ -278,7 +378,7 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
 
       {/* Not while the workspace is being made: skipping half-way would leave a folder and no session. */}
       <Show when={step().kind !== "starting"}>
-        <button class="text-v2-text-text-muted w-fit text-[13px] hover:underline" onClick={() => finish("skipped")}>
+        <button class="text-v2-text-text-muted mx-auto w-fit text-[13px] hover:underline" onClick={() => finish("skipped")}>
           Skip — I'll open a folder myself
         </button>
       </Show>
