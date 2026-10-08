@@ -570,6 +570,22 @@ export function commandLines(content: string): string[] {
   return out
 }
 
+/**
+ * Sure enough to ACT on (#188613). A pick is advice either way; `--run` turns it into an action, and
+ * on 2026-10-08 three of five onboarding phrasings came back at 28–47% and one sent "reply to … in
+ * my email" to `sites reply`. A keyword-order pick (no model answered) is a guess, never confident.
+ */
+// Measured 2026-10-08 on 152 cases (#188613): share of picks that were RIGHT at each bar —
+// 0.5: 79% · 0.6: 82% · 0.7: 85% · 0.8: 86% · 0.9: 88%. Precision plateaus; wrong picks reach 0.99.
+// 0.7 is the knee. Even there about 1 in 7 confident picks is wrong, so a caller that acts on a
+// pick should still show the alternatives — `confident` narrows the risk, it does not remove it.
+export const RUN_MIN = 0.7
+export function confidentPick(by: string, confidence?: number | null): boolean {
+  if (by === "only candidate") return true
+  if (by === "keyword" || confidence == null) return false
+  return confidence >= RUN_MIN
+}
+
 /** A command still carrying a <required> placeholder cannot be run as-is. */
 export const needsArgument = (run: string) => /<[^>]+>/.test(run)
 
@@ -674,6 +690,7 @@ export async function selectTool(a: {
   timeout?: number
   top?: number
   agents?: boolean
+  force?: boolean
 }) {
   const text = a.text.trim()
   // Agents load (cache or API) while the index is searched — never on the critical path twice.
@@ -827,6 +844,8 @@ export async function selectTool(a: {
           agents_source: loaded.source,
           timing,
           confidence: chosen.confidence ?? null,
+          // Callers that act on the pick (onboarding, agents) should check this, not re-derive it.
+          confident: confidentPick(chosen.by, chosen.confidence),
           ms: chosen.ms ?? null,
           fell_back: misses,
           related_by: relatedBy,
@@ -875,6 +894,13 @@ export async function selectTool(a: {
 
   if (a.run) {
     const line = commands[0]
+    if (!a.force && !confidentPick(chosen.by, chosen.confidence)) {
+      const why = chosen.by === "keyword" ? "no model decided it (keyword order)" : `only ${Math.round((chosen.confidence ?? 0) * 100)}% sure`
+      console.log(`  ${dim(`not running — ${why}. Pick one, or re-run with --force:`)}`)
+      for (const l of [line, ...related.slice(0, 3).map((r) => r.run)]) console.log(`    ${highlight(l)}`)
+      process.exitCode = 3
+      return
+    }
     if (needsArgument(line)) {
       console.log(`  ${dim("needs an argument — run it yourself:")} ${highlight(line)}`)
       return

@@ -141,6 +141,8 @@ function score(e: Entry, terms: string[], raw: string, rarity: Map<string, numbe
   return s
 }
 
+const LEADING_VERB: Record<string, string> = { email: "mail send", text: "imessage send", imessage: "imessage send" }
+
 /** "bugs" → "bug", "bloqs" → "bloq". Deliberately crude: only a trailing -s on words over 3 letters, never -ss. */
 export function singular(w: string): string {
   return w.length > 3 && w.endsWith("s") && !w.endsWith("ss") ? w.slice(0, -1) : w
@@ -177,6 +179,11 @@ export function searchCapabilities(
       for (const s of synonyms) for (const w of s.split(/\s+/)) expanded.add(w)
     }
   }
+
+  // A request that OPENS with a channel used as a verb is a send: "email david the proposal",
+  // "text mia I'm late". No phrase list can name every recipient, so the first word decides (#188613).
+  const lead = LEADING_VERB[terms[0] ?? ""]
+  if (lead) expanded.add(lead)
 
   // People say "bloq"; every bloq command is indexed under its canonical name `atlas` (#188493).
   // Added only when the word is TYPED — as a synonym it also fired on "project" and lifted all 60

@@ -520,6 +520,16 @@ const TERMS: Record<string, string[]> = {
   intent: ["which command", "what command", "which tool", "what tool", "what should i run", "what do i run", "pick a command", "choose a command", "tool selection", "in plain english", "natural language"],
   memory: ["remember", "recall", "knowledge base", "rag"],
   bug: ["issue", "report a problem", "defect", "ticket"],
+  // "reply to … in my email" saw only iMessage and `sites reply` (#188613): nothing tied a person's
+  // email words to the `mail` / `gmail` commands. `email` itself is the NEWSLETTER command — a list,
+  // not a person — so the word "email" has to reach mail too, and the newsletter words stay with it.
+  // Split by verb: reading words alone dragged "reply to … in my email" onto gmail inbox/unread.
+  // No "gmail" here: Gmail commands already match that word by name, and as a synonym it sent
+  // "is my gmail integration actually working" to gmail inbox instead of integrations health.
+  mail: ["email", "emails", "e-mail", "my email", "outlook"],
+  // Reading: "check my email" lost its route when "gmail" stopped being a mail synonym.
+  "gmail inbox": ["check my email", "check email", "my inbox", "new emails", "any emails", "what's in my inbox", "whats in my inbox"],
+  "mail send": ["reply to", "write back", "respond to", "email him", "email her", "email them", "send an email", "send email", "email back"],
   // A published note reads at /n/<uuid> and `atlas use` is the ONLY verb that returns its
   // text — but its own words ("pull a shared Atlas item's context") share nothing with how
   // anyone asks for it. Every phrasing below returned zero hits for `atlas use` on 2026-08-27,

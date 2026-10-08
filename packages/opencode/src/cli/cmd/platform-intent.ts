@@ -183,7 +183,12 @@ export const PlatformIntentCommand = cmd({
       .option("model", { describe: "model to escalate to (nano only)", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("run", {
-        describe: "run the picked command (not if it still needs an argument)",
+        describe: "run the picked command (not if it still needs an argument, or if the pick is unsure — see --force)",
+        type: "boolean",
+        default: false,
+      })
+      .option("force", {
+        describe: "with --run: run the pick even when no model decided it or the model was under 70% sure",
         type: "boolean",
         default: false,
       })
@@ -228,6 +233,7 @@ export const PlatformIntentCommand = cmd({
         text: String(a.text),
         json: a.json,
         run: a.run,
+        force: a.force === true,
         limit: Number(a.limit) || 12,
         decide: a.via === "auto" || a.via === "decide",
         platform: a.via === "auto" || a.via === "platform",
