@@ -38,8 +38,9 @@ https://app.mailjet.com/account/apikeys and run `connect` again.
 ## 3. Build a list
 
 ```bash
-iris integrations exec mailjet create_contact_list name="NCMA Members"
-iris integrations exec mailjet add_contact_to_list list_id=<LIST_ID> email=jane@example.com name="Jane Doe"
+# Writes are a dry run unless you add --apply (shows what would happen, changes nothing).
+iris integrations exec mailjet create_contact_list name="NCMA Members" --apply
+iris integrations exec mailjet add_contact_to_list list_id=<LIST_ID> email=jane@example.com name="Jane Doe" --apply
 ```
 
 Adding a contact never re-subscribes someone who unsubscribed. For many contacts, call
@@ -52,7 +53,7 @@ One email, now:
 ```bash
 iris integrations exec mailjet send_transactional_email \
   to=jane@example.com subject="Chapter update" \
-  html_body="<p>Hello</p>" from_email=you@yourdomain.com from_name="NCMA Fort Worth"
+  html_body="<p>Hello</p>" from_email=you@yourdomain.com from_name="NCMA Fort Worth" --apply
 ```
 
 `from_email` is required, and it must be a sender your Mailjet account has validated. IRIS never
@@ -63,7 +64,7 @@ A campaign to a list:
 ```bash
 iris integrations exec mailjet create_campaign \
   list_id=<LIST_ID> subject="October newsletter" from_email=you@yourdomain.com \
-  from_name="NCMA Fort Worth" html_content="<p>…</p>"
+  from_name="NCMA Fort Worth" html_content="<p>…</p>" --apply
 ```
 
 `create_campaign` creates a **draft** in Mailjet. It never sends. Review the draft in Mailjet and

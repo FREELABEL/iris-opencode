@@ -36,6 +36,7 @@ import { isLocalOAuthProvider, runLocalOAuthConnect } from "./integration-oauth-
 import { readIntegrationStores, findStatusDisagreements, describeDisagreement, type StoreRef } from "./integration-stores"
 import { PathwaysCommand } from "./platform-integrations-pathways"
 import { firstArray } from "../../util/array"
+import { isReadAction, knownFunction, dryRunResult } from "./integration-write-gate"
 import { openBrowser } from "../../util/browser"
 
 // ============================================================================
@@ -97,10 +98,26 @@ const INTEGRATION_FUNCTIONS: Record<string, { name: string; description: string 
     { name: "create_custom_audience", description: "Create a custom audience" },
     { name: "get_insights", description: "Performance data for a campaign/ad set/ad" },
   ],
+  // Verified 2026-10-08 against fl-iris-api GmailIntegrationService (MAILBOX_ACTIONS + native).
+  // This list showed three functions while the backend had sixteen, so a desktop agent guessed
+  // label-action names for an hour and one "probe" created a real label in a client's mailbox.
   "gmail": [
     { name: "read_emails", description: "Read emails from inbox (limit, unread_only, query)" },
-    { name: "search_emails", description: "Search emails with Gmail query syntax" },
-    { name: "send_email", description: "Send an email (to, subject, body)" },
+    { name: "search_emails", description: "Search emails with Gmail query syntax (query, limit)" },
+    { name: "get_email", description: "Read one email in full (message_id)" },
+    { name: "get_labels", description: "List your labels (include_system)" },
+    { name: "send_email", description: "Send an email (to, subject, body, cc, bcc) — WRITE" },
+    { name: "reply_to_email", description: "Reply to an email (message_id, body, reply_all) — WRITE" },
+    { name: "create_draft", description: "Create a draft (to, subject, body) — WRITE" },
+    { name: "create_label", description: "Create a label (label_name) — WRITE" },
+    { name: "add_label", description: "Add a label to emails (message_ids, label, create_if_missing) — WRITE" },
+    { name: "move_to_label", description: "Move emails out of the inbox into a label (message_ids, label, create_if_missing) — WRITE" },
+    { name: "remove_label", description: "Remove a label from emails (message_ids, label) — WRITE" },
+    { name: "mark_as_read", description: "Mark emails read (message_ids) — WRITE" },
+    { name: "mark_as_unread", description: "Mark emails unread (message_ids) — WRITE" },
+    { name: "archive_emails", description: "Archive emails (message_ids) — WRITE" },
+    { name: "move_to_inbox", description: "Move emails back to the inbox (message_ids) — WRITE" },
+    { name: "trash_emails", description: "Move emails to trash (message_ids) — WRITE" },
   ],
   // Verified against fl-iris-api GoogleDriveIntegrationService + ComposioClient. This list
   // used to show three functions with no parameters, so an agent looking for a folder guessed
@@ -1872,7 +1889,19 @@ const ExecCommand = cmd({
       .option("account", {
         type: "string",
         describe: "target a connected account by email or name (e.g. --account=alex@gmail.com)",
-      }),
+      })
+      .option("apply", {
+        type: "boolean",
+        default: false,
+        describe: "actually run a write action (send, create, move, delete…). Without it, writes are a dry run that changes nothing",
+      })
+      .option("dry-run", {
+        type: "boolean",
+        default: false,
+        describe: "rehearse even a read action",
+      })
+      .example("iris integrations exec gmail create_label label_name=Clients", "dry run — shows what would happen, changes nothing")
+      .example("iris integrations exec gmail create_label label_name=Clients --apply", "does it for real"),
   async handler(args) {
     // Suppress all UI chrome when --json for clean pipeable output (#55735)
     if (!args.json) {
@@ -2011,6 +2040,33 @@ const ExecCommand = cmd({
         // When the upstream says the function does not exist, answer with the ones that do,
         // in the same response — the caller is usually an agent that will otherwise guess again.
         const known = knownFunctionsFor(target)
+
+        // DRY RUN BY DEFAULT for anything that is not a read (integration-write-gate.ts). A name this
+        // CLI does not know is stopped FIRST, before even a rehearsal: rehearsing a guessed name would
+        // suggest it exists, which is the loop that put a probe label in a client's mailbox.
+        const isKnown = knownFunction(fn, known)
+        const apply = Boolean(args.apply)
+        const rehearse = Boolean(args["dry-run"]) || (!apply && !isReadAction(fn))
+        if (rehearse && isKnown === false) {
+          const out = { success: false, error: `${fn} is not a known ${target} function — nothing was run.`, available_functions: known }
+          if (args.json) { await writeJson(out); process.exitCode = 1; return }
+          prompts.log.error(out.error)
+          for (const f of known ?? []) console.log(`  ${highlight(f.name)}  ${dim(f.description)}`)
+          process.exitCode = 1
+          prompts.outro("Done")
+          return
+        }
+        if (rehearse) {
+          const out = dryRunResult(target, fn, params)
+          // Exit 2 = "not executed": distinct from 0 (done) and 1 (failed), so a script or agent
+          // that expected the write cannot mistake a rehearsal for success.
+          process.exitCode = 2
+          if (args.json) { await writeJson(out); return }
+          prompts.log.warn(`DRY RUN — ${target}.${fn} would run with:`)
+          console.log(`  ${dim(JSON.stringify(params))}`)
+          prompts.outro(`Nothing was changed. To do it for real, add ${highlight("--apply")}`)
+          return
+        }
         const withHint = (result: any) =>
           isFailedResult(result) && isUnknownFunctionError(result) && known
             ? {
