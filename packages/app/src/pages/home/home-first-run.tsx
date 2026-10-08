@@ -42,9 +42,10 @@ const TILES: Tile[] = [
   { type: "outlook", name: "Outlook", detail: "Outlook and Microsoft 365", Logo: OutlookLogo },
 ]
 
-const STEP_INDEX: Record<string, number> = { loading: 0, connect: 0, reading: 1, seen: 1, starting: 2, error: 1 }
+const STEP_INDEX: Record<string, number> = { signin: 0, loading: 0, connect: 0, reading: 1, seen: 1, starting: 2, error: 1 }
 type Step =
   | { kind: "loading" }
+  | { kind: "signin" }
   | { kind: "connect"; note?: string; waiting?: Provider; connected?: { type: Provider; account?: string } }
   | { kind: "reading" }
   | { kind: "seen"; threads: Thread[]; waiting: Thread[]; line?: string; industry?: string; choices: string[] }
@@ -90,6 +91,7 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
     setStep({ kind: "loading" })
     const s = await call("/iris/onboarding/state").catch(() => null)
     if (!s) return setStep({ kind: "error", reason: "IRIS isn't answering yet.", retry: begin })
+    if (s.signedIn === false) return waitForSignIn()
     if (s.mail?.connected) return read()
     setStep({ kind: "connect" })
   }
@@ -119,6 +121,27 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
         setTimeout(() => void read(), 900)
       }
     }, POLL_MS)
+  }
+
+  // Signed out: the sign-in window is open on top. Everything here is locked behind it rather
+  // than offered — a Connect button that can only fail with "not signed in" is worse than none.
+  // Sign-in restarts the app, so this poll is the fallback, not the main path.
+  function waitForSignIn() {
+    setStep({ kind: "signin" })
+    stopPoll()
+    poll = setInterval(async () => {
+      const s = await call("/iris/onboarding/state").catch(() => null)
+      if (s?.signedIn) {
+        stopPoll()
+        void begin()
+      }
+    }, POLL_MS)
+  }
+
+  const showSignIn = () => {
+    try {
+      void (window as any).__TAURI__?.core?.invoke?.("open_login_window")
+    } catch {}
   }
 
   async function read() {
@@ -192,6 +215,28 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
             <Show when={step().kind !== "reading"}>
               <Spinner class="mt-2 text-v2-text-text-muted" />
             </Show>
+          </div>
+        </Match>
+
+        <Match when={step().kind === "signin"}>
+          <div class="fr-rise relative flex flex-col items-center gap-6 text-center">
+            <div class="fr-locked fr-hero" aria-hidden="true">
+              <InboxArt />
+            </div>
+            <div class="fr-gate">
+              <div class="flex items-center gap-2 text-v2-text-text-muted text-[13px]">
+                <Spinner />
+                Waiting for you to sign in
+              </div>
+              <h1 class="text-v2-text-text-base text-[24px] leading-tight [font-weight:650]">Finish signing in</h1>
+              <p class="text-v2-text-text-muted max-w-[400px] text-[15px] leading-relaxed">
+                Use the <span class="text-v2-text-text-base">Sign in to IRIS</span> window. This screen picks up as soon as
+                you're in, and your inbox is next.
+              </p>
+              <button class="fr-gate-btn" onClick={showSignIn}>
+                Show the sign-in window
+              </button>
+            </div>
           </div>
         </Match>
 
@@ -379,7 +424,7 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
       </Switch>
 
       {/* Not while the workspace is being made: skipping half-way would leave a folder and no session. */}
-      <Show when={step().kind !== "starting"}>
+      <Show when={step().kind !== "starting" && step().kind !== "signin"}>
         <button class="text-v2-text-text-muted mx-auto w-fit text-[13px] hover:underline" onClick={() => finish("skipped")}>
           Skip — I'll open a folder myself
         </button>

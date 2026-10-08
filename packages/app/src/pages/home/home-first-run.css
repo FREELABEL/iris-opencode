@@ -233,6 +233,45 @@
     color: var(--v2-icon-icon-muted);
   }
 
+  /* Signed out: the art stays, dimmed, so the screen reads as "next" rather than "empty". */
+  .fr-locked {
+    opacity: 0.3;
+    filter: saturate(0.6);
+    pointer-events: none;
+  }
+  .fr-gate {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 22px 26px 24px;
+    border-radius: 16px;
+    border: 1px solid rgba(168, 85, 247, 0.45);
+    background: var(--v2-background-bg-base);
+    box-shadow:
+      0 0 0 4px rgba(168, 85, 247, 0.1),
+      0 0 50px -16px rgba(168, 85, 247, 0.5),
+      0 0 90px -30px rgba(34, 211, 238, 0.4);
+  }
+  .fr-gate-btn {
+    margin-top: 6px;
+    padding: 9px 16px;
+    border-radius: 10px;
+    font-size: 14px;
+    font-weight: 600;
+    color: #fff;
+    background: linear-gradient(90deg, #9333ea, #2563eb);
+    transition: background 160ms ease, box-shadow 160ms ease;
+  }
+  .fr-gate-btn:hover {
+    background: linear-gradient(90deg, #7e22ce, #1d4ed8);
+    box-shadow: 0 12px 34px -12px rgba(168, 85, 247, 0.7);
+  }
+  .fr-gate-btn:focus-visible {
+    outline: 2px solid var(--v2-border-border-focus);
+    outline-offset: 2px;
+  }
+
   .fr-rise {
     animation: fr-rise 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
   }
