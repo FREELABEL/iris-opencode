@@ -225,6 +225,30 @@
       "purpose": "See every AI session across your Hive — machine, model, branch, staleness — and send input into any of them without knowing which machine holds it."
     },
     {
+      "src": "how-to/answer-agents-from-anywhere.md",
+      "dest": "how-to/answer-agents-from-anywhere.md",
+      "managed": true,
+      "purpose": "See which agents are waiting on you — the question and its options — and answer them from any machine or your phone."
+    },
+    {
+      "src": "how-to/public-url-for-a-local-port.md",
+      "dest": "how-to/public-url-for-a-local-port.md",
+      "managed": true,
+      "purpose": "Give something running on your machine a public https URL, encrypted to the machine, that closes when you stop."
+    },
+    {
+      "src": "how-to/ask-about-your-screen.md",
+      "dest": "how-to/ask-about-your-screen.md",
+      "managed": true,
+      "purpose": "Drag over any part of your screen and get a short answer about it — errors, charts, messages."
+    },
+    {
+      "src": "how-to/shared-folder-across-machines.md",
+      "dest": "how-to/shared-folder-across-machines.md",
+      "managed": true,
+      "purpose": "One folder on every machine in your Hive — read on demand, saved files visible everywhere at once."
+    },
+    {
       "src": "how-to/iris-login.md",
       "dest": "how-to/iris-login.md",
       "managed": true,
