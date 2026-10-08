@@ -47,3 +47,17 @@ test("a dry run reports success:false and how to apply — never reads as done",
   expect(d.message).toMatch(/--apply/)
   expect(d.params).toEqual({ label_name: "Clients" })
 })
+
+// #188637 — every exec result names the mailbox/account that answered and the machine that asked.
+import { accountLine } from "../../src/cli/cmd/platform-run"
+import os from "os"
+
+test("accountLine names the account, its connection id and this machine", () => {
+  const line = accountLine({ success: true, _account: { integration_id: 136, account: "archive@vanguardhcs.com" } })
+  expect(line).toBe(`↳ archive@vanguardhcs.com (#136) · from ${os.hostname()}`)
+})
+
+test("accountLine reads a server dry-run plan too, and says when the address is unknown", () => {
+  expect(accountLine({ dry_run: true, would_run: { integration_id: 148 } })).toBe(`↳ connection #148 (address unknown) (#148) · from ${os.hostname()}`)
+  expect(accountLine({ success: true })).toBeNull()
+})

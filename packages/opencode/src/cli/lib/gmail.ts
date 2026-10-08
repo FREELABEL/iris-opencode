@@ -32,6 +32,9 @@ export interface GmailMessage {
   body_text: string
   labels: string[]
   is_unread: boolean
+  /** The mailbox this message lives in. Its id is only valid there (see setGmailAccount). */
+  mailbox?: string
+  integration_id?: number
 }
 
 export interface GmailLabel {
@@ -163,19 +166,41 @@ export async function getGmailStatus(opts: { deep?: boolean } = {}): Promise<{ o
  * including Composio's own errors (e.g. a connected account in EXPIRED state), which is
  * the signal that used to be thrown away.
  */
+/**
+ * Which mailbox `iris gmail` talks to. Unset = the server's default (the login's own mailbox).
+ * 2026-10-08: with no way to choose, a navigator's agent searched one mailbox here and moved the
+ * results with `integrations exec --integration-id=136` in another — every move 404'd.
+ */
+let gmailAccount: { integrationId?: number; account?: string } = {}
+let lastAccount: { account?: string; integration_id?: number; notice?: string } | null = null
+
+export function setGmailAccount(sel: { integrationId?: number; account?: string }): void {
+  gmailAccount = { integrationId: sel.integrationId || undefined, account: sel.account || undefined }
+}
+
+/** The mailbox that answered the last call (from the server's `_account`). */
+export function lastGmailAccount(): { account?: string; integration_id?: number; notice?: string } | null {
+  return lastAccount
+}
+
 async function gmailExec(action: string, params: Record<string, unknown>): Promise<any> {
   const { irisFetch, IRIS_API, resolveUserId } = await import("../cmd/iris-api")
 
   const userId = await resolveUserId()
   if (!userId) throw new Error("Not signed in — run: iris auth login")
 
+  const body: Record<string, unknown> = { integration: "gmail", action, params }
+  if (gmailAccount.integrationId) body.integration_id = gmailAccount.integrationId
+  else if (gmailAccount.account) body.account = gmailAccount.account
+
   const res = await irisFetch(
     `/api/v1/users/${userId}/integrations/execute-direct`,
-    { method: "POST", body: JSON.stringify({ integration: "gmail", action, params }) },
+    { method: "POST", body: JSON.stringify(body), headers: { "X-Iris-Node": (await import("os")).hostname() } },
     IRIS_API,
   )
 
   const data = (await res.json().catch(() => ({}))) as any
+  if (data?._account) lastAccount = data._account
 
   if (!res.ok) {
     throw new Error(data?.error ?? data?.message ?? `Gmail request failed (HTTP ${res.status}).`)
@@ -279,6 +304,8 @@ function extractMessages(data: any): GmailMessage[] {
       body_text: str(m.messageText ?? m.body_text ?? m.message_text ?? m.body) || decodePayload(m),
       labels: Array.isArray(labels) ? labels : [],
       is_unread: (Array.isArray(labels) ? labels : []).includes("UNREAD"),
+      ...(m.mailbox ? { mailbox: String(m.mailbox) } : {}),
+      ...(m.integration_id ? { integration_id: Number(m.integration_id) } : {}),
     }
   })
 }
