@@ -35,6 +35,7 @@ import { HiveSessionsCommand, HiveSendInputCommand } from "./platform-hive-sessi
 import { HiveTunnelCommand } from "./platform-hive-tunnel"
 import { HiveAnswerCommand, HiveAnswerHookCommand, HiveAnswersCommand, HiveAwayCommand } from "./platform-hive-answer"
 import { HiveTriggerCommand } from "./platform-hive-trigger"
+import { HiveClaimCommand } from "./platform-hive-claim"
 import { HiveRentCommand, HiveRentalsCommand, HiveReleaseCommand, HiveProvidersCommand } from "./platform-hive-rent"
 import { VaultCommandExport } from "./platform-vault"
 import {
@@ -5000,6 +5001,7 @@ export const PlatformHiveCommand = productCommand({
       .command(HiveTunnelCommand)
       .command(HiveAnswerCommand)
       .command(HiveTriggerCommand)
+      .command(HiveClaimCommand)
       .command(HiveAnswersCommand)
       .command(HiveAwayCommand)
       .command(HiveAnswerHookCommand)
