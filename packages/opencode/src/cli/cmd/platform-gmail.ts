@@ -1,8 +1,9 @@
+import os from "os"
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { printDivider, dim, bold, success, writeJson } from "./iris-api"
-import { getToken, getLabels, listMessages, searchMessages, getThread, lastError } from "../lib/gmail"
+import { getToken, getLabels, listMessages, searchMessages, getThread, lastError, setGmailAccount, lastGmailAccount } from "../lib/gmail"
 
 async function requireToken(): Promise<string | null> {
   const token = await getToken()
@@ -59,6 +60,7 @@ const GmailInboxCommand = cmd({
 
       if (!messages.length) {
         prompts.log.info(`No messages matching "${args.query}"`)
+        printMailboxLine()
         prompts.outro("Done")
         return
       }
@@ -74,6 +76,7 @@ const GmailInboxCommand = cmd({
         if (msg.snippet) console.log(`    ${dim(msg.snippet.slice(0, 80))}`)
       }
       printDivider()
+      printMailboxLine()
       prompts.outro(`${success("✓")} ${messages.length} message${messages.length === 1 ? "" : "s"}\n  ${dim("iris gmail read <message-id>")}`)
     } catch (err: any) {
       prompts.log.error(err.message)
@@ -118,6 +121,7 @@ const GmailReadCommand = cmd({
           console.log()
         }
         printDivider()
+        printMailboxLine()
         prompts.outro(`${success("✓")} ${thread.messages.length} message${thread.messages.length === 1 ? "" : "s"} in thread`)
       } else {
         const { getMessageById } = await import("../lib/gmail")
@@ -141,6 +145,7 @@ const GmailReadCommand = cmd({
         console.log(`  ${body.replace(/\n/g, "\n  ")}`)
         printDivider()
         if (msg.thread_id) prompts.log.info(dim(`Thread: iris gmail read ${msg.thread_id} --thread`))
+        printMailboxLine()
         prompts.outro(success("✓"))
       }
     } catch (err: any) {
@@ -175,6 +180,7 @@ const GmailSearchCommand = cmd({
 
       if (!messages.length) {
         prompts.log.info(`No messages matching "${args.query}"`)
+        printMailboxLine()
         prompts.outro("Done")
         return
       }
@@ -192,6 +198,7 @@ const GmailSearchCommand = cmd({
         console.log()
       }
       printDivider()
+      printMailboxLine()
       prompts.outro(`${success("✓")} ${messages.length} result${messages.length === 1 ? "" : "s"}`)
     } catch (err: any) {
       prompts.log.error(err.message)
@@ -233,6 +240,7 @@ const GmailLabelsCommand = cmd({
         console.log(`  ${bold(l.name)}${total}${unread}${isUser}`)
       }
       printDivider()
+      printMailboxLine()
       prompts.outro(`${success("✓")} ${labels.length} label${labels.length === 1 ? "" : "s"}`)
     } catch (err: any) {
       prompts.log.error(err.message)
@@ -254,11 +262,27 @@ const GmailUnreadCommand = cmd({
   },
 })
 
+/**
+ * One line naming the mailbox that answered. Printed after every non-JSON gmail command; in JSON
+ * each message carries `mailbox` + `integration_id` itself. Message ids are only valid in the
+ * mailbox they came from — act on them with the same --integration-id.
+ */
+export function printMailboxLine(): void {
+  const a = lastGmailAccount()
+  if (!a) return
+  const who = a.account ?? `connection #${a.integration_id}`
+  console.log(dim(`  ↳ mailbox: ${who}${a.integration_id ? ` (#${a.integration_id})` : ""} · from ${os.hostname()}`))
+  if (a.notice) console.log(dim(`    ${a.notice}`))
+}
+
 export const PlatformGmailCommand = cmd({
   command: "gmail",
   describe: "read Gmail messages via Google API (requires Gmail OAuth connection)",
   builder: (yargs) =>
     yargs
+      .option("account", { type: "string", describe: "mailbox to use, by address (e.g. --account=me@company.com)" })
+      .option("integration-id", { type: "number", describe: "mailbox to use, by connection id (see: iris integrations list)" })
+      .middleware((argv: any) => setGmailAccount({ integrationId: argv["integration-id"], account: argv.account }))
       .command(GmailInboxCommand)
       .command(GmailReadCommand)
       .command(GmailSearchCommand)

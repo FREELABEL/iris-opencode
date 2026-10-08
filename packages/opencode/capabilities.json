@@ -6242,7 +6242,7 @@
       "describe": "read Gmail messages via Google API (requires Gmail OAuth connection)",
       "aliases": [],
       "run": "iris gmail",
-      "haystack": "gmail read gmail messages via google api (requires gmail oauth connection) inbox read search labels unread"
+      "haystack": "gmail read gmail messages via google api (requires gmail oauth connection) inbox read search labels unread account mailbox to use, by address (e.g. --account=me@company.com) integration-id mailbox to use, by connection id (see: iris integrations list)"
     },
     {
       "kind": "command",
