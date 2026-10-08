@@ -135,7 +135,10 @@ jobs:
           EXE=iris; [ "${{ runner.os }}" = "Windows" ] && EXE=iris.exe
           BIN=$(ls -d cli-*/bin/$EXE 2>/dev/null | grep -v -- '-musl' | grep -v -- '-baseline' | head -1 || true)
           [ -n "$BIN" ] || { echo "::error::no binary built"; ls -R .; exit 1; }
-          echo "path=$(pwd)/$BIN" >> "$GITHUB_OUTPUT"
+          P="$(pwd)/$BIN"
+          # Git-bash paths (/d/a/...) mean nothing to the pwsh packaging step (beta.3).
+          [ "${{ runner.os }}" = "Windows" ] && P=$(cygpath -w "$P")
+          echo "path=$P" >> "$GITHUB_OUTPUT"
 
       # The compiled binary must answer as iris2, carry the platform commands, and be able to
       # search its capability index (the v1.3.156 lesson: files read at runtime are not bundled).
