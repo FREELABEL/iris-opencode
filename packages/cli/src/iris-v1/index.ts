@@ -130,6 +130,7 @@ import { PlatformSystemAppsScanCommand } from "./cli/cmd/platform-system-apps-sc
 import { PlatformIdeasCommand } from "./cli/cmd/platform-ideas"
 import { PlatformOnboardCommand } from "./cli/cmd/platform-onboard"
 import { PlatformNextCommand } from "./cli/cmd/platform-next"
+import { Iris2Command } from "./cli/cmd/iris2"
 import { PlatformInitCommand } from "./cli/cmd/platform-init"
 import { PlatformOnboardFlowsCommand } from "./cli/cmd/platform-onboard-flows"
 import { PlatformProposalsCommand } from "./cli/cmd/platform-proposals"
@@ -509,6 +510,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformIntentCommand))
   .command(reg(PlatformOnboardCommand))
   .command(reg(PlatformNextCommand)) // #187930: one next move
+  .command(reg(Iris2Command)) // #188596: opt-in iris2 preview, installed beside iris
   .command(reg(PlatformInitCommand))
   .command(reg(PlatformOnboardFlowsCommand))
   .command(reg(PlatformProposalsCommand))

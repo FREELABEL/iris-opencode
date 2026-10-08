@@ -1,19 +1,27 @@
 #!/usr/bin/env bun
-// Step 0b spike entrypoint (ADR-04): ONE binary, our front door in front of v2.
-// Tests A5: ./index.ts runs when dynamically imported from another entrypoint
-// inside a single Bun.build({compile}).
+// iris2 front door (ADR-04): ONE binary, our front door in front of v2.
+// ./index.ts runs when dynamically imported from another entrypoint inside a single
+// Bun.build({compile}).
+//
+// iris2 ships BESIDE the stable `iris` as an opt-in preview (#188596). It must never write the
+// stable binary: `upgrade`/`update` are claimed here and go to the iris2 updater, which only
+// ever replaces a file named iris2 (iris-v1/cli/cmd/iris2.ts, the same code stable's
+// `iris iris2 install` runs).
 
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { OPENCODE_VERSION } from "./version"
 
-const IRIS_VERSION = "1.4.0-spike"
+// Release builds get 1.5.0-beta.N from the tag (release-iris2.yml); telemetry rows carry it as
+// cli_version, which is how iris2 traffic is told apart from stable.
+const IRIS_VERSION = OPENCODE_VERSION === "local" ? "0.0.0-iris2-local" : OPENCODE_VERSION
 
 function helpText(): string {
   return [
-    `iris ${IRIS_VERSION} — IRIS CLI on an opencode v2 base (spike)`,
+    `iris2 ${IRIS_VERSION} — preview of IRIS on the opencode v2 engine (your stable \`iris\` is separate)`,
     "",
-    "Usage: iris [platform-command] [args...]",
+    "Usage: iris2 [platform-command] [args...]",
     "",
     "Platform commands (ours, unchanged from 1.3.x):",
     "  atlas        Atlas boards, lists and items",
@@ -30,9 +38,9 @@ function helpText(): string {
     "  run          Non-interactive run",
     "  serve        Start the server",
     "  session      Session management",
-    "  upgrade      Upgrade the IRIS CLI",
+    "  upgrade      Update iris2 to the newest preview (never touches `iris`)",
     "",
-    "Run `iris <command> --help` for command-specific help.",
+    "Run `iris2 <command> --help` for command-specific help.",
     "",
   ].join("\n")
 }
@@ -131,6 +139,19 @@ if (first === "--version" || first === "-v" || first === "-V") {
   process.exit(0)
 }
 
+// ── Updates are iris2's own (#188596 A3) ──────────────────────────────────────
+// Before this, `upgrade` fell through to v1's updater, which downloads the STABLE asset and
+// writes `iris` in this binary's directory — `iris2 upgrade` would have replaced the user's
+// stable iris. v2's `upgrade` would instead install upstream OpenCode (I3). Neither may run.
+if (first === "upgrade" || first === "update") {
+  const { selfUpdate } = await import("./iris-v1/cli/cmd/iris2")
+  process.exit(await selfUpdate(argv.slice(1), IRIS_VERSION))
+}
+if (first === "uninstall") {
+  process.stdout.write("Remove iris2 with: iris iris2 remove   (your stable iris and its data are untouched)\n")
+  process.exit(0)
+}
+
 // ── Command ownership (§7.4 C1) ───────────────────────────────────────────────
 // v2 owns its own command names; everything else (210+ platform names, upgrades,
 // `mcp`, `auth`, `help`, namespaced `x:y`, typos) routes to the vendored v1 layer.
@@ -177,7 +198,7 @@ if (toV2) {
     void Beacon.report("cli_uncaught", {
       message: e instanceof Error ? e.message : String(e),
       command: commandName,
-      context: { kind, engine: "v2" },
+      context: { kind, engine: "v2", channel: "iris2" },
     })
   process.on("unhandledRejection", crash("unhandledRejection"))
   process.on("uncaughtException", crash("uncaughtException"))
@@ -213,6 +234,9 @@ if (toV2) {
   await import("./index.ts")
 } else {
   // ── IRIS platform layer (vendored v1 index.ts; reg()/getRegistry()/namespaced help) ──
+  // v1's TUI can auto-update for users with `autoupdate: true`, and v1's updater writes `iris`.
+  // Inside iris2 that would replace the stable binary, so it is off here.
+  process.env.OPENCODE_DISABLE_AUTOUPDATE ??= "1"
   await import("./iris-v1/index.ts")
   process.exit(process.exitCode ?? 0)
 }

@@ -150,7 +150,9 @@ export default { path: file, version: ${JSON.stringify(opencodePty.version)}, sh
     },
     define: {
       OPENCODE_VERSION: `'${Script.version}'`,
-      OPENCODE_CLI_NAME: "'iris'", // [IRIS]
+      // [IRIS] The name v2 prints in its own help and hints. release-iris2.yml sets iris2 so a
+      // preview user is never told to run the stable binary.
+      OPENCODE_CLI_NAME: JSON.stringify(process.env.IRIS_CLI_NAME ?? "iris"),
       OPENCODE_CHANNEL: `'${Script.channel}'`,
       OPENCODE_ARTIFACT: `'cli'`,
       OPENCODE_LIBC: item.os === "linux" ? `'${item.abi ?? "glibc"}'` : "undefined",
