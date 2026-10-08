@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { meterView, planLabel, sourceNote, type AccountState } from "./account"
+import { accountStatus, meterView, planLabel, sourceNote, type AccountState } from "./account"
 
 const allowance = (over: Partial<AccountState["allowance"]> = {}): AccountState["allowance"] => ({
   measured: true,
@@ -49,5 +49,32 @@ describe("Settings > Account (#187966)", () => {
     expect(sourceNote("~/.iris/config.json (node_api_key)")).toContain("Hive node key")
     expect(sourceNote("~/.iris/sdk/.env")).toBe("Credential from ~/.iris/sdk/.env.")
     expect(sourceNote("none (not signed in)")).toBeNull()
+  })
+
+  test("each reason nobody is signed in as a person gets its own words and fix (#188505, #188507)", () => {
+    const base = {
+      measured: true,
+      signedIn: false,
+      panelsDiffer: false,
+      tokenSource: "",
+      id: null,
+      name: null,
+      email: null,
+    } as any
+    expect(accountStatus(undefined, false)).toMatchObject({ title: "Couldn't load your account", action: "retry" })
+    expect(accountStatus({ ...base, credential: "machine" }, false)).toMatchObject({
+      title: "Signed in as this computer's Hive node",
+      action: "sign-in",
+    })
+    expect(accountStatus({ ...base, credential: "rejected", reason: "fl-api 401" }, false).title).toBe(
+      "Your sign-in was refused",
+    )
+    expect(accountStatus({ ...base, credential: "none" }, false).action).toBe("sign-in")
+    expect(
+      accountStatus({ ...base, credential: "personal", measured: false, reason: "fl-api 502" }, false),
+    ).toMatchObject({
+      title: "Can't reach IRIS",
+      action: "retry",
+    })
   })
 })

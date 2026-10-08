@@ -53,9 +53,14 @@ import {
   fetchPlan,
   fetchMe,
   tokenSource,
+  resolveToken,
+  dataDir,
+  resetCredentialCache,
   fetchPlans,
 } from "@/iris/platform"
 import { parseExpandedListIds } from "@/iris/relationship-graph"
+import { agentCredential, credentialKind, readNodeKey, signOutPersonal, type CredentialKind } from "@/iris/account"
+import { homedir } from "os"
 import { createRoom, fetchRoom, fetchRooms, sendRoomMessage } from "@/iris/rooms"
 import { fetchAgentLive, handBackRun, takeOverRun } from "@/iris/agent-live"
 import { RootHttpApi } from "../api"
@@ -732,12 +737,25 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
 
     const me = Effect.fn("IrisHttpApi.me")(() =>
       Effect.promise(async () => {
-        const [who, plan, allowance] = await Promise.all([fetchMe(), fetchPlan(), fetchAllowance({ peek: true })])
+        // The key CHAT uses, not the panels' resolution (#188506), and what kind of key it is
+        // (#188505: a Hive node key is refused by whoami, which is not "can't reach IRIS").
+        const cred = agentCredential(process.env, () => ({ token: resolveToken(), source: tokenSource() }))
+        const kind = credentialKind(cred.token, readNodeKey(homedir()))
+        // 8s: one hung upstream must not leave Settings on "Checking…" forever (#188507).
+        const opts = { token: cred.token, signal: AbortSignal.timeout(8000) }
+        const [who, plan, allowance] = await Promise.all([
+          fetchMe(opts),
+          fetchPlan(opts),
+          fetchAllowance({ ...opts, peek: true }),
+        ])
+        const credential: CredentialKind | "rejected" = kind === "personal" && who.data.rejected ? "rejected" : kind
         return {
           measured: who.measured,
           ...(who.reason ? { reason: who.reason } : {}),
-          signedIn: who.measured && who.data.id !== null,
-          tokenSource: tokenSource(),
+          signedIn: credential === "personal" && who.measured && who.data.id !== null,
+          credential,
+          panelsDiffer: Boolean(cred.token) && resolveToken() !== cred.token,
+          tokenSource: cred.source,
           id: who.data.id,
           name: who.data.name,
           email: who.data.email,
@@ -756,6 +774,14 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
             notice: null,
           },
         }
+      }),
+    )
+
+    const signOut = Effect.fn("IrisHttpApi.signOut")(() =>
+      Effect.sync(() => {
+        const r = signOutPersonal({ home: homedir(), dataDir: dataDir() })
+        resetCredentialCache()
+        return { ok: true, removed: r.removed }
       }),
     )
 
@@ -778,6 +804,6 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
       ),
     )
 
-    return handlers.handle("frameCheck", frameCheck).handle("atlasNote", atlasNote).handle("allowance", allowance).handle("plan", plan).handle("me", me).handle("plans", plans).handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("graph", graph).handle("graphBoard", graphBoard).handle("catalog", catalog).handle("integrationConnect", integrationConnect).handle("cliCommands", cliCommands).handle("hivePeers", hivePeers).handle("pageDoc", pageDoc).handle("pageSave", pageSave).handle("item", item).handle("itemSave", itemSave).handle("itemTaskAdd", itemTaskAdd).handle("itemTaskSave", itemTaskSave).handle("itemTaskDelete", itemTaskDelete).handle("cardSchema", cardSchema).handle("itemShare", itemShare).handle("itemShareVisibility", itemShareVisibility).handle("itemShareAllowlist", itemShareAllowlist).handle("itemShareInvite", itemShareInvite).handle("itemSharePermission", itemSharePermission).handle("itemShareRevoke", itemShareRevoke).handle("itemShareLink", itemShareLink).handle("itemShareLinkRevoke", itemShareLinkRevoke).handle("itemLabels", itemLabels).handle("itemAttachments", itemAttachments).handle("itemAttachmentUpload", itemAttachmentUpload).handle("itemAttachmentDelete", itemAttachmentDelete).handle("itemEvents", itemEvents).handle("itemEventAdd", itemEventAdd).handle("itemAsks", itemAsks).handle("itemAskAdd", itemAskAdd).handle("itemAskAnswer", itemAskAnswer).handle("itemChat", itemChat).handle("itemChatSend", itemChatSend).handle("rooms", rooms).handle("roomCreate", roomCreate).handle("room", room).handle("roomSend", roomSend).handle("playbookDoc", playbookDoc).handle("artifacts", artifacts).handle("artifactDoc", artifactDoc).handle("artifactPublish", artifactPublish).handle("playbookInstall", playbookInstall).handle("agentTasks", agentTasks).handle("agentLive", agentLive).handle("runTakeOver", runTakeOver).handle("runHandBack", runHandBack).handle("sites", sites).handle("records", records).handle("integrations", integrations).handle("hive", hive)
+    return handlers.handle("frameCheck", frameCheck).handle("atlasNote", atlasNote).handle("allowance", allowance).handle("plan", plan).handle("me", me).handle("signOut", signOut).handle("plans", plans).handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("graph", graph).handle("graphBoard", graphBoard).handle("catalog", catalog).handle("integrationConnect", integrationConnect).handle("cliCommands", cliCommands).handle("hivePeers", hivePeers).handle("pageDoc", pageDoc).handle("pageSave", pageSave).handle("item", item).handle("itemSave", itemSave).handle("itemTaskAdd", itemTaskAdd).handle("itemTaskSave", itemTaskSave).handle("itemTaskDelete", itemTaskDelete).handle("cardSchema", cardSchema).handle("itemShare", itemShare).handle("itemShareVisibility", itemShareVisibility).handle("itemShareAllowlist", itemShareAllowlist).handle("itemShareInvite", itemShareInvite).handle("itemSharePermission", itemSharePermission).handle("itemShareRevoke", itemShareRevoke).handle("itemShareLink", itemShareLink).handle("itemShareLinkRevoke", itemShareLinkRevoke).handle("itemLabels", itemLabels).handle("itemAttachments", itemAttachments).handle("itemAttachmentUpload", itemAttachmentUpload).handle("itemAttachmentDelete", itemAttachmentDelete).handle("itemEvents", itemEvents).handle("itemEventAdd", itemEventAdd).handle("itemAsks", itemAsks).handle("itemAskAdd", itemAskAdd).handle("itemAskAnswer", itemAskAnswer).handle("itemChat", itemChat).handle("itemChatSend", itemChatSend).handle("rooms", rooms).handle("roomCreate", roomCreate).handle("room", room).handle("roomSend", roomSend).handle("playbookDoc", playbookDoc).handle("artifacts", artifacts).handle("artifactDoc", artifactDoc).handle("artifactPublish", artifactPublish).handle("playbookInstall", playbookInstall).handle("agentTasks", agentTasks).handle("agentLive", agentLive).handle("runTakeOver", runTakeOver).handle("runHandBack", runHandBack).handle("sites", sites).handle("records", records).handle("integrations", integrations).handle("hive", hive)
   }),
 )

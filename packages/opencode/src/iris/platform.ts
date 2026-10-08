@@ -53,7 +53,7 @@ import { findLocalPlaybook } from "./playbook-local"
  * xdg-basedir resolves LOCALAPPDATA instead, so this falls back to it there rather than
  * quietly reading a path that does not exist.
  */
-function dataDir(): string {
+export function dataDir(): string {
   if (process.env.XDG_DATA_HOME) return path.join(process.env.XDG_DATA_HOME, "opencode")
   if (process.platform === "win32" && process.env.LOCALAPPDATA) return path.join(process.env.LOCALAPPDATA, "opencode")
   return path.join(homedir(), ".local", "share", "opencode")
@@ -159,8 +159,23 @@ export function tokenSource(): string {
 // Fetch
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function irisFetch(pathname: string, base: string = FL_API, init: RequestInit = {}): Promise<Response> {
-  const token = resolveToken()
+/** Forget the resolved token and user id, so the next call re-reads the files (after sign-out). */
+export function resetCredentialCache(): void {
+  _token = undefined
+  _tokenSource = "not resolved"
+  _userId = undefined
+}
+
+/**
+ * `token` overrides the resolved one. Settings > Account passes the key CHAT uses, which can
+ * differ from what the panels resolve (#188506).
+ */
+export async function irisFetch(
+  pathname: string,
+  base: string = FL_API,
+  init: RequestInit = {},
+  token: string | null = resolveToken(),
+): Promise<Response> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Accept: "application/json",
@@ -535,11 +550,18 @@ const EMPTY_ALLOWANCE: Allowance = {
  * is a deliberate server-side design — asking whether a notice is due and marking it delivered
  * cannot be two steps without a race — and it makes this function unusual enough to say twice.
  */
-export async function fetchAllowance(opts: { peek?: boolean } = {}): Promise<PlatformResult<Allowance>> {
+export async function fetchAllowance(
+  opts: { peek?: boolean; token?: string | null; signal?: AbortSignal } = {},
+): Promise<PlatformResult<Allowance>> {
   try {
     // peek: the same numbers without consuming the notice (fl-iris-api 4eda580d). The Account tab
     // reads with it, because opening Settings must not eat somebody's only warning of the week.
-    const res = await irisFetch(opts.peek ? "/api/v6/allowance/me?peek=1" : "/api/v6/allowance/me", IRIS_API)
+    const res = await irisFetch(
+      opts.peek ? "/api/v6/allowance/me?peek=1" : "/api/v6/allowance/me",
+      IRIS_API,
+      { signal: opts.signal },
+      opts.token === undefined ? resolveToken() : opts.token,
+    )
     if (!res.ok) return { measured: false, reason: `iris-api ${res.status}`, data: EMPTY_ALLOWANCE }
     const j = (await res.json()) as any
     const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null)
@@ -585,12 +607,24 @@ export interface Me {
   id: number | null
   name: string | null
   email: string | null
+  /** fl-api answered 401/403: the credential itself was refused, which is not "unreachable". */
+  rejected: boolean
 }
 
-export async function fetchMe(): Promise<PlatformResult<Me>> {
-  const empty: Me = { id: null, name: null, email: null }
+export async function fetchMe(
+  opts: { token?: string | null; signal?: AbortSignal } = {},
+): Promise<PlatformResult<Me>> {
+  const empty: Me = { id: null, name: null, email: null, rejected: false }
   try {
-    const res = await irisFetch("/api/v1/auth/whoami")
+    const res = await irisFetch(
+      "/api/v1/auth/whoami",
+      FL_API,
+      { signal: opts.signal },
+      opts.token === undefined ? resolveToken() : opts.token,
+    )
+    if (res.status === 401 || res.status === 403) {
+      return { measured: true, reason: `fl-api ${res.status}`, data: { ...empty, rejected: true } }
+    }
     if (!res.ok) return { measured: false, reason: `fl-api ${res.status}`, data: empty }
     const u = ((await res.json()) as any)?.data
     const text = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null)
@@ -600,6 +634,7 @@ export async function fetchMe(): Promise<PlatformResult<Me>> {
         id: typeof u?.id === "number" ? u.id : null,
         name: text(u?.name),
         email: text(u?.email),
+        rejected: false,
       },
     }
   } catch (e) {
@@ -673,10 +708,17 @@ export async function fetchPlans(): Promise<PlatformResult<PlanOffer[]>> {
  * that older server also IGNORES ?peek=1 and would consume the notice. This client must never
  * ship ahead of 4eda580d; check with scripts/deployed.sh fl-iris-api --commit 4eda580d.
  */
-export async function fetchPlan(): Promise<PlatformResult<Plan>> {
+export async function fetchPlan(
+  opts: { token?: string | null; signal?: AbortSignal } = {},
+): Promise<PlatformResult<Plan>> {
   const empty: Plan = { plan: null, paid: null, uncapped: false, upgradeUrl: null }
   try {
-    const res = await irisFetch("/api/v6/allowance/me?peek=1", IRIS_API)
+    const res = await irisFetch(
+      "/api/v6/allowance/me?peek=1",
+      IRIS_API,
+      { signal: opts.signal },
+      opts.token === undefined ? resolveToken() : opts.token,
+    )
     if (!res.ok) return { measured: false, reason: `iris-api ${res.status}`, data: empty }
     const j = (await res.json()) as any
     if (!j || !("plan" in j)) return { measured: false, reason: "server does not report a plan", data: empty }

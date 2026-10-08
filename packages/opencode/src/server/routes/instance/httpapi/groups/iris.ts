@@ -750,6 +750,14 @@ const MeResponse = Schema.Struct({
   measured: described(Schema.Boolean, "FALSE means we could not ask who you are. Not the same as signed out."),
   reason: Schema.optional(Schema.String),
   signedIn: Schema.Boolean,
+  credential: described(
+    Schema.Literals(["personal", "machine", "rejected", "none"]),
+    "machine = this computer's Hive node key, not a person. rejected = IRIS refused the key (401/403).",
+  ),
+  panelsDiffer: described(
+    Schema.Boolean,
+    "The panels (Atlas, Hive) resolve a different credential from the one chat uses (#188506).",
+  ),
   tokenSource: described(Schema.String, "Where the credential came from. A Hive node key is not a person."),
   id: Schema.NullOr(Schema.Finite),
   name: Schema.NullOr(Schema.String),
@@ -873,6 +881,7 @@ export const IrisPaths = {
   allowance: `${root}/allowance`,
   plan: `${root}/plan`,
   me: `${root}/me`,
+  signOut: `${root}/sign-out`,
   plans: `${root}/plans`,
   atlasNote: `${root}/atlas-note`,
   frameCheck: `${root}/frame-check`,
@@ -919,6 +928,21 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Account",
           description:
             "Identity from fl-api, plan and allowance from fl-iris-api. The allowance is peeked, so this never consumes the weekly notice and is safe to call whenever Settings opens.",
+        }),
+      ),
+      HttpApiEndpoint.post("signOut", IrisPaths.signOut, {
+        success: described(
+          Schema.Struct({ ok: Schema.Boolean, removed: Schema.Array(Schema.String) }).annotate({
+            identifier: "IrisSignOutResult",
+          }),
+          "What was removed. The Hive node key is never touched.",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.signOut",
+          summary: "Sign out of IRIS on this machine",
+          description:
+            "Removes the personal sign-in shared by the desktop and the CLI: IRIS_API_KEY and IRIS_USER_ID from ~/.iris/sdk/.env and the `iris` auth-store entry. Leaves ~/.iris/config.json (the Hive node key) alone. The engine still holds the old key until it restarts; the desktop restarts the app afterwards.",
         }),
       ),
       HttpApiEndpoint.get("plans", IrisPaths.plans, {

@@ -1,4 +1,4 @@
-import { Component, Show, createResource } from "solid-js"
+import { Component, Show, createResource, createSignal } from "solid-js"
 import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { usePlatform } from "@/context/platform"
 import { useServer } from "@/context/server"
@@ -18,6 +18,8 @@ export interface AccountState {
   measured: boolean
   reason?: string
   signedIn: boolean
+  credential: "personal" | "machine" | "rejected" | "none"
+  panelsDiffer: boolean
   tokenSource: string
   id: number | null
   name: string | null
@@ -77,6 +79,47 @@ export function planLabel(p: AccountState["plan"] | undefined): string {
   return p.plan.charAt(0).toUpperCase() + p.plan.slice(1)
 }
 
+/**
+ * The headline when nobody is signed in as a person. Each cause gets its own words, because
+ * each has a different fix: "can't reach IRIS" for a refused key sent people to check their
+ * network (#188505), and a failed /iris/me read as "Not signed in" (#188507).
+ */
+export function accountStatus(
+  state: AccountState | undefined,
+  loading: boolean,
+): { title: string; description: string; action: "retry" | "sign-in" } {
+  if (loading) return { title: "Checking…", description: "", action: "retry" }
+  if (!state) {
+    return {
+      title: "Couldn't load your account",
+      description: "IRIS on this computer did not answer. Your sign-in is probably fine.",
+      action: "retry",
+    }
+  }
+  if (state.credential === "machine") {
+    return {
+      title: "Signed in as this computer's Hive node",
+      description: "Chat and Atlas act as this machine, not as you. Sign in to use your own account.",
+      action: "sign-in",
+    }
+  }
+  if (state.credential === "rejected") {
+    return {
+      title: "Your sign-in was refused",
+      description: `IRIS rejected the saved key (${state.reason ?? "401"}). It may have expired or been revoked. Sign in again.`,
+      action: "sign-in",
+    }
+  }
+  if (state.credential === "none") {
+    return { title: "Not signed in", description: "Sign in to use IRIS models, Atlas and Hive.", action: "sign-in" }
+  }
+  return {
+    title: "Can't reach IRIS",
+    description: `IRIS did not answer (${state.reason ?? "no response"}). You may still be signed in.`,
+    action: "retry",
+  }
+}
+
 /** A Hive node key can sign the app in, but it belongs to a machine, not to a person. */
 export function sourceNote(source: string): string | null {
   if (source.includes("node_api_key")) return "Signed in with this machine's Hive node key, not a personal sign-in."
@@ -100,6 +143,22 @@ export const SettingsAccountV2: Component = () => {
     },
   )
 
+  const [signOutStep, setSignOutStep] = createSignal<"idle" | "confirm" | "working" | "failed">("idle")
+  const canSignOut = () => platform.platform === "desktop"
+  const signOut = async () => {
+    setSignOutStep("working")
+    try {
+      const base = server.current?.http?.url?.replace(/\/$/, "")
+      const res = await (platform.fetch ?? globalThis.fetch)(`${base}/iris/sign-out`, { method: "POST" })
+      if (!res.ok) throw new Error(String(res.status))
+      // The engine still holds the old key in memory. Restarting re-runs the startup check,
+      // which finds no key and opens the sign-in screen.
+      await platform.restart()
+    } catch {
+      setSignOutStep("failed")
+    }
+  }
+
   const meter = () => meterView(me()?.allowance)
   const upgradeUrl = () => {
     const p = me()?.plan
@@ -116,20 +175,27 @@ export const SettingsAccountV2: Component = () => {
           <SettingsListV2>
             <Show
               when={me()?.signedIn}
-              fallback={
-                <SettingsRowV2
-                  title={me.loading ? "Checking…" : me()?.measured === false ? "Can't reach IRIS" : "Not signed in"}
-                  description={
-                    me()?.measured === false
-                      ? `IRIS did not answer (${me()?.reason ?? "no response"}). You may still be signed in.`
-                      : "Sign in to use IRIS models, Atlas and Hive."
-                  }
-                >
-                  <ButtonV2 size="normal" variant="neutral" onClick={() => void refetch()}>
-                    Retry
-                  </ButtonV2>
-                </SettingsRowV2>
-              }
+              fallback={(() => {
+                const s = () => accountStatus(me(), me.loading)
+                return (
+                  <SettingsRowV2 title={s().title} description={s().description}>
+                    <span data-action="account-status">
+                      <Show
+                        when={s().action === "sign-in" && platform.openSignIn}
+                        fallback={
+                          <ButtonV2 size="normal" variant="neutral" onClick={() => void refetch()}>
+                            Retry
+                          </ButtonV2>
+                        }
+                      >
+                        <ButtonV2 size="normal" variant="neutral" onClick={() => platform.openSignIn?.()}>
+                          Sign in
+                        </ButtonV2>
+                      </Show>
+                    </span>
+                  </SettingsRowV2>
+                )
+              })()}
             >
               <SettingsRowV2
                 title={me()?.name ?? me()?.email ?? `User ${me()?.id}`}
@@ -143,6 +209,13 @@ export const SettingsAccountV2: Component = () => {
                           {note()}
                         </>
                       )}
+                    </Show>
+                    <Show when={me()?.panelsDiffer}>
+                      <br />
+                      <span data-action="account-panels-differ">
+                        Atlas and Hive panels are using a different saved sign-in from chat. Sign out and back in to
+                        line them up.
+                      </span>
                     </Show>
                   </>
                 }
@@ -163,6 +236,46 @@ export const SettingsAccountV2: Component = () => {
                   </Show>
                 </div>
               </SettingsRowV2>
+              <Show when={canSignOut()}>
+                <SettingsRowV2
+                  title="Sign out"
+                  description={
+                    signOutStep() === "failed"
+                      ? "Sign-out failed. Nothing was restarted. Try again."
+                      : "Signs this computer out of IRIS, in the app and in the iris command. Hive keeps running on this machine."
+                  }
+                >
+                  <span data-action="account-sign-out">
+                    <Show
+                      when={signOutStep() === "confirm" || signOutStep() === "working"}
+                      fallback={
+                        <ButtonV2 size="normal" variant="neutral" onClick={() => setSignOutStep("confirm")}>
+                          Sign out
+                        </ButtonV2>
+                      }
+                    >
+                      <div class="flex items-center gap-2">
+                        <ButtonV2
+                          size="normal"
+                          variant="neutral"
+                          disabled={signOutStep() === "working"}
+                          onClick={() => setSignOutStep("idle")}
+                        >
+                          Cancel
+                        </ButtonV2>
+                        <ButtonV2
+                          size="normal"
+                          variant="neutral"
+                          disabled={signOutStep() === "working"}
+                          onClick={() => void signOut()}
+                        >
+                          {signOutStep() === "working" ? "Signing out…" : "Sign out and restart"}
+                        </ButtonV2>
+                      </div>
+                    </Show>
+                  </span>
+                </SettingsRowV2>
+              </Show>
             </Show>
           </SettingsListV2>
         </div>

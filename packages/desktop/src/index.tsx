@@ -176,6 +176,10 @@ const platform: Platform = {
     await relaunch()
   },
 
+  openSignIn: () => {
+    void invoke("open_login_window").catch(() => undefined)
+  },
+
   notify: async (title, description, onClick) => {
     const granted = await isPermissionGranted().catch(() => false)
     const permission = granted ? "granted" : await requestPermission().catch(() => "denied")
