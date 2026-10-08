@@ -1789,6 +1789,8 @@ export const IrisApi = HttpApi.make("iris").add(
               from: Schema.String,
               date: Schema.optional(Schema.String),
               snippet: Schema.String,
+              unread: Schema.optional(Schema.Boolean),
+              automated: Schema.optional(Schema.Boolean),
             })),
             waiting: Schema.Array(Schema.Struct({
               id: Schema.String,
@@ -1797,6 +1799,8 @@ export const IrisApi = HttpApi.make("iris").add(
               from: Schema.String,
               date: Schema.optional(Schema.String),
               snippet: Schema.String,
+              unread: Schema.optional(Schema.Boolean),
+              automated: Schema.optional(Schema.Boolean),
             })),
           }).annotate({ identifier: "IrisOnboardingMail" }),
           "Recent inbox threads, and the few most likely waiting on this person",
@@ -1816,6 +1820,8 @@ export const IrisApi = HttpApi.make("iris").add(
               from: Schema.String,
               date: Schema.optional(Schema.String),
               snippet: Schema.String,
+              unread: Schema.optional(Schema.Boolean),
+              automated: Schema.optional(Schema.Boolean),
             })) }),
         success: described(
           Schema.Struct({

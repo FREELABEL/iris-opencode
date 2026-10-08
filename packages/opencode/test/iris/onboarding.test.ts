@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdtempSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { digest, pickMailConnection, slugify, toThreads, waiting, workspace, type MailThread } from "../../src/iris/onboarding"
+import { digest, isAutomated, pickMailConnection, slugify, toThreads, waiting, workspace, type MailThread } from "../../src/iris/onboarding"
 
 // D4 #188245 — the pure halves of "Here's what I see". The network halves (mail, ground) return
 // PlatformResult and are exercised against the live endpoints, not mocked here.
@@ -72,7 +72,7 @@ describe("toThreads", () => {
       successful: true,
       data: { value: [{ id: "o1", conversationId: "c1", subject: "Invoice", from: { emailAddress: { name: "Ann", address: "a@x.test" } }, bodyPreview: "Due Friday", receivedDateTime: "2026-10-06T10:00:00Z" }] },
     })
-    expect(outlook[0]).toEqual({ id: "o1", threadId: "c1", subject: "Invoice", from: "Ann <a@x.test>", date: "2026-10-06T10:00:00Z", snippet: "Due Friday" })
+    expect(outlook[0]).toEqual({ id: "o1", threadId: "c1", subject: "Invoice", from: "Ann <a@x.test>", date: "2026-10-06T10:00:00Z", snippet: "Due Friday", unread: undefined, automated: false })
     expect(gmail[0].from).toBe(outlook[0].from)
     expect(gmail[0].snippet).toBe(outlook[0].snippet)
   })
@@ -108,5 +108,67 @@ describe("pickMailConnection", () => {
   test("garbage in, nothing out", () => {
     expect(pickMailConnection(null)).toBeUndefined()
     expect(pickMailConnection({ data: [] })).toBeUndefined()
+  })
+})
+
+describe("toThreads — Composio Gmail", () => {
+  // GMAIL_FETCH_EMAILS via iris-api execute-direct. Read as the native shape, these came back
+  // as subject-only rows: no sender, no preview, no time (first desktop test, 2026-10-08).
+  const composio = {
+    success: true,
+    data: {
+      messages: [
+        {
+          messageId: "m1",
+          threadId: "t1",
+          sender: "Maria Lopez <maria@example.com>",
+          subject: "Can we move Thursday?",
+          preview: { subject: "Can we move Thursday?", body: "Something came up at work —  is Friday open?" },
+          messageTimestamp: "2026-10-07T21:04:00Z",
+          labelIds: ["INBOX", "UNREAD", "CATEGORY_PERSONAL"],
+        },
+        {
+          messageId: "m2",
+          threadId: "t2",
+          sender: "Gamma <team@gamma.app>",
+          subject: "The new Gamma has arrived",
+          messageText: "See what's new",
+          messageTimestamp: "2026-10-07T18:00:00Z",
+          labelIds: ["INBOX", "CATEGORY_PROMOTIONS"],
+        },
+      ],
+    },
+  }
+
+  test("reads sender, preview, time and unread", () => {
+    const [a] = toThreads(composio)
+    expect(a).toMatchObject({
+      id: "m1",
+      threadId: "t1",
+      from: "Maria Lopez <maria@example.com>",
+      snippet: "Something came up at work — is Friday open?",
+      date: "2026-10-07T21:04:00Z",
+      unread: true,
+      automated: false,
+    })
+  })
+
+  test("Gmail's promotions label marks mail automated, and waiting() skips it", () => {
+    const threads = toThreads(composio)
+    expect(threads[1].automated).toBe(true)
+    expect(waiting(threads).map((x) => x.id)).toEqual(["m1"])
+  })
+})
+
+describe("isAutomated", () => {
+  test("no-reply senders and reports are automated", () => {
+    expect(isAutomated("Heartbeat <no-reply@iris.example>", [], "Heartbeat Report: AIAI Holdings — Completed")).toBe(true)
+    expect(isAutomated("x@y.com", [], "Weekly digest")).toBe(true)
+  })
+  test("a supplier chasing an invoice from billing@ is NOT", () => {
+    expect(isAutomated("Apex Dental Supply <billing@apexsupply.example>", [], "Invoice #4471 — overdue")).toBe(false)
+  })
+  test("a reply thread about a report is a person", () => {
+    expect(isAutomated("Dev <dev@example.com>", [], "Re: the Q3 report")).toBe(false)
   })
 })

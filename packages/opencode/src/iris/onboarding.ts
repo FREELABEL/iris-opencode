@@ -33,6 +33,24 @@ export interface MailThread {
   from: string
   date?: string
   snippet: string
+  unread?: boolean
+  /** Newsletters, notifications, reports: real mail, but nobody is waiting on a reply. */
+  automated?: boolean
+}
+
+/** Gmail's own sorting, when the provider passes labels through. */
+const AUTOMATED_LABELS = ["CATEGORY_PROMOTIONS", "CATEGORY_UPDATES", "CATEGORY_SOCIAL", "CATEGORY_FORUMS"]
+/**
+ * The sender says it out loud: nobody reads replies to these. Deliberately NOT info@, billing@,
+ * support@, hello@: a supplier chasing an overdue invoice from billing@ is exactly what is
+ * waiting on a small business.
+ */
+const AUTOMATED_FROM = /(no-?reply|do-?not-?reply|notifications?|newsletter|mailer|updates?|digest|alerts?|news|marketing|receipts?)@|@(e|em|email|mail|mailer|news|marketing)\./i
+
+export function isAutomated(from: string, labels: string[] = [], subject = ""): boolean {
+  if (labels.some((l) => AUTOMATED_LABELS.includes(l))) return true
+  if (AUTOMATED_FROM.test(from)) return true
+  return /\b(report|newsletter|digest|receipt|your order|weekly|webinar)\b/i.test(subject) && !/\bre:/i.test(subject)
 }
 
 export interface Grounding {
@@ -70,23 +88,35 @@ export function toThreads(body: any): MailThread[] {
   const pick = (...c: any[]) => c.find((x) => Array.isArray(x)) ?? []
   const raw: any[] = pick(
     body?.emails, body?.data?.emails, body?.value, body?.data?.value, body?.data?.data?.value,
-    body?.messages, body?.data?.messages, body?.data,
+    body?.messages, body?.data?.messages, body?.data?.data?.messages, body?.data?.response_data?.messages,
+    body?.data,
   )
   return raw.map((e) => {
+    // Native gmail: {from, subject, snippet, date}. Outlook (Graph): {from:{emailAddress}, bodyPreview,
+    // receivedDateTime}. Composio GMAIL_FETCH_EMAILS: {sender, subject, preview:{body}, messageText,
+    // messageTimestamp, labelIds} — read as native, it came back as subject-only rows (2026-10-08).
     const addr = e?.from?.emailAddress
     const from =
       typeof e?.from === "string"
         ? e.from
         : addr
           ? addr.name && addr.address ? `${addr.name} <${addr.address}>` : String(addr.name ?? addr.address ?? "")
-          : ""
+          : String(e?.sender ?? "")
+    const labels: string[] = Array.isArray(e?.labelIds) ? e.labelIds : Array.isArray(e?.labels) ? e.labels : []
+    const subject = String(e?.subject ?? e?.preview?.subject ?? "(no subject)")
+    const snippet = String(e?.snippet ?? e?.bodyPreview ?? e?.preview?.body ?? e?.messageText ?? "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 400)
     return {
-      id: String(e?.id ?? ""),
-      threadId: e?.thread_id ?? e?.conversationId ?? undefined,
-      subject: String(e?.subject ?? "(no subject)"),
+      id: String(e?.id ?? e?.messageId ?? ""),
+      threadId: e?.thread_id ?? e?.threadId ?? e?.conversationId ?? undefined,
+      subject,
       from,
-      date: e?.date ?? e?.receivedDateTime ?? undefined,
-      snippet: String(e?.snippet ?? e?.bodyPreview ?? ""),
+      date: e?.date ?? e?.receivedDateTime ?? e?.messageTimestamp ?? undefined,
+      snippet,
+      unread: labels.length ? labels.includes("UNREAD") : e?.isRead === false ? true : undefined,
+      automated: isAutomated(from, labels, subject),
     }
   })
 }
@@ -174,7 +204,7 @@ export async function mail(limit = 10): Promise<PlatformResult<{ threads: MailTh
 
 /** Threads someone else started, newest first — the ones most likely waiting on this person. */
 export function waiting(threads: MailThread[], account?: string, n = 3): MailThread[] {
-  return threads.filter((t) => !sameAddress(t.from, account)).slice(0, n)
+  return threads.filter((t) => !t.automated && !sameAddress(t.from, account)).slice(0, n)
 }
 
 /** Subject, sender and snippet only, under the endpoint's 5,000-character prompt limit. */

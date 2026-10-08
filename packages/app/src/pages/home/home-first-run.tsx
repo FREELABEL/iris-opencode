@@ -3,6 +3,7 @@ import { useServerSDK } from "@/context/server-sdk"
 import { usePlatform } from "@/context/platform"
 import { Check, GmailLogo, InboxArt, OutlookLogo, Spinner } from "./home-first-run-art"
 import { SignInPanel } from "./home-first-run-signin"
+import { InboxTriage, type InboxThread } from "./home-first-run-inbox"
 import "./home-first-run.css"
 
 /**
@@ -34,7 +35,7 @@ export function firstRunPending(): boolean {
   }
 }
 
-type Thread = { id: string; subject: string; from: string; snippet: string }
+type Thread = InboxThread
 type Provider = "gmail" | "outlook"
 type Tile = { type: Provider; name: string; detail: string; Logo: (p: { class?: string }) => any }
 
@@ -49,7 +50,15 @@ type Step =
   | { kind: "signin" }
   | { kind: "connect"; note?: string; waiting?: Provider; connected?: { type: Provider; account?: string } }
   | { kind: "reading" }
-  | { kind: "seen"; threads: Thread[]; waiting: Thread[]; line?: string; industry?: string; choices: string[] }
+  | {
+      kind: "seen"
+      threads: Thread[]
+      waiting: Thread[]
+      account?: string
+      line?: string
+      industry?: string
+      choices: string[]
+    }
   | { kind: "starting" }
   | { kind: "error"; reason: string; retry: () => void }
 
@@ -77,6 +86,7 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
 
   const [step, setStep] = createSignal<Step>({ kind: "loading" })
   const [answer, setAnswer] = createSignal("")
+  const [provider, setProvider] = createSignal<"gmail" | "outlook">("gmail")
   let poll: ReturnType<typeof setInterval> | undefined
   const stopPoll = () => poll && clearInterval(poll)
   onCleanup(stopPoll)
@@ -93,11 +103,15 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
     const s = await call("/iris/onboarding/state").catch(() => null)
     if (!s) return setStep({ kind: "error", reason: "IRIS isn't answering yet.", retry: begin })
     if (s.signedIn === false) return waitForSignIn()
-    if (s.mail?.connected) return read()
+    if (s.mail?.connected) {
+      if (s.mail.type === "outlook") setProvider("outlook")
+      return read()
+    }
     setStep({ kind: "connect" })
   }
 
   async function connect(type: Provider) {
+    setProvider(type)
     setStep({ kind: "connect", waiting: type, note: "Opening your browser…" })
     const r = await post("/iris/integrations/connect", { type }).catch(() => null)
     if (!r?.measured || !r.url) {
@@ -160,6 +174,7 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
     setStep({
       kind: "seen",
       threads: m.threads,
+      account: m.account,
       waiting: m.waiting ?? [],
       line: g?.line,
       industry: g?.industry,
@@ -167,7 +182,7 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
     })
   }
 
-  async function start(seen: Extract<Step, { kind: "seen" }>, text: string) {
+  async function start(seen: Extract<Step, { kind: "seen" }>, text: string, focus?: Thread[]) {
     const want = text.trim()
     if (!want) return
     track("onboarding.question_answered", want.slice(0, 120))
@@ -179,11 +194,13 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
     }
     track("onboarding.workspace_created")
 
-    const context = seen.waiting
+    const context = (focus?.length ? focus : seen.waiting)
       .map((t) => `- ${senderName(t.from)}: "${t.subject}" — ${t.snippet.slice(0, 160)}`)
       .join("\n")
+    const lead = focus?.length ? "The emails:" : "Start with what's waiting on me in my inbox:"
     const prompt =
-      `${want}\n\nStart with what's waiting on me in my inbox:\n${context}\n\n` +
+      `${want}\n\n` +
+      (context ? `${lead}\n${context}\n\n` : "") +
       `Use my connected email to read the full threads. Draft, don't send.`
     track("onboarding.working")
     finish("done")
@@ -344,66 +361,60 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
         </Match>
 
         <Match when={step().kind === "seen" && (step() as Extract<Step, { kind: "seen" }>)}>
-          {(s) => (
-            <div class="flex flex-col gap-5">
-              <div class="flex flex-col gap-2">
-                <p class="text-v2-text-text-muted text-[13px] uppercase tracking-wide">Here's what I see</p>
-                <h1 class="text-v2-text-text-base text-[22px] leading-snug [font-weight:600]">
-                  {s().line ?? (s().industry ? `Looks like you work in ${s().industry}.` : "Here's your inbox.")}
-                </h1>
-              </div>
-
-              <Show when={s().waiting.length}>
+          {(s) => {
+            const people = () => s().threads.filter((t) => !t.automated).length
+            return (
+              <div class="fr-rise flex flex-col gap-5">
                 <div class="flex flex-col gap-2">
-                  <p class="text-v2-text-text-base text-[14px] [font-weight:530]">
-                    {s().waiting.length} {s().waiting.length === 1 ? "thread is" : "threads are"} waiting on you
-                  </p>
-                  <For each={s().waiting}>
-                    {(t) => (
-                      <div class="rounded-[10px] border border-v2-border-border-base px-4 py-3">
-                        <div class="text-v2-text-text-base text-[14px] [font-weight:530]">{senderName(t.from)}</div>
-                        <div class="text-v2-text-text-base text-[14px]">{t.subject}</div>
-                        <div class="text-v2-text-text-muted truncate text-[13px]">{t.snippet}</div>
-                      </div>
-                    )}
-                  </For>
+                  <p class="fr-mono text-v2-text-text-muted text-[11.5px] uppercase tracking-[0.14em]">Here's what I see</p>
+                  <h1 class="text-v2-text-text-base text-[24px] leading-snug [font-weight:650]">
+                    {s().line ??
+                      (s().industry
+                        ? `Looks like you work in ${s().industry}.`
+                        : people()
+                          ? "Here's who's waiting on you. Pick one and IRIS starts on it."
+                          : "Nobody's waiting on a reply. Want IRIS to go through the rest?")}
+                  </h1>
                 </div>
-              </Show>
 
-              <div class="flex flex-col gap-3">
-                <p class="text-v2-text-text-base text-[15px] [font-weight:530]">What do you want off your plate first?</p>
-                <div class="flex flex-wrap gap-2">
-                  <For each={s().choices}>
-                    {(c) => (
-                      <button
-                        class="rounded-full border border-v2-border-border-base px-3 py-1.5 text-[13px] hover:bg-v2-background-bg-subtle"
-                        onClick={() => void start(s(), c)}
-                      >
-                        {c}
-                      </button>
-                    )}
-                  </For>
+                <InboxTriage
+                  account={s().account}
+                  provider={provider()}
+                  threads={s().threads}
+                  onAct={(a) => void start(s(), a.text, a.focus)}
+                />
+
+                <div class="flex flex-col gap-2.5">
+                  <form
+                    class="flex gap-2"
+                    onSubmit={(e) => {
+                      e.preventDefault()
+                      void start(s(), answer())
+                    }}
+                  >
+                    <input
+                      class="fr-input flex-1"
+                      placeholder="Or ask IRIS anything about your inbox…"
+                      value={answer()}
+                      onInput={(e) => setAnswer(e.currentTarget.value)}
+                    />
+                    <button class="fr-primary px-5" type="submit" disabled={!answer().trim()}>
+                      Start
+                    </button>
+                  </form>
+                  <div class="flex flex-wrap gap-2">
+                    <For each={s().choices}>
+                      {(c) => (
+                        <button class="fr-chip" onClick={() => void start(s(), c)}>
+                          {c}
+                        </button>
+                      )}
+                    </For>
+                  </div>
                 </div>
-                <form
-                  class="flex gap-2"
-                  onSubmit={(e) => {
-                    e.preventDefault()
-                    void start(s(), answer())
-                  }}
-                >
-                  <input
-                    class="flex-1 rounded-[10px] border border-v2-border-border-base bg-transparent px-3 py-2 text-[14px]"
-                    placeholder="Or say it in your own words…"
-                    value={answer()}
-                    onInput={(e) => setAnswer(e.currentTarget.value)}
-                  />
-                  <button class="rounded-[10px] bg-v2-text-text-base px-4 py-2 text-[14px] text-v2-background-bg-base [font-weight:600]">
-                    Start
-                  </button>
-                </form>
               </div>
-            </div>
-          )}
+            )
+          }}
         </Match>
 
         <Match when={step().kind === "error" && (step() as Extract<Step, { kind: "error" }>)}>
