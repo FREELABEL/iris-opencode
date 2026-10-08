@@ -142,6 +142,11 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
     setStep({ kind: "reading" })
     const m = await call("/iris/onboarding/mail").catch(() => null)
     if (!m?.measured) {
+      // A dead or missing connection is not an error to retry: the fix is to connect again,
+      // so go back to the tiles. ("Run: iris connect gmail" is advice for the CLI, not here.)
+      if (/connection|not connected|expired|reconnect|unauthori[sz]ed|invalid_grant/i.test(String(m?.reason ?? ""))) {
+        return setStep({ kind: "connect", note: "Your mail connection needs renewing. Connect it again to continue." })
+      }
       return setStep({ kind: "error", reason: `Couldn't read your mail: ${m?.reason ?? "no answer"}`, retry: read })
     }
     if (!m.threads?.length) {

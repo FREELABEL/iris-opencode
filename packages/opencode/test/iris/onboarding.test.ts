@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdtempSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { digest, slugify, toThreads, waiting, workspace, type MailThread } from "../../src/iris/onboarding"
+import { digest, pickMailConnection, slugify, toThreads, waiting, workspace, type MailThread } from "../../src/iris/onboarding"
 
 // D4 #188245 — the pure halves of "Here's what I see". The network halves (mail, ground) return
 // PlatformResult and are exercised against the live endpoints, not mocked here.
@@ -81,5 +81,32 @@ describe("toThreads", () => {
     expect(toThreads({ success: true, data: { value: [] } })).toEqual([])
     expect(toThreads(null)).toEqual([])
     expect(toThreads({ success: true, message: "ok" })).toEqual([])
+  })
+})
+
+describe("pickMailConnection", () => {
+  // iris-api's index: one row per registry type, isConnected from iris-api's own table.
+  const row = (type: string, isConnected: boolean, extra: Record<string, unknown> = {}) => ({
+    type,
+    isConnected,
+    status: isConnected ? "active" : "available",
+    ...extra,
+  })
+
+  test("finds a readable Gmail", () => {
+    expect(pickMailConnection([row("slack", true), row("gmail", true)])).toEqual({ type: "gmail", account: undefined })
+  })
+
+  test("prefers Gmail over Outlook, in MAIL_TYPES order", () => {
+    expect(pickMailConnection([row("outlook", true), row("gmail", true)])?.type).toBe("gmail")
+  })
+
+  test("an available-but-unconnected Gmail is not connected", () => {
+    expect(pickMailConnection([row("gmail", false), row("outlook", false)])).toBeUndefined()
+  })
+
+  test("garbage in, nothing out", () => {
+    expect(pickMailConnection(null)).toBeUndefined()
+    expect(pickMailConnection({ data: [] })).toBeUndefined()
   })
 })

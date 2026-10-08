@@ -1757,6 +1757,18 @@ export async function fetchCatalog(): Promise<PlatformResult<{ catalog: CatalogE
  * own comment says silence must never promote a credential to shared — connecting for an org
  * needs owner or admin there, and that is a choice to make explicitly rather than by default.
  */
+/** Integration types whose connect link comes from iris-api first (see startIntegrationConnect). */
+const IRIS_FIRST = new Set([
+  "gmail",
+  "google-calendar",
+  "google-drive",
+  "google-docs",
+  "google-sheets",
+  "google-slides",
+  "google-meet",
+  "google-search-console",
+])
+
 export async function startIntegrationConnect(
   type: string,
 ): Promise<PlatformResult<{ url?: string; mode?: string; hint?: string }>> {
@@ -1773,6 +1785,22 @@ export async function startIntegrationConnect(
         mode,
         hint: "This one runs on your own machine — there is nothing to sign in to. Set it up from the bridge.",
       },
+    }
+  }
+
+  // Google types connect through iris-api, like `iris connect` does. iris-api routes them via
+  // Composio (services.google.provider), whose Google app is verified, and stores the row where
+  // execute-direct reads it. fl-api's own Google OAuth showed "Google hasn't verified this app"
+  // and wrote a row iris-api could not see, so a "connected" Gmail then failed to read.
+  if (IRIS_FIRST.has(type)) {
+    const first = await irisFetch(
+      `/api/v1/integrations-temp/oauth-url/${encodeURIComponent(type)}?user_id=${userId}`,
+      IRIS_API,
+    ).catch(() => null)
+    const fb = first ? await first.json().catch(() => null) : null
+    const fUrl = fb?.data?.oauth_url ?? fb?.oauth_url ?? fb?.url
+    if (first?.ok && typeof fUrl === "string" && /^https?:/i.test(fUrl)) {
+      return { measured: true, data: { url: fUrl, mode } }
     }
   }
 

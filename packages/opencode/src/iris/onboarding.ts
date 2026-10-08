@@ -16,7 +16,7 @@
 import { mkdirSync, readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
-import { IRIS_API, fetchIntegrations, irisFetch, resolveUserId, tokenSource, type PlatformResult } from "./platform"
+import { IRIS_API, irisFetch, resolveUserId, tokenSource, type PlatformResult } from "./platform"
 
 /** Mail providers in the order we prefer them. Outlook arrives with D2 #188248. */
 const MAIL_TYPES = ["gmail", "outlook"] as const
@@ -91,20 +91,49 @@ export function toThreads(body: any): MailThread[] {
   })
 }
 
+/**
+ * The first mail connection the READER can use, from iris-api's integrations index.
+ *
+ * Not fl-api's list. Mail is read through iris-api (execute-direct), which only sees iris-api's
+ * own integration rows. fl-api's native Google OAuth writes to fl-api's table instead, so its
+ * list said "Gmail connected" for an account whose mail then failed to read with "No active
+ * 'gmail' connection found" (2026-10-08, the first end-to-end desktop test). "Connected" here
+ * has to mean "readable", or the screen skips Connect and lands on an error.
+ */
+export function pickMailConnection(rows: unknown): { type: (typeof MAIL_TYPES)[number]; account?: string } | undefined {
+  const list = Array.isArray(rows) ? rows : []
+  for (const type of MAIL_TYPES) {
+    const hit = list.find((r: any) => r?.type === type && (r?.isConnected === true || r?.status === "active"))
+    if (hit) return { type, account: (hit as any).account_email ?? (hit as any).account ?? undefined }
+  }
+  return undefined
+}
+
 export async function state(): Promise<PlatformResult<OnboardingState>> {
   const userId = await resolveUserId()
   if (!userId) {
     return { measured: true, data: { signedIn: false, mail: { connected: false } } }
   }
-  const r = await fetchIntegrations({ scope: "all" })
-  if (!r.measured) {
-    return { measured: false, reason: r.reason, data: { signedIn: true, mail: { connected: false } } }
+  try {
+    const res = await irisFetch(`/api/v1/integrations-temp?user_id=${userId}`, IRIS_API)
+    const body = (await res.json().catch(() => null)) as any
+    if (!res.ok || body?.success === false) {
+      return {
+        measured: false,
+        reason: String(body?.error ?? body?.message ?? `iris-api ${res.status}`),
+        data: { signedIn: true, mail: { connected: false } },
+      }
+    }
+    const hit = pickMailConnection(body?.data ?? body?.integrations)
+    if (hit) return { measured: true, data: { signedIn: true, mail: { connected: true, ...hit } } }
+    return { measured: true, data: { signedIn: true, mail: { connected: false } } }
+  } catch (e) {
+    return {
+      measured: false,
+      reason: e instanceof Error ? e.message : String(e),
+      data: { signedIn: true, mail: { connected: false } },
+    }
   }
-  for (const type of MAIL_TYPES) {
-    const hit = r.data.integrations.find((i) => (i.type ?? i.provider) === type && i.connected)
-    if (hit) return { measured: true, data: { signedIn: true, mail: { connected: true, type, account: hit.account } } }
-  }
-  return { measured: true, data: { signedIn: true, mail: { connected: false } } }
 }
 
 /** "Jane Doe <jane@x.com>" → "Jane Doe"; a bare address stays an address. */
