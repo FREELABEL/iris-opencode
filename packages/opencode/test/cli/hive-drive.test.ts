@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { splitMetaSecret, redactMeta, assetName, checksumFor, formatArgs, mountArgs, isMounted, JUICEFS_VERSION } from "../../src/cli/cmd/platform-hive-drive"
+import { splitMetaSecret, redactMeta, assetName, checksumFor, formatArgs, mountArgs, serveArgs, isMounted, validIdentity, DEFAULT_IDENTITY, JUICEFS_VERSION } from "../../src/cli/cmd/platform-hive-drive"
 
 // #188567 — iris hive drive wraps JuiceFS (adopted, not written). These pin the parts that are ours:
 // the password never reaches argv or the screen, the binary is checksum-verified, and "mounted" is
@@ -20,7 +20,7 @@ describe("metadata URL secrets", () => {
     const { url } = splitMetaSecret("redis://:hunter2@h:6379/1")
     expect(formatArgs("team", url, "s3", "https://b").join(" ")).not.toContain("hunter2")
     expect(mountArgs(url, "/m", "/c").join(" ")).not.toContain("hunter2")
-    expect(mountArgs(url, "/m", "/c")).toEqual(["mount", "-d", "--cache-dir", "/c", "redis://h:6379/1", "/m"])
+    expect(mountArgs(url, "/m", "/c")).toEqual(["mount", "-d", "--all-squash", DEFAULT_IDENTITY, "--cache-dir", "/c", "redis://h:6379/1", "/m"])
   })
 })
 
@@ -45,4 +45,19 @@ test("isMounted reads the mount table: exact mountpoint only", () => {
   expect(isMounted("/home/u/IrisDrive/te", table)).toBe(false)
   expect(isMounted("/home/u/IrisDrive/other", table)).toBe(false)
   expect(isMounted("/Users/u/IrisDrive/team", "JuiceFS:team on /Users/u/IrisDrive/team (macfuse)\n")).toBe(true)
+})
+
+describe("one identity per drive (measured: without it, 100/100 cross-machine writes were refused)", () => {
+  test("every mount squashes all writers to the drive's identity; default is a Mac's first user", () => {
+    expect(DEFAULT_IDENTITY).toBe("501:20")
+    expect(mountArgs("redis://h/1", "/m", "/c", "1000:1000").slice(0, 4)).toEqual(["mount", "-d", "--all-squash", "1000:1000"])
+  })
+  test("identity is validated, normalised, never passed through raw", () => {
+    expect(validIdentity("501:20")).toBe("501:20")
+    expect(validIdentity(" 0100:020 ")).toBe("100:20")
+    for (const bad of ["", "root", "501", "501:20; rm -rf /", "-1:2", undefined]) expect(validIdentity(bad as any)).toBeNull()
+  })
+  test("the gateway for FUSE-less machines listens on loopback only", () => {
+    expect(serveArgs("redis://h/1", 9007, "/c")).toEqual(["webdav", "--cache-dir", "/c", "redis://h/1", "127.0.0.1:9007"])
+  })
 })

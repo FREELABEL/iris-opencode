@@ -31,7 +31,26 @@ const NAME = /^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$/
 export const drivesDir = (home: string) => path.join(home, ".iris", "drives")
 export const binPath = (home: string) => path.join(home, ".iris", "bin", "juicefs")
 
-export type DriveConfig = { name: string; meta: string; mountpoint: string; created_at: string }
+export type DriveConfig = { name: string; meta: string; mountpoint: string; created_at: string; identity?: string }
+
+/**
+ * ONE identity for everything written to a drive (#188567, measured 2026-10-08).
+ *
+ * Two physical machines on one R2 volume: a directory Linux created (uid 1000, mode 775) refused
+ * every write from the Mac's gateway (uid 501) — `permission denied`, 100 of 100. `--umask 000`
+ * does not help: the kernel applies the writer's umask before the request reaches JuiceFS (still
+ * 775/664). What worked: every mount squashes all writers to the same uid:gid, and that identity
+ * matches the gateway's user — then 100 + 100 concurrent writes from both machines, 200 visible on
+ * both, 0 corrupt. Access to a drive is "holds its metadata credentials", not POSIX ownership.
+ *
+ * Default 501:20 — the first user and `staff` group on every Mac — so a Mac gateway matches with
+ * no setup. A drive used only by Linux machines can pick its own at create time.
+ */
+export const DEFAULT_IDENTITY = "501:20"
+export function validIdentity(s: unknown): string | null {
+  const m = /^(\d{1,10}):(\d{1,10})$/.exec(String(s ?? "").trim())
+  return m ? `${Number(m[1])}:${Number(m[2])}` : null
+}
 
 /** The URL without its password, and the password — so neither the screen nor argv sees it. */
 export function splitMetaSecret(meta: string): { url: string; password: string | null } {
@@ -76,8 +95,13 @@ export function formatArgs(name: string, metaUrl: string, storage: string, bucke
   return ["format", "--storage", storage, "--bucket", bucket, metaUrl, name]
 }
 
-export function mountArgs(metaUrl: string, mountpoint: string, cacheDir: string): string[] {
-  return ["mount", "-d", "--cache-dir", cacheDir, metaUrl, mountpoint]
+export function mountArgs(metaUrl: string, mountpoint: string, cacheDir: string, identity: string = DEFAULT_IDENTITY): string[] {
+  return ["mount", "-d", "--all-squash", identity, "--cache-dir", cacheDir, metaUrl, mountpoint]
+}
+
+/** The WebDAV gateway for machines with no FUSE (a Mac without macFUSE). Loopback only. */
+export function serveArgs(metaUrl: string, port: number, cacheDir: string): string[] {
+  return ["webdav", "--cache-dir", cacheDir, metaUrl, `127.0.0.1:${port}`]
 }
 
 function readConfig(home: string, name: string): DriveConfig | null {
@@ -180,7 +204,8 @@ const CreateCmd = cmd({
       .option("meta", { describe: "metadata store every node can reach, e.g. redis://:pw@100.x.y.z:6379/1", type: "string", demandOption: true })
       .option("bucket", { describe: "where the bytes live, e.g. https://<acct>.r2.cloudflarestorage.com/<bucket>", type: "string", demandOption: true })
       .option("storage", { describe: "s3 (R2/S3/MinIO) or file (one machine only)", type: "string", default: "s3" })
-      .option("mountpoint", { describe: "default ~/IrisDrive/<name>", type: "string" }),
+      .option("mountpoint", { describe: "default ~/IrisDrive/<name>", type: "string" })
+      .option("identity", { describe: `uid:gid every writer is mapped to — the SAME on every machine (default ${DEFAULT_IDENTITY}, a Mac's first user)`, type: "string" }),
   async handler(argv) {
     const home = os.homedir()
     const name = String(argv.name)
@@ -193,7 +218,9 @@ const CreateCmd = cmd({
     const r = run(j, formatArgs(name, url, String(argv.storage), String(argv.bucket)), password)
     if (!r.ok) return fail(`juicefs format failed: ${lastLine(r.out)}`)
     const mountpoint = path.resolve(String(argv.mountpoint || path.join(home, "IrisDrive", name)))
-    writeConfig(home, { name, meta: String(argv.meta), mountpoint, created_at: new Date().toISOString() })
+    const identity = validIdentity(argv.identity ?? DEFAULT_IDENTITY)
+    if (!identity) return fail(`--identity must look like 501:20, not "${argv.identity}"`)
+    writeConfig(home, { name, meta: String(argv.meta), mountpoint, created_at: new Date().toISOString(), identity })
     console.log(success(`  ✓ drive ${bold(name)} created`) + dim(`  meta ${redactMeta(String(argv.meta))}`))
     console.log(dim(`  mount it here:       iris hive drive mount ${name}`))
     console.log(dim(`  on every other node: iris hive drive join ${name} --meta <the same meta url>`))
@@ -207,7 +234,8 @@ const JoinCmd = cmd({
     y
       .positional("name", { type: "string", demandOption: true })
       .option("meta", { type: "string", demandOption: true })
-      .option("mountpoint", { type: "string" }),
+      .option("mountpoint", { type: "string" })
+      .option("identity", { describe: `uid:gid every writer is mapped to — the SAME on every machine (default ${DEFAULT_IDENTITY}, a Mac's first user)`, type: "string" }),
   async handler(argv) {
     const home = os.homedir()
     const name = String(argv.name)
@@ -220,7 +248,9 @@ const JoinCmd = cmd({
     if (!s.ok) return fail(`cannot reach that metadata store: ${lastLine(s.out)}`)
     if (!new RegExp(`"Name":\\s*"${name}"`).test(s.out)) return fail(`that metadata store holds no drive called ${name}`)
     const mountpoint = path.resolve(String(argv.mountpoint || path.join(home, "IrisDrive", name)))
-    writeConfig(home, { name, meta: String(argv.meta), mountpoint, created_at: new Date().toISOString() })
+    const identity = validIdentity(argv.identity ?? DEFAULT_IDENTITY)
+    if (!identity) return fail(`--identity must look like 501:20, not "${argv.identity}"`)
+    writeConfig(home, { name, meta: String(argv.meta), mountpoint, created_at: new Date().toISOString(), identity })
     console.log(success(`  ✓ joined ${bold(name)}`) + dim(`  — iris hive drive mount ${name}`))
   },
 })
@@ -239,7 +269,7 @@ const MountCmd = cmd({
     fs.mkdirSync(c.mountpoint, { recursive: true })
     const { url, password } = splitMetaSecret(c.meta)
     const cache = path.join(home, ".iris", "drive-cache", c.name)
-    const r = run(j, mountArgs(url, c.mountpoint, cache), password)
+    const r = run(j, mountArgs(url, c.mountpoint, cache, validIdentity(c.identity) ?? DEFAULT_IDENTITY), password)
     // Ask the kernel, not the exit code: a daemonised mount can exit 0 and still not be there.
     if (!r.ok || !isMounted(c.mountpoint)) return fail(`mount failed: ${lastLine(r.out)}`)
     console.log(success(`  ✓ ${bold(c.name)} mounted at ${c.mountpoint}`) + dim("  — reads stream on demand; writes are visible on every node"))
@@ -263,6 +293,36 @@ const UnmountCmd = cmd({
   },
 })
 
+const ServeCmd = cmd({
+  command: "serve <name>",
+  describe: "no FUSE here (a Mac without macFUSE)? serve the drive over WebDAV on loopback — Finder: Go → Connect to Server",
+  builder: (y) =>
+    y
+      .positional("name", { type: "string", demandOption: true })
+      .option("port", { type: "number", default: 9007 }),
+  async handler(argv) {
+    const home = os.homedir()
+    const c = readConfig(home, String(argv.name))
+    if (!c) return fail(`no drive called ${argv.name} on this machine — join it first`)
+    const j = need(home)
+    if (!j) return
+    const port = Number(argv.port)
+    const { url, password } = splitMetaSecret(c.meta)
+    const cache = path.join(home, ".iris", "drive-cache", c.name)
+    const want = validIdentity(c.identity) ?? DEFAULT_IDENTITY
+    const mine = `${process.getuid?.() ?? "?"}:${process.getgid?.() ?? "?"}`
+    // The gateway writes as THIS user. If that is not the drive's identity, directories other
+    // machines created will refuse its writes (measured: 100/100 permission denied).
+    if (mine !== want) console.log(warn(`  ! this user is ${mine}, the drive's identity is ${want} — writes into other machines' folders will be refused`))
+    console.log(success(`  ● ${bold(c.name)} at http://127.0.0.1:${port}/`) + dim("  — Finder: Go → Connect to Server (⌘K) · Ctrl-C to stop"))
+    const env = { ...process.env } as Record<string, string>
+    if (password) env.META_PASSWORD = password
+    const p = Bun.spawn([j, ...serveArgs(url, port, cache)], { env, stdout: "inherit", stderr: "inherit" })
+    process.once("SIGINT", () => p.kill("SIGINT"))
+    await p.exited
+  },
+})
+
 const StatusCmd = cmd({
   command: "status",
   describe: "drives on this machine and whether each is mounted",
@@ -283,6 +343,6 @@ export const HiveDriveCommand = cmd({
   command: "drive",
   describe: "one folder mounted on every Hive node — streamed on demand, live everywhere (JuiceFS)",
   builder: (y) =>
-    y.command(InstallCmd).command(CreateCmd).command(JoinCmd).command(MountCmd).command(UnmountCmd).command(StatusCmd).demandCommand(1),
+    y.command(InstallCmd).command(CreateCmd).command(JoinCmd).command(MountCmd).command(UnmountCmd).command(ServeCmd).command(StatusCmd).demandCommand(1),
   async handler() {},
 })
