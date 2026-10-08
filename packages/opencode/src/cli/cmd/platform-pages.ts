@@ -1,5 +1,6 @@
 import { cmd } from "./cmd"
 import { brandContract, brandContractCss, applyBrandBlock } from "./brand-contract"
+import { TEMPLATE_GALLERY_SLUG, briefQuestions, findTemplate, parseTemplateCatalogue, type TemplateRow } from "./genesis-templates"
 import { productCommand } from "./product-command"
 import { buildListEnvelope, projectFields, LIST_FIELDS } from "./list-envelope"
 import * as prompts from "./clack"
@@ -2174,6 +2175,107 @@ const RebrandCmd = cmd({
       prompts.outro("Done")
     }
   },
+})
+
+// ============================================================================
+// genesis template — starter templates (#188411, epic #188359)
+// ============================================================================
+
+async function loadTemplateCatalogue(): Promise<TemplateRow[] | null> {
+  try {
+    const res = await fetch(`${publicUrl(TEMPLATE_GALLERY_SLUG)}?catalogue=${Date.now()}`)
+    if (!res.ok) return null
+    return parseTemplateCatalogue(await res.text())
+  } catch {
+    return null
+  }
+}
+
+const TemplateListCmd = cmd({
+  command: "list",
+  aliases: ["ls"],
+  describe: "list the Genesis starter templates (from the public gallery /p/genesis-templates)",
+  builder: (y) => y.option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    const rows = await loadTemplateCatalogue()
+    if (rows === null) {
+      if (args.json) console.log(JSON.stringify({ success: false, error: "template gallery unreachable" }))
+      else prompts.log.error(`Could not read the template gallery (${publicUrl(TEMPLATE_GALLERY_SLUG)}).`)
+      process.exitCode = 1
+      return
+    }
+    if (args.json) {
+      console.log(JSON.stringify({ success: true, templates: rows }))
+      return
+    }
+    UI.empty()
+    prompts.intro("◈  Genesis starter templates")
+    if (!rows.length) prompts.log.warn("The gallery has no templates yet.")
+    for (const r of rows) {
+      console.log(`  ${bold(r.slug)}  ${dim(r.archetype ?? "")}${r.audit_score ? dim(`  · audit ${r.audit_score}/10`) : ""}`)
+      if (r.description) console.log(`    ${r.description}`)
+    }
+    console.log()
+    console.log(`  ${dim("Use one:")} iris genesis template use <slug> --brand <brand> --as <new-slug> --bloq <your board>`)
+    prompts.outro("Done")
+  },
+})
+
+const TemplateUseCmd = cmd({
+  command: "use <template>",
+  describe: "clone a starter template in a brand's identity, onto YOUR board, then print its subject brief",
+  builder: (y) =>
+    y
+      .positional("template", { describe: "template slug or short name (iris genesis template list)", type: "string", demandOption: true })
+      .option("brand", { describe: "brand slug whose identity to apply", type: "string", demandOption: true })
+      .option("as", { describe: "slug for your new page", type: "string", demandOption: true })
+      .option("bloq", {
+        describe: "your board (bloq id) that will own the page. Required: the template lives on someone else's board",
+        type: "number",
+        demandOption: true,
+      })
+      .option("title", { describe: "page title (defaults to the brand name)", type: "string" })
+      .option("publish", { describe: "publish immediately", type: "boolean", default: false })
+      .option("force", { describe: "proceed even if the leak check finds the template's own names", type: "boolean", default: false }),
+  async handler(args) {
+    const rows = await loadTemplateCatalogue()
+    if (rows === null) {
+      prompts.log.error(`Could not read the template gallery (${publicUrl(TEMPLATE_GALLERY_SLUG)}).`)
+      process.exitCode = 1
+      return
+    }
+    const row = findTemplate(rows, String(args.template))
+    if (!row) {
+      prompts.log.error(`No template named "${args.template}". See: iris genesis template list`)
+      process.exitCode = 1
+      return
+    }
+    // One clone path. The owner is ALWAYS the caller's board: rebrand defaults the clone's owner
+    // to the SOURCE page's owner, which for a shared template is not the person using it.
+    await (RebrandCmd.handler as (a: Record<string, unknown>) => Promise<void>)({
+      ...args,
+      source: row.slug,
+      "owner-type": "bloq",
+      "owner-id": Number(args.bloq),
+    })
+    if (Number(process.exitCode ?? 0) !== 0) return
+    const qs = briefQuestions(row)
+    if (qs.length) {
+      console.log()
+      console.log(`  ${bold("Now make it about this business")} ${dim("(the colours are done; the subject is not)")}`)
+      qs.forEach((q, i) => console.log(`  ${dim(String(i + 1).padStart(2, " ") + ".")} ${q}`))
+      console.log(`  ${dim("Edit:")} iris pages pull ${args.as}  ${dim("→ change the copy →")}  iris pages push ${args.as}`)
+      console.log()
+    }
+  },
+})
+
+const TemplateCmd = cmd({
+  command: "template",
+  aliases: ["templates"],
+  describe: "Genesis starter templates — list them, or clone one in a brand's identity",
+  builder: (y) => y.command(TemplateListCmd).command(TemplateUseCmd).demandCommand(1),
+  async handler() {},
 })
 
 const ComponentsCmd = cmd({
@@ -5504,6 +5606,7 @@ export const PlatformPagesCommand = productCommand({
       .command(DuplicateCmd)
       .command(CheckPublicCmd)
       .command(RebrandCmd)
+      .command(TemplateCmd)
       .command(ComponentsCmd)
       .command(ComposeCmd)
       .command(ComponentRegistryCmd)
