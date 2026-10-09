@@ -14,6 +14,7 @@ import { Database } from "@opencode-ai/core/database/database"
 import { TodoWriteTool } from "./todo"
 import { GenesisArtifactTool } from "./genesis-artifact"
 import { AtlasArtifactTool } from "./atlas-artifact"
+import { AtlasEpicTool } from "./atlas-epic"
 import { BrowserTool } from "./browser"
 import { WebFetchTool } from "./webfetch"
 import { WriteTool } from "./write"
@@ -110,6 +111,7 @@ const layer = Layer.effect(
     const todo = yield* TodoWriteTool
     const artifacttool = yield* GenesisArtifactTool
     const atlasartifacttool = yield* AtlasArtifactTool
+    const atlasepictool = yield* AtlasEpicTool
     const browsertool = yield* BrowserTool
     const lsptool = yield* LspTool
     const plan = yield* PlanExitTool
@@ -227,6 +229,7 @@ const layer = Layer.effect(
           todo: Tool.init(todo),
           artifact: Tool.init(artifacttool),
           atlasArtifact: Tool.init(atlasartifacttool),
+          atlasEpic: Tool.init(atlasepictool),
           browser: Tool.init(browsertool),
           search: Tool.init(websearch),
           skill: Tool.init(skilltool),
@@ -257,6 +260,9 @@ const layer = Layer.effect(
             // `atlas_artifact` — Atlas › Artifacts (#187717). Display-only: shows a published
             // heyiris.io/n/<uuid> note in the panel; publishing stays with the CLI and its guard.
             tool.atlasArtifact,
+            // `atlas_epic` — a multi-list plan as a chat card, saved to Atlas as one list. Never
+            // sends anything; drafts sit in item bodies until the user asks.
+            tool.atlasEpic,
             // `browser` — Genesis › Browser (#186665). Read-only: open, read, find, screenshot,
             // close. The refusals (private hosts, credential URLs, off-origin) are in
             // iris/browser-verbs; the screenshot lands in the Artifacts pane above.

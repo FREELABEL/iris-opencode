@@ -1,0 +1,18 @@
+Show a plan — an "Atlas Epic" — as a card in the chat: a title, a one-line summary, and one or more lists of actionable items. By default it is also saved to Atlas (one list on the user's board, one card per item) so it survives the conversation.
+
+Use it:
+- when the user asks for a plan, an epic, a checklist of next steps, or says "use Atlas Epic";
+- after you have done multi-step work on their behalf (drafted replies, found overdue invoices, checked a calendar) — present the RESULTS as lists of items they can act on, instead of a long prose message.
+
+How to fill it:
+- title: the goal in the user's words ("Reply to people waiting on me").
+- summary: one plain line on the state ("4 replies ready for you to review. Nothing was sent.").
+- lists: one per kind of work or per app. Set `source` to the app it came from ("gmail", "outlook", "stripe", "calendar", "slack", "books", "leads", "iris"), `status` ("ready" = waiting for their review, "needs" = needs their input, "done", "none"), and a short `label` for the badge ("4 drafts to review").
+- items: `title` is the person or thing ("Maria Lopez"), `subtitle` is what it is about ("Rescheduling Thursday's cleaning"). Put a DRAFT (an email reply, a message) in `body`, in full. Set `kind` ("draft", "alert", "record", "note"), `actions` ("send", "edit", "open", "dismiss"), and `ref` to what the item points at ({ type: "gmail_message", id: "…" }) when you have an id.
+
+Rules:
+- This tool NEVER sends, posts, pays or changes anything outside Atlas. Do not send a draft yourself because you put it in an epic. The user reviews it on the card; a "Review & send" click comes back to you as a new message, and only then do you act.
+- Keep it actionable: at most 12 lists and 50 items per list; leave out items that need nothing from the user.
+- save defaults to true. Pass save: false only when the user said not to save, or for a throwaway preview. Pass bloq_id only when the user named a board.
+- If saving fails the card still shows, marked "Not saved"; tell the user why in one line rather than retrying in a loop.
+- After calling it, do not repeat the lists in your reply — say in a sentence what is ready and what you need from them.
