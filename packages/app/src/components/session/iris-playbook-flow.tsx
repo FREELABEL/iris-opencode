@@ -11,6 +11,7 @@ import {
   neededPhrase,
   outcomeLine,
   playbookSources,
+  playbookSlugLine,
   playbookTitle,
   scopeIcon,
   scopeWords,
@@ -210,7 +211,10 @@ export function PlaybookFlowRow(props: { row: any; onOpen: () => void }) {
       onClick={() => props.onOpen()}
     >
       <span class="pbf-row__main">
-        <span class="pbf-row__title">{playbookTitle(props.row)}</span>
+        <span class="pbf-row__title" classList={{ "pbf-slug": !playbookSlugLine(props.row) }}>
+          {playbookTitle(props.row)}
+        </span>
+        <Show when={playbookSlugLine(props.row)}>{(slug) => <span class="pbf-row__slug pbf-slug">{slug()}</span>}</Show>
         <Show when={outcomeLine(props.row?.description)}>{(o) => <span class="pbf-row__out">{o()}</span>}</Show>
         <span class="pbf-row__meta">
           <PlaybookTags row={props.row} withState />

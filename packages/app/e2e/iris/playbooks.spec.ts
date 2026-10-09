@@ -29,7 +29,7 @@ test("Project shows only this board's playbooks, not all 128", async ({ page }) 
   const body = page.locator("[data-slot='tabs-content']")
   // Rows show the plain title ("03 Flow"); the raw name is the row's data-name.
   await expect(body.locator("[data-name='pathways-case-export']")).toHaveCount(1, { timeout: 30_000 })
-  await expect(body).toContainText("Pathways case export")
+  await expect(body).toContainText("pathways-case-export")
   const text = await body.innerText()
   // The flat list used to open on agent-browser. If it is here, the view did not narrow.
   expect(text).not.toContain("Agent browser")

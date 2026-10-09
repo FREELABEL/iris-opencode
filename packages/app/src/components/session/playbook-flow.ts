@@ -94,6 +94,7 @@ export function humanSteps(row: any): number {
 }
 
 /** "freelabel-ads" → "Freelabel ads". A plain sentence-case reading of a slug. */
+/** "case_id" → "Case id": for labels built from field names (scope words, areas, "You'll need") — never titles. */
 export function humanize(name: unknown): string {
   const s = String(name ?? "")
     .replace(/[-_]+/g, " ")
@@ -103,10 +104,24 @@ export function humanize(name: unknown): string {
   return s.charAt(0).toUpperCase() + s.slice(1)
 }
 
-/** The row's display title: its own `title` when it has one, the humanized name otherwise. */
+/** A real, author-written title — not the slug. Empty when the playbook has none. */
+export function playbookRealTitle(row: any): string {
+  return typeof row?.title === "string" ? row.title.trim() : ""
+}
+
+/**
+ * The row's display title: the author's `title` when it has one, otherwise the SLUG EXACTLY
+ * ("freelabel-ads"). Not a tidied version — "Freelabel ads" read as half a sentence, and the slug
+ * is what you type in the CLI, what is in the URL, and what people already know it by (Alex,
+ * 2026-10-09). The UI draws a slug title in mono, so it reads as the identifier it is.
+ */
 export function playbookTitle(row: any): string {
-  const t = typeof row?.title === "string" ? row.title.trim() : ""
-  return t || humanize(row?.name) || "Untitled playbook"
+  return playbookRealTitle(row) || String(row?.name ?? "").trim() || "Untitled playbook"
+}
+
+/** The slug shown UNDER a real title, so a titled playbook can still be found by its slug. */
+export function playbookSlugLine(row: any): string | undefined {
+  return playbookRealTitle(row) && row?.name ? String(row.name) : undefined
 }
 
 /**

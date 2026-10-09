@@ -5,6 +5,7 @@ import {
   handsTag,
   HANDS_FILTERS,
   humanize,
+  playbookSlugLine,
   matchesHands,
   neededPhrase,
   outcomeLine,
@@ -44,18 +45,25 @@ describe("whoOf — who does a step", () => {
   })
 })
 
-describe("humanize / playbookTitle", () => {
-  test("kebab to sentence case", () => {
-    expect(humanize("freelabel-ads")).toBe("Freelabel ads")
-    expect(humanize("bills-to-books")).toBe("Bills to books")
-    expect(humanize("snake_case__name")).toBe("Snake case name")
+describe("humanize (labels, never titles)", () => {
+  test("field names become words", () => {
+    expect(humanize("case_id")).toBe("Case id")
     expect(humanize("")).toBe("")
   })
-  test("a row's own title wins; the name is the fallback", () => {
-    expect(playbookTitle({ name: "atlas-epic", title: "Plan a project in the open" })).toBe(
-      "Plan a project in the open",
-    )
-    expect(playbookTitle({ name: "atlas-epic", title: "  " })).toBe("Atlas epic")
+})
+
+describe("playbookTitle", () => {
+  test("no title: the slug exactly — not tidied, not capitalised", () => {
+    expect(playbookTitle({ name: "freelabel-ads" })).toBe("freelabel-ads")
+    expect(playbookTitle({ name: "bills-to-books", title: "  " })).toBe("bills-to-books")
+    expect(playbookSlugLine({ name: "freelabel-ads" })).toBeUndefined()
+  })
+  test("a real title leads, and the slug is kept underneath", () => {
+    const row = { name: "atlas-epic", title: "Plan a project in the open" }
+    expect(playbookTitle(row)).toBe("Plan a project in the open")
+    expect(playbookSlugLine(row)).toBe("atlas-epic")
+  })
+  test("nothing at all", () => {
     expect(playbookTitle({})).toBe("Untitled playbook")
   })
 })

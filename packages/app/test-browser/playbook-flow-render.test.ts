@@ -117,7 +117,10 @@ test("every row draws one strip segment per published step, and an honest empty 
     expect(f.you).toBe(r.steps.filter((s: any) => s.mode === "human").length)
   }
   const ads = facts.find((f) => f.name === "freelabel-ads")!
-  expect(ads.title).toBe("Freelabel ads")
+  // No author title: the row shows the slug exactly, drawn as an identifier (mono).
+  expect(ads.title).toBe("freelabel-ads")
+  const adsTitle = document.querySelector('[data-name="freelabel-ads"] .pbf-row__title')!
+  expect(adsTitle.classList.contains("pbf-slug")).toBe(true)
   expect(ads.tags).toContain("Asks you once")
   expect(ads.tags).toContain("Only you")
   expect(ads.views).toBe("488")

@@ -16,7 +16,7 @@ import {
 import "./session-iris-tab.css"
 import { connectsBy, healthRead, metaLine, usageBars } from "./iris-catalog"
 import { IrisIntegrationDetail } from "./iris-integration-detail"
-import { matchesHands, playbookDocBody, playbookSources, playbookTitle, type HandsFilter } from "./playbook-flow"
+import { matchesHands, playbookDocBody, playbookSlugLine, playbookSources, playbookTitle, type HandsFilter } from "./playbook-flow"
 import { Ic, PlaybookFilters, PlaybookFlowInfo, PlaybookFlowList } from "./iris-playbook-flow"
 import { pageSummary, type PageEnvelope } from "./use-paged-surface"
 import { Dialog } from "@opencode-ai/ui/dialog"
@@ -2309,11 +2309,17 @@ export function SessionIrisTab() {
           </button>
           <h3
             class="text-13-medium text-text-strong px-2 pb-1.5 shrink-0"
-            classList={{ "pbf-title": openRow()!.pane === "playbooks" }}
+            classList={{
+              "pbf-title": openRow()!.pane === "playbooks",
+              "pbf-slug": openRow()!.pane === "playbooks" && !playbookSlugLine(openRow()!.raw),
+            }}
             title={openRow()!.pane === "playbooks" ? openRow()!.raw?.name : undefined}
           >
             {openRow()!.title}
           </h3>
+          <Show when={openRow()!.pane === "playbooks" && playbookSlugLine(openRow()!.raw)}>
+            {(slug) => <p class="pbf-detail__slug pbf-slug px-2 pb-1.5">{slug()}</p>}
+          </Show>
 
           {/* LEVEL 3 — chips, because levels 1 and 2 are already a plate and a rule, and a
               third thing drawn like either of them stops the stack reading as a hierarchy.
