@@ -89,7 +89,9 @@
   margin: 0; padding: 6px 10px; border-left: 2px solid var(--epic-accent);
   font-size: 13px; line-height: 1.45; white-space: pre-wrap;
   color: var(--v2-text-text-base, inherit);
-  background: var(--v2-background-bg-base, transparent);
+  /* A faint neutral tint of the text colour over the card, not the page's dark ground: the draft
+     stands apart without a slab (Alex, 2026-10-09). Works the same on light. */
+  background: color-mix(in srgb, var(--v2-text-text-base, #888) 4%, transparent);
   border-radius: 0 6px 6px 0;
 }
 /* An alert needs the person: amber edge, not the jade "IRIS wrote this" edge. */
