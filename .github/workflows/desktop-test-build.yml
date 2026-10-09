@@ -6,6 +6,10 @@ name: Desktop test build (IRIS rebrand)
 # release.yml wiring (tracked in bloq #503 item #182113) lands.
 on:
   workflow_dispatch:
+  # Weekly on main only (GitHub runs schedules on the default branch): keeps the shared Rust cache
+  # warm and rebuilds it when stable Rust moves, which changes the cache key.
+  schedule:
+    - cron: "0 9 * * 1"
 
 permissions:
   contents: read
@@ -30,13 +34,18 @@ jobs:
         with:
           targets: aarch64-apple-darwin
 
-      # The Rust shell compiled from scratch on every run (~4.5 of the ~7 minutes). Cached, a test
-      # build that only changes the interface or engine reuses the compiled crates.
+      # Only main SAVES the Rust cache; every other branch reads it. A run can restore caches from
+      # its own branch or the default branch (main) -- never from iris/1.18.23 or a sibling branch --
+      # so per-branch saves were 624 MB copies nobody else could use, and each new branch built cold.
+      # Restore falls back on key prefix, so a branch whose Cargo.lock differs from main's still
+      # reuses the compiled dependencies and recompiles only what changed.
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: packages/desktop/src-tauri -> target
           key: desktop-test-aarch64
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
 
       - name: Build the iris CLI (sidecar binary)
         run: |
@@ -101,6 +110,18 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
+
+      # Only main SAVES the Rust cache; every other branch reads it. A run can restore caches from
+      # its own branch or the default branch (main) -- never from iris/1.18.23 or a sibling branch --
+      # so per-branch saves were 624 MB copies nobody else could use, and each new branch built cold.
+      # Restore falls back on key prefix, so a branch whose Cargo.lock differs from main's still
+      # reuses the compiled dependencies and recompiles only what changed.
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/desktop/src-tauri -> target
+          key: desktop-test-x86_64-windows
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build the iris CLI (sidecar binary)
         run: |
