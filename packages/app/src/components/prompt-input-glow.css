@@ -1,0 +1,131 @@
+/* The composer's working glow (Alex, 2026-10-09; prototype: iris-working-glow-prototype).
+   RING  — this chat is working: the border becomes a slow sweep of the IRIS signature colours
+           (the heyiris.io purple → blue → cyan), with a faint light behind it.
+   UNDER — something runs in the background (other sessions, this chat's subagents): a soft light
+           turning beneath the composer. It stays while this chat is idle.
+   Both fade in and out; neither ever blinks. Reduced motion: breathe, never spin.
+   The glow lives OUTSIDE the prompt form, which clips its overflow. */
+@property --iris-glow-a {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+.iris-glow {
+  --g1: #a855f7;
+  --g2: #3b82f6;
+  --g3: #06b6d4;
+  position: relative;
+  isolation: isolate;
+  border-radius: 12px;
+}
+.iris-glow > form,
+.iris-glow > div {
+  position: relative;
+  z-index: 1;
+}
+
+.iris-glow::before,
+.iris-glow::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.5s ease;
+  background: conic-gradient(
+    from var(--iris-glow-a),
+    transparent 0deg,
+    var(--g1) 60deg,
+    var(--g2) 120deg,
+    var(--g3) 170deg,
+    transparent 230deg,
+    transparent 360deg
+  );
+  animation: iris-glow-spin 3.2s linear infinite;
+}
+.iris-glow::before {
+  inset: -1.5px;
+  border-radius: 13.5px;
+  z-index: 0;
+}
+.iris-glow::after {
+  inset: -8px;
+  border-radius: 20px;
+  z-index: -1;
+  filter: blur(14px);
+}
+.iris-glow[data-busy]::before {
+  opacity: 1;
+}
+.iris-glow[data-busy]::after {
+  opacity: 0.45;
+}
+
+.iris-glow__under {
+  position: absolute;
+  left: 4%;
+  right: 4%;
+  bottom: -14px;
+  height: 52px;
+  z-index: -2;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.6s ease;
+  filter: blur(24px);
+  border-radius: 50%;
+  background: conic-gradient(from var(--iris-glow-a) at 50% 50%, var(--g1), var(--g2), var(--g3), var(--g1));
+  animation: iris-glow-spin 6s linear infinite;
+}
+.iris-glow[data-bg] .iris-glow__under {
+  opacity: 0.7;
+}
+
+.iris-glow__chip {
+  position: absolute;
+  z-index: 2;
+  right: 10px;
+  top: -28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--v2-text-text-muted, inherit);
+  border: 1px solid var(--v2-border-border-muted, rgba(128, 128, 128, 0.25));
+  background: var(--v2-background-bg-base, transparent);
+}
+.iris-glow__chip > i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--g2);
+  animation: iris-glow-breathe 2.4s ease-in-out infinite;
+}
+
+@keyframes iris-glow-spin {
+  to {
+    --iris-glow-a: 360deg;
+  }
+}
+@keyframes iris-glow-breathe {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .iris-glow::before,
+  .iris-glow::after,
+  .iris-glow__under {
+    animation: none;
+  }
+  .iris-glow[data-busy]::after,
+  .iris-glow[data-bg] .iris-glow__under {
+    animation: iris-glow-breathe 2.6s ease-in-out infinite;
+  }
+}

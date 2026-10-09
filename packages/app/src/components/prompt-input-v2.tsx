@@ -35,6 +35,7 @@ import { useSDK } from "@/context/sdk"
 import { useServerSDK } from "@/context/server-sdk"
 import { dictationAuthFor } from "@/utils/dictation-auth"
 import { useSync } from "@/context/sync"
+import "./prompt-input-glow.css"
 import { createSessionTabs } from "@/pages/session/helpers"
 import { showToast } from "@/utils/toast"
 import { PromptInputV2, type PromptInputV2Suggestion } from "@opencode-ai/session-ui/v2/prompt-input"
@@ -87,6 +88,17 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
       onSelect: stopSpokenReply,
     },
   ])
+  // The working glow (Alex, 2026-10-09): a RING while this chat is working, an UNDERGLOW while
+  // anything else runs in the background — other sessions and this one's subagents, which are
+  // child sessions and so already in session_status. See prompt-input-glow.css.
+  const glowSync = useSync()
+  const busy = createMemo(() => props.controller.view.submit.working?.() ?? false)
+  const background = createMemo(() => {
+    const data = glowSync().data
+    const running = Object.keys(data.session_status).filter((id) => data.session_working(id)).length
+    return Math.max(0, running - (busy() ? 1 : 0))
+  })
+
   command.register("prompt-dictate", () => [
     dictateCommand({
       controls: dictate,
@@ -110,6 +122,14 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
             {language.t("command.voice.stopSpeaking")}
           </ButtonV2>
         </div>
+      </Show>
+      <div class="iris-glow" data-busy={busy() ? "" : undefined} data-bg={background() > 0 ? "" : undefined}>
+      <span class="iris-glow__under" aria-hidden="true" />
+      <Show when={background() > 0}>
+        <span class="iris-glow__chip" role="status">
+          <i aria-hidden="true" />
+          {background()} working in the background
+        </span>
       </Show>
       <PromptInputV2
         controller={props.controller}
@@ -143,6 +163,7 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
           />
         }
       />
+      </div>
     </div>
   )
 }
