@@ -262,3 +262,32 @@ describe("the loader finds a global install from any folder; a project copy wins
     }
   })
 })
+
+// #188688 — the markdown can be byte-identical while a template or script changed. Without the
+// bundle comparison, install says "Up to date" and the old script keeps running.
+describe("assessInstalled: the folder around PLAYBOOK.md", () => {
+  const body = "# poster\n"
+  const rec = (bundle: string | null) => ({ name: "p", version: "3", sha256: sha256(body), installed_at: "x", bundle_sha256: bundle })
+
+  test("same markdown, changed bundle → differs, not current", () => {
+    const v = assessInstalled({ name: "p", localContent: body, record: rec("a".repeat(64)), registryVersion: "3", registryContent: body, registryBundleSha: "b".repeat(64) })
+    expect(v.state).toBe("differs")
+    expect(v.message).toContain("assets changed")
+  })
+
+  test("same markdown, same bundle → current", () => {
+    const v = assessInstalled({ name: "p", localContent: body, record: rec("a".repeat(64)), registryVersion: "3", registryContent: body, registryBundleSha: "a".repeat(64) })
+    expect(v.state).toBe("current")
+  })
+
+  test("installed before bundles existed, registry now has one → differs (the copy has no assets)", () => {
+    const old = { name: "p", version: "3", sha256: sha256(body), installed_at: "x" }
+    const v = assessInstalled({ name: "p", localContent: body, record: old, registryVersion: "3", registryContent: body, registryBundleSha: "b".repeat(64) })
+    expect(v.state).toBe("differs")
+  })
+
+  test("no bundle on either side → current; callers that do not pass a bundle sha are unaffected", () => {
+    expect(assessInstalled({ name: "p", localContent: body, record: rec(null), registryVersion: "3", registryContent: body, registryBundleSha: null }).state).toBe("current")
+    expect(assessInstalled({ name: "p", localContent: body, record: rec("a".repeat(64)), registryVersion: "3", registryContent: body }).state).toBe("current")
+  })
+})

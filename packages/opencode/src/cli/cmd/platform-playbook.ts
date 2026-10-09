@@ -29,6 +29,7 @@ import {
   NoPosixShellError,
 } from "../../skill/executor"
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "fs"
+import { collectBundle, DEFAULT_MAX_BYTES, extractBundle, formatBytes, MAX_FILES, packBundle, removeBundleFiles, sha256Bytes, type BundleFile } from "../../skill/bundle"
 import {
   resolveInstallRoot,
   playbookFile,
@@ -43,7 +44,7 @@ import {
   sha256,
   type InstallMode,
 } from "../../skill/install-location"
-import { join as pathJoin } from "path"
+import { dirname, join as pathJoin } from "path"
 import { runE2ESuite, probeServices, type E2ESuiteResult, type Tier, type ModeCoverage } from "../../skill/e2e/runner"
 import { PlaybookDraftCommand } from "./playbook-draft"
 import { PlaybookSopDraftCommand } from "./sop-draft"
@@ -1696,6 +1697,12 @@ const PlaybookSyncCommand = cmd({
             if (res.ok) {
               apiSynced++
               if (!args.json) console.log(`  ${success(">")} ${plan.name} → API`)
+              // The folder travels with the markdown, or the two drift apart (#188688). Skipped
+              // when the server already holds these exact bytes, so a re-sync costs nothing.
+              let serverSha: string | null = null
+              try { serverSha = ((await res.json()) as any)?.playbook?.bundle?.sha256 ?? null } catch { /* older server */ }
+              const b = await syncBundle(plan.name, info.location, IRIS_API, serverSha)
+              if (!args.json && b.state !== "none" && b.state !== "unchanged") printBundleResult(b, false)
             } else if (!args.json) {
               console.log(dim(`  ! ${plan.name} → API failed (${res.status})`))
             }
@@ -2557,6 +2564,8 @@ const PublishCommand = cmd({
     // Same endpoint and payload as `sync --api`; the server only overwrites content when
     // it is non-null, so this cannot blank an existing body.
     let foundLocally = false
+    let localLocation: string | null = null
+    let serverBundleSha: string | null = null
     try {
       const local = await withInstance(async () => {
         const info = await Skill.get(String(args.name))
@@ -2564,11 +2573,12 @@ const PublishCommand = cmd({
         const plan = await parsePlan(info)
         let content: string | undefined
         try { content = await Bun.file(info.location).text() } catch { /* register metadata anyway */ }
-        return { plan, content }
+        return { plan, content, location: info.location }
       })
 
       if (local) {
         foundLocally = true
+        localLocation = local.location
         const upRes = await irisFetch("/api/v1/playbooks", {
           method: "POST",
           body: JSON.stringify({
@@ -2587,12 +2597,21 @@ const PublishCommand = cmd({
           // Don't stop — the playbook may already exist server-side and still be publishable.
           // But say so, because publishing a stale body silently is its own bug.
           console.log(dim(`  ! Could not upload the local copy (${upRes.status}) — publishing whatever the server already holds.`))
-        } else if (!args.json) {
-          console.log(`  ${success(">")} Uploaded local copy`)
+        } else {
+          if (!args.json) console.log(`  ${success(">")} Uploaded local copy`)
+          try { serverBundleSha = ((await upRes.json()) as any)?.playbook?.bundle?.sha256 ?? null } catch { /* older server: no bundle field */ }
         }
       }
     } catch {
       // Local resolution is best-effort. A server-side-only playbook must still publish.
+    }
+
+    // 0b. The folder around PLAYBOOK.md (#188688) — before the scope changes, so a playbook never
+    // goes public pointing at assets from an older revision.
+    let bundleResult: Awaited<ReturnType<typeof syncBundle>> | null = null
+    if (localLocation) {
+      bundleResult = await syncBundle(String(args.name), localLocation, IRIS_API, serverBundleSha)
+      if (!args.json) printBundleResult(bundleResult, args.scope === "public")
     }
 
     // 1. Set the association + route: iris-api records scope and upserts the marketplace row on public.
@@ -2627,7 +2646,12 @@ const PublishCommand = cmd({
       await handleApiError(attachRes, "Attach to bloq")
     }
 
-    if (args.json) { await writeJson(data); prompts.outro("Done"); return }
+    if (args.json) {
+      await writeJson(bundleResult
+        ? { ...data, bundle_upload: { state: bundleResult.state, files: bundleResult.files.length, bytes: bundleResult.bytes, ...(bundleResult.error ? { error: bundleResult.error } : {}) } }
+        : data)
+      prompts.outro("Done"); return
+    }
 
     printDivider()
     const pb = data?.playbook ?? {}
@@ -2902,6 +2926,76 @@ const PlaybookVerifyCommand = cmd({
 // itself a disclosure.
 
 /**
+ * Send the folder around PLAYBOOK.md to the registry (#188688). Before this, publish carried the
+ * markdown alone, and every template, script and reference file stopped at the author's machine.
+ *
+ * Skips the upload when the server already holds these exact bytes (`serverSha`), and clears the
+ * server's copy when the folder no longer has anything but the markdown.
+ */
+async function syncBundle(
+  name: string,
+  location: string,
+  base: string,
+  serverSha: string | null,
+): Promise<{ state: "uploaded" | "unchanged" | "removed" | "none" | "error"; files: BundleFile[]; bytes: number; skipped: { path: string; reason: string }[]; error?: string }> {
+  const root = dirname(location)
+  const { files, skipped } = collectBundle(root)
+  if (files.length === 0) {
+    if (!serverSha) return { state: "none", files: [], bytes: 0, skipped }
+    const del = await irisFetch(`/api/v1/playbooks/${encodeURIComponent(name)}/bundle`, { method: "DELETE" }, base)
+    return del.ok
+      ? { state: "removed", files: [], bytes: 0, skipped }
+      : { state: "error", files: [], bytes: 0, skipped, error: `could not clear the old bundle (${del.status})` }
+  }
+  if (files.length > MAX_FILES) {
+    return { state: "error", files, bytes: 0, skipped, error: `${files.length} files — the limit is ${MAX_FILES}. Is a build folder in there?` }
+  }
+  const gz = packBundle(files.map((f) => ({ path: f.path, data: readFileSync(f.abs), executable: f.executable })))
+  const manifest: BundleFile[] = files.map(({ path, bytes, sha256 }) => ({ path, bytes, sha256 }))
+  if (gz.length > DEFAULT_MAX_BYTES) {
+    const biggest = [...files].sort((a, b) => b.bytes - a.bytes).slice(0, 3).map((f) => `${f.path} (${formatBytes(f.bytes)})`).join(", ")
+    return { state: "error", files: manifest, bytes: gz.length, skipped, error: `bundle is ${formatBytes(gz.length)}, the limit is ${formatBytes(DEFAULT_MAX_BYTES)}. Largest: ${biggest}` }
+  }
+  const sha = sha256Bytes(gz)
+  if (sha === serverSha) return { state: "unchanged", files: manifest, bytes: gz.length, skipped }
+
+  const form = new FormData()
+  form.append("bundle", new Blob([new Uint8Array(gz)], { type: "application/gzip" }), `${name}.tar.gz`)
+  form.append("sha256", sha)
+  form.append("files", JSON.stringify(manifest))
+  const res = await irisFetch(`/api/v1/playbooks/${encodeURIComponent(name)}/bundle`, { method: "POST", body: form }, base)
+  if (!res.ok) {
+    let why = `${res.status}`
+    try { why += ` ${((await res.json()) as any)?.error ?? ""}` } catch { /* non-JSON error body */ }
+    return { state: "error", files: manifest, bytes: gz.length, skipped, error: `upload failed (${why.trim()})` }
+  }
+  return { state: "uploaded", files: manifest, bytes: gz.length, skipped }
+}
+
+/** One line per outcome, plus — on a PUBLIC publish — the list of files that are now on the internet. */
+function printBundleResult(r: Awaited<ReturnType<typeof syncBundle>>, isPublic: boolean): void {
+  if (r.state === "none") return
+  if (r.state === "error") {
+    console.log(`  ${bold("!")} Assets NOT uploaded: ${r.error}`)
+    console.log(dim("    Installers will get PLAYBOOK.md without its folder until this is fixed."))
+    return
+  }
+  if (r.state === "removed") {
+    console.log(`  ${success(">")} Removed the old asset bundle (the folder holds only PLAYBOOK.md now)`)
+    return
+  }
+  const verb = r.state === "uploaded" ? "Uploaded" : "Unchanged:"
+  console.log(`  ${success(">")} ${verb} ${r.files.length} asset file(s), ${formatBytes(r.bytes)}`)
+  if (isPublic) {
+    console.log(dim("    Now readable by anyone:"))
+    for (const f of r.files.slice(0, 15)) console.log(dim(`      ${f.path}  ${formatBytes(f.bytes)}`))
+    if (r.files.length > 15) console.log(dim(`      … and ${r.files.length - 15} more`))
+  }
+  const secrets = r.skipped.filter((x) => x.reason === "looks like a secret")
+  if (secrets.length) console.log(dim(`    Left out (look like secrets): ${secrets.map((x) => x.path).join(", ")}`))
+}
+
+/**
  * Where an installed playbook lands — see src/skill/install-location.ts. Default is the home
  * dir (~/.iris/playbooks + ~/.claude/skills), which the CLI, Claude Code and the IRIS Desktop
  * app all read from any folder; a git project that already has .iris/playbooks keeps its own.
@@ -3010,6 +3104,8 @@ const PlaybookInstallCommand = cmd({
     const pb = data?.playbook ?? {}
     const content: string = pb.content ?? ""
     const registryVersion: string | null = pb.version == null ? null : String(pb.version)
+    // The folder around PLAYBOOK.md (#188688). Null when the playbook is only the markdown.
+    const registryBundle: { sha256: string; files: BundleFile[] } | null = pb.bundle?.sha256 ? pb.bundle : null
 
     // A playbook row with no body is a publish that never uploaded one — say so
     // rather than writing an empty file that then fails to parse later.
@@ -3028,7 +3124,7 @@ const PlaybookInstallCommand = cmd({
     if (existsSync(file) && !args.force) {
       let local = ""
       try { local = readFileSync(file, "utf8") } catch { /* unreadable → treated as differing */ }
-      const verdict = assessInstalled({ name, localContent: local, record: readInstalled(dir), registryVersion, registryContent: content })
+      const verdict = assessInstalled({ name, localContent: local, record: readInstalled(dir), registryVersion, registryContent: content, registryBundleSha: registryBundle?.sha256 ?? null })
       if (args.json) {
         await writeJson({ installed: false, reason: "already_installed", state: verdict.state, local_edits: verdict.localEdits, registry_version: registryVersion, path: file, message: verdict.message })
         prompts.outro("Done"); return
@@ -3038,11 +3134,54 @@ const PlaybookInstallCommand = cmd({
       prompts.outro("Done"); return
     }
 
+    // Download and verify the bundle BEFORE writing anything, so a failed download cannot leave
+    // PLAYBOOK.md installed without the templates and scripts it runs (#188688).
+    let bundleGz: Uint8Array | null = null
+    if (registryBundle) {
+      const br = await irisFetch(`/api/v1/playbooks/${encodeURIComponent(name)}/bundle`, { headers: { Accept: "application/gzip" } }, IRIS_API)
+      if (!br.ok) {
+        console.error(`  ${bold("Not installed")} — the playbook's assets could not be downloaded (HTTP ${br.status}).`)
+        console.error(dim(`  Its PLAYBOOK.md depends on them, so nothing was written. Try again, or ask the author to republish.`))
+        process.exitCode = 1
+        prompts.outro("Done"); return
+      }
+      bundleGz = new Uint8Array(await br.arrayBuffer())
+      if (sha256Bytes(bundleGz) !== registryBundle.sha256) {
+        console.error(`  ${bold("Not installed")} — the downloaded assets do not match the published hash. Nothing was written.`)
+        process.exitCode = 1
+        prompts.outro("Done"); return
+      }
+    }
+    const previousBundleFiles = readInstalled(dir)?.bundle_files ?? []
+
     // #185996 — mkdir tolerates an existing (OneDrive) folder, and the file is written to a temp
     // name and renamed over the old one, so --force no longer dies with EEXIST on Windows.
     writeFileAtomic(file, content)
+
+    let bundleWritten: string[] = []
+    let bundleRemoved: string[] = []
     try {
-      writeInstalled(dir, { name, version: registryVersion, sha256: sha256(content), installed_at: new Date().toISOString() })
+      if (bundleGz && registryBundle) {
+        const r = extractBundle(dir, bundleGz, registryBundle.files, previousBundleFiles)
+        bundleWritten = r.written
+        bundleRemoved = r.removed
+      } else if (previousBundleFiles.length) {
+        bundleRemoved = removeBundleFiles(dir, previousBundleFiles)
+      }
+    } catch (e: any) {
+      console.error(`  ${bold("!")} PLAYBOOK.md installed, but its assets were refused: ${String(e?.message ?? e)}`)
+      console.error(dim(`    Nothing from the bundle was written. Steps that use \${{playbook.assets}} will not work.`))
+      process.exitCode = 1
+    }
+    try {
+      writeInstalled(dir, {
+        name,
+        version: registryVersion,
+        sha256: sha256(content),
+        installed_at: new Date().toISOString(),
+        bundle_sha256: bundleWritten.length ? registryBundle!.sha256 : null,
+        bundle_files: bundleWritten,
+      })
     } catch { /* the record only powers the staleness check; the install itself succeeded */ }
 
     // Sync THIS playbook beside the root it was installed into — ~/.claude/skills for a global
@@ -3083,6 +3222,7 @@ const PlaybookInstallCommand = cmd({
         skill_note: skillNote,
         skill_via_symlink: skillVia,
         shadowed_by: shadows,
+        bundle: registryBundle ? { sha256: registryBundle.sha256, files_written: bundleWritten.length, files_removed: bundleRemoved } : null,
       })
       prompts.outro("Done"); return
     }
@@ -3092,6 +3232,8 @@ const PlaybookInstallCommand = cmd({
     if (pb.scope) printKV("Scope", String(pb.scope))
     if (registryVersion) printKV("Version", registryVersion)
     printKV("Playbook", file)
+    if (bundleWritten.length) printKV("Assets", `${bundleWritten.length} file(s) — ${dir}`)
+    if (bundleRemoved.length) printKV("Removed", `${bundleRemoved.length} file(s) the new version no longer ships`)
     if (skillFile) printKV("Skill", skillFile)
     printKV("Location", root.scope === "global" ? "global — your home folder" : `project — ${root.root}`)
     printDivider()

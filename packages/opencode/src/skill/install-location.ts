@@ -240,6 +240,10 @@ export interface InstalledRecord {
   version: string | null
   sha256: string
   installed_at: string
+  /** The folder around PLAYBOOK.md (#188688): what was installed, so a changed asset is "stale". */
+  bundle_sha256?: string | null
+  /** Paths the bundle wrote — the ONLY files a later install may remove. */
+  bundle_files?: string[]
 }
 
 export function sha256(s: string): string {
@@ -288,6 +292,8 @@ export function assessInstalled(input: {
   record: InstalledRecord | null
   registryVersion: string | null
   registryContent: string
+  /** The registry's bundle sha, null when the playbook has none. Undefined = caller did not check. */
+  registryBundleSha?: string | null
 }): { state: Staleness; localEdits: boolean; message: string } {
   const { name, record } = input
   const localSha = sha256(input.localContent)
@@ -302,6 +308,17 @@ export function assessInstalled(input: {
       state: "newer",
       localEdits,
       message: `v${input.registryVersion} available (you have v${record!.version}) — ${fix}${editsNote}`,
+    }
+  }
+  // The markdown can be identical while a template or script changed. Without this the copy
+  // reads "Up to date" and keeps running the old script (#188688).
+  const bundleChanged =
+    input.registryBundleSha !== undefined && (input.registryBundleSha ?? null) !== (record?.bundle_sha256 ?? null)
+  if (localSha === registrySha && bundleChanged) {
+    return {
+      state: "differs",
+      localEdits: false,
+      message: `The published assets changed since you installed (${input.registryBundleSha ? "new bundle" : "bundle removed"}) — ${fix}`,
     }
   }
   if (localSha === registrySha) {
