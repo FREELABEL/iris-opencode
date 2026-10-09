@@ -133,7 +133,11 @@ describe("remove script", () => {
     expect(s).toContain('./config.sh remove --token "$RUNNER_TOKEN"')
     for (const line of s.split("\n")) if (/\becho\b/.test(line)) expect(line).not.toContain("RUNNER_TOKEN")
     const rm = s.split("\n").filter((l) => l.includes("rm -rf"))
-    expect(rm).toEqual(['cd "$HOME" && rm -rf "$DIR"'])
+    // Its own folder, and on macOS the service's log folder — only when it is named actions.runner.*
+    expect(rm.map((l) => l.trim().replace(/^.*?(case "\$SVC"|cd "\$HOME")/, "$1"))).toEqual([
+      'case "$SVC" in actions.runner.?*) rm -rf "$HOME/Library/Logs/$SVC" ;; esac',
+      'cd "$HOME" && rm -rf "$DIR"',
+    ])
   })
   test("running it where the folder does not exist is a clean no-op", () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "runner-home-"))

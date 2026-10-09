@@ -127,7 +127,7 @@ function scriptHead(i: { owner: string; repo: string; name: string; token: strin
     "stop_runner() {",
     '  if [ -f .service ]; then',
     // svc.sh uninstall leaves ~/Library/Logs/<service> behind on macOS; .service names the plist.
-    '    if [ "$OS" = osx ]; then SVC="$(basename "$(cat .service)" .plist)"; ./svc.sh stop >/dev/null 2>&1; ./svc.sh uninstall >/dev/null 2>&1; [ -n "$SVC" ] && rm -rf "$HOME/Library/Logs/$SVC"',
+    '    if [ "$OS" = osx ]; then SVC="$(basename "$(cat .service)" .plist)"; ./svc.sh stop >/dev/null 2>&1; ./svc.sh uninstall >/dev/null 2>&1; case "$SVC" in actions.runner.?*) rm -rf "$HOME/Library/Logs/$SVC" ;; esac',
     '    else sudo -n ./svc.sh stop >/dev/null 2>&1; sudo -n ./svc.sh uninstall >/dev/null 2>&1; fi',
     "  fi",
     '  if [ -f .iris-run.pid ]; then P="$(cat .iris-run.pid)"; kill -TERM -- "-$P" 2>/dev/null || kill -TERM "$P" 2>/dev/null; rm -f .iris-run.pid; fi',
