@@ -61,6 +61,20 @@
   opacity: 0.45;
 }
 
+/* WAITING ON YOU — an approval or a question is open. Gold, white and soft yellow instead of the
+   working colours, so "IRIS is paused on you" never reads as "IRIS is busy". */
+.iris-glow[data-wait] {
+  --g1: #f5c542;
+  --g2: #fff7d6;
+  --g3: #d4a017;
+}
+.iris-glow[data-wait]::before {
+  opacity: 1;
+}
+.iris-glow[data-wait][data-halo]::after {
+  opacity: 0.5;
+}
+
 .iris-glow__under {
   position: absolute;
   left: 4%;
@@ -125,6 +139,7 @@
   animation: none;
 }
 .iris-glow[data-still][data-busy]::after,
+.iris-glow[data-still][data-wait]::after,
 .iris-glow[data-still][data-bg] .iris-glow__under {
   animation: iris-glow-breathe 2.6s ease-in-out infinite;
 }
@@ -136,6 +151,7 @@
     animation: none;
   }
   .iris-glow[data-busy]::after,
+  .iris-glow[data-wait]::after,
   .iris-glow[data-bg] .iris-glow__under {
     animation: iris-glow-breathe 2.6s ease-in-out infinite;
   }

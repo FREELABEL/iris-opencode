@@ -1,6 +1,7 @@
 import { Show, type JSX } from "solid-js"
 import { useLanguage } from "@/context/language"
-import { useSettings } from "@/context/settings"
+import { glowDurations, useSettings } from "@/context/settings"
+import "@/components/prompt-input-glow.css"
 import { SessionPermissionDock } from "@/pages/session/composer/session-permission-dock"
 import { SessionQuestionDock } from "@/pages/session/composer/session-question-dock"
 import { SessionFollowupDock } from "@/pages/session/composer/session-followup-dock"
@@ -15,6 +16,18 @@ export function SessionComposerRegion(props: {
   const language = useLanguage()
   const controller = props.controller
   const settings = useSettings()
+  // While IRIS waits for an approval or an answer, the message box is replaced by that card, so the
+  // working ring has nothing to draw on. The card gets the GOLD version instead (Alex, 2026-10-09):
+  // IRIS is paused on you. Same Settings as the ring: off, speed, glow, reduce motion.
+  const waitGlow = () => ({
+    class: "iris-glow",
+    "data-wait": settings.glow.ring() ? "" : undefined,
+    "data-halo": settings.glow.halo() ? "" : undefined,
+    "data-still": settings.glow.reduceMotion() ? "" : undefined,
+    style: {
+      "--iris-glow-ring": `${(glowDurations[settings.glow.speed()] ?? glowDurations.normal)[0]}s`,
+    },
+  })
   const rolled = () => {
     const revert = controller.revert()
     return revert?.items.length ? revert : undefined
@@ -38,7 +51,7 @@ export function SessionComposerRegion(props: {
       >
         <Show when={controller.state.questionRequest()} keyed>
           {(request) => (
-            <div>
+            <div {...waitGlow()}>
               <SessionQuestionDock request={request} onSubmit={controller.onResponseSubmit} />
             </div>
           )}
@@ -46,7 +59,7 @@ export function SessionComposerRegion(props: {
 
         <Show when={controller.state.permissionRequest()} keyed>
           {(request) => (
-            <div>
+            <div {...waitGlow()}>
               <SessionPermissionDock
                 request={request}
                 responding={controller.state.permissionResponding()}
