@@ -205,3 +205,19 @@ describe("classify — person / action / fyi", () => {
     expect(inferAccount([])).toBeUndefined()
   })
 })
+
+describe("activeTypes", () => {
+  test("every active connection, deduplicated; inactive ones are not counted", async () => {
+    const { activeTypes } = await import("../../src/iris/onboarding")
+    expect(
+      activeTypes([
+        { type: "slack", status: "active" },
+        { type: "gmail", isConnected: true },
+        { type: "slack", isConnected: true },
+        { type: "stripe", status: "expired" },
+        { status: "active" },
+      ]),
+    ).toEqual(["slack", "gmail"])
+    expect(activeTypes(null)).toEqual([])
+  })
+})

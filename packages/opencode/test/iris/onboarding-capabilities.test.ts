@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { CATALOG, MIN_CONFIDENCE, capabilities, intentCapability, parseIntentJson } from "../../src/iris/onboarding-capabilities"
+import { CATALOG, MIN_CONFIDENCE, OFFER, capabilities, intentCapability, parseIntentJson } from "../../src/iris/onboarding-capabilities"
 
 // The shape `iris intent --json` printed on 2026-10-08, banner and all.
 const intentOut = (choice: string, confidence: number, commands: string[]) =>
@@ -37,7 +37,11 @@ describe("capabilities", () => {
       cli: "/x/iris",
       exec: exec(intentOut("imessage mentions approve", 0.47, ["iris imessage mentions approve <id>"])),
     })
-    expect(r.capabilities.map((c) => c.id)).toEqual(CATALOG.reply.map((c) => c.id))
+    // The catalog leads; the third is the nearest other goal's, never intent's wrong pick.
+    expect(r.capabilities.map((c) => c.id).slice(0, CATALOG.reply.length)).toEqual(CATALOG.reply.map((c) => c.id))
+    expect(r.capabilities).toHaveLength(OFFER)
+    expect(r.capabilities.some((c) => c.source === "intent")).toBe(false)
+    expect(r.capabilities.filter((c) => c.primary).map((c) => c.id)).toEqual(["draft-replies"])
   })
 
   test("a starter goal gains intent's pick when it is confident and new", async () => {
@@ -47,16 +51,26 @@ describe("capabilities", () => {
 
   test("own words: intent's confident pick", async () => {
     const r = await capabilities("custom", "book more appointments", { cli: "/x/iris", exec: exec(intentOut("calendar slots", 0.82, [])) })
-    expect(r.capabilities).toHaveLength(1)
+    expect(r.capabilities).toHaveLength(OFFER)
     expect(r.capabilities[0]).toMatchObject({ source: "intent", tool: "iris calendar slots", primary: true })
+    expect(r.capabilities.slice(1).every((c) => !c.primary)).toBe(true)
   })
 
-  test("own words, intent unsure or CLI missing: plan it with you — never a wrong tool", async () => {
+  test("own words, intent unsure or CLI missing: nothing primary (their words are the answer) — never a wrong tool", async () => {
     const unsure = await capabilities("custom", "book more appointments", { cli: "/x/iris", exec: exec(intentOut("playbook run pathways-navigation", 0.28, [])) })
-    expect(unsure.capabilities[0].id).toBe("plan-with-you")
+    expect(unsure.capabilities).toHaveLength(OFFER)
+    expect(unsure.capabilities.some((c) => c.primary || c.source === "intent")).toBe(false)
     const noCli = await capabilities("custom", "book more appointments", { cli: null })
-    expect(noCli.capabilities[0].id).toBe("plan-with-you")
+    expect(noCli.capabilities.some((c) => c.primary)).toBe(false)
     expect(noCli.intent).toBeNull()
+  })
+
+  test("a failed payment is an alert, not a receipt for the books", () => {
+    const books = CATALOG.admin.find((c) => c.id === "bills-to-books")!
+    const re = new RegExp(`\\b(${books.evidence.pattern})`, "i")
+    expect(re.test("Payment failed: autopay for card ending 1180")).toBe(false)
+    expect(re.test("Your receipt from Dentrix Cloud")).toBe(true)
+    expect(re.test("Payment received from Venue House")).toBe(true)
   })
 
   test("every catalog tool names something real, and every goal has a primary", () => {

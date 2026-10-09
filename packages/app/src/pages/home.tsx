@@ -73,20 +73,30 @@ export function NewHome() {
   // neither finished nor skipped — gets "Connect your inbox → Here's what I see → Start" instead
   // of an empty project list. Anyone with a project never sees it.
   const [firstRun, setFirstRun] = createSignal(firstRunPending())
+  // Set when onboarding hands off to its session. Keeps the first-run screen ("Setting up your
+  // workspace…") up until the session tab takes over: opening the project makes the condition
+  // below false a moment before navigation, which flashed the empty project list.
+  const [launching, setLaunching] = createSignal(false)
   // Signed out always means sign-in, here, whatever the first-run flag or the tabs say.
   const showFirstRun = createMemo(
     () =>
       signedOut() === true ||
+      launching() ||
       (firstRun() && tabs.ready() && tabs.store.length === 0 && !home.project.newSession()),
   )
   const startFirstSession = (directory: string, prompt: string) => {
     const conn = home.server.focused()
     if (!conn) return
+    // Claim boot routing BEFORE the project exists. projects.open() writes the store, which
+    // re-runs the boot effect above synchronously; with bootRouted still false it found "no tabs,
+    // a project" and opened an empty session — the first of the two tabs onboarding left behind.
+    bootRouted = true
+    setLaunching(true)
     const ctx = home.server.context(conn)
     ctx.projects.open(directory)
     ctx.projects.touch(directory)
-    bootRouted = true
-    void tabs.newDraft({ server: ServerConnection.key(conn), directory }, prompt, undefined, { send: true })
+    // Released once the draft has navigated, so coming back to Home later shows Home.
+    void tabs.newDraft({ server: ServerConnection.key(conn), directory }, prompt, undefined, { send: true }).finally(() => setLaunching(false))
   }
 
   const projects = createHomeProjectsController(home)

@@ -24,6 +24,8 @@ const MAIL_TYPES = ["gmail", "outlook"] as const
 export interface OnboardingState {
   signedIn: boolean
   mail: { connected: boolean; type?: string; account?: string }
+  /** Every active connection's type (gmail, slack, stripe…). First run moves on after ANY one. */
+  connected?: string[]
 }
 
 export interface MailThread {
@@ -160,6 +162,12 @@ export function pickMailConnection(rows: unknown): { type: (typeof MAIL_TYPES)[n
   return undefined
 }
 
+/** Types of every active connection, deduplicated. */
+export function activeTypes(rows: unknown): string[] {
+  const list = Array.isArray(rows) ? rows : []
+  return [...new Set(list.filter((r: any) => typeof r?.type === "string" && (r?.isConnected === true || r?.status === "active")).map((r: any) => r.type as string))]
+}
+
 export async function state(): Promise<PlatformResult<OnboardingState>> {
   const userId = await resolveUserId()
   if (!userId) {
@@ -175,9 +183,11 @@ export async function state(): Promise<PlatformResult<OnboardingState>> {
         data: { signedIn: true, mail: { connected: false } },
       }
     }
-    const hit = pickMailConnection(body?.data ?? body?.integrations)
-    if (hit) return { measured: true, data: { signedIn: true, mail: { connected: true, ...hit } } }
-    return { measured: true, data: { signedIn: true, mail: { connected: false } } }
+    const rows = body?.data ?? body?.integrations
+    const connected = activeTypes(rows)
+    const hit = pickMailConnection(rows)
+    if (hit) return { measured: true, data: { signedIn: true, mail: { connected: true, ...hit }, connected } }
+    return { measured: true, data: { signedIn: true, mail: { connected: false }, connected } }
   } catch (e) {
     return {
       measured: false,

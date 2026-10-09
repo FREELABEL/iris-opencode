@@ -51,7 +51,8 @@ export const MIN_CONFIDENCE = 0.5
  *  (measured: "reply to people waiting on me" → iMessage at 0.53, next to an email goal). */
 export const ADD_CONFIDENCE = 0.7
 
-const RECEIPTS = "receipt|invoice|bill|payment|charge|transaction|statement|refund"
+// Not plain "payment": "Payment failed" is an alert that needs the person, not a receipt for the books.
+const RECEIPTS = "receipt|invoice|bill(?!ing)|payment (received|confirm)|paid|charge|transaction|statement|refund"
 const SECURITY = "sign[- ]?in|signed in|login|device|password|security|verify|verification|suspicious"
 const LEADS = "quote|pricing|price|rates?|interested|inquir|enquir|book(ing)?|availability|proposal|partner|collab|hire|project|estimate|demo"
 const MEETINGS = "meeting|call|notes|recap|transcript|zoom|meet"
@@ -207,9 +208,30 @@ export async function askIntent(
   return parseIntentJson(r.stdout)
 }
 
+/** The card always offers three (Alex, 2026-10-09): what answers the goal, then the nearest others. */
+export const OFFER = 3
+const NEAREST: Record<GoalId, Array<Exclude<GoalId, "custom">>> = {
+  reply: ["catchup", "leads", "admin"],
+  admin: ["catchup", "reply", "leads"],
+  catchup: ["reply", "admin", "leads"],
+  leads: ["reply", "catchup", "admin"],
+  custom: ["reply", "catchup", "admin", "leads"],
+}
+export function topUp(id: GoalId, list: Capability[]): Capability[] {
+  const out = [...list]
+  for (const g of NEAREST[id]) {
+    for (const c of CATALOG[g]) {
+      if (out.length >= OFFER) return out
+      if (!out.some((o) => o.id === c.id)) out.push({ ...c, primary: false })
+    }
+  }
+  return out
+}
+
 /**
  * What to offer for this goal. Starter goals: the catalog, plus intent's pick when it is confident
- * and adds something the catalog lacks. Own words: intent's pick, or "plan it with you".
+ * and adds something the catalog lacks. Own words: intent's pick only — when intent cannot place it,
+ * nothing is primary and the app pre-fills their own words as the answer. Always topped up to three.
  */
 export async function capabilities(
   id: GoalId,
@@ -218,12 +240,12 @@ export async function capabilities(
 ): Promise<{ capabilities: Capability[]; intent: IntentPick | null }> {
   const pick = await askIntent(goal, deps).catch(() => null)
   const fromIntent = intentCapability(goal, pick)
-  if (id === "custom") return { capabilities: [fromIntent ?? planWithYou(goal)], intent: pick }
+  if (id === "custom") return { capabilities: topUp(id, fromIntent ? [fromIntent] : []).slice(0, OFFER), intent: pick }
 
   const base = CATALOG[id]
   const adds =
     fromIntent && (pick?.confidence ?? 0) >= ADD_CONFIDENCE && !base.some((c) => fromIntent.tool.startsWith(c.tool.split(" · ")[0]))
       ? [{ ...fromIntent, primary: false, title: `Also: ${pick!.choice}`, detail: "Suggested by IRIS for this goal" }]
       : []
-  return { capabilities: [...base, ...adds], intent: pick }
+  return { capabilities: topUp(id, [...base, ...adds]).slice(0, OFFER), intent: pick }
 }
