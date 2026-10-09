@@ -228,8 +228,10 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
     }
     track("onboarding.workspace_created")
     track("onboarding.working")
-    finish("done")
+    // Open the session FIRST, then mark onboarding done. The other order unmounted this screen
+    // onto the empty project list for a beat before the session tab appeared.
     props.onStart(ws.path, `${prompt}\n\nUse my connected accounts to read the full details.`)
+    finish("done")
   }
 
   onMount(begin)
