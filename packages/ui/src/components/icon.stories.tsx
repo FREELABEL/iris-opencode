@@ -110,6 +110,12 @@ const names = [
   "link",
   "providers",
   "models",
+  "sparkle",
+  "hand",
+  "clock",
+  "globe",
+  "lock",
+  "play",
 ]
 
 const story = create({ title: "UI/Icon", mod, args: { name: "check" } })
