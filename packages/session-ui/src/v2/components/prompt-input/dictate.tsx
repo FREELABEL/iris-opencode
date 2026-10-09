@@ -35,6 +35,13 @@ export function PromptInputV2Dictate(props: {
   url: () => string
   disabled?: boolean
   insert: (text: string) => void
+  /**
+   * The words of a quick take while it is still being spoken, typed into the chat box as they
+   * arrive; undefined clears them. The composer shows them as in-progress text, and insert()
+   * replaces them with the final transcript. Background takes never call this — their words are
+   * held for review and must not reach the prompt on their own.
+   */
+  live?: (text: string | undefined) => void
   onError?: (message: string | undefined) => void
   controls?: (controls: DictationControls | undefined) => void
   shortcut?: string
@@ -176,6 +183,15 @@ export function PromptInputV2Dictate(props: {
   const panelWave = createMemo(() => waveformBars(dictation.levels().slice(-80), PANEL_WAVE))
   const progress = createMemo(() => capProgress(dictation.seconds(), MAX_SECONDS))
   const quickLive = () => mode() === "quick" && phase() !== "idle"
+  // Type the take into the chat box as it is spoken. Kept up through "transcribing" so the words do
+  // not vanish while the final transcript is fetched; the insert that follows replaces them.
+  const liveText = () => {
+    if (!quickLive()) return undefined
+    const text = [...finals(), partial()].join(" ").replace(/\s+/g, " ").trim()
+    return text || undefined
+  }
+  createEffect(on(liveText, (text) => props.live?.(text)))
+  onCleanup(() => props.live?.(undefined))
   const deviceName = () => props.devices?.current() || i18n.t("ui.promptInput.dictate.systemDefault")
   const label = () => {
     if (mode() === "background" || mode() === "review") return i18n.t("ui.promptInput.dictate.background.open")

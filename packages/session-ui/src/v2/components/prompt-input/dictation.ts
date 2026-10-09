@@ -753,6 +753,8 @@ export function createDictation(opts: DictationOptions) {
       )
     }
     const text = body.text.trim()
+    // The sidecar heard no speech and sent nothing to an engine — not a failed transcription.
+    if (!text && body.noSpeech) return opts.onError?.("No speech heard — nothing was sent.")
     if (!text) return opts.onError?.("That transcribed to nothing — try speaking a little louder.")
     opts.onTranscript(text)
   }
