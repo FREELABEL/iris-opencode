@@ -1768,6 +1768,7 @@ export const IrisApi = HttpApi.make("iris").add(
               type: Schema.optional(Schema.String),
               account: Schema.optional(Schema.String),
             }),
+            connected: Schema.optional(Schema.Array(Schema.String)),
           }).annotate({ identifier: "IrisOnboardingState" }),
           "Whether onboarding has anything to do yet",
         ),
