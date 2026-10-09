@@ -32,7 +32,7 @@ describe("--private refuses the flags that send content off the machine", () => 
 })
 
 describe("--private with the on-device engine broken", () => {
-  test("fails non-zero and never POSTs audio anywhere", async () => {
+  test("fails non-zero and makes no network call at all", async () => {
     // Not audio: whisper/ffmpeg cannot decode it, so transcribeLocal throws and the run reaches
     // the exact fallback that uploads under the default (standard) policy.
     const dir = mkdtempSync(join(tmpdir(), "iris-private-"))
@@ -46,7 +46,7 @@ describe("--private with the on-device engine broken", () => {
     const posts: string[] = []
     globalThis.fetch = (async (input: any, init?: any) => {
       const url = typeof input === "string" ? input : input?.url
-      if ((init?.method ?? "GET").toUpperCase() !== "GET") posts.push(String(url))
+      posts.push(String(url)) // ANY call — a private run has no reason to touch the network
       return new Response(JSON.stringify({ data: { text: "UPLOADED" } }), { status: 200 })
     }) as typeof fetch
 

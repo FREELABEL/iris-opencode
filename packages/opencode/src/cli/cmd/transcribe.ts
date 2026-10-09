@@ -227,7 +227,9 @@ export async function runLocalWhisper(
 
   // Fetched BEFORE the spinner starts so a slow lookup does not look like slow transcription.
   // Undefined here just means unhinted — see fetchGlossary.
-  const glossary = await fetchGlossary(brandId)
+  // Under --private nothing goes over the network, not even this GET of vocabulary: the claim
+  // is provable as "zero connections" only if there are zero.
+  const glossary = privateRun ? undefined : await fetchGlossary(brandId)
 
   const sp = prompts.spinner()
   sp.start(glossary ? "Transcribing locally (whisper.cpp, brand vocabulary)…" : "Transcribing locally (whisper.cpp)…")
