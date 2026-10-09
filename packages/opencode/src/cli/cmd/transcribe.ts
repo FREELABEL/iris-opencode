@@ -14,7 +14,10 @@ import {
 import { spawnSync } from "child_process"
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs"
 import { transcribeLocal, resolveFfmpeg, resolveWhisper, localWhisperInstallHint, installLocalWhisper, noAudioVerdict } from "../lib/transcription"
-import { resolveSttPolicy } from "../lib/stt-policy"
+import { resolveSttPolicy, auditTranscription, sha256File } from "../lib/stt-policy"
+import { transcribeOnNode } from "../lib/transcribe-on-node"
+import { resolveNode } from "./platform-hive-nodes"
+import { resolveSshTarget, ensureSshUser, sshRun, pushFile } from "./hive-tailscale"
 import { treatTranscript, listTreatments, structureWalkthrough } from "../lib/walkthrough"
 import {
   serverTranscriptVerdict,
@@ -651,6 +654,10 @@ export const PlatformTranscribeCommand = cmd({
         default: false,
         describe: "This audio must never reach a cloud speech-to-text provider. On-device only, and if that fails the run fails — no upload fallback. Refuses --remote and --treatment; URLs are downloaded and transcribed here",
       })
+      .option("on", {
+        type: "string",
+        describe: "Transcribe on one of YOUR Hive nodes (name or id) instead of this machine. The audio goes over your own Tailscale mesh, never through IRIS or a provider; implies --private",
+      })
       .option("remote", {
         type: "boolean",
         default: false,
@@ -737,6 +744,8 @@ export const PlatformTranscribeCommand = cmd({
       return
     }
 
+    if (args.on) args.private = true // --on is a private route by construction; its refusals apply
+
     if (args.private) {
       const refusal = privateRunRefusal({ remote: !!args.remote, treatment: args.treatment as string | undefined })
       if (refusal) {
@@ -752,6 +761,19 @@ export const PlatformTranscribeCommand = cmd({
     const url = String(args.url)
     const looksLikeFile =
       args.local || (!/^https?:\/\//i.test(url) && existsSync(resolve(url)))
+
+    // ── Your own Hive node (--on) ───────────────────────────────
+    if (args.on) {
+      if (!looksLikeFile || /^https?:\/\//i.test(url)) {
+        prompts.log.error("--on takes a local audio/video file. Download it first, then: iris transcribe <file> --on <node>")
+        process.exitCode = 1
+        prompts.outro("Not transcribed")
+        return
+      }
+      await runOnNode(String(args.on), url, args)
+      prompts.outro(process.exitCode ? "Not transcribed" : "Done")
+      return
+    }
 
     // ── Local file ──────────────────────────────────────────────
     if (looksLikeFile) {
@@ -933,3 +955,47 @@ export const PlatformTranscribeCommand = cmd({
 
 /** Test seam: the upload path, so a test can prove it is live (and so a refusal test is not vacuous). */
 export const transcribeViaServerForTest = (absPath: string) => transcribeViaServer(absPath)
+
+async function runOnNode(nodeArg: string, filePath: string, args: any): Promise<void> {
+  const abs = resolve(filePath)
+  const fail = async (msg: string) => {
+    if (args.json) await writeJson({ success: false, error: "on_node_failed", message: msg })
+    else prompts.log.error(msg)
+    process.exitCode = 1
+  }
+  const silent = noAudioVerdict(abs)
+  if (silent) return fail(silent)
+
+  // The node LIST comes from IRIS (metadata: names, tailnet addresses). The audio does not.
+  const userId = await requireUserId(undefined)
+  if (!userId) return fail("Sign in first (iris login) — the node list is how --on finds your machine.")
+  const node = await resolveNode(userId, nodeArg)
+  if (!node) return fail(`No node matching "${nodeArg}". Run: iris hive nodes list`)
+  const resolved = await resolveSshTarget(node.id, node.name, { advertised: (node as any).tailscale_ip ?? null })
+  if ("error" in resolved) return fail(resolved.error)
+  const t = await ensureSshUser(node.id, resolved)
+  if ("error" in t) return fail(t.error)
+
+  const sp = prompts.spinner()
+  sp.start(`Sending to ${node.name} over your mesh and transcribing there…`)
+  const started = Date.now()
+  const { bytes, sha256: digest } = await sha256File(abs)
+  const r = await transcribeOnNode(t, abs, { run: sshRun, push: pushFile }, { language: args.language as string | undefined })
+  // The record on THIS machine says where the audio went. Provider names the node, so an audit
+  // of the laptop shows "hive:<node>" — not a cloud name, and not a misleading "local".
+  auditTranscription({
+    provider: `hive:${node.name}`,
+    policy: "sovereign",
+    bytes,
+    sha256: digest,
+    ms: Date.now() - started,
+    ok: r.ok,
+    ...(r.ok ? {} : { error: `${r.stage}: ${r.error}`.slice(0, 200) }),
+  })
+  if (!r.ok) {
+    sp.stop("Failed", 1)
+    return fail(`${node.name}: ${r.error}. The audio was not sent anywhere else.`)
+  }
+  sp.stop(`${success("✓")} Transcribed on ${node.name} ${dim(`(${r.provider}, removed from the node)`)}`)
+  await finishTranscript(abs, r.text, `${r.provider} on hive:${node.name}`, !!args.json, undefined, args.output as string | undefined, filePath, undefined)
+}
