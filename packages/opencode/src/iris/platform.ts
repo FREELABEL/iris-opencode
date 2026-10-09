@@ -39,7 +39,7 @@ import {
 import { homedir } from "os"
 import path from "path"
 import { clampPaging, DEFAULT_PER_PAGE } from "./pagination"
-import { findLocalPlaybook } from "./playbook-local"
+import { byOwnerThenBoard, findLocalPlaybook } from "./playbook-local"
 
 /**
  * Where `auth.json` lives — derived, not imported.
@@ -3802,17 +3802,7 @@ export async function fetchPlaybooks(
 
     // YOURS FIRST, then everyone else's. The two are sorted apart rather than interleaved so a
     // list mixing them cannot read as "all of this is mine to change".
-    playbooks.sort((a, b) =>
-      a.owned === b.owned
-        ? a.attached === b.attached
-          ? a.name.localeCompare(b.name)
-          : a.attached
-            ? -1
-            : 1
-        : a.owned
-          ? -1
-          : 1,
-    )
+    playbooks.sort(byOwnerThenBoard)
 
     return {
       measured: attachedRes.ok || allRes.ok,

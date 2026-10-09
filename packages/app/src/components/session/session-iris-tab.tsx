@@ -202,6 +202,13 @@ export function playbookCommand(r: any): string {
   return `iris playbook run ${r.name}`
 }
 
+/** The All view's source tags for one row, in a fixed order: "project · installed · marketplace". */
+export function playbookSources(r: any): string {
+  const order = ["project", "installed", "account", "marketplace"]
+  const have: string[] = Array.isArray(r?.sources) ? r.sources : []
+  return order.filter((s) => have.includes(s)).join(" · ")
+}
+
 /** The button the card shows, or null when there is nothing to install. */
 export function playbookButton(r: any): { label: string; force: boolean; warn?: string } | null {
   const action = r?.action ?? (r?.hasLocal ? "run" : "install")
@@ -402,6 +409,8 @@ function describeFields(
       title: r.name,
       fields: fieldsOf([
         ["attached to this board", r.attached],
+        // All only: every place this row comes from.
+        ["found in", r.sources?.length ? playbookSources(r) : undefined],
         ["scope", r.scope],
         ["access", r.accessType],
         ["version", r.version],
@@ -610,6 +619,10 @@ interface SubView {
   /** Which renderer draws it, and therefore which array key its payload uses. */
   pane: string
   path: (bloqID: number) => string
+  /** The view a surface opens on when none is chosen. Without it, the first in the list. */
+  default?: true
+  /** The empty-state sentence, when "Nothing in <view> on this board" would not be true. */
+  empty?: string
 }
 
 /**
@@ -631,7 +644,7 @@ interface SubView {
  * Deliberately NOT copied from Elon: its `badge: count > 0 ? count : null`, which renders zero,
  * unknown and errored as the same blank tab.
  */
-const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
+export const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
   atlas: [
     { id: "lists", label: "Lists", pane: "atlas", path: (b) => `/iris/atlas/${b}` },
     { id: "schemas", label: "Schemas", pane: "schemas", path: (b) => `/iris/schemas/${b}` },
@@ -666,9 +679,26 @@ const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
     { id: "artifacts", label: "Artifacts", pane: "artifacts", path: () => `/iris/artifacts` },
   ],
   playbooks: [
+    // "What can I run" — this project's, this machine's and my account's, one row per name, each
+    // tagged with where it comes from. NOT the public catalogue: that is Marketplace's question,
+    // and All including it would be Marketplace with extras. Listed first, but Project stays
+    // the default view, as it was before All existed.
+    {
+      id: "all",
+      label: "All",
+      pane: "playbooks",
+      path: (b) => `/iris/playbooks/${b}?view=all`,
+      empty: "No playbooks yet — install one from Marketplace.",
+    },
     // "Which playbooks does this project use" and "what could I install" are different
     // questions; one flat list of 128 was the wrong answer to both.
-    { id: "project", label: "Project", pane: "playbooks", path: (b) => `/iris/playbooks/${b}?view=project` },
+    {
+      id: "project",
+      label: "Project",
+      pane: "playbooks",
+      path: (b) => `/iris/playbooks/${b}?view=project`,
+      default: true,
+    },
     {
       id: "marketplace",
       label: "Marketplace",
@@ -882,7 +912,7 @@ export function resolvePane(
 ): { sub?: SubView; pane: string; path: (b: number) => string } {
   const list = SUBVIEWS[surface]
   if (list?.length) {
-    const chosen = list.find((s) => s.id === sub) ?? list[0]
+    const chosen = list.find((s) => s.id === sub) ?? list.find((s) => s.default) ?? list[0]
     return { sub: chosen, pane: chosen.pane, path: chosen.path }
   }
   return { pane: surface, path: SURFACES.find((s) => s.id === surface)!.path }
@@ -3363,6 +3393,14 @@ export function SessionIrisTab() {
                         <Show when={pb.description}>
                           <p class="text-11-regular text-text-weak ps-4 pt-0.5 line-clamp-2">{pb.description}</p>
                         </Show>
+                        {/* All only: where this row comes from. One row per name, so a playbook
+                            found in several places names them all — "why is this here" is the
+                            question a union list raises. */}
+                        <Show when={pb.sources?.length}>
+                          <p class="font-mono text-11-regular text-text-weaker ps-4 pt-0.5" data-slot="iris-playbook-sources">
+                            {playbookSources(pb)}
+                          </p>
+                        </Show>
                       </button>
                     </>
                   )}
@@ -3494,7 +3532,7 @@ export function SessionIrisTab() {
                   and the first one is alarming when it is not true. */}
               <Show
                 when={applied() && SEARCH_PLACEHOLDER[pane()]}
-                fallback={`Nothing in ${paneLabel()}${boardScoped() ? " on this board" : ""}.`}
+                fallback={resolved().sub?.empty ?? `Nothing in ${paneLabel()}${boardScoped() ? " on this board" : ""}.`}
               >
                 Nothing in {paneLabel()} matches “{applied()}”.
               </Show>
