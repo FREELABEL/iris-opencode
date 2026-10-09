@@ -203,6 +203,10 @@ const HiveNodesListCommand = cmd({
       const ip = n.last_ip ?? dim("—")
       console.log(`  ${name}${youTag}  ${status}  ${slot}  ${heartbeat}  ${ip}`)
       console.log(`    ${dim("id:")} ${n.id}`)
+      // Disk, live from the heartbeat (#188700). Only said when it is a problem — a full disk is how
+      // a node silently stops completing work, and nothing else in this list would show it.
+      const diskNote = describeDiskLive((n as any).disk_live)
+      if (diskNote) console.log(`    ${diskNote}`)
 
       // Which BUILD, and can it serve local data sources.
       //
@@ -682,3 +686,14 @@ const HiveRunCommand = cmd({
 
 export const HiveNodesCommandExport = HiveNodesCommand
 export const HiveRunCommandExport = HiveRunCommand
+
+/** One line about a node's disk when it is a problem, else null (#188700). Exported for tests. */
+export function describeDiskLive(d: unknown): string | null {
+  if (!d || typeof d !== "object") return null
+  const disk = d as { free_gb?: number; total_gb?: number; low?: boolean; last_write_error?: { code?: string; file?: string } }
+  const err = disk.last_write_error?.code
+    ? ` · last write failed: ${disk.last_write_error.code}${disk.last_write_error.file ? ` (${disk.last_write_error.file})` : ""}`
+    : ""
+  if (!disk.low && !err) return null
+  return `⚠ disk: ${disk.free_gb ?? "?"} GB free of ${disk.total_gb ?? "?"} GB${err}`
+}
