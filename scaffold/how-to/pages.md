@@ -109,3 +109,7 @@ cat pages/component-showcase.json   # 28 components with full props
 - **Blank page?** You used an invalid component type. Run `iris pages component-registry` to check.
 - **Auth error on pages list?** The CLI routes pages through iris-api. If auth fails, the service token may need refreshing.
 - **Page URL format:** `heyiris.io/p/{slug}` — served by iris-api on Railway. (`freelabel.net` is the API host and also answers /p/, so a link built from it works and is on the wrong brand — which is why it spread.)
+
+## Your own domain
+
+To make `yourdomain.com` serve a page (not redirect to it): `iris domains connect yourdomain.com --page <slug>`, then `iris domains verify yourdomain.com`. Full walkthrough: `iris how-to view your-own-domain`.

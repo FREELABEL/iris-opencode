@@ -237,6 +237,12 @@
       "purpose": "Give something running on your machine a public https URL (<name>.t.heyiris.io), encrypted to the machine, that closes when you stop."
     },
     {
+      "src": "how-to/your-own-domain.md",
+      "dest": "how-to/your-own-domain.md",
+      "managed": true,
+      "purpose": "Make your own domain serve a Genesis page (not redirect to it), check it is live, and swap the page later without DNS work."
+    },
+    {
       "src": "how-to/ask-about-your-screen.md",
       "dest": "how-to/ask-about-your-screen.md",
       "managed": true,
