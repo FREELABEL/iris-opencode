@@ -31,6 +31,8 @@ import {
 import "@/components/session/genesis-artifact-card"
 // …and the `atlas_artifact` card, its Atlas twin (#187717).
 import "@/components/session/atlas-artifact-card"
+// …and the `atlas_epic` card: a multi-list plan, saved to Atlas. Its buttons fill the composer; they never send.
+import "@/components/session/atlas-epic-card"
 import { useLinksOpenInPanel } from "@/components/session/web-link-intercept"
 import { DiffChanges } from "@opencode-ai/ui/diff-changes"
 import { FileIcon } from "@opencode-ai/ui/file-icon"

@@ -13,6 +13,8 @@ export type IrisNavRequest = {
   sub?: string
   /** Genesis › Artifacts: the artifact to select once the list has it. */
   artifactId?: string
+  /** Switch the panel to this board first — an Atlas Epic card opening the board it saved to. */
+  bloqId?: number
   nonce: number
 }
 

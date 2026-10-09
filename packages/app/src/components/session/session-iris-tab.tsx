@@ -1984,6 +1984,7 @@ export function SessionIrisTab() {
     const req = irisNavRequest()
     if (!req) return
     untrack(() => {
+      if (req.bloqId && req.bloqId > 0) choose(req.bloqId)
       const known = SURFACES.some((x) => x.id === req.surface)
       if (known) chooseSurface(req.surface as SurfaceId)
       if (req.sub) chooseSub(req.sub, known ? (req.surface as SurfaceId) : surface())
