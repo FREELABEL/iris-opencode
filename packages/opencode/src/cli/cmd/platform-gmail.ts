@@ -103,7 +103,12 @@ const GmailReadCommand = cmd({
       if (args.thread) {
         const thread = await getThread(token, args.id)
         if (!thread) {
-          prompts.log.error(`Thread ${args.id} not found`)
+          // Honest refusal: the backend has no thread fetch yet, and this used to return the
+          // newest inbox messages labelled as the thread.
+          const msg = "Reading a whole thread isn't supported yet. Read one message with: iris gmail read <message-id>"
+          if (args.json) { await writeJson({ success: false, error: msg }); process.exitCode = 1; return }
+          prompts.log.error(msg)
+          process.exitCode = 1
           prompts.outro("Done")
           return
         }
@@ -143,8 +148,13 @@ const GmailReadCommand = cmd({
         console.log()
         const body = msg.body_text || msg.snippet
         console.log(`  ${body.replace(/\n/g, "\n  ")}`)
+        if (msg.attachments?.length) {
+          console.log()
+          console.log(`  ${bold("Attachments:")}`)
+          for (const a of msg.attachments) console.log(`    ${a.filename}  ${dim(`${a.type} · ${Math.round(a.size / 1024)} KB`)}`)
+          console.log(dim(`    read one: iris integrations exec gmail read_attachment message_id=${msg.id} filename="<name>"`))
+        }
         printDivider()
-        if (msg.thread_id) prompts.log.info(dim(`Thread: iris gmail read ${msg.thread_id} --thread`))
         printMailboxLine()
         prompts.outro(success("✓"))
       }
