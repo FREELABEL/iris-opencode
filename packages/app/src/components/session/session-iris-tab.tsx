@@ -48,6 +48,7 @@ import { irisNavRequest, clearIrisNav } from "./iris-nav"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { IrisRooms } from "./iris-rooms"
 import { IrisAgentLive } from "./iris-agent-live"
+import { IrisHiveScripts } from "./iris-hive-scripts"
 import { itemCommands, renderMarkdown } from "./iris-item"
 import {
   ATLAS_EDITED,
@@ -611,7 +612,7 @@ const SURFACES = [
 type SurfaceId = (typeof SURFACES)[number]["id"]
 
 /** Panes that draw and fetch for themselves; the generic row list has nothing to show for them. */
-const SELF_PANES = new Set(["rooms", "artifacts", "atlas-artifacts", "agent-live"])
+const SELF_PANES = new Set(["rooms", "artifacts", "atlas-artifacts", "agent-live", "hive-scripts"])
 
 interface SubView {
   id: string
@@ -723,6 +724,8 @@ export const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
   ],
   hive: [
     { id: "machines", label: "Machines", pane: "hive", path: () => `/iris/hive` },
+    // #188817: write a script, send it to one of your computers, watch it run. Owns its pane.
+    { id: "scripts", label: "Scripts", pane: "hive-scripts", path: () => `/iris/hive/scripts` },
     // The inbox was the original ask — "I want to see the inbox and all of the other machines
     // on the network in this tab". It belongs under Hive, not beside it: it is Hive traffic.
     { id: "inbox", label: "Inbox", pane: "inbox", path: () => `/iris/inbox` },
@@ -2887,6 +2890,9 @@ export function SessionIrisTab() {
               rooms, and "empty" must still show the New room button. */}
           <Match when={pane() === "rooms"}>
             <IrisRooms doFetch={doFetch} bloqId={activeBloq()} />
+          </Match>
+          <Match when={pane() === "hive-scripts"}>
+            <IrisHiveScripts doFetch={doFetch} />
           </Match>
           <Match when={pane() === "agent-live"}>
             <IrisAgentLive doFetch={doFetch} bloqId={activeBloq()} />
