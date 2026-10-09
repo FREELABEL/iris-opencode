@@ -30,6 +30,14 @@ jobs:
         with:
           targets: aarch64-apple-darwin
 
+      # The Rust shell compiled from scratch on every run (~4.5 of the ~7 minutes). Cached, a test
+      # build that only changes the interface or engine reuses the compiled crates.
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/desktop/src-tauri -> target
+          key: desktop-test-aarch64
+
       - name: Build the iris CLI (sidecar binary)
         run: |
           cd packages/opencode
