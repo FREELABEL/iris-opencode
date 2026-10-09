@@ -68,9 +68,13 @@ export interface Settings {
   glow: {
     /** Ring around the message box while IRIS works on this chat. */
     ring: boolean
+    /** The soft spinning light behind the ring. Off keeps just the thin ring. */
+    halo: boolean
     /** Underglow (and its "N working in the background" chip) while other work runs. */
     background: boolean
     speed: GlowSpeed
+    /** Breathe instead of spin. macOS's own Reduce Motion applies regardless of this. */
+    reduceMotion: boolean
   }
 }
 
@@ -254,8 +258,10 @@ const defaultSettings: Settings = {
   },
   glow: {
     ring: true,
+    halo: true,
     background: true,
     speed: "normal" as GlowSpeed,
+    reduceMotion: false,
   },
 }
 
@@ -600,6 +606,14 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         ring: withFallback(() => store.glow?.ring, defaultSettings.glow.ring),
         setRing(value: boolean) {
           setStore("glow", (glow) => ({ ...defaultSettings.glow, ...glow, ring: value }))
+        },
+        halo: withFallback(() => store.glow?.halo, defaultSettings.glow.halo),
+        setHalo(value: boolean) {
+          setStore("glow", (glow) => ({ ...defaultSettings.glow, ...glow, halo: value }))
+        },
+        reduceMotion: withFallback(() => store.glow?.reduceMotion, defaultSettings.glow.reduceMotion),
+        setReduceMotion(value: boolean) {
+          setStore("glow", (glow) => ({ ...defaultSettings.glow, ...glow, reduceMotion: value }))
         },
         background: withFallback(() => store.glow?.background, defaultSettings.glow.background),
         setBackground(value: boolean) {

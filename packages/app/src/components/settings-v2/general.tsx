@@ -231,6 +231,18 @@ const WorkingGlowSection = () => {
           </div>
         </SettingsRowV2>
         <SettingsRowV2
+          title={language.t("settings.general.row.glowHalo.title")}
+          description={language.t("settings.general.row.glowHalo.description")}
+        >
+          <div data-action="settings-glow-halo">
+            <Switch
+              checked={settings.glow.halo()}
+              disabled={!settings.glow.ring()}
+              onChange={(checked) => settings.glow.setHalo(checked)}
+            />
+          </div>
+        </SettingsRowV2>
+        <SettingsRowV2
           title={language.t("settings.general.row.glowBackground.title")}
           description={language.t("settings.general.row.glowBackground.description")}
         >
@@ -253,6 +265,14 @@ const WorkingGlowSection = () => {
             placement="bottom-end"
             gutter={6}
           />
+        </SettingsRowV2>
+        <SettingsRowV2
+          title={language.t("settings.general.row.glowReduceMotion.title")}
+          description={language.t("settings.general.row.glowReduceMotion.description")}
+        >
+          <div data-action="settings-glow-reduce-motion">
+            <Switch checked={settings.glow.reduceMotion()} onChange={(checked) => settings.glow.setReduceMotion(checked)} />
+          </div>
         </SettingsRowV2>
       </SettingsListV2>
     </div>

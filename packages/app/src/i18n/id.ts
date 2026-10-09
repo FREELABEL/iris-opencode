@@ -1035,6 +1035,10 @@ export const dict = {
   "settings.general.row.glowSpeed.calm": "Calm",
   "settings.general.row.glowSpeed.normal": "Normal",
   "settings.general.row.glowSpeed.fast": "Fast",
+  "settings.general.row.glowHalo.title": "Glow behind the ring",
+  "settings.general.row.glowHalo.description": "The soft light around the ring. Turn it off to keep just the thin ring.",
+  "settings.general.row.glowReduceMotion.title": "Reduce motion",
+  "settings.general.row.glowReduceMotion.description": "The glow breathes instead of spinning. Your Mac's Reduce Motion setting also does this.",
   "settings.general.section.feed": "Umpan",
   "settings.general.section.display": "Tampilan",
 

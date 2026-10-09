@@ -129,7 +129,12 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
           </ButtonV2>
         </div>
       </Show>
-      <div class="iris-glow" style={glowStyle()} data-busy={busy() ? "" : undefined} data-bg={background() > 0 ? "" : undefined}>
+      <div
+        class="iris-glow"
+        style={glowStyle()}
+        data-halo={dictationSettings.glow.halo() ? "" : undefined}
+        data-still={dictationSettings.glow.reduceMotion() ? "" : undefined}
+        data-busy={busy() ? "" : undefined} data-bg={background() > 0 ? "" : undefined}>
       <span class="iris-glow__under" aria-hidden="true" />
       <Show when={background() > 0}>
         <span class="iris-glow__chip" role="status">

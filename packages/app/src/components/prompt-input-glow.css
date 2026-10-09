@@ -57,7 +57,7 @@
 .iris-glow[data-busy]::before {
   opacity: 1;
 }
-.iris-glow[data-busy]::after {
+.iris-glow[data-busy][data-halo]::after {
   opacity: 0.45;
 }
 
@@ -116,6 +116,17 @@
   50% {
     opacity: 0.9;
   }
+}
+
+/* Settings > Reduce motion — the same as the system preference below. */
+.iris-glow[data-still]::before,
+.iris-glow[data-still]::after,
+.iris-glow[data-still] .iris-glow__under {
+  animation: none;
+}
+.iris-glow[data-still][data-busy]::after,
+.iris-glow[data-still][data-bg] .iris-glow__under {
+  animation: iris-glow-breathe 2.6s ease-in-out infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
