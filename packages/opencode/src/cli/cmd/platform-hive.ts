@@ -27,6 +27,7 @@ import {
   pickResultPayload,
   TERMINAL_STATUSES,
 } from "./hive-task-create"
+import { currentDelegationOrigin } from "./hive-delegation-origin"
 import { HiveFilesCommandExport } from "./platform-hive-files"
 import { HiveBrowserCommand } from "./platform-hive-browser"
 import { runRemoteDoctor } from "./platform-hive-doctor"
@@ -1202,10 +1203,12 @@ const HiveTasksCommand = cmd({
         notAfter,
         idempotencyKey: args.key as string | undefined,
         retries: args.retries as number | undefined,
+        origin: await currentDelegationOrigin(),
       })
 
       if (!args.json) {
         console.log(`${dim("→")} ${bold(describeTask(type, config))}${nodeName ? ` on ${bold(nodeName)}` : dim(" (any capable node)")}`)
+        if (payload.metadata) console.log(dim("  status and report will appear in this session"))
       }
 
       const createRes = await hiveFetch("/api/v6/nodes/tasks", {

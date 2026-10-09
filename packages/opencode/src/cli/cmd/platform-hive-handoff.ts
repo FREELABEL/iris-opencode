@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { currentDelegationOrigin } from "./hive-delegation-origin"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { requireAuth, requireUserId, dim, bold, success, writeJson } from "./iris-api"
@@ -97,6 +98,7 @@ export const HiveHandoffCommand = cmd({
             expires_at: inboxExpiresAt(),
           },
           timeout_seconds: 600,
+          ...(await currentDelegationOrigin().then((origin) => (origin ? { metadata: { origin } } : {}))),
         }),
       })
       if (!res.ok) { sp?.stop("Failed", 1); prompts.log.error(`HTTP ${res.status}`); process.exit(1) }
