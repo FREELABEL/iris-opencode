@@ -276,6 +276,63 @@ const SitesResponse = Schema.Struct({
   ),
 }).annotate({ identifier: "IrisSitesResponse" })
 
+// Genesis › Brand kits (#188816). Account-wide, like Sites: a brand is owned by its user.
+const BrandSwatch = Schema.Struct({ name: Schema.String, value: Schema.String })
+const BrandsResponse = Schema.Struct({
+  ...Measured,
+  brands: Schema.Array(
+    Schema.Struct({
+      id: Schema.Finite,
+      name: Schema.String,
+      slug: Schema.String,
+      status: Schema.String,
+      entityType: Schema.optional(Schema.String),
+      swatches: described(Schema.Array(BrandSwatch), "Up to six drawable colours, in stored order"),
+      logoUrl: Schema.optional(Schema.String),
+      updatedAt: Schema.optional(Schema.String),
+    }).annotate({ identifier: "IrisBrandSummary" }),
+  ),
+}).annotate({ identifier: "IrisBrandsResponse" })
+
+const BrandKitSchema = Schema.Struct({
+  brand: Schema.Struct({
+    id: Schema.Finite,
+    name: Schema.String,
+    slug: Schema.String,
+    status: Schema.String,
+    description: Schema.optional(Schema.String),
+  }),
+  colors: Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      value: Schema.String,
+      key: described(Schema.String, "Which key holds the value (DEFAULT or default) — saves write back to it"),
+      extra: Schema.Record(Schema.String, Schema.Unknown),
+    }),
+  ),
+  fonts: Schema.Array(Schema.Struct({ role: Schema.String, family: Schema.String })),
+  typeScale: Schema.Array(Schema.Struct({ role: Schema.String, value: Schema.String })),
+  logoUrl: Schema.optional(Schema.String),
+  motion: Schema.optional(
+    Schema.Struct({
+      ease: Schema.optional(Schema.String),
+      durationMs: Schema.optional(Schema.Finite),
+      character: Schema.optional(Schema.String),
+    }),
+  ),
+  personas: Schema.Array(
+    Schema.Struct({ name: Schema.String, isDefault: Schema.Boolean, tone: Schema.optional(Schema.String) }),
+  ),
+  sections: described(
+    Schema.Record(Schema.String, Schema.String),
+    "Each editable section exactly as read. Echo it back as `expected` when saving.",
+  ),
+}).annotate({ identifier: "IrisBrandKit" })
+
+const BrandKitResponse = Schema.Struct({ ...Measured, kit: Schema.optional(BrandKitSchema) }).annotate({
+  identifier: "IrisBrandKitResponse",
+})
+
 const SchemaFieldSchema = Schema.Struct({
   key: described(Schema.String, "The key in a record's `data` map — what a table column reads."),
   label: Schema.String,
@@ -840,6 +897,9 @@ export const IrisPaths = {
   integrations: `${root}/integrations/:bloqID`,
   records: `${root}/records/:bloqID/:slug`,
   sites: `${root}/sites/:bloqID`,
+  brands: `${root}/brands`,
+  brandKit: `${root}/brands/:brandID`,
+  brandSave: `${root}/brands/:brandID/save`,
   agentTasks: `${root}/agents/:agentID/tasks`,
   agentLive: `${root}/agents/:agentID/live`,
   runTakeOver: `${root}/runs/:runID/take-over`,
@@ -2095,6 +2155,50 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "List sites",
           description:
             "A site groups pages under shared navigation, and owns settings, a contact-form inbox and a comms thread that a page does not have. Listing only pages made all of that invisible and made a nine-page site look like nine unrelated rows. NOT board-filtered: sites are owned by a user OR a bloq and the endpoint mixes both, so narrowing by board would hide every account-level site.",
+        }),
+      ),
+      HttpApiEndpoint.get("brands", IrisPaths.brands, {
+        success: described(BrandsResponse, "Your brands, with swatches for the list"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.brands",
+          summary: "List brand kits",
+          description:
+            "Genesis › Brand kits (#188816). Every brand on the signed-in account. A brand kit is the design tokens fl-api keeps at `brands.metadata.design_tokens`. Owner-scoped upstream: you see only your own brands.",
+        }),
+      ),
+      HttpApiEndpoint.get("brandKit", IrisPaths.brandKit, {
+        params: { brandID: Schema.NumberFromString },
+        success: described(BrandKitResponse, "One brand's kit: colours, type, logo, motion, voice"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.brandKit",
+          summary: "Read a brand kit",
+          description:
+            "Tokens are normalised the way fl-api's DesignTokenNormalizer does, so flat legacy kits and nested ones read the same. Font stacks and type sizes are separated: brands file both under typography.",
+        }),
+      ),
+      HttpApiEndpoint.post("brandSave", IrisPaths.brandSave, {
+        params: { brandID: Schema.NumberFromString },
+        payload: Schema.Struct({
+          section: Schema.Literals(["colors", "typography", "motion"]),
+          value: Schema.Unknown,
+          expected: described(Schema.String, "The section as read (kit.sections[section])"),
+        }),
+        success: described(
+          Schema.Struct({
+            ok: Schema.Boolean,
+            reason: Schema.optional(Schema.String),
+            kit: Schema.optional(BrandKitSchema),
+          }).annotate({ identifier: "IrisBrandSaveResult" }),
+          "Whether the save landed, and the kit as the server now holds it",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.brandSave",
+          summary: "Save one section of a brand kit",
+          description:
+            "PINNED to what was read. fl-api's PATCH design-tokens replaces a whole section with no version check, so a second editor would silently win. This re-reads the section and refuses when it moved since `expected`, then writes and reads back.",
         }),
       ),
       HttpApiEndpoint.get("records", IrisPaths.records, {

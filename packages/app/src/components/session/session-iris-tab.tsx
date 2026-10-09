@@ -33,6 +33,7 @@ import { promotedFiles } from "./iris-promote"
 import type { FileContent } from "./iris-file-artifact"
 import { IrisCardEditor } from "./iris-card-editor"
 import { IrisArtifacts } from "./iris-artifacts"
+import { IrisBrandKits } from "./iris-brand-kits"
 import { IrisAtlasArtifacts } from "./iris-atlas-artifacts"
 import { atlasNotes } from "./iris-atlas-artifacts-model"
 import {
@@ -611,7 +612,7 @@ const SURFACES = [
 type SurfaceId = (typeof SURFACES)[number]["id"]
 
 /** Panes that draw and fetch for themselves; the generic row list has nothing to show for them. */
-const SELF_PANES = new Set(["rooms", "artifacts", "atlas-artifacts", "agent-live"])
+const SELF_PANES = new Set(["rooms", "artifacts", "atlas-artifacts", "agent-live", "brands"])
 
 interface SubView {
   id: string
@@ -677,6 +678,10 @@ export const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
     // made, before it is published to /p/. Session-scoped, not board-scoped, and it owns its
     // pane: IrisArtifacts fetches, listens and polls for itself.
     { id: "artifacts", label: "Artifacts", pane: "artifacts", path: () => `/iris/artifacts` },
+    // The brand's design tokens — colours, type, motion, voice — that Genesis pages and artifacts
+    // are meant to take their look from (#188816). Account-wide (a brand belongs to its user, not
+    // a board), and it owns its pane: IrisBrandKits fetches /iris/brands for itself.
+    { id: "brands", label: "Brand kits", pane: "brands", path: () => `/iris/brands` },
   ],
   playbooks: [
     // "What can I run" — this project's, this machine's and my account's, one row per name, each
@@ -2900,6 +2905,9 @@ export function SessionIrisTab() {
               notes={sessionNotes}
               openExternal={(url) => platform.openExternal(url)}
             />
+          </Match>
+          <Match when={pane() === "brands"}>
+            <IrisBrandKits doFetch={doFetch} />
           </Match>
           <Match when={pane() === "artifacts"}>
             <IrisArtifacts
