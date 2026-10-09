@@ -64,6 +64,22 @@ export interface Settings {
     /** xAI voice id for spoken replies ("" = the relay's default). */
     speakVoice: string
   }
+  /** The composer's working glow (prompt-input-glow.css). Both on by default. */
+  glow: {
+    /** Ring around the message box while IRIS works on this chat. */
+    ring: boolean
+    /** Underglow (and its "N working in the background" chip) while other work runs. */
+    background: boolean
+    speed: GlowSpeed
+  }
+}
+
+export type GlowSpeed = "calm" | "normal" | "fast"
+/** Seconds per turn: [ring, underglow]. "normal" is the pace Alex picked (2026-10-09). */
+export const glowDurations: Record<GlowSpeed, [number, number]> = {
+  calm: [4.8, 7.5],
+  normal: [3.84, 6],
+  fast: [2.88, 4.5],
 }
 
 export const monoDefault = "System Mono"
@@ -235,6 +251,11 @@ const defaultSettings: Settings = {
     inputDevice: "",
     speakReplies: false,
     speakVoice: "",
+  },
+  glow: {
+    ring: true,
+    background: true,
+    speed: "normal" as GlowSpeed,
   },
 }
 
@@ -572,6 +593,21 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         speakVoice: withFallback(() => store.voice?.speakVoice, defaultSettings.voice.speakVoice),
         setSpeakVoice(value: string) {
           setStore("voice", (voice) => ({ ...voice, speakVoice: value }))
+        },
+      },
+      glow: {
+        // Settings saved before this group existed have no `glow` object; spread from it, never set a path in it.
+        ring: withFallback(() => store.glow?.ring, defaultSettings.glow.ring),
+        setRing(value: boolean) {
+          setStore("glow", (glow) => ({ ...defaultSettings.glow, ...glow, ring: value }))
+        },
+        background: withFallback(() => store.glow?.background, defaultSettings.glow.background),
+        setBackground(value: boolean) {
+          setStore("glow", (glow) => ({ ...defaultSettings.glow, ...glow, background: value }))
+        },
+        speed: withFallback(() => store.glow?.speed, defaultSettings.glow.speed),
+        setSpeed(value: GlowSpeed) {
+          setStore("glow", (glow) => ({ ...defaultSettings.glow, ...glow, speed: value }))
         },
       },
     }

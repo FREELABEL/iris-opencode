@@ -13,7 +13,7 @@ import {
   setDictationDevice,
   type DictationControls,
 } from "@opencode-ai/session-ui/v2/prompt-input/dictation"
-import { useSettings } from "@/context/settings"
+import { glowDurations, useSettings } from "@/context/settings"
 import { isSpeaking, stopSpokenReply } from "@/context/spoken-replies"
 import { DICTATE_COMMAND_ID, dictateCommand } from "@/components/prompt-input/dictate-command"
 import { ModelSelectorPopoverV2 } from "@/components/dialog-select-model"
@@ -92,11 +92,17 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
   // anything else runs in the background — other sessions and this one's subagents, which are
   // child sessions and so already in session_status. See prompt-input-glow.css.
   const glowSync = useSync()
-  const busy = createMemo(() => props.controller.view.submit.working?.() ?? false)
+  // Settings > Working glow: each light can be turned off, and the pace changed.
+  const busy = createMemo(() => dictationSettings.glow.ring() && (props.controller.view.submit.working?.() ?? false))
   const background = createMemo(() => {
     const data = glowSync().data
     const running = Object.keys(data.session_status).filter((id) => data.session_working(id)).length
-    return Math.max(0, running - (busy() ? 1 : 0))
+    const self = props.controller.view.submit.working?.() ? 1 : 0
+    return dictationSettings.glow.background() ? Math.max(0, running - self) : 0
+  })
+  const glowStyle = createMemo(() => {
+    const [ring, under] = glowDurations[dictationSettings.glow.speed()] ?? glowDurations.normal
+    return { "--iris-glow-ring": `${ring}s`, "--iris-glow-under": `${under}s` }
   })
 
   command.register("prompt-dictate", () => [
@@ -123,7 +129,7 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
           </ButtonV2>
         </div>
       </Show>
-      <div class="iris-glow" data-busy={busy() ? "" : undefined} data-bg={background() > 0 ? "" : undefined}>
+      <div class="iris-glow" style={glowStyle()} data-busy={busy() ? "" : undefined} data-bg={background() > 0 ? "" : undefined}>
       <span class="iris-glow__under" aria-hidden="true" />
       <Show when={background() > 0}>
         <span class="iris-glow__chip" role="status">

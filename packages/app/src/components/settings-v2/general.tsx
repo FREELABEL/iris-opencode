@@ -8,7 +8,7 @@ import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useLanguage } from "@/context/language"
 import { usePlatform } from "@/context/platform"
 import { useUpdaterAction } from "../updater-action"
-import { useSettings } from "@/context/settings"
+import { type GlowSpeed, useSettings } from "@/context/settings"
 import { SettingsListV2 } from "./parts/list"
 import { SettingsRowV2 } from "./parts/row"
 import { LayoutRetirementNotice, LayoutTransitionToggle } from "./interface-transition"
@@ -208,6 +208,52 @@ const SoundsSection: Component<{ controller: SoundSettingsController }> = (props
         <SoundSetting kind="agent" channel={props.controller.agent} />
         <SoundSetting kind="permissions" channel={props.controller.permissions} />
         <SoundSetting kind="errors" channel={props.controller.errors} />
+      </SettingsListV2>
+    </div>
+  )
+}
+
+const GLOW_SPEEDS: GlowSpeed[] = ["calm", "normal", "fast"]
+
+const WorkingGlowSection = () => {
+  const language = useLanguage()
+  const settings = useSettings()
+  return (
+    <div class="settings-v2-section">
+      <h3 class="settings-v2-section-title">{language.t("settings.general.section.workingGlow")}</h3>
+      <SettingsListV2>
+        <SettingsRowV2
+          title={language.t("settings.general.row.glowRing.title")}
+          description={language.t("settings.general.row.glowRing.description")}
+        >
+          <div data-action="settings-glow-ring">
+            <Switch checked={settings.glow.ring()} onChange={(checked) => settings.glow.setRing(checked)} />
+          </div>
+        </SettingsRowV2>
+        <SettingsRowV2
+          title={language.t("settings.general.row.glowBackground.title")}
+          description={language.t("settings.general.row.glowBackground.description")}
+        >
+          <div data-action="settings-glow-background">
+            <Switch checked={settings.glow.background()} onChange={(checked) => settings.glow.setBackground(checked)} />
+          </div>
+        </SettingsRowV2>
+        <SettingsRowV2
+          title={language.t("settings.general.row.glowSpeed.title")}
+          description={language.t("settings.general.row.glowSpeed.description")}
+        >
+          <SelectV2
+            appearance="inline"
+            data-action="settings-glow-speed"
+            options={GLOW_SPEEDS}
+            current={settings.glow.speed()}
+            value={(speed) => speed}
+            label={(speed) => language.t(`settings.general.row.glowSpeed.${speed}`)}
+            onSelect={(speed) => speed && settings.glow.setSpeed(speed)}
+            placement="bottom-end"
+            gutter={6}
+          />
+        </SettingsRowV2>
       </SettingsListV2>
     </div>
   )
@@ -632,6 +678,7 @@ export const SettingsGeneralV2: Component<{
 
         <SoundsSection controller={sounds} />
         <MicrophoneSection />
+        <WorkingGlowSection />
 
         <Show when={desktop()}>
           <UpdatesSection />

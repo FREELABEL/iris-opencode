@@ -41,7 +41,7 @@
     transparent 230deg,
     transparent 360deg
   );
-  animation: iris-glow-spin 3.2s linear infinite;
+  animation: iris-glow-spin var(--iris-glow-ring, 3.84s) linear infinite; /* pace from Settings; 3.84s = "Normal" */
 }
 .iris-glow::before {
   inset: -1.5px;
@@ -74,7 +74,7 @@
   filter: blur(24px);
   border-radius: 50%;
   background: conic-gradient(from var(--iris-glow-a) at 50% 50%, var(--g1), var(--g2), var(--g3), var(--g1));
-  animation: iris-glow-spin 6s linear infinite;
+  animation: iris-glow-spin var(--iris-glow-under, 6s) linear infinite;
 }
 .iris-glow[data-bg] .iris-glow__under {
   opacity: 0.7;
