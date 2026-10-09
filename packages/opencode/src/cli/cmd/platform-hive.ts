@@ -94,6 +94,30 @@ export function resolveTaskPrefix(prefix: string, ids: string[]): { id: string }
 
 const IRIS_API = process.env.IRIS_API_URL ?? "https://freelabel.net"
 
+/**
+ * Turn what the user typed into ONE full task id: a full id passes through; a shortened one is
+ * resolved against the last 7 days of tasks, and an ambiguous one is an error that lists the
+ * candidates. Shared by `tasks get` and `cancel` — `cancel` used to send the prefix straight to
+ * the API, which looks ids up exactly ("No query results for model [App\Models\NodeTask]
+ * 01a109d7", #187990). UUIDv7 ids share their first 8 characters for seconds at a time, so the
+ * 8-character form is genuinely ambiguous, not just unrecognised.
+ */
+export async function resolveTaskIdArg(
+  raw: string,
+  userId: number,
+  list: (userId: number) => Promise<string[]> = listRecentTaskIds,
+): Promise<{ id: string } | { error: string }> {
+  const s = String(raw).trim()
+  if (isFullTaskId(s)) return { id: s }
+  return resolveTaskPrefix(s, await list(userId))
+}
+
+async function listRecentTaskIds(userId: number): Promise<string[]> {
+  const params = new URLSearchParams({ user_id: String(userId), since: "7d", limit: "500" })
+  const lr = await hiveFetch(`/api/v6/nodes/tasks?${params}`).catch(() => null)
+  return lr?.ok ? (((await lr.json()) as any).tasks ?? []).map((t: any) => String(t.id)) : []
+}
+
 async function hiveFetch(path: string, options: RequestInit = {}) {
   return irisFetch(path, options, IRIS_API)
 }
@@ -1303,10 +1327,7 @@ const HiveTasksCommand = cmd({
       }
       // The list prints shortened ids; resolve one against the last 7 days (#186129).
       if (!isFullTaskId(String(taskId))) {
-        const params = new URLSearchParams({ user_id: String(userId), since: "7d", limit: "500" })
-        const lr = await hiveFetch(`/api/v6/nodes/tasks?${params}`).catch(() => null)
-        const ids = lr?.ok ? (((await lr.json()) as any).tasks ?? []).map((t: any) => String(t.id)) : []
-        const r = resolveTaskPrefix(String(taskId), ids)
+        const r = await resolveTaskIdArg(String(taskId), Number(userId))
         if ("error" in r) {
           prompts.log.error(r.error)
           process.exitCode = 1
@@ -1743,8 +1764,22 @@ const HiveCancelCommand = cmd({
         console.log()
         prompts.log.success(`${cancelled}/${tasks.length} tasks cancelled`)
       } else if (args["task-id"]) {
-        spinner.start("Cancelling…")
-        const res = await nodeFetch(`/api/v6/node-agent/tasks/${args["task-id"]}/result`, {
+        // Resolve a shortened id to exactly one task first (#187990) — the API matches ids
+        // exactly, and an 8-character UUIDv7 prefix can name several tasks.
+        let cancelId = String(args["task-id"])
+        if (!isFullTaskId(cancelId)) {
+          const userId = await requireUserId(undefined)
+          if (!userId) { process.exitCode = 1; return }
+          const r = await resolveTaskIdArg(cancelId, userId)
+          if ("error" in r) {
+            prompts.log.error(r.error)
+            process.exitCode = 1
+            return
+          }
+          cancelId = r.id
+        }
+        spinner.start(`Cancelling ${cancelId}…`)
+        const res = await nodeFetch(`/api/v6/node-agent/tasks/${cancelId}/result`, {
           method: "POST",
           body: JSON.stringify({ status: "failed", output: "Cancelled via iris hive cancel", error: "Manually cancelled" }),
         })

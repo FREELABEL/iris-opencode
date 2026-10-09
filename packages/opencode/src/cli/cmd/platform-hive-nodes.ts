@@ -433,6 +433,56 @@ const HiveNodesCommand = cmd({
 // run — execute a shell command on a specific node and wait for output
 // ============================================================================
 
+export const TERMINAL_TASK_STATUSES = new Set(["succeeded", "completed", "failed", "cancelled", "timeout", "errored"])
+
+/**
+ * Poll ONE task — the one a dispatch created — until it reaches a terminal status.
+ *
+ * #187990: `iris hive run` printed a failure (exit 1, 1000ms, no output) that belonged to a
+ * DIFFERENT task, while its own task completed with the right output. Task ids are UUIDv7, so
+ * tasks dispatched seconds apart share their first 8 characters, and the 8-character form is all
+ * `run` printed. This function is the contract that keeps `run` honest:
+ *
+ *   - it asks for the FULL id it was given, never a prefix and never "the latest task";
+ *   - it refuses a record whose id is not that id, rather than reporting someone else's result
+ *     as this command's — a wrong answer that looks right is worse than an error.
+ *
+ * Pure apart from the injected fetch, so the regression test drives it with a fake server.
+ */
+export async function waitForTask(
+  taskId: string,
+  opts: {
+    fetchTask: (id: string) => Promise<any>
+    initialStatus?: string
+    deadlineMs: number
+    intervalMs?: number
+    onStatus?: (task: any) => void
+    sleep?: (ms: number) => Promise<void>
+    now?: () => number
+  },
+): Promise<any | null> {
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+  const now = opts.now ?? Date.now
+  const deadline = now() + opts.deadlineMs
+  let lastStatus = opts.initialStatus
+  while (now() < deadline) {
+    await sleep(opts.intervalMs ?? 1500)
+    const t = await opts.fetchTask(taskId)
+    if (!t || typeof t !== "object") throw new Error(`Poll for task ${taskId} returned no task`)
+    if (t.id !== undefined && String(t.id) !== taskId) {
+      throw new Error(
+        `Poll for task ${taskId} returned a different task (${t.id}) — refusing to report its result as this one's (#187990)`,
+      )
+    }
+    if (t.status !== lastStatus) {
+      opts.onStatus?.(t)
+      lastStatus = t.status
+    }
+    if (TERMINAL_TASK_STATUSES.has(t.status)) return t
+  }
+  return null
+}
+
 const HiveRunCommand = cmd({
   command: "run <target> <command>",
   describe: "run a shell command on a Hive node and stream the output back (fails fast on the first error unless --no-fail-fast is given — see `command`)",
@@ -535,33 +585,31 @@ const HiveRunCommand = cmd({
     }
 
     if (!argv.json) {
-      console.log(`${dim("→")} task ${taskId.slice(0, 8)}  status=${created.task.status}`)
+      // The FULL id. Task ids are UUIDv7 — time-ordered — so tasks created seconds apart share
+      // their first 8 characters, and a shortened id here pointed people at the wrong task
+      // when they went to look it up or cancel it (#187990).
+      console.log(`${dim("→")} task ${taskId}  status=${created.task.status}`)
       console.log(dim("waiting for completion..."))
     }
 
-    // Poll until terminal (succeeded / failed / cancelled / timeout). Bound by timeout + 30s slack.
-    const deadline = Date.now() + (timeoutSec + 30) * 1000
-    const terminal = new Set(["succeeded", "completed", "failed", "cancelled", "timeout", "errored"])
-    let lastStatus = created.task.status
+    // Poll EXACTLY the task this dispatch created, by its full id (#187990). See waitForTask.
     let final: any = null
-
-    while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 1500))
-      const r = await hiveFetch(`/api/v6/nodes/tasks/${taskId}?user_id=${userId}`)
-      if (!r.ok) {
-        console.error(`Poll failed: ${r.status} ${await r.text()}`)
-        process.exit(1)
-      }
-      const body = (await r.json()) as { task: any }
-      const t = body.task
-      if (!argv.json && t.status !== lastStatus) {
-        console.log(`${dim("→")} status=${t.status}${t.progress ? `  progress=${t.progress}%` : ""}`)
-        lastStatus = t.status
-      }
-      if (terminal.has(t.status)) {
-        final = t
-        break
-      }
+    try {
+      final = await waitForTask(taskId, {
+        initialStatus: created.task.status,
+        deadlineMs: (timeoutSec + 30) * 1000,
+        fetchTask: async (id) => {
+          const r = await hiveFetch(`/api/v6/nodes/tasks/${encodeURIComponent(id)}?user_id=${userId}`)
+          if (!r.ok) throw new Error(`Poll failed: ${r.status} ${await r.text()}`)
+          return ((await r.json()) as { task: any }).task
+        },
+        onStatus: argv.json
+          ? undefined
+          : (t) => console.log(`${dim("→")} status=${t.status}${t.progress ? `  progress=${t.progress}%` : ""}`),
+      })
+    } catch (e) {
+      console.error(e instanceof Error ? e.message : String(e))
+      process.exit(1)
     }
 
     if (!final) {
@@ -624,6 +672,7 @@ const HiveRunCommand = cmd({
     console.log(
       `  ${tag} ${verdict}  ${dim("exit=")}${exitLabel}  ${dim("duration=")}${final.duration_ms ?? "?"}ms`,
     )
+    console.log(dim(`  task ${taskId}  ·  iris hive tasks get ${taskId}`))
 
     // Exit with the command's own code, so `iris hive run <node> "..." && next` means what
     // it says. A timeout is 124 (distinct, so CI can retry only those) per the contract.
