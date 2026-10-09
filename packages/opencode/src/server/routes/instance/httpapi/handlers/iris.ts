@@ -64,7 +64,7 @@ import { homedir } from "os"
 import { createRoom, fetchRoom, fetchRooms, sendRoomMessage } from "@/iris/rooms"
 import { fetchAgentLive, handBackRun, takeOverRun } from "@/iris/agent-live"
 import { RootHttpApi } from "../api"
-import { markLocal, projectRoot } from "@/iris/playbook-local"
+import { markLocal, playbookRows, projectRoot } from "@/iris/playbook-local"
 import { Artifacts } from "@/iris/artifacts"
 import { atlasNoteUrl, probeAtlasNote, type NoteProbe } from "@/iris/atlas-note"
 import { frameTarget, probeFrame } from "@/iris/frame-check"
@@ -270,14 +270,12 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
           )
           // Never keep an answer that says it could not measure — the next request should retry.
           if (!(r as any).measured) playbookLists.invalidate()
-          // Description as well as name: playbooks are FOUND by what they do, and the name is
-          // a slug. "restaurant-booking-cancel" is not how anyone looks for it.
-          const rows = filterRows(r.data.playbooks, ctx.query.q, (p) => [
-            p.name,
-            p.description,
-            p.scope,
-            ...p.steps.map((s) => s.title),
-          ])
+          const rows = playbookRows(r.data.playbooks, {
+            view: ctx.query.view,
+            bloqId: ctx.params.bloqID,
+            q: ctx.query.q,
+            roots: { project },
+          })
           const { items, meta } = pageOf(r, rows, ctx.query)
           return { ...meta, playbooks: markLocal(items, { project }) }
         }),

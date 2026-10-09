@@ -105,6 +105,12 @@ const icons = {
   providers: `<path d="M10.0001 4.37562V2.875M13 4.37793V2.87793M7.00014 4.37793V2.875M10 17.1279V15.6279M13 17.1279V15.6279M7 17.1279V15.6279M15.625 13.0029H17.125M15.625 7.00293H17.125M15.625 10.0029H17.125M2.875 10.0029H4.375M2.875 13.0029H4.375M2.875 7.00293H4.375M4.375 4.37793H15.625V15.6279H4.375V4.37793ZM12.6241 10.0022C12.6241 11.4519 11.4488 12.6272 9.99908 12.6272C8.54934 12.6272 7.37408 11.4519 7.37408 10.0022C7.37408 8.55245 8.54934 7.3772 9.99908 7.3772C11.4488 7.3772 12.6241 8.55245 12.6241 10.0022Z" stroke="currentColor" stroke-linecap="square"/>`,
   models: `<path fill-rule="evenodd" clip-rule="evenodd" d="M17.5 10C12.2917 10 10 12.2917 10 17.5C10 12.2917 7.70833 10 2.5 10C7.70833 10 10 7.70833 10 2.5C10 7.70833 12.2917 10 17.5 10Z" stroke="currentColor"/>`,
   "arrow-undo-down": `<path d="M4.08333 11.0859L1.75 8.7526L4.08333 6.41927M2.33333 8.7526L12.5417 8.7526L12.5417 3.21094L7 3.21094" stroke="currentColor" stroke-width="1" stroke-linecap="square"/>`,
+  sparkle: `<path d="M8.6 3.2 9.9 7.4l4.2 1.3-4.2 1.3-1.3 4.2-1.3-4.2-4.2-1.3 4.2-1.3zM14.6 12.6l.6 1.8 1.8.6-1.8.6-.6 1.8-.6-1.8-1.8-.6 1.8-.6z" stroke="currentColor" stroke-linejoin="round" fill="none"/>`,
+  hand: `<path d="M7.5 9.6V4.4a1.15 1.15 0 0 1 2.3 0v4.4M9.8 8.6V3.3a1.15 1.15 0 0 1 2.3 0v5.3M12.1 8.8V4.6a1.15 1.15 0 0 1 2.3 0v6.6c0 3.1-2.2 5.6-5.2 5.6-2 0-3.2-.9-4.3-2.6l-2.2-3.4a1.1 1.1 0 0 1 1.8-1.3l1.6 1.9V6.2a1.15 1.15 0 0 1 2.3 0v3.4" stroke="currentColor" stroke-linecap="square" fill="none"/>`,
+  clock: `<circle cx="10" cy="10" r="7.1" stroke="currentColor" stroke-linecap="square" fill="none"/><path d="M10 5.8V10l2.9 1.9" stroke="currentColor" stroke-linecap="square" fill="none"/>`,
+  globe: `<circle cx="10" cy="10" r="7.1" stroke="currentColor" stroke-linecap="square" fill="none"/><path d="M2.9 10h14.2M10 2.9c2 1.9 3 4.3 3 7.1s-1 5.2-3 7.1c-2-1.9-3-4.3-3-7.1s1-5.2 3-7.1Z" stroke="currentColor" stroke-linecap="square" fill="none"/>`,
+  lock: `<path d="M4.6 8.8h10.8v8.3H4.6zM6.9 8.8V6.4a3.1 3.1 0 0 1 6.2 0v2.4M10 12.1v1.9" stroke="currentColor" stroke-linecap="square" fill="none"/>`,
+  play: `<path d="M6.3 4.3 15.4 10l-9.1 5.7z" fill="currentColor" stroke="currentColor" stroke-linejoin="round"/>`,
 }
 
 const spriteID = "opencode-icon-sprite"

@@ -9,12 +9,15 @@ import {
   onCleanup,
   Show,
   startTransition,
+  Suspense,
   Switch,
   untrack,
 } from "solid-js"
 import "./session-iris-tab.css"
 import { connectsBy, healthRead, metaLine, usageBars } from "./iris-catalog"
 import { IrisIntegrationDetail } from "./iris-integration-detail"
+import { matchesHands, playbookDocBody, playbookSources, playbookTitle, type HandsFilter } from "./playbook-flow"
+import { Ic, PlaybookFilters, PlaybookFlowInfo, PlaybookFlowList } from "./iris-playbook-flow"
 import { pageSummary, type PageEnvelope } from "./use-paged-surface"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { List } from "@opencode-ai/ui/list"
@@ -201,6 +204,9 @@ export function playbookCommand(r: any): string {
   if (action === "update") return `iris playbook install ${r.name} --force`
   return `iris playbook run ${r.name}`
 }
+
+/** The All view's source tags for one row — lives with the rest of the playbook reading. */
+export { playbookSources }
 
 /** The button the card shows, or null when there is nothing to install. */
 export function playbookButton(r: any): { label: string; force: boolean; warn?: string } | null {
@@ -399,9 +405,12 @@ function describeFields(
     }
   if (surface === "playbooks")
     return {
-      title: r.name,
+      // The plain title ("Freelabel ads"); the raw name stays in the developer drawer and tooltip.
+      title: playbookTitle(r),
       fields: fieldsOf([
         ["attached to this board", r.attached],
+        // All only: every place this row comes from.
+        ["found in", r.sources?.length ? playbookSources(r) : undefined],
         ["scope", r.scope],
         ["access", r.accessType],
         ["version", r.version],
@@ -610,6 +619,10 @@ interface SubView {
   /** Which renderer draws it, and therefore which array key its payload uses. */
   pane: string
   path: (bloqID: number) => string
+  /** The view a surface opens on when none is chosen. Without it, the first in the list. */
+  default?: true
+  /** The empty-state sentence, when "Nothing in <view> on this board" would not be true. */
+  empty?: string
 }
 
 /**
@@ -631,7 +644,7 @@ interface SubView {
  * Deliberately NOT copied from Elon: its `badge: count > 0 ? count : null`, which renders zero,
  * unknown and errored as the same blank tab.
  */
-const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
+export const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
   atlas: [
     { id: "lists", label: "Lists", pane: "atlas", path: (b) => `/iris/atlas/${b}` },
     { id: "schemas", label: "Schemas", pane: "schemas", path: (b) => `/iris/schemas/${b}` },
@@ -666,9 +679,26 @@ const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
     { id: "artifacts", label: "Artifacts", pane: "artifacts", path: () => `/iris/artifacts` },
   ],
   playbooks: [
+    // "What can I run" — this project's, this machine's and my account's, one row per name, each
+    // tagged with where it comes from. NOT the public catalogue: that is Marketplace's question,
+    // and All including it would be Marketplace with extras. Listed first, but Project stays
+    // the default view, as it was before All existed.
+    {
+      id: "all",
+      label: "All",
+      pane: "playbooks",
+      path: (b) => `/iris/playbooks/${b}?view=all`,
+      empty: "No playbooks yet — install one from Marketplace.",
+    },
     // "Which playbooks does this project use" and "what could I install" are different
     // questions; one flat list of 128 was the wrong answer to both.
-    { id: "project", label: "Project", pane: "playbooks", path: (b) => `/iris/playbooks/${b}?view=project` },
+    {
+      id: "project",
+      label: "Project",
+      pane: "playbooks",
+      path: (b) => `/iris/playbooks/${b}?view=project`,
+      default: true,
+    },
     {
       id: "marketplace",
       label: "Marketplace",
@@ -882,7 +912,7 @@ export function resolvePane(
 ): { sub?: SubView; pane: string; path: (b: number) => string } {
   const list = SUBVIEWS[surface]
   if (list?.length) {
-    const chosen = list.find((s) => s.id === sub) ?? list[0]
+    const chosen = list.find((s) => s.id === sub) ?? list.find((s) => s.default) ?? list[0]
     return { sub: chosen, pane: chosen.pane, path: chosen.path }
   }
   return { pane: surface, path: SURFACES.find((s) => s.id === surface)!.path }
@@ -1138,6 +1168,25 @@ export function SessionIrisTab() {
 
   const activeBloq = createMemo(() => selected() ?? (bloqs.latest ?? bloqs())?.bloqs?.[0]?.id)
 
+  /**
+   * WARM THE PLAYBOOK LIST before anyone asks for it. Its first load waits on fl-api's board call,
+   * measured at 8–14 s on 2026-10-09 — the panel showed a bare "Loading…" for all of it. The
+   * sidecar keeps one list per board and serves it instantly after that (stale while it
+   * refreshes), so asking once in the background, as soon as the board is known, means the
+   * Playbooks tab is usually ready by the time it is clicked. Fire-and-forget; errors are the
+   * real request's to report. Reads `bloqs` only once it is ready: reading a resource before its
+   * first value suspends the whole panel — the very freeze this exists to avoid.
+   */
+  const warmedBoards = new Set<string>()
+  createEffect(() => {
+    const b = selected() ?? (bloqs.state === "ready" ? bloqs()?.bloqs?.[0]?.id : undefined)
+    if (b == null) return
+    const key = `${base()}|${b}`
+    if (warmedBoards.has(key)) return
+    warmedBoards.add(key)
+    void doFetch(`/iris/playbooks/${b}?view=all`).catch(() => {})
+  })
+
   // A surface asked for from outside (the chat bar's Integrations entry). Consumed once.
   createEffect(() => {
     const wanted = requestedSurface()
@@ -1350,6 +1399,18 @@ export function SessionIrisTab() {
   onCleanup(() => clearInterval(clock))
   const atlasRows = createMemo(() =>
     pane() === "atlas" ? applyAtlasView(rows() as AtlasList[], atlasView(), now()) : ([] as AtlasList[]),
+  )
+
+  /*
+   * HOW HANDS-OFF (Playbooks · "03 Flow"). A lens over the rows already fetched, so it composes
+   * with the server-side search and the All / Project / Marketplace view. Kept across those
+   * views on purpose: "only the fully automatic ones" is a question about you, not about a tab.
+   * The count line under the chips says how many of the loaded rows it kept, so a filtered page
+   * never reads as the whole set.
+   */
+  const [handsFilter, setHandsFilter] = createSignal<HandsFilter>("any")
+  const playbookRows = createMemo(() =>
+    pane() === "playbooks" ? rows().filter((r: any) => matchesHands(r, handsFilter())) : ([] as any[]),
   )
 
   // Loading ONLY on the first load. A refetch with a previous payload in hand is not a loading
@@ -1584,10 +1645,10 @@ export function SessionIrisTab() {
   const [installResult, setInstallResult] = createSignal<{ ok: boolean; message: string } | null>(null)
   /** The playbook just installed, until the refreshed list shows it installed (see the effect below openRow). */
   const [justInstalled, setJustInstalled] = createSignal<string | null>(null)
-  const installOpenPlaybook = async (force: boolean) => {
+  const installOpenPlaybook = async (force: boolean): Promise<boolean> => {
     const row = openRow()
     const name = row?.raw?.name
-    if (!name || installing()) return
+    if (!name || installing()) return false
     setInstalling(true)
     setInstallResult(null)
     try {
@@ -1606,8 +1667,10 @@ export function SessionIrisTab() {
         setJustInstalled(name)
         void refetchSurface()
       }
+      return ok
     } catch (e: any) {
       setInstallResult({ ok: false, message: e?.message ?? String(e) })
+      return false
     } finally {
       setInstalling(false)
     }
@@ -2142,6 +2205,11 @@ export function SessionIrisTab() {
           hundreds of items and the reader is the only way in. Server-side — see the `q` param. */}
       <Show when={SEARCH_PLACEHOLDER[pane()] && !openRow()}>
         <div class="iris-search shrink-0">
+          <Show when={pane() === "playbooks"}>
+            <span class="pbf-search-ic">
+              <Ic name="magnifying-glass" />
+            </span>
+          </Show>
           <input
             class="iris-search__input"
             type="search"
@@ -2163,6 +2231,15 @@ export function SessionIrisTab() {
             </button>
           </Show>
         </div>
+      </Show>
+
+      <Show when={pane() === "playbooks" && !openRow() && view() === "rows"}>
+        <PlaybookFilters
+          value={handsFilter()}
+          onChange={setHandsFilter}
+          shown={playbookRows().length}
+          total={rows().length}
+        />
       </Show>
 
       <Show when={pane() === "atlas" && !openRow() && view() === "rows"}>
@@ -2225,9 +2302,18 @@ export function SessionIrisTab() {
             class="flex items-center gap-1 px-2 py-1 text-11-regular text-text-weak hover:text-text-base shrink-0 text-start cursor-pointer"
             onClick={() => setOpenRow(null)}
           >
-            ← Back
+            <Show when={openRow()!.pane === "playbooks"} fallback="← Back">
+              <Ic name="arrow-left" />
+              All playbooks
+            </Show>
           </button>
-          <h3 class="text-13-medium text-text-strong px-2 pb-1.5 shrink-0">{openRow()!.title}</h3>
+          <h3
+            class="text-13-medium text-text-strong px-2 pb-1.5 shrink-0"
+            classList={{ "pbf-title": openRow()!.pane === "playbooks" }}
+            title={openRow()!.pane === "playbooks" ? openRow()!.raw?.name : undefined}
+          >
+            {openRow()!.title}
+          </h3>
 
           {/* LEVEL 3 — chips, because levels 1 and 2 are already a plate and a rule, and a
               third thing drawn like either of them stops the stack reading as a hierarchy.
@@ -2253,6 +2339,12 @@ export function SessionIrisTab() {
           </Show>
 
           <div class="flex-1 min-h-0 overflow-auto px-2 pb-4">
+            {/* ITS OWN LOADING BOUNDARY. A tab body that reads a resource on first load (the
+                Document, an agent's tasks) used to suspend the nearest <Suspense> — the one round
+                the WHOLE side panel — so clicking "Document" blanked everything to "Loading…" for
+                as long as the fetch took (`.latest` still suspends before the first value). Here
+                only the body waits; the title, tabs and back link stay put. */}
+            <Suspense fallback={<p class="text-12-regular text-text-weak py-2">Reading…</p>}>
             <Switch>
               <Match when={detailTab() === "info"}>
                 {/* THE UPTIME STRIP — the provider's recent history, one bar per window.
@@ -2284,37 +2376,19 @@ export function SessionIrisTab() {
                     </p>
                   </div>
                 </Show>
-                <Show when={openRow()!.pane === "playbooks" && playbookButton(openRow()!.raw)}>
-                  {(btn) => (
-                    <div class="flex flex-col gap-1 pb-2" data-slot="iris-playbook-install">
-                      <div class="flex items-center gap-2">
-                        <Button
-                          size="small"
-                          variant="primary"
-                          disabled={installing()}
-                          onClick={() => void installOpenPlaybook(btn().force)}
-                        >
-                          {installing() ? "Installing…" : btn().label}
-                        </Button>
-                        <span class="text-11-regular text-text-weaker">
-                          {projectDir() ? "into this project" : "into your home folder"}
-                        </span>
-                      </div>
-                      <Show when={btn().warn}>
-                        <p class="text-11-regular text-text-danger-base">{btn().warn}</p>
-                      </Show>
-                      <Show when={installResult()}>
-                        {(r) => (
-                          <p
-                            class="text-11-regular"
-                            classList={{ "text-text-weak": r().ok, "text-text-danger-base": !r().ok }}
-                          >
-                            {r().message}
-                          </p>
-                        )}
-                      </Show>
-                    </div>
-                  )}
+                {/* A PLAYBOOK IS NOT A RECORD EITHER (03 Flow). What it will do, whether it will
+                    ask you anything, and whether anyone uses it — then the steps, coloured by who
+                    does them. The CLI line and the raw fields move into "For developers". */}
+                <Show when={openRow()!.pane === "playbooks" && openRow()!.raw}>
+                  <PlaybookFlowInfo
+                    row={openRow()!.raw}
+                    button={playbookButton(openRow()!.raw)}
+                    command={playbookCommand(openRow()!.raw)}
+                    installing={installing()}
+                    installResult={installResult()}
+                    projectDir={projectDir()}
+                    onInstall={installOpenPlaybook}
+                  />
                 </Show>
                 {/* A CONNECTOR IS NOT A RECORD. Rendering it through the generic key/value list
                     below turned the registry's page into a database row: a full-width green slab
@@ -2331,7 +2405,7 @@ export function SessionIrisTab() {
                     onConnect={() => void startConnect(String(openRow()!.raw.type))}
                   />
                 </Show>
-                <Show when={openRow()!.command && openRow()!.pane !== "catalog"}>
+                <Show when={openRow()!.command && openRow()!.pane !== "catalog" && openRow()!.pane !== "playbooks"}>
                   <button
                     type="button"
                     class="iris-command"
@@ -2343,7 +2417,7 @@ export function SessionIrisTab() {
                 </Show>
                 <dl
                   class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1"
-                  classList={{ hidden: openRow()!.pane === "catalog" }}
+                  classList={{ hidden: openRow()!.pane === "catalog" || openRow()!.pane === "playbooks" }}
                 >
                   <For each={openRow()!.fields}>
                     {([k, v]) => (
@@ -2580,7 +2654,7 @@ export function SessionIrisTab() {
                     </p>
                     <div
                       class="iris-markdown text-12-regular"
-                      innerHTML={renderMarkdown(playbookDoc.latest!.content)}
+                      innerHTML={renderMarkdown(playbookDocBody(playbookDoc.latest!.content))}
                     />
                   </Match>
                 </Switch>
@@ -2787,6 +2861,7 @@ export function SessionIrisTab() {
                 </Switch>
               </Match>
             </Switch>
+            </Suspense>
           </div>
         </div>
       </Show>
@@ -3316,58 +3391,13 @@ export function SessionIrisTab() {
               </Match>
 
               <Match when={pane() === "playbooks"}>
-                <For each={rows()}>
-                  {(pb, i) => (
-                    <>
-                      {/* NOT YOURS starts here. The server sorts owned first, so the boundary is
-                          the first row whose owner is not you — drawn once, as a heading, rather
-                          than badged on every row. A list that mixes them undifferentiated reads
-                          as "all of this is mine to change". */}
-                      <Show when={!pb.owned && (i() === 0 || rows()[i() - 1]?.owned)}>
-                        {/* NAMES THE OWNER rather than calling it "not yours".
-                            Every one of these on this account belongs to user 2945 — the same
-                            person's second login. "Not yours" would be a confident false
-                            statement about their own work; an account number is a fact they
-                            can act on. The boundary is drawn once, where the sort flips. */}
-                        <h4 class="text-11-regular text-text-weaker px-2 pt-3 pb-1 border-t border-border-weaker-base">
-                          Owned by another account
-                          {pb.ownerUserId ? ` · #${pb.ownerUserId}` : ""} — you can run these, not edit them
-                        </h4>
-                      </Show>
-                      <button
-                        type="button"
-                        class="w-full text-start px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
-                        onClick={() => setOpenRow(describeRow(pane(), pb))}
-                      >
-                        <div class="flex items-baseline gap-2">
-                          <span
-                            class="shrink-0"
-                            classList={{ "text-text-base": pb.attached, "text-text-weaker": !pb.attached }}
-                          >
-                            {pb.attached ? "★" : "·"}
-                          </span>
-                          <span
-                            class="text-12-regular min-w-0 flex-1"
-                            classList={{ "text-text-base": pb.owned, "text-text-weak": !pb.owned }}
-                          >
-                            {pb.name}
-                          </span>
-                          <Show when={pb.hasLocal}>
-                            <span class="font-mono text-11-regular text-text-weaker shrink-0">
-                              {pb.action === "update" ? `update · v${pb.version}` : "installed"}
-                            </span>
-                          </Show>
-                          <Show when={pb.attached}>
-                            <span class="font-mono text-11-regular text-text-weaker shrink-0">this board</span>
-                          </Show>
-                        </div>
-                        <Show when={pb.description}>
-                          <p class="text-11-regular text-text-weak ps-4 pt-0.5 line-clamp-2">{pb.description}</p>
-                        </Show>
-                      </button>
-                    </>
-                  )}
-                </For>
+                <PlaybookFlowList
+                  rows={playbookRows()}
+                  total={rows().length}
+                  filter={handsFilter()}
+                  onOpen={(pb) => void startTransition(() => setOpenRow(describeRow(pane(), pb)))}
+                  onReset={() => setHandsFilter("any")}
+                />
               </Match>
 
               <Match when={pane() === "integrations"}>
@@ -3495,7 +3525,7 @@ export function SessionIrisTab() {
                   and the first one is alarming when it is not true. */}
               <Show
                 when={applied() && SEARCH_PLACEHOLDER[pane()]}
-                fallback={`Nothing in ${paneLabel()}${boardScoped() ? " on this board" : ""}.`}
+                fallback={resolved().sub?.empty ?? `Nothing in ${paneLabel()}${boardScoped() ? " on this board" : ""}.`}
               >
                 Nothing in {paneLabel()} matches “{applied()}”.
               </Show>

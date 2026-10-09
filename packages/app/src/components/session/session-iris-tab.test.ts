@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { cellText, detailTabsFor, highlightJson, integrationHealth, itemCommands, logoFor, mcpServerRows, normalizeSurface, playbookButton, playbookCommand, providerMark, resolvePane, surfaceView } from "./session-iris-tab"
+import { cellText, detailTabsFor, highlightJson, integrationHealth, itemCommands, logoFor, mcpServerRows, normalizeSurface, playbookButton, playbookCommand, playbookSources, providerMark, resolvePane, SUBVIEWS, surfaceView } from "./session-iris-tab"
 
 describe("surfaceView", () => {
   test("a failed fetch is never rendered as an empty surface", () => {
@@ -345,5 +345,33 @@ describe("MCP servers, from config + status", () => {
 describe("MCP detail tabs", () => {
   test("Info and Tools — the tools are the reason to open a server", () => {
     expect(detailTabsFor("mcp").map((t) => t.id)).toEqual(["info", "tools", "json"])
+  })
+})
+
+describe("Playbooks › All", () => {
+  test("All is a tab beside Project and Marketplace, and asks the server for view=all", () => {
+    expect(SUBVIEWS.playbooks!.map((s) => s.id)).toEqual(["all", "project", "marketplace"])
+    const r = resolvePane("playbooks", "all")
+    expect(r.pane).toBe("playbooks")
+    expect(r.path(174)).toBe("/iris/playbooks/174?view=all")
+  })
+
+  test("Project is still where Playbooks opens — listing All first does not make it the default", () => {
+    expect(resolvePane("playbooks", undefined).sub?.id).toBe("project")
+    expect(resolvePane("playbooks", "nonsense").sub?.id).toBe("project")
+    // Surfaces without a declared default still open on their first view.
+    expect(resolvePane("agents", undefined).sub?.id).toBe("all")
+  })
+
+  test("an empty All says what to do, not 'nothing on this board'", () => {
+    // All is not board-scoped: "Nothing in Playbooks › All on this board" would be false.
+    expect(resolvePane("playbooks", "all").sub?.empty).toBe("No playbooks yet — install one from Marketplace.")
+    expect(resolvePane("playbooks", "project").sub?.empty).toBeUndefined()
+  })
+
+  test("source tags read in one fixed order, whatever order the server sent", () => {
+    expect(playbookSources({ sources: ["marketplace", "installed", "project"] })).toBe("project · installed · marketplace")
+    expect(playbookSources({ sources: ["account"] })).toBe("account")
+    expect(playbookSources({})).toBe("")
   })
 })

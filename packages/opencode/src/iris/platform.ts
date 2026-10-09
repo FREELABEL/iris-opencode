@@ -39,7 +39,7 @@ import {
 import { homedir } from "os"
 import path from "path"
 import { clampPaging, DEFAULT_PER_PAGE } from "./pagination"
-import { findLocalPlaybook } from "./playbook-local"
+import { byOwnerThenBoard, findLocalPlaybook } from "./playbook-local"
 
 /**
  * Where `auth.json` lives — derived, not imported.
@@ -3731,22 +3731,39 @@ let meId: number | null = null
  */
 export type PlaybookView = "project" | "marketplace" | "all"
 
-export async function fetchPlaybooks(
-  bloqId: number,
-  view?: PlaybookView,
-): Promise<PlatformResult<{ playbooks: Playbook[] }>> {
-  const userId = await resolveUserId()
-  if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { playbooks: [] } }
+/**
+ * ONE UPSTREAM LOAD PER BOARD, shared by every view, served stale while it refreshes.
+ *
+ * Measured 2026-10-09: the board call (fl-api /bloqs/{id}/playbooks) took 10–14 s and the
+ * catalogue 0.36 s. Each of All / Project / Marketplace was cached on its own for a minute, so
+ * every tab paid the 10–14 s again, and again a minute later — the panel looked broken while it
+ * waited. The three views are filters over the same rows, so the rows are loaded once per board:
+ *   fresh   < 60 s           answered from memory
+ *   stale   60 s – 10 min    answered from memory AT ONCE, and refreshed in the background
+ *   expired > 10 min, or the last load failed   waited for, as before
+ * A failed refresh never replaces a good list.
+ */
+const PLAYBOOKS_FRESH_MS = 60_000
+const PLAYBOOKS_STALE_MS = 10 * 60_000
+type BoardPlaybooks = PlatformResult<{ everything: Playbook[] }>
+const boardPlaybooks = new Map<string, { at: number; value?: BoardPlaybooks; pending?: Promise<BoardPlaybooks> }>()
 
-  const unknown = await unknownBloq(bloqId)
-  if (unknown) return { measured: false, reason: unknown, data: { playbooks: [] } }
+export function clearBoardPlaybooks(): void {
+  boardPlaybooks.clear()
+}
 
+async function loadBoardPlaybooks(bloqId: number, userId: number): Promise<BoardPlaybooks> {
   meId = userId
   try {
-    const [attachedRes, allRes] = await Promise.all([
+    // ALL THREE AT ONCE. The board check used to run first and alone — one more fl-api round
+    // trip in front of the two below, measured at 4–6 s on 2026-10-09 while fl-api was slow. It
+    // only decides whether to answer; it never changes the answer, so it need not go first.
+    const [unknown, attachedRes, allRes] = await Promise.all([
+      unknownBloq(bloqId),
       irisFetch(`/api/v1/bloqs/${bloqId}/playbooks`),
       irisFetch(`/api/v1/playbooks`, IRIS_API),
     ])
+    if (unknown) return { measured: false, reason: unknown, data: { everything: [] as Playbook[] } }
 
     const unwrap = async (res: Response) => {
       if (!res.ok) return []
@@ -3778,48 +3795,91 @@ export async function fetchPlaybooks(
     const others = rawAll.map((x: any) => toPlaybook(x, false)).filter((p: Playbook) => !names.has(p.name))
 
     const everything = [...attached, ...others]
-
-    /*
-     * TWO VIEWS, because one list of 128 answered neither question.
-     *
-     * The panel showed every playbook on the account under a board heading — attached ones
-     * first and then 120-odd others, alphabetically, indistinguishable. "Which playbooks does
-     * this project use" and "what could I install" are different questions and the flat list
-     * was the wrong answer to both.
-     *
-     * PROJECT is attached-to-this-board OR filed against it (bloq_id). 19 of 128 carry a
-     * bloq_id at all.
-     * MARKETPLACE is what is actually published — public or unlisted. `private` is neither: it
-     * is yours and unshared, and listing it as marketplace would misdescribe 42 rows.
-     */
-    const want = view ?? "all"
-    const playbooks =
-      want === "project"
-        ? everything.filter((p) => p.attached || (p.bloqId != null && p.bloqId === bloqId))
-        : want === "marketplace"
-          ? everything.filter((p) => (p.scope === "public" || p.scope === "unlisted") && p.bloqId == null)
-          : everything
-
-    // YOURS FIRST, then everyone else's. The two are sorted apart rather than interleaved so a
-    // list mixing them cannot read as "all of this is mine to change".
-    playbooks.sort((a, b) =>
-      a.owned === b.owned
-        ? a.attached === b.attached
-          ? a.name.localeCompare(b.name)
-          : a.attached
-            ? -1
-            : 1
-        : a.owned
-          ? -1
-          : 1,
-    )
-
     return {
       measured: attachedRes.ok || allRes.ok,
       reason: attachedRes.ok ? undefined : `board playbooks unavailable (fl-api ${attachedRes.status})`,
-      data: { playbooks },
+      data: { everything },
     }
   } catch (e) {
-    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { playbooks: [] } }
+    return {
+      measured: false,
+      reason: e instanceof Error ? e.message : String(e),
+      data: { everything: [] as Playbook[] },
+    }
   }
+}
+
+export function boardPlaybooksCached(
+  bloqId: number,
+  userId: number,
+  now = Date.now(),
+  load: (bloqId: number, userId: number) => Promise<BoardPlaybooks> = loadBoardPlaybooks,
+): Promise<BoardPlaybooks> {
+  const key = `${userId}:${bloqId}`
+  const hit = boardPlaybooks.get(key)
+  const refresh = () => {
+    if (hit?.pending) return hit.pending
+    const entry = hit ?? { at: 0 }
+    const pending = load(bloqId, userId).then((value) => {
+      // Keep the last good list if this refresh failed.
+      if (value.measured || !entry.value?.measured) {
+        entry.value = value
+        entry.at = now
+      }
+      entry.pending = undefined
+      return entry.value!
+    })
+    entry.pending = pending
+    boardPlaybooks.set(key, entry)
+    return pending
+  }
+  if (hit?.value?.measured) {
+    const age = now - hit.at
+    if (age < PLAYBOOKS_FRESH_MS) return Promise.resolve(hit.value)
+    if (age < PLAYBOOKS_STALE_MS) {
+      void refresh()
+      return Promise.resolve(hit.value)
+    }
+  }
+  return refresh()
+}
+
+export async function fetchPlaybooks(
+  bloqId: number,
+  view?: PlaybookView,
+): Promise<PlatformResult<{ playbooks: Playbook[] }>> {
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { playbooks: [] } }
+  meId = userId
+  const loaded = await boardPlaybooksCached(bloqId, userId)
+  if (!loaded.measured && loaded.data.everything.length === 0)
+    return { measured: false, reason: loaded.reason, data: { playbooks: [] } }
+  const everything = loaded.data.everything
+  /*
+   * TWO VIEWS, because one list of 128 answered neither question.
+   *
+   * The panel showed every playbook on the account under a board heading — attached ones
+   * first and then 120-odd others, alphabetically, indistinguishable. "Which playbooks does
+   * this project use" and "what could I install" are different questions and the flat list
+   * was the wrong answer to both.
+   *
+   * PROJECT is attached-to-this-board OR filed against it (bloq_id). 19 of 128 carry a
+   * bloq_id at all.
+   * MARKETPLACE is what is actually published — public or unlisted. `private` is neither: it
+   * is yours and unshared, and listing it as marketplace would misdescribe 42 rows.
+   */
+  const want = view ?? "all"
+  const playbooks = (
+    want === "project"
+      ? everything.filter((p) => p.attached || (p.bloqId != null && p.bloqId === bloqId))
+      : want === "marketplace"
+        ? everything.filter((p) => (p.scope === "public" || p.scope === "unlisted") && p.bloqId == null)
+        : everything
+  ).slice() // a copy: `everything` is shared by every view of this board's cached load
+
+  // YOURS FIRST, then everyone else's. The two are sorted apart rather than interleaved so a
+  // list mixing them cannot read as "all of this is mine to change".
+  playbooks.sort(byOwnerThenBoard)
+
+  return { measured: loaded.measured, reason: loaded.reason, data: { playbooks } }
 }

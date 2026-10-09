@@ -1,0 +1,621 @@
+[
+  {
+    "name": "competitive-gap-analysis",
+    "description": "Somebody sends you a link to a tool and asks \"can we do this?\" \u2014 this answers it properly. Reads what the tool ACTUALLY does (transcribes the video, fetches the page; never trusts the caption), breaks it into discrete capabilities, checks each one against what your system already has, and ends with a verdict \u2014 already have it, build the gap, adopt it, or ignore \u2014 with the reasoning written down. Evaluates repositories read-only, never by running them.",
+    "attached": false,
+    "steps": [
+      {
+        "id": "s1",
+        "title": "Get what the thing actually does",
+        "mode": "shell"
+      },
+      {
+        "id": "s2",
+        "title": "Break it into capabilities you can check one at a time",
+        "mode": "ai"
+      },
+      {
+        "id": "s3",
+        "title": "Check every capability against what you already have",
+        "mode": "shell"
+      },
+      {
+        "id": "s4",
+        "title": "Repositories are read, never run",
+        "mode": "shell"
+      },
+      {
+        "id": "s5",
+        "title": "One of four, in writing, with the reasoning",
+        "mode": "ai"
+      },
+      {
+        "id": "s6",
+        "title": "Record it so the next person does not redo it",
+        "mode": "shell"
+      }
+    ],
+    "args": [
+      {
+        "name": "bloq",
+        "required": false
+      },
+      {
+        "name": "link",
+        "required": true
+      },
+      {
+        "name": "claim",
+        "required": false
+      }
+    ],
+    "version": 10,
+    "scope": "private",
+    "publishedAt": "2026-09-21T12:00:00Z",
+    "installs": 0,
+    "views": 5,
+    "hasLocal": false,
+    "action": "install",
+    "sources": ["account"],
+    "ownerUserId": 193,
+    "owned": true
+  },
+  {
+    "name": "freelabel-ads",
+    "description": "Take an ad from an idea to a published post \u2014 brief, branded creative, caption, a human approval gate, then publish to the brand's own connected accounts. Stops at the gate by default; publishing is a separate, deliberate act. Creative comes from the existing campaign-image tools, publishing from the ownership-enforced social layer.",
+    "attached": false,
+    "steps": [
+      {
+        "id": "s1",
+        "title": "Which accounts can this brand actually run ads from",
+        "mode": "shell"
+      },
+      {
+        "id": "s2",
+        "title": "Turn the topic into an ad brief",
+        "mode": "shell"
+      },
+      {
+        "id": "s3",
+        "title": "Render the branded graphic and host it",
+        "mode": "shell"
+      },
+      {
+        "id": "s4",
+        "title": "Write the post caption",
+        "mode": "shell"
+      },
+      {
+        "id": "s5",
+        "title": "Approve before anything goes public",
+        "mode": "human"
+      },
+      {
+        "id": "s6",
+        "title": "Publish the ad",
+        "mode": "shell"
+      }
+    ],
+    "args": [
+      {
+        "name": "agent",
+        "required": false
+      },
+      {
+        "name": "brand",
+        "required": false
+      },
+      {
+        "name": "model",
+        "required": false
+      },
+      {
+        "name": "story",
+        "required": false
+      },
+      {
+        "name": "topic",
+        "required": false
+      },
+      {
+        "name": "action",
+        "required": false
+      },
+      {
+        "name": "variant",
+        "required": false
+      },
+      {
+        "name": "platforms",
+        "required": false
+      }
+    ],
+    "version": 22,
+    "scope": "private",
+    "publishedAt": "2026-09-21T12:00:00Z",
+    "installs": 0,
+    "views": 488,
+    "hasLocal": false,
+    "action": "install",
+    "sources": ["account"],
+    "ownerUserId": 193,
+    "owned": true
+  },
+  {
+    "name": "pathways-intake-review",
+    "description": "Take an intake case from \"documents collected\" to \"assigned to a navigator\" \u2014 evidence checked on the machine that holds the records, risk and workload computed, and a physician approving both the case and the assignment on one screen.",
+    "attached": true,
+    "steps": [
+      {
+        "id": "s1",
+        "title": "Check the case file is complete",
+        "mode": "hive-script"
+      },
+      {
+        "id": "s2",
+        "title": "Summarise the records and set a risk tier",
+        "mode": "ai"
+      },
+      {
+        "id": "s3",
+        "title": "Suggest a navigator, with reasoning",
+        "mode": "shell"
+      },
+      {
+        "id": "s4",
+        "title": "Physician approves the case AND the assignment",
+        "mode": "human"
+      }
+    ],
+    "args": [
+      {
+        "name": "node",
+        "required": false
+      },
+      {
+        "name": "case_id",
+        "required": true
+      },
+      {
+        "name": "case_root",
+        "required": false
+      }
+    ],
+    "version": 10,
+    "scope": "unlisted",
+    "publishedAt": "2026-09-21T12:00:00Z",
+    "installs": 0,
+    "views": 60,
+    "hasLocal": false,
+    "action": "install",
+    "sources": ["account"],
+    "ownerUserId": 193,
+    "owned": true
+  },
+  {
+    "name": "bills-to-books",
+    "description": "Turn a folder of bills, receipts and invoices into verified ledger entries you can hand an accountant. Reads each document, converts foreign currency at the rate for that day, refuses to write any figure it cannot find on the document, and ends with a reconciliation that ties every reported number back to the rows behind it. Preview by default \u2014 nothing is written until you say so.",
+    "attached": false,
+    "steps": [
+      {
+        "id": "s1",
+        "title": "Look at what you actually have before spending anything",
+        "mode": "shell"
+      },
+      {
+        "id": "s2",
+        "title": "Read the folder \u2014 preview, nothing written",
+        "mode": "shell"
+      },
+      {
+        "id": "s3",
+        "title": "Read the HELD pile. This is the step people skip",
+        "mode": "shell"
+      },
+      {
+        "id": "s4",
+        "title": "Commit, once you have read the held pile",
+        "mode": "shell"
+      },
+      {
+        "id": "s5",
+        "title": "Prove the numbers tie out",
+        "mode": "shell"
+      },
+      {
+        "id": "s6",
+        "title": "What to give the accountant",
+        "mode": "shell"
+      }
+    ],
+    "args": [
+      {
+        "name": "scope",
+        "required": false
+      },
+      {
+        "name": "write",
+        "required": false
+      },
+      {
+        "name": "folder",
+        "required": true
+      },
+      {
+        "name": "period",
+        "required": false
+      }
+    ],
+    "version": 6,
+    "scope": "public",
+    "publishedAt": "2026-09-21T12:00:00Z",
+    "installs": 0,
+    "views": 28,
+    "hasLocal": false,
+    "action": "install",
+    "sources": ["account"],
+    "ownerUserId": 193,
+    "owned": true
+  },
+  {
+    "name": "daily-brief",
+    "description": "Produce The Daily Brief \u2014 collect the music-industry wire, feed the FREELABEL newsroom, get an article approved in the dashboard, then render the 9-page brief. Nine pages, six figure shapes, and a renderer that refuses to draw a claim it cannot source. Pass a date or \"today\" (e.g. \"today\", \"2026-08-20\", \"audit only\").",
+    "attached": false,
+    "steps": [],
+    "args": [],
+    "version": 1,
+    "scope": "private",
+    "publishedAt": "2026-09-20T12:00:00Z",
+    "installs": 0,
+    "views": 0,
+    "hasLocal": true,
+    "action": "run",
+    "sources": ["installed", "account"],
+    "ownerUserId": 193,
+    "owned": true
+  },
+  {
+    "name": "atlas-epic",
+    "description": "Start a piece of work the way it should be started \u2014 an epic written BEFORE the work, published so the user can watch it without asking for status, existing bugs attached instead of duplicated, and a diary entry at the end that records what you got wrong. Work that isn't written down gets re-derived; a user who can't see what you're doing can't redirect you.",
+    "attached": false,
+    "steps": [
+      {
+        "id": "s1",
+        "title": "Find what already exists",
+        "mode": "shell"
+      },
+      {
+        "id": "s2",
+        "title": "Draft the epic before the work, not after",
+        "mode": "ai"
+      },
+      {
+        "id": "s3",
+        "title": "Publish it and hand over the URL",
+        "mode": "shell"
+      },
+      {
+        "id": "s4",
+        "title": "Confirm the write actually landed",
+        "mode": "shell"
+      },
+      {
+        "id": "s5",
+        "title": "Wire the work into the graph \u2014 three seams, then govern it",
+        "mode": "ai"
+      },
+      {
+        "id": "s6",
+        "title": "Decide whether to fan out \u2014 and to WHAT, before deciding how many",
+        "mode": "ai"
+      },
+      {
+        "id": "s7",
+        "title": "Hand it to the loop \u2014 only when the work is loop-shaped",
+        "mode": "human"
+      },
+      {
+        "id": "s8",
+        "title": "Do the work, and keep the epic current",
+        "mode": "human"
+      },
+      {
+        "id": "s9",
+        "title": "Write the diary",
+        "mode": "ai"
+      }
+    ],
+    "args": [
+      {
+        "name": "bloq",
+        "required": false
+      },
+      {
+        "name": "goal",
+        "required": true
+      },
+      {
+        "name": "list",
+        "required": false
+      },
+      {
+        "name": "dry_run",
+        "required": false
+      },
+      {
+        "name": "execute",
+        "required": false
+      },
+      {
+        "name": "visibility",
+        "required": false
+      }
+    ],
+    "version": 7,
+    "scope": "public",
+    "publishedAt": "2026-09-29T12:00:00Z",
+    "installs": 0,
+    "views": 12,
+    "hasLocal": true,
+    "action": "run",
+    "sources": ["installed", "account"],
+    "ownerUserId": 193,
+    "owned": true
+  },
+  {
+    "name": "desktop-release",
+    "description": "Ship the IRIS desktop app (desktop-v1.18.x, from iris/1.18.23) without shipping the wrong thing. Preview a change from a compiled build, gate it locally because CI's test runners do not run, preflight against a concurrent release, dispatch, diagnose a failed platform build from its job log, and confirm the version at the endpoint the in-app updater reads.",
+    "attached": false,
+    "steps": [],
+    "args": [
+      {
+        "name": "action",
+        "required": false
+      },
+      {
+        "name": "version",
+        "required": false
+      }
+    ],
+    "version": 6,
+    "scope": "unlisted",
+    "publishedAt": "2026-09-21T12:00:00Z",
+    "installs": 0,
+    "views": 3,
+    "hasLocal": false,
+    "action": "install",
+    "sources": ["account"],
+    "ownerUserId": 193,
+    "owned": true
+  },
+  {
+    "name": "genesis-artifact",
+    "description": "Ship a branded bespoke Genesis /p/ artifact \u2014 a hand-designed HTML page that takes its colour and type from the brand's own design tokens rather than from taste, shows real captures rather than mockups, and is verified in a browser by reading the DOM rather than by trusting a screenshot.",
+    "attached": false,
+    "steps": [
+      {
+        "id": "s1",
+        "title": "Pull the brand's tokens before choosing a single colour",
+        "mode": "shell"
+      },
+      {
+        "id": "s2",
+        "title": "Read the standard, then answer check 01 out loud",
+        "mode": "human"
+      },
+      {
+        "id": "s3",
+        "title": "Capture, crop and host any page the artifact shows",
+        "mode": "shell"
+      },
+      {
+        "id": "s4",
+        "title": "Write the fragment \u2014 scoped, tokenised, host-themed",
+        "mode": "human"
+      },
+      {
+        "id": "s5",
+        "title": "Build the JSON by script and batch-publish it",
+        "mode": "shell"
+      },
+      {
+        "id": "s6",
+        "title": "Verify by reading the DOM, never by looking at a picture",
+        "mode": "shell"
+      },
+      {
+        "id": "s7",
+        "title": "Score it, and record what you got wrong",
+        "mode": "human"
+      }
+    ],
+    "args": [
+      {
+        "name": "bloq",
+        "required": false
+      },
+      {
+        "name": "slug",
+        "required": false
+      },
+      {
+        "name": "brand",
+        "required": false
+      },
+      {
+        "name": "subject",
+        "required": false
+      },
+      {
+        "name": "captures",
+        "required": false
+      }
+    ],
+    "version": 9,
+    "scope": "private",
+    "publishedAt": "2026-10-09T12:00:00Z",
+    "installs": 0,
+    "views": 18,
+    "hasLocal": false,
+    "action": "install",
+    "sources": ["account"],
+    "ownerUserId": 193,
+    "owned": true
+  },
+  {
+    "name": "agentic-loop",
+    "description": "Stop babysitting a long multi-step task by hand. Point this at a goal and it plans the work, fans it out to specialists, checks its own output against what you actually asked for, and remembers what it learned for next time \u2014 optionally repeating itself on a weekly schedule with nobody there to kick it off. The same engine behind the Builder, Scout, and Growth demos, generalized to any goal you give it.",
+    "attached": false,
+    "steps": [
+      {
+        "id": "s1",
+        "title": "Prove the services exist BEFORE spending a cycle on them",
+        "mode": "shell"
+      },
+      {
+        "id": "s2",
+        "title": "Orchestrator \u2014 discover & plan",
+        "mode": "prompt"
+      },
+      {
+        "id": "s3",
+        "title": "Builder \u2014 one-shot the artifact",
+        "mode": "prompt"
+      },
+      {
+        "id": "s4",
+        "title": "Scout \u2014 ranked opportunities",
+        "mode": "prompt"
+      },
+      {
+        "id": "s5",
+        "title": "Growth \u2014 48-hour activation + self-check",
+        "mode": "prompt"
+      },
+      {
+        "id": "s6",
+        "title": "Verification \u2014 did we hit the goal?",
+        "mode": "prompt"
+      },
+      {
+        "id": "s7",
+        "title": "Orchestrator \u2014 unified plan + next-steps",
+        "mode": "prompt"
+      },
+      {
+        "id": "s8",
+        "title": "Is the loop finished? Run the check; do not ask the model",
+        "mode": "shell"
+      },
+      {
+        "id": "s9",
+        "title": "Persist memory (+ ingest to bloq)",
+        "mode": "shell"
+      },
+      {
+        "id": "s10",
+        "title": "Wire the weekly cadence",
+        "mode": "shell"
+      },
+      {
+        "id": "s11",
+        "title": "Cycle summary",
+        "mode": "shell"
+      }
+    ],
+    "args": [
+      {
+        "name": "bloq",
+        "required": false
+      },
+      {
+        "name": "goal",
+        "required": true
+      },
+      {
+        "name": "agent",
+        "required": false
+      },
+      {
+        "name": "action",
+        "required": false
+      },
+      {
+        "name": "requires",
+        "required": false
+      },
+      {
+        "name": "exit_check",
+        "required": false
+      },
+      {
+        "name": "exit_condition",
+        "required": false
+      }
+    ],
+    "version": 25,
+    "scope": "public",
+    "publishedAt": "2026-09-21T12:00:00Z",
+    "installs": 0,
+    "views": 19,
+    "hasLocal": false,
+    "action": "install",
+    "sources": ["account"],
+    "ownerUserId": 193,
+    "owned": true
+  },
+  {
+    "name": "payable-benchmark",
+    "description": "Score pathways:provider-payable against one of Robyn's filed Case Provider Reports and record the run, so \"are we getting better\" is a number with a history instead of an opinion. Two metrics scored apart \u2014 COVERAGE moves when a data source lands, FIDELITY moves when the maths reads the right field \u2014 and a hard rule that zero parsed rows exits red and never scores. Built 2026-09-12 after an ad-hoc scorer printed \"the field is empty book-wide\" from a list that was empty because the query had timed out.",
+    "attached": false,
+    "steps": [
+      {
+        "id": "s1",
+        "title": "The inputs exist and the interpreter is there",
+        "mode": "shell"
+      },
+      {
+        "id": "s2",
+        "title": "Score it, and refuse to score nothing",
+        "mode": "shell"
+      },
+      {
+        "id": "s3",
+        "title": "What has moved, and whether the label says why",
+        "mode": "shell"
+      }
+    ],
+    "args": [
+      {
+        "name": "label",
+        "required": false
+      },
+      {
+        "name": "engine",
+        "required": false
+      },
+      {
+        "name": "record",
+        "required": false
+      },
+      {
+        "name": "exclude",
+        "required": false
+      },
+      {
+        "name": "fixture",
+        "required": false
+      }
+    ],
+    "version": 8,
+    "scope": "project",
+    "publishedAt": "2026-09-29T12:00:00Z",
+    "installs": 0,
+    "views": 801,
+    "hasLocal": false,
+    "action": "install",
+    "sources": ["account"],
+    "ownerUserId": 193,
+    "owned": true
+  }
+]

@@ -447,6 +447,10 @@ const PlaybooksResponse = Schema.Struct({
         Schema.optional(Schema.Literals(["install", "update", "run"])),
         "What the card offers: install (not here), update (installed from the Marketplace and a newer version is published), run (#186274).",
       ),
+      sources: described(
+        Schema.optional(Schema.Array(Schema.Literals(["project", "installed", "account", "marketplace"]))),
+        "view=all only: every place this playbook comes from — this project, installed on this machine, owned by your account, published. One row per name; a name found in several places lists them all.",
+      ),
       bloqId: described(Schema.optional(Schema.Finite), "The board it is filed against. 19 of 128 carry one."),
       ownerUserId: Schema.optional(Schema.Finite),
       owned: described(
@@ -1058,7 +1062,7 @@ export const IrisApi = HttpApi.make("iris").add(
           ...SearchQuery.fields,
           view: described(
             Schema.optional(Schema.Literals(["all", "project", "marketplace"])),
-            "project = attached to this board or filed against it. marketplace = actually published (public or unlisted). `private` is neither: yours and unshared.",
+            "all = everything you can run: this project's, installed on this machine, and your account's — one row per name, each with `sources`. Not the public catalogue. project = attached to this board or filed against it. marketplace = actually published (public or unlisted). `private` is neither: yours and unshared. Omitted = every row the platform returned.",
           ),
           project: described(
             Schema.optional(Schema.String),
