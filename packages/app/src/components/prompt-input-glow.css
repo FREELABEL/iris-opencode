@@ -156,3 +156,12 @@
     animation: iris-glow-breathe 2.6s ease-in-out infinite;
   }
 }
+
+/* The glow spreads past the dock's top edge. The message timeline above was painted over it, which
+   cut the light into a hard horizontal line (1.18.104). Lift the dock above the timeline so the light
+   fades out over the last lines of the conversation instead. Pointer events are unaffected: the dock
+   is pointer-events:none outside the composer, and the glow layers are pointer-events:none. */
+[data-component="session-prompt-dock"] {
+  position: relative;
+  z-index: 2;
+}
