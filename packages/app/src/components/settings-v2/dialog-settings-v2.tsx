@@ -10,6 +10,7 @@ import { SettingsProvidersV2 } from "./providers"
 import { SettingsModelsV2 } from "./models"
 import "./settings-v2.css"
 import { SettingsServersV2 } from "./servers"
+import { SettingsAccountV2 } from "./account"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useLayout } from "@/context/layout"
 import { useTabs } from "@/context/tabs"
@@ -57,6 +58,10 @@ export const DialogSettings: Component<{
                 <div class="flex flex-col gap-1.5">
                   <TabsV2.SectionTitle>{language.t("settings.section.desktop")}</TabsV2.SectionTitle>
                   <div class="flex flex-col gap-1.5 w-full">
+                    <TabsV2.Trigger value="account">
+                      <Icon name="circle-check" />
+                      Account
+                    </TabsV2.Trigger>
                     <TabsV2.Trigger value="general">
                       <Icon name="sliders" />
                       {language.t("settings.tab.general")}
@@ -93,6 +98,9 @@ export const DialogSettings: Component<{
             </div>
           </div>
         </TabsV2.List>
+        <TabsV2.Content value="account" class="settings-v2-panel">
+          <SettingsAccountV2 />
+        </TabsV2.Content>
         <TabsV2.Content value="general" class="settings-v2-panel">
           <SettingsGeneralV2 sessionID={props.sessionID} />
         </TabsV2.Content>

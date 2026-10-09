@@ -14,6 +14,7 @@ import {
   type DictationControls,
 } from "@opencode-ai/session-ui/v2/prompt-input/dictation"
 import { useSettings } from "@/context/settings"
+import { isSpeaking, stopSpokenReply } from "@/context/spoken-replies"
 import { DICTATE_COMMAND_ID, dictateCommand } from "@/components/prompt-input/dictate-command"
 import { ModelSelectorPopoverV2 } from "@/components/dialog-select-model"
 import { DialogSelectModelUnpaidV2 } from "@/components/dialog-select-model-unpaid-v2"
@@ -72,6 +73,20 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
   const command = useCommand()
   const language = useLanguage()
   const [dictate, setDictate] = createSignal<DictationControls>()
+  // Starting to dictate interrupts a reply being read aloud, so the mic does not hear it.
+  createEffect(() => {
+    if (dictate()?.phase() === "recording") stopSpokenReply()
+  })
+  command.register("voice-stop-speaking", () => [
+    {
+      id: "voice.stopSpeaking",
+      title: language.t("command.voice.stopSpeaking"),
+      category: language.t("command.category.session"),
+      keybind: "mod+shift+m",
+      disabled: !isSpeaking(),
+      onSelect: stopSpokenReply,
+    },
+  ])
   command.register("prompt-dictate", () => [
     dictateCommand({
       controls: dictate,
@@ -83,6 +98,19 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
 
   return (
     <div class="flex flex-col gap-3">
+      <Show when={isSpeaking()}>
+        <div class="flex justify-end">
+          <ButtonV2
+            data-action="voice-stop-speaking"
+            variant="ghost-muted"
+            size="normal"
+            title={command.keybind("voice.stopSpeaking")}
+            onClick={stopSpokenReply}
+          >
+            {language.t("command.voice.stopSpeaking")}
+          </ButtonV2>
+        </div>
+      </Show>
       <PromptInputV2
         controller={props.controller}
         borderUnderlay={props.borderUnderlay}

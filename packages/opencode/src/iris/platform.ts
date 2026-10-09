@@ -53,7 +53,7 @@ import { findLocalPlaybook } from "./playbook-local"
  * xdg-basedir resolves LOCALAPPDATA instead, so this falls back to it there rather than
  * quietly reading a path that does not exist.
  */
-function dataDir(): string {
+export function dataDir(): string {
   if (process.env.XDG_DATA_HOME) return path.join(process.env.XDG_DATA_HOME, "opencode")
   if (process.platform === "win32" && process.env.LOCALAPPDATA) return path.join(process.env.LOCALAPPDATA, "opencode")
   return path.join(homedir(), ".local", "share", "opencode")
@@ -67,7 +67,10 @@ function dataDir(): string {
  * rather than failing loudly. Kept as named constants for that reason.
  */
 export const FL_API = process.env.IRIS_FL_API_URL ?? "https://raichu.heyiris.io"
-export const IRIS_API = process.env.IRIS_API_URL ?? "https://freelabel.net"
+// heyiris.io, not freelabel.net (#188508): IRIS never sends people to freelabel.net, which is kept
+// for the FREELABEL creator app. Same fl-iris-api behind both hosts; measured 2026-10-08, every
+// endpoint this module uses answered byte-identically on both, including streaming chat.
+export const IRIS_API = process.env.IRIS_API_URL ?? "https://heyiris.io"
 /** Where a board share link is REDEEMED — Elon's /invite/{token}. fl-api returns the token, never the URL. */
 export const ELON_WEB = process.env.IRIS_ELON_URL ?? "https://elon.freelabel.net"
 
@@ -159,8 +162,23 @@ export function tokenSource(): string {
 // Fetch
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function irisFetch(pathname: string, base: string = FL_API, init: RequestInit = {}): Promise<Response> {
-  const token = resolveToken()
+/** Forget the resolved token and user id, so the next call re-reads the files (after sign-out). */
+export function resetCredentialCache(): void {
+  _token = undefined
+  _tokenSource = "not resolved"
+  _userId = undefined
+}
+
+/**
+ * `token` overrides the resolved one. Settings > Account passes the key CHAT uses, which can
+ * differ from what the panels resolve (#188506).
+ */
+export async function irisFetch(
+  pathname: string,
+  base: string = FL_API,
+  init: RequestInit = {},
+  token: string | null = resolveToken(),
+): Promise<Response> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Accept: "application/json",
@@ -535,9 +553,18 @@ const EMPTY_ALLOWANCE: Allowance = {
  * is a deliberate server-side design — asking whether a notice is due and marking it delivered
  * cannot be two steps without a race — and it makes this function unusual enough to say twice.
  */
-export async function fetchAllowance(): Promise<PlatformResult<Allowance>> {
+export async function fetchAllowance(
+  opts: { peek?: boolean; token?: string | null; signal?: AbortSignal } = {},
+): Promise<PlatformResult<Allowance>> {
   try {
-    const res = await irisFetch("/api/v6/allowance/me", IRIS_API)
+    // peek: the same numbers without consuming the notice (fl-iris-api 4eda580d). The Account tab
+    // reads with it, because opening Settings must not eat somebody's only warning of the week.
+    const res = await irisFetch(
+      opts.peek ? "/api/v6/allowance/me?peek=1" : "/api/v6/allowance/me",
+      IRIS_API,
+      { signal: opts.signal },
+      opts.token === undefined ? resolveToken() : opts.token,
+    )
     if (!res.ok) return { measured: false, reason: `iris-api ${res.status}`, data: EMPTY_ALLOWANCE }
     const j = (await res.json()) as any
     const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null)
@@ -571,6 +598,48 @@ export async function fetchAllowance(): Promise<PlatformResult<Allowance>> {
     }
   } catch (e) {
     return { measured: false, reason: e instanceof Error ? e.message : String(e), data: EMPTY_ALLOWANCE }
+  }
+}
+
+/**
+ * Who the app is acting as (#187966 K1). Read from /api/v1/auth/whoami, the route `iris auth whoami`
+ * reads, so Settings and the CLI cannot name the same credential differently. /api/user would
+ * have worked too, and it does disagree: for user 193 it says "FREELABEL", whoami says "admin".
+ */
+export interface Me {
+  id: number | null
+  name: string | null
+  email: string | null
+  /** fl-api answered 401/403: the credential itself was refused, which is not "unreachable". */
+  rejected: boolean
+}
+
+export async function fetchMe(opts: { token?: string | null; signal?: AbortSignal } = {}): Promise<PlatformResult<Me>> {
+  const empty: Me = { id: null, name: null, email: null, rejected: false }
+  try {
+    const res = await irisFetch(
+      "/api/v1/auth/whoami",
+      FL_API,
+      { signal: opts.signal },
+      opts.token === undefined ? resolveToken() : opts.token,
+    )
+    if (res.status === 401 || res.status === 403) {
+      return { measured: true, reason: `fl-api ${res.status}`, data: { ...empty, rejected: true } }
+    }
+    if (!res.ok) return { measured: false, reason: `fl-api ${res.status}`, data: empty }
+    const u = ((await res.json()) as any)?.data
+    const text = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null)
+    return {
+      measured: true,
+      data: {
+        id: typeof u?.id === "number" ? u.id : null,
+        name: text(u?.name),
+        email: text(u?.email),
+        rejected: false,
+      },
+    }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: empty }
   }
 }
 
@@ -640,10 +709,17 @@ export async function fetchPlans(): Promise<PlatformResult<PlanOffer[]>> {
  * that older server also IGNORES ?peek=1 and would consume the notice. This client must never
  * ship ahead of 4eda580d; check with scripts/deployed.sh fl-iris-api --commit 4eda580d.
  */
-export async function fetchPlan(): Promise<PlatformResult<Plan>> {
+export async function fetchPlan(
+  opts: { token?: string | null; signal?: AbortSignal } = {},
+): Promise<PlatformResult<Plan>> {
   const empty: Plan = { plan: null, paid: null, uncapped: false, upgradeUrl: null }
   try {
-    const res = await irisFetch("/api/v6/allowance/me?peek=1", IRIS_API)
+    const res = await irisFetch(
+      "/api/v6/allowance/me?peek=1",
+      IRIS_API,
+      { signal: opts.signal },
+      opts.token === undefined ? resolveToken() : opts.token,
+    )
     if (!res.ok) return { measured: false, reason: `iris-api ${res.status}`, data: empty }
     const j = (await res.json()) as any
     if (!j || !("plan" in j)) return { measured: false, reason: "server does not report a plan", data: empty }
@@ -3328,7 +3404,7 @@ export interface Integration {
  * `logo_attribution` string, because attribution is a CONDITION of the Logo.dev free tier. One
  * source means the desktop cannot end up showing marks without the credit that pays for them.
  *
- * Fetched from IRIS_API, not FL_API: /api/v1/integrations/catalog is 200 on freelabel.net and
+ * Fetched from IRIS_API, not FL_API: /api/v1/integrations/catalog is 200 on heyiris.io and
  * 404 on raichu.
  */
 /** Health, usage and function counts from the same catalogue call — one request, not three. */

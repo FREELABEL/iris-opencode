@@ -32,6 +32,18 @@ import { ModelStatus } from "./model-status"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderError } from "./error"
 
+/** The IRIS model endpoint. heyiris.io, never freelabel.net (#188508). */
+export const IRIS_OPENAI_BASE = "https://heyiris.io/api/v6/openai"
+const LEGACY_IRIS_OPENAI_BASES = new Set([
+  "https://freelabel.net/api/v6/openai",
+  "https://freelabel.net/api/v6/openai/",
+])
+
+/** Our own former default becomes the current one. Anything a user set themselves is kept. */
+export function upgradeIrisBaseURL(configured: unknown): unknown {
+  return typeof configured === "string" && LEGACY_IRIS_OPENAI_BASES.has(configured) ? IRIS_OPENAI_BASE : configured
+}
+
 const OPENAI_HEADER_TIMEOUT_DEFAULT = 300_000
 
 function wrapSSE(res: Response, ms: number, ctl: AbortController) {
@@ -1482,10 +1494,15 @@ const layer = Layer.effect(
         // manifest just dropped — the picker then offers models the server will not serve
         // (#187726: GPT-5.6 Luna on a dead OpenAI account, retried forever as a 429).
         const irisUnavailable = new Set<string>()
+        // Installs seeded before 2026-10-08 carry our OLD default baseURL in their own
+        // opencode.json, and the desktop never rewrites an existing `iris` entry. That URL was
+        // ours, not the user's choice, so upgrade it in memory (#188508). Any other URL stays.
+        const irisOptions = cfg.provider?.["iris"]?.options as { baseURL?: unknown } | undefined
+        if (irisOptions) irisOptions.baseURL = upgradeIrisBaseURL(irisOptions.baseURL)
         if (cfg.provider?.["iris"]) {
           try {
             const apiKey = process.env.IRIS_API_KEY
-            const baseUrl = cfg.provider["iris"]?.options?.baseURL ?? "https://freelabel.net/api/v6/openai"
+            const baseUrl = cfg.provider["iris"]?.options?.baseURL ?? IRIS_OPENAI_BASE
             const manifestUrl = `${baseUrl}/models`
             const headers: Record<string, string> = { Accept: "application/json" }
             if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`
@@ -1557,9 +1574,7 @@ const layer = Layer.effect(
                         video: m.modalities?.output?.includes("video") ?? false,
                         pdf: m.modalities?.output?.includes("pdf") ?? false,
                       },
-                      interleaved: modelID.includes("deepseek")
-                        ? { field: "reasoning_content" }
-                        : false,
+                      interleaved: modelID.includes("deepseek") ? { field: "reasoning_content" } : false,
                     },
                     release_date: "",
                     variants: ProviderTransform.variants({

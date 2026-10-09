@@ -95,8 +95,10 @@ describe("describeRemoteConfig — what /transcribe/health says about the cloud"
     clear()
     try {
       const r = describeRemoteConfig(write({ api_url: "https://x" }))
+      // A board is no longer required (#188013): the platform files the take under the person's own.
+      // Without a credential the reason is about signing in, never about a config file.
       expect(r.config).toBeNull()
-      expect(r.reason).toContain("default_bloq_id")
+      expect(r.reason).not.toContain("default_bloq_id")
     } finally {
       restore()
     }

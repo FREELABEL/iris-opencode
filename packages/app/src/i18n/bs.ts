@@ -177,6 +177,7 @@ export const dict = {
   "command.prompt.mode.shell": "Shell",
   "command.prompt.mode.normal": "Prompt",
   "command.prompt.dictate": "Diktiraj",
+  "command.voice.stopSpeaking": "Prestani govoriti",
   "command.prompt.dictate.description":
     "Dodirnite da pokrenete ili zaustavite diktiranje; držite da govorite i pustite da zaustavite",
   "command.permissions.autoaccept.enable": "Automatski prihvati dozvole",
@@ -925,6 +926,11 @@ export const dict = {
     "Ulaz s kojeg diktiranje snima. Sistemski podrazumijevani prati postavke zvuka na vašem računaru.",
   "settings.general.row.microphone.systemDefault": "Sistemski podrazumijevani",
   "settings.general.row.microphone.notConnected": "{{name}} (nije povezan)",
+  "settings.general.row.speakReplies.title": "Čitaj odgovore naglas",
+  "settings.general.row.speakReplies.description": "Čita odgovore naglas čim stignu, koristeći IRIS glasovnu uslugu. Kod se preskače.",
+  "settings.general.row.speakReplies.unavailable": "Čitanje odgovora je zaustavljeno",
+  "settings.general.row.speakVoice.title": "Glas odgovora",
+  "settings.general.row.speakVoice.description": "Glas kojim se odgovori čitaju naglas.",
   "settings.general.section.feed": "Feed",
   "settings.general.section.display": "Prikaz",
 

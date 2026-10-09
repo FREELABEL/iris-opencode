@@ -177,6 +177,7 @@ export const dict = {
   "command.prompt.mode.shell": "Команда",
   "command.prompt.mode.normal": "Запит",
   "command.prompt.dictate": "Диктувати",
+  "command.voice.stopSpeaking": "Зупинити озвучування",
   "command.prompt.dictate.description":
     "Торкніться, щоб почати або зупинити диктування; утримуйте, щоб говорити, і відпустіть, щоб зупинити",
   "command.permissions.autoaccept.enable": "Автоматично приймати дозволи",
@@ -1033,6 +1034,11 @@ export const dict = {
     "Вхід, з якого записується диктування. «Системний за замовчуванням» відповідає налаштуванням звуку вашого комп’ютера.",
   "settings.general.row.microphone.systemDefault": "Системний за замовчуванням",
   "settings.general.row.microphone.notConnected": "{{name}} (не підключено)",
+  "settings.general.row.speakReplies.title": "Озвучувати відповіді",
+  "settings.general.row.speakReplies.description": "Читає відповіді вголос, щойно вони надходять, через голосовий сервіс IRIS. Код пропускається.",
+  "settings.general.row.speakReplies.unavailable": "Озвучування відповідей зупинено",
+  "settings.general.row.speakVoice.title": "Голос відповідей",
+  "settings.general.row.speakVoice.description": "Голос, яким зачитуються відповіді.",
   "settings.general.section.feed": "Стрічка",
   "settings.general.section.display": "Дисплей",
 

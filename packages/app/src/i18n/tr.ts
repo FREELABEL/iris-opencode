@@ -181,6 +181,7 @@ export const dict = {
   "command.prompt.mode.shell": "Kabuk",
   "command.prompt.mode.normal": "İstem",
   "command.prompt.dictate": "Dikte et",
+  "command.voice.stopSpeaking": "Okumayı durdur",
   "command.prompt.dictate.description":
     "Dikteyi başlatmak veya durdurmak için dokunun; konuşmak için basılı tutun, durdurmak için bırakın",
   "command.permissions.autoaccept.enable": "İzinleri otomatik kabul et",
@@ -930,6 +931,11 @@ export const dict = {
     "Diktenin kayıt yaptığı giriş. Sistem varsayılanı, bilgisayarınızın ses ayarlarını izler.",
   "settings.general.row.microphone.systemDefault": "Sistem varsayılanı",
   "settings.general.row.microphone.notConnected": "{{name}} (bağlı değil)",
+  "settings.general.row.speakReplies.title": "Yanıtları sesli oku",
+  "settings.general.row.speakReplies.description": "Yanıtları geldikçe IRIS ses hizmetiyle sesli okur. Kod atlanır.",
+  "settings.general.row.speakReplies.unavailable": "Yanıtları sesli okuma durdu",
+  "settings.general.row.speakVoice.title": "Yanıt sesi",
+  "settings.general.row.speakVoice.description": "Yanıtları sesli okumak için kullanılan ses.",
   "settings.general.section.feed": "Akış",
   "settings.general.section.display": "Ekran",
 

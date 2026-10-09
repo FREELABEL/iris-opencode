@@ -59,6 +59,10 @@ export interface Settings {
      * deviceIds and the sidecar sees ffmpeg devices. Each resolves the name to its own id.
      */
     inputDevice: string
+    /** Read the assistant's replies aloud as they stream (IRIS voice relay, xAI TTS). Off by default. */
+    speakReplies: boolean
+    /** xAI voice id for spoken replies ("" = the relay's default). */
+    speakVoice: string
   }
 }
 
@@ -229,6 +233,8 @@ const defaultSettings: Settings = {
   },
   voice: {
     inputDevice: "",
+    speakReplies: false,
+    speakVoice: "",
   },
 }
 
@@ -558,6 +564,14 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         setInputDevice(value: string) {
           // Settings saved before this group existed have no `voice` object to set a path in.
           setStore("voice", (voice) => ({ ...voice, inputDevice: value }))
+        },
+        speakReplies: withFallback(() => store.voice?.speakReplies, defaultSettings.voice.speakReplies),
+        setSpeakReplies(value: boolean) {
+          setStore("voice", (voice) => ({ ...voice, speakReplies: value }))
+        },
+        speakVoice: withFallback(() => store.voice?.speakVoice, defaultSettings.voice.speakVoice),
+        setSpeakVoice(value: string) {
+          setStore("voice", (voice) => ({ ...voice, speakVoice: value }))
         },
       },
     }

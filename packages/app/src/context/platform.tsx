@@ -47,6 +47,9 @@ type PlatformBase = {
   /** Restart the app  */
   restart(): Promise<void>
 
+  /** Open the IRIS sign-in window (desktop). Absent where there is nothing to open. */
+  openSignIn?(): void
+
   /** Send a system notification */
   notify(title: string, description?: string, onClick?: () => void): Promise<void>
 

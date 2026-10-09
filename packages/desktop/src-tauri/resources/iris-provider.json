@@ -4,7 +4,7 @@
       "npm": "@ai-sdk/openai-compatible",
       "name": "IRIS",
       "options": {
-        "baseURL": "https://freelabel.net/api/v6/openai",
+        "baseURL": "https://heyiris.io/api/v6/openai",
         "includeUsage": true,
         "apiKey": "{env:IRIS_API_KEY}"
       },

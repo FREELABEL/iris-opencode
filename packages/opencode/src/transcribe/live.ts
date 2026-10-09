@@ -1,4 +1,4 @@
-import { readRemoteConfig } from "./remote"
+import { readRemoteConfig, resolveBoard } from "./remote"
 
 /**
  * Live dictation: a streaming session from this sidecar to the IRIS STT relay
@@ -45,8 +45,22 @@ export function readLiveConfig(): { config: LiveConfig } | { reason: string } {
   // The same signed-in person token and board the batch path uses (remote.ts isPersonToken): the
   // relay validates it with fl-api whoami and checks the board's cloud policy with it.
   const remote = readRemoteConfig()
-  if (!remote?.token) return { reason: "Live transcription needs you to be signed in to IRIS with a board set." }
-  return { config: { relayUrl: relayUrl.replace(/\/$/, ""), token: remote.token, bloqId: remote.bloqId } }
+  if (!remote?.token) return { reason: "Live transcription needs you to be signed in to IRIS." }
+  return { config: { relayUrl: relayUrl.replace(/\/$/, ""), token: remote.token, bloqId: remote.bloqId ?? "" } }
+}
+
+/**
+ * readLiveConfig, with the board filled in: the relay checks the board's cloud policy before it
+ * streams, so it needs one up front. With none configured, the platform names the person's own.
+ */
+export async function resolveLiveConfig(): Promise<{ config: LiveConfig } | { reason: string }> {
+  const live = readLiveConfig()
+  if (!("config" in live) || live.config.bloqId) return live
+  const remote = readRemoteConfig()
+  const bloqId = remote ? await resolveBoard(remote) : undefined
+  if (!bloqId)
+    return { reason: "You don't have a board yet for live transcription. Create one in IRIS, then try again." }
+  return { config: { ...live.config, bloqId } }
 }
 
 export function openLiveSession(
