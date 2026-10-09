@@ -738,6 +738,58 @@ export function knownFunctionsFor(target: string): { name: string; description: 
  * the server had 20, and an agent concluded delete_label did not exist. Cached a day under
  * ~/.iris/cache; the bundled list answers only when the server cannot be asked.
  */
+/**
+ * A connector's actions WITH their parameters, from the server catalogue — the yml, the single source
+ * (#188781). 2026-10-09: an agent could not find create_draft's fields; it ran exec with no params,
+ * tried `iris integrations describe`, then `strings` on this binary, then guessed Composio's names.
+ */
+export type ActionSignature = {
+  name: string
+  description: string
+  writes: boolean
+  effect?: string | null
+  parameters: { name: string; type: string; required: boolean; description: string }[]
+}
+
+export async function actionSignaturesLive(target: string): Promise<ActionSignature[] | undefined> {
+  const type = SLUG_ALIASES[target] ?? target
+  try {
+    const res = await irisFetch(`/api/v1/integrations/catalog/${encodeURIComponent(type)}`, {}, IRIS_API)
+    const body: any = res.ok ? await res.json() : null
+    const commands: any[] = body?.data?.commands ?? []
+    if (!commands.length) return undefined
+    return commands.map((c) => ({
+      name: String(c.name),
+      description: String(c.description ?? c.label ?? ""),
+      writes: Boolean(c.writes),
+      effect: c.effect ?? null,
+      parameters: (Array.isArray(c.parameters) ? c.parameters : []).map((p: any) => ({
+        name: String(p.name),
+        type: String(p.type ?? "string"),
+        required: Boolean(p.required),
+        description: String(p.description ?? ""),
+      })),
+    }))
+  } catch {
+    return undefined
+  }
+}
+
+/** Print one action the way an agent needs it: what it does, every parameter, and a runnable example. */
+export function printSignature(target: string, sig: ActionSignature): void {
+  console.log(`  ${bold(`${target}.${sig.name}`)}  ${dim(sig.writes ? `write${sig.effect ? ` (${sig.effect})` : ""} — dry run unless --apply` : "read")}`)
+  if (sig.description) console.log(`  ${sig.description.split(/(?<=\.)\s/)[0]}`)
+  if (!sig.parameters.length) console.log(dim("  (no parameters)"))
+  for (const p of sig.parameters) {
+    console.log(`    ${p.required ? bold(p.name) : p.name}${dim(`  ${p.type}${p.required ? " · required" : ""}`)}${p.description ? dim(`  — ${p.description}`) : ""}`)
+  }
+  const ex = sig.parameters
+    .filter((p) => p.required)
+    .map((p) => `${p.name}=${p.type === "array" ? "<id1>,<id2>" : p.type === "integer" || p.type === "number" ? "10" : `"…"`}`)
+    .join(" ")
+  console.log(dim(`  example: iris integrations exec ${target} ${sig.name} ${ex}${sig.writes ? " --apply" : ""}`.trimEnd()))
+}
+
 export async function knownFunctionsLive(target: string): Promise<{ name: string; description: string }[] | undefined> {
   const type = SLUG_ALIASES[target] ?? target
   const fs = await import("fs/promises")
@@ -1936,6 +1988,39 @@ export const ConnectCommand = cmd({
   },
 })
 
+/** `iris integrations describe <type> [action]` — every action, or one action's full signature (#188781). */
+const DescribeCommand = cmd({
+  command: "describe <target> [action]",
+  aliases: ["params", "signature"],
+  describe: "show an integration's actions and each one's parameters (from the server's catalogue)",
+  builder: (yargs) =>
+    yargs
+      .positional("target", { type: "string", demandOption: true, describe: "integration type, e.g. gmail" })
+      .positional("action", { type: "string", describe: "one action, e.g. create_draft" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    const target = String(args.target)
+    const sigs = await actionSignaturesLive(target)
+    if (!sigs) {
+      const msg = `No catalogue for '${target}'. Known integrations: iris integrations list-integrations`
+      if (args.json) { await writeJson({ success: false, error: msg }); process.exitCode = 1; return }
+      prompts.log.error(msg)
+      process.exitCode = 1
+      return
+    }
+    const pick = args.action ? sigs.filter((s) => s.name === args.action) : sigs
+    if (args.action && !pick.length) {
+      const msg = `'${args.action}' is not a ${target} action. Actions: ${sigs.map((s) => s.name).join(", ")}`
+      if (args.json) { await writeJson({ success: false, error: msg, actions: sigs.map((s) => s.name) }); process.exitCode = 1; return }
+      prompts.log.error(msg)
+      process.exitCode = 1
+      return
+    }
+    if (args.json) { await writeJson({ success: true, integration: target, actions: pick }); return }
+    for (const sig of pick) { printSignature(target, sig); console.log() }
+  },
+})
+
 const ExecCommand = cmd({
   command: "exec <target> [function] [params..]",
   aliases: ["call"],
@@ -2113,6 +2198,19 @@ const ExecCommand = cmd({
         // When the upstream says the function does not exist, answer with the ones that do,
         // in the same response — the caller is usually an agent that will otherwise guess again.
         const known = await knownFunctionsLive(target)
+
+        // A write called with NO parameters is asking "how do I call this?" — answer with the
+        // signature instead of a failed dry run (#188781). Reads with no required params still run.
+        if (Object.keys(params).length === 0 && !args.apply) {
+          const sig = (await actionSignaturesLive(target))?.find((a) => a.name === fn)
+          if (sig && (sig.writes || sig.parameters.some((p) => p.required))) {
+            if (args.json) { await writeJson({ success: false, signature_only: true, integration: target, action: sig }); process.exitCode = 2; return }
+            printSignature(target, sig)
+            process.exitCode = 2
+            prompts.outro(dim("Nothing was run — add the parameters above."))
+            return
+          }
+        }
 
         // DRY RUN BY DEFAULT for anything that is not a read (integration-write-gate.ts). A name this
         // CLI does not know is stopped FIRST, before even a rehearsal: rehearsing a guessed name would
@@ -2669,6 +2767,7 @@ export const PlatformRunCommand = cmd({
   builder: (yargs) =>
     yargs
       .command(ExecCommand)
+      .command(DescribeCommand)
       .command(ListToolsCommand)
       .command(ListIntegrationsCommand)
       .command(ListConnectedCommand)
