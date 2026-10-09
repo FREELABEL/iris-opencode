@@ -54,9 +54,16 @@ export function createSignedOut() {
   return signedOut
 }
 
+/**
+ * Only an explicit "Skip" keeps first run away. "done" does not: finishing creates a project, and
+ * anyone who has a project never sees first run anyway (see showFirstRun in home.tsx). So "done"
+ * plus NO project means the project is gone — a reinstall, a wiped ~/.iris, a fresh test HOME —
+ * and the right screen for a signed-in person with nothing is onboarding, not an empty project
+ * list. The flag lives in WebKit storage, which outlives all three (iris-test17, 2026-10-09).
+ */
 export function firstRunPending(): boolean {
   try {
-    return !localStorage.getItem(FIRST_RUN_KEY)
+    return localStorage.getItem(FIRST_RUN_KEY) !== "skipped"
   } catch {
     return false
   }
