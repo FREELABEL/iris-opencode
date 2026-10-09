@@ -35,6 +35,7 @@ export interface GmailMessage {
   /** The mailbox this message lives in. Its id is only valid there (see setGmailAccount). */
   mailbox?: string
   integration_id?: number
+  attachments?: { filename: string; type: string; size: number; attachment_id: string | null }[]
 }
 
 export interface GmailLabel {
@@ -237,10 +238,35 @@ export async function listMessages(_token: string, query = "", limit = 20): Prom
   return extractMessages(data).slice(0, limit)
 }
 
+/**
+ * One message by id — the server's get_email (fl-iris-api 30d73265+): full body as clean text
+ * (text/plain preferred, HTML only as a fallback), headers, labels, attachment names, mailbox.
+ *
+ * This used to send read_emails with a message_id, which read_emails has never accepted: it listed
+ * the inbox and this returned the NEWEST message, whatever id was asked for (a client's agent,
+ * 2026-10-09, concluded "read is buggy" and fell back to search --json plus its own HTML stripper).
+ */
 export async function getMessageById(_token: string, messageId: string): Promise<GmailMessage | null> {
   try {
-    const data = await gmailExec("read_emails", { message_id: messageId, max_results: 1 })
-    return extractMessages(data)[0] ?? null
+    const data = await gmailExec("get_email", { message_id: messageId })
+    const e = data?.email ?? data
+    if (!e || typeof e !== "object" || !(e.id || e.messageId)) return null
+    const labels: string[] = Array.isArray(e.labels) ? e.labels : []
+    return {
+      id: str(e.id ?? e.messageId),
+      thread_id: str(e.thread_id ?? e.threadId),
+      from: str(e.from),
+      to: str(e.to),
+      subject: str(e.subject),
+      date: str(e.date),
+      snippet: str(e.snippet),
+      body_text: str(e.body),
+      labels,
+      is_unread: labels.includes("UNREAD"),
+      ...(e.mailbox ? { mailbox: String(e.mailbox) } : {}),
+      ...(e.integration_id ? { integration_id: Number(e.integration_id) } : {}),
+      ...(Array.isArray(e.attachments) ? { attachments: e.attachments.map((a: any) => ({ filename: str(a.filename), type: str(a.type), size: Number(a.size ?? 0), attachment_id: a.attachment_id ?? null })) } : {}),
+    } as GmailMessage
   } catch {
     return null
   }
@@ -252,14 +278,14 @@ export async function searchMessages(token: string, query: string, limit = 20): 
 
 // ── Threads ──
 
-export async function getThread(_token: string, threadId: string): Promise<GmailThread | null> {
-  try {
-    const data = await gmailExec("read_emails", { thread_id: threadId, max_results: 50 })
-    const messages = extractMessages(data)
-    return { id: threadId, snippet: messages[0]?.snippet ?? "", messages }
-  } catch {
-    return null
-  }
+/**
+ * NOT SUPPORTED — returns null so the caller can say so. This sent read_emails with a thread_id,
+ * which read_emails ignores, so "the thread" was really the newest inbox messages. The Gmail
+ * backend has no thread fetch yet (Composio's Gmail toolkit has none); a wrong thread is worse
+ * than none.
+ */
+export async function getThread(_token: string, _threadId: string): Promise<GmailThread | null> {
+  return null
 }
 
 /**
