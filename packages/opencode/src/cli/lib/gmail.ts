@@ -230,12 +230,43 @@ export async function getLabels(_token: string): Promise<GmailLabel[]> {
 
 // ── Messages ──
 
-export async function listMessages(_token: string, query = "", limit = 20): Promise<GmailMessage[]> {
-  const data = await gmailExec("read_emails", {
-    query: query || "in:inbox",
-    max_results: Math.min(limit, 100),
-  })
-  return extractMessages(data).slice(0, limit)
+/** The page token after the last listMessages call — null when there is nothing more. */
+let lastNextPageToken: string | null = null
+export function nextPageToken(): string | null {
+  return lastNextPageToken
+}
+
+/** One server call returns at most this many (the server pages Composio underneath). */
+export const PAGE_MAX = 500
+/** --all stops here so a runaway query cannot pull a 100k-message archive into memory. */
+export const ALL_CAP = 5000
+
+/**
+ * Messages matching a query — as many as asked for, across pages.
+ *
+ * Used to cap every listing at 100 (and the commands defaulted to 10–20) and never returned the
+ * page token, so "unread" showed 10 and an agent had no way to see the 11th (2026-10-09). Now:
+ * up to `limit` per call (≤500), `pageToken` continues where the last call stopped, `all` keeps
+ * going until the mailbox runs out (≤5000). nextPageToken() says whether there is more.
+ */
+export async function listMessages(
+  _token: string,
+  query = "",
+  limit = 50,
+  opts: { pageToken?: string | null; all?: boolean } = {},
+): Promise<GmailMessage[]> {
+  const want = opts.all ? ALL_CAP : Math.max(1, Math.min(limit, opts.all ? ALL_CAP : PAGE_MAX))
+  const out: GmailMessage[] = []
+  let token: string | null = opts.pageToken ?? null
+  do {
+    const params: Record<string, unknown> = { query: query || "in:inbox", max_results: Math.min(PAGE_MAX, want - out.length) }
+    if (token) params.page_token = String(token)
+    const data = await gmailExec("read_emails", params)
+    out.push(...extractMessages(data))
+    token = (data?.next_page_token ?? data?.nextPageToken ?? data?.data?.nextPageToken ?? null) as string | null
+  } while ((opts.all || out.length < want) && token && out.length < want)
+  lastNextPageToken = token ? String(token) : null
+  return out.slice(0, want)
 }
 
 /**
@@ -272,8 +303,8 @@ export async function getMessageById(_token: string, messageId: string): Promise
   }
 }
 
-export async function searchMessages(token: string, query: string, limit = 20): Promise<GmailMessage[]> {
-  return listMessages(token, query, limit)
+export async function searchMessages(token: string, query: string, limit = 50, opts: { pageToken?: string | null; all?: boolean } = {}): Promise<GmailMessage[]> {
+  return listMessages(token, query, limit, opts)
 }
 
 // ── Threads ──
