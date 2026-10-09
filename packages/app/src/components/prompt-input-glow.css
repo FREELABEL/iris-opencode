@@ -44,18 +44,20 @@
   animation: iris-glow-spin var(--iris-glow-ring, 3.84s) linear infinite; /* pace from Settings; 3.84s = "Normal" */
 }
 .iris-glow::before {
-  inset: -1.5px;
-  border-radius: 13.5px;
+  inset: -2px;
+  border-radius: 14px;
   z-index: 0;
 }
 /* The halo is the RING blurred, not a filled box blurred. A blurred filled rectangle reads as a
    lighter box standing behind the card (Alex, 2026-10-09: "a weird box around the glowing chat");
-   a blurred border hugs the outline. border-image paints the border band only, never the middle. */
+   a blurred border hugs the outline. border-image paints the border band only, never the middle.
+   It must also fade out within ~9px: the session column clips at the side panel and the message
+   list paints over the dock, so any wider light ends in straight, hard edges — a box again. */
 .iris-glow::after {
-  inset: -4px;
+  inset: -2px;
   z-index: -1;
   background: none;
-  border: 5px solid transparent;
+  border: 3px solid transparent;
   border-image: conic-gradient(
       from var(--iris-glow-a),
       transparent 0deg,
@@ -66,13 +68,13 @@
       transparent 360deg
     )
     1;
-  filter: blur(9px);
+  filter: blur(4px);
 }
 .iris-glow[data-busy]::before {
   opacity: 1;
 }
 .iris-glow[data-busy][data-halo]::after {
-  opacity: 0.45;
+  opacity: 0.95;
 }
 
 /* WAITING ON YOU — an approval or a question is open. Gold, white and soft yellow instead of the
@@ -86,7 +88,7 @@
   opacity: 1;
 }
 .iris-glow[data-wait][data-halo]::after {
-  opacity: 0.5;
+  opacity: 1;
 }
 
 .iris-glow__under {
