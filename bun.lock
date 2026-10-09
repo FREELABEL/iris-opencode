@@ -246,7 +246,7 @@
     },
     "packages/opencode": {
       "name": "opencode",
-      "version": "1.3.332",
+      "version": "1.3.333",
       "bin": {
         "iris": "./bin/iris",
       },
