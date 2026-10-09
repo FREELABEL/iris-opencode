@@ -6250,7 +6250,7 @@
       "describe": "list recent Gmail messages",
       "aliases": [],
       "run": "iris gmail inbox",
-      "haystack": "gmail inbox list ls list recent gmail messages query gmail search query (e.g., is:unread, from:alex) limit max messages json check my email check email my inbox new emails any emails what's in my inbox whats in my inbox"
+      "haystack": "gmail inbox list ls list recent gmail messages query gmail search query (e.g., is:unread, from:alex) limit how many messages (up to 500 per call) page-token continue after a previous call (printed when there is more) all keep paging until there are no more (stops at 5000) json check my email check email my inbox new emails any emails what's in my inbox whats in my inbox"
     },
     {
       "kind": "command",
@@ -6274,7 +6274,7 @@
       "describe": "search Gmail with Gmail query syntax",
       "aliases": [],
       "run": "iris gmail search <query>",
-      "haystack": "gmail search find search gmail with gmail query syntax limit max results json"
+      "haystack": "gmail search find search gmail with gmail query syntax limit how many messages (up to 500 per call) page-token continue after a previous call (printed when there is more) all keep paging until there are no more (stops at 5000) json"
     },
     {
       "kind": "command",
@@ -6282,7 +6282,7 @@
       "describe": "show unread Gmail messages",
       "aliases": [],
       "run": "iris gmail unread",
-      "haystack": "gmail unread show unread gmail messages limit max messages json"
+      "haystack": "gmail unread show unread gmail messages limit how many messages (up to 500 per call) page-token continue after a previous call (printed when there is more) all keep paging until there are no more (stops at 5000) json"
     },
     {
       "kind": "command",

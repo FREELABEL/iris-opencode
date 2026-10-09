@@ -3,7 +3,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { printDivider, dim, bold, success, writeJson } from "./iris-api"
-import { getToken, getLabels, listMessages, searchMessages, getThread, lastError, setGmailAccount, lastGmailAccount } from "../lib/gmail"
+import { getToken, getLabels, listMessages, searchMessages, getThread, lastError, setGmailAccount, lastGmailAccount, nextPageToken } from "../lib/gmail"
 
 async function requireToken(): Promise<string | null> {
   const token = await getToken()
@@ -42,7 +42,9 @@ const GmailInboxCommand = cmd({
   builder: (yargs) =>
     yargs
       .option("query", { type: "string", default: "in:inbox", describe: "Gmail search query (e.g., is:unread, from:alex)" })
-      .option("limit", { type: "number", default: 15, describe: "max messages" })
+      .option("limit", { type: "number", default: 50, describe: "how many messages (up to 500 per call)" })
+      .option("page-token", { type: "string", describe: "continue after a previous call (printed when there is more)" })
+      .option("all", { type: "boolean", default: false, describe: "keep paging until there are no more (stops at 5000)" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     if (!args.json) { UI.empty(); prompts.intro("◈  Gmail Inbox") }
@@ -54,7 +56,7 @@ const GmailInboxCommand = cmd({
       const sp = args.json ? null : prompts.spinner()
       if (sp) sp.start("Fetching messages...")
 
-      const messages = await listMessages(token, args.query as string, args.limit as number)
+      const messages = await listMessages(token, args.query as string, args.limit as number, { pageToken: (args as any)["page-token"], all: Boolean((args as any).all) })
 
       if (sp) sp.stop(`${messages.length} message(s)`)
 
@@ -65,7 +67,7 @@ const GmailInboxCommand = cmd({
         return
       }
 
-      if (args.json) { await writeJson(messages); return }
+      if (args.json) { await writeJson(messages); moreHint(true); return }
 
       printDivider()
       for (const msg of messages) {
@@ -77,6 +79,7 @@ const GmailInboxCommand = cmd({
       }
       printDivider()
       printMailboxLine()
+      moreHint(false)
       prompts.outro(`${success("✓")} ${messages.length} message${messages.length === 1 ? "" : "s"}\n  ${dim("iris gmail read <message-id>")}`)
     } catch (err: any) {
       prompts.log.error(err.message)
@@ -172,7 +175,9 @@ const GmailSearchCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("query", { type: "string", demandOption: true, describe: "Gmail search (e.g., from:alex subject:meeting is:unread)" })
-      .option("limit", { type: "number", default: 20, describe: "max results" })
+      .option("limit", { type: "number", default: 50, describe: "how many messages (up to 500 per call)" })
+      .option("page-token", { type: "string", describe: "continue after a previous call (printed when there is more)" })
+      .option("all", { type: "boolean", default: false, describe: "keep paging until there are no more (stops at 5000)" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     if (!args.json) { UI.empty(); prompts.intro(`◈  Gmail Search — "${args.query}"`) }
@@ -184,7 +189,7 @@ const GmailSearchCommand = cmd({
       const sp = args.json ? null : prompts.spinner()
       if (sp) sp.start("Searching...")
 
-      const messages = await searchMessages(token, args.query, args.limit as number)
+      const messages = await searchMessages(token, args.query, args.limit as number, { pageToken: (args as any)["page-token"], all: Boolean((args as any).all) })
 
       if (sp) sp.stop(`${messages.length} result(s)`)
 
@@ -195,7 +200,7 @@ const GmailSearchCommand = cmd({
         return
       }
 
-      if (args.json) { await writeJson(messages); return }
+      if (args.json) { await writeJson(messages); moreHint(true); return }
 
       printDivider()
       for (const msg of messages) {
@@ -209,6 +214,7 @@ const GmailSearchCommand = cmd({
       }
       printDivider()
       printMailboxLine()
+      moreHint(false)
       prompts.outro(`${success("✓")} ${messages.length} result${messages.length === 1 ? "" : "s"}`)
     } catch (err: any) {
       prompts.log.error(err.message)
@@ -264,7 +270,9 @@ const GmailUnreadCommand = cmd({
   describe: "show unread Gmail messages",
   builder: (yargs) =>
     yargs
-      .option("limit", { type: "number", default: 10, describe: "max messages" })
+      .option("limit", { type: "number", default: 50, describe: "how many messages (up to 500 per call)" })
+      .option("page-token", { type: "string", describe: "continue after a previous call (printed when there is more)" })
+      .option("all", { type: "boolean", default: false, describe: "keep paging until there are no more (stops at 5000)" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     // Delegate to inbox with is:unread query
@@ -277,6 +285,15 @@ const GmailUnreadCommand = cmd({
  * each message carries `mailbox` + `integration_id` itself. Message ids are only valid in the
  * mailbox they came from — act on them with the same --integration-id.
  */
+/** Say when there is more — the token to continue, or --all. JSON keeps stdout an array; the hint goes to stderr. */
+function moreHint(json: boolean): void {
+  const t = nextPageToken()
+  if (!t) return
+  const line = `More messages match. Next page: --page-token=${t}  ·  everything: --all`
+  if (json) process.stderr.write(`next_page_token: ${t}\n`)
+  else console.log(dim(`  ${line}`))
+}
+
 export function printMailboxLine(): void {
   const a = lastGmailAccount()
   if (!a) return
