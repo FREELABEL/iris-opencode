@@ -209,6 +209,15 @@ export const RunCommand = cmd({
           if (event.type === "permission.asked") {
             const permission = event.properties
             if (permission.sessionID !== sessionID) continue
+            // No terminal means nobody can answer. A Hive task runs `iris run` headless, and the
+            // prompt below waited on it forever (#188292: a code_generation task stalled on
+            // external_directory). Refuse instead, and say so in the output the task returns.
+            if (!process.stdin.isTTY) {
+              const line = `Permission refused (no one to ask — running without a terminal): ${permission.permission} (${permission.patterns.join(", ")})`
+              if (!outputJsonEvent("permission_refused", { permission: permission.permission, patterns: permission.patterns })) UI.println(line)
+              await sdk.permission.respond({ sessionID, permissionID: permission.id, response: "reject" })
+              continue
+            }
             const result = await select({
               message: `Permission required: ${permission.permission} (${permission.patterns.join(", ")})`,
               options: [
