@@ -489,6 +489,12 @@
       "purpose": "Recipe for iris hive proof — check a machine is ready, record a page working, and post the video on a pull request."
     },
     {
+      "src": "how-to/locate-files-on-your-machines.md",
+      "dest": "how-to/locate-files-on-your-machines.md",
+      "managed": true,
+      "purpose": "Recipe for iris locate — find a file on any machine you own; which engine each platform uses and how to install the faster one."
+    },
+    {
       "src": "how-to/edge-publish.md",
       "dest": "how-to/edge-publish.md",
       "managed": true,

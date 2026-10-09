@@ -5,7 +5,9 @@ import { requireAuth, requireUserId, dim, bold, success, highlight, writeJson } 
 import { hiveFetch, fetchNodes } from "./platform-hive-nodes"
 import { existsSync, readFileSync, readdirSync, mkdirSync } from "fs"
 import { join } from "path"
-import { homedir } from "os"
+import { homedir, hostname } from "os"
+import { createRequire } from "module"
+import { execSync } from "child_process"
 
 // ============================================================================
 // iris hive search — distributed search across all Hive nodes
@@ -37,6 +39,46 @@ function timeAgo(iso: string | null | undefined): string {
   const hrs = Math.round(mins / 60)
   if (hrs < 24) return `${hrs}h ago`
   return `${Math.round(hrs / 24)}d ago`
+}
+
+/**
+ * Whole-disk file search on THIS machine (#188665). The node daemon owns the implementation
+ * (daemon/disk-search.js: fsearch → Spotlight → locate → a labelled home-folder scan); loading the
+ * installed copy keeps one implementation instead of two that drift. A machine that is not a Hive
+ * node has no copy, and is told how to become one rather than silently searching nothing.
+ */
+const DISK_SEARCH = join(homedir(), ".iris", "bridge", "daemon", "disk-search.js")
+
+/** This machine's file-search engines, from the installed node's own module. */
+export async function localProviders(modulePath = DISK_SEARCH): Promise<{ json: any } | { error: string }> {
+  if (!existsSync(modulePath)) return { error: "this machine is not a Hive node — run `iris node install`" }
+  try {
+    const mod = createRequire(import.meta.url)(modulePath)
+    if (typeof mod.listProviders !== "function") return { error: "this node's daemon predates search engines — run `iris node install` to update it" }
+    return { json: mod.listProviders() }
+  } catch (e: any) {
+    return { error: `could not read this machine's engines: ${String(e?.message ?? e).slice(0, 120)}` }
+  }
+}
+
+export async function searchLocalFiles(
+  query: string,
+  limit: number,
+  modulePath = DISK_SEARCH,
+  provider: string | null = null,
+): Promise<{ rows: SearchResult[]; note?: string }> {
+  if (!existsSync(modulePath)) {
+    return { rows: [], note: "this machine is not a Hive node, so its disk was not searched — run `iris node install`" }
+  }
+  try {
+    // createRequire, not require: the CLI runs as an ES module, where a bare require is undefined.
+    const mod = createRequire(import.meta.url)(modulePath)
+    const r = await mod.searchDisk(query, { limit, provider })
+    const rows: SearchResult[] = (r.rows ?? []).map((x: any) => ({ ...x, node_name: "local", node_id: "local" }))
+    return { rows, note: r.note }
+  } catch (e: any) {
+    return { rows: [], note: `file search failed here: ${String(e?.message ?? e).slice(0, 120)}` }
+  }
 }
 
 /** Search the local Hive inbox for matching items */
@@ -89,7 +131,6 @@ function searchLocalInbox(query: string): SearchResult[] {
 function searchLocalImessage(query: string): SearchResult[] {
   const results: SearchResult[] = []
   try {
-    const { execSync } = require("child_process")
     const dbPath = join(homedir(), "Library", "Messages", "chat.db")
     if (!existsSync(dbPath)) return []
 
@@ -139,9 +180,11 @@ export const HiveSearchCommand = cmd({
   describe: "search files, messages, and iMessages across all Hive nodes",
   builder: (yargs) =>
     yargs
+      .example('iris hive search "invoice march" --type files', "find a file on the disk of every machine you own")
+      .example('iris hive search "dentist"', "files, the Hive inbox and iMessages, on every node")
       .positional("query", { describe: "search term", type: "string", demandOption: true })
       .option("type", {
-        describe: "search scope",
+        describe: "search scope — files = the whole disk on each node (fsearch or Spotlight on a Mac, locate or a home-folder scan on Linux)",
         type: "string",
         choices: SEARCH_TYPES,
         default: "all" as SearchType,
@@ -161,12 +204,19 @@ export const HiveSearchCommand = cmd({
     // Step 1: Search local machine
     sp?.start("Searching local node…")
     const localResults: SearchResult[] = []
+    let localFilesNote: string | undefined
 
     if (searchType === "all" || searchType === "inbox") {
       localResults.push(...searchLocalInbox(query).slice(0, limit))
     }
     if (searchType === "all" || searchType === "imessage") {
       localResults.push(...searchLocalImessage(query).slice(0, limit))
+    }
+
+    if (searchType === "all" || searchType === "files") {
+      const disk = await searchLocalFiles(query, limit)
+      localResults.push(...disk.rows)
+      localFilesNote = disk.note
     }
 
     sp?.stop(`${localResults.length} local result(s)`)
@@ -183,7 +233,7 @@ export const HiveSearchCommand = cmd({
 
           try {
             const nodes = await fetchNodes(userId)
-            const thisHostname = require("os").hostname()
+            const thisHostname = hostname()
             const remoteNodes = nodes.filter(
               (n) => n.connection_status === "online" && !n.name.includes(thisHostname),
             )
@@ -272,6 +322,7 @@ export const HiveSearchCommand = cmd({
 
     if (allResults.length === 0) {
       console.log(dim(`  No results for "${query}"`))
+      if (localFilesNote) console.log(dim(`  ${localFilesNote}`))
       prompts.outro("Done")
       return
     }
@@ -292,7 +343,9 @@ export const HiveSearchCommand = cmd({
       console.log()
       console.log(bold(`  ${source.toUpperCase()} (${results.length})`))
 
-      for (const r of results.slice(0, limit)) {
+      // Files come back `limit` per node, so cap the group per node too, not in total.
+      const cap = source === "files" ? limit * Math.max(1, new Set(results.map((r) => r.node_name)).size) : limit
+      for (const r of results.slice(0, cap)) {
         const node = r.node_name === "local" ? dim("local") : highlight(r.node_name)
         const age = r.date ? dim(timeAgo(r.date)) : ""
         console.log(`    ${node}  ${bold(r.match)}  ${age}`)
@@ -303,6 +356,7 @@ export const HiveSearchCommand = cmd({
     }
 
     console.log()
+    if (localFilesNote) console.log(dim(`\n  ${localFilesNote}`))
     prompts.outro("Done")
   },
 })
