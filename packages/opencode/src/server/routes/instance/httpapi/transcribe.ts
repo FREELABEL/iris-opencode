@@ -19,6 +19,7 @@ import {
 import { ChainError, effectiveEngines, transcribeWithFallback } from "@/transcribe/chain"
 import { hold, listHeld, readHeld, release, type Held } from "@/transcribe/held"
 import { splitWav } from "@/transcribe/segments"
+import { detectSpeech } from "@/transcribe/vad"
 import { openLiveSession, resolveLiveConfig } from "@/transcribe/live"
 import { openSpeakSession } from "@/transcribe/speak"
 import { describeRemoteConfig, readRemoteConfig } from "@/transcribe/remote"
@@ -158,6 +159,13 @@ async function transcribeHeld(
   language: string | undefined,
   extra: Record<string, unknown> = {},
 ) {
+  // No speech, no upload: a take of room noise is answered here, before any paid engine sees it.
+  // Nothing worth retrying either, so it is not kept. Fail-open lives inside detectSpeech.
+  const vad = detectSpeech(audio)
+  if (!vad.speech) {
+    if (held) release(held.id)
+    return HttpServerResponse.jsonUnsafe({ text: "", noSpeech: true, attempts: [], ...extra })
+  }
   const result = await transcribeSegments(audio, filename, language).catch((e: unknown) =>
     e instanceof Error ? e : new TranscribeError(String(e)),
   )
@@ -203,13 +211,15 @@ async function transcribeSegments(audio: Uint8Array, filename: string, language:
   const parts = splitWav(audio)
   if (parts.length === 1) return transcribeWithFallback(audio, { filename, language, remote })
   const results = []
-  for (const part of parts) results.push(await transcribeWithFallback(part, { filename, language, remote }))
+  // A long background take is mostly not speech; its silent stretches are not uploaded either.
+  for (const part of parts)
+    if (detectSpeech(part).speech) results.push(await transcribeWithFallback(part, { filename, language, remote }))
   return {
     text: results
       .map((r) => r.text.trim())
       .filter(Boolean)
       .join(" "),
-    provider: results[0]!.provider,
+    provider: results[0]?.provider ?? "none",
     attempts: results.flatMap((r) => r.attempts),
   }
 }
