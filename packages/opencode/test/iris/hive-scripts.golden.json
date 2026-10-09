@@ -1,0 +1,170 @@
+{
+ "task": {
+  "id": "01a12289-17b3-7398-b6d1-28e89f50ba6d",
+  "user_id": 193,
+  "title": "iris scripts run: console-demo",
+  "type": "user_script",
+  "status": "completed",
+  "priority": 5,
+  "progress": 100,
+  "progress_message": "Completed",
+  "node_id": "01a10379-0c9f-73c5-bf83-157496a21589",
+  "node": {
+   "id": "01a10379-0c9f-73c5-bf83-157496a21589",
+   "name": "iris-hive-001",
+   "connection_status": "online"
+  },
+  "error": null,
+  "result": {
+   "data": null,
+   "files": [],
+   "output": "console demo starting on ca93b63ecc77\nconsole demo done",
+   "stderr": null,
+   "stdout": "console demo starting on ca93b63ecc77\nconsole demo done",
+   "metadata": {
+    "exit_code": 0,
+    "executed_by_node_id": "01a10379-0c9f-73c5-bf83-157496a21589",
+    "executed_by_node_name": "iris-hive-001"
+   },
+   "duration_ms": 20943
+  },
+  "created_at": "2026-10-09T21:19:32+00:00",
+  "dispatched_at": "2026-10-09T21:19:32+00:00",
+  "started_at": "2026-10-09T21:19:32+00:00",
+  "completed_at": "2026-10-09T21:19:55+00:00",
+  "duration_ms": 23000,
+  "not_after": null,
+  "idempotency_key": null,
+  "attempts": 1,
+  "max_attempts": 1,
+  "arrived_at": "2026-10-09T21:19:32.722Z",
+  "prompt": "console-demo",
+  "config": {
+   "script_slug": "console-demo",
+   "script_sha256": "7b01f37f30c74acbeadd2e2fd618f3253844991c1f3da4c64f57cd31d21882c8"
+  },
+  "timeout_seconds": 120,
+  "metadata": {
+   "_routing": {
+    "model": null,
+    "pinned": true,
+    "runtime": null,
+    "requirements": [],
+    "required_capabilities": []
+   },
+   "_delivery": {
+    "accepted_at": "2026-10-09T21:19:32.876Z",
+    "node_clock_skew_ms": -154
+   },
+   "exit_code": 0,
+   "executed_by_node_id": "01a10379-0c9f-73c5-bf83-157496a21589",
+   "executed_by_node_name": "iris-hive-001"
+  }
+ },
+ "doctor": {
+  "slug": "mambo-status",
+  "requires": [
+   "bluetooth",
+   "python3"
+  ],
+  "manifest_errors": [],
+  "timeout": 180,
+  "expect_exit": null,
+  "egress": "any",
+  "eligible": [
+   {
+    "node": "Alexs-MacBook-Pro-11711",
+    "verdict": {
+     "ok": true,
+     "unmet": [],
+     "summary": "Alexs-MacBook-Pro-11711 satisfies all 2 requirement(s)"
+    }
+   }
+  ],
+  "eligible_online": 0,
+  "blocked": [
+   {
+    "node": "AlexMaysnow1063",
+    "verdict": {
+     "ok": false,
+     "unmet": [
+      {
+       "requirement": "bluetooth",
+       "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+      },
+      {
+       "requirement": "python3",
+       "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+      }
+     ],
+     "summary": "AlexMaysnow1063 cannot satisfy: bluetooth (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running); python3 (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+    }
+   },
+   {
+    "node": "MacBookPro",
+    "verdict": {
+     "ok": false,
+     "unmet": [
+      {
+       "requirement": "bluetooth",
+       "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+      },
+      {
+       "requirement": "python3",
+       "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+      }
+     ],
+     "summary": "MacBookPro cannot satisfy: bluetooth (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running); python3 (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+    }
+   },
+   {
+    "node": "qb-host-vanguard",
+    "verdict": {
+     "ok": false,
+     "unmet": [
+      {
+       "requirement": "bluetooth",
+       "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+      },
+      {
+       "requirement": "python3",
+       "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+      }
+     ],
+     "summary": "qb-host-vanguard cannot satisfy: bluetooth (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running); python3 (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+    }
+   },
+   {
+    "node": "Alexs-MacBook-Pro-11711",
+    "verdict": {
+     "ok": false,
+     "unmet": [
+      {
+       "requirement": "bluetooth",
+       "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+      },
+      {
+       "requirement": "python3",
+       "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+      }
+     ],
+     "summary": "Alexs-MacBook-Pro-11711 cannot satisfy: bluetooth (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running); python3 (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+    }
+   },
+   {
+    "node": "iris-hive-001",
+    "verdict": {
+     "ok": false,
+     "unmet": [
+      {
+       "requirement": "bluetooth",
+       "reason": "not advertised by this node"
+      }
+     ],
+     "summary": "iris-hive-001 cannot satisfy: bluetooth (not advertised by this node)"
+    }
+   }
+  ],
+  "runnable_now": false
+ }
+}

@@ -117,6 +117,102 @@ const HiveResponse = Schema.Struct({
   ),
 }).annotate({ identifier: "IrisHiveResponse" })
 
+// ── Hive › Scripts (#188817) ─────────────────────────────────────────────────────────────────────
+const DoctorRowSchema = Schema.Struct({
+  node: described(Schema.String, "A node NAME — names repeat across duplicate registrations of one computer."),
+  verdict: Schema.optional(
+    Schema.Struct({
+      ok: Schema.optional(Schema.Boolean),
+      unmet: Schema.optional(Schema.Array(Schema.Struct({ requirement: Schema.String, reason: Schema.String }))),
+      summary: Schema.optional(Schema.String),
+    }),
+  ),
+})
+const ScriptDoctorSchema = Schema.Struct({
+  slug: Schema.String,
+  requires: Schema.Array(Schema.String),
+  manifest_errors: Schema.Array(Schema.String),
+  timeout: Schema.NullOr(Schema.Finite),
+  eligible: Schema.Array(DoctorRowSchema),
+  eligible_online: described(Schema.NullOr(Schema.Finite), "The HUB's count. NULL = not counted, never zero."),
+  blocked: Schema.Array(DoctorRowSchema),
+  runnable_now: Schema.optional(Schema.Boolean),
+}).annotate({ identifier: "IrisScriptDoctor" })
+const ScriptsResponse = Schema.Struct({
+  ...Measured,
+  scripts: Schema.Array(
+    Schema.Struct({
+      slug: Schema.String,
+      name: Schema.optional(Schema.String),
+      description: Schema.optional(Schema.String),
+      runtime: Schema.optional(Schema.String),
+      updatedAt: Schema.optional(Schema.String),
+      lastExecutedAt: described(Schema.NullOr(Schema.String), "Never written by the hub today — do not show as 'last run'."),
+      doctor: described(Schema.NullOr(ScriptDoctorSchema), "NULL = the doctor could not be asked, not 'can run'."),
+    }).annotate({ identifier: "IrisScriptSummary" }),
+  ),
+}).annotate({ identifier: "IrisScriptsResponse" })
+const ScriptSourceResponse = Schema.Struct({
+  ...Measured,
+  script: Schema.NullOr(
+    Schema.Struct({
+      slug: Schema.String,
+      name: Schema.optional(Schema.String),
+      description: Schema.optional(Schema.String),
+      runtime: Schema.String,
+      content: Schema.String,
+      sha256: described(Schema.String, "The content hash a run is pinned to."),
+      updatedAt: Schema.optional(Schema.String),
+      autoPull: Schema.Boolean,
+      visibility: Schema.optional(Schema.String),
+    }).annotate({ identifier: "IrisScriptSource" }),
+  ),
+}).annotate({ identifier: "IrisScriptSourceResponse" })
+const ScriptDoctorResponse = Schema.Struct({ ...Measured, doctor: Schema.NullOr(ScriptDoctorSchema) }).annotate({
+  identifier: "IrisScriptDoctorResponse",
+})
+const ScriptSaveResponse = Schema.Struct({
+  ok: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  sha256: Schema.optional(Schema.String),
+  updatedAt: Schema.optional(Schema.String),
+  created: Schema.optional(Schema.Boolean),
+}).annotate({ identifier: "IrisScriptSaveResponse" })
+const ScriptRunResponse = Schema.Struct({
+  ok: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  taskId: Schema.optional(Schema.String),
+  nodeId: Schema.optional(Schema.String),
+  nodeName: Schema.optional(Schema.String),
+  sha256: described(Schema.optional(Schema.NullOr(Schema.String)), "NULL = the run is UNVERIFIED (no hash could be pinned)."),
+  timeoutSeconds: Schema.optional(Schema.Finite),
+}).annotate({ identifier: "IrisScriptRunResponse" })
+const HiveTaskResponse = Schema.Struct({
+  ...Measured,
+  task: Schema.NullOr(
+    Schema.Struct({
+      id: Schema.String,
+      status: Schema.String,
+      terminal: Schema.Boolean,
+      createdAt: Schema.NullOr(Schema.String),
+      dispatchedAt: Schema.NullOr(Schema.String),
+      arrivedAt: Schema.NullOr(Schema.String),
+      startedAt: Schema.NullOr(Schema.String),
+      completedAt: Schema.NullOr(Schema.String),
+      stdout: Schema.String,
+      stderr: Schema.String,
+      exitCode: Schema.NullOr(Schema.Finite),
+      exitCodeSource: described(
+        Schema.NullOr(Schema.Literals(["metadata", "result", "error_text"])),
+        "error_text = recovered from the daemon's prose, not reported. Label it as inferred.",
+      ),
+      error: Schema.NullOr(Schema.String),
+      nodeName: Schema.NullOr(Schema.String),
+      durationMs: Schema.NullOr(Schema.Finite),
+    }).annotate({ identifier: "IrisHiveTask" }),
+  ),
+}).annotate({ identifier: "IrisHiveTaskResponse" })
+
 const BloqsResponse = Schema.Struct({
   ...Measured,
   ...Paged,
@@ -888,6 +984,12 @@ export const IrisPaths = {
   room: `${root}/rooms/:roomID`,
   roomMessages: `${root}/rooms/:roomID/messages`,
   hive: `${root}/hive`,
+  hiveScripts: `${root}/hive/scripts`,
+  hiveScript: `${root}/hive/scripts/:slug`,
+  hiveScriptDoctor: `${root}/hive/scripts/:slug/doctor`,
+  hiveScriptSave: `${root}/hive/scripts/:slug/save`,
+  hiveScriptRun: `${root}/hive/scripts/:slug/run`,
+  hiveTask: `${root}/hive/tasks/:taskID`,
   allowance: `${root}/allowance`,
   plan: `${root}/plan`,
   me: `${root}/me`,
@@ -2127,6 +2229,54 @@ export const IrisApi = HttpApi.make("iris").add(
             "Scoped three ways: project, organization, user. A connected account is not automatically a board to use. Failing rows sort FIRST so the one you opened the list to find is not buried under two dozen healthy ones.",
         }),
       ),
+      HttpApiEndpoint.get("hiveScripts", IrisPaths.hiveScripts, {
+        success: described(ScriptsResponse, "Your saved Hive scripts, each with the hub's doctor verdict"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.hiveScripts",
+          summary: "List Hive scripts",
+          description:
+            "#188817. `iris scripts list` plus `iris scripts doctor` for every slug (cached 30 s). The verdict is the hub's — the same code that refuses a dispatch.",
+        }),
+      ),
+      HttpApiEndpoint.get("hiveScript", IrisPaths.hiveScript, {
+        params: { slug: Schema.String },
+        success: described(ScriptSourceResponse, "One script's source"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.hiveScript", summary: "Read a Hive script (iris scripts pull)" })),
+      HttpApiEndpoint.get("hiveScriptDoctor", IrisPaths.hiveScriptDoctor, {
+        params: { slug: Schema.String },
+        success: described(ScriptDoctorResponse, "Which computers can run it, and what each is missing"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.hiveScriptDoctor", summary: "Doctor a Hive script (fresh)" })),
+      HttpApiEndpoint.post("hiveScriptSave", IrisPaths.hiveScriptSave, {
+        params: { slug: Schema.String },
+        payload: Schema.Struct({ content: Schema.String }),
+        success: described(ScriptSaveResponse, "The saved version's hash"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.hiveScriptSave",
+          summary: "Save a Hive script (iris scripts push)",
+          description: "Upsert. Name, description, runtime and auto-pull are carried over from the saved copy.",
+        }),
+      ),
+      HttpApiEndpoint.post("hiveScriptRun", IrisPaths.hiveScriptRun, {
+        params: { slug: Schema.String },
+        payload: Schema.Struct({
+          node: described(Schema.String, "Node id or name, resolved as the CLI does."),
+          timeout: Schema.optional(Schema.Finite),
+        }),
+        success: described(ScriptRunResponse, "The dispatched task — poll /iris/hive/tasks/:taskID"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.hiveScriptRun",
+          summary: "Run a Hive script on a computer (iris scripts run)",
+          description:
+            "Pins the content hash like the CLI. Takes no arguments: the daemon does not pass a header's `arg=` values to a user script today, and sending them under an invented key would change nothing.",
+        }),
+      ),
+      HttpApiEndpoint.get("hiveTask", IrisPaths.hiveTask, {
+        params: { taskID: Schema.String },
+        success: described(HiveTaskResponse, "A Hive task's stage timestamps, output and exit"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.hiveTask", summary: "Read a Hive task" })),
       HttpApiEndpoint.get("hive", IrisPaths.hive, {
         query: PageQuery,
         success: described(HiveResponse, "Registered Hive machines"),
