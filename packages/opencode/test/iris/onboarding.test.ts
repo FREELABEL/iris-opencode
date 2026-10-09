@@ -221,3 +221,23 @@ describe("activeTypes", () => {
     expect(activeTypes(null)).toEqual([])
   })
 })
+
+describe("state() sees connections in either store", () => {
+  test("a Slack connection stored by fl-api completes the connect step", async () => {
+    const platform = await import("../../src/iris/platform")
+    const { spyOn } = await import("bun:test")
+    const uid = spyOn(platform, "resolveUserId").mockResolvedValue(7 as any)
+    const iris = spyOn(platform, "irisFetch").mockResolvedValue(
+      new Response(JSON.stringify({ data: [{ type: "gmail", status: "active", account_email: "a@b.co" }] }), { status: 200 }) as any,
+    )
+    const fl = spyOn(platform, "fetchIntegrations").mockResolvedValue({
+      measured: true,
+      data: { integrations: [{ type: "slack", connected: true }, { type: "stripe", connected: false }] as any },
+    })
+    const { state } = await import("../../src/iris/onboarding")
+    const s = await state()
+    expect(s.data.connected?.sort()).toEqual(["gmail", "slack"])
+    expect(s.data.mail).toMatchObject({ connected: true, type: "gmail" })
+    uid.mockRestore(); iris.mockRestore(); fl.mockRestore()
+  })
+})

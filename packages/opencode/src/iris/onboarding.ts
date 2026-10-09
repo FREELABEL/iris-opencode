@@ -16,7 +16,7 @@
 import { mkdirSync, readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
-import { IRIS_API, irisFetch, resolveUserId, tokenSource, type PlatformResult } from "./platform"
+import { IRIS_API, fetchIntegrations, irisFetch, resolveUserId, tokenSource, type PlatformResult } from "./platform"
 
 /** Mail providers in the order we prefer them. Outlook arrives with D2 #188248. */
 const MAIL_TYPES = ["gmail", "outlook"] as const
@@ -168,11 +168,25 @@ export function activeTypes(rows: unknown): string[] {
   return [...new Set(list.filter((r: any) => typeof r?.type === "string" && (r?.isConnected === true || r?.status === "active")).map((r: any) => r.type as string))]
 }
 
+/**
+ * Connected types from fl-api. Google types connect through iris-api (read below); everything else
+ * — Slack, Stripe, Notion… — is stored by fl-api's OAuth callback, which iris-api's list does not
+ * show. First run moves on after ANY one connection, so it has to ask both, or connecting Slack
+ * from the integrations list waits five minutes for a row that is in the other store.
+ * Best effort: a failure here only means a non-Google connection is noticed later.
+ */
+async function flApiConnected(): Promise<string[]> {
+  const r = await fetchIntegrations({ scope: "all" }).catch(() => null)
+  if (!r?.measured) return []
+  return r.data.integrations.filter((i) => i.connected && i.type).map((i) => i.type as string)
+}
+
 export async function state(): Promise<PlatformResult<OnboardingState>> {
   const userId = await resolveUserId()
   if (!userId) {
     return { measured: true, data: { signedIn: false, mail: { connected: false } } }
   }
+  const others = flApiConnected()
   try {
     const res = await irisFetch(`/api/v1/integrations-temp?user_id=${userId}`, IRIS_API)
     const body = (await res.json().catch(() => null)) as any
@@ -184,7 +198,7 @@ export async function state(): Promise<PlatformResult<OnboardingState>> {
       }
     }
     const rows = body?.data ?? body?.integrations
-    const connected = activeTypes(rows)
+    const connected = [...new Set([...activeTypes(rows), ...(await others)])]
     const hit = pickMailConnection(rows)
     if (hit) return { measured: true, data: { signedIn: true, mail: { connected: true, ...hit }, connected } }
     return { measured: true, data: { signedIn: true, mail: { connected: false }, connected } }
