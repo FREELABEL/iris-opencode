@@ -230,3 +230,14 @@ export function stripLabel(steps: FlowStep[]): string {
   if (steps.length === 0) return "Steps not published"
   return `${steps.length} step${steps.length === 1 ? "" : "s"}: ${steps.map((s) => WHO_LABEL[s.who]).join(", ")}`
 }
+
+/**
+ * The document a person reads: the playbook's markdown WITHOUT its leading YAML settings block.
+ * Rendered as markdown, that block came out as one run-on paragraph — "name: … description: …
+ * allowed-tools:" and a bullet list of tool names — above the actual document. Its values are
+ * already on the Info tab; the raw block stays on the JSON tab and in the file.
+ */
+export function playbookDocBody(content: string): string {
+  const m = /^﻿?---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/.exec(content ?? "")
+  return m ? content.slice(m[0].length).replace(/^\s*\n/, "") : (content ?? "")
+}

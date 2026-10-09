@@ -17,6 +17,7 @@ import {
   FILTER_ICON,
   scopeIcon,
   SCOPE_ICON,
+  playbookDocBody,
 } from "./playbook-flow"
 
 // Playbooks · "03 Flow". These guard the CLAIMS the panel makes about a playbook — who does each
@@ -201,5 +202,24 @@ describe("icons — one meaning each", () => {
     for (const s of ["globe", "lock", "link", "folder"]) expect(who.has(s as any)).toBe(false)
     // and the scope icons never reuse the step-count icon
     expect(Object.values(SCOPE_ICON)).not.toContain("checklist")
+  })
+})
+
+describe("playbookDocBody", () => {
+  test("drops the YAML settings block and keeps the document", () => {
+    const doc =
+      "---\nname: architecture-review\ndescription: Catch it early\nallowed-tools:\n  - Read\n  - Grep\n---\n\n# Architecture Review\n\nRun it before code."
+    expect(playbookDocBody(doc)).toBe("# Architecture Review\n\nRun it before code.")
+  })
+  test("a document with no settings block is left alone", () => {
+    expect(playbookDocBody("# Title\n\n---\n\nA rule is not frontmatter.")).toBe(
+      "# Title\n\n---\n\nA rule is not frontmatter.",
+    )
+  })
+  test("CRLF files and a BOM are handled", () => {
+    expect(playbookDocBody("﻿---\r\nname: x\r\n---\r\n# T")).toBe("# T")
+  })
+  test("an unterminated block is not eaten", () => {
+    expect(playbookDocBody("---\nname: x\n# no closing fence")).toBe("---\nname: x\n# no closing fence")
   })
 })

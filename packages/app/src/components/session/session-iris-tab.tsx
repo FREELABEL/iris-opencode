@@ -9,13 +9,14 @@ import {
   onCleanup,
   Show,
   startTransition,
+  Suspense,
   Switch,
   untrack,
 } from "solid-js"
 import "./session-iris-tab.css"
 import { connectsBy, healthRead, metaLine, usageBars } from "./iris-catalog"
 import { IrisIntegrationDetail } from "./iris-integration-detail"
-import { matchesHands, playbookSources, playbookTitle, type HandsFilter } from "./playbook-flow"
+import { matchesHands, playbookDocBody, playbookSources, playbookTitle, type HandsFilter } from "./playbook-flow"
 import { Ic, PlaybookFilters, PlaybookFlowInfo, PlaybookFlowList } from "./iris-playbook-flow"
 import { pageSummary, type PageEnvelope } from "./use-paged-surface"
 import { Dialog } from "@opencode-ai/ui/dialog"
@@ -1166,6 +1167,25 @@ export function SessionIrisTab() {
   )
 
   const activeBloq = createMemo(() => selected() ?? (bloqs.latest ?? bloqs())?.bloqs?.[0]?.id)
+
+  /**
+   * WARM THE PLAYBOOK LIST before anyone asks for it. Its first load waits on fl-api's board call,
+   * measured at 8–14 s on 2026-10-09 — the panel showed a bare "Loading…" for all of it. The
+   * sidecar keeps one list per board and serves it instantly after that (stale while it
+   * refreshes), so asking once in the background, as soon as the board is known, means the
+   * Playbooks tab is usually ready by the time it is clicked. Fire-and-forget; errors are the
+   * real request's to report. Reads `bloqs` only once it is ready: reading a resource before its
+   * first value suspends the whole panel — the very freeze this exists to avoid.
+   */
+  const warmedBoards = new Set<string>()
+  createEffect(() => {
+    const b = selected() ?? (bloqs.state === "ready" ? bloqs()?.bloqs?.[0]?.id : undefined)
+    if (b == null) return
+    const key = `${base()}|${b}`
+    if (warmedBoards.has(key)) return
+    warmedBoards.add(key)
+    void doFetch(`/iris/playbooks/${b}?view=all`).catch(() => {})
+  })
 
   // A surface asked for from outside (the chat bar's Integrations entry). Consumed once.
   createEffect(() => {
@@ -2318,6 +2338,12 @@ export function SessionIrisTab() {
           </Show>
 
           <div class="flex-1 min-h-0 overflow-auto px-2 pb-4">
+            {/* ITS OWN LOADING BOUNDARY. A tab body that reads a resource on first load (the
+                Document, an agent's tasks) used to suspend the nearest <Suspense> — the one round
+                the WHOLE side panel — so clicking "Document" blanked everything to "Loading…" for
+                as long as the fetch took (`.latest` still suspends before the first value). Here
+                only the body waits; the title, tabs and back link stay put. */}
+            <Suspense fallback={<p class="text-12-regular text-text-weak py-2">Reading…</p>}>
             <Switch>
               <Match when={detailTab() === "info"}>
                 {/* THE UPTIME STRIP — the provider's recent history, one bar per window.
@@ -2627,7 +2653,7 @@ export function SessionIrisTab() {
                     </p>
                     <div
                       class="iris-markdown text-12-regular"
-                      innerHTML={renderMarkdown(playbookDoc.latest!.content)}
+                      innerHTML={renderMarkdown(playbookDocBody(playbookDoc.latest!.content))}
                     />
                   </Match>
                 </Switch>
@@ -2834,6 +2860,7 @@ export function SessionIrisTab() {
                 </Switch>
               </Match>
             </Switch>
+            </Suspense>
           </div>
         </div>
       </Show>
@@ -3367,7 +3394,7 @@ export function SessionIrisTab() {
                   rows={playbookRows()}
                   total={rows().length}
                   filter={handsFilter()}
-                  onOpen={(pb) => setOpenRow(describeRow(pane(), pb))}
+                  onOpen={(pb) => void startTransition(() => setOpenRow(describeRow(pane(), pb)))}
                   onReset={() => setHandsFilter("any")}
                 />
               </Match>
