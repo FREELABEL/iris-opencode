@@ -47,10 +47,25 @@ function timeAgo(iso: string | null | undefined): string {
  * installed copy keeps one implementation instead of two that drift. A machine that is not a Hive
  * node has no copy, and is told how to become one rather than silently searching nothing.
  */
+const DISK_SEARCH = join(homedir(), ".iris", "bridge", "daemon", "disk-search.js")
+
+/** This machine's file-search engines, from the installed node's own module. */
+export async function localProviders(modulePath = DISK_SEARCH): Promise<{ json: any } | { error: string }> {
+  if (!existsSync(modulePath)) return { error: "this machine is not a Hive node — run `iris node install`" }
+  try {
+    const mod = createRequire(import.meta.url)(modulePath)
+    if (typeof mod.listProviders !== "function") return { error: "this node's daemon predates search engines — run `iris node install` to update it" }
+    return { json: mod.listProviders() }
+  } catch (e: any) {
+    return { error: `could not read this machine's engines: ${String(e?.message ?? e).slice(0, 120)}` }
+  }
+}
+
 export async function searchLocalFiles(
   query: string,
   limit: number,
-  modulePath = join(homedir(), ".iris", "bridge", "daemon", "disk-search.js"),
+  modulePath = DISK_SEARCH,
+  provider: string | null = null,
 ): Promise<{ rows: SearchResult[]; note?: string }> {
   if (!existsSync(modulePath)) {
     return { rows: [], note: "this machine is not a Hive node, so its disk was not searched — run `iris node install`" }
@@ -58,7 +73,7 @@ export async function searchLocalFiles(
   try {
     // createRequire, not require: the CLI runs as an ES module, where a bare require is undefined.
     const mod = createRequire(import.meta.url)(modulePath)
-    const r = await mod.searchDisk(query, { limit })
+    const r = await mod.searchDisk(query, { limit, provider })
     const rows: SearchResult[] = (r.rows ?? []).map((x: any) => ({ ...x, node_name: "local", node_id: "local" }))
     return { rows, note: r.note }
   } catch (e: any) {
