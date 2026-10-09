@@ -14,7 +14,10 @@ import {
 import { spawnSync } from "child_process"
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs"
 import { transcribeLocal, resolveFfmpeg, resolveWhisper, localWhisperInstallHint, installLocalWhisper, noAudioVerdict } from "../lib/transcription"
-import { resolveSttPolicy } from "../lib/stt-policy"
+import { resolveSttPolicy, auditTranscription, sha256File } from "../lib/stt-policy"
+import { transcribeOnNode } from "../lib/transcribe-on-node"
+import { resolveNode } from "./platform-hive-nodes"
+import { resolveSshTarget, ensureSshUser, sshRun, pushFile } from "./hive-tailscale"
 import { treatTranscript, listTreatments, structureWalkthrough } from "../lib/walkthrough"
 import {
   serverTranscriptVerdict,
@@ -112,10 +115,16 @@ async function transcribeViaServer(
     // diagnosis is already on screen, and repeating the same paragraph reads as a second,
     // different problem.
     const missing = localAlreadyExplained ? null : localDepAdvice()
+    // Under --private the caller asked for exactly this refusal; offering the env var that
+    // undoes it would be advice to break their own promise.
     prompts.log.error(
-      "Transcription policy is 'sovereign' — audio was NOT uploaded.\n" +
+      (privateRun
+        ? "--private — on-device transcription did not succeed and the audio was NOT uploaded.\n"
+        : "Transcription policy is 'sovereign' — audio was NOT uploaded.\n") +
         (missing ? `  ${missing}\n` : "") +
-        "  Or allow the server for this run:  IRIS_TRANSCRIPTION_POLICY=standard",
+        (privateRun
+          ? `  Fix the on-device engine (iris transcribe --install-local), or send it to a Hive node you own.`
+          : "  Or allow the server for this run:  IRIS_TRANSCRIPTION_POLICY=standard"),
     )
     return null
   }
@@ -221,7 +230,9 @@ export async function runLocalWhisper(
 
   // Fetched BEFORE the spinner starts so a slow lookup does not look like slow transcription.
   // Undefined here just means unhinted — see fetchGlossary.
-  const glossary = await fetchGlossary(brandId)
+  // Under --private nothing goes over the network, not even this GET of vocabulary: the claim
+  // is provable as "zero connections" only if there are zero.
+  const glossary = privateRun ? undefined : await fetchGlossary(brandId)
 
   const sp = prompts.spinner()
   sp.start(glossary ? "Transcribing locally (whisper.cpp, brand vocabulary)…" : "Transcribing locally (whisper.cpp)…")
@@ -265,6 +276,42 @@ export async function runLocalWhisper(
  */
 /** Set from --for (#188392). Module-level because every route funnels through finishTranscript. */
 let fileFor: string | undefined
+
+/**
+ * --private (#188318, epic #188696): the caller's promise that this audio must never reach a
+ * cloud speech-to-text provider. `--local` was never that promise — it picks the on-device
+ * path, and when the engine fails the run FALLS BACK to an upload. Since the 2026-10-04
+ * default flip to cloud-first (#187808) that fallback is reachable on every machine.
+ *
+ * So --private does not add a new gate: it raises THIS run to the existing `sovereign`
+ * ceiling, which every upload path already consults (the static guard in stt-policy.test.ts
+ * keeps it that way). A second gate would be a second thing to forget.
+ *
+ * What it also closes, because each sends content off the machine to a model or store the
+ * caller did not name: a --treatment (the transcript text goes to a cloud LLM), --remote, and
+ * the best-effort knowledge-base sync. --for stays allowed — it is an explicit instruction
+ * to file the text in the caller's own project, and no audio goes with it.
+ */
+let privateRun = false
+
+export function privateRunRefusal(opts: { remote?: boolean; treatment?: string }): string | null {
+  if (opts.remote) {
+    return "--private and --remote contradict each other: --remote uploads the audio. Nothing was sent."
+  }
+  if (opts.treatment && opts.treatment !== "raw") {
+    return (
+      `--private refuses --treatment ${opts.treatment}: a treatment sends the transcript text to a cloud model.\n` +
+      "  Run without --treatment for a raw transcript that stays on this machine. Nothing was sent."
+    )
+  }
+  return null
+}
+
+/** Exported for the test that proves the ceiling holds with the engine broken. */
+export function enterPrivateRun(): void {
+  privateRun = true
+  process.env.IRIS_TRANSCRIPTION_POLICY = "sovereign"
+}
 
 async function finishTranscript(
   abs: string,
@@ -342,7 +389,7 @@ async function finishTranscript(
   const estimatedDuration = Math.round((text.split(/\s+/).length / 150) * 60)
   const syncUrl = sourceUrl ?? (/^https?:\/\//i.test(filePath) ? filePath : undefined)
   try {
-    if (syncUrl && text) {
+    if (syncUrl && text && !privateRun) {
       await irisFetch("/api/v1/transcripts", {
         method: "POST",
         body: JSON.stringify({
@@ -375,6 +422,7 @@ async function finishTranscript(
   if (asJson) {
     await writeJson({
       provider,
+      ...(privateRun ? { private: true } : {}),
       file: abs,
       transcript_path: txtPath,
       text,
@@ -601,6 +649,15 @@ export const PlatformTranscribeCommand = cmd({
         default: false,
         describe: "Transcribe the AUDIO on-device via whisper.cpp. Note this does not make the whole run offline — a --treatment still sends the resulting text to the server",
       })
+      .option("private", {
+        type: "boolean",
+        default: false,
+        describe: "This audio must never reach a cloud speech-to-text provider. On-device only, and if that fails the run fails — no upload fallback. Refuses --remote and --treatment; URLs are downloaded and transcribed here",
+      })
+      .option("on", {
+        type: "string",
+        describe: "Transcribe on one of YOUR Hive nodes (name or id) instead of this machine. The audio goes over your own Tailscale mesh, never through IRIS or a provider; implies --private",
+      })
       .option("remote", {
         type: "boolean",
         default: false,
@@ -687,9 +744,36 @@ export const PlatformTranscribeCommand = cmd({
       return
     }
 
+    if (args.on) args.private = true // --on is a private route by construction; its refusals apply
+
+    if (args.private) {
+      const refusal = privateRunRefusal({ remote: !!args.remote, treatment: args.treatment as string | undefined })
+      if (refusal) {
+        if (args.json) await writeJson({ success: false, error: "private_refused", message: refusal })
+        else prompts.log.error(refusal)
+        process.exitCode = 1
+        prompts.outro("Not transcribed")
+        return
+      }
+      enterPrivateRun()
+    }
+
     const url = String(args.url)
     const looksLikeFile =
       args.local || (!/^https?:\/\//i.test(url) && existsSync(resolve(url)))
+
+    // ── Your own Hive node (--on) ───────────────────────────────
+    if (args.on) {
+      if (!looksLikeFile || /^https?:\/\//i.test(url)) {
+        prompts.log.error("--on takes a local audio/video file. Download it first, then: iris transcribe <file> --on <node>")
+        process.exitCode = 1
+        prompts.outro("Not transcribed")
+        return
+      }
+      await runOnNode(String(args.on), url, args)
+      prompts.outro(process.exitCode ? "Not transcribed" : "Done")
+      return
+    }
 
     // ── Local file ──────────────────────────────────────────────
     if (looksLikeFile) {
@@ -715,7 +799,9 @@ export const PlatformTranscribeCommand = cmd({
     // ── Social media (Instagram, TikTok, X, Threads, Facebook) ─
     // Download locally with yt-dlp (uses browser cookies), then whisper locally.
     // No server auth needed. No round trips. Just works.
-    if (isSocialMediaUrl(url) || args.local) {
+    // --private sends a URL here too: the server-side URL route (Supadata / gpt-transcribe)
+    // transcribes in the cloud, which is exactly what the caller ruled out.
+    if (isSocialMediaUrl(url) || args.local || privateRun) {
       const dlSpinner = prompts.spinner()
       dlSpinner.start("Downloading video…")
 
@@ -866,3 +952,50 @@ export const PlatformTranscribeCommand = cmd({
     prompts.outro("Done")
   },
 })
+
+/** Test seam: the upload path, so a test can prove it is live (and so a refusal test is not vacuous). */
+export const transcribeViaServerForTest = (absPath: string) => transcribeViaServer(absPath)
+
+async function runOnNode(nodeArg: string, filePath: string, args: any): Promise<void> {
+  const abs = resolve(filePath)
+  const fail = async (msg: string) => {
+    if (args.json) await writeJson({ success: false, error: "on_node_failed", message: msg })
+    else prompts.log.error(msg)
+    process.exitCode = 1
+  }
+  const silent = noAudioVerdict(abs)
+  if (silent) return fail(silent)
+
+  // The node LIST comes from IRIS (metadata: names, tailnet addresses). The audio does not.
+  const userId = await requireUserId(undefined)
+  if (!userId) return fail("Sign in first (iris login) — the node list is how --on finds your machine.")
+  const node = await resolveNode(userId, nodeArg)
+  if (!node) return fail(`No node matching "${nodeArg}". Run: iris hive nodes list`)
+  const resolved = await resolveSshTarget(node.id, node.name, { advertised: (node as any).tailscale_ip ?? null })
+  if ("error" in resolved) return fail(resolved.error)
+  const t = await ensureSshUser(node.id, resolved)
+  if ("error" in t) return fail(t.error)
+
+  const sp = prompts.spinner()
+  sp.start(`Sending to ${node.name} over your mesh and transcribing there…`)
+  const started = Date.now()
+  const { bytes, sha256: digest } = await sha256File(abs)
+  const r = await transcribeOnNode(t, abs, { run: sshRun, push: pushFile }, { language: args.language as string | undefined })
+  // The record on THIS machine says where the audio went. Provider names the node, so an audit
+  // of the laptop shows "hive:<node>" — not a cloud name, and not a misleading "local".
+  auditTranscription({
+    provider: `hive:${node.name}`,
+    policy: "sovereign",
+    bytes,
+    sha256: digest,
+    ms: Date.now() - started,
+    ok: r.ok,
+    ...(r.ok ? {} : { error: `${r.stage}: ${r.error}`.slice(0, 200) }),
+  })
+  if (!r.ok) {
+    sp.stop("Failed", 1)
+    return fail(`${node.name}: ${r.error}. The audio was not sent anywhere else.`)
+  }
+  sp.stop(`${success("✓")} Transcribed on ${node.name} ${dim(`(${r.provider}, removed from the node)`)}`)
+  await finishTranscript(abs, r.text, `${r.provider} on hive:${node.name}`, !!args.json, undefined, args.output as string | undefined, filePath, undefined)
+}
