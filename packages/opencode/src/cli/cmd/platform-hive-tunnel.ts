@@ -291,7 +291,15 @@ async function runHive(argv: any) {
     if (ok !== true) return fail("Not opened.")
   }
 
-  const env = { ...process.env, IRIS_API_BASE: process.env.IRIS_API_URL ?? "https://freelabel.net", IRIS_API_KEY: await resolveToken() }
+  // The server says which domains the relay serves (first = shown); the runner's one certificate
+  // covers them all, so moving tunnels to a new domain needs no CLI release (#188651).
+  const zones: string[] = Array.isArray(claim.json?.data?.zones) ? claim.json.data.zones.filter((z: unknown) => typeof z === "string") : []
+  const env = {
+    ...process.env,
+    IRIS_API_BASE: process.env.IRIS_API_URL ?? "https://freelabel.net",
+    IRIS_API_KEY: await resolveToken(),
+    ...(zones.length && !process.env.HIVE_RELAY_ZONES ? { HIVE_RELAY_ZONES: zones.join(",") } : {}),
+  }
   const args = [runner, "--name", name, "--port", String(port), ...(argv.staging ? ["--staging"] : [])]
   const dir = join(home, ".iris", "tunnels", name + (argv.staging ? ".staging" : ""))
 
