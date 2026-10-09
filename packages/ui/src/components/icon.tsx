@@ -111,6 +111,17 @@ const icons = {
   globe: `<circle cx="10" cy="10" r="7.1" stroke="currentColor" stroke-linecap="square" fill="none"/><path d="M2.9 10h14.2M10 2.9c2 1.9 3 4.3 3 7.1s-1 5.2-3 7.1c-2-1.9-3-4.3-3-7.1s1-5.2 3-7.1Z" stroke="currentColor" stroke-linecap="square" fill="none"/>`,
   lock: `<path d="M4.6 8.8h10.8v8.3H4.6zM6.9 8.8V6.4a3.1 3.1 0 0 1 6.2 0v2.4M10 12.1v1.9" stroke="currentColor" stroke-linecap="square" fill="none"/>`,
   play: `<path d="M6.3 4.3 15.4 10l-9.1 5.7z" fill="currentColor" stroke="currentColor" stroke-linejoin="round"/>`,
+  // Hive › Scripts (#188817): run stages, the save button and computer skills.
+  save: `<path d="M3.3 3.3h10.2l3.2 3.2v10.2H3.3zM6.4 3.3v4h6.4v-4M6.4 16.7v-5.3h7.2v5.3" stroke="currentColor" stroke-linecap="square" fill="none"/>`,
+  send: `<path d="M2.9 9.6 17.1 3.3l-4.6 13.4-3.3-5.4zM9.2 11.3l7.9-8" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round" fill="none"/>`,
+  pin: `<path d="M10 17.4s5.4-4.9 5.4-9.1a5.4 5.4 0 0 0-10.8 0c0 4.2 5.4 9.1 5.4 9.1z" stroke="currentColor" stroke-linecap="square" fill="none"/><circle cx="10" cy="8.3" r="1.9" stroke="currentColor" fill="none"/>`,
+  speaker: `<path d="M3.3 7.7h3l4.2-3.6v11.8l-4.2-3.6h-3zM13.6 7.3a3.7 3.7 0 0 1 0 5.4M15.7 5.2a6.7 6.7 0 0 1 0 9.6" stroke="currentColor" stroke-linecap="square" fill="none"/>`,
+  chip: `<path d="M5.8 5.8h8.4v8.4H5.8zM8 2.9v2.9M12 2.9v2.9M8 14.2v2.9M12 14.2v2.9M2.9 8h2.9M2.9 12h2.9M14.2 8h2.9M14.2 12h2.9" stroke="currentColor" stroke-linecap="square" fill="none"/>`,
+  box: `<path d="M10 2.7 16.7 6.4v7.2L10 17.3 3.3 13.6V6.4zM3.3 6.4 10 10l6.7-3.6M10 10v7.3" stroke="currentColor" stroke-linejoin="round" fill="none"/>`,
+  camera: `<path d="M2.9 6.3h3.2l1.3-2.1h5.2l1.3 2.1h3.2v10H2.9z" stroke="currentColor" stroke-linecap="square" fill="none"/><circle cx="10" cy="11" r="2.8" stroke="currentColor" fill="none"/>`,
+  bluetooth: `<path d="m5.8 6.3 8.4 7.3-4.2 3.6V2.8l4.2 3.6-8.4 7.3" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round" fill="none"/>`,
+  at: `<circle cx="10" cy="10" r="2.9" stroke="currentColor" fill="none"/><path d="M12.9 7.1v4.1a1.9 1.9 0 0 0 3.8 0V10a6.7 6.7 0 1 0-2.6 5.3" stroke="currentColor" stroke-linecap="square" fill="none"/>`,
+  disk: `<path d="M2.9 11.7 5 4.2h10l2.1 7.5v4.1H2.9zM2.9 11.7h14.2M13.8 13.8h.1" stroke="currentColor" stroke-linecap="square" fill="none"/>`,
 }
 
 const spriteID = "opencode-icon-sprite"

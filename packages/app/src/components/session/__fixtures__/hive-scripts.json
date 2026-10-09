@@ -1,0 +1,1828 @@
+{
+ "capturedAt": "2026-10-09T21:20:00Z",
+ "scripts": [
+  {
+   "slug": "console-demo",
+   "name": "console-demo",
+   "description": "A harmless demo for the Hive console: prints, waits, prints again.",
+   "runtime": "bash",
+   "updatedAt": "2026-09-22T03:47:20.000000Z",
+   "lastExecutedAt": null,
+   "doctor": null
+  },
+  {
+   "slug": "daily-digest",
+   "name": "Daily Digest",
+   "description": "daily-digest \u2014 composes read-messages. Declares no requirements of its own, and must still be refused on a node without Full Disk Access.",
+   "runtime": "bash",
+   "updatedAt": "2026-09-06T00:01:09.000000Z",
+   "lastExecutedAt": null,
+   "doctor": {
+    "slug": "daily-digest",
+    "requires": [],
+    "manifest_errors": [],
+    "timeout": null,
+    "expect_exit": null,
+    "egress": null,
+    "eligible": [],
+    "eligible_online": 0,
+    "blocked": [
+     {
+      "node": "AlexMaysnow1063",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "full-disk-access",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        }
+       ],
+       "summary": "AlexMaysnow1063 cannot satisfy: full-disk-access (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+      }
+     },
+     {
+      "node": "MacBookPro",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "full-disk-access",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        }
+       ],
+       "summary": "MacBookPro cannot satisfy: full-disk-access (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+      }
+     },
+     {
+      "node": "qb-host-vanguard",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "full-disk-access",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        }
+       ],
+       "summary": "qb-host-vanguard cannot satisfy: full-disk-access (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+      }
+     },
+     {
+      "node": "Alexs-MacBook-Pro-11711",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "full-disk-access",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        }
+       ],
+       "summary": "Alexs-MacBook-Pro-11711 cannot satisfy: full-disk-access (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+      }
+     },
+     {
+      "node": "Alexs-MacBook-Pro-11711",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "full-disk-access",
+         "reason": "denied by macOS privacy \u2014 grant Full Disk Access to /Users/mayoalexander/.nvm/versions/node/v22.23.2/bin/node (not your terminal), then run: iris-daemon grant-access \u2014 it restarts the daemon for you"
+        }
+       ],
+       "summary": "Alexs-MacBook-Pro-11711 cannot satisfy: full-disk-access (denied by macOS privacy \u2014 grant Full Disk Access to /Users/mayoalexander/.nvm/versions/node/v22.23.2/bin/node (not your terminal), then run: iris-daemon grant-access \u2014 it restarts the daemon for you)"
+      }
+     },
+     {
+      "node": "iris-hive-001",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "full-disk-access",
+         "reason": "full-disk-access is a macOS concept; not applicable on linux"
+        }
+       ],
+       "summary": "iris-hive-001 cannot satisfy: full-disk-access (full-disk-access is a macOS concept; not applicable on linux)"
+      }
+     }
+    ],
+    "runnable_now": false
+   }
+  },
+  {
+   "slug": "deal-scenarios",
+   "name": "Deal Scenarios",
+   "description": "Deal Scenarios \u2014 Monte Carlo for \"license it, sell it, or walk away?\" Runs every deal structure you are weighing against every market condition you fear, thousands of randomised futures each, and reports what each deal is worth in cash, IP kept and equity \u2014 and how often it goes wrong.",
+   "runtime": "python",
+   "updatedAt": "2026-09-21T14:59:34.000000Z",
+   "lastExecutedAt": null,
+   "doctor": {
+    "slug": "deal-scenarios",
+    "requires": [],
+    "manifest_errors": [],
+    "timeout": 600,
+    "expect_exit": null,
+    "egress": "none",
+    "eligible": [
+     {
+      "node": "AlexMaysnow1063",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "MacBookPro",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "qb-host-vanguard",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "Alexs-MacBook-Pro-11711",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "Alexs-MacBook-Pro-11711",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "iris-hive-001",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     }
+    ],
+    "eligible_online": 1,
+    "blocked": [],
+    "runnable_now": true
+   }
+  },
+  {
+   "slug": "e2e-fda",
+   "name": "e2e-fda",
+   "description": null,
+   "runtime": "bash",
+   "updatedAt": "2026-08-30T00:17:39.000000Z",
+   "lastExecutedAt": null,
+   "doctor": null
+  },
+  {
+   "slug": "e2e-gpu",
+   "name": "e2e-gpu",
+   "description": null,
+   "runtime": "bash",
+   "updatedAt": "2026-08-30T00:17:40.000000Z",
+   "lastExecutedAt": null,
+   "doctor": null
+  },
+  {
+   "slug": "hello-fleet",
+   "name": "Hello Fleet",
+   "description": null,
+   "runtime": "bash",
+   "updatedAt": "2026-06-22T08:37:37.000000Z",
+   "lastExecutedAt": null,
+   "doctor": {
+    "slug": "hello-fleet",
+    "requires": [],
+    "manifest_errors": [],
+    "timeout": null,
+    "expect_exit": null,
+    "egress": null,
+    "eligible": [
+     {
+      "node": "AlexMaysnow1063",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "MacBookPro",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "qb-host-vanguard",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "Alexs-MacBook-Pro-11711",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "Alexs-MacBook-Pro-11711",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "iris-hive-001",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     }
+    ],
+    "eligible_online": 1,
+    "blocked": [],
+    "runnable_now": true
+   }
+  },
+  {
+   "slug": "m1-version-test",
+   "name": "m1-version-test",
+   "description": null,
+   "runtime": "bash",
+   "updatedAt": "2026-09-05T19:22:45.000000Z",
+   "lastExecutedAt": null,
+   "doctor": null
+  },
+  {
+   "slug": "mambo-hop",
+   "name": "mambo-hop",
+   "description": "Parrot Mambo: take off, hover 2s, land.",
+   "runtime": "python",
+   "updatedAt": "2026-10-07T22:41:18.000000Z",
+   "lastExecutedAt": null,
+   "doctor": {
+    "slug": "mambo-hop",
+    "requires": [
+     "bluetooth",
+     "python3"
+    ],
+    "manifest_errors": [],
+    "timeout": 180,
+    "expect_exit": null,
+    "egress": "any",
+    "eligible": [
+     {
+      "node": "Alexs-MacBook-Pro-11711",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "Alexs-MacBook-Pro-11711 satisfies all 2 requirement(s)"
+      }
+     }
+    ],
+    "eligible_online": 0,
+    "blocked": [
+     {
+      "node": "AlexMaysnow1063",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "bluetooth",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        },
+        {
+         "requirement": "python3",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        }
+       ],
+       "summary": "AlexMaysnow1063 cannot satisfy: bluetooth (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running); python3 (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+      }
+     },
+     {
+      "node": "MacBookPro",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "bluetooth",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        },
+        {
+         "requirement": "python3",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        }
+       ],
+       "summary": "MacBookPro cannot satisfy: bluetooth (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running); python3 (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+      }
+     },
+     {
+      "node": "qb-host-vanguard",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "bluetooth",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        },
+        {
+         "requirement": "python3",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        }
+       ],
+       "summary": "qb-host-vanguard cannot satisfy: bluetooth (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running); python3 (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+      }
+     },
+     {
+      "node": "Alexs-MacBook-Pro-11711",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "bluetooth",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        },
+        {
+         "requirement": "python3",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        }
+       ],
+       "summary": "Alexs-MacBook-Pro-11711 cannot satisfy: bluetooth (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running); python3 (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+      }
+     },
+     {
+      "node": "iris-hive-001",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "bluetooth",
+         "reason": "not advertised by this node"
+        }
+       ],
+       "summary": "iris-hive-001 cannot satisfy: bluetooth (not advertised by this node)"
+      }
+     }
+    ],
+    "runnable_now": false
+   }
+  },
+  {
+   "slug": "mambo-land",
+   "name": "mambo-land",
+   "description": "Parrot Mambo: send landing (the emergency stop).",
+   "runtime": "python",
+   "updatedAt": "2026-10-07T22:41:17.000000Z",
+   "lastExecutedAt": null,
+   "doctor": {
+    "slug": "mambo-land",
+    "requires": [
+     "bluetooth",
+     "python3"
+    ],
+    "manifest_errors": [],
+    "timeout": 180,
+    "expect_exit": null,
+    "egress": "any",
+    "eligible": [
+     {
+      "node": "Alexs-MacBook-Pro-11711",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "Alexs-MacBook-Pro-11711 satisfies all 2 requirement(s)"
+      }
+     }
+    ],
+    "eligible_online": 0,
+    "blocked": [
+     {
+      "node": "AlexMaysnow1063",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "bluetooth",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        },
+        {
+         "requirement": "python3",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        }
+       ],
+       "summary": "AlexMaysnow1063 cannot satisfy: bluetooth (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running); python3 (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+      }
+     },
+     {
+      "node": "MacBookPro",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "bluetooth",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        },
+        {
+         "requirement": "python3",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        }
+       ],
+       "summary": "MacBookPro cannot satisfy: bluetooth (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running); python3 (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+      }
+     },
+     {
+      "node": "qb-host-vanguard",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "bluetooth",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        },
+        {
+         "requirement": "python3",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        }
+       ],
+       "summary": "qb-host-vanguard cannot satisfy: bluetooth (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running); python3 (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+      }
+     },
+     {
+      "node": "Alexs-MacBook-Pro-11711",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "bluetooth",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        },
+        {
+         "requirement": "python3",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        }
+       ],
+       "summary": "Alexs-MacBook-Pro-11711 cannot satisfy: bluetooth (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running); python3 (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+      }
+     },
+     {
+      "node": "iris-hive-001",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "bluetooth",
+         "reason": "not advertised by this node"
+        }
+       ],
+       "summary": "iris-hive-001 cannot satisfy: bluetooth (not advertised by this node)"
+      }
+     }
+    ],
+    "runnable_now": false
+   }
+  },
+  {
+   "slug": "mambo-look-around",
+   "name": "mambo-look-around",
+   "description": "Parrot Mambo: take off, turn a full circle in 90 degree steps, land.",
+   "runtime": "python",
+   "updatedAt": "2026-10-07T22:41:20.000000Z",
+   "lastExecutedAt": null,
+   "doctor": {
+    "slug": "mambo-look-around",
+    "requires": [
+     "bluetooth",
+     "python3"
+    ],
+    "manifest_errors": [],
+    "timeout": 180,
+    "expect_exit": null,
+    "egress": "any",
+    "eligible": [
+     {
+      "node": "Alexs-MacBook-Pro-11711",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "Alexs-MacBook-Pro-11711 satisfies all 2 requirement(s)"
+      }
+     }
+    ],
+    "eligible_online": 0,
+    "blocked": [
+     {
+      "node": "AlexMaysnow1063",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "bluetooth",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        },
+        {
+         "requirement": "python3",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        }
+       ],
+       "summary": "AlexMaysnow1063 cannot satisfy: bluetooth (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running); python3 (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+      }
+     },
+     {
+      "node": "MacBookPro",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "bluetooth",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        },
+        {
+         "requirement": "python3",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        }
+       ],
+       "summary": "MacBookPro cannot satisfy: bluetooth (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running); python3 (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+      }
+     },
+     {
+      "node": "qb-host-vanguard",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "bluetooth",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        },
+        {
+         "requirement": "python3",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        }
+       ],
+       "summary": "qb-host-vanguard cannot satisfy: bluetooth (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running); python3 (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+      }
+     },
+     {
+      "node": "Alexs-MacBook-Pro-11711",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "bluetooth",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        },
+        {
+         "requirement": "python3",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        }
+       ],
+       "summary": "Alexs-MacBook-Pro-11711 cannot satisfy: bluetooth (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running); python3 (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+      }
+     },
+     {
+      "node": "iris-hive-001",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "bluetooth",
+         "reason": "not advertised by this node"
+        }
+       ],
+       "summary": "iris-hive-001 cannot satisfy: bluetooth (not advertised by this node)"
+      }
+     }
+    ],
+    "runnable_now": false
+   }
+  },
+  {
+   "slug": "mambo-spin",
+   "name": "mambo-spin",
+   "description": "Parrot Mambo: take off, climb, turn 90 and back, descend, land. No sideways motion.",
+   "runtime": "python",
+   "updatedAt": "2026-10-07T22:41:19.000000Z",
+   "lastExecutedAt": null,
+   "doctor": {
+    "slug": "mambo-spin",
+    "requires": [
+     "bluetooth",
+     "python3"
+    ],
+    "manifest_errors": [],
+    "timeout": 180,
+    "expect_exit": null,
+    "egress": "any",
+    "eligible": [
+     {
+      "node": "Alexs-MacBook-Pro-11711",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "Alexs-MacBook-Pro-11711 satisfies all 2 requirement(s)"
+      }
+     }
+    ],
+    "eligible_online": 0,
+    "blocked": [
+     {
+      "node": "AlexMaysnow1063",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "bluetooth",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        },
+        {
+         "requirement": "python3",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        }
+       ],
+       "summary": "AlexMaysnow1063 cannot satisfy: bluetooth (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running); python3 (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+      }
+     },
+     {
+      "node": "MacBookPro",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "bluetooth",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        },
+        {
+         "requirement": "python3",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        }
+       ],
+       "summary": "MacBookPro cannot satisfy: bluetooth (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running); python3 (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+      }
+     },
+     {
+      "node": "qb-host-vanguard",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "bluetooth",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        },
+        {
+         "requirement": "python3",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        }
+       ],
+       "summary": "qb-host-vanguard cannot satisfy: bluetooth (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running); python3 (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+      }
+     },
+     {
+      "node": "Alexs-MacBook-Pro-11711",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "bluetooth",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        },
+        {
+         "requirement": "python3",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        }
+       ],
+       "summary": "Alexs-MacBook-Pro-11711 cannot satisfy: bluetooth (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running); python3 (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+      }
+     },
+     {
+      "node": "iris-hive-001",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "bluetooth",
+         "reason": "not advertised by this node"
+        }
+       ],
+       "summary": "iris-hive-001 cannot satisfy: bluetooth (not advertised by this node)"
+      }
+     }
+    ],
+    "runnable_now": false
+   }
+  },
+  {
+   "slug": "mambo-status",
+   "name": "mambo-status",
+   "description": "Parrot Mambo: connect over Bluetooth, report battery and flying state. Never flies.",
+   "runtime": "python",
+   "updatedAt": "2026-10-07T22:41:15.000000Z",
+   "lastExecutedAt": null,
+   "doctor": {
+    "slug": "mambo-status",
+    "requires": [
+     "bluetooth",
+     "python3"
+    ],
+    "manifest_errors": [],
+    "timeout": 180,
+    "expect_exit": null,
+    "egress": "any",
+    "eligible": [
+     {
+      "node": "Alexs-MacBook-Pro-11711",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "Alexs-MacBook-Pro-11711 satisfies all 2 requirement(s)"
+      }
+     }
+    ],
+    "eligible_online": 0,
+    "blocked": [
+     {
+      "node": "AlexMaysnow1063",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "bluetooth",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        },
+        {
+         "requirement": "python3",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        }
+       ],
+       "summary": "AlexMaysnow1063 cannot satisfy: bluetooth (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running); python3 (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+      }
+     },
+     {
+      "node": "MacBookPro",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "bluetooth",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        },
+        {
+         "requirement": "python3",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        }
+       ],
+       "summary": "MacBookPro cannot satisfy: bluetooth (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running); python3 (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+      }
+     },
+     {
+      "node": "qb-host-vanguard",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "bluetooth",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        },
+        {
+         "requirement": "python3",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        }
+       ],
+       "summary": "qb-host-vanguard cannot satisfy: bluetooth (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running); python3 (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+      }
+     },
+     {
+      "node": "Alexs-MacBook-Pro-11711",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "bluetooth",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        },
+        {
+         "requirement": "python3",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        }
+       ],
+       "summary": "Alexs-MacBook-Pro-11711 cannot satisfy: bluetooth (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running); python3 (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+      }
+     },
+     {
+      "node": "iris-hive-001",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "bluetooth",
+         "reason": "not advertised by this node"
+        }
+       ],
+       "summary": "iris-hive-001 cannot satisfy: bluetooth (not advertised by this node)"
+      }
+     }
+    ],
+    "runnable_now": false
+   }
+  },
+  {
+   "slug": "node-health",
+   "name": "Node Health",
+   "description": "node-health \u2014 is this machine actually fit to take work?\n\nAnswers the question a fleet operator asks before dispatching anything: disk, memory, load, and whether a container runtime is up. Runs anywhere, needs no permissions, and touches the network never \u2014 which is why it declares `egress=none` rather than leaving it unsaid.\n\nIt reports UNKNOWN rather than guessing. A health check that prints a confident number it could not measure is worse than one that says it could not measure it.",
+   "runtime": "bash",
+   "updatedAt": "2026-09-05T20:38:51.000000Z",
+   "lastExecutedAt": null,
+   "doctor": {
+    "slug": "node-health",
+    "requires": [],
+    "manifest_errors": [],
+    "timeout": 30,
+    "expect_exit": 0,
+    "egress": "none",
+    "eligible": [
+     {
+      "node": "AlexMaysnow1063",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "MacBookPro",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "qb-host-vanguard",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "Alexs-MacBook-Pro-11711",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "Alexs-MacBook-Pro-11711",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "iris-hive-001",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     }
+    ],
+    "eligible_online": 1,
+    "blocked": [],
+    "runnable_now": true
+   }
+  },
+  {
+   "slug": "nyc-budget",
+   "name": "nyc-budget",
+   "description": null,
+   "runtime": "python",
+   "updatedAt": "2026-09-16T03:04:10.000000Z",
+   "lastExecutedAt": null,
+   "doctor": {
+    "slug": "nyc-budget",
+    "requires": [],
+    "manifest_errors": [],
+    "timeout": null,
+    "expect_exit": null,
+    "egress": null,
+    "eligible": [
+     {
+      "node": "AlexMaysnow1063",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "MacBookPro",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "qb-host-vanguard",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "Alexs-MacBook-Pro-11711",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "Alexs-MacBook-Pro-11711",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "iris-hive-001",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     }
+    ],
+    "eligible_online": 1,
+    "blocked": [],
+    "runnable_now": true
+   }
+  },
+  {
+   "slug": "nyc-itinerary",
+   "name": "nyc-itinerary",
+   "description": null,
+   "runtime": "python",
+   "updatedAt": "2026-09-16T03:28:44.000000Z",
+   "lastExecutedAt": null,
+   "doctor": {
+    "slug": "nyc-itinerary",
+    "requires": [],
+    "manifest_errors": [],
+    "timeout": null,
+    "expect_exit": null,
+    "egress": null,
+    "eligible": [
+     {
+      "node": "AlexMaysnow1063",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "MacBookPro",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "qb-host-vanguard",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "Alexs-MacBook-Pro-11711",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "Alexs-MacBook-Pro-11711",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "iris-hive-001",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     }
+    ],
+    "eligible_online": 1,
+    "blocked": [],
+    "runnable_now": true
+   }
+  },
+  {
+   "slug": "payable-benchmark",
+   "name": "Provider payable benchmark \u2014 score the engine against Robyn's filed report",
+   "description": "payable-benchmark \u2014 score pathways:provider-payable against one of Robyn's filed Case Provider Reports and keep the score, so \"are we getting better\" is a number with a history.\n\nTwo metrics, scored apart because they fail for different reasons: COVERAGE (cases the engine computed / cases she resolved) moves when a data source lands; FIDELITY (rows matching to the cent / rows both computed) moves when the maths reads the right field. Fidelity is split again by whether FreeAgent held a real rate or 70% was assumed.\n\nRefuses to score nothing: if either input parses to zero rows it exits 2 and writes no record.\n\nNo network. The fixture is PHI (patient names, DOB) and must already be on the machine; this script never fetches it. Arguments arrive as env vars when run as a Hive script (FIXTURE, ENGINE, RECORD, LABEL, EXCLUDE) and as flags when run by hand.",
+   "runtime": "python",
+   "updatedAt": "2026-09-13T00:56:25.000000Z",
+   "lastExecutedAt": null,
+   "doctor": {
+    "slug": "payable-benchmark",
+    "requires": [],
+    "manifest_errors": [],
+    "timeout": 300,
+    "expect_exit": null,
+    "egress": "none",
+    "eligible": [
+     {
+      "node": "AlexMaysnow1063",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "MacBookPro",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "qb-host-vanguard",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "Alexs-MacBook-Pro-11711",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "Alexs-MacBook-Pro-11711",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "iris-hive-001",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     }
+    ],
+    "eligible_online": 1,
+    "blocked": [],
+    "runnable_now": true
+   }
+  },
+  {
+   "slug": "photo-resize",
+   "name": "Photo Resize",
+   "description": "photo-resize \u2014 batch-resize a folder of images, without uploading them anywhere.\n\nReads every JPEG and PNG in the source directory, writes a resized copy to the target, and never touches the network \u2014 which is the point. The photos stay on the machine that already has them, which is the whole reason to run this on your own node rather than pasting a folder into somebody's website.\n\nThe paths are ARGUMENTS, not baked in. A script that shipped its author's Desktop path would write to a stranger's Desktop.",
+   "runtime": "bash",
+   "updatedAt": "2026-09-05T21:11:04.000000Z",
+   "lastExecutedAt": null,
+   "doctor": {
+    "slug": "photo-resize",
+    "requires": [],
+    "manifest_errors": [],
+    "timeout": 600,
+    "expect_exit": null,
+    "egress": "none",
+    "eligible": [
+     {
+      "node": "AlexMaysnow1063",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "MacBookPro",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "qb-host-vanguard",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "Alexs-MacBook-Pro-11711",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "Alexs-MacBook-Pro-11711",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "iris-hive-001",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     }
+    ],
+    "eligible_online": 1,
+    "blocked": [],
+    "runnable_now": true
+   }
+  },
+  {
+   "slug": "probe-gate-test",
+   "name": "Probe gate test (#184757)",
+   "description": "Regression fixture for #184757: declares the interpreter it needs, so the routing gate must refuse any node that does not advertise python3.",
+   "runtime": "python",
+   "updatedAt": "2026-09-13T01:23:40.000000Z",
+   "lastExecutedAt": null,
+   "doctor": null
+  },
+  {
+   "slug": "provider-capacity",
+   "name": "Provider Capacity",
+   "description": "provider-capacity \u2014 decide whether to BUY another metered AI licence or to spend the one you already hold, from two meters you already have: `iris usage --json` (what was consumed, priced at list) and `models:go-usage --json` (how full each licence's windows are).\n\nIt answers three questions that are usually collapsed into one and then answered wrongly: 1. LEVERAGE \u2014 what would this month's traffic cost at list rates vs what the subscriptions cost? 2. CAPACITY \u2014 is the constraint real capacity, or serial routing leaving a spare licence idle? 3. DEMAND \u2014 how much of the bill is context re-sent on every turn rather than work done?\n\nRefuses to score nothing: zero calls, or zero readable licences, exits 2 and writes no record. No network. Both inputs are produced by other commands and passed in as files or stdin.",
+   "runtime": "python",
+   "updatedAt": "2026-09-22T03:53:11.000000Z",
+   "lastExecutedAt": null,
+   "doctor": {
+    "slug": "provider-capacity",
+    "requires": [],
+    "manifest_errors": [],
+    "timeout": 120,
+    "expect_exit": null,
+    "egress": "none",
+    "eligible": [
+     {
+      "node": "AlexMaysnow1063",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "MacBookPro",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "qb-host-vanguard",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "Alexs-MacBook-Pro-11711",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "Alexs-MacBook-Pro-11711",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "iris-hive-001",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     }
+    ],
+    "eligible_online": 1,
+    "blocked": [],
+    "runnable_now": true
+   }
+  },
+  {
+   "slug": "reach-probe",
+   "name": "reach-probe",
+   "description": null,
+   "runtime": "bash",
+   "updatedAt": "2026-08-30T03:46:19.000000Z",
+   "lastExecutedAt": null,
+   "doctor": null
+  },
+  {
+   "slug": "read-messages",
+   "name": "Read Messages",
+   "description": "read-messages \u2014 reads the local Messages database. Needs Full Disk Access, which is exactly the kind of requirement a caller should inherit rather than discover.",
+   "runtime": "bash",
+   "updatedAt": "2026-09-06T00:01:08.000000Z",
+   "lastExecutedAt": null,
+   "doctor": {
+    "slug": "read-messages",
+    "requires": [
+     "full-disk-access"
+    ],
+    "manifest_errors": [],
+    "timeout": null,
+    "expect_exit": null,
+    "egress": null,
+    "eligible": [],
+    "eligible_online": 0,
+    "blocked": [
+     {
+      "node": "AlexMaysnow1063",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "full-disk-access",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        }
+       ],
+       "summary": "AlexMaysnow1063 cannot satisfy: full-disk-access (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+      }
+     },
+     {
+      "node": "MacBookPro",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "full-disk-access",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        }
+       ],
+       "summary": "MacBookPro cannot satisfy: full-disk-access (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+      }
+     },
+     {
+      "node": "qb-host-vanguard",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "full-disk-access",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        }
+       ],
+       "summary": "qb-host-vanguard cannot satisfy: full-disk-access (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+      }
+     },
+     {
+      "node": "Alexs-MacBook-Pro-11711",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "full-disk-access",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        }
+       ],
+       "summary": "Alexs-MacBook-Pro-11711 cannot satisfy: full-disk-access (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+      }
+     },
+     {
+      "node": "Alexs-MacBook-Pro-11711",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "full-disk-access",
+         "reason": "denied by macOS privacy \u2014 grant Full Disk Access to /Users/mayoalexander/.nvm/versions/node/v22.23.2/bin/node (not your terminal), then run: iris-daemon grant-access \u2014 it restarts the daemon for you"
+        }
+       ],
+       "summary": "Alexs-MacBook-Pro-11711 cannot satisfy: full-disk-access (denied by macOS privacy \u2014 grant Full Disk Access to /Users/mayoalexander/.nvm/versions/node/v22.23.2/bin/node (not your terminal), then run: iris-daemon grant-access \u2014 it restarts the daemon for you)"
+      }
+     },
+     {
+      "node": "iris-hive-001",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "full-disk-access",
+         "reason": "full-disk-access is a macOS concept; not applicable on linux"
+        }
+       ],
+       "summary": "iris-hive-001 cannot satisfy: full-disk-access (full-disk-access is a macOS concept; not applicable on linux)"
+      }
+     }
+    ],
+    "runnable_now": false
+   }
+  },
+  {
+   "slug": "s1-gpu-refusal",
+   "name": "s1-gpu-refusal",
+   "description": null,
+   "runtime": "bash",
+   "updatedAt": "2026-08-27T17:34:40.000000Z",
+   "lastExecutedAt": null,
+   "doctor": null
+  },
+  {
+   "slug": "s1-manifest-smoke",
+   "name": "s1-manifest-smoke",
+   "description": null,
+   "runtime": "bash",
+   "updatedAt": "2026-08-27T17:18:00.000000Z",
+   "lastExecutedAt": null,
+   "doctor": null
+  },
+  {
+   "slug": "s23-egress-demo",
+   "name": "s23-egress-demo",
+   "description": null,
+   "runtime": "bash",
+   "updatedAt": "2026-08-28T15:19:40.000000Z",
+   "lastExecutedAt": null,
+   "doctor": null
+  },
+  {
+   "slug": "s23-egress-typo",
+   "name": "s23-egress-typo",
+   "description": null,
+   "runtime": "bash",
+   "updatedAt": "2026-08-28T15:19:41.000000Z",
+   "lastExecutedAt": null,
+   "doctor": null
+  },
+  {
+   "slug": "servis-notes-tdd",
+   "name": "Servis notes write-back TDD (#185742, CAS102812)",
+   "description": "Servis AI notes write-back conformance suite (#185742) \u2014 CAS102812, bloq #685. mode=read (default) proves get_notes, the dry-run write path, the tag and batch refusals, and that no case field changed, while WRITING NOTHING. mode=write (local --write only) adds the one note: tagged [IRIS-AI DRAFT], idempotent (re-runs deduplicate), read back from the case. Needs python3 and the iris CLI signed in on the node. Exit 0 = all green, 2 = a red, 3 = cannot run.",
+   "runtime": "python",
+   "updatedAt": "2026-09-17T04:41:21.000000Z",
+   "lastExecutedAt": null,
+   "doctor": {
+    "slug": "servis-notes-tdd",
+    "requires": [],
+    "manifest_errors": [],
+    "timeout": 900,
+    "expect_exit": null,
+    "egress": "any",
+    "eligible": [
+     {
+      "node": "AlexMaysnow1063",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "MacBookPro",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "qb-host-vanguard",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "Alexs-MacBook-Pro-11711",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "Alexs-MacBook-Pro-11711",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     },
+     {
+      "node": "iris-hive-001",
+      "verdict": {
+       "ok": true,
+       "unmet": [],
+       "summary": "no declared requirements"
+      }
+     }
+    ],
+    "eligible_online": 1,
+    "blocked": [],
+    "runnable_now": true
+   }
+  },
+  {
+   "slug": "turo-fleet-scraper",
+   "name": "turo-fleet-scraper",
+   "description": "Collect a Turo host's own fleet \u2014 listings, per-vehicle photographs, and the aggregate performance record \u2014 and print it as JSON on stdout.\n\nBuilt for CatoDrive, who asked us to use their own Turo images and vehicle information rather than stock photography. Runs against a profile the account owner controls.\n\nmode=stats (~25s) the aggregate: trips, rating, years hosting, review count mode=fleet (~20m) every listing, its trim, and its full photo set\n\nWHY A REAL BROWSER, not fetch(): Turo removed external API access in 2023 and the profile sits behind Cloudflare. A plain request gets HTTP 403 and zero data; headless Chromium gets the interstitial. A headed browser clears the check on its own in about five seconds. This declares requires=browser for that reason \u2014 there is no API to call instead.\n\nTHREE THINGS THAT LOOK FINE AND ARE NOT, each learned by shipping the wrong version: 1. Photos on a listing page include a \"similar cars\" rail belonging to OTHER hosts. Scoping to document.images gave 12 photos per car of which 9 were strangers' vehicles \u2014 it read as a clean run (1,080 photos) until the tally showed only 569 unique. 2. Turo's CDN serves ONLY the exact size variant the page requested. The bare photo id 404s and so does any size you invent, so the full URL has to be kept verbatim. 3. The gallery shows 3 photos inline; the rest are behind \"View N photos\".\n\nReviews are deliberately NOT collected. They are written by named renters for a different platform, and the same feed carries automated \"the host canceled this trip\" notices \u2014 so an import either republishes other people's words without consent or hand-picks the flattering ones. The aggregate below is the host's own record and is verifiable from the profile link.",
+   "runtime": "node",
+   "updatedAt": "2026-09-14T04:59:37.000000Z",
+   "lastExecutedAt": null,
+   "doctor": {
+    "slug": "turo-fleet-scraper",
+    "requires": [
+     "browser",
+     "node"
+    ],
+    "manifest_errors": [],
+    "timeout": 3500,
+    "expect_exit": null,
+    "egress": "any",
+    "eligible": [],
+    "eligible_online": 0,
+    "blocked": [
+     {
+      "node": "AlexMaysnow1063",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "browser",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        },
+        {
+         "requirement": "node",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        }
+       ],
+       "summary": "AlexMaysnow1063 cannot satisfy: browser (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running); node (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+      }
+     },
+     {
+      "node": "MacBookPro",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "browser",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        },
+        {
+         "requirement": "node",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        }
+       ],
+       "summary": "MacBookPro cannot satisfy: browser (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running); node (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+      }
+     },
+     {
+      "node": "qb-host-vanguard",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "browser",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        },
+        {
+         "requirement": "node",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        }
+       ],
+       "summary": "qb-host-vanguard cannot satisfy: browser (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running); node (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+      }
+     },
+     {
+      "node": "Alexs-MacBook-Pro-11711",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "browser",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        },
+        {
+         "requirement": "node",
+         "reason": "node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running"
+        }
+       ],
+       "summary": "Alexs-MacBook-Pro-11711 cannot satisfy: browser (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running); node (node STOPPED reporting permissions \u2014 the last measurement is too old to route on; check the daemon is current and running)"
+      }
+     },
+     {
+      "node": "Alexs-MacBook-Pro-11711",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "browser",
+         "reason": "Google Chrome: did not answer --version within 2500ms"
+        }
+       ],
+       "summary": "Alexs-MacBook-Pro-11711 cannot satisfy: browser (Google Chrome: did not answer --version within 2500ms)"
+      }
+     },
+     {
+      "node": "iris-hive-001",
+      "verdict": {
+       "ok": false,
+       "unmet": [
+        {
+         "requirement": "browser",
+         "reason": "no browser executable responded to --version"
+        }
+       ],
+       "summary": "iris-hive-001 cannot satisfy: browser (no browser executable responded to --version)"
+      }
+     }
+    ],
+    "runnable_now": false
+   }
+  }
+ ],
+ "nodes": [
+  {
+   "id": "01a09d2c-2076-72e5-9292-7f69c00e8407",
+   "name": "Alexs-MacBook-Pro-11711",
+   "status": "online",
+   "online": true,
+   "lastHeartbeat": "2026-10-09T21:04:43+00:00",
+   "activeTasks": 0,
+   "maxConcurrent": 3,
+   "os": "darwin-arm64",
+   "cpu": "Apple M1 Pro",
+   "cores": 10,
+   "memoryGb": 16,
+   "diskTotalGb": 460.4,
+   "diskFreeGb": 2.1,
+   "daemonVersion": "2.0.0",
+   "uptimeSeconds": 573,
+   "tasksCompleted": 734,
+   "capabilities": [
+    "bash",
+    "node",
+    "wifi",
+    "camera",
+    "docker",
+    "browser",
+    "network",
+    "python3",
+    "audio_in",
+    "audio_out",
+    "bluetooth",
+    "bridge_call",
+    "browser_use",
+    "disk_encrypted"
+   ],
+   "recentRestarts": 20,
+   "transport": "native",
+   "hardwareDetectedAt": "2026-10-09T15:21:44.316Z"
+  },
+  {
+   "id": "01a10379-0c9f-73c5-bf83-157496a21589",
+   "name": "iris-hive-001",
+   "status": "online",
+   "online": true,
+   "lastHeartbeat": "2026-10-09T21:04:36+00:00",
+   "activeTasks": 0,
+   "maxConcurrent": 3,
+   "os": "linux-x64",
+   "cpu": "Intel(R) Core(TM) i5-6500 CPU @ 3.20GHz",
+   "cores": 4,
+   "memoryGb": 31.2,
+   "diskTotalGb": 1873.7,
+   "diskFreeGb": 1521.3,
+   "daemonVersion": "2.0.0",
+   "uptimeSeconds": 9140,
+   "tasksCompleted": 362,
+   "capabilities": [
+    "os",
+    "arch",
+    "bash",
+    "cpus",
+    "node",
+    "network",
+    "python3",
+    "audio_in",
+    "audio_out",
+    "instagram",
+    "isolation",
+    "bridge_call"
+   ],
+   "recentRestarts": 20,
+   "transport": "native",
+   "hardwareDetectedAt": "2026-10-09T18:32:12.755Z"
+  },
+  {
+   "id": "019e1d80-a446-71fa-84a3-6269bf19fab0",
+   "name": "AlexMaysnow1063",
+   "status": "offline",
+   "online": false,
+   "lastHeartbeat": "2026-10-07T23:43:26+00:00",
+   "activeTasks": 0,
+   "maxConcurrent": 3,
+   "os": "darwin-arm64",
+   "cpu": "Apple M2 Pro",
+   "cores": 12,
+   "memoryGb": 16,
+   "diskTotalGb": 460.4,
+   "diskFreeGb": 0.1,
+   "daemonVersion": "2.0.0",
+   "uptimeSeconds": 35400,
+   "tasksCompleted": 4266,
+   "capabilities": [
+    "gpu",
+    "bash",
+    "node",
+    "docker",
+    "browser",
+    "network",
+    "python3",
+    "bridge_call",
+    "full-disk-access"
+   ],
+   "recentRestarts": 20,
+   "transport": "native",
+   "hardwareDetectedAt": "2026-10-07T03:15:00.800Z"
+  },
+  {
+   "id": "01a097a9-3cab-73ef-92ee-e639c92e34b4",
+   "name": "qb-host-vanguard",
+   "status": "offline",
+   "online": false,
+   "lastHeartbeat": "2026-10-06T18:46:32+00:00",
+   "activeTasks": 0,
+   "maxConcurrent": 3,
+   "os": "win32-x64",
+   "cpu": "AMD EPYC 9V45 96-Core Processor",
+   "cores": 2,
+   "memoryGb": 8,
+   "diskTotalGb": null,
+   "diskFreeGb": null,
+   "daemonVersion": "2.0.0",
+   "uptimeSeconds": 259186,
+   "tasksCompleted": 106,
+   "capabilities": [
+    "os",
+    "arch",
+    "cpus",
+    "node",
+    "agents",
+    "network",
+    "instagram",
+    "memory_gb",
+    "bridge_call"
+   ],
+   "recentRestarts": 3,
+   "transport": "native",
+   "hardwareDetectedAt": "2026-10-02T22:14:56.089Z"
+  },
+  {
+   "id": "01a098bd-fcfe-70ad-a518-9329e933860b",
+   "name": "Alexs-MacBook-Pro-11711",
+   "status": "offline",
+   "online": false,
+   "lastHeartbeat": "2026-09-13T23:48:37+00:00",
+   "activeTasks": 0,
+   "maxConcurrent": 3,
+   "os": "darwin-arm64",
+   "cpu": "Apple M1 Pro",
+   "cores": 10,
+   "memoryGb": 16,
+   "diskTotalGb": 460.4,
+   "diskFreeGb": 0.1,
+   "daemonVersion": "2.0.0",
+   "uptimeSeconds": 642,
+   "tasksCompleted": 37,
+   "capabilities": [
+    "bash",
+    "node",
+    "browser",
+    "network",
+    "python3",
+    "bridge_call"
+   ],
+   "recentRestarts": 20,
+   "transport": "native",
+   "hardwareDetectedAt": "2026-09-13T00:45:23.690Z"
+  },
+  {
+   "id": "019ff510-f4c6-7281-ac9a-63b9c0835124",
+   "name": "MacBookPro",
+   "status": "offline",
+   "online": false,
+   "lastHeartbeat": "2026-09-13T03:10:08+00:00",
+   "activeTasks": 0,
+   "maxConcurrent": 3,
+   "os": "darwin-arm64",
+   "cpu": "Apple M1 Pro",
+   "cores": 10,
+   "memoryGb": 16,
+   "diskTotalGb": 460.4,
+   "diskFreeGb": 0.1,
+   "daemonVersion": "2.0.0",
+   "uptimeSeconds": 264,
+   "tasksCompleted": 455,
+   "capabilities": [
+    "os",
+    "arch",
+    "bash",
+    "cpus",
+    "node",
+    "agents",
+    "docker",
+    "network",
+    "python3",
+    "memory_gb",
+    "bridge_call"
+   ],
+   "recentRestarts": 20,
+   "transport": "native",
+   "hardwareDetectedAt": "2026-09-13T00:45:23.690Z"
+  }
+ ],
+ "task": {
+  "id": "01a12289-17b3-7398-b6d1-28e89f50ba6d",
+  "status": "completed",
+  "terminal": true,
+  "createdAt": "2026-10-09T21:19:32+00:00",
+  "dispatchedAt": "2026-10-09T21:19:32+00:00",
+  "arrivedAt": "2026-10-09T21:19:32.722Z",
+  "startedAt": "2026-10-09T21:19:32+00:00",
+  "completedAt": "2026-10-09T21:19:55+00:00",
+  "stdout": "console demo starting on ca93b63ecc77\nconsole demo done",
+  "stderr": "",
+  "exitCode": 0,
+  "exitCodeSource": "metadata",
+  "error": null,
+  "nodeName": "iris-hive-001",
+  "durationMs": 23000
+ },
+ "source": {
+  "slug": "console-demo",
+  "runtime": "bash",
+  "content": "#!/bin/bash\n# iris: arg=seconds default=20\n# iris: timeout=120\n# A harmless demo for the Hive console: prints, waits, prints again.\necho \"console demo starting on $(hostname)\"\nsleep \"${SECONDS_ARG:-${SECONDS:-20}}\"\necho \"console demo done\"\n",
+  "updatedAt": "2026-09-22T03:47:20.000000Z"
+ }
+}
