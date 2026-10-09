@@ -6,6 +6,7 @@ import { homedir, hostname } from "os"
 import { join } from "path"
 import { mkdirSync, openSync, writeFileSync, rmSync } from "fs"
 import { hiveFetch } from "./platform-hive-nodes"
+import { probeLocal, runThirdPartyTunnel } from "./tunnel"
 import {
   RELAY_ZONE,
   defaultTunnelName,
@@ -103,7 +104,8 @@ export const HiveTunnelCommand = cmd({
   builder: (y) =>
     y
       .positional("port", { describe: "local port to publish, e.g. 3000", type: "number" })
-      .option("provider", { describe: "hive (ours: <name>.t.heyiris.io) or tailscale (Funnel)", type: "string", choices: ["hive", "tailscale"], default: "hive" })
+      .option("provider", { describe: "hive (ours: <name>.t.heyiris.io) · tailscale (Funnel) · ngrok · cloudflared", type: "string", choices: ["hive", "tailscale", "ngrok", "cloudflared"], default: "hive" })
+      .option("allow-iris-server", { describe: "allow publishing an IRIS engine server (it has no auth)", type: "boolean", default: false })
       .option("name", { describe: `hive: the name in https://<name>.${RELAY_ZONE} (default: this machine + port)`, type: "string" })
       .option("list", { describe: "hive: the tunnel names you hold, and which are running", type: "boolean", default: false })
       .option("release", { describe: "hive: give a name back so someone else can use it", type: "string" })
@@ -117,8 +119,13 @@ export const HiveTunnelCommand = cmd({
       .example("iris hive tunnel 3000 --name demo --for 2h", `https://demo.${RELAY_ZONE} for two hours`)
       .example("iris hive tunnel 3000 --name demo --bg", "keep it open in the background; close with --off --name demo")
       .example("iris hive tunnel --list", "the names you hold")
-      .example("iris hive tunnel 3000 --provider tailscale", "the same, through Tailscale Funnel instead"),
+      .example("iris hive tunnel 3000 --provider tailscale", "the same, through Tailscale Funnel instead")
+      .example("iris hive tunnel 3000 --provider cloudflared", "or through a third party: ngrok / cloudflared"),
   async handler(argv) {
+    if (argv.provider === "ngrok" || argv.provider === "cloudflared") {
+      const ms = parseFor(argv.for as string)
+      return runThirdPartyTunnel({ port: Number(argv.port), provider: String(argv.provider), ttl: ms ? Math.ceil(ms / 60000) : undefined, "allow-iris-server": argv["allow-iris-server"] as boolean })
+    }
     if (argv.provider !== "tailscale") return runHive(argv)
     if (argv.port === undefined) {
       console.log(`\n${highlight("✗")} which local port? e.g. iris hive tunnel 3000 --provider tailscale`)
@@ -259,6 +266,12 @@ async function runHive(argv: any) {
   const ms = parseFor(argv.for as string)
   if (!ms) return fail(`--for must look like 30m, 2h or 90s (max 24h), not "${argv.for}"`)
   if (runningPid(home, name)) return fail(`${name} is already open in the background — close it first: iris hive tunnel --off --name ${name}`)
+  // From `iris tunnel` (#188653): say "nothing is running there" now, not after a public URL that
+  // answers 502 — and never publish an IRIS engine server, which has no authentication.
+  const local = await probeLocal(port)
+  if (!local.listening) return fail(`nothing is listening on localhost:${port} — start it first`)
+  if (local.irisEngine && !argv["allow-iris-server"])
+    return fail(`localhost:${port} is an IRIS engine server. It has no authentication — a public URL lets anyone run agents and shell commands here. Refusing (override: --allow-iris-server).`)
 
   const runner = findRunner(home)
   if (!runner) return fail("This machine's Hive bridge predates Hive tunnels. Update it: iris bridge install")

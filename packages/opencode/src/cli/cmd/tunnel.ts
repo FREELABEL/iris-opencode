@@ -121,7 +121,7 @@ function waitForUrl(child: ChildProcess, provider: Provider, timeoutMs: number):
   })
 }
 
-async function probeLocal(port: number): Promise<{ listening: boolean; irisEngine: boolean }> {
+export async function probeLocal(port: number): Promise<{ listening: boolean; irisEngine: boolean }> {
   try {
     const r = await fetch(`http://localhost:${port}/global/health`, { signal: AbortSignal.timeout(2000) })
     let body: unknown = null
@@ -136,26 +136,10 @@ async function probeLocal(port: number): Promise<{ listening: boolean; irisEngin
   }
 }
 
-export const TunnelCommand = cmd({
-  command: "tunnel <port>",
-  describe: "give a local dev server a public URL until you press Ctrl-C (ngrok or cloudflared)",
-  builder: (y) =>
-    y
-      .positional("port", { type: "number", describe: "the local port to expose, e.g. 3000", demandOption: true })
-      .option("provider", {
-        type: "string",
-        choices: ["auto", "ngrok", "cloudflared"],
-        default: "auto",
-        describe: "tunnel provider; auto picks ngrok, then cloudflared",
-      })
-      .option("ttl", { type: "number", describe: "close the tunnel after this many minutes" })
-      .option("allow-iris-server", {
-        type: "boolean",
-        default: false,
-        describe: "allow exposing an IRIS engine server (it has no auth — anyone with the URL can drive it)",
-      })
-      .option("json", { type: "boolean", default: false, describe: "print {url,provider,port} as JSON once up" }),
-  async handler(argv) {
+export type ThirdPartyArgs = { port: number; provider: string; ttl?: number; "allow-iris-server"?: boolean; json?: boolean }
+
+/** A tunnel through ngrok or cloudflared — `iris hive tunnel <port> --provider ngrok|cloudflared`. */
+export async function runThirdPartyTunnel(argv: ThirdPartyArgs) {
     const port = Number(argv.port)
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
       console.error(`${highlight("!")} not a port: ${argv.port}`)
@@ -260,5 +244,42 @@ export const TunnelCommand = cmd({
     }
 
     await new Promise(() => {})
+}
+
+/**
+ * `iris tunnel <port>` — kept as an ALIAS of `iris hive tunnel` (#188653): one door for public
+ * URLs. With no provider (or --provider hive) it is exactly `iris hive tunnel`; ngrok and
+ * cloudflared are still reachable as providers, so nothing that worked before stops working.
+ */
+export const TunnelCommand = cmd({
+  command: "tunnel <port>",
+  describe: "a public https URL for a local port — same as `iris hive tunnel` (providers: hive, ngrok, cloudflared)",
+  builder: (y) =>
+    y
+      .positional("port", { type: "number", describe: "the local port to expose, e.g. 3000", demandOption: true })
+      .option("provider", {
+        type: "string",
+        choices: ["hive", "tailscale", "ngrok", "cloudflared", "auto"],
+        default: "hive",
+        describe: "hive (ours, default) · tailscale · ngrok · cloudflared · auto (ngrok, then cloudflared)",
+      })
+      .option("name", { type: "string", describe: "hive: the name in https://<name>.t.heyiris.io" })
+      .option("ttl", { type: "number", describe: "close the tunnel after this many minutes" })
+      .option("yes", { type: "boolean", default: false, describe: "skip the confirmation (hive)" })
+      .option("allow-iris-server", {
+        type: "boolean",
+        default: false,
+        describe: "allow exposing an IRIS engine server (it has no auth — anyone with the URL can drive it)",
+      })
+      .option("json", { type: "boolean", default: false, describe: "ngrok/cloudflared: print {url,provider,port} as JSON once up" }),
+  async handler(argv) {
+    const provider = String(argv.provider)
+    if (provider === "ngrok" || provider === "cloudflared" || provider === "auto") return runThirdPartyTunnel(argv as any)
+    const { HiveTunnelCommand } = await import("./platform-hive-tunnel")
+    const ttl = Number(argv.ttl)
+    return (HiveTunnelCommand as any).handler({
+      port: argv.port, provider, name: argv.name, yes: argv.yes, "allow-iris-server": argv["allow-iris-server"],
+      for: ttl > 0 ? `${ttl}m` : "1h", "public-port": 8443, bg: false, off: false, list: false, staging: false,
+    })
   },
 })

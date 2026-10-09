@@ -80,5 +80,6 @@ iris hive tunnel --release acme-preview          # frees the name; deletes its k
 **"certificate: … retrying in 2 min"** — Let's Encrypt was busy or could not reach the tunnel yet.
 It keeps trying on its own; the URL starts working when the certificate arrives.
 
-**Already use Tailscale Funnel?** `iris hive tunnel 3000 --provider tailscale` publishes through
-your tailnet instead (needs MagicDNS, HTTPS Certificates and the `funnel` node attribute).
+**Prefer another provider?** `--provider tailscale` publishes through your tailnet (needs MagicDNS,
+HTTPS Certificates and the `funnel` node attribute); `--provider ngrok` or `--provider cloudflared`
+use those services if installed. `iris tunnel 3000` is the same command.
