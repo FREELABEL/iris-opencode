@@ -186,7 +186,8 @@ export function PlaybookTags(props: { row: any; withState?: boolean }) {
         </span>
       </Show>
       {/* All only: where this row comes from — "why is this here" is the question a union raises. */}
-      <Show when={props.withState && props.row?.sources?.length}>
+      {/* Only when it comes from more than one place — a lone "account" tag on every row is noise. */}
+      <Show when={props.withState && (props.row?.sources?.length ?? 0) > 1}>
         <span class="pbf-tag pbf-tag--src" data-slot="iris-playbook-sources" title="Where this playbook comes from">
           {playbookSources(props.row)}
         </span>

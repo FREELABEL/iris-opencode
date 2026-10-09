@@ -16,6 +16,7 @@ import {
   WHO_ICON,
   FILTER_ICON,
   scopeIcon,
+  SCOPE_ICON,
 } from "./playbook-flow"
 
 // Playbooks · "03 Flow". These guard the CLAIMS the panel makes about a playbook — who does each
@@ -191,12 +192,14 @@ describe("icons — one meaning each", () => {
       "globe",
       "lock",
       "link",
-      "checklist",
+      "folder",
       undefined,
     ])
   })
   test("no icon means two things: the who and scope sets do not overlap", () => {
     const who = new Set(Object.values(WHO_ICON).filter(Boolean))
-    for (const s of ["globe", "lock", "link", "checklist"]) expect(who.has(s as any)).toBe(false)
+    for (const s of ["globe", "lock", "link", "folder"]) expect(who.has(s as any)).toBe(false)
+    // and the scope icons never reuse the step-count icon
+    expect(Object.values(SCOPE_ICON)).not.toContain("checklist")
   })
 })

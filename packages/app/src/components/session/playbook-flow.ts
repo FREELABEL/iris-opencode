@@ -51,14 +51,15 @@ export const WHO_ICON: Record<Who, "sparkle" | "settings-gear" | "hand" | undefi
 }
 
 /** Who can see it, as an icon — same keys as scopeWords. */
-export const SCOPE_ICON: Record<string, "globe" | "lock" | "link" | "checklist"> = {
+export const SCOPE_ICON: Record<string, "globe" | "lock" | "link" | "folder"> = {
   public: "globe",
   private: "lock",
   unlisted: "link",
-  project: "checklist",
+  // folder, not checklist: checklist already means "number of steps" (one icon, one meaning).
+  project: "folder",
 }
 
-export function scopeIcon(scope: unknown): "globe" | "lock" | "link" | "checklist" | undefined {
+export function scopeIcon(scope: unknown): "globe" | "lock" | "link" | "folder" | undefined {
   return typeof scope === "string" ? SCOPE_ICON[scope.trim().toLowerCase()] : undefined
 }
 
