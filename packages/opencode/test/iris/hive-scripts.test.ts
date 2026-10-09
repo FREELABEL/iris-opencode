@@ -38,6 +38,9 @@ describe("readTask", () => {
   })
   test("unknown statuses are not terminal successes", () => {
     expect(TERMINAL.has("dispatched")).toBe(false)
+    // a task between stages is still live — the panel keeps polling it
+    for (const status of ["pending", "queued", "dispatched", "assigned"]) expect(readTask({ id: "x", status })!.terminal).toBe(false)
+    expect(readTask({ id: "x", status: "succeeded" })!.terminal).toBe(true)
     expect(readTask(null)).toBeNull()
   })
 })
