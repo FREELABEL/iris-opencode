@@ -5,7 +5,7 @@
 .atlas-epic {
   --epic-jade: #4fd1a5;
   --epic-amber: #f59e0b;
-  --epic-jade-ink: color-mix(in srgb, var(--epic-jade) 72%, var(--v2-text-text-base, #888));
+  --epic-jade-ink: color-mix(in srgb, var(--epic-jade) 62%, var(--v2-text-text-base, #888));
   --epic-amber-ink: color-mix(in srgb, var(--epic-amber) 78%, var(--v2-text-text-base, #888));
   --epic-accent: var(--epic-jade);
   --epic-accent-soft: color-mix(in srgb, var(--epic-jade) 14%, transparent);
@@ -92,6 +92,8 @@
   background: var(--v2-background-bg-base, transparent);
   border-radius: 0 6px 6px 0;
 }
+/* An alert needs the person: amber edge, not the jade "IRIS wrote this" edge. */
+.atlas-epic__body[data-kind="alert"] { border-left-color: var(--epic-amber); }
 .atlas-epic__actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .atlas-epic__btn {
   padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;

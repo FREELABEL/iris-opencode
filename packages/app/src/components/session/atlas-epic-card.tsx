@@ -216,7 +216,7 @@ ToolRegistry.register({
                             </Show>
                           </div>
                           <Show when={it.body}>
-                            <blockquote class="atlas-epic__body">{it.body}</blockquote>
+                            <blockquote class="atlas-epic__body" data-kind={it.kind}>{it.body}</blockquote>
                           </Show>
                           <Show when={!epic().working && buttonsFor(it).length > 0 && !isDone(li(), ii(), it, l)}>
                             <div class="atlas-epic__actions">
@@ -248,7 +248,11 @@ ToolRegistry.register({
           <Show when={!epic().working}>
             <Show
               when={epic().saved}
-              fallback={<span class="atlas-epic__muted">Not saved{epic().reason ? `: ${epic().reason}` : ""}</span>}
+              fallback={
+                <span class="atlas-epic__muted">
+                  {/^not saved/i.test(epic().reason ?? "") ? `Not saved${epic().reason!.replace(/^not saved/i, "")}` : `Not saved${epic().reason ? `: ${epic().reason}` : ""}`}
+                </span>
+              }
             >
               <span class="atlas-epic__muted">
                 Saved to Atlas{epic().reason ? ` — ${epic().reason}` : ""}
