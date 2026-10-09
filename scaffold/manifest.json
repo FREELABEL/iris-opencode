@@ -219,6 +219,12 @@
       "purpose": "Rent a long-lived machine (Railway/DigitalOcean), run Python/PHP on it, and release it to stop billing. Covers the --no-hive opt-out and why a failed release is reported as a failure."
     },
     {
+      "src": "how-to/hive-ci-runners.md",
+      "dest": "how-to/hive-ci-runners.md",
+      "managed": true,
+      "purpose": "Run GitHub Actions on your own Hive machines: iris hive runner add/list/remove registers a macOS or Linux node as a self-hosted runner for a repo, as a service, without your GitHub login leaving your machine."
+    },
+    {
       "src": "how-to/hive-sessions.md",
       "dest": "how-to/hive-sessions.md",
       "managed": true,
