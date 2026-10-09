@@ -55,6 +55,21 @@ export function evidenceFor(cap: Capability, threads: InboxThread[]): InboxThrea
   return threads.filter((t) => cap.evidence.kinds.includes(kindOf(t)) && (!re || re.test(`${t.subject} ${t.snippet}`)))
 }
 
+/**
+ * The one line under an option (Alex, 2026-10-09: title + one subtitle, no commands). Aimed at
+ * people → who, from their own mail. Otherwise → what it does, and how much of their mail it covers.
+ * The tool still reaches the session prompt; it is just not shown here.
+ */
+export function subline(cap: Capability, evidence: InboxThread[]): string {
+  if (!evidence.length) return cap.detail
+  const perPerson = cap.evidence.kinds.length === 1 && cap.evidence.kinds[0] === "person"
+  if (perPerson) {
+    const names = [...new Set(evidence.map((t) => senderName(t.from)))]
+    return `e.g. ${names.slice(0, 2).join(", ")}${names.length > 2 ? ` and ${names.length - 2} more` : ""}`
+  }
+  return `${cap.detail} · ${evidence.length} ${evidence.length === 1 ? "email" : "emails"} in your inbox`
+}
+
 export function GoalAsk(props: { initial?: string; onAsk: (text: string) => void }) {
   const [text, setText] = createSignal(props.initial ?? "")
   let ref: HTMLTextAreaElement | undefined
@@ -172,16 +187,7 @@ export function QuestionCard(props: {
                 <span class="fr-qbox" aria-hidden="true" />
                 <span class="flex min-w-0 flex-1 flex-col">
                   <span class="text-[14.5px] text-v2-text-text-base [font-weight:500]">{c.title}</span>
-                  <span class="mt-0.5 text-[12.5px] text-v2-text-text-muted">{c.detail}</span>
-                  <span class="mt-1.5 flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
-                    <span class="fr-mono text-[11.5px] text-v2-text-text-faint">{c.tool}</span>
-                    <Show when={ev().length}>
-                      <span class="text-[12px] text-v2-text-text-muted">
-                        In your inbox: {ev().slice(0, 2).map((t) => senderName(t.from)).join(", ")}
-                        {ev().length > 2 ? ` +${ev().length - 2}` : ""}
-                      </span>
-                    </Show>
-                  </span>
+                  <span class="mt-0.5 text-[12.5px] text-v2-text-text-muted">{subline(c, ev())}</span>
                 </span>
               </button>
             )
