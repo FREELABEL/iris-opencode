@@ -48,3 +48,24 @@ describe("iris locate (#188665)", () => {
     expect("error" in parseNodeAnswer("{not json")).toBe(true)
   })
 })
+
+import { readNodeRows } from "./platform-locate"
+
+describe("reading a machine's answer (#188665 patient-data guard)", () => {
+  test("a withheld answer is a count and a sentence, never a fake file called '(names withheld)'", () => {
+    const r = readNodeRows([{ source: "files", match: "(names withheld)", preview: "3 matches in files — names kept on this machine because it handles patient data.", count: 3, phi: true }])
+    expect(r.hits).toEqual([])
+    expect(r.withheld).toBe(3)
+    expect(r.note).toContain("names kept on this machine")
+  })
+  test("diagnostic rows become the note; real rows are hits; other sources are ignored", () => {
+    const r = readNodeRows([
+      { source: "files", match: "(no file results)", preview: "no file index on this node" },
+      { source: "imessage", match: "+1", preview: "hi" },
+      { source: "files", match: "/a/b.pdf", preview: "plocate · whole disk · 9 ms", provider: "plocate" },
+    ])
+    expect(r.hits.map((h) => h.match)).toEqual(["/a/b.pdf"])
+    expect(r.note).toBe("no file index on this node")
+    expect(r.withheld).toBe(0)
+  })
+})

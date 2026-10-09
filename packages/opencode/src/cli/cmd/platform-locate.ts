@@ -82,6 +82,22 @@ export function parseNodeAnswer(text: string): { json: any } | { error: string }
   }
 }
 
+/**
+ * A machine's hive_search rows → what to show. Diagnostic rows ("(no file results)") become the
+ * note; a withheld answer ("(names withheld)", from a machine that handles patient data) becomes a
+ * count and its sentence — never a file literally called "(names withheld)".
+ */
+export function readNodeRows(rows: any[]): { hits: any[]; note?: string; withheld: number } {
+  const files = (Array.isArray(rows) ? rows : []).filter((x) => x && x.source === "files")
+  const withheldRow = files.find((x) => x.match === "(names withheld)")
+  const diag = files.find((x) => typeof x.match === "string" && x.match.startsWith("(") && x !== withheldRow)
+  return {
+    hits: files.filter((x) => typeof x.match === "string" && !x.match.startsWith("(")),
+    note: withheldRow?.preview ?? diag?.preview,
+    withheld: Number(withheldRow?.count ?? 0),
+  }
+}
+
 // ── setup: the better engine, per platform ─────────────────────────────────────────────────────
 
 /** Pinned so the installer builds the source we audited (MIT, no network code), not whatever is newest. */
@@ -258,9 +274,8 @@ export const LocateCommand = cmd({
         if (!r.ok) return { node: n.name, hits: [] as Hit[], note: r.text, ms: Date.now() - started }
         const a = parseNodeAnswer(r.text)
         if ("error" in a) return { node: n.name, hits: [] as Hit[], note: a.error, ms: Date.now() - started }
-        const rows = (Array.isArray(a.json) ? a.json : []).filter((x: any) => x.source === "files")
-        const notes = rows.filter((x: any) => x.match === "(no file results)").map((x: any) => x.preview)
-        return { node: n.name, hits: rows.filter((x: any) => x.match !== "(no file results)").map((x: any) => ({ ...x, node_name: n.name })) as Hit[], note: notes[0], ms: Date.now() - started }
+        const read = readNodeRows(a.json)
+        return { node: n.name, hits: read.hits.map((x: any) => ({ ...x, node_name: n.name })) as Hit[], note: read.note, withheld: read.withheld, ms: Date.now() - started }
       }),
     )
     if (json) return void console.log(JSON.stringify({ query, took_ms: Date.now() - t0, machines: per }))
@@ -268,7 +283,8 @@ export const LocateCommand = cmd({
     console.log(bold(`\n  ${total} file(s) matching "${query}" on ${per.length} machine(s)`) + dim(`  ·  ${Date.now() - t0} ms`))
     for (const p of per) {
       const engine = p.hits[0]?.provider ?? p.hits[0]?.preview?.split(" · ")[0] ?? ""
-      console.log(`\n  ${highlight(p.node)}  ${dim(`${p.hits.length} found${engine ? ` · ${engine}` : ""} · ${p.ms} ms`)}`)
+      const found = (p as any).withheld ? `${(p as any).withheld} found, names withheld` : `${p.hits.length} found`
+      console.log(`\n  ${highlight(p.node)}  ${dim(`${found}${engine ? ` · ${engine}` : ""} · ${p.ms} ms`)}`)
       for (const h of p.hits) {
         console.log(`    ${short(h.match)}`)
         if (h.preview?.startsWith("line ")) console.log(`      ${dim(h.preview)}`)

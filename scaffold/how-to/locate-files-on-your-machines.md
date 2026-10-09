@@ -55,3 +55,17 @@ iris locate invoice --json                         # for scripts
 The search engines run on the machine itself. fsearch is MIT-licensed and has no network code;
 plocate, Spotlight and Windows Search are part of the operating system. The **file names** that
 match go back to your IRIS account as the search result — file contents never do.
+
+## Machines that handle patient data
+
+On a machine that handles patient data, a search from **another** machine gets a count, not the
+names: `3 found, names withheld`. A file name like `Jane Doe – intake.pdf` identifies a patient.
+Run `iris locate` **on that machine** to see the names; nothing leaves it.
+
+This applies when either is true:
+
+- the search task is marked as patient data by IRIS, or
+- the machine is marked: add `"phi_node": true` to `~/.iris/config.json` on it (or set
+  `IRIS_PHI_NODE=1` for the daemon).
+
+On every machine, IRIS's own encrypted patient-data storage is never searched into a result.
