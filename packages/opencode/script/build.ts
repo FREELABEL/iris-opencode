@@ -121,7 +121,12 @@ const allTargets: {
   },
 ]
 
-const targets = singleFlag
+// --target=<os>-<arch> (e.g. darwin-arm64): build ONE binary for another platform. Lets a desktop
+// change be tried in minutes by swapping the app's iris-cli, instead of a full CI build.
+const onlyTarget = process.argv.find((a) => a.startsWith("--target="))?.slice("--target=".length)
+const targets = onlyTarget
+  ? allTargets.filter((item) => `${item.os}-${item.arch}` === onlyTarget && item.avx2 !== false && item.abi === undefined)
+  : singleFlag
   ? allTargets.filter((item) => {
       if (item.os !== process.platform || item.arch !== process.arch) {
         return false

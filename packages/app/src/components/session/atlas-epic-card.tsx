@@ -75,7 +75,9 @@ ToolRegistry.register({
 
     // Tick state: undefined = follow the data; true/false = the person's choice.
     const [ticks, setTicks] = createStore<Record<string, boolean>>({})
-    const [closed, setClosed] = createStore<Record<number, boolean>>({})
+    // Sections start folded (Alex, 2026-10-09): the card reads as a summary — each list's header,
+    // badge and count — and opens where you click.
+    const [opened, setOpened] = createStore<Record<number, boolean>>({})
     const [note, setNote] = createSignal<string>()
     const prog = createMemo(() => progress(epic(), (k) => ticks[k]))
 
@@ -167,8 +169,8 @@ ToolRegistry.register({
               <button
                 type="button"
                 class="atlas-epic__list-head"
-                aria-expanded={!closed[li()]}
-                onClick={() => setClosed(li(), !closed[li()])}
+                aria-expanded={!!opened[li()]}
+                onClick={() => setOpened(li(), !opened[li()])}
               >
                 <SourceIcon source={l.source} />
                 <span class="atlas-epic__list-title">{l.title}</span>
@@ -183,10 +185,10 @@ ToolRegistry.register({
                   </span>
                 </Show>
                 <span class="atlas-epic__chev" aria-hidden="true">
-                  {closed[li()] ? "›" : "⌄"}
+                  {opened[li()] ? "⌄" : "›"}
                 </span>
               </button>
-              <Show when={!closed[li()]}>
+              <Show when={opened[li()]}>
                 <ul class="atlas-epic__items">
                   <For each={l.items}>
                     {(it, ii) => (
