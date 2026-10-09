@@ -1,10 +1,29 @@
 import { cmd } from "./cmd"
-import { bold, dim, highlight, success } from "./iris-api"
+import { bold, dim, highlight, success, warn, resolveToken } from "./iris-api"
 import { spawn, spawnSync } from "child_process"
 import * as prompts from "./clack"
+import { homedir, hostname } from "os"
+import { join } from "path"
+import { mkdirSync, openSync, writeFileSync, rmSync } from "fs"
+import { hiveFetch } from "./platform-hive-nodes"
+import {
+  RELAY_ZONE,
+  defaultTunnelName,
+  validTunnelName,
+  parseRunnerLine,
+  findRunner,
+  findNode,
+  runningPid,
+  explainTunnelApiError,
+} from "./platform-hive-relay"
 
 /**
  * `iris hive tunnel <port>` — a public URL for something running on this machine (#188585).
+ *
+ * TWO PROVIDERS. The default, `hive`, is ours: https://<name>.t.heyiris.io through the Hive relay
+ * on iris-hive-001, which routes by hostname and never holds the certificate (this machine gets
+ * its own, through the relay — see platform-hive-relay.ts). `--provider tailscale` is the Funnel
+ * path described below, kept for machines already set up for it.
  *
  * The ask: opentunnel (dax, 2026-10-07) — "public urls for anything running on your machine;
  * e2e encrypted, the relay can't see it". Built into Hive rather than waiting on opencode
@@ -79,17 +98,33 @@ function selfInfo(ts: string): { dns: string | null; certs: boolean } {
 }
 
 export const HiveTunnelCommand = cmd({
-  command: "tunnel <port>",
+  command: "tunnel [port]",
   describe: "a PUBLIC https URL for a local port — encrypted to this machine, closes when you stop",
   builder: (y) =>
     y
-      .positional("port", { describe: "local port to publish, e.g. 3000", type: "number", demandOption: true })
+      .positional("port", { describe: "local port to publish, e.g. 3000", type: "number" })
+      .option("provider", { describe: "hive (ours: <name>.t.heyiris.io) or tailscale (Funnel)", type: "string", choices: ["hive", "tailscale"], default: "hive" })
+      .option("name", { describe: `hive: the name in https://<name>.${RELAY_ZONE} (default: this machine + port)`, type: "string" })
+      .option("list", { describe: "hive: the tunnel names you hold, and which are running", type: "boolean", default: false })
+      .option("release", { describe: "hive: give a name back so someone else can use it", type: "string" })
+      .option("staging", { describe: "hive: test certificates (not trusted by browsers)", type: "boolean", default: false, hidden: true })
       .option("for", { describe: `close automatically after this long, e.g. 30m, 2h (default ${DEFAULT_FOR})`, type: "string", default: DEFAULT_FOR })
       .option("public-port", { describe: `public https port: ${FUNNEL_PORTS.join(", ")}`, type: "number", default: DEFAULT_PUBLIC_PORT })
       .option("bg", { describe: "keep it open after this command exits (close with --off)", type: "boolean", default: false })
-      .option("off", { describe: "close a tunnel opened with --bg", type: "boolean", default: false })
-      .option("yes", { describe: "skip the confirmation", type: "boolean", default: false }),
+      .option("off", { describe: "close a tunnel opened with --bg (hive: with --name, or the port's default name)", type: "boolean", default: false })
+      .option("yes", { describe: "skip the confirmation", type: "boolean", default: false })
+      .example("iris hive tunnel 3000", `https://<this-machine>-3000.${RELAY_ZONE} until Ctrl-C (1 h max by default)`)
+      .example("iris hive tunnel 3000 --name demo --for 2h", `https://demo.${RELAY_ZONE} for two hours`)
+      .example("iris hive tunnel 3000 --name demo --bg", "keep it open in the background; close with --off --name demo")
+      .example("iris hive tunnel --list", "the names you hold")
+      .example("iris hive tunnel 3000 --provider tailscale", "the same, through Tailscale Funnel instead"),
   async handler(argv) {
+    if (argv.provider !== "tailscale") return runHive(argv)
+    if (argv.port === undefined) {
+      console.log(`\n${highlight("✗")} which local port? e.g. iris hive tunnel 3000 --provider tailscale`)
+      process.exitCode = 1
+      return
+    }
     const port = Number(argv.port)
     const publicPort = Number(argv["public-port"])
     const fail = (m: string) => {
@@ -165,3 +200,132 @@ export const HiveTunnelCommand = cmd({
     }
   },
 })
+
+// ─── provider: hive ─────────────────────────────────────────────────────────────────────────────
+
+async function runHive(argv: any) {
+  const home = homedir()
+  const fail = (m: string) => {
+    console.log()
+    console.log(`${highlight("✗")} ${m}`)
+    process.exitCode = 1
+  }
+  const api = async (method: string, path: string, body?: unknown) => {
+    const res = await hiveFetch(`/api/v6/nodes/tunnels${path}`, { method, body: body ? JSON.stringify(body) : undefined })
+    const json: any = await res.json().catch(() => ({}))
+    return { ok: res.ok, status: res.status, json }
+  }
+  if (!(await resolveToken())) return fail("Sign in to IRIS first: iris auth login")
+
+  if (argv.list) {
+    const r = await api("GET", "")
+    if (!r.ok) return fail(explainTunnelApiError(r.status, r.json))
+    const rows: any[] = r.json?.data || []
+    console.log()
+    if (!rows.length) return console.log(dim(`  No tunnel names yet. Open one: iris hive tunnel 3000`))
+    for (const t of rows) {
+      const pid = runningPid(home, t.name)
+      console.log(`  ${pid ? success("●") : dim("○")} ${bold(t.url)}${pid ? dim(`  running in the background (pid ${pid})`) : ""}`)
+    }
+    return
+  }
+
+  if (argv.release) {
+    const name = String(argv.release).toLowerCase()
+    const r = await api("DELETE", `/${encodeURIComponent(name)}`)
+    if (!r.ok) return fail(explainTunnelApiError(r.status, r.json))
+    rmSync(join(home, ".iris", "tunnels", name), { recursive: true, force: true })
+    console.log(`\n${success("✓")} released ${bold(name)} — its certificate and key on this machine are deleted`)
+    return
+  }
+
+  const port = Number(argv.port)
+  const name = String(argv.name || (Number.isFinite(port) && port > 0 ? defaultTunnelName(hostname(), port) : "")).toLowerCase()
+
+  if (argv.off) {
+    if (!name) return fail("which tunnel? iris hive tunnel --off --name <name>")
+    const pid = runningPid(home, name)
+    if (!pid) return fail(`no background tunnel named ${name} is running here`)
+    process.kill(pid, "SIGTERM")
+    rmSync(join(home, ".iris", "tunnels", name, "tunnel.pid"), { force: true })
+    console.log(`\n${success("✓")} closed — https://${name}.${RELAY_ZONE} no longer answers`)
+    return
+  }
+
+  if (argv.port === undefined) return fail("which local port? e.g. iris hive tunnel 3000")
+  const refused = refusedPort(port)
+  if (refused) return fail(refused)
+  if (!validTunnelName(name)) return fail("--name is 1–63 lowercase letters, digits and dashes (not starting or ending with a dash)")
+  const ms = parseFor(argv.for as string)
+  if (!ms) return fail(`--for must look like 30m, 2h or 90s (max 24h), not "${argv.for}"`)
+  if (runningPid(home, name)) return fail(`${name} is already open in the background — close it first: iris hive tunnel --off --name ${name}`)
+
+  const runner = findRunner(home)
+  if (!runner) return fail("This machine's Hive bridge predates Hive tunnels. Update it: iris bridge install")
+  const node = findNode(home)
+  if (!node) return fail("Hive tunnels need Node.js 18 or newer on this machine (the Hive bridge uses it too): https://nodejs.org")
+
+  // Reserve the name BEFORE asking for a yes, so "taken" or "reserved" is said now, not after.
+  const claim = await api("POST", "", { name })
+  if (!claim.ok) return fail(explainTunnelApiError(claim.status, claim.json))
+  const url = String(claim.json?.data?.url || `https://${name}.${RELAY_ZONE}`)
+
+  if (!argv.yes) {
+    console.log()
+    console.log(`${highlight("!")} ${bold(`localhost:${port} will be reachable by ANYONE on the internet`)} at ${url}`)
+    console.log(dim(`  for ${argv.bg ? "as long as you leave it (--bg)" : argv.for}. Encrypted to this machine — the relay cannot read it.`))
+    const ok = await prompts.confirm({ message: "Open it?", initialValue: false })
+    if (ok !== true) return fail("Not opened.")
+  }
+
+  const env = { ...process.env, IRIS_API_BASE: process.env.IRIS_API_URL ?? "https://freelabel.net", IRIS_API_KEY: await resolveToken() }
+  const args = [runner, "--name", name, "--port", String(port), ...(argv.staging ? ["--staging"] : [])]
+  const dir = join(home, ".iris", "tunnels", name + (argv.staging ? ".staging" : ""))
+
+  if (argv.bg) {
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
+    const log = openSync(join(dir, "tunnel.log"), "a", 0o600)
+    const child = spawn(node, args, { env, detached: true, stdio: ["ignore", log, log] })
+    child.unref()
+    writeFileSync(join(home, ".iris", "tunnels", name, "tunnel.pid"), String(child.pid), { mode: 0o600 })
+    console.log(`\n${success("●")} ${bold(url)} → localhost:${port}`)
+    console.log(dim(`  OPEN until you close it:  iris hive tunnel --off --name ${name}`))
+    console.log(dim(`  first time for this name? its certificate takes ~30 s — log: ${join(dir, "tunnel.log")}`))
+    return
+  }
+
+  const child = spawn(node, ["--no-warnings", ...args, "--for-ms", String(ms)], { env, stdio: ["ignore", "pipe", "pipe"] })
+  let stderr = ""
+  child.stderr.on("data", (d) => { stderr += String(d) })
+  let announced = false
+  let buf = ""
+  const announce = () => {
+    if (announced) return
+    announced = true
+    console.log(`\n${success("●")} ${bold(url)} → localhost:${port}`)
+    console.log(dim(`  public for ${argv.for} or until Ctrl-C`))
+  }
+  child.stdout.on("data", (d) => {
+    buf += String(d)
+    let i
+    while ((i = buf.indexOf("\n")) >= 0) {
+      const ev = parseRunnerLine(buf.slice(0, i))
+      buf = buf.slice(i + 1)
+      if (!ev) continue
+      if (ev.event === "ready" && ev.certificate === "saved") announce()
+      else if (ev.event === "ready" && ev.certificate === "requesting") console.log(dim(`\n  getting a certificate for ${url} — first time for this name, about 30 s…`))
+      else if (ev.event === "cert") announce()
+      else if (ev.event === "down") console.log(warn("  ◌ relay connection dropped — reconnecting…"))
+      else if (ev.event === "error" && ev.final) console.log(`\n${highlight("✗")} ${ev.message}`)
+      else if (ev.event === "error") console.log(warn(`  ! ${ev.message}${ev.retryInMinutes ? ` — retrying in ${ev.retryInMinutes} min` : ""}`))
+    }
+  })
+  process.once("SIGINT", () => child.kill("SIGINT"))
+  const code: number = await new Promise((r) => child.on("exit", (c) => r(c ?? 0)))
+  if (code !== 0) {
+    process.exitCode = 1
+    if (stderr.trim()) console.log(dim(stderr.trim().split("\n").slice(-3).join("\n")))
+    return
+  }
+  console.log(`\n${success("✓")} tunnel closed — ${url} no longer answers`)
+}

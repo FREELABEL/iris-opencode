@@ -1,7 +1,7 @@
 ---
 category: Infrastructure
 level: intermediate
-tags: [hive, tunnel, public-url, share, localhost, https]
+tags: [hive, tunnel, public-url, share, localhost, https, webhook]
 duration_min: 5
 ---
 # How to: Give something on your machine a public URL
@@ -9,14 +9,18 @@ duration_min: 5
 ## What this does
 
 Gives a site or app running on your machine (say `localhost:3000`) a public **https** address
-anyone can open — to show a client a preview, test a webhook, or share a demo. The connection is
-encrypted all the way to your machine.
+like `https://my-demo.t.heyiris.io` that anyone can open — to show a client a preview, test a
+webhook, or share a demo.
+
+It is encrypted all the way to **your** machine. The connection passes through the IRIS relay,
+but the relay only reads the address on the envelope; it never has the key, so it cannot read
+the traffic or pretend to be you. Your machine opens no ports and you change nothing on your
+router.
 
 ## Prerequisites
 
-- Tailscale is on (`iris hive vpn status`) — every Hive machine already has it
-- Once, in the Tailscale admin console: enable **MagicDNS** and **HTTPS Certificates**, and allow
-  **Funnel** for this machine (Access controls → node attribute `funnel`)
+- Signed in: `iris auth login`
+- The Hive bridge on this machine: `iris bridge install` (also how you update it)
 
 ## Steps
 
@@ -26,38 +30,55 @@ encrypted all the way to your machine.
 iris hive tunnel 3000
 ```
 
-You are asked to confirm, because the address is reachable by **anyone on the internet**. Then:
+You are asked to confirm, because the address is reachable by **anyone on the internet**. The
+first time you use a name, getting its certificate takes about 30 seconds. Then:
 
 ```
-● https://your-machine.your-tailnet.ts.net:8443 → localhost:3000
+● https://your-machine-3000.t.heyiris.io → localhost:3000
   public for 1h or until Ctrl-C
 ```
 
-Press **Ctrl-C** to close it. It also closes by itself after `--for` (default 1 hour).
+Press **Ctrl-C** to close it. It also closes by itself after `--for` (default 1 hour, max 24 h).
 
-**2. Choose how long**
+**2. Pick a name people can remember**
 
 ```bash
-iris hive tunnel 3000 --for 30m
+iris hive tunnel 3000 --name acme-preview
 ```
+
+→ `https://acme-preview.t.heyiris.io`. The name is yours until you release it: nobody else can
+use it, and next time it opens straight away with the certificate it already has.
 
 **3. Keep it open after the command ends (only when you mean it)**
 
 ```bash
-iris hive tunnel 3000 --bg
-iris hive tunnel 3000 --off      # close it
+iris hive tunnel 3000 --name acme-preview --bg
+iris hive tunnel --off --name acme-preview      # close it
+```
+
+**4. See and give back your names**
+
+```bash
+iris hive tunnel --list
+iris hive tunnel --release acme-preview          # frees the name; deletes its key on this machine
 ```
 
 ## Safety built in
 
 - It never opens the Hive bridge port (3200) — that one runs commands, so it is refused outright.
-- It uses public port 8443 by default, so it never replaces a private (tailnet-only) share on 443.
 - Nothing stays open by accident: foreground by default, a timer, and a confirmation.
+- Your certificate and its private key are made on, and stay on, your machine
+  (`~/.iris/tunnels/<name>/`). The relay never has them.
+- Names like `login`, `www`, `api` or `support` are reserved so a tunnel cannot pose as IRIS.
 
 ## Common problems
 
-**"HTTPS certificates are off for this tailnet"** — Tailscale admin → DNS → enable MagicDNS, then
-HTTPS Certificates.
+**"This machine's Hive bridge predates Hive tunnels"** — update it: `iris bridge install`.
 
-**"Funnel is not allowed for this machine"** — Tailscale admin → Access controls → add the `funnel`
-node attribute for it.
+**"The name … is taken"** — someone else holds it. Pick another with `--name`.
+
+**"certificate: … retrying in 2 min"** — Let's Encrypt was busy or could not reach the tunnel yet.
+It keeps trying on its own; the URL starts working when the certificate arrives.
+
+**Already use Tailscale Funnel?** `iris hive tunnel 3000 --provider tailscale` publishes through
+your tailnet instead (needs MagicDNS, HTTPS Certificates and the `funnel` node attribute).
