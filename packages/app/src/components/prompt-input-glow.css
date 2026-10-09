@@ -48,11 +48,25 @@
   border-radius: 13.5px;
   z-index: 0;
 }
+/* The halo is the RING blurred, not a filled box blurred. A blurred filled rectangle reads as a
+   lighter box standing behind the card (Alex, 2026-10-09: "a weird box around the glowing chat");
+   a blurred border hugs the outline. border-image paints the border band only, never the middle. */
 .iris-glow::after {
-  inset: -8px;
-  border-radius: 20px;
+  inset: -4px;
   z-index: -1;
-  filter: blur(14px);
+  background: none;
+  border: 5px solid transparent;
+  border-image: conic-gradient(
+      from var(--iris-glow-a),
+      transparent 0deg,
+      var(--g1) 60deg,
+      var(--g2) 120deg,
+      var(--g3) 170deg,
+      transparent 230deg,
+      transparent 360deg
+    )
+    1;
+  filter: blur(9px);
 }
 .iris-glow[data-busy]::before {
   opacity: 1;
