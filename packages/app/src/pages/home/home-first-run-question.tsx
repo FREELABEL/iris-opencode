@@ -164,7 +164,7 @@ export function QuestionCard(props: {
       return `- ${c.title} — use \`${c.tool}\`${ev.length ? `. Relevant mail: ${ev.join("; ")}` : ""}`
     })
     if (ownOn() && own().trim()) lines.push(`- ${own().trim()} — work out the steps with me`)
-    const prompt = `My goal: ${props.goal}\n\nDo these, with these IRIS tools:\n${lines.join("\n")}\n\nDraft everything for me to review. Don't send anything.`
+    const prompt = `My goal: ${props.goal}\n\nDo these, with these IRIS tools:\n${lines.join("\n")}\n\nDraft everything for me to review. Don't send anything.\n\nWhen you're done, show the results with the atlas_epic tool: one list per thing above, each person or record as an item, drafts in full in the item body.`
     props.onSubmit(prompt, focus)
   }
 
