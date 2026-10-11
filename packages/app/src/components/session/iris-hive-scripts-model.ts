@@ -479,6 +479,70 @@ export function lastLine(text: string | null | undefined): string {
   return lines.at(-1) ?? ""
 }
 
+// ── find · sort · page ───────────────────────────────────────────────────────────────────────────
+
+export type ScriptSort = "recent" | "name"
+export const SCRIPT_SORTS: readonly ScriptSort[] = ["recent", "name"]
+export const readSort = (raw: string | null | undefined): ScriptSort => (raw === "name" ? "name" : "recent")
+/** Rows a page of the list holds. The account with the most scripts has 37 today. */
+export const PAGE_SIZE = 25
+
+/**
+ * Every word of the query must appear somewhere in the script — slug, name, description or a
+ * tag — so "deal scen" finds deal-scenarios and "csv tidy" finds csv-tidy. Case and the
+ * separators people type in place of a hyphen are ignored.
+ */
+export function matchesQuery(
+  s: { slug: string; name?: string | null; description?: string | null; tags?: readonly string[] },
+  q: string,
+): boolean {
+  const words = fold(q).split(" ").filter(Boolean)
+  if (!words.length) return true
+  const hay = fold([s.slug, s.name ?? "", s.description ?? "", ...(s.tags ?? [])].join(" "))
+  return words.every((w) => hay.includes(w))
+}
+const fold = (t: string) => t.toLowerCase().replace(/[-_./:]+/g, " ").replace(/\s+/g, " ").trim()
+
+/**
+ * Recent: newest edit first; a script with no date sinks to the bottom rather than being
+ * treated as new. Name: A–Z. Ties fall back to the slug so the order never shuffles on refresh.
+ */
+export function sortScripts<T extends { slug: string; updatedAt?: string | null }>(list: readonly T[], by: ScriptSort): T[] {
+  const time = (s: T) => {
+    const t = s.updatedAt ? Date.parse(s.updatedAt) : NaN
+    return Number.isFinite(t) ? t : -Infinity
+  }
+  return [...list].sort((a, b) =>
+    by === "recent" ? time(b) - time(a) || a.slug.localeCompare(b.slug) : a.slug.localeCompare(b.slug),
+  )
+}
+
+/** One page of a list; a page past the end lands on the last page, never on an empty one. */
+export function pageOf<T>(list: readonly T[], page: number, size = PAGE_SIZE) {
+  const pages = Math.max(1, Math.ceil(list.length / size))
+  const at = Math.min(Math.max(1, Math.floor(page) || 1), pages)
+  const from = (at - 1) * size
+  return { rows: list.slice(from, from + size), page: at, pages, from: list.length ? from + 1 : 0, to: Math.min(from + size, list.length), total: list.length }
+}
+
+/** The page a script is on, so opening one (⌘K, a remembered pick) shows the page holding it. */
+export function pageHolding<T extends { slug: string }>(list: readonly T[], slug: string | undefined, size = PAGE_SIZE): number | undefined {
+  const i = slug ? list.findIndex((s) => s.slug === slug) : -1
+  return i < 0 ? undefined : Math.floor(i / size) + 1
+}
+
+/** The short age a list row carries: "now", "5m", "3h", "2d", "6w", "1y". */
+export function shortAgo(iso: string | null | undefined, now: number): string {
+  const t = iso ? Date.parse(iso) : NaN
+  if (!Number.isFinite(t)) return ""
+  const s = Math.max(0, (now - t) / 1000)
+  if (s < 60) return "now"
+  if (s < 3600) return `${Math.floor(s / 60)}m`
+  if (s < 86400) return `${Math.floor(s / 3600)}h`
+  const d = Math.floor(s / 86400)
+  return d < 14 ? `${d}d` : d < 365 ? `${Math.floor(d / 7)}w` : `${Math.floor(d / 365)}y`
+}
+
 export function ago(iso: string | null | undefined, now: number): string {
   if (!iso) return "never"
   const s = (now - Date.parse(iso)) / 1000

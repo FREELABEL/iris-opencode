@@ -1290,14 +1290,17 @@ export function SessionIrisTab() {
    */
   const [page, setPage] = createSignal(1)
 
-  const [data, { refetch: refetchSurface }] = createResource(
+  type SurfaceKey = readonly [string, NonNullable<ReturnType<typeof activeBloq>>, SurfaceId, string, number, string]
+  // Typed explicitly: left to inference, the fetcher's `info` argument made the resource's own
+  // value type circular and every reader of data() saw {}.
+  const [data, { refetch: refetchSurface }] = createResource<SurfacePayload, SurfaceKey>(
     () => {
       const id = activeBloq()
       // The sub-view is IN the key. Without it, switching Atlas › Lists to Atlas › Schemas
       // changes nothing the resource can see and the old rows stay on screen under the new tab.
       // Rooms and Artifacts fetch for themselves; the generic row list has nothing to draw.
       if (SELF_PANES.has(resolved().pane)) return undefined
-      return id ? ([base(), id, surface(), resolved().sub?.id ?? "", page(), applied()] as const) : undefined
+      return id ? ([base(), id, surface(), resolved().sub?.id ?? "", page(), applied()] as SurfaceKey) : undefined
     },
     async ([, id, , , pageNo, q], info): Promise<SurfacePayload> => {
       const { pane: which, path } = resolved()

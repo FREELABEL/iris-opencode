@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
 import {
+  matchesQuery,
+  sortScripts,
+  pageOf,
+  pageHolding,
+  shortAgo,
+  readSort,
   commandFor,
   computerVerdict,
   defaultComputer,
@@ -255,5 +261,46 @@ describe("views", () => {
     expect(readView("market")).toBe("market")
     expect(readView("nope")).toBe("all")
     expect(readView(null)).toBe("all")
+  })
+})
+
+describe("find · sort · page", () => {
+  const rows = [
+    { slug: "nyc-budget", updatedAt: "2026-10-01T00:00:00Z" },
+    { slug: "deal-scenarios", name: "Deal Scenarios", description: "fear and greed", updatedAt: "2026-10-10T00:00:00Z" },
+    { slug: "hello-fleet" },
+    { slug: "csv-tidy", tags: ["project:571"], updatedAt: "2026-10-10T00:00:00Z" },
+  ]
+  test("every word must match somewhere; hyphens and case do not matter", () => {
+    expect(matchesQuery(rows[1], "deal scen")).toBe(true)
+    expect(matchesQuery(rows[1], "DEAL-SCENARIOS")).toBe(true)
+    expect(matchesQuery(rows[1], "greed")).toBe(true)
+    expect(matchesQuery(rows[1], "deal budget")).toBe(false)
+    expect(matchesQuery(rows[3], "571")).toBe(true)
+    expect(matchesQuery(rows[0], "   ")).toBe(true)
+  })
+  test("recent puts the newest edit first, undated last, ties by slug", () => {
+    expect(sortScripts(rows, "recent").map((r) => r.slug)).toEqual(["csv-tidy", "deal-scenarios", "nyc-budget", "hello-fleet"])
+    expect(sortScripts(rows, "name").map((r) => r.slug)).toEqual(["csv-tidy", "deal-scenarios", "hello-fleet", "nyc-budget"])
+    expect(rows[0].slug).toBe("nyc-budget") // not sorted in place
+  })
+  test("pages clamp, and the page holding a script is found", () => {
+    const many = Array.from({ length: 37 }, (_, i) => ({ slug: `s${String(i).padStart(2, "0")}` }))
+    expect(pageOf(many, 1)).toMatchObject({ page: 1, pages: 2, from: 1, to: 25, total: 37 })
+    expect(pageOf(many, 2).rows.length).toBe(12)
+    expect(pageOf(many, 9)).toMatchObject({ page: 2, from: 26, to: 37 })
+    expect(pageOf([], 3)).toMatchObject({ page: 1, pages: 1, from: 0, to: 0 })
+    expect(pageHolding(many, "s30")).toBe(2)
+    expect(pageHolding(many, "nope")).toBeUndefined()
+  })
+  test("short ages and the remembered order", () => {
+    const now = Date.parse("2026-10-11T00:00:00Z")
+    expect(shortAgo("2026-10-10T23:59:30Z", now)).toBe("now")
+    expect(shortAgo("2026-10-10T23:00:00Z", now)).toBe("1h")
+    expect(shortAgo("2026-10-08T00:00:00Z", now)).toBe("3d")
+    expect(shortAgo("2026-08-01T00:00:00Z", now)).toBe("10w")
+    expect(shortAgo(undefined, now)).toBe("")
+    expect(readSort("name")).toBe("name")
+    expect(readSort("junk")).toBe("recent")
   })
 })

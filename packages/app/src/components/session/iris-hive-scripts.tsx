@@ -37,6 +37,13 @@ import {
   readiness,
   readView,
   scriptsInView,
+  matchesQuery,
+  sortScripts,
+  pageOf,
+  pageHolding,
+  shortAgo,
+  readSort,
+  type ScriptSort,
   setArgDefault,
   withTag,
   skillsOf,
@@ -112,6 +119,7 @@ const POLL_MS = 1_000
 const SELECTED_KEY = "iris.hive.scripts.slug"
 const LIST_KEY = "iris.hive.scripts.list"
 const VIEW_KEY = "iris.hive.scripts.view"
+const SORT_KEY = "iris.hive.scripts.sort"
 const VIEW_WORD: Record<ScriptView, string> = { all: "All", project: "Project", market: "Marketplace" }
 const NEW_TEMPLATE = "#!/bin/bash\n# iris: timeout=120\n# What this script does, in one line.\necho \"hello from $(hostname)\"\n"
 
@@ -232,6 +240,43 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
   const doctor = createMemo<Doctor | null>(() => current()?.doctor ?? null)
   const listed = createMemo(() =>
     scriptsInView(scripts(), view(), tag(), { showTests: showTests(), open: current() ? slug() : undefined }),
+  )
+
+  // ── find · sort · page ───────────────────────────────────────────────────────────────────────
+  const [query, setQuery] = createSignal("")
+  const [sort, setSortRaw] = createSignal<ScriptSort>(
+    readSort(
+      (() => {
+        try {
+          return localStorage.getItem(SORT_KEY)
+        } catch {
+          return null
+        }
+      })(),
+    ),
+  )
+  const setSort = (v: ScriptSort) => {
+    setSortRaw(v)
+    try {
+      localStorage.setItem(SORT_KEY, v)
+    } catch {}
+  }
+  // Searching looks through the hidden test scripts too: a person typing a name wants it found.
+  const found = createMemo(() => {
+    const q = query().trim()
+    const pool = q && view() === "all" ? scripts() : listed()
+    return sortScripts(q ? pool.filter((s) => matchesQuery(s, q)) : pool, sort())
+  })
+  const [page, setPage] = createSignal(1)
+  const shown = createMemo(() => pageOf(found(), page()))
+  // A new search, view or order starts at the top.
+  createEffect(on([query, view, sort], () => setPage(1), { defer: true }))
+  // Opening a script from elsewhere (⌘K, a remembered pick) turns to the page that holds it.
+  createEffect(
+    on(slug, (s) => {
+      const at = pageHolding(found(), s)
+      if (at && at !== shown().page) setPage(at)
+    }),
   )
   // Opening Project lands on one of the board's scripts, not on whatever All had open.
   createEffect(
@@ -585,6 +630,40 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
             )}
           </For>
         </div>
+        <div class="hsc-find">
+          <Ic name="magnifying-glass" />
+          <input
+            type="search"
+            placeholder="Search"
+            aria-label="Search scripts"
+            value={query()}
+            onInput={(e) => setQuery(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape" && query()) {
+                e.stopPropagation()
+                setQuery("")
+              }
+              if (e.key === "Enter" && shown().rows[0]) choose(shown().rows[0].slug)
+            }}
+          />
+          <Show when={query()}>
+            <button type="button" class="hsc-ib" title="Clear search" aria-label="Clear search" onClick={() => setQuery("")}>
+              <Ic name="close-small" />
+            </button>
+          </Show>
+          <Show when={view() !== "market"}>
+            <button
+              type="button"
+              class="hsc-ib hsc-sort"
+              title={sort() === "recent" ? "Newest edit first — sort A–Z instead" : "A–Z — sort by newest edit instead"}
+              aria-label={sort() === "recent" ? "Sorted by last edited" : "Sorted by name"}
+              onClick={() => setSort(sort() === "recent" ? "name" : "recent")}
+            >
+              <Ic name={sort() === "recent" ? "clock" : "arrow-down-to-line"} />
+              <span class="hsc-num">{sort() === "recent" ? "Recent" : "A–Z"}</span>
+            </button>
+          </Show>
+        </div>
         <Show when={naming()}>
           <input
             class="hsc-newname hsc-mono"
@@ -623,7 +702,7 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
               </li>
             </Show>
             {/* A test script opened from ⌘K stays visible while it is open. */}
-            <For each={listed()}>
+            <For each={shown().rows}>
               {(s) => {
                 const r = () => readiness(s.doctor, onlineNames())
                 return (
@@ -647,11 +726,42 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
                     <Show when={r().state === "blocked"}>
                       <Ic name="lock" class="hsc-amber" />
                     </Show>
+                    <time class="hsc-age hsc-num" datetime={s.updatedAt} title={s.updatedAt ? `Edited ${ago(s.updatedAt, now())}` : "Never edited here"}>
+                      {shortAgo(s.updatedAt, now())}
+                    </time>
                   </li>
                 )
               }}
             </For>
           </ul>
+          <Show when={query().trim() && found().length === 0}>
+            <p class="hsc-muted hsc-pad">Nothing matches “{query().trim()}”.</p>
+          </Show>
+          <Show when={shown().pages > 1}>
+            <nav class="hsc-pager" aria-label="Pages of scripts">
+              <button
+                type="button"
+                class="hsc-ib"
+                aria-label="Previous page"
+                disabled={shown().page <= 1}
+                onClick={() => setPage(shown().page - 1)}
+              >
+                <Ic name="chevron-left" />
+              </button>
+              <span class="hsc-num">
+                {shown().from}–{shown().to} of {shown().total}
+              </span>
+              <button
+                type="button"
+                class="hsc-ib"
+                aria-label="Next page"
+                disabled={shown().page >= shown().pages}
+                onClick={() => setPage(shown().page + 1)}
+              >
+                <Ic name="chevron-right" />
+              </button>
+            </nav>
+          </Show>
           </Show>
           <Show when={view() === "market"}>
             <Show when={market() && !market()!.measured}>
@@ -660,7 +770,7 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
               </p>
             </Show>
             <ul class="hsc-ilist" role="listbox" aria-label="Public scripts">
-              <For each={market.latest?.scripts ?? []}>
+              <For each={(market.latest?.scripts ?? []).filter((m) => matchesQuery(m, query()))}>
                 {(m) => (
                   <li
                     role="option"
@@ -680,7 +790,7 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
               </For>
             </ul>
           </Show>
-          <Show when={view() === "all" && tests().length}>
+          <Show when={view() === "all" && tests().length && !query().trim()}>
             <button
               class="hsc-more hsc-num"
               type="button"

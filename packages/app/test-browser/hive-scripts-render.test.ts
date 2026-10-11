@@ -113,9 +113,14 @@ test("Scripts tab: list, computers and the one fix, from the real snapshot", asy
   expect(host.querySelector(".hsc-fixrow")?.textContent).toContain("6 scripts wait on one fix")
   expect(host.querySelector(".hsc-fixrow")?.getAttribute("title")).toContain("restart its Hive daemon")
 
-  // tests can be shown
+  // tests can be shown — 27 is more than a page, so the list pages
   ;(host.querySelector(".hsc-more") as HTMLButtonElement).click()
-  await wait(() => host.querySelectorAll(".hsc-ilist li").length === 27)
+  await wait(() => host.querySelector(".hsc-pager") !== null)
+  expect(host.querySelectorAll(".hsc-ilist li").length).toBe(25)
+  expect(host.querySelector(".hsc-pager .hsc-num")?.textContent).toBe("1–25 of 27")
+  ;(host.querySelector('.hsc-pager [aria-label="Next page"]') as HTMLButtonElement).click()
+  await wait(() => host.querySelectorAll(".hsc-ilist li").length === 2)
+  expect(host.querySelector(".hsc-pager .hsc-num")?.textContent).toBe("26–27 of 27")
   dispose()
   host.remove()
 })
@@ -241,7 +246,7 @@ test("All · Project · Marketplace: a board's scripts, pinning, and adding a pu
   localStorage.removeItem("iris.hive.scripts.view")
   localStorage.setItem("iris.hive.scripts.slug", "node-health")
   const { host, calls, dispose } = mount({ bloqId: 7, tagged: ["deal-scenarios"] })
-  const rows = () => [...host.querySelectorAll(".hsc-list .hsc-ilist li")].map((l) => l.textContent)
+  const rows = () => [...host.querySelectorAll(".hsc-list .hsc-ilist li")].map((l) => l.querySelector(".hsc-mono")?.textContent)
   const tab = (w: string) => [...host.querySelectorAll(".hsc-views button")].find((b) => b.textContent === w) as HTMLButtonElement
   await wait(() => rows().length > 0)
   expect([...host.querySelectorAll(".hsc-views button")].map((b) => b.textContent)).toEqual(["All", "Project", "Marketplace"])
@@ -296,4 +301,44 @@ test("Project with no board asks for one", async () => {
   dispose()
   host.remove()
   localStorage.removeItem("iris.hive.scripts.view")
+})
+
+test("search finds a script by any word, last-edited orders the list, and A–Z is remembered", async () => {
+  localStorage.removeItem("iris.hive.scripts.sort")
+  const { host, dispose } = mount()
+  await wait(() => host.querySelectorAll(".hsc-ilist li").length > 0)
+  const rows = () => [...host.querySelectorAll(".hsc-list .hsc-ilist li")].map((l) => l.querySelector(".hsc-mono")?.textContent)
+  const ages = () => [...host.querySelectorAll(".hsc-list .hsc-ilist li time")].map((t) => t.getAttribute("datetime"))
+
+  // newest edit first, and every row says how long ago
+  const when = ages().filter(Boolean).map((d) => Date.parse(d!))
+  expect(when.length).toBeGreaterThan(5)
+  expect(when).toEqual([...when].sort((a, b) => b - a))
+  expect(host.querySelector(".hsc-ilist li time")?.textContent).toMatch(/^(now|\d+[mhdwy])$/)
+
+  // words in any order, hyphen or not; Enter opens the first hit
+  const box = host.querySelector('.hsc-find input[type="search"]') as HTMLInputElement
+  box.value = "scen deal"
+  box.dispatchEvent(new Event("input", { bubbles: true }))
+  await wait(() => rows().length === 1)
+  expect(rows()).toEqual(["deal-scenarios"])
+  // a test script is found by name even though the list hides them
+  box.value = "e2e fda"
+  box.dispatchEvent(new Event("input", { bubbles: true }))
+  await wait(() => rows().length === 1 && rows()[0] === "e2e-fda")
+  box.value = "zzz-nothing"
+  box.dispatchEvent(new Event("input", { bubbles: true }))
+  await wait(() => rows().length === 0)
+  expect(host.querySelector(".hsc-list")?.textContent).toContain("Nothing matches")
+  ;(host.querySelector('.hsc-find [aria-label="Clear search"]') as HTMLButtonElement).click()
+  await wait(() => rows().length === 17)
+
+  // A–Z, remembered
+  ;(host.querySelector(".hsc-sort") as HTMLButtonElement).click()
+  await wait(() => rows()[0] === [...rows()].sort()[0] && host.querySelector(".hsc-sort")?.textContent === "A–Z")
+  expect(rows()).toEqual([...rows()].sort())
+  expect(localStorage.getItem("iris.hive.scripts.sort")).toBe("name")
+  dispose()
+  host.remove()
+  localStorage.removeItem("iris.hive.scripts.sort")
 })

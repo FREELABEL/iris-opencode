@@ -132,6 +132,28 @@
 .hsc-ilist li:hover { color: var(--hsc-ink); }
 .hsc-ilist li.on { background: var(--hsc-elev); color: var(--hsc-ink); }
 .hsc-ilist li.bl, .hsc-ilist li.unk { color: var(--hsc-faint); }
+/* Search, with the sort order beside it. */
+.hsc-find {
+  display: flex; align-items: center; gap: 4px; margin: 8px 0 0; padding: 0 2px 0 8px; height: 30px;
+  border: 1px solid var(--hsc-rule); border-radius: 8px; background: var(--hsc-card); color: var(--hsc-faint);
+}
+.hsc-find:focus-within { border-color: color-mix(in srgb, var(--hsc-ink2) 70%, transparent); }
+.hsc-find input {
+  all: unset; flex: 1; min-width: 0; font-size: 12px; color: var(--hsc-ink); padding: 0 2px;
+}
+.hsc-find input::placeholder { color: var(--hsc-faint); }
+.hsc-find input::-webkit-search-cancel-button { display: none; }
+.hsc-find .hsc-ib { border: 0; width: 24px; height: 24px; }
+.hsc-find .hsc-sort { width: auto; padding: 0 6px; gap: 4px; display: inline-flex; font-size: 10.5px; color: var(--hsc-faint); }
+.hsc-find .hsc-sort:hover { color: var(--hsc-ink); }
+/* How long since each script was edited — a quiet column on the right. */
+.hsc-age { flex: none; min-width: 2.4em; text-align: right; font-size: 10.5px; color: var(--hsc-faint); }
+.hsc-ilist li.on .hsc-age { color: var(--hsc-ink2); }
+.hsc-pager {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px; margin: 8px 2px 0;
+  font-size: 11px; color: var(--hsc-faint);
+}
+.hsc-pager .hsc-ib { width: 24px; height: 24px; }
 .hsc-more {
   all: unset; cursor: pointer; display: block; font-size: 11px; color: var(--hsc-faint); margin: 6px 8px;
 }
