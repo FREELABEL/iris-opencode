@@ -13,6 +13,7 @@ import {
   sandboxedDocument,
 } from "./iris-artifacts-model"
 import type { Bindings } from "@opencode-ai/core/util/iris-bindings"
+import { specDocument, type UiNode } from "@opencode-ai/core/util/iris-ui-catalog"
 import { focusArtifact, requestIrisNav } from "./iris-nav"
 import "./genesis-artifact-card.css"
 
@@ -128,7 +129,15 @@ ToolRegistry.register({
     const id = createMemo(() => (typeof meta().id === "string" ? (meta().id as string) : undefined))
     const kind = createMemo<Kind>(() => (meta().kind ?? props.input?.kind ?? "html") as Kind)
     const title = createMemo(() => String(meta().title ?? props.input?.title ?? "Untitled"))
-    const content = createMemo(() => (typeof props.input?.content === "string" ? (props.input.content as string) : ""))
+    // A components answer (#188930 gap #1) has no content: build the same document the tool
+    // stored, with the same core function, so the card and the artifact cannot disagree.
+    const content = createMemo(() =>
+      Array.isArray(props.input?.components)
+        ? specDocument(props.input.components as UiNode[], String(props.input?.title ?? "Untitled"))
+        : typeof props.input?.content === "string"
+          ? (props.input.content as string)
+          : "",
+    )
     const isWrite = createMemo(() => action() === "create" || action() === "update")
     const conflict = createMemo(() => meta().conflict === true)
     // Inline once the call has finished: a half-streamed page is not worth running.

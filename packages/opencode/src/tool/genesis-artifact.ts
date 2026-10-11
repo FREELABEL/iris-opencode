@@ -17,6 +17,7 @@ import {
   type Binding,
   type Bindings,
 } from "@opencode-ai/core/util/iris-bindings"
+import { CATALOG, SpecError, specDocument, validateSpec, type UiNode } from "@opencode-ai/core/util/iris-ui-catalog"
 
 /**
  * The agent's side of Genesis › Artifacts (epics #186508 / #186510).
@@ -52,6 +53,14 @@ export const Parameters = Schema.Struct({
   display: Schema.optional(Schema.Literals(["inline", "card"])).annotate({
     description:
       "inline = draw it live INSIDE the chat message, full width and interactive (the answer IS the interface: a filterable table, a calculator, a chart to explore). card = a small preview that opens the pane (documents, long pages). Default card.",
+  }),
+  components: Schema.optional(Schema.Array(Schema.Unknown)).annotate({
+    description:
+      "Instead of content: build the answer from IRIS's fixed parts — [{type, props, children}]. Types: " +
+      Object.entries(CATALOG)
+        .map(([t, p]) => `${t} (${p})`)
+        .join("; ") +
+      ". `from` names a binding. Prefer this over hand-written HTML for tables, stats, charts and calculators.",
   }),
   bindings: Schema.optional(
     Schema.Record(
@@ -206,15 +215,28 @@ export const GenesisArtifactTool = Tool.define<typeof Parameters, Metadata, Sess
           }
 
           // create / update
-          if (params.content === undefined) return yield* Effect.fail(new Error(`${params.action} needs content`))
+          if (params.content !== undefined && params.components !== undefined) {
+            return yield* Effect.fail(new Error("give content OR components, not both"))
+          }
+          if (params.content === undefined && params.components === undefined) {
+            return yield* Effect.fail(new Error(`${params.action} needs content (or components)`))
+          }
           if (params.action === "update" && !params.id) return yield* Effect.fail(new Error("update needs an id"))
           const prev = params.id ? Artifacts.read(where.dir, session, params.id)?.meta : undefined
           if (params.action === "update" && !prev) {
             return yield* Effect.fail(new Error(`no artifact ${params.id} in this session — create it instead`))
           }
-          const kind = params.kind ?? prev?.kind
+          const kind = params.components !== undefined ? "html" : (params.kind ?? prev?.kind)
           if (!kind) return yield* Effect.fail(new Error("create needs a kind: html, markdown, csv or code"))
           const hasBindings = !!params.bindings && Object.keys(params.bindings).length > 0
+          if (params.components !== undefined) {
+            try {
+              validateSpec(params.components, Object.keys(params.bindings ?? {}))
+            } catch (e) {
+              if (e instanceof SpecError) return yield* Effect.fail(new Error(`components: ${e.message}`))
+              throw e
+            }
+          }
           if (hasBindings && kind !== "html") {
             return yield* Effect.fail(new Error(`bindings are for html artifacts; this one is ${kind}`))
           }
@@ -228,7 +250,11 @@ export const GenesisArtifactTool = Tool.define<typeof Parameters, Metadata, Sess
           // stored as given: an agent that read a bound artifact back and only changed its CSS
           // still carries the block, and the page keeps its data. Stripping it here would empty
           // the page on a styling edit, and an empty page reads as "no data".
-          const content = bound ? injectBindings(params.content, bound) : params.content
+          const source =
+            params.components !== undefined
+              ? specDocument(params.components as UiNode[], params.title ?? prev?.title ?? "Untitled")
+              : params.content!
+          const content = bound ? injectBindings(source, bound) : source
 
           let meta: Artifacts.Meta
           try {

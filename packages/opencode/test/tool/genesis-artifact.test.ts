@@ -323,3 +323,106 @@ describe("genesis_artifact — bindings and inline display", () => {
     }),
   )
 })
+
+// #188930 gap #1 — the answer built from fixed parts, not hand-written markup.
+describe("genesis_artifact — components", () => {
+  const plansCall = [
+    {
+      info: { id: "msg_a", role: "assistant" },
+      parts: [
+        {
+          type: "tool",
+          callID: "call_p",
+          tool: "atlas_datasets",
+          state: {
+            status: "completed",
+            input: {},
+            output: '[{"plan":"Starter","price":19},{"plan":"Team","price":29}]',
+            title: "",
+            metadata: {},
+            time: { start: 1, end: 2 },
+          },
+        },
+      ],
+    },
+  ] as any
+
+  it.instance("a components answer is stored as an html page: the runtime, the spec and the bound data", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const sessions = yield* Session.Service
+      const s = yield* sessions.create({ title: "desk" })
+      const r = yield* run(
+        {
+          action: "create",
+          title: "Plans",
+          display: "inline",
+          components: [
+            { type: "Stat", props: { label: "Plans", value: { from: "plans", field: "price", agg: "count" } } },
+            { type: "Table", props: { from: "plans", columns: ["plan", "price"] } },
+          ],
+          bindings: { plans: { call_id: "call_p" } },
+        },
+        { ...ctxFor(s.id, "build"), messages: plansCall },
+      )
+      expect(r.metadata.kind).toBe("html")
+      const doc = Artifacts.read(Artifacts.rootFor(test.directory).dir, s.id, r.metadata.id!)!.content
+      expect(doc).toContain("window.__IRIS_UI__=")
+      expect(doc).toContain('id="iris-bindings"')
+      expect(doc).toContain('"plan":"Team"')
+      expect(doc.indexOf("iris-bindings")).toBeLessThan(doc.indexOf("window.__IRIS_UI__="))
+    }),
+  )
+
+  it.instance("an invalid spec fails the call with what is allowed — nothing is written", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const sessions = yield* Session.Service
+      const s = yield* sessions.create({ title: "desk" })
+      const exit = yield* Effect.exit(
+        run(
+          {
+            action: "create",
+            title: "x",
+            components: [{ type: "Table", props: { from: "nope" } }],
+            bindings: { plans: { call_id: "call_p" } },
+          },
+          { ...ctxFor(s.id, "build"), messages: plansCall },
+        ),
+      )
+      expect(String((exit as any).cause)).toContain(
+        'components: components[0]: from "nope" is not a binding. Bound: plans',
+      )
+      expect(Artifacts.list(Artifacts.rootFor(test.directory).dir, s.id)).toEqual([])
+    }),
+  )
+
+  it.instance("content and components together is refused", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const s = yield* sessions.create({ title: "desk" })
+      const exit = yield* Effect.exit(
+        run(
+          {
+            action: "create",
+            title: "x",
+            kind: "html",
+            content: "<p>",
+            components: [{ type: "Text", props: { text: "x" } }],
+          },
+          ctxFor(s.id, "build"),
+        ),
+      )
+      expect(String((exit as any).cause)).toContain("content OR components")
+    }),
+  )
+
+  it.instance("the description lists the catalog, so the model knows its parts", () =>
+    Effect.gen(function* () {
+      const info = yield* ArtifactTool
+      const tool = yield* info.init()
+      const schema = JSON.stringify(tool.parameters)
+      for (const t of ["Stat", "Table", "BarChart", "Slider"]) expect(schema).toContain(t)
+    }),
+  )
+})
