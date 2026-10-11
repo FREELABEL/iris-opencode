@@ -174,8 +174,12 @@
   .fr-tile:disabled {
     cursor: default;
   }
+  /* Another one is waiting: still choosable, so dimmed, not greyed out — hover brings it back. */
   .fr-tile[data-state="idle-other"] {
-    opacity: 0.45;
+    opacity: 0.6;
+  }
+  .fr-tile[data-state="idle-other"]:hover:not(:disabled) {
+    opacity: 1;
   }
   .fr-tile[data-state="waiting"] {
     border-color: rgba(168, 85, 247, 0.8);

@@ -162,14 +162,34 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
   const isConnected = (s: any, type: string) =>
     MAIL.has(type) ? s?.mail?.connected && s.mail.type === type : Array.isArray(s?.connected) && s.connected.includes(type)
 
+  // Which connect is current. Choosing another (or cancelling) makes an earlier one's late answer
+  // a no-op, so a slow first click can never open its browser page after the person moved on.
+  let attempt = 0
+  // A connection found before any click; kept across a waiting step so Cancel can offer it again.
+  const readyNow = () => {
+    const s = step()
+    return s.kind === "connect" ? s.ready : undefined
+  }
+
+  /** Stop waiting on the browser and pick again. Whatever was approved meanwhile still counts. */
+  function cancelConnect() {
+    attempt++
+    stopPoll()
+    setStep({ kind: "connect", ready: readyNow() })
+  }
+
   async function connect(type: string) {
-    setStep({ kind: "connect", waiting: type, note: "Opening your browser…" })
+    const mine = ++attempt
+    stopPoll()
+    const ready = readyNow()
+    setStep({ kind: "connect", ready, waiting: type, note: "Opening your browser…" })
     const r = await post("/iris/integrations/connect", { type }).catch(() => null)
+    if (mine !== attempt) return
     if (!r?.measured || !r.url) {
-      return setStep({ kind: "connect", note: r?.hint ?? r?.reason ?? "Couldn't start the connection. Try again." })
+      return setStep({ kind: "connect", ready, note: r?.hint ?? r?.reason ?? "Couldn't start the connection. Try again." })
     }
     platform.openExternal(r.url)
-    setStep({ kind: "connect", waiting: type, note: "Approve IRIS in your browser. This screen continues on its own." })
+    setStep({ kind: "connect", ready, waiting: type, note: "Approve IRIS in your browser. This screen continues on its own." })
 
     // Poll, don't ask them to come back and click. One connection is enough: it moves on by itself.
     stopPoll()
@@ -177,9 +197,10 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
     poll = setInterval(async () => {
       if (Date.now() - started > POLL_FOR_MS) {
         stopPoll()
-        return setStep({ kind: "connect", note: "Still waiting on your browser. Connect again when you're ready." })
+        return setStep({ kind: "connect", ready, note: "Still waiting on your browser. Connect again when you're ready." })
       }
       const s = await call("/iris/onboarding/state").catch(() => null)
+      if (mine !== attempt) return
       if (isConnected(s, type)) {
         stopPoll()
         mailConnected = !!s.mail?.connected
@@ -283,6 +304,13 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
 
           <Match when={step().kind === "connect" && (step() as Extract<Step, { kind: "connect" }>)}>
             {(s) => {
+              // Connected → move on. Waiting on this one → cancel it. Anything else → switch to it.
+              const pick = (type: string) => {
+                const st = tileState(type)
+                if (st === "connected") return setStep({ kind: "goal" })
+                if (st === "waiting") return cancelConnect()
+                void connect(type)
+              }
               const tileState = (type: string) => {
                 const c = s()
                 if (c.connected) return c.connected.type === type ? "connected" : "idle-other"
@@ -309,8 +337,9 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
                           <button
                             class="fr-tile"
                             data-state={tileState(t.type)}
-                            disabled={!!s().waiting || !!s().connected}
-                            onClick={() => (tileState(t.type) === "connected" ? setStep({ kind: "goal" }) : void connect(t.type))}
+                            disabled={!!s().connected}
+                            title={tileState(t.type) === "waiting" ? "Cancel" : undefined}
+                            onClick={() => pick(t.type)}
                           >
                             <span class="fr-logo">
                               <t.Logo />
@@ -358,8 +387,9 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
                             <button
                               class="fr-int"
                               data-state={tileState(c.type)}
-                              disabled={!!s().waiting || !!s().connected}
-                              onClick={() => (tileState(c.type) === "connected" ? setStep({ kind: "goal" }) : void connect(c.type))}
+                              disabled={!!s().connected}
+                              title={tileState(c.type) === "waiting" ? "Cancel" : undefined}
+                              onClick={() => pick(c.type)}
                             >
                               <span class="fr-int-logo">
                                 {c.name.slice(0, 1)}
@@ -396,6 +426,10 @@ export function HomeFirstRun(props: { onStart: (directory: string, prompt: strin
                         {" "}
                         <button class="underline hover:text-v2-text-text-base" onClick={() => void connect(s().waiting!)}>
                           Open it again
+                        </button>
+                        {" · "}
+                        <button class="underline hover:text-v2-text-text-base" onClick={cancelConnect}>
+                          Cancel
                         </button>
                       </Show>
                     </p>
