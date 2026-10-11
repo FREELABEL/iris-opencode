@@ -40,6 +40,7 @@ export type ScriptSummary = {
   updatedAt?: string
   lastExecutedAt: string | null
   doctor: ScriptDoctor | null
+  tags: string[]
 }
 
 export type ScriptSource = {
@@ -52,6 +53,7 @@ export type ScriptSource = {
   updatedAt?: string
   autoPull: boolean
   visibility?: string
+  tags: string[]
 }
 
 export type TaskView = {
@@ -124,7 +126,14 @@ export function readSource(d: any): ScriptSource | null {
     updatedAt: str(d.updated_at),
     autoPull: Boolean(d.auto_pull),
     visibility: str(d.visibility),
+    tags: tagsOf(d.tags),
   }
+}
+
+/** The hub stores tags as JSON that may be null, an array, or (old rows) a comma string. */
+export function tagsOf(v: unknown): string[] {
+  const raw = Array.isArray(v) ? v : typeof v === "string" ? v.split(",") : []
+  return [...new Set(raw.map((t) => String(t).trim()).filter(Boolean))]
 }
 
 /**
@@ -226,6 +235,7 @@ export async function fetchScripts(): Promise<Result<{ scripts: ScriptSummary[];
       updatedAt: str(r.updated_at),
       lastExecutedAt: nul(r.last_executed_at),
       doctor: doctors[i],
+      tags: tagsOf(r.tags),
     }))
     scripts.sort((a, b) => a.slug.localeCompare(b.slug))
     return { measured: true, data: { scripts, account } }
@@ -266,20 +276,31 @@ export type SaveResult = { ok: boolean; reason?: string; sha256?: string; update
  * carried over from the saved copy, because the push endpoint is an upsert and a field left out
  * is not "unchanged" to every server version.
  */
-export async function saveScript(slug: string, content: string): Promise<SaveResult> {
+export async function saveScript(
+  slug: string,
+  content: string,
+  opts: { tags?: string[]; name?: string; description?: string; runtime?: string; mustBeNew?: boolean } = {},
+): Promise<SaveResult> {
   const userId = await resolveUserId()
   if (!userId) return { ok: false, reason: notSignedIn() }
   try {
-    const current = (await fetchScript(slug)).data.script
+    const read = await fetchScript(slug)
+    const current = read.data.script
+    if (opts.mustBeNew && !read.measured) return { ok: false, reason: read.reason ?? "could not check your scripts first" }
+    if (opts.mustBeNew && current) return { ok: false, reason: `you already have a script named '${slug}'` }
+    // The hub writes `tags` as sent, and a push without them ERASES them — so they always go back.
+    if (!read.measured && opts.tags === undefined) return { ok: false, reason: read.reason ?? "could not read the saved copy" }
+    const tags = opts.tags ?? current?.tags ?? []
     const res = await irisFetch(`/api/v1/scripts`, IRIS_API, {
       method: "POST",
       body: JSON.stringify({
         slug,
-        name: current?.name,
-        description: current?.description,
-        runtime: current?.runtime ?? "bash",
+        name: opts.name ?? current?.name,
+        description: opts.description ?? current?.description,
+        runtime: opts.runtime ?? current?.runtime ?? "bash",
         script_content: content,
         auto_pull: current?.autoPull ?? false,
+        tags: tags.length ? tags : null,
         user_id: userId,
       }),
     })
@@ -293,6 +314,105 @@ export async function saveScript(slug: string, content: string): Promise<SaveRes
   } catch (e) {
     return { ok: false, reason: errText(e) }
   }
+}
+
+/** Tag a script into or out of a project. Same push, same content — the hub burns no version. */
+export async function setScriptTags(slug: string, tags: string[]): Promise<SaveResult> {
+  const read = await fetchScript(slug)
+  if (!read.data.script) return { ok: false, reason: read.reason ?? `no script named '${slug}'` }
+  return saveScript(slug, read.data.script.content, { tags: tagsOf(tags) })
+}
+
+// ── Marketplace: the public directory behind /p/hive-scripts. Unauthenticated by design. ──
+
+export type MarketScript = {
+  slug: string
+  name?: string
+  description?: string
+  runtime?: string
+  author?: string
+  version?: number
+  publishedAt?: string
+  requires: string[]
+}
+export type MarketSource = MarketScript & {
+  content: string
+  timeout?: number
+  egress?: string
+  assets: number
+  checks: { title: string; status: string }[]
+}
+
+const readMarket = (r: any): MarketScript => ({
+  slug: String(r.slug),
+  name: str(r.name),
+  description: str(r.description),
+  runtime: str(r.runtime),
+  author: str(r.author),
+  version: typeof r.version === "number" ? r.version : undefined,
+  publishedAt: str(r.published_at),
+  requires: Array.isArray(r.requires) ? r.requires.map(String) : [],
+})
+
+export async function fetchMarket(q?: string): Promise<Result<{ scripts: MarketScript[] }>> {
+  try {
+    const res = await fetch(`${IRIS_API}/api/v1/public/scripts${q ? `?q=${encodeURIComponent(q)}` : ""}`, {
+      headers: { Accept: "application/json" },
+    })
+    if (!res.ok) return { measured: false, reason: `iris-api ${res.status}`, data: { scripts: [] } }
+    const rows: any[] = ((await res.json()) as any)?.data ?? []
+    return { measured: true, data: { scripts: rows.map(readMarket) } }
+  } catch (e) {
+    return { measured: false, reason: errText(e), data: { scripts: [] } }
+  }
+}
+
+export async function fetchMarketScript(slug: string): Promise<Result<{ script: MarketSource | null }>> {
+  try {
+    const res = await fetch(`${IRIS_API}/api/v1/public/scripts/${encodeURIComponent(slug)}`, {
+      headers: { Accept: "application/json" },
+    })
+    if (res.status === 404) return { measured: true, reason: `no public script named '${slug}'`, data: { script: null } }
+    if (!res.ok) return { measured: false, reason: `iris-api ${res.status}`, data: { script: null } }
+    const d = ((await res.json()) as any)?.data
+    if (!d || typeof d.script_content !== "string") return { measured: false, reason: "no source in the answer", data: { script: null } }
+    return {
+      measured: true,
+      data: {
+        script: {
+          ...readMarket(d),
+          content: d.script_content,
+          timeout: typeof d.timeout === "number" ? d.timeout : undefined,
+          egress: str(d.egress),
+          assets: Array.isArray(d.assets) ? d.assets.length : 0,
+          checks: Array.isArray(d.checks)
+            ? d.checks.map((c: any) => ({ title: String(c.title ?? c.id ?? ""), status: String(c.status ?? "") }))
+            : [],
+        },
+      },
+    }
+  } catch (e) {
+    return { measured: false, reason: errText(e), data: { script: null } }
+  }
+}
+
+/**
+ * Add a marketplace script to my account: a copy of its source under the same slug, refused if
+ * I already have one by that name (an install must never overwrite my own script). Attached files
+ * are not copied — the answer says how many were left behind.
+ */
+export async function installScript(slug: string, tags: string[] = []): Promise<SaveResult & { assetsLeft?: number }> {
+  const pub = await fetchMarketScript(slug)
+  const src = pub.data.script
+  if (!src) return { ok: false, reason: pub.reason ?? `no public script named '${slug}'` }
+  const saved = await saveScript(slug, src.content, {
+    mustBeNew: true,
+    name: src.name,
+    description: src.description,
+    runtime: src.runtime,
+    tags: tagsOf(tags),
+  })
+  return src.assets ? { ...saved, assetsLeft: src.assets } : saved
 }
 
 export type RunResult = { ok: boolean; reason?: string; taskId?: string; nodeId?: string; nodeName?: string; sha256?: string | null; timeoutSeconds?: number }

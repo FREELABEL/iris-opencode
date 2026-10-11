@@ -88,3 +88,65 @@ describe("run", () => {
     expect(clampTimeout(600)).toBe(600)
   })
 })
+
+describe("save keeps tags; adding from the marketplace never overwrites", () => {
+  const H = () => import("@/iris/hive-scripts")
+  const withHub = async (mine: Record<string, any>, fn: (posts: any[]) => Promise<void>) => {
+    process.env.IRIS_USER_ID = "193"
+    const posts: any[] = []
+    const real = globalThis.fetch
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      const u = String(url)
+      const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { "Content-Type": "application/json" } })
+      if (init?.method === "POST") {
+        posts.push(JSON.parse(String(init.body)))
+        return json({ data: { updated_at: "2026-10-11T00:00:00Z" } }, 201)
+      }
+      const pub = u.match(/\/api\/v1\/public\/scripts\/([a-z0-9-]+)$/)
+      if (pub) return json({ data: { slug: pub[1], name: "Public", runtime: "bash", script_content: "echo public\n", assets: [{}], checks: [] } })
+      const own = u.match(/\/api\/v1\/scripts\/([a-z0-9-]+)$/)
+      if (own) return mine[own[1]] ? json({ data: mine[own[1]] }) : json({ message: "nope" }, 404)
+      return json({}, 500)
+    }) as any
+    try {
+      await fn(posts)
+    } finally {
+      globalThis.fetch = real
+      delete process.env.IRIS_USER_ID
+    }
+  }
+  const saved = { slug: "deal-scenarios", runtime: "bash", script_content: "echo mine\n", tags: ["ops", "project:7"], auto_pull: false }
+
+  test("a plain save sends the saved tags back (the hub erases tags a push leaves out)", async () => {
+    const { saveScript } = await H()
+    await withHub({ "deal-scenarios": saved }, async (posts) => {
+      expect((await saveScript("deal-scenarios", "echo edited\n")).ok).toBe(true)
+      expect(posts[0].tags).toEqual(["ops", "project:7"])
+      expect(posts[0].script_content).toBe("echo edited\n")
+    })
+  })
+  test("setting tags re-saves the SAVED content with exactly those tags", async () => {
+    const { setScriptTags } = await H()
+    await withHub({ "deal-scenarios": saved }, async (posts) => {
+      expect((await setScriptTags("deal-scenarios", ["ops", "ops", " "])).ok).toBe(true)
+      expect(posts[0]).toMatchObject({ slug: "deal-scenarios", script_content: "echo mine\n", tags: ["ops"] })
+    })
+  })
+  test("adding a public script I already have is refused and writes nothing", async () => {
+    const { installScript } = await H()
+    await withHub({ "deal-scenarios": saved }, async (posts) => {
+      const r = await installScript("deal-scenarios")
+      expect(r.ok).toBe(false)
+      expect(r.reason).toContain("already have")
+      expect(posts).toEqual([])
+    })
+  })
+  test("adding a new one copies the public source and says what was left behind", async () => {
+    const { installScript } = await H()
+    await withHub({}, async (posts) => {
+      const r = await installScript("csv-tidy")
+      expect(r).toMatchObject({ ok: true, assetsLeft: 1 })
+      expect(posts[0]).toMatchObject({ slug: "csv-tidy", name: "Public", script_content: "echo public\n", tags: null })
+    })
+  })
+})

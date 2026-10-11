@@ -102,8 +102,22 @@
   0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--hsc-jade) 45%, transparent); }
   50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--hsc-jade) 0%, transparent); }
 }
+/* All · Project · Marketplace — the Playbooks tabs: words, an underline on the open one. */
+.hsc-views { display: flex; gap: 12px; margin: 10px 0 0; padding: 0 6px; border-bottom: 1px solid var(--hsc-rule); }
+.hsc-views button {
+  all: unset; cursor: pointer; padding: 5px 0 6px; font-size: 12px; color: var(--hsc-faint);
+  border-bottom: 1.5px solid transparent; margin-bottom: -1px; white-space: nowrap;
+}
+.hsc-views button:hover { color: var(--hsc-ink2); }
+.hsc-views button[aria-selected="true"] { color: var(--hsc-ink); border-bottom-color: var(--hsc-ink); }
+.hsc-views button:focus-visible { outline: 2px solid var(--border-interactive-focus, var(--hsc-jade)); outline-offset: 1px; }
+.hsc-jade { color: var(--hsc-jade); }
+.hsc-ib--on { color: var(--hsc-jade); border-color: color-mix(in srgb, var(--hsc-jade) 60%, transparent); }
+.hsc-run.hsc-run--add { background: var(--hsc-jade); color: var(--hsc-surface); }
+.hsc-mdesc { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--hsc-ink2); white-space: pre-line; max-height: 7.5em; overflow-y: auto; }
 .hsc-acct { font-size: 10.5px; color: var(--hsc-faint); font-weight: 400; }
 .hsc--closed .hsc-acct { display: none; }
+.hsc-where--market .hsc-cc { opacity: 0.5; pointer-events: none; }
 .hsc-empty { font-size: 12px; line-height: 1.45; margin-top: 8px; }
 .hsc-newname {
   width: 100%; margin: 8px 0 0; padding: 5px 8px; font-size: 12px; border-radius: 7px;
@@ -173,6 +187,7 @@
 }
 .hsc-chip b { color: var(--hsc-ink); font-weight: 500; }
 .hsc-chip--warn { color: var(--hsc-amber); }
+.hsc-chip--ok { color: var(--hsc-sage); }
 
 /* code */
 .hsc-code { border: 1px solid var(--hsc-rule); border-radius: 10px; background: var(--hsc-card); font-size: 12px; line-height: 1.6; }

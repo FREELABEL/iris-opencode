@@ -12,6 +12,10 @@ import {
   isTestScript,
   lastLine,
   listWidth,
+  projectTag,
+  readView,
+  scriptsInView,
+  withTag,
   parseCommand,
   parseHeader,
   setArgDefault,
@@ -212,12 +216,44 @@ describe("stages", () => {
 })
 
 describe("listWidth", () => {
-  test("keeps the list between 130 and 360px, and defaults to 170", () => {
+  test("keeps the list between 130 and 360px, and defaults to 196", () => {
     expect(listWidth(200)).toBe(200)
     expect(listWidth(10)).toBe(130)
     expect(listWidth(900)).toBe(360)
-    expect(listWidth(undefined)).toBe(170)
-    expect(listWidth("wide")).toBe(170)
-    expect(listWidth(Number.NaN)).toBe(170)
+    expect(listWidth(undefined)).toBe(196)
+    expect(listWidth("wide")).toBe(196)
+    expect(listWidth(Number.NaN)).toBe(196)
+  })
+})
+
+describe("views", () => {
+  const rows = [
+    { slug: "deal-scenarios", tags: ["project:7"] },
+    { slug: "node-health", tags: [] },
+    { slug: "e2e-fda", tags: ["project:7"] },
+    { slug: "s1-probe" },
+  ]
+  const tag = projectTag(7)
+  test("All hides test scripts unless asked, but keeps the open one", () => {
+    expect(scriptsInView(rows, "all", tag, { showTests: false }).map((s) => s.slug)).toEqual(["deal-scenarios", "node-health"])
+    expect(scriptsInView(rows, "all", tag, { showTests: false, open: "s1-probe" }).map((s) => s.slug)).toContain("s1-probe")
+    expect(scriptsInView(rows, "all", tag, { showTests: true })).toHaveLength(4)
+  })
+  test("Project is exactly what the board claimed, tests included", () => {
+    expect(scriptsInView(rows, "project", tag, { showTests: false }).map((s) => s.slug)).toEqual(["deal-scenarios", "e2e-fda"])
+    expect(scriptsInView(rows, "project", projectTag(8), { showTests: true })).toEqual([])
+    expect(scriptsInView(rows, "project", undefined, { showTests: true })).toEqual([])
+  })
+  test("a board with no id claims nothing; tags other than the board's survive a toggle", () => {
+    expect(projectTag(undefined)).toBeUndefined()
+    expect(projectTag(0)).toBeUndefined()
+    expect(withTag(["ops", "project:7"], "project:7", false)).toEqual(["ops"])
+    expect(withTag(["ops"], "project:7", true)).toEqual(["ops", "project:7"])
+    expect(withTag(["project:7"], "project:7", true)).toEqual(["project:7"])
+  })
+  test("an unknown remembered view falls back to All", () => {
+    expect(readView("market")).toBe("market")
+    expect(readView("nope")).toBe("all")
+    expect(readView(null)).toBe("all")
   })
 })

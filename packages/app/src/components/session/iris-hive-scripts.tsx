@@ -32,8 +32,13 @@ import {
   lastLine,
   parseCommand,
   parseHeader,
+  inProject,
+  projectTag,
   readiness,
+  readView,
+  scriptsInView,
   setArgDefault,
+  withTag,
   skillsOf,
   STAGES,
   stageStates,
@@ -44,6 +49,7 @@ import {
   type Doctor,
   type HiveNodeRow,
   type ScriptRow,
+  type ScriptView,
   type TaskView,
 } from "./iris-hive-scripts-model"
 
@@ -80,6 +86,16 @@ type SourcePayload = {
 type RunPayload = { ok: boolean; reason?: string; taskId?: string; nodeId?: string; nodeName?: string; sha256?: string | null }
 type TaskPayload = { measured: boolean; reason?: string | null; task: TaskView | null }
 type SavePayload = { ok: boolean; reason?: string; sha256?: string; updatedAt?: string }
+type MarketRow = { slug: string; name?: string; description?: string; author?: string; version?: number; requires: string[] }
+type MarketPayload = { measured: boolean; reason?: string | null; scripts: MarketRow[] }
+type MarketSourcePayload = {
+  measured: boolean
+  reason?: string | null
+  script:
+    | (MarketRow & { runtime?: string; content: string; timeout?: number; egress?: string; assets: number; checks: { title: string; status: string }[] })
+    | null
+}
+type InstallPayload = SavePayload & { assetsLeft?: number }
 
 type RunState = {
   slug: string
@@ -95,6 +111,8 @@ type RunState = {
 const POLL_MS = 1_000
 const SELECTED_KEY = "iris.hive.scripts.slug"
 const LIST_KEY = "iris.hive.scripts.list"
+const VIEW_KEY = "iris.hive.scripts.view"
+const VIEW_WORD: Record<ScriptView, string> = { all: "All", project: "Project", market: "Marketplace" }
 const NEW_TEMPLATE = "#!/bin/bash\n# iris: timeout=120\n# What this script does, in one line.\necho \"hello from $(hostname)\"\n"
 
 function Ic(props: { name: IconName; title?: string; class?: string }) {
@@ -123,7 +141,11 @@ const remembered = () => {
   }
 }
 
-export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number }) {
+/**
+ * `bloqId` / `bloqName` are the board the Iris tab is on — the Project view lists the scripts that
+ * board has claimed.
+ */
+export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; bloqId?: number; bloqName?: string }) {
   const now = () => props.now?.() ?? Date.now()
   const getJson = async <T,>(path: string, fallback: T, init?: RequestInit): Promise<T> => {
     try {
@@ -159,6 +181,27 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number }) {
   const [showTests, setShowTests] = createSignal(false)
   const [showFix, setShowFix] = createSignal(false)
 
+  // ── All · Project · Marketplace ──────────────────────────────────────────────────────────────
+  const [view, setViewRaw] = createSignal<ScriptView>(
+    readView(
+      (() => {
+        try {
+          return localStorage.getItem(VIEW_KEY)
+        } catch {
+          return null
+        }
+      })(),
+    ),
+  )
+  const setView = (v: ScriptView) => {
+    setViewRaw(v)
+    try {
+      localStorage.setItem(VIEW_KEY, v)
+    } catch {}
+  }
+  const tag = () => projectTag(props.bloqId)
+  const boardName = () => props.bloqName ?? "this board"
+
   // ── which script ─────────────────────────────────────────────────────────────────────────────
   const [slug, setSlug] = createSignal<string | undefined>(remembered())
   const [creating, setCreating] = createSignal<string | undefined>()
@@ -187,6 +230,42 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number }) {
   })
   const current = createMemo(() => scripts().find((s) => s.slug === slug()))
   const doctor = createMemo<Doctor | null>(() => current()?.doctor ?? null)
+  const listed = createMemo(() =>
+    scriptsInView(scripts(), view(), tag(), { showTests: showTests(), open: current() ? slug() : undefined }),
+  )
+  // Opening Project lands on one of the board's scripts, not on whatever All had open.
+  createEffect(
+    on(
+      [view, () => scripts().length],
+      ([v]) => {
+        if (v !== "project" || creating()) return
+        const l = listed()
+        if (l.length && !l.some((s) => s.slug === slug())) choose(l[0].slug)
+      },
+      { defer: true },
+    ),
+  )
+  const pinned = () => !!current() && inProject(current()!, tag())
+
+  // Marketplace: fetched the first time the tab is opened, then kept.
+  const [marketOpened, setMarketOpened] = createSignal(view() === "market")
+  createEffect(() => view() === "market" && setMarketOpened(true))
+  const [market] = createResource(
+    () => marketOpened() || undefined,
+    () => getJson<MarketPayload>("/iris/hive/market", { measured: false, scripts: [] }),
+  )
+  const [mslug, setMslug] = createSignal<string | undefined>()
+  createEffect(() => {
+    if (view() === "market" && !mslug()) {
+      const first = market.latest?.scripts?.[0]
+      if (first) setMslug(first.slug)
+    }
+  })
+  const [msrc] = createResource(
+    () => (view() === "market" ? mslug() : undefined),
+    (s) => getJson<MarketSourcePayload>(`/iris/hive/market/${encodeURIComponent(s)}`, { measured: false, script: null }),
+  )
+  const mine = (s: string | undefined) => !!s && scripts().some((x) => x.slug === s)
 
   const [source, { mutate: mutateSource }] = createResource(
     () => (creating() ? undefined : slug()),
@@ -251,7 +330,9 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number }) {
     setBusy("save")
     setNote(undefined)
     const body = text()
-    const r = await post<SavePayload>(`/iris/hive/scripts/${encodeURIComponent(s)}/save`, { content: body }, { ok: false })
+    // A script written in Project is the board's from the start.
+    const claim = creating() && view() === "project" && tag() ? { tags: [tag()!] } : {}
+    const r = await post<SavePayload>(`/iris/hive/scripts/${encodeURIComponent(s)}/save`, { content: body, ...claim }, { ok: false })
     setBusy(undefined)
     if (!r.ok) {
       setNote(`Not saved — ${r.reason ?? "the sidecar did not answer"}`)
@@ -267,6 +348,41 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number }) {
     }
     void startTransition(() => void refetchList())
     return true
+  }
+
+  const [pinning, setPinning] = createSignal(false)
+  const togglePin = async () => {
+    const c = current()
+    const t = tag()
+    if (!c || !t || pinning()) return
+    setPinning(true)
+    setNote(undefined)
+    const r = await post<SavePayload>(
+      `/iris/hive/scripts/${encodeURIComponent(c.slug)}/tags`,
+      { tags: withTag(c.tags, t, !pinned()) },
+      { ok: false },
+    )
+    if (!r.ok) setNote(`Not changed — ${r.reason ?? "the sidecar did not answer"}`)
+    else await refetchList()
+    setPinning(false)
+  }
+
+  const [installing, setInstalling] = createSignal(false)
+  const install = async () => {
+    const s = mslug()
+    if (!s || installing()) return
+    setInstalling(true)
+    setNote(undefined)
+    const r = await post<InstallPayload>(`/iris/hive/market/${encodeURIComponent(s)}/install`, {}, { ok: false })
+    if (!r.ok) {
+      setInstalling(false)
+      return setNote(`Not added — ${r.reason ?? "the sidecar did not answer"}`)
+    }
+    await refetchList()
+    setInstalling(false)
+    setView("all")
+    choose(s)
+    if (r.assetsLeft) setNote(`Added. Its ${r.assetsLeft} attached file${r.assetsLeft === 1 ? " was" : "s were"} not copied.`)
   }
 
   const runOn = async (target: Computer | undefined, ignoredArgs?: string[]) => {
@@ -440,6 +556,7 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number }) {
             title="New script"
             onClick={() => {
               setListClosed(false)
+              if (view() === "market") setView("all")
               setNaming(true)
             }}
           >
@@ -447,6 +564,27 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number }) {
           </button>
         </div>
         <Show when={!listClosed()}>
+        <div class="hsc-views" role="tablist" aria-label="Which scripts">
+          <For each={["all", "project", "market"] as ScriptView[]}>
+            {(v) => (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={view() === v}
+                title={
+                  v === "all"
+                    ? "Every script on your account"
+                    : v === "project"
+                      ? `The scripts ${boardName()} uses`
+                      : "Public scripts anyone can add"
+                }
+                onClick={() => setView(v)}
+              >
+                {VIEW_WORD[v]}
+              </button>
+            )}
+          </For>
+        </div>
         <Show when={naming()}>
           <input
             class="hsc-newname hsc-mono"
@@ -466,9 +604,17 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number }) {
               Could not read your scripts{list()!.reason ? ` — ${list()!.reason}` : ""}
             </p>
           </Show>
-          <Show when={list() && list()!.measured && scripts().length === 0 && !creating()}>
+          <Show when={view() === "all" && list() && list()!.measured && scripts().length === 0 && !creating()}>
             <p class="hsc-muted hsc-pad">No scripts on account {list()!.account ?? "?"} yet. Press + to write one.</p>
           </Show>
+          <Show when={view() === "project" && !creating() && listed().length === 0}>
+            <p class="hsc-muted hsc-pad hsc-empty">
+              {tag()
+                ? `${boardName()} has no scripts yet. Open one in All and pin it, or press + to write one here.`
+                : "Pick a board to see the scripts it uses."}
+            </p>
+          </Show>
+          <Show when={view() !== "market"}>
           <ul class="hsc-ilist" role="listbox">
             <Show when={creating()}>
               <li class="on" aria-selected="true" title="Not saved yet">
@@ -477,7 +623,7 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number }) {
               </li>
             </Show>
             {/* A test script opened from ⌘K stays visible while it is open. */}
-            <For each={showTests() ? scripts() : real().concat(current() && isTestScript(current()!.slug) ? [current()!] : [])}>
+            <For each={listed()}>
               {(s) => {
                 const r = () => readiness(s.doctor, onlineNames())
                 return (
@@ -495,6 +641,9 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number }) {
                     onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && choose(s.slug)}
                   >
                     <span class="hsc-mono">{s.slug}</span>
+                    <Show when={view() === "all" && inProject(s, tag())}>
+                      <Ic name="pin" class="hsc-jade" title={`In ${boardName()}`} />
+                    </Show>
                     <Show when={r().state === "blocked"}>
                       <Ic name="lock" class="hsc-amber" />
                     </Show>
@@ -503,7 +652,35 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number }) {
               }}
             </For>
           </ul>
-          <Show when={tests().length}>
+          </Show>
+          <Show when={view() === "market"}>
+            <Show when={market() && !market()!.measured}>
+              <p class="hsc-warn hsc-pad" title={market()!.reason ?? undefined}>
+                Could not reach the marketplace
+              </p>
+            </Show>
+            <ul class="hsc-ilist" role="listbox" aria-label="Public scripts">
+              <For each={market.latest?.scripts ?? []}>
+                {(m) => (
+                  <li
+                    role="option"
+                    aria-selected={m.slug === mslug()}
+                    classList={{ on: m.slug === mslug() }}
+                    title={m.description ?? m.name ?? m.slug}
+                    tabIndex={0}
+                    onClick={() => setMslug(m.slug)}
+                    onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && setMslug(m.slug)}
+                  >
+                    <span class="hsc-mono">{m.slug}</span>
+                    <Show when={mine(m.slug)}>
+                      <Ic name="check" class="hsc-jade" title="Already in your scripts" />
+                    </Show>
+                  </li>
+                )}
+              </For>
+            </ul>
+          </Show>
+          <Show when={view() === "all" && tests().length}>
             <button
               class="hsc-more hsc-num"
               type="button"
@@ -558,7 +735,102 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number }) {
           <p class="hsc-warn">{cmdError()}</p>
         </Show>
 
-        <Show when={name()} fallback={<p class="hsc-muted hsc-pad">Pick a script, or press + to write one.</p>}>
+        <Show when={view() === "market"}>
+          <Suspense fallback={<p class="hsc-muted hsc-pad">Reading…</p>}>
+            <Show when={mslug()} fallback={<p class="hsc-muted hsc-pad">Pick a public script to read it.</p>}>
+              <Show
+                when={msrc()?.script}
+                fallback={<p class="hsc-warn">Could not read {mslug()}{msrc()?.reason ? ` — ${msrc()!.reason}` : ""}</p>}
+              >
+                {(m) => (
+                  <>
+                    <div class="hsc-edbar">
+                      <span class="hsc-file hsc-mono">{fileName(m().slug, m().runtime)}</span>
+                      <span class="hsc-chip" title={`Published by ${m().author ?? "someone"}`}>
+                        <Ic name="globe" />
+                        {m().author ?? "—"}
+                      </span>
+                      <Show when={m().version}>
+                        <span class="hsc-chip hsc-num" title="Published version">
+                          v{m().version}
+                        </span>
+                      </Show>
+                      <span class="hsc-spacer" />
+                      <Show
+                        when={!mine(m().slug)}
+                        fallback={
+                          <button
+                            class="hsc-run"
+                            type="button"
+                            title="You already have a script by this name"
+                            onClick={() => {
+                              setView("all")
+                              choose(m().slug)
+                            }}
+                          >
+                            <Ic name="pencil-line" />
+                            Open mine
+                          </button>
+                        }
+                      >
+                        <button
+                          class="hsc-run hsc-run--add"
+                          type="button"
+                          disabled={installing()}
+                          title="Copy it to your scripts — then you can edit it and run it on your computers"
+                          onClick={() => void install()}
+                        >
+                          <Ic name="plus" />
+                          {installing() ? "Adding…" : "Add to my scripts"}
+                        </button>
+                      </Show>
+                    </div>
+                    <Show when={note()}>
+                      <p class="hsc-warn">{note()}</p>
+                    </Show>
+                    <Show when={m().description}>
+                      <p class="hsc-mdesc">{m().description}</p>
+                    </Show>
+                    <div class="hsc-argrow">
+                      <Show when={m().timeout}>
+                        <span class="hsc-chip" title={`Stops after ${m().timeout} seconds`}>
+                          <Ic name="clock" />
+                          <b class="hsc-num">{m().timeout}s</b>
+                        </span>
+                      </Show>
+                      <For each={m().checks}>
+                        {(c) => (
+                          <span
+                            class="hsc-chip"
+                            classList={{ "hsc-chip--ok": c.status === "pass", "hsc-chip--warn": c.status !== "pass" }}
+                            title={c.status === "pass" ? "Checked" : "Worth a look before you run it"}
+                          >
+                            <Ic name={c.status === "pass" ? "check" : "lock"} />
+                            {c.title}
+                          </span>
+                        )}
+                      </For>
+                      <Show when={m().assets}>
+                        <span class="hsc-chip hsc-chip--warn" title="Adding it copies the source, not these files">
+                          {m().assets} attached file{m().assets === 1 ? "" : "s"}
+                        </span>
+                      </Show>
+                    </div>
+                    <CodeView value={m().content} headerLines={parseHeader(m().content).lines} />
+                  </>
+                )}
+              </Show>
+            </Show>
+          </Suspense>
+        </Show>
+        <Show
+          when={view() !== "market" && name()}
+          fallback={
+            <Show when={view() !== "market"}>
+              <p class="hsc-muted hsc-pad">Pick a script, or press + to write one.</p>
+            </Show>
+          }
+        >
           <div class="hsc-edbar">
             <span class="hsc-file hsc-mono">{fileName(name(), runtime())}</span>
             <i
@@ -581,6 +853,19 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number }) {
               </button>
             </span>
             <span class="hsc-spacer" />
+            <Show when={tag() && current() && !creating()}>
+              <button
+                class="hsc-ib hsc-pin"
+                classList={{ "hsc-ib--on": pinned() }}
+                type="button"
+                aria-pressed={pinned()}
+                disabled={pinning()}
+                title={pinned() ? `In ${boardName()} — click to take it out` : `Add to ${boardName()}`}
+                onClick={() => void togglePin()}
+              >
+                <Ic name="pin" />
+              </button>
+            </Show>
             <button
               class="hsc-ib hsc-save"
               classList={{ "hsc-save--due": dirty() && busy() === undefined }}
@@ -730,7 +1015,7 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number }) {
       </section>
 
       {/* ── right: computers ── */}
-      <aside class="hsc-col hsc-where" aria-label="Computers">
+      <aside class="hsc-col hsc-where" classList={{ "hsc-where--market": view() === "market" }} aria-label="Computers">
         <h5>
           <Ic name="server" />
           {mode() === "run" && run() ? "Sent to" : "Run on"}
@@ -740,6 +1025,9 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number }) {
             <p class="hsc-warn" title={hive()!.reason ?? undefined}>
               Could not see your computers
             </p>
+          </Show>
+          <Show when={view() === "market"}>
+            <p class="hsc-muted hsc-empty">Add it to your scripts to run it on one of these.</p>
           </Show>
           <Show when={hive() && hive()!.measured && online().length === 0 && offline().length === 0}>
             <p class="hsc-muted hsc-empty">
@@ -751,7 +1039,8 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number }) {
             {(c) => {
               const v = () => computerVerdict(c, doctor())
               const isRun = () => mode() === "run" && run()?.computerId !== undefined && c.ids.includes(run()!.computerId)
-              const sel = () => (isRun() ? true : mode() === "edit" || !run() ? picked()?.id === c.id : false)
+              const sel = () =>
+                view() === "market" ? false : isRun() ? true : mode() === "edit" || !run() ? picked()?.id === c.id : false
               const d = diskOf(c)
               return (
                 <div

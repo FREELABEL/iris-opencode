@@ -44,13 +44,30 @@ const wait = async (ok: () => boolean, ms = 2000) => {
 }
 const NOW = Date.parse("2026-10-09T21:20:00Z")
 
-function mount(opts: { empty?: boolean } = {}) {
+const MARKET = [
+  { slug: "deal-scenarios", name: "Deal Scenarios", author: "FREELABEL", version: 2, requires: [] },
+  { slug: "csv-tidy", name: "CSV Tidy", author: "FREELABEL", version: 2, requires: [] },
+]
+function mount(opts: { empty?: boolean; bloqId?: number; tagged?: string[] } = {}) {
   const calls: { path: string; method: string; body?: any }[] = []
   let polled = 0
   const doFetch = async (path: string, init?: RequestInit) => {
     calls.push({ path, method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : undefined })
     const json = (v: unknown) => new Response(JSON.stringify(v), { headers: { "Content-Type": "application/json" } })
-    if (path === "/iris/hive/scripts") return json({ measured: true, scripts: opts.empty ? [] : snap.scripts, account: opts.empty ? 2945 : 193 })
+    if (path === "/iris/hive/scripts")
+      return json({
+        measured: true,
+        scripts: opts.empty ? [] : snap.scripts.map((s: any) => ({ ...s, tags: (opts.tagged ?? []).includes(s.slug) ? ["ops", "project:7"] : ["ops"] })),
+        account: opts.empty ? 2945 : 193,
+      })
+    if (path === "/iris/hive/market") return json({ measured: true, scripts: MARKET })
+    if (path.endsWith("/install")) return json({ ok: true, sha256: "z", assetsLeft: 1 })
+    if (path.endsWith("/tags")) return json({ ok: true, sha256: "x" })
+    if (path.startsWith("/iris/hive/market/"))
+      return json({
+        measured: true,
+        script: { ...MARKET.find((m) => path.endsWith(m.slug))!, runtime: "bash", content: "#!/bin/bash\n# iris: timeout=30\necho public\n", timeout: 30, assets: 1, checks: [{ title: "Network denied", status: "pass" }, { title: "Builds commands at runtime", status: "flag" }] },
+      })
     if (path.startsWith("/iris/hive?")) return json({ measured: true, nodes: opts.empty ? [] : snap.nodes })
     if (path === "/iris/hive/scripts/console-demo") return json({ measured: true, script: { ...snap.source, sha256: "x" } })
     if (path.startsWith("/iris/hive/scripts/") && init?.method !== "POST")
@@ -66,7 +83,7 @@ function mount(opts: { empty?: boolean } = {}) {
   }
   const host = document.createElement("div")
   document.body.append(host)
-  const dispose = render(() => createComponent(IrisHiveScripts, { doFetch, now: () => NOW }), host)
+  const dispose = render(() => createComponent(IrisHiveScripts, { doFetch, now: () => NOW, bloqId: opts.bloqId, bloqName: opts.bloqId ? "Deals board" : undefined }), host)
   return { host, calls, dispose }
 }
 
@@ -157,7 +174,7 @@ test("the script list folds to a rail, resizes from its edge, and remembers both
   await wait(() => host.querySelectorAll(".hsc-ilist li").length > 0)
   const pane = () => host.querySelector(".hsc") as HTMLElement
   const grip = () => host.querySelector(".hsc-grip") as HTMLElement
-  expect(pane().style.getPropertyValue("--hsc-lw")).toBe("170px")
+  expect(pane().style.getPropertyValue("--hsc-lw")).toBe("196px")
 
   // fold: the rows go, the rail keeps the fold and + buttons
   ;(host.querySelector(".hsc-fold") as HTMLButtonElement).click()
@@ -171,17 +188,17 @@ test("the script list folds to a rail, resizes from its edge, and remembers both
   key("ArrowRight")
   await wait(() => host.querySelectorAll(".hsc-ilist li").length > 0)
   key("ArrowRight", true)
-  expect(pane().style.getPropertyValue("--hsc-lw")).toBe("210px")
-  expect(grip().getAttribute("aria-valuenow")).toBe("210")
+  expect(pane().style.getPropertyValue("--hsc-lw")).toBe("236px")
+  expect(grip().getAttribute("aria-valuenow")).toBe("236")
   key("ArrowLeft")
-  expect(pane().style.getPropertyValue("--hsc-lw")).toBe("200px")
+  expect(pane().style.getPropertyValue("--hsc-lw")).toBe("226px")
   dispose()
   host.remove()
 
   // a fresh mount comes back at the same width
   ;({ host, dispose } = mount())
   await wait(() => host.querySelectorAll(".hsc-ilist li").length > 0)
-  expect(pane().style.getPropertyValue("--hsc-lw")).toBe("200px")
+  expect(pane().style.getPropertyValue("--hsc-lw")).toBe("226px")
   // double-clicking the edge folds it, and that is remembered too
   grip().dispatchEvent(new MouseEvent("dblclick", { bubbles: true }))
   await wait(() => pane().classList.contains("hsc--closed"))
@@ -218,4 +235,65 @@ test("an account with nothing says so, and an unsaved script lights Save", async
   dispose()
   host.remove()
   localStorage.removeItem("iris.hive.scripts.slug")
+})
+
+test("All · Project · Marketplace: a board's scripts, pinning, and adding a public one", async () => {
+  localStorage.removeItem("iris.hive.scripts.view")
+  localStorage.setItem("iris.hive.scripts.slug", "node-health")
+  const { host, calls, dispose } = mount({ bloqId: 7, tagged: ["deal-scenarios"] })
+  const rows = () => [...host.querySelectorAll(".hsc-list .hsc-ilist li")].map((l) => l.textContent)
+  const tab = (w: string) => [...host.querySelectorAll(".hsc-views button")].find((b) => b.textContent === w) as HTMLButtonElement
+  await wait(() => rows().length > 0)
+  expect([...host.querySelectorAll(".hsc-views button")].map((b) => b.textContent)).toEqual(["All", "Project", "Marketplace"])
+  expect(tab("All").getAttribute("aria-selected")).toBe("true")
+  expect(rows().length).toBe(17)
+  // the board's script carries a pin in All
+  expect(host.querySelector('.hsc-ilist li [title="In Deals board"]')).not.toBeNull()
+
+  // Project: exactly what the board claimed, and it opens one of them
+  tab("Project").click()
+  await wait(() => rows().length === 1)
+  expect(rows()).toEqual(["deal-scenarios"])
+  await wait(() => host.querySelector(".hsc-file")?.textContent === "deal-scenarios.sh")
+  expect(localStorage.getItem("iris.hive.scripts.view")).toBe("project")
+
+  // pinning: the button is on, and pressing it sends the tags WITHOUT the board's, keeping the rest
+  const pin = () => host.querySelector('.hsc-pin') as HTMLButtonElement
+  await wait(() => pin()?.getAttribute("aria-pressed") === "true")
+  pin().click()
+  await wait(() => calls.some((c) => c.path.endsWith("/tags")))
+  const t = calls.find((c) => c.path.endsWith("/tags"))!
+  expect(t.path).toBe("/iris/hive/scripts/deal-scenarios/tags")
+  expect(t.body).toEqual({ tags: ["ops"] })
+
+  // Marketplace: public scripts, read-only, one already mine
+  tab("Marketplace").click()
+  await wait(() => rows().length === 2 && !!host.querySelector(".hsc-code--view"))
+  expect(rows()[0]).toBe("deal-scenarios")
+  expect(host.querySelector(".hsc-list .hsc-ilist li [title='Already in your scripts']")).not.toBeNull()
+  expect(host.querySelector("textarea")).toBeNull()
+  expect(host.querySelector(".hsc-edbar .hsc-run")?.textContent).toContain("Open mine")
+  // one I do not have: Add to my scripts
+  ;(host.querySelectorAll(".hsc-list .hsc-ilist li")[1] as HTMLElement).click()
+  await wait(() => !!host.querySelector(".hsc-run--add"))
+  expect(host.querySelector(".hsc-ed")?.textContent).toContain("Builds commands at runtime")
+  expect(host.querySelector(".hsc-ed")?.textContent).toContain("1 attached file")
+  ;(host.querySelector(".hsc-run--add") as HTMLButtonElement).click()
+  await wait(() => calls.some((c) => c.path === "/iris/hive/market/csv-tidy/install"))
+  await wait(() => tab("All").getAttribute("aria-selected") === "true")
+  dispose()
+  host.remove()
+  localStorage.removeItem("iris.hive.scripts.view")
+  localStorage.removeItem("iris.hive.scripts.slug")
+})
+
+test("Project with no board asks for one", async () => {
+  localStorage.setItem("iris.hive.scripts.view", "project")
+  const { host, dispose } = mount()
+  await wait(() => !!host.querySelector(".hsc-list .hsc-empty"))
+  expect(host.querySelector(".hsc-list .hsc-empty")?.textContent).toBe("Pick a board to see the scripts it uses.")
+  expect(host.querySelector('.hsc-pin')).toBeNull()
+  dispose()
+  host.remove()
+  localStorage.removeItem("iris.hive.scripts.view")
 })

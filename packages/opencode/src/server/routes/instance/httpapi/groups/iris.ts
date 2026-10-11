@@ -150,6 +150,7 @@ const ScriptsResponse = Schema.Struct({
       updatedAt: Schema.optional(Schema.String),
       lastExecutedAt: described(Schema.NullOr(Schema.String), "Never written by the hub today — do not show as 'last run'."),
       doctor: described(Schema.NullOr(ScriptDoctorSchema), "NULL = the doctor could not be asked, not 'can run'."),
+      tags: described(Schema.Array(Schema.String), "`project:<board id>` puts a script in that board's Project view."),
     }).annotate({ identifier: "IrisScriptSummary" }),
   ),
 }).annotate({ identifier: "IrisScriptsResponse" })
@@ -166,6 +167,7 @@ const ScriptSourceResponse = Schema.Struct({
       updatedAt: Schema.optional(Schema.String),
       autoPull: Schema.Boolean,
       visibility: Schema.optional(Schema.String),
+      tags: Schema.Array(Schema.String),
     }).annotate({ identifier: "IrisScriptSource" }),
   ),
 }).annotate({ identifier: "IrisScriptSourceResponse" })
@@ -179,6 +181,36 @@ const ScriptSaveResponse = Schema.Struct({
   updatedAt: Schema.optional(Schema.String),
   created: Schema.optional(Schema.Boolean),
 }).annotate({ identifier: "IrisScriptSaveResponse" })
+const MarketScriptSchema = Schema.Struct({
+  slug: Schema.String,
+  name: Schema.optional(Schema.String),
+  description: Schema.optional(Schema.String),
+  runtime: Schema.optional(Schema.String),
+  author: Schema.optional(Schema.String),
+  version: Schema.optional(Schema.Finite),
+  publishedAt: Schema.optional(Schema.String),
+  requires: Schema.Array(Schema.String),
+})
+const MarketResponse = Schema.Struct({ ...Measured, scripts: Schema.Array(MarketScriptSchema) }).annotate({
+  identifier: "IrisScriptMarketResponse",
+})
+const MarketSourceResponse = Schema.Struct({
+  ...Measured,
+  script: Schema.NullOr(
+    Schema.Struct({
+      ...MarketScriptSchema.fields,
+      content: Schema.String,
+      timeout: Schema.optional(Schema.Finite),
+      egress: Schema.optional(Schema.String),
+      assets: described(Schema.Finite, "Attached files. Adding the script copies its source, not these."),
+      checks: Schema.Array(Schema.Struct({ title: Schema.String, status: Schema.String })),
+    }),
+  ),
+}).annotate({ identifier: "IrisScriptMarketSourceResponse" })
+const ScriptInstallResponse = Schema.Struct({
+  ...ScriptSaveResponse.fields,
+  assetsLeft: Schema.optional(Schema.Finite),
+}).annotate({ identifier: "IrisScriptInstallResponse" })
 const ScriptRunResponse = Schema.Struct({
   ok: Schema.Boolean,
   reason: Schema.optional(Schema.String),
@@ -1050,6 +1082,10 @@ export const IrisPaths = {
   hiveScriptDoctor: `${root}/hive/scripts/:slug/doctor`,
   hiveScriptSave: `${root}/hive/scripts/:slug/save`,
   hiveScriptRun: `${root}/hive/scripts/:slug/run`,
+  hiveScriptTags: `${root}/hive/scripts/:slug/tags`,
+  hiveMarket: `${root}/hive/market`,
+  hiveMarketScript: `${root}/hive/market/:slug`,
+  hiveMarketInstall: `${root}/hive/market/:slug/install`,
   hiveTask: `${root}/hive/tasks/:taskID`,
   allowance: `${root}/allowance`,
   plan: `${root}/plan`,
@@ -2354,13 +2390,46 @@ export const IrisApi = HttpApi.make("iris").add(
       }).annotateMerge(OpenApi.annotations({ identifier: "iris.hiveScriptDoctor", summary: "Doctor a Hive script (fresh)" })),
       HttpApiEndpoint.post("hiveScriptSave", IrisPaths.hiveScriptSave, {
         params: { slug: Schema.String },
-        payload: Schema.Struct({ content: Schema.String }),
+        payload: Schema.Struct({
+          content: Schema.String,
+          tags: described(Schema.optional(Schema.Array(Schema.String)), "Omitted = keep the saved tags."),
+        }),
         success: described(ScriptSaveResponse, "The saved version's hash"),
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "iris.hiveScriptSave",
           summary: "Save a Hive script (iris scripts push)",
           description: "Upsert. Name, description, runtime and auto-pull are carried over from the saved copy.",
+        }),
+      ),
+      HttpApiEndpoint.post("hiveScriptTags", IrisPaths.hiveScriptTags, {
+        params: { slug: Schema.String },
+        payload: Schema.Struct({ tags: Schema.Array(Schema.String) }),
+        success: described(ScriptSaveResponse, "The script, re-saved with these tags"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.hiveScriptTags",
+          summary: "Set a Hive script's tags",
+          description: "Replaces the tags. Same content, so the hub records no new version.",
+        }),
+      ),
+      HttpApiEndpoint.get("hiveMarket", IrisPaths.hiveMarket, {
+        query: { q: Schema.optional(Schema.String) },
+        success: described(MarketResponse, "The public script directory"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.hiveMarket", summary: "Browse public Hive scripts" })),
+      HttpApiEndpoint.get("hiveMarketScript", IrisPaths.hiveMarketScript, {
+        params: { slug: Schema.String },
+        success: described(MarketSourceResponse, "One public script, with its source and checks"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.hiveMarketScript", summary: "Read a public Hive script" })),
+      HttpApiEndpoint.post("hiveMarketInstall", IrisPaths.hiveMarketInstall, {
+        params: { slug: Schema.String },
+        payload: Schema.Struct({ tags: Schema.optional(Schema.Array(Schema.String)) }),
+        success: described(ScriptInstallResponse, "The copy saved to your account"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.hiveMarketInstall",
+          summary: "Add a public Hive script to your account",
+          description: "Copies the source under the same name. Refused if you already have a script by that name.",
         }),
       ),
       HttpApiEndpoint.post("hiveScriptRun", IrisPaths.hiveScriptRun, {

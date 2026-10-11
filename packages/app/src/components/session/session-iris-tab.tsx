@@ -2897,7 +2897,11 @@ export function SessionIrisTab() {
             <IrisRooms doFetch={doFetch} bloqId={activeBloq()} />
           </Match>
           <Match when={pane() === "hive-scripts"}>
-            <IrisHiveScripts doFetch={doFetch} />
+            <IrisHiveScripts
+              doFetch={doFetch}
+              bloqId={activeBloq() != null ? Number(activeBloq()) : undefined}
+              bloqName={activeBloq() != null ? activeBloqName() : undefined}
+            />
           </Match>
           <Match when={pane() === "agent-live"}>
             <IrisAgentLive doFetch={doFetch} bloqId={activeBloq()} />

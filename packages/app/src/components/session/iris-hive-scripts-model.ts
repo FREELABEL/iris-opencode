@@ -36,6 +36,8 @@ export type ScriptRow = {
   /** NULL on every script today (the field is never written) — never shown as "last run". */
   lastExecutedAt?: string | null
   doctor?: Doctor | null
+  /** `project:<board id>` puts it in that board's Project view. */
+  tags?: string[]
 }
 
 export type HiveNodeRow = {
@@ -74,10 +76,43 @@ export type TaskView = {
 // ── test fixtures ────────────────────────────────────────────────────────────────────────────────
 
 /** Scripts that exist to test the Hive itself. Hidden behind a count, never deleted from view. */
+// ── views: All · Project · Marketplace (the Playbooks tabs) ──────────────────────────────────
+export type ScriptView = "all" | "project" | "market"
+export const SCRIPT_VIEWS: ScriptView[] = ["all", "project", "market"]
+export function readView(v: unknown): ScriptView {
+  return SCRIPT_VIEWS.includes(v as ScriptView) ? (v as ScriptView) : "all"
+}
+/** Scripts belong to an account; a board claims one with a tag, since the hub has no project field. */
+export function projectTag(bloqId: number | undefined): string | undefined {
+  return bloqId && bloqId > 0 ? `project:${bloqId}` : undefined
+}
+export function inProject(s: Pick<ScriptRow, "tags">, tag: string | undefined): boolean {
+  return !!tag && (s.tags ?? []).includes(tag)
+}
+/** The tags with `tag` added or taken out; every other tag is kept. */
+export function withTag(tags: string[] | undefined, tag: string, on: boolean): string[] {
+  const rest = (tags ?? []).filter((t) => t !== tag)
+  return on ? [...rest, tag] : rest
+}
+/**
+ * The rows a view lists. All hides the Hive's own test scripts behind a count (but keeps the open
+ * one visible); Project shows exactly what the board claimed, tests included — claiming is deliberate.
+ */
+export function scriptsInView<T extends ScriptRow>(
+  all: T[],
+  view: ScriptView,
+  tag: string | undefined,
+  opts: { showTests: boolean; open?: string },
+): T[] {
+  if (view === "market") return []
+  if (view === "project") return all.filter((s) => inProject(s, tag))
+  return all.filter((s) => opts.showTests || !isTestScript(s.slug) || s.slug === opts.open)
+}
+
 /** The script list: a 40px rail when closed, otherwise 130–360px wide. */
 export const LIST_RAIL = 40
 export function listWidth(w: unknown): number {
-  const n = typeof w === "number" && Number.isFinite(w) ? Math.round(w) : 170
+  const n = typeof w === "number" && Number.isFinite(w) ? Math.round(w) : 196
   return Math.min(360, Math.max(130, n))
 }
 
