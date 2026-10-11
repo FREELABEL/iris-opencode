@@ -1,3 +1,5 @@
+import { injectBindings, type Bindings } from "@opencode-ai/core/util/iris-bindings"
+
 /**
  * The pure half of Agents › Artifacts (epics #186508 / #186510): the sandbox, the author line,
  * and the CSV reader. Kept out of the component so the security-critical parts are tested
@@ -80,6 +82,50 @@ export function sandboxedDocument(html: string): string {
     return html.slice(0, at) + meta + html.slice(at)
   }
   return `<!doctype html><html><head>${meta}</head><body>${html}</body></html>`
+}
+
+/**
+ * INLINE — an artifact drawn live inside the chat message (epic #188930).
+ *
+ * The same sandbox and the same CSP as every other agent-written frame (ADR-01): nothing here
+ * loosens either. What changes is that the frame is full width and takes input, and it must
+ * tell the chat how tall it is — a sandboxed srcdoc frame has an opaque origin, so the parent
+ * cannot measure it. The page posts ONE kind of message, a height; the parent accepts it only
+ * from that frame's own window and only as a clamped number (inlineHeight).
+ */
+export const INLINE_HEIGHT_MESSAGE = "iris-artifact-height"
+export const INLINE_MIN_HEIGHT = 120
+export const INLINE_MAX_HEIGHT = 1200
+/** A page that fills its window (height: 100vh) reports whatever it is given, so this is its size. */
+export const INLINE_DEFAULT_HEIGHT = 560
+
+const HEIGHT_REPORTER =
+  "<script>(function(){var last=0;function s(){try{var d=document.documentElement,b=document.body;" +
+  "var h=Math.ceil(Math.max(d.scrollHeight,b?b.scrollHeight:0));if(Math.abs(h-last)<2)return;last=h;" +
+  `parent.postMessage({type:'${INLINE_HEIGHT_MESSAGE}',h:h},'*')}catch(e){}}` +
+  "if(window.ResizeObserver)new ResizeObserver(s).observe(document.documentElement);" +
+  "window.addEventListener('load',s);s()})()</script>"
+
+/**
+ * The srcdoc for an inline artifact: bindings first in <head> (so the page's own script can read
+ * them on first paint), the CSP meta before even that, and the height reporter last.
+ */
+export function inlineDocument(html: string, bindings?: Bindings): string {
+  const doc = sandboxedDocument(injectBindings(html, bindings))
+  const end = doc.search(/<\/body>/i)
+  return end === -1 ? doc + HEIGHT_REPORTER : doc.slice(0, end) + HEIGHT_REPORTER + doc.slice(end)
+}
+
+/**
+ * A message from an inline frame → the height to give it, or undefined to ignore it. Anything
+ * that is not exactly {type, h:number} is dropped; the number is clamped, so a page that reports
+ * 1e9 (a 100vh layout measuring itself) cannot grow the chat without bound.
+ */
+export function inlineHeight(data: unknown): number | undefined {
+  if (!data || typeof data !== "object") return undefined
+  const d = data as { type?: unknown; h?: unknown }
+  if (d.type !== INLINE_HEIGHT_MESSAGE || typeof d.h !== "number" || !Number.isFinite(d.h)) return undefined
+  return Math.round(Math.min(INLINE_MAX_HEIGHT, Math.max(INLINE_MIN_HEIGHT, d.h)))
 }
 
 /**

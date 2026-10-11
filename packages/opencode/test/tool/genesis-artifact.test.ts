@@ -146,8 +146,180 @@ describe("genesis_artifact — scoped, and the card has what it needs", () => {
     Effect.gen(function* () {
       const sessions = yield* Session.Service
       const parent = yield* sessions.create({ title: "desk" })
-      const r = yield* run({ action: "create", title: "All Hallows", kind: "html", content: "<h1>hi</h1>" }, ctxFor(parent.id, "build"))
-      expect(r.metadata).toMatchObject({ title: "All Hallows", kind: "html", session: parent.id, created: true, revision: 1 })
+      const r = yield* run(
+        { action: "create", title: "All Hallows", kind: "html", content: "<h1>hi</h1>" },
+        ctxFor(parent.id, "build"),
+      )
+      expect(r.metadata).toMatchObject({
+        title: "All Hallows",
+        kind: "html",
+        session: parent.id,
+        created: true,
+        revision: 1,
+      })
+    }),
+  )
+})
+
+// #188930 — data by reference: a page bound to an earlier tool call, drawn inside the chat.
+describe("genesis_artifact — bindings and inline display", () => {
+  /** A conversation whose assistant turn already ran a tool that returned three plans. */
+  const withCall = (
+    callID: string,
+    status: "completed" | "running" = "completed",
+    output = '{"data":[{"plan":"Starter","price":19},{"plan":"Team","price":29},{"plan":"Studio","price":49}]}',
+  ) =>
+    [
+      {
+        info: { id: "msg_a", role: "assistant" },
+        parts: [
+          {
+            type: "tool",
+            callID,
+            tool: "atlas_datasets",
+            state:
+              status === "completed"
+                ? { status, input: {}, output, title: "plans", metadata: {}, time: { start: 1, end: 2 } }
+                : { status, input: {}, time: { start: 1 } },
+          },
+        ],
+      },
+    ] as any
+
+  const page = `<html><head><title>Plans</title></head><body><ul id=l></ul><script>document.getElementById('l').innerHTML=iris.data.rows('plans').map(function(r){return '<li>'+r.plan+' '+r.price+'</li>'}).join('')</script></body></html>`
+
+  it.instance("binds a finished tool call: the block is written into the artifact and handed to the card", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const sessions = yield* Session.Service
+      const s = yield* sessions.create({ title: "desk" })
+      const r = yield* run(
+        {
+          action: "create",
+          title: "Plans",
+          kind: "html",
+          content: page,
+          display: "inline",
+          bindings: { plans: { call_id: "call_1" } },
+        },
+        { ...ctxFor(s.id, "build"), messages: withCall("call_1") },
+      )
+      expect(r.metadata.display).toBe("inline")
+      expect(r.metadata.bindings?.plans.data).toHaveLength(3)
+      expect(r.metadata.bindings?.plans.meta.source).toBe("call:atlas_datasets:call_1")
+      expect(r.output).toContain("plans = 3 rows")
+      expect(r.output).toContain("drawn live in the chat message")
+      const onDisk = Artifacts.read(Artifacts.rootFor(test.directory).dir, s.id, r.metadata.id!)!
+      expect(onDisk.content).toContain('id="iris-bindings"')
+      expect(onDisk.content).toContain('"plan":"Studio"')
+      // the block comes before the page's own script, which reads it synchronously
+      expect(onDisk.content.indexOf("iris-bindings")).toBeLessThan(onDisk.content.indexOf("getElementById('l')"))
+    }),
+  )
+
+  it.instance("an unknown call id FAILS the call — never an empty frame", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const s = yield* sessions.create({ title: "desk" })
+      const exit = yield* Effect.exit(
+        run(
+          {
+            action: "create",
+            title: "Plans",
+            kind: "html",
+            content: page,
+            bindings: { plans: { call_id: "call_missing" } },
+          },
+          { ...ctxFor(s.id, "build"), messages: withCall("call_1") },
+        ),
+      )
+      expect(exit._tag).toBe("Failure")
+      expect(String((exit as any).cause)).toContain("no tool call call_missing")
+    }),
+  )
+
+  it.instance("a call that has not finished is refused, by name", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const s = yield* sessions.create({ title: "desk" })
+      const exit = yield* Effect.exit(
+        run(
+          { action: "create", title: "Plans", kind: "html", content: page, bindings: { plans: { call_id: "call_1" } } },
+          { ...ctxFor(s.id, "build"), messages: withCall("call_1", "running") },
+        ),
+      )
+      expect(String((exit as any).cause)).toContain("is running, not completed")
+    }),
+  )
+
+  it.instance("bindings are refused on a non-html artifact, and call_id + dataset together", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const s = yield* sessions.create({ title: "desk" })
+      const md = yield* Effect.exit(
+        run(
+          { action: "create", title: "x", kind: "markdown", content: "# x", bindings: { a: { call_id: "call_1" } } },
+          {
+            ...ctxFor(s.id, "build"),
+            messages: withCall("call_1"),
+          },
+        ),
+      )
+      expect(String((md as any).cause)).toContain("bindings are for html artifacts")
+      const both = yield* Effect.exit(
+        run(
+          {
+            action: "create",
+            title: "x",
+            kind: "html",
+            content: page,
+            bindings: { a: { call_id: "call_1", dataset: "d" } },
+          },
+          {
+            ...ctxFor(s.id, "build"),
+            messages: withCall("call_1"),
+          },
+        ),
+      )
+      expect(String((both as any).cause)).toContain("exactly one of call_id or dataset")
+    }),
+  )
+
+  it.instance("a styling update that carries the read-back content keeps its data", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const sessions = yield* Session.Service
+      const s = yield* sessions.create({ title: "desk" })
+      const ctx = { ...ctxFor(s.id, "build"), messages: withCall("call_1") }
+      const made = yield* run(
+        { action: "create", title: "Plans", kind: "html", content: page, bindings: { plans: { call_id: "call_1" } } },
+        ctx,
+      )
+      const where = Artifacts.rootFor(test.directory).dir
+      const back = Artifacts.read(where, s.id, made.metadata.id!)!.content
+      yield* run(
+        {
+          action: "update",
+          id: made.metadata.id!,
+          content: back.replace("<title>", "<style>li{color:red}</style><title>"),
+          base_revision: 1,
+        },
+        ctx,
+      )
+      const now = Artifacts.read(where, s.id, made.metadata.id!)!.content
+      expect(now).toContain("li{color:red}")
+      expect(now.match(/id="iris-bindings"/g)).toHaveLength(1)
+      expect(now).toContain('"plan":"Studio"')
+    }),
+  )
+
+  it.instance("default display is card — existing callers are unchanged", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const s = yield* sessions.create({ title: "desk" })
+      const r = yield* run({ action: "create", title: "x", kind: "html", content: "<h1>x</h1>" }, ctxFor(s.id, "build"))
+      expect(r.metadata.display).toBe("card")
+      expect(r.metadata.bindings).toBeUndefined()
     }),
   )
 })

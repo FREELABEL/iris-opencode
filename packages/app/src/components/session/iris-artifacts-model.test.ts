@@ -173,3 +173,76 @@ describe("the live page in the app (#186541)", () => {
     expect((src.match(/src=\{src\(\)\}/g) ?? []).length).toBe(1)
   })
 })
+
+// #188930 — an artifact drawn live inside the chat message.
+import {
+  INLINE_HEIGHT_MESSAGE,
+  INLINE_MAX_HEIGHT,
+  INLINE_MIN_HEIGHT,
+  inlineDocument,
+  inlineHeight,
+} from "./iris-artifacts-model"
+
+describe("inline artifacts — interactive in the message, same locks", () => {
+  const bindings = { plans: { data: [{ plan: "Team", price: 29 }], meta: { source: "t", rows: 1 } } }
+  const page =
+    "<html><head><title>p</title></head><body><script>window.x=iris.data.rows('plans')</script></body></html>"
+
+  test("order in the document: CSP meta, then the data, then the page, then the height reporter", () => {
+    const doc = inlineDocument(page, bindings)
+    const csp = doc.indexOf("Content-Security-Policy")
+    const data = doc.indexOf('id="iris-bindings"')
+    const own = doc.indexOf("window.x=")
+    const rep = doc.indexOf(INLINE_HEIGHT_MESSAGE)
+    expect(csp).toBeGreaterThan(-1)
+    expect(csp).toBeLessThan(data)
+    expect(data).toBeLessThan(own)
+    expect(own).toBeLessThan(rep)
+    expect(doc).toContain("connect-src 'none'")
+  })
+
+  test("without bindings it is the sandboxed page plus the reporter, nothing else", () => {
+    const doc = inlineDocument(page)
+    expect(doc).not.toContain("iris-bindings")
+    expect(doc).toContain(ARTIFACT_CSP)
+  })
+
+  test("the reporter posts a height and nothing else", () => {
+    const doc = inlineDocument("<p>x</p>")
+    const js = doc.match(/<script>(\(function\(\)\{var last=0[\s\S]*?)<\/script>/)![1]
+    const posted: unknown[] = []
+    const fake = { scrollHeight: 640 }
+    new Function("document", "window", "parent", js)(
+      { documentElement: fake, body: fake },
+      { addEventListener() {} },
+      { postMessage: (m: unknown, t: string) => posted.push([m, t]) },
+    )
+    expect(posted).toEqual([[{ type: INLINE_HEIGHT_MESSAGE, h: 640 }, "*"]])
+  })
+
+  test("the chat accepts only a well-formed height, clamped", () => {
+    expect(inlineHeight({ type: INLINE_HEIGHT_MESSAGE, h: 500 })).toBe(500)
+    expect(inlineHeight({ type: INLINE_HEIGHT_MESSAGE, h: 1e9 })).toBe(INLINE_MAX_HEIGHT)
+    expect(inlineHeight({ type: INLINE_HEIGHT_MESSAGE, h: 3 })).toBe(INLINE_MIN_HEIGHT)
+    expect(inlineHeight({ type: INLINE_HEIGHT_MESSAGE, h: "500" })).toBeUndefined()
+    expect(inlineHeight({ type: INLINE_HEIGHT_MESSAGE, h: Number.NaN })).toBeUndefined()
+    expect(inlineHeight({ type: "navigate", url: "https://evil" })).toBeUndefined()
+    expect(inlineHeight("iris-artifact-height")).toBeUndefined()
+    expect(inlineHeight(null)).toBeUndefined()
+  })
+
+  test("the chat card draws inline frames under ARTIFACT_SANDBOX with srcdoc, and checks the sender", () => {
+    const src = readFileSync(path.join(import.meta.dir, "genesis-artifact-card.tsx"), "utf8")
+    const frames = src.match(/<iframe[\s\S]*?\/>/g) ?? []
+    expect(frames.length).toBeGreaterThanOrEqual(2)
+    for (const f of frames) {
+      expect(f).toContain("sandbox={ARTIFACT_SANDBOX}")
+      expect(f).toContain("srcdoc=")
+      expect(f).not.toMatch(/\ssrc=/)
+    }
+    expect(src).not.toContain("allow-same-origin")
+    // a height is taken only from this frame's own window
+    expect(src).toContain("e.source !== frame?.contentWindow")
+    expect(src).toContain("inlineHeight(e.data)")
+  })
+})

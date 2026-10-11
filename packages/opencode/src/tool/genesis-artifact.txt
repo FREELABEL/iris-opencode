@@ -4,10 +4,14 @@ Use it only when the user asks for something to look at: a landing page, a one-p
 
 The artifact is a local draft in this project. To publish it at a public heyiris.io/p/ URL, the user asks for that and you run `iris genesis publish-html <slug> --file <path>` (or the genesis-artifact playbook). Do not publish unasked.
 
+Answering WITH an interface: when the best answer is something to use rather than read — a table to filter, a calculator, a chart to explore, a comparison with sliders — make an html artifact with display=inline. It is drawn live inside your chat message, full width; the user clicks and drags there, and it runs without calling you again.
+
+Data by reference: never retype numbers from a tool result into the HTML. Bind them: bindings={"plans": {"call_id": "<the id of the earlier tool call>"}} or {"plans": {"dataset": "<atlas dataset slug>"}} (optional "path" digs into the value). In the page, read them with iris.data.rows("plans") (an array), iris.data.has("plans"), iris.data.meta("plans"). It is the same API heyiris.io/p/ pages use, so the page publishes unchanged. Only a call that has already FINISHED can be bound — not one made in the same step. A binding that cannot be resolved fails the call; fix it, do not drop it. Check computed totals in the page against the rows; a page that renders is not a page that is right.
+
 Actions:
-- create: title, kind (html | markdown | csv | code), content, optional language (for code). Returns the artifact id and revision 1.
+- create: title, kind (html | markdown | csv | code), content, optional language (for code), optional display (inline | card, default card), optional bindings (html). Returns the artifact id and revision 1.
 - update: id, full new content (and title/kind if they change). Pass base_revision = the revision you last read; if someone else wrote since, the update is refused and tells you who — read it again and apply your change to the current version instead of overwriting theirs.
 - read: id. Returns the current content, its revision, and who wrote it.
 - list: every artifact in this session, newest first, with its revision and author.
 
-The pane is shared by every agent in the session, subagents included; check list before creating something that may already exist. Do not paste the artifact's content into your reply as well — say what you made. HTML runs in a sandbox: scripts work, but it cannot reach the app, the network as the user, or localStorage.
+The pane is shared by every agent in the session, subagents included; check list before creating something that may already exist. Do not paste the artifact's content into your reply as well — say what you made. HTML runs in a sandbox: scripts work, but it cannot reach the app, the network, or localStorage — its data is only what you bind.
