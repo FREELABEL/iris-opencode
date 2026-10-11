@@ -78,6 +78,20 @@ iris hive sandbox --timeout 120 --internet "pip install -q requests && python3 -
 A command that runs past its time is stopped and its sandbox is reset — it cannot keep running in
 the background.
 
+## Your agents can do this too
+
+An IRIS agent can run code in the same kind of sandbox instead of guessing at an answer. Ask it in
+plain words — *"run this and tell me what it prints"*, *"check that this regex matches these five
+lines"*, *"what is the SHA-256 of this string?"* — and it runs the code and answers from the real
+output.
+
+The same rules hold: a fresh sandbox per request, released afterwards; internet off unless the
+request needs it; nothing from your account goes into the box. Agents in workspaces that hold
+patient health information cannot use it.
+
+If an agent says it has no way to run code, its tool list was set by hand and does not include
+sandboxes yet — ask your IRIS contact to add it.
+
 ## Sandbox or rented machine?
 
 | You want | Use |
