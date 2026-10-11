@@ -15,6 +15,9 @@ other machine you own. You release it when you are done, and it stops costing mo
 This is different from a Hive task, which borrows a machine you already have for a few seconds.
 A rental is yours until you release it.
 
+**Just need to run one command somewhere safe?** That is a sandbox, not a rental:
+`iris hive sandbox "python3 script.py"` — see `iris how-to view run-code-in-a-sandbox`.
+
 There is a page that explains the product, and a wizard if you would rather click than type:
 
 - **https://freelabel.net/p/hive-marketplace** — what you are renting and how you know it worked

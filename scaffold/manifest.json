@@ -249,6 +249,12 @@
       "purpose": "Make your own domain serve a Genesis page (not redirect to it), check it is live, and swap the page later without DNS work."
     },
     {
+      "src": "how-to/run-code-in-a-sandbox.md",
+      "dest": "how-to/run-code-in-a-sandbox.md",
+      "managed": true,
+      "purpose": "Run a command in a throwaway Linux sandbox (Python, Node, git) — internet off by default, released afterwards; --keep to reuse one."
+    },
+    {
       "src": "how-to/ask-about-your-screen.md",
       "dest": "how-to/ask-about-your-screen.md",
       "managed": true,
