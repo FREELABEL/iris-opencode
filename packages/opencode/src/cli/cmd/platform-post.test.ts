@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { buildPostBody, publishRows } from "./platform-post"
+import { buildPostBody, publishRows, statusRows, resolveSubmitted, exitCodeFor, requestIds } from "./platform-post"
 import { at, connectedTargets, findBrand, type AccountsMatrix } from "./platform-social"
 
 // Shape of GET /api/v1/social-media/accounts, trimmed from a real response (2026-10-11).
@@ -84,6 +84,88 @@ describe("iris post --brand (#188875)", () => {
   test("a single async job reports every requested platform as submitted", () => {
     const rows = publishRows({ success: true, request_id: "r1" }, ["instagram", "threads"])
     expect(rows.map((r) => `${r.platform}:${r.status}`)).toEqual(["instagram:submitted", "threads:submitted"])
+  })
+})
+
+describe("the response can say success while a platform failed (#188875, live finding)", () => {
+  // Real response, freelabel instagram+threads, instagram needing reauth: top level success=true,
+  // summary 2/0 — and the inner instagram result failed.
+  const LYING = {
+    success: true, partial_success: false, summary: { successful: 2, failed: 0 },
+    results: {
+      instagram: { success: true, results: { instagram: { success: false, status: "failed", error_code: "account_reauth_required", error: "Please reconnect your Instagram account" } } },
+      threads: { success: true, results: { threads: { success: true, post_url: "https://threads.net/@freelabelnet/post/1" } } },
+    },
+  }
+
+  test("the innermost per-platform result wins over every outer success flag", () => {
+    const rows = publishRows(LYING, ["instagram", "threads"])
+    expect(rows[0]).toEqual({ platform: "instagram", profile: undefined, status: "failed", detail: "account_reauth_required: Please reconnect your Instagram account" })
+    expect(rows[1]).toEqual({ platform: "threads", profile: undefined, status: "posted", detail: "https://threads.net/@freelabelnet/post/1" })
+    expect(exitCodeFor(rows)).toBe(1)
+  })
+
+  // Real background answer: no `success` at all, a request_id, and the server's skips.
+  const BACKGROUND = { message: "Upload initiated successfully in background", request_id: "req-42", job_id: "j1", skipped: { x: "No enabled x account connected for brand 'heyiris'" } }
+
+  test("a background upload is 'submitted' per platform, with the skips named", () => {
+    const rows = publishRows(BACKGROUND, ["instagram", "x"])
+    expect(rows).toEqual([
+      { platform: "instagram", status: "submitted", detail: "request req-42" },
+      { platform: "x", status: "skipped", detail: "No enabled x account connected for brand 'heyiris'" },
+    ])
+    expect(requestIds(BACKGROUND)).toEqual(["req-42"])
+    expect(exitCodeFor(rows)).toBe(3)
+  })
+
+  test("polling the status endpoint resolves each platform to its post url or its error", async () => {
+    const answers = [
+      { status: "processing", results: [] },
+      { status: "completed", results: [
+        { platform: "instagram", success: true, post_url: "https://instagram.com/reel/abc", error_message: null, error_code: null },
+        { platform: "tiktok", success: false, post_url: null, error_message: "video too short", error_code: "invalid_media" },
+      ] },
+    ]
+    let calls = 0
+    const r = await resolveSubmitted(
+      publishRows(BACKGROUND, ["instagram", "tiktok", "x"]), ["req-42"],
+      async () => answers[Math.min(calls++, 1)],
+      { timeoutMs: 60_000, intervalMs: 1, sleep: async () => {} },
+    )
+    expect(calls).toBe(2)
+    expect(r.pending).toEqual([])
+    expect(r.rows).toEqual([
+      { platform: "instagram", status: "posted", detail: "https://instagram.com/reel/abc", profile: undefined },
+      { platform: "tiktok", status: "failed", detail: "invalid_media: video too short", profile: undefined },
+      { platform: "x", status: "skipped", detail: "No enabled x account connected for brand 'heyiris'" },
+    ])
+    expect(exitCodeFor(r.rows)).toBe(1)
+  })
+
+  test("a job still running at the timeout stays 'submitted' and is reported as pending (exit 3, not 0)", async () => {
+    const r = await resolveSubmitted(publishRows(BACKGROUND, ["instagram"]), ["req-42"], async () => ({ status: "processing" }),
+      { timeoutMs: 0, intervalMs: 1, sleep: async () => {} })
+    expect(r.pending).toEqual(["req-42"])
+    expect(exitCodeFor(r.rows)).toBe(3)
+  })
+
+  test("an unknown request id is a failure for `social status`, but polling keeps asking through it", async () => {
+    const notFound = { success: false, error: "Client error: ... 404 Not Found\n{...}" }
+    expect(statusRows(notFound)).toEqual([{ platform: "?", status: "failed", detail: "Client error: ... 404 Not Found" }])
+    let calls = 0
+    const r = await resolveSubmitted(publishRows({ request_id: "q", message: "bg" }, ["instagram"]), ["q"],
+      async () => (calls++ === 0 ? notFound : { status: "completed", results: [{ platform: "instagram", success: true, post_url: "u" }] }),
+      { timeoutMs: 60_000, intervalMs: 1, sleep: async () => {} })
+    expect(r.rows[0].status).toBe("posted")
+  })
+
+  test("statusRows: null while running; rows once completed", () => {
+    expect(statusRows({ status: "processing" })).toBeNull()
+    expect(statusRows({ status: "completed", results: [{ platform: "x", success: true, post_url: "u" }] })).toEqual([{ platform: "x", profile: undefined, status: "posted", detail: "u" }])
+  })
+
+  test("all posted → exit 0; skips alone do not fail the run", () => {
+    expect(exitCodeFor([{ platform: "instagram", status: "posted" }, { platform: "x", status: "skipped" }])).toBe(0)
   })
 })
 

@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, writeJson, printDivider, dim, bold, success, warn } from "./iris-api"
+import { statusRows, printRow, exitCodeFor } from "./platform-post"
 
 /**
  * `iris social accounts` — which social accounts IRIS can actually post to, per brand (#188875).
@@ -142,9 +143,42 @@ const SocialAccountsCommand = cmd({
   },
 })
 
+const SocialStatusCommand = cmd({
+  command: "status <request_id>",
+  describe: "what happened to each platform of a background post (the request id iris post prints)",
+  builder: (y) =>
+    y
+      .positional("request_id", { type: "string", demandOption: true })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Post status")
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+    const res = await irisFetch(`/api/v1/social-media/status/${encodeURIComponent(String(args.request_id))}`)
+    const data = (await res.json().catch(() => ({}))) as any
+    if (args.json) { await writeJson(data); prompts.outro("Done"); return }
+    if (!res.ok) {
+      prompts.log.error(`HTTP ${res.status}: ${data?.message ?? data?.error ?? "unknown error"}`)
+      process.exitCode = 1
+      prompts.outro("Done")
+      return
+    }
+    const rows = statusRows(data)
+    if (!rows) {
+      console.log(`  ${dim("still running")} (${data?.status ?? "unknown"})`)
+      process.exitCode = 3
+    } else {
+      for (const r of rows) printRow(r)
+      process.exitCode = exitCodeFor(rows)
+    }
+    prompts.outro("Done")
+  },
+})
+
 export const SocialCommand = cmd({
   command: "social",
   describe: "your connected social accounts (see: iris post --brand)",
-  builder: (y) => y.command(SocialAccountsCommand).demandCommand(1),
+  builder: (y) => y.command(SocialAccountsCommand).command(SocialStatusCommand).demandCommand(1),
   async handler() {},
 })

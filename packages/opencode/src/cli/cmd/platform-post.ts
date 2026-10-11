@@ -67,9 +67,33 @@ export interface PlatformRow {
 }
 
 /**
+ * A platform's own outcome. upload-post nests it — results.instagram is sometimes
+ * `{ results: { instagram: {success:false, error_code, error} } }` — and the OUTER level
+ * (and the response's top-level `success`, and its `summary`) can say success while the
+ * inner one says failed (#188875, measured on a reauth-required account). Only the innermost
+ * per-platform object is believed.
+ */
+function innermost(platform: string, r: any): any {
+  let cur = r
+  for (let i = 0; i < 4 && cur?.results?.[platform]; i++) cur = cur.results[platform]
+  return cur
+}
+
+function outcome(platform: string, r: any, profile?: string): PlatformRow {
+  const x = innermost(platform, r)
+  const failed = x?.success === false || x?.status === "failed" || !!x?.error || !!x?.error_code || !!x?.error_message
+  if (failed) {
+    const msg = String(x?.error_message ?? x?.error ?? x?.message ?? "failed")
+    return { platform, profile, status: "failed", detail: x?.error_code ? `${x.error_code}: ${msg}` : msg }
+  }
+  return { platform, profile, status: "posted", detail: x?.post_url ?? x?.url ?? undefined }
+}
+
+/**
  * One row per platform from the publish response, whichever shape it came back in:
  *   single profile  { success, results: {platform: {...}}, request_id?, skipped? }
  *   several         { success, by_profile: {profile: <single shape>}, skipped }
+ *   background      { message, request_id, job_id, skipped }      → "submitted", resolve with statusRows
  * Platforms the server skipped (no enabled account for the brand) are rows too — never dropped.
  */
 export function publishRows(data: any, requested: string[]): PlatformRow[] {
@@ -79,29 +103,88 @@ export function publishRows(data: any, requested: string[]): PlatformRow[] {
     : [[undefined, data]]
   const seen = new Set<string>()
   for (const [profile, g] of groups) {
-    const results = (g?.results ?? {}) as Record<string, any>
-    for (const [platform, r] of Object.entries(results)) {
-      seen.add(platform)
-      const ok = r?.success !== false && !r?.error
-      rows.push({ platform, profile, status: ok ? "posted" : "failed", detail: ok ? (r?.url ?? r?.post_url ?? undefined) : String(r?.error ?? r?.message ?? "failed") })
+    const results = g?.results
+    if (results && typeof results === "object" && !Array.isArray(results)) {
+      for (const [platform, r] of Object.entries(results as Record<string, any>)) {
+        seen.add(platform)
+        rows.push(outcome(platform, r, profile))
+      }
     }
   }
-  // Async upload-post jobs answer with a request_id and no per-platform results yet, and the
+  // A background upload answers with a request_id and no per-platform results yet, and the
   // by_profile shape does not say which platforms each group carried — so every requested
-  // platform the server neither reported nor skipped takes the overall outcome.
-  const ids = groups.map(([, g]) => g?.request_id).filter(Boolean)
+  // platform the server neither reported nor skipped is "submitted" (resolved by polling) or,
+  // when the request itself failed, "failed".
+  const ids = requestIds(data)
+  const accepted = data?.success !== false && (data?.success || ids.length > 0)
   for (const platform of requested) {
     if (seen.has(platform) || data?.skipped?.[platform]) continue
     rows.push({
       platform,
-      status: data?.success ? "submitted" : "failed",
-      detail: data?.success ? (ids.length ? `request ${ids.join(", ")}` : undefined) : String(data?.error ?? data?.message ?? "failed"),
+      status: accepted ? "submitted" : "failed",
+      detail: accepted ? (ids.length ? `request ${ids.join(", ")}` : undefined) : String(data?.error ?? data?.message ?? "failed"),
     })
   }
   for (const [platform, reason] of Object.entries((data?.skipped ?? {}) as Record<string, string>)) {
     rows.push({ platform, status: "skipped", detail: String(reason) })
   }
   return rows
+}
+
+export function requestIds(data: any): string[] {
+  const groups = data?.by_profile ? Object.values(data.by_profile as Record<string, any>) : [data]
+  return groups.map((g: any) => g?.request_id).filter(Boolean).map(String)
+}
+
+/**
+ * GET /api/v1/social-media/status/{request_id} → { status, results: [{platform, success, post_url, error_message, error_code}] }.
+ * Returns null while the job is still running.
+ */
+export function statusRows(data: any): PlatformRow[] | null {
+  // An unknown id (or a vendor error) comes back HTTP 200 + {success:false, error} with no status.
+  if (data?.success === false && !data?.status) return [{ platform: "?", status: "failed", detail: String(data?.error ?? data?.message ?? "status lookup failed").split("\n")[0] }]
+  const st = String(data?.status ?? "").toLowerCase()
+  const list = Array.isArray(data?.results) ? data.results : []
+  if (!["completed", "complete", "failed", "error", "done", "finished"].includes(st)) return null
+  if (!list.length) return st === "failed" || st === "error" ? [{ platform: "?", status: "failed", detail: String(data?.error ?? data?.message ?? st) }] : []
+  return list.map((r: any) => outcome(String(r?.platform ?? "?"), r))
+}
+
+/** Replace "submitted" rows with what the status endpoint says, polling until done or out of time. */
+export async function resolveSubmitted(
+  rows: PlatformRow[],
+  ids: string[],
+  get: (id: string) => Promise<any>,
+  opts: { timeoutMs: number; intervalMs: number; sleep?: (ms: number) => Promise<void> },
+): Promise<{ rows: PlatformRow[]; pending: string[] }> {
+  const sleep = opts.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)))
+  const done = new Map<string, PlatformRow[]>()
+  const deadline = Date.now() + opts.timeoutMs
+  while (done.size < ids.length) {
+    for (const id of ids) {
+      if (done.has(id)) continue
+      const resp = await get(id).catch(() => null)
+      // A lookup error mid-upload is not the job's outcome — keep asking until the deadline.
+      if (!resp || (resp.success === false && !resp.status)) continue
+      const r = statusRows(resp)
+      if (r) done.set(id, r)
+    }
+    if (done.size === ids.length || Date.now() >= deadline) break
+    await sleep(opts.intervalMs)
+  }
+  const resolved = [...done.values()].flat()
+  const byPlatform = new Map(resolved.map((r) => [r.platform, r]))
+  const out = rows.map((r) => (r.status === "submitted" && byPlatform.has(r.platform) ? { ...byPlatform.get(r.platform)!, profile: r.profile } : r))
+  // A platform the job reported that the request did not list (rare) is still shown.
+  for (const r of resolved) if (!out.some((o) => o.platform === r.platform)) out.push(r)
+  return { rows: out, pending: ids.filter((id) => !done.has(id)) }
+}
+
+/** 0 = every requested platform posted (skips are reported, not failures) · 1 = one failed · 3 = still running at the timeout. */
+export function exitCodeFor(rows: PlatformRow[]): number {
+  if (rows.some((r) => r.status === "failed")) return 1
+  if (rows.some((r) => r.status === "submitted")) return 3
+  return 0
 }
 
 export const PlatformPostCommand = cmd({
@@ -116,7 +199,8 @@ export const PlatformPostCommand = cmd({
       .option("video", { type: "string", describe: "video URL to publish" })
       .option("image", { type: "array", describe: "image URL(s) to publish (repeatable)", string: true })
       .option("caption", { type: "string", describe: "caption for video/image (overrides text)" })
-      .option("media-type", { type: "string", choices: ["REELS", "STORIES"], describe: "Instagram/Facebook placement for a video" }),
+      .option("media-type", { type: "string", choices: ["REELS", "STORIES"], describe: "Instagram/Facebook placement for a video" })
+      .option("wait", { type: "number", default: 300, describe: "seconds to wait for a background upload's per-platform result (0 = don't wait)" }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Post")
@@ -186,35 +270,49 @@ export const PlatformPostCommand = cmd({
         body: JSON.stringify(body),
       })
       const data = (await res.json().catch(() => ({}))) as any
-      const rows = [...publishRows(data, platforms), ...preSkipped.map((s) => ({ platform: s.platform, status: "skipped" as const, detail: s.reason }))]
+      let rows: PlatformRow[] = [...publishRows(data, platforms), ...preSkipped.map((s) => ({ platform: s.platform, status: "skipped" as const, detail: s.reason }))]
 
-      if (!res.ok || !data?.success) {
-        sp.stop("Failed", 1)
+      // The top-level `success` is not the outcome — a platform can fail inside a "successful"
+      // response — so the rows decide, and a background job is followed to its end.
+      const ids = requestIds(data)
+      const waitS = Number(args.wait ?? 300)
+      let pending: string[] = []
+      if (res.ok && ids.length && rows.some((r) => r.status === "submitted") && waitS > 0) {
+        sp.message(`Uploading in the background — waiting up to ${waitS}s for each platform…`)
+        const r = await resolveSubmitted(rows, ids, async (id) => {
+          const s = await irisFetch(`/api/v1/social-media/status/${encodeURIComponent(id)}`)
+          return s.json()
+        }, { timeoutMs: waitS * 1000, intervalMs: 5000 })
+        rows = r.rows
+        pending = r.pending
+      }
+
+      const code = !res.ok ? 1 : exitCodeFor(rows)
+      sp.stop(code === 0 ? "Published" : code === 3 ? "Still uploading" : "Failed", code === 0 ? 0 : 1)
+      if (!res.ok) {
         prompts.log.error(`Publish failed (HTTP ${res.status}): ${data?.message ?? data?.error ?? "unknown error"}`)
         if (data?.primary_error) console.log(dim(`  primary: ${data.primary_error}`))
         if (data?.fallback_error) console.log(dim(`  fallback: ${data.fallback_error}`))
-        for (const r of rows) printRow(r)
-        prompts.outro("Done")
-        return
+      } else {
+        const provider = data.provider_used ?? Object.values(data.by_profile ?? {}).map((g: any) => g?.provider_used).filter(Boolean).join(", ")
+        const viaFallback = data.fallback_used ? " (via Buffer fallback)" : ""
+        console.log()
+        console.log(`  ${bold(kind)}${provider ? ` via ${highlight(provider)}` : ""}${viaFallback}`)
       }
-
-      sp.stop("Published")
-      const provider = data.provider_used ?? Object.values(data.by_profile ?? {}).map((g: any) => g?.provider_used).filter(Boolean).join(", ") ?? "?"
-      const viaFallback = data.fallback_used ? " (via Buffer fallback)" : ""
-      console.log()
-      console.log(`  ${success("✓")} ${bold(kind)} posted via ${highlight(provider || "?")}${viaFallback}`)
       for (const r of rows) printRow(r)
-      if (data.request_id) console.log(`  ${dim("request_id:")} ${data.request_id}`)
+      for (const id of pending) console.log(`  ${dim("still running — check:")} iris social status ${id}`)
+      process.exitCode = code
       prompts.outro("Done")
     } catch (e) {
       sp.stop("Failed", 1)
       prompts.log.error(e instanceof Error ? e.message : String(e))
+      process.exitCode = 1
       prompts.outro("Done")
     }
   },
 })
 
-function printRow(r: PlatformRow) {
+export function printRow(r: PlatformRow) {
   const mark = r.status === "posted" ? success("✓") : r.status === "submitted" ? highlight("…") : r.status === "skipped" ? warn("–") : warn("✗")
   const who = r.profile ? dim(` @${r.profile.replace(/^@+/, "")}`) : ""
   console.log(`  ${mark} ${r.platform.padEnd(10)} ${r.status}${who}${r.detail ? dim("  " + r.detail) : ""}`)
