@@ -86,6 +86,7 @@ import { PlatformNodeCommand } from "./cli/cmd/platform-node"
 import { VaultCommandExport } from "./cli/cmd/platform-vault"
 import { PlatformClipsCommand } from "./cli/cmd/platform-clips"
 import { PlatformPostCommand } from "./cli/cmd/platform-post"
+import { SocialCommand } from "./cli/cmd/platform-social"
 import { XCommand } from "./cli/cmd/platform-x"
 import { PlatformOutreachCommand } from "./cli/cmd/platform-outreach"
 import { OffersCommand } from "./cli/cmd/offers"
@@ -462,6 +463,7 @@ const cli = yargs(rawArgs)
   .command(reg(VaultCommandExport))
   .command(reg(PlatformClipsCommand))
   .command(reg(PlatformPostCommand))
+  .command(reg(SocialCommand))
   .command(reg(XCommand))
   .command(reg(PlatformOutreachCommand))
   .command(reg(OffersCommand))
