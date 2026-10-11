@@ -139,6 +139,7 @@ const ScriptDoctorSchema = Schema.Struct({
   runnable_now: Schema.optional(Schema.Boolean),
 }).annotate({ identifier: "IrisScriptDoctor" })
 const ScriptsResponse = Schema.Struct({
+  account: Schema.optional(Schema.NullOr(Schema.Number)),
   ...Measured,
   scripts: Schema.Array(
     Schema.Struct({

@@ -25,6 +25,8 @@ import {
   elapsedSeconds,
   fileName,
   findComputer,
+  LIST_RAIL,
+  listWidth,
   groupComputers,
   isTestScript,
   lastLine,
@@ -68,7 +70,7 @@ import {
 
 type Fetch = (path: string, init?: RequestInit) => Promise<Response>
 type IconName = IconProps["name"]
-type ScriptsPayload = { measured: boolean; reason?: string | null; scripts: ScriptRow[] }
+type ScriptsPayload = { measured: boolean; reason?: string | null; scripts: ScriptRow[]; account?: number | null }
 type HivePayload = { measured: boolean; reason?: string | null; nodes: HiveNodeRow[] }
 type SourcePayload = {
   measured: boolean
@@ -92,6 +94,7 @@ type RunState = {
 
 const POLL_MS = 1_000
 const SELECTED_KEY = "iris.hive.scripts.slug"
+const LIST_KEY = "iris.hive.scripts.list"
 const NEW_TEMPLATE = "#!/bin/bash\n# iris: timeout=120\n# What this script does, in one line.\necho \"hello from $(hostname)\"\n"
 
 function Ic(props: { name: IconName; title?: string; class?: string }) {
@@ -100,6 +103,16 @@ function Ic(props: { name: IconName; title?: string; class?: string }) {
       <Icon name={props.name} size="small" />
     </span>
   )
+}
+
+// The list column: { w, closed }, remembered across launches.
+const rememberedList = (): { w: number; closed: boolean } => {
+  try {
+    const v = JSON.parse(localStorage.getItem(LIST_KEY) ?? "{}")
+    return { w: listWidth(v.w), closed: v.closed === true }
+  } catch {
+    return { w: listWidth(undefined), closed: false }
+  }
 }
 
 const remembered = () => {
@@ -342,19 +355,98 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number }) {
     return elapsedSeconds(run()?.task, now())
   })
 
+  const [listW, setListW] = createSignal(rememberedList().w)
+  const [listClosed, setListClosed] = createSignal(rememberedList().closed)
+  const [dragging, setDragging] = createSignal(false)
+  createEffect(() => {
+    const v = JSON.stringify({ w: listW(), closed: listClosed() })
+    try {
+      localStorage.setItem(LIST_KEY, v)
+    } catch {}
+  })
+  // Drag the edge to size the list; dragging it shut closes it, dragging a closed one opens it.
+  const startDrag = (e: PointerEvent) => {
+    if (e.button !== 0) return
+    e.preventDefault()
+    const x0 = e.clientX
+    const w0 = listClosed() ? LIST_RAIL : listW()
+    const el = e.currentTarget as HTMLElement
+    el.setPointerCapture(e.pointerId)
+    setDragging(true)
+    const move = (m: PointerEvent) => {
+      const raw = w0 + m.clientX - x0
+      if (raw < LIST_RAIL + 40) return setListClosed(true)
+      setListClosed(false)
+      setListW(listWidth(raw))
+    }
+    const up = () => {
+      setDragging(false)
+      el.removeEventListener("pointermove", move)
+      el.removeEventListener("pointerup", up)
+      el.removeEventListener("pointercancel", up)
+    }
+    el.addEventListener("pointermove", move)
+    el.addEventListener("pointerup", up)
+    el.addEventListener("pointercancel", up)
+  }
+  const dragKey = (e: KeyboardEvent) => {
+    const step = e.shiftKey ? 40 : 10
+    if (e.key === "ArrowLeft") {
+      if (listClosed()) return
+      if (listW() - step < listWidth(0)) return setListClosed(true)
+      setListW(listWidth(listW() - step))
+    } else if (e.key === "ArrowRight") {
+      if (listClosed()) return setListClosed(false)
+      setListW(listWidth(listW() + step))
+    } else if (e.key === "Enter") setListClosed((v) => !v)
+    else return
+    e.preventDefault()
+  }
+
   return (
     <div class="hsc-wrap" ref={rootEl}>
-    <div class="hsc" data-mode={mode()} data-component="hive-scripts">
+    <div
+      class="hsc"
+      classList={{ "hsc--closed": listClosed(), "hsc--drag": dragging() }}
+      style={{ "--hsc-lw": `${listClosed() ? LIST_RAIL : listW()}px` }}
+      data-mode={mode()}
+      data-component="hive-scripts"
+    >
       {/* ── left: scripts ── */}
       <aside class="hsc-col hsc-list" aria-label="Scripts">
         <div class="hsc-lhead">
-          <Ic name="bullet-list" />
-          <b>Scripts</b>
+          <button
+            class="hsc-ib hsc-ib--bare hsc-fold"
+            type="button"
+            title={listClosed() ? "Show scripts" : "Hide scripts"}
+            aria-expanded={!listClosed()}
+            onClick={() => setListClosed((v) => !v)}
+          >
+            <Ic name={listClosed() ? "sidebar" : "sidebar-active"} />
+          </button>
+          <b class="hsc-lname">Scripts</b>
+          <Show when={list.latest?.account}>
+            <span
+              class="hsc-acct hsc-num"
+              title={`Scripts and computers belong to an IRIS account. This is account ${list.latest!.account}.`}
+            >
+              #{list.latest!.account}
+            </span>
+          </Show>
           <span class="hsc-spacer" />
-          <button class="hsc-ib hsc-ib--bare" type="button" title="New script" onClick={() => setNaming(true)}>
+          <button
+            class="hsc-ib hsc-ib--bare"
+            type="button"
+            title="New script"
+            onClick={() => {
+              setListClosed(false)
+              setNaming(true)
+            }}
+          >
             <Ic name="plus" />
           </button>
         </div>
+        <Show when={!listClosed()}>
         <Show when={naming()}>
           <input
             class="hsc-newname hsc-mono"
@@ -373,6 +465,9 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number }) {
             <p class="hsc-warn hsc-pad" title={list()!.reason ?? undefined}>
               Could not read your scripts{list()!.reason ? ` — ${list()!.reason}` : ""}
             </p>
+          </Show>
+          <Show when={list() && list()!.measured && scripts().length === 0 && !creating()}>
+            <p class="hsc-muted hsc-pad">No scripts on account {list()!.account ?? "?"} yet. Press + to write one.</p>
           </Show>
           <ul class="hsc-ilist" role="listbox">
             <Show when={creating()}>
@@ -420,7 +515,20 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number }) {
             </button>
           </Show>
         </Suspense>
+        </Show>
       </aside>
+      <div
+        class="hsc-grip"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize the script list"
+        aria-valuenow={listClosed() ? 0 : listW()}
+        title="Drag to resize · double-click to hide or show"
+        tabIndex={0}
+        onPointerDown={startDrag}
+        onDblClick={() => setListClosed((v) => !v)}
+        onKeyDown={dragKey}
+      />
 
       {/* ── middle: the script ── */}
       <section class="hsc-col hsc-ed" aria-label="Script">
@@ -474,7 +582,8 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number }) {
             </span>
             <span class="hsc-spacer" />
             <button
-              class="hsc-ib"
+              class="hsc-ib hsc-save"
+              classList={{ "hsc-save--due": dirty() && busy() === undefined }}
               type="button"
               title={busy() === "save" ? "Saving…" : dirty() ? "Save (iris scripts push)" : "Saved"}
               disabled={!dirty() || busy() !== undefined}
@@ -630,6 +739,12 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number }) {
           <Show when={hive() && !hive()!.measured}>
             <p class="hsc-warn" title={hive()!.reason ?? undefined}>
               Could not see your computers
+            </p>
+          </Show>
+          <Show when={hive() && hive()!.measured && online().length === 0 && offline().length === 0}>
+            <p class="hsc-muted hsc-empty">
+              No computers on account {list.latest?.account ?? "?"}. A computer shows up here once its Hive is on and
+              signed in to this account.
             </p>
           </Show>
           <For each={online()}>

@@ -11,6 +11,7 @@ import {
   groupComputers,
   isTestScript,
   lastLine,
+  listWidth,
   parseCommand,
   parseHeader,
   setArgDefault,
@@ -207,5 +208,16 @@ describe("stages", () => {
   })
   test("no task: nothing reached", () => {
     expect(Object.values(stageStates(null))).toEqual(["todo", "todo", "todo", "todo", "todo"])
+  })
+})
+
+describe("listWidth", () => {
+  test("keeps the list between 130 and 360px, and defaults to 170", () => {
+    expect(listWidth(200)).toBe(200)
+    expect(listWidth(10)).toBe(130)
+    expect(listWidth(900)).toBe(360)
+    expect(listWidth(undefined)).toBe(170)
+    expect(listWidth("wide")).toBe(170)
+    expect(listWidth(Number.NaN)).toBe(170)
   })
 })

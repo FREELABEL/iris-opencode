@@ -34,7 +34,9 @@
   --hsc-mono-font: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
 
   display: grid;
-  grid-template-columns: 150px minmax(0, 1fr) 220px;
+  --hsc-lw: 170px;
+  position: relative;
+  grid-template-columns: var(--hsc-lw) minmax(0, 1fr) 220px;
   grid-template-areas: "list ed where";
   flex: 1 1 auto;
   min-height: 0;
@@ -61,6 +63,22 @@
 
 .hsc-col { min-width: 0; min-height: 0; overflow-y: auto; padding: 10px; }
 .hsc-list { grid-area: list; border-right: 1px solid var(--hsc-rule); }
+
+/* The list folds to a rail and its right edge drags. The grip sits on the column rule. */
+.hsc--closed .hsc-list { padding: 10px 4px; overflow: hidden; }
+.hsc--closed .hsc-lhead { flex-direction: column; gap: 6px; padding: 0; }
+.hsc--closed .hsc-lname, .hsc--closed .hsc-lhead .hsc-spacer { display: none; }
+.hsc-grip {
+  position: absolute; top: 0; bottom: 0; left: calc(var(--hsc-lw) - 3px); width: 6px; z-index: 2;
+  cursor: col-resize; touch-action: none;
+}
+.hsc-grip::after {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 2px; width: 2px; border-radius: 1px;
+  background: var(--hsc-jade); opacity: 0; transition: opacity 120ms;
+}
+.hsc-grip:hover::after, .hsc-grip:focus-visible::after, .hsc--drag .hsc-grip::after { opacity: 0.7; }
+.hsc-grip:focus-visible { outline: none; }
+.hsc--drag { cursor: col-resize; user-select: none; }
 .hsc-ed { grid-area: ed; display: flex; flex-direction: column; gap: 10px; }
 .hsc-where { grid-area: where; border-left: 1px solid var(--hsc-rule); }
 
@@ -73,6 +91,20 @@
 .hsc-ib--bare { border: 0; width: 24px; height: 24px; }
 .hsc-ib:hover:not(:disabled) { color: var(--hsc-ink); }
 .hsc-ib:disabled { opacity: 0.45; cursor: default; }
+/* Unsaved: Save turns jade and breathes once a second until it is pressed. */
+.hsc-save--due {
+  color: var(--hsc-jade); border-color: var(--hsc-jade);
+  background: color-mix(in srgb, var(--hsc-jade) 16%, transparent);
+  animation: hsc-due 1.6s ease-in-out infinite;
+}
+.hsc-save--due:hover:not(:disabled) { color: var(--hsc-surface); background: var(--hsc-jade); }
+@keyframes hsc-due {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--hsc-jade) 45%, transparent); }
+  50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--hsc-jade) 0%, transparent); }
+}
+.hsc-acct { font-size: 10.5px; color: var(--hsc-faint); font-weight: 400; }
+.hsc--closed .hsc-acct { display: none; }
+.hsc-empty { font-size: 12px; line-height: 1.45; margin-top: 8px; }
 .hsc-newname {
   width: 100%; margin: 8px 0 0; padding: 5px 8px; font-size: 12px; border-radius: 7px;
   border: 1px solid var(--hsc-rule); background: var(--hsc-card); color: var(--hsc-ink);
@@ -240,7 +272,7 @@
 /* Narrow panel: computers move under the script; narrower still, the list goes on top. */
 @container (max-width: 760px) {
   .hsc {
-    grid-template-columns: 140px minmax(0, 1fr);
+    grid-template-columns: var(--hsc-lw) minmax(0, 1fr);
     grid-template-rows: auto auto;
     grid-template-areas: "list ed" "list where";
     overflow-y: auto;
@@ -251,7 +283,10 @@
 @container (max-width: 520px) {
   .hsc { grid-template-columns: minmax(0, 1fr); grid-template-areas: "list" "ed" "where"; }
   .hsc-list { border-right: 0; border-bottom: 1px solid var(--hsc-rule); max-height: 160px; overflow-y: auto; }
+  .hsc-grip { display: none; }
+  .hsc--closed .hsc-lhead { flex-direction: row; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .hsc-fbar i, .hsc-cc { transition: none; }
+  .hsc-fbar i, .hsc-cc, .hsc-grip::after { transition: none; }
+  .hsc-save--due { animation: none; }
 }

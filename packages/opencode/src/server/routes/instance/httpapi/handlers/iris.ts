@@ -749,7 +749,7 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
     // Hive › Scripts (#188817) — the `iris scripts` cloud calls, for the webview.
     const hiveScripts = Effect.fn("IrisHttpApi.hiveScripts")(() =>
       Effect.promise(() => HiveScripts.fetchScripts()).pipe(
-        Effect.map((r) => ({ measured: r.measured, reason: r.reason, scripts: r.data.scripts })),
+        Effect.map((r) => ({ measured: r.measured, reason: r.reason, scripts: r.data.scripts, account: r.data.account ?? null })),
       ),
     )
     const hiveScript = Effect.fn("IrisHttpApi.hiveScript")((ctx: { params: { slug: string } }) =>

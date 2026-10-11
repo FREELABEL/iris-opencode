@@ -74,6 +74,13 @@ export type TaskView = {
 // ── test fixtures ────────────────────────────────────────────────────────────────────────────────
 
 /** Scripts that exist to test the Hive itself. Hidden behind a count, never deleted from view. */
+/** The script list: a 40px rail when closed, otherwise 130–360px wide. */
+export const LIST_RAIL = 40
+export function listWidth(w: unknown): number {
+  const n = typeof w === "number" && Number.isFinite(w) ? Math.round(w) : 170
+  return Math.min(360, Math.max(130, n))
+}
+
 export const TEST_PREFIXES = ["e2e-", "s1-", "s23-", "probe-gate", "m1-", "reach-probe", "console-demo"] as const
 
 export function isTestScript(slug: string): boolean {

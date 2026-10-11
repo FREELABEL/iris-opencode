@@ -209,11 +209,13 @@ async function cachedDoctor(slug: string): Promise<ScriptDoctor | null> {
   return doctor
 }
 
-export async function fetchScripts(): Promise<Result<{ scripts: ScriptSummary[] }>> {
-  if (!(await resolveUserId())) return { measured: false, reason: notSignedIn(), data: { scripts: [] } }
+/** `account` is the IRIS user the list belongs to — scripts are per account, so a second sign-in sees none. */
+export async function fetchScripts(): Promise<Result<{ scripts: ScriptSummary[]; account?: number }>> {
+  const account = await resolveUserId()
+  if (!account) return { measured: false, reason: notSignedIn(), data: { scripts: [] } }
   try {
     const res = await irisFetch(`/api/v1/scripts`, IRIS_API)
-    if (!res.ok) return { measured: false, reason: `iris-api ${res.status}`, data: { scripts: [] } }
+    if (!res.ok) return { measured: false, reason: `iris-api ${res.status}`, data: { scripts: [], account } }
     const rows: any[] = ((await res.json()) as any)?.data ?? []
     const doctors = await pool(rows, 8, (r) => cachedDoctor(String(r.slug)))
     const scripts: ScriptSummary[] = rows.map((r, i) => ({
@@ -226,7 +228,7 @@ export async function fetchScripts(): Promise<Result<{ scripts: ScriptSummary[] 
       doctor: doctors[i],
     }))
     scripts.sort((a, b) => a.slug.localeCompare(b.slug))
-    return { measured: true, data: { scripts } }
+    return { measured: true, data: { scripts, account } }
   } catch (e) {
     return { measured: false, reason: errText(e), data: { scripts: [] } }
   }

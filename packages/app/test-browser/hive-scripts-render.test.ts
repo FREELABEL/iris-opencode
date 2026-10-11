@@ -44,14 +44,14 @@ const wait = async (ok: () => boolean, ms = 2000) => {
 }
 const NOW = Date.parse("2026-10-09T21:20:00Z")
 
-function mount() {
+function mount(opts: { empty?: boolean } = {}) {
   const calls: { path: string; method: string; body?: any }[] = []
   let polled = 0
   const doFetch = async (path: string, init?: RequestInit) => {
     calls.push({ path, method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : undefined })
     const json = (v: unknown) => new Response(JSON.stringify(v), { headers: { "Content-Type": "application/json" } })
-    if (path === "/iris/hive/scripts") return json({ measured: true, scripts: snap.scripts })
-    if (path.startsWith("/iris/hive?")) return json({ measured: true, nodes: snap.nodes })
+    if (path === "/iris/hive/scripts") return json({ measured: true, scripts: opts.empty ? [] : snap.scripts, account: opts.empty ? 2945 : 193 })
+    if (path.startsWith("/iris/hive?")) return json({ measured: true, nodes: opts.empty ? [] : snap.nodes })
     if (path === "/iris/hive/scripts/console-demo") return json({ measured: true, script: { ...snap.source, sha256: "x" } })
     if (path.startsWith("/iris/hive/scripts/") && init?.method !== "POST")
       return json({ measured: true, script: { slug: path.split("/").pop(), runtime: "bash", content: "#!/bin/bash\necho hi\n", sha256: "y" } })
@@ -149,4 +149,73 @@ test("⌘K runs console-demo on iris-hive-001: stages, output, and the card that
   expect((host.querySelector(".hsc-code--edit textarea") as HTMLTextAreaElement).value).toBe(snap.source.content)
   dispose()
   host.remove()
+})
+
+test("the script list folds to a rail, resizes from its edge, and remembers both", async () => {
+  localStorage.removeItem("iris.hive.scripts.list")
+  let { host, dispose } = mount()
+  await wait(() => host.querySelectorAll(".hsc-ilist li").length > 0)
+  const pane = () => host.querySelector(".hsc") as HTMLElement
+  const grip = () => host.querySelector(".hsc-grip") as HTMLElement
+  expect(pane().style.getPropertyValue("--hsc-lw")).toBe("170px")
+
+  // fold: the rows go, the rail keeps the fold and + buttons
+  ;(host.querySelector(".hsc-fold") as HTMLButtonElement).click()
+  await wait(() => pane().classList.contains("hsc--closed"))
+  expect(host.querySelector(".hsc-ilist")).toBeNull()
+  expect(pane().style.getPropertyValue("--hsc-lw")).toBe("40px")
+  expect(host.querySelector(".hsc-fold")?.getAttribute("aria-expanded")).toBe("false")
+
+  // the keyboard on the edge: → opens, then widens; ← narrows
+  const key = (k: string, shiftKey = false) => grip().dispatchEvent(new KeyboardEvent("keydown", { key: k, shiftKey, bubbles: true }))
+  key("ArrowRight")
+  await wait(() => host.querySelectorAll(".hsc-ilist li").length > 0)
+  key("ArrowRight", true)
+  expect(pane().style.getPropertyValue("--hsc-lw")).toBe("210px")
+  expect(grip().getAttribute("aria-valuenow")).toBe("210")
+  key("ArrowLeft")
+  expect(pane().style.getPropertyValue("--hsc-lw")).toBe("200px")
+  dispose()
+  host.remove()
+
+  // a fresh mount comes back at the same width
+  ;({ host, dispose } = mount())
+  await wait(() => host.querySelectorAll(".hsc-ilist li").length > 0)
+  expect(pane().style.getPropertyValue("--hsc-lw")).toBe("200px")
+  // double-clicking the edge folds it, and that is remembered too
+  grip().dispatchEvent(new MouseEvent("dblclick", { bubbles: true }))
+  await wait(() => pane().classList.contains("hsc--closed"))
+  dispose()
+  host.remove()
+  ;({ host, dispose } = mount())
+  await wait(() => host.querySelector(".hsc-fold") !== null)
+  expect(pane().classList.contains("hsc--closed")).toBe(true)
+  dispose()
+  host.remove()
+  localStorage.removeItem("iris.hive.scripts.list")
+})
+
+test("an account with nothing says so, and an unsaved script lights Save", async () => {
+  let { host, dispose } = mount({ empty: true })
+  await wait(() => !!host.querySelector(".hsc-empty"))
+  expect(host.querySelector(".hsc-acct")?.textContent).toBe("#2945")
+  expect(host.querySelector(".hsc-list")?.textContent).toContain("No scripts on account 2945")
+  expect(host.querySelector(".hsc-empty")?.textContent).toContain("No computers on account 2945")
+  dispose()
+  host.remove()
+
+  localStorage.setItem("iris.hive.scripts.slug", "console-demo")
+  ;({ host, dispose } = mount())
+  const ta = () => host.querySelector('textarea[aria-label="Script source"]') as HTMLTextAreaElement | null
+  await wait(() => !!ta()?.value)
+  const save = host.querySelector(".hsc-save") as HTMLButtonElement
+  expect(save.classList.contains("hsc-save--due")).toBe(false)
+  expect(save.disabled).toBe(true)
+  ta()!.value += "echo more\n"
+  ta()!.dispatchEvent(new Event("input", { bubbles: true }))
+  await wait(() => save.classList.contains("hsc-save--due"))
+  expect(save.disabled).toBe(false)
+  dispose()
+  host.remove()
+  localStorage.removeItem("iris.hive.scripts.slug")
 })
