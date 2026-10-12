@@ -3,6 +3,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { requireAuth, requireUserId, dim, bold, success, highlight, writeJson } from "./iris-api"
 import { hiveFetch, fetchNodes } from "./platform-hive-nodes"
+import { detectLocalNodeId } from "./hive-tailscale"
 import { existsSync, readFileSync, readdirSync, mkdirSync } from "fs"
 import { join } from "path"
 import { homedir, hostname } from "os"
@@ -234,8 +235,13 @@ export const HiveSearchCommand = cmd({
           try {
             const nodes = await fetchNodes(userId)
             const thisHostname = hostname()
+            // THIS machine is already searched above as "local". Excluding it by hostname
+            // missed: node "Alexs-MacBook-Pro-11711" on host "Alexs-MacBook-Pro-3" (macOS renames
+            // on mDNS collisions), so this Mac was dispatched a task and searched twice.
+            // The daemon knows its own id; the hostname check stays as the fallback.
+            const localNodeId = await detectLocalNodeId(nodes).catch(() => null)
             const remoteNodes = nodes.filter(
-              (n) => n.connection_status === "online" && !n.name.includes(thisHostname),
+              (n) => n.connection_status === "online" && n.id !== localNodeId && !n.name.includes(thisHostname),
             )
 
             if (remoteNodes.length > 0) {
