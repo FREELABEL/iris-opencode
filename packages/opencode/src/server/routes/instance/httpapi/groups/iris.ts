@@ -220,6 +220,47 @@ const ScriptRunResponse = Schema.Struct({
   sha256: described(Schema.optional(Schema.NullOr(Schema.String)), "NULL = the run is UNVERIFIED (no hash could be pinned)."),
   timeoutSeconds: Schema.optional(Schema.Finite),
 }).annotate({ identifier: "IrisScriptRunResponse" })
+const HeartbeatRunRow = Schema.Struct({
+  id: Schema.Finite,
+  status: Schema.String,
+  startedAt: Schema.NullOr(Schema.String),
+  completedAt: Schema.NullOr(Schema.String),
+  durationMs: Schema.NullOr(Schema.Finite),
+  tokens: Schema.NullOr(Schema.Finite),
+  model: Schema.NullOr(Schema.String),
+  preview: Schema.NullOr(Schema.String),
+  error: Schema.NullOr(Schema.String),
+}).annotate({ identifier: "IrisHeartbeatRun" })
+const HeartbeatRow = Schema.Struct({
+  jobId: Schema.Finite,
+  agentId: Schema.Finite,
+  agentName: Schema.String,
+  bloqId: Schema.NullOr(Schema.Finite),
+  bloqName: Schema.NullOr(Schema.String),
+  mode: Schema.NullOr(Schema.String),
+  frequency: Schema.NullOr(Schema.String),
+  status: Schema.String,
+  agentActive: Schema.NullOr(Schema.Boolean),
+  nextRunAt: Schema.NullOr(Schema.String),
+  lastRunAt: Schema.NullOr(Schema.String),
+  runCount: Schema.Finite,
+  consecutiveFailures: Schema.Finite,
+  lastOk: Schema.NullOr(Schema.Boolean),
+  lastError: Schema.NullOr(Schema.String),
+  reportTo: Schema.Finite,
+  tools: Schema.Finite,
+  runs: Schema.Array(HeartbeatRunRow),
+  runsMeasured: described(Schema.Boolean, "False: the run history could not be read. Empty runs then mean NOT READ, not never ran."),
+}).annotate({ identifier: "IrisHeartbeat" })
+const HeartbeatsResponse = Schema.Struct({
+  ...Measured,
+  heartbeats: Schema.Array(HeartbeatRow),
+}).annotate({ identifier: "IrisHeartbeatsResponse" })
+const HeartbeatActionResponse = Schema.Struct({
+  ok: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  status: Schema.optional(described(Schema.String, "The status fl-api saved, read back.")),
+}).annotate({ identifier: "IrisHeartbeatActionResponse" })
 const HiveTaskResponse = Schema.Struct({
   ...Measured,
   task: Schema.NullOr(
@@ -1031,6 +1072,9 @@ export const IrisPaths = {
   brandSave: `${root}/brands/:brandID/save`,
   agentTasks: `${root}/agents/:agentID/tasks`,
   agentLive: `${root}/agents/:agentID/live`,
+  heartbeats: `${root}/heartbeats`,
+  heartbeatRun: `${root}/heartbeats/:jobID/run`,
+  heartbeatPause: `${root}/heartbeats/:jobID/pause`,
   runTakeOver: `${root}/runs/:runID/take-over`,
   runHandBack: `${root}/runs/:runID/hand-back`,
   playbookDoc: `${root}/playbooks/doc/:name`,
@@ -2272,6 +2316,25 @@ export const IrisApi = HttpApi.make("iris").add(
         payload: Schema.Struct({ message: Schema.optional(Schema.String) }),
         success: described(RunControlResponse, "The run resumes from where it paused; the message is what the agent is told"),
       }).annotateMerge(OpenApi.annotations({ identifier: "iris.runHandBack", summary: "Hand a taken-over run back" })),
+      HttpApiEndpoint.get("heartbeats", IrisPaths.heartbeats, {
+        success: described(HeartbeatsResponse, "Every live agent heartbeat on the account, each with its recent runs"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.heartbeats",
+          summary: "List agent heartbeats",
+          description:
+            "#189110. fl-api scheduled jobs whose task is `heartbeat`, with the last 12 executions of each. A `scheduled` status alone is not evidence a heartbeat is beating — the runs and next_run_at are.",
+        }),
+      ),
+      HttpApiEndpoint.post("heartbeatRun", IrisPaths.heartbeatRun, {
+        params: { jobID: Schema.NumberFromString },
+        success: described(HeartbeatActionResponse, "Dispatched — one beat now, outside the schedule"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.heartbeatRun", summary: "Run a heartbeat now (iris schedules run)" })),
+      HttpApiEndpoint.post("heartbeatPause", IrisPaths.heartbeatPause, {
+        params: { jobID: Schema.NumberFromString },
+        payload: Schema.Struct({ paused: Schema.Boolean }),
+        success: described(HeartbeatActionResponse, "The status fl-api saved"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.heartbeatPause", summary: "Pause or resume a heartbeat" })),
       HttpApiEndpoint.get("agentTasks", IrisPaths.agentTasks, {
         params: { agentID: Schema.NumberFromString },
         query: Schema.Struct({ includeDone: Schema.optional(Schema.String) }),

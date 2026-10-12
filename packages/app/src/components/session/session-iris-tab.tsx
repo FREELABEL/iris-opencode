@@ -51,6 +51,7 @@ import { IrisRooms } from "./iris-rooms"
 import { IrisAgentLive } from "./iris-agent-live"
 import { IrisHiveScripts } from "./iris-hive-scripts"
 import { IrisHiveMachines } from "./iris-hive-machines"
+import { IrisHeartbeats } from "./iris-heartbeats"
 import { itemCommands, renderMarkdown } from "./iris-item"
 import {
   ATLAS_EDITED,
@@ -614,7 +615,7 @@ const SURFACES = [
 type SurfaceId = (typeof SURFACES)[number]["id"]
 
 /** Panes that draw and fetch for themselves; the generic row list has nothing to show for them. */
-const SELF_PANES = new Set(["rooms", "artifacts", "atlas-artifacts", "agent-live", "brands", "hive", "hive-scripts"])
+const SELF_PANES = new Set(["rooms", "artifacts", "atlas-artifacts", "agent-live", "brands", "hive", "hive-scripts", "heartbeats"])
 
 interface SubView {
   id: string
@@ -668,6 +669,10 @@ export const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
     // "Is it stuck?" (#187921): the picked agent's current step and last tool calls, live, with
     // Take over / Hand back. Owns its pane: IrisAgentLive polls for itself.
     { id: "live", label: "Live", pane: "agent-live", path: () => `/iris/agents/live` },
+    // Every agent that runs on its own schedule (#189110): is it beating, did the last beat work,
+    // when is the next — with Run now and Pause. Account-wide like Rooms (a heartbeat is the
+    // agent's, and an agent can watch several boards), and it owns its pane.
+    { id: "heartbeats", label: "Heartbeats", pane: "heartbeats", path: () => `/iris/heartbeats` },
   ],
   pages: [
     { id: "pages", label: "Pages", pane: "pages", path: (b) => `/iris/pages/${b}` },
@@ -2902,6 +2907,9 @@ export function SessionIrisTab() {
           </Match>
           <Match when={pane() === "hive"}>
             <IrisHiveMachines doFetch={doFetch} />
+          </Match>
+          <Match when={pane() === "heartbeats"}>
+            <IrisHeartbeats doFetch={doFetch} />
           </Match>
           <Match when={pane() === "hive-scripts"}>
             <IrisHiveScripts
