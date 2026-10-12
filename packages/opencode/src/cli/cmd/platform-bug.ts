@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, FL_API, IRIS_API, resolveUserId, requireUserId, writeJson } from "./iris-api"
+import { irisFetch, resolveToken, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, FL_API, IRIS_API, resolveUserId, requireUserId, writeJson } from "./iris-api"
 import { hiveFetch } from "./platform-hive-nodes"
 import { Auth } from "../../auth"
 import { homedir, platform, release, arch, hostname, userInfo } from "os"
@@ -10,6 +10,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs"
 import { randomUUID } from "crypto"
 import { execSync } from "child_process"
 import { itemContentText } from "./bloq-item-format"
+import { likelyDuplicates, searchTerms, type DuplicateCandidate } from "./bug-dedupe"
 
 // Bug reports go to bloq #297 (under user 193) via PUBLIC endpoint — no auth required
 const BUG_REPORT_ENDPOINT = "/api/v1/public/bug-report"
@@ -354,6 +355,40 @@ function collectSystemInfo(): Record<string, string> {
 // Bug submission
 // ============================================================================
 
+/**
+ * Similar reports already on the IRIS board (#189153). The board's search is a substring match,
+ * so it is asked once per distinctive word and the results are scored locally. Any failure —
+ * signed out, offline, slow — returns nothing: this is advice, and advice must never stop a
+ * report from being filed.
+ */
+async function findPossibleDuplicates(title: string): Promise<DuplicateCandidate[]> {
+  try {
+    if (!(await resolveToken())) return []
+    const userId = await resolveUserId()
+    if (!userId) return []
+    // In parallel: each search is a round trip of 1–2.5 s, and the reporter is waiting.
+    const pages = await Promise.all(
+      searchTerms(title, 3).map(async (term) => {
+        try {
+          const params = new URLSearchParams({ per_page: "50", page: "1", search: term })
+          const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${BUG_BLOQ_ID}/items?${params}`, {
+            signal: AbortSignal.timeout(4000),
+          })
+          if (!res.ok) return []
+          const data = (await res.json()) as any
+          const raw = data?.data?.items ?? data?.data?.data ?? data?.data ?? []
+          return Array.isArray(raw) ? raw : Object.values(raw)
+        } catch {
+          return []
+        }
+      }),
+    )
+    return likelyDuplicates(title, pages.flat())
+  } catch {
+    return []
+  }
+}
+
 async function submitBug(args: {
   title: string
   description: string
@@ -366,6 +401,8 @@ async function submitBug(args: {
   project?: string
   projectToken?: string
   json?: boolean
+  /** Open/closed reports with a similar title, found before filing (#189153). Shown, never blocking. */
+  possibleDuplicates?: DuplicateCandidate[]
 }): Promise<void> {
   const sysInfo = collectSystemInfo()
 
@@ -492,6 +529,7 @@ async function submitBug(args: {
           bloq_id: landedBloqId,
           project: data?.data?.project ?? null,
           title: args.title,
+          possible_duplicates: args.possibleDuplicates ?? [],
         },
         null,
         2,
@@ -513,6 +551,9 @@ async function submitBug(args: {
   // is still watching.
   console.log(`  ${dim("Title:")} ${args.title}`)
   console.log(`  ${dim("Severity:")} ${args.severity}`)
+  if (args.possibleDuplicates?.length) {
+    console.log(`  ${dim("Possibly the same as:")} ${args.possibleDuplicates.map((d) => `#${d.id}`).join(", ")}`)
+  }
   console.log("")
   console.log(dim("The IRIS team will review and respond. Thanks for helping improve IRIS!"))
 }
@@ -640,6 +681,11 @@ const ReportCommand = cmd({
       // one value and cannot absorb anything. The pre-existing non-interactive error already
       // told people "--title is required" while no such flag existed.
       .option("title", { describe: "short bug title — quote it, or pass --title \"...\"", type: "string" })
+      .option("force-new", {
+        describe: "skip the check for an existing report with a similar title",
+        type: "boolean",
+        default: false,
+      })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     // Combine positional title words + any passthrough args (after --)
@@ -782,6 +828,32 @@ const ReportCommand = cmd({
 
     if (!description) description = "(no description provided)"
 
+    // #189153: look before filing. Same bug filed twice has been verified and paid twice
+    // (#178357). Only for the IRIS board (a client intake is not ours to search), only when
+    // signed in, never blocking an unattended caller: a false match must not cost a real bug.
+    let possibleDuplicates: DuplicateCandidate[] = []
+    const project = (args["project"] as string | undefined) ?? readProjectConfig().project
+    if (!project && !args["force-new"]) {
+      possibleDuplicates = await findPossibleDuplicates(title!)
+      if (possibleDuplicates.length) {
+        const interactive = Boolean(process.stdin.isTTY) && !args.json
+        const lines = possibleDuplicates.map((d) => `  #${d.id}  ${d.title}${d.status ? dim(`  (${d.status})`) : ""}`)
+        if (interactive) {
+          console.log("")
+          console.log(bold("This may already be reported:"))
+          for (const l of lines) console.log(l)
+          const go = await prompts.confirm({ message: "File a new report anyway?", initialValue: false })
+          if (prompts.isCancel(go) || !go) {
+            console.log(dim(`  Add what you saw to the existing one: iris bug update ${possibleDuplicates[0].id} --note "..."`))
+            console.log(dim("  Or file it regardless: add --force-new"))
+            return
+          }
+        } else if (!args.json) {
+          console.error(dim(`  note: possibly already reported — ${possibleDuplicates.map((d) => `#${d.id}`).join(", ")} (filing anyway; --force-new skips this check)`))
+        }
+      }
+    }
+
     try {
       await submitBug({
         title: title!,
@@ -794,6 +866,7 @@ const ReportCommand = cmd({
         project: args["project"] as string | undefined,
         projectToken: args["project-token"] as string | undefined,
         json: args.json,
+        possibleDuplicates,
       })
     } catch (e: any) {
       console.error(`Failed to submit bug: ${e.message}`)
