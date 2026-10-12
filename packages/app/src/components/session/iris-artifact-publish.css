@@ -1,0 +1,224 @@
+/*
+ * Publish modal (#187131). Three steps in reading order — where it lives, its address, who can
+ * see it — then a footer that never scrolls away: the consequence in one sentence, and two real
+ * buttons. Built on the app's own tokens so it sits in both themes like every other dialog.
+ */
+[data-component="dialog"]:has(.iris-pubm) [data-slot="dialog-container"] {
+  width: min(calc(100vw - 16px), 540px);
+  height: min(calc(100vh - 16px), 600px);
+}
+.iris-pubm [data-slot="dialog-description"] {
+  color: var(--text-weak);
+  font-size: 13px;
+  padding-left: 24px;
+}
+
+.iris-pubm__form {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+.iris-pubm__body {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 2px 20px 16px;
+  overflow-y: auto;
+  min-height: 0;
+  flex: 1;
+}
+
+.iris-pubm__sec { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.iris-pubm__lbl {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-base);
+}
+.iris-pubm__n {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  font-size: 10.5px;
+  line-height: 1;
+  font-family: var(--font-family-mono);
+  color: var(--text-weak);
+  background: var(--surface-base, var(--background-element));
+  border: 1px solid var(--border-weak-base);
+}
+
+/* 1 · where */
+.iris-pubm__dest,
+.iris-pubm__board {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  color: var(--text-strong);
+  font-size: 13px;
+}
+.iris-pubm__dest {
+  border: 1px solid var(--border-weak-base);
+  background: var(--surface-base, transparent);
+}
+.iris-pubm__dest:hover:not(:disabled) { border-color: var(--border-base, var(--text-weaker)); }
+.iris-pubm__dest:disabled { cursor: default; }
+.iris-pubm__dest:focus-visible,
+.iris-pubm__board:focus-visible { outline: 2px solid var(--border-interactive-focus, var(--text-interactive-base)); outline-offset: 1px; }
+.iris-pubm__dest [data-component="icon"],
+.iris-pubm__board [data-component="icon"] { color: var(--text-weak); flex: none; }
+.iris-pubm__dest .iris-publish__destname { flex: 1; font-weight: 500; }
+.iris-pubm__id { font-family: var(--font-family-mono); font-size: 11px; color: var(--text-weaker); flex: none; }
+.iris-pubm__change { flex: none; font-size: 12px; color: var(--text-interactive-base, var(--text-strong)); }
+
+.iris-pubm__picker {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-weak-base);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.iris-pubm__search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-weak-base);
+  color: var(--text-weak);
+}
+.iris-pubm__search input {
+  all: unset;
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text-strong);
+}
+.iris-pubm__search input::placeholder { color: var(--text-weaker); }
+.iris-pubm__boards { max-height: 176px; overflow-y: auto; padding: 4px; margin: 0; list-style: none; }
+.iris-pubm__board { padding: 8px 10px; border-radius: 7px; font-size: 13px; color: var(--text-base); }
+.iris-pubm__board:hover { background: var(--surface-base-hover, var(--background-element)); color: var(--text-strong); }
+.iris-pubm__board[aria-pressed="true"] { color: var(--text-strong); font-weight: 500; }
+.iris-pubm__boardname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iris-pubm__empty { padding: 10px; font-size: 12px; color: var(--text-weak); }
+
+/* 2 · address — the fixed part reads as part of the address, not as a label */
+.iris-pubm__addr {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid var(--border-weak-base);
+  border-radius: 10px;
+  overflow: hidden;
+  font-family: var(--font-family-mono);
+  font-size: 12.5px;
+}
+.iris-pubm__addr:focus-within { border-color: var(--border-interactive-focus, var(--text-interactive-base)); }
+.iris-pubm__prefix {
+  flex: none;
+  padding: 9px 2px 9px 12px;
+  color: var(--text-weaker);
+}
+.iris-pubm__addr input {
+  all: unset;
+  flex: 1;
+  min-width: 0;
+  padding: 9px 12px 9px 0;
+  color: var(--text-strong);
+}
+
+/* 3 · who — three tiles, nothing chosen until you choose */
+.iris-pubm__scopes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.iris-pubm__scope {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 11px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border-weak-base);
+  cursor: pointer;
+  min-width: 0;
+}
+.iris-pubm__scope:hover { border-color: var(--border-base, var(--text-weaker)); }
+.iris-pubm__scope input { position: absolute; opacity: 0; pointer-events: none; }
+.iris-pubm__scope:has(input:focus-visible) { outline: 2px solid var(--border-interactive-focus, var(--text-interactive-base)); outline-offset: 1px; }
+.iris-pubm__scope [data-component="icon"] { color: var(--text-weak); }
+.iris-pubm__scope[data-on] {
+  border-color: var(--text-strong);
+  box-shadow: inset 0 0 0 1px var(--text-strong);
+}
+.iris-pubm__scope[data-on] [data-component="icon"] { color: var(--text-strong); }
+.iris-pubm__scopename { font-size: 13px; font-weight: 500; color: var(--text-strong); }
+.iris-pubm__scopehint { font-size: 11.5px; color: var(--text-weak); line-height: 1.35; }
+
+.iris-pubm__switch { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--text-base); cursor: pointer; }
+.iris-pubm__switch input { position: absolute; opacity: 0; pointer-events: none; }
+.iris-pubm__track {
+  position: relative;
+  flex: none;
+  width: 28px;
+  height: 16px;
+  border-radius: 8px;
+  background: var(--border-weak-base);
+  transition: background 0.15s;
+}
+.iris-pubm__track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--surface-raised-stronger-non-alpha, #fff);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
+  transition: transform 0.15s;
+}
+.iris-pubm__switch input:checked + .iris-pubm__track { background: var(--text-strong); }
+.iris-pubm__switch input:checked + .iris-pubm__track::after { transform: translateX(12px); }
+.iris-pubm__switch input:focus-visible + .iris-pubm__track { outline: 2px solid var(--border-interactive-focus, var(--text-interactive-base)); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  .iris-pubm__track, .iris-pubm__track::after { transition: none; }
+}
+
+/* the footer never scrolls away */
+.iris-pubm__foot {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 20px 16px;
+  border-top: 1px solid var(--border-weak-base);
+}
+.iris-pubm__summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--text-weak);
+  overflow-wrap: anywhere;
+}
+.iris-pubm__summary[data-ready] { color: var(--text-strong); }
+.iris-pubm__summary [data-component="icon"] { flex: none; margin-top: 1px; }
+.iris-pubm__error { margin: 0; font-size: 12px; color: var(--text-on-critical-base, var(--text-strong)); }
+.iris-pubm__actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+@media (max-width: 520px) {
+  .iris-pubm__scopes { grid-template-columns: 1fr; }
+  .iris-pubm__scope { flex-direction: row; align-items: center; gap: 10px; }
+  .iris-pubm__scopehint { margin-left: auto; text-align: right; }
+}

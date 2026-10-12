@@ -1,5 +1,8 @@
 import { createMemo, createSignal, For, Show } from "solid-js"
 import { Dialog } from "@opencode-ai/ui/dialog"
+import { Button } from "@opencode-ai/ui/button"
+import { Icon, type IconProps } from "@opencode-ai/ui/icon"
+import "./iris-artifact-publish.css"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { renderMarkdown } from "./iris-item"
 import {
@@ -31,10 +34,10 @@ import {
 type Fetch = (path: string, init?: RequestInit) => Promise<Response>
 type Board = { id: number; name: string }
 
-const SCOPES: { id: Visibility; label: string; hint: (slug: string) => string }[] = [
-  { id: "public", label: "Public", hint: (s) => `Anyone, at heyiris.io/p/${s || "…"}` },
-  { id: "unlisted", label: "Unlisted", hint: () => "Only people you send the link to" },
-  { id: "private", label: "Private", hint: () => "Only you, signed in — saved to Genesis, not on the web" },
+const SCOPES: { id: Visibility; label: string; short: string; icon: IconProps["name"] }[] = [
+  { id: "public", label: "Public", short: "Anyone on the web", icon: "globe" },
+  { id: "unlisted", label: "Unlisted", short: "Anyone with the link", icon: "link" },
+  { id: "private", label: "Private", short: "Only you, not on the web", icon: "lock" },
 ]
 
 /** What the primary button says it will do — never a bare "Submit". */
@@ -156,108 +159,162 @@ export function IrisArtifactPublish(props: {
     setError(null)
     setNote(null)
     dialog.show(() => (
-      <Dialog title={props.meta.published ? "Update page" : "Publish"} description={props.meta.title}>
+      <Dialog
+        title={props.meta.published ? "Update the page" : "Publish"}
+        description={props.meta.title}
+        class="iris-pubm"
+      >
         <form
-          class="iris-publish__form iris-publish__form--modal"
+          class="iris-pubm__form"
           data-testid="artifact-publish-modal"
           onSubmit={(e) => {
             e.preventDefault()
             void submit()
           }}
         >
-          {/* WHERE, before who. The destination is the decision; visibility qualifies it. */}
-          <fieldset class="iris-publish__dest" aria-label="Project">
-            <legend>Project</legend>
-            <Show
-              when={!picking()}
-              fallback={
-                <div class="iris-publish__picker">
-                  <input
-                    class="iris-field__input"
-                    placeholder="Search projects or #id…"
-                    value={filter()}
-                    onInput={(e) => setFilter(e.currentTarget.value)}
-                    aria-label="Search projects"
-                    autofocus
-                  />
-                  <ul class="iris-publish__boards" aria-label="Projects">
-                    <For each={matches()} fallback={<li class="iris-publish__muted">No projects match.</li>}>
-                      {(b) => (
-                        <li>
-                          <button
-                            type="button"
-                            class="iris-publish__board"
-                            classList={{ "iris-publish__board--on": b.id === board() }}
-                            onClick={() => {
-                              setBoard(b.id)
+          <div class="iris-pubm__body">
+            {/* 1 · WHERE, before who. The destination is the decision; visibility qualifies it. */}
+            <section class="iris-pubm__sec" aria-labelledby="pubm-where">
+              <h3 class="iris-pubm__lbl" id="pubm-where">
+                <span class="iris-pubm__n">1</span>Where it lives
+              </h3>
+              <Show
+                when={!picking()}
+                fallback={
+                  <div class="iris-pubm__picker">
+                    <div class="iris-pubm__search">
+                      <Icon name="magnifying-glass" size="small" />
+                      <input
+                        placeholder="Search projects or #id"
+                        value={filter()}
+                        onInput={(e) => setFilter(e.currentTarget.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault()
+                            const first = matches()[0]
+                            if (first) {
+                              setBoard(first.id)
                               setPicking(false)
-                            }}
-                          >
-                            <span class="truncate">{b.name}</span>
-                            <span class="iris-publish__boardid">#{b.id}</span>
-                          </button>
-                        </li>
-                      )}
-                    </For>
-                  </ul>
-                </div>
-              }
-            >
-              <div class="iris-publish__destrow">
-                <strong class="iris-publish__destname">{boardName()}</strong>
-                <Show when={boards().length > 1}>
-                  <button type="button" class="iris-card__linkbtn" onClick={() => setPicking(true)}>
-                    Change
-                  </button>
-                </Show>
+                            }
+                          }
+                        }}
+                        aria-label="Search projects"
+                        autofocus
+                      />
+                    </div>
+                    <ul class="iris-publish__boards iris-pubm__boards" aria-label="Projects">
+                      <For each={matches()} fallback={<li class="iris-pubm__empty">No projects match.</li>}>
+                        {(b) => (
+                          <li>
+                            <button
+                              type="button"
+                              class="iris-pubm__board"
+                              aria-pressed={b.id === board()}
+                              onClick={() => {
+                                setBoard(b.id)
+                                setPicking(false)
+                              }}
+                            >
+                              <Icon name="folder" size="small" />
+                              <span class="iris-pubm__boardname">{b.name}</span>
+                              <span class="iris-pubm__id">#{b.id}</span>
+                              <Show when={b.id === board()}>
+                                <Icon name="check-small" size="small" />
+                              </Show>
+                            </button>
+                          </li>
+                        )}
+                      </For>
+                    </ul>
+                  </div>
+                }
+              >
+                <button
+                  type="button"
+                  class="iris-pubm__dest"
+                  disabled={boards().length <= 1}
+                  onClick={() => setPicking(true)}
+                  title={boards().length > 1 ? "Choose another project" : undefined}
+                >
+                  <Icon name="folder" size="small" />
+                  <strong class="iris-publish__destname">{boardName()}</strong>
+                  <span class="iris-pubm__id">#{board()}</span>
+                  <Show when={boards().length > 1}>
+                    <span class="iris-pubm__change">Change</span>
+                  </Show>
+                </button>
+              </Show>
+            </section>
+
+            {/* 2 · the address, with the part you cannot change shown as part of it */}
+            <section class="iris-pubm__sec" aria-labelledby="pubm-addr">
+              <h3 class="iris-pubm__lbl" id="pubm-addr">
+                <span class="iris-pubm__n">2</span>Address
+              </h3>
+              <label class="iris-pubm__addr">
+                <span class="iris-pubm__prefix">heyiris.io/p/</span>
+                <input
+                  value={slug()}
+                  onInput={(e) => setSlug(e.currentTarget.value.toLowerCase())}
+                  aria-label="Page address"
+                  spellcheck={false}
+                />
+              </label>
+            </section>
+
+            {/* 3 · who. Nothing pre-selected — a default would make "public" the answer to not reading. */}
+            <section class="iris-pubm__sec" aria-labelledby="pubm-who">
+              <h3 class="iris-pubm__lbl" id="pubm-who">
+                <span class="iris-pubm__n">3</span>Who can see it
+              </h3>
+              <div class="iris-pubm__scopes" role="radiogroup" aria-labelledby="pubm-who">
+                <For each={SCOPES}>
+                  {(sc) => (
+                    <label class="iris-pubm__scope" data-on={scope() === sc.id ? "1" : undefined}>
+                      <input type="radio" name="scope" checked={scope() === sc.id} onChange={() => setScope(sc.id)} />
+                      <Icon name={sc.icon} size="small" />
+                      <span class="iris-pubm__scopename">{sc.label}</span>
+                      <span class="iris-pubm__scopehint">{sc.short}</span>
+                    </label>
+                  )}
+                </For>
               </div>
-            </Show>
-          </fieldset>
-          <label class="iris-publish__field">
-            <span>Address</span>
-            <input
-              class="iris-field__input"
-              value={slug()}
-              onInput={(e) => setSlug(e.currentTarget.value.toLowerCase())}
-              aria-label="Page address"
-            />
-          </label>
-          <fieldset class="iris-publish__scopes" aria-label="Who can see it">
-            <legend>Who can see it?</legend>
-            <For each={SCOPES}>
-              {(s) => (
-                <label class="iris-publish__scope" classList={{ "iris-publish__scope--on": scope() === s.id }}>
-                  <input type="radio" name="scope" checked={scope() === s.id} onChange={() => setScope(s.id)} />
-                  <span class="iris-publish__scopename">{s.label}</span>
-                  <span class="iris-publish__muted">{s.hint(slug())}</span>
-                </label>
-              )}
-            </For>
-          </fieldset>
-          <label class="iris-publish__check">
-            <input type="checkbox" checked={auth()} onChange={(e) => setAuth(e.currentTarget.checked)} />
-            <span>Require sign-in (visitors get an email code)</span>
-          </label>
-          {/* The consequence, in one sentence, where the decision is made. */}
-          <p class="iris-publish__summary" data-testid="artifact-publish-summary">
-            {publishSummary(scope(), slug(), boardName())}
-            {props.meta.published ? " · updates the same page" : ""}
-          </p>
-          <Show when={error()}>
-            <p class="iris-publish__note iris-publish__note--bad">{error()}</p>
-          </Show>
-          <div class="iris-publish__actions">
-            <button type="button" class="iris-card__linkbtn" onClick={() => dialog.close()}>
-              Cancel
-            </button>
-            <button
-              type="submit"
-              class="iris-card__linkbtn iris-card__linkbtn--primary"
-              disabled={!board() || !scope() || !slug().trim() || busy()}
-            >
-              {submitLabel()}
-            </button>
+              <label class="iris-pubm__switch">
+                <input type="checkbox" role="switch" checked={auth()} onChange={(e) => setAuth(e.currentTarget.checked)} />
+                <span class="iris-pubm__track" aria-hidden="true" />
+                <span>
+                  Require sign-in
+                  <span class="iris-pubm__scopehint"> — visitors get an email code</span>
+                </span>
+              </label>
+            </section>
           </div>
+
+          <footer class="iris-pubm__foot">
+            {/* The consequence, in one sentence, where the decision is made. */}
+            <p class="iris-pubm__summary" data-testid="artifact-publish-summary" data-ready={scope() && board() ? "1" : undefined}>
+              <Show when={scope()} keyed fallback={<Icon name="help" size="small" />}>
+                {(chosen) => <Icon name={SCOPES.find((x) => x.id === chosen)!.icon} size="small" />}
+              </Show>
+              <span>
+                {publishSummary(scope(), slug(), boardName())}
+                {props.meta.published ? " · updates the same page" : ""}
+              </span>
+            </p>
+            <Show when={error()}>
+              <p class="iris-pubm__error" role="alert">
+                {error()}
+              </p>
+            </Show>
+            <div class="iris-pubm__actions">
+              <Button type="button" variant="ghost" onClick={() => dialog.close()}>
+                Cancel
+              </Button>
+              <Button type="submit" variant="primary" disabled={!board() || !scope() || !slug().trim() || busy()}>
+                {submitLabel()}
+              </Button>
+            </div>
+          </footer>
         </form>
       </Dialog>
     ))

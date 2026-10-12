@@ -134,7 +134,7 @@ describe("publishing an artifact as a page", () => {
   test("publishing is a modal, and the project comes before who can see it (#187131)", () => {
     const src = readFileSync(path.join(import.meta.dir, "iris-artifact-publish.tsx"), "utf8")
     expect(src).toContain("dialog.show(")
-    expect(src.indexOf('aria-label="Project"')).toBeLessThan(src.indexOf('aria-label="Who can see it"'))
+    expect(src.indexOf('id="pubm-where"')).toBeLessThan(src.indexOf('id="pubm-who"'))
     expect(src).toContain("setBoard(props.bloqId)")
   })
   test("the consequence is one sentence: visibility, address and project", () => {
