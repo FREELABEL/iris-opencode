@@ -55,3 +55,15 @@ export function focusAtlasNote(url: string) {
 export function clearAtlasFocus() {
   setAtlasFocus(null)
 }
+
+/**
+ * Hive › Machines "Send a task": the computer Scripts should pick, kept until Scripts reads it.
+ * (Scripts may not be mounted yet when Machines asks — same reason as the request above.)
+ */
+const [hiveNodeFocus, setHiveNodeFocus] = createSignal<{ id: string; nonce: number } | null>(null)
+
+export const irisHiveNodeFocus = hiveNodeFocus
+
+export function focusHiveNode(id: string | null) {
+  setHiveNodeFocus(id ? { id, nonce: Date.now() + Math.random() } : null)
+}

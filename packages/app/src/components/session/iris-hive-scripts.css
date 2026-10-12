@@ -6,7 +6,8 @@
  * first and then light-dark(light, dark) so the pane follows the app's theme, not the OS.
  * Numbers are mono. Words live in tooltips; icons carry the meaning.
  */
-.hsc {
+/* Tokens are shared with Hive › Machines (.hmc). */
+.hsc, .hmc {
   --hsc-surface: #131312;
   --hsc-surface: light-dark(#f6f5f1, #131312);
   --hsc-card: #1b1b19;
@@ -32,7 +33,8 @@
   --hsc-term: #0e0e0d;
   --hsc-term: light-dark(#f1f0ea, #0e0e0d);
   --hsc-mono-font: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
-
+}
+.hsc {
   display: grid;
   --hsc-lw: 170px;
   position: relative;

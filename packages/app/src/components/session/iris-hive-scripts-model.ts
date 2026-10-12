@@ -52,6 +52,13 @@ export type HiveNodeRow = {
   diskFreeGb?: number
   capabilities?: readonly string[]
   tasksCompleted?: number
+  activeTasks?: number
+  maxConcurrent?: number
+  cpu?: string
+  daemonVersion?: string
+  recentRestarts?: number
+  /** When the hardware snapshot (disk, memory) was taken — not the heartbeat. */
+  hardwareDetectedAt?: string
 }
 
 export type TaskView = {

@@ -15,6 +15,7 @@ import {
 } from "solid-js"
 import { Icon, type IconProps } from "@opencode-ai/ui/icon"
 import "./iris-hive-scripts.css"
+import { focusHiveNode, irisHiveNodeFocus } from "./iris-nav"
 import {
   ago,
   commandFor,
@@ -332,6 +333,15 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
   // ── where it runs ────────────────────────────────────────────────────────────────────────────
   const [pickedId, setPickedId] = createSignal<string | undefined>()
   createEffect(on(slug, () => setPickedId(undefined), { defer: true }))
+  // Machines › "Send a task" names the computer; take it once that computer is in the list.
+  createEffect(() => {
+    const f = irisHiveNodeFocus()
+    if (!f) return
+    const c = computers().find((x) => x.ids.includes(f.id))
+    if (!c) return
+    setPickedId(c.id)
+    focusHiveNode(null)
+  })
   const picked = createMemo<Computer | undefined>(() => {
     const id = pickedId()
     return (id ? online().find((c) => c.id === id) : undefined) ?? defaultComputer(computers(), doctor())

@@ -50,6 +50,7 @@ import { useSessionLayout } from "@/pages/session/session-layout"
 import { IrisRooms } from "./iris-rooms"
 import { IrisAgentLive } from "./iris-agent-live"
 import { IrisHiveScripts } from "./iris-hive-scripts"
+import { IrisHiveMachines } from "./iris-hive-machines"
 import { itemCommands, renderMarkdown } from "./iris-item"
 import {
   ATLAS_EDITED,
@@ -613,7 +614,7 @@ const SURFACES = [
 type SurfaceId = (typeof SURFACES)[number]["id"]
 
 /** Panes that draw and fetch for themselves; the generic row list has nothing to show for them. */
-const SELF_PANES = new Set(["rooms", "artifacts", "atlas-artifacts", "agent-live", "brands", "hive-scripts"])
+const SELF_PANES = new Set(["rooms", "artifacts", "atlas-artifacts", "agent-live", "brands", "hive", "hive-scripts"])
 
 interface SubView {
   id: string
@@ -2899,6 +2900,9 @@ export function SessionIrisTab() {
           <Match when={pane() === "rooms"}>
             <IrisRooms doFetch={doFetch} bloqId={activeBloq()} />
           </Match>
+          <Match when={pane() === "hive"}>
+            <IrisHiveMachines doFetch={doFetch} />
+          </Match>
           <Match when={pane() === "hive-scripts"}>
             <IrisHiveScripts
               doFetch={doFetch}
@@ -3101,26 +3105,6 @@ export function SessionIrisTab() {
                 </For>
               </Match>
 
-              <Match when={pane() === "hive"}>
-                <For each={rows()}>
-                  {(n) => (
-                    <button
-                      type="button"
-                      class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
-                      onClick={() => setOpenRow(describeRow(pane(), n))}
-                    >
-                      {/* Online is GREEN and breathing — a machine that is up is the thing you
-                          look for in this list, and a glyph in body-text colour said nothing.
-                          The pulse stops under prefers-reduced-motion; the colour still carries it. */}
-                      <span class="iris-hive__dot shrink-0" data-on={n.online ? "1" : undefined} title={n.online ? "online" : "offline"} />
-                      <span class="text-12-regular text-text-base min-w-0 flex-1">{n.name}</span>
-                      <span class="font-mono tabular-nums text-11-regular text-text-weaker shrink-0">
-                        {n.activeTasks}/{n.maxConcurrent}
-                      </span>
-                    </button>
-                  )}
-                </For>
-              </Match>
 
               <Match when={pane() === "peers"}>
                 <For each={rows()}>

@@ -1,0 +1,135 @@
+/*
+ * Hive › Machines — heyiris.io/p/hive-panel-directions#pick.
+ * Same tokens and roles as Scripts: sage = online, amber = needs you, coral = critical,
+ * jade = the action. Numbers are mono.
+ */
+.hmc {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  color: var(--hsc-ink);
+  background: var(--hsc-surface);
+  font-size: 12.5px;
+}
+.hmc *, .hmc *::before, .hmc *::after { box-sizing: border-box; }
+.hmc button:focus-visible, .hmc [tabindex]:focus-visible {
+  outline: 2px solid var(--border-interactive-focus, var(--hsc-jade)); outline-offset: 1px;
+}
+.hmc-main { min-width: 0; min-height: 0; overflow-y: auto; padding: 12px 14px 16px; }
+.hmc-faint { color: var(--hsc-faint); }
+.hmc-empty { padding: 10px 2px; line-height: 1.5; }
+
+/* triage on top */
+.hmc-top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.hmc-sum { display: flex; align-items: center; gap: 14px; flex: 1; min-width: 0; color: var(--hsc-ink2); }
+.hmc-sum b { color: var(--hsc-ink); font-weight: 600; }
+.hmc-att { display: inline-flex; align-items: center; gap: 5px; color: var(--hsc-amber); }
+.hmc-att b { color: var(--hsc-amber); }
+.hmc-seg { display: inline-flex; border: 1px solid var(--hsc-rule); border-radius: 8px; padding: 2px; gap: 2px; }
+.hmc-seg button {
+  all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px;
+  border-radius: 6px; font-size: 11.5px; color: var(--hsc-faint);
+}
+.hmc-seg button:hover { color: var(--hsc-ink2); }
+.hmc-seg button[aria-selected="true"] { background: var(--hsc-elev); color: var(--hsc-ink); }
+
+/* cards */
+.hmc-cards {
+  list-style: none; margin: 0; padding: 0; display: grid; gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+}
+.hmc-card {
+  display: flex; flex-direction: column; gap: 7px; padding: 11px 12px; cursor: pointer;
+  border: 1px solid var(--hsc-rule); border-radius: 10px; background: var(--hsc-card);
+}
+.hmc-card:hover { border-color: color-mix(in srgb, var(--hsc-ink2) 45%, var(--hsc-rule)); }
+.hmc-card[aria-selected="true"] { border-color: color-mix(in srgb, var(--hsc-jade) 70%, transparent); }
+.hmc-card.off { background: transparent; }
+.hmc-card.off .hmc-name { color: var(--hsc-ink2); }
+.hmc-row { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.hmc-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.hmc-x { font-size: 10.5px; color: var(--hsc-faint); }
+.hmc-done { font-size: 10.5px; color: var(--hsc-faint); white-space: nowrap; }
+.hmc-status { font-size: 12px; color: var(--hsc-ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.hmc-status[data-tone="free"] { color: var(--hsc-sage); }
+.hmc-status[data-tone="full"] { color: var(--hsc-amber); }
+.hmc-status[data-tone="away"] { color: var(--hsc-faint); }
+.hmc-disk { display: flex; align-items: center; gap: 8px; font-size: 10.5px; color: var(--hsc-ink2); }
+.hmc-bar { flex: 1; height: 4px; border-radius: 2px; background: var(--hsc-elev); overflow: hidden; }
+.hmc-bar i { display: block; height: 100%; background: var(--hsc-ink2); opacity: 0.7; }
+.hmc-bar[data-low] i { background: var(--hsc-coral); opacity: 1; }
+.hmc-skills { display: flex; gap: 4px; }
+.hmc-skill {
+  width: 24px; height: 24px; border-radius: 6px; background: var(--hsc-elev); color: var(--hsc-ink2);
+}
+.hmc-chip {
+  display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 7px; font-size: 11.5px;
+  color: var(--hsc-amber); background: color-mix(in srgb, var(--hsc-amber) 12%, transparent);
+}
+.hmc-chip[data-level="crit"] { color: var(--hsc-coral); background: color-mix(in srgb, var(--hsc-coral) 12%, transparent); }
+
+/* map */
+.hmc-map { border: 1px solid var(--hsc-rule); border-radius: 10px; background: var(--hsc-card); padding: 8px; }
+.hmc-map svg { display: block; width: 100%; height: auto; max-height: 460px; }
+.hmc-edge { stroke: var(--hsc-rule); stroke-width: 1.2; }
+.hmc-edge[data-kind="computer"][data-on] { stroke: color-mix(in srgb, var(--hsc-sage) 55%, transparent); }
+.hmc-edge[data-kind="peer"] { stroke-dasharray: 3 4; }
+.hmc-node circle { fill: var(--hsc-elev); stroke: var(--hsc-faint); stroke-width: 1.5; }
+.hmc-node text { fill: var(--hsc-ink2); font-size: 10.5px; font-family: inherit; }
+.hmc-node[data-kind="you"] circle { fill: var(--hsc-ink); stroke: none; }
+.hmc-node[data-kind="you"] text { fill: var(--hsc-surface); font-weight: 600; }
+.hmc-node[data-kind="computer"] { cursor: pointer; }
+.hmc-node[data-kind="computer"][data-on] circle { fill: color-mix(in srgb, var(--hsc-sage) 30%, var(--hsc-elev)); stroke: var(--hsc-sage); }
+.hmc-node[data-kind="computer"][data-att] circle { stroke: var(--hsc-amber); stroke-width: 2.5; }
+.hmc-node[data-open] text { fill: var(--hsc-ink); font-weight: 600; }
+.hmc-node[data-kind="peer"] circle { fill: none; stroke: var(--hsc-ink2); stroke-dasharray: 2 2; }
+.hmc-node[data-kind="peer"][data-on] circle { stroke: var(--hsc-jade); }
+.hmc-legend { display: flex; flex-wrap: wrap; gap: 14px; padding: 6px 4px 2px; font-size: 10.5px; color: var(--hsc-faint); }
+.hmc-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.hmc-ring { width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--hsc-amber); }
+.hmc-pdot { width: 9px; height: 9px; border-radius: 50%; border: 1.5px dashed var(--hsc-ink2); }
+
+/* detail */
+.hmc-detail {
+  border-left: 1px solid var(--hsc-rule); padding: 14px 14px 18px; overflow-y: auto; min-height: 0;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.hmc-dname { display: flex; align-items: center; gap: 7px; margin: 0; font-size: 14px; font-weight: 600; min-width: 0; }
+.hmc-dname span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hmc-spec { margin: -4px 0 0; font-size: 11.5px; color: var(--hsc-faint); }
+.hmc-acts { display: flex; gap: 6px; flex-wrap: wrap; }
+.hmc-btn {
+  all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px;
+  border-radius: 8px; font-size: 12px; border: 1px solid var(--hsc-rule); color: var(--hsc-ink2);
+}
+.hmc-btn:hover:not(:disabled) { color: var(--hsc-ink); }
+.hmc-btn:disabled { opacity: 0.45; cursor: default; }
+.hmc-btn--go { background: var(--hsc-jade); border-color: var(--hsc-jade); color: var(--hsc-surface); font-weight: 600; }
+.hmc-btn--go:hover:not(:disabled) { color: var(--hsc-surface); filter: brightness(1.08); }
+.hmc-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 2px 0 0; }
+.hmc-stats div { padding: 7px 9px; border-radius: 8px; background: var(--hsc-card); }
+.hmc-stats dt { font-size: 10.5px; color: var(--hsc-faint); }
+.hmc-stats dd { margin: 2px 0 0; font-size: 13px; }
+.hmc-stats dd[data-low] { color: var(--hsc-coral); }
+.hmc-detail h4 { margin: 6px 0 0; font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--hsc-faint); }
+.hmc-att-list, .hmc-can { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.hmc-att-list li {
+  display: flex; flex-direction: column; gap: 2px; padding: 7px 9px; border-radius: 8px;
+  border-left: 2px solid var(--hsc-amber); background: color-mix(in srgb, var(--hsc-amber) 8%, transparent);
+}
+.hmc-att-list li[data-level="crit"] { border-left-color: var(--hsc-coral); background: color-mix(in srgb, var(--hsc-coral) 8%, transparent); }
+.hmc-att-list li[data-level="info"] { border-left-color: var(--hsc-rule); background: var(--hsc-card); }
+.hmc-att-list b { font-weight: 600; font-size: 12px; }
+.hmc-att-list span { font-size: 11.5px; color: var(--hsc-ink2); line-height: 1.4; }
+.hmc-can li { display: flex; align-items: center; gap: 8px; color: var(--hsc-ink2); }
+.hmc-dev summary { cursor: pointer; font-size: 11px; color: var(--hsc-faint); }
+.hmc-dev p { margin: 6px 0 0; font-size: 10.5px; color: var(--hsc-faint); word-break: break-all; }
+
+/* narrow: detail drops below the cards */
+@container (max-width: 720px) {
+  .hmc { grid-template-columns: 1fr; grid-auto-rows: min-content; overflow-y: auto; }
+  .hmc-main { overflow: visible; }
+  .hmc-detail { border-left: 0; border-top: 1px solid var(--hsc-rule); }
+}
