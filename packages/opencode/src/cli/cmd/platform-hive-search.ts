@@ -264,9 +264,12 @@ export const HiveSearchCommand = cmd({
                   const data = (await res.json()) as { task: { id: string } }
                   const taskId = data.task.id
 
-                  // Poll for results (search should be fast — 15s max)
-                  for (let i = 0; i < 10; i++) {
-                    await new Promise((r) => setTimeout(r, 1500))
+                  // Poll for results (search should be fast — 15s max). The first check used to
+                  // wait a flat 1.5 s, while the node's whole search takes ~0.4 s (#188696 O3):
+                  // poll at 150 ms, easing to 1 s, so a fast node answers in a fast command.
+                  const deadline = Date.now() + 15_000
+                  for (let i = 0; Date.now() < deadline; i++) {
+                    await new Promise((r) => setTimeout(r, Math.min(150 * 1.3 ** i, 1000)))
                     const pollRes = await hiveFetch(
                       `/api/v6/nodes/tasks/${taskId}?user_id=${userId}`,
                     )
