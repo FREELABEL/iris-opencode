@@ -172,9 +172,28 @@ export async function serveNative(opts: {
 /** Stop and unregister a native app (used by --replace; also the basis of a future `iris app stop`). */
 export async function stopNative(name: string): Promise<void> {
   const p = currentPlatform()
-  if (p === "linux") await ok("systemctl", ["--user", "disable", "--now", `iris-app-${name}.service`])
+  if (p === "linux") {
+    await ok("systemctl", ["--user", "disable", "--now", `iris-app-${name}.service`])
+    await ok("systemctl", ["--user", "reset-failed", `iris-app-${name}.service`]) // no "failed" ghost left in the unit list
+  }
   else if (p === "darwin") await ok("launchctl", ["bootout", `gui/${userInfo().uid}/${serviceLabel(name)}`])
   else { await ok("schtasks", ["/End", "/TN", `IRIS\\App ${name}`]); await ok("schtasks", ["/Delete", "/TN", `IRIS\\App ${name}`, "/F"]) }
+}
+
+/**
+ * Is something already listening on 127.0.0.1:<port>? Checked BEFORE serving: otherwise the new
+ * app fails to bind, the old one answers the health check, and "healthy" is a lie (stress test
+ * 2026-10-12 — two apps both reported healthy on 18911).
+ */
+export async function portInUse(port: number): Promise<boolean> {
+  const net = await import("net")
+  return await new Promise<boolean>((resolve) => {
+    const sock = net.connect({ host: "127.0.0.1", port })
+    const done = (v: boolean) => { sock.destroy(); resolve(v) }
+    sock.once("connect", () => done(true))
+    sock.once("error", () => done(false))
+    sock.setTimeout(1500, () => done(false))
+  })
 }
 
 /** Probe http://127.0.0.1:<port><path> until 2xx/3xx or time runs out. Done in Node so it works on Windows. */

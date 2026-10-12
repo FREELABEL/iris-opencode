@@ -180,6 +180,13 @@ HTTPServer(("0.0.0.0", 8000), H).serve_forever()
     expect(lintLocalApp({ "app.py": src }).map((f) => f.rule)).toContain("bind-local")
   })
 
+  test("reading HOST with a 0.0.0.0 fallback is a warning, not a refusal", () => {
+    const src = `import os\nHTTPServer((os.environ.get("HOST", "0.0.0.0"), 8000), H)\n`
+    const f = lintLocalApp({ "app.py": src })
+    expect(f.map((x) => x.rule)).not.toContain("bind-local")
+    expect(f.find((x) => x.rule === "bind-default")?.severity).toBe("warning")
+  })
+
   test("the template manifest resolves", () => {
     const r = resolveManifest("my-console", LOCAL_CONSOLE_FILES("my-console"))
     expect(r.errors).toEqual([])

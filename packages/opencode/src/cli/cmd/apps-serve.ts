@@ -320,7 +320,13 @@ export function lintLocalApp(files: Record<string, string>, opts: { served?: boo
     if (/os\.system\s*\(|os\.popen\s*\(/.test(src)) out.push({ severity: "error", file, rule: "no-shell", message: "os.system/os.popen run a shell — use subprocess.run([...]) with an argument list" })
     // Inside a served container 0.0.0.0 is REQUIRED (docker publishes it on the host's 127.0.0.1);
     // on a desktop it exposes the console to the whole network.
-    if (!opts.served && /["']0\.0\.0\.0["']|host\s*=\s*["']["']|\(\s*["']["']\s*,\s*\d+\s*\)/.test(src)) out.push({ severity: "error", file, rule: "bind-local", message: "binds to every interface — bind 127.0.0.1 so only this machine can reach it" })
+    // Reading the address from HOST (which the launcher sets to 127.0.0.1) is the right shape; a
+    // 0.0.0.0 that is only the FALLBACK default is a warning, not a refusal (stress test 2026-10-12:
+    // the refusal blocked a correct app).
+    const readsHost = /environ(\.get)?\s*[\[(]\s*["']HOST["']|getenv\(\s*["']HOST["']/.test(src)
+    const wildcard = /["']0\.0\.0\.0["']|host\s*=\s*["']["']|\(\s*["']["']\s*,\s*\d+\s*\)/.test(src)
+    if (!opts.served && wildcard && !readsHost) out.push({ severity: "error", file, rule: "bind-local", message: "binds to every interface — bind 127.0.0.1 so only this machine can reach it" })
+    if (!opts.served && wildcard && readsHost) out.push({ severity: "warning", file, rule: "bind-default", message: "falls back to 0.0.0.0 when HOST is unset (e.g. run by hand) — make the fallback 127.0.0.1" })
     if (opts.served && /["']127\.0\.0\.1["']|["']localhost["']/.test(src) && !/["']0\.0\.0\.0["']/.test(src)) out.push({ severity: "warning", file, rule: "served-bind", message: "served apps run in a container — listen on 0.0.0.0:$PORT inside it (the host still only exposes 127.0.0.1)" })
     if (servesHttp) {
       if (!/secrets\.(token_urlsafe|token_hex)|IRIS_CONSOLE_TOKEN/.test(src)) out.push({ severity: "error", file, rule: "require-token", message: "no per-launch token — any website you visit can send requests to a localhost server; require a random token on every request" })

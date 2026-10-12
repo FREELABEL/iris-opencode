@@ -36,7 +36,7 @@ import {
   type ServedApp,
 } from "./apps-serve"
 import { chooseRuntime } from "./apps-native"
-import { findUv, hasDockerHere, installUv, listNativeHere, serveNative, uvInstallCommand, waitHealthy } from "./platform-app-native"
+import { findUv, hasDockerHere, installUv, listNativeHere, portInUse, serveNative, uvInstallCommand, waitHealthy } from "./platform-app-native"
 
 const pexec = promisify(execFile)
 const HIVE_APPS_BLOQ = 736
@@ -402,6 +402,16 @@ async function serveNativeHere(
     return
   }
 
+  // The port must be free — unless --replace is re-serving the SAME app on the same port.
+  {
+    const { homedir } = await import("os")
+    let ownPort: number | null = null
+    try { ownPort = Number(JSON.parse(readFileSync(join(homedir(), ".iris", "apps", manifest.name, "app.json"), "utf8")).port) || null } catch {}
+    if (await portInUse(port) && !(args.replace && ownPort === port)) {
+      return fail(2, `Port ${port} is already in use on this machine — another app answers there, so a health check would pass for the wrong app. Pick another: --port <n>`)
+    }
+  }
+
   const spinner = json ? null : prompts.spinner()
   spinner?.start("Installing it as a background service…")
   const res = await serveNative({ manifest, folder: resolve(String(args.folder)), filePaths: folder.paths, hostPort: port, uv, replace: !!args.replace })
@@ -413,7 +423,12 @@ async function serveNativeHere(
   const h = await waitHealthy(port, manifest.health, waitSec)
   if (!h.ready) {
     spinner?.stop("Started, but it does not answer", 1)
-    return fail(1, `${manifest.name} is registered with ${res.supervisor} but ${manifest.health} did not answer within ${waitSec}s (last HTTP ${h.http ?? "none"}).`, { logs: res.logs }, [dim(`  Log: ${res.logs}`)])
+    // Say WHY (the app's own last words) and how to undo it — a crash-looping service left behind
+    // silently was the stress test's finding.
+    let tail = ""
+    try { tail = readFileSync(res.logs ?? "", "utf8").trim().split(/\r?\n/).slice(-12).join("\n") } catch {}
+    return fail(1, `${manifest.name} is registered with ${res.supervisor} but ${manifest.health} did not answer within ${waitSec}s (last HTTP ${h.http ?? "none"}). It will keep restarting until you stop it.`, { logs: res.logs, log_tail: tail },
+      [tail ? dim(tail.split("\n").map((l) => `  │ ${l}`).join("\n")) : dim(`  Log: ${res.logs} (empty)`), `  Stop it:  iris app stop ${manifest.name}`, dim(`  Log: ${res.logs}`)])
   }
   spinner?.stop(`Healthy — HTTP ${h.http} after ${h.afterSec}s`)
 
@@ -427,3 +442,52 @@ async function serveNativeHere(
   printDivider()
   prompts.outro(success("Done"))
 }
+
+export const StopCommand = cmd({
+  command: "stop <name>",
+  describe: "stop a served app and unregister it (native: the OS service; docker: the container) — its folder is kept unless --purge",
+  builder: (yargs) =>
+    yargs
+      .positional("name", { describe: "the app name (iris app list --hive)", type: "string", demandOption: true })
+      .option("node", { describe: "docker apps on another Hive machine", type: "string" })
+      .option("purge", { describe: "also delete the app's folder, logs and stored secrets", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID", type: "number" }),
+  async handler(args) {
+    const name = String(args.name)
+    if (!/^[a-z0-9][a-z0-9-]{0,40}$/.test(name)) { prompts.log.error(`"${name}" is not an app name`); process.exitCode = 2; return }
+    const done: string[] = []
+    const { stopNative } = await import("./platform-app-native")
+    const { homedir } = await import("os")
+    const { rmSync } = await import("fs")
+    const home = join(homedir(), ".iris", "apps", name)
+    const nativeRecord = join(home, "app.json")
+    if (!args.node && existsSync(nativeRecord)) {
+      await stopNative(name)
+      const { platform } = await import("os")
+      if (platform() === "linux") { try { rmSync(join(homedir(), ".config", "systemd", "user", `iris-app-${name}.service`), { force: true }) } catch {} }
+      if (platform() === "darwin") { try { rmSync(join(homedir(), "Library", "LaunchAgents", `io.heyiris.app.${name}.plist`), { force: true }) } catch {} }
+      rmSync(nativeRecord, { force: true })
+      done.push("native service stopped and unregistered")
+    }
+    // Docker: here, or on --node over ssh.
+    let runner: Runner | null = null
+    if (args.node) {
+      await requireAuth()
+      const userId = await requireUserId(args["user-id"] as number | undefined)
+      if (!userId) { process.exitCode = 1; return }
+      const picked = await pickRunner(userId, String(args.node), {})
+      if ("error" in picked) { prompts.log.error(picked.error); process.exitCode = 1; return }
+      runner = picked.runner
+    } else runner = await localRunner()
+    // inspect first: `docker rm -f` exits 0 for a container that never existed, which made stop
+    // claim to remove things that were not there.
+    const c = shq(servedContainerName(name))
+    const r = await runner.run(`command -v docker >/dev/null 2>&1 || exit 0; if docker inspect ${c} >/dev/null 2>&1; then docker rm -f ${c} >/dev/null && echo REMOVED; fi`, 60_000)
+    if (/REMOVED/.test(r.stdout)) done.push(`container ${servedContainerName(name)} removed`)
+    if (args.purge && !args.node && existsSync(home)) { rmSync(home, { recursive: true, force: true }); done.push(`deleted ${home}`) }
+    if (args.json) { await writeJson({ ok: done.length > 0, app: name, done }); if (!done.length) process.exitCode = 1; return }
+    if (!done.length) { prompts.log.warn(`Nothing named ${name} is served ${args.node ? `on ${args.node}` : "on this machine"}.`); process.exitCode = 1; return }
+    for (const d of done) console.log(`  ${success("✓")} ${d}`)
+  },
+})

@@ -24,7 +24,7 @@ import {
 } from "fs"
 import { join, resolve, basename, relative } from "path"
 import { fetchDatasetRecords } from "./platform-atlas-datasets"
-import { LintCommand, ServeCommand, listHiveApps, printHiveApps } from "./platform-app-serve"
+import { LintCommand, ServeCommand, StopCommand, listHiveApps, printHiveApps } from "./platform-app-serve"
 import { LOCAL_CONSOLE_FILES } from "./apps-local-console"
 import { dispatchTaskAndWait, fetchNodes, resolveNode, type HiveNode } from "./platform-hive-nodes"
 import { buildTaskPayload } from "./hive-task-create"
@@ -932,6 +932,7 @@ export const PlatformAppCommand = cmd({
       .command(ListCommand)
       .command(ServeCommand)
       .command(LintCommand)
+      .command(StopCommand)
       .command(DeleteCommand)
       .demandCommand(1),
   async handler() {},
