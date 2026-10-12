@@ -10,6 +10,7 @@ import {
   cadenceOf,
   durationOf,
   errorOf,
+  hoursOf,
   kindOf,
   lastBeatAt,
   rollupOf,
@@ -73,6 +74,7 @@ function Week(props: { row: HeartbeatRow; now: number; picked?: number; onPick: 
           {roll().failed ? ` · ${roll().failed} failed` : ""}
           {roll().missed ? ` · ${roll().missed} skipped` : ""}
           {roll().expected ? ` · of ${roll().expected} due` : ""}
+          {roll().outside ? ` · ${roll().outside} outside its hours` : ""}
         </span>
       </figcaption>
       <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`${roll().beats} beats worked, ${roll().failed} failed, ${roll().missed} skipped this week`}>
@@ -405,7 +407,7 @@ export function IrisHeartbeats(props: {
                   </span>
                 </h3>
                 <p class="hmc-spec">
-                  {[cadenceOf(r().frequency), modeOf(r().mode), r().bloqName].filter(Boolean).join(" · ")}
+                  {[cadenceOf(r().frequency), hoursOf(r()), modeOf(r().mode), r().bloqName].filter(Boolean).join(" · ")}
                 </p>
                 <div class="hmc-acts">
                   <button
@@ -447,7 +449,7 @@ export function IrisHeartbeats(props: {
                   <ul class="hmc-att-list">
                     <For each={probs()}>
                       {(p) => (
-                        <li data-level={p.kind === "late" || p.kind === "stopped" ? "crit" : "warn"}>
+                        <li data-level={p.kind === "late" || p.kind === "stopped" ? "crit" : p.kind === "config" ? "info" : "warn"}>
                           <b>{p.text}</b>
                           <Show when={p.fix}>
                             <span>{p.fix}</span>

@@ -81,9 +81,10 @@ test("Heartbeats: the late one on top, skipping and failing next, a week and a t
   // the detail: problem, the week, the beats
   expect(host.querySelector(".hmc-dname")?.textContent).toBe("Market Watch AgentLate")
   expect(host.querySelector(".hmc-att-list b")?.textContent).toBe("Missed its beat — due 3 days ago")
-  expect(host.querySelector(".hbt-week figcaption")?.textContent).toBe("This week1 worked · 12 skipped · of 21 due")
-  expect(host.querySelectorAll(".hbt-wmiss").length).toBe(12)
+  expect(host.querySelector(".hbt-week figcaption")?.textContent).toBe("This week1 worked · of 6 due · 15 outside its hours")
+  expect(host.querySelectorAll(".hbt-wmiss").length).toBe(0) // it works Tue–Thu only (#189170)
   expect(host.querySelectorAll(".hbt-wbeat").length).toBe(1) // its one kept beat, Oct 8, and nothing since
+  expect(host.querySelector(".hmc-spec")?.textContent).toContain("Tue–Thu · 07:00–16:00 ET")
 
   // Run now goes to THIS job, and says so
   ;(host.querySelector(".hmc-btn--go") as HTMLButtonElement).click()

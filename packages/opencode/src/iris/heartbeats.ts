@@ -57,8 +57,22 @@ export type HeartbeatRow = {
   lastError: string | null
   reportTo: number
   tools: number
-  /** settings.heartbeat_working_days — the days it wakes. Null = not set (every day). */
+  /** settings.heartbeat_working_days — what the EDITORS show. Not what is enforced (#189170). */
   workingDays: string[] | null
+  /**
+   * settings.schedule when enabled — the gate iris-api ENFORCES (checkAgentSchedule): a wake
+   * outside these days/hours is skipped by design. Null = no gate, it acts on every wake.
+   */
+  schedule: { timezone: string; days: string[]; hours: { start: string; end: string } | null } | null
+  /** settings.heartbeat_frequency — the cadence the editors show; job.frequency is what fires. */
+  settingsFrequency: string | null
+  /** The job's own timezone (calculateNextRun uses it). */
+  timezone: string | null
+  /**
+   * The last SKIPPED wake, once fl-api records skips (#189113 fl-api half): when, why, and
+   * which kind (skipped / blocked / circuit_breaker). Null until then, or when the last wake ran.
+   */
+  lastSkip: { at: string | null; reason: string | null; kind: string | null } | null
   /** Newest first. Empty with `runsMeasured: false` means NOT READ, not "never ran". */
   runs: HeartbeatRun[]
   runsMeasured: boolean
@@ -104,6 +118,16 @@ export function readRun(e: any, keepResponse = true): HeartbeatRun {
   }
 }
 
+/** settings.schedule → the enforced gate, normalised ("tuesday" → "tue"); null when off. */
+export function readSchedule(sc: any): HeartbeatRow["schedule"] {
+  if (!sc || typeof sc !== "object" || sc.enabled !== true) return null
+  const days = Array.isArray(sc.working_days) ? sc.working_days.map((d: unknown) => String(d).slice(0, 3).toLowerCase()) : []
+  const h = sc.active_hours
+  const hours = h && typeof h.start === "string" && typeof h.end === "string" ? { start: h.start, end: h.end } : null
+  // iris-api's default when the schedule names none (checkAgentSchedule)
+  return { timezone: str(sc.timezone) ?? "America/New_York", days, hours }
+}
+
 export function readHeartbeat(j: any, runs: any[] | null): HeartbeatRow {
   const agent = j?.agent ?? {}
   const last = j?.last_result && typeof j.last_result === "object" ? j.last_result : null
@@ -129,6 +153,13 @@ export function readHeartbeat(j: any, runs: any[] | null): HeartbeatRow {
     workingDays: Array.isArray(agent.settings?.heartbeat_working_days)
       ? agent.settings.heartbeat_working_days.map((d: unknown) => String(d).slice(0, 3).toLowerCase())
       : null,
+    schedule: readSchedule(agent.settings?.schedule),
+    settingsFrequency: str(agent.settings?.heartbeat_frequency),
+    timezone: str(j?.timezone),
+    lastSkip:
+      last && last.skipped === true
+        ? { at: str(last.skipped_at), reason: str(last.skip_reason), kind: str(last.skip_kind) }
+        : null,
     // Full reports for the beats the timeline shows; the rest feed the week chart only.
     runs: (runs ?? []).map((e, i) => readRun(e, i < TIMELINE)),
     runsMeasured: runs !== null,

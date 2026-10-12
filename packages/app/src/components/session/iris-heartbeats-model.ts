@@ -51,11 +51,16 @@ export type HeartbeatRow = {
   reportTo: number
   tools: number
   workingDays?: string[] | null
+  schedule?: { timezone: string; days: string[]; hours: { start: string; end: string } | null } | null
+  settingsFrequency?: string | null
+  timezone?: string | null
+  lastSkip?: { at: string | null; reason: string | null; kind: string | null } | null
   runs: HeartbeatRun[]
   runsMeasured: boolean
 }
 
 export type BeatState = "late" | "silent" | "failing" | "running" | "ok" | "paused"
+
 
 /** A beat this far past its time is late, not "about to run". The scheduler ticks every minute. */
 export const LATE_AFTER_MS = 15 * 60_000
@@ -106,6 +111,45 @@ export function periodOf(frequency: string | null | undefined): number | null {
   return null
 }
 
+const PARTS = new Map<string, Intl.DateTimeFormat>()
+/** Weekday ("tue") and minute-of-day of an instant, in a timezone. */
+export function partsIn(ms: number, tz: string): { dow: string; minutes: number } {
+  let f = PARTS.get(tz)
+  if (!f) {
+    try {
+      f = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
+    } catch {
+      f = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
+    }
+    PARTS.set(tz, f)
+  }
+  const p = Object.fromEntries(f.formatToParts(new Date(ms)).map((x) => [x.type, x.value]))
+  return { dow: String(p.weekday).slice(0, 3).toLowerCase(), minutes: Number(p.hour) * 60 + Number(p.minute) }
+}
+
+const hm = (s: string) => {
+  const [h, m] = s.split(":").map(Number)
+  return (h || 0) * 60 + (m || 0)
+}
+
+/**
+ * May it ACT at this instant? The gate iris-api enforces (checkAgentSchedule): working days and
+ * active hours in the schedule's own timezone. A wake outside it is skipped by design — never a
+ * miss. No schedule → every wake may act. Mirrors the server's rule exactly: start inclusive,
+ * end exclusive, days by name.
+ */
+export function mayAct(r: HeartbeatRow, ms: number): boolean {
+  const sc = r.schedule
+  if (!sc) return true
+  const { dow, minutes } = partsIn(ms, sc.timezone)
+  if (sc.days.length && !sc.days.includes(dow)) return false
+  if (sc.hours && (minutes < hm(sc.hours.start) || minutes >= hm(sc.hours.end))) return false
+  return true
+}
+
+/** A skip whose reason is the schedule gate — by design, not a fault. */
+export const byDesign = (reason: string | null | undefined) => !!reason && /^Outside (working days|active hours)/i.test(reason)
+
 /** The time a run happened at — what the timeline and the week place it by. */
 export const runAt = (x: HeartbeatRun): number => t(x.startedAt ?? x.completedAt)
 
@@ -145,18 +189,60 @@ export function lastBeatAt(r: HeartbeatRow): string | null {
 }
 
 /**
- * Wakes that produced nothing since its last real beat (#189113). Silent when it has woken for at
- * least a whole cadence past its newest run — one late write-back is not a skip. Never-ran counts:
- * a job that keeps waking with no run at all is the purest case (measured: two heartbeats created
- * in June and July with 0 runs and a `last_run_at` from that morning).
+ * Wakes that should have acted and produced nothing since its last real beat (#189113).
+ *
+ * Two sources, newest first:
+ *  - fl-api's skip record (last_result.skipped), once it writes one: its reason decides — a skip
+ *    "Outside working days/active hours" is the schedule doing its job, anything else is silence.
+ *  - Otherwise the clock: last_run_at moved past the newest run. Silent only if at least one wake
+ *    in that gap was INSIDE the enforced schedule — a 16:00–17:00 agent woken at 04:00 by an
+ *    8-hourly job did nothing because it may not, not because it is broken (#189170).
+ * Never-ran counts: a job that keeps waking with no run at all is the purest case.
  */
 export function silentSince(r: HeartbeatRow): string | null {
+  if (!r.runsMeasured) return null
+  const beatIso = lastBeatAt(r)
+  const beat = t(beatIso)
+  const skip = r.lastSkip
+  if (skip && Number.isFinite(t(skip.at)) && !(t(skip.at) <= beat)) {
+    return byDesign(skip.reason) ? null : (beatIso ?? "never")
+  }
   const woke = t(r.lastRunAt)
-  if (!Number.isFinite(woke) || !r.runsMeasured) return null
-  const beat = t(lastBeatAt(r))
-  const gap = Number.isFinite(beat) ? woke - beat : Infinity
+  if (!Number.isFinite(woke)) return null
   const period = periodOf(r.frequency) ?? 86_400_000
-  return gap > Math.max(period, LATE_AFTER_MS) ? (lastBeatAt(r) ?? "never") : null
+  const from = Number.isFinite(beat) ? beat : woke - 7 * 86_400_000
+  if (woke - from <= Math.max(LATE_AFTER_MS, Number.isFinite(beat) ? period / 2 : 0)) return null
+  // walk the wakes the scheduler made in (beat, woke] — anchored on the last one it made
+  for (let k = woke, n = 0; k > from + LATE_AFTER_MS && n < 2000; k -= period, n++) if (mayAct(r, k)) return beatIso ?? "never"
+  return null
+}
+
+/** The cadence the editors show disagrees with the one that fires (#189170). */
+export function cadenceDrift(r: HeartbeatRow): string | null {
+  const a = r.settingsFrequency
+  if (!a || !r.frequency || a === r.frequency) return null
+  // "daily_6am" is a daily cadence with a time of day; the job carries the time separately
+  if (/^daily(_|$)/.test(a) && r.frequency === "daily") return null
+  return a
+}
+
+/** "Tue–Thu · 07:00–16:00 ET" — the enforced hours, in words. */
+export function hoursOf(r: HeartbeatRow): string | null {
+  const sc = r.schedule
+  if (!sc) return null
+  const order = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+  const days = order.filter((d) => sc.days.includes(d))
+  const label = (d: string) => d[0].toUpperCase() + d.slice(1)
+  const dayTxt =
+    !days.length || days.length === 7
+      ? "Every day"
+      : days.length === 5 && days.join() === "mon,tue,wed,thu,fri"
+        ? "Weekdays"
+        : days.every((d, i) => i === 0 || order.indexOf(d) === order.indexOf(days[i - 1]) + 1) && days.length > 2
+          ? `${label(days[0])}–${label(days[days.length - 1])}`
+          : days.map(label).join(", ")
+  const tz = sc.timezone === "America/New_York" ? "ET" : sc.timezone === "UTC" ? "UTC" : sc.timezone.split("/").pop()!.replace(/_/g, " ")
+  return sc.hours ? `${dayTxt} · ${sc.hours.start}–${sc.hours.end} ${tz}` : `${dayTxt} · ${tz}`
 }
 
 const failed = (x: HeartbeatRun): boolean =>
@@ -176,7 +262,7 @@ export function stateOf(r: HeartbeatRow, now: number): BeatState {
   return "ok"
 }
 
-export type Problem = { kind: "late" | "silent" | "failing" | "stopped"; text: string; fix: string }
+export type Problem = { kind: "late" | "silent" | "failing" | "stopped" | "config"; text: string; fix: string }
 
 export function problemsOf(r: HeartbeatRow, now: number): Problem[] {
   const out: Problem[] = []
@@ -188,14 +274,26 @@ export function problemsOf(r: HeartbeatRow, now: number): Problem[] {
       fix: "The scheduler has not picked it up, though it still says scheduled. Run it now; if it stays late, pause and resume it to reschedule.",
     })
   const quiet = silentSince(r)
+  const why = r.lastSkip && !byDesign(r.lastSkip.reason) ? r.lastSkip.reason : null
   if (s === "silent" && quiet)
     out.push({
       kind: "silent",
       text:
-        quiet === "never"
-          ? `Wakes up but has never done anything — woke ${ago(r.lastRunAt, now)}`
-          : `Wakes up but does nothing — last real beat ${ago(quiet, now)}`,
-      fix: "Its schedule moves on, but no run is recorded: the beats are being skipped (outside its hours, gated, or no projects to watch). Run now shows the reason; the platform does not record it yet (#189113).",
+        (quiet === "never"
+          ? `Wakes up but has never done anything — woke ${ago(r.lastSkip?.at ?? r.lastRunAt, now)}`
+          : `Wakes up but does nothing — last real beat ${ago(quiet, now)}`) + (why ? ` · ${oneLine(why)}` : ""),
+      fix: why
+        ? r.lastSkip?.kind === "circuit_breaker"
+          ? "It was paused after repeated failures. Fix the cause in its last failed beat, then Run now to resume."
+          : "That is the reason the platform gave for its last skipped wake."
+        : "Its schedule moves on, but no run is recorded during its working hours: the beats are being skipped (gated, or no projects to watch). Run now shows the reason; the platform records it once #189113 lands.",
+    })
+  const drift = cadenceDrift(r)
+  if (drift)
+    out.push({
+      kind: "config",
+      text: `Its settings say ${cadenceOf(drift).toLowerCase()}; it actually wakes ${cadenceOf(r.frequency).toLowerCase()}`,
+      fix: "The heartbeat editor shows one cadence and the scheduler fires on another (#189170). Save the schedule again in the editor so both agree.",
     })
   const last = lastRun(r)
   const fails = r.runs.filter(failed).length
@@ -244,7 +342,10 @@ export function lineOf(r: HeartbeatRow, now: number): string {
   if (s === "paused") return `Paused · ${lastTxt}`
   if (s === "running") return "Beating now"
   if (s === "late") return `Late · due ${ago(r.nextRunAt, now)}`
-  if (s === "silent") return `Wakes but does nothing · ${last ? `last real beat ${ago(last, now)}` : "never ran"}`
+  if (s === "silent") {
+    const why = r.lastSkip && !byDesign(r.lastSkip.reason) && r.lastSkip.reason ? ` · ${oneLine(r.lastSkip.reason).slice(0, 60)}` : ""
+    return `Wakes but does nothing · ${last ? `last real beat ${ago(last, now)}` : "never ran"}${why}`
+  }
   if (s === "failing") return `Last beat failed · next ${untilOf(r.nextRunAt, now)}`
   return `Next ${untilOf(r.nextRunAt, now)} · ${lastTxt}`
 }
@@ -333,6 +434,8 @@ export type WeekView = {
   missed: number[]
   /** Due wakes before its newest kept run — not kept by the platform (#189132), so not judged. */
   unknown: number
+  /** Wakes the scheduler made outside the enforced hours — skipped by design, not counted. */
+  outside: number
   next: number | null
   period: number | null
 }
@@ -350,18 +453,27 @@ export function weekOf(r: HeartbeatRow, now: number): WeekView {
     d.setHours(0, 0, 0, 0)
     return d.getTime()
   }
-  const works = (ms: number) => !r.workingDays?.length || r.workingDays.includes(DOW[new Date(ms).getDay()])
+  // the ENFORCED gate decides which wakes count as due (#189170), not the editors' working days
+  const works = (ms: number) => mayAct(r, ms)
+  const worksDay = (ms: number) => !r.schedule?.days.length || r.schedule.days.includes(partsIn(ms + 12 * 3_600_000, r.schedule.timezone).dow)
   const days: WeekView["days"] = []
-  for (let d = startOfDay(start + DAY); d <= end; d += DAY) days.push({ at: d, label: DOW_LABEL[DOW[new Date(d).getDay()]], on: works(d) })
+  for (let d = startOfDay(start + DAY); d <= end; d += DAY) days.push({ at: d, label: DOW_LABEL[DOW[new Date(d).getDay()]], on: worksDay(d) })
   const period = periodOf(r.frequency)
   const next = t(r.nextRunAt)
   const expected: number[] = []
+  let outside = 0
   if (period && Number.isFinite(next) && r.status !== "paused") {
     let k = next
     while (k > end) k -= period
-    for (; k > start && expected.length < 400; k -= period) if (works(k)) expected.unshift(k)
+    for (; k > start && expected.length < 400; k -= period) {
+      if (works(k)) expected.unshift(k)
+      else outside++
+    }
     // LATE: the scheduler stopped at next_run_at, so every wake it owed since is due and missing.
-    for (let f = next + period; f <= end && expected.length < 400; f += period) if (works(f)) expected.push(f)
+    for (let f = next + period; f <= end && expected.length < 400; f += period) {
+      if (works(f)) expected.push(f)
+      else outside++
+    }
   }
   const beats = r.runs
     .map((x) => ({ at: runAt(x), kind: kindOf(x), id: x.id }))
@@ -377,7 +489,7 @@ export function weekOf(r: HeartbeatRow, now: number): WeekView {
   const upTo = Math.max(Number.isFinite(woke) ? woke + LATE_AFTER_MS : -Infinity, late ? now - LATE_AFTER_MS : -Infinity)
   const missed = expected.filter((e) => e > newest + near && e <= upTo && !beats.some((b) => Math.abs(b.at - e) <= near))
   const unknown = expected.filter((e) => e < newest - near && !beats.some((b) => Math.abs(b.at - e) <= near)).length
-  return { start, end, days, expected, beats, missed, unknown, next: Number.isFinite(next) ? next : null, period }
+  return { start, end, days, expected, beats, missed, unknown, outside, next: Number.isFinite(next) ? next : null, period }
 }
 
 /** What this agent got done this week, in one line's worth of numbers. */
@@ -392,6 +504,7 @@ export function rollupOf(r: HeartbeatRow, now: number) {
     failed: runs.filter((x) => kindOf(x) === "fail").length,
     missed: w.missed.length,
     unknown: w.unknown,
+    outside: w.outside,
     outputs: runs.filter((x) => x.itemId || x.deliverableId || x.publicUrl).length,
     tokens: runs.reduce((n, x) => n + (x.tokens ?? 0), 0),
     tools: [...tools.entries()].sort((a, b) => b[1] - a[1]),

@@ -19,6 +19,11 @@ import {
   toolsOf,
   untilOf,
   weekOf,
+  byDesign,
+  cadenceDrift,
+  hoursOf,
+  mayAct,
+  silentSince,
   type HeartbeatRow,
 } from "./iris-heartbeats-model"
 
@@ -38,8 +43,12 @@ describe("Agents › Heartbeats — what is true", () => {
     const due = Date.parse(m.nextRunAt!)
     expect(stateOf(m, due + 14 * 60_000)).not.toBe("late")
     expect(stateOf(m, due + 16 * 60_000)).toBe("late")
-    // every 8 hours since it stopped is owed and missing
-    expect(weekOf(m, NOW).missed.length).toBe(12)
+    // with no schedule, every 8 hours since it stopped would be owed and missing…
+    expect(weekOf({ ...m, schedule: null }, NOW).missed.length).toBe(12)
+    // …but it only works Tue–Thu 07:00–16:00 ET (#189170): those wakes were never its to make
+    const w = weekOf(m, NOW)
+    expect(hoursOf(m)).toBe("Tue–Thu · 07:00–16:00 ET")
+    expect([w.expected.length, w.outside, w.missed.length]).toEqual([6, 15, 0])
   })
 
   test("#189113: last_run_at moves on a SKIP — a wake with no run behind it is not a beat", () => {
@@ -94,6 +103,57 @@ describe("Agents › Heartbeats — what is true", () => {
   })
 })
 
+describe("the enforced schedule (#189170)", () => {
+  test("a wake may act only inside the schedule's days and hours, in ITS timezone", () => {
+    const o = by("Oversight Agent") // weekdays 16:00–17:00 ET
+    expect(mayAct(o, Date.parse("2026-10-12T20:30:00Z"))).toBe(true) // Mon 16:30 ET
+    expect(mayAct(o, Date.parse("2026-10-12T21:00:00Z"))).toBe(false) // 17:00 ET — end is exclusive
+    expect(mayAct(o, Date.parse("2026-10-12T20:00:00Z"))).toBe(true) // 16:00 ET — start inclusive
+    expect(mayAct(o, Date.parse("2026-10-11T20:30:00Z"))).toBe(false) // Sunday
+    expect(mayAct({ ...o, schedule: null }, Date.parse("2026-10-11T20:30:00Z"))).toBe(true)
+  })
+  test("a gap made only of wakes outside its hours is not silence", () => {
+    const o = by("Oversight Agent")
+    // last real beat Mon 16:10 ET, woke again at 00:10 and 08:10 ET — both outside 16–17
+    const quiet = {
+      ...o,
+      runs: [{ ...o.runs[0], status: "completed", error: null, response: "ok", startedAt: "2026-10-12T20:10:00Z", completedAt: "2026-10-12T20:11:00Z" }],
+      lastRunAt: "2026-10-13T12:10:00Z",
+    }
+    expect(silentSince(quiet)).toBeNull()
+    // one more wake that WAS inside its hours, with nothing to show → silent
+    expect(silentSince({ ...quiet, lastRunAt: "2026-10-13T20:10:00Z" })).toBe("2026-10-12T20:11:00Z")
+  })
+  test("the editors' cadence and the one that fires are compared, and called out when they differ", () => {
+    expect(cadenceDrift(by("Market Watch Agent"))).toBe("every_5_minutes")
+    expect(problemsOf(by("Market Watch Agent"), NOW).find((p) => p.kind === "config")!.text).toBe(
+      "Its settings say every 5 minutes; it actually wakes every 8 hours",
+    )
+    expect(cadenceDrift(by("Backtest Agent"))).toBeNull() // daily_6am is daily
+    expect(rows.filter((r) => cadenceDrift(r)).length).toBe(5)
+  })
+})
+
+describe("fl-api's skip record (#189113)", () => {
+  const c = by("Chief of Staff")
+  const at = (h: number) => new Date(NOW - h * 3_600_000).toISOString()
+  test("a skip outside its hours is by design — not silence", () => {
+    expect(byDesign("Outside active hours (02:10 not in 09:00-17:00 America/New_York)")).toBe(true)
+    const r = { ...c, lastSkip: { at: at(1), reason: "Outside working days (sunday not in monday, friday)", kind: "skipped" } }
+    expect(silentSince(r)).toBeNull()
+  })
+  test("any other skip is silence, and the line and problem say why", () => {
+    const r = { ...c, runs: c.runs.filter((x) => !x.response?.startsWith("AI API")), lastSkip: { at: at(1), reason: "No projects to monitor", kind: "skipped" } }
+    expect(stateOf(r, NOW)).toBe("silent")
+    expect(lineOf(r, NOW)).toEndWith("· No projects to monitor")
+    expect(problemsOf(r, NOW)[0].text).toContain("No projects to monitor")
+  })
+  test("a circuit-breaker pause says how to resume", () => {
+    const r = { ...c, lastSkip: { at: at(1), reason: "Paused: 5 consecutive failures. Use Run Now to resume.", kind: "circuit_breaker" } }
+    expect(problemsOf(r, NOW).find((p) => p.kind === "silent")!.fix).toContain("Run now to resume")
+  })
+})
+
 describe("one beat, opened", () => {
   const x = by("Newsletter Agent").runs[0]
   test("a report splits on the agent's own headings into the four questions", () => {
@@ -114,8 +174,9 @@ describe("one beat, opened", () => {
     expect(sectionsOf("Error: AI API error: 403")).toEqual([])
   })
   test("the roll-up counts what the week actually holds", () => {
-    // its one kept beat (5 days ago) was a laundered 403 — counted failed, not worked
-    expect(rollupOf(by("Oversight Agent"), NOW)).toMatchObject({ beats: 0, failed: 1, missed: 15 })
+    // its one kept beat (5 days ago) was a laundered 403 — counted failed, not worked; and of
+    // the wakes since, only the 3 that fell inside its 16:00–17:00 window count as skipped
+    expect(rollupOf(by("Oversight Agent"), NOW)).toMatchObject({ beats: 0, failed: 1, missed: 3 })
     expect(rollupOf(by("Beauty Content Agent"), NOW).tools[0]).toEqual(["agent_memory", 2])
   })
 })

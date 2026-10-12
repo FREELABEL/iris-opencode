@@ -255,6 +255,18 @@ const HeartbeatRow = Schema.Struct({
   reportTo: Schema.Finite,
   tools: Schema.Finite,
   workingDays: Schema.NullOr(Schema.Array(Schema.String)),
+  schedule: Schema.NullOr(
+    Schema.Struct({
+      timezone: Schema.String,
+      days: Schema.Array(Schema.String),
+      hours: Schema.NullOr(Schema.Struct({ start: Schema.String, end: Schema.String })),
+    }),
+  ),
+  settingsFrequency: Schema.NullOr(Schema.String),
+  timezone: Schema.NullOr(Schema.String),
+  lastSkip: Schema.NullOr(
+    Schema.Struct({ at: Schema.NullOr(Schema.String), reason: Schema.NullOr(Schema.String), kind: Schema.NullOr(Schema.String) }),
+  ),
   runs: Schema.Array(HeartbeatRunRow),
   runsMeasured: described(Schema.Boolean, "False: the run history could not be read. Empty runs then mean NOT READ, not never ran."),
 }).annotate({ identifier: "IrisHeartbeat" })

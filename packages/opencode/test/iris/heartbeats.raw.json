@@ -43,13 +43,28 @@
      "heartbeat_mode": "autonomous",
      "consecutive_failures": 3,
      "settings": {
-      "heartbeat_working_days": null
+      "heartbeat_working_days": null,
+      "schedule": {
+       "enabled": true,
+       "timezone": "America/New_York",
+       "working_days": [
+        "tuesday",
+        "wednesday",
+        "thursday"
+       ],
+       "active_hours": {
+        "end": "16:00",
+        "start": "07:00"
+       }
+      },
+      "heartbeat_frequency": "every_5_minutes"
      }
     },
     "bloq": {
      "id": 300,
      "name": "Board 1"
-    }
+    },
+    "timezone": "UTC"
    },
    "runs": [
     {
@@ -105,10 +120,13 @@
      "heartbeat_mode": "autonomous",
      "consecutive_failures": 0,
      "settings": {
-      "heartbeat_working_days": null
+      "heartbeat_working_days": null,
+      "schedule": null,
+      "heartbeat_frequency": null
      }
     },
-    "bloq": null
+    "bloq": null,
+    "timezone": "America/New_York"
    },
    "runs": [
     {
@@ -180,10 +198,13 @@
      "heartbeat_mode": "autonomous",
      "consecutive_failures": 0,
      "settings": {
-      "heartbeat_working_days": null
+      "heartbeat_working_days": null,
+      "schedule": null,
+      "heartbeat_frequency": null
      }
     },
-    "bloq": null
+    "bloq": null,
+    "timezone": "America/New_York"
    },
    "runs": [
     {
@@ -240,10 +261,27 @@
        "wed",
        "thu",
        "fri"
-      ]
+      ],
+      "schedule": {
+       "enabled": true,
+       "timezone": "America/New_York",
+       "working_days": [
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday"
+       ],
+       "active_hours": {
+        "end": "17:00",
+        "start": "09:00"
+       }
+      },
+      "heartbeat_frequency": "every_30_minutes"
      }
     },
-    "bloq": null
+    "bloq": null,
+    "timezone": "UTC"
    },
    "runs": [
     {
@@ -300,10 +338,22 @@
        "wed",
        "thu",
        "fri"
-      ]
+      ],
+      "schedule": {
+       "enabled": true,
+       "working_days": [
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday"
+       ]
+      },
+      "heartbeat_frequency": "every_30_minutes"
      }
     },
-    "bloq": null
+    "bloq": null,
+    "timezone": "America/New_York"
    },
    "runs": [
     {
@@ -365,10 +415,22 @@
        "wed",
        "thu",
        "fri"
-      ]
+      ],
+      "schedule": {
+       "enabled": true,
+       "working_days": [
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday"
+       ]
+      },
+      "heartbeat_frequency": "every_4_hours"
      }
     },
-    "bloq": null
+    "bloq": null,
+    "timezone": "America/New_York"
    },
    "runs": [
     {
@@ -425,10 +487,22 @@
        "wed",
        "thu",
        "fri"
-      ]
+      ],
+      "schedule": {
+       "enabled": true,
+       "working_days": [
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday"
+       ]
+      },
+      "heartbeat_frequency": "every_6_hours"
      }
     },
-    "bloq": null
+    "bloq": null,
+    "timezone": "America/New_York"
    },
    "runs": [
     {
@@ -479,10 +553,13 @@
      "heartbeat_mode": "co-pilot",
      "consecutive_failures": 0,
      "settings": {
-      "heartbeat_working_days": null
+      "heartbeat_working_days": null,
+      "schedule": null,
+      "heartbeat_frequency": null
      }
     },
-    "bloq": null
+    "bloq": null,
+    "timezone": "UTC"
    },
    "runs": [
     {
@@ -543,10 +620,15 @@
        "wed",
        "thu",
        "fri"
-      ]
+      ],
+      "schedule": {
+       "enabled": false
+      },
+      "heartbeat_frequency": "daily"
      }
     },
-    "bloq": null
+    "bloq": null,
+    "timezone": "America/New_York"
    },
    "runs": [
     {
@@ -652,10 +734,13 @@
      "heartbeat_mode": "autonomous",
      "consecutive_failures": 0,
      "settings": {
-      "heartbeat_working_days": null
+      "heartbeat_working_days": null,
+      "schedule": null,
+      "heartbeat_frequency": null
      }
     },
-    "bloq": null
+    "bloq": null,
+    "timezone": "America/New_York"
    },
    "runs": [
     {
@@ -710,10 +795,13 @@
      "heartbeat_mode": "autonomous",
      "consecutive_failures": 3,
      "settings": {
-      "heartbeat_working_days": null
+      "heartbeat_working_days": null,
+      "schedule": null,
+      "heartbeat_frequency": null
      }
     },
-    "bloq": null
+    "bloq": null,
+    "timezone": "America/New_York"
    },
    "runs": []
   },
@@ -750,10 +838,13 @@
      "heartbeat_mode": "autonomous",
      "consecutive_failures": 1,
      "settings": {
-      "heartbeat_working_days": null
+      "heartbeat_working_days": null,
+      "schedule": null,
+      "heartbeat_frequency": null
      }
     },
-    "bloq": null
+    "bloq": null,
+    "timezone": "America/New_York"
    },
    "runs": [
     {
@@ -810,13 +901,30 @@
      "heartbeat_mode": "autonomous",
      "consecutive_failures": 0,
      "settings": {
-      "heartbeat_working_days": null
+      "heartbeat_working_days": null,
+      "schedule": {
+       "enabled": true,
+       "timezone": "America/New_York",
+       "working_days": [
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday"
+       ],
+       "active_hours": {
+        "end": "17:00",
+        "start": "16:00"
+       }
+      },
+      "heartbeat_frequency": "daily_430pm"
      }
     },
     "bloq": {
      "id": 300,
      "name": "Board 1"
-    }
+    },
+    "timezone": "UTC"
    },
    "runs": [
     {
@@ -871,13 +979,16 @@
      "heartbeat_mode": "autonomous",
      "consecutive_failures": 4,
      "settings": {
-      "heartbeat_working_days": null
+      "heartbeat_working_days": null,
+      "schedule": null,
+      "heartbeat_frequency": null
      }
     },
     "bloq": {
      "id": 337,
      "name": "Board 2"
-    }
+    },
+    "timezone": "UTC"
    },
    "runs": [
     {
@@ -935,13 +1046,30 @@
      "heartbeat_mode": "autonomous",
      "consecutive_failures": 3,
      "settings": {
-      "heartbeat_working_days": null
+      "heartbeat_working_days": null,
+      "schedule": {
+       "enabled": true,
+       "timezone": "America/New_York",
+       "working_days": [
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday"
+       ],
+       "active_hours": {
+        "end": "16:00",
+        "start": "06:00"
+       }
+      },
+      "heartbeat_frequency": "daily_6am"
      }
     },
     "bloq": {
      "id": 300,
      "name": "Board 1"
-    }
+    },
+    "timezone": "UTC"
    },
    "runs": [
     {
@@ -992,10 +1120,13 @@
      "heartbeat_mode": "briefing",
      "consecutive_failures": 0,
      "settings": {
-      "heartbeat_working_days": null
+      "heartbeat_working_days": null,
+      "schedule": null,
+      "heartbeat_frequency": null
      }
     },
-    "bloq": null
+    "bloq": null,
+    "timezone": "America/New_York"
    },
    "runs": []
   },
@@ -1028,10 +1159,13 @@
      "heartbeat_mode": "briefing",
      "consecutive_failures": 0,
      "settings": {
-      "heartbeat_working_days": null
+      "heartbeat_working_days": null,
+      "schedule": null,
+      "heartbeat_frequency": null
      }
     },
-    "bloq": null
+    "bloq": null,
+    "timezone": "America/New_York"
    },
    "runs": []
   },
@@ -1067,10 +1201,13 @@
      "heartbeat_mode": "autonomous",
      "consecutive_failures": 4,
      "settings": {
-      "heartbeat_working_days": null
+      "heartbeat_working_days": null,
+      "schedule": null,
+      "heartbeat_frequency": null
      }
     },
-    "bloq": null
+    "bloq": null,
+    "timezone": "America/New_York"
    },
    "runs": [
     {
