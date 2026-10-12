@@ -541,6 +541,29 @@ const ChevronDown = () => (
 )
 
 const LAST_BLOQ_KEY = "iris.panel.bloq"
+/**
+ * "All projects" (#189145) — mirrors ALL_PROJECTS in opencode/src/iris/platform.ts. Bloq ids start
+ * at 1. Only the panes in ALL_CAPABLE can show it; every other pane asks for a project instead.
+ */
+export const ALL_PROJECTS = 0
+export const ALL_CAPABLE = new Set(["pages", "sites"])
+/**
+ * The project is remembered PER SESSION (#189144). It used to be one value for the whole app
+ * ("a preference"), so a new session opened precisely to get away from a project inherited it,
+ * and pages made there were filed under it. A session that has never chosen starts on All
+ * projects — nothing is silently linked to it.
+ */
+export const sessionBloqKey = (sessionId: string) => `${LAST_BLOQ_KEY}.session.${sessionId}`
+export function readSessionBloq(sessionId: string | undefined): number | undefined {
+  try {
+    const raw = localStorage.getItem(sessionId ? sessionBloqKey(sessionId) : LAST_BLOQ_KEY)
+    if (raw === null) return sessionId ? ALL_PROJECTS : undefined
+    const v = Number(raw)
+    return Number.isFinite(v) && v >= 0 ? v : undefined
+  } catch {
+    return undefined
+  }
+}
 const LAST_SURFACE_KEY = "iris.panel.surface"
 /**
  * A MAP of surface -> sub-view, not a single value.
@@ -1150,7 +1173,7 @@ export function SessionIrisTab() {
   /** Every request to the sidecar. `init` exists because this panel now WRITES (page saves). */
   const doFetch = (path: string, init?: RequestInit) => (platform.fetch ?? globalThis.fetch)(`${base()}${path}`, init)
 
-  const [bloqs] = createResource(base, async () => {
+  const [bloqs, { refetch: refetchBloqs }] = createResource(base, async () => {
     /*
      * ALL of them, not the first page.
      *
@@ -1167,20 +1190,24 @@ export function SessionIrisTab() {
     return (await res.json()) as Measured & { bloqs: { id: number; name: string }[] }
   })
 
-  // Remembered per viewer, not per session: which project you were looking at is a preference,
-  // and re-picking it on every launch is how a panel stops being opened.
-  const [selected, setSelected] = createSignal<number | undefined>(
-    (() => {
-      try {
-        const v = Number(localStorage.getItem(LAST_BLOQ_KEY))
-        return Number.isFinite(v) && v > 0 ? v : undefined
-      } catch {
-        return undefined
-      }
-    })(),
-  )
+  // Remembered PER SESSION (#189144) — see sessionBloqKey. Switching session tabs restores that
+  // session's project; switching back restores yours.
+  const [selected, setSelected] = createSignal<number | undefined>(readSessionBloq(sessionLayout.params.id))
+  createEffect(on(() => sessionLayout.params.id, (sid) => setSelected(readSessionBloq(sid)), { defer: true }))
 
-  const activeBloq = createMemo(() => selected() ?? (bloqs.latest ?? bloqs())?.bloqs?.[0]?.id)
+  /*
+   * A FUNCTION, not a memo, on purpose: it reads resolved() — which is declared further down —
+   * and a memo evaluates eagerly at this line, which is a TDZ crash for every user (the same trap
+   * the page() comment below describes). Every reader calls it after setup, inside a tracking scope.
+   *
+   * ALL_PROJECTS is only a real answer on the panes that can list everything; elsewhere it means
+   * "no project chosen" and the pane asks. Outside any session the old fallback stands.
+   */
+  const activeBloq = (): number | undefined => {
+    const s = selected()
+    if (s === ALL_PROJECTS) return ALL_CAPABLE.has(resolved().pane) ? ALL_PROJECTS : undefined
+    return s ?? (sessionLayout.params.id ? undefined : (bloqs.latest ?? bloqs())?.bloqs?.[0]?.id)
+  }
 
   /**
    * WARM THE PLAYBOOK LIST before anyone asks for it. Its first load waits on fl-api's board call,
@@ -1306,7 +1333,8 @@ export function SessionIrisTab() {
       // changes nothing the resource can see and the old rows stay on screen under the new tab.
       // Rooms and Artifacts fetch for themselves; the generic row list has nothing to draw.
       if (SELF_PANES.has(resolved().pane)) return undefined
-      return id ? ([base(), id, surface(), resolved().sub?.id ?? "", page(), applied()] as SurfaceKey) : undefined
+      // != null, not truthiness: ALL_PROJECTS is 0 (#189145).
+      return id != null ? ([base(), id, surface(), resolved().sub?.id ?? "", page(), applied()] as SurfaceKey) : undefined
     },
     async ([, id, , , pageNo, q], info): Promise<SurfacePayload> => {
       const { pane: which, path } = resolved()
@@ -1648,7 +1676,10 @@ export function SessionIrisTab() {
   })
 
   const activeBloqName = createMemo(
-    () => (bloqs.latest ?? bloqs())?.bloqs?.find((b) => b.id === activeBloq())?.name ?? "Select a board",
+    () =>
+      activeBloq() === ALL_PROJECTS
+        ? "All projects"
+        : ((bloqs.latest ?? bloqs())?.bloqs?.find((b) => b.id === activeBloq())?.name ?? "Select a board"),
   )
 
   /** A non-Atlas row being inspected. Atlas has its own reader because it has a BODY; the rest
@@ -2098,8 +2129,15 @@ export function SessionIrisTab() {
   function choose(id: number) {
     setSelected(id)
     try {
-      localStorage.setItem(LAST_BLOQ_KEY, String(id))
+      const sid = sessionLayout.params.id
+      localStorage.setItem(sid ? sessionBloqKey(sid) : LAST_BLOQ_KEY, String(id))
     } catch {}
+  }
+
+  /** ↻ (#189143): re-read the project list and the pane on screen — a page made a minute ago shows. */
+  function refreshPanel() {
+    void refetchBloqs()
+    void refetchSurface()
   }
 
   /**
@@ -2110,7 +2148,9 @@ export function SessionIrisTab() {
    * this button used to live in.
    */
   function openBoardPicker() {
-    const all = (bloqs.latest ?? bloqs())?.bloqs ?? []
+    const boards = (bloqs.latest ?? bloqs())?.bloqs ?? []
+    // "All projects" first, on the panes that can show it (#189145).
+    const all = ALL_CAPABLE.has(resolved().pane) ? [{ id: ALL_PROJECTS, name: "All projects" }, ...boards] : boards
     dialog.show(() => (
       <Dialog title="Board" description={`${all.length} boards`}>
         <List
@@ -2118,7 +2158,7 @@ export function SessionIrisTab() {
           search={{ placeholder: "Search boards or #id…", autofocus: true }}
           emptyMessage="No boards match."
           key={(b) => String(b?.id ?? "")}
-          items={() => all.map((b) => ({ ...b, ref: `#${b.id}` }))}
+          items={() => all.map((b) => ({ ...b, ref: b.id === ALL_PROJECTS ? "every project" : `#${b.id}` }))}
           /* `ref` is in the filter keys so typing 674 finds the board. You refer to
            these by number everywhere else — commits, tickets, conversation — and a
            picker you can only search by name makes the number useless here. */
@@ -2157,7 +2197,7 @@ export function SessionIrisTab() {
     const project = scope === "project"
     setScopeChip({
       scope,
-      label: scopeChipLabel(scope, project && hasBoards && activeBloq() ? activeBloqName() : undefined),
+      label: scopeChipLabel(scope, project && hasBoards && activeBloq() != null ? activeBloqName() : undefined),
       pick: project && hasBoards ? openBoardPicker : undefined,
     })
   })
@@ -2205,14 +2245,17 @@ export function SessionIrisTab() {
                 )}
               </For>
             </div>
+            {/* ↻ replaced ⤢ here (#189143): nothing else in the panel re-reads the lists, so a page
+                made a minute ago stayed missing until you switched project and back. Focus mode is
+                still reachable from the keyboard and the floating control. */}
             <button
               type="button"
               class="iris-focusbtn"
-              title="Focus — hide the tab rows"
-              aria-pressed={false}
-              onClick={() => setFocus(true)}
+              title="Refresh — re-read this list"
+              aria-label="Refresh"
+              onClick={refreshPanel}
             >
-              ⤢
+              ↻
             </button>
           </div>
         )}
@@ -3527,6 +3570,13 @@ export function SessionIrisTab() {
                         {pg.status === "published" ? "●" : "○"}
                       </span>
                       <span class="text-12-regular text-text-base min-w-0 flex-1">{pg.title}</span>
+                      {/* Listing every project: say where each page lives (#189145). */}
+                      <Show when={activeBloq() === ALL_PROJECTS}>
+                        <span class="text-11-regular text-text-weaker shrink-0 truncate max-w-[40%]">
+                          {(bloqs.latest ?? bloqs())?.bloqs?.find((b) => b.id === pg.projectId)?.name ??
+                            (pg.projectId ? `#${pg.projectId}` : "no project")}
+                        </span>
+                      </Show>
                       <Show when={pg.slug}>
                         <span class="font-mono tabular-nums text-11-regular text-text-weak shrink-0">/{pg.slug}</span>
                       </Show>
@@ -3538,6 +3588,19 @@ export function SessionIrisTab() {
           </Match>
 
           {/* Only reachable when measured===true — a genuine empty surface. */}
+          {/* No project chosen for this session yet (#189144) — a board pane has nothing to show,
+              and saying "this board is empty" would be a false statement about a board nobody
+              picked. Ask instead. */}
+          <Match when={boardScoped() && !SELF_PANES.has(pane()) && activeBloq() == null && (bloqs.latest ?? bloqs())?.measured}>
+            <div class="px-2 py-3 flex flex-col gap-2 items-start">
+              <p class="text-12-regular text-text-weak">
+                This session has no project yet. Choose one{ALL_CAPABLE.has(pane()) ? ", or All projects" : ""}.
+              </p>
+              <button type="button" class="iris-subnav__item iris-subnav__item--active" onClick={openBoardPicker}>
+                Choose a project
+              </button>
+            </div>
+          </Match>
           <Match when={view() === "empty"}>
             <p class="px-2 py-2 text-12-regular text-text-weak">
               {/* "This board is empty" and "your search matched nothing" are different facts,

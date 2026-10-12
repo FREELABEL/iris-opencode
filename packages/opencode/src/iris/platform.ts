@@ -1077,9 +1077,19 @@ export async function fetchLeads(bloqId: number): Promise<PlatformResult<{ leads
   }
 }
 
+/**
+ * "All projects" (#189145). Bloq ids start at 1, so 0 is free to mean "every project this
+ * account has" for the two lists where that question makes sense: Pages and Sites. A page made in
+ * the wrong project — or one whose project you forgot — is otherwise only findable by clicking
+ * through every project in turn.
+ */
+export const ALL_PROJECTS = 0
+
 export interface Page {
   id: number
   title: string
+  /** The project (bloq) the page is filed under — set when listing ALL projects, so each row can say where it lives. */
+  projectId?: number
   slug?: string
   status: string
   url?: string
@@ -1095,15 +1105,21 @@ export async function fetchPages(bloqId: number): Promise<PlatformResult<{ pages
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { pages: [] } }
 
-  const unknown = await unknownBloq(bloqId)
-  if (unknown) return { measured: false, reason: unknown, data: { pages: [] } }
+  const all = bloqId === ALL_PROJECTS
+  if (!all) {
+    const unknown = await unknownBloq(bloqId)
+    if (unknown) return { measured: false, reason: unknown, data: { pages: [] } }
+  }
 
   try {
     // owner_type/owner_id is a NARROWING filter, which is the point: this used to be fetched
     // per-user and rendered under a project header, so the list could never change when you
-    // switched project.
+    // switched project. ALL_PROJECTS drops the narrowing ON PURPOSE and labels each row with
+    // its project instead — the defect was the missing label, not the breadth.
     const res = await irisFetch(
-      `/api/v1/pages?user_id=${userId}&owner_type=bloq&owner_id=${bloqId}&per_page=50`,
+      all
+        ? `/api/v1/pages?user_id=${userId}&per_page=100`
+        : `/api/v1/pages?user_id=${userId}&owner_type=bloq&owner_id=${bloqId}&per_page=50`,
       IRIS_API,
     )
     if (!res.ok) return { measured: false, reason: `iris-api ${res.status}`, data: { pages: [] } }
@@ -1121,6 +1137,7 @@ export async function fetchPages(bloqId: number): Promise<PlatformResult<{ pages
       visibility: p.visibility ?? undefined,
       requiresAuth: typeof p.requires_auth === "boolean" ? p.requires_auth : undefined,
       category: p.category ?? undefined,
+      projectId: String(p.owner_type) === "bloq" && p.owner_id != null ? Number(p.owner_id) : undefined,
     }))
     return { measured: true, data: { pages } }
   } catch (e) {
@@ -1501,10 +1518,13 @@ export async function fetchSites(bloqId: number): Promise<PlatformResult<{ sites
     // A site belongs to this board when the board OWNS it, or when it is filed against the
     // board as a project. Both are checked: owner_type/owner_id is the older relation and
     // projects_bloq_id the newer one, and rows in the wild carry one or the other.
-    const mine = rows.filter(
-      (r: any) =>
-        (String(r.owner_type) === "bloq" && Number(r.owner_id) === bloqId) || Number(r.projects_bloq_id) === bloqId,
-    )
+    // ALL_PROJECTS: every site, each still labelled with its owner below (#189145).
+    const mine = bloqId === ALL_PROJECTS
+      ? rows
+      : rows.filter(
+          (r: any) =>
+            (String(r.owner_type) === "bloq" && Number(r.owner_id) === bloqId) || Number(r.projects_bloq_id) === bloqId,
+        )
 
     const sites: Site[] = mine.map((r: any) => ({
       id: Number(r.id),

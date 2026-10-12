@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { cellText, detailTabsFor, highlightJson, integrationHealth, itemCommands, logoFor, mcpServerRows, normalizeSurface, playbookButton, playbookCommand, playbookSources, providerMark, resolvePane, SUBVIEWS, surfaceView } from "./session-iris-tab"
+import { ALL_CAPABLE, ALL_PROJECTS, readSessionBloq, sessionBloqKey, cellText, detailTabsFor, highlightJson, integrationHealth, itemCommands, logoFor, mcpServerRows, normalizeSurface, playbookButton, playbookCommand, playbookSources, providerMark, resolvePane, SUBVIEWS, surfaceView } from "./session-iris-tab"
 
 describe("surfaceView", () => {
   test("a failed fetch is never rendered as an empty surface", () => {
@@ -373,5 +373,41 @@ describe("Playbooks › All", () => {
     expect(playbookSources({ sources: ["marketplace", "installed", "project"] })).toBe("project · installed · marketplace")
     expect(playbookSources({ sources: ["account"] })).toBe("account")
     expect(playbookSources({})).toBe("")
+  })
+})
+
+
+describe("panel project is per session (#189144, #189145)", () => {
+  test("a session that never chose starts on All projects — it does not inherit the last project", () => {
+    localStorage.clear()
+    localStorage.setItem("iris.panel.bloq", "747") // the old app-wide value, e.g. Heartbeat Console
+    expect(readSessionBloq("ses_new")).toBe(ALL_PROJECTS)
+  })
+
+  test("each session keeps its own project", () => {
+    localStorage.clear()
+    localStorage.setItem(sessionBloqKey("ses_a"), "747")
+    localStorage.setItem(sessionBloqKey("ses_b"), "607")
+    expect(readSessionBloq("ses_a")).toBe(747)
+    expect(readSessionBloq("ses_b")).toBe(607)
+  })
+
+  test("outside a session the app-wide value still applies", () => {
+    localStorage.clear()
+    localStorage.setItem("iris.panel.bloq", "38")
+    expect(readSessionBloq(undefined)).toBe(38)
+  })
+
+  test("a junk stored value is ignored, not trusted", () => {
+    localStorage.clear()
+    localStorage.setItem(sessionBloqKey("ses_x"), "not-a-number")
+    expect(readSessionBloq("ses_x")).toBeUndefined()
+  })
+
+  test("All projects is offered only where a list can span projects", () => {
+    expect(ALL_CAPABLE.has("pages")).toBe(true)
+    expect(ALL_CAPABLE.has("sites")).toBe(true)
+    expect(ALL_CAPABLE.has("atlas")).toBe(false)
+    expect(ALL_PROJECTS).toBe(0)
   })
 })
