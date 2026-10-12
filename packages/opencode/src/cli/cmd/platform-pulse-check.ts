@@ -32,6 +32,7 @@ import {
   type TopicSource,
   type SourceSweep,
   sweepAll,
+  currentSessionIds,
   toObservations,
   topicSlug,
   keywordVariants,
@@ -246,6 +247,8 @@ async function runPulseCheck(args: any, allowFix: boolean): Promise<void> {
         bridgeKey: getBridgeToken() ?? undefined,
         apiFetch: (path: string) => irisFetch(path),
         userId: userId ?? undefined,
+        // The session running this check is not evidence about the topic (#189155).
+        excludeSessions: currentSessionIds(),
       },
       (s) => spinner?.message(`sweeping ${SOURCE_LABEL[s]}`),
     )

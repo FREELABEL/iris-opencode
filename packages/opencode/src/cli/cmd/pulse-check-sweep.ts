@@ -96,6 +96,18 @@ export interface SweepOptions {
    */
   apiFetch?: (path: string) => Promise<Response>
   userId?: number
+  /**
+   * Session ids whose transcripts must not count (#189155): the session RUNNING the check. Its
+   * own transcript holds the keyword dozens of times — the command, its output, the discussion
+   * that led to it — so the Claude Code stop scored 47-107 "hits" that were mostly itself.
+   */
+  excludeSessions?: string[]
+}
+
+/** The agent sessions this process is running inside, from the ids their hosts export. */
+export function currentSessionIds(env: Record<string, string | undefined> = process.env): string[] {
+  const ids = [env.CLAUDE_CODE_SESSION_ID, env.OPENCODE_SESSION_ID, env.IRIS_SESSION_ID]
+  return [...new Set(ids.filter((v): v is string => typeof v === "string" && v.trim().length >= 8).map((v) => v.trim()))]
 }
 
 // ── keyword variants ────────────────────────────────────────────────────────
@@ -323,11 +335,73 @@ export function gitRepos(root: string): string[] {
 
 // ── collectors ──────────────────────────────────────────────────────────────
 
+/** True when the repo has at least one commit on any ref. */
+function hasCommits(repo: string): boolean {
+  return run("git", ["-C", repo, "rev-list", "-n", "1", "--all"]).length > 0
+}
+
+const SKIP_DIRS = new Set(["node_modules", ".git", "vendor", "dist", "build", ".cache", "storage", "tmp"])
+
+/**
+ * Independent repositories BELOW a directory (#189155). A work folder that is itself an empty
+ * repo — or no repo at all — holding the real checkouts one or two levels down read "commits: 0"
+ * on every topic, because the sweep only ever asked the folder. Bounded depth, junk dirs skipped,
+ * and worktrees of one repository counted once (they share one history): keyed by the common
+ * git dir, keeping the main checkout where there is one.
+ */
+export function nestedRepos(dir: string, maxDepth = 3, cap = 40): string[] {
+  const byCommon = new Map<string, string>()
+  const walk = (d: string, depth: number) => {
+    if (depth > maxDepth || byCommon.size >= cap) return
+    let entries: string[]
+    try {
+      entries = readdirSync(d)
+    } catch {
+      return
+    }
+    for (const name of entries) {
+      if (name.startsWith(".") || SKIP_DIRS.has(name)) continue
+      const sub = join(d, name)
+      try {
+        if (!statSync(sub).isDirectory()) continue
+      } catch {
+        continue
+      }
+      if (existsSync(join(sub, ".git"))) {
+        const common = run("git", ["-C", sub, "rev-parse", "--path-format=absolute", "--git-common-dir"])
+        if (common) {
+          const isMain = existsSync(join(sub, ".git")) && statSync(join(sub, ".git")).isDirectory()
+          const prev = byCommon.get(common)
+          if (!prev || isMain) byCommon.set(common, sub)
+        }
+        continue // a repo's own nested repos are its gitlinks — gitRepos finds those
+      }
+      walk(sub, depth + 1)
+    }
+  }
+  walk(dir, 1)
+  return [...byCommon.values()].sort()
+}
+
+/**
+ * The repos a sweep reads, and the directory names are relative to. The enclosing repo when it
+ * has history (the monorepo case); otherwise every independent repo under the folder.
+ */
+export function sweepRepos(dir: string): { root: string; repos: string[] } | null {
+  const root = resolveRepoRoot(dir)
+  if (root && hasCommits(root)) return { root, repos: gitRepos(root) }
+  const base = root ?? dir
+  const repos = nestedRepos(base).flatMap((r) => gitRepos(r)).filter((r) => hasCommits(r))
+  const unique = [...new Set(repos)]
+  return unique.length ? { root: base, repos: unique } : null
+}
+
 /** Commit subjects and bodies across every repo in the tree. */
 export function sweepGit(opts: SweepOptions): SourceSweep {
-  const root = resolveRepoRoot(opts.repo)
-  const repos = root ? gitRepos(root) : []
-  if (repos.length === 0) return unavailable("git", `${opts.repo} is not inside a git repository`)
+  const found = sweepRepos(opts.repo)
+  const root = found?.root ?? null
+  const repos = found?.repos ?? []
+  if (repos.length === 0) return unavailable("git", `${opts.repo} is not inside a git repository with commits, and holds none`)
 
   const pattern = keywordPattern(opts.keyword)
   if (pattern === null) return unavailable("git", `"${opts.keyword}" has no searchable characters`)
@@ -335,13 +409,14 @@ export function sweepGit(opts: SweepOptions): SourceSweep {
   const matched = new Set<string>([canonicalKeyword(opts.keyword)])
   const items: Hit[] = []
   const seen = new Set<string>()
+  const seenPrior = new Set<string>()
   let prior = 0
 
   const since = new Date(Date.now() - opts.windowDays * 864e5).toISOString()
   const priorSince = new Date(Date.now() - opts.windowDays * 2 * 864e5).toISOString()
 
   for (const repo of repos) {
-    const name = repo === root ? basename(repo) : relative(root!, repo)
+    const name = repo === root ? basename(repo) : relative(root!, repo) || basename(repo)
     // Deduped per repo: one commit matching three variants is one commit.
     const priorSeen = new Set<string>()
 
@@ -350,22 +425,23 @@ export function sweepGit(opts: SweepOptions): SourceSweep {
     // pattern uses a bounded interval, which basic regex would need escaped.
     const current = run("git", [
       "-C", repo, "log", "--all", "-i", "-E", `--grep=${pattern}`,
-      `--since=${since}`, `--format=%h${SEP}%aI${SEP}%s`, "--max-count=200",
+      `--since=${since}`, `--format=%H${SEP}%aI${SEP}%s`, "--max-count=200",
     ])
 
     for (const line of current.split("\n").filter(Boolean)) {
-      const [sha, date, subject] = line.split(SEP)
-      const where = `${name}@${sha}`
-      if (seen.has(where)) continue
-      seen.add(where)
-      items.push({ when: date, where, text: subject })
+      const [full, date, subject] = line.split(SEP)
+      // One commit is one commit, however many clones of its repo sit in the folder.
+      if (seen.has(full)) continue
+      seen.add(full)
+      items.push({ when: date, where: `${name}@${full.slice(0, 7)}`, text: subject })
     }
 
     const before = run("git", [
       "-C", repo, "log", "--all", "-i", "-E", `--grep=${pattern}`,
-      `--since=${priorSince}`, `--until=${since}`, "--format=%h", "--max-count=200",
+      `--since=${priorSince}`, `--until=${since}`, "--format=%H", "--max-count=200",
     ])
-    for (const sha of before.split("\n").filter(Boolean)) priorSeen.add(sha)
+    for (const sha of before.split("\n").filter(Boolean)) if (!seenPrior.has(sha)) priorSeen.add(sha)
+    for (const sha of priorSeen) seenPrior.add(sha)
 
     prior += priorSeen.size
   }
@@ -430,6 +506,70 @@ export function sweepDiary(opts: SweepOptions): SourceSweep {
   return finish("diary", items, prior, matched, opts.limit)
 }
 
+/**
+ * The diary when it lives in Atlas (#189155). The local sweep looks for a `daily-diary/` folder;
+ * where there is none it reported the source SHUT — while the diary was right there in Atlas, as a
+ * "Daily Diary" list (one item per day: title = the date, description = the entry). Boards whose
+ * name mentions a diary are read for lists whose name does; entries are dated from the title.
+ */
+export async function sweepDiaryAtlas(opts: SweepOptions): Promise<SourceSweep> {
+  if (!opts.apiFetch || !opts.userId) return unavailable("diary", "no local daily-diary folder, and not signed in to read the Atlas diary")
+  const re = keywordRegex(opts.keyword)
+  if (re === null) return unavailable("diary", `"${opts.keyword}" has no searchable characters`)
+
+  let boards: any[]
+  try {
+    const res = await opts.apiFetch(`/api/v1/user/${opts.userId}/bloqs?simplified=1&per_page=500`)
+    if (!res.ok) return unavailable("diary", `board list returned ${res.status}`)
+    const raw = ((await res.json()) as any)?.data
+    boards = (Array.isArray(raw) ? raw : []).filter((b: any) => /diary/i.test(String(b?.name ?? "")))
+  } catch (e: any) {
+    return unavailable("diary", `could not reach Atlas: ${String(e?.message ?? e).slice(0, 120)}`)
+  }
+
+  const cutoff = Date.now() - opts.windowDays * 864e5
+  const priorCutoff = Date.now() - opts.windowDays * 2 * 864e5
+  const items: Hit[] = []
+  let prior = 0
+  let lists = 0
+
+  for (const board of boards.slice(0, 5)) {
+    let full: any
+    try {
+      const res = await opts.apiFetch(`/api/v1/user/${opts.userId}/bloqs/${board.id}`)
+      if (!res.ok) continue
+      const body = (await res.json()) as any
+      full = body?.data ?? body
+    } catch {
+      continue
+    }
+    for (const list of firstArray(full?.lists)) {
+      if (!/diary/i.test(String(list?.name ?? ""))) continue
+      lists++
+      for (const row of firstArray(list?.items)) {
+        const title = String(row?.title ?? "")
+        const dated = title.match(/(\d{4}-\d{2}-\d{2})/)
+        const at = dated ? Date.parse(`${dated[1]}T12:00:00Z`) : Date.parse(row?.created_at ?? "")
+        if (!Number.isFinite(at) || at < priorCutoff) continue
+        const body = `${title}\n${String(row?.description ?? row?.content ?? "")}`
+        const line = firstMentionLine(body, re)
+        if (line === undefined) continue
+        if (at < cutoff) {
+          prior++
+          continue
+        }
+        items.push({ when: new Date(at).toISOString(), where: `Atlas · ${String(list?.name ?? "diary")} #${row?.id}`, text: line })
+      }
+    }
+  }
+
+  if (lists === 0) return unavailable("diary", "no local daily-diary folder and no diary list in Atlas")
+  items.sort((a, b) => (b.when ?? "").localeCompare(a.when ?? ""))
+  const sweep = finish("diary", items, prior, new Set([canonicalKeyword(opts.keyword)]), opts.limit)
+  sweep.unavailableReason = "read from the Atlas diary (no local daily-diary folder)"
+  return sweep
+}
+
 /** The line the keyword actually appears on — context beats a leading excerpt. */
 function firstMentionLine(body: string, re: RegExp): string | undefined {
   for (const line of body.split("\n")) {
@@ -450,9 +590,10 @@ function firstMentionLine(body: string, re: RegExp): string | undefined {
  * momentum a fake baseline instead.
  */
 export function sweepFiles(opts: SweepOptions): SourceSweep {
-  const root = resolveRepoRoot(opts.repo)
-  const repos = root ? gitRepos(root) : []
-  if (repos.length === 0) return unavailable("files", `${opts.repo} is not inside a git repository`)
+  const found = sweepRepos(opts.repo)
+  const root = found?.root ?? null
+  const repos = found?.repos ?? []
+  if (repos.length === 0) return unavailable("files", `${opts.repo} is not inside a git repository with commits, and holds none`)
 
   const pattern = keywordPattern(opts.keyword)
   if (pattern === null) return unavailable("files", `"${opts.keyword}" has no searchable characters`)
@@ -489,8 +630,7 @@ export function sweepFiles(opts: SweepOptions): SourceSweep {
  * the topic as touched yesterday. For "is this thread warm" that is the useful
  * direction to be wrong in, but it is not a claim about when the work happened.
  */
-export function sweepClaudeCode(opts: SweepOptions): SourceSweep {
-  const root = join(homedir(), ".claude", "projects")
+export function sweepClaudeCode(opts: SweepOptions, root = join(homedir(), ".claude", "projects")): SourceSweep {
   if (!existsSync(root)) return unavailable("claude_code", "no ~/.claude/projects session store on this machine")
   return sweepSessionFiles("claude_code", root, ".jsonl", opts)
 }
@@ -525,6 +665,7 @@ export function sweepOpencode(opts: SweepOptions): SourceSweep {
       continue
     }
     if (!sessionId) continue
+    if ((opts.excludeSessions ?? []).includes(sessionId)) continue
     const existing = sessions.get(sessionId)
     if (existing === undefined || at > existing) sessions.set(sessionId, at)
   }
@@ -582,8 +723,15 @@ function sweepSessionFiles(source: TopicSource, root: string, ext: string, opts:
   const priorCutoff = Date.now() - opts.windowDays * 2 * 864e5
 
   const seen = new Map<string, number>()
+  const exclude = opts.excludeSessions ?? []
+  let excluded = 0
   const out = run("grep", ["-rEil", `--include=*${ext}`, pattern, root], undefined, 60000)
   for (const file of out.split("\n").filter(Boolean)) {
+    // The session running this check — its transcript AND its subagents' (#189155).
+    if (exclude.some((id) => file.includes(id))) {
+      excluded++
+      continue
+    }
     try {
       seen.set(file, statSync(file).mtimeMs)
     } catch {}
@@ -604,7 +752,9 @@ function sweepSessionFiles(source: TopicSource, root: string, ext: string, opts:
   }
 
   items.sort((a, b) => (b.when ?? "").localeCompare(a.when ?? ""))
-  return finish(source, items, prior, matched, opts.limit)
+  const sweep = finish(source, items, prior, matched, opts.limit)
+  if (excluded) sweep.unavailableReason = `left out the session running this check (${excluded} transcript file${excluded === 1 ? "" : "s"})`
+  return sweep
 }
 
 /**
@@ -1008,6 +1158,28 @@ export async function sweepBloq(opts: SweepOptions): Promise<SourceSweep> {
     return await sweepBoard(opts, hits[0], cutoff, priorCutoff)
   }
 
+  // SEVERAL boards answer to the name (#189155). This used to say "name one exactly" and fall
+  // through to a text search that scored 0 — the person asked about a topic that plainly has
+  // boards, and was told nothing happened. Read each matching board (bounded) and merge.
+  if (hits.length > 1) {
+    const read = hits.slice(0, 6)
+    const parts = await Promise.all(read.map((b: any) => sweepBoard(opts, b, cutoff, priorCutoff)))
+    const ok = parts.filter((p) => p.searched)
+    if (ok.length) {
+      const merged = ok.flatMap((p) => p.items.map((i) => ({ ...i, where: `${p.board?.name ?? ""} · ${i.where}`.slice(0, 90) })))
+      merged.sort((a, b) => (b.when ?? "").localeCompare(a.when ?? ""))
+      const total = ok.reduce((n, p) => n + p.hits, 0)
+      const prior = ok.reduce((n, p) => n + (p.hitsPrior ?? 0), 0)
+      const sweep = finish("bloq", merged, prior, new Set([opts.keyword.toLowerCase()]), opts.limit)
+      sweep.hits = total
+      const names = ok.map((p) => `#${p.board?.id} ${p.board?.name ?? ""}`.trim())
+      sweep.unavailableReason =
+        `read ${ok.length} boards matching "${opts.keyword}": ${names.join(", ")}` +
+        (hits.length > read.length ? ` (and ${hits.length - read.length} more not read)` : "")
+      return sweep
+    }
+  }
+
   const ambiguous = hits.length > 1
     ? `"${opts.keyword}" matches ${hits.length} boards (${hits.map((b: any) => "#" + b.id).join(", ")}) — name one exactly`
     : null
@@ -1024,8 +1196,10 @@ export async function sweepBloq(opts: SweepOptions): Promise<SourceSweep> {
       const res = await opts.apiFetch(`/api/v1/user/${opts.userId}/bloqs/content-items?${params}`)
       if (!res.ok) return unavailable("bloq", `item search returned ${res.status}`)
       // Same non-array guard as the board-list fetch above (#182191).
+      // The endpoint answers `data: { items: [...] }` (#189155) — reading only an array here made
+      // every text search across boards score 0. Both shapes are read; anything else is empty.
       const rawRows = ((await res.json()) as any)?.data
-      rows = Array.isArray(rawRows) ? rawRows : []
+      rows = Array.isArray(rawRows) ? rawRows : Array.isArray(rawRows?.items) ? rawRows.items : []
     } catch (e: any) {
       return unavailable("bloq", `Atlas search failed: ${String(e?.message ?? e).slice(0, 120)}`)
     }
@@ -1210,7 +1384,13 @@ export async function sweepAll(opts: SweepOptions, onStart?: (s: TopicSource) =>
   for (const [name, fn] of sync) {
     if (!wanted.has(name)) continue
     onStart?.(name)
-    out.push(fn())
+    const result = fn()
+    // No local diary folder is not "the diary is shut" when the diary lives in Atlas (#189155).
+    if (name === "diary" && !result.searched && opts.apiFetch && opts.userId) {
+      out.push(await sweepDiaryAtlas(opts))
+      continue
+    }
+    out.push(result)
   }
 
   if (wanted.has("email")) {

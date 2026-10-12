@@ -8679,7 +8679,7 @@
       "describe": "check recent activity across all channels (CRM, Gmail, iMessage, Apple Mail, Meetings)",
       "aliases": [],
       "run": "iris leads pulse <id>",
-      "haystack": "leads pulse inbox incoming check recent activity across all channels (crm, gmail, imessage, apple mail, meetings) days look-back window in days limit max messages per channel mail-account also read this mail.app account hydrate generate + send follow-up if gate is unpaid + past throttle window dry-run with --hydrate: generate the ai email but don to with --hydrate: redirect email to this address (for testing) force with --hydrate/--recap: ignore throttle window recap generate + send professional status update email to this lead json json output"
+      "haystack": "leads pulse inbox incoming check recent activity across all channels (crm, gmail, imessage, apple mail, meetings) days look-back window in days limit max messages per channel mail-account also read this mail.app account hydrate generate + send follow-up if gate is unpaid + past throttle window dry-run with --hydrate: generate the ai email but don to with --hydrate: redirect email to this address (for testing) force with --hydrate/--recap: ignore throttle window recap generate + send professional status update email to this lead save also file the messages found into the comms ledger (changes the lead json json output"
     },
     {
       "kind": "command",
