@@ -24,6 +24,8 @@ import {
 } from "fs"
 import { join, resolve, basename, relative } from "path"
 import { fetchDatasetRecords } from "./platform-atlas-datasets"
+import { LintCommand, ServeCommand, listHiveApps, printHiveApps } from "./platform-app-serve"
+import { LOCAL_CONSOLE_FILES } from "./apps-local-console"
 import { dispatchTaskAndWait, fetchNodes, resolveNode, type HiveNode } from "./platform-hive-nodes"
 import { buildTaskPayload } from "./hive-task-create"
 import { describeUptime } from "./hive-uptime"
@@ -542,7 +544,7 @@ const CreateCommand = cmd({
       .option("template", {
         alias: "t",
         describe: "scaffold template (scaffold mode only; default basic)",
-        choices: ["basic", "react", "vue"] as const,
+        choices: ["basic", "react", "vue", "local-console"] as const,
       }),
   async handler(args) {
     const name = args.name as string
@@ -556,6 +558,25 @@ const CreateCommand = cmd({
       return
     }
     const template = (args.template as string | undefined) ?? "basic"
+
+    if (template === "local-console") {
+      // #189082 — the safe shape of an agent-built desktop console. Its own file set; see apps-local-console.ts.
+      const dir = join(process.cwd(), name)
+      if (existsSync(dir)) { prompts.log.error(`Directory "${name}" already exists`); process.exitCode = 1; return }
+      const slug = name.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 41) || "local-console"
+      mkdirSync(dir, { recursive: true })
+      for (const [file, body] of Object.entries(LOCAL_CONSOLE_FILES(slug))) writeFileSync(join(dir, file), body, { mode: file.endsWith(".command") ? 0o755 : 0o644 })
+      UI.empty()
+      prompts.intro(`◈  Local console: ${name}`)
+      printDivider()
+      printKV("Path", dir)
+      printKV("Start", "double-click launch.bat (Windows) or launch.command (Mac)")
+      printKV("Safety", "127.0.0.1 only · per-launch token · Host/Origin checked · allowlisted commands · read-only by default")
+      printKV("Check it", `iris app lint ${name}`)
+      printDivider()
+      prompts.outro("Done")
+      return
+    }
 
     UI.empty()
     prompts.intro(`◈  Create IRIS App: ${name}`)
@@ -762,13 +783,27 @@ const DeployCommand = cmd({
 const ListCommand = cmd({
   command: "list",
   aliases: ["ls"],
-  describe: "list your IRIS apps",
-  builder: (yargs) => yargs.option("json", { describe: "JSON output", type: "boolean", default: false }),
+  describe: "list your apps — IRIS-hosted, and with --hive what each of your machines is serving and whether it is healthy",
+  builder: (yargs) =>
+    yargs
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("hive", { describe: "ask your machines what they serve (#189084)", type: "boolean", default: false })
+      .option("node", { describe: "with --hive: only this machine", type: "string" }),
   async handler(args) {
     const token = await requireAuth()
     if (!token) return
     const userId = await requireUserId()
     if (!userId) return
+
+    if (args.hive) {
+      const rows = await listHiveApps(userId, { node: args.node as string | undefined })
+      if (args.json) { await writeJson({ ok: true, machines: rows }); return }
+      UI.empty()
+      prompts.intro("◈  Your apps on your machines")
+      printHiveApps(rows)
+      prompts.outro(dim("● healthy  ◐ running, not answering  ○ stopped"))
+      return
+    }
 
     try {
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/apps`)
@@ -889,12 +924,14 @@ const DeleteCommand = cmd({
 export const PlatformAppCommand = cmd({
   command: "app",
   aliases: ["apps"],
-  describe: "apps you own: run one on your Hive instead of paying for it (create \"<job>\" --node), or scaffold/deploy an IRIS-hosted app",
+  describe: "apps you own: run one on your Hive instead of paying for it (create \"<job>\" --node), serve your own Python app (serve <folder>), see what runs where (list --hive), or scaffold/deploy an IRIS-hosted app",
   builder: (yargs) =>
     yargs
       .command(CreateCommand)
       .command(DeployCommand)
       .command(ListCommand)
+      .command(ServeCommand)
+      .command(LintCommand)
       .command(DeleteCommand)
       .demandCommand(1),
   async handler() {},
