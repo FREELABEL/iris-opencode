@@ -61,25 +61,29 @@ function mount(opts: { empty?: boolean; unread?: boolean } = {}) {
   return { host, dispose, calls }
 }
 
-test("Heartbeats: the late one on top, a trace per agent, detail with what to do", async () => {
+test("Heartbeats: the late one on top, skipping and failing next, a week and a timeline for each", async () => {
   const { host, dispose, calls } = mount()
   await wait(() => host.querySelectorAll(".hbt-row").length > 0)
   if (process.env.HBT_DUMP) (await import("node:fs")).writeFileSync(process.env.HBT_DUMP + "/list.html", host.innerHTML)
 
-  expect(host.querySelector(".hmc-sum")?.textContent).toBe("16 of 18 beating2 need attention")
+  // half the fleet needs attention once skips and laundered failures are counted (#189113, #189114)
+  expect(host.querySelector(".hmc-sum")?.textContent).toBe("9 of 18 beating9 need attention")
   const rows = [...host.querySelectorAll(".hbt-row")]
   expect(rows.length).toBe(18)
-  expect(rows[0].getAttribute("data-state")).toBe("late")
+  expect(rows.map((r) => r.getAttribute("data-state")).slice(0, 9)).toEqual([
+    "late", "silent", "silent", "silent", "silent", "silent", "silent", "failing", "failing",
+  ])
   expect(rows[0].querySelector(".hbt-name")?.textContent).toBe("Market Watch Agent")
   expect(rows[0].querySelector(".hbt-line")?.textContent).toBe("Late · due 3 days ago")
-  expect(rows[0].querySelector(".hbt-cad")?.textContent).toBe("Every 8 hours")
-  const ncma = rows.find((r) => r.textContent?.includes("Newsletter Agent"))!
-  expect([...ncma.querySelectorAll(".hbt-strip i")].map((i) => i.getAttribute("data-b"))).toEqual(["ok", "fail", "ok", "ok"])
+  const curator = rows.find((r) => r.textContent?.includes("Music Curator"))!
+  expect(curator.querySelector(".hbt-line")?.textContent).toBe("Wakes but does nothing · last real beat 8 h ago")
 
-  // detail opens on the first row and says what is wrong and what to do
+  // the detail: problem, the week, the beats
   expect(host.querySelector(".hmc-dname")?.textContent).toBe("Market Watch AgentLate")
   expect(host.querySelector(".hmc-att-list b")?.textContent).toBe("Missed its beat — due 3 days ago")
-  expect(host.querySelector(".hmc-stats dd[data-low]")?.textContent).toBe("3d ago")
+  expect(host.querySelector(".hbt-week figcaption")?.textContent).toBe("This week1 worked · 12 skipped · of 21 due")
+  expect(host.querySelectorAll(".hbt-wmiss").length).toBe(12)
+  expect(host.querySelectorAll(".hbt-wbeat").length).toBe(1) // its one kept beat, Oct 8, and nothing since
 
   // Run now goes to THIS job, and says so
   ;(host.querySelector(".hmc-btn--go") as HTMLButtonElement).click()
@@ -87,16 +91,41 @@ test("Heartbeats: the late one on top, a trace per agent, detail with what to do
   expect(calls.some((c) => c.path === "/iris/heartbeats/764/run")).toBe(true)
   expect(host.querySelector(".hbt-note")?.hasAttribute("data-ok")).toBe(true)
 
+  // a laundered failure opens on WHY, flagged as recorded-as-success
+  const cos = [...host.querySelectorAll(".hbt-row")].find((r) => r.textContent?.includes("Chief of Staff")) as HTMLElement
+  cos.click()
+  await wait(() => host.querySelector(".hmc-dname")?.textContent?.startsWith("Chief of Staff") ?? false)
+  const beat = host.querySelector(".hbt-runs li") as HTMLElement
+  expect(beat.getAttribute("data-b")).toBe("fail")
+  expect(beat.querySelector(".hbt-run-gist")?.textContent).toBe("AI API error: 402")
+  ;(beat.querySelector(".hbt-run-top") as HTMLButtonElement).click()
+  await wait(() => !!host.querySelector(".hbt-beat"))
+  expect(host.querySelector(".hbt-part--fail p")?.textContent).toBe("AI API error: 402")
+  expect(host.querySelector(".hbt-fine")?.textContent).toContain("Recorded as a success")
+  if (process.env.HBT_DUMP) (await import("node:fs")).writeFileSync(process.env.HBT_DUMP + "/fail.html", host.innerHTML)
+
+  // a good beat opens on what happened, what changed, what it did, and what it left
+  const nl = [...host.querySelectorAll(".hbt-row")].find((r) => r.textContent?.includes("Newsletter Agent")) as HTMLElement
+  nl.click()
+  await wait(() => host.querySelector(".hmc-dname")?.textContent?.startsWith("Newsletter Agent") ?? false)
+  expect(host.querySelector(".hbt-beat")).toBeNull() // a different agent starts closed
+  ;(host.querySelector(".hbt-runs .hbt-run-top") as HTMLButtonElement).click()
+  await wait(() => !!host.querySelector(".hbt-beat"))
+  expect([...host.querySelectorAll(".hbt-beat h5")].map((h) => h.textContent)).toEqual([
+    "What happened", "What changed since the last beat", "What it did", "Numbers", "Result",
+  ])
+  expect(host.querySelector(".hbt-beat .hbt-part p")?.textContent).toBe("The project is progressing; two new items were drafted.")
+  if (process.env.HBT_DUMP) (await import("node:fs")).writeFileSync(process.env.HBT_DUMP + "/beat.html", host.innerHTML)
+
   // a pause fl-api did not save is reported as not working — never as done
-  // the list re-renders after the action refetches; take the row as it is now
-  const dj = [...host.querySelectorAll(".hbt-row")].find((r) => r.textContent?.includes("Music Curator")) as HTMLElement
-  dj.click()
+  const mc = [...host.querySelectorAll(".hbt-row")].find((r) => r.textContent?.includes("Music Curator")) as HTMLElement
+  mc.click()
   await wait(() => host.querySelector(".hmc-dname")?.textContent?.startsWith("Music Curator") ?? false)
   expect(host.querySelector(".hbt-aside")?.textContent).toContain("still runs on schedule")
+  expect(host.querySelector(".hbt-week figcaption")?.textContent).toContain("3 skipped")
   ;([...host.querySelectorAll(".hmc-btn")].find((b) => b.textContent === "Pause") as HTMLButtonElement).click()
   await wait(() => host.querySelector(".hbt-note")?.textContent?.startsWith("Did not work") ?? false)
   expect(JSON.parse(calls.find((c) => c.path.endsWith("/pause"))!.body!)).toEqual({ paused: true })
-  expect(host.querySelector(".hbt-note")?.hasAttribute("data-ok")).toBe(false)
 
   // find narrows; Escape clears
   const find = host.querySelector(".hbt-find") as HTMLInputElement

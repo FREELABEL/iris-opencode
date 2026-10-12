@@ -229,7 +229,12 @@ const HeartbeatRunRow = Schema.Struct({
   tokens: Schema.NullOr(Schema.Finite),
   model: Schema.NullOr(Schema.String),
   preview: Schema.NullOr(Schema.String),
+  response: Schema.NullOr(Schema.String),
   error: Schema.NullOr(Schema.String),
+  itemId: Schema.NullOr(Schema.Finite),
+  deliverableId: Schema.NullOr(Schema.Finite),
+  publicUrl: Schema.NullOr(Schema.String),
+  emailSent: Schema.NullOr(Schema.Boolean),
 }).annotate({ identifier: "IrisHeartbeatRun" })
 const HeartbeatRow = Schema.Struct({
   jobId: Schema.Finite,
@@ -249,6 +254,7 @@ const HeartbeatRow = Schema.Struct({
   lastError: Schema.NullOr(Schema.String),
   reportTo: Schema.Finite,
   tools: Schema.Finite,
+  workingDays: Schema.NullOr(Schema.Array(Schema.String)),
   runs: Schema.Array(HeartbeatRunRow),
   runsMeasured: described(Schema.Boolean, "False: the run history could not be read. Empty runs then mean NOT READ, not never ran."),
 }).annotate({ identifier: "IrisHeartbeat" })
@@ -2323,7 +2329,7 @@ export const IrisApi = HttpApi.make("iris").add(
           identifier: "iris.heartbeats",
           summary: "List agent heartbeats",
           description:
-            "#189110. fl-api scheduled jobs whose task is `heartbeat`, with the last 12 executions of each. A `scheduled` status alone is not evidence a heartbeat is beating — the runs and next_run_at are.",
+            "#189110. fl-api scheduled jobs whose task is `heartbeat`, with up to 50 executions of each (a week for every cadence slower than 4-hourly). A `scheduled` status alone is not evidence a heartbeat is beating — the runs and next_run_at are.",
         }),
       ),
       HttpApiEndpoint.post("heartbeatRun", IrisPaths.heartbeatRun, {

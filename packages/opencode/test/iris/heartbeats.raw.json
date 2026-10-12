@@ -1,5 +1,5 @@
 {
- "capturedAt": "2026-10-12T20:52:21.904Z",
+ "capturedAt": "2026-10-12T21:12:14.341Z",
  "rows": [
   {
    "job": {
@@ -41,7 +41,10 @@
      "name": "Market Watch Agent",
      "active": true,
      "heartbeat_mode": "autonomous",
-     "consecutive_failures": 3
+     "consecutive_failures": 3,
+     "settings": {
+      "heartbeat_working_days": null
+     }
     },
     "bloq": {
      "id": 300,
@@ -58,155 +61,13 @@
      "duration_seconds": null,
      "tokens_used": 50327,
      "model_used": "gpt-4o-mini",
-     "response_preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results",
-     "error_message": null
-    }
-   ]
-  },
-  {
-   "job": {
-    "id": 720,
-    "agent_id": 366,
-    "bloq_id": null,
-    "task_name": "heartbeat",
-    "status": "scheduled",
-    "frequency": "hourly",
-    "next_run_at": "2026-10-12T21:00:00.000000Z",
-    "last_run_at": "2026-10-12T20:00:41.000000Z",
-    "run_count": 1474,
-    "data": {
-     "type": "heartbeat",
-     "mode": "co-pilot",
-     "agent_name": "Store Assistant",
-     "report_emails": [],
-     "required_tools": []
-    },
-    "last_result": {
-     "success": true,
-     "error": null
-    },
-    "agent": {
-     "id": 366,
-     "name": "Store Assistant",
-     "active": true,
-     "heartbeat_mode": "co-pilot",
-     "consecutive_failures": 0
-    },
-    "bloq": null
-   },
-   "runs": [
-    {
-     "id": 10896,
-     "status": "completed",
-     "started_at": "2026-10-12T19:59:58+00:00",
-     "completed_at": "2026-10-12T20:00:58+00:00",
-     "duration_ms": null,
-     "duration_seconds": null,
-     "tokens_used": 57342,
-     "model_used": "gpt-4o-mini",
-     "response_preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results",
-     "error_message": null
-    }
-   ]
-  },
-  {
-   "job": {
-    "id": 744,
-    "agent_id": 596,
-    "bloq_id": null,
-    "task_name": "heartbeat",
-    "status": "scheduled",
-    "frequency": "hourly",
-    "next_run_at": "2026-10-12T21:00:00.000000Z",
-    "last_run_at": "2026-10-12T20:00:44.000000Z",
-    "run_count": 1471,
-    "data": {
-     "type": "heartbeat",
-     "mode": "co-pilot",
-     "agent_name": "Clinic Assistant",
-     "report_emails": [],
-     "required_tools": [
-      "manageLeads",
-      "agent_memory",
-      "searchKnowledgeBase",
-      "sendEmail"
-     ]
-    },
-    "last_result": {
-     "success": true,
-     "error": null
-    },
-    "agent": {
-     "id": 596,
-     "name": "Clinic Assistant",
-     "active": true,
-     "heartbeat_mode": "co-pilot",
-     "consecutive_failures": 0
-    },
-    "bloq": null
-   },
-   "runs": [
-    {
-     "id": 10900,
-     "status": "completed",
-     "started_at": "2026-10-12T20:00:03+00:00",
-     "completed_at": "2026-10-12T20:01:03+00:00",
-     "duration_ms": null,
-     "duration_seconds": null,
-     "tokens_used": 45057,
-     "model_used": "gpt-4o-mini",
-     "response_preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results",
-     "error_message": null
-    }
-   ]
-  },
-  {
-   "job": {
-    "id": 848,
-    "agent_id": 621,
-    "bloq_id": null,
-    "task_name": "Daily content run",
-    "status": "scheduled",
-    "frequency": "every_6_hours",
-    "next_run_at": "2026-10-12T21:25:00.000000Z",
-    "last_run_at": "2026-10-12T15:25:28.000000Z",
-    "run_count": 505,
-    "data": {
-     "type": "heartbeat",
-     "mode": "autonomous",
-     "agent_name": "Discovery Agent",
-     "report_emails": [],
-     "required_tools": [
-      "httpRequest",
-      "agent_memory",
-      "manageBloqItems"
-     ]
-    },
-    "last_result": {
-     "success": true,
-     "error": null
-    },
-    "agent": {
-     "id": 621,
-     "name": "Discovery Agent",
-     "active": true,
-     "heartbeat_mode": "autonomous",
-     "consecutive_failures": 0
-    },
-    "bloq": null
-   },
-   "runs": [
-    {
-     "id": 10996,
-     "status": "completed",
-     "started_at": "2026-10-12T15:24:35+00:00",
-     "completed_at": "2026-10-12T15:25:35+00:00",
-     "duration_ms": null,
-     "duration_seconds": null,
-     "tokens_used": 0,
-     "model_used": "grok-4-1-fast-reasoning",
-     "response_preview": null,
-     "error_message": null
+     "response_preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results (top score: 0.705)\n- ✓ **agent",
+     "response": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results (top score: 0.705)\n- ✓ **agent_memory**: memory stored\n\n---\n*4 iterations | 50327 tokens*",
+     "error_message": null,
+     "bloq_item_id": null,
+     "deliverable_id": null,
+     "public_url": null,
+     "email_sent": null
     }
    ]
   },
@@ -242,7 +103,10 @@
      "name": "Chief of Staff",
      "active": true,
      "heartbeat_mode": "autonomous",
-     "consecutive_failures": 0
+     "consecutive_failures": 0,
+     "settings": {
+      "heartbeat_working_days": null
+     }
     },
     "bloq": null
    },
@@ -257,7 +121,12 @@
      "tokens_used": 0,
      "model_used": "gpt-5.6-terra",
      "response_preview": "Error: AI API error: 402",
-     "error_message": null
+     "response": "Error: AI API error: 402",
+     "error_message": null,
+     "bloq_item_id": null,
+     "deliverable_id": null,
+     "public_url": null,
+     "email_sent": null
     },
     {
      "id": 16269,
@@ -268,8 +137,71 @@
      "duration_seconds": null,
      "tokens_used": 53430,
      "model_used": "gpt-5.6-terra",
-     "response_preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results",
-     "error_message": null
+     "response_preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results (top score: 0.705)\n- ✓ **agent",
+     "response": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results (top score: 0.705)\n- ✓ **agent_memory**: memory stored\n\n---\n*4 iterations | 50327 tokens*",
+     "error_message": null,
+     "bloq_item_id": null,
+     "deliverable_id": null,
+     "public_url": null,
+     "email_sent": null
+    }
+   ]
+  },
+  {
+   "job": {
+    "id": 848,
+    "agent_id": 621,
+    "bloq_id": null,
+    "task_name": "Daily content run",
+    "status": "scheduled",
+    "frequency": "every_6_hours",
+    "next_run_at": "2026-10-12T21:25:00.000000Z",
+    "last_run_at": "2026-10-12T15:25:28.000000Z",
+    "run_count": 505,
+    "data": {
+     "type": "heartbeat",
+     "mode": "autonomous",
+     "agent_name": "Discovery Agent",
+     "report_emails": [],
+     "required_tools": [
+      "httpRequest",
+      "agent_memory",
+      "manageBloqItems"
+     ]
+    },
+    "last_result": {
+     "success": true,
+     "error": null
+    },
+    "agent": {
+     "id": 621,
+     "name": "Discovery Agent",
+     "active": true,
+     "heartbeat_mode": "autonomous",
+     "consecutive_failures": 0,
+     "settings": {
+      "heartbeat_working_days": null
+     }
+    },
+    "bloq": null
+   },
+   "runs": [
+    {
+     "id": 10996,
+     "status": "completed",
+     "started_at": "2026-10-12T15:24:35+00:00",
+     "completed_at": "2026-10-12T15:25:35+00:00",
+     "duration_ms": null,
+     "duration_seconds": null,
+     "tokens_used": 0,
+     "model_used": "grok-4-1-fast-reasoning",
+     "response_preview": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed*",
+     "response": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed** — Two new articles were added to the deliverables list:\n1. **First article** - a summary of a local development.\n2. **Second article** - a summary of a funding decision.\n\n**Actions** — \n- Created two articles from current sources.\n- Checked every claim against its source.\n\nTASKS: []\nNEXT_STEPS: []",
+     "error_message": null,
+     "bloq_item_id": null,
+     "deliverable_id": null,
+     "public_url": null,
+     "email_sent": null
     }
    ]
   },
@@ -300,7 +232,16 @@
      "name": "Music Curator",
      "active": false,
      "heartbeat_mode": "co-pilot",
-     "consecutive_failures": 3
+     "consecutive_failures": 3,
+     "settings": {
+      "heartbeat_working_days": [
+       "mon",
+       "tue",
+       "wed",
+       "thu",
+       "fri"
+      ]
+     }
     },
     "bloq": null
    },
@@ -314,8 +255,138 @@
      "duration_seconds": null,
      "tokens_used": 59178,
      "model_used": "gpt-4o-mini",
-     "response_preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results",
-     "error_message": null
+     "response_preview": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed*",
+     "response": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed** — Two new articles were added to the deliverables list:\n1. **First article** - a summary of a local development.\n2. **Second article** - a summary of a funding decision.\n\n**Actions** — \n- Created two articles from current sources.\n- Checked every claim against its source.\n\nTASKS: []\nNEXT_STEPS: []",
+     "error_message": null,
+     "bloq_item_id": null,
+     "deliverable_id": null,
+     "public_url": null,
+     "email_sent": null
+    }
+   ]
+  },
+  {
+   "job": {
+    "id": 720,
+    "agent_id": 366,
+    "bloq_id": null,
+    "task_name": "heartbeat",
+    "status": "scheduled",
+    "frequency": "hourly",
+    "next_run_at": "2026-10-12T22:00:00.000000Z",
+    "last_run_at": "2026-10-12T21:01:07.000000Z",
+    "run_count": 1475,
+    "data": {
+     "type": "heartbeat",
+     "mode": "co-pilot",
+     "agent_name": "Store Assistant",
+     "report_emails": [],
+     "required_tools": []
+    },
+    "last_result": {
+     "success": true,
+     "error": null
+    },
+    "agent": {
+     "id": 366,
+     "name": "Store Assistant",
+     "active": true,
+     "heartbeat_mode": "co-pilot",
+     "consecutive_failures": 0,
+     "settings": {
+      "heartbeat_working_days": [
+       "mon",
+       "tue",
+       "wed",
+       "thu",
+       "fri"
+      ]
+     }
+    },
+    "bloq": null
+   },
+   "runs": [
+    {
+     "id": 10896,
+     "status": "completed",
+     "started_at": "2026-10-12T21:00:20+00:00",
+     "completed_at": "2026-10-12T21:01:20+00:00",
+     "duration_ms": null,
+     "duration_seconds": null,
+     "tokens_used": 57738,
+     "model_used": "gpt-4o-mini",
+     "response_preview": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed*",
+     "response": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed** — Two new articles were added to the deliverables list:\n1. **First article** - a summary of a local development.\n2. **Second article** - a summary of a funding decision.\n\n**Actions** — \n- Created two articles from current sources.\n- Checked every claim against its source.\n\nTASKS: []\nNEXT_STEPS: []",
+     "error_message": null,
+     "bloq_item_id": null,
+     "deliverable_id": null,
+     "public_url": null,
+     "email_sent": null
+    }
+   ]
+  },
+  {
+   "job": {
+    "id": 744,
+    "agent_id": 596,
+    "bloq_id": null,
+    "task_name": "heartbeat",
+    "status": "scheduled",
+    "frequency": "hourly",
+    "next_run_at": "2026-10-12T22:00:00.000000Z",
+    "last_run_at": "2026-10-12T21:01:09.000000Z",
+    "run_count": 1472,
+    "data": {
+     "type": "heartbeat",
+     "mode": "co-pilot",
+     "agent_name": "Clinic Assistant",
+     "report_emails": [],
+     "required_tools": [
+      "manageLeads",
+      "agent_memory",
+      "searchKnowledgeBase",
+      "sendEmail"
+     ]
+    },
+    "last_result": {
+     "success": true,
+     "error": null
+    },
+    "agent": {
+     "id": 596,
+     "name": "Clinic Assistant",
+     "active": true,
+     "heartbeat_mode": "co-pilot",
+     "consecutive_failures": 0,
+     "settings": {
+      "heartbeat_working_days": [
+       "mon",
+       "tue",
+       "wed",
+       "thu",
+       "fri"
+      ]
+     }
+    },
+    "bloq": null
+   },
+   "runs": [
+    {
+     "id": 10900,
+     "status": "completed",
+     "started_at": "2026-10-12T21:00:22+00:00",
+     "completed_at": "2026-10-12T21:01:22+00:00",
+     "duration_ms": null,
+     "duration_seconds": null,
+     "tokens_used": 45074,
+     "model_used": "gpt-4o-mini",
+     "response_preview": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed*",
+     "response": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed** — Two new articles were added to the deliverables list:\n1. **First article** - a summary of a local development.\n2. **Second article** - a summary of a funding decision.\n\n**Actions** — \n- Created two articles from current sources.\n- Checked every claim against its source.\n\nTASKS: []\nNEXT_STEPS: []",
+     "error_message": null,
+     "bloq_item_id": null,
+     "deliverable_id": null,
+     "public_url": null,
+     "email_sent": null
     }
    ]
   },
@@ -346,7 +417,16 @@
      "name": "Referrals Agent",
      "active": true,
      "heartbeat_mode": "passive",
-     "consecutive_failures": 2
+     "consecutive_failures": 2,
+     "settings": {
+      "heartbeat_working_days": [
+       "mon",
+       "tue",
+       "wed",
+       "thu",
+       "fri"
+      ]
+     }
     },
     "bloq": null
    },
@@ -360,8 +440,13 @@
      "duration_seconds": null,
      "tokens_used": 23782,
      "model_used": "minimax-m3",
-     "response_preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results",
-     "error_message": null
+     "response_preview": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed*",
+     "response": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed** — Two new articles were added to the deliverables list:\n1. **First article** - a summary of a local development.\n2. **Second article** - a summary of a funding decision.\n\n**Actions** — \n- Created two articles from current sources.\n- Checked every claim against its source.\n\nTASKS: []\nNEXT_STEPS: []",
+     "error_message": null,
+     "bloq_item_id": null,
+     "deliverable_id": null,
+     "public_url": null,
+     "email_sent": null
     }
    ]
   },
@@ -392,7 +477,10 @@
      "name": "Contest Manager",
      "active": true,
      "heartbeat_mode": "co-pilot",
-     "consecutive_failures": 0
+     "consecutive_failures": 0,
+     "settings": {
+      "heartbeat_working_days": null
+     }
     },
     "bloq": null
    },
@@ -406,8 +494,13 @@
      "duration_seconds": null,
      "tokens_used": 50050,
      "model_used": "gpt-4o-mini",
-     "response_preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results",
-     "error_message": null
+     "response_preview": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed*",
+     "response": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed** — Two new articles were added to the deliverables list:\n1. **First article** - a summary of a local development.\n2. **Second article** - a summary of a funding decision.\n\n**Actions** — \n- Created two articles from current sources.\n- Checked every claim against its source.\n\nTASKS: []\nNEXT_STEPS: []",
+     "error_message": null,
+     "bloq_item_id": null,
+     "deliverable_id": null,
+     "public_url": null,
+     "email_sent": null
     }
    ]
   },
@@ -442,7 +535,16 @@
      "name": "Newsletter Agent",
      "active": true,
      "heartbeat_mode": "autonomous",
-     "consecutive_failures": 0
+     "consecutive_failures": 0,
+     "settings": {
+      "heartbeat_working_days": [
+       "mon",
+       "tue",
+       "wed",
+       "thu",
+       "fri"
+      ]
+     }
     },
     "bloq": null
    },
@@ -456,8 +558,13 @@
      "duration_seconds": null,
      "tokens_used": 126571,
      "model_used": "gpt-4o-mini",
-     "response_preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results",
-     "error_message": null
+     "response_preview": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed*",
+     "response": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed** — Two new articles were added to the deliverables list:\n1. **First article** - a summary of a local development.\n2. **Second article** - a summary of a funding decision.\n\n**Actions** — \n- Created two articles from current sources.\n- Checked every claim against its source.\n\nTASKS: []\nNEXT_STEPS: []",
+     "error_message": null,
+     "bloq_item_id": null,
+     "deliverable_id": null,
+     "public_url": null,
+     "email_sent": null
     },
     {
      "id": 11089,
@@ -468,8 +575,13 @@
      "duration_seconds": 0,
      "tokens_used": 0,
      "model_used": "hive_dispatch",
-     "response_preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results",
-     "error_message": null
+     "response_preview": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed*",
+     "response": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed** — Two new articles were added to the deliverables list:\n1. **First article** - a summary of a local development.\n2. **Second article** - a summary of a funding decision.\n\n**Actions** — \n- Created two articles from current sources.\n- Checked every claim against its source.\n\nTASKS: []\nNEXT_STEPS: []",
+     "error_message": null,
+     "bloq_item_id": null,
+     "deliverable_id": null,
+     "public_url": null,
+     "email_sent": null
     },
     {
      "id": 11088,
@@ -481,7 +593,12 @@
      "tokens_used": null,
      "model_used": null,
      "response_preview": null,
-     "error_message": "Hive dispatch failed: HTTP 422"
+     "response": null,
+     "error_message": "Hive dispatch failed: HTTP 422",
+     "bloq_item_id": null,
+     "deliverable_id": null,
+     "public_url": null,
+     "email_sent": null
     },
     {
      "id": 11036,
@@ -492,8 +609,13 @@
      "duration_seconds": 0,
      "tokens_used": 0,
      "model_used": "hive_dispatch",
-     "response_preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results",
-     "error_message": null
+     "response_preview": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed*",
+     "response": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed** — Two new articles were added to the deliverables list:\n1. **First article** - a summary of a local development.\n2. **Second article** - a summary of a funding decision.\n\n**Actions** — \n- Created two articles from current sources.\n- Checked every claim against its source.\n\nTASKS: []\nNEXT_STEPS: []",
+     "error_message": null,
+     "bloq_item_id": null,
+     "deliverable_id": null,
+     "public_url": null,
+     "email_sent": null
     }
    ]
   },
@@ -528,7 +650,10 @@
      "name": "Newsroom Agent",
      "active": true,
      "heartbeat_mode": "autonomous",
-     "consecutive_failures": 0
+     "consecutive_failures": 0,
+     "settings": {
+      "heartbeat_working_days": null
+     }
     },
     "bloq": null
    },
@@ -543,7 +668,12 @@
      "tokens_used": 0,
      "model_used": "gpt-5.6-luna",
      "response_preview": "Error: AI API error: 401",
-     "error_message": null
+     "response": "Error: AI API error: 401",
+     "error_message": null,
+     "bloq_item_id": null,
+     "deliverable_id": null,
+     "public_url": null,
+     "email_sent": null
     }
    ]
   },
@@ -578,7 +708,10 @@
      "name": "Healthcare Content Agent",
      "active": true,
      "heartbeat_mode": "autonomous",
-     "consecutive_failures": 3
+     "consecutive_failures": 3,
+     "settings": {
+      "heartbeat_working_days": null
+     }
     },
     "bloq": null
    },
@@ -615,7 +748,10 @@
      "name": "Beauty Content Agent",
      "active": true,
      "heartbeat_mode": "autonomous",
-     "consecutive_failures": 1
+     "consecutive_failures": 1,
+     "settings": {
+      "heartbeat_working_days": null
+     }
     },
     "bloq": null
    },
@@ -629,8 +765,13 @@
      "duration_seconds": null,
      "tokens_used": 60095,
      "model_used": "minimax-m3",
-     "response_preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results",
-     "error_message": null
+     "response_preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results (top score: 0.705)\n- ✓ **agent",
+     "response": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results (top score: 0.705)\n- ✓ **agent_memory**: memory stored\n\n---\n*4 iterations | 50327 tokens*",
+     "error_message": null,
+     "bloq_item_id": null,
+     "deliverable_id": null,
+     "public_url": null,
+     "email_sent": null
     }
    ]
   },
@@ -667,7 +808,10 @@
      "name": "Oversight Agent",
      "active": true,
      "heartbeat_mode": "autonomous",
-     "consecutive_failures": 0
+     "consecutive_failures": 0,
+     "settings": {
+      "heartbeat_working_days": null
+     }
     },
     "bloq": {
      "id": 300,
@@ -685,7 +829,12 @@
      "tokens_used": 0,
      "model_used": "grok-4-1-fast-non-reasoning",
      "response_preview": "Error: AI API error: 403",
-     "error_message": null
+     "response": "Error: AI API error: 403",
+     "error_message": null,
+     "bloq_item_id": null,
+     "deliverable_id": null,
+     "public_url": null,
+     "email_sent": null
     }
    ]
   },
@@ -720,7 +869,10 @@
      "name": "Ranch Assistant",
      "active": true,
      "heartbeat_mode": "autonomous",
-     "consecutive_failures": 4
+     "consecutive_failures": 4,
+     "settings": {
+      "heartbeat_working_days": null
+     }
     },
     "bloq": {
      "id": 337,
@@ -737,8 +889,13 @@
      "duration_seconds": null,
      "tokens_used": 10980,
      "model_used": "grok-4-1-fast-non-reasoning",
-     "response_preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results",
-     "error_message": null
+     "response_preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results (top score: 0.705)\n- ✓ **agent",
+     "response": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results (top score: 0.705)\n- ✓ **agent_memory**: memory stored\n\n---\n*4 iterations | 50327 tokens*",
+     "error_message": null,
+     "bloq_item_id": null,
+     "deliverable_id": null,
+     "public_url": null,
+     "email_sent": null
     }
    ]
   },
@@ -776,7 +933,10 @@
      "name": "Backtest Agent",
      "active": true,
      "heartbeat_mode": "autonomous",
-     "consecutive_failures": 3
+     "consecutive_failures": 3,
+     "settings": {
+      "heartbeat_working_days": null
+     }
     },
     "bloq": {
      "id": 300,
@@ -793,8 +953,13 @@
      "duration_seconds": null,
      "tokens_used": 57841,
      "model_used": "grok-4-1-fast-non-reasoning",
-     "response_preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results",
-     "error_message": null
+     "response_preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results (top score: 0.705)\n- ✓ **agent",
+     "response": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results (top score: 0.705)\n- ✓ **agent_memory**: memory stored\n\n---\n*4 iterations | 50327 tokens*",
+     "error_message": null,
+     "bloq_item_id": null,
+     "deliverable_id": null,
+     "public_url": null,
+     "email_sent": null
     }
    ]
   },
@@ -811,11 +976,13 @@
     "run_count": 0,
     "data": {
      "type": "heartbeat",
+     "mode": null,
      "agent_name": "Sales Agent",
      "report_emails": [],
      "required_tools": []
     },
     "last_result": {
+     "success": null,
      "error": null
     },
     "agent": {
@@ -823,7 +990,10 @@
      "name": "Sales Agent",
      "active": true,
      "heartbeat_mode": "briefing",
-     "consecutive_failures": 0
+     "consecutive_failures": 0,
+     "settings": {
+      "heartbeat_working_days": null
+     }
     },
     "bloq": null
    },
@@ -842,6 +1012,7 @@
     "run_count": 0,
     "data": {
      "type": "heartbeat",
+     "mode": null,
      "agent_name": "Article Writer",
      "report_emails": [],
      "required_tools": []
@@ -855,7 +1026,10 @@
      "name": "Article Writer",
      "active": true,
      "heartbeat_mode": "briefing",
-     "consecutive_failures": 0
+     "consecutive_failures": 0,
+     "settings": {
+      "heartbeat_working_days": null
+     }
     },
     "bloq": null
    },
@@ -891,7 +1065,10 @@
      "name": "Lead Monitor",
      "active": true,
      "heartbeat_mode": "autonomous",
-     "consecutive_failures": 4
+     "consecutive_failures": 4,
+     "settings": {
+      "heartbeat_working_days": null
+     }
     },
     "bloq": null
    },
@@ -905,8 +1082,13 @@
      "duration_seconds": null,
      "tokens_used": 17473,
      "model_used": "gpt-4.1-nano",
-     "response_preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results",
-     "error_message": null
+     "response_preview": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed*",
+     "response": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed** — Two new articles were added to the deliverables list:\n1. **First article** - a summary of a local development.\n2. **Second article** - a summary of a funding decision.\n\n**Actions** — \n- Created two articles from current sources.\n- Checked every claim against its source.\n\nTASKS: []\nNEXT_STEPS: []",
+     "error_message": null,
+     "bloq_item_id": null,
+     "deliverable_id": null,
+     "public_url": null,
+     "email_sent": null
     }
    ]
   }

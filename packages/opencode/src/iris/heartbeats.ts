@@ -26,7 +26,14 @@ export type HeartbeatRun = {
   tokens: number | null
   model: string | null
   preview: string | null
+  /** The run's own report (markdown), capped. What the beat-detail sections are read from. */
+  response: string | null
   error: string | null
+  /** What it left behind — any of these may be absent. */
+  itemId: number | null
+  deliverableId: number | null
+  publicUrl: string | null
+  emailSent: boolean | null
 }
 
 export type HeartbeatRow = {
@@ -50,6 +57,8 @@ export type HeartbeatRow = {
   lastError: string | null
   reportTo: number
   tools: number
+  /** settings.heartbeat_working_days — the days it wakes. Null = not set (every day). */
+  workingDays: string[] | null
   /** Newest first. Empty with `runsMeasured: false` means NOT READ, not "never ran". */
   runs: HeartbeatRun[]
   runsMeasured: boolean
@@ -57,7 +66,11 @@ export type HeartbeatRow = {
 
 /** Statuses a heartbeat can be in and still be yours to look at. Cancelled/completed are gone. */
 const LIVE = new Set(["scheduled", "running", "paused", "failed"])
-const RUNS_PER_ROW = 12
+// A week of an hourly heartbeat is 168; 50 is fl-api's default page and covers every cadence
+// slower than every 4 hours for a full week, which is all but two of the live ones.
+const RUNS_PER_ROW = 50
+const RESPONSE_CAP = 6000
+export const TIMELINE = 10
 const MAX_ROWS = 60
 
 const num = (v: unknown): number | null => {
@@ -71,7 +84,7 @@ export function isHeartbeatJob(j: any): boolean {
   return j.task_name === "heartbeat" || j.data?.type === "heartbeat"
 }
 
-export function readRun(e: any): HeartbeatRun {
+export function readRun(e: any, keepResponse = true): HeartbeatRun {
   const err = str(e?.error_message)
   return {
     id: num(e?.id) ?? 0,
@@ -82,7 +95,12 @@ export function readRun(e: any): HeartbeatRun {
     tokens: num(e?.tokens_used),
     model: str(e?.model_used),
     preview: str(e?.response_preview),
+    response: keepResponse ? (str(e?.response)?.slice(0, RESPONSE_CAP) ?? null) : null,
     error: err,
+    itemId: num(e?.bloq_item_id),
+    deliverableId: num(e?.deliverable_id),
+    publicUrl: str(e?.public_url),
+    emailSent: typeof e?.email_sent === "boolean" ? e.email_sent : null,
   }
 }
 
@@ -108,7 +126,11 @@ export function readHeartbeat(j: any, runs: any[] | null): HeartbeatRow {
     lastError: lastOk === false ? (str(last?.error) ?? str(last?.message) ?? null) : null,
     reportTo: Array.isArray(j?.data?.report_emails) ? j.data.report_emails.length : 0,
     tools: Array.isArray(j?.data?.required_tools) ? j.data.required_tools.length : 0,
-    runs: (runs ?? []).map(readRun),
+    workingDays: Array.isArray(agent.settings?.heartbeat_working_days)
+      ? agent.settings.heartbeat_working_days.map((d: unknown) => String(d).slice(0, 3).toLowerCase())
+      : null,
+    // Full reports for the beats the timeline shows; the rest feed the week chart only.
+    runs: (runs ?? []).map((e, i) => readRun(e, i < TIMELINE)),
     runsMeasured: runs !== null,
   }
 }

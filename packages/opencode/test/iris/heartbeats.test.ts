@@ -14,6 +14,11 @@ describe("heartbeats sidecar", () => {
       lastOk: false,
       lastError: "Heartbeat Stage 3 endpoint unavailable",
     })
+    // working days ride along from the agent's settings; the beat keeps its report and outputs
+    expect(rows.find((r) => r.agentName === "Music Curator")!.workingDays).toEqual(["mon", "tue", "wed", "thu", "fri"])
+    const beat = rows.find((r) => r.agentName === "Newsletter Agent")!.runs[0]
+    expect(beat.response).toStartWith("**Status**")
+    expect(beat).toMatchObject({ itemId: null, deliverableId: null, publicUrl: null })
   })
   test("runs that could not be read are NOT READ, not 'never ran'", () => {
     const r = readHeartbeat(raw.rows[0].job, null)
@@ -25,6 +30,11 @@ describe("heartbeats sidecar", () => {
     expect(isHeartbeatJob({ agent_id: 1, task_name: "x", data: { type: "heartbeat" } })).toBe(true)
     expect(isHeartbeatJob({ agent_id: null, task_name: "heartbeat" })).toBe(false)
     expect(isHeartbeatJob({ agent_id: 2, task_name: "Write a post" })).toBe(false)
+  })
+  test("only the newest beats keep their full report — the rest feed the week", () => {
+    const runs = Array.from({ length: 14 }, (_, i) => ({ id: i, status: "completed", response: "**Status** — ok" }))
+    const r = readHeartbeat(raw.rows[0].job, runs)
+    expect(r.runs.filter((x) => x.response).length).toBe(10)
   })
   test("a run's duration comes from ms, or seconds when that is all there is", () => {
     expect(readRun({ id: 1, status: "completed", duration_ms: 1500 }).durationMs).toBe(1500)

@@ -1,5 +1,5 @@
 {
- "capturedAt": "2026-10-12T20:52:21.904Z",
+ "capturedAt": "2026-10-12T21:12:14.341Z",
  "heartbeats": [
   {
    "jobId": 764,
@@ -19,6 +19,7 @@
    "lastError": null,
    "reportTo": 2,
    "tools": 9,
+   "workingDays": null,
    "runs": [
     {
      "id": 10929,
@@ -28,107 +29,13 @@
      "durationMs": null,
      "tokens": 50327,
      "model": "gpt-4o-mini",
-     "preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results",
-     "error": null
-    }
-   ],
-   "runsMeasured": true
-  },
-  {
-   "jobId": 720,
-   "agentId": 366,
-   "agentName": "Store Assistant",
-   "bloqId": null,
-   "bloqName": null,
-   "mode": "co-pilot",
-   "frequency": "hourly",
-   "status": "scheduled",
-   "agentActive": true,
-   "nextRunAt": "2026-10-12T21:00:00.000000Z",
-   "lastRunAt": "2026-10-12T20:00:41.000000Z",
-   "runCount": 1474,
-   "consecutiveFailures": 0,
-   "lastOk": true,
-   "lastError": null,
-   "reportTo": 0,
-   "tools": 0,
-   "runs": [
-    {
-     "id": 10896,
-     "status": "completed",
-     "startedAt": "2026-10-12T19:59:58+00:00",
-     "completedAt": "2026-10-12T20:00:58+00:00",
-     "durationMs": null,
-     "tokens": 57342,
-     "model": "gpt-4o-mini",
-     "preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results",
-     "error": null
-    }
-   ],
-   "runsMeasured": true
-  },
-  {
-   "jobId": 744,
-   "agentId": 596,
-   "agentName": "Clinic Assistant",
-   "bloqId": null,
-   "bloqName": null,
-   "mode": "co-pilot",
-   "frequency": "hourly",
-   "status": "scheduled",
-   "agentActive": true,
-   "nextRunAt": "2026-10-12T21:00:00.000000Z",
-   "lastRunAt": "2026-10-12T20:00:44.000000Z",
-   "runCount": 1471,
-   "consecutiveFailures": 0,
-   "lastOk": true,
-   "lastError": null,
-   "reportTo": 0,
-   "tools": 4,
-   "runs": [
-    {
-     "id": 10900,
-     "status": "completed",
-     "startedAt": "2026-10-12T20:00:03+00:00",
-     "completedAt": "2026-10-12T20:01:03+00:00",
-     "durationMs": null,
-     "tokens": 45057,
-     "model": "gpt-4o-mini",
-     "preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results",
-     "error": null
-    }
-   ],
-   "runsMeasured": true
-  },
-  {
-   "jobId": 848,
-   "agentId": 621,
-   "agentName": "Discovery Agent",
-   "bloqId": null,
-   "bloqName": null,
-   "mode": "autonomous",
-   "frequency": "every_6_hours",
-   "status": "scheduled",
-   "agentActive": true,
-   "nextRunAt": "2026-10-12T21:25:00.000000Z",
-   "lastRunAt": "2026-10-12T15:25:28.000000Z",
-   "runCount": 505,
-   "consecutiveFailures": 0,
-   "lastOk": true,
-   "lastError": null,
-   "reportTo": 0,
-   "tools": 3,
-   "runs": [
-    {
-     "id": 10996,
-     "status": "completed",
-     "startedAt": "2026-10-12T15:24:35+00:00",
-     "completedAt": "2026-10-12T15:25:35+00:00",
-     "durationMs": null,
-     "tokens": 0,
-     "model": "grok-4-1-fast-reasoning",
-     "preview": null,
-     "error": null
+     "preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results (top score: 0.705)\n- ✓ **agent",
+     "response": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results (top score: 0.705)\n- ✓ **agent_memory**: memory stored\n\n---\n*4 iterations | 50327 tokens*",
+     "error": null,
+     "itemId": null,
+     "deliverableId": null,
+     "publicUrl": null,
+     "emailSent": null
     }
    ],
    "runsMeasured": true
@@ -151,6 +58,7 @@
    "lastError": null,
    "reportTo": 0,
    "tools": 4,
+   "workingDays": null,
    "runs": [
     {
      "id": 16839,
@@ -161,7 +69,12 @@
      "tokens": 0,
      "model": "gpt-5.6-terra",
      "preview": "Error: AI API error: 402",
-     "error": null
+     "response": "Error: AI API error: 402",
+     "error": null,
+     "itemId": null,
+     "deliverableId": null,
+     "publicUrl": null,
+     "emailSent": null
     },
     {
      "id": 16269,
@@ -171,8 +84,52 @@
      "durationMs": null,
      "tokens": 53430,
      "model": "gpt-5.6-terra",
-     "preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results",
-     "error": null
+     "preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results (top score: 0.705)\n- ✓ **agent",
+     "response": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results (top score: 0.705)\n- ✓ **agent_memory**: memory stored\n\n---\n*4 iterations | 50327 tokens*",
+     "error": null,
+     "itemId": null,
+     "deliverableId": null,
+     "publicUrl": null,
+     "emailSent": null
+    }
+   ],
+   "runsMeasured": true
+  },
+  {
+   "jobId": 848,
+   "agentId": 621,
+   "agentName": "Discovery Agent",
+   "bloqId": null,
+   "bloqName": null,
+   "mode": "autonomous",
+   "frequency": "every_6_hours",
+   "status": "scheduled",
+   "agentActive": true,
+   "nextRunAt": "2026-10-12T21:25:00.000000Z",
+   "lastRunAt": "2026-10-12T15:25:28.000000Z",
+   "runCount": 505,
+   "consecutiveFailures": 0,
+   "lastOk": true,
+   "lastError": null,
+   "reportTo": 0,
+   "tools": 3,
+   "workingDays": null,
+   "runs": [
+    {
+     "id": 10996,
+     "status": "completed",
+     "startedAt": "2026-10-12T15:24:35+00:00",
+     "completedAt": "2026-10-12T15:25:35+00:00",
+     "durationMs": null,
+     "tokens": 0,
+     "model": "grok-4-1-fast-reasoning",
+     "preview": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed*",
+     "response": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed** — Two new articles were added to the deliverables list:\n1. **First article** - a summary of a local development.\n2. **Second article** - a summary of a funding decision.\n\n**Actions** — \n- Created two articles from current sources.\n- Checked every claim against its source.\n\nTASKS: []\nNEXT_STEPS: []",
+     "error": null,
+     "itemId": null,
+     "deliverableId": null,
+     "publicUrl": null,
+     "emailSent": null
     }
    ],
    "runsMeasured": true
@@ -195,6 +152,13 @@
    "lastError": null,
    "reportTo": 0,
    "tools": 0,
+   "workingDays": [
+    "mon",
+    "tue",
+    "wed",
+    "thu",
+    "fri"
+   ],
    "runs": [
     {
      "id": 12124,
@@ -204,8 +168,103 @@
      "durationMs": null,
      "tokens": 59178,
      "model": "gpt-4o-mini",
-     "preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results",
-     "error": null
+     "preview": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed*",
+     "response": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed** — Two new articles were added to the deliverables list:\n1. **First article** - a summary of a local development.\n2. **Second article** - a summary of a funding decision.\n\n**Actions** — \n- Created two articles from current sources.\n- Checked every claim against its source.\n\nTASKS: []\nNEXT_STEPS: []",
+     "error": null,
+     "itemId": null,
+     "deliverableId": null,
+     "publicUrl": null,
+     "emailSent": null
+    }
+   ],
+   "runsMeasured": true
+  },
+  {
+   "jobId": 720,
+   "agentId": 366,
+   "agentName": "Store Assistant",
+   "bloqId": null,
+   "bloqName": null,
+   "mode": "co-pilot",
+   "frequency": "hourly",
+   "status": "scheduled",
+   "agentActive": true,
+   "nextRunAt": "2026-10-12T22:00:00.000000Z",
+   "lastRunAt": "2026-10-12T21:01:07.000000Z",
+   "runCount": 1475,
+   "consecutiveFailures": 0,
+   "lastOk": true,
+   "lastError": null,
+   "reportTo": 0,
+   "tools": 0,
+   "workingDays": [
+    "mon",
+    "tue",
+    "wed",
+    "thu",
+    "fri"
+   ],
+   "runs": [
+    {
+     "id": 10896,
+     "status": "completed",
+     "startedAt": "2026-10-12T21:00:20+00:00",
+     "completedAt": "2026-10-12T21:01:20+00:00",
+     "durationMs": null,
+     "tokens": 57738,
+     "model": "gpt-4o-mini",
+     "preview": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed*",
+     "response": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed** — Two new articles were added to the deliverables list:\n1. **First article** - a summary of a local development.\n2. **Second article** - a summary of a funding decision.\n\n**Actions** — \n- Created two articles from current sources.\n- Checked every claim against its source.\n\nTASKS: []\nNEXT_STEPS: []",
+     "error": null,
+     "itemId": null,
+     "deliverableId": null,
+     "publicUrl": null,
+     "emailSent": null
+    }
+   ],
+   "runsMeasured": true
+  },
+  {
+   "jobId": 744,
+   "agentId": 596,
+   "agentName": "Clinic Assistant",
+   "bloqId": null,
+   "bloqName": null,
+   "mode": "co-pilot",
+   "frequency": "hourly",
+   "status": "scheduled",
+   "agentActive": true,
+   "nextRunAt": "2026-10-12T22:00:00.000000Z",
+   "lastRunAt": "2026-10-12T21:01:09.000000Z",
+   "runCount": 1472,
+   "consecutiveFailures": 0,
+   "lastOk": true,
+   "lastError": null,
+   "reportTo": 0,
+   "tools": 4,
+   "workingDays": [
+    "mon",
+    "tue",
+    "wed",
+    "thu",
+    "fri"
+   ],
+   "runs": [
+    {
+     "id": 10900,
+     "status": "completed",
+     "startedAt": "2026-10-12T21:00:22+00:00",
+     "completedAt": "2026-10-12T21:01:22+00:00",
+     "durationMs": null,
+     "tokens": 45074,
+     "model": "gpt-4o-mini",
+     "preview": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed*",
+     "response": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed** — Two new articles were added to the deliverables list:\n1. **First article** - a summary of a local development.\n2. **Second article** - a summary of a funding decision.\n\n**Actions** — \n- Created two articles from current sources.\n- Checked every claim against its source.\n\nTASKS: []\nNEXT_STEPS: []",
+     "error": null,
+     "itemId": null,
+     "deliverableId": null,
+     "publicUrl": null,
+     "emailSent": null
     }
    ],
    "runsMeasured": true
@@ -228,6 +287,13 @@
    "lastError": null,
    "reportTo": 0,
    "tools": 0,
+   "workingDays": [
+    "mon",
+    "tue",
+    "wed",
+    "thu",
+    "fri"
+   ],
    "runs": [
     {
      "id": 15802,
@@ -237,8 +303,13 @@
      "durationMs": null,
      "tokens": 23782,
      "model": "minimax-m3",
-     "preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results",
-     "error": null
+     "preview": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed*",
+     "response": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed** — Two new articles were added to the deliverables list:\n1. **First article** - a summary of a local development.\n2. **Second article** - a summary of a funding decision.\n\n**Actions** — \n- Created two articles from current sources.\n- Checked every claim against its source.\n\nTASKS: []\nNEXT_STEPS: []",
+     "error": null,
+     "itemId": null,
+     "deliverableId": null,
+     "publicUrl": null,
+     "emailSent": null
     }
    ],
    "runsMeasured": true
@@ -261,6 +332,7 @@
    "lastError": null,
    "reportTo": 0,
    "tools": 0,
+   "workingDays": null,
    "runs": [
     {
      "id": 12148,
@@ -270,8 +342,13 @@
      "durationMs": null,
      "tokens": 50050,
      "model": "gpt-4o-mini",
-     "preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results",
-     "error": null
+     "preview": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed*",
+     "response": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed** — Two new articles were added to the deliverables list:\n1. **First article** - a summary of a local development.\n2. **Second article** - a summary of a funding decision.\n\n**Actions** — \n- Created two articles from current sources.\n- Checked every claim against its source.\n\nTASKS: []\nNEXT_STEPS: []",
+     "error": null,
+     "itemId": null,
+     "deliverableId": null,
+     "publicUrl": null,
+     "emailSent": null
     }
    ],
    "runsMeasured": true
@@ -294,6 +371,13 @@
    "lastError": null,
    "reportTo": 0,
    "tools": 3,
+   "workingDays": [
+    "mon",
+    "tue",
+    "wed",
+    "thu",
+    "fri"
+   ],
    "runs": [
     {
      "id": 11090,
@@ -303,8 +387,13 @@
      "durationMs": null,
      "tokens": 126571,
      "model": "gpt-4o-mini",
-     "preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results",
-     "error": null
+     "preview": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed*",
+     "response": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed** — Two new articles were added to the deliverables list:\n1. **First article** - a summary of a local development.\n2. **Second article** - a summary of a funding decision.\n\n**Actions** — \n- Created two articles from current sources.\n- Checked every claim against its source.\n\nTASKS: []\nNEXT_STEPS: []",
+     "error": null,
+     "itemId": null,
+     "deliverableId": null,
+     "publicUrl": null,
+     "emailSent": null
     },
     {
      "id": 11089,
@@ -314,8 +403,13 @@
      "durationMs": 0,
      "tokens": 0,
      "model": "hive_dispatch",
-     "preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results",
-     "error": null
+     "preview": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed*",
+     "response": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed** — Two new articles were added to the deliverables list:\n1. **First article** - a summary of a local development.\n2. **Second article** - a summary of a funding decision.\n\n**Actions** — \n- Created two articles from current sources.\n- Checked every claim against its source.\n\nTASKS: []\nNEXT_STEPS: []",
+     "error": null,
+     "itemId": null,
+     "deliverableId": null,
+     "publicUrl": null,
+     "emailSent": null
     },
     {
      "id": 11088,
@@ -326,7 +420,12 @@
      "tokens": null,
      "model": null,
      "preview": null,
-     "error": "Hive dispatch failed: HTTP 422"
+     "response": null,
+     "error": "Hive dispatch failed: HTTP 422",
+     "itemId": null,
+     "deliverableId": null,
+     "publicUrl": null,
+     "emailSent": null
     },
     {
      "id": 11036,
@@ -336,8 +435,13 @@
      "durationMs": 0,
      "tokens": 0,
      "model": "hive_dispatch",
-     "preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results",
-     "error": null
+     "preview": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed*",
+     "response": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed** — Two new articles were added to the deliverables list:\n1. **First article** - a summary of a local development.\n2. **Second article** - a summary of a funding decision.\n\n**Actions** — \n- Created two articles from current sources.\n- Checked every claim against its source.\n\nTASKS: []\nNEXT_STEPS: []",
+     "error": null,
+     "itemId": null,
+     "deliverableId": null,
+     "publicUrl": null,
+     "emailSent": null
     }
    ],
    "runsMeasured": true
@@ -360,6 +464,7 @@
    "lastError": null,
    "reportTo": 0,
    "tools": 3,
+   "workingDays": null,
    "runs": [
     {
      "id": 16628,
@@ -370,7 +475,12 @@
      "tokens": 0,
      "model": "gpt-5.6-luna",
      "preview": "Error: AI API error: 401",
-     "error": null
+     "response": "Error: AI API error: 401",
+     "error": null,
+     "itemId": null,
+     "deliverableId": null,
+     "publicUrl": null,
+     "emailSent": null
     }
    ],
    "runsMeasured": true
@@ -393,6 +503,7 @@
    "lastError": null,
    "reportTo": 0,
    "tools": 3,
+   "workingDays": null,
    "runs": [],
    "runsMeasured": true
   },
@@ -414,6 +525,7 @@
    "lastError": null,
    "reportTo": 0,
    "tools": 3,
+   "workingDays": null,
    "runs": [
     {
      "id": 11288,
@@ -423,8 +535,13 @@
      "durationMs": null,
      "tokens": 60095,
      "model": "minimax-m3",
-     "preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results",
-     "error": null
+     "preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results (top score: 0.705)\n- ✓ **agent",
+     "response": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results (top score: 0.705)\n- ✓ **agent_memory**: memory stored\n\n---\n*4 iterations | 50327 tokens*",
+     "error": null,
+     "itemId": null,
+     "deliverableId": null,
+     "publicUrl": null,
+     "emailSent": null
     }
    ],
    "runsMeasured": true
@@ -447,6 +564,7 @@
    "lastError": null,
    "reportTo": 2,
    "tools": 2,
+   "workingDays": null,
    "runs": [
     {
      "id": 10930,
@@ -457,7 +575,12 @@
      "tokens": 0,
      "model": "grok-4-1-fast-non-reasoning",
      "preview": "Error: AI API error: 403",
-     "error": null
+     "response": "Error: AI API error: 403",
+     "error": null,
+     "itemId": null,
+     "deliverableId": null,
+     "publicUrl": null,
+     "emailSent": null
     }
    ],
    "runsMeasured": true
@@ -480,6 +603,7 @@
    "lastError": null,
    "reportTo": 0,
    "tools": 3,
+   "workingDays": null,
    "runs": [
     {
      "id": 10954,
@@ -489,8 +613,13 @@
      "durationMs": null,
      "tokens": 10980,
      "model": "grok-4-1-fast-non-reasoning",
-     "preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results",
-     "error": null
+     "preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results (top score: 0.705)\n- ✓ **agent",
+     "response": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results (top score: 0.705)\n- ✓ **agent_memory**: memory stored\n\n---\n*4 iterations | 50327 tokens*",
+     "error": null,
+     "itemId": null,
+     "deliverableId": null,
+     "publicUrl": null,
+     "emailSent": null
     }
    ],
    "runsMeasured": true
@@ -513,6 +642,7 @@
    "lastError": null,
    "reportTo": 2,
    "tools": 3,
+   "workingDays": null,
    "runs": [
     {
      "id": 10928,
@@ -522,8 +652,13 @@
      "durationMs": null,
      "tokens": 57841,
      "model": "grok-4-1-fast-non-reasoning",
-     "preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results",
-     "error": null
+     "preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results (top score: 0.705)\n- ✓ **agent",
+     "response": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results (top score: 0.705)\n- ✓ **agent_memory**: memory stored\n\n---\n*4 iterations | 50327 tokens*",
+     "error": null,
+     "itemId": null,
+     "deliverableId": null,
+     "publicUrl": null,
+     "emailSent": null
     }
    ],
    "runsMeasured": true
@@ -546,6 +681,7 @@
    "lastError": null,
    "reportTo": 0,
    "tools": 0,
+   "workingDays": null,
    "runs": [],
    "runsMeasured": true
   },
@@ -567,6 +703,7 @@
    "lastError": "Heartbeat Stage 3 endpoint unavailable",
    "reportTo": 0,
    "tools": 0,
+   "workingDays": null,
    "runs": [],
    "runsMeasured": true
   },
@@ -588,6 +725,7 @@
    "lastError": null,
    "reportTo": 0,
    "tools": 2,
+   "workingDays": null,
    "runs": [
     {
      "id": 10973,
@@ -597,8 +735,13 @@
      "durationMs": null,
      "tokens": 17473,
      "model": "gpt-4.1-nano",
-     "preview": "**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories retrieved\n- ✓ **SearchKnowledgeBaseTool**: 5 KB results",
-     "error": null
+     "preview": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed*",
+     "response": "**Status** — The project is progressing; two new items were drafted.\n\n**Key Numbers** — Total items: 344 (329 active, 0 pending, 11 completed).\n\n**What Changed** — Two new articles were added to the deliverables list:\n1. **First article** - a summary of a local development.\n2. **Second article** - a summary of a funding decision.\n\n**Actions** — \n- Created two articles from current sources.\n- Checked every claim against its source.\n\nTASKS: []\nNEXT_STEPS: []",
+     "error": null,
+     "itemId": null,
+     "deliverableId": null,
+     "publicUrl": null,
+     "emailSent": null
     }
    ],
    "runsMeasured": true
