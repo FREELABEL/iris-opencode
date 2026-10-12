@@ -104,6 +104,7 @@ def run_allowed(action, agent_id=None):
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "iris-local-console"
+    protocol_version = "HTTP/1.1"  # keep-alive; every response sets Content-Length
 
     def _send(self, code, body, ctype="application/json"):
         data = body if isinstance(body, bytes) else json.dumps(body).encode()
@@ -112,6 +113,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Content-Length", str(len(data)))
         self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'")
         self.end_headers()
         self.wfile.write(data)
@@ -128,7 +130,7 @@ class Handler(BaseHTTPRequestHandler):
         given = self.headers.get("X-Console-Token") or (parse_qs(url.query).get("t") or [""])[0]
         return secrets.compare_digest(given, TOKEN)
 
-    def do_GET(self):
+    def _get(self):
         url = urlparse(self.path)
         if url.path == "/healthz":  # no data, no token — only says it is up
             return self._send(200, {"ok": True})
@@ -145,20 +147,44 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(code, body)
         return self._send(404, {"error": "not found"})
 
-    def do_POST(self):
+    def _post(self):
         url = urlparse(self.path)
         if not self._allowed(url):
             return self._send(403, {"error": "forbidden"})
         if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
             return self._send(415, {"error": "send application/json"})  # forces a CORS preflight
-        length = min(int(self.headers.get("Content-Length") or 0), 4096)
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return self._send(400, {"error": "bad Content-Length"})
+        if length > 4096:  # refuse, don't read and don't reset the connection
+            self.close_connection = True
+            return self._send(413, {"error": "body too large (max 4 KB)"})
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
         except ValueError:
             return self._send(400, {"error": "bad json"})
+        if not isinstance(body, dict):
+            return self._send(400, {"error": "body must be a JSON object"})
         action = url.path[len("/api/"):] if url.path.startswith("/api/") else ""
         code, out = run_allowed(action, str(body.get("agent_id", "")))
         return self._send(code, out)
+
+    # One guarded entry point per method: any unexpected error is a 500 JSON answer, never a
+    # dropped connection or a traceback in the browser.
+    def do_GET(self):
+        try:
+            self._get()
+        except Exception as exc:  # noqa: BLE001
+            sys.stderr.write("GET error: %s\\n" % type(exc).__name__)
+            self._send(500, {"error": "internal error"})
+
+    def do_POST(self):
+        try:
+            self._post()
+        except Exception as exc:  # noqa: BLE001
+            sys.stderr.write("POST error: %s\\n" % type(exc).__name__)
+            self._send(500, {"error": "internal error"})
 
     def log_message(self, fmt, *args):  # never log the token
         sys.stderr.write("%s %s\\n" % (self.command, urlparse(self.path).path))

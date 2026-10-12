@@ -187,6 +187,16 @@ HTTPServer(("0.0.0.0", 8000), H).serve_forever()
     expect(f.find((x) => x.rule === "bind-default")?.severity).toBe("warning")
   })
 
+  test("the generated server.py is valid Python", async () => {
+    const { execFileSync } = await import("child_process")
+    const { mkdtempSync, writeFileSync } = await import("fs")
+    const { tmpdir } = await import("os")
+    const { join } = await import("path")
+    const dir = mkdtempSync(join(tmpdir(), "console-"))
+    writeFileSync(join(dir, "server.py"), LOCAL_CONSOLE_FILES("t")["server.py"]!)
+    execFileSync("python3", ["-m", "py_compile", join(dir, "server.py")]) // throws on a syntax error
+  })
+
   test("the template manifest resolves", () => {
     const r = resolveManifest("my-console", LOCAL_CONSOLE_FILES("my-console"))
     expect(r.errors).toEqual([])
