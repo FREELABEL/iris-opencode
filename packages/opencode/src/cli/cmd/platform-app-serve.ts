@@ -35,6 +35,8 @@ import {
   shq,
   type ServedApp,
 } from "./apps-serve"
+import { chooseRuntime } from "./apps-native"
+import { findUv, hasDockerHere, installUv, listNativeHere, serveNative, uvInstallCommand, waitHealthy } from "./platform-app-native"
 
 const pexec = promisify(execFile)
 const HIVE_APPS_BLOQ = 736
@@ -132,11 +134,13 @@ async function pickRunner(userId: number, nodeArg: string | undefined, opts: { h
 
 export const ServeCommand = cmd({
   command: "serve <folder>",
-  describe: "serve a Python app folder from one of your machines — locked-down container, restarts on crash and reboot, 127.0.0.1 only",
+  describe: "serve a Python app folder from one of your machines — restarts on crash and at login, 127.0.0.1 only; no Docker needed (native) or container-isolated (docker)",
   builder: (yargs) =>
     yargs
       .positional("folder", { describe: "the app folder (iris.app.json or a script with # iris: lines)", type: "string", demandOption: true })
       .option("node", { describe: "Hive machine to serve it on (default: this machine)", type: "string" })
+      .option("runtime", { describe: "auto (Docker if installed, else native) · native (no Docker: uv + the OS supervisor) · docker (container isolation)", type: "string", default: "auto" })
+      .option("install-uv", { describe: "native: install uv (the Python runtime manager) if it is missing", type: "boolean", default: false })
       .option("port", { describe: "port on the machine (127.0.0.1 only; default 18000)", type: "number", default: 18000 })
       .option("entry", { describe: "which .py file runs, when the folder has several and no iris.app.json", type: "string" })
       .option("replace", { describe: "replace the running copy of this app", type: "boolean", default: false })
@@ -165,9 +169,18 @@ export const ServeCommand = cmd({
     const port = Number(args.port)
     if (!Number.isInteger(port) || port < 1024 || port > 65535) return fail(2, `--port ${args.port} must be 1024–65535`)
 
+    // Native runs on THIS machine in S1 (Windows has no sh to drive over ssh); docker may be remote.
+    const remote = !!args.node && args.node !== "local"
+    const dockerHere = remote ? true : await hasDockerHere()
+    const choice = chooseRuntime(args.runtime as string | undefined, dockerHere, manifest.data_class)
+    if ("error" in choice) return fail(2, choice.error)
     if (manifest.data_class === "phi") {
       return fail(2, "data_class: phi — apps that handle patient data are not servable in S1. They need a BAA-covered machine and access logging first (#189083).")
     }
+    if (choice.runtime === "native" && remote) {
+      return fail(2, "--runtime native serves on THIS machine. Run iris app serve on the machine itself (remote native comes next).")
+    }
+    if (choice.runtime === "native") return serveNativeHere(args, manifest, source, folder, json, say, fail)
 
     // The lint for SERVED apps (container rules) — errors stop the serve; warnings are shown.
     const lint = lintLocalApp(folder.files, { served: true })
@@ -295,6 +308,14 @@ export async function listHiveApps(userId: number, opts: { node?: string } = {})
     const parsed = parseListOutput(res.stdout)
     out.push({ machine: n.name, apps: parsed.apps, noDocker: parsed.noDocker, error: res.code !== 0 ? (res.stderr || `exit ${res.code}`).trim().slice(0, 200) : undefined })
   }))
+  // Native apps on this machine have no container — they are read from their own records.
+  const native = await listNativeHere().catch(() => [])
+  if (native.length) {
+    const nativeRows: ServedApp[] = native.map((n) => ({ container: `native:${n.name}`, app: n.name, kind: "native", port: n.port, state: n.healthy ? "running" : "registered", status: `${n.supervisor} · since ${n.served_at.slice(0, 10)}`, http: n.http === null ? "000" : String(n.http), ports: `127.0.0.1:${n.port}`, healthy: n.healthy }))
+    const mine = out.find((r) => localId && nodes.find((n) => n.id === localId)?.name === r.machine)
+    if (mine) mine.apps.push(...nativeRows)
+    else out.push({ machine: "this machine", apps: nativeRows })
+  }
   if (!localId && !opts.node) {
     const r = await localRunner()
     const res = await r.run(buildListScript(), 30_000)
@@ -340,3 +361,69 @@ export const LintCommand = cmd({
     if (errors) process.exitCode = 1
   },
 })
+
+/** --runtime native on this machine: uv + the OS supervisor, no Docker (Windows, macOS, Linux). */
+async function serveNativeHere(
+  args: any,
+  manifest: import("./apps-serve").AppManifest,
+  source: string,
+  folder: ReturnType<typeof readAppFolder>,
+  json: boolean,
+  say: (l?: string) => void,
+  fail: (code: number, error: string, extra?: Record<string, unknown>, hints?: string[]) => Promise<void>,
+): Promise<void> {
+  const port = Number(args.port)
+  // Desktop rules: it shares a machine (and a browser) with the person. 0.0.0.0 is an error;
+  // token/Host are warnings — an API called by local programs may not want a browser token.
+  const lint = lintLocalApp(folder.files, { served: false })
+  const blocking = lint.filter((f) => f.severity === "error" && f.rule !== "require-token" && f.rule !== "check-host")
+
+  if (!json) { UI.empty(); prompts.intro(`◈  IRIS Hive Apps — serve ${manifest.name} (native, no Docker)`) }
+  say(`  ${bold("Manifest")} ${source}  ${dim(`${manifest.entry} · health ${manifest.health}`)}`)
+  say(`  ${bold("Runs as")}  you, on this machine — without your IRIS login or shell credentials`)
+  if (manifest.secrets.length) say(`  ${bold("Secrets")}  ${manifest.secrets.join(", ")}  ${dim("(stored for this app, owner-only)")}`)
+  for (const f of lint) say(`  ${f.severity === "error" && blocking.includes(f) ? "✗" : "!"} ${f.file}: ${f.message}`)
+  if (blocking.length) return fail(2, `${blocking.length} problem(s) must be fixed before this is served`, { lint }, [dim("  Listen on os.environ['HOST'] (127.0.0.1) and os.environ['PORT'] — the launcher sets both.")])
+
+  let uv = await findUv()
+  if (!uv) {
+    const c = uvInstallCommand()
+    if (!args["install-uv"]) return fail(3, "uv (the Python runtime manager) is not installed.", {}, [`  Install it once:  ${c.display}`, `  Or let IRIS do it: iris app serve ${args.folder} --install-uv`])
+    say(dim(`  installing uv: ${c.display}`))
+    const r = await installUv()
+    uv = r.ok ? await findUv() : null
+    if (!uv) return fail(3, "uv did not install.", { output: r.out.slice(-600) }, [dim(r.out.trim().split("\n").slice(-6).map((l) => `  ${l}`).join("\n"))])
+  }
+  say(`  ${bold("Python")}   uv ${dim(uv)}`)
+
+  if (args["dry-run"]) {
+    if (json) { await writeJson({ ok: true, dry_run: true, runtime: "native", manifest, uv, port }); return }
+    prompts.outro("Dry run — nothing written, nothing started")
+    return
+  }
+
+  const spinner = json ? null : prompts.spinner()
+  spinner?.start("Installing it as a background service…")
+  const res = await serveNative({ manifest, folder: resolve(String(args.folder)), filePaths: folder.paths, hostPort: port, uv, replace: !!args.replace })
+  if (!res.ok) { spinner?.stop("Not started", 1); return fail(res.exists ? 4 : 1, res.error ?? "failed", {}, res.hint ? [`  ${res.hint}`] : []) }
+  spinner?.stop(`Handed to ${res.supervisor}`)
+
+  const waitSec = Math.max(10, Math.min(600, Number(args.wait) || 120))
+  spinner?.start(`Waiting for ${manifest.health} (first start downloads Python — up to ${waitSec}s)…`)
+  const h = await waitHealthy(port, manifest.health, waitSec)
+  if (!h.ready) {
+    spinner?.stop("Started, but it does not answer", 1)
+    return fail(1, `${manifest.name} is registered with ${res.supervisor} but ${manifest.health} did not answer within ${waitSec}s (last HTTP ${h.http ?? "none"}).`, { logs: res.logs }, [dim(`  Log: ${res.logs}`)])
+  }
+  spinner?.stop(`Healthy — HTTP ${h.http} after ${h.afterSec}s`)
+
+  if (json) { await writeJson({ ok: true, runtime: "native", app: manifest.name, supervisor: res.supervisor, local: `http://127.0.0.1:${port}`, health_http: h.http, home: res.home, logs: res.logs }); return }
+  printDivider()
+  printKV("Serving", `${manifest.name} on this machine (native)`)
+  printKV("Local", `http://127.0.0.1:${port}  (this machine only)`)
+  printKV("Survives", `crashes and restarts at login (${res.supervisor})`)
+  printKV("Logs", res.logs ?? "")
+  printKV("See it", "iris app list --hive")
+  printDivider()
+  prompts.outro(success("Done"))
+}
