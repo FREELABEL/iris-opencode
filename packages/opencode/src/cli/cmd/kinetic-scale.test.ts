@@ -99,6 +99,31 @@ describe("gap 1 — the route table, so enforcement is not opt-in", () => {
   })
 })
 
+describe("hive send names its node with --to, not the word after send (#188935)", () => {
+  // The positional after `send` is the CONTENT. Reading it as the node made every send ask for a
+  // couple on `node:<message text>` — "not a body name" — so no text could be sent node-to-node.
+  test("--to x and --to=x are the instance; the message is never the body", () => {
+    expect(routeFor(["hive", "send", "plain test", "--to", "iris-hive-001"])).toEqual({ class: "node", verb: "send", instance: "iris-hive-001" })
+    expect(routeFor(["hive", "send", "plain test", "--to=iris-hive-001", "--envelope"])).toEqual({ class: "node", verb: "send", instance: "iris-hive-001" })
+    expect(routeFor(["hive", "send", "--to", "iris-hive-001", "plain test"], ["hive", "send"])).toEqual({ class: "node", verb: "send", instance: "iris-hive-001" })
+  })
+
+  test("the routed body is one the guard can decide on", () => {
+    const r = routeFor(["hive", "send", "plain test", "--to", "iris-hive-001"])!
+    const d = decide({ actor: { kind: "operator" }, node: "n", body: `${r.class}:${r.instance}`, verb: r.verb, couples: [], now: NOW })
+    expect(d.reason).not.toContain("not a body name")
+    expect(d.decision).toBe("allow")
+  })
+
+  test("--to all is a class-level ask, not a free pass", () => {
+    expect(routeFor(["hive", "send", "hi", "--to", "all"])).toEqual({ class: "node", verb: "send", instance: null })
+  })
+
+  test("a message that reads like a status word is still a send", () => {
+    expect(routeFor(["hive", "send", "status", "--to", "x"])).toEqual({ class: "node", verb: "send", instance: "x" })
+  })
+})
+
 describe("hive tasks create is a dispatch, and the guard sees it", () => {
   // It sends work to another machine exactly as `hive task` does, but the route table only knew
   // run/task/script/send — so on a LOCKED machine, an agent could still dispatch through it.

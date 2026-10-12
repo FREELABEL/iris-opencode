@@ -112,6 +112,15 @@ export function routeFor(argv: string[], parsed?: string[]): Route | null {
   if (!cls) return null
   if (!sub) return null
   if ((READS[cls] ?? []).includes(sub)) return null
+  // `iris hive send <content> --to <node>` — the word after `send` is the MESSAGE, not the node.
+  // Reading it positionally made every send ask for a couple on `node:<the message text>`, a body
+  // that cannot exist, so no text could be sent at all (#188935). `--to all` names no single
+  // node: a class-level ask, never a free pass. Checked BEFORE the
+  // status-arg read below, which would otherwise wave through a message that is literally "status".
+  if (cls === "node" && sub === "send") {
+    const to = flagValue(parts, "--to")
+    return { class: "node", verb: "send", instance: to && to !== "all" ? to : null }
+  }
   // `record status` / `stream status` read; `record start` acts.
   if (STATUS_ARG.has(String(third ?? ""))) return null
 
@@ -131,13 +140,10 @@ export function routeFor(argv: string[], parsed?: string[]): Route | null {
     // is a class-level ask — never a free pass.
     if (sub === "tasks") {
       if (third !== "create" && third !== "new") return null
-      const i = parts.indexOf("--node")
-      const eq = parts.find((p) => p.startsWith("--node="))
-      const node = i >= 0 && parts[i + 1] && !parts[i + 1].startsWith("-") ? parts[i + 1] : eq ? eq.slice("--node=".length) : null
-      return { class: "node", verb: "task", instance: node || null }
+      return { class: "node", verb: "task", instance: flagValue(parts, "--node") }
     }
     // `iris hive run <node> <cmd>` — arbitrary shell on another machine, the epic's named danger.
-    const verb = sub === "run" || sub === "exec" ? "run" : sub === "task" ? "task" : sub === "script" ? "script" : sub === "send" ? "send" : null
+    const verb = sub === "run" || sub === "exec" ? "run" : sub === "task" ? "task" : sub === "script" ? "script" : null
     return verb ? { class: "node", verb, instance: third && !third.startsWith("-") ? third : null } : null
   }
   if (cls === "android") {
@@ -167,6 +173,14 @@ export function routeFor(argv: string[], parsed?: string[]): Route | null {
   // Guarding the dry run would train people to couple for a command that changes nothing.
   if (sub === "clean") return parts.includes("--apply") ? { class: "device", verb: "clean", instance: null } : null // --apply is a FLAG, so read it from parts
   return null
+}
+
+/** `--flag value` or `--flag=value`, from lowercased argv parts. Absent → null. */
+function flagValue(parts: string[], flag: string): string | null {
+  const i = parts.indexOf(flag)
+  if (i >= 0 && parts[i + 1] && !parts[i + 1].startsWith("-")) return parts[i + 1]
+  const eq = parts.find((p) => p.startsWith(`${flag}=`))
+  return eq ? eq.slice(flag.length + 1) || null : null
 }
 
 /** Verbs a couple may bless for a class — used to refuse a typo at coupling time, not at act time. */
