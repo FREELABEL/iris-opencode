@@ -60,7 +60,20 @@ import {
   fetchPlans,
 } from "@/iris/platform"
 import { parseExpandedListIds } from "@/iris/relationship-graph"
-import { agentCredential, credentialKind, readNodeKey, signOutPersonal, type CredentialKind } from "@/iris/account"
+import {
+  accountRef,
+  agentCredential,
+  cliDataDir,
+  credentialKind,
+  forgetActiveAccount,
+  readAccountStore,
+  readNodeKey,
+  registerAccount,
+  removeAccount,
+  signOutPersonal,
+  switchAccount,
+  type CredentialKind,
+} from "@/iris/account"
 import { homedir } from "os"
 import { createRoom, fetchRoom, fetchRooms, sendRoomMessage } from "@/iris/rooms"
 import { fetchAgentLive, handBackRun, takeOverRun } from "@/iris/agent-live"
@@ -899,6 +912,13 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
           fetchAllowance({ ...opts, peek: true }),
         ])
         const credential: CredentialKind | "rejected" = kind === "personal" && who.data.rejected ? "rejected" : kind
+        // Remember who this key is (#189321), so signing in as a second account does not throw
+        // this one away and a switch back has a key and a name to show. Never the node key.
+        if (credential === "personal" && who.measured && who.data.id !== null && cred.token) {
+          try {
+            registerAccount(homedir(), cred.token, who.data)
+          } catch {}
+        }
         return {
           measured: who.measured,
           ...(who.reason ? { reason: who.reason } : {}),
@@ -929,9 +949,56 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
 
     const signOut = Effect.fn("IrisHttpApi.signOut")(() =>
       Effect.sync(() => {
-        const r = signOutPersonal({ home: homedir(), dataDir: dataDir() })
+        const home = homedir()
+        const active = agentCredential(process.env, () => ({ token: resolveToken(), source: tokenSource() })).token
+        const r = signOutPersonal({ home, dataDir: dataDir() })
+        // An engine started for a second account has its own data dir; the CLI's auth store is
+        // the default one, and it must not keep acting as the account just signed out of.
+        const cli = cliDataDir(process.env, home)
+        if (cli !== dataDir()) r.removed.push(...signOutPersonal({ home, dataDir: cli }).removed)
+        // Another saved account? Fall back to it rather than to the sign-in screen (#189321).
+        const { next } = forgetActiveAccount(home, active)
+        if (next) {
+          const s = switchAccount({ home, cliDataDir: cli }, accountRef(next))
+          if (s.ok) r.removed.push(`now signed in as ${next.email ?? accountRef(next)}`)
+        }
         resetCredentialCache()
         return { ok: true, removed: r.removed }
+      }),
+    )
+
+    const accounts = Effect.fn("IrisHttpApi.accounts")(() =>
+      Effect.sync(() => {
+        const active = agentCredential(process.env, () => ({ token: resolveToken(), source: tokenSource() })).token
+        const { store, readable } = readAccountStore(homedir())
+        return {
+          readable,
+          accounts: store.accounts.map((a) => ({
+            ref: accountRef(a),
+            id: a.user_id,
+            email: a.email,
+            name: a.name,
+            active: Boolean(active) && a.key === active,
+            separateData: a.data_dir !== null,
+          })),
+        }
+      }),
+    )
+
+    const accountSwitch = Effect.fn("IrisHttpApi.accountSwitch")((ctx: { payload: { ref: string } }) =>
+      Effect.sync(() => {
+        const home = homedir()
+        const r = switchAccount({ home, cliDataDir: cliDataDir(process.env, home) }, ctx.payload.ref)
+        resetCredentialCache()
+        return r.ok ? { ok: true } : { ok: false, reason: r.reason }
+      }),
+    )
+
+    const accountRemove = Effect.fn("IrisHttpApi.accountRemove")((ctx: { payload: { ref: string } }) =>
+      Effect.sync(() => {
+        const active = agentCredential(process.env, () => ({ token: resolveToken(), source: tokenSource() })).token
+        const r = removeAccount(homedir(), ctx.payload.ref, active)
+        return r.ok ? { ok: true } : { ok: false, reason: r.reason }
       }),
     )
 
@@ -954,6 +1021,6 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
       ),
     )
 
-    return handlers.handle("frameCheck", frameCheck).handle("atlasNote", atlasNote).handle("allowance", allowance).handle("plan", plan).handle("me", me).handle("signOut", signOut).handle("plans", plans).handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("graph", graph).handle("graphBoard", graphBoard).handle("catalog", catalog).handle("integrationConnect", integrationConnect).handle("onboardingState", onboardingState).handle("onboardingMail", onboardingMail).handle("onboardingGround", onboardingGround).handle("onboardingCapabilities", onboardingCapabilities).handle("onboardingWorkspace", onboardingWorkspace).handle("onboardingTrack", onboardingTrack).handle("cliCommands", cliCommands).handle("hivePeers", hivePeers).handle("pageDoc", pageDoc).handle("pageSave", pageSave).handle("item", item).handle("itemSave", itemSave).handle("itemTaskAdd", itemTaskAdd).handle("itemTaskSave", itemTaskSave).handle("itemTaskDelete", itemTaskDelete).handle("cardSchema", cardSchema).handle("itemShare", itemShare).handle("itemShareVisibility", itemShareVisibility).handle("itemShareAllowlist", itemShareAllowlist).handle("itemShareInvite", itemShareInvite).handle("itemSharePermission", itemSharePermission).handle("itemShareRevoke", itemShareRevoke).handle("itemShareLink", itemShareLink).handle("itemShareLinkRevoke", itemShareLinkRevoke).handle("itemLabels", itemLabels).handle("itemAttachments", itemAttachments).handle("itemAttachmentUpload", itemAttachmentUpload).handle("itemAttachmentDelete", itemAttachmentDelete).handle("itemEvents", itemEvents).handle("itemEventAdd", itemEventAdd).handle("itemAsks", itemAsks).handle("itemAskAdd", itemAskAdd).handle("itemAskAnswer", itemAskAnswer).handle("itemChat", itemChat).handle("itemChatSend", itemChatSend).handle("rooms", rooms).handle("roomCreate", roomCreate).handle("room", room).handle("roomSend", roomSend).handle("playbookDoc", playbookDoc).handle("artifacts", artifacts).handle("artifactDoc", artifactDoc).handle("artifactPublish", artifactPublish).handle("playbookInstall", playbookInstall).handle("agentTasks", agentTasks).handle("heartbeats", heartbeats).handle("heartbeatRun", heartbeatRun).handle("heartbeatPause", heartbeatPause).handle("pulseTopic", pulseTopic).handle("pulseContacts", pulseContacts).handle("pulseContact", pulseContact).handle("agentLive", agentLive).handle("runTakeOver", runTakeOver).handle("runHandBack", runHandBack).handle("sites", sites).handle("brands", brands).handle("brandKit", brandKit).handle("brandSave", brandSave).handle("records", records).handle("integrations", integrations).handle("hive", hive).handle("hiveScripts", hiveScripts).handle("hiveScript", hiveScript).handle("hiveScriptDoctor", hiveScriptDoctor).handle("hiveScriptSave", hiveScriptSave).handle("hiveScriptRun", hiveScriptRun).handle("hiveTask", hiveTask).handle("hiveScriptTags", hiveScriptTags).handle("hiveMarket", hiveMarket).handle("hiveMarketScript", hiveMarketScript).handle("hiveMarketInstall", hiveMarketInstall)
+    return handlers.handle("frameCheck", frameCheck).handle("atlasNote", atlasNote).handle("allowance", allowance).handle("plan", plan).handle("me", me).handle("signOut", signOut).handle("accounts", accounts).handle("accountSwitch", accountSwitch).handle("accountRemove", accountRemove).handle("plans", plans).handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("graph", graph).handle("graphBoard", graphBoard).handle("catalog", catalog).handle("integrationConnect", integrationConnect).handle("onboardingState", onboardingState).handle("onboardingMail", onboardingMail).handle("onboardingGround", onboardingGround).handle("onboardingCapabilities", onboardingCapabilities).handle("onboardingWorkspace", onboardingWorkspace).handle("onboardingTrack", onboardingTrack).handle("cliCommands", cliCommands).handle("hivePeers", hivePeers).handle("pageDoc", pageDoc).handle("pageSave", pageSave).handle("item", item).handle("itemSave", itemSave).handle("itemTaskAdd", itemTaskAdd).handle("itemTaskSave", itemTaskSave).handle("itemTaskDelete", itemTaskDelete).handle("cardSchema", cardSchema).handle("itemShare", itemShare).handle("itemShareVisibility", itemShareVisibility).handle("itemShareAllowlist", itemShareAllowlist).handle("itemShareInvite", itemShareInvite).handle("itemSharePermission", itemSharePermission).handle("itemShareRevoke", itemShareRevoke).handle("itemShareLink", itemShareLink).handle("itemShareLinkRevoke", itemShareLinkRevoke).handle("itemLabels", itemLabels).handle("itemAttachments", itemAttachments).handle("itemAttachmentUpload", itemAttachmentUpload).handle("itemAttachmentDelete", itemAttachmentDelete).handle("itemEvents", itemEvents).handle("itemEventAdd", itemEventAdd).handle("itemAsks", itemAsks).handle("itemAskAdd", itemAskAdd).handle("itemAskAnswer", itemAskAnswer).handle("itemChat", itemChat).handle("itemChatSend", itemChatSend).handle("rooms", rooms).handle("roomCreate", roomCreate).handle("room", room).handle("roomSend", roomSend).handle("playbookDoc", playbookDoc).handle("artifacts", artifacts).handle("artifactDoc", artifactDoc).handle("artifactPublish", artifactPublish).handle("playbookInstall", playbookInstall).handle("agentTasks", agentTasks).handle("heartbeats", heartbeats).handle("heartbeatRun", heartbeatRun).handle("heartbeatPause", heartbeatPause).handle("pulseTopic", pulseTopic).handle("pulseContacts", pulseContacts).handle("pulseContact", pulseContact).handle("agentLive", agentLive).handle("runTakeOver", runTakeOver).handle("runHandBack", runHandBack).handle("sites", sites).handle("brands", brands).handle("brandKit", brandKit).handle("brandSave", brandSave).handle("records", records).handle("integrations", integrations).handle("hive", hive).handle("hiveScripts", hiveScripts).handle("hiveScript", hiveScript).handle("hiveScriptDoctor", hiveScriptDoctor).handle("hiveScriptSave", hiveScriptSave).handle("hiveScriptRun", hiveScriptRun).handle("hiveTask", hiveTask).handle("hiveScriptTags", hiveScriptTags).handle("hiveMarket", hiveMarket).handle("hiveMarketScript", hiveMarketScript).handle("hiveMarketInstall", hiveMarketInstall)
   }),
 )

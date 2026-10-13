@@ -1224,6 +1224,9 @@ export const IrisPaths = {
   plan: `${root}/plan`,
   me: `${root}/me`,
   signOut: `${root}/sign-out`,
+  accounts: `${root}/accounts`,
+  accountSwitch: `${root}/accounts/switch`,
+  accountRemove: `${root}/accounts/remove`,
   plans: `${root}/plans`,
   atlasNote: `${root}/atlas-note`,
   frameCheck: `${root}/frame-check`,
@@ -1285,6 +1288,63 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Sign out of IRIS on this machine",
           description:
             "Removes the personal sign-in shared by the desktop and the CLI: IRIS_API_KEY and IRIS_USER_ID from ~/.iris/sdk/.env and the `iris` auth-store entry. Leaves ~/.iris/config.json (the Hive node key) alone. The engine still holds the old key until it restarts; the desktop restarts the app afterwards.",
+        }),
+      ),
+      HttpApiEndpoint.get("accounts", IrisPaths.accounts, {
+        success: described(
+          Schema.Struct({
+            readable: Schema.Boolean,
+            accounts: Schema.Array(
+              Schema.Struct({
+                ref: Schema.String,
+                id: Schema.NullOr(Schema.Finite),
+                email: Schema.NullOr(Schema.String),
+                name: Schema.NullOr(Schema.String),
+                active: Schema.Boolean,
+                separateData: Schema.Boolean,
+              }),
+            ),
+          }).annotate({ identifier: "IrisAccountsResult" }),
+          "Every account this machine is signed in as. Keys are never returned.",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.accounts",
+          summary: "Saved accounts",
+          description:
+            "The accounts in ~/.iris/accounts.json, with the one chat uses marked active. `ref` names an account to switch to or remove: its user id, or a key fingerprint for a sign-in saved before its identity was known.",
+        }),
+      ),
+      HttpApiEndpoint.post("accountSwitch", IrisPaths.accountSwitch, {
+        payload: Schema.Struct({ ref: Schema.String }),
+        success: described(
+          Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String) }).annotate({
+            identifier: "IrisAccountSwitchResult",
+          }),
+          "Whether the saved key was made the active one",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.accountSwitch",
+          summary: "Switch account",
+          description:
+            "Writes the saved account's key to ~/.iris/sdk/.env and to the CLI's auth store, so the app and the iris command both act as it. The engine keeps the old key until it restarts; the desktop restarts the app afterwards.",
+        }),
+      ),
+      HttpApiEndpoint.post("accountRemove", IrisPaths.accountRemove, {
+        payload: Schema.Struct({ ref: Schema.String }),
+        success: described(
+          Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String) }).annotate({
+            identifier: "IrisAccountRemoveResult",
+          }),
+          "Whether the saved sign-in was forgotten",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.accountRemove",
+          summary: "Remove a saved account",
+          description:
+            "Forgets a saved sign-in that is not the active one. Its chat history stays on disk and comes back if it signs in again. The active account is signed out with sign-out instead.",
         }),
       ),
       HttpApiEndpoint.get("plans", IrisPaths.plans, {
