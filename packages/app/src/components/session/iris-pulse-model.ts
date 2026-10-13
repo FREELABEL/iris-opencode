@@ -146,3 +146,15 @@ export function whenOf(iso: string | undefined, now: number): string {
   if (d === 1) return "yesterday"
   return d < 14 ? `${d} days ago` : new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric" })
 }
+
+/** "read just now" / "read 4 min ago" / "read 2 h ago" — how old the numbers on screen are. */
+export function readAgo(at: number | undefined, now: number): string | null {
+  if (!at) return null
+  const s = Math.max(0, Math.floor((now - at) / 1000))
+  if (s < 45) return "read just now"
+  const m = Math.round(s / 60)
+  if (m < 60) return `read ${m} min ago`
+  const h = Math.round(m / 60)
+  if (h < 24) return `read ${h} h ago`
+  return `read ${Math.round(h / 24)} d ago`
+}

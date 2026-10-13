@@ -194,7 +194,18 @@ export type TopicPulse = {
   stops: PulseStop[]
 }
 
-export async function fetchPulseTopic(input: { keyword: string; days?: number; repo?: string }): Promise<Result<TopicPulse | null>> {
+/** #189319 — what a streamed route reports as it is driven. */
+export type TopicHooks = {
+  /** The stop Pulse is reading now. The topic route is SEQUENTIAL: one stop at a time, in order. */
+  onStart?(source: TopicSource, label: string): void
+  /** A stop's finished result, the moment it is known. */
+  onStop?(stop: PulseStop): void
+}
+
+export async function fetchPulseTopic(
+  input: { keyword: string; days?: number; repo?: string },
+  hooks: TopicHooks = {},
+): Promise<Result<TopicPulse | null>> {
   const keyword = input.keyword.trim()
   if (!keyword) return { measured: false, reason: "name a topic to pulse", data: null }
   const days = Math.min(Math.max(Math.round(input.days ?? 30), 1), 365)
@@ -214,9 +225,13 @@ export async function fetchPulseTopic(input: { keyword: string; days?: number; r
     excludeSessions: currentSessionIds(),
   }
   const t0 = Date.now()
+  const fromOf = (id: TopicSource) => `iris pulse check "${keyword}" --sources ${id}`
   try {
-    const sweeps = await sweepAll(opts)
-    const fromOf = (id: TopicSource) => `iris pulse check "${keyword}" --sources ${id}`
+    const sweeps = await sweepAll(
+      opts,
+      (id) => hooks.onStart?.(id, TOPIC_LABELS[id] ?? id),
+      (sw) => hooks.onStop?.(topicStop(sw, fromOf)),
+    )
     return {
       measured: true,
       data: { keyword, days, repo, ms: Date.now() - t0, summary: topicSummary(sweeps), stops: sweeps.map((s) => topicStop(s, fromOf)) },

@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
+import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import { described } from "./metadata"
 
 /**
@@ -1162,6 +1162,7 @@ export const IrisPaths = {
   heartbeatRun: `${root}/heartbeats/:jobID/run`,
   heartbeatPause: `${root}/heartbeats/:jobID/pause`,
   pulseTopic: `${root}/pulse/topic`,
+  pulseTopicStream: `${root}/pulse/topic/stream`,
   pulseContacts: `${root}/pulse/contacts`,
   pulseContact: `${root}/pulse/contacts/:leadID`,
   runTakeOver: `${root}/runs/:runID/take-over`,
@@ -2484,6 +2485,17 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Pulse a topic (iris pulse check, read-only)",
           description:
             "#189286. The same PulseScript `iris pulse check` walks, run on this machine. Unlike the CLI it never files the result: opening a route only reads.",
+        }),
+      ),
+      HttpApiEndpoint.get("pulseTopicStream", IrisPaths.pulseTopicStream, {
+        query: Schema.Struct({ q: Schema.String, days: Schema.optional(Schema.String), project: Schema.optional(Schema.String) }),
+        success: Schema.String.pipe(HttpApiSchema.asText({ contentType: "text/event-stream" })),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.pulseTopicStream",
+          summary: "Pulse a topic, streamed stop by stop (read-only)",
+          description:
+            "#189319. Server-sent events: `start` {source,label} as Pulse reaches a stop (the route is sequential), `stop` {stop} as that stop's result lands, then `done` {data} with the same body /pulse/topic returns, or `error` {reason}.",
         }),
       ),
       HttpApiEndpoint.get("pulseContacts", IrisPaths.pulseContacts, {

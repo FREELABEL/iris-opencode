@@ -663,6 +663,115 @@
     min-width: 0;
     padding: 0;
   }
+
+  /* A failed IRIS call (#189316): a red rule and the reason, so it is findable inside the fold. */
+  [data-slot="context-tool-group-item"][data-error] {
+    border-left: 2px solid var(--v2-state-fg-danger);
+    padding-left: 8px;
+    margin-left: -10px;
+  }
+  [data-slot="context-tool-group-error"] {
+    display: block;
+    color: var(--v2-state-fg-danger);
+    font-size: var(--font-size-small);
+    line-height: var(--line-height-large);
+    overflow-wrap: anywhere;
+  }
+}
+
+[data-slot="context-tool-group-failed"] {
+  color: var(--v2-state-fg-danger);
+}
+
+/* Commands row (#188457). */
+[data-component="iris-working-mark"] {
+  flex-shrink: 0;
+  overflow: visible;
+}
+[data-component="iris-working-mark"] [data-slot="iris-working-orbit"] {
+  transform-origin: 8px 8px;
+  animation: iris-wm-orbit 1.1s linear infinite;
+}
+[data-component="iris-working-mark"] [data-slot="iris-working-core"] {
+  transform-origin: 8px 8px;
+  animation: iris-wm-core 1.1s ease-in-out infinite;
+}
+@keyframes iris-wm-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes iris-wm-core {
+  0%,
+  100% {
+    transform: scale(0.8);
+    opacity: 0.7;
+  }
+  50% {
+    transform: scale(1.15);
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-component="iris-working-mark"] [data-slot="iris-working-orbit"],
+  [data-component="iris-working-mark"] [data-slot="iris-working-core"] {
+    animation: none;
+  }
+}
+[data-slot="context-tool-group-live"] {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-small);
+  color: var(--text-strong);
+}
+[data-slot="context-tool-group-time"] {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-small);
+}
+[data-component="context-tool-group-list"] {
+  [data-slot="basic-tool-tool-trigger-content"] {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+  [data-slot="basic-tool-tool-info"] {
+    min-width: 0;
+    flex: 1;
+  }
+  [data-slot="context-tool-group-ms"] {
+    flex-shrink: 0;
+    margin-left: auto;
+    font-family: var(--font-family-mono);
+    font-size: var(--font-size-small);
+    color: var(--text-weak);
+  }
+  [data-slot="context-tool-group-toggle"] {
+    all: unset;
+    display: block;
+    width: 100%;
+    cursor: pointer;
+    border-radius: 4px;
+  }
+  [data-slot="context-tool-group-toggle"]:hover [data-slot="basic-tool-tool-subtitle"] {
+    color: var(--text-strong);
+  }
+  [data-slot="context-tool-group-toggle"]:focus-visible {
+    outline: 2px solid var(--border-interactive-focus, currentColor);
+    outline-offset: 2px;
+  }
+  [data-slot="context-tool-group-output"] {
+    margin: 4px 0 6px;
+    padding: 8px 10px;
+    max-height: 240px;
+    overflow: auto;
+    border-radius: 6px;
+    background: var(--surface-inset-base, rgba(127, 127, 127, 0.08));
+    font-family: var(--font-family-mono);
+    font-size: var(--font-size-small);
+    line-height: var(--line-height-large);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: var(--text-base);
+  }
 }
 
 [data-component="diagnostics"] {
