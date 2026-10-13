@@ -77,7 +77,8 @@ describe("the session running the check is not evidence", () => {
       expect(all.hits).toBe(3)
       const s = sweepClaudeCode(opts({ excludeSessions: ["self-session-id"] }), root)
       expect(s.hits).toBe(1)
-      expect(s.unavailableReason).toBe("left out the session running this check (2 transcript files)")
+      // the temp store is brand new, so #189233's "only goes back to …" note follows this one
+      expect(s.unavailableReason).toStartWith("left out the session running this check (2 transcript files)")
     } finally {
       rmSync(home, { recursive: true, force: true })
     }

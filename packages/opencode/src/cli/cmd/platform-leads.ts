@@ -1,6 +1,7 @@
 import { describeListScope } from "./leads-scope"
 import { cmd } from "./cmd"
 import { PulseCheckCommand, pulseCheckOptions, runPulseCheck } from "./platform-pulse-check"
+import { readAtlasDiary } from "./pulse-check-sweep"
 import { summariseOutgoing, collectOutgoing, healOutgoing, type OutgoingReport } from "./comms-outgoing-health"
 import { probeBridge } from "./platform-mail"
 import { refreshLeadComms } from "./platform-atlas-comms"
@@ -13771,6 +13772,11 @@ export const PlatformPulseCommand = productCommand({
 
     // ── --admin: Agency view (original behavior) ─────────────────
     const lines: string[] = []
+    // The diary on its own (#189233): `lines` also carries the scorecard and ungated digest for
+    // --notify, and --json's `diary` used to be lines.slice(0, 5) — i.e. scorecard rows whenever
+    // there was no local diary folder.
+    const diaryLines: string[] = []
+    let diaryNote: string | null = null
     // #189206: under --json the human view runs with stdout muted, and ONE document is written at
     // the end — it used to print the whole scorecard and then a JSON object of five diary strings.
     const adminGate = args.json ? muteStdout() : null
@@ -13823,8 +13829,36 @@ export const PlatformPulseCommand = productCommand({
           console.log(`  ${highlight(datePrefix)}  ${title}`)
           if (summary) console.log(`    ${dim(summary.slice(0, 120))}`)
           lines.push(`${datePrefix}: ${title}`)
+          diaryLines.push(`${datePrefix}: ${title}`)
         }
         console.log()
+      } else {
+        // No local diary — read the Atlas Daily Diary, the same reader `pulse check` uses (#189233).
+        const uid = await resolveUserId().catch(() => null)
+        // Read two weeks so an empty digest can say WHEN the diary last moved, not just go quiet.
+        const read = await readAtlasDiary((p: string) => irisFetch(p), uid ?? undefined, Date.now() - 14 * 864e5)
+        const since = Date.parse(`${cutoff}T00:00:00Z`)
+        if ("error" in read) {
+          console.log(dim(`  (diary: ${read.error})`))
+        } else if (!read.entries.some((e) => e.at >= since)) {
+          const newest = read.entries[0] ? new Date(read.entries[0].at).toISOString().slice(0, 10) : null
+          diaryNote = newest ? `nothing in the last 2 days — newest entry ${newest}` : "no diary entries in the last 2 weeks"
+          console.log(dim(`  (diary: ${diaryNote})`))
+        } else {
+          read.entries = read.entries.filter((e) => e.at >= since)
+          console.log(bold("\n  Recent Work") + dim("  (Atlas diary)"))
+          console.log(dim("  ─────────────────────────────────"))
+          for (const e of read.entries.slice(0, 5)) {
+            const datePrefix = new Date(e.at).toISOString().slice(0, 10)
+            const title = e.title.replace(/^\s*\d{4}-\d{2}-\d{2}\s*[—:-]?\s*/, "").trim() || datePrefix
+            const summary = e.body.split("\n").map((l) => l.replace(/^[#*\-\s]+/, "").trim()).find((l) => l.length > 0) ?? ""
+            console.log(`  ${highlight(datePrefix)}  ${title}`)
+            if (summary) console.log(`    ${dim(summary.slice(0, 120))}`)
+            lines.push(`${datePrefix}: ${title}`)
+            diaryLines.push(`${datePrefix}: ${title}`)
+          }
+          console.log()
+        }
       }
     } catch (err: any) {
       console.log(dim(`  (diary unavailable: ${err.message})`))
@@ -13976,7 +14010,8 @@ export const PlatformPulseCommand = productCommand({
           scorecard: adminOut.scorecard,
           not_measured: adminOut.scorecard.filter((r) => r.pulse === null).length,
           ungated: adminOut.ungated,
-          diary: lines.slice(0, 5),
+          diary: diaryLines.slice(0, 5),
+          ...(diaryNote ? { diary_note: diaryNote } : {}),
           errors: adminOut.errors,
           timestamp: new Date().toISOString(),
         }),

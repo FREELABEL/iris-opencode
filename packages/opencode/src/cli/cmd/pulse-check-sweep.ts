@@ -605,31 +605,35 @@ export function sweepDiary(opts: SweepOptions): SourceSweep {
  * "Daily Diary" list (one item per day: title = the date, description = the entry). Boards whose
  * name mentions a diary are read for lists whose name does; entries are dated from the title.
  */
-export async function sweepDiaryAtlas(opts: SweepOptions): Promise<SourceSweep> {
-  if (!opts.apiFetch || !opts.userId) return unavailable("diary", "no local daily-diary folder, and not signed in to read the Atlas diary")
-  const re = keywordRegex(opts.keyword)
-  if (re === null) return unavailable("diary", `"${opts.keyword}" has no searchable characters`)
+export type DiaryEntry = { at: number; title: string; body: string; where: string }
 
+/**
+ * Every diary entry in Atlas since `sinceMs`: boards whose name mentions a diary, their lists whose
+ * name does, one item per day (title = the date). Shared by `pulse check` (filtered by topic) and
+ * `pulse --admin` (the recent-work digest) so the two never read different diaries (#189233).
+ * Returns null when it could not look, with why.
+ */
+export async function readAtlasDiary(
+  apiFetch: ((path: string) => Promise<Response>) | undefined,
+  userId: number | undefined,
+  sinceMs: number,
+): Promise<{ entries: DiaryEntry[]; lists: number } | { error: string }> {
+  if (!apiFetch || !userId) return { error: "not signed in to read the Atlas diary" }
   let boards: any[]
   try {
-    const res = await opts.apiFetch(`/api/v1/user/${opts.userId}/bloqs?simplified=1&per_page=500`)
-    if (!res.ok) return unavailable("diary", `board list returned ${res.status}`)
+    const res = await apiFetch(`/api/v1/user/${userId}/bloqs?simplified=1&per_page=500`)
+    if (!res.ok) return { error: `board list returned ${res.status}` }
     const raw = ((await res.json()) as any)?.data
     boards = (Array.isArray(raw) ? raw : []).filter((b: any) => /diary/i.test(String(b?.name ?? "")))
   } catch (e: any) {
-    return unavailable("diary", `could not reach Atlas: ${String(e?.message ?? e).slice(0, 120)}`)
+    return { error: `could not reach Atlas: ${String(e?.message ?? e).slice(0, 120)}` }
   }
-
-  const cutoff = Date.now() - opts.windowDays * 864e5
-  const priorCutoff = Date.now() - opts.windowDays * 2 * 864e5
-  const items: Hit[] = []
-  let prior = 0
+  const entries: DiaryEntry[] = []
   let lists = 0
-
   for (const board of boards.slice(0, 5)) {
     let full: any
     try {
-      const res = await opts.apiFetch(`/api/v1/user/${opts.userId}/bloqs/${board.id}`)
+      const res = await apiFetch(`/api/v1/user/${userId}/bloqs/${board.id}`)
       if (!res.ok) continue
       const body = (await res.json()) as any
       full = body?.data ?? body
@@ -643,20 +647,42 @@ export async function sweepDiaryAtlas(opts: SweepOptions): Promise<SourceSweep> 
         const title = String(row?.title ?? "")
         const dated = title.match(/(\d{4}-\d{2}-\d{2})/)
         const at = dated ? Date.parse(`${dated[1]}T12:00:00Z`) : Date.parse(row?.created_at ?? "")
-        if (!Number.isFinite(at) || at < priorCutoff) continue
-        const body = `${title}\n${String(row?.description ?? row?.content ?? "")}`
-        const line = firstMentionLine(body, re)
-        if (line === undefined) continue
-        if (at < cutoff) {
-          prior++
-          continue
-        }
-        items.push({ when: new Date(at).toISOString(), where: `Atlas · ${String(list?.name ?? "diary")} #${row?.id}`, text: line })
+        if (!Number.isFinite(at) || at < sinceMs) continue
+        entries.push({
+          at,
+          title,
+          body: String(row?.description ?? row?.content ?? ""),
+          where: `Atlas · ${String(list?.name ?? "diary")} #${row?.id}`,
+        })
       }
     }
   }
+  entries.sort((x, y) => y.at - x.at)
+  return { entries, lists }
+}
 
-  if (lists === 0) return unavailable("diary", "no local daily-diary folder and no diary list in Atlas")
+export async function sweepDiaryAtlas(opts: SweepOptions): Promise<SourceSweep> {
+  if (!opts.apiFetch || !opts.userId) return unavailable("diary", "no local daily-diary folder, and not signed in to read the Atlas diary")
+  const re = keywordRegex(opts.keyword)
+  if (re === null) return unavailable("diary", `"${opts.keyword}" has no searchable characters`)
+
+  const cutoff = Date.now() - opts.windowDays * 864e5
+  const priorCutoff = Date.now() - opts.windowDays * 2 * 864e5
+  const read = await readAtlasDiary(opts.apiFetch, opts.userId, priorCutoff)
+  if ("error" in read) return unavailable("diary", read.error)
+  if (read.lists === 0) return unavailable("diary", "no local daily-diary folder and no diary list in Atlas")
+
+  const items: Hit[] = []
+  let prior = 0
+  for (const e of read.entries) {
+    const line = firstMentionLine(`${e.title}\n${e.body}`, re)
+    if (line === undefined) continue
+    if (e.at < cutoff) {
+      prior++
+      continue
+    }
+    items.push({ when: new Date(e.at).toISOString(), where: e.where, text: line })
+  }
   items.sort((a, b) => (b.when ?? "").localeCompare(a.when ?? ""))
   const sweep = finish("diary", items, prior, new Set([canonicalKeyword(opts.keyword)]), opts.limit)
   sweep.unavailableReason = "read from the Atlas diary (no local daily-diary folder)"
@@ -715,6 +741,56 @@ export function sweepFiles(opts: SweepOptions): SourceSweep {
 }
 
 /**
+ * The oldest record a session store still holds. A store that was pruned (Claude Code removes old
+ * transcripts) cannot testify about anything before it, so a 0 there is "not measured", not "none"
+ * (#189233). Walked with fs, not `find -printf` — the CLI runs on macOS. Bounded depth.
+ */
+export function storeEarliest(root: string, ext: string, depth = 4): number | undefined {
+  let min = Infinity
+  const walk = (dir: string, d: number) => {
+    let names: string[]
+    try {
+      names = readdirSync(dir)
+    } catch {
+      return
+    }
+    for (const name of names) {
+      const full = join(dir, name)
+      let st
+      try {
+        st = statSync(full)
+      } catch {
+        continue
+      }
+      if (st.isDirectory()) {
+        if (d > 0) walk(full, d - 1)
+      } else if (name.endsWith(ext) && st.mtimeMs < min) min = st.mtimeMs
+    }
+  }
+  walk(root, depth)
+  return Number.isFinite(min) ? min : undefined
+}
+
+/** Keep a session-store sweep to what the store can actually see. */
+export function limitToStore(sweep: SourceSweep, earliest: number | undefined, opts: SweepOptions, now = Date.now()): SourceSweep {
+  if (earliest === undefined || !sweep.searched) return sweep
+  const cutoff = now - opts.windowDays * 864e5
+  const priorCutoff = now - opts.windowDays * 2 * 864e5
+  const notes: string[] = []
+  const since = new Date(earliest).toISOString().slice(0, 10)
+  if (earliest > priorCutoff) {
+    sweep.hitsPrior = undefined
+    notes.push(`its transcripts only go back to ${since}, so there is no earlier window to compare`)
+  }
+  if (earliest > cutoff) {
+    const covered = Math.max(1, Math.round((now - earliest) / 864e5))
+    notes.push(`this window covers ${covered} of ${opts.windowDays} days`)
+  }
+  if (notes.length) sweep.unavailableReason = [sweep.unavailableReason, ...notes].filter(Boolean).join("; ")
+  return sweep
+}
+
+/**
  * Claude Code transcripts.
  *
  * Dated by file mtime, which is the session's LAST activity rather than the
@@ -725,7 +801,7 @@ export function sweepFiles(opts: SweepOptions): SourceSweep {
  */
 export function sweepClaudeCode(opts: SweepOptions, root = join(homedir(), ".claude", "projects")): SourceSweep {
   if (!existsSync(root)) return unavailable("claude_code", "no ~/.claude/projects session store on this machine")
-  return sweepSessionFiles("claude_code", root, ".jsonl", opts)
+  return limitToStore(sweepSessionFiles("claude_code", root, ".jsonl", opts), storeEarliest(root, ".jsonl"), opts)
 }
 
 /**
@@ -782,7 +858,7 @@ export function sweepOpencode(opts: SweepOptions): SourceSweep {
   }
 
   items.sort((a, b) => (b.when ?? "").localeCompare(a.when ?? ""))
-  return finish("opencode", items, prior, matched, opts.limit)
+  return limitToStore(finish("opencode", items, prior, matched, opts.limit), storeEarliest(join(storage, "session"), ".json", 2), opts)
 }
 
 function opencodeSessionIndex(sessionRoot: string): Map<string, { title?: string; directory?: string }> {
