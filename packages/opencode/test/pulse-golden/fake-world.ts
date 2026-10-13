@@ -21,7 +21,7 @@ class PinnedDate extends RealDate {
     if (args.length === 0) super(now)
     else super(...(args as [any]))
   }
-  static now() {
+  static override now() {
     return now
   }
 }
