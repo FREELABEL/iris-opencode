@@ -62,6 +62,12 @@ export interface SourceSweep {
   items: Hit[]
   /** Which spelling variants actually matched, for the brief. */
   matchedVariants?: string[]
+  /**
+   * The search stopped at its own ceiling, so `hits` is a FLOOR (#189203) — git's --max-count, the
+   * Atlas page size. Shown as "200+", and left out of momentum: two capped numbers compared read
+   * "flat" whatever happened.
+   */
+  capped?: boolean
   /** Set only when the keyword resolved to an Atlas board rather than to text. */
   board?: {
     id: number
@@ -119,8 +125,17 @@ export function currentSessionIds(env: Record<string, string | undefined> = proc
  * context. Variants are reported back so a match on `creatoros` is not silently
  * presented as a match on the phrase.
  */
+/**
+ * Accents FOLDED, not dropped (#189202). Tokenising on [^a-z0-9] turned every accented letter
+ * into a separator — "café naïve" became "caf na ve", which matches nothing anywhere. NFKD
+ * splits "é" into "e" + a combining mark; removing the marks leaves the letter the text uses.
+ */
+export function foldKeyword(keyword: string): string {
+  return keyword.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
+}
+
 export function keywordVariants(keyword: string): string[] {
-  const base = keyword.trim().toLowerCase().replace(/\s+/g, " ")
+  const base = foldKeyword(keyword).trim().replace(/\s+/g, " ")
 
   // Tokenise on NON-ALPHANUMERICS, not on spaces. Splitting on spaces made the
   // variant set depend on how the subject happened to be punctuated: a board
@@ -181,7 +196,7 @@ export function keywordVariants(keyword: string): string[] {
  * matches every line, which is the loudest possible way to be wrong.
  */
 export function keywordPattern(keyword: string): string | null {
-  const tokens = keyword.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)
+  const tokens = foldKeyword(keyword).split(/[^a-z0-9]+/).filter(Boolean)
   if (tokens.length === 0) return null
 
   return tokens.join("[^a-z0-9\\n]{0,8}")
@@ -189,7 +204,65 @@ export function keywordPattern(keyword: string): string | null {
 
 /** The subject reduced to its tokens — one label for every spelling of it. */
 export function canonicalKeyword(keyword: string): string {
-  return keyword.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).join(" ")
+  return foldKeyword(keyword).split(/[^a-z0-9]+/).filter(Boolean).join(" ")
+}
+
+// ── G: is this a topic at all? ──────────────────────────────────────────────
+
+/** Words that occur in nearly every file, commit and message — a sweep for them measures nothing. */
+const TOO_COMMON = new Set([
+  "the", "and", "for", "you", "are", "was", "with", "this", "that", "from", "have", "not", "but",
+  "all", "any", "can", "had", "her", "his", "its", "our", "out", "one", "use", "new", "get", "set",
+  "to", "of", "in", "on", "is", "it", "at", "be", "by", "or", "as", "an", "we", "do", "if", "so",
+  "no", "up", "my", "me", "go", "id", "ok",
+])
+
+export interface TopicQuality {
+  /** Set when the topic cannot mean anything: the run is refused. */
+  refuse?: string
+  /** Set when it can run but the numbers will not mean what they look like. */
+  warn?: string
+}
+
+/**
+ * #189200. "a" swept 3,422 files and 200 commits; "the" 1,391 files and the boards whose NAMES
+ * start with "The". Both came back looking like the hottest topic in the account. A single
+ * character is refused; a stopword or a two-letter topic runs, with a warning that says so.
+ */
+export function topicQuality(keyword: string): TopicQuality {
+  const tokens = canonicalKeyword(keyword).split(" ").filter(Boolean)
+  const chars = tokens.join("").length
+  if (chars === 0) return { refuse: `"${keyword}" has no searchable characters — nothing to sweep or file. Use a real keyword.` }
+  if (chars < 2) {
+    return { refuse: `"${keyword}" is ${chars} character — it matches nearly everything, so the sweep would measure nothing. Use the word you mean.` }
+  }
+  if (tokens.every((t) => TOO_COMMON.has(t))) {
+    return { warn: `"${canonicalKeyword(keyword)}" is a common word — it matches nearly every file and message, so these counts are not about a topic.` }
+  }
+  if (chars === 2) {
+    return { warn: `"${canonicalKeyword(keyword)}" is two letters — it also matches inside other words, so expect the counts to run high.` }
+  }
+  return {}
+}
+
+// ── E: does an Atlas row actually mention the topic? ────────────────────────
+
+/**
+ * #189201. The content-items search answers with up to 100 LOOSELY matched rows: for "it s quoted"
+ * and "caf na ve" it returned 100 rows and not one contained the phrase. Count a row only when its
+ * own title, description or content does — through the same any-separator pattern every local
+ * source uses, so "Life Atlas" and "life-atlas" agree here too.
+ */
+export function rowMentions(row: any, keyword: string): boolean {
+  const pattern = keywordPattern(keyword)
+  if (pattern === null) return false
+  const re = new RegExp(pattern, "i")
+  const text = foldKeyword(
+    [row?.title, row?.description, typeof row?.content === "string" ? row.content : JSON.stringify(row?.content ?? "")]
+      .filter(Boolean)
+      .join("\n"),
+  )
+  return text.split("\n").some((line) => re.test(line))
 }
 
 /** The pattern as a JS regex, applied one LINE at a time exactly as grep does. */
@@ -227,6 +300,21 @@ function epochOf(iso: string | undefined): number | undefined {
   if (!iso) return undefined
   const t = Date.parse(iso)
   return Number.isNaN(t) ? undefined : Math.floor(t / 1000)
+}
+
+/** git log --max-count per repo and window; a repo that reaches it has more than we counted. */
+export const GIT_CAP = 200
+/** content-items page size; a variant that fills it has more than we counted. */
+export const ATLAS_PAGE = 100
+
+/** A capped count is a floor: say so, and keep it out of momentum (#189203). */
+export function markCapped(sweep: SourceSweep, capped: boolean, cap: number): SourceSweep {
+  if (!capped) return sweep
+  sweep.capped = true
+  sweep.hitsPrior = undefined
+  const note = `at least ${sweep.hits} — the search stops at ${cap}, so this is a floor and not compared with the window before`
+  sweep.unavailableReason = sweep.unavailableReason ? `${sweep.unavailableReason}; ${note}` : note
+  return sweep
 }
 
 function finish(
@@ -411,6 +499,7 @@ export function sweepGit(opts: SweepOptions): SourceSweep {
   const seen = new Set<string>()
   const seenPrior = new Set<string>()
   let prior = 0
+  let capped = false
 
   const since = new Date(Date.now() - opts.windowDays * 864e5).toISOString()
   const priorSince = new Date(Date.now() - opts.windowDays * 2 * 864e5).toISOString()
@@ -425,10 +514,12 @@ export function sweepGit(opts: SweepOptions): SourceSweep {
     // pattern uses a bounded interval, which basic regex would need escaped.
     const current = run("git", [
       "-C", repo, "log", "--all", "-i", "-E", `--grep=${pattern}`,
-      `--since=${since}`, `--format=%H${SEP}%aI${SEP}%s`, "--max-count=200",
+      `--since=${since}`, `--format=%H${SEP}%aI${SEP}%s`, `--max-count=${GIT_CAP}`,
     ])
 
-    for (const line of current.split("\n").filter(Boolean)) {
+    const currentLines = current.split("\n").filter(Boolean)
+    if (currentLines.length >= GIT_CAP) capped = true
+    for (const line of currentLines) {
       const [full, date, subject] = line.split(SEP)
       // One commit is one commit, however many clones of its repo sit in the folder.
       if (seen.has(full)) continue
@@ -438,16 +529,18 @@ export function sweepGit(opts: SweepOptions): SourceSweep {
 
     const before = run("git", [
       "-C", repo, "log", "--all", "-i", "-E", `--grep=${pattern}`,
-      `--since=${priorSince}`, `--until=${since}`, "--format=%H", "--max-count=200",
+      `--since=${priorSince}`, `--until=${since}`, "--format=%H", `--max-count=${GIT_CAP}`,
     ])
-    for (const sha of before.split("\n").filter(Boolean)) if (!seenPrior.has(sha)) priorSeen.add(sha)
+    const beforeLines = before.split("\n").filter(Boolean)
+    if (beforeLines.length >= GIT_CAP) capped = true
+    for (const sha of beforeLines) if (!seenPrior.has(sha)) priorSeen.add(sha)
     for (const sha of priorSeen) seenPrior.add(sha)
 
     prior += priorSeen.size
   }
 
   items.sort((a, b) => (b.when ?? "").localeCompare(a.when ?? ""))
-  return finish("git", items, prior, matched, opts.limit)
+  return markCapped(finish("git", items, prior, matched, opts.limit), capped, GIT_CAP)
 }
 
 /**
@@ -1188,6 +1281,7 @@ export async function sweepBloq(opts: SweepOptions): Promise<SourceSweep> {
   const items: Hit[] = []
   const seen = new Set<string>()
   let prior = 0
+  let capped = false
 
   for (const variant of variants) {
     let rows: any[]
@@ -1204,9 +1298,13 @@ export async function sweepBloq(opts: SweepOptions): Promise<SourceSweep> {
       return unavailable("bloq", `Atlas search failed: ${String(e?.message ?? e).slice(0, 120)}`)
     }
 
+    // Capped only when a FULL page all really matched — a page of loose junk is not "more beyond".
+    if (rows.length >= ATLAS_PAGE && rows.every((r) => rowMentions(r, opts.keyword))) capped = true
     for (const row of rows) {
       const at = Date.parse(row?.updated_at ?? row?.created_at ?? "")
       if (!Number.isFinite(at) || at < priorCutoff) continue
+      // The search's own matching is loose; the row has to actually say it (#189201).
+      if (!rowMentions(row, opts.keyword)) continue
       const where = `#${row?.id} ${String(row?.list_name ?? row?.bloq_name ?? "")}`.trim().slice(0, 60)
       matched.add(variant)
       if (seen.has(where)) continue
@@ -1222,7 +1320,7 @@ export async function sweepBloq(opts: SweepOptions): Promise<SourceSweep> {
   items.sort((a, b) => (b.when ?? "").localeCompare(a.when ?? ""))
   const sweep = finish("bloq", items, prior, matched, opts.limit)
   sweep.unavailableReason = ambiguous ?? "no board by this name — searched item text across your boards instead"
-  return sweep
+  return markCapped(sweep, capped, ATLAS_PAGE)
 }
 
 /** The keyword named a board. Report the board's own vital signs. */
