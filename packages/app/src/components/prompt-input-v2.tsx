@@ -135,6 +135,7 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
         data-halo={dictationSettings.glow.halo() ? "" : undefined}
         data-still={dictationSettings.glow.reduceMotion() ? "" : undefined}
         data-busy={busy() ? "" : undefined} data-bg={background() > 0 ? "" : undefined}>
+      <span class="iris-glow__halo" aria-hidden="true" />
       <span class="iris-glow__under" aria-hidden="true" />
       <Show when={background() > 0}>
         <span class="iris-glow__chip" role="status">

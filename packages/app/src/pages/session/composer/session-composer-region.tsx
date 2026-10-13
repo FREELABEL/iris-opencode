@@ -52,6 +52,7 @@ export function SessionComposerRegion(props: {
         <Show when={controller.state.questionRequest()} keyed>
           {(request) => (
             <div {...waitGlow()}>
+              <span class="iris-glow__halo" aria-hidden="true" />
               <SessionQuestionDock request={request} onSubmit={controller.onResponseSubmit} />
             </div>
           )}
@@ -60,6 +61,7 @@ export function SessionComposerRegion(props: {
         <Show when={controller.state.permissionRequest()} keyed>
           {(request) => (
             <div {...waitGlow()}>
+              <span class="iris-glow__halo" aria-hidden="true" />
               <SessionPermissionDock
                 request={request}
                 responding={controller.state.permissionResponding()}
