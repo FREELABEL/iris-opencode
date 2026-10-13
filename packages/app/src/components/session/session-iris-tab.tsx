@@ -52,6 +52,7 @@ import { IrisAgentLive } from "./iris-agent-live"
 import { IrisHiveScripts } from "./iris-hive-scripts"
 import { IrisHiveMachines } from "./iris-hive-machines"
 import { IrisHeartbeats } from "./iris-heartbeats"
+import { IrisPulseContact, IrisPulseTopic } from "./iris-pulse"
 import { itemCommands, renderMarkdown } from "./iris-item"
 import {
   ATLAS_EDITED,
@@ -608,6 +609,9 @@ const SURFACES = [
   // ignores the argument. Kept in the same list anyway so the switcher stays one mechanism;
   // a second code path for one surface is how surfaces drift apart.
   { id: "hive", label: "Hive", path: (_b: number) => `/iris/hive` },
+  // Pulse (#189286) — heyiris.io/p/pulse-panel-directions. Account-wide like Hive: a topic or a
+  // contact is not a board's, so the path ignores the argument.
+  { id: "pulse", label: "Pulse", path: (_b: number) => `/iris/pulse` },
   { id: "playbooks", label: "Playbooks", path: (b: number) => `/iris/playbooks/${b}` },
   { id: "integrations", label: "Integrations", path: (b: number) => `/iris/integrations/${b}` },
 ] as const
@@ -615,7 +619,7 @@ const SURFACES = [
 type SurfaceId = (typeof SURFACES)[number]["id"]
 
 /** Panes that draw and fetch for themselves; the generic row list has nothing to show for them. */
-const SELF_PANES = new Set(["rooms", "artifacts", "atlas-artifacts", "agent-live", "brands", "hive", "hive-scripts", "heartbeats"])
+const SELF_PANES = new Set(["rooms", "artifacts", "atlas-artifacts", "agent-live", "brands", "hive", "hive-scripts", "heartbeats", "pulse-topic", "pulse-contact"])
 
 interface SubView {
   id: string
@@ -732,6 +736,12 @@ export const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
     // "What can I add" is a different question from "what do I have", so it is a view rather
     // than a "+" that opens a modal over the list you were reading.
     { id: "add", label: "+ Add", pane: "catalog", path: () => `/iris/catalog` },
+  ],
+  // A pickup route (#189286): two ways in, one shape. There is deliberately no account route —
+  // people in IRIS have contacts, not accounts. Both panes draw and fetch for themselves.
+  pulse: [
+    { id: "topic", label: "Topic", pane: "pulse-topic", path: () => `/iris/pulse/topic`, default: true },
+    { id: "contact", label: "Contact", pane: "pulse-contact", path: () => `/iris/pulse/contacts` },
   ],
   hive: [
     { id: "machines", label: "Machines", pane: "hive", path: () => `/iris/hive` },
@@ -2910,6 +2920,12 @@ export function SessionIrisTab() {
           </Match>
           <Match when={pane() === "heartbeats"}>
             <IrisHeartbeats doFetch={doFetch} />
+          </Match>
+          <Match when={pane() === "pulse-topic"}>
+            <IrisPulseTopic doFetch={doFetch} project={projectDir()} />
+          </Match>
+          <Match when={pane() === "pulse-contact"}>
+            <IrisPulseContact doFetch={doFetch} />
           </Match>
           <Match when={pane() === "hive-scripts"}>
             <IrisHiveScripts
