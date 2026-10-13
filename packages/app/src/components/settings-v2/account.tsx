@@ -1,4 +1,4 @@
-import { Component, Show, createResource, createSignal } from "solid-js"
+import { Component, For, Show, createResource, createSignal } from "solid-js"
 import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { usePlatform } from "@/context/platform"
 import { useServer } from "@/context/server"
@@ -160,6 +160,34 @@ export function sourceNote(source: string): string | null {
   return `Credential from ${source}.`
 }
 
+/** One row of /iris/accounts (#189321). The engine never sends the key. */
+export interface SavedAccount {
+  ref: string
+  id: number | null
+  email: string | null
+  name: string | null
+  active: boolean
+  separateData: boolean
+}
+
+/** A saved sign-in by the best name we have. One saved before anyone asked who it is still gets words. */
+export function savedAccountLabel(a: Pick<SavedAccount, "id" | "email" | "name">): string {
+  return a.name?.trim() || a.email?.trim() || (a.id !== null ? `Account #${a.id}` : "An account signed in earlier")
+}
+
+/** The accounts you could switch to: every saved one except the one in use. */
+export function otherAccounts(list: SavedAccount[] | undefined): SavedAccount[] {
+  return (list ?? []).filter((a) => !a.active)
+}
+
+/** What "Sign out" will do, which depends on whether there is another account to fall back to. */
+export function signOutDescription(others: SavedAccount[]): string {
+  if (others.length === 0) {
+    return "Signs this computer out of IRIS, in the app and in the iris command. Hive keeps running on this machine."
+  }
+  return `Signs out of this account and switches to ${savedAccountLabel(others[0])}. Hive keeps running on this machine.`
+}
+
 export const SettingsAccountV2: Component = () => {
   const platform = usePlatform()
   const server = useServer()
@@ -189,6 +217,57 @@ export const SettingsAccountV2: Component = () => {
       await platform.restart()
     } catch {
       setSignOutStep("failed")
+    }
+  }
+
+  const [saved, { refetch: refetchSaved }] = createResource(
+    () => server.current?.http?.url?.replace(/\/$/, ""),
+    async (base): Promise<SavedAccount[] | undefined> => {
+      try {
+        const res = await (platform.fetch ?? globalThis.fetch)(`${base}/iris/accounts`)
+        return res.ok ? (((await res.json()) as { accounts: SavedAccount[] }).accounts ?? []) : undefined
+      } catch {
+        return undefined
+      }
+    },
+  )
+  const others = () => otherAccounts(saved())
+
+  // One action at a time, named by the account it is for, so two clicks cannot race a restart.
+  const [accountAction, setAccountAction] = createSignal<{ ref: string; kind: "switch" | "remove" } | null>(null)
+  const [accountError, setAccountError] = createSignal<string | null>(null)
+  const accountPost = async (path: "switch" | "remove", ref: string) => {
+    const base = server.current?.http?.url?.replace(/\/$/, "")
+    const res = await (platform.fetch ?? globalThis.fetch)(`${base}/iris/accounts/${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ref }),
+    })
+    const body = res.ok ? ((await res.json()) as { ok: boolean; reason?: string }) : { ok: false, reason: `${res.status}` }
+    if (!body.ok) throw new Error(body.reason ?? "refused")
+  }
+  const switchTo = async (a: SavedAccount) => {
+    setAccountError(null)
+    setAccountAction({ ref: a.ref, kind: "switch" })
+    try {
+      await accountPost("switch", a.ref)
+      // The engine reads its key once, at start; the restart is what makes chat act as this account.
+      await platform.restart()
+    } catch (e) {
+      setAccountError(`Couldn't switch to ${savedAccountLabel(a)}: ${e instanceof Error ? e.message : String(e)}`)
+      setAccountAction(null)
+    }
+  }
+  const forget = async (a: SavedAccount) => {
+    setAccountError(null)
+    setAccountAction({ ref: a.ref, kind: "remove" })
+    try {
+      await accountPost("remove", a.ref)
+      await refetchSaved()
+    } catch (e) {
+      setAccountError(`Couldn't remove ${savedAccountLabel(a)}: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setAccountAction(null)
     }
   }
 
@@ -275,7 +354,7 @@ export const SettingsAccountV2: Component = () => {
                   description={
                     signOutStep() === "failed"
                       ? "Sign-out failed. Nothing was restarted. Try again."
-                      : "Signs this computer out of IRIS, in the app and in the iris command. Hive keeps running on this machine."
+                      : signOutDescription(others())
                   }
                 >
                   <span data-action="account-sign-out">
@@ -312,6 +391,64 @@ export const SettingsAccountV2: Component = () => {
             </Show>
           </SettingsListV2>
         </div>
+
+        <Show when={canSignOut() && me()?.signedIn}>
+          <div class="settings-v2-section" data-action="account-saved">
+            <h3 class="settings-v2-section-title">Other accounts on this computer</h3>
+            <SettingsListV2>
+              <For each={others()}>
+                {(a) => (
+                  <SettingsRowV2
+                    title={savedAccountLabel(a)}
+                    description={
+                      a.email && a.email !== savedAccountLabel(a)
+                        ? a.email
+                        : "Switching restarts IRIS. Each account keeps its own chats."
+                    }
+                  >
+                    <div class="flex items-center gap-2" data-action="account-saved-row">
+                      <ButtonV2
+                        size="normal"
+                        variant="neutral"
+                        disabled={accountAction() !== null}
+                        onClick={() => void forget(a)}
+                      >
+                        {accountAction()?.ref === a.ref && accountAction()?.kind === "remove" ? "Removing…" : "Remove"}
+                      </ButtonV2>
+                      <ButtonV2
+                        size="normal"
+                        variant="neutral"
+                        disabled={accountAction() !== null}
+                        onClick={() => void switchTo(a)}
+                      >
+                        {accountAction()?.ref === a.ref && accountAction()?.kind === "switch"
+                          ? "Switching…"
+                          : "Switch and restart"}
+                      </ButtonV2>
+                    </div>
+                  </SettingsRowV2>
+                )}
+              </For>
+              <SettingsRowV2
+                title="Add another account"
+                description={
+                  accountError() ??
+                  (others().length === 0
+                    ? "Sign in as a second account without signing out of this one. Each account keeps its own chats."
+                    : "Sign in as another account. The ones above stay signed in.")
+                }
+              >
+                <Show when={platform.openSignIn}>
+                  <span data-action="account-add">
+                    <ButtonV2 size="normal" variant="neutral" onClick={() => platform.openSignIn?.()}>
+                      Add account
+                    </ButtonV2>
+                  </span>
+                </Show>
+              </SettingsRowV2>
+            </SettingsListV2>
+          </div>
+        </Show>
 
         <Show when={me()?.signedIn}>
           <div class="settings-v2-section">
