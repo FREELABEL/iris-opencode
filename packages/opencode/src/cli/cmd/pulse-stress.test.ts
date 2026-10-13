@@ -124,7 +124,7 @@ describe("#189204 a read shows the stored score", () => {
   })
   test("leads pulse only calls the recomputing endpoint with --save", () => {
     const src = readFileSync(join(import.meta.dir, "platform-leads.ts"), "utf8")
-    expect(src).toContain("shouldFileComms(args as { save?: unknown }) ? irisFetch(`/api/v1/leads/${leadId}/score`) : Promise.resolve(null)")
+    expect(src).toContain("shouldFileComms(args as { save?: unknown }) ? irisFetch(`/api/v1/leads/${leadId}/score?save=1`) : Promise.resolve(null)")
   })
 })
 
