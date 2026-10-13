@@ -2,6 +2,8 @@ import { describeListScope } from "./leads-scope"
 import { cmd } from "./cmd"
 import { PulseCheckCommand, pulseCheckOptions, runPulseCheck } from "./platform-pulse-check"
 import { readAtlasDiary } from "./pulse-check-sweep"
+import { fetchLeadCalendarEvents, type Channel, type ContactQuery } from "./pulse-contact-script"
+import { runScript, scriptFor } from "../../pulse/core"
 import { summariseOutgoing, collectOutgoing, healOutgoing, type OutgoingReport } from "./comms-outgoing-health"
 import { probeBridge } from "./platform-mail"
 import { refreshLeadComms } from "./platform-atlas-comms"
@@ -62,15 +64,12 @@ import {
   buildTouchPayload,
   nextFollowUpState,
   type ChannelBlindness,
-  emailChannelLabel,
-  readCalendarEvents,
   shouldFileComms,
   countLeadTasks,
   selectPulseLeads,
   describeDrops,
   storedLeadScore,
   channelFetchLimit,
-  threadInWindow,
   validPulseDays,
   adminLeadName,
   ungatedForLoaded,
@@ -186,41 +185,6 @@ function formatDate(iso: string): string {
  * Search Google Calendar for events matching a lead's name/email.
  * Returns events split into past and upcoming.
  */
-async function fetchLeadCalendarEvents(
-  lead: { name?: string; email?: string; emails?: string[]; id: number },
-  opts: { days?: number; futureDays?: number } = {},
-): Promise<{ past: any[]; upcoming: any[] }> {
-  const pastDays = opts.days ?? 30
-  const futureDays = opts.futureDays ?? 30
-  const now = new Date()
-  const timeMin = new Date(now.getTime() - pastDays * 86400000).toISOString()
-  const timeMax = new Date(now.getTime() + futureDays * 86400000).toISOString()
-
-  const result = await calExec("get_events", { time_min: timeMin, time_max: timeMax, max_results: 2500 })
-  // Throws when no calendar was read (#189155) — an unread calendar is "not measured", never 0.
-  const events: any[] = readCalendarEvents(result)
-
-  // Client-side filter: match lead name or ANY email in summary/description/attendees
-  const nameL = (lead.name ?? "").toLowerCase()
-  const emailsToMatch = lead.emails?.length ? lead.emails : (lead.email ? [lead.email.toLowerCase()] : [])
-  const filtered = events.filter((ev: any) => {
-    const haystack = [ev.summary, ev.description, JSON.stringify(ev.attendees ?? [])].join(" ").toLowerCase()
-    if (emailsToMatch.some((e) => haystack.includes(e))) return true
-    if (nameL && nameL.length > 2 && haystack.includes(nameL)) return true
-    return false
-  })
-
-  const past: any[] = []
-  const upcoming: any[] = []
-  for (const ev of filtered) {
-    const start = new Date(ev.start || ev.start_time || "")
-    if (start < now) past.push(ev)
-    else upcoming.push(ev)
-  }
-  past.sort((a, b) => new Date(b.start || "").getTime() - new Date(a.start || "").getTime())
-  upcoming.sort((a, b) => new Date(a.start || "").getTime() - new Date(b.start || "").getTime())
-  return { past, upcoming }
-}
 
 /**
  * Resolve a lead ID from a numeric ID, name, or email.
@@ -4340,15 +4304,8 @@ const LeadsPulseCommand = cmd({
       channelSpinner.start("Scanning channels…")
 
       const days = args.days as number
-      const channels: { name: string; label?: string; messages: any[]; error?: string; undated?: number }[] = []
+      const channels: Channel[] = []
 
-      // Timeout wrapper — prevents any single channel fetch from hanging the entire pulse (#104244)
-      const withTimeout = <T>(promise: Promise<T>, ms: number, label: string): Promise<T> => {
-        return Promise.race([
-          promise,
-          new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms)),
-        ])
-      }
       const CHANNEL_TIMEOUT = 15000 // 15s per channel
 
       // Check if the lead has any contact info at all (#55721)
@@ -4357,260 +4314,15 @@ const LeadsPulseCommand = cmd({
         prompts.log.warn(`Lead #${leadId} has no email or phone — cannot scan Gmail, iMessage, or Apple Mail.`)
         prompts.log.info(`Add contact info: ${dim(`iris leads update ${leadId} --email "…" --phone "…"`)}`)
       } else {
-        // Build parallel fetches
-        const fetches: Promise<void>[] = []
         // #189205: --limit is how many rows are SHOWN. The fetch asks for a count's worth.
         const msgLimit = channelFetchLimit(args.limit)
 
-        // Gmail (via lead-specific Gmail threads endpoint — avoids MCP 422) (#55620)
-        if (email) {
-          fetches.push(
-            withTimeout(irisFetch(`/api/v1/leads/${leadId}/gmail-threads`), CHANNEL_TIMEOUT, "Gmail")
-              .then(async (r) => {
-                if (r.ok) {
-                  const d = (await r.json()) as any
-                  const threads = d?.data ?? d?.threads ?? []
-                  // Flatten thread summaries into message-like entries
-                  const msgs = Array.isArray(threads)
-                    ? threads.map((t: any) => ({
-                        // Must match fl-api getGmailThreads(): latest_subject / latest_from /
-                        // latest_snippet / thread_id. The old names never existed on the response,
-                        // so every field below fell through to its ?? default (#178548).
-                        subject: t.latest_subject ?? t.latest_snippet ?? "(no subject)",
-                        from: t.latest_from ?? "",
-                        date: t.last_message_at ?? t.first_message_at ?? "",
-                        message_count: t.message_count ?? 1,
-                        sent_count: Number(t.sent_count ?? 0),
-                        thread_id: t.thread_id ?? "",
-                      }))
-                    : []
-                  // Filter to only threads involving ANY of the lead's emails (#55723).
-                  // NOTE: this filter was INERT until #178548 — `from` was always "" because it
-                  // read a field the API does not emit, so the guard below matched every row and
-                  // nothing was ever filtered. With `from` now populated it runs for the first time.
-                  // The fail-open branch is kept deliberately: the source endpoint is already
-                  // scoped byLead($leadId) server-side, so an unknown sender is not evidence the
-                  // thread belongs to someone else, and dropping it would lose real history.
-                  //
-                  // CRITICAL: the original predicate keeps a thread only when the SENDER is the
-                  // lead, i.e. inbound only. Enabling it unchanged would have silently dropped
-                  // every OUTBOUND thread from Pulse — the first real thread checked was
-                  // "Follow-Up on Genesis Website Agreement" from alex@freelabel.net, which the
-                  // lead did not send. That would have starved the comms_freshness /
-                  // last_outbound_at signals that Pulse and the recap window depend on.
-                  // sent_count > 0 means we participated in the thread outbound, so keep it.
-                  const filtered = msgs.filter((m: any) => {
-                    // #189205: inside the --days window, like every other channel.
-                    if (!threadInWindow(m, days)) return false
-                    if (!m.from) return true // unknown sender — source is already lead-scoped
-                    if ((m.sent_count ?? 0) > 0) return true // we sent into this thread
-                    const fromLower = m.from.toLowerCase()
-                    return allEmails.some((e) => fromLower.includes(e))
-                  })
-                  // The lead email log, not an inbox — named for what it holds (#189155).
-                  channels.push({ name: "Gmail", label: emailChannelLabel(Array.isArray(threads) ? threads : []), messages: filtered })
-                } else {
-                  // Fallback: try Apple Mail-style search via bridge as Gmail backup
-                  const body = await r.text().catch(() => "")
-                  let errorMsg = `HTTP ${r.status}`
-                  try {
-                    errorMsg = JSON.parse(body)?.error ?? JSON.parse(body)?.message ?? errorMsg
-                  } catch {}
-                  channels.push({ name: "Gmail", messages: [], error: errorMsg })
-                }
-              })
-              .catch((e) => {
-                channels.push({ name: "Gmail", messages: [], error: e.message })
-              }),
-          )
-        }
-
-        // iMessage (via local bridge daemon) — 1:1 by phone/email handle or contact name
-        const handle = phone || email
-        if (handle) {
-          fetches.push(
-            withTimeout(fetch(
-              `${BRIDGE_BASE}/api/imessage/search?handle=${encodeURIComponent(handle)}&days=${days}&limit=${msgLimit}`,
-              { headers: bridgeHeaders() },
-            ), CHANNEL_TIMEOUT, "iMessage")
-              .then(async (r) => {
-                if (r.ok) {
-                  const d = (await r.json()) as any
-                  channels.push({ name: "iMessage", messages: d?.messages ?? [] })
-                } else {
-                  const body = await r.text().catch(() => "")
-                  channels.push({ name: "iMessage", messages: [], error: body || `HTTP ${r.status}` })
-                }
-              })
-              .catch((e) => {
-                channels.push({ name: "iMessage", messages: [], error: e.message })
-              }),
-          )
-        } else if (name) {
-          // Fallback: search by contact name via Contacts.app resolution
-          fetches.push(
-            withTimeout(fetch(
-              `${BRIDGE_BASE}/api/imessage/search?name=${encodeURIComponent(name)}&days=${days}&limit=${msgLimit}`,
-              { headers: bridgeHeaders() },
-            ), CHANNEL_TIMEOUT, "iMessage")
-              .then(async (r) => {
-                if (r.ok) {
-                  const d = (await r.json()) as any
-                  channels.push({ name: "iMessage", messages: d?.messages ?? [] })
-                } else {
-                  const body = await r.text().catch(() => "")
-                  channels.push({ name: "iMessage", messages: [], error: body || `HTTP ${r.status}` })
-                }
-              })
-              .catch((e) => {
-                channels.push({ name: "iMessage", messages: [], error: e.message })
-              }),
-          )
-        } else {
-          channels.push({
-            name: "iMessage",
-            messages: [],
-            error: `No phone, email, or name — add with: iris leads update ${leadId} --phone "..."`,
-          })
-        }
-
-        // #71781: iMessage group chats — scan linked chat IDs or auto-discover via bridge
-        let chatIds: string[] = Array.isArray(lead.contact_info?.chat_ids) ? lead.contact_info.chat_ids : []
-        // Auto-discover group chats if none linked and we have a handle
-        if (chatIds.length === 0 && handle) {
-          fetches.push(
-            fetch(`${BRIDGE_BASE}/api/imessage/group-chats?handle=${encodeURIComponent(handle)}&days=${days}&limit=5`, {
-              headers: bridgeHeaders(),
-            })
-              .then(async (r) => {
-                if (r.ok) {
-                  const d = (await r.json()) as any
-                  const groups = d?.group_chats ?? []
-                  for (const gc of groups) {
-                    if (gc.recent_count > 0) {
-                      chatIds.push(gc.chat_identifier)
-                    }
-                  }
-                  // Now scan discovered group chats
-                  const gcFetches = chatIds.map((chatId: string) =>
-                    fetch(
-                      `${BRIDGE_BASE}/api/imessage/search?handle=${encodeURIComponent(chatId)}&days=${days}&limit=${msgLimit}`,
-                      { headers: bridgeHeaders() },
-                    )
-                      .then(async (r2) => {
-                        if (r2.ok) {
-                          const d2 = (await r2.json()) as any
-                          const label =
-                            groups.find((g: any) => g.chat_identifier === chatId)?.display_name || chatId.slice(0, 12)
-                          channels.push({ name: `iMessage Group (${label})`, messages: d2?.messages ?? [] })
-                        }
-                      })
-                      .catch(() => {}),
-                  )
-                  await Promise.allSettled(gcFetches)
-                }
-              })
-              .catch(() => {}), // non-fatal — bridge may not support this yet
-          )
-        } else {
-          // Scan explicitly linked chat IDs
-          for (const chatId of chatIds) {
-            fetches.push(
-              fetch(
-                `${BRIDGE_BASE}/api/imessage/search?handle=${encodeURIComponent(chatId)}&days=${days}&limit=${msgLimit}`,
-                { headers: bridgeHeaders() },
-              )
-                .then(async (r) => {
-                  if (r.ok) {
-                    const d = (await r.json()) as any
-                    channels.push({ name: `iMessage Group (${chatId.slice(0, 12)}…)`, messages: d?.messages ?? [] })
-                  } else {
-                    channels.push({
-                      name: `iMessage Group`,
-                      messages: [],
-                      error: `Chat ${chatId.slice(0, 20)} — HTTP ${r.status}`,
-                    })
-                  }
-                })
-                .catch((e) => {
-                  channels.push({ name: `iMessage Group`, messages: [], error: e.message })
-                }),
-            )
-          }
-        }
-
-        // WhatsApp GROUP chats — explicitly linked groups (contact_info.whatsapp_groups), local DB.
-        // Render-only here; ingest is owned by the pre-ingest block above (correct external IDs).
-        try {
-          const wa = require("../lib/whatsapp")
-          if (wa.isAvailable()) {
-            const waItems = wa.readGroupsForLead(lead, days, msgLimit)
-            const byGroup = new Map<string, any[]>()
-            for (const it of waItems) {
-              const arr = byGroup.get(it.metadata.group_name) ?? []
-              arr.push({ text: it.body, ts: it.sent_at, from_me: it.direction === "outbound", push_name: it.metadata.push_name })
-              byGroup.set(it.metadata.group_name, arr)
-            }
-            for (const [gName, msgs] of byGroup) channels.push({ name: `WhatsApp Group (${gName})`, messages: msgs })
-          }
-        } catch {}
-
-        // Apple Mail (via local bridge daemon) — scan ALL known emails
-        for (const scanEmail of allEmails.length > 0 ? allEmails : (email ? [email] : [])) {
-          fetches.push(
-            withTimeout(fetch(
-              `${BRIDGE_BASE}/api/mail/search?from=${encodeURIComponent(scanEmail)}&days=${days}&limit=${msgLimit}&include_body=0&include_attachments=1`,
-              { headers: bridgeHeaders() },
-            ), CHANNEL_TIMEOUT, `Apple Mail (${scanEmail})`)
-              .then(async (r) => {
-                if (r.ok) {
-                  const d = (await r.json()) as any
-                  const msgs = d?.messages ?? []
-                  // Merge into existing Apple Mail channel or create new
-                  const existing = channels.find((ch) => ch.name === "Apple Mail")
-                  if (existing) {
-                    // Dedup by date+subject
-                    for (const m of msgs) {
-                      if (!existing.messages.some((e: any) => e.date === m.date && e.subject === m.subject)) {
-                        existing.messages.push(m)
-                      }
-                    }
-                  } else {
-                    channels.push({ name: "Apple Mail", messages: msgs })
-                  }
-                } else {
-                  const body = await r.text().catch(() => "")
-                  if (!channels.find((ch) => ch.name === "Apple Mail")) {
-                    channels.push({ name: "Apple Mail", messages: [], error: body || `HTTP ${r.status}` })
-                  }
-                }
-              })
-              .catch((e) => {
-                if (!channels.find((ch) => ch.name === "Apple Mail")) {
-                  channels.push({ name: "Apple Mail", messages: [], error: e.message })
-                }
-              }),
-          )
-        }
-
-        // Google Calendar meetings (search by lead name/email)
-        fetches.push(
-          withTimeout(fetchLeadCalendarEvents({ name, email, emails: allEmails, id: leadId }, { days, futureDays: 90 }), CHANNEL_TIMEOUT, "Calendar")
-            .then(({ past, upcoming }) => {
-              const allEvents = [...upcoming, ...past].map((ev) => ({
-                summary: ev.summary || "(no title)",
-                date: ev.start || ev.start_time || "",
-                status: new Date(ev.start || ev.start_time || "") >= new Date() ? "upcoming" : "past",
-                location: ev.location || "",
-              }))
-              channels.push({ name: "Meetings", messages: allEvents })
-            })
-            .catch((e) => {
-              channels.push({ name: "Meetings", messages: [], error: e.message })
-            }),
-        )
-
-        await Promise.allSettled(fetches)
+        // The channels are the default "contact" PulseScript (#189244): one read-only stop per
+        // channel, run in parallel, listed in the order they answer.
+        const query: ContactQuery = { leadId, lead, name, email, phone, allEmails, days, msgLimit, timeoutMs: CHANNEL_TIMEOUT }
+        await runScript(scriptFor<ContactQuery, Channel[]>("contact"), query, {
+          onOutcome: (o) => channels.push(...o.output),
+        })
 
         const totalMessages = channels.reduce((sum, ch) => sum + ch.messages.length, 0)
         channelSpinner.stop(`${totalMessages} message(s) across ${channels.length} channel(s)`)

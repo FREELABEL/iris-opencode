@@ -27,6 +27,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "fs"
 import { join, basename, relative, dirname } from "path"
 import { homedir } from "os"
 import { firstArray } from "../../util/array"
+import { runScript, scriptFor } from "../../pulse/core"
 
 export const TOPIC_SOURCES = ["git", "diary", "files", "claude_code", "opencode", "imessage", "email", "gmail", "bloq"] as const
 export type TopicSource = typeof TOPIC_SOURCES[number]
@@ -1547,7 +1548,6 @@ export async function sweepGmail(opts: SweepOptions): Promise<SourceSweep> {
  */
 export async function sweepAll(opts: SweepOptions, onStart?: (s: TopicSource) => void): Promise<SourceSweep[]> {
   await import("./pulse-topic-script")
-  const { runScript, scriptFor } = await import("../../pulse/core")
   const wanted = new Set<string>(opts.sources)
   const outcomes = await runScript(scriptFor<SweepOptions, SourceSweep>("topic"), opts, {
     only: (stop) => wanted.has(stop.id),
