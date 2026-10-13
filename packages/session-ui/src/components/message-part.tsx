@@ -59,6 +59,10 @@ import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 import { Spinner } from "@opencode-ai/ui/spinner"
 import { TextShimmer } from "@opencode-ai/ui/text-shimmer"
 import { AnimatedCountList } from "./tool-count-summary"
+import { groupParts, irisCallTrigger, irisGroupSummary, isContextGroupTool, isIrisGroupTool, sameGroups } from "./part-group"
+export { groupParts, irisCallTrigger, irisGroupSummary, isContextGroupTool, isIrisGroupTool, sameGroups }
+import type { PartGroup } from "./part-group"
+export type { ContextKind, PartGroup, PartRef } from "./part-group"
 import { ToolStatusTitle } from "./tool-status-title"
 import { patchFiles } from "./apply-patch-file"
 import { partDefaultOpen } from "./part-default-open"
@@ -604,7 +608,6 @@ function taskSession(
     .sort((a, b) => (b.time.created ?? 0) - (a.time.created ?? 0))[0]?.id
 }
 
-const CONTEXT_GROUP_TOOLS = new Set(["read", "glob", "grep", "list"])
 const HIDDEN_TOOLS = new Set(["todowrite"])
 
 function list<T>(value: T[] | undefined | null, fallback: T[]) {
@@ -619,90 +622,6 @@ function same<T>(a: readonly T[] | undefined, b: readonly T[] | undefined) {
   return a.every((x, i) => x === b[i])
 }
 
-export type PartRef = {
-  messageID: string
-  partID: string
-}
-
-export type PartGroup =
-  | {
-      key: string
-      type: "part"
-      ref: PartRef
-    }
-  | {
-      key: string
-      type: "context"
-      refs: PartRef[]
-    }
-
-function sameRef(a: PartRef, b: PartRef) {
-  return a.messageID === b.messageID && a.partID === b.partID
-}
-
-function sameGroup(a: PartGroup, b: PartGroup) {
-  if (a === b) return true
-  if (a.key !== b.key) return false
-  if (a.type !== b.type) return false
-  if (a.type === "part") {
-    if (b.type !== "part") return false
-    return sameRef(a.ref, b.ref)
-  }
-  if (b.type !== "context") return false
-  if (a.refs.length !== b.refs.length) return false
-  return a.refs.every((ref, i) => sameRef(ref, b.refs[i]!))
-}
-
-export function sameGroups(a: readonly PartGroup[] | undefined, b: readonly PartGroup[] | undefined) {
-  if (a === b) return true
-  if (!a || !b) return false
-  if (a.length !== b.length) return false
-  return a.every((item, i) => sameGroup(item, b[i]!))
-}
-
-export function groupParts(parts: { messageID: string; part: PartType }[]) {
-  const result: PartGroup[] = []
-  let start = -1
-
-  const flush = (end: number) => {
-    if (start < 0) return
-    const first = parts[start]
-    const last = parts[end]
-    if (!first || !last) {
-      start = -1
-      return
-    }
-    result.push({
-      key: `context:${first.part.id}`,
-      type: "context",
-      refs: parts.slice(start, end + 1).map((item) => ({
-        messageID: item.messageID,
-        partID: item.part.id,
-      })),
-    })
-    start = -1
-  }
-
-  parts.forEach((item, index) => {
-    if (isContextGroupTool(item.part)) {
-      if (start < 0) start = index
-      return
-    }
-
-    flush(index - 1)
-    result.push({
-      key: `part:${item.messageID}:${item.part.id}`,
-      type: "part",
-      ref: {
-        messageID: item.messageID,
-        partID: item.part.id,
-      },
-    })
-  })
-
-  flush(parts.length - 1)
-  return result
-}
 
 function index<T extends { id: string }>(items: readonly T[]) {
   return new Map(items.map((item) => [item.id, item] as const))
@@ -825,9 +744,6 @@ export function AssistantParts(props: {
   )
 }
 
-function isContextGroupTool(part: PartType): part is ToolPart {
-  return part.type === "tool" && CONTEXT_GROUP_TOOLS.has(part.tool)
-}
 
 function contextToolDetail(part: ToolPart): string | undefined {
   const info = getToolInfo(
@@ -1048,13 +964,17 @@ export function ContextToolGroup(props: {
   onSizeChange?: () => void
 }) {
   const i18n = useI18n()
-  const [localOpen, setLocalOpen] = createSignal(false)
-  const open = () => props.open ?? localOpen()
+  const [localOpen, setLocalOpen] = createSignal<boolean | undefined>(undefined)
+  // Uncontrolled, a group holding a failed call starts open (#189316); a click then decides.
+  const open = () => props.open ?? localOpen() ?? props.parts.some((part) => part.state.status === "error")
   const pending = createMemo(
     () =>
       !!props.busy || props.parts.some((part) => part.state.status === "pending" || part.state.status === "running"),
   )
   const summary = createMemo(() => contextToolSummary(props.parts))
+  // IRIS when every call in the group is one; the grouping never mixes kinds (#189316).
+  const iris = createMemo(() => props.parts.length > 0 && props.parts.every(isIrisGroupTool))
+  const irisSummary = createMemo(() => irisGroupSummary(props.parts))
   const handleOpenChange = (value: boolean) => {
     if (props.open === undefined) setLocalOpen(value)
     props.onOpenChange?.(value)
@@ -1078,8 +998,8 @@ export function ContextToolGroup(props: {
             <span data-slot="context-tool-group-label" class="shrink-0">
               <ToolStatusTitle
                 active={pending()}
-                activeText={i18n.t("ui.sessionTurn.status.gatheringContext")}
-                doneText={i18n.t("ui.sessionTurn.status.gatheredContext")}
+                activeText={i18n.t(iris() ? "ui.sessionTurn.status.runningIris" : "ui.sessionTurn.status.gatheringContext")}
+                doneText={i18n.t(iris() ? "ui.sessionTurn.status.ranIris" : "ui.sessionTurn.status.gatheredContext")}
                 split={false}
               />
             </span>
@@ -1087,6 +1007,9 @@ export function ContextToolGroup(props: {
               data-slot="context-tool-group-summary"
               class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-normal text-text-base"
             >
+<Show
+                when={iris()}
+                fallback={
               <AnimatedCountList
                 items={[
                   {
@@ -1104,6 +1027,16 @@ export function ContextToolGroup(props: {
                 ]}
                 fallback=""
               />
+                }
+              >
+                <span>{i18n.t(irisSummary().ran === 1 ? "ui.messagePart.iris.ran.one" : "ui.messagePart.iris.ran.other", { count: irisSummary().ran })}</span>
+                <Show when={irisSummary().failed > 0}>
+                  <span data-slot="context-tool-group-failed">
+                    {" · "}
+                    {i18n.t(irisSummary().failed === 1 ? "ui.messagePart.iris.failed.one" : "ui.messagePart.iris.failed.other", { count: irisSummary().failed })}
+                  </span>
+                </Show>
+              </Show>
             </span>
           </span>
           <Collapsible.Arrow />
@@ -1113,12 +1046,18 @@ export function ContextToolGroup(props: {
         <div data-component="context-tool-group-list">
           <Index each={props.parts}>
             {(partAccessor) => {
-              const trigger = createMemo(() => contextToolTrigger(partAccessor(), i18n))
+              const trigger = createMemo(() =>
+                isIrisGroupTool(partAccessor()) ? irisCallTrigger(partAccessor()) : contextToolTrigger(partAccessor(), i18n),
+              )
+              const error = createMemo(() => {
+                const st = partAccessor().state
+                return st.status === "error" ? st.error : undefined
+              })
               const running = createMemo(
                 () => partAccessor().state.status === "pending" || partAccessor().state.status === "running",
               )
               return (
-                <div data-slot="context-tool-group-item">
+                <div data-slot="context-tool-group-item" data-error={error() ? "" : undefined}>
                   <div data-component="tool-trigger">
                     <div data-slot="basic-tool-tool-trigger-content">
                       <div data-slot="basic-tool-tool-info">
@@ -1130,8 +1069,8 @@ export function ContextToolGroup(props: {
                             <Show when={trigger().subtitle}>
                               <span data-slot="basic-tool-tool-subtitle">{trigger().subtitle}</span>
                             </Show>
-                            <Show when={trigger().args?.length}>
-                              <For each={trigger().args}>
+                            <Show when={"args" in trigger() && (trigger() as { args?: string[] }).args?.length}>
+                              <For each={(trigger() as { args?: string[] }).args}>
                                 {(arg) => <span data-slot="basic-tool-tool-arg">{arg}</span>}
                               </For>
                             </Show>
@@ -1140,6 +1079,9 @@ export function ContextToolGroup(props: {
                       </div>
                     </div>
                   </div>
+                  <Show when={error()}>
+                    {(e) => <span data-slot="context-tool-group-error">{e()}</span>}
+                  </Show>
                 </div>
               )
             }}
