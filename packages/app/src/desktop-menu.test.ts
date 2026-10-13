@@ -37,8 +37,12 @@ describe("the menus send people to IRIS, not OpenCode (#187966)", () => {
   test("the native Mac menu offers Settings, and the app only answers allow-listed commands", () => {
     const menu = readFileSync(path.join(import.meta.dir, "../../desktop/src/menu.ts"), "utf8")
     expect(menu).toContain('text: "Settings..."')
-    expect(menu).toContain('detail: "settings.open"')
-    expect(NATIVE_COMMANDS.has("settings.open")).toBe(true)
+    // Every command the native menu sends must be one the app answers.
+    const sent = [...menu.matchAll(/nativeCommand\("([^"]+)"\)/g)].map((m) => m[1])
+    expect(sent).toEqual(expect.arrayContaining(["settings.open", "settings.account", "plan.upgrade"]))
+    for (const id of sent) expect([id, NATIVE_COMMANDS.has(id)]).toEqual([id, true])
+    expect(menu).toContain('text: "Account & Plan..."')
+    expect(menu).toContain('text: "Upgrade IRIS..."')
     expect(menu).toContain(`"${NATIVE_COMMAND_EVENT}"`)
   })
 

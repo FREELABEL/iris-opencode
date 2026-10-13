@@ -954,6 +954,20 @@ export default function LegacyLayout(props: ParentProps) {
         onSelect: () => openSettings(),
       },
       {
+        // The app menu's "Account & Plan…": Settings, opened on who you are, your plan and the week's allowance.
+        id: "settings.account",
+        title: "Account & plan",
+        category: language.t("command.category.settings"),
+        onSelect: () => openSettings("account"),
+      },
+      {
+        // The app menu's "Upgrade IRIS…": the in-app plan list, the same dialog as the title-bar pill.
+        id: "plan.upgrade",
+        title: "Upgrade IRIS",
+        category: language.t("command.category.settings"),
+        onSelect: () => openUpgrade(),
+      },
+      {
         id: "session.previous",
         title: language.t("command.session.previous"),
         category: language.t("command.category.session"),
@@ -1108,14 +1122,31 @@ export default function LegacyLayout(props: ParentProps) {
     })
   }
 
-  function openSettings() {
+  function openSettings(tab?: string) {
     const run = ++dialogRun
-    const module = settings.general.newLayoutDesigns()
-      ? import("@/components/settings-v2")
-      : import("@/components/dialog-settings")
+    const v2 = settings.general.newLayoutDesigns()
+    const module = v2 ? import("@/components/settings-v2") : import("@/components/dialog-settings")
     void module.then((x) => {
       if (dialogDead || dialogRun !== run) return
-      dialog.show(() => <x.DialogSettings />)
+      // Only the new Settings has an Account tab; the old one ignores the request and opens as before.
+      const Settings = x.DialogSettings as (p: { defaultValue?: string }) => any
+      dialog.show(() => <Settings defaultValue={v2 ? tab : undefined} />)
+    })
+  }
+
+  function openUpgrade() {
+    const run = ++dialogRun
+    void import("@/components/dialog-upgrade").then((x) => {
+      if (dialogDead || dialogRun !== run) return
+      const base = server.current?.http?.url?.replace(/\/$/, "") ?? ""
+      dialog.show(() => (
+        <x.DialogUpgrade
+          pricingUrl="https://web.heyiris.io/pricing?source=desktop-menu"
+          fetchJson={async <T,>(path: string) =>
+            (await (await (platform.fetch ?? globalThis.fetch)(`${base}${path}`)).json()) as T
+          }
+        />
+      ))
     })
   }
 

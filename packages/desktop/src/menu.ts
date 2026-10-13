@@ -7,6 +7,9 @@ import { getUpdateMode, runUpdater, setUpdateMode, UPDATER_ENABLED } from "./upd
 import type { UpdateMode } from "./update-policy"
 import { cliHealth, installCli, irisAction } from "./cli"
 
+/** Ask the app to run one of its commands (allow-listed in NATIVE_COMMANDS). */
+const nativeCommand = (id: string) => window.dispatchEvent(new CustomEvent("iris:native-command", { detail: id }))
+
 export async function createMenu() {
   // This used to begin `if (ostype() !== "macos") return`, which is why Windows had no menu at
   // all — not a missing File submenu, the whole menu was skipped. A client saw an update
@@ -24,72 +27,82 @@ export async function createMenu() {
           await PredefinedMenuItem.new({
             item: { About: null },
           }),
-          // macOS users look for Settings here, under the app name, and nowhere else. Without it
-          // ⌘, was the only way in (#187966). Windows has Settings in its in-app menu already.
-          // The app owns the command, so the shell asks it by event rather than reimplementing it.
+          await PredefinedMenuItem.new({ item: "Separator" }),
+          // ── You and your plan. Grouped so "where's my plan / how do I upgrade" is one glance
+          // (Alex, 2026-10-13). The app owns these screens, so the shell asks it by event
+          // (NATIVE_COMMANDS in packages/app/src/context/command.tsx allow-lists each id).
           ...(isMac
             ? [
+                // macOS users look for Settings here, under the app name, and nowhere else (#187966).
+                // Windows has Settings in its in-app menu already.
                 await MenuItem.new({
                   text: "Settings...",
                   accelerator: "Cmd+,",
-                  action: () =>
-                    window.dispatchEvent(new CustomEvent("iris:native-command", { detail: "settings.open" })),
+                  action: () => nativeCommand("settings.open"),
                 }),
               ]
             : []),
           await MenuItem.new({
-            enabled: UPDATER_ENABLED,
-            action: () => runUpdater({ alertOnFail: true, trigger: "manual" }),
-            text: "Check For Updates...",
+            text: "Account & Plan...",
+            action: () => nativeCommand("settings.account"),
           }),
-          // The setting people have been asking for, next to the thing it governs.
-          //
-          // It lives in the menu rather than only in Settings > Updates because the shell
-          // owns the prompt: the launch check runs before the webview app has mounted its
-          // settings context, so this is the one surface guaranteed to exist at the moment
-          // the preference matters. (The app-side row reads the same store.)
-          await updatesSubmenu(),
+          await MenuItem.new({
+            text: "Upgrade IRIS...",
+            action: () => nativeCommand("plan.upgrade"),
+          }),
           // Sign-in, always reachable. It used to appear ONLY as a startup prompt when no
           // credential existed, so dismissing it left no way back except relaunching the app —
           // and the thing it fixes ("0 tokens", empty replies) does not look like a sign-in
-          // problem, so nobody would think to relaunch for it. A permanent item also covers
-          // re-authenticating after a token expires, which the startup path never handled.
+          // problem, so nobody would think to relaunch for it.
           await MenuItem.new({
             action: () => invoke("open_login_window"),
             text: "Sign In...",
           }),
+          await PredefinedMenuItem.new({ item: "Separator" }),
+          // ── Updates.
           await MenuItem.new({
-            action: () => installCli(),
-            text: "Install CLI...",
+            enabled: UPDATER_ENABLED,
+            action: () => runUpdater({ alertOnFail: true, trigger: "manual" }),
+            text: "Check for Updates...",
           }),
-          // Next to the thing it diagnoses. "Install CLI..." cannot tell you whether you
-          // needed it; this can.
-          await MenuItem.new({
-            action: () => cliHealth(),
-            text: "CLI Health",
+          // The setting people have been asking for, next to the thing it governs. It lives in the
+          // menu as well as Settings because the shell owns the prompt: the launch check runs
+          // before the webview has mounted its settings context.
+          await updatesSubmenu(),
+          await PredefinedMenuItem.new({ item: "Separator" }),
+          // ── Tools for people who use the terminal and the Hive. Folded into submenus so the
+          // everyday items above stay scannable; nothing was removed.
+          await Submenu.new({
+            text: "Command Line",
+            items: [
+              await MenuItem.new({ action: () => installCli(), text: "Install CLI..." }),
+              // Next to the thing it diagnoses: "Install CLI..." cannot tell you whether you needed it.
+              await MenuItem.new({ action: () => cliHealth(), text: "CLI Health" }),
+              await MenuItem.new({
+                action: () => irisAction("auth-whoami", "IRIS Account"),
+                text: "Who Is the CLI Signed In As?",
+              }),
+            ],
           }),
-          await PredefinedMenuItem.new({
-            item: "Separator",
-          }),
-          // The Hive actions people actually need after installing, so recovery does not
-          // require a terminal. "Register" is the fix for the common case where `iris auth
-          // whoami` works but the daemon reports 401: the account key is fine and the machine
-          // simply is not a registered node — two different credentials.
-          await MenuItem.new({
-            action: () => irisAction("daemon-status", "Hive Daemon Status"),
-            text: "Hive: Daemon Status",
-          }),
-          await MenuItem.new({
-            action: () => irisAction("daemon-register", "Register Hive Node"),
-            text: "Hive: Register This Machine",
-          }),
-          await MenuItem.new({
-            action: () => irisAction("daemon-restart", "Restart Hive Daemon"),
-            text: "Hive: Restart Daemon",
-          }),
-          await MenuItem.new({
-            action: () => irisAction("auth-whoami", "IRIS Account"),
-            text: "Who Am I Logged In As",
+          // The Hive actions people need after installing, so recovery does not require a terminal.
+          // "Register" fixes the common case where `iris auth whoami` works but the daemon reports
+          // 401: the account key is fine and the machine is simply not a registered node.
+          await Submenu.new({
+            text: "Hive",
+            items: [
+              await MenuItem.new({
+                action: () => irisAction("daemon-status", "Hive Daemon Status"),
+                text: "Daemon Status",
+              }),
+              await MenuItem.new({
+                action: () => irisAction("daemon-register", "Register Hive Node"),
+                text: "Register This Machine",
+              }),
+              await MenuItem.new({
+                action: () => irisAction("daemon-restart", "Restart Hive Daemon"),
+                text: "Restart Daemon",
+              }),
+            ],
           }),
           await PredefinedMenuItem.new({
             item: "Separator",
