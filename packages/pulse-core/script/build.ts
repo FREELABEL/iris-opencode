@@ -1,6 +1,6 @@
 /**
  * Build @heyiris/pulse-core:
- *   dist/index.js, dist/heartbeats.js  — ESM for Desktop / CLI / npm consumers
+ *   dist/{index,heartbeats,pulse,query}.js — ESM for Desktop / CLI / npm consumers
  *   dist/*.d.ts                        — types (tsc, declarations only)
  *   dist/pulse-core.iife.js            — browser bundle for Genesis pages → window.IrisPulseCore
  */
@@ -13,7 +13,7 @@ process.chdir(root)
 rmSync("dist", { recursive: true, force: true })
 
 const esm = await Bun.build({
-  entrypoints: ["src/index.ts", "src/heartbeats.ts"],
+  entrypoints: ["src/index.ts", "src/heartbeats.ts", "src/pulse.ts", "src/query.ts"],
   outdir: "dist",
   format: "esm",
   target: "browser",
