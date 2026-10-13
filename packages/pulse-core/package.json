@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@heyiris/pulse-core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "The IRIS Pulse / Heartbeats state model — one versioned copy for Desktop, CLI and Genesis pages.",
   "license": "MIT",
   "type": "module",
@@ -29,7 +29,8 @@
       "bun": "./src/query.ts",
       "import": "./dist/query.js"
     },
-    "./iife": "./dist/pulse-core.iife.js"
+    "./iife": "./dist/pulse-core.iife.js",
+    "./cjs": "./dist/pulse-core.cjs"
   },
   "files": ["dist", "src", "README.md"],
   "sideEffects": false,

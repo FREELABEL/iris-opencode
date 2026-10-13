@@ -1,6 +1,7 @@
 # @heyiris/pulse-core
 
-The one copy of the IRIS Heartbeats state model (#189243, epic #189242).
+The one copy of the IRIS Heartbeats state model and the Pulse route vocabulary (#189243, #189245,
+epic #189242).
 
 Desktop ships from `iris/1.18.23`, the CLI ships from `main`, and Genesis pages ship from neither.
 They share no code, so each carried its own copy of "is this agent's heartbeat late, silent,
@@ -20,9 +21,10 @@ dependencies. Feed it heartbeat rows as the API returns them (`HeartbeatRow`) an
 | `kindOf`, `laundered`, `errorOf`, `toolsOfRun`, `beatStory`, `sectionsOf`, `toolsOf` | one run, read honestly (a "completed" run whose reply is an error is a failed beat) |
 | `ago`, `shortAgo`, `untilOf`, `durationOf`, `tokensOf`, `previewOf` | the labels |
 | types `HeartbeatRow`, `HeartbeatRun`, `HeartbeatWake`, `BeatState`, `Problem`, `WeekView`, … | |
-
-`src/pulse.ts` is a placeholder. The Pulse Source / Stop / Signal types are being designed in the
-CLI (#189244) and move here once settled.
+| `queryHeartbeats(rows, {states, since, agents, now})` | which agents are in which state, and since when — with each match's `line` and `problems` |
+| `stateSince(row, now)`, `parseSince("7d", now)`, `BEAT_STATES` | when the current state began (null when the record cannot say); a state that does not exist throws |
+| `readHeartbeat(job, runs)`, `readRun`, `isHeartbeatJob`, `unwrap`, `LIVE_STATUSES`, `RUNS_PER_ROW` | fl-api's raw job + execution rows → `HeartbeatRow` (fetch them yourself; this does no I/O) |
+| `runScript`, `runStop`, `registerDefault`, `extend`, `scriptFor`, `formatCount` (from `./pulse`) | Pulse: walk a route of Stops over Sources — shut is never 0, a floor is N+, a script is read-only |
 
 ## Use it
 
@@ -42,7 +44,7 @@ Inside this monorepo, depend on it as `"@heyiris/pulse-core": "workspace:*"`. Bu
 load it with a plain `<script>` tag and everything is on `window.IrisPulseCore`.
 
 ```html
-<script src="https://<our CDN>/pulse-core/0.1.0/pulse-core.iife.js"></script>
+<script src="https://<our CDN>/pulse-core/0.2.0/pulse-core.iife.js"></script>
 <script>
   const { stateOf, lineOf, weekOf } = window.IrisPulseCore
   const now = Date.now()
@@ -60,7 +62,7 @@ file can also be inlined into a page's `<script>` if a page must be self-contain
 ```sh
 bun test           # the model tests (ported from Desktop) + the golden test
 bun run golden     # regenerate test/fixtures/golden.json — on purpose only, then read the diff
-bun run build      # dist/: ESM + .d.ts + the IIFE
+bun run build      # dist/: ESM + .d.ts + the IIFE + pulse-core.cjs (Node require — vendored by the Hive daemon SDK)
 ```
 
 `test/fixtures/heartbeats.json` is 18 real heartbeats, anonymised (names, boards, report text and
