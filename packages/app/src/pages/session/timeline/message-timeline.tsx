@@ -21,6 +21,7 @@ import { Button } from "@opencode-ai/ui/button"
 import { Card } from "@opencode-ai/ui/card"
 import {
   ContextToolGroup,
+  failedCall,
   Message,
   MessageDivider,
   Part as MessagePart,
@@ -996,7 +997,7 @@ export function MessageTimeline(props: {
       const open = createMemo(() => {
         const chosen = toolOpen[contextOpenKey()]
         if (chosen !== undefined) return chosen === true
-        return parts().some((part) => part.state.status === "error")
+        return parts().some(failedCall)
       })
 
       return (
