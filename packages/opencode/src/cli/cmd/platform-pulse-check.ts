@@ -38,6 +38,7 @@ import {
   keywordVariants,
   topicQuality,
 } from "./pulse-check-sweep"
+import { TOPIC_LABEL } from "./pulse-topic-script"
 import {
   type DaemonPermissions,
   fetchDaemonPermissions,
@@ -52,17 +53,7 @@ import {
   UPDATE_COMMAND,
 } from "./daemon-permissions"
 
-const SOURCE_LABEL: Record<TopicSource, string> = {
-  git: "commits",
-  diary: "diary",
-  files: "files",
-  claude_code: "Claude Code",
-  opencode: "opencode",
-  imessage: "iMessage",
-  email: "Apple Mail",
-  gmail: "Gmail",
-  bloq: "Atlas",
-}
+const SOURCE_LABEL: Record<TopicSource, string> = TOPIC_LABEL
 
 function ago(iso?: string): string {
   if (!iso) return "—"
