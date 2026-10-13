@@ -9,9 +9,10 @@ import { Dynamic } from "solid-js/web"
  * Inline rather than a lucide dependency: eight icons do not justify a package, and the geometry
  * below is copied verbatim from lucide-vue-next (ISC). Change the site and this together.
  *
- * Colour follows the site: products in its Solutions menu carry their Tailwind colour; things the
- * site lists under Resources (Integrations, Models) or not at all (Agents, MCP) are drawn in the
- * text colour, as the site does.
+ * Colour follows the site: products in its Solutions menu carry their Tailwind colour. Two are
+ * coloured here though the site leaves them plain (2026-10-13, asked for): Agents takes Heartbeat's
+ * pink, since heartbeats live under Agents; Integrations takes sky, the cyan of the IRIS glow. MCP
+ * stays in the text colour.
  */
 type Shape = [tag: "path" | "rect" | "circle" | "line", attrs: Record<string, string>]
 
@@ -82,8 +83,8 @@ export const PRODUCT_ICONS: Record<string, { shapes: Shape[]; color?: string }> 
   hive: { shapes: NETWORK, color: "#f59e0b" }, // amber-500
   pulse: { shapes: ACTIVITY, color: "#fb7185" }, // rose-400
   leads: { shapes: USER_PLUS, color: "#10b981" }, // ReachR — emerald-500
-  agents: { shapes: BOT },
-  integrations: { shapes: NETWORK }, // the site's Resources › Integrations
+  agents: { shapes: BOT, color: "#ec4899" }, // pink-500 — the site's Heartbeat, which lives under Agents here
+  integrations: { shapes: NETWORK, color: "#0ea5e9" }, // sky-500 — uncoloured on the site; the cyan of the IRIS glow
   mcp: { shapes: PLUG },
 }
 

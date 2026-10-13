@@ -31,7 +31,34 @@
   animation: pls-spin 0.9s linear infinite;
 }
 @keyframes pls-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .pls-spin { animation: none; } }
+.pls-clock { min-width: 5ch; display: inline-block; }
+
+/* Running (#189286): every stop is read at once, so every pin pulses together; a light runs
+   down the rail; each tally is a shimmering bar where the count will land. */
+.pls-route--running::after {
+  content: ""; position: absolute; left: 10px; top: 14px; width: 4px; height: 36px; border-radius: 2px;
+  background: linear-gradient(transparent, var(--hsc-jade), transparent);
+  animation: pls-travel 1.6s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+@keyframes pls-travel { from { transform: translateY(0); opacity: 0; } 15% { opacity: 1; } 85% { opacity: 1; } to { transform: translateY(var(--rail, 420px)); opacity: 0; } }
+.pls-stop--reading { cursor: default; }
+.pls-stop--reading:hover { background: none; }
+.pls-stop--reading .pls-pin { border-color: var(--hsc-jade); color: var(--hsc-jade); animation: pls-pulse 1.4s ease-in-out infinite; animation-delay: calc(var(--i) * 90ms); }
+.pls-stop--reading .pls-body p { color: var(--hsc-faint); }
+@keyframes pls-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--hsc-jade) 45%, transparent); }
+  50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--hsc-jade) 0%, transparent); }
+}
+.pls-bar {
+  display: block; width: 44px; height: 10px; border-radius: 3px; margin-top: 4px;
+  background: linear-gradient(90deg, var(--hsc-rule) 0%, color-mix(in srgb, var(--hsc-jade) 35%, var(--hsc-rule)) 50%, var(--hsc-rule) 100%);
+  background-size: 200% 100%; animation: pls-shimmer 1.2s linear infinite; animation-delay: calc(var(--i) * 90ms);
+}
+@keyframes pls-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .pls-spin, .pls-route--running::after, .pls-stop--reading .pls-pin, .pls-bar { animation: none; }
+  .pls-route--running::after { display: none; }
+}
 
 .pls-lead { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin: 0 0 6px; }
 .pls-lead b { font-size: 14px; font-weight: 600; }

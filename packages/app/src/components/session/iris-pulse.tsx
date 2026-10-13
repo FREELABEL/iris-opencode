@@ -207,6 +207,47 @@ function StopDetail(props: { stop: PulseStop | undefined; index: string; now: nu
 
 // ── topic ────────────────────────────────────────────────────────────────────
 
+/**
+ * The route while it is being driven. Every stop is read AT ONCE (the sidecar fans out with
+ * Promise.all / sweepAll), so every pin pulses together — drawing them lit one by one would claim
+ * an order that is not happening. A light runs down the rail and a clock counts, so a 20-second
+ * read never looks frozen. Per-stop completion needs the route streamed (#189318).
+ */
+function PulseRunning(props: { stops: string[]; usual: string; label: string }) {
+  const started = Date.now()
+  const [t, setT] = createSignal(0)
+  const timer = setInterval(() => setT(Date.now() - started), 100)
+  onCleanup(() => clearInterval(timer))
+  return (
+    <div class="pls-running" role="status" aria-label={props.label}>
+      <p class="pls-checking">
+        <span class="pls-spin" aria-hidden="true" />
+        {props.label} <b class="hsc-num pls-clock">{(t() / 1000).toFixed(1)} s</b>
+        <span class="hsc-muted">usually {props.usual}</span>
+      </p>
+      <ol class="pls-route pls-route--running" aria-hidden="true" ref={(el) => queueMicrotask(() => el.style.setProperty("--rail", `${Math.max(0, el.offsetHeight - 50)}px`))}>
+        <For each={props.stops}>
+          {(name, i) => (
+            <li class="pls-stop pls-stop--reading" style={{ "--i": i() }}>
+              <span class="pls-pin">{i() + 1}</span>
+              <div class="pls-body">
+                <h4>{name}</h4>
+                <p>reading…</p>
+              </div>
+              <span class="pls-tally">
+                <span class="pls-bar" />
+              </span>
+            </li>
+          )}
+        </For>
+      </ol>
+    </div>
+  )
+}
+
+const TOPIC_RUN = ["Commits", "Diary", "Files", "Claude Code sessions", "opencode sessions", "iMessage", "Apple Mail", "Gmail", "Atlas"]
+const CONTACT_RUN = ["Lead record", "Deal", "Tasks", "Checks", "Pulse score", "Email log"]
+
 export function IrisPulseTopic(props: { doFetch: Fetch; project?: string; now?: () => number }) {
   const now = () => props.now?.() ?? Date.now()
   const [q, setQ] = createSignal(remember("iris.pulse.topic") ?? "")
@@ -267,10 +308,7 @@ export function IrisPulseTopic(props: { doFetch: Fetch; project?: string; now?: 
           </form>
 
           <Show when={run.loading}>
-            <p class="pls-checking" role="status">
-              <span class="pls-spin" aria-hidden="true" />
-              Checking 9 stops… <span class="hsc-muted">usually 10–30 s</span>
-            </p>
+            <PulseRunning stops={TOPIC_RUN} usual="10–30 s" label={`Driving the route for “${ask()?.q ?? ""}”`} />
           </Show>
           <Show when={!run.loading && run.latest && !run.latest.measured}>
             <p class="hsc-warn">{run.latest!.reason ?? "The route did not finish."}</p>
@@ -394,10 +432,7 @@ export function IrisPulseContact(props: { doFetch: Fetch; now?: () => number }) 
           </div>
 
           <Show when={run.loading}>
-            <p class="pls-checking" role="status">
-              <span class="pls-spin" aria-hidden="true" />
-              Reading the contact’s stops… <span class="hsc-muted">usually 1–3 s</span>
-            </p>
+            <PulseRunning stops={CONTACT_RUN} usual="1–3 s" label="Reading the contact’s stops" />
           </Show>
           <Show when={!run.loading && run.latest && !run.latest.measured}>
             <p class="hsc-warn">{run.latest!.reason ?? "Could not read this contact."}</p>

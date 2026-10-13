@@ -33,11 +33,14 @@ const wait = async (ok: () => boolean, ms = 2000) => {
   }
 }
 const NOW = Date.parse("2026-10-13T06:30:00Z")
+// The finished route's stops — not the "reading…" placeholders drawn while it runs.
+const R = ".pls-route:not(.pls-route--running) .pls-stop"
 
-function mount(which: "topic" | "contact") {
+function mount(which: "topic" | "contact", delay = 0) {
   const calls: Array<{ path: string; method: string }> = []
   const doFetch = async (path: string, init?: RequestInit) => {
     calls.push({ path, method: init?.method ?? "GET" })
+    if (delay) await new Promise((r) => setTimeout(r, delay))
     const json = (v: unknown) => new Response(JSON.stringify(v), { headers: { "Content-Type": "application/json" } })
     if (path.startsWith("/iris/pulse/topic")) return json(fixture.topic)
     if (path.startsWith("/iris/pulse/contacts/")) return json(fixture.contact)
@@ -58,9 +61,9 @@ test("Pulse › Topic: nothing runs until asked; then the route, with shut stops
   await new Promise((r) => setTimeout(r, 30))
   expect(calls.length).toBe(0)
   ;(host.querySelector(".pls-query button[type=submit]") as HTMLButtonElement).click()
-  await wait(() => host.querySelectorAll(".pls-stop").length > 0)
+  await wait(() => host.querySelectorAll(R).length > 0)
 
-  const stops = [...host.querySelectorAll(".pls-stop")]
+  const stops = [...host.querySelectorAll(R)]
   expect(stops.length).toBe(9)
   const shut = stops.filter((s) => s.hasAttribute("data-shut"))
   expect(shut.map((s) => s.querySelector("h4")?.textContent)).toEqual(["iMessage", "Apple Mail", "Gmail"])
@@ -81,21 +84,39 @@ test("Pulse › Topic: nothing runs until asked; then the route, with shut stops
 
 test("Pulse › Contact: the score, what is owed, and every unread channel shut", async () => {
   const { host, dispose, calls } = mount("contact")
-  await wait(() => host.querySelectorAll(".pls-stop").length > 0)
+  await wait(() => host.querySelectorAll(R).length > 0)
 
   expect(host.querySelector(".pls-lead b")?.textContent).toBe("Injury law client")
   expect(host.querySelector(".pls-score")?.textContent).toBe("43")
   expect(host.querySelector(".pls-blind")?.textContent).toBe("partial read — 4 of 5 channels blind")
-  const deal = [...host.querySelectorAll(".pls-stop")].find((s) => s.querySelector("h4")?.textContent === "Deal")!
+  const deal = [...host.querySelectorAll(R)].find((s) => s.querySelector("h4")?.textContent === "Deal")!
   expect(deal.querySelector(".pls-main")?.textContent).toBe("$9,950")
   expect(deal.getAttribute("data-tone")).toBe("wait")
   // the detail opens on the first stop with something owed
   expect(host.querySelector(".pls-detail .hmc-dname")?.textContent).toContain("Deal")
-  const meetings = [...host.querySelectorAll(".pls-stop")].find((s) => s.querySelector("h4")?.textContent === "Meetings")!
+  const meetings = [...host.querySelectorAll(R)].find((s) => s.querySelector("h4")?.textContent === "Meetings")!
   expect(meetings.querySelector(".pls-main")?.textContent).toBe("shut")
   expect(meetings.textContent).toContain("not “no meetings”")
   expect(host.querySelector(".pls-owed li")?.textContent).toContain("Signed contract + first payment")
   expect(calls.every((c) => c.method === "GET")).toBe(true)
+  dispose()
+  host.remove()
+})
+
+test("Pulse › running: every stop reads at once, a clock counts, and no number is shown before it exists", async () => {
+  const { host, dispose } = mount("topic", 400)
+  ;(host.querySelector(".pls-query button[type=submit]") as HTMLButtonElement).click()
+  await wait(() => host.querySelectorAll(".pls-route--running .pls-stop").length > 0)
+  const reading = [...host.querySelectorAll(".pls-route--running .pls-stop")]
+  expect(reading.map((s) => s.querySelector("h4")?.textContent)).toEqual([
+    "Commits", "Diary", "Files", "Claude Code sessions", "opencode sessions", "iMessage", "Apple Mail", "Gmail", "Atlas",
+  ])
+  expect(reading.every((s) => s.querySelector(".pls-body p")?.textContent === "reading…")).toBe(true)
+  expect(host.querySelector(".pls-route--running .pls-main")).toBeNull()
+  expect(host.querySelector(".pls-clock")?.textContent).toMatch(/^\d+\.\d s$/)
+  // and the placeholder gives way to the real route
+  await wait(() => host.querySelectorAll(R).length > 0)
+  expect(host.querySelector(".pls-route--running")).toBeNull()
   dispose()
   host.remove()
 })
