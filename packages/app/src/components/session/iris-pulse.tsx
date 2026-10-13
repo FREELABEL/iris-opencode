@@ -610,9 +610,9 @@ export function IrisPulseContact(props: { doFetch: Fetch; now?: () => number }) 
                     <b>{d().lead.name}</b>
                     <Show when={d().lead.company}>
                       {(c) => (
-                        <span class="pls-chip" title="Company">
+                        <span class="pls-chip" title={c()}>
                           <Ico d={BUILDING} />
-                          {c()}
+                          <span class="pls-chip-t">{c()}</span>
                         </span>
                       )}
                     </Show>

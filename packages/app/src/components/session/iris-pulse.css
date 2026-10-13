@@ -108,9 +108,11 @@
 /* Selected: the card ground, and the pin filled. Not an inset edge — on a rounded stop that edge
    curved round the pin like a bracket. */
 .pls-stop[aria-pressed="true"] { background: var(--hsc-card); }
-.pls-stop[aria-pressed="true"] .pls-pin { background: var(--hsc-jade); border-color: var(--hsc-jade); color: var(--hsc-surface); }
-.pls-stop[aria-pressed="true"][data-owed] .pls-pin { background: var(--hsc-amber); border-color: var(--hsc-amber); }
-.pls-stop[aria-pressed="true"][data-shut] .pls-pin { background: var(--hsc-surface); color: var(--hsc-ink2); border-color: var(--hsc-ink2); }
+/* .pls-route prefix: these must beat the tone rules below ([data-owed] sets the pin text amber —
+   amber on an amber fill hid the number). */
+.pls-route .pls-stop[aria-pressed="true"] .pls-pin { background: var(--hsc-jade); border-color: var(--hsc-jade); color: var(--hsc-surface); }
+.pls-route .pls-stop[aria-pressed="true"][data-owed] .pls-pin { background: var(--hsc-amber); border-color: var(--hsc-amber); color: var(--hsc-surface); }
+.pls-route .pls-stop[aria-pressed="true"][data-shut] .pls-pin { background: var(--hsc-surface); color: var(--hsc-ink2); border-color: var(--hsc-ink2); }
 .pls-stop:focus-visible { outline: 2px solid var(--border-interactive-focus, var(--hsc-jade)); outline-offset: -2px; }
 .pls-pin {
   position: relative; z-index: 1; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center;
@@ -194,8 +196,9 @@
 .pls-lead { align-items: center; gap: 6px 8px; }
 .pls-chip {
   display: inline-flex; align-items: center; gap: 5px; max-width: 26ch; padding: 1px 8px; border-radius: 999px;
-  font-size: 11.5px; color: var(--hsc-ink2); background: var(--hsc-card); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 11.5px; color: var(--hsc-ink2); background: var(--hsc-card); white-space: nowrap; min-width: 0;
 }
+.pls-chip-t { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .pls-chip--status { border: 1px solid var(--hsc-rule); background: none; }
 .pls-lock { display: inline-grid; place-items: center; color: var(--hsc-faint); }
 .pls-err { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
