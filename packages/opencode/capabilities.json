@@ -11758,7 +11758,7 @@
       "aliases": [
         "daily"
       ],
-      "run": "iris pulse",
+      "run": "iris pulse [keyword..]",
       "haystack": "pulse daily agency view: diary digest + lead scorecard + ungated leads alerts list add remove check admin agency view: diary digest + lead scorecard + ungated leads status filter by lead status (admin mode) bloq filter by bloq id (admin mode) notify send pulse summary to yourself via imessage heal repair unlogged sends that already name their lead json json output"
     },
     {
@@ -11783,7 +11783,7 @@
       "describe": "list your pulse alert rules",
       "aliases": [],
       "run": "iris pulse alerts list",
-      "haystack": "pulse alerts list list your pulse alert rules"
+      "haystack": "pulse alerts list list your pulse alert rules json json output"
     },
     {
       "kind": "command",
