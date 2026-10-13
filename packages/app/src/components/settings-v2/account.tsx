@@ -236,6 +236,9 @@ export const SettingsAccountV2: Component = () => {
   // One action at a time, named by the account it is for, so two clicks cannot race a restart.
   const [accountAction, setAccountAction] = createSignal<{ ref: string; kind: "switch" | "remove" } | null>(null)
   const [accountError, setAccountError] = createSignal<string | null>(null)
+  // Outside the desktop nothing can restart the engine, and it reads its key once, at start. So a
+  // switch there is saved, not finished — and the page says so rather than pretending.
+  const [switchedTo, setSwitchedTo] = createSignal<string | null>(null)
   const accountPost = async (path: "switch" | "remove", ref: string) => {
     const base = server.current?.http?.url?.replace(/\/$/, "")
     const res = await (platform.fetch ?? globalThis.fetch)(`${base}/iris/accounts/${path}`, {
@@ -252,7 +255,10 @@ export const SettingsAccountV2: Component = () => {
     try {
       await accountPost("switch", a.ref)
       // The engine reads its key once, at start; the restart is what makes chat act as this account.
-      await platform.restart()
+      if (canSignOut()) return await platform.restart()
+      setSwitchedTo(savedAccountLabel(a))
+      setAccountAction(null)
+      await refetchSaved()
     } catch (e) {
       setAccountError(`Couldn't switch to ${savedAccountLabel(a)}: ${e instanceof Error ? e.message : String(e)}`)
       setAccountAction(null)
@@ -392,7 +398,7 @@ export const SettingsAccountV2: Component = () => {
           </SettingsListV2>
         </div>
 
-        <Show when={canSignOut() && me()?.signedIn}>
+        <Show when={me()?.signedIn}>
           <div class="settings-v2-section" data-action="account-saved">
             <h3 class="settings-v2-section-title">Other accounts on this computer</h3>
             <SettingsListV2>
@@ -403,7 +409,9 @@ export const SettingsAccountV2: Component = () => {
                     description={
                       a.email && a.email !== savedAccountLabel(a)
                         ? a.email
-                        : "Switching restarts IRIS. Each account keeps its own chats."
+                        : canSignOut()
+                          ? "Switching restarts IRIS. Each account keeps its own chats."
+                          : "Switching changes the saved sign-in; restart the IRIS server to finish."
                     }
                   >
                     <div class="flex items-center gap-2" data-action="account-saved-row">
@@ -423,19 +431,33 @@ export const SettingsAccountV2: Component = () => {
                       >
                         {accountAction()?.ref === a.ref && accountAction()?.kind === "switch"
                           ? "Switching…"
-                          : "Switch and restart"}
+                          : canSignOut()
+                            ? "Switch and restart"
+                            : "Switch"}
                       </ButtonV2>
                     </div>
                   </SettingsRowV2>
                 )}
               </For>
+              <Show when={switchedTo()}>
+                {(name) => (
+                  <SettingsRowV2
+                    title={`Switched to ${name()}`}
+                    description="Saved for the app and the iris command. Restart the IRIS server to finish: chat keeps using the account it started with until then."
+                  >
+                    <span data-action="account-switched" />
+                  </SettingsRowV2>
+                )}
+              </Show>
               <SettingsRowV2
                 title="Add another account"
                 description={
                   accountError() ??
-                  (others().length === 0
-                    ? "Sign in as a second account without signing out of this one. Each account keeps its own chats."
-                    : "Sign in as another account. The ones above stay signed in.")
+                  (!platform.openSignIn
+                    ? "Run iris auth login in a terminal as the other account, then reopen Settings. The account you are in now is kept."
+                    : others().length === 0
+                      ? "Sign in as a second account without signing out of this one. Each account keeps its own chats."
+                      : "Sign in as another account. The ones above stay signed in.")
                 }
               >
                 <Show when={platform.openSignIn}>
