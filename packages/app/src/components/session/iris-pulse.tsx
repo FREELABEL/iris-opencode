@@ -212,15 +212,30 @@ function StopDetail(props: { stop: PulseStop | undefined; index: string; now: nu
  * Run the route again, with how old the numbers on screen are. The age matters as much as the
  * button: it is how you know whether to press it. Re-runs exactly what is shown.
  */
+function Ico(props: { d: string[]; rect?: { x: number; y: number; w: number; h: number } }) {
+  return (
+    <svg class="pls-ico" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <Show when={props.rect}>{(r) => <rect x={r().x} y={r().y} width={r().w} height={r().h} rx="2" />}</Show>
+      <For each={props.d}>{(d) => <path d={d} />}</For>
+    </svg>
+  )
+}
+// lucide (ISC): refresh-cw, building-2, lock
+const REFRESH = ["M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8", "M21 3v5h-5", "M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16", "M8 16H3v5"]
+const BUILDING = ["M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z", "M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2", "M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2", "M10 6h4", "M10 10h4", "M10 14h4", "M10 18h4"]
+const LOCK = ["M7 11V7a5 5 0 0 1 10 0v4"]
+
 function Again(props: { at?: number; now: () => number; onRun: () => void; label?: string }) {
   const [tick, setTick] = createSignal(0)
   const timer = setInterval(() => setTick((n) => n + 1), 30_000)
   onCleanup(() => clearInterval(timer))
+  const ago = () => (tick(), readAgo(props.at, props.now()))
+  const label = () => props.label ?? "Run again"
   return (
     <span class="pls-again">
-      <Show when={(tick(), readAgo(props.at, props.now()))}>{(t) => <span class="hsc-muted">{t()}</span>}</Show>
-      <button type="button" class="hmc-btn pls-again-btn" onClick={props.onRun}>
-        {props.label ?? "Run again"}
+      <Show when={ago()}>{(t) => <span class="pls-ago">{t().replace(/^read /, "")}</span>}</Show>
+      <button type="button" class="pls-again-btn" onClick={props.onRun} aria-label={label()} title={`${label()}${ago() ? ` · ${ago()}` : ""}`}>
+        <Ico d={REFRESH} />
       </button>
     </span>
   )
@@ -431,7 +446,7 @@ export function IrisPulseTopic(props: { doFetch: Fetch; project?: string; now?: 
           <Show when={!run.loading && run.latest && !run.latest.measured}>
             <p class="hsc-warn pls-err">
               {run.latest!.reason ?? "The route did not finish."}{" "}
-              <button type="button" class="hmc-btn pls-again-btn" onClick={again}>
+              <button type="button" class="hmc-btn pls-retry" onClick={again}>
                 Try again
               </button>
             </p>
@@ -571,7 +586,7 @@ export function IrisPulseContact(props: { doFetch: Fetch; now?: () => number }) 
           <Show when={!run.loading && run.latest && !run.latest.measured}>
             <p class="hsc-warn pls-err">
               {run.latest!.reason ?? "Could not read this contact."}{" "}
-              <button type="button" class="hmc-btn pls-again-btn" onClick={again}>
+              <button type="button" class="hmc-btn pls-retry" onClick={again}>
                 Try again
               </button>
             </p>
@@ -593,8 +608,17 @@ export function IrisPulseContact(props: { doFetch: Fetch; now?: () => number }) 
                 <>
                   <div class="pls-lead">
                     <b>{d().lead.name}</b>
-                    <span class="hsc-muted">
-                      {[d().lead.company, d().lead.status, `${d().days} days`, "read-only"].filter(Boolean).join(" · ")}
+                    <Show when={d().lead.company}>
+                      {(c) => (
+                        <span class="pls-chip" title={c()}>
+                          <Ico d={BUILDING} />
+                          <span class="pls-chip-t">{c()}</span>
+                        </span>
+                      )}
+                    </Show>
+                    <Show when={d().lead.status}>{(st) => <span class="pls-chip pls-chip--status">{st()}</span>}</Show>
+                    <span class="pls-lock" title="Read-only: opening a contact never writes — the score is read, not re-saved" aria-label="Read-only">
+                      <Ico d={LOCK} rect={{ x: 3, y: 11, w: 18, h: 11 }} />
                     </span>
                     <Again at={readAt()} now={now} onRun={again} />
                   </div>

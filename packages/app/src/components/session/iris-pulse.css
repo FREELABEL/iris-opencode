@@ -57,7 +57,9 @@
 @keyframes pls-land { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
 .pls-stop--reading { cursor: default; }
 .pls-stop--reading:hover { background: none; }
-.pls-stop--reading .pls-pin { border-color: var(--hsc-jade); color: var(--hsc-jade); animation: pls-pulse 1.4s ease-in-out infinite; animation-delay: calc(var(--i) * 90ms); }
+/* In step, not staggered: these stops are read at the same moment, and staggered rings read as six
+   pins of different sizes. */
+.pls-stop--reading .pls-pin { border-color: var(--hsc-jade); color: var(--hsc-jade); animation: pls-pulse 1.4s ease-in-out infinite; }
 .pls-stop--reading .pls-body p { color: var(--hsc-faint); }
 @keyframes pls-pulse {
   0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--hsc-jade) 45%, transparent); }
@@ -66,7 +68,7 @@
 .pls-bar {
   display: block; width: 44px; height: 10px; border-radius: 3px; margin-top: 4px;
   background: linear-gradient(90deg, var(--hsc-rule) 0%, color-mix(in srgb, var(--hsc-jade) 35%, var(--hsc-rule)) 50%, var(--hsc-rule) 100%);
-  background-size: 200% 100%; animation: pls-shimmer 1.2s linear infinite; animation-delay: calc(var(--i) * 90ms);
+  background-size: 200% 100%; animation: pls-shimmer 1.2s linear infinite;
 }
 @keyframes pls-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
 @media (prefers-reduced-motion: reduce) {
@@ -106,9 +108,11 @@
 /* Selected: the card ground, and the pin filled. Not an inset edge — on a rounded stop that edge
    curved round the pin like a bracket. */
 .pls-stop[aria-pressed="true"] { background: var(--hsc-card); }
-.pls-stop[aria-pressed="true"] .pls-pin { background: var(--hsc-jade); border-color: var(--hsc-jade); color: var(--hsc-surface); }
-.pls-stop[aria-pressed="true"][data-owed] .pls-pin { background: var(--hsc-amber); border-color: var(--hsc-amber); }
-.pls-stop[aria-pressed="true"][data-shut] .pls-pin { background: var(--hsc-surface); color: var(--hsc-ink2); border-color: var(--hsc-ink2); }
+/* .pls-route prefix: these must beat the tone rules below ([data-owed] sets the pin text amber —
+   amber on an amber fill hid the number). */
+.pls-route .pls-stop[aria-pressed="true"] .pls-pin { background: var(--hsc-jade); border-color: var(--hsc-jade); color: var(--hsc-surface); }
+.pls-route .pls-stop[aria-pressed="true"][data-owed] .pls-pin { background: var(--hsc-amber); border-color: var(--hsc-amber); color: var(--hsc-surface); }
+.pls-route .pls-stop[aria-pressed="true"][data-shut] .pls-pin { background: var(--hsc-surface); color: var(--hsc-ink2); border-color: var(--hsc-ink2); }
 .pls-stop:focus-visible { outline: 2px solid var(--border-interactive-focus, var(--hsc-jade)); outline-offset: -2px; }
 .pls-pin {
   position: relative; z-index: 1; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center;
@@ -176,6 +180,25 @@
 }
 
 /* Run again (#189319): pushed to the end of the summary / lead line, with the age of the numbers. */
-.pls-again { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
-.pls-again-btn { font-size: 11.5px; padding: 3px 10px; }
+.pls-again { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.pls-ago { font-size: 11px; color: var(--hsc-faint); }
+.pls-again-btn {
+  all: unset; box-sizing: border-box; display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 6px;
+  border: 1px solid var(--hsc-rule); color: var(--hsc-ink2); cursor: pointer;
+}
+.pls-again-btn:hover { color: var(--hsc-jade); border-color: var(--hsc-jade); }
+.pls-again-btn:focus-visible { outline: 2px solid var(--border-interactive-focus, var(--hsc-jade)); outline-offset: 1px; }
+.pls-again-btn:active .pls-ico { transform: rotate(90deg); transition: transform 160ms ease; }
+.pls-retry { font-size: 11.5px; padding: 3px 10px; }
+.pls-ico { flex: none; }
+
+/* The contact line: name, then small chips — not a sentence of metadata. */
+.pls-lead { align-items: center; gap: 6px 8px; }
+.pls-chip {
+  display: inline-flex; align-items: center; gap: 5px; max-width: 26ch; padding: 1px 8px; border-radius: 999px;
+  font-size: 11.5px; color: var(--hsc-ink2); background: var(--hsc-card); white-space: nowrap; min-width: 0;
+}
+.pls-chip-t { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.pls-chip--status { border: 1px solid var(--hsc-rule); background: none; }
+.pls-lock { display: inline-grid; place-items: center; color: var(--hsc-faint); }
 .pls-err { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
