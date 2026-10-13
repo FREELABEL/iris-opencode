@@ -28,6 +28,7 @@ import {
   silentSince,
   HISTORY_KEPT_SINCE,
   toolsOfRun,
+  ledgerCovers,
   type HeartbeatRow,
 } from "./iris-heartbeats-model"
 
@@ -243,7 +244,7 @@ describe("Agents › Heartbeats — measured, not replayed (#189237–#189239)",
     const free = { ...m, schedule: null }
     const inferred = weekOf(free, NOW).missed
     const at = new Date(inferred[inferred.length - 1]).toISOString()
-    const led = { ...free, ledgerSince: "2026-10-01T00:00:00Z", wakes: [{ at, dueAt: at, outcome: "skipped", kind: "skipped", reason: "No projects to watch", heldUntil: null }] }
+    const led = { ...free, ledgerSince: at, wakes: [{ at, dueAt: at, outcome: "skipped", kind: "skipped", reason: "No projects to watch", heldUntil: null }] }
     const w = weekOf(led, NOW)
     expect(w.missed.length).toBe(inferred.length - 1)
     expect(w.skips).toEqual([{ at: Date.parse(at), reason: "No projects to watch", kind: "skipped", byDesign: false }])
@@ -285,5 +286,38 @@ describe("Agents › Heartbeats — measured, not replayed (#189237–#189239)",
     const beat = (id: number, h: number, cont: ReturnType<typeof c> | null) => ({ ...m.runs[0], id, startedAt: at(h), completedAt: at(h), continuity: cont })
     const runs = [beat(1, 1, c(true, true)), beat(2, 9, c(true, false)), beat(3, 17, c(false, false)), beat(4, 25, null)]
     expect(rollupOf({ ...m, runs }, NOW).remembered).toEqual({ measured: 3, read: 2, used: 1 })
+  })
+})
+
+describe("Agents › Heartbeats — inside the wake ledger, a gap is not a skip (13 Oct dry run)", () => {
+  // Job 720 as measured 13 Oct 05:26Z: hourly, weekdays, beat at 04:05, scheduler set next = 13:00.
+  const at = (iso: string) => Date.parse(iso)
+  const beat = { id: 1, status: "completed", startedAt: "2026-10-13T04:05:00Z", completedAt: "2026-10-13T04:05:26Z", durationMs: 26000, tokens: null, model: null, preview: "ok", error: null, response: "**Status** — ok" }
+  const row: HeartbeatRow = {
+    ...by("Market Watch Agent"),
+    frequency: "hourly", status: "scheduled", nextRunAt: "2026-10-13T13:00:00Z", lastRunAt: "2026-10-13T04:05:08Z",
+    schedule: { timezone: "America/New_York", days: ["mon", "tue", "wed", "thu", "fri"], hours: null },
+    lastSkip: null, runs: [beat], runsMeasured: true, wakes: [], ledgerSince: "2026-10-13T03:36:15Z",
+  }
+  const NOW2 = at("2026-10-13T05:26:00Z")
+  test("no wake recorded since its beat → not silent, and the week owes nothing", () => {
+    expect(ledgerCovers(row, at(beat.completedAt))).toBe(true)
+    expect(stateOf(row, NOW2)).toBe("ok")
+    expect(weekOf(row, NOW2).missed).toEqual([])
+  })
+  test("a recorded skip after the beat → silent, with the reason drawn as a skip", () => {
+    const skipped = { ...row, wakes: [{ at: "2026-10-13T05:05:00Z", dueAt: "2026-10-13T05:05:00Z", outcome: "skipped", kind: "skipped", reason: "No projects to watch", heldUntil: null }] }
+    expect(stateOf(skipped, NOW2)).toBe("silent")
+    expect(weekOf(skipped, NOW2).skips.map((k) => k.reason)).toEqual(["No projects to watch"])
+  })
+  test("a skip by design (outside its hours) inside the ledger is not silence", () => {
+    const gated = { ...row, wakes: [{ at: "2026-10-13T05:05:00Z", dueAt: null, outcome: "skipped", kind: "skipped", reason: "Outside active hours", heldUntil: null }] }
+    expect(stateOf(gated, NOW2)).toBe("ok")
+  })
+  test("before the ledger began, the old inference still applies", () => {
+    const old = { ...row, ledgerSince: "2026-10-13T05:00:00Z" }
+    expect(ledgerCovers(old, at(beat.completedAt))).toBe(false)
+    expect(stateOf(old, NOW2)).toBe("silent")
+    expect(stateOf({ ...row, wakes: null }, NOW2)).toBe("silent")
   })
 })

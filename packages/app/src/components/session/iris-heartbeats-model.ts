@@ -264,6 +264,14 @@ export function silentSince(r: HeartbeatRow, now: number = Date.now()): string |
   if (skip && Number.isFinite(t(skip.at)) && !(t(skip.at) <= beat)) {
     return byDesign(skip.reason) ? null : (beatIso ?? "never")
   }
+  // Once the wake ledger covers the time since its last beat (#189237), every skipped wake is
+  // RECORDED — so silence is a recorded skip, never an empty gap. Measured 13 Oct: two hourly
+  // agents beat at 04:05 and the scheduler set their next wake for 13:00; inferring a wake every
+  // hour from the cadence called them silent at 05:20 though nothing had been skipped.
+  if (ledgerCovers(r, beat)) {
+    const k = (r.wakes ?? []).find((w) => w.outcome === "skipped" && t(w.at) > beat && !byDesign(w.reason))
+    return k ? beatIso : null
+  }
   const period = periodOf(r.frequency) ?? 86_400_000
   // AFTER the fix a skip no longer moves last_run_at, so the clock rule below stops seeing it.
   // Absence is evidence now: if the next beat it owed after its last one (or after the fix) has
@@ -277,6 +285,12 @@ export function silentSince(r: HeartbeatRow, now: number = Date.now()): string |
   // walk the wakes the scheduler made in (beat, woke] — anchored on the last one it made
   for (let k = woke, n = 0; k > from + LATE_AFTER_MS && n < 2000; k -= period, n++) if (mayAct(r, k)) return beatIso ?? "never"
   return null
+}
+
+/** The ledger was read and was already recording at `ms` — from then on, absence is not evidence. */
+export function ledgerCovers(r: HeartbeatRow, ms: number): boolean {
+  const since = t(r.ledgerSince ?? null)
+  return !!r.wakes && Number.isFinite(since) && Number.isFinite(ms) && ms >= since
 }
 
 /** The cadence the editors show disagrees with the one that fires (#189170). */
@@ -584,6 +598,8 @@ export function weekOf(r: HeartbeatRow, now: number): WeekView {
       r.runsMeasured &&
       noBeat(e) &&
       !recorded(e) &&
+      // inside the ledger only a RECORDED skip is a skip (drawn from `skips`), never a gap
+      !ledgerCovers(r, e) &&
       ((e > newest + near && e <= upTo) || (e > HISTORY_KEPT_SINCE && e < now - LATE_AFTER_MS && e > newest + near)),
   )
   // Before the fix, a wake with no row may have run and been overwritten — not judged.
