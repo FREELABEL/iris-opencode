@@ -62,7 +62,12 @@
   padding: 8px 8px 8px 0; border-radius: 8px; cursor: pointer;
 }
 .pls-stop:hover { background: var(--hsc-card); }
-.pls-stop[aria-pressed="true"] { background: var(--hsc-card); box-shadow: inset 2px 0 0 var(--hsc-jade); }
+/* Selected: the card ground, and the pin filled. Not an inset edge — on a rounded stop that edge
+   curved round the pin like a bracket. */
+.pls-stop[aria-pressed="true"] { background: var(--hsc-card); }
+.pls-stop[aria-pressed="true"] .pls-pin { background: var(--hsc-jade); border-color: var(--hsc-jade); color: var(--hsc-surface); }
+.pls-stop[aria-pressed="true"][data-owed] .pls-pin { background: var(--hsc-amber); border-color: var(--hsc-amber); }
+.pls-stop[aria-pressed="true"][data-shut] .pls-pin { background: var(--hsc-surface); color: var(--hsc-ink2); border-color: var(--hsc-ink2); }
 .pls-stop:focus-visible { outline: 2px solid var(--border-interactive-focus, var(--hsc-jade)); outline-offset: -2px; }
 .pls-pin {
   position: relative; z-index: 1; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center;

@@ -61,6 +61,12 @@ const BOT: Shape[] = [
   ["path", { d: "M15 13v2" }],
   ["path", { d: "M9 13v2" }],
 ]
+const ACTIVITY: Shape[] = [
+  [
+    "path",
+    { d: "M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2" },
+  ],
+]
 const PLUG: Shape[] = [
   ["path", { d: "M12 22v-5" }],
   ["path", { d: "M9 8V2" }],
@@ -74,6 +80,7 @@ export const PRODUCT_ICONS: Record<string, { shapes: Shape[]; color?: string }> 
   pages: { shapes: HAMMER, color: "#84cc16" }, // Genesis — lime-500
   playbooks: { shapes: SCROLL_TEXT, color: "#c084fc" }, // purple-400
   hive: { shapes: NETWORK, color: "#f59e0b" }, // amber-500
+  pulse: { shapes: ACTIVITY, color: "#fb7185" }, // rose-400
   leads: { shapes: USER_PLUS, color: "#10b981" }, // ReachR — emerald-500
   agents: { shapes: BOT },
   integrations: { shapes: NETWORK }, // the site's Resources › Integrations
