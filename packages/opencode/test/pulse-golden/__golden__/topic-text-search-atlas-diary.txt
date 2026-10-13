@@ -1,0 +1,28 @@
+== exit 0
+== stdout
+
+  [1mLast touched[0m  [1m5d ago[0m   [90m2 hits across 2/2 sources[0m
+[90m  widget   ·   40d window[0m
+
+  diary        [1m1[0m[90m  flat[0m[90m  (read from the Atlas diary (no local daily-diary folder))[0m
+    [90m5d ago   [0m Atlas · Daily Diary #201                       [90mReviewed the widget metrics.[0m
+  [90mApple Mail  [0m [90mnot searched[0m [90m— IRIS bridge at http://bridge.golden.test is not healthy (503)[0m
+  [90mGmail       [0m [90mnot searched[0m [90m— ConnectedAccountExpired[0m
+  Atlas        [1m1[0m[90m  flat[0m[90m  (no board by this name — searched item text across your boards instead)[0m
+    [90m5d ago   [0m #301 Docs                                      [90mWidget FAQ[0m
+
+[90m  Momentum: 2 this 40d vs 2 the 40d before — flat[0m[90m  (from diary, Atlas)[0m
+[90m  Blind spots: Apple Mail, Gmail — excluded from breadth, not counted as misses.[0m
+
+
+== stderr
+[0m
+◈  Pulse check — [1mwidget[0m
+sweeping
+sweeping diary
+sweeping Apple Mail
+sweeping Gmail
+sweeping Atlas
+[90mswept[0m
+[90miris pulse check "widget" --days 40 --sources diary,bloq,email,gmail  ·  --json[0m
+
