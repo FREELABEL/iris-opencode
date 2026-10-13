@@ -23,6 +23,8 @@ import {
   cadenceDrift,
   hoursOf,
   mayAct,
+  heldForHours,
+  nextFireAt,
   silentSince,
   type HeartbeatRow,
 } from "./iris-heartbeats-model"
@@ -35,20 +37,26 @@ const rows = snap.heartbeats as HeartbeatRow[]
 const by = (name: string) => rows.find((r) => r.agentName === name)!
 
 describe("Agents › Heartbeats — what is true", () => {
-  test("LATE comes from the clock: `scheduled` with next_run_at three days gone", () => {
-    const m = by("Market Watch Agent")
+  test("LATE comes from the clock — but a wake due outside its hours WAITS, and that is not late", () => {
+    const m = by("Market Watch Agent") // works Tue–Thu 07:00–16:00 ET; due Thu 23:00 ET
     expect(m.status).toBe("scheduled")
-    expect(stateOf(m, NOW)).toBe("late")
-    expect(lineOf(m, NOW)).toBe("Late · due 3 days ago")
-    const due = Date.parse(m.nextRunAt!)
-    expect(stateOf(m, due + 14 * 60_000)).not.toBe("late")
-    expect(stateOf(m, due + 16 * 60_000)).toBe("late")
-    // with no schedule, every 8 hours since it stopped would be owed and missing…
-    expect(weekOf({ ...m, schedule: null }, NOW).missed.length).toBe(12)
-    // …but it only works Tue–Thu 07:00–16:00 ET (#189170): those wakes were never its to make
+    // the scheduler holds an after-hours wake until the window opens: Tuesday 07:00 ET
+    expect(nextFireAt(m)).toBe("2026-10-13T11:00:00.000Z")
+    expect(heldForHours(m)).toBe(true)
+    expect(stateOf(m, NOW)).toBe("ok")
+    expect(lineOf(m, NOW)).toBe("Next in 14h · held for its hours · last beat 4 days ago")
+    // past its window opening with no beat → late
+    expect(stateOf(m, Date.parse("2026-10-13T11:16:00Z"))).toBe("late")
+    expect(stateOf(m, Date.parse("2026-10-13T11:14:00Z"))).toBe("ok")
+    // with no schedule it WOULD have been 3 days late, and owed every 8-hourly wake since
+    const free = { ...m, schedule: null }
+    expect(stateOf(free, NOW)).toBe("late")
+    expect(lineOf(free, NOW)).toBe("Late · due 3 days ago")
+    expect(weekOf(free, NOW).missed.length).toBe(12)
+    expect(problemsOf(free, NOW)[0].kind).toBe("late")
     const w = weekOf(m, NOW)
     expect(hoursOf(m)).toBe("Tue–Thu · 07:00–16:00 ET")
-    expect([w.expected.length, w.outside, w.missed.length]).toEqual([6, 15, 0])
+    expect([w.expected.length, w.missed.length]).toEqual([6, 0])
   })
 
   test("#189113: last_run_at moves on a SKIP — a wake with no run behind it is not a beat", () => {
@@ -97,13 +105,18 @@ describe("Agents › Heartbeats — what is true", () => {
 
   test("problems first; the summary does not call a skipping heartbeat beating", () => {
     const sorted = sortBeats(rows, NOW).map((r) => stateOf(r, NOW))
-    expect(sorted[0]).toBe("late")
+    expect(sorted[0]).toBe("silent")
     expect(sorted.indexOf("ok")).toBeGreaterThan(sorted.lastIndexOf("failing"))
-    expect(beatSummary(rows, NOW)).toEqual({ total: 18, beating: 9, attention: 9, paused: 0 })
+    expect(beatSummary(rows, NOW)).toEqual({ total: 18, beating: 10, attention: 8, paused: 0 })
   })
 })
 
 describe("the enforced schedule (#189170)", () => {
+  test("the replayed scheduler gives a 16:00–17:00 weekday agent one beat a weekday", () => {
+    const w = weekOf(by("Oversight Agent"), NOW)
+    expect(w.expected.length).toBe(5)
+    expect(new Set(w.expected.map((e) => new Date(e).toISOString().slice(11, 16)))).toEqual(new Set(["20:00"])) // 16:00 ET — the real Oct 7 run started 20:00:46Z
+  })
   test("a wake may act only inside the schedule's days and hours, in ITS timezone", () => {
     const o = by("Oversight Agent") // weekdays 16:00–17:00 ET
     expect(mayAct(o, Date.parse("2026-10-12T20:30:00Z"))).toBe(true) // Mon 16:30 ET

@@ -11,6 +11,8 @@ import {
   durationOf,
   errorOf,
   hoursOf,
+  heldForHours,
+  nextFireAt,
   kindOf,
   lastBeatAt,
   rollupOf,
@@ -74,7 +76,7 @@ function Week(props: { row: HeartbeatRow; now: number; picked?: number; onPick: 
           {roll().failed ? ` · ${roll().failed} failed` : ""}
           {roll().missed ? ` · ${roll().missed} skipped` : ""}
           {roll().expected ? ` · of ${roll().expected} due` : ""}
-          {roll().outside ? ` · ${roll().outside} outside its hours` : ""}
+          {roll().outside ? ` · ${roll().outside} held for its hours` : ""}
         </span>
       </figcaption>
       <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`${roll().beats} beats worked, ${roll().failed} failed, ${roll().missed} skipped this week`}>
@@ -113,10 +115,10 @@ function Week(props: { row: HeartbeatRow; now: number; picked?: number; onPick: 
         <span><i data-k="ok" /> worked</span>
         <span><i data-k="fail" /> failed</span>
         <span><i data-k="miss" /> due, did not run</span>
-        <span class="hsc-num">{w().next && props.row.status !== "paused"
-            ? w().next! > props.now
-              ? `next ${untilOf(new Date(w().next!).toISOString(), props.now)}`
-              : `was due ${untilOf(new Date(w().next!).toISOString(), props.now)}`
+        <span class="hsc-num">{props.row.status !== "paused" && nextFireAt(props.row)
+            ? Date.parse(nextFireAt(props.row)!) > props.now
+              ? `next ${untilOf(nextFireAt(props.row), props.now)}${heldForHours(props.row) ? " · held for its hours" : ""}`
+              : `was due ${untilOf(nextFireAt(props.row), props.now)}`
             : ""}</span>
       </p>
       <Show when={roll().unknown}>
@@ -470,7 +472,7 @@ export function IrisHeartbeats(props: {
                   <div>
                     <dt>Next beat</dt>
                     <dd class="hsc-num" data-low={st() === "late" ? "1" : undefined}>
-                      {paused() ? "paused" : untilOf(r().nextRunAt, now())}
+                      {paused() ? "paused" : untilOf(nextFireAt(r()), now())}
                     </dd>
                   </div>
                   <div>

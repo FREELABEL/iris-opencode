@@ -112,19 +112,43 @@ export function periodOf(frequency: string | null | undefined): number | null {
 }
 
 const PARTS = new Map<string, Intl.DateTimeFormat>()
-/** Weekday ("tue") and minute-of-day of an instant, in a timezone. */
-export function partsIn(ms: number, tz: string): { dow: string; minutes: number } {
+function fmt(tz: string): Intl.DateTimeFormat {
   let f = PARTS.get(tz)
   if (!f) {
+    const o: Intl.DateTimeFormatOptions = {
+      weekday: "short", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+    }
     try {
-      f = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
+      f = new Intl.DateTimeFormat("en-US", { ...o, timeZone: tz })
     } catch {
-      f = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
+      f = new Intl.DateTimeFormat("en-US", { ...o, timeZone: "UTC" })
     }
     PARTS.set(tz, f)
   }
-  const p = Object.fromEntries(f.formatToParts(new Date(ms)).map((x) => [x.type, x.value]))
-  return { dow: String(p.weekday).slice(0, 3).toLowerCase(), minutes: Number(p.hour) * 60 + Number(p.minute) }
+  return f
+}
+/** Weekday ("tue"), calendar date and minute-of-day of an instant, in a timezone. */
+export function partsIn(ms: number, tz: string): { dow: string; minutes: number; y: number; mo: number; d: number } {
+  const p = Object.fromEntries(fmt(tz).formatToParts(new Date(ms)).map((x) => [x.type, x.value]))
+  return {
+    dow: String(p.weekday).slice(0, 3).toLowerCase(),
+    minutes: Number(p.hour) * 60 + Number(p.minute),
+    y: Number(p.year),
+    mo: Number(p.month),
+    d: Number(p.day),
+  }
+}
+
+/** The instant a wall-clock time (date + minute-of-day) happens in a timezone — DST-safe. */
+export function zonedAt(y: number, mo: number, d: number, minutes: number, tz: string): number {
+  const wall = Date.UTC(y, mo - 1, d, 0, minutes)
+  const off = (ms: number) => {
+    const p = partsIn(ms, tz)
+    return Date.UTC(p.y, p.mo - 1, p.d, 0, p.minutes) - Math.floor(ms / 60_000) * 60_000
+  }
+  let guess = wall - off(wall)
+  guess = wall - off(guess)
+  return guess
 }
 
 const hm = (s: string) => {
@@ -145,6 +169,25 @@ export function mayAct(r: HeartbeatRow, ms: number): boolean {
   if (sc.days.length && !sc.days.includes(dow)) return false
   if (sc.hours && (minutes < hm(sc.hours.start) || minutes >= hm(sc.hours.end))) return false
   return true
+}
+
+/**
+ * When a wake due at `ms` actually FIRES. fl-api's scheduler does not drop a wake that falls
+ * outside the enforced hours — it leaves the job due and fires it the minute the window opens
+ * (ProcessAgentJobs: isAgentAvailable → skip without touching next_run_at). So a 17:39 wake of a
+ * 09:00–17:00 agent fires at 09:00 the next working day. No schedule → it fires when due.
+ */
+export function firesAt(r: HeartbeatRow, ms: number): number {
+  const sc = r.schedule
+  if (!sc || mayAct(r, ms)) return ms
+  const start = sc.hours ? hm(sc.hours.start) : 0
+  for (let i = 0; i <= 8; i++) {
+    const p = partsIn(ms + i * 86_400_000, sc.timezone)
+    if (sc.days.length && !sc.days.includes(p.dow)) continue
+    const open = zonedAt(p.y, p.mo, p.d, start, sc.timezone)
+    if (open > ms) return open
+  }
+  return ms
 }
 
 /** A skip whose reason is the schedule gate — by design, not a fault. */
@@ -255,7 +298,9 @@ export function stateOf(r: HeartbeatRow, now: number): BeatState {
   if (r.status === "paused") return "paused"
   if (r.status === "running" || r.runs[0]?.status === "running") return "running"
   const next = t(r.nextRunAt)
-  if (r.status === "scheduled" && Number.isFinite(next) && now - next > LATE_AFTER_MS) return "late"
+  // Late only once its window has OPENED and it still did not fire — a wake due after hours
+  // waits for the morning, and that is not late (#189170).
+  if (r.status === "scheduled" && Number.isFinite(next) && now - firesAt(r, next) > LATE_AFTER_MS) return "late"
   if (silentSince(r)) return "silent"
   const last = lastRun(r)
   if (r.status === "failed" || (last ? failed(last) : r.lastOk === false)) return "failing"
@@ -334,6 +379,19 @@ export function untilOf(iso: string | null | undefined, now: number): string {
   return `in ${Math.round(h / 24)}d`
 }
 
+/** When its next beat actually fires: next_run_at, held until its window opens. ISO, or null. */
+export function nextFireAt(r: HeartbeatRow): string | null {
+  const n = t(r.nextRunAt)
+  if (!Number.isFinite(n)) return null
+  return new Date(firesAt(r, n)).toISOString()
+}
+
+/** Its next beat is waiting for its hours (due already, or due outside them). */
+export const heldForHours = (r: HeartbeatRow): boolean => {
+  const n = t(r.nextRunAt)
+  return Number.isFinite(n) && firesAt(r, n) - n > 60_000
+}
+
 /** The line under an agent's name. */
 export function lineOf(r: HeartbeatRow, now: number): string {
   const s = stateOf(r, now)
@@ -346,8 +404,8 @@ export function lineOf(r: HeartbeatRow, now: number): string {
     const why = r.lastSkip && !byDesign(r.lastSkip.reason) && r.lastSkip.reason ? ` · ${oneLine(r.lastSkip.reason).slice(0, 60)}` : ""
     return `Wakes but does nothing · ${last ? `last real beat ${ago(last, now)}` : "never ran"}${why}`
   }
-  if (s === "failing") return `Last beat failed · next ${untilOf(r.nextRunAt, now)}`
-  return `Next ${untilOf(r.nextRunAt, now)} · ${lastTxt}`
+  if (s === "failing") return `Last beat failed · next ${untilOf(nextFireAt(r), now)}`
+  return `Next ${untilOf(nextFireAt(r), now)}${heldForHours(r) ? " · held for its hours" : ""} · ${lastTxt}`
 }
 
 const RANK: Record<BeatState, number> = { late: 0, silent: 1, failing: 2, running: 3, ok: 4, paused: 5 }
@@ -434,7 +492,7 @@ export type WeekView = {
   missed: number[]
   /** Due wakes before its newest kept run — not kept by the platform (#189132), so not judged. */
   unknown: number
-  /** Wakes the scheduler made outside the enforced hours — skipped by design, not counted. */
+  /** Wakes that fell outside the enforced hours and were HELD until the window opened. */
   outside: number
   next: number | null
   period: number | null
@@ -454,27 +512,28 @@ export function weekOf(r: HeartbeatRow, now: number): WeekView {
     return d.getTime()
   }
   // the ENFORCED gate decides which wakes count as due (#189170), not the editors' working days
-  const works = (ms: number) => mayAct(r, ms)
   const worksDay = (ms: number) => !r.schedule?.days.length || r.schedule.days.includes(partsIn(ms + 12 * 3_600_000, r.schedule.timezone).dow)
   const days: WeekView["days"] = []
   for (let d = startOfDay(start + DAY); d <= end; d += DAY) days.push({ at: d, label: DOW_LABEL[DOW[new Date(d).getDay()]], on: worksDay(d) })
   const period = periodOf(r.frequency)
   const next = t(r.nextRunAt)
-  const expected: number[] = []
+  // The scheduler, replayed: a wake comes due, fires when its window allows (held until it
+  // opens), and the next one is set from when it FIRED (calculateNextRun runs off "now"). Started
+  // a week early so the chain has settled into its real rhythm by the time the window begins.
+  const fires = new Set<number>()
   let outside = 0
   if (period && Number.isFinite(next) && r.status !== "paused") {
-    let k = next
-    while (k > end) k -= period
-    for (; k > start && expected.length < 400; k -= period) {
-      if (works(k)) expected.unshift(k)
-      else outside++
-    }
-    // LATE: the scheduler stopped at next_run_at, so every wake it owed since is due and missing.
-    for (let f = next + period; f <= end && expected.length < 400; f += period) {
-      if (works(f)) expected.push(f)
-      else outside++
+    const from = start - 7 * DAY
+    let t = next - Math.ceil((next - from) / period) * period
+    for (let n = 0; t <= end && n < 2000; n++) {
+      const f = firesAt(r, t)
+      if (t > start && f !== t) outside++
+      if (f > end) break
+      if (f > start) fires.add(Math.round(f / 60_000) * 60_000)
+      t = f + period
     }
   }
+  const expected = [...fires].sort((a, b) => a - b)
   const beats = r.runs
     .map((x) => ({ at: runAt(x), kind: kindOf(x), id: x.id }))
     .filter((b) => Number.isFinite(b.at) && b.at >= start && b.at <= end)

@@ -61,36 +61,45 @@ function mount(opts: { empty?: boolean; unread?: boolean } = {}) {
   return { host, dispose, calls }
 }
 
-test("Heartbeats: the late one on top, skipping and failing next, a week and a timeline for each", async () => {
+test("Heartbeats: skipping and failing on top, a held one is not late, a week and a timeline for each", async () => {
   const { host, dispose, calls } = mount()
   await wait(() => host.querySelectorAll(".hbt-row").length > 0)
   if (process.env.HBT_DUMP) (await import("node:fs")).writeFileSync(process.env.HBT_DUMP + "/list.html", host.innerHTML)
 
-  // half the fleet needs attention once skips and laundered failures are counted (#189113, #189114)
-  expect(host.querySelector(".hmc-sum")?.textContent).toBe("9 of 18 beating9 need attention")
+  // skips and laundered failures count (#189113, #189114); a wake held for its hours does not
+  expect(host.querySelector(".hmc-sum")?.textContent).toBe("10 of 18 beating8 need attention")
   const rows = [...host.querySelectorAll(".hbt-row")]
   expect(rows.length).toBe(18)
-  expect(rows.map((r) => r.getAttribute("data-state")).slice(0, 9)).toEqual([
-    "late", "silent", "silent", "silent", "silent", "silent", "silent", "failing", "failing",
+  expect(rows.map((r) => r.getAttribute("data-state")).slice(0, 8)).toEqual([
+    "silent", "silent", "silent", "silent", "silent", "silent", "failing", "failing",
   ])
-  expect(rows[0].querySelector(".hbt-name")?.textContent).toBe("Market Watch Agent")
-  expect(rows[0].querySelector(".hbt-line")?.textContent).toBe("Late · due 3 days ago")
-  const curator = rows.find((r) => r.textContent?.includes("Music Curator"))!
-  expect(curator.querySelector(".hbt-line")?.textContent).toBe("Wakes but does nothing · last real beat 8 h ago")
+  expect(rows[0].querySelector(".hbt-name")?.textContent).toBe("Music Curator")
+  expect(rows[0].querySelector(".hbt-line")?.textContent).toBe("Wakes but does nothing · last real beat 8 h ago")
+  const mw = rows.find((r) => r.textContent?.includes("Market Watch Agent"))!
+  expect(mw.getAttribute("data-state")).toBe("ok")
+  expect(mw.querySelector(".hbt-line")?.textContent).toBe("Next in 14h · held for its hours · last beat 4 days ago")
 
-  // the detail: problem, the week, the beats
-  expect(host.querySelector(".hmc-dname")?.textContent).toBe("Market Watch AgentLate")
-  expect(host.querySelector(".hmc-att-list b")?.textContent).toBe("Missed its beat — due 3 days ago")
-  expect(host.querySelector(".hbt-week figcaption")?.textContent).toBe("This week1 worked · of 6 due · 15 outside its hours")
-  expect(host.querySelectorAll(".hbt-wmiss").length).toBe(0) // it works Tue–Thu only (#189170)
-  expect(host.querySelectorAll(".hbt-wbeat").length).toBe(1) // its one kept beat, Oct 8, and nothing since
-  expect(host.querySelector(".hmc-spec")?.textContent).toContain("Tue–Thu · 07:00–16:00 ET")
+  // the detail opens on the first row: its hours, the week, what is wrong
+  expect(host.querySelector(".hmc-dname")?.textContent).toBe("Music CuratorSkipping")
+  expect(host.querySelector(".hmc-spec")?.textContent).toContain("Weekdays · 09:00–17:00 ET")
+  expect(host.querySelector(".hmc-att-list b")?.textContent).toBe("Wakes up but does nothing — last real beat 8 h ago")
+  expect(host.querySelector(".hbt-week figcaption")?.textContent).toBe("This week1 worked · 3 skipped · of 20 due · 5 held for its hours")
+  expect(host.querySelectorAll(".hbt-wmiss").length).toBe(3)
 
   // Run now goes to THIS job, and says so
   ;(host.querySelector(".hmc-btn--go") as HTMLButtonElement).click()
   await wait(() => !!host.querySelector(".hbt-note"))
-  expect(calls.some((c) => c.path === "/iris/heartbeats/764/run")).toBe(true)
+  expect(calls.some((c) => c.path === "/iris/heartbeats/865/run")).toBe(true)
   expect(host.querySelector(".hbt-note")?.hasAttribute("data-ok")).toBe(true)
+
+  // the held one: its next beat is when its window opens, and the cadence drift is called out
+  ;([...host.querySelectorAll(".hbt-row")].find((r) => r.textContent?.includes("Market Watch Agent")) as HTMLElement).click()
+  await wait(() => host.querySelector(".hmc-dname")?.textContent?.startsWith("Market Watch Agent") ?? false)
+  expect(host.querySelector(".hmc-spec")?.textContent).toContain("Tue–Thu · 07:00–16:00 ET")
+  expect(host.querySelector(".hbt-wkey")?.textContent).toContain("next in 14h · held for its hours")
+  expect([...host.querySelectorAll(".hmc-att-list b")].map((b) => b.textContent)).toEqual([
+    "Its settings say every 5 minutes; it actually wakes every 8 hours",
+  ])
 
   // a laundered failure opens on WHY, flagged as recorded-as-success
   const cos = [...host.querySelectorAll(".hbt-row")].find((r) => r.textContent?.includes("Chief of Staff")) as HTMLElement
