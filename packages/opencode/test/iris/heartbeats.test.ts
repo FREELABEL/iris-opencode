@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import raw from "./heartbeats.raw.json"
-import { isHeartbeatJob, readHeartbeat, readRun } from "../../src/iris/heartbeats"
+import { isHeartbeatJob, readHeartbeat, readRun, readWakes } from "../../src/iris/heartbeats"
 
 // fl-api's own scheduled-job + execution rows for account #193, 2026-10-12 (names, boards, run text and emails anonymised — this repo is public).
 describe("heartbeats sidecar", () => {
@@ -40,5 +40,30 @@ describe("heartbeats sidecar", () => {
     expect(readRun({ id: 1, status: "completed", duration_ms: 1500 }).durationMs).toBe(1500)
     expect(readRun({ id: 1, status: "completed", duration_seconds: 3 }).durationMs).toBe(3000)
     expect(readRun({ id: 1, status: "failed", error_message: "x" })).toMatchObject({ error: "x", durationMs: null })
+  })
+  test("tool calls come from functions_executed (#189238); an empty list is none recorded", () => {
+    const r = readRun({ id: 1, status: "completed", functions_executed: [
+      { tool: "agent_memory", ok: true, status: "success", duration_ms: 538, args_summary: "action=retrieve", error: null },
+      { tool: "send_email", ok: false, status: "error", duration_ms: 12, error: "no recipient" },
+    ] })
+    expect(r.toolCalls).toEqual([
+      { tool: "agent_memory", ok: true, durationMs: 538, args: "action=retrieve", error: null },
+      { tool: "send_email", ok: false, durationMs: 12, args: null, error: "no recipient" },
+    ])
+    expect(readRun({ id: 2, status: "completed", functions_executed: [] }).toolCalls).toBeNull()
+  })
+  test("continuity is read as measured (#189239), null when the beat predates it", () => {
+    const c = { loaded: true, referenced: true, anchors_total: 12, anchors_matched: 4, previous_entry_at: "2026-10-13T02:01:26+00:00" }
+    expect(readRun({ id: 1, status: "completed", continuity: c }).continuity).toEqual({ loaded: true, referenced: true, matched: 4, total: 12, previousAt: "2026-10-13T02:01:26+00:00" })
+    expect(readRun({ id: 1, status: "completed" }).continuity).toBeNull()
+  })
+  test("the wake ledger keeps only held and skipped rows — executions are already runs (#189237)", () => {
+    const l = readWakes({ ledger_since: "2026-10-13T03:36:15+00:00", data: [
+      { at: "2026-10-13T03:35:00+00:00", due_at: "2026-10-13T03:35:00+00:00", outcome: "held", source: "scheduler", reason: "Outside its working days or active hours", held_until: "2026-10-13T13:00:00+00:00" },
+      { at: "2026-10-12T13:04:00+00:00", outcome: "worked", source: "execution", execution_id: 9 },
+    ] })
+    expect(l!.ledgerSince).toBe("2026-10-13T03:36:15+00:00")
+    expect(l!.wakes).toEqual([{ at: "2026-10-13T03:35:00+00:00", dueAt: "2026-10-13T03:35:00+00:00", outcome: "held", kind: null, reason: "Outside its working days or active hours", heldUntil: "2026-10-13T13:00:00+00:00" }])
+    expect(readWakes({ message: "Not found" })).toBeNull()
   })
 })

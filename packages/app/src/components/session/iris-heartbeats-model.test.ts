@@ -27,6 +27,7 @@ import {
   nextFireAt,
   silentSince,
   HISTORY_KEPT_SINCE,
+  toolsOfRun,
   type HeartbeatRow,
 } from "./iris-heartbeats-model"
 
@@ -233,5 +234,56 @@ describe("words", () => {
     expect(previewOf("**Workflow Complete**\n\n\n**Tools Used:**\n- ✓ **agent_memory**: 10 memories")).toBe(
       "Workflow Complete Tools Used: agent_memory: 10 memories",
     )
+  })
+})
+
+describe("Agents › Heartbeats — measured, not replayed (#189237–#189239)", () => {
+  test("a skip the ledger recorded is a skip with its reason, and replaces the inferred dot", () => {
+    const m = by("Market Watch Agent")
+    const free = { ...m, schedule: null }
+    const inferred = weekOf(free, NOW).missed
+    const at = new Date(inferred[inferred.length - 1]).toISOString()
+    const led = { ...free, ledgerSince: "2026-10-01T00:00:00Z", wakes: [{ at, dueAt: at, outcome: "skipped", kind: "skipped", reason: "No projects to watch", heldUntil: null }] }
+    const w = weekOf(led, NOW)
+    expect(w.missed.length).toBe(inferred.length - 1)
+    expect(w.skips).toEqual([{ at: Date.parse(at), reason: "No projects to watch", kind: "skipped", byDesign: false }])
+    expect(rollupOf(led, NOW).skips).toBe(1)
+    // a gated skip is the schedule doing its job — recorded, but not counted against it
+    const gated = { ...led, wakes: [{ ...led.wakes[0], reason: "Outside active hours" }] }
+    expect(rollupOf(gated, NOW).skips).toBe(0)
+  })
+  test("a history that could not be read judges nothing missed (#189277: a 500 is not silence)", () => {
+    const free = { ...by("Market Watch Agent"), schedule: null }
+    expect(weekOf(free, NOW).missed.length).toBe(12)
+    expect(weekOf({ ...free, runs: [], runsMeasured: false }, NOW).missed).toEqual([])
+  })
+  test("held wakes are counted from the ledger once it records them", () => {
+    const m = by("Market Watch Agent")
+    const replayed = weekOf(m, NOW).outside
+    const since = new Date(NOW - 3_600_000).toISOString()
+    // ledger began an hour ago and saw nothing — the week's holds before it are still replayed
+    expect(weekOf({ ...m, ledgerSince: since, wakes: [] }, NOW).outside).toBe(replayed)
+    const due = new Date(NOW - 1_800_000).toISOString()
+    const one = { ...m, ledgerSince: since, wakes: [{ at: due, dueAt: due, outcome: "held", kind: null, reason: "Outside its working days or active hours", heldUntil: null }] }
+    expect(weekOf(one, NOW).outside).toBe(replayed + 1)
+  })
+  test("tools come from the platform's record when it kept one, else from the report", () => {
+    const run = { id: 1, status: "completed", startedAt: null, completedAt: null, durationMs: null, tokens: null, model: null, preview: null, error: null, response: "- ✓ **agent_memory**: 10 memories" }
+    expect(toolsOfRun(run)).toEqual([{ name: "agent_memory", did: "10 memories", ok: true, ms: null, measured: false }])
+    const rec = { ...run, toolCalls: [{ tool: "agent_memory", ok: true, durationMs: 538, args: "action=retrieve", error: null }, { tool: "send_email", ok: false, durationMs: 9, args: "to=x", error: "no recipient" }] }
+    expect(toolsOfRun(rec)).toEqual([
+      { name: "agent_memory", did: "action=retrieve", ok: true, ms: 538, measured: true },
+      { name: "send_email", did: "no recipient", ok: false, ms: 9, measured: true },
+    ])
+    expect(beatStory(rec).tools.length).toBe(2)
+  })
+  test("'remembers last shift' is a count over the beats where it was measured", () => {
+    const m = by("Market Watch Agent")
+    expect(rollupOf(m, NOW).remembered).toBeNull()
+    const c = (loaded: boolean, referenced: boolean) => ({ loaded, referenced, matched: referenced ? 4 : 0, total: 12, previousAt: null })
+    const at = (h: number) => new Date(NOW - h * 3_600_000).toISOString()
+    const beat = (id: number, h: number, cont: ReturnType<typeof c> | null) => ({ ...m.runs[0], id, startedAt: at(h), completedAt: at(h), continuity: cont })
+    const runs = [beat(1, 1, c(true, true)), beat(2, 9, c(true, false)), beat(3, 17, c(false, false)), beat(4, 25, null)]
+    expect(rollupOf({ ...m, runs }, NOW).remembered).toEqual({ measured: 3, read: 2, used: 1 })
   })
 })
