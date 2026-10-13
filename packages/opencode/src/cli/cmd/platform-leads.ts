@@ -3953,8 +3953,10 @@ const LeadsPulseCommand = cmd({
           irisFetch(`/api/v1/leads/${leadId}/deal-status`),
           irisFetch(`/api/v1/leads/${leadId}/stripe-payments`),
           irisFetch(`/api/v1/leads/${leadId}/tasks`),
-          // #189204: GET /score RECOMPUTES and saves. A read shows the stored score instead.
-          shouldFileComms(args as { save?: unknown }) ? irisFetch(`/api/v1/leads/${leadId}/score`) : Promise.resolve(null),
+          // #189204: only --save recomputes the score. #189218 made GET /score a pure read on the
+          // server; `?save=1` asks it to persist — and an older server ignores the flag and saves
+          // anyway, so this works on both sides of that deploy.
+          shouldFileComms(args as { save?: unknown }) ? irisFetch(`/api/v1/leads/${leadId}/score?save=1`) : Promise.resolve(null),
           irisFetch(`/api/v1/leads/${leadId}/activities?limit=20`),
           irisFetch(`/api/v1/leads/${leadId}/outreach-steps`),
           bloqId && userId ? irisFetch(`/api/v1/users/${userId}/bloqs/workflows?bloq_id=${bloqId}&per_page=20`) : Promise.resolve(null),
