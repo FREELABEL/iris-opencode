@@ -1539,50 +1539,21 @@ export async function sweepGmail(opts: SweepOptions): Promise<SourceSweep> {
 
 // ── orchestration ───────────────────────────────────────────────────────────
 
+/**
+ * Every requested source, in order — the default "topic" PulseScript (#189244), run through the
+ * Pulse core runner. The script lives in pulse-topic-script.ts and is imported here lazily
+ * because it imports this module's sweeps. A source that throws is isolated by the runner and
+ * reported as not searched, with why, instead of failing the whole check.
+ */
 export async function sweepAll(opts: SweepOptions, onStart?: (s: TopicSource) => void): Promise<SourceSweep[]> {
-  const wanted = new Set(opts.sources)
-  const out: SourceSweep[] = []
-
-  // Deliberately sequential. These collectors are all disk- or AppleScript-bound
-  // on one machine; running them at once makes the slowest one slower and the
-  // progress line meaningless.
-  const sync: Array<[TopicSource, () => SourceSweep]> = [
-    ["git", () => sweepGit(opts)],
-    ["diary", () => sweepDiary(opts)],
-    ["files", () => sweepFiles(opts)],
-    ["claude_code", () => sweepClaudeCode(opts)],
-    ["opencode", () => sweepOpencode(opts)],
-    ["imessage", () => sweepImessage(opts)],
-  ]
-
-  for (const [name, fn] of sync) {
-    if (!wanted.has(name)) continue
-    onStart?.(name)
-    const result = fn()
-    // No local diary folder is not "the diary is shut" when the diary lives in Atlas (#189155).
-    if (name === "diary" && !result.searched && opts.apiFetch && opts.userId) {
-      out.push(await sweepDiaryAtlas(opts))
-      continue
-    }
-    out.push(result)
-  }
-
-  if (wanted.has("email")) {
-    onStart?.("email")
-    out.push(await sweepEmail(opts))
-  }
-
-  if (wanted.has("gmail")) {
-    onStart?.("gmail")
-    out.push(await sweepGmail(opts))
-  }
-
-  if (wanted.has("bloq")) {
-    onStart?.("bloq")
-    out.push(await sweepBloq(opts))
-  }
-
-  return out
+  await import("./pulse-topic-script")
+  const { runScript, scriptFor } = await import("../../pulse/core")
+  const wanted = new Set<string>(opts.sources)
+  const outcomes = await runScript(scriptFor<SweepOptions, SourceSweep>("topic"), opts, {
+    only: (stop) => wanted.has(stop.id),
+    onStart: (stop) => onStart?.(stop.id as TopicSource),
+  })
+  return outcomes.map((o) => o.output)
 }
 
 export function topicSlug(keyword: string): string {
