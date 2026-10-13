@@ -1497,12 +1497,18 @@ export async function sweepGmail(_opts: SweepOptions): Promise<SourceSweep> {
  * because it imports this module's sweeps. A source that throws is isolated by the runner and
  * reported as not searched, with why, instead of failing the whole check.
  */
-export async function sweepAll(opts: SweepOptions, onStart?: (s: TopicSource) => void): Promise<SourceSweep[]> {
+export async function sweepAll(
+  opts: SweepOptions,
+  onStart?: (s: TopicSource) => void,
+  onSweep?: (s: SourceSweep) => void,
+): Promise<SourceSweep[]> {
   await import("./topic")
   const wanted = new Set<string>(opts.sources)
   const outcomes = await runScript(scriptFor<SweepOptions, SourceSweep>("topic"), opts, {
     only: (stop) => wanted.has(stop.id),
     onStart: (stop) => onStart?.(stop.id as TopicSource),
+    // #189319: each stop's result as it lands, so a caller can stream the route.
+    onOutcome: (o) => onSweep?.(o.output),
   })
   return outcomes.map((o) => o.output)
 }

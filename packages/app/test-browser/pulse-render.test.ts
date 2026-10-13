@@ -36,10 +36,16 @@ const NOW = Date.parse("2026-10-13T06:30:00Z")
 // The finished route's stops — not the "reading…" placeholders drawn while it runs.
 const R = ".pls-route:not(.pls-route--running) .pls-stop"
 
-function mount(which: "topic" | "contact", delay = 0) {
+function mount(which: "topic" | "contact", delay = 0, stream?: ReadableStream<Uint8Array>) {
   const calls: Array<{ path: string; method: string }> = []
   const doFetch = async (path: string, init?: RequestInit) => {
     calls.push({ path, method: init?.method ?? "GET" })
+    // The streamed route (#189319): served when the test supplies a stream, else 404 like an
+    // older sidecar — which must fall back to the one-shot route.
+    if (path.startsWith("/iris/pulse/topic/stream")) {
+      if (!stream) return new Response("not found", { status: 404 })
+      return new Response(stream, { headers: { "Content-Type": "text/event-stream" } })
+    }
     if (delay) await new Promise((r) => setTimeout(r, delay))
     const json = (v: unknown) => new Response(JSON.stringify(v), { headers: { "Content-Type": "application/json" } })
     if (path.startsWith("/iris/pulse/topic")) return json(fixture.topic)
@@ -103,10 +109,10 @@ test("Pulse › Contact: the score, what is owed, and every unread channel shut"
   host.remove()
 })
 
-test("Pulse › running: every stop reads at once, a clock counts, and no number is shown before it exists", async () => {
+test("Pulse › older sidecar (no stream): one-shot route, every stop reading at once, a clock, no number before it exists", async () => {
   const { host, dispose } = mount("topic", 400)
   ;(host.querySelector(".pls-query button[type=submit]") as HTMLButtonElement).click()
-  await wait(() => host.querySelectorAll(".pls-route--running .pls-stop").length > 0)
+  await wait(() => host.querySelectorAll(".pls-route--running .pls-stop.pls-stop--reading").length === 9)
   const reading = [...host.querySelectorAll(".pls-route--running .pls-stop")]
   expect(reading.map((s) => s.querySelector("h4")?.textContent)).toEqual([
     "Commits", "Diary", "Files", "Claude Code sessions", "opencode sessions", "iMessage", "Apple Mail", "Gmail", "Atlas",
@@ -119,4 +125,78 @@ test("Pulse › running: every stop reads at once, a clock counts, and no number
   expect(host.querySelector(".pls-route--running")).toBeNull()
   dispose()
   host.remove()
+})
+
+test("Pulse › streamed: the stop being read pulses, landed stops show their count, the rest wait", async () => {
+  const enc = new TextEncoder()
+  let ctl!: ReadableStreamDefaultController<Uint8Array>
+  const stream = new ReadableStream<Uint8Array>({ start: (c) => void (ctl = c) })
+  const send = (event: string, data: unknown) => ctl.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
+  const { host, dispose } = mount("topic", 0, stream)
+  ;(host.querySelector(".pls-query button[type=submit]") as HTMLButtonElement).click()
+  const row = (label: string) => [...host.querySelectorAll(".pls-route--running .pls-stop")].find((s) => s.querySelector("h4")?.textContent === label)!
+
+  send("start", { source: "git", label: "Commits" })
+  await wait(() => !!row("Commits")?.classList.contains("pls-stop--reading"))
+  expect(row("Diary").classList.contains("pls-stop--waiting")).toBe(true)
+  expect(row("Diary").querySelector(".pls-body p")?.textContent).toBe("next")
+  expect(row("Commits").querySelector(".pls-main")).toBeNull()
+
+  const git = fixture.topic.data.stops.find((s: any) => s.id === "git")
+  send("stop", { stop: git })
+  send("start", { source: "diary", label: "Diary" })
+  await wait(() => !!row("Diary")?.classList.contains("pls-stop--reading"))
+  expect(row("Commits").classList.contains("pls-stop--read")).toBe(true)
+  expect(row("Commits").querySelector(".pls-main")?.textContent).toBe(String(git.count))
+  expect(host.querySelector(".pls-checking")?.textContent).toContain("1 of 9 stops read")
+  // a shut stop that lands says shut — never 0
+  const shut = fixture.topic.data.stops.find((s: any) => s.shut)
+  send("stop", { stop: shut })
+  await wait(() => !!row(shut.label)?.classList.contains("pls-stop--read"))
+  expect(row(shut.label).querySelector(".pls-body p")?.textContent).toBe("shut")
+  expect(row(shut.label).querySelector(".pls-main")?.textContent).toBe("shut")
+
+  send("done", fixture.topic)
+  ctl.close()
+  await wait(() => host.querySelectorAll(R).length > 0)
+  expect(host.querySelector(".pls-route--running")).toBeNull()
+  expect(host.querySelectorAll(R).length).toBe(9)
+  dispose()
+  host.remove()
+})
+
+test("Pulse › Run again re-reads the same route; a failed route offers Try again", async () => {
+  const { host, dispose, calls } = mount("contact")
+  await wait(() => host.querySelectorAll(R).length > 0)
+  const reads = () => calls.filter((c) => c.path.startsWith("/iris/pulse/contacts/4242")).length
+  expect(reads()).toBe(1)
+  const btn = host.querySelector(".pls-lead .pls-again-btn") as HTMLButtonElement
+  expect(btn.textContent?.trim()).toBe("Run again")
+  expect(host.querySelector(".pls-lead .pls-again")?.textContent).toContain("read just now")
+  btn.click()
+  await wait(() => reads() === 2)
+  await wait(() => host.querySelectorAll(R).length > 0)
+  expect(calls.every((c) => c.method === "GET")).toBe(true)
+  dispose()
+  host.remove()
+
+  // a route that fails says why, and offers to try again
+  let fail = true
+  const host2 = document.createElement("div")
+  document.body.append(host2)
+  const doFetch = async (path: string) => {
+    if (path.startsWith("/iris/pulse/topic/stream")) return new Response("nf", { status: 404 })
+    if (fail) return new Response(JSON.stringify({ measured: false, reason: "the route did not finish: boom", data: null }), { headers: { "Content-Type": "application/json" } })
+    return new Response(JSON.stringify(fixture.topic), { headers: { "Content-Type": "application/json" } })
+  }
+  const d2 = render(() => createComponent(IrisPulseTopic as any, { doFetch, now: () => NOW }), host2)
+  ;(host2.querySelector(".pls-query button[type=submit]") as HTMLButtonElement).click()
+  await wait(() => !!host2.querySelector(".pls-err"))
+  expect(host2.querySelector(".pls-err")?.textContent).toContain("boom")
+  fail = false
+  ;(host2.querySelector(".pls-err .pls-again-btn") as HTMLButtonElement).click()
+  await wait(() => host2.querySelectorAll(R).length > 0)
+  expect(host2.querySelector(".pls-sum .pls-again-btn")?.textContent?.trim()).toBe("Run again")
+  d2()
+  host2.remove()
 })

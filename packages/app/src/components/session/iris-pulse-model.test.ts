@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { blindLine, pinsOf, priorLine, runsLine, sparkOf, tallyOf, topicLine, touchedLine, type PulseStop } from "./iris-pulse-model"
+import { blindLine, pinsOf, readAgo, priorLine, runsLine, sparkOf, tallyOf, topicLine, touchedLine, type PulseStop } from "./iris-pulse-model"
 
 const stop = (o: Partial<PulseStop>): PulseStop => ({
   id: "git",
@@ -47,4 +47,13 @@ describe("pulse panel model (#189286)", () => {
     expect(blindLine({ read: 1, total: 5 })).toBe("partial read — 4 of 5 channels blind")
     expect(blindLine({ read: 5, total: 5 })).toBeNull()
   })
+})
+
+test("readAgo: how old the numbers on screen are", () => {
+  const T = 1_800_000_000_000
+  expect(readAgo(undefined, T)).toBeNull()
+  expect(readAgo(T - 10_000, T)).toBe("read just now")
+  expect(readAgo(T - 4 * 60_000, T)).toBe("read 4 min ago")
+  expect(readAgo(T - 2 * 3_600_000, T)).toBe("read 2 h ago")
+  expect(readAgo(T - 3 * 86_400_000, T)).toBe("read 3 d ago")
 })
