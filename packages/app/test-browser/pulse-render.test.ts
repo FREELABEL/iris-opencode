@@ -171,8 +171,10 @@ test("Pulse › Run again re-reads the same route; a failed route offers Try aga
   const reads = () => calls.filter((c) => c.path.startsWith("/iris/pulse/contacts/4242")).length
   expect(reads()).toBe(1)
   const btn = host.querySelector(".pls-lead .pls-again-btn") as HTMLButtonElement
-  expect(btn.textContent?.trim()).toBe("Run again")
-  expect(host.querySelector(".pls-lead .pls-again")?.textContent).toContain("read just now")
+  expect(btn.getAttribute("aria-label")).toBe("Run again")
+  expect(host.querySelector(".pls-lead .pls-ago")?.textContent).toBe("just now")
+  // the line is chips, not a sentence of metadata
+  expect(host.querySelector(".pls-lead .hsc-muted")).toBeNull()
   btn.click()
   await wait(() => reads() === 2)
   await wait(() => host.querySelectorAll(R).length > 0)
@@ -194,9 +196,9 @@ test("Pulse › Run again re-reads the same route; a failed route offers Try aga
   await wait(() => !!host2.querySelector(".pls-err"))
   expect(host2.querySelector(".pls-err")?.textContent).toContain("boom")
   fail = false
-  ;(host2.querySelector(".pls-err .pls-again-btn") as HTMLButtonElement).click()
+  ;(host2.querySelector(".pls-err .pls-retry") as HTMLButtonElement).click()
   await wait(() => host2.querySelectorAll(R).length > 0)
-  expect(host2.querySelector(".pls-sum .pls-again-btn")?.textContent?.trim()).toBe("Run again")
+  expect(host2.querySelector(".pls-sum .pls-again-btn")?.getAttribute("aria-label")).toBe("Run again")
   d2()
   host2.remove()
 })
