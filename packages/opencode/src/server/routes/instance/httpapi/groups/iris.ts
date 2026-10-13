@@ -279,6 +279,74 @@ const HeartbeatActionResponse = Schema.Struct({
   reason: Schema.optional(Schema.String),
   status: Schema.optional(described(Schema.String, "The status fl-api saved, read back.")),
 }).annotate({ identifier: "IrisHeartbeatActionResponse" })
+// Pulse (#189286) — heyiris.io/p/pulse-panel-directions, pick 01 "the route". Every endpoint is a READ.
+const PulseStopRow = Schema.Struct({
+  id: Schema.String,
+  label: Schema.String,
+  from: Schema.optional(described(Schema.String, "The CLI command or endpoint the stop was read from.")),
+  shut: described(Schema.Boolean, "True = NOT MEASURED. The count is null then — never render it as 0."),
+  reason: Schema.NullOr(Schema.String),
+  provenance: Schema.Literals(["measured", "partial", "not-kept", "not-measured"]),
+  count: Schema.NullOr(Schema.Finite),
+  floor: described(Schema.Boolean, "A capped count: at least `count`."),
+  delta: Schema.NullOr(Schema.Finite),
+  text: Schema.String,
+  owed: Schema.Finite,
+  fix: Schema.optional(Schema.Struct({ label: Schema.String, command: Schema.optional(Schema.String) })),
+  items: Schema.Array(Schema.Struct({ when: Schema.optional(Schema.String), where: Schema.String, text: Schema.optional(Schema.String) })),
+}).annotate({ identifier: "IrisPulseStop" })
+const PulseTopicResponse = Schema.Struct({
+  ...Measured,
+  data: Schema.NullOr(
+    Schema.Struct({
+      keyword: Schema.String,
+      days: Schema.Finite,
+      repo: Schema.String,
+      ms: Schema.Finite,
+      summary: Schema.Struct({
+        hits: Schema.Finite,
+        floor: Schema.Boolean,
+        withHits: Schema.Finite,
+        reachable: Schema.Finite,
+        total: Schema.Finite,
+        shut: Schema.Finite,
+        prior: described(Schema.NullOr(Schema.Finite), "NULL when any read stop cannot reconstruct the window before."),
+        lastTouched: Schema.NullOr(Schema.Finite),
+      }),
+      stops: Schema.Array(PulseStopRow),
+    }),
+  ),
+}).annotate({ identifier: "IrisPulseTopicResponse" })
+const PulseContactRow = Schema.Struct({
+  id: Schema.Finite,
+  name: Schema.String,
+  company: Schema.NullOr(Schema.String),
+  status: Schema.NullOr(Schema.String),
+  email: Schema.NullOr(Schema.String),
+}).annotate({ identifier: "IrisPulseContact" })
+const PulseContactsResponse = Schema.Struct({ ...Measured, data: Schema.Array(PulseContactRow) }).annotate({
+  identifier: "IrisPulseContactsResponse",
+})
+const PulseContactResponse = Schema.Struct({
+  ...Measured,
+  data: Schema.NullOr(
+    Schema.Struct({
+      lead: PulseContactRow,
+      days: Schema.Finite,
+      ms: Schema.Finite,
+      score: Schema.Struct({
+        score: Schema.NullOr(Schema.Finite),
+        band: Schema.NullOr(Schema.String),
+        previous: Schema.NullOr(Schema.Finite),
+        history: Schema.Array(Schema.Struct({ at: Schema.String, score: Schema.Finite })),
+        coverage: Schema.NullOr(Schema.Finite),
+      }),
+      stops: Schema.Array(PulseStopRow),
+      owed: Schema.Array(Schema.Struct({ what: Schema.String, amount: Schema.optional(Schema.String), since: Schema.optional(Schema.String) })),
+      channels: Schema.Struct({ read: Schema.Finite, total: Schema.Finite }),
+    }),
+  ),
+}).annotate({ identifier: "IrisPulseContactResponse" })
 const HiveTaskResponse = Schema.Struct({
   ...Measured,
   task: Schema.NullOr(
@@ -1093,6 +1161,9 @@ export const IrisPaths = {
   heartbeats: `${root}/heartbeats`,
   heartbeatRun: `${root}/heartbeats/:jobID/run`,
   heartbeatPause: `${root}/heartbeats/:jobID/pause`,
+  pulseTopic: `${root}/pulse/topic`,
+  pulseContacts: `${root}/pulse/contacts`,
+  pulseContact: `${root}/pulse/contacts/:leadID`,
   runTakeOver: `${root}/runs/:runID/take-over`,
   runHandBack: `${root}/runs/:runID/hand-back`,
   playbookDoc: `${root}/playbooks/doc/:name`,
@@ -2342,6 +2413,32 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "List agent heartbeats",
           description:
             "#189110. fl-api scheduled jobs whose task is `heartbeat`, with up to 50 executions of each (a week for every cadence slower than 4-hourly). A `scheduled` status alone is not evidence a heartbeat is beating — the runs and next_run_at are.",
+        }),
+      ),
+      HttpApiEndpoint.get("pulseTopic", IrisPaths.pulseTopic, {
+        query: Schema.Struct({ q: Schema.String, days: Schema.optional(Schema.String), project: Schema.optional(Schema.String) }),
+        success: described(PulseTopicResponse, "The topic route: one stop per source, in the order Pulse visits them"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.pulseTopic",
+          summary: "Pulse a topic (iris pulse check, read-only)",
+          description:
+            "#189286. The same PulseScript `iris pulse check` walks, run on this machine. Unlike the CLI it never files the result: opening a route only reads.",
+        }),
+      ),
+      HttpApiEndpoint.get("pulseContacts", IrisPaths.pulseContacts, {
+        query: Schema.Struct({ q: Schema.optional(Schema.String) }),
+        success: described(PulseContactsResponse, "Contacts (leads) matching the search"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.pulseContacts", summary: "Find a contact to pulse" })),
+      HttpApiEndpoint.get("pulseContact", IrisPaths.pulseContact, {
+        params: { leadID: Schema.NumberFromString },
+        query: Schema.Struct({ days: Schema.optional(Schema.String) }),
+        success: described(PulseContactResponse, "The contact route: record, deal, tasks, checks, email log, then the channels"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.pulseContact",
+          summary: "Pulse a contact (iris leads pulse, read-only)",
+          description: "#189286. GETs only — the score is read without `?record=1` (#189218) and is never saved.",
         }),
       ),
       HttpApiEndpoint.post("heartbeatRun", IrisPaths.heartbeatRun, {
