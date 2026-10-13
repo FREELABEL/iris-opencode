@@ -61,6 +61,12 @@ import {
   buildTouchPayload,
   nextFollowUpState,
   type ChannelBlindness,
+  emailChannelLabel,
+  readCalendarEvents,
+  shouldFileComms,
+  countLeadTasks,
+  selectPulseLeads,
+  describeDrops,
 } from "./platform-leads-honesty"
 
 // ============================================================================
@@ -181,12 +187,8 @@ async function fetchLeadCalendarEvents(
   const timeMax = new Date(now.getTime() + futureDays * 86400000).toISOString()
 
   const result = await calExec("get_events", { time_min: timeMin, time_max: timeMax, max_results: 2500 })
-  // calExec returns { success, events: [...] } — handle various shapes
-  let events: any[] = []
-  if (Array.isArray(result)) events = result
-  else if (result?.events) events = result.events
-  else if (result?.data?.events) events = result.data.events
-  else if (result?.data && Array.isArray(result.data)) events = result.data
+  // Throws when no calendar was read (#189155) — an unread calendar is "not measured", never 0.
+  const events: any[] = readCalendarEvents(result)
 
   // Client-side filter: match lead name or ANY email in summary/description/attendees
   const nameL = (lead.name ?? "").toLowerCase()
@@ -3355,6 +3357,11 @@ const LeadsPulseCommand = cmd({
         type: "boolean",
         default: false,
       })
+      .option("save", {
+        describe: "also file the messages found into the comms ledger (changes the lead's score). Off: pulse only reads",
+        type: "boolean",
+        default: false,
+      })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     const isJson = args.json === true
@@ -3708,7 +3715,7 @@ const LeadsPulseCommand = cmd({
 
         // Meeting engagement
         if (meetS !== null && meetS !== undefined && meetS < 50) {
-          fixHints.push({ signal: "meet", score: meetS, reason: "no upcoming meetings", fix: `iris leads meet ${leadId} --at "next Tuesday 2pm"` })
+          fixHints.push({ signal: "meet", score: meetS, reason: "no meeting logged in IRIS (the score reads notes and tasks, not your calendar)", fix: `iris leads meet ${leadId} --at "next Tuesday 2pm"` })
         }
 
         // Deliverable completeness
@@ -4307,7 +4314,7 @@ const LeadsPulseCommand = cmd({
       channelSpinner.start("Scanning channels…")
 
       const days = args.days as number
-      const channels: { name: string; messages: any[]; error?: string }[] = []
+      const channels: { name: string; label?: string; messages: any[]; error?: string }[] = []
 
       // Timeout wrapper — prevents any single channel fetch from hanging the entire pulse (#104244)
       const withTimeout = <T>(promise: Promise<T>, ms: number, label: string): Promise<T> => {
@@ -4371,7 +4378,8 @@ const LeadsPulseCommand = cmd({
                     const fromLower = m.from.toLowerCase()
                     return allEmails.some((e) => fromLower.includes(e))
                   })
-                  channels.push({ name: "Gmail", messages: filtered })
+                  // The lead email log, not an inbox — named for what it holds (#189155).
+                  channels.push({ name: "Gmail", label: emailChannelLabel(Array.isArray(threads) ? threads : []), messages: filtered })
                 } else {
                   // Fallback: try Apple Mail-style search via bridge as Gmail backup
                   const body = await r.text().catch(() => "")
@@ -4578,15 +4586,17 @@ const LeadsPulseCommand = cmd({
         const totalMessages = channels.reduce((sum, ch) => sum + ch.messages.length, 0)
         channelSpinner.stop(`${totalMessages} message(s) across ${channels.length} channel(s)`)
 
-        // Persist-after: fire-and-forget write to lead_comms for history (#57657)
-        // Maps live-scan results → atlas:comms ingest format. Dedup hash prevents duplicates.
+        // Persist-after (#57657) — ONLY with --save (#189155). A read must not change the record
+        // it reports on: filing on every run moved the lead's score between two reads minutes
+        // apart. Maps live-scan results → atlas:comms ingest format; dedup hash prevents duplicates.
+        const fileComms = shouldFileComms(args as { save?: unknown })
         const channelMap: Record<string, string> = {
           Gmail: "gmail",
           iMessage: "imessage",
           "Apple Mail": "apple_mail",
           Meetings: "calendar",
         }
-        for (const ch of channels) {
+        for (const ch of fileComms ? channels : []) {
           const channelKey = channelMap[ch.name]
           if (!channelKey || ch.messages.length === 0) continue
           const items = ch.messages
@@ -4673,6 +4683,8 @@ const LeadsPulseCommand = cmd({
           workflows: leadWorkflows,
           productUsage,
           channels,
+          // #189155: false = this run only READ; nothing was filed into the comms ledger.
+          saved: shouldFileComms(args as { save?: unknown }),
           recap,
         })
         prompts.outro("Done")
@@ -4683,7 +4695,8 @@ const LeadsPulseCommand = cmd({
       for (const ch of channels) {
         console.log()
         const count = ch.messages.length
-        const label = ch.error ? `${ch.name}  ${dim(`⚠ ${ch.error}`)}` : `${ch.name}  ${dim(`(${count})`)}`
+        const shown = ch.label ?? ch.name
+        const label = ch.error ? `${shown}  ${dim(`⚠ ${ch.error}`)}` : `${shown}  ${dim(`(${count})`)}`
         console.log(`  ${bold(label)}`)
 
         if (count === 0 && !ch.error) {
@@ -8127,18 +8140,13 @@ const LeadsPulseAllCommand = cmd({
       const results = await Promise.all(fetches)
       const leads: any[] = results.flat()
 
-      // Skip junk leads (no email, social emails, self)
-      // Exception: Negotiating leads with phone numbers are always eligible (hand-picked, not scraped)
-      const eligible = leads.filter((l) => {
-        if (!l.email && !l.phone) return false
-        const isSocialEmail = l.email?.endsWith("@instagram.com") || l.email?.endsWith("@twitter.com")
-        const isNegotiating = l.status === "Negotiating" || l.status === "In Negotiation"
-        if (isSocialEmail && !(isNegotiating && l.phone)) return false
-        if (l.name === `Lead #${l.id}`) return false
-        return true
-      })
+      // Skip junk leads — the ONE rule `pulse --admin` uses too (#189155), so both count the same deals.
+      // Exception kept: Negotiating leads with phone numbers are eligible even on a social email.
+      const { leads: eligible, dropped: eligibleDrops } = selectPulseLeads(leads)
 
-      spinner.stop(`${leads.length} ${statuses.join(" + ")} leads (${eligible.length} eligible)`)
+      spinner.stop(
+        `${leads.length} ${statuses.join(" + ")} leads (${eligible.length} eligible${describeDrops(eligibleDrops) ? ` — ${describeDrops(eligibleDrops)}` : ""})`,
+      )
 
       // Fetch pulse data for each lead
       type PulseRow = {
@@ -8163,9 +8171,10 @@ const LeadsPulseAllCommand = cmd({
         proposalUrl: string | null
         kbCount: number
         recapEligible: boolean
-        tasksPending: number
-        tasksOverdue: number
-        tasksCompleted: number
+        /** null = not read on this run (#189155) — never a zero. */
+        tasksPending: number | null
+        tasksOverdue: number | null
+        tasksCompleted: number | null
         reqPassing: number
         reqTotal: number
         meetingScore: number | null
@@ -8187,21 +8196,22 @@ const LeadsPulseAllCommand = cmd({
           const stripe = stripeRes?.ok ? (((await stripeRes.json()) as any)?.data ?? {}) : {}
 
           // Extra fetches for --prepare (tasks + requirements)
-          let tasksPending = 0, tasksOverdue = 0, tasksCompleted = 0
+          // null = NOT READ (#189155). These were 0 whenever --prepare was off, so `--json` reported
+          // "0 tasks" for every deal. Tasks are now read for --json too; when they are not, null.
+          let tasksPending: number | null = null, tasksOverdue: number | null = null, tasksCompleted: number | null = null
           let reqPassing = 0, reqTotal = 0
-          if (args.prepare) {
+          if (args.prepare || args.json) {
             const [tasksRes, reqRes] = await Promise.allSettled([
               irisFetch(`/api/v1/leads/${lead.id}/tasks`),
-              irisFetch(`/api/v1/leads/${lead.id}/requirements/summary`),
+              args.prepare ? irisFetch(`/api/v1/leads/${lead.id}/requirements/summary`) : Promise.resolve(null),
             ])
             if (tasksRes.status === "fulfilled" && tasksRes.value?.ok) {
               const td = ((await tasksRes.value.json()) as any)?.data ?? []
               const tasks: any[] = firstArray(td, td?.tasks)
-              const now = new Date()
-              tasksCompleted = tasks.filter((t: any) => t.status === "completed" || t.completed).length
-              const pending = tasks.filter((t: any) => t.status !== "completed" && !t.completed)
-              tasksOverdue = pending.filter((t: any) => t.due_date && new Date(t.due_date) < now).length
-              tasksPending = pending.length
+              const c = countLeadTasks(tasks, new Date())
+              tasksCompleted = c.completed
+              tasksOverdue = c.overdue
+              tasksPending = c.pending
             }
             if (reqRes.status === "fulfilled" && reqRes.value?.ok) {
               const rd = (await reqRes.value.json()) as any
@@ -8302,9 +8312,9 @@ const LeadsPulseAllCommand = cmd({
             proposalUrl: null,
             kbCount: 0,
             recapEligible: !!(lead.email && !lead.email.endsWith("@instagram.com") && !lead.email.endsWith("@twitter.com")),
-            tasksPending: 0,
-            tasksOverdue: 0,
-            tasksCompleted: 0,
+            tasksPending: null,
+            tasksOverdue: null,
+            tasksCompleted: null,
             reqPassing: 0,
             reqTotal: 0,
             meetingScore: null,
@@ -8338,9 +8348,11 @@ const LeadsPulseAllCommand = cmd({
           }
 
           // Stats line
-          const taskStr = r.tasksPending > 0
-            ? `${r.tasksOverdue > 0 ? `${UI.Style.TEXT_DANGER}${r.tasksOverdue} overdue${UI.Style.TEXT_NORMAL} · ` : ""}${r.tasksPending} pending · ${r.tasksCompleted} done`
-            : dim("no tasks")
+          const taskStr = r.tasksPending === null
+            ? dim("tasks not read")
+            : r.tasksPending > 0
+              ? `${(r.tasksOverdue ?? 0) > 0 ? `${UI.Style.TEXT_DANGER}${r.tasksOverdue} overdue${UI.Style.TEXT_NORMAL} · ` : ""}${r.tasksPending} pending · ${r.tasksCompleted ?? 0} done`
+              : dim(`no open tasks${r.tasksCompleted ? ` · ${r.tasksCompleted} done` : ""}`)
           const reqStr = r.reqTotal > 0
             ? `${r.reqPassing === r.reqTotal ? UI.Style.TEXT_SUCCESS : r.reqPassing === 0 ? UI.Style.TEXT_DANGER : UI.Style.TEXT_WARNING}${r.reqPassing}/${r.reqTotal} passing${UI.Style.TEXT_NORMAL}`
             : dim("no reqs")
@@ -8361,7 +8373,7 @@ const LeadsPulseAllCommand = cmd({
           if (!r.contentAgent) actions.push(`iris leads content-engine create ${r.id}`)
           if (r.comms !== null && r.comms < 30) actions.push(`iris leads pulse ${r.id} --recap`)
           if (r.meetingScore === null) actions.push(`iris leads meet ${r.id} --at …`)
-          if (r.tasksOverdue > 0) actions.push(`iris leads tasks ${r.id}`)
+          if ((r.tasksOverdue ?? 0) > 0) actions.push(`iris leads tasks ${r.id}`)
           if (r.hydrationEligible) actions.push(`iris leads pulse ${r.id} --hydrate`)
           // Deduplicate and take top 3
           const uniqueActions = [...new Set(actions)].slice(0, 3)
@@ -8386,8 +8398,8 @@ const LeadsPulseAllCommand = cmd({
         // is not an account that is failing, and counting it as one is how a fleet
         // summary manufactures bad news out of missing data.
         const failing = rows.filter((r) => r.band === "failing").length
-        const totalOverdue = rows.reduce((s, r) => s + r.tasksOverdue, 0)
-        const totalPending = rows.reduce((s, r) => s + r.tasksPending, 0)
+        const totalOverdue = rows.reduce((s, r) => s + (r.tasksOverdue ?? 0), 0)
+        const totalPending = rows.reduce((s, r) => s + (r.tasksPending ?? 0), 0)
         console.log(`  Avg Pulse: ${avgPulse}/100  |  ${UI.Style.TEXT_DANGER}${failing} failing${UI.Style.TEXT_NORMAL}  |  Tasks: ${totalPending} pending${totalOverdue > 0 ? `, ${UI.Style.TEXT_DANGER}${totalOverdue} overdue${UI.Style.TEXT_NORMAL}` : ""}`)
         console.log()
         printDivider()
@@ -13762,16 +13774,10 @@ export const PlatformPulseCommand = productCommand({
       const batches = await Promise.all(fetches)
       const allLeads: any[] = batches.flat()
 
-      const seen = new Set<number>()
-      const leads = allLeads.filter((l: any) => {
-        if (seen.has(l.id)) return false
-        seen.add(l.id)
-        if (!l.email && !l.phone) return false
-        if (!l.full_name && !l.company) return false
-        return true
-      })
+      // The same selector `pulse-all` uses (#189155): one rule, one deal count.
+      const { leads, dropped } = selectPulseLeads(allLeads)
 
-      spinner.stop(`${leads.length} leads loaded`)
+      spinner.stop(`${leads.length} leads loaded${describeDrops(dropped) ? ` (${describeDrops(dropped)})` : ""}`)
 
       if (leads.length === 0) {
         console.log(dim("  No active leads found."))

@@ -602,3 +602,114 @@ export function nextFollowUpState(contactInfo: unknown, now: Date = new Date()):
     daysAway === 0 ? "today" : daysAway === 1 ? "tomorrow" : `in ${daysAway} days`
   return { scheduled: true, overdue: false, daysAway, label: `${dateOnly} (${when})` }
 }
+
+// ── #189155 — what `leads pulse` reads, said as what it is ──────────────────
+
+/**
+ * The "Gmail" channel reads fl-api's lead email log (LeadEmailMessage), not a Gmail inbox. When
+ * Gmail is not synced, the only rows in that log are the emails IRIS itself sent, so calling the
+ * channel "Gmail" told a person their inbox had been read when it had not. Measured 2026-10-12:
+ * every deal checked showed outbound-only threads under "Gmail".
+ *
+ * Received mail in the log is the evidence that an inbox is being synced; without any, it is
+ * honestly "Sent by IRIS".
+ */
+export function emailChannelLabel(threads: Array<{ received_count?: unknown }>): "Gmail" | "Sent by IRIS" {
+  const received = threads.reduce((n, t) => n + (Number(t?.received_count) || 0), 0)
+  return received > 0 ? "Gmail" : "Sent by IRIS"
+}
+
+/**
+ * The calendar call's result, or a THROW when it did not read a calendar. It used to fall through
+ * to `events = []` for any failure — no connection, an error object, an unknown shape — so an
+ * unread calendar printed "Meetings (0)" and a reader concluded the lead had no meetings.
+ */
+export function readCalendarEvents(result: unknown): any[] {
+  const r = result as any
+  if (Array.isArray(r)) return r
+  if (r && typeof r === "object") {
+    if (r.success === false || r.error) {
+      const why = typeof r.error === "string" ? r.error : (r.error?.message ?? r.message ?? "the calendar call failed")
+      throw new Error(`not measured — calendar not read (${String(why).slice(0, 120)})`)
+    }
+    if (Array.isArray(r.events)) return r.events
+    if (Array.isArray(r.data?.events)) return r.data.events
+    if (Array.isArray(r.data)) return r.data
+  }
+  throw new Error("not measured — calendar not read (no events in the response)")
+}
+
+/**
+ * `leads pulse` is a READ (#189155). It used to file every message it found into the comms ledger
+ * on every run, which moved the lead's score between two reads minutes apart (19 → 28). Filing is
+ * now opt-in; `iris leads sync-comms` remains the silent filer for the Hive comms_sync task.
+ */
+export function shouldFileComms(args: { save?: unknown }): boolean {
+  return args.save === true
+}
+
+/**
+ * Task counts, read the way the API writes them (#189155). `pulse-all --prepare` tested
+ * `t.status === "completed" || t.completed`, but lead tasks carry `is_completed` — so every DONE
+ * task counted as pending, and any of them with a past due date as overdue. Every other reader in
+ * the leads commands already used `is_completed`.
+ */
+export function isTaskDone(t: any): boolean {
+  return t?.is_completed === true || t?.is_completed === 1 || t?.completed === true || t?.status === "completed"
+}
+
+export function countLeadTasks(tasks: any[], now: Date = new Date()): { pending: number; overdue: number; completed: number } {
+  const done = tasks.filter(isTaskDone)
+  const open = tasks.filter((t) => !isTaskDone(t))
+  const overdue = open.filter((t) => t?.due_date && new Date(t.due_date) < now).length
+  return { pending: open.length, overdue, completed: done.length }
+}
+
+export type PulseLeadDrops = { duplicate: number; noContact: number; noName: number; social: number }
+
+/**
+ * ONE rule for which deals a pulse scores (#189155). `pulse --admin` and `pulse-all` loaded the
+ * same statuses and reported 84 and 120: one de-duplicated and required a name, the other did
+ * neither but dropped social-handle emails. Two numbers for one question; now both call this, and
+ * say what was left out.
+ */
+export function selectPulseLeads(all: any[]): { leads: any[]; dropped: PulseLeadDrops } {
+  const dropped: PulseLeadDrops = { duplicate: 0, noContact: 0, noName: 0, social: 0 }
+  const seen = new Set<number>()
+  const leads: any[] = []
+  for (const l of all) {
+    if (seen.has(l?.id)) {
+      dropped.duplicate++
+      continue
+    }
+    seen.add(l?.id)
+    if (!l?.email && !l?.phone) {
+      dropped.noContact++
+      continue
+    }
+    const placeholder = typeof l?.name === "string" && l.name === `Lead #${l.id}`
+    const hasName = !!(l?.full_name || l?.company || (l?.name && !placeholder))
+    if (!hasName) {
+      dropped.noName++
+      continue
+    }
+    const isSocialEmail = typeof l?.email === "string" && (l.email.endsWith("@instagram.com") || l.email.endsWith("@twitter.com"))
+    const isNegotiating = l?.status === "Negotiating" || l?.status === "In Negotiation"
+    if (isSocialEmail && !(isNegotiating && l?.phone)) {
+      dropped.social++
+      continue
+    }
+    leads.push(l)
+  }
+  return { leads, dropped }
+}
+
+export function describeDrops(d: PulseLeadDrops): string {
+  const parts = [
+    d.duplicate ? `${d.duplicate} duplicate` : "",
+    d.noContact ? `${d.noContact} no email/phone` : "",
+    d.noName ? `${d.noName} no name` : "",
+    d.social ? `${d.social} social-handle email` : "",
+  ].filter(Boolean)
+  return parts.length ? `left out: ${parts.join(", ")}` : ""
+}
