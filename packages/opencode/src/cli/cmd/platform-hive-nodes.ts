@@ -8,6 +8,8 @@ import { resolveLocalNode } from "./hive-local-node"
 import { describeUptime } from "./hive-uptime"
 import { describeIsolation } from "./hive-isolation"
 import { exitCodeForResult, verdictForResult, renderOutput, fromHiveTask, TIMEOUT_EXIT } from "./hive-script-result"
+import { currentDelegationOrigin } from "./hive-delegation-origin"
+import { buildHiveRunBody } from "./hive-run-body"
 
 // ============================================================================
 // iris hive nodes / run
@@ -596,19 +598,15 @@ const HiveRunCommand = cmd({
     const priority = argv.priority as number | undefined
     const clampedPriority = priority ? Math.max(1, Math.min(10, Math.round(priority))) : undefined
 
+    // From inside an `iris` session, the session that sent this hears it start and gets its report
+    // — even with --queue, or when this process is killed mid-wait (#188667).
+    const origin = await currentDelegationOrigin()
     const createRes = await hiveFetch(`/api/v6/nodes/tasks`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        user_id: userId,
-        title,
-        type: "sandbox_execute",
-        node_id: node.id,
-        prompt: script,
-        config: { timeout_seconds: timeoutSec },
-        timeout_seconds: timeoutSec,
-        ...(clampedPriority ? { priority: clampedPriority } : {}),
-      }),
+      body: JSON.stringify(
+        buildHiveRunBody({ userId, nodeId: node.id, title, script, timeoutSec, priority: clampedPriority, origin }),
+      ),
     })
 
     if (!createRes.ok) {
@@ -629,6 +627,7 @@ const HiveRunCommand = cmd({
         return
       }
       console.log(`${success("✓")} dispatched task ${bold(taskId)}  status=${created.task.status}`)
+      if (origin) console.log(dim("  status and report will appear in this session"))
       console.log(dim(`  Check later:  iris hive tasks get ${taskId}`))
       return
     }
