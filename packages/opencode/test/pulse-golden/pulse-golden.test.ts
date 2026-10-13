@@ -127,7 +127,10 @@ describe.skipIf(process.platform !== "linux")("pulse golden output (#189244)", (
           if (unmatched && process.env.GOLDEN_DEBUG) console.error(`${c.name} unmatched:\n${unmatched}`)
           return
         }
-        expect(out).toBe(readFileSync(file, "utf8"))
+        // git renders a +0000 commit date as "+00:00" or "Z" depending on its version (2.43 here,
+        // newer on CI) — same instant, so the comparison is made on one spelling.
+        const z = (s: string) => s.replace(/(T\d\d:\d\d:\d\d)\+00:00/g, "$1Z")
+        expect(z(out)).toBe(z(readFileSync(file, "utf8")))
       },
       120_000,
     )
