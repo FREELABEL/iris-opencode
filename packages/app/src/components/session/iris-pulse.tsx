@@ -207,46 +207,128 @@ function StopDetail(props: { stop: PulseStop | undefined; index: string; now: nu
 
 // ── topic ────────────────────────────────────────────────────────────────────
 
+/** What the streamed route has reported so far (#189319). */
+type Live = { current?: string; done: Record<string, PulseStop> }
+
 /**
- * The route while it is being driven. Every stop is read AT ONCE (the sidecar fans out with
- * Promise.all / sweepAll), so every pin pulses together — drawing them lit one by one would claim
- * an order that is not happening. A light runs down the rail and a clock counts, so a 20-second
- * read never looks frozen. Per-stop completion needs the route streamed (#189319).
+ * Read the streamed topic route (#189319): `start` as Pulse reaches a stop, `stop` as it lands,
+ * then `done` with the whole route. Returns null when there is no stream to read — an older
+ * sidecar without the endpoint, or a fetch that cannot hand back a body — so the caller falls
+ * back to the one-shot route.
  */
-function PulseRunning(props: { stops: string[]; usual: string; label: string }) {
+async function streamTopic(doFetch: Fetch, path: string, onLive: (l: Live) => void): Promise<Payload<TopicPulse | null> | null> {
+  let res: Response
+  try {
+    res = await doFetch(path, { headers: { Accept: "text/event-stream" } })
+  } catch {
+    return null
+  }
+  if (!res.ok || !res.body || !(res.headers.get("content-type") ?? "").includes("text/event-stream")) return null
+  const reader = res.body.getReader()
+  const dec = new TextDecoder()
+  let buf = ""
+  let live: Live = { done: {} }
+  for (;;) {
+    const { value, done } = await reader.read()
+    if (value) buf += dec.decode(value, { stream: true })
+    let cut: number
+    while ((cut = buf.indexOf("\n\n")) >= 0) {
+      const block = buf.slice(0, cut)
+      buf = buf.slice(cut + 2)
+      let event = "message"
+      let data = ""
+      for (const line of block.split("\n")) {
+        if (line.startsWith("event:")) event = line.slice(6).trim()
+        else if (line.startsWith("data:")) data += line.slice(5).trimStart()
+      }
+      if (!data) continue
+      const body = JSON.parse(data)
+      if (event === "start") live = { ...live, current: body.source }
+      else if (event === "stop") live = { current: live.current === body.stop.id ? undefined : live.current, done: { ...live.done, [body.stop.id]: body.stop } }
+      else if (event === "done") return body as Payload<TopicPulse | null>
+      else if (event === "error") return { measured: false, reason: body.reason ?? "the route did not finish", data: null }
+      onLive(live)
+    }
+    if (done) return { measured: false, reason: "the route stopped before it finished", data: null }
+  }
+}
+
+/**
+ * The route while it is being driven.
+ *
+ * TOPIC is sequential (pulse/topic.ts: disk- and AppleScript-bound sources, one at a time), and it
+ * is streamed (#189319): a stop that has landed shows its real count, the stop being read now
+ * pulses, the ones ahead wait. CONTACT reads its stops in parallel (Promise.all) and is not
+ * streamed, so every pin pulses together and a light runs down the rail — drawing them lit in turn
+ * would claim an order that is not happening. Either way a clock counts, so a slow read never
+ * looks frozen, and no number appears before it exists.
+ */
+function PulseRunning(props: { stops: { id: string; label: string }[]; usual: string; label: string; live?: Live }) {
   const started = Date.now()
   const [t, setT] = createSignal(0)
   const timer = setInterval(() => setT(Date.now() - started), 100)
   onCleanup(() => clearInterval(timer))
+  const sequential = () => !!props.live
+  const state = (id: string): "read" | "reading" | "waiting" => {
+    const l = props.live
+    if (!l) return "reading"
+    if (l.done[id]) return "read"
+    return l.current === id ? "reading" : "waiting"
+  }
+  const doneCount = () => Object.keys(props.live?.done ?? {}).length
   return (
     <div class="pls-running" role="status" aria-label={props.label}>
       <p class="pls-checking">
         <span class="pls-spin" aria-hidden="true" />
         {props.label} <b class="hsc-num pls-clock">{(t() / 1000).toFixed(1)} s</b>
-        <span class="hsc-muted">usually {props.usual}</span>
+        <Show when={sequential()} fallback={<span class="hsc-muted">usually {props.usual}</span>}>
+          <span class="hsc-muted">
+            <span class="hsc-num">{doneCount()}</span> of <span class="hsc-num">{props.stops.length}</span> stops read
+          </span>
+        </Show>
       </p>
-      <ol class="pls-route pls-route--running" aria-hidden="true" ref={(el) => queueMicrotask(() => el.style.setProperty("--rail", `${Math.max(0, el.offsetHeight - 50)}px`))}>
+      <ol
+        class="pls-route pls-route--running"
+        data-sequential={sequential() ? "" : undefined}
+        aria-hidden="true"
+        ref={(el) => queueMicrotask(() => el.style.setProperty("--rail", `${Math.max(0, el.offsetHeight - 50)}px`))}
+      >
         <For each={props.stops}>
-          {(name, i) => (
-            <li class="pls-stop pls-stop--reading" style={{ "--i": i() }}>
-              <span class="pls-pin">{i() + 1}</span>
-              <div class="pls-body">
-                <h4>{name}</h4>
-                <p>reading…</p>
-              </div>
-              <span class="pls-tally">
-                <span class="pls-bar" />
-              </span>
-            </li>
-          )}
+          {(s, i) => {
+            const stop = () => props.live?.done[s.id]
+            return (
+              <li class="pls-stop" classList={{ "pls-stop--reading": state(s.id) === "reading", "pls-stop--waiting": state(s.id) === "waiting", "pls-stop--read": state(s.id) === "read" }} data-shut={stop()?.shut ? "" : undefined} style={{ "--i": i() }}>
+                <span class="pls-pin">{stop()?.shut ? "×" : i() + 1}</span>
+                <div class="pls-body">
+                  <h4>{s.label}</h4>
+                  <p>{state(s.id) === "read" ? (stop()!.shut ? "shut" : stop()!.text) : state(s.id) === "reading" ? "reading…" : "next"}</p>
+                </div>
+                <span class="pls-tally">
+                  <Show when={stop()} fallback={<Show when={state(s.id) === "reading"}><span class="pls-bar" /></Show>}>
+                    {(st) => <span class="pls-main hsc-num">{tallyOf(st()).main}</span>}
+                  </Show>
+                </span>
+              </li>
+            )
+          }}
         </For>
       </ol>
     </div>
   )
 }
 
-const TOPIC_RUN = ["Commits", "Diary", "Files", "Claude Code sessions", "opencode sessions", "iMessage", "Apple Mail", "Gmail", "Atlas"]
-const CONTACT_RUN = ["Lead record", "Deal", "Tasks", "Checks", "Pulse score", "Email log"]
+const TOPIC_RUN = [
+  { id: "git", label: "Commits" },
+  { id: "diary", label: "Diary" },
+  { id: "files", label: "Files" },
+  { id: "claude_code", label: "Claude Code sessions" },
+  { id: "opencode", label: "opencode sessions" },
+  { id: "imessage", label: "iMessage" },
+  { id: "email", label: "Apple Mail" },
+  { id: "gmail", label: "Gmail" },
+  { id: "bloq", label: "Atlas" },
+]
+const CONTACT_RUN = ["Lead record", "Deal", "Tasks", "Checks", "Pulse score", "Email log"].map((label) => ({ id: label, label }))
 
 export function IrisPulseTopic(props: { doFetch: Fetch; project?: string; now?: () => number }) {
   const now = () => props.now?.() ?? Date.now()
@@ -254,11 +336,18 @@ export function IrisPulseTopic(props: { doFetch: Fetch; project?: string; now?: 
   const [days, setDays] = createSignal(Number(remember("iris.pulse.days") ?? 30) || 30)
   const [ask, setAsk] = createSignal<{ q: string; days: number; n: number } | undefined>()
   const [picked, setPicked] = createSignal<string | undefined>()
+  const [live, setLive] = createSignal<Live>({ done: {} })
   const [run] = createResource(ask, async (a) => {
     const p = new URLSearchParams({ q: a.q, days: String(a.days) })
     if (props.project) p.set("project", props.project)
+    setLive({ done: {} })
+    const streamed = await streamTopic(props.doFetch, `/iris/pulse/topic/stream?${p}`, setLive)
+    if (streamed) return streamed
+    // No stream to read (older sidecar): the one-shot route, with the all-at-once running view.
+    setLive({ done: {}, current: "__none" })
     return getJson<TopicPulse | null>(props.doFetch, `/iris/pulse/topic?${p}`, null)
   })
+  const streaming = () => live().current !== "__none"
   const drive = () => {
     const k = q().trim()
     if (!k) return
@@ -308,7 +397,7 @@ export function IrisPulseTopic(props: { doFetch: Fetch; project?: string; now?: 
           </form>
 
           <Show when={run.loading}>
-            <PulseRunning stops={TOPIC_RUN} usual="10–30 s" label={`Driving the route for “${ask()?.q ?? ""}”`} />
+            <PulseRunning stops={TOPIC_RUN} usual="10–30 s" label={`Driving the route for “${ask()?.q ?? ""}”`} live={streaming() ? live() : undefined} />
           </Show>
           <Show when={!run.loading && run.latest && !run.latest.measured}>
             <p class="hsc-warn">{run.latest!.reason ?? "The route did not finish."}</p>

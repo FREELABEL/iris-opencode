@@ -41,6 +41,20 @@
   animation: pls-travel 1.6s cubic-bezier(0.45, 0, 0.55, 1) infinite;
 }
 @keyframes pls-travel { from { transform: translateY(0); opacity: 0; } 15% { opacity: 1; } 85% { opacity: 1; } to { transform: translateY(var(--rail, 420px)); opacity: 0; } }
+/* Streamed topic route (#189319): the stop being read pulses; landed stops show their count;
+   stops ahead wait. No light on the rail — the pulsing stop IS where Pulse is. */
+.pls-route--running[data-sequential]::after { display: none; }
+.pls-stop--waiting, .pls-stop--read { cursor: default; }
+.pls-stop--waiting:hover, .pls-stop--read:hover { background: none; }
+.pls-stop--waiting .pls-pin { border-color: var(--hsc-rule); color: var(--hsc-faint); }
+.pls-stop--waiting .pls-body h4 { color: var(--hsc-ink2); }
+.pls-stop--waiting .pls-body p { color: var(--hsc-faint); }
+.pls-stop--read .pls-pin { background: var(--hsc-jade); border-color: var(--hsc-jade); color: var(--hsc-surface); }
+.pls-stop--read[data-shut] .pls-pin { background: var(--hsc-surface); border: 2px dashed var(--hsc-faint); color: var(--hsc-faint); }
+.pls-stop--read .pls-body p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pls-stop--read[data-shut] .pls-body p, .pls-stop--read[data-shut] .pls-main { color: var(--hsc-faint); }
+.pls-stop--read .pls-main { animation: pls-land 320ms ease-out; }
+@keyframes pls-land { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
 .pls-stop--reading { cursor: default; }
 .pls-stop--reading:hover { background: none; }
 .pls-stop--reading .pls-pin { border-color: var(--hsc-jade); color: var(--hsc-jade); animation: pls-pulse 1.4s ease-in-out infinite; animation-delay: calc(var(--i) * 90ms); }
@@ -56,7 +70,7 @@
 }
 @keyframes pls-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
 @media (prefers-reduced-motion: reduce) {
-  .pls-spin, .pls-route--running::after, .pls-stop--reading .pls-pin, .pls-bar { animation: none; }
+  .pls-spin, .pls-route--running::after, .pls-stop--reading .pls-pin, .pls-bar, .pls-stop--read .pls-main { animation: none; }
   .pls-route--running::after { display: none; }
 }
 
