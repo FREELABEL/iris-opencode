@@ -110,6 +110,8 @@ export const dict: Record<string, string> = {
   "ui.messagePart.context.list.other": "{{count}} lists",
   "ui.messagePart.iris.ran.one": "{{count}} IRIS command",
   "ui.messagePart.iris.ran.other": "{{count}} IRIS commands",
+  "ui.messagePart.commands.one": "{{count}} command",
+  "ui.messagePart.commands.other": "{{count}} commands",
   "ui.messagePart.iris.failed.one": "{{count}} failed",
   "ui.messagePart.iris.failed.other": "{{count}} failed",
   "ui.sessionTurn.status.runningIris": "Running",

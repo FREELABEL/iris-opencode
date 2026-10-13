@@ -14,10 +14,21 @@ const CONTEXT_GROUP_TOOLS = new Set(["read", "glob", "grep", "list"])
 export function isIrisGroupTool(part: PartType): part is ToolPart {
   return part.type === "tool" && /^iris_os_/i.test(part.tool)
 }
-export type ContextKind = "files" | "iris"
+/**
+ * Shell commands (#188457) fold with IRIS calls: in a real turn they alternate — Shell, IRIS ×4,
+ * Shell, IRIS ×2 — and folding each kind separately still left a wall of rows. Both are "a command
+ * the agent ran", so one row holds a run of either.
+ */
+export function isShellTool(part: PartType): part is ToolPart {
+  return part.type === "tool" && (part.tool === "shell" || part.tool === "bash")
+}
+export function isCommandTool(part: PartType): part is ToolPart {
+  return isIrisGroupTool(part) || isShellTool(part)
+}
+export type ContextKind = "files" | "commands"
 function contextKind(part: PartType): ContextKind | undefined {
   if (isContextGroupTool(part)) return "files"
-  if (isIrisGroupTool(part)) return "iris"
+  if (isCommandTool(part)) return "commands"
   return undefined
 }
 
@@ -89,8 +100,8 @@ export function groupParts(parts: { messageID: string; part: PartType }[]) {
         messageID: item.messageID,
         partID: item.part.id,
       })),
-      // Only an IRIS group carries a kind, so a files group compares equal to one built before it.
-      ...(kind === "iris" ? { kind } : {}),
+      // Only a commands group carries a kind, so a files group compares equal to one built before it.
+      ...(kind === "commands" ? { kind } : {}),
     })
     start = -1
   }
@@ -134,7 +145,74 @@ export function irisCallTrigger(part: ToolPart): { title: string; subtitle: stri
   return { title: name.replace(/_/g, " "), subtitle: first ?? "" }
 }
 
-export function irisGroupSummary(parts: ToolPart[]) {
-  return { ran: parts.length, failed: parts.filter((p) => p.state.status === "error").length }
+/** Any command in a commands row: an IRIS call as above, a shell command as `$ <command>`. */
+export function commandTrigger(part: ToolPart): { title: string; subtitle: string } {
+  if (!isShellTool(part)) return irisCallTrigger(part)
+  const input = (part.state.input ?? {}) as Record<string, unknown>
+  return { title: "$", subtitle: typeof input.command === "string" ? input.command.trim() : "" }
 }
 
+function meta(part: ToolPart): Record<string, unknown> {
+  return ("metadata" in part.state ? (part.state.metadata as Record<string, unknown>) : undefined) ?? {}
+}
+
+/** A shell exit code, when the command finished and reported one. */
+export function exitOf(part: ToolPart): number | undefined {
+  const e = meta(part).exit
+  return typeof e === "number" ? e : undefined
+}
+
+/**
+ * Failed = the call errored, or a shell command exited non-zero. A non-zero exit comes back as a
+ * COMPLETED part — counting only `error` would fold a failed `ls` out of sight, which is the one
+ * thing the folded row must never do.
+ */
+export function failed(part: ToolPart): boolean {
+  if (part.state.status === "error") return true
+  const e = exitOf(part)
+  return isShellTool(part) && e !== undefined && e !== 0
+}
+
+export function running(part: ToolPart): boolean {
+  return part.state.status === "pending" || part.state.status === "running"
+}
+
+/** How long a call took, in ms, once it has finished. */
+export function durationOf(part: ToolPart): number | undefined {
+  const t = (part.state as { time?: { start?: number; end?: number } }).time
+  if (!t?.start || !t.end) return undefined
+  return Math.max(0, t.end - t.start)
+}
+
+/** What a shell command printed (the tool's own preview of it), for the second click. */
+export function outputOf(part: ToolPart): string | undefined {
+  const o = meta(part).output
+  return typeof o === "string" && o.trim() ? o : undefined
+}
+
+export function commandsSummary(parts: ToolPart[]) {
+  const starts = parts.map((p) => (p.state as { time?: { start?: number } }).time?.start).filter((n): n is number => !!n)
+  const ends = parts.map((p) => (p.state as { time?: { end?: number } }).time?.end).filter((n): n is number => !!n)
+  const live = [...parts].reverse().find(running)
+  return {
+    ran: parts.length,
+    failed: parts.filter(failed).length,
+    allIris: parts.every(isIrisGroupTool),
+    // Wall time of the run (first start to last end), not the sum — calls can overlap.
+    ms: starts.length && ends.length && !live ? Math.max(...ends) - Math.min(...starts) : undefined,
+    live: live ? commandTrigger(live) : undefined,
+  }
+}
+
+/** Kept for #189316 callers: the IRIS-only summary. */
+export function irisGroupSummary(parts: ToolPart[]) {
+  return { ran: parts.length, failed: parts.filter(failed).length }
+}
+
+/** "41s", "1m 05s", "800ms". */
+export function formatDuration(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  const s = Math.round(ms / 1000)
+  if (s < 60) return `${s}s`
+  return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`
+}
