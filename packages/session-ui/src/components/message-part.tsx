@@ -1075,13 +1075,13 @@ export function ContextToolGroup(props: {
                               </For>
                             </Show>
                           </div>
-                          <Show when={error()}>
-                            {(e) => <span data-slot="context-tool-group-error">{e()}</span>}
-                          </Show>
                         </div>
                       </div>
                     </div>
                   </div>
+                  <Show when={error()}>
+                    {(e) => <span data-slot="context-tool-group-error">{e()}</span>}
+                  </Show>
                 </div>
               )
             }}
