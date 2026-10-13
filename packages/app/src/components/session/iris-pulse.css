@@ -117,6 +117,10 @@
 .pls-pin {
   position: relative; z-index: 1; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center;
   font-size: 11px; font-weight: 600; background: var(--hsc-surface); border: 2px solid var(--hsc-jade); color: var(--hsc-jade);
+  /* Centre the DIGIT, not its line box: the pin inherited a 24px line-height inside a 20px content
+     box, which sat every number 1.5px low. line-height 1 plus a cap-height trim puts the glyph itself
+     on the centre (text-box: WebKit 18.2+ / Chromium 133+; elsewhere line-height 1 alone is ~0.5px). */
+  line-height: 1; text-box: trim-both cap alphabetic; font-variant-numeric: tabular-nums;
 }
 .pls-stop[data-tone="none"] .pls-pin { border-color: var(--hsc-rule); color: var(--hsc-ink2); }
 .pls-stop[data-owed] .pls-pin { border-color: var(--hsc-amber); color: var(--hsc-amber); }
