@@ -1,10 +1,18 @@
 import { describe, expect, test } from "bun:test"
-import { contactRoute, topicStop, topicSummary, type ContactInputs } from "../../src/iris/pulse"
+import { cleanReason, contactRoute, topicStop, topicSummary, type ContactInputs } from "../../src/iris/pulse"
 import type { SourceSweep } from "../../src/iris/pulse/sweep"
 
 const from = (id: string) => `iris pulse check "x" --sources ${id}`
 
 describe("pulse topic (#189286)", () => {
+  test("a JSON error body becomes its message; a caveat reads as a sentence", () => {
+    expect(cleanReason('Apple Mail search returned 503: {"error":"Mail Envelope Index not found — is Mail.app configured on this Mac?"}')).toBe(
+      "Apple Mail search returned 503 — Mail Envelope Index not found — is Mail.app configured on this Mac?",
+    )
+    expect(cleanReason("read from the Atlas diary")).toBe("Read from the Atlas diary")
+    expect(cleanReason("iMessage is only readable on macOS")).toBe("iMessage is only readable on macOS")
+  })
+
   test("a source that could not look is SHUT with its reason — its count is null, never 0", () => {
     const s = topicStop({ source: "imessage", searched: false, unavailableReason: "iMessage is only readable on macOS", hits: 0, items: [] }, from)
     expect(s.shut).toBe(true)

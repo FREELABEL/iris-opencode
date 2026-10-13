@@ -1,0 +1,687 @@
+{
+ "topic": {
+  "measured": true,
+  "data": {
+   "keyword": "heartbeat",
+   "days": 30,
+   "repo": "/Users/you/work",
+   "ms": 22161,
+   "summary": {
+    "hits": 1631,
+    "floor": true,
+    "withHits": 5,
+    "reachable": 6,
+    "total": 9,
+    "shut": 3,
+    "prior": null,
+    "lastTouched": 1791875012000
+   },
+   "stops": [
+    {
+     "id": "git",
+     "label": "Commits",
+     "from": "iris pulse check \"heartbeat\" --sources git",
+     "shut": false,
+     "reason": null,
+     "provenance": "measured",
+     "count": 150,
+     "floor": false,
+     "delta": 39,
+     "text": "150 commits mention it. 39 more than the window before.",
+     "owed": 0,
+     "items": [
+      {
+       "when": "2026-10-13T06:55:26+00:00",
+       "where": "Commits \u00b7 result 1"
+      },
+      {
+       "when": "2026-10-13T06:54:48+00:00",
+       "where": "Commits \u00b7 result 2"
+      },
+      {
+       "when": "2026-10-13T06:51:27+00:00",
+       "where": "Commits \u00b7 result 3"
+      },
+      {
+       "when": "2026-10-13T06:47:49+00:00",
+       "where": "Commits \u00b7 result 4"
+      },
+      {
+       "when": "2026-10-13T05:31:10+00:00",
+       "where": "Commits \u00b7 result 5"
+      },
+      {
+       "when": "2026-10-13T05:29:27+00:00",
+       "where": "Commits \u00b7 result 6"
+      },
+      {
+       "when": "2026-10-13T05:28:05+00:00",
+       "where": "Commits \u00b7 result 7"
+      },
+      {
+       "when": "2026-10-13T04:27:56+00:00",
+       "where": "Commits \u00b7 result 8"
+      }
+     ]
+    },
+    {
+     "id": "diary",
+     "label": "Diary",
+     "from": "iris pulse check \"heartbeat\" --sources diary",
+     "shut": false,
+     "reason": "read from the Atlas diary (no local daily-diary folder)",
+     "provenance": "partial",
+     "count": 0,
+     "floor": false,
+     "delta": -2,
+     "text": "0 diary entries mention it. 2 fewer than the window before. Read from the Atlas diary (no local daily-diary folder)",
+     "owed": 0,
+     "items": []
+    },
+    {
+     "id": "files",
+     "label": "Files",
+     "from": "iris pulse check \"heartbeat\" --sources files",
+     "shut": false,
+     "reason": null,
+     "provenance": "measured",
+     "count": 1290,
+     "floor": false,
+     "delta": null,
+     "text": "1290 files mention it.",
+     "owed": 0,
+     "items": [
+      {
+       "when": "2026-10-13T05:27:43.676Z",
+       "where": "Files \u00b7 result 1"
+      },
+      {
+       "when": "2026-10-13T05:27:33.978Z",
+       "where": "Files \u00b7 result 2"
+      },
+      {
+       "when": "2026-10-13T03:40:21.746Z",
+       "where": "Files \u00b7 result 3"
+      },
+      {
+       "when": "2026-10-13T03:40:02.515Z",
+       "where": "Files \u00b7 result 4"
+      },
+      {
+       "when": "2026-10-13T03:39:18.463Z",
+       "where": "Files \u00b7 result 5"
+      },
+      {
+       "when": "2026-10-13T01:04:56.720Z",
+       "where": "Files \u00b7 result 6"
+      },
+      {
+       "when": "2026-10-13T01:04:56.598Z",
+       "where": "Files \u00b7 result 7"
+      },
+      {
+       "when": "2026-10-13T01:04:56.595Z",
+       "where": "Files \u00b7 result 8"
+      }
+     ]
+    },
+    {
+     "id": "claude_code",
+     "label": "Claude Code sessions",
+     "from": "iris pulse check \"heartbeat\" --sources claude_code",
+     "shut": false,
+     "reason": "left out the session running this check (6 transcript files); its transcripts only go back to 2026-10-03, so there is no earlier window to compare; this window covers 9 of 30 days",
+     "provenance": "partial",
+     "count": 124,
+     "floor": false,
+     "delta": null,
+     "text": "124 sessions mention it. Left out the session running this check (6 transcript files); its transcripts only go back to 2026-10-03, so there is no earlier window to compare; this window covers 9 of 30 days",
+     "owed": 0,
+     "items": [
+      {
+       "when": "2026-10-13T07:03:32.583Z",
+       "where": "Claude Code sessions \u00b7 result 1"
+      },
+      {
+       "when": "2026-10-13T07:03:29.627Z",
+       "where": "Claude Code sessions \u00b7 result 2"
+      },
+      {
+       "when": "2026-10-13T06:59:21.559Z",
+       "where": "Claude Code sessions \u00b7 result 3"
+      },
+      {
+       "when": "2026-10-13T06:04:40.263Z",
+       "where": "Claude Code sessions \u00b7 result 4"
+      },
+      {
+       "when": "2026-10-13T06:03:18.371Z",
+       "where": "Claude Code sessions \u00b7 result 5"
+      },
+      {
+       "when": "2026-10-13T05:22:31.807Z",
+       "where": "Claude Code sessions \u00b7 result 6"
+      },
+      {
+       "when": "2026-10-13T04:32:03.829Z",
+       "where": "Claude Code sessions \u00b7 result 7"
+      },
+      {
+       "when": "2026-10-13T04:28:56.668Z",
+       "where": "Claude Code sessions \u00b7 result 8"
+      }
+     ]
+    },
+    {
+     "id": "opencode",
+     "label": "opencode sessions",
+     "from": "iris pulse check \"heartbeat\" --sources opencode",
+     "shut": false,
+     "reason": "its transcripts only go back to 2026-10-03, so there is no earlier window to compare; this window covers 9 of 30 days",
+     "provenance": "partial",
+     "count": 3,
+     "floor": false,
+     "delta": null,
+     "text": "3 sessions mention it. Its transcripts only go back to 2026-10-03, so there is no earlier window to compare; this window covers 9 of 30 days",
+     "owed": 0,
+     "items": [
+      {
+       "when": "2026-10-03T21:54:41.866Z",
+       "where": "opencode sessions \u00b7 result 1"
+      },
+      {
+       "when": "2026-10-03T21:46:01.710Z",
+       "where": "opencode sessions \u00b7 result 2"
+      },
+      {
+       "when": "2026-10-03T21:35:48.606Z",
+       "where": "opencode sessions \u00b7 result 3"
+      }
+     ]
+    },
+    {
+     "id": "imessage",
+     "label": "iMessage",
+     "from": "iris pulse check \"heartbeat\" --sources imessage",
+     "shut": true,
+     "reason": "iMessage is only readable on macOS",
+     "provenance": "not-measured",
+     "count": null,
+     "floor": false,
+     "delta": null,
+     "text": "iMessage is only readable on macOS",
+     "owed": 0,
+     "fix": {
+      "label": "Run this route on the Mac"
+     },
+     "items": []
+    },
+    {
+     "id": "email",
+     "label": "Apple Mail",
+     "from": "iris pulse check \"heartbeat\" --sources email",
+     "shut": true,
+     "reason": "Apple Mail search returned 503 \u2014 Mail Envelope Index not found \u2014 is Mail.app configured on this Mac?",
+     "provenance": "not-measured",
+     "count": null,
+     "floor": false,
+     "delta": null,
+     "text": "Apple Mail search returned 503 \u2014 Mail Envelope Index not found \u2014 is Mail.app configured on this Mac?",
+     "owed": 0,
+     "fix": {
+      "label": "Run this route on the Mac"
+     },
+     "items": []
+    },
+    {
+     "id": "gmail",
+     "label": "Gmail",
+     "from": "iris pulse check \"heartbeat\" --sources gmail",
+     "shut": true,
+     "reason": "The desktop app does not search Gmail for a topic yet \u2014 `iris pulse check` in a terminal does",
+     "provenance": "not-measured",
+     "count": null,
+     "floor": false,
+     "delta": null,
+     "text": "The desktop app does not search Gmail for a topic yet \u2014 `iris pulse check` in a terminal does",
+     "owed": 0,
+     "fix": {
+      "label": "Run it in a terminal",
+      "command": "iris pulse check"
+     },
+     "items": []
+    },
+    {
+     "id": "bloq",
+     "label": "Atlas",
+     "from": "iris pulse check \"heartbeat\" --sources bloq",
+     "shut": false,
+     "reason": "no board by this name \u2014 searched item text across your boards instead; at least 64 \u2014 the search stops at 100, so this is a floor and not compared with the window before",
+     "provenance": "partial",
+     "count": 64,
+     "floor": true,
+     "delta": null,
+     "text": "At least 64 items mention it. No board by this name \u2014 searched item text across your boards instead; at least 64 \u2014 the search stops at 100, so this is a floor and not compared with the window before",
+     "owed": 0,
+     "items": [
+      {
+       "when": "2026-10-13T06:42:36.000Z",
+       "where": "Atlas \u00b7 result 1"
+      },
+      {
+       "when": "2026-10-13T03:43:49.000Z",
+       "where": "Atlas \u00b7 result 2"
+      },
+      {
+       "when": "2026-10-13T03:37:48.000Z",
+       "where": "Atlas \u00b7 result 3"
+      },
+      {
+       "when": "2026-10-13T03:36:54.000Z",
+       "where": "Atlas \u00b7 result 4"
+      },
+      {
+       "when": "2026-10-13T03:36:37.000Z",
+       "where": "Atlas \u00b7 result 5"
+      },
+      {
+       "when": "2026-10-13T03:36:36.000Z",
+       "where": "Atlas \u00b7 result 6"
+      },
+      {
+       "when": "2026-10-13T03:20:37.000Z",
+       "where": "Atlas \u00b7 result 7"
+      },
+      {
+       "when": "2026-10-13T01:37:58.000Z",
+       "where": "Atlas \u00b7 result 8"
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "contact": {
+  "measured": true,
+  "data": {
+   "lead": {
+    "id": 4242,
+    "name": "Injury law client",
+    "company": "Example Clinic",
+    "status": "In Negotiation",
+    "email": "client@example.com"
+   },
+   "days": 30,
+   "score": {
+    "score": 43,
+    "band": "failing",
+    "previous": 43,
+    "history": [
+     {
+      "at": "2026-09-25 12:01:10",
+      "score": 46
+     },
+     {
+      "at": "2026-09-30 12:01:24",
+      "score": 46
+     },
+     {
+      "at": "2026-09-30 18:01:30",
+      "score": 46
+     },
+     {
+      "at": "2026-10-01 02:01:38",
+      "score": 49
+     },
+     {
+      "at": "2026-10-02 02:01:40",
+      "score": 45
+     },
+     {
+      "at": "2026-10-02 16:01:08",
+      "score": 45
+     },
+     {
+      "at": "2026-10-02 18:01:25",
+      "score": 45
+     },
+     {
+      "at": "2026-10-03 14:01:34",
+      "score": 45
+     },
+     {
+      "at": "2026-10-06 00:01:40",
+      "score": 39
+     },
+     {
+      "at": "2026-10-08 16:01:49",
+      "score": 42
+     },
+     {
+      "at": "2026-10-10 20:01:16",
+      "score": 43
+     },
+     {
+      "at": "2026-10-12 21:01:23",
+      "score": 43
+     },
+     {
+      "at": "2026-10-12 21:05:22",
+      "score": 43
+     },
+     {
+      "at": "2026-10-12 21:31:59",
+      "score": 43
+     },
+     {
+      "at": "2026-10-12 21:32:53",
+      "score": 43
+     },
+     {
+      "at": "2026-10-12 21:38:30",
+      "score": 43
+     },
+     {
+      "at": "2026-10-12 21:41:38",
+      "score": 43
+     },
+     {
+      "at": "2026-10-12 23:26:51",
+      "score": 43
+     },
+     {
+      "at": "2026-10-12 23:26:56",
+      "score": 43
+     },
+     {
+      "at": "2026-10-12 23:27:02",
+      "score": 43
+     },
+     {
+      "at": "2026-10-12 23:27:07",
+      "score": 43
+     },
+     {
+      "at": "2026-10-12 23:27:12",
+      "score": 43
+     },
+     {
+      "at": "2026-10-12 23:30:22",
+      "score": 43
+     },
+     {
+      "at": "2026-10-12 23:31:09",
+      "score": 43
+     },
+     {
+      "at": "2026-10-13 00:04:15",
+      "score": 43
+     },
+     {
+      "at": "2026-10-13 00:04:51",
+      "score": 43
+     },
+     {
+      "at": "2026-10-13 00:18:06",
+      "score": 43
+     },
+     {
+      "at": "2026-10-13 00:59:59",
+      "score": 43
+     },
+     {
+      "at": "2026-10-13 01:00:57",
+      "score": 43
+     },
+     {
+      "at": "2026-10-13 01:04:19",
+      "score": 43
+     }
+    ],
+    "coverage": 0.92
+   },
+   "stops": [
+    {
+     "id": "record",
+     "label": "Lead record",
+     "from": "/api/v1/leads/4242/activities",
+     "shut": false,
+     "reason": "only the 20 most recent are read",
+     "provenance": "partial",
+     "count": 20,
+     "floor": true,
+     "delta": null,
+     "text": "20+ recent activities \u00b7 last signup, Oct 5.",
+     "owed": 0,
+     "items": [
+      {
+       "when": "2026-10-05T19:03:43.000000Z",
+       "where": "signup",
+       "text": "(activity text)"
+      },
+      {
+       "when": "2026-09-17T04:50:57.000000Z",
+       "where": "note",
+       "text": "(activity text)"
+      },
+      {
+       "when": "2026-09-16T21:49:09.000000Z",
+       "where": "note",
+       "text": "(activity text)"
+      },
+      {
+       "when": "2026-09-16T05:14:37.000000Z",
+       "where": "board attached",
+       "text": "(activity text)"
+      },
+      {
+       "when": "2026-09-14T19:55:56.000000Z",
+       "where": "note",
+       "text": "(activity text)"
+      },
+      {
+       "when": "2026-09-13T18:52:31.000000Z",
+       "where": "note",
+       "text": "(activity text)"
+      },
+      {
+       "when": "2026-09-11T03:49:58.000000Z",
+       "where": "note",
+       "text": "(activity text)"
+      },
+      {
+       "when": "2026-09-10T17:42:32.000000Z",
+       "where": "note",
+       "text": "(activity text)"
+      }
+     ]
+    },
+    {
+     "id": "deal",
+     "label": "Deal",
+     "from": "/api/v1/leads/4242/deal-status",
+     "shut": false,
+     "reason": null,
+     "provenance": "measured",
+     "count": 9950,
+     "floor": false,
+     "delta": null,
+     "text": "Payment gate waiting on both: contract unsigned, $9,950/mo unpaid. 0 of 3 reminders sent.",
+     "owed": 1,
+     "items": []
+    },
+    {
+     "id": "tasks",
+     "label": "Tasks",
+     "from": "/api/v1/leads/4242/tasks",
+     "shut": false,
+     "reason": null,
+     "provenance": "measured",
+     "count": 9,
+     "floor": false,
+     "delta": null,
+     "text": "9 done \u00b7 20 open \u00b7 4 overdue since Sep 15.",
+     "owed": 4,
+     "items": [
+      {
+       "when": null,
+       "where": "Open task 1"
+      },
+      {
+       "when": null,
+       "where": "Open task 2"
+      },
+      {
+       "when": null,
+       "where": "Open task 3"
+      },
+      {
+       "when": null,
+       "where": "Open task 4"
+      },
+      {
+       "when": null,
+       "where": "Open task 5"
+      },
+      {
+       "when": null,
+       "where": "Open task 6"
+      },
+      {
+       "when": null,
+       "where": "Open task 7"
+      },
+      {
+       "when": null,
+       "where": "Open task 8"
+      }
+     ]
+    },
+    {
+     "id": "checks",
+     "label": "Checks",
+     "from": "/api/v1/leads/4242/requirements/summary",
+     "shut": false,
+     "reason": null,
+     "provenance": "not-kept",
+     "count": 1,
+     "floor": false,
+     "delta": null,
+     "text": "1 of 6 passing \u2014 as of the last run, Jun 9.",
+     "owed": 4,
+     "items": []
+    },
+    {
+     "id": "gmail",
+     "label": "Email log",
+     "from": "/api/v1/leads/4242/gmail-threads",
+     "shut": false,
+     "reason": null,
+     "provenance": "measured",
+     "count": 0,
+     "floor": false,
+     "delta": null,
+     "text": "No email in 30 days.",
+     "owed": 0,
+     "items": []
+    },
+    {
+     "id": "imessage",
+     "label": "iMessage",
+     "from": "iris leads pulse 4242",
+     "shut": true,
+     "reason": "Not read by the desktop app yet. Their 1:1 and group chats \u2014 read on the Mac by the CLI.",
+     "provenance": "not-measured",
+     "count": null,
+     "floor": false,
+     "delta": null,
+     "text": "Not read by the desktop app yet. Their 1:1 and group chats \u2014 read on the Mac by the CLI.",
+     "owed": 0,
+     "fix": {
+      "label": "Run it in a terminal",
+      "command": "iris leads pulse 4242"
+     },
+     "items": []
+    },
+    {
+     "id": "whatsapp",
+     "label": "WhatsApp",
+     "from": "iris leads pulse 4242",
+     "shut": true,
+     "reason": "Not read by the desktop app yet. Their WhatsApp groups \u2014 read on the Mac by the CLI.",
+     "provenance": "not-measured",
+     "count": null,
+     "floor": false,
+     "delta": null,
+     "text": "Not read by the desktop app yet. Their WhatsApp groups \u2014 read on the Mac by the CLI.",
+     "owed": 0,
+     "fix": {
+      "label": "Run it in a terminal",
+      "command": "iris leads pulse 4242"
+     },
+     "items": []
+    },
+    {
+     "id": "mail",
+     "label": "Apple Mail",
+     "from": "iris leads pulse 4242",
+     "shut": true,
+     "reason": "Not read by the desktop app yet. Their mail in Mail.app \u2014 read on the Mac by the CLI.",
+     "provenance": "not-measured",
+     "count": null,
+     "floor": false,
+     "delta": null,
+     "text": "Not read by the desktop app yet. Their mail in Mail.app \u2014 read on the Mac by the CLI.",
+     "owed": 0,
+     "fix": {
+      "label": "Run it in a terminal",
+      "command": "iris leads pulse 4242"
+     },
+     "items": []
+    },
+    {
+     "id": "meetings",
+     "label": "Meetings",
+     "from": "iris leads pulse 4242",
+     "shut": true,
+     "reason": "The calendar is not read here, so this is not \u201cno meetings\u201d \u2014 it was not read.",
+     "provenance": "not-measured",
+     "count": null,
+     "floor": false,
+     "delta": null,
+     "text": "The calendar is not read here, so this is not \u201cno meetings\u201d \u2014 it was not read.",
+     "owed": 0,
+     "fix": {
+      "label": "Run it in a terminal",
+      "command": "iris leads pulse 4242"
+     },
+     "items": []
+    }
+   ],
+   "owed": [
+    {
+     "what": "Signed contract + first payment",
+     "amount": "$9,950/mo",
+     "since": "141 d"
+    },
+    {
+     "what": "Overdue: follow-up task 1",
+     "since": "28 d"
+    },
+    {
+     "what": "Overdue: follow-up task 2",
+     "since": "27 d"
+    },
+    {
+     "what": "Overdue: follow-up task 3",
+     "since": "27 d"
+    }
+   ],
+   "channels": {
+    "read": 1,
+    "total": 5
+   },
+   "ms": 7726
+  }
+ }
+}

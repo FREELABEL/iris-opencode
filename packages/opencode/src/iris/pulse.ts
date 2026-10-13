@@ -91,11 +91,23 @@ const TOPIC_NOUN: Record<TopicSource, [string, string]> = {
 
 const plural = (n: number, [one, many]: [string, string]) => `${n} ${n === 1 ? one : many}`
 
+/**
+ * A reason as a sentence a person reads: an embedded JSON error body becomes its message, and it
+ * starts with a capital so it can follow another sentence.
+ */
+export function cleanReason(r: string): string {
+  const m = r.match(/^(.*?):?\s*\{.*?"(?:error|message)"\s*:\s*"([^"]+)".*\}\s*$/s)
+  const out = (m ? `${m[1].trim()} — ${m[2]}` : r).trim()
+  // "iMessage", "iCloud": a word that is meant to start lower-case keeps it.
+  if (/^[a-z][A-Z]/.test(out)) return out
+  return out.charAt(0).toUpperCase() + out.slice(1)
+}
+
 /** A sweep as a stop. Pure — the panel's shape is tested without a disk. */
 export function topicStop(s: SourceSweep, fromOf: (id: TopicSource) => string): PulseStop {
   const label = TOPIC_LABELS[s.source] ?? s.source
   if (!s.searched) {
-    const reason = s.unavailableReason ?? "could not look"
+    const reason = cleanReason(s.unavailableReason ?? "could not look")
     return {
       id: s.source,
       label,
@@ -117,7 +129,7 @@ export function topicStop(s: SourceSweep, fromOf: (id: TopicSource) => string): 
   let text = `${floor ? "At least " : ""}${plural(s.hits, TOPIC_NOUN[s.source])} mention${s.hits === 1 ? "s" : ""} it.`
   if (s.board) text = `Board “${s.board.name}” — ${plural(s.hits, TOPIC_NOUN.bloq)}${s.board.silentLists.length ? `, ${s.board.silentLists.length} list${s.board.silentLists.length === 1 ? "" : "s"} gone quiet` : ""}.`
   if (delta !== null && delta !== 0) text += ` ${Math.abs(delta)} ${delta > 0 ? "more" : "fewer"} than the window before.`
-  if (s.unavailableReason) text += ` ${s.unavailableReason}`
+  if (s.unavailableReason) text += ` ${cleanReason(s.unavailableReason)}`
   return {
     id: s.source,
     label,
