@@ -123,8 +123,8 @@ function Week(props: { row: HeartbeatRow; now: number; picked?: number; onPick: 
       </p>
       <Show when={roll().unknown}>
         <p class="hbt-wtools">
-          {roll().unknown} earlier wake{roll().unknown === 1 ? "" : "s"} not shown: the platform keeps only its newest beat
-          for now (#189132).
+          {roll().unknown} wake{roll().unknown === 1 ? "" : "s"} from before 13 Oct not shown: the platform overwrote
+          each beat with the next until then (#189132).
         </p>
       </Show>
       <Show when={roll().tools.length}>

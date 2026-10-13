@@ -26,6 +26,7 @@ import {
   heldForHours,
   nextFireAt,
   silentSince,
+  HISTORY_KEPT_SINCE,
   type HeartbeatRow,
 } from "./iris-heartbeats-model"
 
@@ -164,6 +165,27 @@ describe("fl-api's skip record (#189113)", () => {
   test("a circuit-breaker pause says how to resume", () => {
     const r = { ...c, lastSkip: { at: at(1), reason: "Paused: 5 consecutive failures. Use Run Now to resume.", kind: "circuit_breaker" } }
     expect(problemsOf(r, NOW).find((p) => p.kind === "silent")!.fix).toContain("Run now to resume")
+  })
+})
+
+describe("after the fix (13 Oct): absence is evidence", () => {
+  // every 2 hours, no schedule gate — after the fix a skip leaves last_run_at alone
+  const base = by("Contest Manager")
+  const AFTER = Date.parse("2026-10-13T12:10:00Z")
+  const run = (iso: string) => ({ ...base.runs[0], id: Date.parse(iso), status: "completed", error: null, startedAt: iso, completedAt: iso })
+  test("still beating every 2 hours after the fix → ok, nothing skipped", () => {
+    const beats = ["2026-10-13T12:00:00Z", "2026-10-13T10:00:00Z", "2026-10-13T08:00:00Z", "2026-10-13T06:00:00Z", "2026-10-13T04:00:00Z", "2026-10-13T02:00:00Z"].map(run)
+    const r = { ...base, runs: beats, lastRunAt: "2026-10-13T12:00:00Z", nextRunAt: "2026-10-13T14:00:00Z" }
+    expect(stateOf(r, AFTER)).toBe("ok")
+    expect(weekOf(r, AFTER).missed.filter((e) => e > HISTORY_KEPT_SINCE)).toEqual([])
+  })
+  test("no row since 00:23 while last_run_at stood still → silent, and the owed wakes are skips", () => {
+    const r = { ...base, runs: [run("2026-10-13T00:23:00Z")], lastRunAt: "2026-10-13T00:23:00Z", nextRunAt: "2026-10-13T14:00:00Z" }
+    expect(silentSince(r, AFTER)).toBe("2026-10-13T00:23:00Z")
+    expect(stateOf(r, AFTER)).toBe("silent")
+    expect(weekOf(r, AFTER).missed.length).toBeGreaterThanOrEqual(5) // 02:23 … 10:23
+    // the same picture BEFORE the fix is not judged — rows were being overwritten then
+    expect(weekOf(r, Date.parse("2026-10-12T21:12:00Z")).unknown).toBeGreaterThan(0)
   })
 })
 

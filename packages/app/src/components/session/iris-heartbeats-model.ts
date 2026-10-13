@@ -62,6 +62,13 @@ export type HeartbeatRow = {
 export type BeatState = "late" | "silent" | "failing" | "running" | "ok" | "paused"
 
 
+/**
+ * From here on every beat keeps its own row and a skip leaves last_run_at alone (iris-api #105 +
+ * fl-api #101, live 2026-10-13 00:16Z). Before it, a missing row may have been overwritten
+ * (#189132), so absence is only evidence after this instant.
+ */
+export const HISTORY_KEPT_SINCE = Date.parse("2026-10-13T00:16:00Z")
+
 /** A beat this far past its time is late, not "about to run". The scheduler ticks every minute. */
 export const LATE_AFTER_MS = 15 * 60_000
 
@@ -242,7 +249,7 @@ export function lastBeatAt(r: HeartbeatRow): string | null {
  *    8-hourly job did nothing because it may not, not because it is broken (#189170).
  * Never-ran counts: a job that keeps waking with no run at all is the purest case.
  */
-export function silentSince(r: HeartbeatRow): string | null {
+export function silentSince(r: HeartbeatRow, now: number = Date.now()): string | null {
   if (!r.runsMeasured) return null
   const beatIso = lastBeatAt(r)
   const beat = t(beatIso)
@@ -250,9 +257,14 @@ export function silentSince(r: HeartbeatRow): string | null {
   if (skip && Number.isFinite(t(skip.at)) && !(t(skip.at) <= beat)) {
     return byDesign(skip.reason) ? null : (beatIso ?? "never")
   }
+  const period = periodOf(r.frequency) ?? 86_400_000
+  // AFTER the fix a skip no longer moves last_run_at, so the clock rule below stops seeing it.
+  // Absence is evidence now: if the next beat it owed after its last one (or after the fix) has
+  // come and gone with no row, it is silent — even before fl-api names the reason.
+  const since = Math.max(Number.isFinite(beat) ? beat : -Infinity, HISTORY_KEPT_SINCE)
+  if (now > HISTORY_KEPT_SINCE && firesAt(r, since + period) < now - LATE_AFTER_MS) return beatIso ?? "never"
   const woke = t(r.lastRunAt)
   if (!Number.isFinite(woke)) return null
-  const period = periodOf(r.frequency) ?? 86_400_000
   const from = Number.isFinite(beat) ? beat : woke - 7 * 86_400_000
   if (woke - from <= Math.max(LATE_AFTER_MS, Number.isFinite(beat) ? period / 2 : 0)) return null
   // walk the wakes the scheduler made in (beat, woke] — anchored on the last one it made
@@ -301,7 +313,7 @@ export function stateOf(r: HeartbeatRow, now: number): BeatState {
   // Late only once its window has OPENED and it still did not fire — a wake due after hours
   // waits for the morning, and that is not late (#189170).
   if (r.status === "scheduled" && Number.isFinite(next) && now - firesAt(r, next) > LATE_AFTER_MS) return "late"
-  if (silentSince(r)) return "silent"
+  if (silentSince(r, now)) return "silent"
   const last = lastRun(r)
   if (r.status === "failed" || (last ? failed(last) : r.lastOk === false)) return "failing"
   return "ok"
@@ -318,7 +330,7 @@ export function problemsOf(r: HeartbeatRow, now: number): Problem[] {
       text: `Missed its beat — due ${ago(r.nextRunAt, now)}`,
       fix: "The scheduler has not picked it up, though it still says scheduled. Run it now; if it stays late, pause and resume it to reschedule.",
     })
-  const quiet = silentSince(r)
+  const quiet = silentSince(r, now)
   const why = r.lastSkip && !byDesign(r.lastSkip.reason) ? r.lastSkip.reason : null
   if (s === "silent" && quiet)
     out.push({
@@ -544,10 +556,18 @@ export function weekOf(r: HeartbeatRow, now: number): WeekView {
   const newest = Number.isFinite(t(lastBeatAt(r))) ? t(lastBeatAt(r)) : -Infinity
   const woke = t(r.lastRunAt)
   const near = (period ?? DAY) / 2
-  const late = Number.isFinite(next) && r.status === "scheduled" && now - next > LATE_AFTER_MS
+  const late = Number.isFinite(next) && r.status === "scheduled" && now - firesAt(r, next) > LATE_AFTER_MS
   const upTo = Math.max(Number.isFinite(woke) ? woke + LATE_AFTER_MS : -Infinity, late ? now - LATE_AFTER_MS : -Infinity)
-  const missed = expected.filter((e) => e > newest + near && e <= upTo && !beats.some((b) => Math.abs(b.at - e) <= near))
-  const unknown = expected.filter((e) => e < newest - near && !beats.some((b) => Math.abs(b.at - e) <= near)).length
+  const noBeat = (e: number) => !beats.some((b) => Math.abs(b.at - e) <= near)
+  // A due wake with no row is a SKIP when the records could show one: after its newest kept run
+  // up to when it last woke, or anywhere after the fix (every beat has kept its row since).
+  const missed = expected.filter(
+    (e) =>
+      noBeat(e) &&
+      ((e > newest + near && e <= upTo) || (e > HISTORY_KEPT_SINCE && e < now - LATE_AFTER_MS && e > newest + near)),
+  )
+  // Before the fix, a wake with no row may have run and been overwritten — not judged.
+  const unknown = expected.filter((e) => noBeat(e) && e < newest - near && e <= HISTORY_KEPT_SINCE).length
   return { start, end, days, expected, beats, missed, unknown, outside, next: Number.isFinite(next) ? next : null, period }
 }
 
