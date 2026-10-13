@@ -211,7 +211,7 @@ function StopDetail(props: { stop: PulseStop | undefined; index: string; now: nu
  * The route while it is being driven. Every stop is read AT ONCE (the sidecar fans out with
  * Promise.all / sweepAll), so every pin pulses together — drawing them lit one by one would claim
  * an order that is not happening. A light runs down the rail and a clock counts, so a 20-second
- * read never looks frozen. Per-stop completion needs the route streamed (#189318).
+ * read never looks frozen. Per-stop completion needs the route streamed (#189319).
  */
 function PulseRunning(props: { stops: string[]; usual: string; label: string }) {
   const started = Date.now()
