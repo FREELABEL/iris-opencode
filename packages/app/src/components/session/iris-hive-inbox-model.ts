@@ -119,3 +119,15 @@ export type HivePill = "machines" | "inbox"
 export function hivePillTarget(pill: HivePill): { surface: "hive"; sub: "machines" | "inbox" } {
   return { surface: "hive", sub: pill === "inbox" ? "inbox" : "machines" }
 }
+
+/**
+ * The body without its first line when that line IS the title — the header already shows it, and
+ * a message that opens by repeating its own heading reads like a glitch.
+ */
+export function bodyAfterTitle(body: string, title: string): string {
+  const lines = body.split("\n")
+  const first = lines.findIndex((l) => l.trim())
+  if (first < 0 || lines[first].trim() !== title.trim()) return body
+  const rest = lines.slice(first + 1).join("\n").replace(/^\s*\n/, "")
+  return rest.trim() ? rest : body
+}

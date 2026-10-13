@@ -4,6 +4,7 @@ import "./iris-hive-scripts.css"
 import "./iris-hive-inbox.css"
 import { renderMarkdown } from "./iris-item"
 import {
+  bodyAfterTitle,
   bodyNote,
   fullTime,
   inboxCli,
@@ -133,7 +134,7 @@ export function IrisHiveInbox(props: {
                 <div class="hib-sum">
                   <Show when={list.latest?.measured} fallback={<span>Inbox</span>}>
                     <span>
-                      <b class="hsc-num">{unread()}</b> unread
+                      <b class="hsc-num" classList={{ "hib-hot": unread() > 0 }}>{unread()}</b> unread
                       <span class="hib-faint">
                         {" "}
                         · <span class="hsc-num">{list.latest!.items.length}</span> total
@@ -281,8 +282,8 @@ export function IrisHiveInbox(props: {
 
                     <Show when={m().body}>
                       <Show
-                        when={bodyHtml(m().body!)}
-                        fallback={<div class="hib-body hib-body--plain">{m().body}</div>}
+                        when={bodyHtml(bodyAfterTitle(m().body!, subjectOf(m())))}
+                        fallback={<div class="hib-body hib-body--plain">{bodyAfterTitle(m().body!, subjectOf(m()))}</div>}
                       >
                         {(html) => <div class="hib-body iris-markdown" onClick={onBodyClick} innerHTML={html()} />}
                       </Show>

@@ -225,7 +225,7 @@ export function TitlebarIrisPills() {
       <Portal mount={mount()!}>
         <div
           data-slot="iris-pills"
-          class="flex shrink-0 items-center gap-1 mr-3 text-[11px] text-v2-text-text-weak"
+          class="flex shrink-0 items-center gap-1 mr-3 text-[12px] text-v2-text-text-weak"
         >
           {/* Real tooltips, not the `title` attribute. A native tooltip takes about a second to
               appear, cannot be styled, and is the reason these pills read as decoration: there
@@ -358,13 +358,16 @@ export function TitlebarIrisPills() {
               </svg>
               <span>Inbox</span>
               <Show when={unread()}>
+                {/* Inline vars, not utilities: the theme tokens are always defined, a utility class
+                    only exists if Tailwind generated it (bg-v2-icon-icon-accent was not). */}
                 <span
                   data-slot="iris-inbox-badge"
                   class="min-w-4 rounded-full px-1 text-center text-[10px] font-semibold leading-4 tabular-nums"
-                  classList={{
-                    "bg-v2-icon-icon-accent text-v2-background-bg-deep": unread() !== "—",
-                    "bg-v2-overlay-simple-overlay-hover text-v2-text-text-weak": unread() === "—",
-                  }}
+                  style={
+                    unread() === "—"
+                      ? { border: "1px solid var(--v2-border-border-base)", color: "var(--v2-text-text-weak)" }
+                      : { background: "var(--v2-icon-icon-accent)", color: "#fff" }
+                  }
                 >
                   {unread()}
                 </span>

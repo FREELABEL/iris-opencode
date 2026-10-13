@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { bodyNote, hivePillTarget, inboxCli, inboxRowsOf, kindLabel, shortAge, subjectOf, unreadOf } from "./iris-hive-inbox-model"
+import { bodyAfterTitle, bodyNote, hivePillTarget, inboxCli, inboxRowsOf, kindLabel, shortAge, subjectOf, unreadOf } from "./iris-hive-inbox-model"
 
 // Fictional rows only — this repo is public.
 const row = (o: Partial<Parameters<typeof inboxRowsOf>[0] extends readonly (infer R)[] | undefined ? R : never>) => ({
@@ -76,4 +76,14 @@ describe("presentation helpers", () => {
     expect(bodyNote({ bodyState: "missing", type: "message" })).toBeTruthy()
     expect(bodyNote({ bodyState: "none", type: "link" })).toBeNull()
   })
+})
+
+describe("bodyAfterTitle", () => {
+  test("drops the first line when the header already shows it", () => {
+    expect(bodyAfterTitle("Deploy done\n\nAll three passed.", "Deploy done")).toBe("All three passed.")
+  })
+  test("keeps the body when the first line is not the title", () => {
+    expect(bodyAfterTitle("Hello\nthere", "report.pdf")).toBe("Hello\nthere")
+  })
+  test("never empties a one-line message", () => expect(bodyAfterTitle("Just this", "Just this")).toBe("Just this"))
 })
