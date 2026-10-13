@@ -11,6 +11,7 @@ import {
   runsLine,
   sparkOf,
   tallyOf,
+  readAgo,
   topicParts,
   touchedLine,
   whenOf,
@@ -207,6 +208,24 @@ function StopDetail(props: { stop: PulseStop | undefined; index: string; now: nu
 
 // ── topic ────────────────────────────────────────────────────────────────────
 
+/**
+ * Run the route again, with how old the numbers on screen are. The age matters as much as the
+ * button: it is how you know whether to press it. Re-runs exactly what is shown.
+ */
+function Again(props: { at?: number; now: () => number; onRun: () => void; label?: string }) {
+  const [tick, setTick] = createSignal(0)
+  const timer = setInterval(() => setTick((n) => n + 1), 30_000)
+  onCleanup(() => clearInterval(timer))
+  return (
+    <span class="pls-again">
+      <Show when={(tick(), readAgo(props.at, props.now()))}>{(t) => <span class="hsc-muted">{t()}</span>}</Show>
+      <button type="button" class="hmc-btn pls-again-btn" onClick={props.onRun}>
+        {props.label ?? "Run again"}
+      </button>
+    </span>
+  )
+}
+
 /** What the streamed route has reported so far (#189319). */
 type Live = { current?: string; done: Record<string, PulseStop> }
 
@@ -337,15 +356,25 @@ export function IrisPulseTopic(props: { doFetch: Fetch; project?: string; now?: 
   const [ask, setAsk] = createSignal<{ q: string; days: number; n: number } | undefined>()
   const [picked, setPicked] = createSignal<string | undefined>()
   const [live, setLive] = createSignal<Live>({ done: {} })
+  const [readAt, setReadAt] = createSignal<number | undefined>()
+  const again = () => {
+    const a = ask()
+    if (!a) return
+    setPicked(undefined)
+    setAsk({ ...a, n: a.n + 1 })
+  }
   const [run] = createResource(ask, async (a) => {
     const p = new URLSearchParams({ q: a.q, days: String(a.days) })
     if (props.project) p.set("project", props.project)
     setLive({ done: {} })
     const streamed = await streamTopic(props.doFetch, `/iris/pulse/topic/stream?${p}`, setLive)
+    setReadAt(Date.now())
     if (streamed) return streamed
     // No stream to read (older sidecar): the one-shot route, with the all-at-once running view.
     setLive({ done: {}, current: "__none" })
-    return getJson<TopicPulse | null>(props.doFetch, `/iris/pulse/topic?${p}`, null)
+    const r = await getJson<TopicPulse | null>(props.doFetch, `/iris/pulse/topic?${p}`, null)
+    setReadAt(Date.now())
+    return r
   })
   const streaming = () => live().current !== "__none"
   const drive = () => {
@@ -400,7 +429,12 @@ export function IrisPulseTopic(props: { doFetch: Fetch; project?: string; now?: 
             <PulseRunning stops={TOPIC_RUN} usual="10–30 s" label={`Driving the route for “${ask()?.q ?? ""}”`} live={streaming() ? live() : undefined} />
           </Show>
           <Show when={!run.loading && run.latest && !run.latest.measured}>
-            <p class="hsc-warn">{run.latest!.reason ?? "The route did not finish."}</p>
+            <p class="hsc-warn pls-err">
+              {run.latest!.reason ?? "The route did not finish."}{" "}
+              <button type="button" class="hmc-btn pls-again-btn" onClick={again}>
+                Try again
+              </button>
+            </p>
           </Show>
           <Show when={!ask()}>
             <div class="pls-empty">
@@ -430,6 +464,7 @@ export function IrisPulseTopic(props: { doFetch: Fetch; project?: string; now?: 
                     <span class="hsc-muted hsc-num">
                       {d().summary.shut} shut · checked in {(d().ms / 1000).toFixed(1)} s
                     </span>
+                    <Again at={readAt()} now={now} onRun={again} />
                   </div>
                   <Route stops={stops()} picked={pick()?.id} onPick={setPicked} />
                   <Legend />
@@ -456,10 +491,20 @@ export function IrisPulseContact(props: { doFetch: Fetch; now?: () => number }) 
   const [leadId, setLeadId] = createSignal<number | undefined>(Number(remember("iris.pulse.contact")) || undefined)
   const [days, setDays] = createSignal(30)
   const [picked, setPicked] = createSignal<string | undefined>()
+  const [nonce, setNonce] = createSignal(0)
+  const [readAt, setReadAt] = createSignal<number | undefined>()
   const [run] = createResource(
-    () => (leadId() ? { id: leadId()!, days: days() } : undefined),
-    (a) => getJson<ContactPulse | null>(props.doFetch, `/iris/pulse/contacts/${a.id}?days=${a.days}`, null),
+    () => (leadId() ? { id: leadId()!, days: days(), n: nonce() } : undefined),
+    async (a) => {
+      const r = await getJson<ContactPulse | null>(props.doFetch, `/iris/pulse/contacts/${a.id}?days=${a.days}`, null)
+      setReadAt(Date.now())
+      return r
+    },
   )
+  const again = () => {
+    setPicked(undefined)
+    setNonce((n) => n + 1)
+  }
   const data = () => (run.loading ? undefined : run.latest?.data ?? undefined)
   const stops = () => data()?.stops ?? []
   const pick = createMemo(() => stops().find((s) => s.id === picked()) ?? stops().find((s) => s.owed > 0) ?? stops()[0])
@@ -524,7 +569,12 @@ export function IrisPulseContact(props: { doFetch: Fetch; now?: () => number }) 
             <PulseRunning stops={CONTACT_RUN} usual="1–3 s" label="Reading the contact’s stops" />
           </Show>
           <Show when={!run.loading && run.latest && !run.latest.measured}>
-            <p class="hsc-warn">{run.latest!.reason ?? "Could not read this contact."}</p>
+            <p class="hsc-warn pls-err">
+              {run.latest!.reason ?? "Could not read this contact."}{" "}
+              <button type="button" class="hmc-btn pls-again-btn" onClick={again}>
+                Try again
+              </button>
+            </p>
           </Show>
           <Show when={!leadId()}>
             <div class="pls-empty">
@@ -546,6 +596,7 @@ export function IrisPulseContact(props: { doFetch: Fetch; now?: () => number }) 
                     <span class="hsc-muted">
                       {[d().lead.company, d().lead.status, `${d().days} days`, "read-only"].filter(Boolean).join(" · ")}
                     </span>
+                    <Again at={readAt()} now={now} onRun={again} />
                   </div>
                   <div class="pls-sum">
                     <span>

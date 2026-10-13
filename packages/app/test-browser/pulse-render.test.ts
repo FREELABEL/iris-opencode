@@ -164,3 +164,39 @@ test("Pulse › streamed: the stop being read pulses, landed stops show their co
   dispose()
   host.remove()
 })
+
+test("Pulse › Run again re-reads the same route; a failed route offers Try again", async () => {
+  const { host, dispose, calls } = mount("contact")
+  await wait(() => host.querySelectorAll(R).length > 0)
+  const reads = () => calls.filter((c) => c.path.startsWith("/iris/pulse/contacts/4242")).length
+  expect(reads()).toBe(1)
+  const btn = host.querySelector(".pls-lead .pls-again-btn") as HTMLButtonElement
+  expect(btn.textContent?.trim()).toBe("Run again")
+  expect(host.querySelector(".pls-lead .pls-again")?.textContent).toContain("read just now")
+  btn.click()
+  await wait(() => reads() === 2)
+  await wait(() => host.querySelectorAll(R).length > 0)
+  expect(calls.every((c) => c.method === "GET")).toBe(true)
+  dispose()
+  host.remove()
+
+  // a route that fails says why, and offers to try again
+  let fail = true
+  const host2 = document.createElement("div")
+  document.body.append(host2)
+  const doFetch = async (path: string) => {
+    if (path.startsWith("/iris/pulse/topic/stream")) return new Response("nf", { status: 404 })
+    if (fail) return new Response(JSON.stringify({ measured: false, reason: "the route did not finish: boom", data: null }), { headers: { "Content-Type": "application/json" } })
+    return new Response(JSON.stringify(fixture.topic), { headers: { "Content-Type": "application/json" } })
+  }
+  const d2 = render(() => createComponent(IrisPulseTopic as any, { doFetch, now: () => NOW }), host2)
+  ;(host2.querySelector(".pls-query button[type=submit]") as HTMLButtonElement).click()
+  await wait(() => !!host2.querySelector(".pls-err"))
+  expect(host2.querySelector(".pls-err")?.textContent).toContain("boom")
+  fail = false
+  ;(host2.querySelector(".pls-err .pls-again-btn") as HTMLButtonElement).click()
+  await wait(() => host2.querySelectorAll(R).length > 0)
+  expect(host2.querySelector(".pls-sum .pls-again-btn")?.textContent?.trim()).toBe("Run again")
+  d2()
+  host2.remove()
+})
