@@ -67,3 +67,33 @@ export const irisHiveNodeFocus = hiveNodeFocus
 export function focusHiveNode(id: string | null) {
   setHiveNodeFocus(id ? { id, nonce: Date.now() + Math.random() } : null)
 }
+
+/**
+ * OPEN THE SIDE PANEL from outside a session's layout (#189279) — the titlebar's Hive and Inbox
+ * pills. The titlebar has no session context, so it cannot call tabs().open("iris") itself; it
+ * leaves a request here and the session page (which owns the panel) acts on it. Same reason as
+ * requestIrisNav for being a signal: whoever reads it may mount after the click.
+ */
+const [panelOpen, setPanelOpen] = createSignal<{ nonce: number } | null>(null)
+
+export const irisPanelOpenRequest = panelOpen
+
+export function clearIrisPanelOpen() {
+  setPanelOpen(null)
+}
+
+/** Open the panel AND put it on this surface/sub-view. */
+export function openIrisPanel(r: Omit<IrisNavRequest, "nonce">) {
+  requestIrisNav(r)
+  setPanelOpen({ nonce: Date.now() + Math.random() })
+}
+
+/**
+ * The inbox changed here (a message was opened and marked read). The titlebar's unread badge
+ * re-reads on this instead of waiting up to 30s to agree with the list you are looking at.
+ */
+const [inboxVersion, setInboxVersion] = createSignal(0)
+export const irisInboxVersion = inboxVersion
+export function bumpIrisInbox() {
+  setInboxVersion((v) => v + 1)
+}

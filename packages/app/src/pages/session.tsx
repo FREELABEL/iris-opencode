@@ -62,6 +62,7 @@ import { TerminalProvider, useTerminal } from "@/context/terminal"
 import { PromptInput } from "@/components/prompt-input"
 import { PromptInputV2Composer, usePromptInputV2Controller } from "@/components/prompt-input-v2"
 import { irisFilesPinned, requestIrisSurface } from "@/components/session/session-iris-tab"
+import { clearIrisPanelOpen, irisPanelOpenRequest } from "@/components/session/iris-nav"
 import { useSettingsCommand } from "@/components/settings-dialog"
 import { setCursorPosition } from "@/components/prompt-input/editor-dom"
 import { promptLength } from "@/components/prompt-input/history"
@@ -376,6 +377,22 @@ export default function Page() {
   const reviewMode = () => view().review.mode() ?? "git"
   const reviewFile = () => view().review.file()
   const sessionOwnership = createSessionOwnership(sessionKey)
+
+  /*
+   * The titlebar's Hive and Inbox pills (#189279) ask for the IRIS panel from outside any session
+   * layout. This page owns the panel, so it opens it — the same three steps as onIntegrations
+   * below; the surface/sub-view itself travels through requestIrisNav and the tab applies it.
+   */
+  createEffect(() => {
+    if (!irisPanelOpenRequest()) return
+    untrack(() => {
+      view().reviewPanel.open("other")
+      if (layout.fileTree.opened() && layout.fileTree.tab() !== "all") layout.fileTree.setTab("all")
+      void tabs().open("iris")
+      tabs().setActive("iris")
+    })
+    clearIrisPanelOpen()
+  })
   const newSessionDesign = createMemo(() => settings.general.newLayoutDesigns())
 
   createEffect(() => {
