@@ -155,6 +155,7 @@ import { PlatformDomainsCommand } from "./cli/cmd/platform-domains"
 import { PlatformPagesBatchCommand } from "./cli/cmd/platform-pages-batch"
 import { PlatformPartialsCommand } from "./cli/cmd/platform-partials"
 import { PlatformScriptsCommand } from "./cli/cmd/platform-scripts"
+import { PlatformHeartbeatsCommand } from "./cli/cmd/platform-heartbeats"
 import { PlatformCloudUploadCommand } from "./cli/cmd/platform-cloud-upload"
 import { PlatformDriveCommand } from "./cli/cmd/platform-drive"
 import { PlatformObsidianCommand } from "./cli/cmd/platform-obsidian"
@@ -543,6 +544,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformPagesBatchCommand))
   .command(reg(PlatformPartialsCommand))
   .command(reg(PlatformScriptsCommand))
+  .command(reg(PlatformHeartbeatsCommand))
   .command(reg(PlatformCloudUploadCommand))
   .command(reg(PlatformDriveCommand))
   .command(reg(PlatformObsidianCommand))
