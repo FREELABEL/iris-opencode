@@ -398,7 +398,9 @@ export const SettingsAccountV2: Component = () => {
           </SettingsListV2>
         </div>
 
-        <Show when={me()?.signedIn}>
+        {/* The saved accounts live on this computer. A slow or failed IRIS call must not hide them:
+            "Can't reach IRIS" is exactly when switching to another account is the useful move. */}
+        <Show when={me()?.signedIn || (saved()?.length ?? 0) > 0}>
           <div class="settings-v2-section" data-action="account-saved">
             <h3 class="settings-v2-section-title">Other accounts on this computer</h3>
             <SettingsListV2>
