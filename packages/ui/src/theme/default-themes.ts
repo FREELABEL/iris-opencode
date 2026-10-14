@@ -1,6 +1,7 @@
 import type { DesktopTheme } from "./types"
 import oc2ThemeJson from "./themes/oc-2.json"
 import amoledThemeJson from "./themes/amoled.json"
+import blossomThemeJson from "./themes/blossom.json"
 import auraThemeJson from "./themes/aura.json"
 import ayuThemeJson from "./themes/ayu.json"
 import carbonfoxThemeJson from "./themes/carbonfox.json"
@@ -39,6 +40,7 @@ import zenburnThemeJson from "./themes/zenburn.json"
 
 export const oc2Theme = oc2ThemeJson as DesktopTheme
 export const amoledTheme = amoledThemeJson as DesktopTheme
+export const blossomTheme = blossomThemeJson as DesktopTheme
 export const auraTheme = auraThemeJson as DesktopTheme
 export const ayuTheme = ayuThemeJson as DesktopTheme
 export const carbonfoxTheme = carbonfoxThemeJson as DesktopTheme
@@ -106,6 +108,7 @@ export const DEFAULT_THEMES: Record<string, DesktopTheme> = {
   "osaka-jade": osakaJadeTheme,
   palenight: palenightTheme,
   rosepine: rosepineTheme,
+  blossom: blossomTheme,
   shadesofpurple: shadesOfPurpleTheme,
   solarized: solarizedTheme,
   synthwave84: synthwave84Theme,
