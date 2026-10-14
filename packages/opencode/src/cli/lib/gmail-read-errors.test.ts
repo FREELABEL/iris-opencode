@@ -28,3 +28,14 @@ describe("getMessageById", () => {
     expect(await getMessageById("", "nope")).toBeNull()
   })
 })
+
+describe("getMessageById with the backend's empty id (#189389)", () => {
+  test("a message with content but id:\"\" is the message that was asked for", async () => {
+    reply = { status: 200, body: { success: true, data: { success: true, email: { id: "", thread_id: "abc", from: "RingCentral", subject: "[Fax]", labels: [] } } } }
+    expect((await getMessageById("", "abc"))?.id).toBe("abc")
+  })
+  test("an empty object is still not found", async () => {
+    reply = { status: 200, body: { success: true, data: { success: true, email: {} } } }
+    expect(await getMessageById("", "abc")).toBeNull()
+  })
+})

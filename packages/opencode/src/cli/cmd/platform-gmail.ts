@@ -50,7 +50,7 @@ const GmailInboxCommand = cmd({
     if (!args.json) { UI.empty(); prompts.intro("◈  Gmail Inbox") }
 
     const token = await requireToken()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { process.exitCode = 1; if (args.json) process.stdout.write(JSON.stringify({ success: false, error: lastError() }) + "\n"); else prompts.outro("Done"); return }
 
     try {
       const sp = args.json ? null : prompts.spinner()
@@ -82,8 +82,7 @@ const GmailInboxCommand = cmd({
       moreHint(false)
       prompts.outro(`${success("✓")} ${messages.length} message${messages.length === 1 ? "" : "s"}\n  ${dim("iris gmail read <message-id>")}`)
     } catch (err: any) {
-      prompts.log.error(err.message)
-      prompts.outro("Done")
+      fail(args, err?.message ?? String(err))
     }
   },
 })
@@ -100,7 +99,7 @@ const GmailReadCommand = cmd({
     if (!args.json) { UI.empty(); prompts.intro("◈  Gmail Read") }
 
     const token = await requireToken()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { process.exitCode = 1; if (args.json) process.stdout.write(JSON.stringify({ success: false, error: lastError() }) + "\n"); else prompts.outro("Done"); return }
 
     try {
       if (args.thread) {
@@ -134,11 +133,7 @@ const GmailReadCommand = cmd({
       } else {
         const { getMessageById } = await import("../lib/gmail")
         const msg = await getMessageById(token, args.id)
-        if (!msg) {
-          prompts.log.error(`Message ${args.id} not found`)
-          prompts.outro("Done")
-          return
-        }
+        if (!msg) return fail(args, `Message ${args.id} not found in this mailbox`)
 
         if (args.json) { await writeJson(msg); return }
 
@@ -162,8 +157,7 @@ const GmailReadCommand = cmd({
         prompts.outro(success("✓"))
       }
     } catch (err: any) {
-      prompts.log.error(err.message)
-      prompts.outro("Done")
+      fail(args, err?.message ?? String(err))
     }
   },
 })
@@ -183,7 +177,7 @@ const GmailSearchCommand = cmd({
     if (!args.json) { UI.empty(); prompts.intro(`◈  Gmail Search — "${args.query}"`) }
 
     const token = await requireToken()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { process.exitCode = 1; if (args.json) process.stdout.write(JSON.stringify({ success: false, error: lastError() }) + "\n"); else prompts.outro("Done"); return }
 
     try {
       const sp = args.json ? null : prompts.spinner()
@@ -217,8 +211,7 @@ const GmailSearchCommand = cmd({
       moreHint(false)
       prompts.outro(`${success("✓")} ${messages.length} result${messages.length === 1 ? "" : "s"}`)
     } catch (err: any) {
-      prompts.log.error(err.message)
-      prompts.outro("Done")
+      fail(args, err?.message ?? String(err))
     }
   },
 })
@@ -233,7 +226,7 @@ const GmailLabelsCommand = cmd({
     if (!args.json) { UI.empty(); prompts.intro("◈  Gmail Labels") }
 
     const token = await requireToken()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { process.exitCode = 1; if (args.json) process.stdout.write(JSON.stringify({ success: false, error: lastError() }) + "\n"); else prompts.outro("Done"); return }
 
     try {
       const labels = await getLabels(token)
@@ -259,8 +252,7 @@ const GmailLabelsCommand = cmd({
       printMailboxLine()
       prompts.outro(`${success("✓")} ${labels.length} label${labels.length === 1 ? "" : "s"}`)
     } catch (err: any) {
-      prompts.log.error(err.message)
-      prompts.outro("Done")
+      fail(args, err?.message ?? String(err))
     }
   },
 })
@@ -285,13 +277,29 @@ const GmailUnreadCommand = cmd({
  * each message carries `mailbox` + `integration_id` itself. Message ids are only valid in the
  * mailbox they came from — act on them with the same --integration-id.
  */
+/**
+ * A failed gmail command FAILS: exit 1, and under --json a JSON error on stdout so a parser gets
+ * JSON either way. It used to print "not found" and exit 0 — an agent cannot tell that from
+ * success, and a contract test could not see it (#189389).
+ */
+function fail(args: { json?: unknown }, message: string): void {
+  process.exitCode = 1
+  if (args.json) {
+    process.stdout.write(JSON.stringify({ success: false, error: message }) + "\n")
+    return
+  }
+  prompts.log.error(message)
+  prompts.outro("Done")
+}
+
 /** Say when there is more — the token to continue, or --all. JSON keeps stdout an array; the hint goes to stderr. */
 function moreHint(json: boolean): void {
   const t = nextPageToken()
   if (!t) return
   const line = `More messages match. Next page: --page-token=${t}  ·  everything: --all`
-  if (json) process.stderr.write(`next_page_token: ${t}\n`)
-  else console.log(dim(`  ${line}`))
+  // --json: say nothing. Anything on stderr makes PowerShell's `2>&1` report a SUCCESSFUL call as
+  // exit 1 — a client's agent abandoned working commands because of it (#189389). Use --all.
+  if (!json) console.log(dim(`  ${line}`))
 }
 
 export function printMailboxLine(): void {

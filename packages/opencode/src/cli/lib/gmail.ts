@@ -281,7 +281,14 @@ export async function getMessageById(_token: string, messageId: string): Promise
   try {
     const data = await gmailExec("get_email", { message_id: messageId })
     const e = data?.email ?? data
-    if (!e || typeof e !== "object" || !(e.id || e.messageId)) return null
+    if (!e || typeof e !== "object") return null
+    // A real message with no id is the backend's bug, not a missing message (#189389: Composio's
+    // `messageId` was read as `id`, so every message came back id:""). We asked for this id; if
+    // the server returned a message with content, it is that message.
+    if (!(e.id || e.messageId)) {
+      if (!(e.from || e.subject || e.body)) return null
+      e.id = messageId
+    }
     const labels: string[] = Array.isArray(e.labels) ? e.labels : []
     return {
       id: str(e.id ?? e.messageId),
