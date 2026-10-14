@@ -13,6 +13,7 @@ import { createTabMemory } from "./tab-memory"
 import { nextTabAfterClose, pushClosedTab, removeClosedTabs, takeClosedTab, type ClosedTab } from "./closed-tabs"
 import { createDraftPromptSession, type PromptModel } from "./prompt-state"
 import { migrateTabs } from "./tab-migration"
+import { accountKey } from "@/utils/account-scope"
 
 export type SessionTab = {
   type: "session"
@@ -59,14 +60,14 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
     const fallback = server.key
     const [store, setStore, _, ready] = persisted(
       {
-        ...Persist.window("tabs"),
+        ...Persist.window(accountKey("tabs")),
         migrate: (value: unknown) => migrateTabs(value, fallback),
       },
       createStore<Tab[]>([]),
     )
-    const [recent, setRecent, , recentReady] = persisted(Persist.window("tabs.recent"), createStore<RecentTab>({}))
-    const [info, setInfo] = persisted(Persist.window("tabs.info"), createStore<Record<string, TabInfo>>({}))
-    const [closed, setClosed, , closedReady] = persisted(Persist.window("tabs.closed"), createStore<ClosedTab[]>([]))
+    const [recent, setRecent, , recentReady] = persisted(Persist.window(accountKey("tabs.recent")), createStore<RecentTab>({}))
+    const [info, setInfo] = persisted(Persist.window(accountKey("tabs.info")), createStore<Record<string, TabInfo>>({}))
+    const [closed, setClosed, , closedReady] = persisted(Persist.window(accountKey("tabs.closed")), createStore<ClosedTab[]>([]))
 
     const params = useParams()
     const navigate = useNavigate()
