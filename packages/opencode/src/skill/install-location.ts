@@ -60,9 +60,21 @@ function rootFor(scope: InstallScope, root: string, reason: string, p: PathApi):
   }
 }
 
+/** The real path when it exists (native paths only) — `/tmp` is `/private/tmp` on macOS. */
+function real(x: string): string {
+  try {
+    return realpathSync.native(x)
+  } catch {
+    return x
+  }
+}
+
 function samePath(a: string, b: string, p: PathApi): boolean {
   const norm = (x: string) => {
-    const r = p.resolve(x)
+    // process.cwd() is already resolved through symlinks and os.homedir() is not, so a home
+    // reached through a link never compared equal to itself: install reported the copy it had
+    // just written as an older copy shadowing it (measured: HOME=/tmp/x on macOS).
+    const r = p.resolve(p === nodePath ? real(x) : x)
     // Windows paths are case-insensitive; a trailing separator must not make two paths differ.
     return (p === nodePath.win32 ? r.toLowerCase() : r).replace(/[\\/]+$/, "")
   }

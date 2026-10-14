@@ -262,3 +262,20 @@ describe("the loader finds a global install from any folder; a project copy wins
     }
   })
 })
+
+describe("shadowingCopies — a home reached through a symlink is still home", () => {
+  test("the copy just installed is never reported as shadowing itself", () => {
+    const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "il-link-")))
+    const realHome = path.join(base, "realhome")
+    const linkHome = path.join(base, "linkhome")
+    fs.mkdirSync(path.join(realHome, "proj"), { recursive: true })
+    fs.symlinkSync(realHome, linkHome)
+    const installed = path.join(linkHome, ".iris", "playbooks", "p", "PLAYBOOK.md")
+    fs.mkdirSync(path.dirname(installed), { recursive: true })
+    fs.writeFileSync(installed, "x")
+    // cwd as process.cwd() reports it (resolved), home as $HOME reports it (the link)
+    const got = shadowingCopies("p", path.join(realHome, "proj"), installed, linkHome)
+    expect(got).toEqual([])
+    fs.rmSync(base, { recursive: true, force: true })
+  })
+})

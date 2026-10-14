@@ -1,6 +1,8 @@
 import { Beacon } from "../../telemetry/beacon"
 import { cmd } from "./cmd"
 import { parseTargets, toCursorRule, isGenerated, upsertAgentsBlock, type SyncTarget } from "../lib/playbook-targets"
+import { replicaIdentity, sessionRefreshNote, toSkillId } from "../lib/skill-replica"
+import { auditSkills, pruneOrphanReplicas, removeGeneratedReplica, scanSkills, skillRoots, type Finding } from "../lib/skill-audit"
 import { PlaybookContentsCommands } from "./platform-playbook-contents"
 import * as prompts from "./clack"
 // Aliased: `Tier` is already taken in this file by the e2e runner's own unrelated enum.
@@ -31,6 +33,7 @@ import {
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "fs"
 import {
   resolveInstallRoot,
+  findGitRoot,
   playbookFile,
   installHome,
   skillsDirForPlaybook,
@@ -1441,11 +1444,18 @@ const SkillReviewCommand = cmd({
  * The SKILL.md replica of a playbook: full prose kept, executable step blocks stripped.
  * One writer for `sync` and `install` — one copy, one behaviour.
  */
-async function renderSkillReplica(info: { location: string }, plan: SkillPlan): Promise<string> {
+async function renderSkillReplica(
+  info: { location: string },
+  plan: SkillPlan,
+): Promise<{ output: string; id: string | null; description: string; repairs: string[] }> {
   // Build SKILL.md replica: keep full prose, strip executable step blocks
   const rawMd = await Bun.file(info.location).text()
   const matter = (await import("gray-matter")).default
   const parsed = matter(rawMd)
+  // The skill's ID and description, made valid for every reader (see lib/skill-replica.ts).
+  // The folder AND the frontmatter name are this id — the IRIS app keys by the name, Claude Code
+  // by the folder, and the two disagreeing is how one skill gets two names.
+  const identity = replicaIdentity({ name: plan.name, description: plan.description, body: parsed.content })
 
   // Rebuild frontmatter (strip v2-only fields that Claude doesn't need)
   // The marker goes BELOW the frontmatter, never above it. A SKILL.md that does not begin
@@ -1462,8 +1472,8 @@ async function renderSkillReplica(info: { location: string }, plan: SkillPlan): 
   const yaml = (v: string) => JSON.stringify(String(v ?? ""))
   const fmLines: string[] = [
     "---",
-    `name: ${yaml(plan.name)}`,
-    `description: ${yaml(plan.description)}`,
+    `name: ${yaml(identity.id ?? plan.name)}`,
+    `description: ${yaml(identity.description)}`,
   ]
   // Preserve allowed-tools from original
   const toolsMatch = rawMd.match(/allowed-tools:\n((?:\s+-\s+\w+\n)+)/)
@@ -1505,7 +1515,7 @@ async function renderSkillReplica(info: { location: string }, plan: SkillPlan): 
   usageBlock.push("")
 
   const output = fmLines.join("\n") + "\n" + usageBlock.join("\n") + body.trim() + "\n"
-  return output
+  return { output, id: identity.id, description: identity.description, repairs: identity.repairs }
 }
 
 /**
@@ -1539,6 +1549,12 @@ const PlaybookSyncCommand = cmd({
       .option("target", {
         type: "string",
         describe: "where to sync: claude (default, .claude/skills), cursor (.cursor/rules), agents (AGENTS.md), or all — comma-separate for several",
+      })
+      // boolean-negation is disabled globally (src/index.ts) — a literal flag, like install's --no-sync.
+      .option("no-prune", {
+        type: "boolean",
+        default: false,
+        describe: "keep generated skills whose playbook was renamed or removed (default: remove them)",
       }),
   async handler(args) {
     let syncTargets: SyncTarget[]
@@ -1554,6 +1570,15 @@ const PlaybookSyncCommand = cmd({
       // Rendered once per playbook, then written to every requested target (#186212).
       const rendered: { name: string; description: string; output: string }[] = []
       const skillSyncFailures: string[] = []
+      const repairs: string[] = []
+      // skills dir → the skill ids that belong there (written now, or owned by a playbook that lives
+      // beside it). Anything generated in that dir and NOT in here is an orphan (#189424 audit).
+      const owned = new Map<string, Set<string>>()
+      const own = (dir: string, id: string) => {
+        const set = owned.get(dir) ?? new Set<string>()
+        set.add(id)
+        owned.set(dir, set)
+      }
       const { join } = await import("path")
 
       // Each playbook syncs BESIDE the .iris/playbooks it lives in: a global one
@@ -1590,9 +1615,19 @@ const PlaybookSyncCommand = cmd({
           continue
         }
 
-        const output = await renderSkillReplica(info, plan)
-        rendered.push({ name: plan.name, description: plan.description, output })
+        const replica = await renderSkillReplica(info, plan)
+        const output = replica.output
+        rendered.push({ name: replica.id ?? plan.name, description: replica.description, output })
+        for (const r of replica.repairs) repairs.push(`${plan.name}: ${r}`)
+        const ownDir = skillsDirForPlaybook(info.location)
+        if (ownDir) {
+          own(ownDir, replica.id ?? plan.name)
+        }
         if (!syncTargets.includes("claude")) continue
+        if (!replica.id) {
+          skipped++
+          continue
+        }
 
         // Write to .claude/skills/{name}/SKILL.md
         //
@@ -1608,15 +1643,16 @@ const PlaybookSyncCommand = cmd({
         // already on disk here. A failure is reported and counted, never fatal.
         const skillsDir = skillsDirForPlaybook(info.location) ?? fallbackSkillsDir
         try {
-          const r = writeSkillReplica(skillsDir, plan.name, output, { home: skillsDir === homeSkillsDir })
+          own(skillsDir, replica.id)
+          const r = writeSkillReplica(skillsDir, replica.id, output, { home: skillsDir === homeSkillsDir })
           if (!r.ok) {
             skipped++
-            if (!args.json) console.log(`  ${dim("·")} ${plan.name} ${dim(`— ${join(skillsDir, plan.name)} is ${r.reason}`)}`)
+            if (!args.json) console.log(`  ${dim("·")} ${replica.id} ${dim(`— ${join(skillsDir, replica.id)} is ${r.reason}`)}`)
             continue
           }
           targets.add(skillsDir)
           synced++
-          if (!args.json) console.log(`  ${success("✓")} ${plan.name} ${dim(skillsDir === homeSkillsDir ? "(global)" : "")}`)
+          if (!args.json) console.log(`  ${success("✓")} ${replica.id} ${dim(skillsDir === homeSkillsDir ? "(global)" : "")}`)
         } catch (e: any) {
           skillSyncFailures.push(plan.name)
           if (!args.json) {
@@ -1624,6 +1660,26 @@ const PlaybookSyncCommand = cmd({
           }
         }
       }
+
+      // Generated skills whose playbook was renamed or removed. Left behind, they keep offering the
+      // model a procedure that no longer exists — and a renamed one shows up under BOTH names.
+      // Only replicas carrying the generated marker, never a symlinked or hand-written skill, and
+      // only when the PLAYBOOK.md they were made from is gone too.
+      const pruned: string[] = []
+      if (syncTargets.includes("claude") && !args["no-prune"]) {
+        if (existsSync(join(home, ".iris", "playbooks"))) own(homeSkillsDir, "")
+        for (const [dir, keep] of owned) {
+          try {
+            for (const id of pruneOrphanReplicas(dir, keep)) {
+              pruned.push(join(dir, id))
+              if (!args.json) console.log(`  ${dim("−")} ${id} ${dim(`— removed: its playbook is gone (${dir})`)}`)
+            }
+          } catch (e: any) {
+            if (!args.json) console.log(`  ${dim("·")} ${dim(`could not prune ${dir}: ${String(e?.code ?? e?.message ?? e)}`)}`)
+          }
+        }
+      }
+      if (!args.json) for (const r of repairs) console.log(`  ${bold("!")} ${r}`)
 
       // --target cursor / agents (#186212): the same replicas, for the other agents on this repo.
       // Written into the current project — Cursor and AGENTS.md readers are per-repo.
@@ -1713,11 +1769,15 @@ const PlaybookSyncCommand = cmd({
           targets: [...targets],
           published: false,
           scope: "local",
+          pruned,
+          repairs,
+          session_note: synced > 0 ? sessionRefreshNote([]) : null,
         }))
       } else {
         printDivider()
         const apiMsg = args.api ? `, ${apiSynced} to API` : ""
-        console.log(dim(`  ${synced} synced${apiMsg}, ${skipped} skipped`))
+        console.log(dim(`  ${synced} synced${apiMsg}, ${skipped} skipped${pruned.length ? `, ${pruned.length} removed` : ""}`))
+        if (synced > 0) console.log(`  ${bold("!")} ${sessionRefreshNote([])}`)
         if (skillSyncFailures.length > 0) {
           console.log(dim(`  ${skillSyncFailures.length} could not be written: ${skillSyncFailures.join(", ")}`))
           console.log(dim(`  The playbooks themselves are installed in .iris/playbooks/ and still run.`))
@@ -2676,14 +2736,16 @@ const PublishCommand = cmd({
 
 const PlaybookDoctorCommand = cmd({
   command: "doctor [name]",
-  describe: "diagnose common playbook problems: version/step mismatches, shadow copies, validation issues",
+  describe: "diagnose playbook problems (version/step mismatches, shadow copies) and the skills the IRIS app and Claude Code read",
   builder: (yargs) =>
     yargs
-      .positional("name", { type: "string", describe: "check a single playbook (default: check all)" })
+      .positional("name", { type: "string", describe: "check a single playbook (default: check all, plus every installed skill)" })
+      .option("skills", { type: "boolean", describe: "audit installed skills (default: on when no name is given)" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     await withInstance(async () => {
       const name = args.name as string | undefined
+      const auditSkillFiles = (args.skills as boolean | undefined) ?? !name
 
       if (name) {
         const info = await Skill.get(name)
@@ -2738,9 +2800,33 @@ const PlaybookDoctorCommand = cmd({
 
       const unhealthy = reports.filter((r) => r.problems.length > 0)
 
+      // The other half: the SKILL.md files the IRIS app (1.18) and Claude Code actually read,
+      // from every root the app scans from here. A playbook can be perfect and its skill missing.
+      let skillFindings: Finding[] = []
+      let skillCount = 0
+      let skillRootList: string[] = []
+      if (auditSkillFiles) {
+        const roots = skillRoots({ cwd: process.cwd(), home: installHome(), stop: findGitRoot(process.cwd(), installHome(), existsSync) })
+        const files = scanSkills(roots)
+        skillCount = files.length
+        skillRootList = roots.map((r) => r.dir)
+        const keep = new Set<string>()
+        for (const r of reports) {
+          keep.add(r.name)
+          keep.add(toSkillId(r.name))
+        }
+        skillFindings = auditSkills(files, keep)
+      }
+      const skillErrors = skillFindings.filter((f) => f.level === "error")
+
       if (args.json) {
-        await writeJson({ checked: reports.length, unhealthy: unhealthy.length, reports: unhealthy })
-        if (unhealthy.some((r) => r.problems.some((p) => p.level === "error"))) process.exitCode = 1
+        await writeJson({
+          checked: reports.length,
+          unhealthy: unhealthy.length,
+          reports: unhealthy,
+          ...(auditSkillFiles ? { skills: { roots: skillRootList, files: skillCount, findings: skillFindings.filter((f) => f.level !== "info") } } : {}),
+        })
+        if (unhealthy.some((r) => r.problems.some((p) => p.level === "error")) || skillErrors.length) process.exitCode = 1
         return
       }
 
@@ -2761,9 +2847,26 @@ const PlaybookDoctorCommand = cmd({
         }
       }
 
+      if (auditSkillFiles) {
+        printDivider()
+        const shown = skillFindings.filter((f) => f.level !== "info")
+        const identical = skillFindings.filter((f) => f.code === "shadowed-identical").length
+        console.log(`  ${bold("Skills")} ${dim(`— ${skillCount} SKILL.md file(s) in ${skillRootList.length} folder(s) the IRIS app reads from here`)}`)
+        if (shown.length === 0) console.log(success(`  ✓ Every skill loads, with a description`))
+        for (const f of shown) {
+          const icon = f.level === "error" ? "✗" : "⚠"
+          const line = `    ${icon} ${f.id ?? "(no id)"} — ${f.message}`
+          console.log(f.level === "error" ? line : dim(line))
+          console.log(dim(`      ${f.file}`))
+        }
+        if (identical) console.log(dim(`  ${identical} skill(s) are installed in more than one place with identical text — harmless.`))
+        if (shown.some((f) => f.code === "orphan")) console.log(dim(`  Remove orphans: iris playbook sync`))
+      }
+
       printDivider()
-      const hasErrors = unhealthy.some((r) => r.problems.some((p) => p.level === "error"))
-      prompts.outro(unhealthy.length === 0 ? success("Healthy") : hasErrors ? "Problems found" : "Warnings found")
+      const hasErrors = unhealthy.some((r) => r.problems.some((p) => p.level === "error")) || skillErrors.length > 0
+      const anyWarn = unhealthy.length > 0 || skillFindings.some((f) => f.level === "warning")
+      prompts.outro(!hasErrors && !anyWarn ? success("Healthy") : hasErrors ? "Problems found" : "Warnings found")
       if (hasErrors) process.exitCode = 1
     })
   },
@@ -2906,6 +3009,25 @@ const PlaybookVerifyCommand = cmd({
  * dir (~/.iris/playbooks + ~/.claude/skills), which the CLI, Claude Code and the IRIS Desktop
  * app all read from any folder; a git project that already has .iris/playbooks keeps its own.
  */
+/**
+ * The same skill id in the OTHER scope (global ↔ this project), when its text differs. Two copies
+ * are not an error for the CLI — the project wins — but Claude Code prefers the personal copy and
+ * the IRIS app ≤1.18.117 picks either at random, so the one you just installed may not be the one
+ * that loads.
+ */
+function otherScopeSkill(root: { scope: string; root: string }, id: string, output: string): string | null {
+  const otherRoot =
+    root.scope === "global" ? findGitRoot(process.cwd(), installHome(), existsSync) : installHome()
+  if (!otherRoot || otherRoot === root.root) return null
+  const f = pathJoin(otherRoot, ".claude", "skills", id, "SKILL.md")
+  if (!existsSync(f)) return null
+  try {
+    return readFileSync(f, "utf8") === output ? null : f
+  } catch {
+    return null
+  }
+}
+
 function installTarget(name: string, mode: InstallMode = "auto") {
   const root = resolveInstallRoot({ cwd: process.cwd(), home: installHome(), mode })
   return { root, ...playbookFile(root, name) }
@@ -3052,17 +3174,26 @@ const PlaybookInstallCommand = cmd({
     let skillFile: string | null = null
     let skillNote: string | null = null
     let skillVia: string | null = null
+    let skillId: string | null = null
+    let skillRepairs: string[] = []
+    let skillShadow: string | null = null
     if (syncSkills) {
       try {
         const info = { name, description: String(pb.description ?? ""), location: file }
         const plan = await parsePlan(info)
-        const output = await renderSkillReplica(info, plan)
-        const r = writeSkillReplica(root.skillsDir, plan.name, output, { home: root.scope === "global", followSymlink: true })
-        if (r.ok) {
-          skillFile = pathJoin(root.skillsDir, plan.name, "SKILL.md")
-          skillVia = r.via
+        const replica = await renderSkillReplica(info, plan)
+        skillRepairs = replica.repairs
+        if (!replica.id) skillNote = `"${plan.name}" cannot be made into a skill id`
+        else {
+          skillId = replica.id
+          const r = writeSkillReplica(root.skillsDir, replica.id, replica.output, { home: root.scope === "global", followSymlink: true })
+          if (r.ok) {
+            skillFile = pathJoin(root.skillsDir, replica.id, "SKILL.md")
+            skillVia = r.via
+          }
+          else skillNote = `${pathJoin(root.skillsDir, replica.id)} is ${r.reason}`
+          skillShadow = otherScopeSkill(root, replica.id, replica.output)
         }
-        else skillNote = `${pathJoin(root.skillsDir, plan.name)} is ${r.reason}`
       } catch (e: any) {
         skillNote = `skill sync did not finish: ${String(e?.code ?? e?.message ?? e)}`
       }
@@ -3082,7 +3213,11 @@ const PlaybookInstallCommand = cmd({
         skill_path: skillFile,
         skill_note: skillNote,
         skill_via_symlink: skillVia,
+        skill_id: skillId,
+        skill_repairs: skillRepairs,
+        skill_also_at: skillShadow,
         shadowed_by: shadows,
+        session_note: skillFile ? sessionRefreshNote([skillId ?? name]) : null,
       })
       prompts.outro("Done"); return
     }
@@ -3111,9 +3246,88 @@ const PlaybookInstallCommand = cmd({
       console.log(`  ${bold("!")} An older copy takes priority when you run from here: ${s}`)
       console.log(dim(`    Delete that folder so this install is the one that runs: ${pathJoin(s, "..")}`))
     }
+    for (const r of skillRepairs) console.log(`  ${bold("!")} ${r}`)
+    if (skillShadow) {
+      console.log(`  ${bold("!")} A different skill named ${skillId} is also at ${skillShadow}`)
+      console.log(dim(`    Readers disagree on which wins (Claude Code: ~/.claude/skills; IRIS CLI: the project; IRIS app ≤1.18.117: either). Remove one: iris playbook doctor`))
+    }
+    if (skillFile) console.log(`  ${bold("!")} ${sessionRefreshNote([skillId ?? name])}`)
     console.log(dim(`  Update later: iris playbook install ${name} --force`))
 
     prompts.outro(`${success("✓")} Installed ${highlight(name)}${skillFile ? " and synced for Claude Code + IRIS" : ""}`)
+  },
+})
+
+// iris playbook uninstall <name> — the other half of install
+// ============================================================================
+// Without it the only way out was deleting folders by hand, and deleting the playbook alone left
+// its generated skill behind: the IRIS app and Claude Code kept offering a procedure that no
+// longer existed. This removes both — the playbook file and ONLY the skill sync generated from it.
+
+const PlaybookUninstallCommand = cmd({
+  command: "uninstall <name>",
+  aliases: ["remove"],
+  describe: "remove an installed playbook and the skill generated from it (never a hand-written skill)",
+  builder: (yargs) =>
+    yargs
+      .positional("name", { type: "string", demandOption: true })
+      .option("global", { type: "boolean", describe: "remove the copy in your home folder" })
+      .option("project", { type: "boolean", describe: "remove this project's copy" })
+      .conflicts("global", "project")
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    const name = String(args.name)
+    const json = args.json as boolean
+    const { rmSync, unlinkSync, readdirSync: lsDir, rmdirSync } = await import("fs")
+    const modes: InstallMode[] = args.global ? ["global"] : args.project ? ["project"] : ["auto", "global"]
+    let target: ReturnType<typeof installTarget> | null = null
+    for (const m of modes) {
+      const t = installTarget(name, m)
+      if (existsSync(t.file)) {
+        target = t
+        break
+      }
+    }
+    if (!target) {
+      if (json) await writeJson({ uninstalled: false, name, reason: "not_installed" })
+      else console.error(`  ${bold(name)} is not installed${args.global ? " globally" : args.project ? " in this project" : ""} — nothing removed.`)
+      process.exitCode = 1
+      return
+    }
+    // The skill was written under the playbook's frontmatter name, made portable — read it first.
+    let fmName = name
+    try {
+      const m = (await import("gray-matter")).default(readFileSync(target.file, "utf8"))
+      if (typeof m.data?.name === "string" && m.data.name.trim()) fmName = m.data.name
+    } catch {}
+    // The playbook: its file and the install record. Anything else in the folder is someone's — kept.
+    unlinkSync(target.file)
+    try {
+      rmSync(pathJoin(target.dir, ".installed.json"), { force: true })
+    } catch {}
+    let leftovers: string[] = []
+    try {
+      leftovers = lsDir(target.dir)
+      if (leftovers.length === 0) rmdirSync(target.dir)
+    } catch {}
+    const id = toSkillId(fmName) || toSkillId(name) || name
+    const skill = removeGeneratedReplica(target.root.skillsDir, id)
+    const skillPath = pathJoin(target.root.skillsDir, id)
+
+    if (json) {
+      await writeJson({ uninstalled: name, path: target.file, location: target.root.scope, skill: skill, skill_path: skillPath, kept: leftovers })
+      return
+    }
+    UI.empty()
+    prompts.intro(`◈  Uninstall Playbook — ${highlight(name)}`)
+    printKV("Removed", target.file)
+    if (skill === "removed") printKV("Skill removed", skillPath)
+    else if (skill === "hand-written") console.log(`  ${bold("!")} ${skillPath} is a hand-written skill — left alone`)
+    else if (skill === "symlink") console.log(`  ${bold("!")} ${skillPath} is a symlink — left alone`)
+    if (leftovers.length) console.log(dim(`  Kept ${leftovers.length} other file(s) in ${target.dir}`))
+    if (skill === "removed")
+      console.log(dim(`  An IRIS app window that is already open keeps offering ${id} until the app is restarted.`))
+    prompts.outro(`${success("✓")} Uninstalled ${highlight(name)}`)
   },
 })
 
@@ -3147,6 +3361,7 @@ export const PlatformPlaybookCommand = cmd({
       .command(PlaybookVerifyCommand)
       .command(PlaybookAvailableCommand)
       .command(PlaybookInstallCommand)
+      .command(PlaybookUninstallCommand)
       .command(AttachCommand)
       .command(DetachCommand)
       .command(AttachedCommand)
