@@ -18,6 +18,27 @@ export const ServeCommand = effectCmd({
     const opts = yield* resolveNetworkOptions(args)
     const server = yield* Effect.promise(() => Server.listen(opts))
     console.log(`opencode server listening on http://${server.hostname}:${server.port}`)
+    // The signed-in account's IRIS agents into the picker (#189448 S1). In the background, AFTER
+    // listen: lib.rs exits the app if the engine is not up within 7s. Never fatal — see
+    // iris/desktop-agent-sync.ts. If files changed, reload config so this launch already shows them.
+    void (async () => {
+      const [{ syncDesktopAgents }, os] = await Promise.all([import("../../iris/desktop-agent-sync"), import("os")])
+      const out = await syncDesktopAgents({ home: os.homedir(), env: process.env }).catch(() => null)
+      if (out) console.error(`iris agent sync: ${JSON.stringify(out)}`)
+      if (out?.ran && out.ok && (out.changed ?? 0) > 0) {
+        const [{ AppRuntime }, { Config }, { disposeAllInstancesAndEmitGlobalDisposed }] = await Promise.all([
+          import("../../effect/app-runtime"),
+          import("../../config/config"),
+          import("../../server/global-lifecycle"),
+        ])
+        await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            yield* (yield* Config.Service).invalidate()
+            yield* disposeAllInstancesAndEmitGlobalDisposed({ swallowErrors: true })
+          }),
+        ).catch((e) => console.error(`iris agent sync: reload failed: ${e}`))
+      }
+    })()
 
     // #186171: the desktop app starting its engine is the desktop's app_open. Only when the
     // desktop is the client (spawn_sidecar sets OPENCODE_CLIENT=desktop), so a headless
