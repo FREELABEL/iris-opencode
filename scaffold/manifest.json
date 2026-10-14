@@ -363,6 +363,12 @@
       "purpose": "Pulse readiness engine — autonomous 4-signal scoring (requirements + liveness + comms freshness + config), 15-min cron, daily digest. How to enroll a lead, view the score, run requirements, debug the loop."
     },
     {
+      "src": "how-to/pulse-desktop.md",
+      "dest": "how-to/pulse-desktop.md",
+      "managed": true,
+      "purpose": "Pulse from inside IRIS Desktop chat — ask where a topic stands (commits, diary, files, sessions, tasks, mail) or how a contact is doing, without leaving the conversation."
+    },
+    {
       "src": "how-to/remote-support-a-family-pc.md",
       "dest": "how-to/remote-support-a-family-pc.md",
       "managed": true,
