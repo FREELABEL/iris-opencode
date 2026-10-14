@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { commandsSummary, commandTrigger, failed, formatDuration, groupParts, irisCallTrigger, irisGroupSummary, isIrisGroupTool } from "./part-group"
+import { commandReportOf, commandsSummary, commandTrigger, failed, formatDuration, groupParts, irisCallTrigger, irisGroupSummary, isIrisGroupTool } from "./part-group"
 
 // #189316 — a run of IRIS calls folds into one row; a failure stays visible.
 const tool = (id: string, name: string, status: "completed" | "error" | "running" = "completed", input: Record<string, unknown> = {}, metadata: Record<string, unknown> = {}, time = { start: 0, end: 1 }) =>
@@ -111,5 +111,22 @@ describe("shell commands fold with IRIS calls (#188457)", () => {
 
   test("a shell command reads as `$ <command>`", () => {
     expect(commandTrigger(tool("a", "shell", "completed", { command: "  pwd " }))).toEqual({ title: "$", subtitle: "pwd" })
+  })
+})
+
+// #189435 — the Report button's payload.
+describe("commandReportOf", () => {
+  test("a shell command that exited non-zero reports its command, exit code and output", () => {
+    const p = tool("s", "bash", "completed", { command: "mkdir -p ~/x && false" }, { exit: 1, output: "mkdir: denied" })
+    expect(commandReportOf(p)).toEqual({ tool: "bash", command: "mkdir -p ~/x && false", error: "exit 1", output: "mkdir: denied" })
+  })
+  test("an IRIS call that errored reports what the row shows and the error text", () => {
+    const r = commandReportOf(tool("i", "IRIS_OS_iris_run", "error", { command: "mail accounts" }))
+    expect(r?.tool).toBe("IRIS_OS_iris_run")
+    expect(r?.error).toBe("Not enough non-option arguments")
+    expect(r?.command).toContain("mail accounts")
+  })
+  test("a successful call has nothing to report", () => {
+    expect(commandReportOf(tool("ok", "bash", "completed", { command: "ls" }, { exit: 0 }))).toBeUndefined()
   })
 })

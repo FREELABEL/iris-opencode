@@ -1172,6 +1172,7 @@ export const IrisPaths = {
   artifactDoc: `${root}/artifacts/:artifactID`,
   artifactPublish: `${root}/artifacts/:artifactID/publish`,
   playbookInstall: `${root}/playbooks/install`,
+  bugReport: `${root}/bug-report`,
   catalog: `${root}/catalog`,
   integrationConnect: `${root}/integrations/connect`,
   onboardingState: `${root}/onboarding/state`,
@@ -1683,6 +1684,33 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Install or update a playbook",
           description:
             "Runs the real `iris playbook install <name> --json` (no shell; name must be a slug) — into the session's project when `project` is sent, otherwise the home folder. `force` replaces the local copy (Update). The failure message is the CLI's own words (#186274).",
+        }),
+      ),
+      HttpApiEndpoint.post("bugReport", IrisPaths.bugReport, {
+        payload: Schema.Struct({
+          tool: Schema.String,
+          command: Schema.String,
+          error: Schema.String,
+          output: Schema.optional(Schema.String),
+          note: Schema.optional(Schema.String),
+          preview: described(Schema.optional(Schema.Boolean), "Build the report and return it without sending"),
+        }),
+        success: described(
+          Schema.Struct({
+            ok: Schema.Boolean,
+            itemId: Schema.optional(Schema.Finite),
+            reason: Schema.optional(Schema.String),
+            title: Schema.optional(Schema.String),
+            description: Schema.optional(Schema.String),
+          }).annotate({ identifier: "IrisBugReportResult" }),
+          "Whether the report was filed, and its ticket number",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.bugReport",
+          summary: "Report a failed command",
+          description:
+            "The Report button on a failed command (#189435). Files it on the IRIS bug board like `iris bug report` does (fl-api, then the IRIS API host on a 5xx). Secrets are scrubbed and only the last 40 lines of output are sent. Only ever called from a user's press.",
         }),
       ),
       HttpApiEndpoint.post("pageSave", IrisPaths.pageSave, {

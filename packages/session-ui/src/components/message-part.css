@@ -677,6 +677,22 @@
     line-height: var(--line-height-large);
     overflow-wrap: anywhere;
   }
+  /* Report (#189435): quiet until wanted, so a red row does not shout twice. */
+  [data-slot="context-tool-group-report"] {
+    margin-left: 10px;
+    padding: 0 6px;
+    border-radius: 4px;
+    font-size: var(--font-size-small);
+    color: var(--v2-text-text-muted);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+    cursor: pointer;
+  }
+  [data-slot="context-tool-group-report"]:hover {
+    color: var(--v2-text-text-base);
+    background: var(--v2-overlay-simple-overlay-hover);
+  }
 }
 
 [data-slot="context-tool-group-failed"] {

@@ -524,6 +524,10 @@ const layer = Layer.effect(
           const args = Shell.args(sh, input.command, cwd)
           let output = ""
           let aborted = false
+          // The exit code, kept like the agent's shell tool keeps it (tool/shell.ts metadata.exit). Without
+          // it a command the user ran that failed rendered as a success: the timeline reads
+          // metadata.exit to mark a failed row and to offer Report on it (#189435).
+          let exitCode: number | undefined
 
           const finish = Effect.uninterruptible(
             Effect.gen(function* () {
@@ -541,7 +545,7 @@ const layer = Layer.effect(
                   time: { ...part.state.time, end: completed },
                   input: part.state.input,
                   title: "",
-                  metadata: { output },
+                  metadata: exitCode === undefined ? { output } : { output, exit: exitCode },
                   output,
                 }
                 yield* sessions.updatePart(part)
@@ -573,7 +577,7 @@ const layer = Layer.effect(
                   }
                 }),
               )
-              yield* handle.exitCode
+              exitCode = Number(yield* handle.exitCode)
             }).pipe(Effect.scoped, Effect.orDie),
           ).pipe(Effect.exit)
 
