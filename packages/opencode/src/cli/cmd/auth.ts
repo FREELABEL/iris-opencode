@@ -13,6 +13,14 @@ import { Global } from "../../global"
 import { Plugin } from "../../plugin"
 import { Instance } from "../../project/instance"
 import type { Hooks } from "@opencode-ai/plugin"
+import {
+  describeAccount,
+  findAccount,
+  readAccountStore,
+  readActiveSdkEnv,
+  recordSignIn,
+  switchAccount,
+} from "./auth-accounts"
 
 type PluginAuth = NonNullable<Hooks["auth"]>
 
@@ -170,6 +178,8 @@ export const AuthCommand = cmd({
       .command(AuthLogoutCommand)
       .command(AuthListCommand)
       .command(AuthWhoamiCommand)
+      .command(AuthAccountsCommand)
+      .command(AuthSwitchCommand)
       .demandCommand(),
   async handler() {},
 })
@@ -235,6 +245,98 @@ export const AuthWhoamiCommand = cmd({
     prompts.log.info(dim(`credential: ${credentialSource}`))
     prompts.log.info(dim(`fl-api: ${FL_API}`))
     prompts.log.info(dim(`iris-api: ${IRIS_API}`))
+    prompts.outro("Done")
+  },
+})
+
+/**
+ * Every IRIS account signed in on this machine (#189335). Written by `iris auth login` and by
+ * IRIS Desktop; the active one is whatever ~/.iris/sdk/.env holds.
+ */
+/**
+ * True only for a key exported in the shell. The CLI copies ~/.iris/sdk/.env into process.env at
+ * start (provider.ts) when nothing is set, so a bare `process.env.IRIS_API_KEY` check fires for
+ * everyone. A shell override is a key that differs from the one in the file.
+ */
+function shellKeyOverrides(sdkKey: string | null) {
+  const env = process.env.IRIS_API_KEY
+  return !!env && env !== sdkKey
+}
+
+export const AuthAccountsCommand = cmd({
+  command: "accounts",
+  describe: "list the IRIS accounts signed in on this machine",
+  builder: (yargs) => yargs.option("json", { type: "boolean", default: false, describe: "JSON output" }),
+  async handler(args) {
+    const home = os.homedir()
+    const { store, readable } = readAccountStore(home)
+    const active = readActiveSdkEnv(home).key
+    const rows = store.accounts.map((a) => describeAccount(a, active))
+    if (args.json) {
+      console.log(JSON.stringify({ readable, accounts: rows }, null, 2))
+      return
+    }
+    UI.empty()
+    prompts.intro("◈  IRIS accounts on this machine")
+    if (!readable) {
+      prompts.log.error("~/.iris/accounts.json could not be read. Nothing was changed; fix or move the file.")
+      return
+    }
+    if (rows.length === 0) {
+      prompts.log.info("None saved yet. Each `iris auth login` (or Desktop sign-in) adds the account it signs in as.")
+      prompts.outro("0 accounts")
+      return
+    }
+    for (const r of rows) {
+      const mark = r.active ? `${UI.Style.TEXT_SUCCESS}● in use${UI.Style.TEXT_NORMAL}` : "  "
+      const email = r.email && r.email !== r.label ? `  ${UI.Style.TEXT_DIM}${r.email}${UI.Style.TEXT_NORMAL}` : ""
+      prompts.log.info(`${r.label}${email}  ${UI.Style.TEXT_DIM}${r.ref}${UI.Style.TEXT_NORMAL}  ${mark}`)
+    }
+    if (shellKeyOverrides(active)) {
+      prompts.log.warn("IRIS_API_KEY is set in this shell and outranks every saved account here.")
+    }
+    prompts.outro(`${rows.length} account${rows.length === 1 ? "" : "s"} · switch with: iris auth switch <email or id>`)
+  },
+})
+
+export const AuthSwitchCommand = cmd({
+  command: "switch <account>",
+  describe: "make another saved IRIS account the one this machine acts as",
+  builder: (yargs) =>
+    yargs.positional("account", { type: "string", demandOption: true, describe: "email, user id or name (see `iris auth accounts`)" }),
+  async handler(args) {
+    const home = os.homedir()
+    UI.empty()
+    prompts.intro("◈  Switch IRIS account")
+    const { store, readable } = readAccountStore(home)
+    if (!readable) {
+      prompts.log.error("~/.iris/accounts.json could not be read. Nothing was changed.")
+      process.exitCode = 1
+      return
+    }
+    const found = findAccount(store, String(args.account))
+    if (!found.account) {
+      prompts.log.error(found.reason)
+      process.exitCode = 1
+      return
+    }
+    const before = readActiveSdkEnv(home).key
+    const target = describeAccount(found.account, before)
+    if (target.active) {
+      prompts.outro(`Already using ${target.label}.`)
+      return
+    }
+    const result = switchAccount({ home, cliDataDir: Global.Path.data }, target.ref)
+    if (!result.ok) {
+      prompts.log.error(result.reason)
+      process.exitCode = 1
+      return
+    }
+    prompts.log.success(`Now acting as ${target.label}`)
+    if (shellKeyOverrides(before)) {
+      prompts.log.warn("IRIS_API_KEY is set in this shell and still outranks the switch here. Unset it to use the switched account.")
+    }
+    prompts.log.info(`${UI.Style.TEXT_DIM}IRIS Desktop notices the new key and offers to restart; its chat history is kept per account.${UI.Style.TEXT_NORMAL}`)
     prompts.outro("Done")
   },
 })
@@ -328,6 +430,24 @@ export const AuthListCommand = cmd({
 
 const IRIS_DIR = path.join(os.homedir(), ".iris")
 const SDK_ENV_PATH = path.join(IRIS_DIR, "sdk", ".env")
+
+/**
+ * Called just before a login overwrites ~/.iris/sdk/.env. Never blocks the login: a store it
+ * cannot read is left alone and the login proceeds as it always did.
+ */
+function rememberSignIn(key: string, userId: number, user: { email?: unknown; name?: unknown } | undefined) {
+  try {
+    const home = os.homedir()
+    const ok = recordSignIn(home, readActiveSdkEnv(home), key, {
+      id: Number.isFinite(userId) && userId > 0 ? userId : null,
+      email: typeof user?.email === "string" ? user.email : null,
+      name: typeof user?.name === "string" ? user.name : null,
+    })
+    if (!ok) prompts.log.warn("~/.iris/accounts.json could not be read; the previous account was not saved for switching.")
+  } catch {
+    // Non-critical: the login itself must still work.
+  }
+}
 const IRIS_AUTH_API = process.env.IRIS_AUTH_API_URL ?? "https://raichu.heyiris.io"
 
 async function irisLoginStatus(): Promise<{ authenticated: boolean; token?: string; userId?: string }> {
@@ -485,6 +605,9 @@ async function irisLoginFlow(forceReauth: boolean): Promise<boolean> {
       return false
     }
 
+    // Keep the account being replaced, and give a different one its own data dir (#189335).
+    rememberSignIn(sdkToken, Number(userId), loginData?.data?.user)
+
     // Write ~/.iris/sdk/.env
     fs.mkdirSync(path.join(IRIS_DIR, "sdk"), { recursive: true })
     fs.writeFileSync(
@@ -579,7 +702,8 @@ export const AuthLoginCommand = cmd({
           // Validate token against API
           const apiBase = process.env.IRIS_AUTH_API_URL ?? "https://raichu.heyiris.io"
           try {
-            const res = await fetch(`${apiBase}/api/v1/me`, {
+            // /api/v1/me answers 404 (measured 2026-10-14); whoami is the route `iris auth whoami` uses.
+            const res = await fetch(`${apiBase}/api/v1/auth/whoami`, {
               headers: { Authorization: `Bearer ${args.token}`, Accept: "application/json" },
               signal: AbortSignal.timeout(10_000),
             })
@@ -593,6 +717,8 @@ export const AuthLoginCommand = cmd({
               prompts.log.error("Token valid but could not resolve user ID")
               return
             }
+
+            rememberSignIn(args.token, Number(userId), data?.data ?? data)
 
             // Write ~/.iris/sdk/.env
             fs.mkdirSync(path.join(IRIS_DIR, "sdk"), { recursive: true })
