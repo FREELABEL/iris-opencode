@@ -38,7 +38,7 @@ import { isLocalOAuthProvider, runLocalOAuthConnect } from "./integration-oauth-
 import { readIntegrationStores, findStatusDisagreements, describeDisagreement, type StoreRef } from "./integration-stores"
 import { PathwaysCommand } from "./platform-integrations-pathways"
 import { firstArray } from "../../util/array"
-import { isReadAction, knownFunction, dryRunResult } from "./integration-write-gate"
+import { knownFunction, dryRunResult, gatedExec, previewParams, recipientCount } from "./integration-write-gate"
 import { openBrowser } from "../../util/browser"
 
 // ============================================================================
@@ -2024,7 +2024,7 @@ const DescribeCommand = cmd({
 const ExecCommand = cmd({
   command: "exec <target> [function] [params..]",
   aliases: ["call"],
-  describe: "execute an integration function or system tool",
+  describe: "execute an integration function or system tool — writes and sends are a dry run unless --apply",
   builder: (y) =>
     y
       .positional("target", { type: "string", demandOption: true, describe: "integration type or tool name" })
@@ -2051,7 +2051,7 @@ const ExecCommand = cmd({
       .option("apply", {
         type: "boolean",
         default: false,
-        describe: "actually run a write action (send, create, move, delete…). Without it, writes are a dry run that changes nothing",
+        describe: "actually run a write/send action (send, create, move, delete…). Without it, anything that is not a read is a dry run: it shows the account, the parameters and the recipient count, sends nothing, and exits 0",
       })
       .option("dry-run", {
         type: "boolean",
@@ -2059,7 +2059,10 @@ const ExecCommand = cmd({
         describe: "rehearse even a read action",
       })
       .example("iris integrations exec gmail create_label label_name=Clients", "dry run — shows what would happen, changes nothing")
-      .example("iris integrations exec gmail create_label label_name=Clients --apply", "does it for real"),
+      .example("iris integrations exec gmail create_label label_name=Clients --apply", "does it for real")
+      .example("iris integrations exec mailjet send_transactional_email --integration-id 138 --params-file msg.json", "dry run — prints what would be sent, sends nothing")
+      .example("iris integrations exec mailjet send_transactional_email --integration-id 138 --params-file msg.json --apply", "sends it")
+      .example("iris integrations exec mailjet get_contact_lists", "reads run without --apply"),
   async handler(args) {
     // Suppress all UI chrome when --json for clean pipeable output (#55735)
     if (!args.json) {
@@ -2212,70 +2215,84 @@ const ExecCommand = cmd({
           }
         }
 
-        // DRY RUN BY DEFAULT for anything that is not a read (integration-write-gate.ts). A name this
-        // CLI does not know is stopped FIRST, before even a rehearsal: rehearsing a guessed name would
-        // suggest it exists, which is the loop that put a probe label in a client's mailbox.
+        // DRY RUN BY DEFAULT for anything that is not a read — the decision lives in ONE place,
+        // gatedExec (integration-write-gate.ts), so it can be tested without a network (#189462).
+        // A name with a write verb (send, create, delete…) never runs without --apply, whatever the
+        // server's plan says; the server can only make a rehearsal stricter.
         const isKnown = knownFunction(fn, known)
-        const apply = Boolean(args.apply)
-        let rehearse = Boolean(args["dry-run"]) || (!apply && !isReadAction(fn))
+        const spinner = args.json ? null : prompts.spinner()
+        const accountLabel = accountOpts.integrationId
+          ? ` ${dim(`(#${accountOpts.integrationId})`)}`
+          : accountOpts.account
+            ? ` ${dim(`(${accountOpts.account})`)}`
+            : ""
+        const fnName = fn
+        const outcome = await gatedExec(fnName, { apply: Boolean(args.apply), forceDryRun: Boolean(args["dry-run"]) }, (dryRun) => {
+          if (!dryRun) spinner?.start(`Executing ${target}.${fnName}${accountLabel}…`)
+          return executeIntegrationCall(target, fnName, params, { ...accountOpts, dryRun })
+        })
 
-        // The SERVER judges a rehearsal (#188638). It knows the account the call would reach, the
-        // real action name, whether it reads or writes, and whether the upstream tool exists — the
-        // local verb list and function list are only a fallback when it cannot be asked. On
-        // 2026-10-08 a local rehearsal said "looks good" for a move whose Composio tool did not exist.
-        if (rehearse) {
-          let plan: any = null
-          try {
-            plan = await executeIntegrationCall(target, fn, params, { ...accountOpts, dryRun: true })
-          } catch {}
-          if (plan?.dry_run && plan?.would_run) {
-            const readNotForced = plan.ok && plan.would_run.effect === "read" && !args["dry-run"]
-            if (!readNotForced) {
-              process.exitCode = plan.ok ? 2 : 1
-              const out = { ...plan, params, client_node: os.hostname(), apply_with: `iris integrations exec ${target} ${fn} … --apply` }
-              if (args.json) { await writeJson(out); return }
-              const w = plan.would_run
-              if (plan.ok) prompts.log.warn(`DRY RUN — nothing was changed. This would run:`)
-              else prompts.log.error(`DRY RUN FAILED — this would not work:`)
-              console.log(`  ${bold(`${w.integration}.${w.action}`)}${w.requested_action ? dim(` (you typed ${w.requested_action})`) : ""}  ${dim(w.effect ?? "")}`)
-              const line = accountLine(plan)
-              if (line) console.log(`  ${line}`)
-              if (w.upstream_tool) console.log(dim(`  upstream: ${w.upstream_tool}${w.upstream_tool_exists === false ? " — DOES NOT EXIST" : w.upstream_tool_exists ? " ✓" : ""}`))
-              console.log(`  ${dim(JSON.stringify(params))}`)
-              for (const p of plan.problems ?? []) prompts.log.error(p)
-              prompts.outro(plan.ok ? `To do it for real, add ${highlight("--apply")}` : "Fix the above, then dry-run again.")
-              return
-            }
-            rehearse = false // the server says it is a read that will work — just run it
-          } else if (plan?.success === false && plan?.error) {
-            // A refusal (e.g. several accounts, none chosen) is the rehearsal's answer.
+        if (outcome.kind === "refused") {
+          // A refusal (e.g. several accounts, none chosen) is the rehearsal's answer.
+          const plan = outcome.result
+          process.exitCode = 1
+          if (args.json) { await writeJson(plan); return }
+          prompts.log.error(String(plan.error))
+          prompts.outro("Nothing was changed.")
+          return
+        }
+
+        if (outcome.kind === "rehearsed") {
+          const plan = outcome.plan
+          const recipients = recipientCount(params)
+          const shown = previewParams(params)
+          const applyWith = `iris integrations exec ${target} ${fn} … --apply`
+          if (!plan && isKnown === false) {
+            const out = { success: false, dry_run: true, executed: false, error: `${fn} is not a known ${target} function — nothing was run.`, available_functions: known }
+            if (args.json) { await writeJson(out); process.exitCode = 1; return }
+            prompts.log.error(out.error)
+            for (const f of known ?? []) console.log(`  ${highlight(f.name)}  ${dim(f.description)}`)
             process.exitCode = 1
-            if (args.json) { await writeJson(plan); return }
-            prompts.log.error(String(plan.error))
-            prompts.outro("Nothing was changed.")
+            prompts.outro("Done")
             return
           }
-        }
-        if (rehearse && isKnown === false) {
-          const out = { success: false, error: `${fn} is not a known ${target} function — nothing was run.`, available_functions: known }
-          if (args.json) { await writeJson(out); process.exitCode = 1; return }
-          prompts.log.error(out.error)
-          for (const f of known ?? []) console.log(`  ${highlight(f.name)}  ${dim(f.description)}`)
-          process.exitCode = 1
-          prompts.outro("Done")
-          return
-        }
-        if (rehearse) {
-          const out = dryRunResult(target, fn, params)
-          // Exit 2 = "not executed": distinct from 0 (done) and 1 (failed), so a script or agent
-          // that expected the write cannot mistake a rehearsal for success.
-          process.exitCode = 2
+          // A rehearsal is not a failure: exit 0 unless the plan found a problem (#189462). The JSON
+          // still says dry_run:true / executed:false / success:false, so nothing reads it as "sent".
+          const problems: string[] = plan?.problems ?? []
+          if (plan && plan.ok === false) process.exitCode = 1
+          if (outcome.server_ignored_dry_run) process.exitCode = 1
+          const out = {
+            ...(plan ?? dryRunResult(target, fn, params)),
+            success: false,
+            dry_run: true,
+            executed: false,
+            integration: target,
+            function: fn,
+            integration_id: plan?.would_run?.integration_id ?? accountOpts.integrationId ?? null,
+            account: plan?.would_run?.account ?? accountOpts.account ?? null,
+            params: shown,
+            recipients,
+            ...(outcome.server_ignored_dry_run ? { warning: "The server did not acknowledge the dry run — it may have performed the action. Check before retrying." } : {}),
+            client_node: os.hostname(),
+            apply_with: applyWith,
+          }
           if (args.json) { await writeJson(out); return }
-          prompts.log.warn(`DRY RUN — ${target}.${fn} would run with:`)
-          console.log(`  ${dim(JSON.stringify(params))}`)
-          prompts.outro(`Nothing was changed. To do it for real, add ${highlight("--apply")}`)
+          if (outcome.server_ignored_dry_run) prompts.log.error(out.warning as string)
+          if (!plan || plan.ok) prompts.log.warn(`DRY RUN — nothing was changed. This would run:`)
+          else prompts.log.error(`DRY RUN FAILED — this would not work:`)
+          const w = plan?.would_run
+          console.log(`  ${bold(`${w?.integration ?? target}.${w?.action ?? fn}`)}${w?.requested_action ? dim(` (you typed ${w.requested_action})`) : ""}  ${dim(w?.effect ?? "write")}`)
+          const line = plan ? accountLine(plan) : null
+          if (line) console.log(`  ${line}`)
+          else if (accountOpts.integrationId || accountOpts.account) console.log(`  ${dim(`↳ ${accountOpts.account ?? `connection #${accountOpts.integrationId}`}`)}`)
+          if (w?.upstream_tool) console.log(dim(`  upstream: ${w.upstream_tool}${w.upstream_tool_exists === false ? " — DOES NOT EXIST" : w.upstream_tool_exists ? " ✓" : ""}`))
+          if (recipients !== null) console.log(`  ${bold(`recipients: ${recipients}`)}`)
+          for (const [k, v] of Object.entries(shown)) console.log(`  ${dim(`${k}:`)} ${typeof v === "string" ? v : JSON.stringify(v)}`)
+          for (const p of problems) prompts.log.error(p)
+          prompts.outro(!plan || plan.ok ? `To do it for real, add ${highlight("--apply")}` : "Fix the above, then dry-run again.")
           return
         }
+
         const withHint = (result: any) =>
           isFailedResult(result) && isUnknownFunctionError(result) && known
             ? {
@@ -2285,20 +2302,13 @@ const ExecCommand = cmd({
               }
             : result
         if (args.json) {
-          const result = withHint(await executeIntegrationCall(target, fn, params, accountOpts))
+          const result = withHint(outcome.result)
           await writeJson(result && typeof result === "object" ? { ...result, client_node: os.hostname() } : result)
           if (isFailedResult(result)) process.exitCode = 1
           return
         }
-        const spinner = prompts.spinner()
-        const accountLabel = accountOpts.integrationId
-          ? ` ${dim(`(#${accountOpts.integrationId})`)}`
-          : accountOpts.account
-            ? ` ${dim(`(${accountOpts.account})`)}`
-            : ""
-        spinner.start(`Executing ${target}.${fn}${accountLabel}…`)
-        const result = withHint(await executeIntegrationCall(target, fn, params, accountOpts))
-        spinner.stop(`${target}.${fn}`)
+        const result = withHint(outcome.result)
+        spinner?.stop(`${target}.${fn}`)
         displayResult(result, `${target}.${fn}`)
         const who = accountLine(result)
         if (who) console.log(dim(`  ${who}`))
