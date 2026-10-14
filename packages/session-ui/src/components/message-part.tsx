@@ -65,6 +65,7 @@ import {
   durationOf,
   exitOf,
   failed as failedCall,
+  commandReportOf,
   formatDuration,
   groupParts,
   irisCallTrigger,
@@ -1015,6 +1016,7 @@ export function ContextToolGroup(props: {
   onSizeChange?: () => void
 }) {
   const i18n = useI18n()
+  const data = useData()
   const [localOpen, setLocalOpen] = createSignal<boolean | undefined>(undefined)
   // Uncontrolled, a group holding a failed call starts open (#189316); a click then decides.
   const open = () => props.open ?? localOpen() ?? props.parts.some(failedCall)
@@ -1171,7 +1173,26 @@ export function ContextToolGroup(props: {
                     </button>
                   </Show>
                   <Show when={error()}>
-                    {(e) => <span data-slot="context-tool-group-error">{e()}</span>}
+                    {(e) => (
+                      <span data-slot="context-tool-group-error">
+                        {e()}
+                        {/* #189435: the user can send this one to us. Nothing is sent without the press. */}
+                        <Show when={data.reportCommand}>
+                          {(report) => (
+                            <button
+                              type="button"
+                              data-slot="context-tool-group-report"
+                              onClick={() => {
+                                const r = commandReportOf(partAccessor())
+                                if (r) report()(r)
+                              }}
+                            >
+                              Report
+                            </button>
+                          )}
+                        </Show>
+                      </span>
+                    )}
                   </Show>
                   <Show when={isShown() && output()}>
                     {(o) => <pre data-slot="context-tool-group-output">{o()}</pre>}

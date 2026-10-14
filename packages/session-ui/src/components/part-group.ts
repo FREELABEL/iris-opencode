@@ -216,3 +216,17 @@ export function formatDuration(ms: number): string {
   if (s < 60) return `${s}s`
   return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`
 }
+
+/**
+ * What the Report button sends for a failed call (#189435): the tool, the command as the row shows
+ * it, the error line and the output. Not for successful calls.
+ */
+export function commandReportOf(part: ToolPart): { tool: string; command: string; error: string; output?: string } | undefined {
+  if (!failed(part)) return undefined
+  const st = part.state
+  const exit = exitOf(part)
+  const error = st.status === "error" ? st.error : exit !== undefined ? `exit ${exit}` : "failed"
+  const trigger = commandTrigger(part)
+  const command = isShellTool(part) ? trigger.subtitle : [trigger.title, trigger.subtitle].filter(Boolean).join(" ")
+  return { tool: part.tool, command: command || part.tool, error, output: outputOf(part) }
+}

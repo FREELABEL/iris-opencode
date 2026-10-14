@@ -46,6 +46,10 @@ export type NavigateToSessionFn = (sessionID: string) => void
 
 export type SessionHrefFn = (sessionID: string) => string
 
+/** A failed command, as the Report button sends it (#189435). The app decides what happens next. */
+export type CommandReportInput = { tool: string; command: string; error: string; output?: string }
+export type ReportCommandFn = (report: CommandReportInput) => void
+
 export const { use: useData, provider: DataProvider } = createSimpleContext({
   name: "Data",
   init: (props: {
@@ -54,6 +58,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     sessionID?: string
     onNavigateToSession?: NavigateToSessionFn
     onSessionHref?: SessionHrefFn
+    onReportCommand?: ReportCommandFn
   }) => {
     return {
       get store() {
@@ -67,6 +72,9 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       },
       navigateToSession: props.onNavigateToSession,
       sessionHref: props.onSessionHref,
+      get reportCommand() {
+        return props.onReportCommand
+      },
     }
   },
 })

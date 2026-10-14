@@ -1,5 +1,9 @@
 import { DataProvider } from "@opencode-ai/session-ui/context"
 import { showToast } from "@/utils/toast"
+import { useDialog } from "@opencode-ai/ui/context/dialog"
+import { usePlatform } from "@/context/platform"
+import { useServerSDK } from "@/context/server-sdk"
+import { DialogReportCommand } from "@/components/dialog-report-command"
 import { base64Encode } from "@opencode-ai/core/util/encode"
 import { useLocation, useNavigate, useParams } from "@solidjs/router"
 import { type Accessor, createEffect, createMemo, createResource, onCleanup, type ParentProps, Show } from "solid-js"
@@ -57,6 +61,13 @@ export function DirectoryDataProvider(
     onCleanup(() => serverSync().session.unpin(sessionID))
   })
 
+  // #189435: the Report button on a failed command opens this; nothing is sent until the person presses Send.
+  const dialog = useDialog()
+  const platform = usePlatform()
+  const serverSDK = useServerSDK()
+  const localFetch = (path: string, init?: RequestInit) =>
+    (platform.fetch ?? globalThis.fetch)(`${serverSDK().url.replace(/\/$/, "")}${path}`, init)
+
   return (
     <Show when={directory()} keyed>
       {(directory) => (
@@ -66,6 +77,7 @@ export function DirectoryDataProvider(
           sessionID={params.id}
           onNavigateToSession={(sessionID: string) => navigate(href(sessionID))}
           onSessionHref={href}
+          onReportCommand={(report) => dialog.show(() => <DialogReportCommand report={report} doFetch={localFetch} />)}
         >
           <LocalProvider>{props.children}</LocalProvider>
         </DataProvider>
