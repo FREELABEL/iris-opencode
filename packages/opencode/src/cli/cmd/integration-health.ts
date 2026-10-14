@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, dim, bold, success, highlight, writeJson } from "./iris-api"
+import { irisFetch, requireAuth, resolveUserId, IRIS_API, dim, bold, success, highlight, writeJson } from "./iris-api"
 
 /**
  * `iris integrations health` / `iris integrations test <type>` — IH-08, epic bloq #503 list #2315.
@@ -38,6 +38,8 @@ interface HealthRow {
   last_error: string | null
   probe_state?: string
   probe_error?: string | null
+  /** Which integration store holds the row. Absent means fl-api, the health API's own. */
+  store?: "iris-api"
 }
 
 /** "4m ago" / "3d ago" — or the honest word when nothing has ever checked. */
@@ -104,17 +106,90 @@ export function formatSummary(rows: HealthRow[]): string {
   )} n/a`
 }
 
-async function fetchHealth(probe: boolean): Promise<{ rows: HealthRow[] | null; failure: string | null }> {
+/**
+ * One iris-api row, in the four-state vocabulary (#186971).
+ *
+ * `probe` is iris-api's POST /v1/integrations-temp/{id}/test answer, or null when nothing was
+ * probed. That endpoint says "credentials are present (live test not implemented)" for a type
+ * with no probe of its own — which is NOT a pass, so it maps to never_checked. Exported for tests.
+ */
+export function irisRowToHealth(
+  row: { id: number; type: string; name?: string | null; account_email?: string | null; status?: string | null },
+  probe: { success?: boolean; message?: string | null; error?: string | null } | null,
+  now: string = new Date().toISOString(),
+): HealthRow {
+  const base = {
+    id: row.id,
+    type: String(row.type ?? "").toLowerCase(),
+    name: row.name ?? null,
+    account: row.account_email ?? null,
+    status: String(row.status ?? "active"),
+    store: "iris-api" as const,
+  }
+  if (!probe || (probe.success && /not implemented/i.test(String(probe.message ?? "")))) {
+    return { ...base, state: "never_checked", last_tested: null, last_error: null }
+  }
+  if (probe.success) return { ...base, state: "working", last_tested: now, last_error: null }
+  return { ...base, state: "failing", last_tested: now, last_error: probe.error ?? probe.message ?? null }
+}
+
+/**
+ * THE HEALTH API ONLY SEES fl-api's STORE (#186971). `connect` and `setup-native` write native
+ * API-key rows (mailjet, apollo, …) to iris-api's own `integrations` table, so for those this
+ * command answered "No mailjet connection on this account" about a Mailjet that answered every
+ * call — and a client was told their link was down. Same split as list-connected (#181228).
+ * Read iris-api's rows too, and probe them there when asked.
+ */
+async function fetchIrisRows(probe: boolean, onlyType?: string): Promise<HealthRow[]> {
+  const userId = await resolveUserId()
+  if (!userId) return []
+  try {
+    const res = await irisFetch(`/api/v1/users/${userId}/integrations`, {}, IRIS_API)
+    if (!res.ok) return []
+    const body = (await res.json()) as Record<string, any>
+    const list: any[] = Array.isArray(body?.connections) ? body.connections : Array.isArray(body?.data) ? body.data : []
+    // Only rows iris-api itself holds: a Composio-only connection has no local id to test.
+    const own = list.filter(
+      (r) => Number.isInteger(r?.id) && r.id > 0 && (!onlyType || String(r.type ?? "").toLowerCase() === onlyType),
+    )
+    const out: HealthRow[] = []
+    for (const r of own) {
+      let answer: any = null
+      if (probe) {
+        try {
+          const t = await irisFetch(`/api/v1/integrations-temp/${r.id}/test`, { method: "POST" }, IRIS_API)
+          answer = await t.json().catch(() => ({ success: false, error: `HTTP ${t.status}` }))
+          if (!t.ok && answer && answer.success === undefined) answer.success = false
+        } catch (e) {
+          answer = { success: false, error: e instanceof Error ? e.message : String(e) }
+        }
+      }
+      out.push(irisRowToHealth(r, answer))
+    }
+    return out
+  } catch {
+    return []
+  }
+}
+
+async function fetchHealth(
+  probe: boolean,
+  onlyType?: string,
+): Promise<{ rows: HealthRow[] | null; failure: string | null }> {
+  let flRows: HealthRow[] | null = null
+  let failure: string | null = null
   try {
     const res = await irisFetch(`/api/v1/integrations/health${probe ? "?probe=1" : ""}`)
-    if (!res.ok) {
-      return { rows: null, failure: `the health API returned HTTP ${res.status}` }
-    }
-    const body = (await res.json()) as { data?: HealthRow[] }
-    return { rows: body?.data ?? [], failure: null }
+    if (!res.ok) failure = `the health API returned HTTP ${res.status}`
+    else flRows = ((await res.json()) as { data?: HealthRow[] })?.data ?? []
   } catch (e) {
-    return { rows: null, failure: e instanceof Error ? e.message : String(e) }
+    failure = e instanceof Error ? e.message : String(e)
   }
+
+  const irisRows = await fetchIrisRows(probe, onlyType)
+  // fl-api unreachable but iris-api answered: report what we could measure, not a bare failure.
+  if (failure && irisRows.length === 0) return { rows: null, failure }
+  return { rows: [...(flRows ?? []), ...irisRows], failure: null }
 }
 
 export const IntegrationsHealthCommand = cmd({
@@ -223,7 +298,7 @@ export const IntegrationsTestCommand = cmd({
     // GET /api/v1/integrations/health?probe=1 exists and already probes live. Filtering its
     // rows answers the same question, and preserves the distinction that matters: a type with
     // no row is NOT CONNECTED, which is a different answer from a connection that failed.
-    const probe = await fetchHealth(true)
+    const probe = await fetchHealth(true, type)
     if (probe.failure) {
       failure = probe.failure
     } else {
