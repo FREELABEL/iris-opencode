@@ -11,9 +11,11 @@ import { AgentsExportCommand } from "./platform-agents-export"
 import { AgentsJoinCommand, AgentsLeaveCommand } from "./platform-agents-rooms"
 import { AgentsPauseCommand, AgentsResumeCommand, AgentsStopCommand } from "./platform-agents-governance"
 import { AgentsHandBackCommand, AgentsTakeOverCommand, AgentsWatchCommand } from "./platform-agents-watch"
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, unlinkSync } from "fs"
 import { join } from "path"
 import { firstArray } from "../../util/array"
+import { Global } from "../../global"
+import { planDesktopSync } from "../lib/desktop-agents"
 import { AUTONOMY_CHOICES, AUTONOMY_LEVELS, CLI_DEFAULT_AUTONOMY, describeAutonomy, parseAutonomy } from "./agent-autonomy"
 
 /**
@@ -1873,6 +1875,74 @@ const AgentsInboxCommand = cmd({
   },
 })
 
+/**
+ * `iris agents desktop-sync` (#189425) — every IRIS agent on the account becomes an opencode
+ * agent in the Desktop app and TUI picker, with full local tools. See lib/desktop-agents.ts
+ * for why the generated permissions look the way they do.
+ */
+const AgentsDesktopSyncCommand = cmd({
+  command: "desktop-sync",
+  aliases: ["sync-desktop"],
+  describe: "make your IRIS agents selectable in IRIS Desktop / the TUI (writes opencode agent files)",
+  builder: (yargs) =>
+    yargs
+      .option("agent", { alias: "a", describe: "only these agent IDs (comma-separated); deletes nothing", type: "string" })
+      .option("dir", { describe: "agents directory (default: the opencode config dir)", type: "string" })
+      .option("dry-run", { describe: "show what would change, write nothing", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro("◈  IRIS Agents → Desktop") }
+    const token = await requireAuth()
+    if (!token) { process.exitCode = 1; return }
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { process.exitCode = 1; return }
+
+    const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents?per_page=500`)
+    if (!(await handleApiError(res, "List agents"))) { process.exitCode = 1; return }
+    const agents = firstArray(((await res.json()) as any)?.data)
+
+    const only = args.agent
+      ? new Set(String(args.agent).split(",").map((x) => Number(x.trim())).filter(Number.isInteger))
+      : undefined
+    const dir = args.dir ?? join(Global.Path.config, "agents")
+    const existing = new Map<string, string>()
+    if (existsSync(dir)) {
+      for (const f of readdirSync(dir)) if (f.endsWith(".md")) existing.set(f, readFileSync(join(dir, f), "utf8"))
+    }
+    const plan = planDesktopSync(agents, existing, only)
+
+    if (!args["dry-run"]) {
+      mkdirSync(dir, { recursive: true })
+      for (const w of plan.write) writeFileSync(join(dir, w.file), w.content)
+      for (const f of plan.remove) unlinkSync(join(dir, f))
+    }
+
+    const changed = plan.write.length + plan.remove.length
+    if (args.json) {
+      await writeJson({
+        dir,
+        dry_run: args["dry-run"],
+        written: plan.write.map((w) => ({ file: w.file, id: w.id, name: w.name })),
+        removed: plan.remove,
+        hand_written_skipped: plan.handWritten,
+        restart_required: changed > 0 && !args["dry-run"],
+      })
+      return
+    }
+    const verb = args["dry-run"] ? "would " : ""
+    for (const w of plan.write) prompts.log.success(`${verb}write ${w.file}  ${dim(`#${w.id} ${w.name}`)}`)
+    for (const f of plan.remove) prompts.log.info(`${verb}remove ${f}  ${dim("(agent no longer on your account)")}`)
+    for (const f of plan.handWritten) prompts.log.warn(`${f} is hand-written — left alone ${dim("(delete it to let sync manage it)")}`)
+    if (!changed) prompts.log.info(dim("Already in sync."))
+    prompts.outro(
+      changed && !args["dry-run"]
+        ? `${changed} change(s) in ${dir} — restart IRIS Desktop (or start a new TUI session) to see them`
+        : dir,
+    )
+  },
+})
+
 export const PlatformAgentsCommand = cmd({
   command: "agents",
   describe: "manage IRIS platform agents — pull, push, diff, CRUD, assign, pause/resume/stop",
@@ -1904,6 +1974,7 @@ export const PlatformAgentsCommand = cmd({
       .command(AgentsLeaveCommand)
       .command(AgentsExportCommand)
       .command(AgentsBenchCommand)
+      .command(AgentsDesktopSyncCommand)
       .demandCommand(),
   async handler() {},
 })
