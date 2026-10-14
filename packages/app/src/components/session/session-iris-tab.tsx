@@ -998,7 +998,9 @@ export const IRIS_SURFACE_CHOICES: readonly { id: string; label: string }[] = SU
  * product, which view. Products are tabs you PIN from the + menu instead of one eight-item bar.
  */
 const PINNED_KEY = "iris.panel.pinned"
-const DEFAULT_PINNED: SurfaceId[] = ["pages", "atlas", "agents"]
+// Pulse is pinned for anyone who has not chosen their own tabs (#189286): behind the + menu it
+// was a product nobody would stumble on. People who already pinned their own keep their choice.
+const DEFAULT_PINNED: SurfaceId[] = ["pages", "atlas", "agents", "pulse"]
 const readPinned = (raw: string | null) =>
   readPinnedIds<SurfaceId>(
     raw,

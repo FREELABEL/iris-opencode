@@ -59,6 +59,8 @@ export const dict = {
   "command.terminal.toggle": "Toggle terminal",
   "command.fileTree.toggle": "Toggle file tree",
   "command.review.toggle": "Toggle review",
+  "command.pulse.open": "Open Pulse",
+  "command.pulse.open.description": "Check where a topic stands, or what you owe a contact",
   "command.terminal.new": "New terminal",
   "command.terminal.new.description": "Create a new terminal tab",
   "command.steps.toggle": "Toggle steps",
