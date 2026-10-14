@@ -677,9 +677,10 @@
     line-height: var(--line-height-large);
     overflow-wrap: anywhere;
   }
-  /* Report (#189435): quiet until wanted, so a red row does not shout twice. */
+  /* Report (#189435): shown only inside an opened command, under its output, quiet. */
   [data-slot="context-tool-group-report"] {
-    margin-left: 10px;
+    display: inline-block;
+    margin: 4px 0 2px -6px;
     padding: 0 6px;
     border-radius: 4px;
     font-size: var(--font-size-small);
