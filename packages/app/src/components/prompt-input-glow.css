@@ -91,23 +91,27 @@
   opacity: 1;
 }
 
+/* The underglow must end inside the dock's 12px bottom padding: below that, the session panel
+   (rounded, overflow hidden) cuts it off in a straight line (Alex, 2026-10-14: "the glow around the
+   chat is kinda weird and getting cut off"). It was 52px tall at -14px with a 24px blur, which
+   reached ~38px below the card. Now it sits behind the card's lower edge and fades out ~10px below it. */
 .iris-glow__under {
   position: absolute;
-  left: 4%;
-  right: 4%;
-  bottom: -14px;
-  height: 52px;
+  left: 6%;
+  right: 6%;
+  bottom: -2px;
+  height: 16px;
   z-index: -2;
   pointer-events: none;
   opacity: 0;
   transition: opacity 0.6s ease;
-  filter: blur(24px);
+  filter: blur(5px);
   border-radius: 50%;
   background: conic-gradient(from var(--iris-glow-a) at 50% 50%, var(--g1), var(--g2), var(--g3), var(--g1));
   animation: iris-glow-spin var(--iris-glow-under, 6s) linear infinite;
 }
 .iris-glow[data-bg] .iris-glow__under {
-  opacity: 0.7;
+  opacity: 1;
 }
 
 .iris-glow__chip {
