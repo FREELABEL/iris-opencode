@@ -1,3 +1,4 @@
+mod accounts;
 mod cli;
 mod google_signin;
 mod login;
@@ -629,32 +630,30 @@ fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
     let engine_cwd = dirs_next_home().unwrap_or_else(|| std::path::PathBuf::from("/"));
 
     #[cfg(target_os = "windows")]
-    let (mut rx, child) = app
-        .shell()
-        .sidecar("iris-cli")
-        .unwrap()
-        .env("OPENCODE_EXPERIMENTAL_ICON_DISCOVERY", "true")
-        .env("OPENCODE_CLIENT", "desktop")
-        .env("XDG_STATE_HOME", &state_dir)
-        .env("IRIS_API_KEY", &iris_api_key)
-        .current_dir(&engine_cwd)
-        .args(["serve", &format!("--port={port}")])
-        .spawn()
-        .expect("Failed to spawn opencode");
-
+    let cmd = app.shell().sidecar("iris-cli").unwrap();
     #[cfg(not(target_os = "windows"))]
-    let (mut rx, child) = app
-        .shell()
-        .sidecar("iris-cli")
-        .expect("Failed to resolve iris-cli sidecar")
+    let cmd = app.shell().sidecar("iris-cli").expect("Failed to resolve iris-cli sidecar");
+
+    let mut cmd = cmd
         .env("OPENCODE_EXPERIMENTAL_ICON_DISCOVERY", "true")
         .env("OPENCODE_CLIENT", "desktop")
         .env("XDG_STATE_HOME", &state_dir)
         .env("IRIS_API_KEY", &iris_api_key)
         .current_dir(&engine_cwd)
-        .args(["serve", &format!("--port={port}")])
-        .spawn()
-        .expect("Failed to spawn opencode");
+        .args(["serve", &format!("--port={port}")]);
+
+    // #189321: an account other than the first keeps its chat history, provider sign-ins and
+    // MCP auth in its own data dir — sessions carry no account id, so a shared dir shows one
+    // account's history under another. The parent's value travels too, so the engine can still
+    // find the CLI's (default) auth store when it switches or signs out.
+    if let Some(data_home) = dirs_next_home().and_then(|h| accounts::data_home_for_key(&h, &iris_api_key)) {
+        let _ = std::fs::create_dir_all(&data_home);
+        println!("Engine data for this account: {}", data_home.display());
+        let parent = std::env::var("XDG_DATA_HOME").unwrap_or_default();
+        cmd = cmd.env("XDG_DATA_HOME", &data_home).env("IRIS_PARENT_XDG_DATA_HOME", parent);
+    }
+
+    let (mut rx, child) = cmd.spawn().expect("Failed to spawn opencode");
 
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.recv().await {

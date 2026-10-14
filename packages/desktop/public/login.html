@@ -220,7 +220,21 @@ on this machine.</p>
     $("step-code").hidden = true;
     $("sub").textContent = "You're signed in on this machine.";
     msg("Signed in. Opening IRIS…", "ok");
-    await invoke("save_iris_token", { token });
+    // #189321: who this key is, so the saved-accounts list can name it and give a second account
+    // its own history. Best effort with a short timeout — sign-in must not wait on it or fail
+    // because of it; an account saved without a name is still an account you can switch to.
+    let identity = null;
+    try {
+      const r = await fetch(API + "/api/v1/auth/whoami", {
+        headers: { Authorization: "Bearer " + token, Accept: "application/json" },
+        signal: AbortSignal.timeout(5000),
+      });
+      const u = r.ok ? (await r.json())?.data : null;
+      if (u && typeof u.id === "number") {
+        identity = { user_id: u.id, email: u.email || null, name: u.name || null };
+      }
+    } catch (_) {}
+    await invoke("save_iris_token", { token, identity });
     // After the save, not before: Rust attaches the token now on disk, which is what lets the
     // server join this install to the person (genesis_events.user_id).
     track("onboarding.signed_in", method);

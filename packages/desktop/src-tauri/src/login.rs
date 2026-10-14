@@ -26,13 +26,25 @@ use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow};
 /// value in some setups, and clobbering it to "fix" login would break integrations that were
 /// working — a fix that breaks a neighbour is not a fix.
 #[tauri::command]
-pub fn save_iris_token(app: AppHandle, token: String) -> Result<(), String> {
+pub fn save_iris_token(app: AppHandle, token: String, identity: Option<crate::accounts::Identity>) -> Result<(), String> {
     let token = token.trim();
     if token.is_empty() {
         return Err("Empty token".into());
     }
+    let identity = identity.unwrap_or_default();
 
     let home = dirs_next_home().ok_or("Could not resolve home directory")?;
+
+    // #189321: the key about to be replaced belongs to an account the person may want back.
+    // Keep it in ~/.iris/accounts.json before .env forgets it. A failure here is reported and
+    // does NOT block sign-in: losing the ability to switch back is bad, being unable to sign in
+    // at all is worse.
+    let old_key = crate::iris_env_value("IRIS_API_KEY");
+    let old_user_id = crate::iris_env_value("IRIS_USER_ID").and_then(|v| v.parse::<i64>().ok());
+    if let Err(e) = crate::accounts::record_sign_in(&home, old_key, old_user_id, token, &identity) {
+        eprintln!("Signed in, but the saved-accounts list was not updated: {e}");
+    }
+
     let dir = home.join(".iris").join("sdk");
     std::fs::create_dir_all(&dir).map_err(|e| format!("Could not create {dir:?}: {e}"))?;
     let path = dir.join(".env");
@@ -42,11 +54,16 @@ pub fn save_iris_token(app: AppHandle, token: String) -> Result<(), String> {
         .lines()
         .filter(|l| {
             let t = l.trim().strip_prefix("export ").unwrap_or(l.trim());
-            !t.starts_with("IRIS_API_KEY=")
+            // IRIS_USER_ID too: left in place it names the PREVIOUS account, and the engine
+            // trusts that line over fl-api (platform.ts resolveUserId).
+            !t.starts_with("IRIS_API_KEY=") && !t.starts_with("IRIS_USER_ID=")
         })
         .map(|l| l.to_string())
         .collect();
     lines.push(format!("IRIS_API_KEY={token}"));
+    if let Some(id) = identity.user_id {
+        lines.push(format!("IRIS_USER_ID={id}"));
+    }
 
     let mut out = lines.join("\n");
     out.push('\n');
