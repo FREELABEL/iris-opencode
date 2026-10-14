@@ -1992,6 +1992,16 @@
 "service": "fl-api"
 },
 {
+"method": "POST",
+"uri": "/api/v1/auth/google/desktop/exchange",
+"service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/auth/google/desktop/start",
+"service": "fl-api"
+},
+{
 "method": "GET",
 "uri": "/api/v1/auth/google/redirect",
 "service": "fl-api"
@@ -5257,6 +5267,11 @@
 "service": "iris-api"
 },
 {
+"method": "POST",
+"uri": "/api/v1/hooks/{}",
+"service": "iris-api"
+},
+{
 "method": "GET",
 "uri": "/api/v1/how-tos",
 "service": "iris-api"
@@ -6548,6 +6563,11 @@
 },
 {
 "method": "POST",
+"uri": "/api/v1/leads/{}/score",
+"service": "fl-api"
+},
+{
+"method": "POST",
 "uri": "/api/v1/leads/{}/send-stripe-invoice",
 "service": "fl-api"
 },
@@ -6775,6 +6795,56 @@
 "method": "POST",
 "uri": "/api/v1/magazine-issues/{}/publish",
 "service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/mailings",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/mailings",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/mailings/unsubscribe/{}/{}",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/mailings/unsubscribe/{}/{}",
+"service": "iris-api"
+},
+{
+"method": "DELETE",
+"uri": "/api/v1/mailings/{}",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/mailings/{}",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/mailings/{}/pause",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/mailings/{}/recipients",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/mailings/{}/send",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/mailings/{}/test",
+"service": "iris-api"
 },
 {
 "method": "POST",
@@ -7644,6 +7714,11 @@
 {
 "method": "DELETE",
 "uri": "/api/v1/okf/keys/{}",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/onboarding/claim",
 "service": "fl-api"
 },
 {
@@ -9313,6 +9388,11 @@
 },
 {
 "method": "GET",
+"uri": "/api/v1/public/heartbeat-status/{}",
+"service": "fl-api"
+},
+{
+"method": "GET",
 "uri": "/api/v1/public/models",
 "service": "iris-api"
 },
@@ -9350,6 +9430,16 @@
 "method": "GET",
 "uri": "/api/v1/public/opportunities/{}/bug-bounty/leaderboard",
 "service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/public/orbit/bodies",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/public/orbit/close-approaches",
+"service": "iris-api"
 },
 {
 "method": "POST",
@@ -10473,12 +10563,32 @@
 },
 {
 "method": "GET",
+"uri": "/api/v1/studio/spotify-claims",
+"service": "fl-api"
+},
+{
+"method": "GET",
 "uri": "/api/v1/studio/{}",
 "service": "fl-api"
 },
 {
 "method": "PUT",
 "uri": "/api/v1/studio/{}/settings",
+"service": "fl-api"
+},
+{
+"method": "DELETE",
+"uri": "/api/v1/studio/{}/spotify-claim",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/studio/{}/spotify-claim",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/studio/{}/spotify-claim/approve",
 "service": "fl-api"
 },
 {
@@ -12308,6 +12418,11 @@
 },
 {
 "method": "GET",
+"uri": "/api/v1/users/{}/bloqs/heartbeat-incidents",
+"service": "fl-api"
+},
+{
+"method": "GET",
 "uri": "/api/v1/users/{}/bloqs/job-executions/{}",
 "service": "fl-api"
 },
@@ -12399,6 +12514,11 @@
 {
 "method": "POST",
 "uri": "/api/v1/users/{}/bloqs/scheduled-jobs/{}/run",
+"service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/users/{}/bloqs/scheduled-jobs/{}/wakes",
 "service": "fl-api"
 },
 {
@@ -12739,6 +12859,26 @@
 {
 "method": "GET",
 "uri": "/api/v1/users/{}/heartbeat",
+"service": "fl-api"
+},
+{
+"method": "DELETE",
+"uri": "/api/v1/users/{}/heartbeat-status-page",
+"service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/users/{}/heartbeat-status-page",
+"service": "fl-api"
+},
+{
+"method": "PUT",
+"uri": "/api/v1/users/{}/heartbeat-status-page",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/users/{}/heartbeat-status-page/rotate",
 "service": "fl-api"
 },
 {
@@ -13613,6 +13753,11 @@
 },
 {
 "method": "POST",
+"uri": "/api/v6/anthropic/v1/messages",
+"service": "iris-api"
+},
+{
+"method": "POST",
 "uri": "/api/v6/bloqs/{}/announce",
 "service": "iris-api"
 },
@@ -13852,6 +13997,11 @@
 "service": "iris-api"
 },
 {
+"method": "POST",
+"uri": "/api/v6/compute/{}/exec",
+"service": "iris-api"
+},
+{
 "method": "GET",
 "uri": "/api/v6/diary",
 "service": "iris-api"
@@ -13983,6 +14133,11 @@
 },
 {
 "method": "GET",
+"uri": "/api/v6/memory/mine",
+"service": "iris-api"
+},
+{
+"method": "GET",
 "uri": "/api/v6/memory/search",
 "service": "iris-api"
 },
@@ -13994,6 +14149,11 @@
 {
 "method": "DELETE",
 "uri": "/api/v6/memory/{}",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/api/v6/memory/{}/confirm",
 "service": "iris-api"
 },
 {
@@ -14253,6 +14413,26 @@
 },
 {
 "method": "GET",
+"uri": "/api/v6/nodes/session-claims",
+"service": "iris-api"
+},
+{
+"method": "DELETE",
+"uri": "/api/v6/nodes/sessions/{}/claim",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/api/v6/nodes/sessions/{}/claim",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/api/v6/nodes/sessions/{}/suggestion",
+"service": "iris-api"
+},
+{
+"method": "GET",
 "uri": "/api/v6/nodes/tasks",
 "service": "iris-api"
 },
@@ -14264,6 +14444,11 @@
 {
 "method": "POST",
 "uri": "/api/v6/nodes/tasks/estimate-cost",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/api/v6/nodes/tasks/fanout",
 "service": "iris-api"
 },
 {
@@ -14279,6 +14464,36 @@
 {
 "method": "POST",
 "uri": "/api/v6/nodes/tools/execute",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/api/v6/nodes/triggers",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/api/v6/nodes/triggers",
+"service": "iris-api"
+},
+{
+"method": "DELETE",
+"uri": "/api/v6/nodes/triggers/{}",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/api/v6/nodes/tunnels",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/api/v6/nodes/tunnels",
+"service": "iris-api"
+},
+{
+"method": "DELETE",
+"uri": "/api/v6/nodes/tunnels/{}",
 "service": "iris-api"
 },
 {
@@ -15349,6 +15564,21 @@
 {
 "method": "GET",
 "uri": "/marketplace/{}",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/me/memory",
+"service": "iris-api"
+},
+{
+"method": "DELETE",
+"uri": "/me/memory/{}",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/me/memory/{}/confirm",
 "service": "iris-api"
 },
 {

@@ -567,6 +567,12 @@
       "purpose": "How to: connect a client's own Mailjet account and build lists, send email and draft campaigns through iris integrations exec."
     },
     {
+      "src": "how-to/mailing.md",
+      "dest": "how-to/mailing.md",
+      "managed": true,
+      "purpose": "How to: send one personal email to everyone on a list through your own Mailjet — iris mailing new → test → send → status/log, resuming a stopped send, and the etiquette for cold lists."
+    },
+    {
       "src": "how-to/agent-trust-and-approvals.md",
       "dest": "how-to/agent-trust-and-approvals.md",
       "managed": true,

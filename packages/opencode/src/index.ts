@@ -185,6 +185,7 @@ import { PlatformVoiceCommand } from "./cli/cmd/platform-voice"
 import { PlatformRecallCommand } from "./cli/cmd/platform-recall"
 import { PlatformPersonalityCommand } from "./cli/cmd/platform-personality"
 import { PlatformMailCommand } from "./cli/cmd/platform-mail"
+import { PlatformMailingCommand } from "./cli/cmd/platform-mailing"
 import { PlatformSendersCommand } from "./cli/cmd/platform-senders"
 import { PlatformImessageCommand } from "./cli/cmd/platform-imessage"
 import { PlatformWhatsappCommand } from "./cli/cmd/platform-whatsapp"
@@ -571,6 +572,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformRecallCommand))
   .command(reg(PlatformPersonalityCommand))
   .command(reg(PlatformMailCommand))
+  .command(reg(PlatformMailingCommand))
   .command(reg(PlatformSendersCommand))
   .command(reg(PlatformImessageCommand))
   .command(reg(PlatformWhatsappCommand))
