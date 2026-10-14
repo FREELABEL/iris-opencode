@@ -163,6 +163,10 @@ export function createPromptInputV2Attachments(
     }
     if (!plainText) return
     const text = plainText.includes("\r") ? plainText.replace(/\r\n?/g, "\n") : plainText
+    // A large paste is attached, not typed (#189434). Inserting it into the editor froze the app
+    // for longer the bigger it was (measured: 200 lines 0.6s, 1,000 lines 7.2s, 5,000 lines
+    // minutes). As an attachment it is held like a dropped .txt file (43ms) and sent in full.
+    if (largePaste(text) && (await add(pastedTextFile(text), true, target, true))) return
     const put = () => {
       if (input.addPart({ type: "text", content: text, start: 0, end: 0 })) return true
       input.focusEditor()
@@ -272,7 +276,19 @@ function cursorPosition(editor: HTMLElement) {
   return before.toString().replace(/\u200B/g, "").length
 }
 
-function largePaste(text: string) {
-  if (text.length >= 8000) return true
-  return text.split("\n").length - 1 >= 120
+/** Above this a paste becomes an attachment chip (#189434). Inline, 40 lines cost ~0.1s and 200 lines 0.6s. */
+export const LARGE_PASTE_CHARS = 4000
+export const LARGE_PASTE_LINES = 80
+
+export function largePaste(text: string) {
+  if (text.length >= LARGE_PASTE_CHARS) return true
+  let lines = 1
+  for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10 && ++lines >= LARGE_PASTE_LINES) return true
+  return false
+}
+
+/** The attachment a large paste becomes. The name is what the chip shows. */
+export function pastedTextFile(text: string) {
+  const lines = text.length === 0 ? 0 : text.split("\n").length
+  return new File([text], `Pasted text · ${lines} ${lines === 1 ? "line" : "lines"}.txt`, { type: "text/plain" })
 }
