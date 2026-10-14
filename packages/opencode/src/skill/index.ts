@@ -1,5 +1,6 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import path from "path"
+import { statSync } from "fs"
 import { Effect, Layer, Context, Schema } from "effect"
 import { NamedError } from "@opencode-ai/core/util/error"
 import type { Agent } from "@/agent/agent"
@@ -87,11 +88,34 @@ type State = {
 type DiscoveryState = {
   matches: string[]
   dirs: string[]
+  /** Folders whose contents decide the skill set, and each SKILL.md found — see `fingerprint`. */
+  watch: string[]
+  fingerprint: string
 }
 
 type ScanState = {
   matches: Set<string>
   dirs: Set<string>
+  watch: Set<string>
+}
+
+/**
+ * What the skill set was built from: the mtime of every scanned skills folder (a new skill is a new
+ * subfolder, which changes it) and of every SKILL.md found (an update rewrites it). Discovery used
+ * to run once per open project and never again, so a playbook installed while the app was open —
+ * from the Marketplace card or by the agent running `iris playbook install` — stayed invisible
+ * until a restart (#189424). Comparing this costs one stat per skill per turn.
+ */
+export function fingerprint(paths: Iterable<string>): string {
+  const parts: string[] = []
+  for (const p of paths) {
+    let m = -1
+    try {
+      m = statSync(p).mtimeMs
+    } catch {}
+    parts.push(`${p}\0${m}`)
+  }
+  return parts.join("\n")
 }
 
 export interface Interface {
@@ -102,7 +126,7 @@ export interface Interface {
   readonly available: (agent?: Agent.Info) => Effect.Effect<Info[]>
 }
 
-const add = Effect.fnUntraced(function* (state: State, match: string, events: EventV2Bridge.Service["Service"]) {
+const parse = Effect.fnUntraced(function* (match: string, events: EventV2Bridge.Service["Service"]) {
   const md = yield* Effect.tryPromise({
     try: () => ConfigMarkdown.parse(match),
     catch: (err) => err,
@@ -118,6 +142,14 @@ const add = Effect.fnUntraced(function* (state: State, match: string, events: Ev
     ),
   )
 
+  return md
+})
+
+const add = Effect.fnUntraced(function* (
+  state: State,
+  match: string,
+  md: { data: unknown; content: string } | undefined,
+) {
   if (!md) return
 
   if (!isSkillFrontmatter(md.data)) return
@@ -164,6 +196,11 @@ const scan = Effect.fnUntraced(function* (
     }),
   )
 
+  // The folder(s) a new skill would appear in. Not `root` itself for ~/.claude: that changes
+  // whenever Claude Code writes its own files, and would rescan on every turn for nothing.
+  if (pattern === EXTERNAL_SKILL_PATTERN) state.watch.add(path.join(root, "skills"))
+  else if (pattern === OPENCODE_SKILL_PATTERN) for (const d of ["skill", "skills"]) state.watch.add(path.join(root, d))
+  else state.watch.add(root)
   for (const match of matches) {
     state.matches.add(match)
     state.dirs.add(path.dirname(match))
@@ -180,7 +217,7 @@ const discoverSkills = Effect.fnUntraced(function* (
   directory: string,
   worktree: string,
 ) {
-  const state: ScanState = { matches: new Set(), dirs: new Set() }
+  const state: ScanState = { matches: new Set(), dirs: new Set(), watch: new Set() }
 
   const externalDirs: string[] = []
   if (!disableExternalSkills) {
@@ -193,9 +230,12 @@ const discoverSkills = Effect.fnUntraced(function* (
       yield* scan(state, root, EXTERNAL_SKILL_PATTERN, { dot: true, scope: "global" })
     }
 
-    const upDirs = yield* fsys
+    // Outermost first, so the folder nearest the session is registered last and wins a name clash.
+    const upDirs = (yield* fsys
       .up({ targets: externalDirs, start: directory, stop: worktree })
-      .pipe(Effect.catch(() => Effect.succeed([] as string[])))
+      .pipe(Effect.catch(() => Effect.succeed([] as string[])))).toSorted(
+      (a, b) => path.dirname(a).length - path.dirname(b).length,
+    )
 
     for (const root of upDirs) {
       yield* scan(state, root, EXTERNAL_SKILL_PATTERN, { dot: true, scope: "project" })
@@ -226,9 +266,12 @@ const discoverSkills = Effect.fnUntraced(function* (
     }
   }
 
+  const watch = [...state.watch, ...state.matches]
   return {
     matches: Array.from(state.matches),
     dirs: Array.from(state.dirs),
+    watch,
+    fingerprint: fingerprint(watch),
   }
 })
 
@@ -237,10 +280,14 @@ const loadSkills = Effect.fnUntraced(function* (
   discovered: DiscoveryState,
   events: EventV2Bridge.Service["Service"],
 ) {
-  yield* Effect.forEach(discovered.matches, (match) => add(state, match, events), {
+  // Parse in parallel, REGISTER in discovery order. Registering as each parse finished meant a
+  // name found in two places went to whichever file was read last — measured on IRIS app 1.18.117:
+  // four starts in the same folder, four different winners. Now later sources win, every time:
+  // built-in < ~/.claude < ~/.agents < project (outermost → nearest) < config dirs < paths < urls.
+  const parsed = yield* Effect.forEach(discovered.matches, (match) => parse(match, events), {
     concurrency: "unbounded",
-    discard: true,
   })
+  for (let i = 0; i < discovered.matches.length; i++) yield* add(state, discovered.matches[i], parsed[i])
 
   yield* Effect.logInfo("init", { count: Object.keys(state.skills).length })
 })
@@ -286,29 +333,41 @@ const layer = Layer.effect(
       }),
     )
 
+    // Rebuild when anything discovery read has changed on disk since (#189424).
+    const current = Effect.fn("Skill.current")(function* () {
+      const d = yield* InstanceState.get(discovered)
+      if (fingerprint(d.watch) !== d.fingerprint) {
+        yield* InstanceState.invalidate(discovered)
+        yield* InstanceState.invalidate(state)
+        yield* Effect.logInfo("skills changed on disk — rescanned")
+      }
+      return yield* InstanceState.get(state)
+    })
+
     const get = Effect.fn("Skill.get")(function* (name: string) {
-      const s = yield* InstanceState.get(state)
+      const s = yield* current()
       return s.skills[name]
     })
 
     const require = Effect.fn("Skill.require")(function* (name: string) {
-      const s = yield* InstanceState.get(state)
+      const s = yield* current()
       const info = s.skills[name]
       if (info) return info
       return yield* new NotFoundError({ name, available: Object.keys(s.skills).toSorted() })
     })
 
     const all = Effect.fn("Skill.all")(function* () {
-      const s = yield* InstanceState.get(state)
+      const s = yield* current()
       return Object.values(s.skills)
     })
 
     const dirs = Effect.fn("Skill.dirs")(function* () {
+      yield* current()
       return (yield* InstanceState.get(discovered)).dirs
     })
 
     const available = Effect.fn("Skill.available")(function* (agent?: Agent.Info) {
-      const s = yield* InstanceState.get(state)
+      const s = yield* current()
       const list = Object.values(s.skills).toSorted((a, b) => a.name.localeCompare(b.name))
       if (!agent) return list
       return list.filter((skill) => Permission.evaluate("skill", skill.name, agent.permission).action !== "deny")

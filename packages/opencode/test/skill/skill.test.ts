@@ -582,4 +582,124 @@ description: A skill in the .opencode/skills directory.
       { git: true },
     ),
   )
+  // #189424 — a playbook installed while the app is open (Marketplace card, or the agent running
+  // `iris playbook install`) must be offered on the NEXT turn, not after a restart.
+  it.live("picks up a skill installed after the first lookup, without a restart", () =>
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const skill = yield* Skill.Service
+          const before = (yield* skill.all()).filter((s) => s.location !== "<built-in>")
+          expect(before.length).toBe(0)
+
+          yield* Effect.promise(() =>
+            Bun.write(
+              path.join(dir, ".claude", "skills", "late-skill", "SKILL.md"),
+              `---\nname: late-skill\ndescription: Installed mid-session.\n---\n\nv1\n`,
+            ),
+          )
+          const after = yield* skill.available()
+          expect(after.map((s) => s.name)).toContain("late-skill")
+          const loaded = yield* skill.require("late-skill")
+          expect(loaded.content).toContain("v1")
+        }),
+      { git: true },
+    ),
+  )
+
+  it.live("reloads a skill whose SKILL.md was rewritten (install --force)", () =>
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const file = path.join(dir, ".claude", "skills", "upd-skill", "SKILL.md")
+          yield* Effect.promise(() => Bun.write(file, `---\nname: upd-skill\ndescription: d\n---\n\nold body\n`))
+          const skill = yield* Skill.Service
+          expect((yield* skill.require("upd-skill")).content).toContain("old body")
+          yield* Effect.promise(async () => {
+            await Bun.sleep(20)
+            const tmp = file + ".tmp"
+            await Bun.write(tmp, `---\nname: upd-skill\ndescription: d\n---\n\nnew body\n`)
+            await fs.rename(tmp, file)
+          })
+          expect((yield* skill.require("upd-skill")).content).toContain("new body")
+        }),
+      { git: true },
+    ),
+  )
+
+  it.live("forgets a skill that was removed from disk", () =>
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const d = path.join(dir, ".claude", "skills", "gone-skill")
+          yield* Effect.promise(() => Bun.write(path.join(d, "SKILL.md"), `---\nname: gone-skill\ndescription: d\n---\nx\n`))
+          const skill = yield* Skill.Service
+          expect(yield* skill.get("gone-skill")).toBeDefined()
+          yield* Effect.promise(() => fs.rm(d, { recursive: true, force: true }))
+          expect(yield* skill.get("gone-skill")).toBeUndefined()
+        }),
+      { git: true },
+    ),
+  )
+
+  // A name in two places used to go to whichever file finished PARSING last. Global copies are
+  // made large here so that, under the old code, they finish last and win — the project copy
+  // must win anyway, for every name.
+  it.live("the project copy of a skill beats the ~/.claude/skills copy, deterministically", () =>
+    Effect.gen(function* () {
+      const home = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (t) => Effect.promise(() => t[Symbol.asyncDispose]()),
+      )
+      const proj = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir({ git: true })),
+        (t) => Effect.promise(() => t[Symbol.asyncDispose]()),
+      )
+      const names = Array.from({ length: 24 }, (_, i) => `dup-${i}`)
+      const big = "padding line for a slow parse\n".repeat(60_000)
+      yield* Effect.promise(() =>
+        Promise.all(
+          names.flatMap((n) => [
+            Bun.write(path.join(home.path, ".claude", "skills", n, "SKILL.md"), `---\nname: ${n}\ndescription: global\n---\n${big}`),
+            Bun.write(path.join(proj.path, ".claude", "skills", n, "SKILL.md"), `---\nname: ${n}\ndescription: project\n---\nsmall\n`),
+          ]),
+        ),
+      )
+      yield* withHome(
+        home.path,
+        Effect.gen(function* () {
+          const skill = yield* Skill.Service
+          const list = (yield* skill.all()).filter((s) => s.name.startsWith("dup-"))
+          expect(list.length).toBe(names.length)
+          expect(list.filter((s) => s.description !== "project").map((s) => s.name)).toEqual([])
+        }).pipe(provideInstance(proj.path)),
+      )
+    }),
+  )
+
+  it.live("in nested projects, the .claude/skills nearest the session wins", () =>
+    Effect.gen(function* () {
+      const proj = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir({ git: true })),
+        (t) => Effect.promise(() => t[Symbol.asyncDispose]()),
+      )
+      const sub = path.join(proj.path, "packages", "app")
+      const big = "padding line for a slow parse\n".repeat(60_000)
+      const names = Array.from({ length: 12 }, (_, i) => `nest-${i}`)
+      yield* Effect.promise(() =>
+        Promise.all(
+          names.flatMap((n) => [
+            Bun.write(path.join(proj.path, ".claude", "skills", n, "SKILL.md"), `---\nname: ${n}\ndescription: root\n---\n${big}`),
+            Bun.write(path.join(sub, ".claude", "skills", n, "SKILL.md"), `---\nname: ${n}\ndescription: nearest\n---\nsmall\n`),
+          ]),
+        ),
+      )
+      yield* Effect.gen(function* () {
+        const skill = yield* Skill.Service
+        const list = (yield* skill.all()).filter((s) => s.name.startsWith("nest-"))
+        expect(list.length).toBe(names.length)
+        expect(list.filter((s) => s.description !== "nearest").map((s) => s.name)).toEqual([])
+      }).pipe(provideInstance(sub))
+    }),
+  )
 })
