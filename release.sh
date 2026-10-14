@@ -264,7 +264,12 @@ if git ls-remote --tags "https://github.com/$REPO.git" "refs/tags/v$TARGET" 2>/d
   echo "  Undo locally:  git tag -d v$TARGET && git reset --hard HEAD~1   (only if HEAD is still your bump)"
   exit 1
 fi
-git push origin main --tags
+# Push the branch and ONLY this release's tag. `--tags` pushed every local tag too, and
+# GitHub does not fire workflows for a push that creates more than three tags at once:
+# v1.3.346 went up alongside ~200 stale tags and its release build never started
+# (2026-10-14; it had to be dispatched by hand).
+git push origin main
+git push origin "refs/tags/v$TARGET"
 echo "Pushed to origin main with tag v$TARGET"
 
 # 4. Wait for CI
