@@ -1710,10 +1710,39 @@ const FlushCommand = cmd({
   },
 })
 
+/**
+ * `iris bug comment <id> "<text>"` (#189449). The append path already existed as
+ * `bug update <id> --note`, and nobody found it: the obvious verb is "comment", and the
+ * option sat under a command named for changing fields. Epics that attach existing bugs
+ * ("attach, don't duplicate") had no visible way to tell the bug it was picked up, so
+ * every cross-link was one-way. Same endpoint, same write verification — just a name
+ * people reach for.
+ */
+const CommentCommand = cmd({
+  command: "comment <id> <text..>",
+  aliases: ["note"],
+  describe: "add a note to a bug — e.g. link the epic that picked it up (status and title untouched)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "bug item ID", type: "number", demandOption: true })
+      .positional("text", { describe: "the note", type: "string", array: true, demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .example('$0 bug comment 186544 "Picked up by epic #189448"', "point a bug at the plan that closes it"),
+  async handler(args) {
+    const text = ([] as string[]).concat((args.text as any) ?? []).join(" ").trim()
+    if (!text) {
+      console.error('\n  Nothing to add. Usage: iris bug comment <id> "your note"\n')
+      process.exitCode = 1
+      return
+    }
+    await (UpdateCommand as any).handler({ ...args, description: text })
+  },
+})
+
 export const PlatformBugCommand = cmd({
   command: "bug",
   aliases: ["bugs", "report"],
   describe: "report bugs and view your submissions",
-  builder: (yargs) => yargs.command(ReportCommand).command(ListCommand).command(ShowCommand).command(VerifyCommand).command(CloseCommand).command(UpdateCommand).command(FlushCommand).demandCommand(),
+  builder: (yargs) => yargs.command(ReportCommand).command(ListCommand).command(ShowCommand).command(VerifyCommand).command(CloseCommand).command(UpdateCommand).command(CommentCommand).command(FlushCommand).demandCommand(),
   async handler() {},
 })
