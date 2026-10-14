@@ -1166,36 +1166,30 @@ export function ContextToolGroup(props: {
               )
               return (
                 <div data-slot="context-tool-group-item" data-error={error() ? "" : undefined}>
-                  <Show when={output()} fallback={body()}>
-                    {/* A shell command's output opens on a second click, as the ticket asks. */}
+                  {/* A command opens on a second click: its output, and for a failed one the Report link. */}
+                  <Show when={output() || (error() && data.reportCommand)} fallback={body()}>
                     <button type="button" data-slot="context-tool-group-toggle" aria-expanded={isShown()} onClick={toggle}>
                       {body()}
                     </button>
                   </Show>
-                  <Show when={error()}>
-                    {(e) => (
-                      <span data-slot="context-tool-group-error">
-                        {e()}
-                        {/* #189435: the user can send this one to us. Nothing is sent without the press. */}
-                        <Show when={data.reportCommand}>
-                          {(report) => (
-                            <button
-                              type="button"
-                              data-slot="context-tool-group-report"
-                              onClick={() => {
-                                const r = commandReportOf(partAccessor())
-                                if (r) report()(r)
-                              }}
-                            >
-                              Report
-                            </button>
-                          )}
-                        </Show>
-                      </span>
-                    )}
-                  </Show>
-                  <Show when={isShown() && output()}>
-                    {(o) => <pre data-slot="context-tool-group-output">{o()}</pre>}
+                  <Show when={error()}>{(e) => <span data-slot="context-tool-group-error">{e()}</span>}</Show>
+                  <Show when={isShown()}>
+                    <Show when={output()}>{(o) => <pre data-slot="context-tool-group-output">{o()}</pre>}</Show>
+                    {/* #189435: only once the person has opened the command, so the row itself stays quiet. */}
+                    <Show when={error() ? data.reportCommand : undefined}>
+                      {(report) => (
+                        <button
+                          type="button"
+                          data-slot="context-tool-group-report"
+                          onClick={() => {
+                            const r = commandReportOf(partAccessor())
+                            if (r) report()(r)
+                          }}
+                        >
+                          Report this
+                        </button>
+                      )}
+                    </Show>
                   </Show>
                 </div>
               )
