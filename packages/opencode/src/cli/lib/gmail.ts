@@ -255,6 +255,8 @@ export async function listMessages(
   limit = 50,
   opts: { pageToken?: string | null; all?: boolean } = {},
 ): Promise<GmailMessage[]> {
+  // --limit abc arrives as NaN; Math.min(NaN) is NaN and the backend answered "no messages" (#189399).
+  if (!opts.all && !(Number.isFinite(limit) && limit > 0)) throw new Error(`--limit must be a positive number (got "${limit}")`)
   const want = opts.all ? ALL_CAP : Math.max(1, Math.min(limit, opts.all ? ALL_CAP : PAGE_MAX))
   const out: GmailMessage[] = []
   let token: string | null = opts.pageToken ?? null
@@ -281,7 +283,14 @@ export async function getMessageById(_token: string, messageId: string): Promise
   try {
     const data = await gmailExec("get_email", { message_id: messageId })
     const e = data?.email ?? data
-    if (!e || typeof e !== "object" || !(e.id || e.messageId)) return null
+    if (!e || typeof e !== "object") return null
+    // A real message with no id is the backend's bug, not a missing message (#189389: Composio's
+    // `messageId` was read as `id`, so every message came back id:""). We asked for this id; if
+    // the server returned a message with content, it is that message.
+    if (!(e.id || e.messageId)) {
+      if (!(e.from || e.subject || e.body)) return null
+      e.id = messageId
+    }
     const labels: string[] = Array.isArray(e.labels) ? e.labels : []
     return {
       id: str(e.id ?? e.messageId),
@@ -298,8 +307,12 @@ export async function getMessageById(_token: string, messageId: string): Promise
       ...(e.integration_id ? { integration_id: Number(e.integration_id) } : {}),
       ...(Array.isArray(e.attachments) ? { attachments: e.attachments.map((a: any) => ({ filename: str(a.filename), type: str(a.type), size: Number(a.size ?? 0), attachment_id: a.attachment_id ?? null })) } : {}),
     } as GmailMessage
-  } catch {
-    return null
+  } catch (err: any) {
+    // A failed request is NOT "not found". Swallowing it here printed "Message <id> not found"
+    // for every id on a client machine, and her agent spent ten calls varying flags (#189385).
+    // Gmail's own 404 is the only failure that means not-found; everything else propagates.
+    if (/\b404\b|not\s*found|Requested entity was not found/i.test(String(err?.message ?? ""))) return null
+    throw err
   }
 }
 
