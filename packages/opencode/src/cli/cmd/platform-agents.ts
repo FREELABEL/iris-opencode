@@ -15,7 +15,8 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, unlink
 import { join } from "path"
 import { firstArray } from "../../util/array"
 import { Global } from "../../global"
-import { planDesktopSync } from "../lib/desktop-agents"
+import { DEFAULT_MAX_DESKTOP_AGENTS, planDesktopSync, selectRoster } from "../lib/desktop-agents"
+import { installHome } from "../../skill/install-location"
 import { AUTONOMY_CHOICES, AUTONOMY_LEVELS, CLI_DEFAULT_AUTONOMY, describeAutonomy, parseAutonomy } from "./agent-autonomy"
 
 /**
@@ -1887,6 +1888,9 @@ const AgentsDesktopSyncCommand = cmd({
   builder: (yargs) =>
     yargs
       .option("agent", { alias: "a", describe: "only these agent IDs (comma-separated); deletes nothing", type: "string" })
+      .option("max", { describe: `how many agents the picker holds (0 = no limit); pinned agents always count`, type: "number", default: DEFAULT_MAX_DESKTOP_AGENTS })
+      .option("pin", { describe: "always include these agent IDs (comma-separated) — remembered for future syncs", type: "string" })
+      .option("unpin", { describe: "stop always including these agent IDs (comma-separated)", type: "string" })
       .option("dir", { describe: "agents directory (default: the opencode config dir)", type: "string" })
       .option("dry-run", { describe: "show what would change, write nothing", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
@@ -1910,7 +1914,21 @@ const AgentsDesktopSyncCommand = cmd({
     if (existsSync(dir)) {
       for (const f of readdirSync(dir)) if (f.endsWith(".md")) existing.set(f, readFileSync(join(dir, f), "utf8"))
     }
-    const plan = planDesktopSync(agents, existing, only)
+    // Pins live with the user, not the account, so an automatic sync on Desktop launch keeps them.
+    const pinsFile = join(installHome(), ".iris", "desktop-agents.json")
+    const ids = (v: unknown) => String(v ?? "").split(",").map((x) => Number(x.trim())).filter((n) => Number.isInteger(n) && n > 0)
+    let pinned = new Set<number>()
+    try { pinned = new Set(ids((JSON.parse(readFileSync(pinsFile, "utf8")).pinned ?? []).join(","))) } catch {}
+    if (args.pin || args.unpin) {
+      for (const n of ids(args.pin)) pinned.add(n)
+      for (const n of ids(args.unpin)) pinned.delete(n)
+      if (!args["dry-run"]) {
+        mkdirSync(join(installHome(), ".iris"), { recursive: true })
+        writeFileSync(pinsFile, JSON.stringify({ pinned: [...pinned].sort((a, b) => a - b) }, null, 2) + "\n")
+      }
+    }
+    const roster = only ? undefined : selectRoster(agents, args.max ?? DEFAULT_MAX_DESKTOP_AGENTS, pinned)
+    const plan = planDesktopSync(agents, existing, only, roster)
 
     if (!args["dry-run"]) {
       mkdirSync(dir, { recursive: true })
@@ -1926,6 +1944,8 @@ const AgentsDesktopSyncCommand = cmd({
         written: plan.write.map((w) => ({ file: w.file, id: w.id, name: w.name })),
         removed: plan.remove,
         hand_written_skipped: plan.handWritten,
+        picker_size: roster?.size ?? null,
+        pinned: [...pinned],
         restart_required: changed > 0 && !args["dry-run"],
       })
       return

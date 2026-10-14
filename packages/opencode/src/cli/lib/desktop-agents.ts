@@ -28,6 +28,28 @@ export const DESKTOP_AGENT_PREFIX = "iris-"
 /** Irreversible commands confirm first. Everything else — including reading and editing local data — does not. */
 export const ASK_FIRST = ["rm -rf *", "git push *", "git reset --hard*"] as const
 
+/**
+ * A picker of 246 agents is not a picker. Accounts at or under this many discoverable agents
+ * get all of them; larger accounts get this many, most recently active first, plus every
+ * agent the person pinned. Decided 2026-10-14 (epic #189448, S1).
+ */
+export const DEFAULT_MAX_DESKTOP_AGENTS = 25
+
+/** Which agent ids belong in the Desktop picker. Pins always make it; recency fills the rest. */
+export function selectRoster(agents: RawAgent[], max = DEFAULT_MAX_DESKTOP_AGENTS, pinned: Set<number> = new Set()): Set<number> {
+  const pool = agents.filter(isDiscoverable)
+  if (max <= 0 || pool.length <= max) return new Set(pool.map((a) => a.id))
+  const ids = new Set(pool.filter((a) => pinned.has(a.id)).map((a) => a.id))
+  const recent = pool
+    .filter((a) => !ids.has(a.id))
+    .sort((x, y) => String(y.last_active_at ?? "").localeCompare(String(x.last_active_at ?? "")) || x.id - y.id)
+  for (const a of recent) {
+    if (ids.size >= max) break
+    ids.add(a.id)
+  }
+  return ids
+}
+
 export function slugify(name: string): string {
   return name
     .normalize("NFKD")
@@ -107,8 +129,15 @@ export type SyncPlan = {
  * Pure: given the account's agents and what is already in the dir, decide what to do.
  * `existing` maps file name → content for every `.md` file in the agents dir.
  */
-export function planDesktopSync(agents: RawAgent[], existing: Map<string, string>, only?: Set<number>): SyncPlan {
-  const pool = agents.filter(isDiscoverable).filter((a) => !only || only.has(a.id))
+export function planDesktopSync(
+  agents: RawAgent[],
+  existing: Map<string, string>,
+  only?: Set<number>,
+  roster?: Set<number>,
+): SyncPlan {
+  // `only` (--agent) is additive and deletes nothing. `roster` is the WHOLE intended picker:
+  // a generated file for an agent outside it is removed, which is how the cap takes effect.
+  const pool = agents.filter(isDiscoverable).filter((a) => (only ? only.has(a.id) : !roster || roster.has(a.id)))
   const stems = fileStems(pool)
   const plan: SyncPlan = { write: [], remove: [], handWritten: [] }
   const wanted = new Set<string>()

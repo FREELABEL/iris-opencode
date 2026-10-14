@@ -9,6 +9,7 @@ import {
   fileStems,
   planDesktopSync,
   renderDesktopAgent,
+  selectRoster,
   slugify,
 } from "../../src/cli/lib/desktop-agents"
 
@@ -109,4 +110,45 @@ test("file names are stable, safe and unique", () => {
     { id: 3, name: "日本" },
   ])
   expect([...stems.values()]).toEqual(["iris-sales-1", "iris-sales-2", "iris-agent-3"])
+})
+
+describe("the picker cap (epic #189448 S1)", () => {
+  const many = Array.from({ length: 40 }, (_, i) => ({
+    id: i + 1,
+    name: `Agent ${i + 1}`,
+    last_active_at: `2026-10-${String((i % 28) + 1).padStart(2, "0")}T00:00:00Z`,
+  }))
+
+  test("a small account gets every agent", () => {
+    expect(selectRoster(many.slice(0, 10)).size).toBe(10)
+  })
+
+  test("a large account gets 25, most recently active first", () => {
+    const r = selectRoster(many)
+    expect(r.size).toBe(25)
+    // day 28 is the most recent; agent 28 must be in, the oldest-day agents must not
+    expect(r.has(28)).toBe(true)
+    expect(r.has(1)).toBe(false)
+  })
+
+  test("pins always make it, even when old", () => {
+    const r = selectRoster(many, 25, new Set([1, 2]))
+    expect(r.has(1) && r.has(2)).toBe(true)
+    expect(r.size).toBe(25)
+  })
+
+  test("0 means no cap", () => {
+    expect(selectRoster(many, 0).size).toBe(40)
+  })
+
+  test("an agent the cap drops loses its generated file, never a hand-written one", () => {
+    const existing = new Map([
+      ["iris-agent-1.md", renderDesktopAgent(many[0])],
+      ["iris-agent-2.md", "---\ndescription: mine\n---\nx"],
+    ])
+    const plan = planDesktopSync(many, existing, undefined, selectRoster(many))
+    expect(plan.remove).toContain("iris-agent-1.md")
+    expect(plan.remove).not.toContain("iris-agent-2.md")
+    expect(plan.write.length).toBe(25)
+  })
 })
