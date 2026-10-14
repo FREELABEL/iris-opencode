@@ -298,8 +298,12 @@ export async function getMessageById(_token: string, messageId: string): Promise
       ...(e.integration_id ? { integration_id: Number(e.integration_id) } : {}),
       ...(Array.isArray(e.attachments) ? { attachments: e.attachments.map((a: any) => ({ filename: str(a.filename), type: str(a.type), size: Number(a.size ?? 0), attachment_id: a.attachment_id ?? null })) } : {}),
     } as GmailMessage
-  } catch {
-    return null
+  } catch (err: any) {
+    // A failed request is NOT "not found". Swallowing it here printed "Message <id> not found"
+    // for every id on a client machine, and her agent spent ten calls varying flags (#189385).
+    // Gmail's own 404 is the only failure that means not-found; everything else propagates.
+    if (/\b404\b|not\s*found|Requested entity was not found/i.test(String(err?.message ?? ""))) return null
+    throw err
   }
 }
 
