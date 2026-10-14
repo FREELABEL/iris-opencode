@@ -1883,7 +1883,7 @@ const AgentsInboxCommand = cmd({
 const AgentsDesktopSyncCommand = cmd({
   command: "desktop-sync",
   aliases: ["sync-desktop"],
-  describe: "make your IRIS agents selectable in IRIS Desktop / the TUI (writes opencode agent files)",
+  describe: "put your IRIS agents in the IRIS Desktop agent picker, with full use of your machine",
   builder: (yargs) =>
     yargs
       .option("agent", { alias: "a", describe: "only these agent IDs (comma-separated); deletes nothing", type: "string" })

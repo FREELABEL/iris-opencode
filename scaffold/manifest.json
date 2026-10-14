@@ -369,6 +369,12 @@
       "purpose": "Pulse from inside IRIS Desktop chat — ask where a topic stands (commits, diary, files, sessions, tasks, mail) or how a contact is doing, without leaving the conversation."
     },
     {
+      "src": "how-to/desktop-agents.md",
+      "dest": "how-to/desktop-agents.md",
+      "managed": true,
+      "purpose": "Put your IRIS agents in the IRIS Desktop agent picker with iris agents desktop-sync — full local tools, facts still from IRIS; restart to see them."
+    },
+    {
       "src": "how-to/remote-support-a-family-pc.md",
       "dest": "how-to/remote-support-a-family-pc.md",
       "managed": true,
