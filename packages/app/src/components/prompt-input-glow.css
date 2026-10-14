@@ -185,3 +185,96 @@
   position: relative;
   z-index: 2;
 }
+
+/* The chip is a button now (#189437): it opens the list of what is running. */
+button.iris-glow__chip {
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+button.iris-glow__chip:hover,
+button.iris-glow__chip[data-expanded] {
+  color: var(--v2-text-text-base, inherit);
+  background: var(--v2-overlay-simple-overlay-hover, rgba(128, 128, 128, 0.12));
+}
+button.iris-glow__chip:focus-visible {
+  outline: 2px solid var(--v2-border-border-focus, #3b82f6);
+  outline-offset: 2px;
+}
+
+/* The list (#189437). Rows after upstream 2.0's running menu: dot, name, a muted line, ✕ on hover. */
+.iris-bg-menu {
+  width: 280px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.iris-bg-menu__head {
+  padding: 6px 10px 4px;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--v2-text-text-faint, #8a8394);
+}
+.iris-bg-menu__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.iris-bg-menu__dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #3b82f6;
+  animation: iris-glow-breathe 2.4s ease-in-out infinite;
+}
+.iris-bg-menu__dot[data-retry] {
+  background: #f59e0b;
+}
+.iris-bg-menu__text {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+}
+.iris-bg-menu__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 530;
+}
+.iris-bg-menu__sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--v2-text-text-muted, #8a8394);
+}
+.iris-bg-menu__stop {
+  display: none;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  color: var(--v2-icon-icon-muted, currentColor);
+}
+.iris-bg-menu__stop:hover {
+  background: var(--v2-overlay-simple-overlay-hover, rgba(128, 128, 128, 0.12));
+  color: var(--v2-text-text-base, inherit);
+}
+.iris-bg-menu__row:hover .iris-bg-menu__stop,
+.iris-bg-menu__row[data-highlighted] .iris-bg-menu__stop {
+  display: inline-flex;
+}
+@media (hover: none) {
+  .iris-bg-menu__stop {
+    display: inline-flex;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .iris-bg-menu__dot {
+    animation: none;
+  }
+}
