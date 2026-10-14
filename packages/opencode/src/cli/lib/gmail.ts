@@ -255,6 +255,8 @@ export async function listMessages(
   limit = 50,
   opts: { pageToken?: string | null; all?: boolean } = {},
 ): Promise<GmailMessage[]> {
+  // --limit abc arrives as NaN; Math.min(NaN) is NaN and the backend answered "no messages" (#189399).
+  if (!opts.all && !(Number.isFinite(limit) && limit > 0)) throw new Error(`--limit must be a positive number (got "${limit}")`)
   const want = opts.all ? ALL_CAP : Math.max(1, Math.min(limit, opts.all ? ALL_CAP : PAGE_MAX))
   const out: GmailMessage[] = []
   let token: string | null = opts.pageToken ?? null

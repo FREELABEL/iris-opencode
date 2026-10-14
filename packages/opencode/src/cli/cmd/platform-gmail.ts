@@ -17,7 +17,7 @@ async function requireToken(): Promise<string | null> {
     // NOT list-connected: it reads a store that cannot see Composio-backed connections, so
     // it will happily confirm "nothing connected" for a working account and send people into
     // a reconnect loop. Point at the call that proves it either way.
-    prompts.log.info(dim("Verify by using it:  iris integrations exec gmail fetch_emails max_results=5"))
+    prompts.log.info(dim("Verify by using it:  iris integrations exec gmail read_emails max_results=5"))
   }
   return token
 }
@@ -60,6 +60,8 @@ const GmailInboxCommand = cmd({
 
       if (sp) sp.stop(`${messages.length} message(s)`)
 
+      // --json with nothing found is an empty array, not prose (#189395).
+      if (!messages.length && args.json) { await writeJson([]); return }
       if (!messages.length) {
         prompts.log.info(`No messages matching "${args.query}"`)
         printMailboxLine()
@@ -76,6 +78,8 @@ const GmailInboxCommand = cmd({
         const date = formatDate(msg.date)
         console.log(`  ${unread} ${bold(from.padEnd(20).slice(0, 20))}  ${msg.subject.slice(0, 50)}  ${dim(date)}`)
         if (msg.snippet) console.log(`    ${dim(msg.snippet.slice(0, 80))}`)
+        // The outro says "iris gmail read <message-id>" — so print the id (#189393).
+        console.log(`    ${dim(`id:${msg.id}`)}`)
       }
       printDivider()
       printMailboxLine()
@@ -187,6 +191,8 @@ const GmailSearchCommand = cmd({
 
       if (sp) sp.stop(`${messages.length} result(s)`)
 
+      // --json with nothing found is an empty array, not prose (#189395).
+      if (!messages.length && args.json) { await writeJson([]); return }
       if (!messages.length) {
         prompts.log.info(`No messages matching "${args.query}"`)
         printMailboxLine()
