@@ -13,6 +13,9 @@ import { tmpdir } from "os"
 import { join } from "path"
 
 const CLI = join(import.meta.dir, "../src/index.ts")
+// The CLI runs IN a throwaway folder, so bunfig.toml (the JSX preload) must be named explicitly —
+// bun reads it from the cwd, and without it the TUI import fails before any command runs.
+const BUNFIG = join(import.meta.dir, "../bunfig.toml")
 const tmp = mkdtempSync(join(tmpdir(), "pb-skill-cli-"))
 const HOME = join(tmp, "home")
 const WORK = join(tmp, "work") // not a git repo → installs go global
@@ -48,7 +51,7 @@ afterAll(() => {
 })
 
 async function iris(args: string[], cwd = WORK) {
-  const proc = Bun.spawn(["bun", "run", CLI, ...args], {
+  const proc = Bun.spawn(["bun", `--config=${BUNFIG}`, "run", CLI, ...args], {
     cwd,
     env: {
       ...process.env,
