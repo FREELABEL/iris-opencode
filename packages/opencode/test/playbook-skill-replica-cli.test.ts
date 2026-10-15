@@ -11,12 +11,13 @@ import { createServer, type Server } from "node:http"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
+import { fileURLToPath } from "url"
 
 const CLI = join(import.meta.dir, "../src/index.ts")
 // The CLI runs IN a throwaway folder (it resolves projects from the cwd), so bunfig.toml's JSX
 // preload is not picked up from there — name it by absolute path, and forbid auto-install so a
 // missing module fails loudly instead of being fetched into the throwaway HOME.
-const PRELOAD = require.resolve("@opentui/solid/preload", { paths: [join(import.meta.dir, "..")] })
+const PRELOAD = fileURLToPath(import.meta.resolve("@opentui/solid/preload"))
 setDefaultTimeout(120_000)
 const tmp = mkdtempSync(join(tmpdir(), "pb-skill-cli-"))
 const HOME = join(tmp, "home")
