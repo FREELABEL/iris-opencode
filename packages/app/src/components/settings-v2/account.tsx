@@ -1,7 +1,9 @@
 import { Component, For, Show, createResource, createSignal } from "solid-js"
 import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
+import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { usePlatform } from "@/context/platform"
 import { useServer } from "@/context/server"
+import { DEFAULT_PRICING_URL, DialogUpgrade, plansDialogCopy } from "../dialog-upgrade"
 import { SettingsListV2 } from "./parts/list"
 import { SettingsRowV2 } from "./parts/row"
 import "./settings-v2.css"
@@ -92,6 +94,18 @@ function resetsText(iso: string | null, now: Date): string | null {
     minute: "2-digit",
   })
   return `Resets ${when}`
+}
+
+/**
+ * What the Plan row offers. Only someone we KNOW has not paid is asked to Upgrade; someone we know
+ * pays gets "See plans" — the same plans, to compare or change, with nothing urging them on
+ * (#189544: paid accounts had no way to see plans at all). Unknown or unmeasured: nothing.
+ */
+export function planAction(p: AccountState["plan"] | undefined): "upgrade" | "see-plans" | null {
+  if (!p?.measured) return null
+  if (p.paid === false) return "upgrade"
+  if (p.paid === true) return "see-plans"
+  return null
 }
 
 /**
@@ -191,6 +205,7 @@ export function signOutDescription(others: SavedAccount[]): string {
 export const SettingsAccountV2: Component = () => {
   const platform = usePlatform()
   const server = useServer()
+  const dialog = useDialog()
 
   const [me, { refetch }] = createResource(
     () => server.current?.http?.url?.replace(/\/$/, ""),
@@ -282,6 +297,21 @@ export const SettingsAccountV2: Component = () => {
     const p = me()?.plan
     return p?.measured && p.paid === false ? (p.upgradeUrl ?? me()?.allowance.upgradeUrl ?? null) : null
   }
+  // Over Settings, not instead of it: closing the plans returns here.
+  const seePlans = () => {
+    const base = server.current?.http?.url?.replace(/\/$/, "")
+    const copy = plansDialogCopy(true, planLabel(me()?.plan))
+    dialog.push(() => (
+      <DialogUpgrade
+        title={copy.title}
+        description={copy.description}
+        pricingUrl={me()?.plan.upgradeUrl ?? me()?.allowance.upgradeUrl ?? DEFAULT_PRICING_URL}
+        fetchJson={async <T,>(path: string) =>
+          (await (await (platform.fetch ?? globalThis.fetch)(`${base}${path}`)).json()) as T
+        }
+      />
+    ))
+  }
 
   return (
     <>
@@ -351,6 +381,11 @@ export const SettingsAccountV2: Component = () => {
                         Upgrade
                       </ButtonV2>
                     )}
+                  </Show>
+                  <Show when={planAction(me()?.plan) === "see-plans"}>
+                    <ButtonV2 size="normal" variant="neutral" data-action="account-see-plans" onClick={seePlans}>
+                      See plans
+                    </ButtonV2>
                   </Show>
                 </div>
               </SettingsRowV2>

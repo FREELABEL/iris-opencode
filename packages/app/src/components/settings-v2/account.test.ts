@@ -3,6 +3,7 @@ import {
   accountStatus,
   meterView,
   otherAccounts,
+  planAction,
   planLabel,
   savedAccountLabel,
   signOutDescription,
@@ -153,5 +154,26 @@ describe("Settings > Account, more than one account (#189321)", () => {
     expect(signOutDescription([acct({ email: "b@example.com" })])).toBe(
       "Signs out of this account and switches to b@example.com. Hive keeps running on this machine.",
     )
+  })
+})
+
+// #189544: the Plan row only ever offered Upgrade, and only to unpaid accounts — paid ones had no path.
+describe("planAction", () => {
+  const plan = (over: Partial<AccountState["plan"]> = {}): AccountState["plan"] => ({
+    measured: true,
+    plan: "iris_solo",
+    paid: true,
+    uncapped: false,
+    upgradeUrl: null,
+    ...over,
+  })
+  test("paid accounts get See plans; unpaid keep Upgrade", () => {
+    expect(planAction(plan({ paid: true }))).toBe("see-plans")
+    expect(planAction(plan({ paid: false }))).toBe("upgrade")
+  })
+  test("unknown or unmeasured offers nothing", () => {
+    expect(planAction(plan({ paid: null }))).toBeNull()
+    expect(planAction(plan({ measured: false, paid: true }))).toBeNull()
+    expect(planAction(undefined)).toBeNull()
   })
 })

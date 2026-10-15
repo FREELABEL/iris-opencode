@@ -16,7 +16,8 @@ import { useServer } from "@/context/server"
 import { usePlatform } from "@/context/platform"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useTitlebarRightMount } from "./titlebar"
-import { DialogUpgrade } from "./dialog-upgrade"
+import { useCommand } from "@/context/command"
+import { DialogUpgrade, plansDialogCopy } from "./dialog-upgrade"
 
 /**
  * Two pills in the titlebar: how many machines are up, and whether anything is waiting for you.
@@ -182,6 +183,31 @@ export function TitlebarIrisPills() {
   const [plan] = createResource<PlanState | undefined, Key>(planKey, poll<PlanState>("/iris/plan"))
   const badge = createMemo(() => planBadge(plan()))
 
+  const showPlans = () => {
+    const state = plan()
+    const copy = plansDialogCopy(state?.measured ? state.paid : undefined)
+    dialog.show(() => (
+      <DialogUpgrade
+        title={copy.title}
+        description={copy.description}
+        pricingUrl={state?.upgradeUrl || TITLEBAR_UPGRADE_URL}
+        fetchJson={async <T,>(path: string) => (await (await doFetch(path)).json()) as T}
+      />
+    ))
+  }
+  // The way to the plans for everyone, paid or not: IRIS > "IRIS Plans…" in the app menu
+  // (desktop menu.ts) and the command palette. Nothing in the window itself changes for someone who
+  // pays — the titlebar pill stays reserved for accounts we know have not (#189544).
+  const command = useCommand()
+  command.register("iris-plans", () => [
+    {
+      id: "plans.open",
+      title: "IRIS Plans",
+      category: "IRIS",
+      onSelect: showPlans,
+    },
+  ])
+
   const notice = createMemo(() => authNotice(auth()))
 
   const unread = createMemo(() => inboxLabel(inbox(), inbox.loading))
@@ -282,14 +308,7 @@ export function TitlebarIrisPills() {
                   type="button"
                   data-slot="iris-plan-pill"
                   class="shrink-0 rounded-full bg-v2-icon-icon-accent/20 px-2 py-0.5 text-[11px] font-medium leading-4 text-v2-icon-icon-accent transition-colors hover:bg-v2-icon-icon-accent/30"
-                  onClick={() =>
-                    dialog.show(() => (
-                      <DialogUpgrade
-                        pricingUrl={b().url}
-                        fetchJson={async <T,>(path: string) => (await (await doFetch(path)).json()) as T}
-                      />
-                    ))
-                  }
+                  onClick={showPlans}
                 >
                   {b().text}
                 </button>

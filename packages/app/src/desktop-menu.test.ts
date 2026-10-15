@@ -42,6 +42,18 @@ describe("the menus send people to IRIS, not OpenCode (#187966)", () => {
     expect(menu).toContain(`"${NATIVE_COMMAND_EVENT}"`)
   })
 
+  test("the app menu offers IRIS Plans… under Who Am I, wired to an allow-listed command (#189544)", () => {
+    const menu = readFileSync(path.join(import.meta.dir, "../../desktop/src/menu.ts"), "utf8")
+    const who = menu.indexOf('text: "Who Am I Logged In As"')
+    const plans = menu.indexOf('text: "IRIS Plans…"')
+    expect(who).toBeGreaterThan(-1)
+    expect(plans).toBeGreaterThan(who)
+    expect(menu.slice(plans, plans + 300)).toContain('detail: "plans.open"')
+    expect(NATIVE_COMMANDS.has("plans.open")).toBe(true)
+    const pills = readFileSync(path.join(import.meta.dir, "components/titlebar-iris-pills.tsx"), "utf8")
+    expect(pills).toContain('id: "plans.open"')
+  })
+
   test("release notes are never fetched from OpenCode's changelog", () => {
     const src = readFileSync(path.join(import.meta.dir, "context/highlights.tsx"), "utf8")
     expect(src).not.toContain("opencode.ai/changelog")

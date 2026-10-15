@@ -34,6 +34,25 @@ export function checkoutUrl(base: string, slug?: string): string {
   return u.toString()
 }
 
+/** Where the plans dialog sends checkout when the server names no URL. */
+export const DEFAULT_PRICING_URL = "https://web.heyiris.io/pricing"
+
+/**
+ * The dialog's heading, by what we know about the account. Someone who already pays is shown
+ * "Your plan" — the same grid, as a place to compare and change, never told to upgrade (#189544).
+ * Only someone we KNOW has not paid is asked to upgrade; unknown reads neutrally.
+ */
+export function plansDialogCopy(paid: boolean | null | undefined, plan?: string | null): { title: string; description: string } {
+  const everything = "Every plan includes all twelve products and every model."
+  if (paid === true)
+    return {
+      title: "Your plan",
+      description: `${plan ? `You're on ${plan}. ` : ""}${everything} Changing plans finishes on the web.`,
+    }
+  if (paid === false) return { title: "Upgrade IRIS", description: `${everything} Pick a plan to finish on the web.` }
+  return { title: "IRIS plans", description: `${everything} Pick a plan to finish on the web.` }
+}
+
 /**
  * The plans, inside the app — not a bounce to a browser tab for someone who only wanted to see
  * what upgrading gets them. Prices come from the sidecar (/iris/plans), which reads the same
@@ -43,7 +62,13 @@ export function checkoutUrl(base: string, slug?: string): string {
  * If the list cannot be read, the dialog says so and still offers the pricing page — it never
  * renders an empty grid that looks like there is nothing to buy.
  */
-export function DialogUpgrade(props: { fetchJson: <T>(path: string) => Promise<T>; pricingUrl: string }) {
+export function DialogUpgrade(props: {
+  fetchJson: <T>(path: string) => Promise<T>
+  pricingUrl: string
+  /** Defaults to the upgrade copy; pass plansDialogCopy(...) for someone who already pays. */
+  title?: string
+  description?: string
+}) {
   const dialog = useDialog()
   const platform = usePlatform()
   const [plans] = createResource(() =>
@@ -57,8 +82,8 @@ export function DialogUpgrade(props: { fetchJson: <T>(path: string) => Promise<T
 
   return (
     <Dialog
-      title="Upgrade IRIS"
-      description="Every plan includes all twelve products and every model. Pick a plan to finish on the web."
+      title={props.title ?? plansDialogCopy(false).title}
+      description={props.description ?? plansDialogCopy(false).description}
       size="x-large"
     >
       <div data-slot="iris-upgrade" class="flex flex-col gap-4 px-6 pb-5">
