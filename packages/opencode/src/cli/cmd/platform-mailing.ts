@@ -525,10 +525,10 @@ const MailingNewCommand = cmd({
       .option("company-field", { describe: "column(s) holding company, comma-separated", type: "string" })
       .option("reason-fallback", { describe: "the {{Reason}} line for someone with no title or company", type: "string" })
       .option("email-field", { describe: "column holding the email address (default: found automatically)", type: "string" })
-      .option("from-email", { describe: "sender address (must be validated in your Mailjet)", type: "string" })
+      .option("from-email", { describe: "sender address (must be validated in your Mailjet or Resend)", type: "string" })
       .option("from-name", { describe: "sender name people see", type: "string" })
       .option("postal-address", { describe: "your postal address for the footer", type: "string" })
-      .option("integration", { describe: "which Mailjet connection, if you have more than one", type: "number" })
+      .option("integration", { describe: "which email connection (Mailjet or Resend), if you have more than one", type: "number" })
       .option("preview-out", { describe: "where to save the full HTML preview", type: "string" })
       .option("json", jsonOpt)
       .example(

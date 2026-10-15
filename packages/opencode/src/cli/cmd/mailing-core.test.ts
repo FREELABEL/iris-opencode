@@ -232,3 +232,39 @@ describe("reading the server", () => {
     expect(toCsv([{ email: "a@b.com", error: 'bad, "very"\nbad' }], ["email", "error"])).toBe('email,error\na@b.com,"bad, ""very""\nbad"\n')
   })
 })
+
+// #189596 — same commands, Mailjet or Resend underneath. The CLI must not tell a Resend sender to
+// go and connect Mailjet, and must never hand out a Resend connect command without --name: that
+// form overwrites the platform's own Resend connection, which carries everyone's sign-in email.
+describe("either provider", () => {
+  const aud = (sendable: number) => ({ total: sendable, sendable, dropped: { no_email: 0, duplicate: 0, excluded: 0, suppressed: 0 } })
+
+  test("the draft headline names the service it will send through", () => {
+    expect(draftHeadline({ id: 7, status: "draft", provider: "resend", counts: { list: aud(57) } })).toBe("Draft #7 — 57 list ready, via Resend.")
+    expect(draftHeadline({ id: 8, status: "draft", provider: "mailjet", counts: { list: aud(3) } })).toBe("Draft #8 — 3 list ready, via Mailjet.")
+    expect(draftHeadline({ id: 9, status: "draft", counts: { list: aud(3) } })).toBe("Draft #9 — 3 list ready.")
+  })
+
+  test("no connection → both ways to connect, and the Resend one names a new account", () => {
+    const f = friendlyError(422, { reason: "no_mailjet", message: "No active Mailjet or Resend connection on your account." })
+    expect(f.code).toBe("mailjet_not_connected")
+    expect(f.message).toContain("Mailjet or Resend")
+    const resend = f.fix?.find((l) => l.startsWith("iris integrations connect resend"))
+    expect(f.fix?.some((l) => l.startsWith("iris integrations connect mailjet"))).toBe(true)
+    expect(resend).toContain("--name=")
+  })
+
+  test("the platform's own Resend account is refused with the way to add your own", () => {
+    const f = friendlyError(422, { reason: "platform_connection", message: "Connection #146 is the platform's own Resend account" })
+    expect(f.code).toBe("platform_connection")
+    expect(f.message).toContain("sign-in")
+    expect(f.fix?.[0]).toStartWith("iris integrations connect resend")
+    expect(f.fix?.[0]).toContain("--name=")
+  })
+
+  test("connection problems say connection, not Mailjet", () => {
+    for (const reason of ["integration_inactive", "integration_forbidden", "integration_not_found"]) {
+      expect(friendlyError(422, { reason }).message).not.toContain("Mailjet connection")
+    }
+  })
+})
