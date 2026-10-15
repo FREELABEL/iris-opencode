@@ -23,6 +23,34 @@ function fmtCents(c?: number | null): string {
 
 function printDivider() { console.log(dim("  " + "─".repeat(72))) }
 
+// A record's one-line headline in `records list` / `records search` (#187830). It used to be
+// `display_field ?? Object.keys(data)[0]` — but MySQL hands JSON objects back with keys sorted
+// by LENGTH, so "first key" meant "shortest key", and for a Lexicon demand letter that was
+// `gaps`, an array, comma-joined into a sentence that looked like a title. The schema's own
+// field order is the author's intent; key order from the database is nobody's. Never headline
+// an array or object.
+const TITLE_KEYS = ["title", "name", "label"]
+
+function headlineScalar(v: unknown): string | null {
+  if (typeof v === "string") return v.trim() ? v : null
+  if (typeof v === "number" || typeof v === "boolean") return String(v)
+  return null
+}
+
+export function recordHeadline(r: any, schema: any): { key: string | null; value: string } {
+  const d = r?.data && typeof r.data === "object" ? r.data : {}
+  const declared: string[] = Array.isArray(schema?.fields?.fields)
+    ? schema.fields.fields.map((f: any) => f?.key).filter((k: any) => typeof k === "string")
+    : []
+  const candidates = [schema?.fields?.display_field, ...TITLE_KEYS, ...declared, ...Object.keys(d)]
+  for (const key of candidates) {
+    if (typeof key !== "string") continue
+    const value = headlineScalar(d[key])
+    if (value != null) return { key, value }
+  }
+  return { key: null, value: r?.external_id ? String(r.external_id) : `#${r?.id}` }
+}
+
 // A schema's `settings` blob is not decoration — an ONBOARDING FLOW lives entirely
 // in it (`flow_type: "onboarding"` plus steps/branding/completion). Both the create
 // and update endpoints have always accepted it; the CLI just never passed it, which
@@ -523,15 +551,14 @@ const RecordsListCommand = cmd({
       for (const r of records) {
         const d = r.data ?? {}
         // Build a smart one-liner from the first few fields
-        const displayField = schema?.fields?.display_field ?? Object.keys(d)[0]
-        const displayVal = d[displayField] ?? r.external_id ?? `#${r.id}`
+        const headline = recordHeadline(r, schema)
         const extId = r.external_id ? dim(r.external_id) : ""
-        console.log(`  ${dim(`#${r.id}`)}  ${bold(String(displayVal))}  ${extId}`)
+        console.log(`  ${dim(`#${r.id}`)}  ${bold(headline.value)}  ${extId}`)
 
         // Show key fields inline
         const preview: string[] = []
         for (const key of Object.keys(d).slice(0, 6)) {
-          if (key === displayField) continue
+          if (key === headline.key) continue
           const val = d[key]
           if (val == null || typeof val === "object") continue
           preview.push(`${key}: ${val}`)
@@ -584,10 +611,8 @@ const RecordsSearchCommand = cmd({
       if (records.length === 0) { prompts.log.warn("No matches"); prompts.outro("Done"); return }
       printDivider()
       for (const r of records) {
-        const d = r.data ?? {}
-        const displayField = schema?.fields?.display_field ?? Object.keys(d)[0]
-        const displayVal = d[displayField] ?? r.external_id ?? `#${r.id}`
-        console.log(`  ${dim(`#${r.id}`)}  ${bold(String(displayVal))}  ${r.external_id ? dim(r.external_id) : ""}`)
+        const headline = recordHeadline(r, schema)
+        console.log(`  ${dim(`#${r.id}`)}  ${bold(headline.value)}  ${r.external_id ? dim(r.external_id) : ""}`)
       }
       printDivider()
       prompts.outro("Done")
