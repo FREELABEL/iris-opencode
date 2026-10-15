@@ -72,11 +72,16 @@ async function iris(args: string[], cwd = WORK) {
   const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
   const exitCode = await proc.exited
   const out = (stdout + stderr).replace(/\x1b\[[0-9;]*m/g, "")
-  const start = stdout.indexOf("{")
+  // The CLI prints a banner (and sometimes log lines) around its JSON: take the first "{" that
+  // starts a line and parses through to the last "}".
   let json: any = null
-  try {
-    json = start >= 0 ? JSON.parse(stdout.slice(start, stdout.lastIndexOf("}") + 1)) : null
-  } catch {}
+  const end = stdout.lastIndexOf("}")
+  for (const m of stdout.matchAll(/(^|\n)\{/g)) {
+    try {
+      json = JSON.parse(stdout.slice(m.index! + m[1].length, end + 1))
+      break
+    } catch {}
+  }
   return { exitCode, out, json }
 }
 
