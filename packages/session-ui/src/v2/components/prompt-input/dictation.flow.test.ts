@@ -389,6 +389,22 @@ describe("createDictation — setup that would fail is reported before anyone sp
     dispose()
   })
 
+  test("after a refusal, the next press looks again: signed in since, it records (#189525)", async () => {
+    health = notReady
+    const errors: string[] = []
+    const { d, dispose } = await mount({ onError: (m: string) => errors.push(m) })
+    await sleep(20)
+    d.toggle()
+    await sleep(50)
+    expect(errors).toHaveLength(1)
+    health = { ...notReady, cloud: { configured: true } }
+    d.toggle()
+    await sleep(50)
+    expect(errors).toHaveLength(1)
+    expect(gumCalls).toBe(1)
+    dispose()
+  })
+
   test("on-device whisper alone is enough to dictate", async () => {
     health = { ...notReady, local: { whisper: true } }
     const { d, dispose } = await mount()
@@ -439,3 +455,56 @@ describe("createDictation — background retries of held recordings", () => {
     dispose()
   })
 })
+
+describe("createDictation — live words cost a streaming session; only open one someone will see", () => {
+  const realWebSocket = globalThis.WebSocket
+  let sockets: { url: string; closed: boolean }[]
+  beforeEach(() => {
+    sockets = []
+    ;(globalThis as any).WebSocket = class {
+      static OPEN = 1
+      static CONNECTING = 0
+      readyState = 0
+      record: { url: string; closed: boolean }
+      constructor(url: URL) {
+        this.record = { url: String(url), closed: false }
+        sockets.push(this.record)
+      }
+      send() {}
+      close() {
+        this.record.closed = true
+        this.readyState = 3
+      }
+    }
+  })
+  afterEach(() => {
+    globalThis.WebSocket = realWebSocket
+  })
+
+  test("a composer that shows no live words opens no live session (#189526)", async () => {
+    const { d, dispose } = await mount()
+    d.toggle()
+    await sleep(500)
+    expect(d.phase()).toBe("recording")
+    expect(sockets).toHaveLength(0)
+    dispose()
+  })
+
+  test("a composer that shows live words opens one", async () => {
+    const { d, dispose } = await mount({ onPartial: () => {} })
+    d.toggle()
+    await sleep(500)
+    expect(sockets.filter((s) => s.url.includes("/dictate/live"))).toHaveLength(1)
+    dispose()
+  })
+
+  test("cancelling a take closes its live session at once (#189533)", async () => {
+    const { d, dispose } = await mount({ onPartial: () => {} })
+    d.toggle()
+    await sleep(500)
+    d.cancel()
+    expect(sockets[0]?.closed).toBe(true)
+    dispose()
+  })
+})
+
