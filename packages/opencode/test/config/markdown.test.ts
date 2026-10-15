@@ -87,3 +87,22 @@ test("should not match email addresses", () => {
   const emailMatches = ConfigMarkdown.files(emailTest)
   expect(emailMatches.length).toBe(0)
 })
+
+// An unquoted colon in a value is what people write and what Claude Code / the IRIS app accept.
+// It used to throw here — and one such playbook took down every playbook listing with it.
+test("frontmatter with an unquoted colon in a value parses, like the IRIS app", async () => {
+  const dir = await import("fs").then((fs) => fs.mkdtempSync(require("path").join(require("os").tmpdir(), "md-colon-")))
+  const file = require("path").join(dir, "PLAYBOOK.md")
+  await Bun.write(file, "---\nname: tiny\ndescription: Do the tiny thing: carefully\n---\n\nBody: stays.\n")
+  const md = await ConfigMarkdown.parse(file)
+  expect(md.data.name).toBe("tiny")
+  expect(md.data.description).toBe("Do the tiny thing: carefully")
+  expect(md.content).toContain("Body: stays.")
+})
+
+test("frontmatter that is broken for another reason still fails loudly", async () => {
+  const dir = await import("fs").then((fs) => fs.mkdtempSync(require("path").join(require("os").tmpdir(), "md-bad-")))
+  const file = require("path").join(dir, "PLAYBOOK.md")
+  await Bun.write(file, "---\nname: [unclosed\n---\nx\n")
+  await expect(ConfigMarkdown.parse(file)).rejects.toThrow()
+})
