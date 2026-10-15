@@ -1084,6 +1084,66 @@ const MeResponse = Schema.Struct({
 })
 
 /**
+ * Settings › Security (#189589). Whether Constellation Gate screens this account's model traffic,
+ * WHY (the reason is the rollout policy's own), and what it has done. The policy is the server's;
+ * the panel renders it and never decides it, so it cannot drift from what the proxy does.
+ */
+const GateEventSchema = Schema.Struct({
+  id: Schema.Finite,
+  at: Schema.NullOr(Schema.String),
+  segment: Schema.String,
+  action: described(Schema.String, "clean | flagged | held | error"),
+  mode: Schema.String,
+  verdict: Schema.NullOr(Schema.String),
+  score: Schema.NullOr(Schema.Finite),
+  reasonCode: Schema.NullOr(Schema.String),
+  detected: Schema.Array(Schema.String),
+  sensitivity: Schema.NullOr(Schema.String),
+  latencyMs: Schema.NullOr(Schema.Finite),
+  cached: Schema.Boolean,
+  errorCode: Schema.NullOr(Schema.String),
+  reportedFalse: Schema.Boolean,
+}).annotate({ identifier: "IrisGateEvent" })
+
+const SecurityResponse = Schema.Struct({
+  measured: described(Schema.Boolean, "FALSE means we could not ask. Never render that as Gate off."),
+  reason: Schema.optional(Schema.String),
+  gate: Schema.Struct({
+    enabled: Schema.Boolean,
+    reason: described(Schema.String, "The rollout policy's reason: allowlisted, new_user, phi_no_baa, not_in_rollout, …"),
+    explanation: Schema.String,
+    mode: described(Schema.String, "shadow = scan and record only · enforce = hold flagged tool results"),
+    org: Schema.NullOr(Schema.String),
+    sensitivity: Schema.NullOr(Schema.String),
+    categories: Schema.Array(Schema.String),
+    segments: Schema.Array(Schema.String),
+    failOpen: Schema.Boolean,
+    availableChecks: Schema.Array(Schema.String),
+    sensitivities: Schema.Array(Schema.String),
+    stats: Schema.Struct({
+      windowDays: Schema.Finite,
+      scanned: Schema.Finite,
+      clean: Schema.Finite,
+      flagged: Schema.Finite,
+      held: Schema.Finite,
+      errors: Schema.Finite,
+      reportedFalse: Schema.Finite,
+      reportedFalsePct: Schema.NullOr(Schema.Finite),
+      p50LatencyMs: Schema.NullOr(Schema.Finite),
+      billableTokens: Schema.Finite,
+    }),
+    recent: Schema.Array(GateEventSchema),
+  }),
+  phiGuard: Schema.Struct({ active: Schema.Boolean, mode: Schema.String, explanation: Schema.String }),
+}).annotate({ identifier: "IrisSecurityResponse" })
+
+const GateReportResponse = Schema.Struct({
+  measured: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  event: Schema.NullOr(GateEventSchema),
+}).annotate({ identifier: "IrisGateReportResponse" })
+
+/**
  * ARTIFACTS (epic #186508). What the agent made in this session, from the store in
  * src/iris/artifacts.ts. Both routes return JSON. Neither returns an HTML document, and none
  * ever may (ADR-01): the panel places `content` into a sandboxed `srcdoc` iframe, and an iframe
@@ -1225,6 +1285,8 @@ export const IrisPaths = {
   allowance: `${root}/allowance`,
   plan: `${root}/plan`,
   me: `${root}/me`,
+  security: `${root}/security`,
+  securityGateReport: `${root}/security/gate/events/:id/report`,
   signOut: `${root}/sign-out`,
   accounts: `${root}/accounts`,
   accountSwitch: `${root}/accounts/switch`,
@@ -1275,6 +1337,26 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Account",
           description:
             "Identity from fl-api, plan and allowance from fl-iris-api. The allowance is peeked, so this never consumes the weekly notice and is safe to call whenever Settings opens.",
+        }),
+      ),
+      HttpApiEndpoint.get("security", IrisPaths.security, {
+        success: described(SecurityResponse, "What protects this account's model traffic, and why"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.security",
+          summary: "Security settings",
+          description:
+            "Constellation Gate's state for the account chat uses — on or off and the rollout policy's reason, mode, checks, 30-day stats and recent scans — plus the health-data guard. Decided by fl-iris-api from a remote flag; read-only here.",
+        }),
+      ),
+      HttpApiEndpoint.post("securityGateReport", IrisPaths.securityGateReport, {
+        params: { id: Schema.String },
+        success: described(GateReportResponse, "The event, marked as reported"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.securityGateReport",
+          summary: "Report a Gate mistake",
+          description: "Marks one of your own scan events as wrong. It feeds the false-positive rate; it does not change the verdict.",
         }),
       ),
       HttpApiEndpoint.post("signOut", IrisPaths.signOut, {

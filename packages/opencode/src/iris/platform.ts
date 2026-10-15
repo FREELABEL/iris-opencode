@@ -702,6 +702,190 @@ export async function fetchPlans(): Promise<PlatformResult<PlanOffer[]>> {
 }
 
 /**
+ * Settings › Security (#189589): what protects this account's model traffic, and why.
+ *
+ * Every judgement here is the server's. Whether Gate is on, why, which mode, which checks —
+ * GateRolloutPolicy on fl-iris-api decides it from a remote flag, and the same policy runs in
+ * the model proxy, so the panel cannot say "on" while the proxy says "off". This only reshapes
+ * snake_case into the app's casing.
+ */
+export interface GateEvent {
+  id: number
+  at: string | null
+  segment: string
+  action: string
+  mode: string
+  verdict: string | null
+  score: number | null
+  reasonCode: string | null
+  detected: string[]
+  sensitivity: string | null
+  latencyMs: number | null
+  cached: boolean
+  errorCode: string | null
+  reportedFalse: boolean
+}
+
+export interface SecurityState {
+  gate: {
+    enabled: boolean
+    reason: string
+    explanation: string
+    mode: string
+    org: string | null
+    sensitivity: string | null
+    categories: string[]
+    segments: string[]
+    failOpen: boolean
+    availableChecks: string[]
+    sensitivities: string[]
+    stats: {
+      windowDays: number
+      scanned: number
+      clean: number
+      flagged: number
+      held: number
+      errors: number
+      reportedFalse: number
+      reportedFalsePct: number | null
+      p50LatencyMs: number | null
+      billableTokens: number
+    }
+    recent: GateEvent[]
+  }
+  phiGuard: { active: boolean; mode: string; explanation: string }
+}
+
+export const EMPTY_SECURITY: SecurityState = {
+  gate: {
+    enabled: false,
+    reason: "unknown",
+    explanation: "",
+    mode: "shadow",
+    org: null,
+    sensitivity: null,
+    categories: [],
+    segments: [],
+    failOpen: true,
+    availableChecks: [],
+    sensitivities: [],
+    stats: {
+      windowDays: 30,
+      scanned: 0,
+      clean: 0,
+      flagged: 0,
+      held: 0,
+      errors: 0,
+      reportedFalse: 0,
+      reportedFalsePct: null,
+      p50LatencyMs: null,
+      billableTokens: 0,
+    },
+    recent: [],
+  },
+  phiGuard: { active: false, mode: "report", explanation: "" },
+}
+
+const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null)
+const strs = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [])
+
+export function gateEventFrom(e: any): GateEvent {
+  return {
+    id: Number(e?.id ?? 0),
+    at: e?.at ?? null,
+    segment: String(e?.segment ?? ""),
+    action: String(e?.action ?? ""),
+    mode: String(e?.mode ?? ""),
+    verdict: e?.verdict ?? null,
+    score: num(e?.score),
+    reasonCode: e?.reason_code ?? null,
+    detected: strs(e?.detected),
+    sensitivity: e?.sensitivity ?? null,
+    latencyMs: num(e?.latency_ms),
+    cached: Boolean(e?.cached),
+    errorCode: e?.error_code ?? null,
+    reportedFalse: Boolean(e?.reported_false),
+  }
+}
+
+/** Reshape GET /api/v6/security. Exported so the mapping is tested without a network. */
+export function securityFrom(j: any): SecurityState {
+  const g = j?.data?.gate ?? {}
+  const st = g.stats ?? {}
+  const p = j?.data?.phi_guard ?? {}
+  return {
+    gate: {
+      enabled: Boolean(g.enabled),
+      reason: String(g.reason ?? "unknown"),
+      explanation: String(g.explanation ?? ""),
+      mode: String(g.mode ?? "shadow"),
+      org: g.org ?? null,
+      sensitivity: g.sensitivity ?? null,
+      categories: strs(g.categories),
+      segments: strs(g.segments),
+      failOpen: g.fail_open !== false,
+      availableChecks: strs(g.available_checks),
+      sensitivities: strs(g.sensitivities),
+      stats: {
+        windowDays: num(st.window_days) ?? 30,
+        scanned: num(st.scanned) ?? 0,
+        clean: num(st.clean) ?? 0,
+        flagged: num(st.flagged) ?? 0,
+        held: num(st.held) ?? 0,
+        errors: num(st.errors) ?? 0,
+        reportedFalse: num(st.reported_false) ?? 0,
+        reportedFalsePct: num(st.reported_false_pct),
+        p50LatencyMs: num(st.p50_latency_ms),
+        billableTokens: num(st.billable_tokens) ?? 0,
+      },
+      recent: Array.isArray(g.recent) ? g.recent.map(gateEventFrom) : [],
+    },
+    phiGuard: {
+      active: Boolean(p.active),
+      mode: String(p.mode ?? "report"),
+      explanation: String(p.explanation ?? ""),
+    },
+  }
+}
+
+export async function fetchSecurity(
+  opts: { token?: string | null; signal?: AbortSignal } = {},
+): Promise<PlatformResult<SecurityState>> {
+  try {
+    const res = await irisFetch(
+      "/api/v6/security",
+      IRIS_API,
+      { signal: opts.signal },
+      opts.token === undefined ? resolveToken() : opts.token,
+    )
+    if (!res.ok) return { measured: false, reason: `iris-api ${res.status}`, data: EMPTY_SECURITY }
+    return { measured: true, data: securityFrom(await res.json()) }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: EMPTY_SECURITY }
+  }
+}
+
+/** "Gate got this one wrong." Only the caller's own events can be reported — the server scopes it. */
+export async function reportGateEvent(
+  id: number,
+  opts: { token?: string | null; signal?: AbortSignal } = {},
+): Promise<PlatformResult<GateEvent | null>> {
+  try {
+    const res = await irisFetch(
+      `/api/v6/security/gate/events/${encodeURIComponent(String(id))}/report`,
+      IRIS_API,
+      { method: "POST", signal: opts.signal },
+      opts.token === undefined ? resolveToken() : opts.token,
+    )
+    if (!res.ok) return { measured: false, reason: `iris-api ${res.status}`, data: null }
+    const j = (await res.json()) as any
+    return { measured: true, data: gateEventFrom(j?.data) }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: null }
+  }
+}
+
+/**
  * The caller's plan, WITHOUT consuming a notice (`?peek=1`, fl-iris-api 4eda580d). Unlike
  * fetchAllowance this is safe to poll: the title bar asks every few minutes to decide between
  * an Upgrade button and a plan label. A server without the `plan` field (older than 4eda580d)

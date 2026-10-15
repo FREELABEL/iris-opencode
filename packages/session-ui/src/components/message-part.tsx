@@ -67,6 +67,8 @@ import {
   failed as failedCall,
   commandReportOf,
   formatDuration,
+  gateMarkText,
+  gateSummary,
   groupParts,
   irisCallTrigger,
   irisGroupSummary,
@@ -78,6 +80,8 @@ import {
   sameGroups,
 } from "./part-group"
 export {
+  gateMarkText,
+  gateSummary,
   commandsSummary,
   commandTrigger,
   failedCall,
@@ -90,8 +94,8 @@ export {
   isShellTool,
   sameGroups,
 }
-import type { PartGroup } from "./part-group"
-export type { ContextKind, PartGroup, PartRef } from "./part-group"
+import type { GateSummary, PartGroup } from "./part-group"
+export type { ContextKind, GateSummary, PartGroup, PartRef } from "./part-group"
 import { ToolStatusTitle } from "./tool-status-title"
 import { patchFiles } from "./apply-patch-file"
 import { partDefaultOpen } from "./part-default-open"
@@ -1010,6 +1014,8 @@ function IrisWorkingMark() {
 
 export function ContextToolGroup(props: {
   parts: ToolPart[]
+  /** Constellation Gate's verdict on this turn (#189589); absent when Gate did not screen it. */
+  gate?: GateSummary
   busy?: boolean
   open?: boolean
   onOpenChange?: (open: boolean) => void
@@ -1019,7 +1025,9 @@ export function ContextToolGroup(props: {
   const data = useData()
   const [localOpen, setLocalOpen] = createSignal<boolean | undefined>(undefined)
   // Uncontrolled, a group holding a failed call starts open (#189316); a click then decides.
-  const open = () => props.open ?? localOpen() ?? props.parts.some(failedCall)
+  // A held tool result opens the group too (#189589): something was withheld from the model, and
+  // the person is told, never left to notice.
+  const open = () => props.open ?? localOpen() ?? (props.parts.some(failedCall) || (props.gate?.held ?? 0) > 0)
   const pending = createMemo(
     () =>
       !!props.busy || props.parts.some((part) => part.state.status === "pending" || part.state.status === "running"),
@@ -1110,12 +1118,34 @@ export function ContextToolGroup(props: {
                   </span>
                 </Show>
               </Show>
+              <Show when={!pending() && props.gate}>
+                {(g) => (
+                  <span data-slot="context-tool-group-gate" data-tone={gateMarkText(g()).tone}>
+                    {" · "}
+                    <Icon name="shield" size="small" />
+                    {gateMarkText(g()).text}
+                  </span>
+                )}
+              </Show>
             </span>
           </span>
           <Collapsible.Arrow />
         </div>
       </Collapsible.Trigger>
       <Collapsible.Content>
+        <Show when={(props.gate?.held ?? 0) > 0}>
+          <div data-component="gate-held-card">
+            <Icon name="shield" size="small" />
+            <div data-slot="gate-held-copy">
+              <span data-slot="gate-held-title">
+                Gate held {props.gate!.held} tool result{props.gate!.held === 1 ? "" : "s"} before the model read {props.gate!.held === 1 ? "it" : "them"}
+              </span>
+              <span data-slot="gate-held-description">
+                It read as an attempt to take over the assistant. The model was told it was withheld. Settings › Security lists it, and you can report a mistake there.
+              </span>
+            </div>
+          </div>
+        </Show>
         <div data-component="context-tool-group-list">
           <Index each={props.parts}>
             {(partAccessor) => {
