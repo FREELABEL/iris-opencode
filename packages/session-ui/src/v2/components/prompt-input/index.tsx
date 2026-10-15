@@ -71,6 +71,7 @@ export function PromptInputV2(props: PromptInputV2Props) {
   let editor: HTMLDivElement | undefined
   /** Live dictation words, while a quick take is being spoken (see the Dictate `live` prop). */
   let liveSpan: HTMLElement | undefined
+  const [liveShown, setLiveShown] = createSignal(false)
   let localInput = false
   // Where dictation draws while a take runs. Signals, so its portals mount once the nodes exist.
   const [dictateLayer, setDictateLayer] = createSignal<HTMLElement>()
@@ -215,7 +216,8 @@ export function PromptInputV2(props: PromptInputV2Props) {
             onPaste={props.controller.onPaste}
             onFocus={() => props.controller.dispatch({ type: "focus.editor" })}
           />
-          <Show when={!props.controller.value()}>
+          {/* Hidden while live words are typed in: they are on screen but not in the value (#189546). */}
+          <Show when={!props.controller.value() && !liveShown()}>
             <div
               class="pointer-events-none absolute inset-x-0 top-0 px-4 pt-4 text-[13px] font-[440] leading-5 text-v2-text-text-faint"
               classList={{ "font-mono!": state.mode === "shell" }}
@@ -266,6 +268,7 @@ export function PromptInputV2(props: PromptInputV2Props) {
                     // The take, typed into the chat box while it is spoken (live-text.ts). Kept out
                     // of prompt state — no input event — so the final transcript is what is sent.
                     if (editor) liveSpan = showLiveText(editor, liveSpan, text)
+                    setLiveShown(!!text)
                   }}
                   insert={(text) => {
                     // Append into the editor and let the component's own onInput re-parse it.
