@@ -1018,8 +1018,8 @@ export function ContextToolGroup(props: {
   const i18n = useI18n()
   const data = useData()
   const [localOpen, setLocalOpen] = createSignal<boolean | undefined>(undefined)
-  // Uncontrolled, a group holding a failed call starts open (#189316); a click then decides.
-  const open = () => props.open ?? localOpen() ?? props.parts.some(failedCall)
+  // Starts folded even with a failure in it (#189509); the header says "· N failed".
+  const open = () => props.open ?? localOpen() ?? false
   const pending = createMemo(
     () =>
       !!props.busy || props.parts.some((part) => part.state.status === "pending" || part.state.status === "running"),

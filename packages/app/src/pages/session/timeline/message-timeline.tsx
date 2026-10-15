@@ -21,7 +21,6 @@ import { Button } from "@opencode-ai/ui/button"
 import { Card } from "@opencode-ai/ui/card"
 import {
   ContextToolGroup,
-  failedCall,
   Message,
   MessageDivider,
   Part as MessagePart,
@@ -992,13 +991,9 @@ export function MessageTimeline(props: {
           .filter((part): part is ToolPart => part?.type === "tool")
       })
       const contextOpenKey = () => `context:${row().group.key}`
-      // A group holding a failed call opens on its own (#189316) — folding a failure out of sight
-      // is how it gets missed. Once the person opens or closes it, their choice wins.
-      const open = createMemo(() => {
-        const chosen = toolOpen[contextOpenKey()]
-        if (chosen !== undefined) return chosen === true
-        return parts().some(failedCall)
-      })
+      // Groups start folded, failures included (#189509): a long run with a few failures opened
+      // itself and filled the chat. The header's red "· N failed" is the signal; a click opens it.
+      const open = createMemo(() => toolOpen[contextOpenKey()] === true)
 
       return (
         <ContextToolGroup
