@@ -40,6 +40,8 @@ export function withNetworkOptions<T>(yargs: Argv<T>) {
 export function isLoopbackHost(hostname: string): boolean {
   const h = (hostname ?? "").trim().toLowerCase().replace(/^\[|\]$/g, "")
   if (h === "localhost" || h === "::1" || h === "0:0:0:0:0:0:0:1") return true
+  // An IPv4 peer on a dual-stack socket arrives as ::ffff:127.0.0.1.
+  if (h.startsWith("::ffff:")) return isLoopbackHost(h.slice(7))
   // The whole 127.0.0.0/8 block, not just 127.0.0.1.
   if (/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h)) return true
   return false
@@ -55,18 +57,60 @@ export const TOKEN_ENV = "IRIS_SERVER_TOKEN"
  * check quietly becomes fail-open.
  */
 export function serverTokenPresent(): boolean {
+  return readServerToken() !== undefined
+}
+
+/** The shared secret itself, or undefined when none is configured. Same rules as above. */
+export function readServerToken(): string | undefined {
   const fromEnv = (process.env[TOKEN_ENV] ?? "").trim()
-  if (fromEnv.length > 0) return true
+  if (fromEnv.length > 0) return fromEnv
 
   try {
     const os = require("node:os")
     const path = require("node:path")
     const fs = require("node:fs")
     const file = path.join(os.homedir(), ".iris", "bridge-token")
-    return fs.readFileSync(file, "utf8").trim().length > 0
+    const token = fs.readFileSync(file, "utf8").trim()
+    return token.length > 0 ? token : undefined
   } catch {
-    return false
+    return undefined
   }
+}
+
+function timingSafeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a)
+  const bb = Buffer.from(b)
+  if (ab.length !== bb.length) return false
+  return require("node:crypto").timingSafeEqual(ab, bb)
+}
+
+/**
+ * MAY THIS REQUEST REACH THE SESSION API? (#182762)
+ *
+ * assertBindIsSafe lets a routable bind start when a token is configured — but until this rule
+ * existed nothing ever CHECKED that token, so the network got the whole session surface anyway.
+ * A routable bind now means every request from another machine must carry
+ * `Authorization: Bearer <token>`.
+ *
+ * Requests from a loopback peer are allowed without it: the TUI talks to its own worker server
+ * with no header, and the loopback surface is the same one a loopback bind already exposes.
+ * An unknown peer is NOT loopback — absent information never reads as safe. CORS preflights
+ * pass so the browser can learn the policy; they carry no data.
+ */
+export function requestIsAuthorized(input: {
+  boundHostname: string
+  peer: string | undefined
+  method: string
+  authorization: string | undefined
+  token: string | undefined
+}): boolean {
+  if (isLoopbackHost(input.boundHostname)) return true
+  if (input.peer && isLoopbackHost(input.peer)) return true
+  if (input.method.toUpperCase() === "OPTIONS") return true
+  if (!input.token) return false
+  const match = /^Bearer\s+(.+)$/i.exec((input.authorization ?? "").trim())
+  if (!match) return false
+  return timingSafeEqual(match[1].trim(), input.token)
 }
 
 /**
@@ -90,9 +134,8 @@ export function serverTokenPresent(): boolean {
  * scrolled is not a control. It is deliberately checked in the RESOLVER rather than at each call
  * site, so a new command that binds a server cannot forget it.
  *
- * This does NOT authenticate the loopback surface; a local process can still reach it. That is
- * the rest of #182762 and needs middleware in the server package. This closes the remote half,
- * which is the half a stranger on the network can reach.
+ * The token is then ENFORCED per request by requestIsAuthorized (server middleware). The
+ * loopback surface stays open to local processes, as it is on a loopback bind.
  */
 export function assertBindIsSafe(opts: { hostname: string; mdns?: boolean; tokenPresent: boolean }): void {
   if (isLoopbackHost(opts.hostname) || opts.tokenPresent) return
