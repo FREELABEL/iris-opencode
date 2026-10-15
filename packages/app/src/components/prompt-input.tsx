@@ -29,6 +29,7 @@ import { useLayout } from "@/context/layout"
 import { useSDK } from "@/context/sdk"
 import { createDictation, setDictationAuth, setDictationDevice } from "@opencode-ai/session-ui/v2/prompt-input/dictation"
 import { useSettings } from "@/context/settings"
+import { holdSpokenReplies } from "@/context/spoken-replies"
 import { useServerSDK } from "@/context/server-sdk"
 import { dictationAuthFor } from "@/utils/dictation-auth"
 import { useSync } from "@/context/sync"
@@ -1053,6 +1054,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       setCursorPosition(editorRef, (editorRef.textContent ?? "").length)
     },
   })
+  // Nothing is read aloud while dictating, so the mic does not hear it (#189527).
+  createEffect(() => holdSpokenReplies(dictation.phase() === "recording"))
   command.register("prompt-dictate", () => [
     dictateCommand({
       controls: () => dictation,

@@ -37,7 +37,7 @@ import { createAutoScroll } from "@opencode-ai/ui/hooks"
 import { previewSelectedLines } from "@opencode-ai/session-ui/pierre/selection-bridge"
 import { Button } from "@opencode-ai/ui/button"
 import { showToast } from "@/utils/toast"
-import { useSpokenReplies } from "@/context/spoken-replies"
+import { isSpeaking, stopSpokenReply, useSpokenReplies } from "@/context/spoken-replies"
 import { base64Encode, checksum } from "@opencode-ai/core/util/encode"
 import { useLocation, useNavigate, useParams, useSearchParams } from "@solidjs/router"
 import { NewSessionView, SessionHeader } from "@/components/session"
@@ -1100,6 +1100,17 @@ export default function Page() {
     view().review.setMode(next)
   })
 
+  // Registered here, not in a composer, so the old and new layouts both get it (#189527).
+  command.register("voice-stop-speaking", () => [
+    {
+      id: "voice.stopSpeaking",
+      title: language.t("command.voice.stopSpeaking"),
+      category: language.t("command.category.session"),
+      keybind: "mod+shift+m",
+      disabled: !isSpeaking(),
+      onSelect: stopSpokenReply,
+    },
+  ])
   useSpokenReplies({
     enabled: () => settings.voice.speakReplies(),
     sessionID: () => params.id,
