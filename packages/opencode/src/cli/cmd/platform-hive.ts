@@ -29,6 +29,7 @@ import {
 } from "./hive-task-create"
 import { currentDelegationOrigin } from "./hive-delegation-origin"
 import { HiveFilesCommandExport } from "./platform-hive-files"
+import { fleetRows, needsAttention, type ScheduleNode } from "./hive-schedule-fleet"
 import { HiveBrowserCommand } from "./platform-hive-browser"
 import { runRemoteDoctor } from "./platform-hive-doctor"
 import { HiveSelftestCommandExport } from "./platform-hive-selftest"
@@ -1035,15 +1036,18 @@ async function bridgeUrl(path: string): Promise<string> {
 async function reportBridgeFailure(method: string, url: string, res: Response): Promise<string> {
   const bodyText = await res.text().catch(() => "")
   let errMsg = res.statusText || `HTTP ${res.status}`
+  let daemonExplained = false
   if (bodyText) {
     try {
       const j = JSON.parse(bodyText) as Record<string, unknown>
-      if (j.error) errMsg = String(j.error)
+      if (j.error) { errMsg = String(j.error); daemonExplained = true }
     } catch { errMsg = bodyText.slice(0, 200) }
   }
   // Always surface the concrete URL + status (previously swallowed to "Not Found")
   prompts.log.error(`${method} ${url} → HTTP ${res.status} ${res.statusText}${errMsg && errMsg !== res.statusText ? ` — ${errMsg}` : ""}`)
-  if (res.status === 404) {
+  // A 404 that carries the daemon's own error ("Schedule not found: x") means the route
+  // exists and the thing does not; only a bare 404 means the daemon lacks the route.
+  if (res.status === 404 && !daemonExplained) {
     prompts.log.warn("Daemon route not found. Update the daemon: iris daemon restart (or iris update)")
   }
   process.exitCode = 1
@@ -2185,10 +2189,16 @@ const HiveDoctorCommand = cmd({
 
 const HiveScriptPushCommand = cmd({
   command: "push <file>",
-  describe: "push a local script to the node and execute it",
+  describe: "push a local script to the node and execute it (--no-run to only save it, e.g. before `hive schedule add`)",
   builder: (yargs) =>
     yargs
       .positional("file", { type: "string", describe: "local file path" })
+      // Push always executed, synchronously, under a 30s default timeout — so persisting a
+      // long script in order to schedule it ran it once and killed it mid-way (exit 124),
+      // leaving half its work done (#188735). --no-run saves it and returns.
+      // A LITERAL flag: src/index.ts turns yargs boolean-negation off (#146915), so an
+      // option("run") would NOT accept --no-run (negated-flags.test.ts, #184593).
+      .option("no-run", { type: "boolean", default: false, describe: "save the script to /scripts without executing it" })
       .option("project", { alias: "p", type: "string", describe: "inject env vars from a hive project" })
       .option("persist", { type: "boolean", default: true, describe: "keep script on node after execution" })
       .option("args", { type: "array", string: true, default: [], describe: "arguments to pass to the script" })
@@ -2231,6 +2241,41 @@ const HiveScriptPushCommand = cmd({
             }
           }
         } catch {}
+      }
+
+      if (args["no-run"]) {
+        // Save only. The scheduler reads scripts from <dataDir>/scripts, which is exactly
+        // where POST /files?path=/scripts writes.
+        const saveUrl = await bridgeUrl(`/daemon/files?path=/scripts&filename=${encodeURIComponent(filename)}`)
+        const saveRes = await fetch(saveUrl, {
+          method: "POST",
+          headers: bridgeHeaders(),
+          body: JSON.stringify({ content }),
+        })
+        if (!saveRes.ok) {
+          const errMsg = await reportBridgeFailure("POST", saveUrl, saveRes)
+          spinner.stop(`Failed: HTTP ${saveRes.status} — ${errMsg}`, 1)
+          prompts.outro("Done")
+          return
+        }
+        const saved = await saveRes.json() as Record<string, unknown>
+        // Read it back: an upload that reports success is not the same as a file on disk.
+        const readUrl = await bridgeUrl(`/daemon/files?path=${encodeURIComponent(String(saved.path ?? `/scripts/${filename}`))}`)
+        const readRes = await fetch(readUrl, { headers: bridgeHeaders() })
+        const back = readRes.ok ? await readRes.json().catch(() => null) as Record<string, unknown> | null : null
+        if (!back || (typeof back.content === "string" && back.content !== content)) {
+          spinner.stop("Saved, but the read-back did not match what was sent", 1)
+          process.exitCode = 1
+          prompts.outro("Done")
+          return
+        }
+        spinner.stop(success("Saved (not run)"))
+        printDivider()
+        printKV("Persisted", success(String(saved.path ?? `/scripts/${filename}`)))
+        if (saved.machine) printKV("Machine", dim(String(saved.machine)))
+        console.log(dim(`  Schedule it: iris hive schedule add ${filename} --cron "0 9 * * *"`))
+        prompts.outro("Done")
+        return
       }
 
       const url = await bridgeUrl("/daemon/execute-script")
@@ -2618,9 +2663,48 @@ const HiveScriptCommand = cmd({
 
 const HiveScheduleListCommand = cmd({
   command: "list",
-  describe: "list cron schedules on the local node",
-  builder: (yargs) => yargs,
-  async handler() {
+  describe: "list cron schedules on the local node (--all: every node, with what is not running)",
+  builder: (yargs) =>
+    yargs
+      .option("all", { type: "boolean", default: false, describe: "every node's schedules, from their heartbeats — flags offline, failed and overdue" })
+      .option("json", { type: "boolean", default: false, describe: "JSON output (with --all)" }),
+  async handler(args) {
+    if (args.all) {
+      // #188731: the local list only sees this machine, so a job on a sleeping laptop was
+      // invisible. Every daemon reports its schedules in its heartbeat; read those.
+      const userId = await requireUserId()
+      if (!userId) return
+      const rows = fleetRows(await fetchNodes(userId) as unknown as ScheduleNode[])
+      const attention = rows.filter((r) => needsAttention(r.verdict))
+      if (args.json) {
+        writeJson({ schedules: rows, needs_attention: attention.length })
+      } else {
+        UI.empty()
+        prompts.intro("◈  Schedules — every node")
+        if (rows.length === 0) {
+          console.log(dim("  No node reports any schedules."))
+        } else {
+          const label: Record<string, string> = {
+            ok: success("● ok"), paused: dim("○ paused"), node_offline: highlight("✗ node offline — not running"),
+            failed: highlight("✗ last run failed"), never_ran: highlight("⚠ never ran"), overdue: highlight("⚠ overdue"),
+          }
+          printDivider()
+          for (const r of rows) {
+            const last = r.lastRun ? new Date(r.lastRun).toLocaleString() : "never"
+            console.log(`  ${label[r.verdict]}  ${bold(r.filename)}  ${dim(r.cron)}  ${dim("on")} ${r.node}`)
+            console.log(dim(`      last: ${last}${r.lastStatus ? ` (${r.lastStatus})` : ""}`))
+          }
+          console.log()
+          console.log(attention.length
+            ? highlight(`  ${attention.length} of ${rows.length} schedule(s) are not running as scheduled.`)
+            : dim(`  ${rows.length} schedule(s), all running.`))
+        }
+        prompts.outro("Done")
+      }
+      if (attention.length) process.exitCode = 1
+      return
+    }
+
     UI.empty()
     prompts.intro("◈  Node Schedules")
 
@@ -2681,7 +2765,12 @@ const HiveScheduleAddCommand = cmd({
     spinner.start("Creating schedule...")
 
     try {
-      const res = await fetch(`${BRIDGE_URL}/schedules`, {
+      // Every schedule call used the bare `${BRIDGE_URL}/schedules`, while the daemon serves
+      // them only under its prefix (`/daemon/schedules` when embedded in the bridge). So add,
+      // rm, pause and resume all answered "Not Found" while `list` — which went through
+      // bridgeUrl — worked (#188734).
+      const url = await bridgeUrl("/daemon/schedules")
+      const res = await fetch(url, {
         method: "POST",
         headers: bridgeHeaders(),
         body: JSON.stringify({
@@ -2692,8 +2781,8 @@ const HiveScheduleAddCommand = cmd({
       })
 
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.statusText })) as Record<string, unknown>
-        spinner.stop(`Failed: ${err.error}`, 1)
+        const errMsg = await reportBridgeFailure("POST", url, res)
+        spinner.stop(`Failed: ${errMsg}`, 1)
         prompts.outro("Done")
         return
       }
@@ -2725,14 +2814,14 @@ const HiveScheduleRmCommand = cmd({
     prompts.intro("◈  Remove Schedule")
 
     try {
-      const res = await fetch(`${BRIDGE_URL}/schedules/${encodeURIComponent(args.id as string)}`, {
+      const url = await bridgeUrl(`/daemon/schedules/${encodeURIComponent(args.id as string)}`)
+      const res = await fetch(url, {
         method: "DELETE",
         headers: bridgeHeaders(),
       })
 
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.statusText })) as Record<string, unknown>
-        prompts.log.error(String(err.error))
+        await reportBridgeFailure("DELETE", url, res)
       } else {
         const data = await res.json() as Record<string, unknown>
         const s = data.schedule as Record<string, unknown>
@@ -2753,18 +2842,19 @@ const HiveSchedulePauseCommand = cmd({
   async handler(args) {
     UI.empty()
     try {
-      const res = await fetch(`${BRIDGE_URL}/schedules/${encodeURIComponent(args.id as string)}/pause`, {
+      const url = await bridgeUrl(`/daemon/schedules/${encodeURIComponent(args.id as string)}/pause`)
+      const res = await fetch(url, {
         method: "POST",
         headers: bridgeHeaders(),
       })
       if (res.ok) {
         prompts.log.success("Schedule paused")
       } else {
-        const err = await res.json().catch(() => ({ error: res.statusText })) as Record<string, unknown>
-        prompts.log.error(String(err.error))
+        await reportBridgeFailure("POST", url, res)
       }
     } catch (err) {
       prompts.log.error(err instanceof Error ? err.message : String(err))
+      process.exitCode = 1
     }
   },
 })
@@ -2777,18 +2867,19 @@ const HiveScheduleResumeCommand = cmd({
   async handler(args) {
     UI.empty()
     try {
-      const res = await fetch(`${BRIDGE_URL}/schedules/${encodeURIComponent(args.id as string)}/resume`, {
+      const url = await bridgeUrl(`/daemon/schedules/${encodeURIComponent(args.id as string)}/resume`)
+      const res = await fetch(url, {
         method: "POST",
         headers: bridgeHeaders(),
       })
       if (res.ok) {
         prompts.log.success("Schedule resumed")
       } else {
-        const err = await res.json().catch(() => ({ error: res.statusText })) as Record<string, unknown>
-        prompts.log.error(String(err.error))
+        await reportBridgeFailure("POST", url, res)
       }
     } catch (err) {
       prompts.log.error(err instanceof Error ? err.message : String(err))
+      process.exitCode = 1
     }
   },
 })

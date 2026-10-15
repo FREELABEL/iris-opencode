@@ -763,6 +763,7 @@ export async function streamAgentChat(opts: {
     const decoder = new TextDecoder()
     let buffer = ""
     let streamError: string | undefined
+    let sawDone = false
     const result: AgentChatResult = {
       ok: true,
       content: "",
@@ -787,6 +788,7 @@ export async function streamAgentChat(opts: {
       }
       opts.onEvent?.(evt)
       if (evt.type === "done") {
+        sawDone = true
         if (typeof evt.content === "string") result.content = evt.content
         const tu = normalizeToolNames((evt as Record<string, unknown>).tools_used)
         if (tu.length > 0) result.toolsUsed = tu
@@ -810,10 +812,21 @@ export async function streamAgentChat(opts: {
     if (buffer.trim()) handleFrame(buffer)
 
     if (streamError) return { ...result, ok: false, status: "failed", error: streamError }
+    // A stream that closes without its `done` frame was cut off server-side — production's
+    // PHP-FPM killed every request at 120s (#188733) — and used to come back ok:true with
+    // empty content, which a caller then saved as the answer.
+    if (!sawDone) {
+      return { ...result, ok: false, status: "failed", error: "The server closed the stream before the agent finished (no result received). Long runs can hit the server's request limit — try a faster model." }
+    }
     return result
   } catch (err) {
     if (controller.signal.aborted) return failure(`Timed out after ${opts.timeoutSecs ?? 180}s`, true)
-    return failure(err instanceof Error ? err.message : String(err))
+    const msg = err instanceof Error ? err.message : String(err)
+    // Bun's wording for a dropped connection names fetch() internals; say what happened.
+    if (/socket connection was closed|ECONNRESET|other side closed/i.test(msg)) {
+      return failure("The server closed the connection before the agent finished. Long runs can hit the server's request limit — try a faster model.")
+    }
+    return failure(msg)
   } finally {
     clearTimeout(timer)
   }
