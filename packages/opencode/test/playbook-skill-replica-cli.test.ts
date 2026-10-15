@@ -85,6 +85,7 @@ async function iris(args: string[], cwd = WORK) {
       break
     } catch {}
   }
+  if (process.env.DEBUG_PB) console.log(`\n$ iris ${args.join(" ")}  (exit ${exitCode})\n${out}`)
   return { exitCode, out, json }
 }
 
