@@ -566,6 +566,14 @@ mod tests {
         assert!(matches!(choose(&home, None, &PLENTY), Choice::Legacy(_)));
         assert_eq!(fs::read(target.join("opencode/opencode.db")).unwrap(), b"someone's");
         assert!(!target.join(MARKER).exists());
+
+        // Empty, too: an empty dir could be renamed over on Unix, and would then hold a copy we
+        // never decided to make.
+        let home = temp_home("foreign-empty");
+        legacy_with_history(&home);
+        fs::create_dir_all(isolated_home(&home)).unwrap();
+        assert!(matches!(choose(&home, None, &PLENTY), Choice::Legacy(_)));
+        assert!(fs::read_dir(isolated_home(&home)).unwrap().next().is_none());
     }
 
     #[test]
