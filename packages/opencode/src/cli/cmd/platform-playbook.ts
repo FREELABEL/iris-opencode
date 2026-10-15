@@ -2811,7 +2811,9 @@ const PlaybookDoctorCommand = cmd({
         skillCount = files.length
         skillRootList = roots.map((r) => r.dir)
         const keep = new Set<string>()
+        // Only real playbooks keep a replica alive — Skill.all() also lists the replicas themselves.
         for (const r of reports) {
+          if (!r.location.endsWith("PLAYBOOK.md")) continue
           keep.add(r.name)
           keep.add(toSkillId(r.name))
         }

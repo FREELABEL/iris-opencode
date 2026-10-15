@@ -103,6 +103,6 @@ test("frontmatter with an unquoted colon in a value parses, like the IRIS app", 
 test("frontmatter that is broken for another reason still fails loudly", async () => {
   const dir = await import("fs").then((fs) => fs.mkdtempSync(require("path").join(require("os").tmpdir(), "md-bad-")))
   const file = require("path").join(dir, "PLAYBOOK.md")
-  await Bun.write(file, "---\nname: [unclosed\n---\nx\n")
+  await Bun.write(file, "---\nname: a\nname: b\n---\nx\n")
   await expect(ConfigMarkdown.parse(file)).rejects.toThrow()
 })
