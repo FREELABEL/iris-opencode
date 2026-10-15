@@ -148,6 +148,15 @@ export function accountDataHome(home: string, userId: number) {
 }
 
 /**
+ * Where the FIRST account's engine keeps its data (an XDG_DATA_HOME), once the desktop has copied
+ * it out of the directory stock OpenCode also uses (#189477, packages/desktop/src-tauri/src/
+ * history_home.rs). Until that copy has happened the first account still runs in the default dir.
+ */
+export function defaultAccountDataHome(home: string) {
+  return path.join(home, ".iris", "accounts", "default")
+}
+
+/**
  * `readable: false` means the file exists and could not be parsed. Writers refuse in that case:
  * a store we cannot read holds keys, and rewriting it from empty would delete them.
  */
@@ -288,7 +297,9 @@ export function switchAccount(
   written.push("~/.iris/sdk/.env")
 
   const authFiles = new Set([path.join(opts.cliDataDir, "auth.json")])
-  if (account.data_dir) authFiles.add(path.join(account.data_dir, "opencode", "auth.json"))
+  // The first account's engine may run from its own copy (#189477); repointAuthStore only touches a
+  // store that already has an iris entry, so this is a no-op where the copy never happened.
+  authFiles.add(path.join(account.data_dir ?? defaultAccountDataHome(opts.home), "opencode", "auth.json"))
   for (const f of authFiles) if (repointAuthStore(f, account.key)) written.push(f)
   return { ok: true, account, written }
 }

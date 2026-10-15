@@ -1,6 +1,7 @@
 mod accounts;
 mod cli;
 mod google_signin;
+mod history_home;
 mod login;
 mod onboarding;
 mod window_customizer;
@@ -646,7 +647,41 @@ fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
     // MCP auth in its own data dir — sessions carry no account id, so a shared dir shows one
     // account's history under another. The parent's value travels too, so the engine can still
     // find the CLI's (default) auth store when it switches or signs out.
-    if let Some(data_home) = dirs_next_home().and_then(|h| accounts::data_home_for_key(&h, &iris_api_key)) {
+    //
+    // #189477: the first account gets its own dir too. Its data used to live in the default XDG
+    // dir — the same directory and database stock OpenCode uses, which OpenCode 2.x rewrites in
+    // place on first run. history_home copies it (never moves it) to ~/.iris/accounts/default
+    // once, here, before the engine exists and so before the 7-second listen clock starts. Any
+    // doubt — disk space, a failed or disturbed copy — and the engine starts in the old dir as
+    // it always has.
+    let home = dirs_next_home();
+    let account_home = home.as_deref().and_then(|h| accounts::data_home_for_key(h, &iris_api_key));
+    let data_home = account_home.or_else(|| {
+        let h = home.as_deref()?;
+        if std::env::var_os(history_home::OPT_OUT_ENV).is_some() {
+            println!("{} is set: engine data stays in the shared dir", history_home::OPT_OUT_ENV);
+            return None;
+        }
+        let parent = std::env::var_os("XDG_DATA_HOME");
+        match history_home::choose(h, parent.as_deref(), &history_home::free_bytes) {
+            history_home::Choice::Isolated { data_home, copied_now } => {
+                if copied_now {
+                    println!("Copied engine history into {} (the original is untouched)", data_home.display());
+                }
+                // A CLI sign-in or sign-out writes the shared auth store; the panels read this one.
+                let legacy = history_home::legacy_data_dir(h, parent.as_deref());
+                if let Err(e) = history_home::mirror_iris_auth(&legacy.join("auth.json"), &data_home.join("opencode").join("auth.json")) {
+                    eprintln!("Could not mirror the iris sign-in: {e}");
+                }
+                Some(data_home)
+            }
+            history_home::Choice::Legacy(why) => {
+                eprintln!("Engine data stays in the shared dir: {why}");
+                None
+            }
+        }
+    });
+    if let Some(data_home) = data_home {
         let _ = std::fs::create_dir_all(&data_home);
         println!("Engine data for this account: {}", data_home.display());
         let parent = std::env::var("XDG_DATA_HOME").unwrap_or_default();

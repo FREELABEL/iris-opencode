@@ -42,6 +42,14 @@ sha2 = "0.10"
 getrandom = "0.2"
 base64 = "0.22"
 
+# #189477: free disk space before copying history (statvfs / GetDiskFreeSpaceExW). Both were
+# already in the tree transitively.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18.2"
 # v2_8: UserMediaPermissionRequest::is_for_{audio,video}_device (window_customizer.rs).

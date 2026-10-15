@@ -8,6 +8,7 @@ import {
   agentCredential,
   cliDataDir,
   credentialKind,
+  defaultAccountDataHome,
   forgetActiveAccount,
   readAccountStore,
   readNodeKey,
@@ -166,6 +167,25 @@ describe("more than one account on one machine (#189321)", () => {
       openai: { k: 1 },
     })
     expect(JSON.parse(readFileSync(path.join(bDir, "opencode", "auth.json"), "utf-8")).iris.key).toBe("key-b")
+  })
+
+  test("switching back to the first account repoints its own copied store too (#189477)", () => {
+    const { home, data } = twoAccounts()
+    writeFileSync(path.join(data, "auth.json"), JSON.stringify({ iris: { type: "api", key: "key-b" } }))
+    // The desktop copied the first account's data out of the shared dir; its panels read this one.
+    const own = path.join(defaultAccountDataHome(home), "opencode")
+    mkdirSync(own, { recursive: true })
+    writeFileSync(path.join(own, "auth.json"), JSON.stringify({ iris: { type: "api", key: "key-b" }, openai: { k: 2 } }))
+
+    const r = switchAccount({ home, cliDataDir: data }, "193")
+
+    expect(r.ok).toBe(true)
+    expect(JSON.parse(readFileSync(path.join(data, "auth.json"), "utf-8")).iris.key).toBe("key-a")
+    expect(JSON.parse(readFileSync(path.join(own, "auth.json"), "utf-8"))).toEqual({
+      iris: { type: "api", key: "key-a" },
+      openai: { k: 2 },
+    })
+    expect(defaultAccountDataHome(home)).toBe(path.join(home, ".iris", "accounts", "default"))
   })
 
   test("switching does not create an iris auth entry where there was none", () => {
