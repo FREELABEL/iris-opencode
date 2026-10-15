@@ -302,13 +302,19 @@ export function createDictation(opts: DictationOptions) {
   // What the server can do. Fetched once on mount for the composer; the Windows fallback below
   // waits on it, since the first press can land before it arrives.
   const [readiness, setReadiness] = createSignal<DictationReadiness>()
-  const readinessLoaded = call("/transcribe/health")
-    .then((res) => (res.ok ? res.json() : undefined))
-    .then((body: unknown) => {
-      if (isReadiness(body) && !disposed) setReadiness(body)
-      return readiness()
-    })
-    .catch(() => undefined)
+  // Live words cost a streaming session and send a second copy of the audio off the machine. Only
+  // open one for a composer that shows them; the old composer never did (#189526).
+  const liveWanted = () => !!(opts.onPartial || opts.onFinal)
+
+  const loadReadiness = () =>
+    call("/transcribe/health")
+      .then((res) => (res.ok ? res.json() : undefined))
+      .then((body: unknown) => {
+        if (isReadiness(body) && !disposed) setReadiness(body)
+        return readiness()
+      })
+      .catch(() => undefined)
+  const readinessLoaded = loadReadiness()
 
   // Held recordings: the server keeps audio on disk when every engine fails. They are retried
   // automatically on RETRY_BACKOFF_MS, and on demand. Recordings left from a previous run are
@@ -469,7 +475,10 @@ export function createDictation(opts: DictationOptions) {
       // and no on-device whisper, every take would fail after the fact. Say why now. Unknown
       // readiness (an older server) never blocks.
       const pending = attempt
-      const ready = readiness() ?? (await readinessLoaded)
+      const cached = readiness() ?? (await readinessLoaded)
+      // A refusal is not cached: the message tells the person to sign in and try again, so look
+      // again before refusing a second time (#189525).
+      const ready = cached && !cached.cloud.configured && !cached.local.whisper ? ((await loadReadiness()) ?? cached) : cached
       // A hold-to-talk release (or stop) while this was awaited bumps `attempt`: abandon the take
       // rather than open a microphone nobody is holding.
       if (attempt !== pending || disposed) return
@@ -563,7 +572,7 @@ export function createDictation(opts: DictationOptions) {
    * The voice routes only answer loopback callers, so the credential never leaves this machine.
    */
   function openLive(source: "window" | "sidecar") {
-    if (liveSocket || live() === "unavailable" || typeof WebSocket === "undefined") return
+    if (!liveWanted() || liveSocket || live() === "unavailable" || typeof WebSocket === "undefined") return
     const url = new URL(`${base()}/dictate/live`)
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
     url.searchParams.set("source", source)
@@ -595,7 +604,7 @@ export function createDictation(opts: DictationOptions) {
 
   /** Window recorder frame (at the AudioContext rate) -> 100 ms PCM16 frames on the live socket. */
   function sendLiveAudio(frame: Float32Array, rate: number) {
-    if (live() === "unavailable") return
+    if (!liveWanted() || live() === "unavailable") return
     openLive("window")
     const pcm = toPcm16(downsample(frame, rate, TARGET_RATE))
     livePending.push(pcm)
@@ -928,6 +937,9 @@ export function createDictation(opts: DictationOptions) {
     captured = []
     peak = 0
     teardownWebview()
+    // Close the live session now: left open, it held one of the relay's two sessions per person
+    // until the relay's idle timeout, and the next take could be refused (#189533).
+    resetLive()
     setPhase("idle")
   }
 

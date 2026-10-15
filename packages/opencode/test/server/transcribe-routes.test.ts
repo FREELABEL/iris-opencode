@@ -154,6 +154,7 @@ describe("the sidecar take's cap, and Keep recording (#189519)", () => {
   const capturing = async (base: string) => (await (await fetch(`${base}/dictate/level`)).json()).capturing as boolean
 
   linuxOnly("a take ends at its cap, and the level route says the recorder has stopped", async () => {
+    configured() // the stop below transcribes: keep it on the stand-in platform, never the real one
     streaming()
     await withServer(async (base) => {
       try {

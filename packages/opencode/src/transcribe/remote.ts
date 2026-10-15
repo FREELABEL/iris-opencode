@@ -25,6 +25,8 @@ export interface RemoteConfig {
   bloqId?: string
 }
 
+const DEFAULT_API_URL = "https://heyiris.io"
+
 /** Read ~/.iris/config.json, the same file the CLI authenticates with. Env wins. */
 export function readRemoteConfig(): RemoteConfig | null {
   return describeRemoteConfig().config
@@ -52,11 +54,10 @@ export function describeRemoteConfig(
     /* an unreadable config is the same as no config */
   }
 
-  if (!apiUrl)
-    return {
-      config: null,
-      reason: "You are not signed in to IRIS. Run iris auth login in a terminal, then try dictation again.",
-    }
+  // Same default as the rest of the server (iris/platform.ts IRIS_API). Signing in inside the
+  // desktop app gives the engine IRIS_API_KEY but no URL and writes no config.json, so requiring
+  // one told signed-in people to go and use a terminal (#189521).
+  apiUrl = apiUrl || DEFAULT_API_URL
   // The platform refuses anonymous transcription, so a person's credential is REQUIRED. The
   // node_api_key in ~/.iris/config.json is not one — the platform rejects it as a caller — so
   // only shapes the platform's guard accepts are sent; anything else is reported, not tried.
