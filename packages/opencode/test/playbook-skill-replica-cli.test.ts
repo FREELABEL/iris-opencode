@@ -6,16 +6,18 @@
  * Claude Code, a renamed or uninstalled playbook leaves its skill behind. So these run `install`,
  * `install --force`, `uninstall`, `sync` and `doctor` in a throwaway home and assert on the files.
  */
-import { afterAll, beforeAll, describe, expect, test } from "bun:test"
+import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test"
 import { createServer, type Server } from "node:http"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 
 const CLI = join(import.meta.dir, "../src/index.ts")
-// The CLI runs IN a throwaway folder, so bunfig.toml (the JSX preload) must be named explicitly —
-// bun reads it from the cwd, and without it the TUI import fails before any command runs.
-const BUNFIG = join(import.meta.dir, "../bunfig.toml")
+// The CLI runs IN a throwaway folder (it resolves projects from the cwd), so bunfig.toml's JSX
+// preload is not picked up from there — name it by absolute path, and forbid auto-install so a
+// missing module fails loudly instead of being fetched into the throwaway HOME.
+const PRELOAD = require.resolve("@opentui/solid/preload", { paths: [join(import.meta.dir, "..")] })
+setDefaultTimeout(120_000)
 const tmp = mkdtempSync(join(tmpdir(), "pb-skill-cli-"))
 const HOME = join(tmp, "home")
 const WORK = join(tmp, "work") // not a git repo → installs go global
@@ -51,7 +53,7 @@ afterAll(() => {
 })
 
 async function iris(args: string[], cwd = WORK) {
-  const proc = Bun.spawn(["bun", `--config=${BUNFIG}`, "run", CLI, ...args], {
+  const proc = Bun.spawn(["bun", "--no-install", `--preload=${PRELOAD}`, "run", CLI, ...args], {
     cwd,
     env: {
       ...process.env,
