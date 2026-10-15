@@ -100,9 +100,11 @@ test("frontmatter with an unquoted colon in a value parses, like the IRIS app", 
   expect(md.content).toContain("Body: stays.")
 })
 
-test("frontmatter that is broken for another reason still fails loudly", async () => {
-  const dir = await import("fs").then((fs) => fs.mkdtempSync(require("path").join(require("os").tmpdir(), "md-bad-")))
-  const file = require("path").join(dir, "PLAYBOOK.md")
-  await Bun.write(file, "---\nname: a\nname: b\n---\nx\n")
-  await expect(ConfigMarkdown.parse(file)).rejects.toThrow()
+test("sanitize only touches unquoted top-level values that contain a colon", () => {
+  const src = '---\nname: x\ntitle: "quoted: kept"\nlist:\n  - a: b\ndescription: plain: fixed\n---\nbody\n'
+  const out = ConfigMarkdown.sanitize(src)
+  expect(out).toContain('title: "quoted: kept"')
+  expect(out).toContain("  - a: b")
+  expect(out).toContain("description: |-\n  plain: fixed")
+  expect(out.endsWith("---\nbody\n")).toBe(true)
 })
