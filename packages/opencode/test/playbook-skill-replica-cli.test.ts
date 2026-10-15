@@ -93,6 +93,7 @@ describe("install → a skill every reader accepts", () => {
   test("fresh install writes a replica with id == folder and the registry description", async () => {
     registry["tiny-pb"] = { version: "1", content: "---\nname: tiny-pb\ndescription: Do the tiny thing: carefully\n---\n\n# Tiny\n\nStep one.\n" }
     const r = await iris(["playbook", "install", "tiny-pb", "--json"])
+    if (r.exitCode !== 0) console.log("INSTALL OUTPUT:\n" + r.out)
     expect(r.exitCode).toBe(0)
     const s = fm(join(SKILLS, "tiny-pb", "SKILL.md"))
     expect(s.name).toBe("tiny-pb")

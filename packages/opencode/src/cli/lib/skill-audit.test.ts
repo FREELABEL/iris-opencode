@@ -82,9 +82,12 @@ describe("auditSkills", () => {
     expect(codes("lower")).toContain("lowercase-filename")
   })
   test("different copies of one id are an error; identical copies are only info", () => {
-    expect(findings.find((f) => f.id === "dup")?.level).toBe("error")
-    expect(findings.find((f) => f.id === "dup")?.code).toBe("shadowed")
-    expect(findings.find((f) => f.id === "same")?.level).toBe("info")
+    const dup = findings.find((f) => f.id === "dup" && f.code.startsWith("shadowed"))
+    expect(dup?.code).toBe("shadowed")
+    expect(dup?.level).toBe("error")
+    const same = findings.find((f) => f.id === "same" && f.code.startsWith("shadowed"))
+    expect(same?.code).toBe("shadowed-identical")
+    expect(same?.level).toBe("info")
   })
   test("orphans: only a GENERATED replica whose playbook is gone", () => {
     expect(codes("gone")).toContain("orphan")
@@ -95,7 +98,9 @@ describe("auditSkills", () => {
     expect(codes("ok")).toEqual([])
   })
   test("keep: a playbook the loader still finds is never an orphan", () => {
-    expect(auditSkills(files, new Set(["gone"])).some((f) => f.code === "orphan")).toBe(false)
+    const kept = auditSkills(files, new Set(["gone"]))
+    expect(kept.some((f) => f.code === "orphan" && f.id === "gone")).toBe(false)
+    expect(findings.some((f) => f.code === "orphan" && f.id === "gone")).toBe(true)
   })
 })
 
