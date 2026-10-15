@@ -8,13 +8,15 @@ import { LEVEL_HISTORY, levelFromRms } from "./dictate-visual"
  * fake microphone, AudioContext and server to pin down what each of those stops leaves behind.
  */
 
-type Call = { path: string; resolve?: () => void }
+type Call = { path: string; search?: string; resolve?: () => void }
 
 let calls: Call[]
 let tracksStopped: number
 let processor: { onaudioprocess?: (e: unknown) => void } | undefined
 let holdStart: boolean
 let sidecarLevel = 0
+/** /dictate/level `capturing`; undefined = a server that does not report it. */
+let sidecarCapturing: boolean | undefined
 /** GET /transcribe/health body; undefined = an older server that does not report readiness. */
 let health: unknown
 let holdHealth: (() => void) | undefined
@@ -39,6 +41,7 @@ beforeEach(() => {
   holdHealth = undefined
   stopFails = false
   gumCalls = 0
+  sidecarCapturing = undefined
   setUserAgent("Mozilla/5.0 (Macintosh) AppleWebKit")
   ;(globalThis as any).window = globalThis
   Object.defineProperty(navigator, "mediaDevices", {
@@ -65,7 +68,7 @@ beforeEach(() => {
   }
   globalThis.fetch = (async (input: string) => {
     const path = new URL(input).pathname
-    const call: Call = { path }
+    const call: Call = { path, search: new URL(input).search }
     calls.push(call)
     if (path === "/dictate/start" && holdStart) await new Promise<void>((r) => (call.resolve = r))
     if (path === "/transcribe/health") {
@@ -79,8 +82,10 @@ beforeEach(() => {
     const body =
       path === "/transcribe/held"
         ? { held: [] }
+        : path === "/transcribe/retry"
+          ? { text: "older words" }
         : path === "/dictate/level"
-          ? { level: sidecarLevel, seconds: 1 }
+          ? { level: sidecarLevel, seconds: 1, capturing: sidecarCapturing }
           : { text: "hello" }
     return new Response(JSON.stringify(body), { status: 200 })
   }) as typeof fetch
@@ -359,6 +364,30 @@ describe("createDictation — extend: Keep recording lifts a running take to the
     dispose()
   })
 
+  test("a sidecar take extended asks the server to move its cap too (#189519)", async () => {
+    const { d, dispose } = await mount()
+    d.toggle() // probe hears silence → sidecar
+    await sleep(700)
+    d.extend()
+    await sleep(20)
+    expect(posted("/dictate/extend")).toBe(1)
+    dispose()
+  })
+
+  test("a sidecar recorder that stops on its own ends the take, and what it captured is transcribed (#189519)", async () => {
+    const texts: string[] = []
+    const { d, dispose } = await mount({ onTranscript: (t: string) => texts.push(t) })
+    d.toggle()
+    await sleep(700)
+    expect(d.phase()).toBe("recording")
+    sidecarCapturing = false
+    await sleep(300)
+    expect(posted("/dictate/stop")).toBe(1)
+    expect(d.phase()).toBe("idle")
+    expect(texts).toEqual(["hello"])
+    dispose()
+  })
+
   test("extend when idle does nothing", async () => {
     const { d, dispose } = await mount()
     d.extend()
@@ -448,11 +477,72 @@ describe("createDictation — background retries of held recordings", () => {
     dispose()
   })
 
+  test("a retry that lands during a new take is delivered after that take, never instead of it (#189523)", async () => {
+    const texts: string[] = []
+    const { d, dispose } = await failOneTake({ autoRetry: false, onTranscript: (t: string) => texts.push(t) })
+    stopFails = false
+    d.toggle() // a new take
+    await sleep(500)
+    expect(d.phase()).toBe("recording")
+    await d.retryHeld()
+    expect(texts).toEqual([])
+    d.toggle()
+    await sleep(50)
+    expect(texts).toEqual(["hello", "older words"])
+    dispose()
+  })
+
   test("autoRetry: false holds the recording but never retries it in the background", async () => {
     const { d, dispose } = await failOneTake({ autoRetry: false })
     expect(d.held().map((h: { id: string }) => h.id)).toEqual(["1700000000000-abcdef"])
     expect(d.nextRetryIn()).toBeUndefined()
     dispose()
+  })
+})
+
+describe("createDictation — a take torn down mid-recording is kept, not thrown away (#189520)", () => {
+  const fakeTicker = () => {
+    const ticks: Array<() => void> = []
+    globalThis.setInterval = ((fn: () => void) => {
+      ticks.push(fn)
+      return 0 as any
+    }) as any
+    return ticks
+  }
+
+  test("a sidecar take is stopped and held on the server", async () => {
+    const ticks = fakeTicker()
+    const { d, dispose } = await mount()
+    d.toggle() // probe hears silence → sidecar
+    await sleep(700)
+    for (let i = 0; i < 5; i++) ticks[0]!()
+    expect(d.seconds()).toBe(5)
+    dispose()
+    expect(posted("/dictate/hold")).toBe(1)
+    expect(posted("/dictate/cancel")).toBe(0)
+  })
+
+  test("a mis-press (under 3 s) is still just cancelled", async () => {
+    const { d, dispose } = await mount()
+    d.toggle()
+    await sleep(700)
+    dispose()
+    expect(posted("/dictate/cancel")).toBe(1)
+    expect(posted("/dictate/hold")).toBe(0)
+  })
+
+  test("a window take is uploaded to be held, not transcribed", async () => {
+    setUserAgent("Mozilla/5.0 (Windows NT 10.0)")
+    const ticks = fakeTicker()
+    const { d, dispose } = await mount()
+    d.toggle()
+    await sleep(10)
+    processor!.onaudioprocess!({ inputBuffer: { getChannelData: () => new Float32Array(4096).fill(0.3) } })
+    for (let i = 0; i < 4; i++) ticks[0]!()
+    dispose()
+    const uploads = calls.filter((c) => c.path === "/transcribe")
+    expect(uploads).toHaveLength(1)
+    expect(uploads[0]!.search).toContain("hold=1")
   })
 })
 

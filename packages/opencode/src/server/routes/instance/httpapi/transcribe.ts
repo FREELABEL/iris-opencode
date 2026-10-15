@@ -5,6 +5,7 @@ import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstab
 import {
   cancelCapture,
   currentLevel,
+  extendCapture,
   ffmpegPath,
   isRecording,
   listInputDevices,
@@ -225,6 +226,13 @@ async function transcribeSegments(audio: Uint8Array, filename: string, language:
 }
 
 /** Holding is the safety net, not a precondition: a full disk must not also block transcription. */
+/** Save a take for later without transcribing it: 202 with `held`, 500 when the disk refused it. */
+function heldOnly(audio: Uint8Array) {
+  const held = holdOrNull(audio)
+  if (!held) return HttpServerResponse.jsonUnsafe({ error: "The recording could not be saved." }, { status: 500 })
+  return HttpServerResponse.jsonUnsafe({ held: { id: held.id, seconds: held.seconds } }, { status: 202 })
+}
+
 function holdOrNull(audio: Uint8Array) {
   try {
     return hold(audio)
@@ -283,6 +291,34 @@ export const dictateRoute = HttpRouter.use((router) =>
       }).pipe(
         Effect.catch((e) => Effect.succeed(HttpServerResponse.jsonUnsafe({ error: e.message }, { status: 500 }))),
       ),
+    )
+
+    // Stop the sidecar take and SAVE it, transcribing nothing: what the composer does when it is
+    // torn down mid-take, instead of cancelling (#189520). Silence is not kept.
+    yield* add(router, "POST", "/dictate/hold", () =>
+      Effect.tryPromise({
+        try: async () => {
+          const { audio } = await stopCapture()
+          if (peakAmplitude(audio) < 0.01) return HttpServerResponse.jsonUnsafe({ held: undefined })
+          return heldOnly(audio)
+        },
+        catch: (e) => (e instanceof TranscribeError ? e : new TranscribeError(String(e))),
+      }).pipe(
+        Effect.catch((e) => Effect.succeed(HttpServerResponse.jsonUnsafe({ error: e.message }, { status: 409 }))),
+      ),
+    )
+
+    // "Keep recording": lift the running sidecar take to ?max_seconds= (capture.ts bounds it).
+    // 409 when nothing is recording, or the take already reached its cap.
+    yield* add(router, "POST", "/dictate/extend", (request) =>
+      Effect.sync(() => {
+        const maxSeconds = Number(new URL(request.url, "http://localhost").searchParams.get("max_seconds"))
+        if (!Number.isFinite(maxSeconds) || maxSeconds <= 0)
+          return HttpServerResponse.jsonUnsafe({ error: "max_seconds is required" }, { status: 400 })
+        return extendCapture(maxSeconds)
+          ? HttpServerResponse.jsonUnsafe({ recording: true, maxSeconds })
+          : HttpServerResponse.jsonUnsafe({ error: "Not recording." }, { status: 409 })
+      }),
     )
 
     yield* add(router, "POST", "/dictate/cancel", () =>
@@ -460,6 +496,11 @@ export const transcribeRoute = HttpRouter.use((router) =>
           audio.set(c, offset)
           offset += c.byteLength
         }
+
+        // ?hold=1: save it and transcribe nothing. The composer sends a take this way when it is
+        // torn down mid-recording (a new session, another project), so the take waits in the
+        // held list with Retry instead of being thrown away (#189520).
+        if (url.searchParams.get("hold") === "1") return heldOnly(audio)
 
         return yield* Effect.promise(() =>
           transcribeHeld(
