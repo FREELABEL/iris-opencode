@@ -14,7 +14,7 @@ import {
   type DictationControls,
 } from "@opencode-ai/session-ui/v2/prompt-input/dictation"
 import { glowDurations, useSettings } from "@/context/settings"
-import { isSpeaking, stopSpokenReply } from "@/context/spoken-replies"
+import { holdSpokenReplies, isSpeaking, stopSpokenReply } from "@/context/spoken-replies"
 import { DICTATE_COMMAND_ID, dictateCommand } from "@/components/prompt-input/dictate-command"
 import { ModelSelectorPopoverV2 } from "@/components/dialog-select-model"
 import { DialogSelectModelUnpaidV2 } from "@/components/dialog-select-model-unpaid-v2"
@@ -75,20 +75,8 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
   const command = useCommand()
   const language = useLanguage()
   const [dictate, setDictate] = createSignal<DictationControls>()
-  // Starting to dictate interrupts a reply being read aloud, so the mic does not hear it.
-  createEffect(() => {
-    if (dictate()?.phase() === "recording") stopSpokenReply()
-  })
-  command.register("voice-stop-speaking", () => [
-    {
-      id: "voice.stopSpeaking",
-      title: language.t("command.voice.stopSpeaking"),
-      category: language.t("command.category.session"),
-      keybind: "mod+shift+m",
-      disabled: !isSpeaking(),
-      onSelect: stopSpokenReply,
-    },
-  ])
+  // Nothing is read aloud while dictating, so the mic does not hear it.
+  createEffect(() => holdSpokenReplies(dictate()?.phase() === "recording"))
   // The working glow (Alex, 2026-10-09): a RING while this chat is working, an UNDERGLOW while
   // anything else runs in the background — other sessions and this one's subagents, which are
   // child sessions and so already in session_status. See prompt-input-glow.css.
