@@ -724,6 +724,10 @@ jobs:
           # partial one stays fetchable by tag. Re-run the workflow to complete it and it is
           # promoted automatically on the next full build.
           prerelease: ${{ steps.assets.outputs.missing != '' }}
+          # Flipping prerelease back to false on a re-run does NOT make a release "latest" —
+          # GitHub only moves latest when told to. v1.3.348 completed on re-run (#189475) and
+          # releases/latest stayed on v1.3.347 until promoted by hand. Say it explicitly.
+          make_latest: ${{ steps.assets.outputs.missing == '' && 'true' || 'false' }}
           generate_release_notes: true
           # Empty when everything built, so a complete release looks untouched.
           body: ${{ steps.assets.outputs.missing }}
