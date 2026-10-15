@@ -1,39 +1,101 @@
 /**
  * A quick dictation take, typed into the chat box while it is being spoken.
  *
- * One span at the end of the editor, rewritten in place as the words arrive. It is on screen and
- * NOT in the prompt: the editor's parser skips it (isLiveDictation), and the final transcript
- * replaces it. Reading it into the prompt would put the take there twice once the transcript lands.
+ * The words are written as the prompt's REAL text — one plain text node at the end of the editor,
+ * rewritten in place as they arrive, with the caller firing the editor's input event after each
+ * write. So the placeholder goes away, the text is the editor's own colour, Send is enabled, and
+ * what Send sends is what is on screen (#189543). Until then they were a grey preview span the
+ * parser skipped: on screen, never in the prompt.
+ *
+ * The region belongs to the take until the person edits it. Once they type into the dictated words,
+ * or the words leave the editor (sent, cleared), it is theirs: no later live update or final
+ * transcript overwrites or re-adds them.
  */
-export const LIVE_SLOT = "dictate-live"
-
-export function isLiveDictation(node: Node): boolean {
-  return node instanceof HTMLElement && node.dataset.slot === LIVE_SLOT
+export type LiveRegion = {
+  node: Text
+  /** Exactly what was last written into `node`, leading space included. */
+  shown: string
+  /** The person took the words over; nothing more is written for this take. */
+  released?: boolean
 }
 
 /**
- * Show `text` as the live take, reusing `current` while it is still in the editor (the editor can
- * rebuild its DOM under it — typing, a mention). Undefined clears it. Returns the span to keep.
+ * Show `text` as the take's words. Undefined takes them back out (a take that ended without a
+ * transcript, or moved to the background). Returns the region to keep and whether the editor changed
+ * — when it did, the caller fires the editor's input event so the prompt reads the new text.
  */
-export function showLiveText(
+export function writeLiveText(
   editor: HTMLElement,
-  current: HTMLElement | undefined,
+  region: LiveRegion | undefined,
   text: string | undefined,
-): HTMLElement | undefined {
+): { region: LiveRegion | undefined; changed: boolean } {
+  if (region?.released) return { region: text === undefined ? undefined : region, changed: false }
+  const node = region ? locate(editor, region) : undefined
+  if (region && !node) {
+    // Gone from the editor or edited: theirs now.
+    return { region: text === undefined ? undefined : { ...region, released: true }, changed: false }
+  }
   if (text === undefined) {
-    current?.remove()
-    return undefined
+    if (!node) return { region: undefined, changed: false }
+    node.remove()
+    return { region: undefined, changed: true }
   }
-  let span = current
-  if (!span || !span.isConnected || span.parentNode !== editor) {
-    span?.remove()
-    span = document.createElement("span")
-    span.dataset.slot = LIVE_SLOT
-    span.contentEditable = "false"
-    editor.appendChild(span)
+  if (node) {
+    const shown = gapBefore(node) + text
+    if (node.data === shown) return { region: { node, shown }, changed: false }
+    node.data = shown
+    return { region: { node, shown }, changed: true }
   }
-  const before = span.previousSibling?.textContent ?? ""
-  const gap = before.length > 0 && !/\s$/.test(before) ? " " : ""
-  span.textContent = gap + text
-  return span
+  const fresh = document.createTextNode("")
+  editor.appendChild(fresh)
+  fresh.data = gapBefore(fresh) + text
+  return { region: { node: fresh, shown: fresh.data }, changed: true }
+}
+
+/**
+ * The take's final transcript. It replaces the live words where they still are; with no live words
+ * (the live preview never ran) it is appended. When the person took the words over, nothing is
+ * written. Returns true when the editor changed.
+ */
+export function settleLiveText(editor: HTMLElement, region: LiveRegion | undefined, text: string): boolean {
+  if (region?.released) return false
+  const node = region ? locate(editor, region) : undefined
+  if (region && !node) return false
+  if (node) {
+    node.data = gapBefore(node) + text
+    return true
+  }
+  const fresh = document.createTextNode("")
+  editor.appendChild(fresh)
+  fresh.data = gapBefore(fresh) + text
+  return true
+}
+
+/**
+ * The region's node, while it still holds exactly what was written. The editor can rebuild its DOM
+ * from the prompt (a mention, a popover pick); then the words are found again at the end of the
+ * last text node and split back out into a node of their own.
+ */
+function locate(editor: HTMLElement, region: LiveRegion): Text | undefined {
+  const { node, shown } = region
+  if (editor.contains(node)) return node.data === shown ? node : undefined
+  const last = lastText(editor)
+  if (!last || !shown || !last.data.endsWith(shown)) return undefined
+  return last.splitText(last.data.length - shown.length)
+}
+
+function lastText(editor: HTMLElement): Text | undefined {
+  let node: Node | null = editor.lastChild
+  while (node && !(node instanceof Text)) node = node.lastChild ?? node.previousSibling
+  return node ?? undefined
+}
+
+function gapBefore(node: Text): string {
+  let prev = node.previousSibling
+  let before = ""
+  while (prev && !before) {
+    before = prev.textContent ?? ""
+    prev = prev.previousSibling
+  }
+  return before.length > 0 && !/\s$/.test(before) ? " " : ""
 }

@@ -6,6 +6,10 @@ describe("live dictation framing", () => {
   test("relay events map to partial / final / unavailable; anything else is ignored", () => {
     expect(parseRelayEvent(JSON.stringify({ type: "transcript.partial", text: "hey", is_final: false }))).toEqual({ type: "partial", text: "hey" })
     expect(parseRelayEvent(JSON.stringify({ type: "transcript.partial", text: "hey iris", is_final: true }))).toEqual({ type: "final", text: "hey iris" })
+    // speech_final restates the whole turn (#189543): passed on as a turn, which replaces its finals.
+    expect(
+      parseRelayEvent(JSON.stringify({ type: "transcript.partial", text: "hey iris", is_final: true, speech_final: true })),
+    ).toEqual({ type: "final", text: "hey iris", turn: true })
     expect(parseRelayEvent(JSON.stringify({ type: "relay.error", code: "idle", message: "stopped" }))).toEqual({ type: "unavailable", reason: "stopped" })
     expect(parseRelayEvent(JSON.stringify({ type: "transcript.created" }))).toBeUndefined()
     expect(parseRelayEvent("not json")).toBeUndefined()
