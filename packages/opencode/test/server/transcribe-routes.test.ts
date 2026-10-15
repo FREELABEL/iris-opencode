@@ -141,6 +141,87 @@ describe("GET /dictate/level and the sidecar recording", () => {
   })
 })
 
+describe("the sidecar take's cap, and Keep recording (#189519)", () => {
+  const linuxOnly = process.platform === "linux" ? test : test.skip
+  // A recorder that keeps streaming, 0.1 s of audio every 0.1 s, until it is stopped — so whether
+  // capture is still running shows up as `seconds` still growing.
+  const streaming = () => {
+    const path = join(dir, "ffmpeg-streaming")
+    writeFileSync(path, `#!/bin/sh\nwhile :; do head -c 3200 "${dir}/voice.pcm"; sleep 0.1; done\n`)
+    chmodSync(path, 0o755)
+    process.env["IRIS_FFMPEG"] = path
+  }
+  const capturing = async (base: string) => (await (await fetch(`${base}/dictate/level`)).json()).capturing as boolean
+
+  linuxOnly("a take ends at its cap, and the level route says the recorder has stopped", async () => {
+    streaming()
+    await withServer(async (base) => {
+      try {
+        expect((await fetch(`${base}/dictate/start?max_seconds=1`, { method: "POST" })).status).toBe(200)
+        await Bun.sleep(300)
+        expect(await capturing(base)).toBe(true)
+        await Bun.sleep(1400)
+        expect(await capturing(base)).toBe(false)
+        // What was captured is still there for the stop.
+        const stop = await fetch(`${base}/dictate/stop`, { method: "POST" })
+        expect(stop.status).not.toBe(409)
+      } finally {
+        await fetch(`${base}/dictate/cancel`, { method: "POST" })
+      }
+    })
+  })
+
+  linuxOnly("Keep recording moves the cap: capture runs on past the original one", async () => {
+    streaming()
+    await withServer(async (base) => {
+      expect((await fetch(`${base}/dictate/start?max_seconds=1`, { method: "POST" })).status).toBe(200)
+      await Bun.sleep(300)
+      expect((await fetch(`${base}/dictate/extend?max_seconds=60`, { method: "POST" })).status).toBe(200)
+      await Bun.sleep(1700)
+      expect(await capturing(base)).toBe(true)
+      await fetch(`${base}/dictate/cancel`, { method: "POST" })
+    })
+  })
+
+  test("extend with nothing recording is a 409", async () => {
+    await withServer(async (base) => {
+      expect((await fetch(`${base}/dictate/extend?max_seconds=60`, { method: "POST" })).status).toBe(409)
+    })
+  })
+})
+
+describe("keeping a take the composer was torn down in the middle of (#189520)", () => {
+  const linuxOnly = process.platform === "linux" ? test : test.skip
+
+  test("POST /transcribe?hold=1 saves the recording and calls no engine", async () => {
+    configured()
+    let platformCalls = 0
+    platformReply = () => (platformCalls++, Response.json({ success: true, data: { text: "x", provider: "xai" } }))
+    await withServer(async (base) => {
+      const res = await fetch(`${base}/transcribe?hold=1&filename=d.wav`, { method: "POST", body: wav() })
+      expect(res.status).toBe(202)
+      const id = (await res.json()).held.id
+      expect(platformCalls).toBe(0)
+      const held = (await (await fetch(`${base}/transcribe/held`)).json()).held
+      expect(held.map((h: { id: string }) => h.id)).toContain(id)
+      await fetch(`${base}/transcribe/discard?id=${id}`, { method: "POST" })
+    })
+  })
+
+  linuxOnly("POST /dictate/hold stops the sidecar take and holds it", async () => {
+    configured()
+    await withServer(async (base) => {
+      expect((await fetch(`${base}/dictate/start`, { method: "POST" })).status).toBe(200)
+      await Bun.sleep(300)
+      const res = await fetch(`${base}/dictate/hold`, { method: "POST" })
+      expect(res.status).toBe(202)
+      const id = (await res.json()).held.id
+      expect(await (await fetch(`${base}/dictate/status`)).json()).toEqual({ recording: false })
+      await fetch(`${base}/transcribe/discard?id=${id}`, { method: "POST" })
+    })
+  })
+})
+
 describe("POST /transcribe over the platform's size limit", () => {
   test("413, names the limit, and does NOT hold the recording", async () => {
     configured()
@@ -247,6 +328,8 @@ describe("loopback only", () => {
         ["POST", "/dictate/start"],
         ["POST", "/dictate/stop"],
         ["POST", "/dictate/cancel"],
+        ["POST", "/dictate/extend?max_seconds=60"],
+        ["POST", "/dictate/hold"],
         ["GET", "/dictate/status"],
         ["GET", "/dictate/level"],
       ] as const) {

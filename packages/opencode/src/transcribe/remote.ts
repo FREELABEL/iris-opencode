@@ -107,7 +107,7 @@ const TIMEOUT_MS = 90_000
 export async function transcribeRemote(
   audio: Uint8Array,
   cfg: RemoteConfig,
-  opts: { filename?: string; provider?: string; language?: string } = {},
+  opts: { filename?: string; provider?: string; language?: string; timeoutMs?: number } = {},
 ): Promise<{ text: string; provider: string; ms: number }> {
   const started = Date.now()
   const form = new FormData()
@@ -123,7 +123,7 @@ export async function transcribeRemote(
       method: "POST",
       headers: cfg.token ? { Authorization: `Bearer ${cfg.token}` } : {},
       body: form,
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(Math.min(opts.timeoutMs ?? TIMEOUT_MS, TIMEOUT_MS)),
     })
   } catch (e) {
     throw new RemoteTranscribeError(`Could not reach ${cfg.apiUrl} for remote transcription: ${String(e)}`, 0)
