@@ -177,11 +177,12 @@ export interface DictationOptions {
   onError?: (message: string) => void
   /**
    * Live preview while recording (GET /dictate/live -> IRIS STT relay -> xAI streaming STT).
-   * onPartial REPLACES the in-progress utterance; onFinal appends a locked one. The batch
-   * transcript delivered to onTranscript after stop is still the text that gets inserted.
+   * onPartial REPLACES the in-progress segment; onFinal locks one. A final with `turn` restates
+   * the whole turn and replaces that turn's finals — see transcript-merge.ts. The batch transcript
+   * delivered to onTranscript after stop is still the text that ends the take.
    */
   onPartial?: (text: string) => void
-  onFinal?: (text: string) => void
+  onFinal?: (text: string, turn?: boolean) => void
   /** Live preview is off for this take (not configured, refused, dropped). Batch is unaffected. */
   onLiveUnavailable?: (reason: string) => void
   /**
@@ -579,7 +580,7 @@ export function createDictation(opts: DictationOptions) {
       if (liveSocket !== ws || typeof message.data !== "string") return
       const event = parseLiveEvent(message.data)
       if (event?.type === "partial") opts.onPartial?.(event.text)
-      if (event?.type === "final") opts.onFinal?.(event.text)
+      if (event?.type === "final") opts.onFinal?.(event.text, event.turn)
       if (event?.type === "unavailable") liveUnavailable(event.reason)
     }
     ws.onerror = () => liveUnavailable("The live preview could not connect.")
@@ -1005,16 +1006,21 @@ export function toPcm16(samples: Float32Array) {
 /** Server frame on /dictate/live, or undefined for anything else. */
 export function parseLiveEvent(
   text: string,
-): { type: "partial" | "final"; text: string } | { type: "unavailable"; reason: string } | undefined {
+):
+  | { type: "partial"; text: string }
+  | { type: "final"; text: string; turn?: boolean }
+  | { type: "unavailable"; reason: string }
+  | undefined {
   const value = (() => {
     try {
-      return JSON.parse(text) as { type?: unknown; text?: unknown; reason?: unknown }
+      return JSON.parse(text) as { type?: unknown; text?: unknown; reason?: unknown; turn?: unknown }
     } catch {
       return undefined
     }
   })()
-  if ((value?.type === "partial" || value?.type === "final") && typeof value.text === "string")
-    return { type: value.type, text: value.text }
+  if (value?.type === "partial" && typeof value.text === "string") return { type: "partial", text: value.text }
+  if (value?.type === "final" && typeof value.text === "string")
+    return value.turn === true ? { type: "final", text: value.text, turn: true } : { type: "final", text: value.text }
   if (value?.type === "unavailable")
     return { type: "unavailable", reason: typeof value.reason === "string" ? value.reason : "Live preview stopped." }
   return undefined
