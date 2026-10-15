@@ -17,6 +17,8 @@ import {
   logComm,
   unloggedSpoolPath,
 } from "./comms-send"
+import { hiveReason, hiveMailCall, dedupeInbox, type MailVia } from "./mail-transport"
+import { classifySender } from "../lib/mail-classify"
 
 // macOS Apple Mail integration via the IRIS Bridge (BRIDGE_URL, default localhost:3200)
 // Bridge endpoint: GET /api/mail/search?from=X&subject=X&days=N&limit=N&include_body=1&max_body=N
@@ -74,13 +76,74 @@ async function reportMailFailure(verb: string, err: string): Promise<void> {
   prompts.log.error([`${verb} failed: ${r.headline.replace(/^blind — /, "")}`, ...r.fix].join("\n"))
 }
 
+// ── Where the call runs (#189480) ───────────────────────────────────────────────────
+//
+// `iris mail` used to talk only to this machine's bridge, so on any machine without Apple
+// Mail it failed — with "is Mail.app configured on this Mac?" even on Linux — while an
+// online Hive node had Mail the whole time. Every subcommand now goes through mailCall:
+// this machine first when it is a Mac with Mail, otherwise the Hive node, over the cloud's
+// bridge-call rail. The routing decision itself is hiveReason (tested in mail-transport).
+
+type MailCall = { fn: string; method: "GET" | "POST"; path: string; args: Record<string, unknown> }
+type MailAnswer = { ok: true; data: any; where: string } | { ok: false; error: string; local: boolean }
+
+const viaOption = {
+  type: "string" as const,
+  choices: ["auto", "local", "hive"],
+  default: "auto",
+  describe: "auto: this machine if it has Apple Mail, else the Hive node that does",
+}
+
+async function viaHive(c: MailCall, reason: string): Promise<MailAnswer> {
+  const r = await hiveMailCall(c.fn, c.args)
+  if (!r.ok) return { ok: false, error: r.error, local: false }
+  return { ok: true, data: r.data, where: `Hive node ${r.nodeId ? r.nodeId.slice(0, 8) : "?"} — ${reason}` }
+}
+
+async function mailCall(c: MailCall, via: MailVia): Promise<MailAnswer> {
+  const up = hiveReason({ platform: process.platform, via })
+  if (up) return viaHive(c, up)
+
+  const bridge = await probeBridge()
+  if (!bridge.ok) {
+    return { ok: false, local: true, error: `${bridge.message}${via === "auto" ? " — or ask the Hive node: --via hive" : ""}` }
+  }
+
+  let res: Response
+  if (c.method === "GET") {
+    const qs = new URLSearchParams()
+    for (const [k, v] of Object.entries(c.args)) if (v !== undefined && v !== null && v !== "") qs.set(k, String(v))
+    res = await bridgeFetch(`${c.path}?${qs}`)
+  } else {
+    res = await bridgeFetch(c.path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(c.args) })
+  }
+  if (res.ok) return { ok: true, data: await res.json(), where: "this machine" }
+
+  const err = await res.text().catch(() => `HTTP ${res.status}`)
+  const fallback = hiveReason({ platform: process.platform, via, localError: err })
+  if (fallback) return viaHive(c, fallback)
+  return { ok: false, error: err, local: true }
+}
+
+/** Print a failed call — with the Full Disk Access fix when it is a local permission refusal. */
+async function reportAnswer(verb: string, a: Extract<MailAnswer, { ok: false }>): Promise<void> {
+  if (a.local) await reportMailFailure(verb, a.error)
+  else prompts.log.error(`${verb} failed: ${a.error}`)
+  process.exitCode = 1
+}
+
 const MailSearchCommand = cmd({
-  command: "search <query>",
+  command: "search [query]",
   aliases: ["find"],
-  describe: "search Apple Mail by sender name or email",
+  describe: "search Apple Mail by sender name or email (omit it to search everyone — see also: iris mail inbox)",
   builder: (yargs) =>
     yargs
-      .positional("query", { type: "string", demandOption: true, describe: "sender name or email substring" })
+      .positional("query", {
+        type: "string",
+        default: "@",
+        describe: "sender name or email substring; omitted = every sender (it matches on '@')",
+      })
+      .option("via", viaOption)
       .option("subject", { type: "string", alias: "s", describe: "filter by subject" })
       .option("days", { type: "number", default: 7, describe: "search last N days" })
       .option("limit", { type: "number", default: 10, describe: "max results" })
@@ -92,35 +155,23 @@ const MailSearchCommand = cmd({
     UI.empty()
     prompts.intro("◈  Apple Mail Search")
 
-    const bridge = await probeBridge()
-    if (!bridge.ok) {
-      prompts.log.error(bridge.message)
-      prompts.outro("Done")
-      return
-    }
-
-    const params = new URLSearchParams({
-      from: args.query,
-      days: String(args.days),
-      limit: String(args.limit),
-    })
+    const query = String(args.query ?? "@")
+    const searchArgs: Record<string, unknown> = { from: query, days: args.days, limit: args.limit, subject: args.subject }
     if (args.full) {
-      params.set("include_body", "1")
-      params.set("max_body", String(args.maxBody ?? args["max-body"] ?? 4000))
+      searchArgs.include_body = 1
+      searchArgs.max_body = args.maxBody ?? args["max-body"] ?? 4000
     }
-    if (args.subject) params.set("subject", args.subject)
-    if (args.attachments) params.set("include_attachments", "1")
+    if (args.attachments) searchArgs.include_attachments = 1
 
-    const res = await bridgeFetch(`/api/mail/search?${params}`)
-    if (!res.ok) {
-      const err = await res.text().catch(() => "Unknown error")
-      await reportMailFailure("Mail search", err)
+    const answer = await mailCall({ fn: "search_emails", method: "GET", path: "/api/mail/search", args: searchArgs }, args.via as MailVia)
+    if (!answer.ok) {
+      await reportAnswer("Mail search", answer)
       prompts.outro("Done")
       return
     }
+    if (answer.where !== "this machine") prompts.log.info(dim(`via ${answer.where}`))
 
-    const data = (await res.json()) as any
-    const messages: any[] = mailRows(data)
+    const messages: any[] = mailRows(answer.data)
 
     if (args.json) {
       await writeJson(messages)
@@ -129,13 +180,14 @@ const MailSearchCommand = cmd({
     }
 
     if (messages.length === 0) {
-      prompts.log.info(`No emails from "${args.query}" in the last ${args.days} days`)
+      prompts.log.info(query === "@" ? `No emails in the last ${args.days} days` : `No emails from "${query}" in the last ${args.days} days`)
       prompts.outro("Done")
       return
     }
 
     for (const msg of messages) {
       printDivider()
+      if (msg.id != null) printKV("Id", String(msg.id))
       printKV("Date", msg.date)
       printKV("From", msg.sender)
       printKV("Subject", bold(msg.subject))
@@ -159,55 +211,61 @@ const MailSearchCommand = cmd({
 
 const MailReadCommand = cmd({
   command: "read <query>",
-  describe: "read the latest email from a sender (full body)",
+  describe: "read one email in full — by its id (from `iris mail inbox`), or the latest from a sender",
   builder: (yargs) =>
     yargs
-      .positional("query", { type: "string", demandOption: true, describe: "sender name or email" })
+      .positional("query", { type: "string", demandOption: true, describe: "message id, or sender name/email" })
       .option("subject", { type: "string", alias: "s", describe: "filter by subject" })
       .option("days", { type: "number", default: 14, describe: "search last N days" })
       .option("max-body", { type: "number", default: 10000, describe: "max body chars" })
       .option("save-attachments", { type: "boolean", default: false, describe: "download attachments to temp dir" })
+      .option("via", viaOption)
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
-    prompts.intro(`◈  Read Mail — from "${args.query}"`)
+    const query = String(args.query)
+    const byId = /^\d+$/.test(query)
+    prompts.intro(byId ? `◈  Read Mail — message ${query}` : `◈  Read Mail — from "${query}"`)
+    const maxBody = args.maxBody ?? args["max-body"] ?? 10000
 
-    const bridge = await probeBridge()
-    if (!bridge.ok) {
-      prompts.log.error(bridge.message)
-      prompts.outro("Done")
-      return
+    let msg: any
+    if (byId) {
+      // By id: envelope AND body, from whichever machine holds the mailbox (#189480).
+      const answer = await mailCall({ fn: "read_email", method: "GET", path: "/api/mail/message", args: { id: Number(query), max_body: maxBody } }, args.via as MailVia)
+      if (!answer.ok) {
+        await reportAnswer("Mail read", answer)
+        prompts.outro("Done")
+        return
+      }
+      if (answer.where !== "this machine") prompts.log.info(dim(`via ${answer.where}`))
+      msg = { ...answer.data, date: answer.data.date_sent }
+      if (!msg.body && msg.body_error) msg.body = dim(`(body unavailable: ${msg.body_error})`)
+    } else {
+      const saveAttachments = args.saveAttachments ?? args["save-attachments"] ?? false
+      const searchArgs: Record<string, unknown> = {
+        from: query, days: args.days, limit: 1, include_body: 1, include_attachments: 1, max_body: maxBody, subject: args.subject,
+      }
+      if (saveAttachments) searchArgs.save_attachments = 1
+      const answer = await mailCall({ fn: "search_emails", method: "GET", path: "/api/mail/search", args: searchArgs }, args.via as MailVia)
+      if (!answer.ok) {
+        await reportAnswer("Mail read", answer)
+        prompts.outro("Done")
+        return
+      }
+      const messages: any[] = mailRows(answer.data)
+      if (messages.length === 0) {
+        prompts.log.info(`No emails from "${query}" in the last ${args.days} days`)
+        prompts.outro("Done")
+        return
+      }
+      msg = messages[0]
+      // The envelope-index daemon returns no body on search. Ask for it by id rather than
+      // printing "(no body)" for a message that has one.
+      if (!msg.body && msg.id != null) {
+        const full = await mailCall({ fn: "read_email", method: "GET", path: "/api/mail/message", args: { id: msg.id, max_body: maxBody } }, args.via as MailVia)
+        if (full.ok && full.data?.body) msg = { ...msg, body: full.data.body }
+      }
     }
-
-    const saveAttachments = args.saveAttachments ?? args["save-attachments"] ?? false
-    const params = new URLSearchParams({
-      from: args.query,
-      days: String(args.days),
-      limit: "1",
-      include_body: "1",
-      include_attachments: "1",
-      max_body: String(args.maxBody ?? args["max-body"] ?? 10000),
-    })
-    if (saveAttachments) params.set("save_attachments", "1")
-    if (args.subject) params.set("subject", args.subject)
-
-    const res = await bridgeFetch(`/api/mail/search?${params}`)
-    if (!res.ok) {
-      await reportMailFailure("Mail read", await res.text().catch(() => "Unknown error"))
-      prompts.outro("Done")
-      return
-    }
-
-    const data = (await res.json()) as any
-    const messages: any[] = mailRows(data)
-
-    if (messages.length === 0) {
-      prompts.log.info(`No emails from "${args.query}" in the last ${args.days} days`)
-      prompts.outro("Done")
-      return
-    }
-
-    const msg = messages[0]
 
     if (args.json) {
       await writeJson(msg)
@@ -216,8 +274,9 @@ const MailReadCommand = cmd({
     }
 
     printDivider()
+    if (msg.id != null) printKV("Id", String(msg.id))
     printKV("Date", msg.date)
-    printKV("From", msg.sender)
+    printKV("From", msg.sender_name ? `${msg.sender_name} <${msg.sender}>` : msg.sender)
     printKV("Subject", bold(msg.subject))
     if (msg.attachments?.length > 0) {
       console.log()
@@ -232,7 +291,167 @@ const MailReadCommand = cmd({
     console.log()
     console.log(msg.body || dim("(no body)"))
     console.log()
+    if (msg.id != null) prompts.log.info(dim(`reply in this thread: iris mail reply ${msg.id} --body "…"`))
     prompts.outro("Done")
+  },
+})
+
+/**
+ * The inbox, with people separated from feeds (#189480).
+ *
+ * There was no way to list mail: `search` needed a sender, and the senders worth answering —
+ * recruiters — are strangers. `@` happened to work as a wildcard and nothing said so. And of
+ * ~120 job emails in 30 days most were LinkedIn / Jobot / Lensa alerts, burying the people.
+ */
+const MailInboxCommand = cmd({
+  command: "inbox",
+  aliases: ["list", "ls"],
+  describe: "list recent mail from everyone, people separated from automated alerts",
+  builder: (yargs) =>
+    yargs
+      .option("days", { type: "number", default: 7, describe: "last N days" })
+      .option("limit", { type: "number", default: 50, describe: "max messages to fetch (the bridge caps at 200)" })
+      .option("subject", { type: "string", alias: "s", describe: "only subjects containing this" })
+      .option("people", { type: "boolean", default: false, describe: "only mail written by a person" })
+      .option("alerts", { type: "boolean", default: false, describe: "only automated alerts and feeds" })
+      .option("via", viaOption)
+      .option("json", { type: "boolean", default: false })
+      .example("iris mail inbox --people --days 30", "who actually wrote to you this month")
+      .example('iris mail inbox --people -s engineer', "people, subject containing 'engineer'"),
+  async handler(args) {
+    if (!args.json) {
+      UI.empty()
+      prompts.intro("◈  Apple Mail — inbox")
+    }
+    const answer = await mailCall(
+      { fn: "search_emails", method: "GET", path: "/api/mail/search", args: { from: "@", days: args.days, limit: args.limit, subject: args.subject } },
+      args.via as MailVia,
+    )
+    if (!answer.ok) {
+      if (args.json) {
+        console.log(JSON.stringify({ ok: false, error: answer.error }))
+        process.exitCode = 1
+      } else {
+        await reportAnswer("Inbox", answer)
+        prompts.outro("Done")
+      }
+      return
+    }
+
+    const rows = dedupeInbox(mailRows(answer.data)).map((m: any) => {
+      const verdict = classifySender({ sender: m.sender, senderName: m.sender_name, subject: m.subject })
+      return { ...m, kind: verdict.kind, why: verdict.why }
+    })
+    const shown = rows.filter((r) => (args.people ? r.kind === "person" : args.alerts ? r.kind === "alert" : true))
+    const people = rows.filter((r) => r.kind === "person").length
+
+    if (args.json) {
+      await writeJson({ ok: true, where: answer.where, total: rows.length, people, alerts: rows.length - people, messages: shown })
+      return
+    }
+
+    if (answer.where !== "this machine") prompts.log.info(dim(`via ${answer.where}`))
+    for (const m of shown) {
+      const tag = m.kind === "person" ? success("person") : dim(m.kind === "alert" ? "alert " : "?     ")
+      const when = m.date ? String(m.date).slice(0, 16).replace("T", " ") : "—"
+      const who = m.sender_name ? `${m.sender_name} <${m.sender}>` : m.sender
+      console.log(`  ${dim(String(m.id ?? "—").padStart(7))}  ${tag}  ${dim(when)}  ${who}`)
+      console.log(`  ${" ".repeat(7)}          ${bold(String(m.subject ?? "").slice(0, 100))}`)
+    }
+    printDivider()
+    if (rows.length >= Number(args.limit)) prompts.log.warn(`showing the newest ${args.limit} — raise --limit (max 200) or narrow --days to see the rest`)
+    if (shown.some((m) => m.id == null)) prompts.log.warn("this Mac's daemon predates message ids — update it to read or reply by id")
+    prompts.outro(`${rows.length} message(s): ${people} from people, ${rows.length - people} automated · read one: iris mail read <id>`)
+  },
+})
+
+/**
+ * Reply IN THE THREAD (#189480).
+ *
+ * `iris mail send` composes a new message, so a reply reached a recruiter as a separate email.
+ * This asks the machine that holds the mailbox to build the reply with Mail's own `reply`
+ * command from the original message — the only way Mail.app sets In-Reply-To / References.
+ */
+const MailReplyCommand = cmd({
+  command: "reply <id>",
+  describe: "reply to an email in its thread (id from `iris mail inbox`) — logged to the lead like send",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { type: "number", demandOption: true, describe: "message id from `iris mail inbox` / `iris mail read`" })
+      .option("body", { type: "string", alias: "b", demandOption: true })
+      .option("all", { type: "boolean", default: false, describe: "reply to all recipients" })
+      .option("draft", { type: "boolean", default: false, describe: "open the reply in Mail.app WITHOUT sending it" })
+      .option("from", { type: "string", alias: "f", describe: "send as this Mail.app address (default: the account it arrived on)" })
+      .option("lead", { type: "number", describe: "CRM lead this reply belongs to" })
+      .option("force", { type: "boolean", default: false, describe: "reply to someone who is NOT a lead — recorded as unattributed" })
+      .option("via", viaOption),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Reply — message ${args.id}`)
+    const via = args.via as MailVia
+
+    // Who it goes to, before anything is sent — the same refusal rules as `iris mail send`.
+    const original = await mailCall({ fn: "read_email", method: "GET", path: "/api/mail/message", args: { id: args.id, max_body: 200 } }, via)
+    if (!original.ok) {
+      await reportAnswer("Reply", original)
+      prompts.outro("Not sent")
+      return
+    }
+    const to = String(original.data?.sender ?? "")
+    prompts.log.info(`to ${original.data?.sender_name ? `${original.data.sender_name} <${to}>` : to} · ${bold(String(original.data?.subject ?? ""))}`)
+
+    let leadId: number | undefined = args.lead != null ? Number(args.lead) : undefined
+    if (leadId == null) {
+      const resolution = await resolveLeadForHandle(to)
+      if (resolution.reason === "ok") leadId = resolution.leadId
+      else if (resolution.reason === "ambiguous") {
+        prompts.log.error(`${to} matches ${resolution.matches.length} leads — say which with --lead <id>`)
+        for (const m of resolution.matches) prompts.log.warn(`  --lead ${m.id}   ${m.name ?? "(no name)"}`)
+        prompts.outro("Not sent")
+        process.exitCode = 1
+        return
+      } else if (!args.force && !args.draft) {
+        prompts.log.error(`Refusing to send: no lead has the address ${to}.`)
+        prompts.log.warn("Attach it with --lead <id>, reply unattributed with --force, or --draft to look first.")
+        prompts.outro("Not sent")
+        process.exitCode = 1
+        return
+      }
+    }
+
+    const answer = await mailCall(
+      {
+        fn: "reply_email",
+        method: "POST",
+        path: "/api/mail/reply",
+        args: { message_id: args.id, body_text: args.body, reply_all: args.all, draft: args.draft, ...(args.from ? { from_email: args.from } : {}) },
+      },
+      via,
+    )
+    if (!answer.ok) {
+      await reportAnswer("Reply", answer)
+      prompts.outro("Not sent")
+      return
+    }
+    if (answer.where !== "this machine") prompts.log.info(dim(`via ${answer.where}`))
+    if (answer.data?.mode === "draft") {
+      prompts.outro(`${success("✓")} Reply opened in Mail.app on ${answer.where} — nothing sent`)
+      return
+    }
+
+    const subject = `Re: ${String(original.data?.subject ?? "").replace(/^re:\s*/i, "")}`
+    const logged = leadId
+      ? await recordDirectSend({ toHandle: to, leadId, channel: "apple_mail", subject, message: args.body, origin: "cli.mail.reply" })
+      : { ok: false as const, error: "replied with --force and no lead to attach it to" }
+    if (logged.ok) prompts.log.info(`Recorded to comms${logged.commId ? ` as comm #${logged.commId}` : ""} on lead #${leadId}`)
+    else {
+      const spooled = await spoolUnlogged({
+        at: new Date().toISOString(), channel: "apple_mail", to, subject, message: args.body, leadId,
+        reason: logged.error ?? "unknown", origin: "cli.mail.reply",
+      })
+      prompts.log.warn(`not on a lead's record — ${logged.error}${spooled ? `; spooled for: iris mail audit` : ""}`)
+    }
+    prompts.outro(`${success("✓")} Replied in thread to ${to}`)
   },
 })
 
@@ -637,7 +856,9 @@ export const PlatformMailCommand = cmd({
   builder: (yargs) =>
     yargs
       .command(MailSearchCommand)
+      .command(MailInboxCommand)
       .command(MailReadCommand)
+      .command(MailReplyCommand)
       .command(MailSendCommand)
       .command(MailAccountsCommand)
       .command(MailAuditCommand)

@@ -1,4 +1,6 @@
 import { spawnSync } from "child_process"
+import { localSourceOf, whereItRuns } from "./intent-where"
+import { bridgeReach } from "./mail-transport"
 import { UI } from "../ui"
 import { irisFetch, IRIS_API, dim, bold, highlight, printDivider } from "./iris-api"
 import { loadIndex, searchCapabilities } from "./platform-find"
@@ -819,6 +821,14 @@ export async function selectTool(a: {
           .slice(0, top)
           .map((c) => ({ ...c, p: 0 }))
 
+  // WHERE it runs (#189480). A pick that reads one machine's own data (Apple Mail, iMessage)
+  // is only half an answer off that machine — the Mac that has it went unmentioned and the
+  // next step was SSH. One reach lookup, only for those commands.
+  const source = localSourceOf(commands[0] ?? "")
+  const runsOn = source
+    ? whereItRuns(commands[0], { platform: process.platform, localAvailable: process.platform === "darwin", reach: await bridgeReach(source) })
+    : null
+
   if (a.json) {
     console.log(
       JSON.stringify(
@@ -826,6 +836,7 @@ export async function selectTool(a: {
           query: text,
           choice: best.name,
           run: commands[0],
+          runs_on: runsOn,
           commands,
           decided_by: chosen.by,
           decided: picked.map((c) => c.name),
@@ -878,6 +889,7 @@ export async function selectTool(a: {
       console.log(`  ${dim(`fell back to keyword order — ${misses.join("; ")}`)}`)
     console.log()
     for (const line of commands) console.log(`  ${highlight(`→ ${line}`)}`)
+    if (runsOn) console.log(`  ${dim(runsOn)}`)
     printDivider()
     console.log(
       `  ${bold(`also relevant (${related.length})`)}  ${dim(relatedBy === "decide" ? "ranked by Decide" : "find's order — Decide unavailable")}`,
