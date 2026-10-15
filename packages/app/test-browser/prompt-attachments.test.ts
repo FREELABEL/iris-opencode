@@ -173,3 +173,94 @@ test("rejects desktop duplicates and keeps changed files in the V2 prompt store"
 function images(prompt: ReturnType<typeof createPromptState>) {
   return prompt.current().filter((part) => part.type === "image")
 }
+
+test("a refused file in a mixed drop is named, not silently dropped (V2 composer)", async () => {
+  await createRoot(async (dispose) => {
+    const [state, setState] = createStore({ prompt: [] as PromptInputV2Prompt })
+    const warnings: (string | undefined)[] = []
+    const attachments = createPromptInputV2Attachments({
+      capture: () => ({
+        current: () => state.prompt,
+        cursor: () => 0,
+        set: (prompt) => setState("prompt", prompt),
+      }),
+      editor: () => document.createElement("div"),
+      focusEditor: () => undefined,
+      addPart: () => false,
+      setDraggingType: () => undefined,
+      directory: () => "/",
+      isDialogActive: () => false,
+      warn: (message) => warnings.push(message),
+      duplicate: () => undefined,
+      onError: () => undefined,
+    })
+
+    await attachments.addAttachments([
+      new File(["name,amount\nAnn,5\n"], "claims.csv", { type: "text/csv" }),
+      new File([Uint8Array.of(0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1)], "roster.xls", { type: "" }),
+    ])
+
+    expect(state.prompt).toHaveLength(1)
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('"roster.xls"')
+    expect(warnings[0]).toContain("Save As")
+    dispose()
+  })
+})
+
+test("an .xlsx is attached by the V2 composer instead of refused", async () => {
+  await createRoot(async (dispose) => {
+    const [state, setState] = createStore({ prompt: [] as PromptInputV2Prompt })
+    const warnings: (string | undefined)[] = []
+    const attachments = createPromptInputV2Attachments({
+      capture: () => ({
+        current: () => state.prompt,
+        cursor: () => 0,
+        set: (prompt) => setState("prompt", prompt),
+      }),
+      editor: () => document.createElement("div"),
+      focusEditor: () => undefined,
+      addPart: () => false,
+      setDraggingType: () => undefined,
+      directory: () => "/",
+      isDialogActive: () => false,
+      warn: (message) => warnings.push(message),
+      duplicate: () => undefined,
+      onError: () => undefined,
+    })
+
+    await attachments.addAttachments([
+      new File([Uint8Array.of(0x50, 0x4b, 0x03, 0x04, 0x14, 0x00)], "roster.xlsx", { type: "" }),
+    ])
+
+    expect(warnings).toEqual([])
+    expect(state.prompt).toHaveLength(1)
+    expect(state.prompt[0]).toMatchObject({
+      type: "image",
+      filename: "roster.xlsx",
+      mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    })
+    dispose()
+  })
+})
+
+test("a refused file in a mixed drop is named, not silently dropped (legacy composer)", async () => {
+  await createRoot(async (dispose) => {
+    const prompt = createPromptState()
+    const warnings: (string | undefined)[] = []
+    const attachments = createPromptAttachmentsCore({
+      capture: () => prompt.capture(),
+      editor: () => document.createElement("div"),
+      warn: (message) => warnings.push(message),
+    })
+    await attachments.addAttachments([
+      new File(["name,amount\nAnn,5\n"], "claims.csv", { type: "text/csv" }),
+      new File([Uint8Array.of(0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1)], "locked.xlsx", { type: "" }),
+    ])
+    expect(images(prompt)).toHaveLength(1)
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('"locked.xlsx"')
+    expect(warnings[0]).toContain("password-protected")
+    dispose()
+  })
+})

@@ -465,11 +465,12 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
       picker: platform.openAttachmentPickerDialog,
       directory: () => sdk().directory,
       isDialogActive: () => !!dialog.active,
-      warn: () =>
+      warn: (message) =>
         showToast({
           title: language.t("prompt.toast.pasteUnsupported.title"),
-          description: language.t("prompt.toast.pasteUnsupported.description"),
+          description: message ?? language.t("prompt.toast.pasteUnsupported.description"),
         }),
+      notice: (message) => showToast({ title: "Large attachment", description: message }),
       duplicate: () => showToast({ title: language.t("prompt.toast.attachmentDuplicate.title") }),
       onError: (error) =>
         showToast({

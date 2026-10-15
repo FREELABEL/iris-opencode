@@ -40,7 +40,7 @@ import { ShellID } from "@/tool/shell/id"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Truncate } from "@/tool/truncate"
 import { Image } from "@/image/image"
-import { decodeDataUrl } from "@/util/data-url"
+import * as AttachmentText from "./attachment-text"
 import { Process } from "@/util/process"
 import { Cause, Effect, Exit, Latch, Layer, Option, Scope, Context, Schema, Types } from "effect"
 import { InstanceState } from "@/effect/instance-state"
@@ -700,6 +700,45 @@ const layer = Layer.effect(
         id: part.id ? PartID.make(part.id) : PartID.ascending(),
       })
 
+      const inlineAttachment = Effect.fn("SessionPrompt.inlineAttachment")(function* (
+        part: Extract<PromptInput["parts"][number], { type: "file" }>,
+        bytes: Uint8Array,
+        path: string | undefined = part.filename,
+      ) {
+        const text = (value: string): Draft<SessionV1.Part> => ({
+          messageID: info.id,
+          sessionID: input.sessionID,
+          type: "text",
+          synthetic: true,
+          text: value,
+        })
+        const result = AttachmentText.attachmentToText({ bytes, mime: part.mime, filename: path })
+        if (result.kind === "unreadable") {
+          // The person sees why; the model is told it did not see the file. Nothing is forwarded.
+          yield* events.publish(Session.Event.Error, {
+            sessionID: input.sessionID,
+            error: new NamedError.Unknown({ message: AttachmentText.unreadableMessage(path, result) }).toObject(),
+          })
+          return [text(AttachmentText.unreadableNote(path, result))]
+        }
+        const context = yield* provider.getModel(info.model.providerID, info.model.modelID).pipe(
+          Effect.map((mdl) => mdl.limit.context),
+          Effect.catch(() => Effect.succeed(undefined)),
+        )
+        const limited = AttachmentText.limitInlineText({
+          text: result.text,
+          filename: path,
+          budget: AttachmentText.inlineBudget(context),
+        })
+        const body = limited.text.trim() === "" ? `[IRIS: "${path ?? "file"}" is empty.]` : limited.text
+        return [
+          text(`Called the Read tool with the following input: ${JSON.stringify({ filePath: path })}`),
+          text(body),
+          // Kept for the transcript as text/plain, which toModelMessages never forwards as a file part.
+          { ...part, mime: "text/plain", messageID: info.id, sessionID: input.sessionID },
+        ]
+      })
+
       const resolvePart: (part: PromptInput["parts"][number]) => Effect.Effect<Draft<SessionV1.Part>[]> = Effect.fn(
         "SessionPrompt.resolveUserPart",
       )(function* (part) {
@@ -789,30 +828,29 @@ const layer = Layer.effect(
           const url = new URL(part.url)
           switch (url.protocol) {
             case "data:":
-              if (part.mime === "text/plain") {
-                return [
-                  {
-                    messageID: info.id,
-                    sessionID: input.sessionID,
-                    type: "text",
-                    synthetic: true,
-                    text: `Called the Read tool with the following input: ${JSON.stringify({ filePath: part.filename })}`,
-                  },
-                  {
-                    messageID: info.id,
-                    sessionID: input.sessionID,
-                    type: "text",
-                    synthetic: true,
-                    text: decodeDataUrl(part.url),
-                  },
-                  { ...part, messageID: info.id, sessionID: input.sessionID },
-                ]
+              // Anything that is not an image, PDF or media is read HERE into text — or replaced by
+              // a note saying it could not be. Forwarding it raw either inlined megabytes (HTTP 400,
+              // and every later turn in the session with it) or handed the SDK a mime it cannot
+              // encode (the turn threw). See attachment-text.ts.
+              if (AttachmentText.needsTextResolution(part.mime)) {
+                return yield* inlineAttachment(part, AttachmentText.dataUrlBytes(part.url))
               }
               break
             case "file:": {
               yield* Effect.logInfo("file", { mime: part.mime })
               const filepath = fileURLToPath(part.url)
               const mime = (yield* fsys.isDir(filepath)) ? "application/x-directory" : part.mime
+
+              // A workbook or Word file referenced by path (the CLI's -f, an @-mention) used to go to
+              // the Read tool as "text/plain" — which refuses binary — or to the SDK raw, which throws.
+              if (
+                mime !== "application/x-directory" &&
+                (AttachmentText.isOfficeFile(mime, filepath) ||
+                  (mime !== "text/plain" && AttachmentText.needsTextResolution(mime)))
+              ) {
+                const bytes = yield* fsys.readFile(filepath).pipe(Effect.catch(() => Effect.succeed(undefined)))
+                if (bytes) return yield* inlineAttachment(part, bytes, filepath)
+              }
 
               const { read } = yield* registry.named()
               const execRead = (args: Parameters<typeof read.execute>[0], extra?: Tool.Context["extra"]) => {

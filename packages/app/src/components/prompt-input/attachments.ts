@@ -7,7 +7,7 @@ import { usePlatform } from "@/context/platform"
 import { uuid } from "@/utils/uuid"
 import { getCursorPosition } from "./editor-dom"
 import { createBlobReference, type DraftStore } from "@/utils/draft-store"
-import { attachmentMime } from "./files"
+import { attachmentCheck, largeAttachmentNotice } from "./files"
 import { normalizePaste, pasteMode } from "./paste"
 
 type PromptTarget = Pick<ReturnType<ReturnType<typeof usePrompt>["capture"]>, "current" | "cursor" | "set">
@@ -18,7 +18,10 @@ type PromptAttachmentsCoreInput = {
   editor: () => HTMLDivElement | undefined
   focusEditor?: () => void
   addPart?: (part: ContentPart) => boolean
-  warn?: () => void
+  /** No message: the generic "unsupported" toast. A message: why THIS file was refused, and what to do. */
+  warn?: (message?: string) => void
+  /** A file was attached but the model may not see all of it. */
+  notice?: (message: string) => void
   readClipboardImage?: () => Promise<File | null>
   getPathForFile?: (file: File) => string
   draftStore?: DraftStore
@@ -43,13 +46,16 @@ export function createPromptAttachmentsCore(input: PromptAttachmentsCoreInput) {
     return { prompt, cursor: prompt.cursor() ?? getCursorPosition(editor) }
   }
 
-  const add = async (file: File, toast = true, target = capture()) => {
+  const add = async (file: File, target = capture()) => {
     if (!target) return false
-    const mime = await attachmentMime(file)
-    if (!mime) {
-      if (toast) input.warn?.()
+    const check = await attachmentCheck(file)
+    if (!check.ok) {
+      // Always say which file and why — even inside a multi-file drop, where the old code stayed
+      // silent as long as one other file was accepted.
+      input.warn?.(check.message)
       return false
     }
+    const mime = check.mime
 
     const attachment: ImageAttachmentPart = {
       type: "image",
@@ -60,27 +66,28 @@ export function createPromptAttachmentsCore(input: PromptAttachmentsCoreInput) {
       blob: input.draftStore ? await input.draftStore.putBlob(file) : await createBlobReference(file),
     }
     target.prompt.set([...target.prompt.current(), attachment], target.cursor)
+    const notice = largeAttachmentNotice(file, mime)
+    if (notice) input.notice?.(notice)
     return true
   }
 
   const addAttachment = (file: File) => add(file)
 
-  const addAttachments = async (files: File[], toast = true, target = capture()) => {
+  const addAttachments = async (files: File[], target = capture()) => {
     let found = false
 
     for (const file of files) {
-      const ok = await add(file, false, target)
+      const ok = await add(file, target)
       if (ok) found = true
     }
 
-    if (!found && files.length > 0 && toast) input.warn?.()
     return found
   }
 
   const addClipboardAttachment = async (pending: Promise<File | null>, target = capture()) => {
     const file = await pending
     if (!file) return false
-    return add(file, true, target)
+    return add(file, target)
   }
 
   const removeAttachment = (id: string) => {
@@ -106,7 +113,7 @@ export function createPromptAttachmentsCore(input: PromptAttachmentsCoreInput) {
     })
 
     if (files.length > 0) {
-      await addAttachments(files, true, target)
+      await addAttachments(files, target)
       return
     }
 
@@ -154,11 +161,14 @@ export function createPromptAttachments(input: PromptAttachmentsInput) {
     ...input,
     draftStore: platform.draftStore,
     capture: input.prompt.capture,
-    warn: () => {
+    warn: (message) => {
       showToast({
         title: language.t("prompt.toast.pasteUnsupported.title"),
-        description: language.t("prompt.toast.pasteUnsupported.description"),
+        description: message ?? language.t("prompt.toast.pasteUnsupported.description"),
       })
+    },
+    notice: (message) => {
+      showToast({ title: "Large attachment", description: message })
     },
   })
 

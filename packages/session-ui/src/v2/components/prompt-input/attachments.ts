@@ -1,8 +1,9 @@
 import { onMount } from "solid-js"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import type { PromptInputV2Attachment, PromptInputV2Prompt } from "./types"
+import { attachmentCheck, largeAttachmentNotice } from "./attachment-check"
 
-const accepted = [
+export const accepted = [
   "image/png",
   "image/jpeg",
   "image/gif",
@@ -16,6 +17,17 @@ const accepted = [
   "application/x-yaml",
   "application/xml",
   "application/yaml",
+  // Read into text by the engine; the unreadable office formats stay pickable so the person is told why.
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  ".xlsx",
+  ".xlsm",
+  ".xls",
+  ".ods",
+  ".docx",
+  ".doc",
+  ".tsv",
   ".c",
   ".cc",
   ".cjs",
@@ -73,7 +85,10 @@ export type PromptInputV2AttachmentConfig = {
   ) => Promise<void>
   directory: () => string
   isDialogActive: () => boolean
-  warn: () => void
+  /** No message: the generic "unsupported" toast. A message: why THIS file was refused, and what to do. */
+  warn: (message?: string) => void
+  /** A file was attached but the model may not see all of it. */
+  notice?: (message: string) => void
   duplicate: () => void
   onError: (error: unknown) => void
   readClipboardImage?: () => Promise<File | null>
@@ -96,13 +111,16 @@ export function createPromptInputV2Attachments(
     if (!editor) return
     return { prompt, cursor: prompt.cursor() ?? cursorPosition(editor) }
   }
-  const add = async (file: File, toast = true, target = capture(), clipboard = false) => {
+  const add = async (file: File, target = capture(), clipboard = false) => {
     if (!target) return false
-    const mime = await attachmentMime(file)
-    if (!mime) {
-      if (toast) input.warn()
+    const check = await attachmentCheck(file)
+    if (!check.ok) {
+      // Always say which file and why — even inside a multi-file drop, where this used to stay
+      // silent as long as one other file in the batch was accepted.
+      input.warn(check.message)
       return false
     }
+    const mime = check.mime
     const blob = input.store ? await input.store(file) : await blobReference(file)
     const sourcePath = input.getPathForFile?.(file) || undefined
     // Native clipboard images arrive with a fresh timestamped filename on every paste, so identical
@@ -130,15 +148,15 @@ export function createPromptInputV2Attachments(
       blob,
     }
     target.prompt.set([...target.prompt.current(), attachment], target.cursor)
+    const notice = largeAttachmentNotice(file, mime)
+    if (notice) input.notice?.(notice)
     return true
   }
-  const addAttachments = async (files: File[], toast = true, target = capture()) => {
-    const found = await files.reduce(async (result, file) => {
+  const addAttachments = async (files: File[], target = capture()) => {
+    return files.reduce(async (result, file) => {
       const previous = await result
-      return (await add(file, false, target)) || previous
+      return (await add(file, target)) || previous
     }, Promise.resolve(false))
-    if (!found && files.length > 0 && toast) input.warn()
-    return found
   }
   const handlePaste = async (event: ClipboardEvent) => {
     const clipboardData = event.clipboardData
@@ -153,20 +171,20 @@ export function createPromptInputV2Attachments(
       return file ? [file] : []
     })
     if (files.length > 0) {
-      await addAttachments(files, true, target)
+      await addAttachments(files, target)
       return
     }
     const plainText = clipboardData.getData("text/plain") ?? ""
     if (input.readClipboardImage && !plainText) {
       const file = await input.readClipboardImage()
-      if (file && (await add(file, true, target, true))) return
+      if (file && (await add(file, target, true))) return
     }
     if (!plainText) return
     const text = plainText.includes("\r") ? plainText.replace(/\r\n?/g, "\n") : plainText
     // A large paste is attached, not typed (#189434). Inserting it into the editor froze the app
     // for longer the bigger it was (measured: 200 lines 0.6s, 1,000 lines 7.2s, 5,000 lines
     // minutes). As an attachment it is held like a dropped .txt file (43ms) and sent in full.
-    if (largePaste(text) && (await add(pastedTextFile(text), true, target, true))) return
+    if (largePaste(text) && (await add(pastedTextFile(text), target, true))) return
     const put = () => {
       if (input.addPart({ type: "text", content: text, start: 0, end: 0 })) return true
       input.focusEditor()
@@ -223,48 +241,12 @@ export function createPromptInputV2Attachments(
   }
 }
 
-const imageMimes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"])
-
 async function blobReference(file: File) {
   const id = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", await file.arrayBuffer())))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("")
   return { id, url: URL.createObjectURL(file) }
 }
-const imageExtensions = new Map([
-  ["gif", "image/gif"],
-  ["jpeg", "image/jpeg"],
-  ["jpg", "image/jpeg"],
-  ["png", "image/png"],
-  ["webp", "image/webp"],
-])
-const textMimes = new Set([
-  "application/json",
-  "application/ld+json",
-  "application/toml",
-  "application/x-toml",
-  "application/x-yaml",
-  "application/xml",
-  "application/yaml",
-])
-
-async function attachmentMime(file: File) {
-  const type = file.type.split(";", 1)[0]?.trim().toLowerCase() ?? ""
-  if (imageMimes.has(type) || type === "application/pdf") return type
-  const index = file.name.lastIndexOf(".")
-  const suffix = index === -1 ? "" : file.name.slice(index + 1).toLowerCase()
-  const fallback = imageExtensions.get(suffix) ?? (suffix === "pdf" ? "application/pdf" : undefined)
-  if ((!type || type === "application/octet-stream") && fallback) return fallback
-  if (type.startsWith("text/") || textMimes.has(type) || type.endsWith("+json") || type.endsWith("+xml")) {
-    return "text/plain"
-  }
-  const bytes = new Uint8Array(await file.slice(0, 4096).arrayBuffer())
-  if (bytes.some((byte) => byte === 0)) return
-  const control = bytes.filter((byte) => byte < 9 || (byte > 13 && byte < 32)).length
-  if (bytes.length > 0 && control / bytes.length > 0.3) return
-  return "text/plain"
-}
-
 function cursorPosition(editor: HTMLElement) {
   const selection = window.getSelection()
   if (!selection || selection.rangeCount === 0) return 0
