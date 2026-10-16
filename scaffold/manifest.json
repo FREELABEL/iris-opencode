@@ -201,6 +201,18 @@
       "purpose": "How to: verify a page actually renders — check-public, verify and read — rather than trusting a 200. Committed in ce2fdf8be without a manifest entry, so the installer never fetched it."
     },
     {
+      "src": "how-to/genesis-starter-templates.md",
+      "dest": "how-to/genesis-starter-templates.md",
+      "managed": true,
+      "purpose": "How to: start a page from a Genesis template — clone it in your brand, then make it yours. The gallery is at genesis-ui.com."
+    },
+    {
+      "src": "how-to/genesis-make-a-template.md",
+      "dest": "how-to/genesis-make-a-template.md",
+      "managed": true,
+      "purpose": "How to: turn one of your Genesis pages into a template any brand can wear — brand-tokens block, fallbacks, per-theme accent."
+    },
+    {
       "src": "how-to/hive-dispatch.md",
       "dest": "how-to/hive-dispatch.md",
       "managed": true,
