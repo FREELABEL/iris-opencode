@@ -69,6 +69,58 @@ export interface SecurityState {
     recent: GateEvent[]
   }
   phiGuard: { active: boolean; mode: string; explanation: string }
+  platform?: SecurityPlatform | null
+}
+
+export interface SecurityPlatform {
+  rollout: { enabled: boolean; mode: string; percent: number; newUserDays: number; tiers: string[]; allowUsers: number } | null
+  keySource: string
+  last24h: {
+    scanned: number
+    clean: number
+    flagged: number
+    held: number
+    errors: number
+    accounts: number
+    cached: number
+    p50Ms: number | null
+    p95Ms: number | null
+    billableTokens: number
+    reportedFalsePct: number | null
+  }
+  recent: (GateEvent & { userId: number | null; smoke: boolean })[]
+}
+
+/** The rollout in one sentence, the way an operator would say it. */
+export function rolloutSentence(r: SecurityPlatform["rollout"]): string {
+  if (!r) return "No rollout is set, so Gate screens no one."
+  if (!r.enabled) return "Switched off for everyone (kill switch)."
+  const who: string[] = []
+  if (r.newUserDays > 0) who.push(`new accounts for their first ${r.newUserDays} days`)
+  if (r.tiers.length) who.push(`the ${r.tiers.join(", ")} plan${r.tiers.length === 1 ? "" : "s"}`)
+  if (r.percent > 0) who.push(`${r.percent}% of everyone else`)
+  if (r.allowUsers > 0) who.push(`${r.allowUsers} named account${r.allowUsers === 1 ? "" : "s"}`)
+  const mode = r.mode === "enforce" ? "Holding what it flags" : "Watching only"
+  return `${mode} — ${who.length ? who.join(", ") : "no one yet"}. Anyone who works with health data is always left out.`
+}
+
+export function keySourceLabel(source: string): string {
+  if (source === "env") return "platform key"
+  const m = /^integration:(\d+)$/.exec(source)
+  if (m) return `saved Gate connector #${m[1]}`
+  if (source.startsWith("integration:")) return `connector problem (${source.split(":").slice(2).join(":")})`
+  return "no key"
+}
+
+export function platformTiles(d: SecurityPlatform["last24h"]): { label: string; value: string; hint: string }[] {
+  const fmt = (n: number) => n.toLocaleString("en-US")
+  const sec = (ms: number | null) => (ms === null ? "—" : `${(ms / 1000).toFixed(2)}s`)
+  return [
+    { label: "Scanned", value: fmt(d.scanned), hint: `${fmt(d.accounts)} account${d.accounts === 1 ? "" : "s"} · ${fmt(d.cached)} seen before` },
+    { label: "Flagged", value: fmt(d.flagged + d.held), hint: d.held > 0 ? `${fmt(d.held)} held` : "none held" },
+    { label: "Median scan", value: sec(d.p50Ms), hint: `p95 ${sec(d.p95Ms)}` },
+    { label: "Not scanned", value: fmt(d.errors), hint: d.errors > 0 ? "Gate didn't answer; calls went through" : "Gate answered every time" },
+  ]
 }
 
 type Tone = "on" | "off" | "warn" | "unknown"
@@ -379,6 +431,68 @@ export const SettingsSecurityV2: Component = () => {
               <p class="settings-v2-security-error">{reportError()}</p>
             </Show>
           </div>
+        </Show>
+
+        <Show when={ready() && state()!.platform}>
+          {(p) => (
+            <div class="settings-v2-section" data-action="gate-platform">
+              <h3 class="settings-v2-section-title">Across IRIS · last 24 hours</h3>
+              <SettingsListV2>
+                <SettingsRowV2 title="Rollout" description={rolloutSentence(p().rollout)}>
+                  <Pill tone={p().rollout?.enabled ? "on" : "off"}>{p().rollout?.enabled ? "Live" : "Off"}</Pill>
+                </SettingsRowV2>
+                <SettingsRowV2 title="Key" description="Where the server's Gate key comes from. The key itself never leaves IRIS's servers.">
+                  <span class="settings-v2-security-mono">{keySourceLabel(p().keySource)}</span>
+                </SettingsRowV2>
+              </SettingsListV2>
+              <div class="settings-v2-security-stats">
+                <For each={platformTiles(p().last24h)}>
+                  {(t) => (
+                    <div class="settings-v2-security-stat">
+                      <span data-slot="label">{t.label}</span>
+                      <span data-slot="value">{t.value}</span>
+                      <span data-slot="hint">{t.hint}</span>
+                    </div>
+                  )}
+                </For>
+              </div>
+              <SettingsListV2>
+                <Show
+                  when={p().recent.length > 0}
+                  fallback={
+                    <SettingsRowV2 title="No scans yet" description="They appear here as accounts in the rollout use IRIS.">
+                      <span />
+                    </SettingsRowV2>
+                  }
+                >
+                  <For each={p().recent}>
+                    {(e) => {
+                      const v = eventView(e)
+                      return (
+                        <SettingsRowV2
+                          title={
+                            <span class="settings-v2-security-event-title">
+                              <Pill tone={v.tone}>{v.label}</Pill>
+                              {v.source}
+                              <span class="settings-v2-security-mono settings-v2-security-faint">
+                                #{e.userId ?? "?"} · {eventTime(e.at)}
+                              </span>
+                              <Show when={e.smoke}>
+                                <Pill tone="unknown">test</Pill>
+                              </Show>
+                            </span>
+                          }
+                          description={v.detail || "Nothing found."}
+                        >
+                          <span />
+                        </SettingsRowV2>
+                      )
+                    }}
+                  </For>
+                </Show>
+              </SettingsListV2>
+            </div>
+          )}
         </Show>
 
         <div class="settings-v2-section">

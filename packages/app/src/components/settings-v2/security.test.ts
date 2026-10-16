@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { checkChips, eventTime, eventView, gateStatusView, modeView, statTiles, type SecurityState } from "./security"
+import { checkChips, eventTime, eventView, gateStatusView, keySourceLabel, modeView, platformTiles, rolloutSentence, statTiles, type SecurityState } from "./security"
 
 const STATE: SecurityState = {
   measured: true,
@@ -100,4 +100,27 @@ test("eventTime shows a time today and a date otherwise", () => {
   expect(eventTime("2026-10-15T15:04:00", now)).toMatch(/3:04/)
   expect(eventTime("2026-10-02T15:04:00", now)).toBe("Oct 2")
   expect(eventTime(null, now)).toBe("")
+})
+
+describe("admin view", () => {
+  test("the rollout reads as one sentence, and health data is always named", () => {
+    expect(rolloutSentence({ enabled: true, mode: "shadow", percent: 5, newUserDays: 14, tiers: [], allowUsers: 1 })).toBe(
+      "Watching only — new accounts for their first 14 days, 5% of everyone else, 1 named account. Anyone who works with health data is always left out.",
+    )
+    expect(rolloutSentence({ enabled: false, mode: "shadow", percent: 5, newUserDays: 14, tiers: [], allowUsers: 1 })).toContain("kill switch")
+    expect(rolloutSentence(null)).toContain("screens no one")
+  })
+
+  test("the key source names the connector, or the problem with it", () => {
+    expect(keySourceLabel("integration:140")).toBe("saved Gate connector #140")
+    expect(keySourceLabel("integration:140:not_a_gate_connector")).toBe("connector problem (not_a_gate_connector)")
+    expect(keySourceLabel("none")).toBe("no key")
+  })
+
+  test("platform tiles count holds as flags and say when Gate didn't answer", () => {
+    const t = platformTiles({ scanned: 3, clean: 1, flagged: 1, held: 1, errors: 0, accounts: 2, cached: 1, p50Ms: 760, p95Ms: 900, billableTokens: 76, reportedFalsePct: null })
+    expect(t[1]).toMatchObject({ value: "2", hint: "1 held" })
+    expect(t[2]).toMatchObject({ value: "0.76s", hint: "p95 0.90s" })
+    expect(t[3].hint).toBe("Gate answered every time")
+  })
 })

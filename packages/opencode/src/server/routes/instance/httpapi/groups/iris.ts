@@ -1135,6 +1135,40 @@ const SecurityResponse = Schema.Struct({
     recent: Schema.Array(GateEventSchema),
   }),
   phiGuard: Schema.Struct({ active: Schema.Boolean, mode: Schema.String, explanation: Schema.String }),
+  platform: described(
+    Schema.NullOr(
+      Schema.Struct({
+        rollout: Schema.NullOr(
+          Schema.Struct({
+            enabled: Schema.Boolean,
+            mode: Schema.String,
+            percent: Schema.Finite,
+            newUserDays: Schema.Finite,
+            tiers: Schema.Array(Schema.String),
+            allowUsers: Schema.Finite,
+          }),
+        ),
+        keySource: Schema.String,
+        last24h: Schema.Struct({
+          scanned: Schema.Finite,
+          clean: Schema.Finite,
+          flagged: Schema.Finite,
+          held: Schema.Finite,
+          errors: Schema.Finite,
+          accounts: Schema.Finite,
+          cached: Schema.Finite,
+          p50Ms: Schema.NullOr(Schema.Finite),
+          p95Ms: Schema.NullOr(Schema.Finite),
+          billableTokens: Schema.Finite,
+          reportedFalsePct: Schema.NullOr(Schema.Finite),
+        }),
+        recent: Schema.Array(
+          Schema.Struct({ ...GateEventSchema.fields, userId: Schema.NullOr(Schema.Finite), smoke: Schema.Boolean }),
+        ),
+      }),
+    ),
+    "Platform admins only: the rollout across all of IRIS. Null for everyone else.",
+  ),
 }).annotate({ identifier: "IrisSecurityResponse" })
 
 const GateReportResponse = Schema.Struct({

@@ -754,6 +754,27 @@ export interface SecurityState {
     recent: GateEvent[]
   }
   phiGuard: { active: boolean; mode: string; explanation: string }
+  /** Platform admins only: the rollout across all of IRIS. Null for everyone else. */
+  platform: SecurityPlatform | null
+}
+
+export interface SecurityPlatform {
+  rollout: { enabled: boolean; mode: string; percent: number; newUserDays: number; tiers: string[]; allowUsers: number } | null
+  keySource: string
+  last24h: {
+    scanned: number
+    clean: number
+    flagged: number
+    held: number
+    errors: number
+    accounts: number
+    cached: number
+    p50Ms: number | null
+    p95Ms: number | null
+    billableTokens: number
+    reportedFalsePct: number | null
+  }
+  recent: (GateEvent & { userId: number | null; smoke: boolean })[]
 }
 
 export const EMPTY_SECURITY: SecurityState = {
@@ -784,6 +805,7 @@ export const EMPTY_SECURITY: SecurityState = {
     recent: [],
   },
   phiGuard: { active: false, mode: "report", explanation: "" },
+  platform: null,
 }
 
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null)
@@ -845,6 +867,42 @@ export function securityFrom(j: any): SecurityState {
       mode: String(p.mode ?? "report"),
       explanation: String(p.explanation ?? ""),
     },
+    platform: platformFrom(j?.data?.platform),
+  }
+}
+
+function platformFrom(x: any): SecurityPlatform | null {
+  if (!x || typeof x !== "object" || x.unavailable) return null
+  const r = x.rollout
+  const d = x.last_24h ?? {}
+  return {
+    rollout: r
+      ? {
+          enabled: Boolean(r.enabled),
+          mode: String(r.mode ?? "shadow"),
+          percent: num(r.percent) ?? 0,
+          newUserDays: num(r.new_user_days) ?? 0,
+          tiers: strs(r.tiers),
+          allowUsers: num(r.allow_users) ?? 0,
+        }
+      : null,
+    keySource: String(x.key_source ?? "none"),
+    last24h: {
+      scanned: num(d.scanned) ?? 0,
+      clean: num(d.clean) ?? 0,
+      flagged: num(d.flagged) ?? 0,
+      held: num(d.held) ?? 0,
+      errors: num(d.errors) ?? 0,
+      accounts: num(d.accounts) ?? 0,
+      cached: num(d.cached) ?? 0,
+      p50Ms: num(d.p50_ms),
+      p95Ms: num(d.p95_ms),
+      billableTokens: num(d.billable_tokens) ?? 0,
+      reportedFalsePct: num(d.reported_false_pct),
+    },
+    recent: Array.isArray(x.recent)
+      ? x.recent.map((e: any) => ({ ...gateEventFrom(e), userId: num(e?.user_id), smoke: Boolean(e?.smoke) }))
+      : [],
   }
 }
 
