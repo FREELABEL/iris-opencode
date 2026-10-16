@@ -380,7 +380,7 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
   // Approve or reject a run Constellation Gate held (#189589). Approving starts a NEW task —
   // the panel follows that one, so what you watch is what actually runs.
   const [deciding, setDeciding] = createSignal(false)
-  const decide = async (decision: "approve" | "reject") => {
+  const decide = async (decision: "approve" | "reject" | "cancel") => {
     const r = run()
     if (!r?.taskId) return
     setDeciding(true)
@@ -392,7 +392,8 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
       )
       if (!p.measured) return putRun({ ...r, reason: p.reason ?? "The decision was not recorded." })
       if (decision === "approve" && p.taskId) return putRun({ ...r, taskId: p.taskId, task: null, reason: undefined })
-      putRun({ ...r, task: r.task ? { ...r.task, held: false, terminal: true, status: "cancelled", error: "Rejected — it never ran." } : null })
+      const error = decision === "cancel" ? "Stopped — the computer was told to end it." : "Rejected — it never ran."
+      putRun({ ...r, task: r.task ? { ...r.task, held: false, terminal: true, status: "cancelled", error } : null })
     } finally {
       setDeciding(false)
     }
@@ -1112,6 +1113,20 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
                       )}
                     </For>
                     <span class="hsc-spacer" />
+                    {/* Stop (#189589 follow-up): any run of yours that has not finished, including one
+                        Gate is holding. The hub cancels it and tells the computer to end it. */}
+                    <Show when={run()?.taskId && run()?.task && !run()!.task!.terminal}>
+                      <button
+                        type="button"
+                        class="hsc-run hsc-run--stop"
+                        data-action="hive-stop"
+                        disabled={deciding()}
+                        onClick={() => void decide("cancel")}
+                        title="Stop this run on the computer"
+                      >
+                        <Ic name="stop" /> {deciding() ? "Stopping…" : "Stop"}
+                      </button>
+                    </Show>
                     <span class="hsc-num hsc-clock" title="Since it was queued">
                       {elapsed().toFixed(1)} s
                     </span>

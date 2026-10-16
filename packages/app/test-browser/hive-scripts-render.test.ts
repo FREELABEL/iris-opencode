@@ -365,3 +365,21 @@ test("a machine that cannot run the script says why on its card, and the code is
   dispose()
   host.remove()
 })
+
+test("a running run has a Stop button that cancels it on the hub", async () => {
+  const { host, calls, dispose } = mount()
+  await wait(() => host.querySelectorAll(".hsc-ilist li").length > 0 && host.querySelectorAll(".hsc-cc").length > 0)
+  const input = host.querySelector(".hsc-cmdk input") as HTMLInputElement
+  input.value = "run console-demo on iris-hive-001"
+  input.dispatchEvent(new Event("input", { bubbles: true }))
+  host.querySelector(".hsc-cmdk")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))
+
+  // first poll answers "running" — Stop must be there
+  await wait(() => host.querySelector('[data-action="hive-stop"]') !== null)
+  ;(host.querySelector('[data-action="hive-stop"]') as HTMLButtonElement).click()
+  await wait(() => calls.some((c) => c.method === "POST" && c.path.endsWith("/cancel")))
+  expect(calls.find((c) => c.path.endsWith("/cancel"))!.path).toMatch(/^\/iris\/hive\/tasks\/[^/]+\/cancel$/)
+  await wait(() => (host.querySelector(".hsc-term")?.textContent ?? "").includes("Stopped"))
+  dispose()
+  host.remove()
+})

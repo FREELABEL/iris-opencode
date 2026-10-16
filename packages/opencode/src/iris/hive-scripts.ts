@@ -495,7 +495,7 @@ export async function runScript(slug: string, node: string, timeout?: number): P
  * Approve or reject a run Constellation Gate held (#189589). Approving re-runs it through the hub's
  * single dispatch path; the answer names the NEW task, which is the one to follow.
  */
-export async function decideHeldTask(id: string, decision: "approve" | "reject"): Promise<Result<{ taskId: string | null }>> {
+export async function decideHeldTask(id: string, decision: "approve" | "reject" | "cancel"): Promise<Result<{ taskId: string | null }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: notSignedIn(), data: { taskId: null } }
   try {

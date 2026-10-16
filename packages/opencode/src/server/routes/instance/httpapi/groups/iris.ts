@@ -2853,10 +2853,10 @@ export const IrisApi = HttpApi.make("iris").add(
         }),
       ),
       HttpApiEndpoint.post("hiveTaskDecide", IrisPaths.hiveTaskDecide, {
-        params: { taskID: Schema.String, decision: Schema.Literals(["approve", "reject"]) },
+        params: { taskID: Schema.String, decision: Schema.Literals(["approve", "reject", "cancel"]) },
         success: described(
           Schema.Struct({ ...Measured, taskId: Schema.NullOr(Schema.String) }).annotate({ identifier: "IrisHiveTaskDecision" }),
-          "Approve or reject a run Constellation Gate held. Approve answers with the NEW task to follow.",
+          "Approve or reject a run Constellation Gate held (approve answers with the NEW task to follow), or cancel/stop any run of yours.",
         ),
       }).annotateMerge(OpenApi.annotations({ identifier: "iris.hiveTaskDecide", summary: "Approve or reject a held Hive run" })),
       HttpApiEndpoint.get("hiveTask", IrisPaths.hiveTask, {

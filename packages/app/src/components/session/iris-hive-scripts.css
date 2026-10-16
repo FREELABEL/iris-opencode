@@ -365,3 +365,7 @@
   color: var(--hsc-amber);
   white-space: normal;
 }
+
+/* Stop a run (#189589 follow-up). Coral: it ends something already happening on a machine. */
+.hsc-run.hsc-run--stop { background: transparent; color: var(--hsc-coral); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--hsc-coral) 55%, transparent); padding: 4px 11px; margin-right: 8px; }
+.hsc-run.hsc-run--stop:hover { background: color-mix(in srgb, var(--hsc-coral) 12%, transparent); }

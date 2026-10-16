@@ -880,7 +880,7 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
         Effect.promise(() => HiveScripts.runScript(ctx.params.slug, ctx.payload.node, ctx.payload.timeout)),
     )
     const hiveTaskDecide = Effect.fn("IrisHttpApi.hiveTaskDecide")(
-      (ctx: { params: { taskID: string; decision: "approve" | "reject" } }) =>
+      (ctx: { params: { taskID: string; decision: "approve" | "reject" | "cancel" } }) =>
         Effect.promise(() => HiveScripts.decideHeldTask(ctx.params.taskID, ctx.params.decision)).pipe(
           Effect.map((r) => ({ measured: r.measured, reason: r.reason, taskId: r.data.taskId })),
         ),
