@@ -369,6 +369,16 @@ const HiveTaskResponse = Schema.Struct({
       error: Schema.NullOr(Schema.String),
       nodeName: Schema.NullOr(Schema.String),
       durationMs: Schema.NullOr(Schema.Finite),
+      held: described(Schema.Boolean, "Constellation Gate held this run for its owner's approval. It has NOT been sent."),
+      gate: Schema.NullOr(
+        Schema.Struct({
+          explanation: Schema.String,
+          reasons: Schema.Array(Schema.String),
+          action: Schema.NullOr(Schema.String),
+          score: Schema.NullOr(Schema.Finite),
+          hardware: Schema.Array(Schema.String),
+        }),
+      ),
     }).annotate({ identifier: "IrisHiveTask" }),
   ),
 }).annotate({ identifier: "IrisHiveTaskResponse" })
@@ -1316,6 +1326,7 @@ export const IrisPaths = {
   hiveMarketScript: `${root}/hive/market/:slug`,
   hiveMarketInstall: `${root}/hive/market/:slug/install`,
   hiveTask: `${root}/hive/tasks/:taskID`,
+  hiveTaskDecide: `${root}/hive/tasks/:taskID/:decision`,
   allowance: `${root}/allowance`,
   plan: `${root}/plan`,
   me: `${root}/me`,
@@ -2841,6 +2852,13 @@ export const IrisApi = HttpApi.make("iris").add(
             "Pins the content hash like the CLI. Takes no arguments: the daemon does not pass a header's `arg=` values to a user script today, and sending them under an invented key would change nothing.",
         }),
       ),
+      HttpApiEndpoint.post("hiveTaskDecide", IrisPaths.hiveTaskDecide, {
+        params: { taskID: Schema.String, decision: Schema.Literals(["approve", "reject"]) },
+        success: described(
+          Schema.Struct({ ...Measured, taskId: Schema.NullOr(Schema.String) }).annotate({ identifier: "IrisHiveTaskDecision" }),
+          "Approve or reject a run Constellation Gate held. Approve answers with the NEW task to follow.",
+        ),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.hiveTaskDecide", summary: "Approve or reject a held Hive run" })),
       HttpApiEndpoint.get("hiveTask", IrisPaths.hiveTask, {
         params: { taskID: Schema.String },
         success: described(HiveTaskResponse, "A Hive task's stage timestamps, output and exit"),

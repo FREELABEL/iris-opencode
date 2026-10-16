@@ -78,6 +78,9 @@ export type TaskView = {
   error: string | null
   nodeName: string | null
   durationMs: number | null
+  /** Constellation Gate held this run for approval (#189589). Optional: older engines omit it. */
+  held?: boolean
+  gate?: { explanation: string; reasons: string[]; action: string | null; score: number | null; hardware: string[] } | null
 }
 
 // ── test fixtures ────────────────────────────────────────────────────────────────────────────────
@@ -462,6 +465,8 @@ export function taskSucceeded(task: TaskView | null | undefined): boolean {
 
 export function taskStatusWord(task: TaskView | null | undefined): string {
   if (!task) return "Ready"
+  // #189589: held by Constellation Gate — not sent, and not "Queued", which would read as on its way.
+  if (task.held) return "Waiting for your approval"
   if (task.terminal) {
     if (taskSucceeded(task)) return task.exitCode != null ? `Done · exit ${task.exitCode}` : "Done"
     if (task.status === "timeout") return "Timed out"

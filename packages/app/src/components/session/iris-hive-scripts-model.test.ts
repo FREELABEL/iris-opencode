@@ -304,3 +304,9 @@ describe("find · sort · page", () => {
     expect(readSort("junk")).toBe("recent")
   })
 })
+
+// #189589 — a run Constellation Gate held has not been sent; "Queued" would read as on its way.
+test("a held run reads as waiting for approval, not queued", () => {
+  const held = { id: "t1", status: "awaiting_approval", terminal: false, stdout: "", stderr: "", exitCode: null, exitCodeSource: null, error: null, nodeName: null, durationMs: null, held: true } as any
+  expect(taskStatusWord(held)).toBe("Waiting for your approval")
+})

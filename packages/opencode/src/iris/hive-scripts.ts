@@ -72,6 +72,9 @@ export type TaskView = {
   error: string | null
   nodeName: string | null
   durationMs: number | null
+  /** Constellation Gate held this run for its owner's approval (#189589). It has not been sent. */
+  held: boolean
+  gate: { explanation: string; reasons: string[]; action: string | null; score: number | null; hardware: string[] } | null
 }
 
 /** The CLI's terminal set (platform-scripts.ts RunCmd). */
@@ -173,6 +176,17 @@ export function readTask(t: any): TaskView | null {
     error: nul(t.error),
     nodeName: str(t.node?.name) ?? str(r.metadata?.executed_by_node_name) ?? null,
     durationMs: typeof t.duration_ms === "number" ? t.duration_ms : null,
+    held: status === "awaiting_approval",
+    gate:
+      t.gate && typeof t.gate === "object"
+        ? {
+            explanation: String(t.gate.explanation ?? ""),
+            reasons: Array.isArray(t.gate.reasons) ? t.gate.reasons.map(String) : [],
+            action: t.gate.action ?? null,
+            score: typeof t.gate.score === "number" ? t.gate.score : null,
+            hardware: Array.isArray(t.gate.hardware) ? t.gate.hardware.map(String) : [],
+          }
+        : null,
   }
 }
 
@@ -474,6 +488,23 @@ export async function runScript(slug: string, node: string, timeout?: number): P
     return { ok: true, taskId: String(taskId), nodeId: target.id, nodeName: target.name, sha256: digest, timeoutSeconds }
   } catch (e) {
     return { ok: false, reason: errText(e) }
+  }
+}
+
+/**
+ * Approve or reject a run Constellation Gate held (#189589). Approving re-runs it through the hub's
+ * single dispatch path; the answer names the NEW task, which is the one to follow.
+ */
+export async function decideHeldTask(id: string, decision: "approve" | "reject"): Promise<Result<{ taskId: string | null }>> {
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: notSignedIn(), data: { taskId: null } }
+  try {
+    const res = await irisFetch(`/api/v6/nodes/tasks/${encodeURIComponent(id)}/${decision}?user_id=${userId}`, IRIS_API, { method: "POST" })
+    const body = (await res.json().catch(() => ({}))) as any
+    if (!res.ok) return { measured: false, reason: String(body?.message ?? `iris-api ${res.status}`), data: { taskId: null } }
+    return { measured: true, data: { taskId: body?.task?.id != null ? String(body.task.id) : null } }
+  } catch (e) {
+    return { measured: false, reason: errText(e), data: { taskId: null } }
   }
 }
 

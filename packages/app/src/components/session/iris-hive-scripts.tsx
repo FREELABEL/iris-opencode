@@ -375,6 +375,27 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
     }),
   )
 
+  // Approve or reject a run Constellation Gate held (#189589). Approving starts a NEW task —
+  // the panel follows that one, so what you watch is what actually runs.
+  const [deciding, setDeciding] = createSignal(false)
+  const decide = async (decision: "approve" | "reject") => {
+    const r = run()
+    if (!r?.taskId) return
+    setDeciding(true)
+    try {
+      const p = await getJson<{ measured: boolean; reason?: string; taskId: string | null }>(
+        `/iris/hive/tasks/${encodeURIComponent(r.taskId)}/${decision}`,
+        { measured: false, taskId: null },
+        { method: "POST" },
+      )
+      if (!p.measured) return putRun({ ...r, reason: p.reason ?? "The decision was not recorded." })
+      if (decision === "approve" && p.taskId) return putRun({ ...r, taskId: p.taskId, task: null, reason: undefined })
+      putRun({ ...r, task: r.task ? { ...r.task, held: false, terminal: true, status: "cancelled", error: "Rejected — it never ran." } : null })
+    } finally {
+      setDeciding(false)
+    }
+  }
+
   const [busy, setBusy] = createSignal<"save" | "run" | undefined>()
   const [note, setNote] = createSignal<string | undefined>()
   const [savedAt, setSavedAt] = createSignal<string | undefined>()
@@ -1106,7 +1127,24 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
                           {run()!.ignoredArgs!.join(", ")}: arguments are not delivered to scripts yet — it ran with its own defaults.
                         </div>
                       </Show>
-                      <Show when={run()!.task && !run()!.task!.terminal}>
+                      <Show when={run()!.task?.held}>
+                        <div class="hsc-gate-held" data-action="hive-gate-held">
+                          <div class="hsc-gate-title">Held by Constellation Gate — not sent</div>
+                          <div>{run()!.task!.gate?.explanation || "This run needs your approval before it can start."}</div>
+                          <Show when={run()!.task!.gate?.score != null && run()!.task!.gate?.reasons.includes("flagged")}>
+                            <div class="hsc-dim">risk {run()!.task!.gate!.score!.toFixed(2)}</div>
+                          </Show>
+                          <div class="hsc-gate-actions">
+                            <button type="button" class="hsc-run" disabled={deciding()} onClick={() => void decide("approve")}>
+                              {deciding() ? "Sending…" : "Approve and run"}
+                            </button>
+                            <button type="button" class="hsc-run hsc-run--ghost" disabled={deciding()} onClick={() => void decide("reject")}>
+                              Reject
+                            </button>
+                          </div>
+                        </div>
+                      </Show>
+                      <Show when={run()!.task && !run()!.task!.terminal && !run()!.task!.held}>
                         <div class="hsc-dim">Output arrives when the run finishes.</div>
                       </Show>
                       <For each={(run()!.task?.stdout ?? "").split("\n").filter(Boolean)}>{(l) => <div>{l}</div>}</For>

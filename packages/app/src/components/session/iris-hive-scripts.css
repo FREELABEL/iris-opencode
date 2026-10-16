@@ -329,3 +329,20 @@
   .hsc-fbar i, .hsc-cc, .hsc-grip::after { transition: none; }
   .hsc-save--due { animation: none; }
 }
+
+/* Constellation Gate held this run (#189589): a decision card, not an error — nothing failed,
+   nothing was sent, and the next step is the person's. Amber is the panel's "needs you" colour. */
+.hsc-gate-held {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 2px 0 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--hsc-amber) 45%, transparent);
+  background: color-mix(in srgb, var(--hsc-amber) 10%, transparent);
+  white-space: normal;
+}
+.hsc-gate-title { color: var(--hsc-amber); font-weight: 600; }
+.hsc-gate-actions { display: flex; gap: 8px; margin-top: 4px; }
+.hsc-run.hsc-run--ghost { background: transparent; color: inherit; box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 30%, transparent); }
