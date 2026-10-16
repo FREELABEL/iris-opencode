@@ -134,7 +134,7 @@ export function isTestScript(slug: string): boolean {
 
 // ── the `# iris:` header ─────────────────────────────────────────────────────────────────────────
 
-export type HeaderArg = { name: string; default?: string; required: boolean; line: number }
+export type HeaderArg = { name: string; default?: string; required: boolean; line: number; choices?: string[] }
 export type ScriptHeader = {
   args: HeaderArg[]
   timeout: number | null
@@ -172,7 +172,8 @@ export function parseHeader(source: string): ScriptHeader {
           return at < 0 ? [w, "true"] : [w.slice(0, at), w.slice(at + 1)]
         }),
       )
-      out.args.push({ name: value, default: kv["default"], required: kv["required"] === "true", line: i + 1 })
+      const choices = kv["choices"] ? kv["choices"].split("|").filter(Boolean) : undefined
+      out.args.push({ name: value, default: kv["default"], required: kv["required"] === "true", line: i + 1, ...(choices && choices.length > 1 ? { choices } : {}) })
     } else if (key === "timeout") {
       const n = Number(value)
       if (Number.isFinite(n) && n > 0) out.timeout = n
@@ -652,4 +653,25 @@ export function highlightLine(line: string, lang: "python" | "bash" | "js"): Tok
   }
   flush()
   return out
+}
+
+/**
+ * The values a run sends for a script's declared settings (#189589): what the person typed or
+ * picked, else the declared default; empty optional settings are left out so the script's own
+ * fallback applies. Unknown names are passed through so the hub can refuse them with a sentence.
+ */
+export function runArgs(declared: ScriptHeader["args"], values: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const a of declared) {
+    const v = (values[a.name] ?? "").trim()
+    if (v !== "") out[a.name] = v
+    else if (a.default !== undefined && a.default !== "") out[a.name] = a.default
+  }
+  for (const [k, v] of Object.entries(values)) if (!(k in out) && !declared.some((a) => a.name === k) && v.trim() !== "") out[k] = v.trim()
+  return out
+}
+
+/** Required settings with no value — Run says which, instead of sending a run the hub will refuse. */
+export function missingRequired(declared: ScriptHeader["args"], values: Record<string, string>): string[] {
+  return declared.filter((a) => a.required && !(values[a.name] ?? "").trim() && !a.default).map((a) => a.name)
 }

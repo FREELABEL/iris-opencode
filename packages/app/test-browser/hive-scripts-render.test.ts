@@ -137,16 +137,15 @@ test("⌘K runs console-demo on iris-hive-001: stages, output, and the card that
   await wait(() => calls.some((c) => c.path.endsWith("/run")))
   const runCall = calls.find((c) => c.path.endsWith("/run"))!
   expect(runCall.path).toBe("/iris/hive/scripts/console-demo/run")
-  // sent to the node it named, the timeout from the header — and NO arguments: the daemon drops them
+  // sent to the node it named, the timeout from the header — and the settings typed (#189589):
+  // they used to be dropped by the daemon; now the hub checks them and the node passes them on
   expect(runCall.body.node).toBe(snap.nodes.find((n: any) => n.name === "iris-hive-001" && n.online)!.id)
   expect(runCall.body.timeout).toBe(120)
-  expect("args" in runCall.body).toBe(false)
+  expect(runCall.body.args).toMatchObject({ seconds: "20" })
 
   await wait(() => host.querySelector(".hsc-track") !== null)
   // the edit/run toggle moved to Run
   expect(host.querySelector(".hsc")?.getAttribute("data-mode")).toBe("run")
-  // the arguments typed are SAID to be dropped, not silently dropped
-  await wait(() => host.querySelector(".hsc-term")?.textContent?.includes("not delivered") ?? false)
 
   // polled to completion: five stages done, the real output, exit 0
   await wait(() => host.querySelector(".hsc-term")?.textContent?.includes("console demo done") ?? false, 5000)
@@ -380,6 +379,32 @@ test("a running run has a Stop button that cancels it on the hub", async () => {
   await wait(() => calls.some((c) => c.method === "POST" && c.path.endsWith("/cancel")))
   expect(calls.find((c) => c.path.endsWith("/cancel"))!.path).toMatch(/^\/iris\/hive\/tasks\/[^/]+\/cancel$/)
   await wait(() => (host.querySelector(".hsc-term")?.textContent ?? "").includes("Stopped"))
+  dispose()
+  host.remove()
+})
+
+
+// #189589 — settings are editable for the next run; a choices= setting is a dropdown; the run
+// sends what was picked. And the output can go full screen, where long lines do not wrap.
+test("settings are fields the run sends, and the output opens full screen", async () => {
+  const { host, calls, dispose } = mount()
+  await wait(() => host.querySelectorAll(".hsc-ilist li").length > 0 && host.querySelectorAll(".hsc-cc").length > 0)
+  const input = host.querySelector(".hsc-cmdk input") as HTMLInputElement
+  input.value = "run console-demo seconds=7 on iris-hive-001"
+  input.dispatchEvent(new Event("input", { bubbles: true }))
+  host.querySelector(".hsc-cmdk")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))
+  await wait(() => calls.some((c) => c.path.endsWith("/run")))
+  expect(calls.find((c) => c.path.endsWith("/run"))!.body.args).toMatchObject({ seconds: "7" })
+
+  // the setting is now a field holding the value that was sent
+  await wait(() => host.querySelector('[data-action="hive-setting"]') !== null)
+  expect((host.querySelector('[data-action="hive-setting"]') as HTMLInputElement).value).toBe("7")
+
+  const full = host.querySelector('[data-action="hive-output-full"]') as HTMLButtonElement
+  full.click()
+  await wait(() => host.querySelector(".hsc-console")?.hasAttribute("data-full") ?? false)
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))
+  await wait(() => !(host.querySelector(".hsc-console")?.hasAttribute("data-full") ?? true))
   dispose()
   host.remove()
 })

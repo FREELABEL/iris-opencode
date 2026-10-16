@@ -448,7 +448,7 @@ export function clampTimeout(v: unknown): number {
 }
 
 /** `iris scripts run <slug> --node <node>`: dispatch, return the task id. The caller polls. */
-export async function runScript(slug: string, node: string, timeout?: number): Promise<RunResult> {
+export async function runScript(slug: string, node: string, timeout?: number, args?: Record<string, string>): Promise<RunResult> {
   const userId = await resolveUserId()
   if (!userId) return { ok: false, reason: notSignedIn() }
   try {
@@ -476,11 +476,21 @@ export async function runScript(slug: string, node: string, timeout?: number): P
         type: "user_script",
         node_id: target.id,
         prompt: slug,
-        config: { script_slug: slug, ...(digest ? { script_sha256: digest } : {}) },
+        // #189589: the run's settings. The hub checks them against the script's declarations,
+        // carries them in the signed task, and the node hands them over as IRIS_ARG_<NAME>.
+        config: { script_slug: slug, ...(digest ? { script_sha256: digest } : {}), ...(args && Object.keys(args).length ? { args } : {}) },
         timeout_seconds: timeoutSeconds,
       }),
     })
-    if (!res.ok) return { ok: false, reason: `Dispatch failed: ${res.status} ${(await res.text().catch(() => "")).slice(0, 300)}` }
+    if (!res.ok) {
+      // The hub answers a refused run with a sentence ({error, message}); show that, not raw JSON.
+      const raw = await res.text().catch(() => "")
+      let said: string | undefined
+      try {
+        said = (JSON.parse(raw) as any)?.message
+      } catch {}
+      return { ok: false, reason: said ? String(said) : `Dispatch failed: ${res.status} ${raw.slice(0, 300)}` }
+    }
     const created = (await res.json()) as any
     const taskId = created?.task?.id
     if (!taskId) return { ok: false, reason: "the hub accepted the dispatch but returned no task id" }

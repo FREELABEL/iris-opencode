@@ -2842,6 +2842,7 @@ export const IrisApi = HttpApi.make("iris").add(
         payload: Schema.Struct({
           node: described(Schema.String, "Node id or name, resolved as the CLI does."),
           timeout: Schema.optional(Schema.Finite),
+          args: Schema.optional(described(Schema.Record(Schema.String, Schema.String), "Values for the script's declared settings (# iris: arg=). The hub checks them; the node passes them as IRIS_ARG_<NAME>.")),
         }),
         success: described(ScriptRunResponse, "The dispatched task — poll /iris/hive/tasks/:taskID"),
       }).annotateMerge(

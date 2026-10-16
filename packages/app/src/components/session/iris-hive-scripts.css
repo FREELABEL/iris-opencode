@@ -369,3 +369,16 @@
 /* Stop a run (#189589 follow-up). Coral: it ends something already happening on a machine. */
 .hsc-run.hsc-run--stop { background: transparent; color: var(--hsc-coral); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--hsc-coral) 55%, transparent); padding: 4px 11px; margin-right: 8px; }
 .hsc-run.hsc-run--stop:hover { background: color-mix(in srgb, var(--hsc-coral) 12%, transparent); }
+
+/* A script's settings, editable for the next run (#189589). */
+.hsc-setting { display: inline-flex; align-items: center; gap: 0; border-radius: 7px; overflow: hidden; box-shadow: inset 0 0 0 1px var(--hsc-line, rgba(127,127,127,.25)); font-size: 12px; }
+.hsc-setting > span { padding: 4px 7px; color: var(--hsc-faint); }
+.hsc-setting input, .hsc-setting select { all: unset; padding: 4px 8px; background: color-mix(in srgb, currentColor 6%, transparent); color: inherit; font-size: 12px; min-width: 4ch; }
+.hsc-setting select { cursor: pointer; padding-right: 18px; }
+.hsc-setting[data-required] { box-shadow: inset 0 0 0 1px var(--hsc-amber); }
+.hsc-setting[data-required] > span { color: var(--hsc-amber); }
+.hsc-chead { flex-wrap: wrap; row-gap: 6px; }
+
+/* Full-screen output: the console covers the window, lines do not wrap, it scrolls both ways. */
+.hsc-console[data-full] { position: fixed; inset: 12px; z-index: 60; display: flex; flex-direction: column; box-shadow: 0 30px 80px rgba(0,0,0,.55); }
+.hsc-console[data-full] .hsc-term { flex: 1; max-height: none; white-space: pre; word-break: normal; font-size: 13px; }

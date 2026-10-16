@@ -33,6 +33,8 @@ import {
   lastLine,
   parseCommand,
   parseHeader,
+  runArgs,
+  missingRequired,
   inProject,
   projectTag,
   readiness,
@@ -114,8 +116,6 @@ type RunState = {
   taskId?: string
   task: TaskView | null
   reason?: string
-  /** Arguments typed in ⌘K that the daemon will not receive — said, not dropped silently. */
-  ignoredArgs?: string[]
 }
 
 const POLL_MS = 1_000
@@ -380,6 +380,13 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
   // Approve or reject a run Constellation Gate held (#189589). Approving starts a NEW task —
   // the panel follows that one, so what you watch is what actually runs.
   const [deciding, setDeciding] = createSignal(false)
+  // Full-screen output (#189589 follow-up): a wide table printed by a script stays in its columns.
+  const [fullOutput, setFullOutput] = createSignal(false)
+  onMount(() => {
+    const onEsc = (e: KeyboardEvent) => e.key === "Escape" && fullOutput() && setFullOutput(false)
+    window.addEventListener("keydown", onEsc)
+    onCleanup(() => window.removeEventListener("keydown", onEsc))
+  })
   const decide = async (decision: "approve" | "reject" | "cancel") => {
     const r = run()
     if (!r?.taskId) return
@@ -464,24 +471,38 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
     if (r.assetsLeft) setNote(`Added. Its ${r.assetsLeft} attached file${r.assetsLeft === 1 ? " was" : "s were"} not copied.`)
   }
 
-  const runOn = async (target: Computer | undefined, ignoredArgs?: string[]) => {
+  // A script's settings for the next run (#189589), per script: what was typed or picked, else
+  // the declared default. Sent with the run; the computer receives them as IRIS_ARG_<NAME>.
+  const [argValues, setArgValues] = createSignal<Record<string, Record<string, string>>>({})
+  const valuesFor = () => argValues()[name()] ?? {}
+  const setArgValue = (k: string, v: string) => setArgValues((all) => ({ ...all, [name()]: { ...(all[name()] ?? {}), [k]: v } }))
+  const valueOf = (a: { name: string; default?: string }) => valuesFor()[a.name] ?? a.default ?? ""
+
+  const runOn = async (target: Computer | undefined, extra?: Record<string, string>) => {
     const s = name()
     if (!s || !target) return
     if (dirty() && !(await save())) return
-    setBusy("run")
+    const values = { ...valuesFor(), ...(extra ?? {}) }
+    const missing = missingRequired(header().args, values)
     setMode("run")
-    putRun({ slug: s, computerId: target.id, computerName: target.name, task: null, ignoredArgs })
+    if (missing.length) {
+      putRun({ slug: s, computerId: target.id, computerName: target.name, task: null, reason: `Fill in ${missing.join(", ")} first — the script requires ${missing.length === 1 ? "it" : "them"}.` })
+      return
+    }
+    const args = runArgs(header().args, values)
+    setBusy("run")
+    putRun({ slug: s, computerId: target.id, computerName: target.name, task: null })
     const r = await post<RunPayload>(
       `/iris/hive/scripts/${encodeURIComponent(s)}/run`,
-      { node: target.id, timeout: timeoutSec() },
+      { node: target.id, timeout: timeoutSec(), ...(Object.keys(args).length ? { args } : {}) },
       { ok: false },
     )
     setBusy(undefined)
     if (!r.ok || !r.taskId) {
-      putRun({ slug: s, computerId: target.id, computerName: target.name, task: null, reason: r.reason ?? "Dispatch failed", ignoredArgs })
+      putRun({ slug: s, computerId: target.id, computerName: target.name, task: null, reason: r.reason ?? "Dispatch failed" })
       return
     }
-    putRun({ slug: s, computerId: target.id, computerName: r.nodeName ?? target.name, taskId: r.taskId, task: null, ignoredArgs })
+    putRun({ slug: s, computerId: target.id, computerName: r.nodeName ?? target.name, taskId: r.taskId, task: null })
   }
 
   const ready = createMemo(() => readiness(doctor(), onlineNames()))
@@ -513,10 +534,11 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
     if (parsed.node && !where) return setCmdError(`No computer named ${parsed.node}`)
     if (where && !where.online) return setCmdError(`${where.name} is offline`)
     if (where) setPickedId(where.id)
-    const ignored = Object.keys(parsed.args)
+    // `run mambo mode=hop`: the typed settings are remembered for this script and sent.
+    for (const [k, v] of Object.entries(parsed.args)) setArgValue(k, v)
     setCmd("")
     // Wait for the chosen script's doctor to be current before picking a default computer.
-    queueMicrotask(() => void runOn(where ?? picked(), ignored.length ? ignored : undefined))
+    queueMicrotask(() => void runOn(where ?? picked(), parsed.args))
   }
   // ⌘K inside this tab focuses the field. Window capture runs before the app's palette listener
   // (document capture), and only when focus is already in this pane — elsewhere ⌘K is the palette.
@@ -1096,7 +1118,7 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
                   </For>
                 </ol>
                 <CodeView value={text()} headerLines={header().lines} runtime={runtime()} />
-                <div class="hsc-console" data-state={run()?.task?.terminal ? "done" : run() ? "live" : "idle"}>
+                <div class="hsc-console" data-state={run()?.task?.terminal ? "done" : run() ? "live" : "idle"} data-full={fullOutput() ? "" : undefined}>
                   <div class="hsc-chead">
                     <span
                       class="hsc-rstat"
@@ -1105,11 +1127,30 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
                       <i />
                       <b>{run()?.reason ? "Not sent" : taskStatusWord(run()?.task)}</b>
                     </span>
+                    {/* A script's settings (#189589): edit them here for the next run. A setting
+                        with choices is a dropdown; a required one is marked until it has a value. */}
                     <For each={header().args}>
                       {(a) => (
-                        <span class="hsc-chip hsc-num" title="Declared in the header — not passed to the computer yet">
-                          {a.name}={a.default ?? "—"}
-                        </span>
+                        <label class="hsc-setting" data-required={a.required && !valueOf(a) ? "" : undefined} title={a.required ? `${a.name} is required` : `Sent to the script as IRIS_ARG_${a.name.toUpperCase()}`}>
+                          <span>{a.name}</span>
+                          <Show
+                            when={a.choices}
+                            fallback={
+                              <input
+                                class="hsc-mono"
+                                data-action="hive-setting"
+                                value={valueOf(a)}
+                                placeholder={a.required ? "required" : "—"}
+                                onInput={(e) => setArgValue(a.name, e.currentTarget.value)}
+                                size={Math.max(6, Math.min(24, valueOf(a).length + 1))}
+                              />
+                            }
+                          >
+                            <select class="hsc-mono" data-action="hive-setting" value={valueOf(a)} onChange={(e) => setArgValue(a.name, e.currentTarget.value)}>
+                              <For each={a.choices}>{(c) => <option value={c}>{c}</option>}</For>
+                            </select>
+                          </Show>
+                        </label>
                       )}
                     </For>
                     <span class="hsc-spacer" />
@@ -1127,6 +1168,16 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
                         <Ic name="stop" /> {deciding() ? "Stopping…" : "Stop"}
                       </button>
                     </Show>
+                    <button
+                      type="button"
+                      class="hsc-ib"
+                      data-action="hive-output-full"
+                      aria-pressed={fullOutput()}
+                      title={fullOutput() ? "Exit full screen (Esc)" : "Full screen — long lines stay on one line"}
+                      onClick={() => setFullOutput((v) => !v)}
+                    >
+                      <Ic name={fullOutput() ? "collapse" : "expand"} />
+                    </button>
                     <span class="hsc-num hsc-clock" title="Since it was queued">
                       {elapsed().toFixed(1)} s
                     </span>
@@ -1139,11 +1190,7 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
                       <Show when={run()!.reason}>
                         <div class="hsc-err">{run()!.reason}</div>
                       </Show>
-                      <Show when={run()!.ignoredArgs}>
-                        <div class="hsc-dim">
-                          {run()!.ignoredArgs!.join(", ")}: arguments are not delivered to scripts yet — it ran with its own defaults.
-                        </div>
-                      </Show>
+
                       <Show when={run()!.task?.held}>
                         <div class="hsc-gate-held" data-action="hive-gate-held">
                           <div class="hsc-gate-title">Held by Constellation Gate — not sent</div>

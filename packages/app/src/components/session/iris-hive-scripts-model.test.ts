@@ -30,6 +30,8 @@ import {
   stageStates,
   taskStatusWord,
   highlightLine,
+  runArgs,
+  missingRequired,
   topFix,
   type Doctor,
   type HiveNodeRow,
@@ -335,5 +337,24 @@ describe("highlightLine (script view colour)", () => {
   test("the text is never changed, only wrapped", () => {
     const line = 'VENV = os.path.expanduser("~/.iris/venvs/mambo")'
     expect(highlightLine(line, "python").map((t) => t.t).join("")).toBe(line)
+  })
+})
+
+describe("script settings (#189589)", () => {
+  const h = parseHeader("#!/bin/sh\n# iris: arg=mode default=status choices=status|hop|spin\n# iris: arg=note\n# iris: arg=fixture required\necho\n")
+
+  test("choices= makes a pick-list", () => {
+    expect(h.args[0]).toMatchObject({ name: "mode", default: "status", choices: ["status", "hop", "spin"] })
+    expect(h.args[1].choices).toBeUndefined()
+  })
+
+  test("a run sends picked values, else defaults; empty optional settings are left out", () => {
+    expect(runArgs(h.args, { mode: "hop", fixture: "case-1" })).toEqual({ mode: "hop", fixture: "case-1" })
+    expect(runArgs(h.args, { fixture: "x" })).toEqual({ mode: "status", fixture: "x" })
+  })
+
+  test("Run names the required settings that are still empty", () => {
+    expect(missingRequired(h.args, {})).toEqual(["fixture"])
+    expect(missingRequired(h.args, { fixture: "a" })).toEqual([])
   })
 })
