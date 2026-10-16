@@ -565,3 +565,91 @@ export function ago(iso: string | null | undefined, now: number): string {
   const d = Math.floor(s / 86400)
   return d === 1 ? "yesterday" : d < 14 ? `${d} days ago` : `${Math.floor(d / 7)} weeks ago`
 }
+
+/**
+ * Syntax colour for the script view — small, dependency-free, line by line (#189589 follow-up:
+ * "flat and ugly and not really scannable"). Not a parser: it colours what makes a script
+ * scannable — comments, strings, keywords, numbers, calls — and the `# iris:` header that decides
+ * where the script may run. A string or comment that spans lines is coloured per line, which is
+ * the right trade for a reading view.
+ */
+export type Tok = { t: string; k?: "com" | "str" | "kw" | "num" | "fn" | "dir" | "var" }
+
+const KEYWORDS: Record<string, string[]> = {
+  python: ["def", "class", "return", "if", "elif", "else", "for", "while", "in", "not", "and", "or", "import", "from", "as", "try", "except", "finally", "raise", "with", "async", "await", "lambda", "pass", "break", "continue", "yield", "global", "is", "None", "True", "False", "self"],
+  bash: ["if", "then", "else", "elif", "fi", "for", "do", "done", "while", "case", "esac", "function", "return", "in", "local", "export", "set", "exit", "echo", "source"],
+  js: ["const", "let", "var", "function", "return", "if", "else", "for", "while", "of", "in", "async", "await", "import", "from", "export", "new", "try", "catch", "finally", "throw", "class", "true", "false", "null", "undefined", "typeof"],
+}
+
+export function langOf(runtime: string | null | undefined): "python" | "bash" | "js" {
+  if (runtime === "python") return "python"
+  if (runtime === "node" || runtime === "playwright") return "js"
+  return "bash"
+}
+
+export function highlightLine(line: string, lang: "python" | "bash" | "js"): Tok[] {
+  if (/^\s*(#|\/\/)\s*iris:/.test(line)) return [{ t: line, k: "dir" }]
+  const kw = new Set(KEYWORDS[lang])
+  const comment = lang === "js" ? "//" : "#"
+  const out: Tok[] = []
+  let i = 0
+  let plain = ""
+  const flush = () => {
+    if (plain) out.push({ t: plain })
+    plain = ""
+  }
+  while (i < line.length) {
+    const rest = line.slice(i)
+    if (rest.startsWith(comment) && !(lang === "bash" && i > 0 && /[\w$]/.test(line[i - 1]))) {
+      flush()
+      out.push({ t: rest, k: "com" })
+      break
+    }
+    const q = line[i]
+    if (q === '"' || q === "'" || (q === "`" && lang === "js")) {
+      const triple = lang === "python" && rest.startsWith(q.repeat(3))
+      const close = triple ? q.repeat(3) : q
+      let j = i + close.length
+      while (j < line.length && !line.startsWith(close, j)) j += line[j] === "\\" ? 2 : 1
+      j = Math.min(line.length, j + close.length)
+      flush()
+      out.push({ t: line.slice(i, j), k: "str" })
+      i = j
+      continue
+    }
+    if (lang === "bash" && q === "$") {
+      const m = /^\$(\{[^}]*\}|[A-Za-z_][\w]*|\d|[@#?*!$])/.exec(rest)
+      if (m) {
+        flush()
+        out.push({ t: m[0], k: "var" })
+        i += m[0].length
+        continue
+      }
+    }
+    const word = /^[A-Za-z_][\w]*/.exec(rest)
+    if (word && (i === 0 || !/[\w.]/.test(line[i - 1]) || lang !== "bash")) {
+      const w = word[0]
+      const prev = line[i - 1]
+      if (kw.has(w) && !(prev && /[\w]/.test(prev))) {
+        flush()
+        out.push({ t: w, k: "kw" })
+      } else if (line[i + w.length] === "(") {
+        flush()
+        out.push({ t: w, k: "fn" })
+      } else plain += w
+      i += w.length
+      continue
+    }
+    const num = /^\d+(\.\d+)?/.exec(rest)
+    if (num && !(i > 0 && /[\w]/.test(line[i - 1]))) {
+      flush()
+      out.push({ t: num[0], k: "num" })
+      i += num[0].length
+      continue
+    }
+    plain += q
+    i++
+  }
+  flush()
+  return out
+}

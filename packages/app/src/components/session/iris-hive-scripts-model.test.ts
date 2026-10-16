@@ -29,6 +29,7 @@ import {
   skillsOf,
   stageStates,
   taskStatusWord,
+  highlightLine,
   topFix,
   type Doctor,
   type HiveNodeRow,
@@ -309,4 +310,30 @@ describe("find · sort · page", () => {
 test("a held run reads as waiting for approval, not queued", () => {
   const held = { id: "t1", status: "awaiting_approval", terminal: false, stdout: "", stderr: "", exitCode: null, exitCodeSource: null, error: null, nodeName: null, durationMs: null, held: true } as any
   expect(taskStatusWord(held)).toBe("Waiting for your approval")
+})
+
+describe("highlightLine (script view colour)", () => {
+  const kinds = (line: string, lang: "python" | "bash" | "js") =>
+    highlightLine(line, lang).filter((t) => t.k).map((t) => `${t.k}:${t.t}`)
+
+  test("the iris header is its own colour — it decides where the script runs", () => {
+    expect(highlightLine("# iris: requires=bluetooth,python3", "python")).toEqual([{ t: "# iris: requires=bluetooth,python3", k: "dir" }])
+  })
+
+  test("python: keywords, calls, strings, numbers, trailing comment", () => {
+    expect(kinds('def hop(n=2): print("up", 1)  # go', "python")).toEqual(["kw:def", "fn:hop", "num:2", "fn:print", 'str:"up"', "num:1", "com:# go"])
+  })
+
+  test("a # inside a string is not a comment", () => {
+    expect(kinds('x = "a # b"', "python")).toEqual(['str:"a # b"'])
+  })
+
+  test("bash: variables and keywords; $# is a variable, not a comment", () => {
+    expect(kinds('if [ $# -gt 0 ]; then echo "$HOME"; fi', "bash")).toEqual(["kw:if", "var:$#", "num:0", "kw:then", "kw:echo", 'str:"$HOME"', "kw:fi"])
+  })
+
+  test("the text is never changed, only wrapped", () => {
+    const line = 'VENV = os.path.expanduser("~/.iris/venvs/mambo")'
+    expect(highlightLine(line, "python").map((t) => t.t).join("")).toBe(line)
+  })
 })

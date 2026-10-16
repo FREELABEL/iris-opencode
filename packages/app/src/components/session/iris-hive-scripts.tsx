@@ -59,6 +59,8 @@ import {
   type ScriptRow,
   type ScriptView,
   type TaskView,
+  highlightLine,
+  langOf,
 } from "./iris-hive-scripts-model"
 
 /**
@@ -957,7 +959,7 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
                         </span>
                       </Show>
                     </div>
-                    <CodeView value={m().content} headerLines={parseHeader(m().content).lines} />
+                    <CodeView value={m().content} headerLines={parseHeader(m().content).lines} runtime={m().runtime} />
                   </>
                 )}
               </Show>
@@ -1092,7 +1094,7 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
                     }}
                   </For>
                 </ol>
-                <CodeView value={text()} headerLines={header().lines} />
+                <CodeView value={text()} headerLines={header().lines} runtime={runtime()} />
                 <div class="hsc-console" data-state={run()?.task?.terminal ? "done" : run() ? "live" : "idle"}>
                   <div class="hsc-chead">
                     <span
@@ -1247,6 +1249,9 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
                       </Switch>
                     </span>
                   </div>
+                  <Show when={!isRun() && v().can === false && v().why}>
+                    <div class="hsc-why" data-action="hive-cant-run-why">{v().why}</div>
+                  </Show>
                   <Show when={isRun() && lastLine(run()?.task?.stdout)}>
                     <div class="hsc-dlog hsc-mono">{lastLine(run()?.task?.stdout)}</div>
                   </Show>
@@ -1322,14 +1327,19 @@ function CodeEditor(props: { value: string; onInput: (v: string) => void; header
 }
 
 /** The code, compact and read-only. No running-line highlight: nothing reports which line runs. */
-function CodeView(props: { value: string; headerLines: number[] }) {
+function CodeView(props: { value: string; headerLines: number[]; runtime?: string | null }) {
+  const lang = () => langOf(props.runtime)
   return (
     <ol class="hsc-code hsc-code--view hsc-mono">
       <For each={props.value.replace(/\n$/, "").split("\n")}>
         {(l, i) => (
-          <li classList={{ h: props.headerLines.includes(i() + 1), c: !props.headerLines.includes(i() + 1) && l.trimStart().startsWith("#") }}>
+          <li classList={{ h: props.headerLines.includes(i() + 1) }}>
             <span class="n hsc-num">{i() + 1}</span>
-            <span class="src">{l || " "}</span>
+            <span class="src">
+              <Show when={l} fallback={" "}>
+                <For each={highlightLine(l, lang())}>{(t) => (t.k ? <span class={`hl-${t.k}`}>{t.t}</span> : t.t)}</For>
+              </Show>
+            </span>
           </li>
         )}
       </For>

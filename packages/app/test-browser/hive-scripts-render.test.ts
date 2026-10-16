@@ -342,3 +342,26 @@ test("search finds a script by any word, last-edited orders the list, and A–Z 
   host.remove()
   localStorage.removeItem("iris.hive.scripts.sort")
 })
+
+// #189589 follow-ups, rendered: "it doesn't tell me why" and "flat and not scannable".
+test("a machine that cannot run the script says why on its card, and the code is coloured", async () => {
+  const { host, dispose } = mount()
+  await wait(() => host.querySelectorAll(".hsc-ilist li").length > 0 && host.querySelectorAll(".hsc-cc").length > 0)
+  const input = host.querySelector(".hsc-cmdk input") as HTMLInputElement
+  input.value = "run console-demo on iris-hive-001"
+  input.dispatchEvent(new Event("input", { bubbles: true }))
+  host.querySelector(".hsc-cmdk")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))
+  await wait(() => host.querySelectorAll(".hsc-code--view li").length > 0)
+
+  const blocked = [...host.querySelectorAll(".hsc-cc.no")]
+  if (blocked.length) {
+    // the reason is TEXT on the card, not only a hover
+    expect(blocked.every((c) => (c.querySelector('[data-action="hive-cant-run-why"]')?.textContent ?? "").length > 0)).toBe(true)
+  }
+  const spans = [...host.querySelectorAll(".hsc-code--view [class^='hl-']")]
+  expect(spans.length).toBeGreaterThan(0)
+  // the header lines that decide routing get their own colour
+  expect(spans.some((s) => s.className === "hl-dir" && s.textContent?.includes("iris:"))).toBe(true)
+  dispose()
+  host.remove()
+})

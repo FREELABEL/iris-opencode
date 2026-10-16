@@ -346,3 +346,22 @@
 .hsc-gate-title { color: var(--hsc-amber); font-weight: 600; }
 .hsc-gate-actions { display: flex; gap: 8px; margin-top: 4px; }
 .hsc-run.hsc-run--ghost { background: transparent; color: inherit; box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 30%, transparent); }
+
+/* Script view colour (#189589 follow-up). From the app's syntax theme, so it matches code in chat
+   and follows light/dark. The `# iris:` header gets its own colour: it decides where this runs. */
+.hsc-code--view .hl-com { color: var(--syntax-comment); font-style: italic; }
+.hsc-code--view .hl-str { color: var(--syntax-string); }
+.hsc-code--view .hl-kw { color: var(--syntax-keyword); }
+.hsc-code--view .hl-num { color: var(--syntax-constant); }
+.hsc-code--view .hl-fn { color: var(--syntax-primitive); }
+.hsc-code--view .hl-var { color: var(--syntax-variable); }
+.hsc-code--view .hl-dir { color: var(--hsc-amber); }
+
+/* Why a machine cannot run this — said on the card, not hidden in a hover. */
+.hsc-why {
+  margin-top: 6px;
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--hsc-amber);
+  white-space: normal;
+}
