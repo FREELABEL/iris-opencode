@@ -1053,7 +1053,11 @@ const PlanResponse = Schema.Struct({
   measured: described(Schema.Boolean, "FALSE means we could not ask. Never render that as the Free plan."),
   reason: Schema.optional(Schema.String),
   plan: described(Schema.NullOr(Schema.String), "free | pro | business; NULL for staff."),
-  paid: described(Schema.NullOr(Schema.Boolean), "Has this person paid. NULL = unknown; only false shows Upgrade."),
+  paid: described(Schema.NullOr(Schema.Boolean), "Has this person paid. NULL = unknown."),
+  label: described(
+    Schema.NullOr(Schema.String),
+    "What to call the plan on screen (Free, IRIS Solo, Staff). NULL = the server did not say.",
+  ),
   uncapped: Schema.Boolean,
   upgradeUrl: Schema.NullOr(Schema.String),
 })

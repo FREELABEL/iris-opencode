@@ -652,6 +652,8 @@ export interface Plan {
    * older than dd9d0dfa. Only `false` may show an Upgrade button.
    */
   paid: boolean | null
+  /** What to call the plan on screen ("Free", "IRIS Solo", "Staff"), from the server. Display only. */
+  label: string | null
   uncapped: boolean
   upgradeUrl: string | null
 }
@@ -712,7 +714,7 @@ export async function fetchPlans(): Promise<PlatformResult<PlanOffer[]>> {
 export async function fetchPlan(
   opts: { token?: string | null; signal?: AbortSignal } = {},
 ): Promise<PlatformResult<Plan>> {
-  const empty: Plan = { plan: null, paid: null, uncapped: false, upgradeUrl: null }
+  const empty: Plan = { plan: null, paid: null, label: null, uncapped: false, upgradeUrl: null }
   try {
     const res = await irisFetch(
       "/api/v6/allowance/me?peek=1",
@@ -728,6 +730,7 @@ export async function fetchPlan(
       data: {
         plan: typeof j.plan === "string" ? j.plan : null,
         paid: typeof j.paid === "boolean" ? j.paid : null,
+        label: typeof j.plan_label === "string" && j.plan_label.trim() ? j.plan_label.trim() : null,
         uncapped: Boolean(j.uncapped),
         upgradeUrl: typeof j.upgrade_url === "string" ? j.upgrade_url : null,
       },

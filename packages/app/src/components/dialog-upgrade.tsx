@@ -35,16 +35,20 @@ export function checkoutUrl(base: string, slug?: string): string {
 }
 
 /**
- * The plans, inside the app — not a bounce to a browser tab for someone who only wanted to see
- * what upgrading gets them. Prices come from the sidecar (/iris/plans), which reads the same
- * package list the web pricing page does, so the two never quote different numbers. Checkout
- * itself stays on the web: Stripe, the trial and the account all live there.
+ * The plans on sale, as cards — shared by the Upgrade dialog and Settings > Account. Prices come
+ * from the sidecar (/iris/plans), which reads the same package list the web pricing page does, so
+ * the two never quote different numbers. Choosing a plan opens Stripe checkout on the web with
+ * that plan already picked: Stripe, the trial and the account all live there.
  *
- * If the list cannot be read, the dialog says so and still offers the pricing page — it never
- * renders an empty grid that looks like there is nothing to buy.
+ * If the list cannot be read, it says so and still offers the pricing page — it never renders an
+ * empty grid that looks like there is nothing to buy.
  */
-export function DialogUpgrade(props: { fetchJson: <T>(path: string) => Promise<T>; pricingUrl: string }) {
-  const dialog = useDialog()
+export function PlanCards(props: {
+  fetchJson: <T>(path: string) => Promise<T>
+  pricingUrl: string
+  /** Called after a plan opens in the browser (the dialog closes itself here). */
+  onChosen?: () => void
+}) {
   const platform = usePlatform()
   const [plans] = createResource(() =>
     props.fetchJson<PlansState>("/iris/plans").catch((): PlansState => ({ measured: false, plans: [] })),
@@ -52,68 +56,85 @@ export function DialogUpgrade(props: { fetchJson: <T>(path: string) => Promise<T
 
   const open = (slug?: string) => {
     platform.openExternal(checkoutUrl(props.pricingUrl, slug))
-    dialog.close()
+    props.onChosen?.()
   }
 
+  return (
+    <div data-slot="iris-upgrade" class="flex flex-col gap-4">
+      <Show when={!plans.loading} fallback={<div class="text-v2-text-text-weak py-8 text-center">Loading plans…</div>}>
+        <Show
+          when={plans()?.measured && plans()!.plans.length > 0}
+          fallback={
+            <div class="text-v2-text-text-weak py-6 text-center">
+              Couldn't load plans here. The pricing page has them all.
+            </div>
+          }
+        >
+          <div class="grid gap-3" style={{ "grid-template-columns": "repeat(auto-fit, minmax(200px, 1fr))" }}>
+            <For each={plans()!.plans}>
+              {(p) => (
+                <div
+                  data-slot="iris-upgrade-plan"
+                  class="flex flex-col gap-3 rounded-lg border p-4"
+                  classList={{
+                    "border-v2-icon-icon-accent": p.popular,
+                    "border-v2-border-border-base": !p.popular,
+                  }}
+                >
+                  <div class="flex items-center justify-between gap-2">
+                    <span class="text-v2-text-text-strong text-[15px] font-semibold">{p.title}</span>
+                    <Show when={p.popular}>
+                      <span class="bg-v2-icon-icon-accent/20 text-v2-icon-icon-accent rounded-full px-2 py-0.5 text-[11px] font-medium">
+                        Most popular
+                      </span>
+                    </Show>
+                  </div>
+                  <div class="text-v2-text-text-strong font-mono text-[22px] font-semibold tabular-nums">
+                    {formatPrice(p.price, p.period)}
+                  </div>
+                  <Show when={p.subtitle}>
+                    <div class="text-v2-text-text-weak text-[12px]">{p.subtitle}</div>
+                  </Show>
+                  <ul class="text-v2-text-text-base flex flex-1 flex-col gap-1.5 text-[12px]">
+                    <For each={p.features}>
+                      {(f) => (
+                        <li class="flex gap-1.5">
+                          <span aria-hidden="true">✓</span>
+                          {f}
+                        </li>
+                      )}
+                    </For>
+                  </ul>
+                  <Button variant={p.popular ? "primary" : "secondary"} size="large" onClick={() => open(p.slug)}>
+                    {p.trialDays ? `Start ${p.trialDays}-day trial` : `Choose ${p.title}`}
+                  </Button>
+                </div>
+              )}
+            </For>
+          </div>
+        </Show>
+      </Show>
+      <div class="flex items-center justify-between gap-2 text-[12px]">
+        <span class="text-v2-text-text-weak">Secure checkout by Stripe · Cancel anytime</span>
+        <Button variant="ghost" size="small" onClick={() => open()}>
+          Compare all plans
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+/** The plans, inside the app — not a bounce to a browser tab for someone who only wanted to look. */
+export function DialogUpgrade(props: { fetchJson: <T>(path: string) => Promise<T>; pricingUrl: string }) {
+  const dialog = useDialog()
   return (
     <Dialog
       title="Upgrade IRIS"
       description="Every plan includes all twelve products and every model. Pick a plan to finish on the web."
       size="x-large"
     >
-      <div data-slot="iris-upgrade" class="flex flex-col gap-4 px-6 pb-5">
-        <Show when={!plans.loading} fallback={<div class="text-v2-text-text-weak py-8 text-center">Loading plans…</div>}>
-          <Show
-            when={plans()?.measured && plans()!.plans.length > 0}
-            fallback={
-              <div class="text-v2-text-text-weak py-6 text-center">
-                Couldn't load plans here. The pricing page has them all.
-              </div>
-            }
-          >
-            <div class="grid gap-3" style={{ "grid-template-columns": "repeat(auto-fit, minmax(200px, 1fr))" }}>
-              <For each={plans()!.plans}>
-                {(p) => (
-                  <div
-                    data-slot="iris-upgrade-plan"
-                    class="flex flex-col gap-3 rounded-lg border p-4"
-                    classList={{
-                      "border-v2-icon-icon-accent": p.popular,
-                      "border-v2-border-border-base": !p.popular,
-                    }}
-                  >
-                    <div class="flex items-center justify-between gap-2">
-                      <span class="text-v2-text-text-strong text-[15px] font-semibold">{p.title}</span>
-                      <Show when={p.popular}>
-                        <span class="bg-v2-icon-icon-accent/20 text-v2-icon-icon-accent rounded-full px-2 py-0.5 text-[11px] font-medium">
-                          Most popular
-                        </span>
-                      </Show>
-                    </div>
-                    <div class="text-v2-text-text-strong font-mono text-[22px] font-semibold tabular-nums">
-                      {formatPrice(p.price, p.period)}
-                    </div>
-                    <Show when={p.subtitle}>
-                      <div class="text-v2-text-text-weak text-[12px]">{p.subtitle}</div>
-                    </Show>
-                    <ul class="text-v2-text-text-base flex flex-1 flex-col gap-1.5 text-[12px]">
-                      <For each={p.features}>{(f) => <li class="flex gap-1.5"><span aria-hidden="true">✓</span>{f}</li>}</For>
-                    </ul>
-                    <Button variant={p.popular ? "primary" : "secondary"} size="large" onClick={() => open(p.slug)}>
-                      {p.trialDays ? `Start ${p.trialDays}-day trial` : `Choose ${p.title}`}
-                    </Button>
-                  </div>
-                )}
-              </For>
-            </div>
-          </Show>
-        </Show>
-        <div class="flex items-center justify-between gap-2 text-[12px]">
-          <span class="text-v2-text-text-weak">Secure checkout by Stripe · Cancel anytime</span>
-          <Button variant="ghost" size="small" onClick={() => open()}>
-            Compare all plans
-          </Button>
-        </div>
+      <div class="px-6 pb-5">
+        <PlanCards fetchJson={props.fetchJson} pricingUrl={props.pricingUrl} onChosen={() => dialog.close()} />
       </div>
     </Dialog>
   )
