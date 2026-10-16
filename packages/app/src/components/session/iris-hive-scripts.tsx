@@ -179,7 +179,9 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
   const [list, { refetch: refetchList }] = createResource(() =>
     getJson<ScriptsPayload>("/iris/hive/scripts", { measured: false, scripts: [] }),
   )
-  const [hive] = createResource(() => getJson<HivePayload>("/iris/hive?perPage=200", { measured: false, nodes: [] }))
+  const [hive, { refetch: refetchHive }] = createResource(() =>
+    getJson<HivePayload>("/iris/hive?perPage=200", { measured: false, nodes: [] }),
+  )
 
   const scripts = createMemo(() => list.latest?.scripts ?? [])
   const nodes = createMemo(() => hive.latest?.nodes ?? [])
@@ -299,7 +301,7 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
   // Marketplace: fetched the first time the tab is opened, then kept.
   const [marketOpened, setMarketOpened] = createSignal(view() === "market")
   createEffect(() => view() === "market" && setMarketOpened(true))
-  const [market] = createResource(
+  const [market, { refetch: refetchMarket }] = createResource(
     () => marketOpened() || undefined,
     () => getJson<MarketPayload>("/iris/hive/market", { measured: false, scripts: [] }),
   )
@@ -316,7 +318,7 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
   )
   const mine = (s: string | undefined) => !!s && scripts().some((x) => x.slug === s)
 
-  const [source, { mutate: mutateSource }] = createResource(
+  const [source, { mutate: mutateSource, refetch: refetchSource }] = createResource(
     () => (creating() ? undefined : slug()),
     (s) => getJson<SourcePayload>(`/iris/hive/scripts/${encodeURIComponent(s)}`, { measured: false, script: null }),
   )
@@ -388,6 +390,60 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
     window.addEventListener("keydown", onEsc)
     onCleanup(() => window.removeEventListener("keydown", onEsc))
   })
+  // Reload everything this panel shows — the list, the open script, the computers, the
+  // marketplace — without reloading the app (#189589). An unsaved edit is kept: only the SAVED
+  // copy underneath it is refreshed.
+  const [refreshing, setRefreshing] = createSignal(false)
+  const refreshAll = async () => {
+    if (refreshing()) return
+    setRefreshing(true)
+    try {
+      await Promise.all([
+        refetchList(),
+        refetchHive(),
+        !creating() && slug() ? refetchSource() : null,
+        marketOpened() ? refetchMarket() : null,
+      ])
+    } finally {
+      setRefreshing(false)
+    }
+  }
+
+  // Copy the run's output as plain text. The browser build is served over plain http on a LAN
+  // address, where navigator.clipboard does not exist — fall back to a hidden textarea.
+  const [copied, setCopied] = createSignal(false)
+  const outputText = () => {
+    const r = run()
+    if (!r?.task) return r?.reason ?? ""
+    const t = r.task
+    const tail = t.terminal
+      ? [`${t.exitCode != null ? `exit ${t.exitCode}` : t.status} · ${elapsed().toFixed(0)} s · ${r.computerName}`, t.error ?? ""]
+      : []
+    return [t.stdout ?? "", t.stderr ?? "", ...tail].filter((x) => x && x.trim()).join("\n")
+  }
+  const copyOutput = async () => {
+    const text = outputText()
+    if (!text) return
+    let ok = false
+    try {
+      await navigator.clipboard.writeText(text)
+      ok = true
+    } catch {
+      const ta = document.createElement("textarea")
+      ta.value = text
+      ta.style.position = "fixed"
+      ta.style.opacity = "0"
+      document.body.appendChild(ta)
+      ta.select()
+      ok = document.execCommand("copy")
+      ta.remove()
+    }
+    if (ok) {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    }
+  }
+
   const decide = async (decision: "approve" | "reject" | "cancel") => {
     const r = run()
     if (!r?.taskId) return
@@ -652,6 +708,20 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
             </span>
           </Show>
           <span class="hsc-spacer" />
+          <button
+            class="hsc-ib hsc-ib--bare hsc-refresh"
+            type="button"
+            data-action="hive-refresh"
+            title="Reload scripts, the open script and computers"
+            aria-label="Reload scripts, the open script and computers"
+            aria-busy={refreshing()}
+            disabled={refreshing()}
+            onClick={() => void refreshAll()}
+          >
+            <span class="hsc-ic" classList={{ "hsc-spin": refreshing() }} aria-hidden="true">
+              ↻
+            </span>
+          </button>
           <button
             class="hsc-ib hsc-ib--bare"
             type="button"
@@ -1169,6 +1239,19 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
                         <Ic name="stop" /> {deciding() ? "Stopping…" : "Stop"}
                       </button>
                     </Show>
+                    <button
+                      type="button"
+                      class="hsc-ib"
+                      data-action="hive-output-copy"
+                      disabled={!outputText()}
+                      title={copied() ? "Copied" : "Copy the output"}
+                      aria-label={copied() ? "Copied" : "Copy the output"}
+                      onClick={() => void copyOutput()}
+                    >
+                      <Show when={copied()} fallback={<Ic name="copy" />}>
+                        <Ic name="check" />
+                      </Show>
+                    </button>
                     <button
                       type="button"
                       class="hsc-ib"

@@ -408,3 +408,41 @@ test("settings are fields the run sends, and the output opens full screen", asyn
   dispose()
   host.remove()
 })
+
+test("one button reloads the list, the open script and the computers — no app reload", async () => {
+  const { host, calls, dispose } = mount()
+  await wait(() => host.querySelectorAll(".hsc-ilist li").length > 0 && host.querySelectorAll(".hsc-cc").length > 0)
+  const count = (p: (s: string) => boolean) => calls.filter((c) => c.method === "GET" && p(c.path)).length
+  const before = {
+    list: count((s) => s === "/iris/hive/scripts"),
+    nodes: count((s) => s.startsWith("/iris/hive?")),
+    source: count((s) => /^\/iris\/hive\/scripts\/[^/]+$/.test(s)),
+  }
+  ;(host.querySelector('[data-action="hive-refresh"]') as HTMLButtonElement).click()
+  await wait(() => count((s) => s === "/iris/hive/scripts") > before.list)
+  await wait(() => count((s) => s.startsWith("/iris/hive?")) > before.nodes)
+  await wait(() => count((s) => /^\/iris\/hive\/scripts\/[^/]+$/.test(s)) > before.source)
+  dispose()
+  host.remove()
+})
+
+test("the output has a copy button next to full screen, and it copies the run's text", async () => {
+  const { host, calls, dispose } = mount()
+  await wait(() => host.querySelectorAll(".hsc-ilist li").length > 0 && host.querySelectorAll(".hsc-cc").length > 0)
+  let copied = ""
+  Object.defineProperty(navigator, "clipboard", { value: { writeText: async (t: string) => void (copied = t) }, configurable: true })
+  const input = host.querySelector(".hsc-cmdk input") as HTMLInputElement
+  input.value = "run console-demo on iris-hive-001"
+  input.dispatchEvent(new Event("input", { bubbles: true }))
+  host.querySelector(".hsc-cmdk")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))
+  await wait(() => calls.some((c) => c.path.endsWith("/run")))
+  const copy = () => host.querySelector('[data-action="hive-output-copy"]') as HTMLButtonElement
+  expect(copy()).not.toBeNull()
+  expect(copy().nextElementSibling?.getAttribute("data-action")).toBe("hive-output-full")
+  await wait(() => !copy().disabled)
+  copy().click()
+  await wait(() => copied.length > 0)
+  expect(copied).toContain(host.querySelector(".hsc-term div:not(.hsc-dim)")?.textContent ?? "")
+  dispose()
+  host.remove()
+})
