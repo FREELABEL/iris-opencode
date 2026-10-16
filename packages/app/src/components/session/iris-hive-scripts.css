@@ -287,6 +287,8 @@
 .hsc-ccl b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .hsc-x { color: var(--hsc-faint); font-size: 11px; flex: none; }
 .hsc-dk { display: inline-flex; gap: 4px; align-items: center; color: var(--hsc-coral); font-size: 11px; flex: none; }
+.hsc-cams { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 6px; }
+.hsc-cam { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--hsc-rule); color: var(--hsc-jade); }
 .hsc-ccs { display: flex; flex-wrap: wrap; gap: 6px; row-gap: 6px; align-items: center; justify-content: space-between; }
 .hsc-skills { display: inline-flex; gap: 4px; }
 .hsc-skill {

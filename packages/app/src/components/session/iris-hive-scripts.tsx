@@ -50,6 +50,7 @@ import {
   setArgDefault,
   withTag,
   skillsOf,
+  plugged,
   STAGES,
   stageStates,
   taskStatusWord,
@@ -1290,6 +1291,18 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
                       </span>
                     </Show>
                   </div>
+                  <Show when={plugged(c).length}>
+                    <div class="hsc-cams" title="Plugged-in camera, reported by this computer's Hive">
+                      <For each={plugged(c)}>
+                        {(n) => (
+                          <span class="hsc-cam">
+                            <Ic name="camera" />
+                            {n}
+                          </span>
+                        )}
+                      </For>
+                    </div>
+                  </Show>
                   <div class="hsc-ccs">
                     <span class="hsc-skills">
                       <For each={skillsOf(c)}>{(s) => <Ic name={s.icon as IconName} title={s.word} class="hsc-skill" />}</For>

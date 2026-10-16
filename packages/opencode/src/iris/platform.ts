@@ -381,6 +381,8 @@ export interface HiveNode {
   tasksCompleted?: number
   /** Which things this node can actually do — bash, docker, browser, python3, bridge_call. */
   capabilities?: string[]
+  /** Physical cameras by factory product name ("OBSBOT Tiny Camera"); never a personal name. */
+  cameras?: string[]
   /** A machine that heartbeats once per restart looks healthy while crash-looping (#182434). */
   recentRestarts?: number
   transport?: string
@@ -484,6 +486,9 @@ export async function fetchHiveNodes(): Promise<PlatformResult<{ nodes: HiveNode
         .filter(([, v]) => v)
         .map(([k]) => k),
       recentRestarts: Array.isArray(n.recent_restarts) ? n.recent_restarts.length : undefined,
+      cameras: Array.isArray(n.devices?.camera?.names)
+        ? n.devices.camera.names.filter((x: unknown) => typeof x === "string").slice(0, 8)
+        : undefined,
       transport: n.transport?.default_rail ?? undefined,
       tailscaleIp: n.tailscale_ip ?? undefined,
       hardwareDetectedAt: n.hardware_profile?.detected_at ?? undefined,

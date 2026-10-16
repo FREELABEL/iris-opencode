@@ -36,8 +36,7 @@ import {
   type Doctor,
   type HiveNodeRow,
   type ScriptRow,
-  type TaskView,
-} from "./iris-hive-scripts-model"
+  type TaskView, plugged } from "./iris-hive-scripts-model"
 
 // #188817 — every rule the Scripts tab draws from, over a REAL snapshot of account #193 on
 // 2026-10-09 (27 scripts, 17 doctor verdicts, 6 node records, one real run of console-demo).
@@ -357,4 +356,12 @@ describe("script settings (#189589)", () => {
     expect(missingRequired(h.args, {})).toEqual(["fixture"])
     expect(missingRequired(h.args, { fixture: "a" })).toEqual([])
   })
+})
+
+// #189589 — the card names a plugged-in webcam; the laptop's own camera is not news.
+test("plugged names external cameras only", () => {
+  const base = { id: "1", name: "mac", online: true, lastHeartbeat: null }
+  expect(plugged({ ...base, cameras: ["FaceTime HD Camera", "OBSBOT Tiny Camera"] })).toEqual(["OBSBOT Tiny Camera"])
+  expect(plugged({ ...base, cameras: ["FaceTime HD Camera"] })).toEqual([])
+  expect(plugged({ ...base })).toEqual([])
 })

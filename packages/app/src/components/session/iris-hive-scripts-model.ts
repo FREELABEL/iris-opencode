@@ -59,6 +59,8 @@ export type HiveNodeRow = {
   recentRestarts?: number
   /** When the hardware snapshot (disk, memory) was taken — not the heartbeat. */
   hardwareDetectedAt?: string
+  /** Physical cameras by product name, from the node's device report. */
+  cameras?: readonly string[]
 }
 
 export type TaskView = {
@@ -305,6 +307,16 @@ export const SKILLS: Record<string, { icon: string; word: string }> = {
   bluetooth: { icon: "bluetooth", word: "Bluetooth" },
   disk_encrypted: { icon: "lock", word: "Encrypted disk" },
   instagram: { icon: "at", word: "Instagram" },
+}
+
+/**
+ * The cameras worth naming on a computer's card: plugged-in ones. A laptop's own camera is
+ * always there, so it is named only when it is the only one.
+ */
+export function plugged(c: HiveNodeRow): string[] {
+  const all = [...(c.cameras ?? [])]
+  const external = all.filter((n) => !/facetime|built-?in|macbook|imac/i.test(n))
+  return external.length ? external : []
 }
 
 export function skillsOf(c: HiveNodeRow, limit = 3): { icon: string; word: string }[] {
