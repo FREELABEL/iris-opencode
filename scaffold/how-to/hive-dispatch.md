@@ -1,185 +1,119 @@
 ---
 category: Infrastructure
-level: intermediate
-tags: [hive, daemon, remote-access]
-duration_min: 15
+level: beginner
+tags: [hive, old-laptop, remote, run, machines]
+duration_min: 10
 ---
-# How to: Connect a machine to the Hive and dispatch a task
+# How to: Connect a machine to the Hive and run a job on it
 
 ## What this does
 
-Connects the user's machine to the **IRIS Hive** — a distributed compute mesh where any registered node can execute tasks (code generation, sandbox runs, scraping, SOM batches, custom scripts) dispatched from the IRIS platform. This is the differentiator vs. other CLIs: your machine becomes part of a private agent network.
+Turns a machine you already own, like the old laptop in a drawer or an office PC nobody uses, into
+part of your **Hive**: a private network of your own machines. Once it's connected, you can run a
+command on it from any other machine you're signed in on and read the output where you are.
 
-## Prerequisites
+Proven on `iris-hive-001`, a Dell OptiPlex from 2016 running Ubuntu: it joined the Hive minutes after
+IRIS was installed, and it has run jobs for the rest of the network since.
 
-- IRIS CLI installed and authenticated (`iris-login` complete — see `iris-login.md`)
-- Node.js installed (`node --version` should return v18+ — the daemon is a Node process)
-- The Hive daemon installed at `~/.iris/bridge/` (the installer scaffolds this if Node was present at install time)
+## Before you start
 
-If the daemon directory doesn't exist:
+- The old machine boots, is on the internet, and runs macOS, Linux or Windows.
+- You have an IRIS account. Sign in with the same account on both machines.
 
-```bash
-$ ls ~/.iris/bridge/daemon.js
-# If missing, re-run the IRIS installer with Node present, OR clone manually:
-$ git clone https://github.com/FREELABEL/iris-daemon.git ~/.iris/bridge && cd ~/.iris/bridge && npm install --production
-```
+## Step 1: Install IRIS on the old machine
 
-## Step 1: Start the daemon
+macOS or Linux:
 
 ```bash
-$ iris-daemon start
+curl -fsSL https://heyiris.io/install-code | bash
 ```
 
-This launches the daemon as a background process listening on `localhost:3200` and connecting to the IRIS platform via Pusher (private channel `private-node.{nodeId}`) for real-time task dispatch.
+On Windows, download IRIS from [heyiris.io/downloads](https://heyiris.io/downloads).
 
-If the daemon detects an SDK token in `~/.iris/sdk/.env` but no node API key, it **self-registers** with the platform automatically — no manual step. This is the self-healing flow shipped in the iris-login installer (March 2026).
-
-Verify it's running:
+Then sign in:
 
 ```bash
-$ iris-daemon status
-✓ Daemon running (pid 12345, uptime 00:02:14)
-✓ Node ID: node_live_abc123...
-✓ Connected to Pusher: yes
-✓ Heartbeat: every 30s, last sent 12s ago
-✓ Active tasks: 0
+iris auth login
 ```
 
-Or hit the local queue endpoint directly:
+## Step 2: Bring it online
+
+On the old machine:
 
 ```bash
-$ curl http://localhost:3200/daemon/queue | jq
+iris hive connect
 ```
 
-This shows active tasks with titles, types, PIDs, and uptime — useful for debugging.
+```
+Connecting this machine…
+Online
+```
 
-## Step 2: Verify the node appears in the platform
+It connects outward, so you don't need SSH, a VPN or any open ports. Run `iris hive connect` again
+any time to check. It's safe to repeat.
+
+## Step 3: See it from your main machine
+
+On the machine you normally work on:
 
 ```bash
-$ iris hive nodes list
+iris hive nodes list
 ```
 
-Or visit the Hive dashboard in the platform UI: `https://app.heyiris.io/hive`. Your machine should appear as a green "online" node within ~30s of starting the daemon.
+```
+  Name             Status     Active  Last heartbeat
+  iris-hive-001    ● online   0/3     11s ago
+    uptime: up 1d 0h
+```
 
-## Step 3: Dispatch a task
+**Active** is how many jobs it is running right now, out of how many it will take at once.
 
-> **Not available over the hosted MCP connector.** `hive run`, `hive exec`, `hive script`,
-> `hive push`, `hive deploy`, `hive swarm` and `hive demo` execute code on a real machine,
-> so they are refused when the caller is the hosted connector at `heyiris.io/api/mcp`
-> (Claude web/desktop/mobile). Run them from a terminal, or from a locally-registered
-> `iris mcp serve`, where the intent is yours.
->
-> The reason is trust, not capability: a model driving the hosted connector also reads
-> untrusted content — mail, web pages, lead notes — so injected text there becomes code
-> execution on your fleet, and those machines hold a live `IRIS_API_KEY`. A human typing
-> `iris hive run` has intent; a model that just read an email does not.
->
-> Read-only Hive commands still work over the connector: `hive nodes list` / `show`,
-> `hive tasks`, `status`, `logs`, `peers`, `connections`, `queue`, `doctor`.
-
-
-The daemon supports these task types out of the box:
-
-| Type | What it does |
-|---|---|
-| `code_generation` | Run a code-gen workflow on the node |
-| `sandbox_execute` | Execute a script in an isolated sandbox |
-| `test_run` | Run a test suite |
-| `scaffold_workspace` | Set up a new project workspace |
-| `run_persistent` | Long-running process the daemon supervises |
-| `artisan` | Run a Laravel artisan command |
-| `som` / `som_batch` | SOM outreach pipeline (see `outreach-campaign.md`) |
-| `leadgen` | Lead generation scrapers |
-| `custom` | Arbitrary shell command |
-
-Dispatch a one-off task:
+## Step 4: Run a job on it
 
 ```bash
-$ iris hive task dispatch --type=sandbox_execute --script="echo hello from $(hostname)"
+iris hive run iris-hive-001 "uname -sr && nproc && uptime -p"
 ```
 
-Or schedule a recurring task (campaign template style):
+```
+→ status=completed  progress=100%
 
-```bash
-$ iris hive task dispatch --type=som_batch --schedule="0 9 * * *" --segment=creators
+─── output ───
+Linux 6.8.0-147-generic
+4
+up 1 day, 5 hours, 6 minutes
+
+  ✓ completed  exit=0
 ```
 
-Recurring tasks create a `bloq_scheduled_jobs` row on the platform, picked up by `ProcessAgentJobs` in fl-api, which routes via `ExecuteAgentJob` → `IrisApiService::dispatchHiveTask()` → the daemon's task queue.
+Use the machine's name from `iris hive nodes list`. The command runs on that machine, and the output
+comes back to you. It stops at the first failing step; add `--no-fail-fast` to run everything anyway.
 
-## Step 4: Stop or restart
+Good first jobs for an old machine: a build, an export, a batch of transcription, a nightly backup
+script. That's work you'd rather not have slowing down the machine you're using.
 
-```bash
-$ iris-daemon stop
-$ iris-daemon restart
-```
+## Common problems
 
-The daemon writes logs to `~/.iris/bridge/logs/daemon.log` with timestamps in the format `[HH:MM:SS AM/PM]`.
+**The machine shows `offline`.** On that machine, run `iris hive connect --force` to restart its
+connection. If it's still offline, run `iris hive doctor` there. It checks the connection and says
+what's wrong.
 
-## Expected output (full happy path)
+**It went offline after a restart.** On Windows, `iris hive connect` registers it to start
+again on its own. On macOS and Linux, run `iris hive connect` on it after a restart.
 
-```bash
-$ iris-daemon start
-✓ Daemon started (pid 12345)
-✓ Loading SDK credentials from ~/.iris/sdk/.env
-✓ Auto-registering node...
-✓ Node registered: node_live_abc123 (saved to ~/.iris/bridge/.env)
-✓ Connecting to Pusher private-node.node_live_abc123...
-✓ Connected. Listening for tasks.
-[03:42:11 PM] Heartbeat sent
+**`iris hive run` says the machine isn't found.** Use the name exactly as `iris hive nodes list`
+prints it. Both machines must be signed in to the same account.
 
-$ iris hive task dispatch --type=sandbox_execute --script="uname -a"
-✓ Task dispatched: task_xyz789
-✓ Routing to node: node_live_abc123
-[03:42:23 PM] Task task_xyz789 received
-[03:42:23 PM] Executing: uname -a
-[03:42:23 PM] Task task_xyz789 completed (12ms)
-✓ Result: Darwin alex-mac 23.5.0 ...
-```
+**You want proof that a job really ran there.** Run `iris hive selftest <name>`. It sends a test job
+and checks that the output and exit code came back.
 
-## Common errors
+**You're asking an AI assistant to run it through the IRIS connector in Claude on the web, desktop
+or mobile.** It will refuse `iris hive run`. That's deliberate. An assistant there also reads mail
+and web pages, and text hidden in those mustn't be able to run commands on your machines. Run it from
+a terminal. Read-only commands like `iris hive nodes list` still work there.
 
-### `Daemon failed to start: EADDRINUSE port 3200`
+## Related
 
-**Cause:** Another process is using port 3200, or a previous daemon didn't shut down cleanly.
-**Fix:** `lsof -i :3200` to find the process, `kill <pid>`, then `iris-daemon start` again. If the process is the daemon itself in a zombie state, `pkill -f daemon.js` first.
-
-### Daemon starts but never registers (no node ID)
-
-**Cause:** No SDK token found in `~/.iris/sdk/.env`.
-**Fix:** Run `iris-login` first. The daemon auto-registers on next start.
-
-### Daemon registers but doesn't appear in `iris hive nodes list`
-
-**Cause:** Pusher connection failed (firewall, proxy, or platform outage).
-**Fix:** Check `~/.iris/bridge/logs/daemon.log` for Pusher connection errors. If Pusher is blocked by a corporate firewall, the daemon falls back to HTTP polling but with higher latency. Test platform reachability: `curl -I https://app.heyiris.io`.
-
-### Task dispatched but never executed
-
-**Cause:** Daemon is registered but not subscribed to the right channel, or the task type isn't recognized by this daemon version.
-**Fix:** `iris-daemon restart`, then `curl http://localhost:3200/daemon/queue` to confirm the task arrived. If the queue is empty, the dispatch routed to a different node — check `iris hive nodes list` for which nodes are online.
-
-### `Error: Bridge not installed at ~/.iris/bridge`
-
-**Cause:** Installer ran without Node.js present, so the bridge component was skipped.
-**Fix:** Install Node.js (https://nodejs.org), then re-run the IRIS installer, OR clone manually as shown in Prerequisites.
-
-## What auto-chaining does (advanced)
-
-When a `discover` task completes on a Hive node, the daemon automatically dispatches a follow-up `som_batch` task on the same node (runs `npm run som:all`). This is the SOM auto-pipeline.
-
-To disable: edit `~/.iris/config.json` and set `chain_outreach: false`.
-
-## Related recipes
-
-- `iris-login.md` — must be done first
-- **`hive-tailscale.md` — the OTHER rail.** This recipe covers the daemon: the machine
-  dials out to IRIS and executes tasks, needing no Tailscale and no open ports. That is the
-  right rail when you want IRIS to *run something*. It is the wrong rail when a human or a
-  session needs to reach the machine itself — remote desktop, a GUI-only app, a
-  localhost-only database. For that, see `hive-tailscale.md`.
-
-  The two are independent and the confusion between them is the most common time sink here:
-  **a node reachable over Tailscale does not mean its daemon is running**, and a running
-  daemon does not mean the machine is on a tailnet.
-- `outreach-campaign.md` — the most common task type to dispatch
-- `lead-to-proposal.md` — leads generated by Hive tasks flow into this workflow
+- `hive-tailscale.md`: reach a machine that isn't on your network
+- `hive-rent-compute.md`: rent a machine when you don't have a spare one
+- `shared-folder-across-machines.md`: one folder on every machine in your Hive
+- `run-code-in-a-sandbox.md`: run something in a throwaway sandbox instead
