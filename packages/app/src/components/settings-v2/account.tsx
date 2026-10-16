@@ -4,6 +4,7 @@ import { usePlatform } from "@/context/platform"
 import { useServer } from "@/context/server"
 import { SettingsListV2 } from "./parts/list"
 import { SettingsRowV2 } from "./parts/row"
+import { TITLEBAR_UPGRADE_URL } from "../titlebar-iris-pills"
 import "./settings-v2.css"
 
 /**
@@ -279,8 +280,8 @@ export const SettingsAccountV2: Component = () => {
 
   const meter = () => meterView(me()?.allowance)
   const upgradeUrl = () => {
-    const p = me()?.plan
-    return p?.measured && p.paid === false ? (p.upgradeUrl ?? me()?.allowance.upgradeUrl ?? null) : null
+    // Always offered, like the title bar's Upgrade (see planBadge): every account can move up a plan.
+    return me()?.plan?.upgradeUrl ?? me()?.allowance.upgradeUrl ?? TITLEBAR_UPGRADE_URL
   }
 
   return (
