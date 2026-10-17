@@ -27,14 +27,20 @@ import {
   pickResultPayload,
   TERMINAL_STATUSES,
 } from "./hive-task-create"
+import { currentDelegationOrigin } from "./hive-delegation-origin"
 import { HiveFilesCommandExport } from "./platform-hive-files"
 import { HiveBrowserCommand } from "./platform-hive-browser"
 import { runRemoteDoctor } from "./platform-hive-doctor"
 import { HiveSelftestCommandExport } from "./platform-hive-selftest"
 import { HiveSessionsCommand, HiveSendInputCommand } from "./platform-hive-sessions"
 import { HiveTunnelCommand } from "./platform-hive-tunnel"
+import { HiveDriveCommand } from "./platform-hive-drive"
 import { HiveAnswerCommand, HiveAnswerHookCommand, HiveAnswersCommand, HiveAwayCommand } from "./platform-hive-answer"
-import { HiveRentCommand, HiveRentalsCommand, HiveReleaseCommand, HiveProvidersCommand } from "./platform-hive-rent"
+import { HiveTriggerCommand } from "./platform-hive-trigger"
+import { HiveClaimCommand } from "./platform-hive-claim"
+import { HiveProofCommand } from "./platform-hive-proof"
+import { HiveRunnerCommand } from "./platform-hive-runner"
+import { HiveRentCommand, HiveRentalsCommand, HiveReleaseCommand, HiveProvidersCommand, HiveSandboxCommand } from "./platform-hive-rent"
 import { VaultCommandExport } from "./platform-vault"
 import {
   HiveDiscoverCommandExport,
@@ -57,6 +63,7 @@ import {
 // Agent-to-agent work (epic #184516): hand a work item to another agent's inbox, and decide
 // who may reach a machine at all.
 import { HiveHandoffCommand } from "./platform-hive-handoff"
+import { runNodeVault } from "./hive-node-vault"
 import { HiveAccessCommand } from "./platform-hive-access"
 import {
   HiveSearchCommand,
@@ -90,6 +97,30 @@ export function resolveTaskPrefix(prefix: string, ids: string[]): { id: string }
 }
 
 const IRIS_API = process.env.IRIS_API_URL ?? "https://freelabel.net"
+
+/**
+ * Turn what the user typed into ONE full task id: a full id passes through; a shortened one is
+ * resolved against the last 7 days of tasks, and an ambiguous one is an error that lists the
+ * candidates. Shared by `tasks get` and `cancel` — `cancel` used to send the prefix straight to
+ * the API, which looks ids up exactly ("No query results for model [App\Models\NodeTask]
+ * 01a109d7", #187990). UUIDv7 ids share their first 8 characters for seconds at a time, so the
+ * 8-character form is genuinely ambiguous, not just unrecognised.
+ */
+export async function resolveTaskIdArg(
+  raw: string,
+  userId: number,
+  list: (userId: number) => Promise<string[]> = listRecentTaskIds,
+): Promise<{ id: string } | { error: string }> {
+  const s = String(raw).trim()
+  if (isFullTaskId(s)) return { id: s }
+  return resolveTaskPrefix(s, await list(userId))
+}
+
+async function listRecentTaskIds(userId: number): Promise<string[]> {
+  const params = new URLSearchParams({ user_id: String(userId), since: "7d", limit: "500" })
+  const lr = await hiveFetch(`/api/v6/nodes/tasks?${params}`).catch(() => null)
+  return lr?.ok ? (((await lr.json()) as any).tasks ?? []).map((t: any) => String(t.id)) : []
+}
 
 async function hiveFetch(path: string, options: RequestInit = {}) {
   return irisFetch(path, options, IRIS_API)
@@ -1175,10 +1206,12 @@ const HiveTasksCommand = cmd({
         notAfter,
         idempotencyKey: args.key as string | undefined,
         retries: args.retries as number | undefined,
+        origin: await currentDelegationOrigin(),
       })
 
       if (!args.json) {
         console.log(`${dim("→")} ${bold(describeTask(type, config))}${nodeName ? ` on ${bold(nodeName)}` : dim(" (any capable node)")}`)
+        if (payload.metadata) console.log(dim("  status and report will appear in this session"))
       }
 
       const createRes = await hiveFetch("/api/v6/nodes/tasks", {
@@ -1300,10 +1333,7 @@ const HiveTasksCommand = cmd({
       }
       // The list prints shortened ids; resolve one against the last 7 days (#186129).
       if (!isFullTaskId(String(taskId))) {
-        const params = new URLSearchParams({ user_id: String(userId), since: "7d", limit: "500" })
-        const lr = await hiveFetch(`/api/v6/nodes/tasks?${params}`).catch(() => null)
-        const ids = lr?.ok ? (((await lr.json()) as any).tasks ?? []).map((t: any) => String(t.id)) : []
-        const r = resolveTaskPrefix(String(taskId), ids)
+        const r = await resolveTaskIdArg(String(taskId), Number(userId))
         if ("error" in r) {
           prompts.log.error(r.error)
           process.exitCode = 1
@@ -1740,8 +1770,22 @@ const HiveCancelCommand = cmd({
         console.log()
         prompts.log.success(`${cancelled}/${tasks.length} tasks cancelled`)
       } else if (args["task-id"]) {
-        spinner.start("Cancelling…")
-        const res = await nodeFetch(`/api/v6/node-agent/tasks/${args["task-id"]}/result`, {
+        // Resolve a shortened id to exactly one task first (#187990) — the API matches ids
+        // exactly, and an 8-character UUIDv7 prefix can name several tasks.
+        let cancelId = String(args["task-id"])
+        if (!isFullTaskId(cancelId)) {
+          const userId = await requireUserId(undefined)
+          if (!userId) { process.exitCode = 1; return }
+          const r = await resolveTaskIdArg(cancelId, userId)
+          if ("error" in r) {
+            prompts.log.error(r.error)
+            process.exitCode = 1
+            return
+          }
+          cancelId = r.id
+        }
+        spinner.start(`Cancelling ${cancelId}…`)
+        const res = await nodeFetch(`/api/v6/node-agent/tasks/${cancelId}/result`, {
           method: "POST",
           body: JSON.stringify({ status: "failed", output: "Cancelled via iris hive cancel", error: "Manually cancelled" }),
         })
@@ -3355,11 +3399,22 @@ const HiveExecCommand = cmd({
 // ============================================================================
 
 const HiveCredentialsListCommand = cmd({
-  command: "list <bloq-id>",
-  describe: "list project credentials",
+  command: "list [bloq-id]",
+  describe: "list project credentials (--local: this machine's node vault)",
   builder: (yargs) =>
-    yargs.positional("bloq-id", { describe: "bloq/project ID", type: "number", demandOption: true }),
+    yargs
+      .positional("bloq-id", { describe: "bloq/project ID", type: "number" })
+      .option("local", { describe: "list names in THIS machine's node vault (never values)", type: "boolean", default: false })
+      .option("json", { describe: "JSON output (with --local)", type: "boolean", default: false })
+      .check((a) => {
+        if (!a.local && a["bloq-id"] === undefined) return "bloq-id is required (or pass --local)"
+        return true
+      }),
   async handler(args) {
+    if (args.local) {
+      process.exitCode = runNodeVault("list", undefined, { json: !!args.json })
+      return
+    }
     const token = await requireAuth()
     if (!token) return
 
@@ -3393,15 +3448,48 @@ const HiveCredentialsListCommand = cmd({
 })
 
 const HiveCredentialsAddCommand = cmd({
-  command: "add",
-  describe: "store a new project credential",
+  command: "add [name]",
+  describe: "store a new project credential (--local: in THIS machine's node vault, never uploaded)",
   builder: (yargs) =>
     yargs
-      .option("bloq-id", { describe: "bloq/project ID", type: "number", demandOption: true })
-      .option("platform", { describe: "platform (n8n, youtube, instagram, twitter, linkedin, email)", type: "string", demandOption: true })
-      .option("type", { describe: "credential type", type: "string", choices: ["api_key", "browser_session"], default: "api_key" })
-      .option("key", { describe: "key=value pairs for api_key type (repeatable)", type: "array" }),
+      .positional("name", { describe: "vault name for --local (what tasks reference as node_credential)", type: "string" })
+      .option("local", {
+        describe: "keep it on this machine: sealed by the OS keystore, only its name is ever sent. Required for portals with patient data",
+        type: "boolean",
+        default: false,
+      })
+      .option("bloq-id", { describe: "bloq/project ID", type: "number" })
+      .option("platform", { describe: "platform (n8n, youtube, instagram, twitter, linkedin, email)", type: "string" })
+      .option("type", { describe: "credential type (login with --local)", type: "string", choices: ["api_key", "browser_session", "login"] })
+      .option("key", { describe: "key=value pairs for api_key type (repeatable)", type: "array" })
+      .option("username", { describe: "--local: portal username", type: "string" })
+      .option("url", { describe: "--local: portal login URL", type: "string" })
+      .option("totp", { describe: "--local: also prompt for a TOTP seed (codes are generated on this machine)", type: "boolean", default: false })
+      .option("totp-secret", { describe: "--local: TOTP seed (lands in shell history — prefer --totp)", type: "string" })
+      .option("password-stdin", { describe: "--local: read password (line 1) and TOTP seed (line 2) from stdin", type: "boolean", default: false })
+      .check((a) => {
+        if (a.local) {
+          if (!a.name) return "--local needs a name:  iris hive creds add <name> --local --username U --url URL"
+          if (a.type && a.type !== "login") return "--local stores logins only (--type login)"
+          return true
+        }
+        if (a["bloq-id"] === undefined || !a.platform) return "--bloq-id and --platform are required (or pass --local)"
+        if (a.type === "login") return "--type login is node-vault only — add --local"
+        return true
+      }),
   async handler(args) {
+    if (args.local) {
+      process.exitCode = runNodeVault("add", args.name as string, {
+        type: "login",
+        username: args.username as string | undefined,
+        url: args.url as string | undefined,
+        totp: !!args.totp,
+        totpSecret: args["totp-secret"] as string | undefined,
+        passwordStdin: !!args["password-stdin"],
+      })
+      return
+    }
+    if (!args.type) args.type = "api_key"
     const token = await requireAuth()
     if (!token) return
 
@@ -3474,7 +3562,8 @@ const HiveCredentialsAddCommand = cmd({
     printKV("Bloq", args["bloq-id"])
     printKV("Keys", Object.keys(credentials).join(", "))
     printDivider()
-    console.log(success("Credential stored — available to all Hive nodes for this project"))
+    console.log(success("Credential stored on the server — available to all Hive nodes for this project"))
+    console.log(dim("  For a portal login that should never leave this machine:  iris hive creds add <name> --local"))
     console.log("")
   },
 })
@@ -3587,10 +3676,16 @@ const HiveCredentialsSaveSessionCommand = cmd({
 
 const HiveCredentialsRemoveCommand = cmd({
   command: "remove <id>",
-  describe: "revoke a project credential",
+  describe: "revoke a project credential (--local: delete from this machine's node vault by name)",
   builder: (yargs) =>
-    yargs.positional("id", { describe: "credential ID", type: "string", demandOption: true }),
+    yargs
+      .positional("id", { describe: "credential ID (or vault name with --local)", type: "string", demandOption: true })
+      .option("local", { describe: "remove from THIS machine's node vault", type: "boolean", default: false }),
   async handler(args) {
+    if (args.local) {
+      process.exitCode = runNodeVault("remove", String(args.id))
+      return
+    }
     const token = await requireAuth()
     if (!token) return
 
@@ -4997,12 +5092,18 @@ export const PlatformHiveCommand = productCommand({
       .command(HiveSessionsCommand)
       .command(HiveSendInputCommand)
       .command(HiveTunnelCommand)
+      .command(HiveDriveCommand)
       .command(HiveAnswerCommand)
+      .command(HiveTriggerCommand)
+      .command(HiveClaimCommand)
+      .command(HiveProofCommand)
+      .command(HiveRunnerCommand)
       .command(HiveAnswersCommand)
       .command(HiveAwayCommand)
       .command(HiveAnswerHookCommand)
       // Rentals — long-lived machines a customer pays for, distinct from the ephemeral task
       // workers behind `hive nodes`. Separate verbs because they are a separate product.
+      .command(HiveSandboxCommand)
       .command(HiveRentCommand)
       .command(HiveRentalsCommand)
       .command(HiveReleaseCommand)

@@ -4120,7 +4120,7 @@ const BloqsShareCommand = cmd({
       // #179082 — address the link to a person, and narrow what it grants.
       // Naming the invitee does NOT email them; it records who the link is for.
       // Use `iris bloq-members invite --send-email` to actually notify someone.
-      .option("email", { describe: "address the invite to this person (does not send mail)", type: "string" })
+      .option("email", { describe: "only this address can redeem the link (#189719; does not send mail)", type: "string" })
       .option("scope-list", { describe: "grant access to ONE list only", type: "number" })
       .option("scope-item", { describe: "grant access to ONE item only", type: "number" })
       .option("scope-own", { describe: "grant access only to rows this person authored", type: "boolean", default: false })

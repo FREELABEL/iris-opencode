@@ -32,6 +32,10 @@ export interface GmailMessage {
   body_text: string
   labels: string[]
   is_unread: boolean
+  /** The mailbox this message lives in. Its id is only valid there (see setGmailAccount). */
+  mailbox?: string
+  integration_id?: number
+  attachments?: { filename: string; type: string; size: number; attachment_id: string | null }[]
 }
 
 export interface GmailLabel {
@@ -163,19 +167,41 @@ export async function getGmailStatus(opts: { deep?: boolean } = {}): Promise<{ o
  * including Composio's own errors (e.g. a connected account in EXPIRED state), which is
  * the signal that used to be thrown away.
  */
+/**
+ * Which mailbox `iris gmail` talks to. Unset = the server's default (the login's own mailbox).
+ * 2026-10-08: with no way to choose, a navigator's agent searched one mailbox here and moved the
+ * results with `integrations exec --integration-id=136` in another — every move 404'd.
+ */
+let gmailAccount: { integrationId?: number; account?: string } = {}
+let lastAccount: { account?: string; integration_id?: number; notice?: string } | null = null
+
+export function setGmailAccount(sel: { integrationId?: number; account?: string }): void {
+  gmailAccount = { integrationId: sel.integrationId || undefined, account: sel.account || undefined }
+}
+
+/** The mailbox that answered the last call (from the server's `_account`). */
+export function lastGmailAccount(): { account?: string; integration_id?: number; notice?: string } | null {
+  return lastAccount
+}
+
 async function gmailExec(action: string, params: Record<string, unknown>): Promise<any> {
   const { irisFetch, IRIS_API, resolveUserId } = await import("../cmd/iris-api")
 
   const userId = await resolveUserId()
   if (!userId) throw new Error("Not signed in — run: iris auth login")
 
+  const body: Record<string, unknown> = { integration: "gmail", action, params }
+  if (gmailAccount.integrationId) body.integration_id = gmailAccount.integrationId
+  else if (gmailAccount.account) body.account = gmailAccount.account
+
   const res = await irisFetch(
     `/api/v1/users/${userId}/integrations/execute-direct`,
-    { method: "POST", body: JSON.stringify({ integration: "gmail", action, params }) },
+    { method: "POST", body: JSON.stringify(body), headers: { "X-Iris-Node": (await import("os")).hostname() } },
     IRIS_API,
   )
 
   const data = (await res.json().catch(() => ({}))) as any
+  if (data?._account) lastAccount = data._account
 
   if (!res.ok) {
     throw new Error(data?.error ?? data?.message ?? `Gmail request failed (HTTP ${res.status}).`)
@@ -204,37 +230,93 @@ export async function getLabels(_token: string): Promise<GmailLabel[]> {
 
 // ── Messages ──
 
-export async function listMessages(_token: string, query = "", limit = 20): Promise<GmailMessage[]> {
-  const data = await gmailExec("read_emails", {
-    query: query || "in:inbox",
-    max_results: Math.min(limit, 100),
-  })
-  return extractMessages(data).slice(0, limit)
+/** The page token after the last listMessages call — null when there is nothing more. */
+let lastNextPageToken: string | null = null
+export function nextPageToken(): string | null {
+  return lastNextPageToken
 }
 
+/** One server call returns at most this many (the server pages Composio underneath). */
+export const PAGE_MAX = 500
+/** --all stops here so a runaway query cannot pull a 100k-message archive into memory. */
+export const ALL_CAP = 5000
+
+/**
+ * Messages matching a query — as many as asked for, across pages.
+ *
+ * Used to cap every listing at 100 (and the commands defaulted to 10–20) and never returned the
+ * page token, so "unread" showed 10 and an agent had no way to see the 11th (2026-10-09). Now:
+ * up to `limit` per call (≤500), `pageToken` continues where the last call stopped, `all` keeps
+ * going until the mailbox runs out (≤5000). nextPageToken() says whether there is more.
+ */
+export async function listMessages(
+  _token: string,
+  query = "",
+  limit = 50,
+  opts: { pageToken?: string | null; all?: boolean } = {},
+): Promise<GmailMessage[]> {
+  const want = opts.all ? ALL_CAP : Math.max(1, Math.min(limit, opts.all ? ALL_CAP : PAGE_MAX))
+  const out: GmailMessage[] = []
+  let token: string | null = opts.pageToken ?? null
+  do {
+    const params: Record<string, unknown> = { query: query || "in:inbox", max_results: Math.min(PAGE_MAX, want - out.length) }
+    if (token) params.page_token = String(token)
+    const data = await gmailExec("read_emails", params)
+    out.push(...extractMessages(data))
+    token = (data?.next_page_token ?? data?.nextPageToken ?? data?.data?.nextPageToken ?? null) as string | null
+  } while ((opts.all || out.length < want) && token && out.length < want)
+  lastNextPageToken = token ? String(token) : null
+  return out.slice(0, want)
+}
+
+/**
+ * One message by id — the server's get_email (fl-iris-api 30d73265+): full body as clean text
+ * (text/plain preferred, HTML only as a fallback), headers, labels, attachment names, mailbox.
+ *
+ * This used to send read_emails with a message_id, which read_emails has never accepted: it listed
+ * the inbox and this returned the NEWEST message, whatever id was asked for (a client's agent,
+ * 2026-10-09, concluded "read is buggy" and fell back to search --json plus its own HTML stripper).
+ */
 export async function getMessageById(_token: string, messageId: string): Promise<GmailMessage | null> {
   try {
-    const data = await gmailExec("read_emails", { message_id: messageId, max_results: 1 })
-    return extractMessages(data)[0] ?? null
+    const data = await gmailExec("get_email", { message_id: messageId })
+    const e = data?.email ?? data
+    if (!e || typeof e !== "object" || !(e.id || e.messageId)) return null
+    const labels: string[] = Array.isArray(e.labels) ? e.labels : []
+    return {
+      id: str(e.id ?? e.messageId),
+      thread_id: str(e.thread_id ?? e.threadId),
+      from: str(e.from),
+      to: str(e.to),
+      subject: str(e.subject),
+      date: str(e.date),
+      snippet: str(e.snippet),
+      body_text: str(e.body),
+      labels,
+      is_unread: labels.includes("UNREAD"),
+      ...(e.mailbox ? { mailbox: String(e.mailbox) } : {}),
+      ...(e.integration_id ? { integration_id: Number(e.integration_id) } : {}),
+      ...(Array.isArray(e.attachments) ? { attachments: e.attachments.map((a: any) => ({ filename: str(a.filename), type: str(a.type), size: Number(a.size ?? 0), attachment_id: a.attachment_id ?? null })) } : {}),
+    } as GmailMessage
   } catch {
     return null
   }
 }
 
-export async function searchMessages(token: string, query: string, limit = 20): Promise<GmailMessage[]> {
-  return listMessages(token, query, limit)
+export async function searchMessages(token: string, query: string, limit = 50, opts: { pageToken?: string | null; all?: boolean } = {}): Promise<GmailMessage[]> {
+  return listMessages(token, query, limit, opts)
 }
 
 // ── Threads ──
 
-export async function getThread(_token: string, threadId: string): Promise<GmailThread | null> {
-  try {
-    const data = await gmailExec("read_emails", { thread_id: threadId, max_results: 50 })
-    const messages = extractMessages(data)
-    return { id: threadId, snippet: messages[0]?.snippet ?? "", messages }
-  } catch {
-    return null
-  }
+/**
+ * NOT SUPPORTED — returns null so the caller can say so. This sent read_emails with a thread_id,
+ * which read_emails ignores, so "the thread" was really the newest inbox messages. The Gmail
+ * backend has no thread fetch yet (Composio's Gmail toolkit has none); a wrong thread is worse
+ * than none.
+ */
+export async function getThread(_token: string, _threadId: string): Promise<GmailThread | null> {
+  return null
 }
 
 /**
@@ -279,6 +361,8 @@ function extractMessages(data: any): GmailMessage[] {
       body_text: str(m.messageText ?? m.body_text ?? m.message_text ?? m.body) || decodePayload(m),
       labels: Array.isArray(labels) ? labels : [],
       is_unread: (Array.isArray(labels) ? labels : []).includes("UNREAD"),
+      ...(m.mailbox ? { mailbox: String(m.mailbox) } : {}),
+      ...(m.integration_id ? { integration_id: Number(m.integration_id) } : {}),
     }
   })
 }

@@ -11,9 +11,12 @@ import { AgentsExportCommand } from "./platform-agents-export"
 import { AgentsJoinCommand, AgentsLeaveCommand } from "./platform-agents-rooms"
 import { AgentsPauseCommand, AgentsResumeCommand, AgentsStopCommand } from "./platform-agents-governance"
 import { AgentsHandBackCommand, AgentsTakeOverCommand, AgentsWatchCommand } from "./platform-agents-watch"
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, unlinkSync } from "fs"
 import { join } from "path"
 import { firstArray } from "../../util/array"
+import { Global } from "../../global"
+import { DEFAULT_MAX_DESKTOP_AGENTS, planDesktopSync, selectRoster } from "../lib/desktop-agents"
+import { installHome } from "../../skill/install-location"
 import { AUTONOMY_CHOICES, AUTONOMY_LEVELS, CLI_DEFAULT_AUTONOMY, describeAutonomy, parseAutonomy } from "./agent-autonomy"
 
 /**
@@ -1873,6 +1876,93 @@ const AgentsInboxCommand = cmd({
   },
 })
 
+/**
+ * `iris agents desktop-sync` (#189425) — every IRIS agent on the account becomes an opencode
+ * agent in the Desktop app and TUI picker, with full local tools. See lib/desktop-agents.ts
+ * for why the generated permissions look the way they do.
+ */
+const AgentsDesktopSyncCommand = cmd({
+  command: "desktop-sync",
+  aliases: ["sync-desktop"],
+  describe: "put your IRIS agents in the IRIS Desktop agent picker, with full use of your machine",
+  builder: (yargs) =>
+    yargs
+      .option("agent", { alias: "a", describe: "only these agent IDs (comma-separated); deletes nothing", type: "string" })
+      .option("max", { describe: `how many agents the picker holds (0 = no limit); pinned agents always count`, type: "number", default: DEFAULT_MAX_DESKTOP_AGENTS })
+      .option("pin", { describe: "always include these agent IDs (comma-separated) — remembered for future syncs", type: "string" })
+      .option("unpin", { describe: "stop always including these agent IDs (comma-separated)", type: "string" })
+      .option("dir", { describe: "agents directory (default: the opencode config dir)", type: "string" })
+      .option("dry-run", { describe: "show what would change, write nothing", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro("◈  IRIS Agents → Desktop") }
+    const token = await requireAuth()
+    if (!token) { process.exitCode = 1; return }
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { process.exitCode = 1; return }
+
+    const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents?per_page=500`)
+    if (!(await handleApiError(res, "List agents"))) { process.exitCode = 1; return }
+    const agents = firstArray(((await res.json()) as any)?.data)
+
+    const only = args.agent
+      ? new Set(String(args.agent).split(",").map((x) => Number(x.trim())).filter(Number.isInteger))
+      : undefined
+    const dir = args.dir ?? join(Global.Path.config, "agents")
+    const existing = new Map<string, string>()
+    if (existsSync(dir)) {
+      for (const f of readdirSync(dir)) if (f.endsWith(".md")) existing.set(f, readFileSync(join(dir, f), "utf8"))
+    }
+    // Pins live with the user, not the account, so an automatic sync on Desktop launch keeps them.
+    const pinsFile = join(installHome(), ".iris", "desktop-agents.json")
+    const ids = (v: unknown) => String(v ?? "").split(",").map((x) => Number(x.trim())).filter((n) => Number.isInteger(n) && n > 0)
+    let pinned = new Set<number>()
+    try { pinned = new Set(ids((JSON.parse(readFileSync(pinsFile, "utf8")).pinned ?? []).join(","))) } catch {}
+    if (args.pin || args.unpin) {
+      for (const n of ids(args.pin)) pinned.add(n)
+      for (const n of ids(args.unpin)) pinned.delete(n)
+      if (!args["dry-run"]) {
+        mkdirSync(join(installHome(), ".iris"), { recursive: true })
+        writeFileSync(pinsFile, JSON.stringify({ pinned: [...pinned].sort((a, b) => a - b) }, null, 2) + "\n")
+      }
+    }
+    const roster = only ? undefined : selectRoster(agents, args.max ?? DEFAULT_MAX_DESKTOP_AGENTS, pinned)
+    const plan = planDesktopSync(agents, existing, only, roster)
+
+    if (!args["dry-run"]) {
+      mkdirSync(dir, { recursive: true })
+      for (const w of plan.write) writeFileSync(join(dir, w.file), w.content)
+      for (const f of plan.remove) unlinkSync(join(dir, f))
+    }
+
+    const changed = plan.write.length + plan.remove.length
+    if (args.json) {
+      await writeJson({
+        dir,
+        dry_run: args["dry-run"],
+        written: plan.write.map((w) => ({ file: w.file, id: w.id, name: w.name })),
+        removed: plan.remove,
+        hand_written_skipped: plan.handWritten,
+        picker_size: roster?.size ?? null,
+        pinned: [...pinned],
+        restart_required: changed > 0 && !args["dry-run"],
+      })
+      return
+    }
+    const verb = args["dry-run"] ? "would " : ""
+    for (const w of plan.write) prompts.log.success(`${verb}write ${w.file}  ${dim(`#${w.id} ${w.name}`)}`)
+    for (const f of plan.remove) prompts.log.info(`${verb}remove ${f}  ${dim("(agent no longer on your account)")}`)
+    for (const f of plan.handWritten) prompts.log.warn(`${f} is hand-written — left alone ${dim("(delete it to let sync manage it)")}`)
+    if (!changed) prompts.log.info(dim("Already in sync."))
+    prompts.outro(
+      changed && !args["dry-run"]
+        ? `${changed} change(s) in ${dir} — restart IRIS Desktop (or start a new TUI session) to see them`
+        : dir,
+    )
+  },
+})
+
 export const PlatformAgentsCommand = cmd({
   command: "agents",
   describe: "manage IRIS platform agents — pull, push, diff, CRUD, assign, pause/resume/stop",
@@ -1904,6 +1994,7 @@ export const PlatformAgentsCommand = cmd({
       .command(AgentsLeaveCommand)
       .command(AgentsExportCommand)
       .command(AgentsBenchCommand)
+      .command(AgentsDesktopSyncCommand)
       .demandCommand(),
   async handler() {},
 })

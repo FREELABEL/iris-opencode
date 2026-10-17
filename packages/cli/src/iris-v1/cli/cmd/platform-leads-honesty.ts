@@ -602,3 +602,205 @@ export function nextFollowUpState(contactInfo: unknown, now: Date = new Date()):
     daysAway === 0 ? "today" : daysAway === 1 ? "tomorrow" : `in ${daysAway} days`
   return { scheduled: true, overdue: false, daysAway, label: `${dateOnly} (${when})` }
 }
+
+// ── #189155 — what `leads pulse` reads, said as what it is ──────────────────
+
+/**
+ * The "Gmail" channel reads fl-api's lead email log (LeadEmailMessage), not a Gmail inbox. When
+ * Gmail is not synced, the only rows in that log are the emails IRIS itself sent, so calling the
+ * channel "Gmail" told a person their inbox had been read when it had not. Measured 2026-10-12:
+ * every deal checked showed outbound-only threads under "Gmail".
+ *
+ * Received mail in the log is the evidence that an inbox is being synced; without any, it is
+ * honestly "Sent by IRIS".
+ */
+export function emailChannelLabel(threads: Array<{ received_count?: unknown }>): "Gmail" | "Sent by IRIS" {
+  const received = threads.reduce((n, t) => n + (Number(t?.received_count) || 0), 0)
+  return received > 0 ? "Gmail" : "Sent by IRIS"
+}
+
+/**
+ * The calendar call's result, or a THROW when it did not read a calendar. It used to fall through
+ * to `events = []` for any failure — no connection, an error object, an unknown shape — so an
+ * unread calendar printed "Meetings (0)" and a reader concluded the lead had no meetings.
+ */
+export function readCalendarEvents(result: unknown): any[] {
+  const r = result as any
+  if (Array.isArray(r)) return r
+  if (r && typeof r === "object") {
+    if (r.success === false || r.error) {
+      const why = typeof r.error === "string" ? r.error : (r.error?.message ?? r.message ?? "the calendar call failed")
+      throw new Error(`not measured — calendar not read (${String(why).slice(0, 120)})`)
+    }
+    if (Array.isArray(r.events)) return r.events
+    if (Array.isArray(r.data?.events)) return r.data.events
+    if (Array.isArray(r.data)) return r.data
+  }
+  throw new Error("not measured — calendar not read (no events in the response)")
+}
+
+/**
+ * `leads pulse` is a READ (#189155). It used to file every message it found into the comms ledger
+ * on every run, which moved the lead's score between two reads minutes apart (19 → 28). Filing is
+ * now opt-in; `iris leads sync-comms` remains the silent filer for the Hive comms_sync task.
+ */
+export function shouldFileComms(args: { save?: unknown }): boolean {
+  return args.save === true
+}
+
+/**
+ * Task counts, read the way the API writes them (#189155). `pulse-all --prepare` tested
+ * `t.status === "completed" || t.completed`, but lead tasks carry `is_completed` — so every DONE
+ * task counted as pending, and any of them with a past due date as overdue. Every other reader in
+ * the leads commands already used `is_completed`.
+ */
+export function isTaskDone(t: any): boolean {
+  return t?.is_completed === true || t?.is_completed === 1 || t?.completed === true || t?.status === "completed"
+}
+
+export function countLeadTasks(tasks: any[], now: Date = new Date()): { pending: number; overdue: number; completed: number } {
+  const done = tasks.filter(isTaskDone)
+  const open = tasks.filter((t) => !isTaskDone(t))
+  const overdue = open.filter((t) => t?.due_date && new Date(t.due_date) < now).length
+  return { pending: open.length, overdue, completed: done.length }
+}
+
+export type PulseLeadDrops = { duplicate: number; noContact: number; noName: number; social: number }
+
+/**
+ * ONE rule for which deals a pulse scores (#189155). `pulse --admin` and `pulse-all` loaded the
+ * same statuses and reported 84 and 120: one de-duplicated and required a name, the other did
+ * neither but dropped social-handle emails. Two numbers for one question; now both call this, and
+ * say what was left out.
+ */
+export function selectPulseLeads(all: any[]): { leads: any[]; dropped: PulseLeadDrops } {
+  const dropped: PulseLeadDrops = { duplicate: 0, noContact: 0, noName: 0, social: 0 }
+  const seen = new Set<number>()
+  const leads: any[] = []
+  for (const l of all) {
+    if (seen.has(l?.id)) {
+      dropped.duplicate++
+      continue
+    }
+    seen.add(l?.id)
+    if (!l?.email && !l?.phone) {
+      dropped.noContact++
+      continue
+    }
+    const placeholder = typeof l?.name === "string" && l.name === `Lead #${l.id}`
+    const hasName = !!(l?.full_name || l?.company || (l?.name && !placeholder))
+    if (!hasName) {
+      dropped.noName++
+      continue
+    }
+    const isSocialEmail = typeof l?.email === "string" && (l.email.endsWith("@instagram.com") || l.email.endsWith("@twitter.com"))
+    const isNegotiating = l?.status === "Negotiating" || l?.status === "In Negotiation"
+    if (isSocialEmail && !(isNegotiating && l?.phone)) {
+      dropped.social++
+      continue
+    }
+    leads.push(l)
+  }
+  return { leads, dropped }
+}
+
+export function describeDrops(d: PulseLeadDrops): string {
+  const parts = [
+    d.duplicate ? `${d.duplicate} duplicate` : "",
+    d.noContact ? `${d.noContact} no email/phone` : "",
+    d.noName ? `${d.noName} no name` : "",
+    d.social ? `${d.social} social-handle email` : "",
+  ].filter(Boolean)
+  return parts.length ? `left out: ${parts.join(", ")}` : ""
+}
+
+/**
+ * The score a READ shows (#189204). `GET /leads/{id}/score` does not read a score — fl-api's
+ * getScore() recomputes it and SAVES it, so `leads pulse` without --save still moved lead 15336
+ * from 43 to 51 between two reads a minute apart, and stamped score_updated_at each time. A read
+ * shows the score already stored on the lead, and says it is the stored one; only --save asks the
+ * server to recompute.
+ */
+export function storedLeadScore(lead: any): {
+  lead_id: number | null
+  score: number | null
+  is_hot_lead: boolean
+  score_updated_at: string | null
+  source: "stored"
+} {
+  const n = Number(lead?.lead_score)
+  return {
+    lead_id: Number.isFinite(Number(lead?.id)) ? Number(lead.id) : null,
+    score: lead?.lead_score === null || lead?.lead_score === undefined || !Number.isFinite(n) ? null : n,
+    is_hot_lead: lead?.is_hot_lead === true || lead?.is_hot_lead === 1,
+    score_updated_at: lead?.score_updated_at ?? null,
+    source: "stored",
+  }
+}
+
+/** How many messages a channel asks for — a COUNT, not the display limit (#189205). */
+export const CHANNEL_FETCH_LIMIT = 500
+
+/**
+ * `--limit` is how many rows are SHOWN (#189205). It was also the query limit and the slice before
+ * counting, so `--limit 0` turned a channel with 3 threads into "(0)". Counting uses everything the
+ * window holds; only the display is trimmed.
+ */
+export function channelFetchLimit(displayLimit: unknown): number {
+  const n = Number(displayLimit)
+  return Math.max(Number.isFinite(n) ? n : 0, CHANNEL_FETCH_LIMIT)
+}
+
+/**
+ * Whether an email thread falls inside the `--days` window (#189205). Threads were never filtered
+ * by date, so `--days 1` and `--days 3650` reported the same 3 threads. A thread with no date at all
+ * is kept — dropping it would make history vanish — and is counted as undated by the caller.
+ */
+export function threadInWindow(t: { date?: string | null }, days: number, now: number = Date.now()): boolean {
+  const at = Date.parse(String(t?.date ?? ""))
+  if (!Number.isFinite(at)) return true
+  return at >= now - days * 864e5
+}
+
+/** `--days` below 1 is not a window (#189205): every cutoff collapses to now. */
+export function validPulseDays(days: unknown): number | null {
+  const n = Number(days)
+  return Number.isFinite(n) && n >= 1 ? n : null
+}
+
+/**
+ * A lead's name for the agency scorecard (#189207). It read `full_name || company`, but lead rows
+ * carry `name` and full_name is null on every one checked — so most rows printed "#10445 (#10445)".
+ */
+export function adminLeadName(lead: any): string {
+  const n = [lead?.name, lead?.full_name, lead?.company].find((v) => typeof v === "string" && v.trim())
+  return n ? String(n).trim() : `#${lead?.id}`
+}
+
+/**
+ * The ungated deals among the leads the scorecard LOADED (#189207). deals/active is account-wide,
+ * so the list ignored --bloq and --status. With no loaded set (the lead load failed) the deals are
+ * returned as they are, rather than hiding them behind an error.
+ */
+export function ungatedForLoaded(deals: any[], loaded: Set<number> | null): any[] {
+  const ungated = (Array.isArray(deals) ? deals : []).filter((d) => !d?.has_gate)
+  if (!loaded) return ungated
+  return ungated.filter((d) => loaded.has(Number(d?.lead_id)))
+}
+
+/**
+ * pulse-all rows whose readiness read FAILED carry band "error" and pulse 0 (#189207). As a number
+ * that 0 ranked them the worst deals in the agency and dragged the average down. These keep the
+ * failures out of both: descending puts them last, ascending ("worst first") puts them last too.
+ */
+export function pulseSortKey(r: { pulse: number; band?: string }): number {
+  return r.band === "error" ? -1 : r.pulse
+}
+export function pulseSortKeyAsc(r: { pulse: number; band?: string }): number {
+  return r.band === "error" ? Number.POSITIVE_INFINITY : r.pulse
+}
+/** The average over rows that were actually measured; 0 when none were. */
+export function measuredAverage(rows: Array<{ pulse: number; band?: string }>): number {
+  const m = rows.filter((r) => r.band !== "error")
+  return m.length ? Math.round(m.reduce((s, r) => s + r.pulse, 0) / m.length) : 0
+}

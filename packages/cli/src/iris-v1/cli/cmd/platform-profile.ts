@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
+import { at } from "./platform-social"
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "fs"
 import { join } from "path"
 import { firstArray } from "../../util/array"
@@ -1035,11 +1036,11 @@ const ProfileSocialCommand = cmd({
 
     // Show inline social handles from profile
     const handles: [string, string][] = []
-    if (profile.instagram) handles.push(["Instagram", `@${profile.instagram}`])
-    if (profile.twitter) handles.push(["Twitter/X", `@${profile.twitter}`])
+    if (profile.instagram) handles.push(["Instagram", at(profile.instagram)])
+    if (profile.twitter) handles.push(["Twitter/X", at(profile.twitter)])
     if (profile.youtube) handles.push(["YouTube", profile.youtube])
     if (profile.spotify) handles.push(["Spotify", profile.spotify])
-    if (profile.tiktok) handles.push(["TikTok", `@${profile.tiktok}`])
+    if (profile.tiktok) handles.push(["TikTok", at(profile.tiktok)])
     if (profile.twitch) handles.push(["Twitch", profile.twitch])
     if (profile.website_url) handles.push(["Website", profile.website_url])
 

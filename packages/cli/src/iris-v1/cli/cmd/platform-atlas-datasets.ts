@@ -690,7 +690,7 @@ const RecordsSummaryCommand = cmd({
 // records plus the dataset's true total so callers can warn loudly when a capped fetch
 // is partial — audit and export used to silently process only the first 200 rows and
 // present the result as complete, dropping ~91% of a 2143-row dataset (#137273).
-async function fetchDatasetRecords(
+export async function fetchDatasetRecords(
   schema: string,
   opts: { limit: number; all: boolean },
 ): Promise<{ records: any[]; total: number; truncated: boolean }> {

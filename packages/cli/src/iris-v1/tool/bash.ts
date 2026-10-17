@@ -156,6 +156,10 @@ export const BashTool = Tool.define("bash", async () => {
         cwd,
         env: {
           ...process.env,
+          // Lets a command run from here report back to this session — `iris hive tasks create`
+          // stamps it on the task so the other machine's status and report land here (#188667).
+          IRIS_SESSION_ID: ctx.sessionID,
+          IRIS_MESSAGE_ID: ctx.messageID,
         },
         stdio: ["ignore", "pipe", "pipe"],
         detached: process.platform !== "win32",

@@ -35,3 +35,20 @@ describe("intent retrieval — the right command reaches the shortlist", () => {
     expect(singular("gas")).toBe("gas")
   })
 })
+
+describe("#188613 email words reach the mail commands, and the controls stay put", () => {
+  const top = (q: string) => searchCapabilities(index as any, q.toLowerCase(), "command", 12).map((h) => h.e.name)
+  test("reply in my email → mail send, not sites reply", () => {
+    expect(top("reply to sarah in my email saying thanks for the intro")[0]).toBe("mail send")
+  })
+  test("'email <person>' as a verb is a send", () => {
+    expect(top("email david the proposal pdf")).toContain("mail send")
+  })
+  test("reading email reaches gmail", () => {
+    expect(top("check my email")).toContain("gmail inbox")
+  })
+  test("controls: a newsletter stays with email send, a text stays with imessage send", () => {
+    expect(top("send the newsletter to the vip list")[0]).toBe("email send")
+    expect(top("text mia that im running late")).toContain("imessage send")
+  })
+})

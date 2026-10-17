@@ -3,6 +3,7 @@ import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Api } from "../api"
 import { response } from "../location"
+import { redactSecrets } from "./secrets"
 
 export const ModelHandler = HttpApiBuilder.group(Api, "server.model", (handlers) =>
   Effect.gen(function* () {
@@ -11,7 +12,7 @@ export const ModelHandler = HttpApiBuilder.group(Api, "server.model", (handlers)
         "model.list",
         Effect.fn(function* () {
           const models = yield* Model.Service
-          return yield* response(models.available())
+          return yield* response(models.available().pipe(Effect.map((list) => list.map(redactSecrets))))
         }),
       )
       .handle(
