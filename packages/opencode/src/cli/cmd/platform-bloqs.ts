@@ -32,6 +32,15 @@ import { firstArray } from "../../util/array"
 import { bloqWebUrl as atlasBloqUrl, bloqUrlFrom } from "./bloq-web-url"
 import { openBrowser } from "../../util/browser"
 import { AtlasDocCommand } from "./platform-atlas-item"
+import {
+  BloqsTasksCommand,
+  BloqsTaskAddCommand,
+  BloqsTaskDoneCommand,
+  BloqsTaskDeleteCommand,
+  BloqsAssigneesCommand,
+  BloqsAssignCommand,
+  BloqsUnassignCommand,
+} from "./platform-bloq-card"
 
 // ============================================================================
 // Display helpers
@@ -1277,6 +1286,8 @@ const BloqsAddItemCommand = cmd({
       .option("title", { describe: "item title", type: "string" })
       .option("text", { describe: "item content (alternative to positional)", type: "string" })
       .option("due", { describe: "due date (ISO, e.g. 2026-07-22)", type: "string" })
+      // Any status update-item can set (#189804: fl-api's create used to accept only four).
+      .option("status", { describe: "create in this status", type: "string", choices: BLOQ_ITEM_STATUS_CHOICES })
       .option("reporter-lead", {
         describe: "lead ID of the person who reported this, for bounty attribution",
         type: "number",
@@ -1387,6 +1398,7 @@ const BloqsAddItemCommand = cmd({
       const payload: Record<string, unknown> = { content }
       if (title) payload.title = title
       if (dueDate) payload.due_date = dueDate
+      if (args.status) payload.status = normalizeItemStatus(String(args.status))
       // Credit follows the work, not the board it lands on.
       //
       // Attribution used to be a property of `bug report` alone: anything filed through this
@@ -4455,6 +4467,14 @@ export const PlatformBloqsCommand = productCommand({
       .command(BloqsDetachPlaybookCommand)
       .command(BloqsPlaybooksCommand)
       .command(BloqsUpdateItemCommand)
+      // A card's checklist and assignees (#189800)
+      .command(BloqsTasksCommand)
+      .command(BloqsTaskAddCommand)
+      .command(BloqsTaskDoneCommand)
+      .command(BloqsTaskDeleteCommand)
+      .command(BloqsAssigneesCommand)
+      .command(BloqsAssignCommand)
+      .command(BloqsUnassignCommand)
       .command(BloqsContributorsCommand)
       .command(BloqsItemsCommand)
       .command(BloqsPublishPagesCommand)
