@@ -16,7 +16,28 @@ permissions:
   packages: write
 
 jobs:
+  # A release lower than the highest CLI release already out is refused (#188596). The v2
+  # engine ships as 1.5.x from iris2/channel; without this, the next 1.3.x cut from main would
+  # publish fine and `iris update` would carry every user off v2. Version order, not dates.
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse a version below the newest CLI release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          V="${INPUT_VERSION:-${GITHUB_REF#refs/tags/v}}"
+          HIGHEST=$(gh api "repos/${{ github.repository }}/releases?per_page=100" --paginate -q '.[] | select(.draft | not) | .tag_name' \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' | sort -V | tail -1)
+          echo "releasing $V; highest CLI release is ${HIGHEST:-none}"
+          if [ -n "$HIGHEST" ] && [ "$V" != "$HIGHEST" ] && [ "$(printf '%s\n%s\n' "$V" "$HIGHEST" | sort -V | tail -1)" = "$HIGHEST" ]; then
+            echo "::error::v$V is below v$HIGHEST, the newest CLI release. Users update to the highest version, so this would never reach them — or, before #188596, would have pulled them off it. Release a version above v$HIGHEST."
+            exit 1
+          fi
+
   build:
+    needs: [guard]
     strategy:
       fail-fast: false
       matrix:
@@ -166,6 +187,7 @@ jobs:
             packages/opencode/dist/*.zip
 
   build-desktop:
+    needs: [guard]
     strategy:
       fail-fast: false
       matrix:
@@ -293,6 +315,7 @@ jobs:
   # Windows remains UNSIGNED (no Windows code-signing cert yet; SmartScreen warns). This job is
   # optional and non-blocking, same as build-desktop.
   build-desktop-tauri:
+    needs: [guard]
     strategy:
       fail-fast: false
       matrix:
@@ -444,6 +467,7 @@ jobs:
   # Unsigned: no Windows code-signing cert exists for this repo (Alex's call — acceptable for
   # now, see bloq #503 item #182113). Windows SmartScreen will warn on first run.
   build-desktop-tauri-windows:
+    needs: [guard]
     runs-on: windows-latest
     continue-on-error: true
     timeout-minutes: 40
