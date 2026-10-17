@@ -30,6 +30,10 @@ interface LiteItem {
   title?: string | null
   updated_at?: string | null
   deleted_at?: string | null
+  due_date?: string | null
+  priority?: string | null
+  /** fl-api's card summary (#189793) — a new attachment or a ticked subtask may not move updated_at. */
+  summary?: unknown
 }
 interface LiteList {
   id: number
@@ -50,7 +54,9 @@ export function atlasFingerprint(lists: LiteList[]): string {
     parts.push(`L${l.id}|${l.name ?? ""}|${l.sort_order ?? ""}`)
     for (const i of [...(l.items ?? [])].sort((a, b) => a.id - b.id)) {
       if (i.deleted_at) continue
-      parts.push(`I${i.id}|${i.bloq_list_id ?? l.id}|${i.sort_order ?? ""}|${i.status ?? ""}|${i.updated_at ?? ""}|${i.title ?? ""}`)
+      parts.push(
+        `I${i.id}|${i.bloq_list_id ?? l.id}|${i.sort_order ?? ""}|${i.status ?? ""}|${i.updated_at ?? ""}|${i.title ?? ""}|${i.due_date ?? ""}|${i.priority ?? ""}|${i.summary ? JSON.stringify(i.summary) : ""}`,
+      )
     }
   }
   return String(Bun.hash(parts.join("\n")))
@@ -61,7 +67,7 @@ async function fetchFingerprint(bloqId: number): Promise<string | null> {
   const userId = await resolveUserId()
   if (!userId) return null
   try {
-    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}?light=1`)
+    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}?light=1&summary=1`)
     if (!res.ok) return null
     const json = (await res.json()) as any
     const raw = json?.data ?? json

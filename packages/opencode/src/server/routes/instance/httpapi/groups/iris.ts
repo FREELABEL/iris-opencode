@@ -70,6 +70,28 @@ const AtlasItem = Schema.Struct({
   content: Schema.optional(described(Schema.String, "The item body, as markdown.")),
   createdAt: Schema.optional(described(Schema.String, "ISO timestamp the item was created.")),
   updatedAt: Schema.optional(described(Schema.String, "ISO timestamp the item was last edited.")),
+  dueDate: Schema.optional(described(Schema.String, "Due date as fl-api stores it (#189806).")),
+  priority: Schema.optional(Schema.String),
+  cardType: Schema.optional(Schema.String),
+  labels: Schema.optional(Schema.Array(Schema.String)),
+  tasks: Schema.optional(
+    described(
+      Schema.Struct({ open: Schema.Finite, done: Schema.Finite, total: Schema.Finite }),
+      "Checklist progress from fl-api's card summary (#189793). Absent = not measured.",
+    ),
+  ),
+  attachments: Schema.optional(described(Schema.Finite, "Attachment count. Absent = not measured.")),
+  assignees: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        id: Schema.Finite,
+        type: Schema.Literals(["user", "agent"]),
+        userId: Schema.optional(Schema.Finite),
+        agentId: Schema.optional(Schema.Finite),
+        name: Schema.optional(Schema.String),
+      }),
+    ),
+  ),
 }).annotate({ identifier: "IrisAtlasItem" })
 
 const AtlasResponse = Schema.Struct({
@@ -1256,6 +1278,11 @@ export const IrisPaths = {
   atlasLive: `${root}/atlas/:bloqID/live`,
   atlasItemCreate: `${root}/atlas/:bloqID/lists/:listID/items`,
   atlasListCreate: `${root}/atlas/:bloqID/lists`,
+  atlasMembers: `${root}/atlas/:bloqID/members`,
+  atlasMemberInvite: `${root}/atlas/:bloqID/members/invite`,
+  atlasMember: `${root}/atlas/:bloqID/members/:memberID`,
+  itemAssignees: `${root}/item/:itemID/assignees`,
+  itemAssignee: `${root}/item/:itemID/assignees/:assigneeID`,
   agents: `${root}/agents/:bloqID`,
   leads: `${root}/leads/:bloqID`,
   pages: `${root}/pages/:bloqID`,
@@ -1565,6 +1592,51 @@ export const IrisApi = HttpApi.make("iris").add(
       }).annotateMerge(
         OpenApi.annotations({ identifier: "iris.atlasListCreate", summary: "Add a list to a board", description: "#189768." }),
       ),
+      HttpApiEndpoint.get("atlasMembers", IrisPaths.atlasMembers, {
+        params: { bloqID: Schema.NumberFromString },
+        success: described(
+          Schema.Struct({
+            ...Measured,
+            ownerId: Schema.NullOr(Schema.Finite),
+            youAreOwner: Schema.Boolean,
+            members: Schema.Array(Schema.Struct({ userId: Schema.Finite, name: Schema.String, email: Schema.String, permission: Schema.String })),
+          }).annotate({ identifier: "IrisAtlasMembers" }),
+          "Who is on the board (#189795)",
+        ),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.atlasMembers", summary: "List a board's members" })),
+      HttpApiEndpoint.post("atlasMemberInvite", IrisPaths.atlasMemberInvite, {
+        params: { bloqID: Schema.NumberFromString },
+        payload: Schema.Struct({ email: Schema.String, permission: Schema.Literals(["viewer", "editor"]) }),
+        success: described(Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String) }).annotate({ identifier: "IrisAtlasMemberResult" }), "Whether it landed"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.atlasMemberInvite", summary: "Invite someone to a board by email" })),
+      HttpApiEndpoint.post("atlasMemberSave", IrisPaths.atlasMember, {
+        params: { bloqID: Schema.NumberFromString, memberID: Schema.NumberFromString },
+        payload: Schema.Struct({ permission: Schema.Literals(["viewer", "editor"]) }),
+        success: described(Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String) }), "Whether it landed"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.atlasMemberSave", summary: "Change a member's permission" })),
+      HttpApiEndpoint.delete("atlasMemberRemove", IrisPaths.atlasMember, {
+        params: { bloqID: Schema.NumberFromString, memberID: Schema.NumberFromString },
+        success: described(Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String) }), "Whether it landed"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.atlasMemberRemove", summary: "Remove a member from a board" })),
+      HttpApiEndpoint.get("itemAssignees", IrisPaths.itemAssignees, {
+        params: { itemID: Schema.NumberFromString },
+        success: described(Schema.Struct({ ...Measured, assignees: Schema.Array(Schema.Struct({ id: Schema.Finite, type: Schema.Literals(["user", "agent"]), userId: Schema.optional(Schema.Finite), agentId: Schema.optional(Schema.Finite), name: Schema.optional(Schema.String) })) }).annotate({ identifier: "IrisItemAssignees" }), "A card's assignees (#189796)"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.itemAssignees", summary: "List a card's assignees" })),
+      HttpApiEndpoint.post("itemAssign", IrisPaths.itemAssignees, {
+        params: { itemID: Schema.NumberFromString },
+        payload: Schema.Struct({ userId: Schema.optional(Schema.Finite), agentId: Schema.optional(Schema.Finite) }),
+        success: described(Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String), assignees: Schema.optional(Schema.Array(Schema.Struct({ id: Schema.Finite, type: Schema.Literals(["user", "agent"]), userId: Schema.optional(Schema.Finite), agentId: Schema.optional(Schema.Finite), name: Schema.optional(Schema.String) }))) }).annotate({ identifier: "IrisItemAssignResult" }), "The card's assignees after"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.itemAssign",
+          summary: "Assign a board member or agent to a card",
+          description: "fl-api refuses anyone not on the board, in words (#189801 ADR-02: assigning is not access).",
+        }),
+      ),
+      HttpApiEndpoint.delete("itemUnassign", IrisPaths.itemAssignee, {
+        params: { itemID: Schema.NumberFromString, assigneeID: Schema.NumberFromString },
+        success: described(Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String), assignees: Schema.optional(Schema.Array(Schema.Struct({ id: Schema.Finite, type: Schema.Literals(["user", "agent"]), userId: Schema.optional(Schema.Finite), agentId: Schema.optional(Schema.Finite), name: Schema.optional(Schema.String) }))) }), "The card's assignees after"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.itemUnassign", summary: "Unassign someone from a card" })),
       HttpApiEndpoint.get("atlasLive", IrisPaths.atlasLive, {
         params: { bloqID: Schema.NumberFromString },
         success: Schema.String.pipe(HttpApiSchema.asText({ contentType: "text/event-stream" })),
