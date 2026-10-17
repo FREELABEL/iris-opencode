@@ -669,7 +669,16 @@ const LeadsGetCommand = cmd({
           { name: "company", has: !!l.company },
           { name: "stage", has: !!l.stage },
           { name: "source", has: !!(l.source ?? l.keywords?.source) },
-          { name: "bloq", has: Array.isArray(l.bloq_ids) ? l.bloq_ids.length > 0 : !!l.bloq_id },
+          // #189724: `leads get` returns attached boards as `bloqs` (objects), not `bloq_ids`;
+          // reading only bloq_ids fell through to the legacy singular column and reported
+          // "missing: bloq" for a lead on two boards.
+          {
+            name: "bloq",
+            has:
+              (Array.isArray(l.bloq_ids) && l.bloq_ids.length > 0) ||
+              (Array.isArray(l.bloqs) && l.bloqs.length > 0) ||
+              !!l.bloq_id,
+          },
           { name: "notes", has: Array.isArray(l.notes) && l.notes.length > 0 },
         ]
         const gScore = Math.round((gFields.filter((f) => f.has).length / gFields.length) * 100)
@@ -1035,7 +1044,7 @@ const LeadsCreateCommand = cmd({
       .option("bid", { describe: "deal amount — counts toward board pipeline value", type: "number" })
       .option("mrr", { describe: "monthly recurring revenue", type: "number" })
       .option("notes", { describe: "initial note to attach", type: "string" })
-      .option("bloq-id", { describe: "CRM bloq ID (default: auto-detect)", type: "number" })
+      .option("bloq-id", { describe: "board (bloq) this lead belongs to — required; prompted for when interactive", type: "number" })
       .option("json", { describe: "JSON output (returns the created lead — capture the new id)", type: "boolean", default: false }),
   async handler(args) {
     const isJson = args.json === true
@@ -1088,7 +1097,32 @@ const LeadsCreateCommand = cmd({
       }
     }
 
-    let bloqId = args["bloq-id"] ?? 38
+    // #189716: this used to be `args["bloq-id"] ?? 38` — every lead created without a board
+    // was silently attached to bloq 38, one specific account's board, for EVERY user. The API
+    // requires a board, so the honest default is to ask, or to refuse and say so.
+    let bloqId = args["bloq-id"]
+    if (bloqId === undefined) {
+      if (isNonInteractive() || isJson) {
+        if (isJson) console.log(JSON.stringify({ error: "Missing required --bloq-id flag (the board this lead belongs to)" }))
+        else {
+          prompts.log.error("Missing required --bloq-id — the board this lead belongs to.")
+          prompts.log.info(dim(`Find it: iris bloqs search <name>   then: iris leads create --name "${name}" --bloq-id <id>`))
+        }
+        process.exitCode = 1
+        if (!isJson) prompts.outro("Done")
+        return
+      }
+      const result = await prompts.text({
+        message: "Board (bloq) ID this lead belongs to",
+        placeholder: "find it with: iris bloqs search <name>",
+        validate: (x) => (x && /^\d+$/.test(x.trim()) ? undefined : "Enter a numeric board ID"),
+      })
+      if (prompts.isCancel(result)) {
+        prompts.outro("Cancelled")
+        return
+      }
+      bloqId = Number(String(result).trim())
+    }
 
     const spinner = isJson ? null : prompts.spinner()
     spinner?.start("Creating lead…")

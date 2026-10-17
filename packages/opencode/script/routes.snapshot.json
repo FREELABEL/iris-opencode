@@ -6708,6 +6708,11 @@
 },
 {
 "method": "POST",
+"uri": "/api/v1/licences/{}/link",
+"service": "fl-api"
+},
+{
+"method": "POST",
 "uri": "/api/v1/licences/{}/revoke",
 "service": "fl-api"
 },
@@ -11144,6 +11149,11 @@
 {
 "method": "GET",
 "uri": "/api/v1/user/bloqs/{}/shared-users",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/user/bloqs/{}/transfer",
 "service": "fl-api"
 },
 {
