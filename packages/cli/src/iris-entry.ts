@@ -67,6 +67,59 @@ function readSdkEnv(): Record<string, string> {
   return env
 }
 
+// What a stable `iris` user already configured, carried into v2 on every launch (#188596).
+// v2 keeps its own config in ~/.config/iris, so without this the IRIS OS MCP server, the agents
+// `iris agents desktop-sync` writes and the user's commands all vanish from the TUI. Read each
+// launch, not copied once: `iris mcp add` (the platform layer) still writes the v1 file.
+// OPENCODE_PERMISSION is how the Hive daemon stops unattended `iris run` from waiting on a
+// prompt nobody can answer (#188292); v1 read it, v2 does not. All keys stay in v1's shape —
+// v2's config normalizer migrates them (core/src/v1/config/migrate.ts).
+function v1Carryover(): Record<string, unknown> {
+  const dir = path.join(process.env.XDG_CONFIG_HOME ?? path.join(os.homedir(), ".config"), "opencode")
+  const v1 = readJson(path.join(dir, "opencode.json")) ?? readJson(path.join(dir, "opencode.jsonc")) ?? {}
+  const permission = process.env.OPENCODE_PERMISSION ? readJsonText(process.env.OPENCODE_PERMISSION) : undefined
+  return Object.fromEntries(
+    Object.entries({ mcp: v1.mcp, agent: v1.agent, command: v1.command, permission }).filter(([, v]) => v),
+  )
+}
+
+// Agent and command markdown, and the global AGENTS.md, live beside the v1 config. Link them
+// into v2's config dir rather than copy, so what `iris agents desktop-sync` writes later still
+// shows up. Only where v2 has nothing of that name: a user's own v2 files are never replaced.
+// Junctions on Windows, which need no developer mode; a failure only means it is not carried.
+function linkV1Files() {
+  const base = process.env.XDG_CONFIG_HOME ?? path.join(os.homedir(), ".config")
+  const v1 = path.join(base, "opencode")
+  const v2 = path.join(base, "iris")
+  for (const name of ["agent", "agents", "command", "commands", "AGENTS.md"]) {
+    const source = path.join(v1, name)
+    const target = path.join(v2, name)
+    if (!fs.existsSync(source) || fs.existsSync(target)) continue
+    try {
+      fs.mkdirSync(v2, { recursive: true })
+      const dir = fs.statSync(source).isDirectory()
+      fs.symlinkSync(source, target, dir ? (process.platform === "win32" ? "junction" : "dir") : "file")
+    } catch {}
+  }
+}
+
+function readJson(file: string): Record<string, unknown> | undefined {
+  if (!fs.existsSync(file)) return
+  return readJsonText(fs.readFileSync(file, "utf8"))
+}
+
+// A config the user broke must not stop `iris` from starting; it just carries nothing over.
+function readJsonText(text: string): Record<string, unknown> | undefined {
+  const value: unknown = (() => {
+    try {
+      return Bun.JSONC.parse(text)
+    } catch {
+      return undefined
+    }
+  })()
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined
+}
+
 function irisProviderConfig(traceId: string): string {
   const sdk = readSdkEnv()
   const baseURL = (process.env.IRIS_API_URL ?? sdk.IRIS_API_URL ?? "https://freelabel.net") + "/api/v6/openai"
@@ -88,6 +141,7 @@ function irisProviderConfig(traceId: string): string {
     models[id] = { name, tool_call: true }
   }
   return JSON.stringify({
+    ...v1Carryover(),
     $schema: "https://opencode.ai/config.json",
     model: "iris/gpt-4.1-nano",
     // v1's model picker listed IRIS models only; v2 adds its own free `opencode/*` models.
@@ -225,6 +279,7 @@ if (toV2) {
   })
   process.once("exit", end)
 
+  linkV1Files()
   process.env.OPENCODE_CONFIG_CONTENT ??= irisProviderConfig(traceId)
 
   // ── Hand off to v2 (A5) ───────────────────────────────────────────────────
