@@ -82,7 +82,7 @@ const RentCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("name", { describe: "a label for this machine", type: "string", demandOption: true })
-      .option("provider", { describe: "railway (default) | digitalocean", type: "string" })
+      .option("provider", { describe: "railway (default) | digitalocean (GPUs) | cloudflare (throwaway sandbox — see iris hive sandbox)", type: "string" })
       .option("image", { describe: "container or OS image", type: "string" })
       // Enrolment is the DEFAULT. Declining is explicit, and is recorded so a declined rental
       // shows as declined rather than being silently absent from the fleet.
@@ -214,6 +214,75 @@ const ProvidersCommand = cmd({
   },
 })
 
+/**
+ * `iris hive sandbox <command>` — run one command in a throwaway Linux sandbox (#188287).
+ *
+ * Cloudflare Containers through the `cloudflare` compute provider: Python, Node, git, curl; internet
+ * OFF unless --internet; billed only while it runs. By default it rents a sandbox, runs the
+ * command, prints the output and releases it — nothing is left behind. --keep holds it for the next
+ * command (--id), which keeps files between commands.
+ */
+const SandboxCommand = cmd({
+  command: "sandbox <command..>",
+  describe: "run a command in a throwaway Linux sandbox (Python, Node, git) — released afterwards",
+  builder: (yargs) =>
+    yargs
+      .positional("command", { describe: "the shell command, e.g. \"python3 -c 'print(6*7)'\"", type: "string", array: true })
+      .option("id", { describe: "reuse a sandbox you kept (lease id from `iris hive rentals`)", type: "number" })
+      .option("keep", { describe: "keep the sandbox after the command (reuse with --id)", type: "boolean", default: false })
+      .option("internet", { describe: "let the command reach the internet (off by default)", type: "boolean", default: false })
+      .option("timeout", { describe: "seconds before the command is stopped (max 120)", type: "number", default: 30 })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID", type: "number" })
+      .example("iris hive sandbox \"python3 -c 'print(6*7)'\"", "42, in a fresh sandbox that is gone afterwards")
+      .example("iris hive sandbox --keep \"git clone https://github.com/x/y && ls y\" --internet", "keep it; reuse it with --id"),
+  async handler(argv) {
+    await requireAuth()
+    const userId = await requireUserId(argv["user-id"] as number | undefined)
+    if (!userId) process.exit(1)
+    const command = ((argv.command as string[]) || []).join(" ").trim()
+    if (!command) {
+      console.error("Give a command, e.g. iris hive sandbox \"python3 --version\"")
+      process.exit(1)
+    }
+
+    let id = argv.id as number | undefined
+    const rentedHere = !id
+    try {
+      if (!id) {
+        const { lease } = await api(`?user_id=${userId}`, {
+          method: "POST",
+          body: JSON.stringify({ user_id: userId, name: `sandbox-${Date.now().toString(36)}`, provider: "cloudflare", enrol_as_node: false }),
+        })
+        id = lease.id as number
+      }
+      const timeoutMs = Math.max(1, Math.min(Number(argv.timeout) || 30, 120)) * 1000
+      const { result } = await api(`/${id}/exec?user_id=${userId}`, {
+        method: "POST",
+        body: JSON.stringify({ user_id: userId, command, timeout_ms: timeoutMs, internet: !!argv.internet }),
+      })
+      if (argv.json) await writeJson({ lease_id: id, kept: !rentedHere || !!argv.keep, ...result })
+      else {
+        if (result.stdout) process.stdout.write(result.stdout)
+        if (result.stderr) process.stderr.write(result.stderr)
+        if (result.timedOut) console.error(warn(`  stopped after ${timeoutMs / 1000}s — raise --timeout (max 120)`))
+        if (result.truncated) console.error(dim("  output was cut at 256 KB"))
+        if (argv.keep && rentedHere) console.error(dim(`  kept sandbox #${id} — reuse: iris hive sandbox --id ${id} "<command>"   release: iris hive release ${id}`))
+      }
+      process.exitCode = result.exitCode ?? 0
+    } catch (e: any) {
+      const m = String(e.message || e)
+      console.error(`Sandbox failed: ${m}`)
+      if (/not configured/i.test(m)) console.error(dim("  Cloudflare sandboxes are not switched on for this account yet. Check: iris hive providers"))
+      process.exitCode = 1
+    } finally {
+      // A sandbox we rented for one command is released whatever happened, unless asked to keep it.
+      if (rentedHere && id && !argv.keep) await api(`/${id}?user_id=${userId}`, { method: "DELETE" }).catch(() => {})
+    }
+  },
+})
+
+export const HiveSandboxCommand = SandboxCommand
 export const HiveRentCommand = RentCommand
 export const HiveRentalsCommand = RentalsCommand
 export const HiveReleaseCommand = ReleaseCommand

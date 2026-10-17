@@ -173,6 +173,8 @@ export interface BuildPayloadInput {
   idempotencyKey?: string
   /** Extra tries after a failure. Needs a key — see checkContract. */
   retries?: number
+  /** The session that sent it, so its status and report come back there (#188667). */
+  origin?: { node_id: string; session_id: string; message_id?: string; provider: string } | null
 }
 
 /**
@@ -216,6 +218,7 @@ export function buildTaskPayload(input: BuildPayloadInput): Record<string, unkno
     // --retries N means N MORE tries after the first: N + 1 attempts, within the API's 1–10.
     payload.max_attempts = Math.max(1, Math.min(10, Math.round(input.retries) + 1))
   }
+  if (input.origin) payload.metadata = { origin: input.origin }
 
   return payload
 }

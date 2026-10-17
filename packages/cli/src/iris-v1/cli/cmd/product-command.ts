@@ -51,6 +51,11 @@ export interface ProductSpec {
    * headline behaviour a no-op while every other signal said the conversion worked.
    */
   handler?: (args: any) => Promise<void> | void
+  /**
+   * The yargs command string when it is more than the name — e.g. `pulse [keyword..]`, so a
+   * product can take a positional of its own beside its subcommands. Defaults to `name`.
+   */
+  command?: string
 }
 
 /** Registry of every declared product, so Gate 22 and `iris help` can enumerate them. */
@@ -77,7 +82,7 @@ export function productEpilogue(spec: ProductSpec): string {
 export function productCommand(spec: ProductSpec) {
   PRODUCTS.push(spec)
   return cmd({
-    command: spec.name,
+    command: spec.command ?? spec.name,
     aliases: spec.aliases ?? [],
     describe: spec.purpose,
     builder: (yargs: any) => {

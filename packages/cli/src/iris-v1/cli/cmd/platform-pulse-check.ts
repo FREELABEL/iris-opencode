@@ -32,10 +32,13 @@ import {
   type TopicSource,
   type SourceSweep,
   sweepAll,
+  currentSessionIds,
   toObservations,
   topicSlug,
   keywordVariants,
+  topicQuality,
 } from "./pulse-check-sweep"
+import { TOPIC_LABEL } from "./pulse-topic-script"
 import {
   type DaemonPermissions,
   fetchDaemonPermissions,
@@ -50,17 +53,7 @@ import {
   UPDATE_COMMAND,
 } from "./daemon-permissions"
 
-const SOURCE_LABEL: Record<TopicSource, string> = {
-  git: "commits",
-  diary: "diary",
-  files: "files",
-  claude_code: "Claude Code",
-  opencode: "opencode",
-  imessage: "iMessage",
-  email: "Apple Mail",
-  gmail: "Gmail",
-  bloq: "Atlas",
-}
+const SOURCE_LABEL: Record<TopicSource, string> = TOPIC_LABEL
 
 function ago(iso?: string): string {
   if (!iso) return "—"
@@ -79,10 +72,43 @@ function trend(s: SourceSweep): string {
   return delta > 0 ? success(`  +${delta}`) : dim(`  ${delta}`)
 }
 
+/**
+ * The sweep's options, shared by `iris pulse check <topic>` and the bare `iris pulse <topic>`
+ * (#189199) — one definition, so the two spellings cannot drift apart.
+ */
+export function pulseCheckOptions(yargs: any): any {
+  return yargs
+      .option("days", {
+        describe: "sweep window; momentum compares it against the equally-long window before it",
+        type: "number",
+        default: 30,
+      })
+      .option("repo", { describe: "repository root to sweep", type: "string", default: process.cwd() })
+      .option("sources", {
+        describe: `comma-separated subset of: ${TOPIC_SOURCES.join(", ")}`,
+        type: "string",
+      })
+      .option("limit", { describe: "items shown per source", type: "number", default: 6 })
+      .option("include-context", {
+        describe: "also upload message/mail/session text (off by default — those carry credentials and client data)",
+        type: "boolean",
+        default: false,
+      })
+      // boolean-negation is disabled globally (see src/index.ts), so `--no-push`
+      // has to be a literal flag rather than the negation of `--push`.
+      .option("no-push", {
+        describe: "sweep and print, but do not file the result in the Signal Corpus",
+        type: "boolean",
+        default: false,
+      })
+}
+
 export const PulseCheckCommand = cmd({
   command: "check <keyword..>",
   aliases: ["topic"],
   describe: "sweep every trail a topic left — commits, diary, files, agent sessions, messages, mail — and score how warm the thread is",
+  // Options written out here, not via pulseCheckOptions(): build-capabilities reads builder SOURCE,
+  // and a function call hides every option from `iris how-to` search. A test keeps the two lists equal.
   builder: (yargs) =>
     yargs
       .positional("keyword", {
@@ -178,13 +204,24 @@ export function blindSpotLines(label: string, s: SourceSweep, perms: DaemonPermi
   return [`  ${label} ${highlight(r.headline)}`, ...r.fix.map((l) => `${pad}${l}`)]
 }
 
-async function runPulseCheck(args: any, allowFix: boolean): Promise<void> {
+/**
+ * A refused run, said the way the caller asked to hear it (#189208): under --json, one JSON object
+ * on stdout and exit 1 — an empty stdout with exit 1 reads to a script as "no output", not "no".
+ */
+async function refuse(args: any, message: string, extra: Record<string, unknown> = {}): Promise<void> {
+  process.exitCode = 1
+  if (args?.json) {
+    await writeJson({ success: false, error: message, ...extra })
+    return
+  }
+  console.error(message)
+}
+
+export async function runPulseCheck(args: any, allowFix: boolean): Promise<void> {
   {
-    const keyword = (args.keyword as string[]).join(" ").trim()
+    const keyword = (Array.isArray(args.keyword) ? args.keyword : [args.keyword ?? ""]).join(" ").trim()
     if (!keyword) {
-      console.error("A keyword is required, e.g. iris pulse check \"creator os\"")
-      process.exitCode = 1
-      return
+      return refuse(args, "A keyword is required, e.g. iris pulse \"creator os\"")
     }
     // Reject BEFORE filing (#182193): topicSlug() strips every non-alphanumeric
     // character, so a keyword with none (e.g. "***") collapses to the empty
@@ -192,10 +229,10 @@ async function runPulseCheck(args: any, allowFix: boolean): Promise<void> {
     // then files under the same external_id "topic:topic", colliding with and
     // overwriting any other invalid keyword's corpus entity. There is no
     // meaningful topic to score here, so refuse rather than file a collision.
-    if (!/[a-z0-9]/i.test(keyword)) {
-      console.error(`"${keyword}" has no searchable characters — nothing to sweep or file. Use a real keyword.`)
-      process.exitCode = 1
-      return
+    // #189200: and a topic of ONE character matches nearly everything — refused too.
+    const quality = topicQuality(keyword)
+    if (quality.refuse) {
+      return refuse(args, quality.refuse, { keyword })
     }
 
     const requested = args.sources
@@ -204,9 +241,7 @@ async function runPulseCheck(args: any, allowFix: boolean): Promise<void> {
 
     const unknown = requested.filter((s) => !TOPIC_SOURCES.includes(s as TopicSource))
     if (unknown.length) {
-      console.error(`Unknown source(s): ${unknown.join(", ")}. Known: ${TOPIC_SOURCES.join(", ")}`)
-      process.exitCode = 1
-      return
+      return refuse(args, `Unknown source(s): ${unknown.join(", ")}. Known: ${TOPIC_SOURCES.join(", ")}`)
     }
     // #182192: a window below 1 day isn't "narrower", it's meaningless — every
     // cutoff collapses to "now", so every source reports 0 hits and the run
@@ -214,9 +249,7 @@ async function runPulseCheck(args: any, allowFix: boolean): Promise<void> {
     // argument.
     const days = Number(args.days)
     if (!Number.isFinite(days) || days < 1) {
-      console.error(`--days must be at least 1 (got ${args.days})`)
-      process.exitCode = 1
-      return
+      return refuse(args, `--days must be at least 1 (got ${args.days})`)
     }
     const sources = requested as TopicSource[]
 
@@ -246,6 +279,8 @@ async function runPulseCheck(args: any, allowFix: boolean): Promise<void> {
         bridgeKey: getBridgeToken() ?? undefined,
         apiFetch: (path: string) => irisFetch(path),
         userId: userId ?? undefined,
+        // The session running this check is not evidence about the topic (#189155).
+        excludeSessions: currentSessionIds(),
       },
       (s) => spinner?.message(`sweeping ${SOURCE_LABEL[s]}`),
     )
@@ -311,6 +346,7 @@ async function runPulseCheck(args: any, allowFix: boolean): Promise<void> {
         push_error: pushError,
         score: scored,
         blind_spots: blindSpotsJson(sweeps, perms),
+        warnings: quality.warn ? [quality.warn] : [],
       })
       return
     }
@@ -338,6 +374,7 @@ async function runPulseCheck(args: any, allowFix: boolean): Promise<void> {
       console.log(`  ${bold("Last touched")}  ${bold(ago(newest))}   ${dim(`${totalHits} hits across ${carrying.length}/${searched.length} sources`)}`)
     }
     console.log(dim(`  ${keywordVariants(keyword).join(" · ")}   ·   ${args.days}d window`))
+    if (quality.warn) console.log(highlight(`  ⚠ ${quality.warn}`))
     console.log()
 
     for (const s of sweeps) {
@@ -350,7 +387,7 @@ async function runPulseCheck(args: any, allowFix: boolean): Promise<void> {
         continue
       }
 
-      const count = s.hits === 0 ? dim("none") : bold(String(s.hits))
+      const count = s.hits === 0 ? dim("none") : bold(`${s.hits}${s.capped ? "+" : ""}`)
       const caveat = s.unavailableReason ? dim(`  (${s.unavailableReason})`) : ""
       console.log(`  ${label} ${count}${trend(s)}${caveat}`)
 

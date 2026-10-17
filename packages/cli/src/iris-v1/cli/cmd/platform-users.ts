@@ -32,7 +32,7 @@ const UsersListCommand = cmd({
     if (args.json) { await writeJson(users); prompts.outro("Done"); return }
     printDivider()
     for (const u of users) {
-      const name = u.full_name ?? u.user_name ?? u.name ?? u.email ?? `User #${u.id}`
+      const name = u.full_name || u.name || u.user_name || u.email || `User #${u.id}`
       console.log(`  ${bold(String(name))}  ${dim(`#${u.id}`)}  ${dim(String(u.email ?? ""))}`)
     }
     printDivider()
@@ -55,7 +55,7 @@ const UsersGetCommand = cmd({
     if (args.json) { await writeJson(data); prompts.outro("Done"); return }
     printDivider()
     printKV("ID", data.id)
-    printKV("Name", data.full_name ?? data.user_name ?? data.name)
+    printKV("Name", data.full_name || data.name || data.user_name) // #189717: name before handle
     printKV("Email", data.email)
     printKV("Phone", data.phone)
     printKV("Created", data.created_at)
@@ -97,7 +97,7 @@ const UsersSearchCommand = cmd({
       prompts.log.warn(`No users matching "${args.query}"`)
     } else {
       for (const u of users) {
-        const name = u.full_name ?? u.user_name ?? u.name ?? u.email ?? `User #${u.id}`
+        const name = u.full_name || u.name || u.user_name || u.email || `User #${u.id}`
         console.log(`  ${bold(String(name))}  ${dim(`#${u.id}`)}  ${dim(String(u.email ?? ""))}`)
       }
     }
@@ -121,7 +121,7 @@ const UsersMeCommand = cmd({
     if (args.json) { await writeJson(data); prompts.outro("Done"); return }
     printDivider()
     printKV("ID", data.id)
-    printKV("Name", data.full_name ?? data.user_name ?? data.name)
+    printKV("Name", data.full_name || data.name || data.user_name) // #189717: name before handle
     printKV("Email", data.email)
     printDivider()
     prompts.outro("Done")

@@ -685,6 +685,8 @@ export async function streamAgentChat(opts: {
   conversationHistory?: Array<{ role: string; content: string }>
   maxIterations?: number
   overrideModel?: string
+  /** A spoken turn: the server answers it with the voice model (nano) unless overrideModel is set (#188701). */
+  voice?: boolean
   timeoutSecs?: number
   // Defaults to true. Set false (via `--no-rag`) to suppress knowledge-base/bloq
   // context injection so the model answers from its own weights only (#146915).
@@ -723,6 +725,7 @@ export async function streamAgentChat(opts: {
   if (opts.maxIterations) body.max_iterations = opts.maxIterations
   // Endpoint validator only accepts nano/flash models — keeps test runs cheap.
   if (opts.overrideModel) body.override_model = opts.overrideModel
+  if (opts.voice) body.voice = true
 
   const failure = (error?: string, timedOut = false): AgentChatResult => ({
     ok: false,

@@ -27,6 +27,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "fs"
 import { join, basename, relative, dirname } from "path"
 import { homedir } from "os"
 import { firstArray } from "../../util/array"
+import { runScript, scriptFor } from "../../pulse/core"
 
 export const TOPIC_SOURCES = ["git", "diary", "files", "claude_code", "opencode", "imessage", "email", "gmail", "bloq"] as const
 export type TopicSource = typeof TOPIC_SOURCES[number]
@@ -62,6 +63,12 @@ export interface SourceSweep {
   items: Hit[]
   /** Which spelling variants actually matched, for the brief. */
   matchedVariants?: string[]
+  /**
+   * The search stopped at its own ceiling, so `hits` is a FLOOR (#189203) — git's --max-count, the
+   * Atlas page size. Shown as "200+", and left out of momentum: two capped numbers compared read
+   * "flat" whatever happened.
+   */
+  capped?: boolean
   /** Set only when the keyword resolved to an Atlas board rather than to text. */
   board?: {
     id: number
@@ -96,6 +103,18 @@ export interface SweepOptions {
    */
   apiFetch?: (path: string) => Promise<Response>
   userId?: number
+  /**
+   * Session ids whose transcripts must not count (#189155): the session RUNNING the check. Its
+   * own transcript holds the keyword dozens of times — the command, its output, the discussion
+   * that led to it — so the Claude Code stop scored 47-107 "hits" that were mostly itself.
+   */
+  excludeSessions?: string[]
+}
+
+/** The agent sessions this process is running inside, from the ids their hosts export. */
+export function currentSessionIds(env: Record<string, string | undefined> = process.env): string[] {
+  const ids = [env.CLAUDE_CODE_SESSION_ID, env.OPENCODE_SESSION_ID, env.IRIS_SESSION_ID]
+  return [...new Set(ids.filter((v): v is string => typeof v === "string" && v.trim().length >= 8).map((v) => v.trim()))]
 }
 
 // ── keyword variants ────────────────────────────────────────────────────────
@@ -107,8 +126,17 @@ export interface SweepOptions {
  * context. Variants are reported back so a match on `creatoros` is not silently
  * presented as a match on the phrase.
  */
+/**
+ * Accents FOLDED, not dropped (#189202). Tokenising on [^a-z0-9] turned every accented letter
+ * into a separator — "café naïve" became "caf na ve", which matches nothing anywhere. NFKD
+ * splits "é" into "e" + a combining mark; removing the marks leaves the letter the text uses.
+ */
+export function foldKeyword(keyword: string): string {
+  return keyword.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
+}
+
 export function keywordVariants(keyword: string): string[] {
-  const base = keyword.trim().toLowerCase().replace(/\s+/g, " ")
+  const base = foldKeyword(keyword).trim().replace(/\s+/g, " ")
 
   // Tokenise on NON-ALPHANUMERICS, not on spaces. Splitting on spaces made the
   // variant set depend on how the subject happened to be punctuated: a board
@@ -169,7 +197,7 @@ export function keywordVariants(keyword: string): string[] {
  * matches every line, which is the loudest possible way to be wrong.
  */
 export function keywordPattern(keyword: string): string | null {
-  const tokens = keyword.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)
+  const tokens = foldKeyword(keyword).split(/[^a-z0-9]+/).filter(Boolean)
   if (tokens.length === 0) return null
 
   return tokens.join("[^a-z0-9\\n]{0,8}")
@@ -177,7 +205,65 @@ export function keywordPattern(keyword: string): string | null {
 
 /** The subject reduced to its tokens — one label for every spelling of it. */
 export function canonicalKeyword(keyword: string): string {
-  return keyword.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).join(" ")
+  return foldKeyword(keyword).split(/[^a-z0-9]+/).filter(Boolean).join(" ")
+}
+
+// ── G: is this a topic at all? ──────────────────────────────────────────────
+
+/** Words that occur in nearly every file, commit and message — a sweep for them measures nothing. */
+const TOO_COMMON = new Set([
+  "the", "and", "for", "you", "are", "was", "with", "this", "that", "from", "have", "not", "but",
+  "all", "any", "can", "had", "her", "his", "its", "our", "out", "one", "use", "new", "get", "set",
+  "to", "of", "in", "on", "is", "it", "at", "be", "by", "or", "as", "an", "we", "do", "if", "so",
+  "no", "up", "my", "me", "go", "id", "ok",
+])
+
+export interface TopicQuality {
+  /** Set when the topic cannot mean anything: the run is refused. */
+  refuse?: string
+  /** Set when it can run but the numbers will not mean what they look like. */
+  warn?: string
+}
+
+/**
+ * #189200. "a" swept 3,422 files and 200 commits; "the" 1,391 files and the boards whose NAMES
+ * start with "The". Both came back looking like the hottest topic in the account. A single
+ * character is refused; a stopword or a two-letter topic runs, with a warning that says so.
+ */
+export function topicQuality(keyword: string): TopicQuality {
+  const tokens = canonicalKeyword(keyword).split(" ").filter(Boolean)
+  const chars = tokens.join("").length
+  if (chars === 0) return { refuse: `"${keyword}" has no searchable characters — nothing to sweep or file. Use a real keyword.` }
+  if (chars < 2) {
+    return { refuse: `"${keyword}" is ${chars} character — it matches nearly everything, so the sweep would measure nothing. Use the word you mean.` }
+  }
+  if (tokens.every((t) => TOO_COMMON.has(t))) {
+    return { warn: `"${canonicalKeyword(keyword)}" is a common word — it matches nearly every file and message, so these counts are not about a topic.` }
+  }
+  if (chars === 2) {
+    return { warn: `"${canonicalKeyword(keyword)}" is two letters — it also matches inside other words, so expect the counts to run high.` }
+  }
+  return {}
+}
+
+// ── E: does an Atlas row actually mention the topic? ────────────────────────
+
+/**
+ * #189201. The content-items search answers with up to 100 LOOSELY matched rows: for "it s quoted"
+ * and "caf na ve" it returned 100 rows and not one contained the phrase. Count a row only when its
+ * own title, description or content does — through the same any-separator pattern every local
+ * source uses, so "Life Atlas" and "life-atlas" agree here too.
+ */
+export function rowMentions(row: any, keyword: string): boolean {
+  const pattern = keywordPattern(keyword)
+  if (pattern === null) return false
+  const re = new RegExp(pattern, "i")
+  const text = foldKeyword(
+    [row?.title, row?.description, typeof row?.content === "string" ? row.content : JSON.stringify(row?.content ?? "")]
+      .filter(Boolean)
+      .join("\n"),
+  )
+  return text.split("\n").some((line) => re.test(line))
 }
 
 /** The pattern as a JS regex, applied one LINE at a time exactly as grep does. */
@@ -215,6 +301,21 @@ function epochOf(iso: string | undefined): number | undefined {
   if (!iso) return undefined
   const t = Date.parse(iso)
   return Number.isNaN(t) ? undefined : Math.floor(t / 1000)
+}
+
+/** git log --max-count per repo and window; a repo that reaches it has more than we counted. */
+export const GIT_CAP = 200
+/** content-items page size; a variant that fills it has more than we counted. */
+export const ATLAS_PAGE = 100
+
+/** A capped count is a floor: say so, and keep it out of momentum (#189203). */
+export function markCapped(sweep: SourceSweep, capped: boolean, cap: number): SourceSweep {
+  if (!capped) return sweep
+  sweep.capped = true
+  sweep.hitsPrior = undefined
+  const note = `at least ${sweep.hits} — the search stops at ${cap}, so this is a floor and not compared with the window before`
+  sweep.unavailableReason = sweep.unavailableReason ? `${sweep.unavailableReason}; ${note}` : note
+  return sweep
 }
 
 function finish(
@@ -323,11 +424,73 @@ export function gitRepos(root: string): string[] {
 
 // ── collectors ──────────────────────────────────────────────────────────────
 
+/** True when the repo has at least one commit on any ref. */
+function hasCommits(repo: string): boolean {
+  return run("git", ["-C", repo, "rev-list", "-n", "1", "--all"]).length > 0
+}
+
+const SKIP_DIRS = new Set(["node_modules", ".git", "vendor", "dist", "build", ".cache", "storage", "tmp"])
+
+/**
+ * Independent repositories BELOW a directory (#189155). A work folder that is itself an empty
+ * repo — or no repo at all — holding the real checkouts one or two levels down read "commits: 0"
+ * on every topic, because the sweep only ever asked the folder. Bounded depth, junk dirs skipped,
+ * and worktrees of one repository counted once (they share one history): keyed by the common
+ * git dir, keeping the main checkout where there is one.
+ */
+export function nestedRepos(dir: string, maxDepth = 3, cap = 40): string[] {
+  const byCommon = new Map<string, string>()
+  const walk = (d: string, depth: number) => {
+    if (depth > maxDepth || byCommon.size >= cap) return
+    let entries: string[]
+    try {
+      entries = readdirSync(d)
+    } catch {
+      return
+    }
+    for (const name of entries) {
+      if (name.startsWith(".") || SKIP_DIRS.has(name)) continue
+      const sub = join(d, name)
+      try {
+        if (!statSync(sub).isDirectory()) continue
+      } catch {
+        continue
+      }
+      if (existsSync(join(sub, ".git"))) {
+        const common = run("git", ["-C", sub, "rev-parse", "--path-format=absolute", "--git-common-dir"])
+        if (common) {
+          const isMain = existsSync(join(sub, ".git")) && statSync(join(sub, ".git")).isDirectory()
+          const prev = byCommon.get(common)
+          if (!prev || isMain) byCommon.set(common, sub)
+        }
+        continue // a repo's own nested repos are its gitlinks — gitRepos finds those
+      }
+      walk(sub, depth + 1)
+    }
+  }
+  walk(dir, 1)
+  return [...byCommon.values()].sort()
+}
+
+/**
+ * The repos a sweep reads, and the directory names are relative to. The enclosing repo when it
+ * has history (the monorepo case); otherwise every independent repo under the folder.
+ */
+export function sweepRepos(dir: string): { root: string; repos: string[] } | null {
+  const root = resolveRepoRoot(dir)
+  if (root && hasCommits(root)) return { root, repos: gitRepos(root) }
+  const base = root ?? dir
+  const repos = nestedRepos(base).flatMap((r) => gitRepos(r)).filter((r) => hasCommits(r))
+  const unique = [...new Set(repos)]
+  return unique.length ? { root: base, repos: unique } : null
+}
+
 /** Commit subjects and bodies across every repo in the tree. */
 export function sweepGit(opts: SweepOptions): SourceSweep {
-  const root = resolveRepoRoot(opts.repo)
-  const repos = root ? gitRepos(root) : []
-  if (repos.length === 0) return unavailable("git", `${opts.repo} is not inside a git repository`)
+  const found = sweepRepos(opts.repo)
+  const root = found?.root ?? null
+  const repos = found?.repos ?? []
+  if (repos.length === 0) return unavailable("git", `${opts.repo} is not inside a git repository with commits, and holds none`)
 
   const pattern = keywordPattern(opts.keyword)
   if (pattern === null) return unavailable("git", `"${opts.keyword}" has no searchable characters`)
@@ -335,13 +498,15 @@ export function sweepGit(opts: SweepOptions): SourceSweep {
   const matched = new Set<string>([canonicalKeyword(opts.keyword)])
   const items: Hit[] = []
   const seen = new Set<string>()
+  const seenPrior = new Set<string>()
   let prior = 0
+  let capped = false
 
   const since = new Date(Date.now() - opts.windowDays * 864e5).toISOString()
   const priorSince = new Date(Date.now() - opts.windowDays * 2 * 864e5).toISOString()
 
   for (const repo of repos) {
-    const name = repo === root ? basename(repo) : relative(root!, repo)
+    const name = repo === root ? basename(repo) : relative(root!, repo) || basename(repo)
     // Deduped per repo: one commit matching three variants is one commit.
     const priorSeen = new Set<string>()
 
@@ -350,28 +515,33 @@ export function sweepGit(opts: SweepOptions): SourceSweep {
     // pattern uses a bounded interval, which basic regex would need escaped.
     const current = run("git", [
       "-C", repo, "log", "--all", "-i", "-E", `--grep=${pattern}`,
-      `--since=${since}`, `--format=%h${SEP}%aI${SEP}%s`, "--max-count=200",
+      `--since=${since}`, `--format=%H${SEP}%aI${SEP}%s`, `--max-count=${GIT_CAP}`,
     ])
 
-    for (const line of current.split("\n").filter(Boolean)) {
-      const [sha, date, subject] = line.split(SEP)
-      const where = `${name}@${sha}`
-      if (seen.has(where)) continue
-      seen.add(where)
-      items.push({ when: date, where, text: subject })
+    const currentLines = current.split("\n").filter(Boolean)
+    if (currentLines.length >= GIT_CAP) capped = true
+    for (const line of currentLines) {
+      const [full, date, subject] = line.split(SEP)
+      // One commit is one commit, however many clones of its repo sit in the folder.
+      if (seen.has(full)) continue
+      seen.add(full)
+      items.push({ when: date, where: `${name}@${full.slice(0, 7)}`, text: subject })
     }
 
     const before = run("git", [
       "-C", repo, "log", "--all", "-i", "-E", `--grep=${pattern}`,
-      `--since=${priorSince}`, `--until=${since}`, "--format=%h", "--max-count=200",
+      `--since=${priorSince}`, `--until=${since}`, "--format=%H", `--max-count=${GIT_CAP}`,
     ])
-    for (const sha of before.split("\n").filter(Boolean)) priorSeen.add(sha)
+    const beforeLines = before.split("\n").filter(Boolean)
+    if (beforeLines.length >= GIT_CAP) capped = true
+    for (const sha of beforeLines) if (!seenPrior.has(sha)) priorSeen.add(sha)
+    for (const sha of priorSeen) seenPrior.add(sha)
 
     prior += priorSeen.size
   }
 
   items.sort((a, b) => (b.when ?? "").localeCompare(a.when ?? ""))
-  return finish("git", items, prior, matched, opts.limit)
+  return markCapped(finish("git", items, prior, matched, opts.limit), capped, GIT_CAP)
 }
 
 /**
@@ -430,6 +600,96 @@ export function sweepDiary(opts: SweepOptions): SourceSweep {
   return finish("diary", items, prior, matched, opts.limit)
 }
 
+/**
+ * The diary when it lives in Atlas (#189155). The local sweep looks for a `daily-diary/` folder;
+ * where there is none it reported the source SHUT — while the diary was right there in Atlas, as a
+ * "Daily Diary" list (one item per day: title = the date, description = the entry). Boards whose
+ * name mentions a diary are read for lists whose name does; entries are dated from the title.
+ */
+export type DiaryEntry = { at: number; title: string; body: string; where: string }
+
+/**
+ * Every diary entry in Atlas since `sinceMs`: boards whose name mentions a diary, their lists whose
+ * name does, one item per day (title = the date). Shared by `pulse check` (filtered by topic) and
+ * `pulse --admin` (the recent-work digest) so the two never read different diaries (#189233).
+ * Returns null when it could not look, with why.
+ */
+export async function readAtlasDiary(
+  apiFetch: ((path: string) => Promise<Response>) | undefined,
+  userId: number | undefined,
+  sinceMs: number,
+): Promise<{ entries: DiaryEntry[]; lists: number } | { error: string }> {
+  if (!apiFetch || !userId) return { error: "not signed in to read the Atlas diary" }
+  let boards: any[]
+  try {
+    const res = await apiFetch(`/api/v1/user/${userId}/bloqs?simplified=1&per_page=500`)
+    if (!res.ok) return { error: `board list returned ${res.status}` }
+    const raw = ((await res.json()) as any)?.data
+    boards = (Array.isArray(raw) ? raw : []).filter((b: any) => /diary/i.test(String(b?.name ?? "")))
+  } catch (e: any) {
+    return { error: `could not reach Atlas: ${String(e?.message ?? e).slice(0, 120)}` }
+  }
+  const entries: DiaryEntry[] = []
+  let lists = 0
+  for (const board of boards.slice(0, 5)) {
+    let full: any
+    try {
+      const res = await apiFetch(`/api/v1/user/${userId}/bloqs/${board.id}`)
+      if (!res.ok) continue
+      const body = (await res.json()) as any
+      full = body?.data ?? body
+    } catch {
+      continue
+    }
+    for (const list of firstArray(full?.lists)) {
+      if (!/diary/i.test(String(list?.name ?? ""))) continue
+      lists++
+      for (const row of firstArray(list?.items)) {
+        const title = String(row?.title ?? "")
+        const dated = title.match(/(\d{4}-\d{2}-\d{2})/)
+        const at = dated ? Date.parse(`${dated[1]}T12:00:00Z`) : Date.parse(row?.created_at ?? "")
+        if (!Number.isFinite(at) || at < sinceMs) continue
+        entries.push({
+          at,
+          title,
+          body: String(row?.description ?? row?.content ?? ""),
+          where: `Atlas · ${String(list?.name ?? "diary")} #${row?.id}`,
+        })
+      }
+    }
+  }
+  entries.sort((x, y) => y.at - x.at)
+  return { entries, lists }
+}
+
+export async function sweepDiaryAtlas(opts: SweepOptions): Promise<SourceSweep> {
+  if (!opts.apiFetch || !opts.userId) return unavailable("diary", "no local daily-diary folder, and not signed in to read the Atlas diary")
+  const re = keywordRegex(opts.keyword)
+  if (re === null) return unavailable("diary", `"${opts.keyword}" has no searchable characters`)
+
+  const cutoff = Date.now() - opts.windowDays * 864e5
+  const priorCutoff = Date.now() - opts.windowDays * 2 * 864e5
+  const read = await readAtlasDiary(opts.apiFetch, opts.userId, priorCutoff)
+  if ("error" in read) return unavailable("diary", read.error)
+  if (read.lists === 0) return unavailable("diary", "no local daily-diary folder and no diary list in Atlas")
+
+  const items: Hit[] = []
+  let prior = 0
+  for (const e of read.entries) {
+    const line = firstMentionLine(`${e.title}\n${e.body}`, re)
+    if (line === undefined) continue
+    if (e.at < cutoff) {
+      prior++
+      continue
+    }
+    items.push({ when: new Date(e.at).toISOString(), where: e.where, text: line })
+  }
+  items.sort((a, b) => (b.when ?? "").localeCompare(a.when ?? ""))
+  const sweep = finish("diary", items, prior, new Set([canonicalKeyword(opts.keyword)]), opts.limit)
+  sweep.unavailableReason = "read from the Atlas diary (no local daily-diary folder)"
+  return sweep
+}
+
 /** The line the keyword actually appears on — context beats a leading excerpt. */
 function firstMentionLine(body: string, re: RegExp): string | undefined {
   for (const line of body.split("\n")) {
@@ -450,9 +710,10 @@ function firstMentionLine(body: string, re: RegExp): string | undefined {
  * momentum a fake baseline instead.
  */
 export function sweepFiles(opts: SweepOptions): SourceSweep {
-  const root = resolveRepoRoot(opts.repo)
-  const repos = root ? gitRepos(root) : []
-  if (repos.length === 0) return unavailable("files", `${opts.repo} is not inside a git repository`)
+  const found = sweepRepos(opts.repo)
+  const root = found?.root ?? null
+  const repos = found?.repos ?? []
+  if (repos.length === 0) return unavailable("files", `${opts.repo} is not inside a git repository with commits, and holds none`)
 
   const pattern = keywordPattern(opts.keyword)
   if (pattern === null) return unavailable("files", `"${opts.keyword}" has no searchable characters`)
@@ -481,6 +742,56 @@ export function sweepFiles(opts: SweepOptions): SourceSweep {
 }
 
 /**
+ * The oldest record a session store still holds. A store that was pruned (Claude Code removes old
+ * transcripts) cannot testify about anything before it, so a 0 there is "not measured", not "none"
+ * (#189233). Walked with fs, not `find -printf` — the CLI runs on macOS. Bounded depth.
+ */
+export function storeEarliest(root: string, ext: string, depth = 4): number | undefined {
+  let min = Infinity
+  const walk = (dir: string, d: number) => {
+    let names: string[]
+    try {
+      names = readdirSync(dir)
+    } catch {
+      return
+    }
+    for (const name of names) {
+      const full = join(dir, name)
+      let st
+      try {
+        st = statSync(full)
+      } catch {
+        continue
+      }
+      if (st.isDirectory()) {
+        if (d > 0) walk(full, d - 1)
+      } else if (name.endsWith(ext) && st.mtimeMs < min) min = st.mtimeMs
+    }
+  }
+  walk(root, depth)
+  return Number.isFinite(min) ? min : undefined
+}
+
+/** Keep a session-store sweep to what the store can actually see. */
+export function limitToStore(sweep: SourceSweep, earliest: number | undefined, opts: SweepOptions, now = Date.now()): SourceSweep {
+  if (earliest === undefined || !sweep.searched) return sweep
+  const cutoff = now - opts.windowDays * 864e5
+  const priorCutoff = now - opts.windowDays * 2 * 864e5
+  const notes: string[] = []
+  const since = new Date(earliest).toISOString().slice(0, 10)
+  if (earliest > priorCutoff) {
+    sweep.hitsPrior = undefined
+    notes.push(`its transcripts only go back to ${since}, so there is no earlier window to compare`)
+  }
+  if (earliest > cutoff) {
+    const covered = Math.max(1, Math.round((now - earliest) / 864e5))
+    notes.push(`this window covers ${covered} of ${opts.windowDays} days`)
+  }
+  if (notes.length) sweep.unavailableReason = [sweep.unavailableReason, ...notes].filter(Boolean).join("; ")
+  return sweep
+}
+
+/**
  * Claude Code transcripts.
  *
  * Dated by file mtime, which is the session's LAST activity rather than the
@@ -489,10 +800,9 @@ export function sweepFiles(opts: SweepOptions): SourceSweep {
  * the topic as touched yesterday. For "is this thread warm" that is the useful
  * direction to be wrong in, but it is not a claim about when the work happened.
  */
-export function sweepClaudeCode(opts: SweepOptions): SourceSweep {
-  const root = join(homedir(), ".claude", "projects")
+export function sweepClaudeCode(opts: SweepOptions, root = join(homedir(), ".claude", "projects")): SourceSweep {
   if (!existsSync(root)) return unavailable("claude_code", "no ~/.claude/projects session store on this machine")
-  return sweepSessionFiles("claude_code", root, ".jsonl", opts)
+  return limitToStore(sweepSessionFiles("claude_code", root, ".jsonl", opts), storeEarliest(root, ".jsonl"), opts)
 }
 
 /**
@@ -525,6 +835,7 @@ export function sweepOpencode(opts: SweepOptions): SourceSweep {
       continue
     }
     if (!sessionId) continue
+    if ((opts.excludeSessions ?? []).includes(sessionId)) continue
     const existing = sessions.get(sessionId)
     if (existing === undefined || at > existing) sessions.set(sessionId, at)
   }
@@ -548,7 +859,7 @@ export function sweepOpencode(opts: SweepOptions): SourceSweep {
   }
 
   items.sort((a, b) => (b.when ?? "").localeCompare(a.when ?? ""))
-  return finish("opencode", items, prior, matched, opts.limit)
+  return limitToStore(finish("opencode", items, prior, matched, opts.limit), storeEarliest(join(storage, "session"), ".json", 2), opts)
 }
 
 function opencodeSessionIndex(sessionRoot: string): Map<string, { title?: string; directory?: string }> {
@@ -582,8 +893,15 @@ function sweepSessionFiles(source: TopicSource, root: string, ext: string, opts:
   const priorCutoff = Date.now() - opts.windowDays * 2 * 864e5
 
   const seen = new Map<string, number>()
+  const exclude = opts.excludeSessions ?? []
+  let excluded = 0
   const out = run("grep", ["-rEil", `--include=*${ext}`, pattern, root], undefined, 60000)
   for (const file of out.split("\n").filter(Boolean)) {
+    // The session running this check — its transcript AND its subagents' (#189155).
+    if (exclude.some((id) => file.includes(id))) {
+      excluded++
+      continue
+    }
     try {
       seen.set(file, statSync(file).mtimeMs)
     } catch {}
@@ -604,7 +922,9 @@ function sweepSessionFiles(source: TopicSource, root: string, ext: string, opts:
   }
 
   items.sort((a, b) => (b.when ?? "").localeCompare(a.when ?? ""))
-  return finish(source, items, prior, matched, opts.limit)
+  const sweep = finish(source, items, prior, matched, opts.limit)
+  if (excluded) sweep.unavailableReason = `left out the session running this check (${excluded} transcript file${excluded === 1 ? "" : "s"})`
+  return sweep
 }
 
 /**
@@ -1008,6 +1328,28 @@ export async function sweepBloq(opts: SweepOptions): Promise<SourceSweep> {
     return await sweepBoard(opts, hits[0], cutoff, priorCutoff)
   }
 
+  // SEVERAL boards answer to the name (#189155). This used to say "name one exactly" and fall
+  // through to a text search that scored 0 — the person asked about a topic that plainly has
+  // boards, and was told nothing happened. Read each matching board (bounded) and merge.
+  if (hits.length > 1) {
+    const read = hits.slice(0, 6)
+    const parts = await Promise.all(read.map((b: any) => sweepBoard(opts, b, cutoff, priorCutoff)))
+    const ok = parts.filter((p) => p.searched)
+    if (ok.length) {
+      const merged = ok.flatMap((p) => p.items.map((i) => ({ ...i, where: `${p.board?.name ?? ""} · ${i.where}`.slice(0, 90) })))
+      merged.sort((a, b) => (b.when ?? "").localeCompare(a.when ?? ""))
+      const total = ok.reduce((n, p) => n + p.hits, 0)
+      const prior = ok.reduce((n, p) => n + (p.hitsPrior ?? 0), 0)
+      const sweep = finish("bloq", merged, prior, new Set([opts.keyword.toLowerCase()]), opts.limit)
+      sweep.hits = total
+      const names = ok.map((p) => `#${p.board?.id} ${p.board?.name ?? ""}`.trim())
+      sweep.unavailableReason =
+        `read ${ok.length} boards matching "${opts.keyword}": ${names.join(", ")}` +
+        (hits.length > read.length ? ` (and ${hits.length - read.length} more not read)` : "")
+      return sweep
+    }
+  }
+
   const ambiguous = hits.length > 1
     ? `"${opts.keyword}" matches ${hits.length} boards (${hits.map((b: any) => "#" + b.id).join(", ")}) — name one exactly`
     : null
@@ -1016,6 +1358,7 @@ export async function sweepBloq(opts: SweepOptions): Promise<SourceSweep> {
   const items: Hit[] = []
   const seen = new Set<string>()
   let prior = 0
+  let capped = false
 
   for (const variant of variants) {
     let rows: any[]
@@ -1024,15 +1367,21 @@ export async function sweepBloq(opts: SweepOptions): Promise<SourceSweep> {
       const res = await opts.apiFetch(`/api/v1/user/${opts.userId}/bloqs/content-items?${params}`)
       if (!res.ok) return unavailable("bloq", `item search returned ${res.status}`)
       // Same non-array guard as the board-list fetch above (#182191).
+      // The endpoint answers `data: { items: [...] }` (#189155) — reading only an array here made
+      // every text search across boards score 0. Both shapes are read; anything else is empty.
       const rawRows = ((await res.json()) as any)?.data
-      rows = Array.isArray(rawRows) ? rawRows : []
+      rows = Array.isArray(rawRows) ? rawRows : Array.isArray(rawRows?.items) ? rawRows.items : []
     } catch (e: any) {
       return unavailable("bloq", `Atlas search failed: ${String(e?.message ?? e).slice(0, 120)}`)
     }
 
+    // Capped only when a FULL page all really matched — a page of loose junk is not "more beyond".
+    if (rows.length >= ATLAS_PAGE && rows.every((r) => rowMentions(r, opts.keyword))) capped = true
     for (const row of rows) {
       const at = Date.parse(row?.updated_at ?? row?.created_at ?? "")
       if (!Number.isFinite(at) || at < priorCutoff) continue
+      // The search's own matching is loose; the row has to actually say it (#189201).
+      if (!rowMentions(row, opts.keyword)) continue
       const where = `#${row?.id} ${String(row?.list_name ?? row?.bloq_name ?? "")}`.trim().slice(0, 60)
       matched.add(variant)
       if (seen.has(where)) continue
@@ -1048,7 +1397,7 @@ export async function sweepBloq(opts: SweepOptions): Promise<SourceSweep> {
   items.sort((a, b) => (b.when ?? "").localeCompare(a.when ?? ""))
   const sweep = finish("bloq", items, prior, matched, opts.limit)
   sweep.unavailableReason = ambiguous ?? "no board by this name — searched item text across your boards instead"
-  return sweep
+  return markCapped(sweep, capped, ATLAS_PAGE)
 }
 
 /** The keyword named a board. Report the board's own vital signs. */
@@ -1191,44 +1540,20 @@ export async function sweepGmail(opts: SweepOptions): Promise<SourceSweep> {
 
 // ── orchestration ───────────────────────────────────────────────────────────
 
+/**
+ * Every requested source, in order — the default "topic" PulseScript (#189244), run through the
+ * Pulse core runner. The script lives in pulse-topic-script.ts and is imported here lazily
+ * because it imports this module's sweeps. A source that throws is isolated by the runner and
+ * reported as not searched, with why, instead of failing the whole check.
+ */
 export async function sweepAll(opts: SweepOptions, onStart?: (s: TopicSource) => void): Promise<SourceSweep[]> {
-  const wanted = new Set(opts.sources)
-  const out: SourceSweep[] = []
-
-  // Deliberately sequential. These collectors are all disk- or AppleScript-bound
-  // on one machine; running them at once makes the slowest one slower and the
-  // progress line meaningless.
-  const sync: Array<[TopicSource, () => SourceSweep]> = [
-    ["git", () => sweepGit(opts)],
-    ["diary", () => sweepDiary(opts)],
-    ["files", () => sweepFiles(opts)],
-    ["claude_code", () => sweepClaudeCode(opts)],
-    ["opencode", () => sweepOpencode(opts)],
-    ["imessage", () => sweepImessage(opts)],
-  ]
-
-  for (const [name, fn] of sync) {
-    if (!wanted.has(name)) continue
-    onStart?.(name)
-    out.push(fn())
-  }
-
-  if (wanted.has("email")) {
-    onStart?.("email")
-    out.push(await sweepEmail(opts))
-  }
-
-  if (wanted.has("gmail")) {
-    onStart?.("gmail")
-    out.push(await sweepGmail(opts))
-  }
-
-  if (wanted.has("bloq")) {
-    onStart?.("bloq")
-    out.push(await sweepBloq(opts))
-  }
-
-  return out
+  await import("./pulse-topic-script")
+  const wanted = new Set<string>(opts.sources)
+  const outcomes = await runScript(scriptFor<SweepOptions, SourceSweep>("topic"), opts, {
+    only: (stop) => wanted.has(stop.id),
+    onStart: (stop) => onStart?.(stop.id as TopicSource),
+  })
+  return outcomes.map((o) => o.output)
 }
 
 export function topicSlug(keyword: string): string {

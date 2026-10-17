@@ -395,6 +395,7 @@ export async function runVoiceChat(args: {
 
       try {
         const result = await streamAgentChat({
+          voice: true,
           agentId,
           message: text + VOICE_HINT,
           userId,

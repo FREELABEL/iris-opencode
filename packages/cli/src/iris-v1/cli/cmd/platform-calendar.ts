@@ -1354,7 +1354,7 @@ const CalendarSearchCommand = cmd({
       .option("attendees", { type: "boolean", default: true, describe: "print each event's attendees" })
       .option("to-leads", { type: "boolean", default: false, describe: "match attendees to CRM leads; preview only unless --yes" })
       .option("yes", { type: "boolean", default: false, describe: "with --to-leads: create leads for attendees not in the CRM" })
-      .option("bloq-id", { type: "number", describe: "with --to-leads --yes: bloq for new leads (default 38)" })
+      .option("bloq-id", { type: "number", describe: "with --to-leads --yes: board for new leads (required to create any)" })
       .option("json", { type: "boolean", default: false })
       .example('iris calendar search "constellation"', "find the invite, wherever it landed")
       .example('iris calendar search gate --days 7 --to-leads', "attendees not yet in the CRM"),
@@ -1480,6 +1480,10 @@ const CalendarSearchCommand = cmd({
         } catch (err: any) {
           row.error = `lookup failed: ${err?.message ?? err}`
         }
+        // #189716: no silent board — these used to land on bloq 38 (one account's board).
+        if (!row.leadId && !row.error && args.yes && args["bloq-id"] === undefined) {
+          row.error = "not created — pass --bloq-id <board> to create new leads"
+        }
         if (!row.leadId && !row.error && args.yes) {
           try {
             const res = await irisFetch("/api/v1/leads", {
@@ -1487,7 +1491,7 @@ const CalendarSearchCommand = cmd({
               body: JSON.stringify({
                 name: a.name || a.email.split("@")[0],
                 email: a.email,
-                bloqId: args["bloq-id"] ?? 38,
+                bloqId: args["bloq-id"],
                 source: "calendar",
               }),
             })

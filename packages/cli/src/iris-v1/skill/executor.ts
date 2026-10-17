@@ -200,13 +200,17 @@ const DANGEROUS_PATTERNS = [
   /\bpkill\b/,
   /\bshutdown\b/,
   /\breboot\b/,
-  /\bformat\b/,
+  // Disk formatting only. A bare /\bformat\b/ flagged `ffprobe -show_entries format=duration`
+  // and `--format css` as dangerous, so unattended playbook runs skipped them and every step
+  // after them ("needs confirmation and no one is at a terminal").
+  /\bformat\s+[a-z]:/i,
+  /\bdiskutil\s+(erase\w*|zeroDisk|randomDisk|secureErase)\b/i,
   /\bmkfs\b/,
   /\bdd\s+if=/,
   /\bchmod\s+-R\s+777\b/,
 ]
 
-function isDangerousCommand(code: string): boolean {
+export function isDangerousCommand(code: string): boolean {
   return DANGEROUS_PATTERNS.some((p) => p.test(code))
 }
 

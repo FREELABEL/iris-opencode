@@ -188,6 +188,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   download: "communication",
   transcribe: "communication",
   mail: "communication",
+  mailing: "communication",
   senders: "communication",
   imessage: "communication",
   whatsapp: "communication",
