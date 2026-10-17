@@ -356,9 +356,83 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
       },
   )
 
+  /*
+   * ASSIGNEES (#189796). Who the card is assigned to, from fl-api's /assignees (#189792). The
+   * board's members and agents are offered; anyone else can be assigned BY EMAIL, and that gives
+   * them access to the cards assigned to them — assigning ties the access (#189801 ADR-02). Only
+   * the board's owner can bring someone in this way; fl-api says so when it refuses.
+   */
+  type Assignee = { id: number; type: "user" | "agent"; userId?: number; agentId?: number; name?: string }
+  const [assignees, { mutate: setAssignees }] = createResource(
+    () => props.itemId,
+    async (id) =>
+      (await (await props.doFetch(`/iris/item/${id}/assignees`)).json()) as {
+        measured: boolean
+        reason?: string
+        assignees: Assignee[]
+      },
+  )
+  const [members] = createResource(
+    () => props.bloqId,
+    async (b) =>
+      (await (await props.doFetch(`/iris/atlas/${b}/members`)).json()) as {
+        measured: boolean
+        ownerId: number | null
+        members: { userId: number; name: string; email: string; permission: string }[]
+      },
+  )
+  const [assignNote, setAssignNote] = createSignal<{ ok: boolean; text: string } | null>(null)
+  const assignable = createMemo(() => {
+    const taken = new Set((assignees.latest?.assignees ?? []).map((a) => (a.type === "user" ? `u${a.userId}` : `a${a.agentId}`)))
+    const people = (members.latest?.members ?? []).map((m) => ({ key: `u${m.userId}`, label: m.name || m.email, userId: m.userId }))
+    const owner = members.latest?.ownerId
+    const all = [
+      ...(owner && !people.some((p) => p.userId === owner) ? [{ key: `u${owner}`, label: "Board owner", userId: owner }] : []),
+      ...people,
+      ...(agents.latest?.agents ?? []).map((a) => ({ key: `a${a.id}`, label: `${a.name} (agent)`, agentId: a.id })),
+    ]
+    return all.filter((x) => !taken.has(x.key))
+  })
+  const [assignEmail, setAssignEmail] = createSignal("")
+  async function addByEmail() {
+    const email = assignEmail().trim()
+    if (!email) return
+    setAssignNote(null)
+    const out = await post(`/iris/item/${props.itemId}/assignees`, { email })
+    if (out.ok && Array.isArray(out.assignees)) {
+      setAssignees((cur) => (cur ? { ...cur, assignees: out.assignees } : cur))
+      setAssignEmail("")
+      setAssignNote({
+        ok: true,
+        text: out.accessGranted ? `${email} can now see and work on the cards assigned to them — nothing else on this board.` : `Assigned ${email}.`,
+      })
+      props.onChanged?.()
+    } else setAssignNote({ ok: false, text: out.reason ?? "could not assign" })
+  }
+  async function addAssignee(key: string) {
+    const pick = assignable().find((x) => x.key === key)
+    if (!pick) return
+    setAssignNote(null)
+    const out = await post(`/iris/item/${props.itemId}/assignees`, "userId" in pick ? { userId: pick.userId } : { agentId: (pick as any).agentId })
+    if (out.ok && Array.isArray(out.assignees)) {
+      setAssignees((cur) => (cur ? { ...cur, assignees: out.assignees } : cur))
+      props.onChanged?.()
+    } else setAssignNote({ ok: false, text: out.reason ?? "could not assign" })
+  }
+  async function removeAssignee(a: Assignee) {
+    setAssignNote(null)
+    const out = await post(`/iris/item/${props.itemId}/assignees/${a.id}`, undefined, { method: "DELETE" })
+    if (out.ok && Array.isArray(out.assignees)) {
+      setAssignees((cur) => (cur ? { ...cur, assignees: out.assignees } : cur))
+      if (out.accessRemoved) setAssignNote({ ok: true, text: `${a.name ?? "They"} no longer have access to this board — that was their last card.` })
+      props.onChanged?.()
+    } else setAssignNote({ ok: false, text: out.reason ?? "could not unassign" })
+  }
+
   const [side, setSide] = createSignal<SideTab>("details")
   createEffect(() => {
-    if (side() === "tasks" || side() === "chat") setWantAgents(true)
+    // Details lists agents too: they are assignable (#189796).
+    if (side() === "tasks" || side() === "chat" || side() === "details") setWantAgents(true)
   })
 
   // ── Details ─────────────────────────────────────────────────────────────
@@ -735,6 +809,9 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
 
   // ── Tasks ───────────────────────────────────────────────────────────────
   const [newTask, setNewTask] = createSignal("")
+  /** Adding UNDER this item makes a subtask (#189794); fl-api rolls completion up the chain. */
+  const [addParent, setAddParent] = createSignal<CardTask | null>(null)
+  const [newDue, setNewDue] = createSignal("")
   const [newAgent, setNewAgent] = createSignal("")
   const [taskNote, setTaskNote] = createSignal<{ ok: boolean; text: string } | null>(null)
   const [busyTask, setBusyTask] = createSignal<number | null>(null)
@@ -749,10 +826,12 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
     setAdding(true)
     setTaskNote(null)
     const agentId = newAgent() ? Number(newAgent()) : undefined
-    const out = await post(`/iris/item/${d.id}/tasks`, { title, agentId })
+    const parentId = addParent()?.id
+    const out = await post(`/iris/item/${d.id}/tasks`, { title, agentId, parentId, dueDate: newDue() || undefined })
     if (out.ok) {
       setNewTask("")
       setNewAgent("")
+      setNewDue("")
       // Re-read rather than append: fl-api's create reply carries the agent id but not its
       // name, and a row that says "agent 701" beside rows that say "XArt Chief of Staff" is
       // the same list drawn two ways.
@@ -1003,7 +1082,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                       [
                         ["details", "Details", undefined],
                         ["sharing", "Sharing", undefined],
-                        ["tasks", "Tasks", doc.latest!.tasksMeasured ? openTasks() : undefined],
+                        ["tasks", "Checklist", doc.latest!.tasksMeasured ? openTasks() : undefined],
                         ["chat", "Chat", undefined],
                       ] as [SideTab, string, number | undefined][]
                     }
@@ -1030,6 +1109,61 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                   <Switch>
                     {/* ───────────── DETAILS ───────────── */}
                     <Match when={side() === "details"}>
+                      <div class="iris-field">
+                        <span class="iris-field__label">Assigned</span>
+                        <div class="iris-card__assignees">
+                          <Show when={assignees.latest && !assignees.latest.measured}>
+                            <span class="text-11-regular text-text-weak">Not available — {assignees.latest!.reason}</span>
+                          </Show>
+                          <For each={assignees.latest?.assignees ?? []}>
+                            {(a) => (
+                              <span class="iris-card__chip iris-card__assignee">
+                                {a.name ?? (a.type === "agent" ? "agent" : "member")}
+                                {a.type === "agent" ? " · agent" : ""}
+                                <button type="button" class="iris-card__x" title="Unassign" onClick={() => void removeAssignee(a)}>
+                                  ×
+                                </button>
+                              </span>
+                            )}
+                          </For>
+                          <Show when={assignees.latest?.measured && assignable().length > 0}>
+                            <select
+                              class="iris-field__input iris-card__assignpick"
+                              aria-label="Assign someone"
+                              value=""
+                              onChange={(e) => {
+                                const v = e.currentTarget.value
+                                e.currentTarget.value = ""
+                                if (v) void addAssignee(v)
+                              }}
+                            >
+                              <option value="">+ Assign…</option>
+                              <For each={assignable()}>{(x) => <option value={x.key}>{x.label}</option>}</For>
+                            </select>
+                          </Show>
+                          <Show when={assignees.latest?.measured}>
+                            <form
+                              class="iris-card__assignmail"
+                              onSubmit={(e) => {
+                                e.preventDefault()
+                                void addByEmail()
+                              }}
+                            >
+                              <input
+                                class="iris-field__input"
+                                type="email"
+                                placeholder="or assign by email"
+                                aria-label="Assign by email"
+                                title="Someone not on this board gets access to the cards assigned to them, and nothing else"
+                                value={assignEmail()}
+                                onInput={(e) => setAssignEmail(e.currentTarget.value)}
+                              />
+                            </form>
+                          </Show>
+                        </div>
+                        <NoteLine note={assignNote()} />
+                      </div>
+
                       <label class="iris-field">
                         <span class="iris-field__label">Status</span>
                         <select class="iris-field__input" value={form()?.status ?? ""} onChange={(e) => set("status", e.currentTarget.value)}>
@@ -1447,8 +1581,24 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                         when={doc.latest!.tasksMeasured}
                         fallback={<p class="text-12-regular text-text-weak">Could not read tasks — {doc.latest!.tasksReason ?? "unknown"}.</p>}
                       >
-                        <Show when={doc.latest!.tasks.length === 0}>
-                          <p class="text-12-regular text-text-weak pb-2">No tasks on this card.</p>
+                        <Show
+                          when={doc.latest!.tasks.length > 0}
+                          fallback={<p class="text-12-regular text-text-weak pb-2">No checklist yet. Add the first step below.</p>}
+                        >
+                          {(() => {
+                            const done = () => doc.latest!.tasks.filter((t) => t.done).length
+                            const total = () => doc.latest!.tasks.length
+                            return (
+                              <div class="iris-card__progress" title={`${done()} of ${total()} done`}>
+                                <span class="font-mono tabular-nums text-11-regular text-text-weak">
+                                  {Math.round((done() / total()) * 100)}%
+                                </span>
+                                <span class="iris-card__progressbar">
+                                  <span style={{ width: `${(done() / total()) * 100}%` }} />
+                                </span>
+                              </div>
+                            )
+                          })()}
                         </Show>
                         <ul class="iris-card__tasks">
                           <For each={doc.latest!.tasks}>
@@ -1474,6 +1624,17 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                                 <button
                                   type="button"
                                   class="iris-card__x"
+                                  title="Add a subtask under this"
+                                  onClick={() => {
+                                    setAddParent(t)
+                                    queueMicrotask(() => document.querySelector<HTMLInputElement>(".iris-card__addtask input")?.focus())
+                                  }}
+                                >
+                                  +
+                                </button>
+                                <button
+                                  type="button"
+                                  class="iris-card__x"
                                   classList={{ "iris-card__x--armed": armed() === t.id }}
                                   disabled={busyTask() === t.id}
                                   title={armed() === t.id ? "Click again to delete" : "Delete task"}
@@ -1494,7 +1655,31 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                           void addTask()
                         }}
                       >
-                        <input class="iris-field__input" placeholder="Add a task…" aria-label="New task" value={newTask()} onInput={(e) => setNewTask(e.currentTarget.value)} />
+                        <Show when={addParent()}>
+                          {(p) => (
+                            <span class="iris-card__chip iris-card__under">
+                              under “{p().title}”
+                              <button type="button" class="iris-card__x" title="Add at the top level instead" onClick={() => setAddParent(null)}>
+                                ×
+                              </button>
+                            </span>
+                          )}
+                        </Show>
+                        <input
+                          class="iris-field__input"
+                          placeholder={addParent() ? "Add a subtask…" : "Add a checklist item…"}
+                          aria-label="New checklist item"
+                          value={newTask()}
+                          onInput={(e) => setNewTask(e.currentTarget.value)}
+                        />
+                        <input
+                          class="iris-field__input iris-card__due"
+                          type="date"
+                          aria-label="Due date"
+                          title="Due date (optional)"
+                          value={newDue()}
+                          onInput={(e) => setNewDue(e.currentTarget.value)}
+                        />
                         <select class="iris-field__input" aria-label="Assign to agent" value={newAgent()} onChange={(e) => setNewAgent(e.currentTarget.value)}>
                           <option value="">No agent</option>
                           <For each={agents.latest?.agents ?? []}>{(a) => <option value={String(a.id)}>{a.name}</option>}</For>

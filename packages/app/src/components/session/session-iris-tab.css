@@ -795,8 +795,25 @@
 
 /* LIVE (#189767). The promise a live board makes has to be visible: a dot that breathes while
    the board is being watched, and goes quiet when it is not. */
-.iris-atlas-live {
+.iris-atlas-members {
   margin-inline-start: auto;
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  color: var(--text-weak);
+  background: none;
+  border: 1px solid var(--border-weaker-base);
+  border-radius: 5px;
+  padding: 1px 8px 1px 4px;
+  cursor: pointer;
+}
+.iris-atlas-members:hover {
+  color: var(--text-base);
+  background: var(--background-element);
+}
+.iris-atlas-live {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -1484,12 +1501,17 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
 }
 .iris-card__x:hover { color: var(--text-strong); background: var(--background-element); }
 .iris-card__x--armed { color: #f0836a; font-size: 10px; }
+/* The title gets its own line; due date, agent and Add share the next (#189794). */
 .iris-card__addtask {
   display: grid;
   grid-template-columns: 1fr auto auto;
   gap: 6px;
   align-items: center;
   padding-top: 10px;
+}
+.iris-card__addtask > input:not([type="date"]),
+.iris-card__addtask > .iris-card__under {
+  grid-column: 1 / -1;
 }
 .iris-card__addtask select.iris-field__input { max-width: 120px; }
 
@@ -2303,4 +2325,174 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
       border-color 0.12s,
       opacity 0.12s;
   }
+}
+
+/* Card faces (#189806) — the same badges in List and Board view. */
+.iris-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 3px;
+}
+.iris-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10.5px;
+  line-height: 16px;
+  padding: 0 6px;
+  border-radius: 4px;
+  color: var(--text-weak);
+  background: var(--background-element);
+  border: 1px solid var(--border-weaker-base);
+  white-space: nowrap;
+}
+.iris-badge--label {
+  color: var(--text-base);
+}
+.iris-badge--loud {
+  color: var(--text-strong);
+  border-color: var(--border-weak-base);
+  font-weight: 600;
+}
+.iris-badge--due[data-due="overdue"] {
+  color: var(--text-on-critical-weak);
+  background: var(--surface-critical-weak);
+  border-color: var(--border-critical-base);
+}
+.iris-badge--due[data-due="soon"] {
+  color: var(--text-on-warning-weak);
+  background: var(--surface-warning-weak);
+  border-color: var(--border-warning-base);
+}
+.iris-badge--complete {
+  color: var(--text-on-success-strong, #fff);
+  background: var(--surface-success-strong);
+  border-color: transparent;
+}
+.iris-avatars {
+  display: inline-flex;
+  margin-inline-start: 2px;
+}
+.iris-avatar {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-strong);
+  background: var(--background-element);
+  border: 1.5px solid var(--background-base);
+  margin-inline-start: -4px;
+}
+.iris-avatar:first-child {
+  margin-inline-start: 0;
+}
+.iris-avatar--agent {
+  border-radius: 5px;
+  color: var(--text-interactive-base);
+}
+.iris-avatar--more {
+  color: var(--text-weak);
+}
+
+/* Card editor: checklist progress (#189794) and assignees (#189796). */
+.iris-card__progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 8px;
+}
+.iris-card__progressbar {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--background-element);
+  overflow: hidden;
+}
+.iris-card__progressbar > span {
+  display: block;
+  height: 100%;
+  background: var(--surface-success-strong);
+  transition: width 0.2s ease;
+}
+.iris-card__under {
+  flex-basis: 100%;
+}
+.iris-card__due {
+  max-width: 140px;
+}
+.iris-card__assignees {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.iris-card__assignee {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.iris-card__assignpick {
+  width: auto;
+  min-width: 140px;
+}
+
+/* Board members (#189795). */
+.iris-members {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 420px;
+}
+.iris-members__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.iris-members__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.iris-members__row .iris-avatar {
+  width: 24px;
+  height: 24px;
+  font-size: 9.5px;
+  margin: 0;
+}
+.iris-members__who {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-base);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.iris-members__perm {
+  width: auto;
+}
+.iris-members__invite {
+  display: flex;
+  gap: 6px;
+}
+.iris-members__invite input {
+  flex: 1;
+}
+
+.iris-card__assignmail {
+  flex: 1 1 160px;
+  min-width: 140px;
+}
+.iris-card__assignmail input {
+  width: 100%;
 }

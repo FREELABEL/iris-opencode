@@ -6,6 +6,9 @@ import {
   atlasDropPosition,
   cardPreview,
   changedItemIds,
+  dueLabel,
+  dueState,
+  initials,
   editedSince,
   isDone,
   keepUnchanged,
@@ -228,5 +231,33 @@ describe("board view — moving a card (#189723)", () => {
     expect(readAtlasLayout("board")).toBe("board")
     expect(readAtlasLayout("kanban")).toBe("list")
     expect(readAtlasLayout(null)).toBe("list")
+  })
+})
+
+describe("card face: due dates and avatars (#189806)", () => {
+  const NOW = Date.parse("2026-10-17T09:00:00")
+  test("a date-only due date is the end of that day", () => {
+    expect(dueState("2026-10-17", NOW)).toBe("soon")
+    expect(dueState("2026-10-16", NOW)).toBe("overdue")
+    expect(dueState("2026-10-18", NOW)).toBe("soon")
+    expect(dueState("2026-10-25", NOW)).toBe("later")
+    expect(dueState(undefined, NOW)).toBeUndefined()
+    expect(dueState("not a date", NOW)).toBeUndefined()
+  })
+  test("fl-api's midnight-UTC due date is the date it names, not the evening before", () => {
+    expect(dueState("2026-10-17T00:00:00.000000Z", NOW)).toBe("soon")
+    expect(dueLabel("2026-10-18T00:00:00.000000Z", NOW)).toBe("Tomorrow")
+    expect(dueState("2026-10-16T00:00:00.000000Z", NOW)).toBe("overdue")
+  })
+  test("labels read like a person would say them", () => {
+    expect(dueLabel("2026-10-17", NOW)).toBe("Today")
+    expect(dueLabel("2026-10-18", NOW)).toBe("Tomorrow")
+    expect(dueLabel("2026-10-16", NOW)).toBe("Yesterday")
+  })
+  test("initials", () => {
+    expect(initials("Ana Pérez")).toBe("AP")
+    expect(initials("elon")).toBe("EL")
+    expect(initials("alex@freelabel.net")).toBe("AN")
+    expect(initials(undefined)).toBe("?")
   })
 })

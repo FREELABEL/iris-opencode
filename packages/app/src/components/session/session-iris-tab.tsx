@@ -70,6 +70,7 @@ import {
   editedSince,
   isDefaultView,
   isDone,
+  initials,
   keepUnchanged,
   moveAtlasItem,
   readAtlasLayout,
@@ -80,6 +81,8 @@ import {
   type AtlasViewOptions,
 } from "./iris-atlas-view"
 import { liveLabel, readSse, type LiveState } from "./iris-atlas-live"
+import { CardBadges, type CardFace } from "./iris-card-badges"
+import { IrisBoardMembers, readMembers } from "./iris-board-members"
 import { filterRecords, sortRecords, toCsv, type SortDir } from "./iris-records-view"
 
 // Re-exported: the panel tests assert on these, and they were defined here before the card
@@ -101,7 +104,7 @@ export { itemCommands, renderMarkdown }
  * server sends `measured` for this reason; throwing it away here would put the bug back.
  */
 
-interface AtlasItem {
+interface AtlasItem extends CardFace {
   id: number
   title: string
   type?: string
@@ -1691,6 +1694,12 @@ export function SessionIrisTab() {
     }
   }
 
+  /** The board's people, for the toolbar's Members button (#189795). */
+  const [boardMembers, { refetch: refetchMembers }] = createResource(
+    () => (pane() === "atlas" && activeBloq() != null ? Number(activeBloq()) : undefined),
+    (b) => readMembers(doFetch, b),
+  )
+
   const [copiedId, setCopiedId] = createSignal<number | undefined>()
   const copyItemId = (id: number) => {
     void navigator.clipboard?.writeText(`#${id}`).catch(() => {})
@@ -2768,6 +2777,37 @@ export function SessionIrisTab() {
               reset
             </button>
           </Show>
+          <button
+            type="button"
+            class="iris-atlas-members"
+            title="Members — who is on this board"
+            onClick={() => {
+              const b = activeBloq()
+              if (b == null) return
+              dialog.show(() => (
+                <IrisBoardMembers
+                  bloqId={Number(b)}
+                  boardName={activeBloqName()}
+                  doFetch={doFetch}
+                  onChanged={() => void refetchMembers()}
+                />
+              ))
+            }}
+          >
+            <span class="iris-avatars">
+              <For each={(boardMembers.latest?.members ?? []).slice(0, 3)}>
+                {(m) => <span class="iris-avatar">{initials(m.name || m.email)}</span>}
+              </For>
+            </span>
+            <span>
+              {boardMembers.latest?.measured
+                ? (() => {
+                    const n = boardMembers.latest!.members.length + 1
+                    return `${n} ${n === 1 ? "member" : "members"}`
+                  })()
+                : "Members"}
+            </span>
+          </button>
           <span
             class="iris-atlas-live"
             data-state={liveState()}
@@ -3620,6 +3660,7 @@ export function SessionIrisTab() {
                                   }}
                                 >
                                   <span class="text-12-regular text-text-base">{item.title}</span>
+                                  <CardBadges item={item} now={now()} />
                                   <span class="iris-board__meta">
                                     <Show when={isDone(item.status)}>
                                       <span>✓ done</span>
@@ -3723,6 +3764,7 @@ export function SessionIrisTab() {
                                   <Show when={preview()}>
                                     <span class="iris-atlas-row__preview">{preview()}</span>
                                   </Show>
+                                  <CardBadges item={item} now={now()} />
                                 </span>
                                 <Show when={liveIds().has(item.id) || awayIds().has(item.id)}>
                                   <span class="iris-atlas-row__changed" title="Changed since you last looked" />
