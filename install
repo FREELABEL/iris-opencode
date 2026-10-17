@@ -538,7 +538,7 @@ else
         #
         # Ask for the newest release in THIS series instead. The `"v[0-9]` anchor is what
         # excludes desktop-v*: after `"tag_name": "` that tag begins with `d`, not `v`.
-        specific_version=$(curl -s "https://api.github.com/repos/FREELABEL/iris-opencode/releases?per_page=30" \
+        specific_version=$(curl -s "https://api.github.com/repos/FREELABEL/iris-opencode/releases?per_page=100" \
             | sed -n 's/.*"tag_name": *"v\([0-9][^"]*\)".*/\1/p' | head -1) || true
 
         if [[ -z "$specific_version" ]]; then

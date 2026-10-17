@@ -138,7 +138,7 @@ if ($RequestedVersion) {
     # So: enumerate releases, keep bare vX.Y.Z tags (desktop-v* are excluded by the anchor),
     # skip drafts, and take the newest one that actually HAS this platform's asset.
     try {
-        $Releases = Invoke-RestMethod -Uri "https://api.github.com/repos/FREELABEL/iris-opencode/releases?per_page=30" -UseBasicParsing -ErrorAction Stop
+        $Releases = Invoke-RestMethod -Uri "https://api.github.com/repos/FREELABEL/iris-opencode/releases?per_page=100" -UseBasicParsing -ErrorAction Stop
         $Chosen = $null
         foreach ($r in $Releases) {
             if ($r.draft) { continue }
