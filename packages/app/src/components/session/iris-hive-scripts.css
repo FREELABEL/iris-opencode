@@ -7,7 +7,7 @@
  * Numbers are mono. Words live in tooltips; icons carry the meaning.
  */
 /* Tokens are shared with Hive › Machines (.hmc). */
-.hsc, .hmc {
+.hsc, .hmc, .hfd {
   --hsc-surface: #131312;
   --hsc-surface: light-dark(#f6f5f1, #131312);
   --hsc-card: #1b1b19;

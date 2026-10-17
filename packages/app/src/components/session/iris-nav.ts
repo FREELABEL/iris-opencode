@@ -67,3 +67,29 @@ export const irisHiveNodeFocus = hiveNodeFocus
 export function focusHiveNode(id: string | null) {
   setHiveNodeFocus(id ? { id, nonce: Date.now() + Math.random() } : null)
 }
+
+/**
+ * Open the side panel on an IRIS surface from OUTSIDE a session — the titlebar's machines and
+ * inbox dialogs (#189763). The titlebar has no session layout of its own (it renders above the
+ * session providers), so it asks; the session page, which owns the panel and its tabs, answers.
+ */
+const [panelRequest, setPanelRequest] = createSignal<{ surface: string; sub?: string; nonce: number } | null>(null)
+
+export const irisPanelRequest = panelRequest
+
+export function requestIrisPanel(surface: string, sub?: string) {
+  setPanelRequest({ surface, sub, nonce: Date.now() + Math.random() })
+}
+
+export function clearIrisPanel() {
+  setPanelRequest(null)
+}
+
+/** Hive › Machines: the computer to select when the pane opens (a dialog's "Details →"). */
+const [machineFocus, setMachineFocus] = createSignal<{ id: string; nonce: number } | null>(null)
+
+export const irisMachineFocus = machineFocus
+
+export function focusHiveMachine(id: string | null) {
+  setMachineFocus(id ? { id, nonce: Date.now() + Math.random() } : null)
+}

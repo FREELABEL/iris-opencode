@@ -1331,6 +1331,9 @@ export const IrisPaths = {
   hiveMarketInstall: `${root}/hive/market/:slug/install`,
   hiveTask: `${root}/hive/tasks/:taskID`,
   hiveTaskDecide: `${root}/hive/tasks/:taskID/:decision`,
+  hiveLocal: `${root}/hive/local`,
+  hiveLocalRestart: `${root}/hive/local/restart`,
+  inboxOpen: `${root}/inbox/:index/open`,
   allowance: `${root}/allowance`,
   plan: `${root}/plan`,
   me: `${root}/me`,
@@ -2864,6 +2867,71 @@ export const IrisApi = HttpApi.make("iris").add(
           "Approve or reject a run Constellation Gate held (approve answers with the NEW task to follow), or cancel/stop any run of yours.",
         ),
       }).annotateMerge(OpenApi.annotations({ identifier: "iris.hiveTaskDecide", summary: "Approve or reject a held Hive run" })),
+      HttpApiEndpoint.get("hiveLocal", IrisPaths.hiveLocal, {
+        success: described(
+          Schema.Struct({
+            ...Measured,
+            daemon: Schema.Struct({
+              supported: Schema.Boolean,
+              nodeId: Schema.NullOr(Schema.String),
+              running: Schema.Boolean,
+              pid: Schema.NullOr(Schema.Finite),
+              program: Schema.NullOr(Schema.String),
+              programOk: Schema.NullOr(Schema.Boolean),
+              version: Schema.NullOr(Schema.String),
+              behind: Schema.NullOr(Schema.Finite),
+              fetchedAt: Schema.NullOr(Schema.String),
+              localEdits: Schema.NullOr(Schema.Finite),
+            }).annotate({ identifier: "IrisLocalDaemon" }),
+          }).annotate({ identifier: "IrisHiveLocalResponse" }),
+          "This computer's Hive daemon: running, which commit, how far behind, and whether launchd runs it from ~/.iris",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.hiveLocal",
+          summary: "This computer's Hive daemon",
+          description:
+            "Read from this machine, not the hub: the hub only knows what the daemon last reported, and a daemon far behind or loaded from a temporary folder still heartbeats (#189763).",
+        }),
+      ),
+      HttpApiEndpoint.post("hiveLocalRestart", IrisPaths.hiveLocalRestart, {
+        success: described(
+          Schema.Struct({
+            ...Measured,
+            before: Schema.NullOr(Schema.Finite),
+            after: Schema.NullOr(Schema.Finite),
+            repaired: Schema.Boolean,
+          }).annotate({ identifier: "IrisHiveLocalRestart" }),
+          "Old and new PID — the restart counts only when a new process exists. `repaired` = the launch agent was re-loaded from ~/Library/LaunchAgents",
+        ),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.hiveLocalRestart", summary: "Restart this computer's Hive daemon" })),
+      HttpApiEndpoint.post("inboxOpen", IrisPaths.inboxOpen, {
+        params: { index: Schema.NumberFromString },
+        success: described(
+          Schema.Struct({
+            ...Measured,
+            message: Schema.NullOr(
+              Schema.Struct({
+                index: Schema.Finite,
+                type: Schema.String,
+                from: Schema.String,
+                receivedAt: Schema.optional(Schema.String),
+                body: Schema.NullOr(Schema.String),
+                url: Schema.NullOr(Schema.String),
+                file: Schema.NullOr(Schema.String),
+                size: Schema.NullOr(Schema.Finite),
+                burned: Schema.Boolean,
+              }).annotate({ identifier: "IrisInboxMessage" }),
+            ),
+          }).annotate({ identifier: "IrisInboxOpenResponse" }),
+          "The message, now marked read — or deleted after this answer when it was burn-after-reading",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.inboxOpen",
+          summary: "Open a Hive inbox message (iris hive inbox read <n>)",
+        }),
+      ),
       HttpApiEndpoint.get("hiveTask", IrisPaths.hiveTask, {
         params: { taskID: Schema.String },
         success: described(HiveTaskResponse, "A Hive task's stage timestamps, output and exit"),

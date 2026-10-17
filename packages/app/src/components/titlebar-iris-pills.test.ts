@@ -90,3 +90,16 @@ describe("planBadge", () => {
     )
   })
 })
+
+describe("fleet pill counts computers (#189763)", () => {
+  test("one Mac registered three times is one computer — the pill and its dialog agree", () => {
+    const mac = { os: "darwin", cores: 10, memoryGb: 16, diskTotalGb: 460, lastHeartbeat: null }
+    const nodes = [
+      { id: "a", name: "MacBook", online: true, ...mac },
+      { id: "b", name: "MacBook", online: false, ...mac },
+      { id: "c", name: "MacBook", online: false, ...mac },
+      { id: "d", name: "iris-hive-001", online: true, os: "linux", cores: 4, memoryGb: 8, diskTotalGb: 1800, lastHeartbeat: null },
+    ]
+    expect(fleetLabel({ measured: true, nodes })).toBe("2/2")
+  })
+})

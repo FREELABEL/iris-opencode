@@ -1,0 +1,64 @@
+/*
+ * The machines and inbox dialogs (#189763). Same tokens and roles as Hive › Machines / Scripts
+ * (.hsc in iris-hive-scripts.css): sage = online, amber = needs you, coral = critical,
+ * jade = the action. Numbers are mono.
+ */
+.hfd { color: var(--hsc-ink); font-size: 13px; }
+.hfd *, .hfd *::before, .hfd *::after { box-sizing: border-box; }
+.hfd code { font-family: var(--hsc-mono-font); font-size: 12px; }
+.hfd-faint { color: var(--hsc-faint); }
+.hfd-warn { color: var(--hsc-amber); margin: 0 0 10px; }
+.hfd-said { color: var(--hsc-ink2); font-size: 12px; }
+.hfd-foot { display: flex; align-items: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+
+.hfd-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--hsc-rule); }
+.hfd-dot.on { background: var(--hsc-sage); }
+
+.hfd-link {
+  all: unset; cursor: pointer; color: var(--hsc-jade); font-size: 12px; white-space: nowrap;
+}
+.hfd-link:hover { text-decoration: underline; }
+.hfd-link:disabled { color: var(--hsc-faint); cursor: default; text-decoration: none; }
+.hfd-link:focus-visible, .hfd button:focus-visible { outline: 2px solid var(--hsc-jade); outline-offset: 2px; border-radius: 4px; }
+
+/* machines */
+.hfd-cards { list-style: none; margin: 0; padding: 0 2px 0 0; display: grid; gap: 10px; max-height: min(calc(100vh - 360px), 520px); overflow-y: auto; }
+.hfd-card { border: 1px solid var(--hsc-rule); border-radius: 10px; padding: 11px 13px; background: var(--hsc-card); }
+.hfd-card.is-away { opacity: 0.72; }
+.hfd-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.hfd-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.hfd-tag {
+  font-size: 10.5px; padding: 1px 7px; border-radius: 999px; color: var(--hsc-jade);
+  border: 1px solid color-mix(in srgb, var(--hsc-jade) 45%, transparent); white-space: nowrap;
+}
+.hfd-status { margin: 4px 0 0 16px; color: var(--hsc-ink2); font-size: 12px; }
+.hfd-status[data-tone="free"] { color: var(--hsc-sage); }
+.hfd-notes { list-style: none; margin: 9px 0 0 16px; padding: 0; display: grid; gap: 8px; }
+.hfd-notes li { display: flex; align-items: center; gap: 12px; justify-content: space-between; }
+.hfd-notes li > div { display: grid; gap: 2px; min-width: 0; }
+.hfd-note { font-weight: 500; }
+.hfd-notes li[data-level="crit"] .hfd-note { color: var(--hsc-coral); }
+.hfd-notes li[data-level="warn"] .hfd-note { color: var(--hsc-amber); }
+.hfd-notes li[data-level="info"] .hfd-note { color: var(--hsc-ink2); }
+.hfd-fix { color: var(--hsc-faint); font-size: 12px; line-height: 1.4; }
+.hfd-quiet { margin: 8px 0 0 16px; }
+
+/* inbox */
+.hfd-inbox { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: min(calc(100vh - 360px), 520px); overflow-y: auto; }
+.hfd-inbox button {
+  all: unset; box-sizing: border-box; cursor: pointer; display: flex; align-items: flex-start; gap: 10px; width: 100%;
+  padding: 9px 11px; border-radius: 8px; border: 1px solid transparent;
+}
+.hfd-inbox button:hover { background: var(--hsc-card); border-color: var(--hsc-rule); }
+.hfd-inbox button .hfd-dot { margin-top: 5px; }
+.hfd-inbox button .hfd-dot.on { background: var(--hsc-jade); }
+.hfd-msg { display: grid; gap: 2px; min-width: 0; flex: 1; }
+.hfd-msg-top { display: flex; align-items: baseline; gap: 4px; min-width: 0; }
+.hfd-msg-label { color: var(--hsc-ink2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hfd-inbox button.unread .hfd-msg-label { color: var(--hsc-ink); }
+.hfd-open { display: grid; gap: 10px; }
+.hfd-body {
+  margin: 0; padding: 12px 14px; border-radius: 8px; background: var(--hsc-term); border: 1px solid var(--hsc-rule);
+  font-family: var(--hsc-mono-font); font-size: 12.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+  max-height: min(50vh, 420px); overflow-y: auto;
+}

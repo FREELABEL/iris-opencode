@@ -388,9 +388,19 @@ export function SessionSidePanel(props: {
     previewTab(SESSION_OPEN_FILE_TAB)
     queueMicrotask(() => fileFilter?.focus())
   }
+  let lastStripInput = 0
+  const markStripInput = () => {
+    lastStripInput = Date.now()
+  }
   const activateTab = (value: string) => {
     // A product tab: the IRIS panel, on that product. "iris" itself is never shown as a tab.
     if (value.startsWith("iris:")) return openIrisSurface(value.slice(5))
+    // Leaving the IRIS tab is a person's choice, never the strip's (#189763). Opened from closed,
+    // the strip "corrects" its selection to Files when that trigger appears (once the git changes
+    // load, 1.3–2.8 s later — traced in a browser, 2026-10-17), which threw away every
+    // programmatic open: a chat card's, the machines dialog's "Details →". Only a click or key
+    // on the strip in the last second counts.
+    if (activeTab() === "iris" && Date.now() - lastStripInput > 1000) return
     const next = normalizeTab(value)
     const path = file.pathFromTab(next)
     if (path) void file.load(path)
@@ -534,7 +544,7 @@ export function SessionSidePanel(props: {
                         <DragDropSensors />
                         <ConstrainDragYAxis />
                         <Tabs value={stripValue()} onChange={activateTab}>
-                          <div class="sticky top-0 shrink-0 flex">
+                          <div class="sticky top-0 shrink-0 flex" onPointerDown={markStripInput} onKeyDown={markStripInput}>
                             <Tabs.List
                               class="min-w-0 flex-1"
                               ref={(el: HTMLDivElement) => {
@@ -788,7 +798,7 @@ export function SessionSidePanel(props: {
                       }}
                     >
                       <Tabs value={stripValue()} onChange={activateTab}>
-                        <div class="session-review-v2-tabs-bar sticky top-0 shrink-0 flex items-center">
+                        <div class="session-review-v2-tabs-bar sticky top-0 shrink-0 flex items-center" onPointerDown={markStripInput} onKeyDown={markStripInput}>
                           <Tabs.List
                             ref={(el: HTMLDivElement) => {
                               tabList = el

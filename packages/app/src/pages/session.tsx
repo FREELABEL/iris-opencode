@@ -62,6 +62,7 @@ import { TerminalProvider, useTerminal } from "@/context/terminal"
 import { PromptInput } from "@/components/prompt-input"
 import { PromptInputV2Composer, usePromptInputV2Controller } from "@/components/prompt-input-v2"
 import { irisFilesPinned, requestIrisSurface } from "@/components/session/session-iris-tab"
+import { clearIrisPanel, irisPanelRequest } from "@/components/session/iris-nav"
 import { useSettingsCommand } from "@/components/settings-dialog"
 import { setCursorPosition } from "@/components/prompt-input/editor-dom"
 import { promptLength } from "@/components/prompt-input/history"
@@ -373,6 +374,18 @@ export default function Page() {
   const location = useLocation()
   const navigate = useNavigate()
   const { params, sessionKey, workspaceKey, tabs, view } = useSessionLayout()
+  // The titlebar's machines/inbox dialogs (#189763) ask for the side panel on Hive; only this page
+  // owns the panel and its tabs. Same three steps as onIntegrations below, in the same order.
+  createEffect(() => {
+    const req = irisPanelRequest()
+    if (!req) return
+    clearIrisPanel()
+    requestIrisSurface(req.surface, req.sub)
+    view().reviewPanel.open("other")
+    if (layout.fileTree.opened() && layout.fileTree.tab() !== "all") layout.fileTree.setTab("all")
+    void tabs().open("iris")
+    tabs().setActive("iris")
+  })
   const reviewMode = () => view().review.mode() ?? "git"
   const reviewFile = () => view().review.file()
   const sessionOwnership = createSessionOwnership(sessionKey)

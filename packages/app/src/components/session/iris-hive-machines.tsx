@@ -1,4 +1,4 @@
-import { createMemo, createResource, createSignal, For, onCleanup, Show } from "solid-js"
+import { createEffect, createMemo, createResource, createSignal, For, onCleanup, Show } from "solid-js"
 import { Icon, type IconProps } from "@opencode-ai/ui/icon"
 import "./iris-hive-scripts.css"
 import "./iris-hive-machines.css"
@@ -16,7 +16,7 @@ import {
   type HivePeerRow,
   type MachinesView,
 } from "./iris-hive-machines-model"
-import { focusHiveNode, requestIrisNav } from "./iris-nav"
+import { focusHiveMachine, focusHiveNode, irisMachineFocus, requestIrisNav } from "./iris-nav"
 
 /**
  * Hive › Machines (heyiris.io/p/hive-panel-directions#pick): your computers as a team — who is
@@ -83,6 +83,16 @@ export function IrisHiveMachines(props: {
 
   const [openId, setOpenId] = createSignal<string | undefined>()
   const open = createMemo<Computer | undefined>(() => computers().find((c) => c.id === openId()) ?? computers()[0])
+  // A dialog's "Details →" (#189763) names a node id; select the computer that registration belongs
+  // to once the list has it, then clear the request so a later visit starts where the person left it.
+  createEffect(() => {
+    const f = irisMachineFocus()
+    if (!f) return
+    const hit = computers().find((c) => c.ids.includes(f.id))
+    if (!hit) return
+    setOpenId(hit.id)
+    focusHiveMachine(null)
+  })
 
   const sendTask = (c: Computer) => {
     focusHiveNode(c.id)

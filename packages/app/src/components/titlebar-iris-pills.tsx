@@ -17,6 +17,11 @@ import { usePlatform } from "@/context/platform"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useTitlebarRightMount } from "./titlebar"
 import { DialogUpgrade } from "./dialog-upgrade"
+import { DialogHiveFleet, DialogHiveInbox } from "./dialog-hive"
+import { groupComputers, type HiveNodeRow } from "./session/iris-hive-scripts-model"
+import { inboxPill } from "./dialog-hive-model"
+import { focusHiveMachine, requestIrisPanel } from "./session/iris-nav"
+import { useLocation, useNavigate, useParams } from "@solidjs/router"
 
 /**
  * Two pills in the titlebar: how many machines are up, and whether anything is waiting for you.
@@ -82,7 +87,18 @@ export function authNotice(auth: AuthState | undefined): { text: string; hint: s
 export function fleetLabel(hive: HiveState | undefined, loading = false): string {
   if (loading && !hive) return "·"
   if (!hive || !hive.measured) return "—"
-  return `${hive.nodes.filter((n) => n.online).length}/${hive.nodes.length}`
+  const cs = computersOf(hive.nodes)
+  return `${cs.filter((n) => n.online).length}/${cs.length}`
+}
+
+/**
+ * Computers, not registrations (#189763): one MacBook registered three times read "2/6" on the
+ * pill and "2 of 4 computers" in the dialog it opens. Same grouping as Hive › Machines — a
+ * registration carries hardware facts; one without them counts on its own.
+ */
+export function computersOf(nodes: HiveState["nodes"]): { online: boolean }[] {
+  const full = nodes.filter((n) => (n as { id?: unknown }).id != null) as unknown as HiveNodeRow[]
+  return full.length === nodes.length ? groupComputers(full) : nodes
 }
 
 /**
@@ -153,7 +169,8 @@ export function TitlebarIrisPills() {
     return b ? ([b, tick()] as const) : undefined
   })
 
-  const doFetch = (path: string) => (platform.fetch ?? globalThis.fetch)(`${base()}${path}`)
+  const doFetch = (path: string, init?: RequestInit) => (platform.fetch ?? globalThis.fetch)(`${base()}${path}`, init)
+  const fetchJson = async <T,>(path: string, init?: RequestInit) => (await (await doFetch(path, init)).json()) as T
 
   // These poll every 30s from OUTSIDE the session's error boundary, so a rejected fetch (sidecar
   // restarting, Windows resuming from sleep) used to throw straight to app.tsx and replace the whole
@@ -169,8 +186,35 @@ export function TitlebarIrisPills() {
       }
     }
 
-  const [hive] = createResource<HiveState | undefined, Key>(key, poll<HiveState>("/iris/hive"))
-  const [inbox] = createResource<InboxState | undefined, Key>(key, poll<InboxState>("/iris/inbox"))
+  const [hive, { refetch: refetchHive }] = createResource<HiveState | undefined, Key>(key, poll<HiveState>("/iris/hive"))
+  const [inbox, { refetch: refetchInbox }] = createResource<InboxState | undefined, Key>(key, poll<InboxState>("/iris/inbox"))
+
+  /**
+   * The side panel lives on the session page; the titlebar asks for it (#189763). Off a session
+   * page there is no panel to open, so go to this project's session page, which answers the request.
+   */
+  const params = useParams()
+  const location = useLocation()
+  const navigate = useNavigate()
+  const openPanel = (sub: "machines" | "inbox", computerId?: string) => {
+    if (computerId) focusHiveMachine(computerId)
+    requestIrisPanel("hive", sub)
+    if (!/\/session(\/|$)/.test(location.pathname) && params.dir) navigate(`/${params.dir}/session`)
+  }
+  const showFleet = () =>
+    dialog.show(() => (
+      <DialogHiveFleet fetchJson={fetchJson} onFullControls={(id) => openPanel("machines", id)} onChanged={() => void refetchHive()} />
+    ))
+  const showInbox = () =>
+    dialog.show(() => (
+      <DialogHiveInbox
+        fetchJson={fetchJson}
+        onOpenInbox={() => openPanel("inbox")}
+        onChanged={() => void refetchInbox()}
+        openUrl={(u) => platform.openExternal(u)}
+        openPath={platform.openPath ? (f) => void platform.openPath!(f) : undefined}
+      />
+    ))
   const [auth] = createResource<AuthState | undefined, Key>(key, poll<AuthState>("/iris/auth"))
 
   // The plan changes when someone buys, not every 30s: ask every 10 minutes (20 ticks). /iris/plan
@@ -217,7 +261,17 @@ export function TitlebarIrisPills() {
               onMouseLeave={() => setFleetOpen(false)}
               onFocus={() => setFleetOpen(true)}
               onBlur={() => setFleetOpen(false)}
-              onClick={() => setFleetOpen((v) => !v)}
+              onClick={() => {
+                setFleetOpen(false)
+                showFleet()
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault()
+                  setFleetOpen(false)
+                  showFleet()
+                }
+              }}
             >
               <span
                 class="mr-1"
@@ -305,19 +359,35 @@ export function TitlebarIrisPills() {
             </TooltipV2>
           </Show>
 
-          <Show when={unread()}>
+          {/* Always there (#189763): a person with no unread messages still needs a way in to
+              read the old ones, and the old 11px "✉ 1" was too small to find or to hit. */}
+          <Show when={!inbox.loading || inbox.latest}>
             <TooltipV2
               placement="bottom"
               value={
                 <>
-                  {unread()} unread Hive {unread() === "1" ? "message" : "messages"}
-                  {inbox()?.from ? ` · latest from ${inbox()!.from}` : ""} · read them with: iris hive inbox read
+                  {unread()
+                    ? `${unread()} unread Hive ${unread() === "1" ? "message" : "messages"}${inbox()?.from ? ` · latest from ${inbox()!.from}` : ""}`
+                    : "Hive messages"}
                 </>
               }
             >
-              <span data-slot="iris-inbox-pill" class="cursor-default">
-                ✉ {unread()}
-              </span>
+              <button
+                type="button"
+                data-slot="iris-inbox-pill"
+                aria-label={unread() ? `${unread()} unread Hive messages` : "Hive messages"}
+                class="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[13px] leading-none hover:bg-v2-background-bg-base hover:text-v2-text-text-base"
+                classList={{ "text-v2-text-text-base": !!unread() }}
+                onClick={showInbox}
+              >
+                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+                  <rect x="1.75" y="3.25" width="12.5" height="9.5" rx="1.5" />
+                  <path d="M2.25 4.25 8 8.75l5.75-4.5" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+                <Show when={inboxPill(inbox()?.unread, inbox()?.unreadable)}>
+                  {(n) => <span class="tabular-nums font-medium">{n()}</span>}
+                </Show>
+              </button>
             </TooltipV2>
           </Show>
         </div>

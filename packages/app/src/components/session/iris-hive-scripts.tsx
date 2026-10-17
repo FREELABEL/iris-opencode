@@ -192,6 +192,29 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
   const real = createMemo(() => scripts().filter((s) => !isTestScript(s.slug)))
   const tests = createMemo(() => scripts().filter((s) => isTestScript(s.slug)))
   const fix = createMemo(() => topFix(scripts(), onlineNames()))
+
+  // #189762 — a lock must not outlive its cause. The list (with each script's doctor) and the
+  // computers used to be read only on ↻, after a run, or after an edit, so a Mac that slept while
+  // the panel was open kept every hardware script padlocked after it woke and reported again.
+  // Re-read the computers every 15 s; re-ask the doctors when the set of online computers changes
+  // (a machine coming back is exactly when locks should clear). The engine caches doctors 30 s.
+  onMount(() => {
+    const t = setInterval(() => {
+      if (document.visibilityState === "visible") void startTransition(() => void refetchHive())
+    }, 15_000)
+    onCleanup(() => clearInterval(t))
+  })
+  const onlineKey = createMemo(() => [...onlineNames()].sort().join("|"))
+  createEffect(
+    on(onlineKey, (_now, before) => {
+      if (before === undefined) return
+      void startTransition(() => void refetchList())
+      // ...and once more after the engine's 30 s doctor cache has expired, so the answer is the
+      // hub's current one, not the one it cached while the machine was away.
+      const later = setTimeout(() => void startTransition(() => void refetchList()), 31_000)
+      onCleanup(() => clearTimeout(later))
+    }),
+  )
   const [showTests, setShowTests] = createSignal(false)
   const [showFix, setShowFix] = createSignal(false)
 
