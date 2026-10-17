@@ -74,6 +74,7 @@ import {
   type AtlasViewOptions,
 } from "./iris-atlas-view"
 import { liveLabel, readSse, type LiveState } from "./iris-atlas-live"
+import { filterRecords, sortRecords, toCsv, type SortDir } from "./iris-records-view"
 
 // Re-exported: the panel tests assert on these, and they were defined here before the card
 // editor needed them too.
@@ -549,6 +550,8 @@ const ChevronDown = () => (
   </svg>
 )
 
+/** One page of dataset records — the request and the "N of M" count must use the same number. */
+const RECORDS_PER_PAGE = 25
 const LAST_BLOQ_KEY = "iris.panel.bloq"
 const LAST_SURFACE_KEY = "iris.panel.surface"
 /**
@@ -1558,6 +1561,69 @@ export function SessionIrisTab() {
     }
   }
 
+  /*
+   * KEYBOARD (#189771), on Atlas › Lists only, and only while focus is inside this panel — the
+   * handler sits on the panel, so it can never take a key from the chat box. j/k or the arrows
+   * move between cards, Enter opens one, / searches, n adds a card to the focused card's list,
+   * c copies its #id, x marks it done (or open again), [ and ] fold and unfold its list.
+   */
+  const atlasRowEls = () => Array.from(document.querySelectorAll<HTMLElement>(".iris-atlas-row[data-item-id]"))
+  async function toggleDone(itemId: number) {
+    const item = (rows() as AtlasList[]).flatMap((l) => l.items).find((i) => i.id === itemId)
+    if (!item) return
+    await doFetch(`/iris/item/${itemId}/save`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: isDone(item.status) ? "active" : "done" }),
+    }).catch(() => {})
+    liveRefresh(false)
+  }
+  function atlasKeys(e: KeyboardEvent) {
+    if (pane() !== "atlas" || view() !== "rows" || openRow()) return
+    if (e.metaKey || e.ctrlKey || e.altKey) return
+    const t = e.target as HTMLElement | null
+    if (t && (t.closest("input, textarea, select, [contenteditable='true']") || t.isContentEditable)) return
+    const key = e.key
+    if (key === "/") {
+      const box = document.querySelector<HTMLInputElement>(".iris-search__input")
+      if (box) {
+        e.preventDefault()
+        box.focus()
+      }
+      return
+    }
+    const els = atlasRowEls()
+    const at = t ? els.indexOf(t.closest<HTMLElement>(".iris-atlas-row[data-item-id]")!) : -1
+    const move = (d: number) => {
+      const next = els[Math.max(0, Math.min(els.length - 1, at < 0 ? 0 : at + d))]
+      if (next) {
+        e.preventDefault()
+        next.focus()
+        next.scrollIntoView({ block: "nearest" })
+      }
+    }
+    if (key === "j" || key === "ArrowDown") return move(1)
+    if (key === "k" || key === "ArrowUp") return move(-1)
+    const row = at >= 0 ? els[at] : undefined
+    if (!row) return
+    const itemId = Number(row.dataset.itemId)
+    const listId = Number(row.dataset.listId)
+    const list = (rows() as AtlasList[]).find((l) => l.id === listId)
+    if (key === "n" && list) {
+      e.preventDefault()
+      openComposer(listId)
+    } else if (key === "c") {
+      e.preventDefault()
+      copyItemId(itemId)
+    } else if (key === "x") {
+      e.preventDefault()
+      void toggleDone(itemId)
+    } else if ((key === "[" && list && !isFolded(list)) || (key === "]" && list && isFolded(list))) {
+      e.preventDefault()
+      toggleFold(list)
+    }
+  }
+
   const [copiedId, setCopiedId] = createSignal<number | undefined>()
   const copyItemId = (id: number) => {
     void navigator.clipboard?.writeText(`#${id}`).catch(() => {})
@@ -2067,9 +2133,16 @@ export function SessionIrisTab() {
    * also ask for the next page of schemas.
    */
   const [recordPage, setRecordPage] = createSignal(1)
+  /* RECORDS: sort, filter, export (#189769). Sort and filter act on the page on screen and say
+     so; export reads every page. */
+  const [recordSort, setRecordSort] = createSignal<{ key: string; dir: SortDir } | undefined>()
+  const [recordQuery, setRecordQuery] = createSignal("")
+  const [exporting, setExporting] = createSignal<string | undefined>()
   createEffect(() => {
     openRow()
     setRecordPage(1)
+    setRecordSort(undefined)
+    setRecordQuery("")
   })
   /** What the open agent is holding. Fetched only when the tab is on, like the records table. */
   const [agentTasks] = createResource(
@@ -2210,7 +2283,9 @@ export function SessionIrisTab() {
     // The BOARD is in the path, not decoration: the server refuses a dataset that belongs
     // elsewhere, and it can only do that if we say which board we are asking as.
     async ([, bloqID, slug, pageNo]) => {
-      const res = await doFetch(`/iris/records/${bloqID}/${encodeURIComponent(slug)}?page=${pageNo}&perPage=25`)
+      const res = await doFetch(
+        `/iris/records/${bloqID}/${encodeURIComponent(slug)}?page=${pageNo}&perPage=${RECORDS_PER_PAGE}`,
+      )
       return (await res.json()) as Measured & {
         columns: { key: string; label: string; type: string; visibility?: string }[]
         rows: { id: number; data: Record<string, unknown>; updatedAt?: string }[]
@@ -2220,6 +2295,54 @@ export function SessionIrisTab() {
       }
     },
   )
+
+  const recordRows = createMemo(() => {
+    const r = records.latest
+    if (!r) return []
+    const sort = recordSort()
+    const filtered = filterRecords(r.rows, r.columns, recordQuery())
+    if (!sort) return filtered
+    const col = sort.key === "id" ? "id" : r.columns.find((c) => c.key === sort.key)
+    return col ? sortRecords(filtered, col, sort.dir) : filtered
+  })
+  const cycleSort = (key: string) =>
+    setRecordSort((cur) =>
+      cur?.key !== key ? { key, dir: "asc" } : cur.dir === "asc" ? { key, dir: "desc" } : undefined,
+    )
+  /** Every page, 200 at a time, up to 10,000 rows — then a file named after the dataset. */
+  async function exportRecords() {
+    const r = openRow()
+    const slug = r?.raw?.slug
+    const b = activeBloq()
+    if (!slug || b == null) return
+    setExporting("Reading…")
+    try {
+      const all: { id: number; data: Record<string, unknown> }[] = []
+      let columns: { key: string; label: string; type: string }[] = []
+      for (let page = 1; page <= 50; page++) {
+        const res = await doFetch(`/iris/records/${b}/${encodeURIComponent(String(slug))}?page=${page}&perPage=200`)
+        const j = (await res.json()) as { measured?: boolean; reason?: string; columns?: typeof columns; rows?: typeof all; hasMore?: boolean }
+        if (!res.ok || j.measured === false) throw new Error(j.reason ?? `HTTP ${res.status}`)
+        if (page === 1) columns = j.columns ?? []
+        all.push(...(j.rows ?? []))
+        setExporting(`Reading… ${all.length}`)
+        if (!j.hasMore) break
+      }
+      const blob = new Blob([toCsv(columns, all)], { type: "text/csv;charset=utf-8" })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = `${String(slug).replace(/[^a-z0-9_-]+/gi, "-") || "records"}.csv`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      setExporting(`Exported ${all.length} ${all.length === 1 ? "row" : "rows"}`)
+    } catch (e) {
+      setExporting(`Export failed — ${e instanceof Error ? e.message : String(e)}`)
+    }
+    setTimeout(() => setExporting(undefined), 4000)
+  }
 
   // Leaving the surface or the board must close the reader — otherwise you switch to Leads and
   // are still looking at an Atlas item.
@@ -2428,7 +2551,7 @@ export function SessionIrisTab() {
   onCleanup(() => setScopeChip(undefined))
 
   return (
-    <div class="relative flex flex-col h-full min-h-0 gap-2 px-2 pb-2">
+    <div class="relative flex flex-col h-full min-h-0 gap-2 px-2 pb-2" onKeyDown={atlasKeys}>
       <Show when={busy()}>
         <div class="iris-activity" aria-hidden="true" />
       </Show>
@@ -3074,14 +3197,46 @@ export function SessionIrisTab() {
                         safe to share.
                       </p>
                     </Show>
+                    <div class="iris-records-tools">
+                      <input
+                        class="iris-records-tools__filter"
+                        type="search"
+                        placeholder="Filter this page…"
+                        value={recordQuery()}
+                        onInput={(e) => setRecordQuery(e.currentTarget.value)}
+                      />
+                      <Show when={recordQuery() || recordSort()}>
+                        <span class="font-mono tabular-nums">
+                          {recordRows().length} of {records.latest!.rows.length} on this page
+                        </span>
+                      </Show>
+                      <button
+                        type="button"
+                        class="iris-records-tools__btn"
+                        disabled={!!exporting()?.startsWith("Reading")}
+                        title="Every record in this dataset, not just this page"
+                        onClick={() => void exportRecords()}
+                      >
+                        {exporting() ?? "Export CSV"}
+                      </button>
+                    </div>
                     <div class="iris-table-wrap">
                       <table class="iris-table">
                         <thead>
                           <tr>
-                            <th class="iris-table__num">id</th>
+                            <th
+                              class="iris-table__num iris-table__sort"
+                              aria-sort={recordSort()?.key === "id" ? (recordSort()!.dir === "asc" ? "ascending" : "descending") : "none"}
+                              onClick={() => cycleSort("id")}
+                            >
+                              id{recordSort()?.key === "id" ? (recordSort()!.dir === "asc" ? " ▲" : " ▼") : ""}
+                            </th>
                             <For each={records.latest!.columns}>
                               {(c) => (
                                 <th
+                                  class="iris-table__sort"
+                                  aria-sort={recordSort()?.key === c.key ? (recordSort()!.dir === "asc" ? "ascending" : "descending") : "none"}
+                                  onClick={() => cycleSort(c.key)}
                                   title={
                                     c.visibility
                                       ? `${c.key} · ${c.type} · visibility: ${c.visibility}`
@@ -3089,6 +3244,7 @@ export function SessionIrisTab() {
                                   }
                                 >
                                   {c.label}
+                                  {recordSort()?.key === c.key ? (recordSort()!.dir === "asc" ? " ▲" : " ▼") : ""}
                                   {/* THREE STATES, DRAWN AS THREE (#185139).
                                       Declared phi, declared something else, and nobody said.
                                       Only the first two were ever drawn, so silence rendered
@@ -3114,7 +3270,7 @@ export function SessionIrisTab() {
                           </tr>
                         </thead>
                         <tbody>
-                          <For each={records.latest!.rows}>
+                          <For each={recordRows()}>
                             {(r) => (
                               <tr>
                                 <td class="iris-table__num">{r.id}</td>
@@ -3138,20 +3294,32 @@ export function SessionIrisTab() {
                     <div class="flex items-center gap-2 py-2 text-11-regular text-text-weaker">
                       <span class="font-mono tabular-nums">
                         {pageSummary({
-                          shown: (recordPage() - 1) * 25 + records.latest!.rows.length,
+                          shown: (recordPage() - 1) * RECORDS_PER_PAGE + records.latest!.rows.length,
                           env: records.latest as unknown as PageEnvelope,
                         })}
                       </span>
-                      <Show when={records.latest!.hasMore}>
-                        <button
-                          type="button"
-                          class="ms-auto px-2 py-0.5 rounded cursor-pointer text-text-weak hover:text-text-base hover:bg-background-element"
-                          disabled={records.loading}
-                          onClick={() => setRecordPage((n) => n + 1)}
-                        >
-                          {records.loading ? "Loading…" : "Next page"}
-                        </button>
-                      </Show>
+                      <span class="ms-auto flex items-center gap-1">
+                        <Show when={recordPage() > 1}>
+                          <button
+                            type="button"
+                            class="px-2 py-0.5 rounded cursor-pointer text-text-weak hover:text-text-base hover:bg-background-element"
+                            disabled={records.loading}
+                            onClick={() => setRecordPage((n) => Math.max(1, n - 1))}
+                          >
+                            Previous page
+                          </button>
+                        </Show>
+                        <Show when={records.latest!.hasMore}>
+                          <button
+                            type="button"
+                            class="px-2 py-0.5 rounded cursor-pointer text-text-weak hover:text-text-base hover:bg-background-element"
+                            disabled={records.loading}
+                            onClick={() => setRecordPage((n) => n + 1)}
+                          >
+                            {records.loading ? "Loading…" : "Next page"}
+                          </button>
+                        </Show>
+                      </span>
                     </div>
                   </Match>
                 </Switch>
@@ -3318,13 +3486,16 @@ export function SessionIrisTab() {
                               <div
                                 role="button"
                                 tabindex="0"
+                                data-item-id={item.id}
+                                data-list-id={list.id}
+                                aria-keyshortcuts="Enter x c n"
                                 class="iris-atlas-row"
                                 classList={{
                                   "iris-atlas-row--done": isDone(item.status),
                                   "iris-atlas-row--live": liveIds().has(item.id),
                                   "iris-atlas-row--new": awayIds().has(item.id) && !liveIds().has(item.id),
                                 }}
-                                title="Open this card"
+                                title="Open this card — keys: j/k move · Enter open · x done · c copy #id · n new card · / search"
                                 onClick={() => openCard(item.id)}
                                 onKeyDown={(e) => {
                                   if (e.target !== e.currentTarget) return
