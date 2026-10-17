@@ -136,8 +136,20 @@ export function routeFor(argv: string[], parsed?: string[]): Route | null {
       const node = i >= 0 && parts[i + 1] && !parts[i + 1].startsWith("-") ? parts[i + 1] : eq ? eq.slice("--node=".length) : null
       return { class: "node", verb: "task", instance: node || null }
     }
+    // `iris hive send <content> --to <node>` names its node with a FLAG; the word after `send` is
+    // the PAYLOAD — a file path, a URL, a sentence. Reading that word as the instance asked for a
+    // couple on `node:/tmp/handoff.md` or `node:hello there`, a body that cannot exist, so every
+    // send was refused with advice to couple an agent to the message text (#189372). Same shape
+    // as the android row below. `--to` wins whenever it is present; only the positional form
+    // `iris hive send <node> <message>` (no --to) has the node in the third slot.
+    if (sub === "send") {
+      const to = flagValue(parts, ["--to"])
+      if (to === "all") return { class: "node", verb: "send", instance: null } // fan-out: class-level ask, never a free pass
+      const positional = words.length > (at >= 0 ? at + 2 : 3) ? third : null // <node> <message>: two words after `send`
+      return { class: "node", verb: "send", instance: nodeInstance(to ?? positional) }
+    }
     // `iris hive run <node> <cmd>` — arbitrary shell on another machine, the epic's named danger.
-    const verb = sub === "run" || sub === "exec" ? "run" : sub === "task" ? "task" : sub === "script" ? "script" : sub === "send" ? "send" : null
+    const verb = sub === "run" || sub === "exec" ? "run" : sub === "task" ? "task" : sub === "script" ? "script" : null
     return verb ? { class: "node", verb, instance: third && !third.startsWith("-") ? third : null } : null
   }
   if (cls === "android") {
@@ -167,6 +179,32 @@ export function routeFor(argv: string[], parsed?: string[]): Route | null {
   // Guarding the dry run would train people to couple for a command that changes nothing.
   if (sub === "clean") return parts.includes("--apply") ? { class: "device", verb: "clean", instance: null } : null // --apply is a FLAG, so read it from parts
   return null
+}
+
+/** `--to x` or `--to=x` (or any alias) from lower-cased argv; null when absent or flag-shaped. */
+function flagValue(parts: string[], names: string[]): string | null {
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i]
+    for (const n of names) {
+      if (p === n) return parts[i + 1] && !parts[i + 1].startsWith("-") ? parts[i + 1] : null
+      if (p.startsWith(n + "=")) return p.slice(n.length + 1) || null
+    }
+  }
+  return null
+}
+
+/**
+ * A node name as the instance half of a body. Node names are what a person typed (`Alex's MacBook
+ * Pro`), and a name that is not a legal instance would be refused as "not a body name" — the
+ * wrong refusal, for the wrong reason. Legal names pass through untouched, so existing couples
+ * keep matching; anything else gets the same slug `bodyForDevice` gives a device.
+ */
+function nodeInstance(raw: string | null | undefined): string | null {
+  const s = String(raw ?? "").trim().toLowerCase()
+  if (!s || s.startsWith("-")) return null
+  if (/^[a-z0-9._*-]+$/.test(s)) return s
+  const slug = s.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
+  return slug || null
 }
 
 /** Verbs a couple may bless for a class — used to refuse a typo at coupling time, not at act time. */

@@ -1,3 +1,4 @@
+import { fetchClaims } from "./platform-hive-claim"
 import { cmd } from "./cmd"
 import { requireAuth, requireUserId, writeJson, dim, bold, success, warn } from "./iris-api"
 import { hiveFetch } from "./platform-hive-nodes"
@@ -149,7 +150,10 @@ const SessionsCommand = cmd({
         Date.parse(b.updated_at || "0") - Date.parse(a.updated_at || "0"),
     )
 
-    if (argv.json) return void (await writeJson(shown))
+    // Who has each session (#188316). A claims fetch that fails leaves the column out rather
+    // than showing everything as "unassigned", which would be a false statement.
+    const claims = await fetchClaims(userId).catch(() => null)
+    if (argv.json) return void (await writeJson(claims ? shown.map((r) => ({ ...r, claim: claims.get(r.session_id) ?? null })) : shown))
 
     console.log()
     // Printed BEFORE the table, and printed even when the table is empty. A node that cannot
@@ -182,6 +186,12 @@ const SessionsCommand = cmd({
         `  ${String(r.node).slice(0, 16).padEnd(16)} ${st} ${age(r.updated_at).padEnd(5)} ${String(r.provider).padEnd(12)} ${model} ${bold(label(r))}${branch}`,
       )
       if (r.status === "needs_you") for (const line of waitingLines(r.waiting)) console.log(`  ${" ".repeat(16)} ${" ".repeat(9)} ${warn(line)}`)
+      if (claims) {
+        const c = claims.get(r.session_id)
+        const owner = c?.assignee ? `owner ${bold(c.assignee)}` : dim("unassigned — iris hive claim " + r.session_id.slice(-8))
+        const hint = !c?.assignee && c?.suggested_owner ? dim(`  · suggested: ${c.suggested_owner}`) : ""
+        console.log(`  ${" ".repeat(16)} ${" ".repeat(9)} ${owner}${hint}`)
+      }
     }
     console.log()
     const live = shown.filter((r) => r.status === "active").length

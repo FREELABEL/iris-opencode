@@ -54,6 +54,7 @@ const IssueCmd = cmd({
       .option("allowance", { describe: "spend allowance in CENTS", type: "number", default: 0 })
       .option("days", { describe: "expire this many days from now", type: "number" })
       .option("note", { describe: "what was actually agreed, in words", type: "string" })
+      .option("lead", { describe: "CRM lead this licence belongs to (shows on the lead)", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args: any) {
     const body: Record<string, unknown> = {
@@ -64,6 +65,8 @@ const IssueCmd = cmd({
     }
     if (args.days) body.days = args.days
     if (args.note) body.note = args.note
+    // #189718: the API has accepted lead_id since #183598; the CLI never sent it.
+    if (args.lead) body.lead_id = args.lead
 
     const res = await irisFetch(BASE, { method: "POST", body: JSON.stringify(body) })
     if (!res.ok) return reportError(res, "Issue licence")
@@ -178,6 +181,23 @@ const RevokeCmd = cmd({
   },
 })
 
+// #189718 — join a key that was already issued (and maybe already sent) to its CRM lead,
+// instead of revoking it and sending the person a different key.
+const LinkCmd = cmd({
+  command: "link <key>",
+  describe: "link an issued licence to its CRM lead (operator only)",
+  builder: (y: any) =>
+    y.positional("key", { type: "string" }).option("lead", { describe: "CRM lead id", type: "number", demandOption: true }),
+  async handler(args: any) {
+    const res = await irisFetch(`${BASE}/${encodeURIComponent(args.key)}/link`, {
+      method: "POST",
+      body: JSON.stringify({ lead_id: args.lead }),
+    })
+    if (!res.ok) return reportError(res, "Link licence")
+    prompts.log.success(`Linked ${args.key} → lead #${args.lead}`)
+  },
+})
+
 const ShowCmd = cmd({
   command: "show <key>",
   describe: "one licence with its seats and audit trail (operator only)",
@@ -197,6 +217,7 @@ const ShowCmd = cmd({
     printKV("status", String(data?.status ?? "—"))
     printKV("seats", `${(data?.seat_rows?.length ?? 0)} of ${data?.seats ?? "—"} held`)
     printKV("issued to", String(data?.issued_to_email ?? "—"))
+    printKV("lead", data?.lead_id ? `#${data.lead_id}` : "— (iris licence link <key> --lead <id>)")
     printDivider()
     for (const e of data?.events ?? []) {
       UI.println(dim(`  ${String(e.created_at ?? "").slice(0, 19)}  ${e.event}`))
@@ -211,7 +232,7 @@ export const LicenceGroup = cmd({
   aliases: ["license", "licences", "licenses"],
   describe: "what a yes produces — issue, claim and check entitlement",
   builder: (y: any) =>
-    y.command(IssueCmd).command(ClaimCmd).command(MeCmd).command(ListCmd).command(ShowCmd).command(RevokeCmd).demandCommand(),
+    y.command(IssueCmd).command(ClaimCmd).command(MeCmd).command(ListCmd).command(ShowCmd).command(LinkCmd).command(RevokeCmd).demandCommand(),
   async handler() {},
 })
 
@@ -230,6 +251,7 @@ export const LicenceCommand = productCommand({
       .command(MeCmd)
       .command(ListCmd)
       .command(ShowCmd)
+      .command(LinkCmd)
       .command(RevokeCmd)
       .demandCommand(),
 })

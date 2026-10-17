@@ -4,6 +4,7 @@ import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Api } from "../api"
 import { response } from "../location"
+import { redactSecrets } from "./secrets"
 
 export const ProviderHandler = HttpApiBuilder.group(Api, "server.provider", (handlers) =>
   Effect.gen(function* () {
@@ -12,7 +13,7 @@ export const ProviderHandler = HttpApiBuilder.group(Api, "server.provider", (han
         "provider.list",
         Effect.fn(function* () {
           const providers = yield* Provider.Service
-          return yield* response(providers.available())
+          return yield* response(providers.available().pipe(Effect.map((list) => list.map(redactSecrets))))
         }),
       )
       .handle(
@@ -25,7 +26,7 @@ export const ProviderHandler = HttpApiBuilder.group(Api, "server.provider", (han
               providerID: ctx.params.providerID,
               message: `Provider not found: ${ctx.params.providerID}`,
             })
-          return yield* response(Effect.succeed(provider))
+          return yield* response(Effect.succeed(redactSecrets(provider)))
         }),
       )
   }),

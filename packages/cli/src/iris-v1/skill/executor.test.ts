@@ -3,6 +3,7 @@ import { unlinkSync, existsSync } from "fs"
 import { homedir } from "os"
 import { join } from "path"
 import {
+  isDangerousCommand,
   parseSteps,
   interpolate,
   interpolateInput,
@@ -2662,5 +2663,26 @@ describe("a playbook with shell steps and no bash refuses WHOLE", () => {
     const r = await executeSkill(plan, {}, { bash: () => null, dryRun: true })
     cleanupRun(r.run_id)
     expect(Object.keys(r.steps).sort()).toEqual(["draft", "publish"])
+  })
+})
+
+describe("isDangerousCommand — 'format' means disk formatting, not the word", () => {
+  test.each([
+    "ffprobe -v error -show_entries format=duration x.mp4",
+    "iris brands dt export iris --format css",
+    "date +%Y --format=iso",
+    "prettier --check . # format later",
+  ])("not dangerous: %s", (cmd) => {
+    expect(isDangerousCommand(cmd)).toBe(false)
+  })
+
+  test.each([
+    "format c:",
+    "FORMAT D: /q",
+    "mkfs.ext4 /dev/sda1",
+    "diskutil eraseDisk APFS Blank disk2",
+    "rm -rf /tmp/x",
+  ])("dangerous: %s", (cmd) => {
+    expect(isDangerousCommand(cmd)).toBe(true)
   })
 })

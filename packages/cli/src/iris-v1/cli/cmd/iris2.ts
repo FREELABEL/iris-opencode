@@ -124,8 +124,9 @@ export function compareVersions(a: string, b: string): number {
 }
 
 /**
- * Newest release of one channel. Preview: highest version. Stable: newest-first, the same rule
- * `iris update` uses (pick-release.ts) — a re-cut release wins by recency.
+ * Newest release of one channel: the highest version. Stable used to mean newest-first, but once
+ * the v2 engine is stable (1.5.x) a later 1.3.x cut from main would outrank it by date and look
+ * like an update to every user (#188596). A re-cut of the same version is still found.
  */
 export function pickLatest(releases: Release[], channel: Channel = "preview"): { tag: string; version: string } | null {
   let best: { tag: string; version: string } | null = null
@@ -133,7 +134,6 @@ export function pickLatest(releases: Release[], channel: Channel = "preview"): {
     if (r.draft) continue
     const version = versionOfTag(r.tag_name, channel)
     if (!version) continue
-    if (channel === "stable") return { tag: r.tag_name, version }
     if (!best || compareVersions(version, best.version) > 0) best = { tag: r.tag_name, version }
   }
   return best

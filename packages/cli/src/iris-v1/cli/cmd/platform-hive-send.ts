@@ -274,13 +274,43 @@ async function dispatchToNode(
 // Command
 // ============================================================================
 
+/**
+ * Which node, and what to send. Two forms, both supported:
+ *
+ *   iris hive send <content> --to <node>        the documented form
+ *   iris hive send <node> <message...>          the form people type first (#189372)
+ *
+ * `--to` always wins, and with it every positional is content — so an unquoted sentence
+ * (`iris hive send hello there --to mac`) sends the whole sentence instead of dropping "there".
+ * Pure, so the parsing is tested without a network.
+ */
+export function resolveSendArgs(
+  content: unknown,
+  rest: unknown,
+  to: unknown,
+): { target: string; content: string } | { error: string } {
+  const words = [content, ...(Array.isArray(rest) ? rest : rest == null ? [] : [rest])]
+    .map((w) => String(w ?? ""))
+    .filter((w) => w.length > 0)
+  const flag = typeof to === "string" ? to.trim() : ""
+  if (flag) {
+    if (words.length === 0) return { error: "Nothing to send. Usage: iris hive send <file|url|text> --to <node>" }
+    return { target: flag, content: words.join(" ") }
+  }
+  if (words.length >= 2) return { target: words[0], content: words.slice(1).join(" ") }
+  return { error: "No target node. Usage: iris hive send <file|url|text> --to <node>   or   iris hive send <node> <message>" }
+}
+
 export const HiveSendCommand = cmd({
-  command: "send <content>",
+  command: "send <content> [rest..]",
   describe: "send a file, text, or link to another Hive node",
   builder: (yargs) =>
     yargs
-      .positional("content", { describe: "file path, URL, or text message", type: "string", demandOption: true })
-      .option("to", { describe: "target node name/id, or 'all'", type: "string", demandOption: true })
+      .positional("content", { describe: "file path, URL, or text message — or the node, when --to is omitted", type: "string", demandOption: true })
+      .positional("rest", { describe: "the message, in the `iris hive send <node> <message>` form", type: "string", array: true })
+      .option("to", { describe: "target node name/id, or 'all'", type: "string" })
+      .example("iris hive send ./notes.md --to studio-mac", "send a file")
+      .example("iris hive send studio-mac \"build is green\"", "send text, node first")
       .option("message", { alias: "m", describe: "optional message (for file/link sends)", type: "string" })
       .option("user-id", { describe: "user ID", type: "number" })
       .option("envelope", {
@@ -299,8 +329,13 @@ export const HiveSendCommand = cmd({
     const userId = await requireUserId(argv["user-id"] as number | undefined)
     if (!userId) { prompts.outro("Done"); return }
 
-    const content = String(argv.content)
-    const target = String(argv.to)
+    const parsedArgs = resolveSendArgs(argv.content, argv.rest, argv.to)
+    if ("error" in parsedArgs) {
+      if (argv.json) console.log(JSON.stringify({ success: false, error: parsedArgs.error }))
+      else prompts.log.error(parsedArgs.error)
+      process.exit(1)
+    }
+    const { content, target } = parsedArgs
     const message = argv.message as string | undefined
     const type = detectType(content)
 

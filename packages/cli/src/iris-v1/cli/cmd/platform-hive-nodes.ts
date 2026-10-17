@@ -22,7 +22,7 @@ export async function hiveFetch(path: string, options: RequestInit = {}) {
   return irisFetch(path, options, IRIS_API)
 }
 
-interface HiveNode {
+export interface HiveNode {
   id: string
   name: string
   status: string
@@ -81,6 +81,45 @@ export async function resolveNode(userId: number, target: string): Promise<HiveN
     nodes.find((n) => n.name.toLowerCase().startsWith(target.toLowerCase())) ??
     null
   )
+}
+
+/**
+ * Dispatch one task and wait for it to finish — the create-then-poll that `hive run` and
+ * `hive tasks create` each do inline, as a function another command can call. Same endpoints,
+ * same terminal set, same bound (the task's own timeout plus 30 s of slack). Returns the final
+ * task, or `null` when it was still running at the bound (the task is NOT cancelled).
+ */
+export async function dispatchTaskAndWait(
+  userId: number,
+  payload: Record<string, unknown>,
+  onStatus?: (status: string) => void,
+): Promise<{ taskId: string; final: Record<string, unknown> | null }> {
+  const createRes = await hiveFetch(`/api/v6/nodes/tasks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  })
+  if (!createRes.ok) throw new Error(`Task creation failed: HTTP ${createRes.status} ${(await createRes.text().catch(() => "")).slice(0, 500)}`)
+  const created = (await createRes.json()) as { task: { id: string; status: string } }
+  const taskId = created.task.id
+  const timeoutSec = Number(payload.timeout_seconds ?? 300)
+  const deadline = Date.now() + (timeoutSec + 30) * 1000
+  const terminal = new Set(["succeeded", "completed", "failed", "cancelled", "timeout", "errored", "expired"])
+  let last = created.task.status
+  onStatus?.(last)
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 1500))
+    const r = await hiveFetch(`/api/v6/nodes/tasks/${taskId}?user_id=${userId}`)
+    if (!r.ok) throw new Error(`Poll failed for task ${taskId}: HTTP ${r.status}`)
+    const t = ((await r.json()) as { task: Record<string, unknown> }).task
+    const st = String(t.status ?? "")
+    if (st !== last) {
+      last = st
+      onStatus?.(st)
+    }
+    if (terminal.has(st)) return { taskId, final: t }
+  }
+  return { taskId, final: null }
 }
 
 // ============================================================================
@@ -164,6 +203,10 @@ const HiveNodesListCommand = cmd({
       const ip = n.last_ip ?? dim("—")
       console.log(`  ${name}${youTag}  ${status}  ${slot}  ${heartbeat}  ${ip}`)
       console.log(`    ${dim("id:")} ${n.id}`)
+      // Disk, live from the heartbeat (#188700). Only said when it is a problem — a full disk is how
+      // a node silently stops completing work, and nothing else in this list would show it.
+      const diskNote = describeDiskLive((n as any).disk_live)
+      if (diskNote) console.log(`    ${diskNote}`)
 
       // Which BUILD, and can it serve local data sources.
       //
@@ -394,6 +437,56 @@ const HiveNodesCommand = cmd({
 // run — execute a shell command on a specific node and wait for output
 // ============================================================================
 
+export const TERMINAL_TASK_STATUSES = new Set(["succeeded", "completed", "failed", "cancelled", "timeout", "errored"])
+
+/**
+ * Poll ONE task — the one a dispatch created — until it reaches a terminal status.
+ *
+ * #187990: `iris hive run` printed a failure (exit 1, 1000ms, no output) that belonged to a
+ * DIFFERENT task, while its own task completed with the right output. Task ids are UUIDv7, so
+ * tasks dispatched seconds apart share their first 8 characters, and the 8-character form is all
+ * `run` printed. This function is the contract that keeps `run` honest:
+ *
+ *   - it asks for the FULL id it was given, never a prefix and never "the latest task";
+ *   - it refuses a record whose id is not that id, rather than reporting someone else's result
+ *     as this command's — a wrong answer that looks right is worse than an error.
+ *
+ * Pure apart from the injected fetch, so the regression test drives it with a fake server.
+ */
+export async function waitForTask(
+  taskId: string,
+  opts: {
+    fetchTask: (id: string) => Promise<any>
+    initialStatus?: string
+    deadlineMs: number
+    intervalMs?: number
+    onStatus?: (task: any) => void
+    sleep?: (ms: number) => Promise<void>
+    now?: () => number
+  },
+): Promise<any | null> {
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+  const now = opts.now ?? Date.now
+  const deadline = now() + opts.deadlineMs
+  let lastStatus = opts.initialStatus
+  while (now() < deadline) {
+    await sleep(opts.intervalMs ?? 1500)
+    const t = await opts.fetchTask(taskId)
+    if (!t || typeof t !== "object") throw new Error(`Poll for task ${taskId} returned no task`)
+    if (t.id !== undefined && String(t.id) !== taskId) {
+      throw new Error(
+        `Poll for task ${taskId} returned a different task (${t.id}) — refusing to report its result as this one's (#187990)`,
+      )
+    }
+    if (t.status !== lastStatus) {
+      opts.onStatus?.(t)
+      lastStatus = t.status
+    }
+    if (TERMINAL_TASK_STATUSES.has(t.status)) return t
+  }
+  return null
+}
+
 const HiveRunCommand = cmd({
   command: "run <target> <command>",
   describe: "run a shell command on a Hive node and stream the output back (fails fast on the first error unless --no-fail-fast is given — see `command`)",
@@ -496,33 +589,31 @@ const HiveRunCommand = cmd({
     }
 
     if (!argv.json) {
-      console.log(`${dim("→")} task ${taskId.slice(0, 8)}  status=${created.task.status}`)
+      // The FULL id. Task ids are UUIDv7 — time-ordered — so tasks created seconds apart share
+      // their first 8 characters, and a shortened id here pointed people at the wrong task
+      // when they went to look it up or cancel it (#187990).
+      console.log(`${dim("→")} task ${taskId}  status=${created.task.status}`)
       console.log(dim("waiting for completion..."))
     }
 
-    // Poll until terminal (succeeded / failed / cancelled / timeout). Bound by timeout + 30s slack.
-    const deadline = Date.now() + (timeoutSec + 30) * 1000
-    const terminal = new Set(["succeeded", "completed", "failed", "cancelled", "timeout", "errored"])
-    let lastStatus = created.task.status
+    // Poll EXACTLY the task this dispatch created, by its full id (#187990). See waitForTask.
     let final: any = null
-
-    while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 1500))
-      const r = await hiveFetch(`/api/v6/nodes/tasks/${taskId}?user_id=${userId}`)
-      if (!r.ok) {
-        console.error(`Poll failed: ${r.status} ${await r.text()}`)
-        process.exit(1)
-      }
-      const body = (await r.json()) as { task: any }
-      const t = body.task
-      if (!argv.json && t.status !== lastStatus) {
-        console.log(`${dim("→")} status=${t.status}${t.progress ? `  progress=${t.progress}%` : ""}`)
-        lastStatus = t.status
-      }
-      if (terminal.has(t.status)) {
-        final = t
-        break
-      }
+    try {
+      final = await waitForTask(taskId, {
+        initialStatus: created.task.status,
+        deadlineMs: (timeoutSec + 30) * 1000,
+        fetchTask: async (id) => {
+          const r = await hiveFetch(`/api/v6/nodes/tasks/${encodeURIComponent(id)}?user_id=${userId}`)
+          if (!r.ok) throw new Error(`Poll failed: ${r.status} ${await r.text()}`)
+          return ((await r.json()) as { task: any }).task
+        },
+        onStatus: argv.json
+          ? undefined
+          : (t) => console.log(`${dim("→")} status=${t.status}${t.progress ? `  progress=${t.progress}%` : ""}`),
+      })
+    } catch (e) {
+      console.error(e instanceof Error ? e.message : String(e))
+      process.exit(1)
     }
 
     if (!final) {
@@ -585,6 +676,7 @@ const HiveRunCommand = cmd({
     console.log(
       `  ${tag} ${verdict}  ${dim("exit=")}${exitLabel}  ${dim("duration=")}${final.duration_ms ?? "?"}ms`,
     )
+    console.log(dim(`  task ${taskId}  ·  iris hive tasks get ${taskId}`))
 
     // Exit with the command's own code, so `iris hive run <node> "..." && next` means what
     // it says. A timeout is 124 (distinct, so CI can retry only those) per the contract.
@@ -594,3 +686,14 @@ const HiveRunCommand = cmd({
 
 export const HiveNodesCommandExport = HiveNodesCommand
 export const HiveRunCommandExport = HiveRunCommand
+
+/** One line about a node's disk when it is a problem, else null (#188700). Exported for tests. */
+export function describeDiskLive(d: unknown): string | null {
+  if (!d || typeof d !== "object") return null
+  const disk = d as { free_gb?: number; total_gb?: number; low?: boolean; last_write_error?: { code?: string; file?: string } }
+  const err = disk.last_write_error?.code
+    ? ` · last write failed: ${disk.last_write_error.code}${disk.last_write_error.file ? ` (${disk.last_write_error.file})` : ""}`
+    : ""
+  if (!disk.low && !err) return null
+  return `⚠ disk: ${disk.free_gb ?? "?"} GB free of ${disk.total_gb ?? "?"} GB${err}`
+}

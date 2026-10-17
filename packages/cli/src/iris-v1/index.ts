@@ -80,6 +80,7 @@ import { PlatformNodeCommand } from "./cli/cmd/platform-node"
 import { VaultCommandExport } from "./cli/cmd/platform-vault"
 import { PlatformClipsCommand } from "./cli/cmd/platform-clips"
 import { PlatformPostCommand } from "./cli/cmd/platform-post"
+import { SocialCommand } from "./cli/cmd/platform-social"
 import { XCommand } from "./cli/cmd/platform-x"
 import { PlatformOutreachCommand } from "./cli/cmd/platform-outreach"
 import { OffersCommand } from "./cli/cmd/offers"
@@ -99,6 +100,7 @@ import { PlatformRunCommand, PlatformConnectCommand, PlatformListConnectedComman
 import { PlatformListenCommand } from "./cli/cmd/listen"
 import { PlatformTranscribeCommand } from "./cli/cmd/transcribe"
 import { PlatformOcrCommand } from "./cli/cmd/platform-ocr"
+import { PlatformLookCommand } from "./cli/cmd/platform-look"
 import { PlatformDownloadCommand } from "./cli/cmd/download"
 import { PlatformBugCommand } from "./cli/cmd/platform-bug"
 import { PlatformFeatureCommand } from "./cli/cmd/platform-feature"
@@ -138,6 +140,7 @@ import { PlatformContractsCommand } from "./cli/cmd/platform-contracts"
 import { PlatformPagesCommand } from "./cli/cmd/platform-pages"
 import { PlatformExposureCommand } from "./cli/cmd/platform-exposure"
 import { PlatformFindCommand } from "./cli/cmd/platform-find"
+import { LocateCommand } from "./cli/cmd/platform-locate"
 import { PlatformDashboardCommand } from "./cli/cmd/platform-dashboard"
 import { PlatformContentEngineCommand } from "./cli/cmd/platform-content-engine"
 import { PlatformNewsroomCommand } from "./cli/cmd/platform-newsroom"
@@ -176,6 +179,7 @@ import { PlatformVoiceCommand } from "./cli/cmd/platform-voice"
 import { PlatformRecallCommand } from "./cli/cmd/platform-recall"
 import { PlatformPersonalityCommand } from "./cli/cmd/platform-personality"
 import { PlatformMailCommand } from "./cli/cmd/platform-mail"
+import { PlatformMailingCommand } from "./cli/cmd/platform-mailing"
 import { PlatformSendersCommand } from "./cli/cmd/platform-senders"
 import { PlatformImessageCommand } from "./cli/cmd/platform-imessage"
 import { PlatformWhatsappCommand } from "./cli/cmd/platform-whatsapp"
@@ -361,6 +365,7 @@ const cli = yargs(rawArgs)
   .command(reg(GuideCommand))
   .command(reg(TelemetryCommand))
   .command(reg(PlatformFindCommand))
+  .command(reg(LocateCommand))
   // Core CLI commands
   .command(reg(BuzzCommand))
   .command(reg(McpCommand))
@@ -447,6 +452,7 @@ const cli = yargs(rawArgs)
   .command(reg(VaultCommandExport))
   .command(reg(PlatformClipsCommand))
   .command(reg(PlatformPostCommand))
+  .command(reg(SocialCommand))
   .command(reg(XCommand))
   .command(reg(PlatformOutreachCommand))
   .command(reg(OffersCommand))
@@ -471,6 +477,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformListIntegrationsCommand))
   .command(reg(PlatformTranscribeCommand))
   .command(reg(PlatformOcrCommand))
+  .command(reg(PlatformLookCommand))
   .command(reg(PlatformListenCommand))
   .command(reg(PlatformDownloadCommand))
   .command(reg(PlatformConnectCommand))
@@ -553,6 +560,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformRecallCommand))
   .command(reg(PlatformPersonalityCommand))
   .command(reg(PlatformMailCommand))
+  .command(reg(PlatformMailingCommand))
   .command(reg(PlatformSendersCommand))
   .command(reg(PlatformImessageCommand))
   .command(reg(PlatformWhatsappCommand))
