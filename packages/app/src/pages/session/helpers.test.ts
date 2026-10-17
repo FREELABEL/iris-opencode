@@ -170,7 +170,13 @@ describe("createSessionTabs", () => {
   // A non-git project opened every session on "No tracked changes — Create Git repository".
   // For a non-technical user that was the first thing on screen; the default is now IRIS (Atlas).
   describe("reviewFirst decides the empty-panel default", () => {
-    const make = (input: { reviewFirst?: boolean; filesPinned?: boolean; active?: string; all?: string[] }) => {
+    const make = (input: {
+      reviewFirst?: boolean
+      filesPinned?: boolean
+      preferIris?: boolean
+      active?: string
+      all?: string[]
+    }) => {
       const [state] = createStore({ active: input.active as string | undefined, all: input.all ?? [] })
       const tabs = createMemo(() => ({ active: () => state.active, all: () => state.all }))
       return createSessionTabs({
@@ -181,8 +187,26 @@ describe("createSessionTabs", () => {
         hasReview: () => true,
         ...(input.reviewFirst === undefined ? {} : { reviewFirst: () => input.reviewFirst! }),
         ...(input.filesPinned === undefined ? {} : { filesPinned: () => input.filesPinned! }),
+        ...(input.preferIris === undefined ? {} : { preferIris: () => input.preferIris! }),
       })
     }
+
+    test("pinned Atlas opens on IRIS even in a git project with the file tree pinned (#189766)", () => {
+      createRoot((dispose) => {
+        expect(make({ reviewFirst: true, filesPinned: true, preferIris: true }).activeTab()).toBe("iris")
+        expect(make({ reviewFirst: true, filesPinned: true, preferIris: false }).activeTab()).toBe("review")
+        dispose()
+      })
+    })
+
+    test("pinned Atlas changes only the default: a tab you opened still wins (#189766)", () => {
+      createRoot((dispose) => {
+        expect(make({ reviewFirst: true, filesPinned: true, preferIris: true, active: "review" }).activeTab()).toBe("review")
+        expect(make({ preferIris: true, all: ["file://a.ts"] }).activeTab()).toBe("file://a.ts")
+        expect(make({ preferIris: true, active: "context" }).activeTab()).toBe("context")
+        dispose()
+      })
+    })
 
     test("an unpinned file tree is never the default, even in a git project (#187129)", () => {
       createRoot((dispose) => {

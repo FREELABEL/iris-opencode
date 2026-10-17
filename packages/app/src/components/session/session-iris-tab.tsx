@@ -40,7 +40,9 @@ import {
   ACCOUNT_SURFACES,
   FILES_PIN_KEY,
   filesTabPinned,
+  openingSurface,
   panelScope,
+  pinnedByChoice,
   readPinnedIds,
   scopeChipLabel,
   visibleTabs,
@@ -1027,7 +1029,12 @@ const storage = (key: string) => {
  * without) this component mounting; the component keeps them current.
  */
 const [irisPinnedSig, setIrisPinnedSig] = createSignal<SurfaceId[]>(readPinned(storage(PINNED_KEY)))
-const [irisSurfaceSig, setIrisSurfaceSig] = createSignal<SurfaceId>(normalizeSurface(storage(LAST_SURFACE_KEY)))
+const [irisSurfaceSig, setIrisSurfaceSig] = createSignal<SurfaceId>(
+  normalizeSurface(openingSurface(normalizeSurface(storage(LAST_SURFACE_KEY)), storage(PINNED_KEY))),
+)
+/** Whether the person pinned Atlas themselves — the side panel then opens on IRIS (#189766). */
+const [pinsRawSig, setPinsRawSig] = createSignal<string | null>(storage(PINNED_KEY))
+export const irisOpensOnAtlas = () => pinnedByChoice(pinsRawSig(), "atlas")
 export const irisPinned = irisPinnedSig
 export const irisActiveSurface = irisSurfaceSig
 export function irisStripTabs(): { id: SurfaceId; label: string; pinned: boolean }[] {
@@ -1044,6 +1051,7 @@ export function toggleIrisPin(id: string): boolean {
   const next = cur.includes(sid) ? cur.filter((x) => x !== sid) : [...cur, sid]
   if (!next.length) return true
   setIrisPinnedSig(next)
+  setPinsRawSig(JSON.stringify(next))
   try {
     localStorage.setItem(PINNED_KEY, JSON.stringify(next))
   } catch {}
@@ -1239,15 +1247,10 @@ export function SessionIrisTab() {
     setRequestedSurface(undefined)
   })
 
-  const [surface, setSurface] = createSignal<SurfaceId>(
-    (() => {
-      try {
-        return normalizeSurface(localStorage.getItem(LAST_SURFACE_KEY))
-      } catch {
-        return "atlas" as SurfaceId
-      }
-    })(),
-  )
+  // From the shared signal, not storage: it already holds this launch's opening product
+  // (#189766), and it survives the panel closing and reopening, so a product picked earlier in
+  // this launch is still the one on screen.
+  const [surface, setSurface] = createSignal<SurfaceId>(irisSurfaceSig())
   // The side panel's strip highlights the product on screen — keep the shared signal current.
   createEffect(() => setIrisSurfaceSig(surface()))
 

@@ -18,6 +18,29 @@ export function readPinnedIds<T extends string>(raw: string | null, valid: reado
   return [...fallback]
 }
 
+/**
+ * Did the person pin this product THEMSELVES (#189766)? Only a stored, valid pin list counts.
+ * The default set (pages, atlas, agents, pulse) is what everyone gets without choosing, so
+ * reading it as a choice would make "only if they added it" true for nearly everyone.
+ */
+export function pinnedByChoice(raw: string | null, id: string): boolean {
+  try {
+    const list = JSON.parse(raw ?? "null")
+    return Array.isArray(list) && list.includes(id)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Which product the panel opens on when the app starts (#189766). Atlas, for anyone who pinned
+ * it; everyone else gets the product they used last, exactly as before. Applied once per launch
+ * — a product you pick after that stays picked until the next launch.
+ */
+export function openingSurface<T extends string>(lastUsed: T, pinsRaw: string | null): T | "atlas" {
+  return pinnedByChoice(pinsRaw, "atlas") ? "atlas" : lastUsed
+}
+
 /** The tabs actually drawn: the pinned set, plus the active product if it is not pinned. */
 export function visibleTabs<T extends string>(pinned: T[], active: T): T[] {
   return pinned.includes(active) ? pinned : [...pinned, active]

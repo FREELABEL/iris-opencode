@@ -43,6 +43,7 @@ import {
   irisPinned,
   toggleIrisPin,
   irisFilesPinned,
+  irisOpensOnAtlas,
   toggleIrisFilesPin,
   irisScopeChip,
 } from "@/components/session/session-iris-tab"
@@ -207,6 +208,7 @@ export function SessionSidePanel(props: {
     hasReview: props.canReview,
     reviewFirst: props.reviewFirst,
     filesPinned,
+    preferIris: irisOpensOnAtlas,
     fileBrowser: () => !!props.fileBrowserState,
   })
   const contextOpen = tabState.contextOpen

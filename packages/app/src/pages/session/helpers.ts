@@ -28,6 +28,11 @@ type TabsInput = {
    */
   reviewFirst?: Accessor<boolean>
   /**
+   * The person pinned Atlas themselves (#189766): when nothing else is open, the panel opens on
+   * IRIS rather than Files/Review — even in a git project. Omitted = false.
+   */
+  preferIris?: Accessor<boolean>
+  /**
    * Whether the Review/file-tree tab is pinned (#187129). Unpinned, it is not a tab at all: it
    * cannot be the active one and is never the default. Separate from `review` on purpose — that is
    * "this layout has a review tab" (desktop), and mobile must not change with a desktop pin.
@@ -48,6 +53,7 @@ export const createSessionTabs = (input: TabsInput) => {
   const reviewFirst = input.reviewFirst ?? (() => true)
   const filesPinned = input.filesPinned ?? (() => true)
   const fileBrowser = input.fileBrowser ?? (() => false)
+  const preferIris = input.preferIris ?? (() => false)
   const contextOpen = createMemo(() => input.tabs().active() === "context" || input.tabs().all().includes("context"))
   // Atlas mirrors context exactly: a named panel tab that is not a file, so it must be excluded
   // from panelTabs (which is the FILE tab list) and named in activeTab/closableTab.
@@ -94,6 +100,9 @@ export const createSessionTabs = (input: TabsInput) => {
     if (contextOpen()) return "context"
     if (irisOpen()) return "iris"
     if (webOpen()) return "web"
+    // Someone who pinned Atlas opens on IRIS, not Files/Review (#189766). Only the FALLBACK
+    // changes: a tab they opened themselves (above) still wins.
+    if (preferIris()) return "iris"
     if (review() && hasReview()) return reviewFirst() && filesPinned() ? "review" : "iris"
     return "empty"
   })
