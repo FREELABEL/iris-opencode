@@ -3001,6 +3001,8 @@ export interface ShareMember {
   name: string
   email: string
   permission: string
+  /** A narrowed membership — "assigned" means only the cards assigned to them. */
+  scope?: string
 }
 export interface ShareLink {
   id: string
@@ -3048,11 +3050,14 @@ export function readEmailList(v: unknown): string[] {
 
 /** BloqUserController@index rows: {id, name, email, username, permission: viewer|editor|owner, status, …}. */
 export function readShareMember(r: any): ShareMember {
+  const scope = r?.scope_type ?? r?.pivot?.scope_type
   return {
     userId: Number(r?.id ?? r?.user_id),
     name: String(r?.name ?? r?.username ?? ""),
     email: String(r?.email ?? ""),
     permission: String(r?.permission ?? "viewer"),
+    // 'assigned' = sees only the cards assigned to them (#189801 ADR-02). Absent = whole board.
+    ...(scope && scope !== "bloq" ? { scope: String(scope) } : {}),
   }
 }
 
@@ -3297,24 +3302,33 @@ export async function fetchAssignees(itemId: number): Promise<PlatformResult<{ a
   }
 }
 
+/**
+ * Assign a person (by id or email) or an agent. Assigning someone who is not on the board gives
+ * them access to the cards assigned to them (#189801 ADR-02) — `accessGranted` says when it did.
+ */
 export async function assign(
   itemId: number,
-  who: { userId?: number; agentId?: number },
-): Promise<Ok & { assignees?: AtlasAssignee[] }> {
+  who: { userId?: number; agentId?: number; email?: string },
+): Promise<Ok & { assignees?: AtlasAssignee[]; accessGranted?: boolean }> {
   const userId = await resolveUserId()
   if (!userId) return { ok: false, reason: notSignedIn() }
-  if (!who.userId === !who.agentId) return { ok: false, reason: "assign a person or an agent" }
+  const given = [who.userId, who.agentId, who.email?.trim()].filter(Boolean)
+  if (given.length !== 1) return { ok: false, reason: "assign one person, email or agent" }
   const r = await postJson(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/assignees`, {
-    ...(who.userId ? { user_id: who.userId } : { agent_id: who.agentId }),
+    ...(who.userId ? { user_id: who.userId } : who.agentId ? { agent_id: who.agentId } : { email: who.email!.trim() }),
   })
-  return r.ok ? { ok: true, assignees: readAssignees(r.data?.data?.assignees ?? r.data?.assignees) } : { ok: false, reason: r.reason }
+  if (!r.ok) return { ok: false, reason: r.reason }
+  const d = r.data?.data ?? r.data
+  return { ok: true, assignees: readAssignees(d?.assignees), accessGranted: d?.access_granted === true }
 }
 
-export async function unassign(itemId: number, assigneeId: number): Promise<Ok & { assignees?: AtlasAssignee[] }> {
+export async function unassign(itemId: number, assigneeId: number): Promise<Ok & { assignees?: AtlasAssignee[]; accessRemoved?: boolean }> {
   const userId = await resolveUserId()
   if (!userId) return { ok: false, reason: notSignedIn() }
   const r = await postJson(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/assignees/${assigneeId}`, undefined, "DELETE")
-  return r.ok ? { ok: true, assignees: readAssignees(r.data?.data?.assignees ?? r.data?.assignees) } : { ok: false, reason: r.reason }
+  if (!r.ok) return { ok: false, reason: r.reason }
+  const d = r.data?.data ?? r.data
+  return { ok: true, assignees: readAssignees(d?.assignees), accessRemoved: d?.access_removed === true }
 }
 
 function readAssignees(rows: any): AtlasAssignee[] {

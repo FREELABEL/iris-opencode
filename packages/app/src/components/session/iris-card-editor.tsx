@@ -357,9 +357,10 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
   )
 
   /*
-   * ASSIGNEES (#189796). Who the card is assigned to, from fl-api's /assignees (#189792). Only the
-   * board's members and agents are offered: fl-api refuses anyone else ("invite them first"),
-   * because assigning is not access (#189801 ADR-02).
+   * ASSIGNEES (#189796). Who the card is assigned to, from fl-api's /assignees (#189792). The
+   * board's members and agents are offered; anyone else can be assigned BY EMAIL, and that gives
+   * them access to the cards assigned to them — assigning ties the access (#189801 ADR-02). Only
+   * the board's owner can bring someone in this way; fl-api says so when it refuses.
    */
   type Assignee = { id: number; type: "user" | "agent"; userId?: number; agentId?: number; name?: string }
   const [assignees, { mutate: setAssignees }] = createResource(
@@ -392,6 +393,22 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
     ]
     return all.filter((x) => !taken.has(x.key))
   })
+  const [assignEmail, setAssignEmail] = createSignal("")
+  async function addByEmail() {
+    const email = assignEmail().trim()
+    if (!email) return
+    setAssignNote(null)
+    const out = await post(`/iris/item/${props.itemId}/assignees`, { email })
+    if (out.ok && Array.isArray(out.assignees)) {
+      setAssignees((cur) => (cur ? { ...cur, assignees: out.assignees } : cur))
+      setAssignEmail("")
+      setAssignNote({
+        ok: true,
+        text: out.accessGranted ? `${email} can now see and work on the cards assigned to them — nothing else on this board.` : `Assigned ${email}.`,
+      })
+      props.onChanged?.()
+    } else setAssignNote({ ok: false, text: out.reason ?? "could not assign" })
+  }
   async function addAssignee(key: string) {
     const pick = assignable().find((x) => x.key === key)
     if (!pick) return
@@ -407,6 +424,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
     const out = await post(`/iris/item/${props.itemId}/assignees/${a.id}`, undefined, { method: "DELETE" })
     if (out.ok && Array.isArray(out.assignees)) {
       setAssignees((cur) => (cur ? { ...cur, assignees: out.assignees } : cur))
+      if (out.accessRemoved) setAssignNote({ ok: true, text: `${a.name ?? "They"} no longer have access to this board — that was their last card.` })
       props.onChanged?.()
     } else setAssignNote({ ok: false, text: out.reason ?? "could not unassign" })
   }
@@ -1122,6 +1140,25 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                               <option value="">+ Assign…</option>
                               <For each={assignable()}>{(x) => <option value={x.key}>{x.label}</option>}</For>
                             </select>
+                          </Show>
+                          <Show when={assignees.latest?.measured}>
+                            <form
+                              class="iris-card__assignmail"
+                              onSubmit={(e) => {
+                                e.preventDefault()
+                                void addByEmail()
+                              }}
+                            >
+                              <input
+                                class="iris-field__input"
+                                type="email"
+                                placeholder="or assign by email"
+                                aria-label="Assign by email"
+                                title="Someone not on this board gets access to the cards assigned to them, and nothing else"
+                                value={assignEmail()}
+                                onInput={(e) => setAssignEmail(e.currentTarget.value)}
+                              />
+                            </form>
                           </Show>
                         </div>
                         <NoteLine note={assignNote()} />

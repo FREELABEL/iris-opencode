@@ -470,7 +470,7 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
       ),
     )
     const itemAssign = Effect.fn("IrisHttpApi.itemAssign")(
-      (ctx: { params: { itemID: number }; payload: { userId?: number; agentId?: number } }) =>
+      (ctx: { params: { itemID: number }; payload: { userId?: number; agentId?: number; email?: string } }) =>
         Effect.promise(() => assign(ctx.params.itemID, ctx.payload)),
     )
     const itemUnassign = Effect.fn("IrisHttpApi.itemUnassign")((ctx: { params: { itemID: number; assigneeID: number } }) =>

@@ -16,7 +16,7 @@ export interface BoardMembers {
   reason?: string
   ownerId: number | null
   youAreOwner: boolean
-  members: { userId: number; name: string; email: string; permission: string }[]
+  members: { userId: number; name: string; email: string; permission: string; scope?: string }[]
 }
 
 export async function readMembers(doFetch: Fetch, bloqId: number): Promise<BoardMembers> {
@@ -89,6 +89,11 @@ export function IrisBoardMembers(props: { bloqId: number; boardName?: string; do
                     <Show when={m.name && m.email}>
                       <span class="text-11-regular text-text-weaker"> · {m.email}</span>
                     </Show>
+                    <Show when={m.scope}>
+                      <span class="iris-card__chip ms-1" title="Their access is limited">
+                        {m.scope === "assigned" ? "assigned cards only" : `${m.scope} only`}
+                      </span>
+                    </Show>
                   </span>
                   <Show
                     when={data.latest!.youAreOwner}
@@ -160,7 +165,10 @@ export function IrisBoardMembers(props: { bloqId: number; boardName?: string; do
                 {busy() ? "…" : "Invite"}
               </button>
             </form>
-            <p class="text-11-regular text-text-weaker">An editor can add and edit cards; a viewer can read. They get an email.</p>
+            <p class="text-11-regular text-text-weaker">
+              An editor can add and edit cards; a viewer can read. They get an email. To give someone just one card, assign them
+              to it by email from the card instead.
+            </p>
           </Show>
         </Show>
         <Show when={note()}>

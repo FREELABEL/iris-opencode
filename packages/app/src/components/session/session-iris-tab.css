@@ -2488,3 +2488,11 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 .iris-members__invite input {
   flex: 1;
 }
+
+.iris-card__assignmail {
+  flex: 1 1 160px;
+  min-width: 140px;
+}
+.iris-card__assignmail input {
+  width: 100%;
+}

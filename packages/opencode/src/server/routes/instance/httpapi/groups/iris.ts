@@ -1599,7 +1599,15 @@ export const IrisApi = HttpApi.make("iris").add(
             ...Measured,
             ownerId: Schema.NullOr(Schema.Finite),
             youAreOwner: Schema.Boolean,
-            members: Schema.Array(Schema.Struct({ userId: Schema.Finite, name: Schema.String, email: Schema.String, permission: Schema.String })),
+            members: Schema.Array(
+              Schema.Struct({
+                userId: Schema.Finite,
+                name: Schema.String,
+                email: Schema.String,
+                permission: Schema.String,
+                scope: Schema.optional(described(Schema.String, "'assigned' = only the cards assigned to them")),
+              }),
+            ),
           }).annotate({ identifier: "IrisAtlasMembers" }),
           "Who is on the board (#189795)",
         ),
@@ -1624,18 +1632,22 @@ export const IrisApi = HttpApi.make("iris").add(
       }).annotateMerge(OpenApi.annotations({ identifier: "iris.itemAssignees", summary: "List a card's assignees" })),
       HttpApiEndpoint.post("itemAssign", IrisPaths.itemAssignees, {
         params: { itemID: Schema.NumberFromString },
-        payload: Schema.Struct({ userId: Schema.optional(Schema.Finite), agentId: Schema.optional(Schema.Finite) }),
-        success: described(Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String), assignees: Schema.optional(Schema.Array(Schema.Struct({ id: Schema.Finite, type: Schema.Literals(["user", "agent"]), userId: Schema.optional(Schema.Finite), agentId: Schema.optional(Schema.Finite), name: Schema.optional(Schema.String) }))) }).annotate({ identifier: "IrisItemAssignResult" }), "The card's assignees after"),
+        payload: Schema.Struct({
+          userId: Schema.optional(Schema.Finite),
+          agentId: Schema.optional(Schema.Finite),
+          email: described(Schema.optional(Schema.String), "Assign by email — someone not on the board gets access to their assigned cards"),
+        }),
+        success: described(Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String), accessGranted: Schema.optional(Schema.Boolean), assignees: Schema.optional(Schema.Array(Schema.Struct({ id: Schema.Finite, type: Schema.Literals(["user", "agent"]), userId: Schema.optional(Schema.Finite), agentId: Schema.optional(Schema.Finite), name: Schema.optional(Schema.String) }))) }).annotate({ identifier: "IrisItemAssignResult" }), "The card's assignees after"),
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "iris.itemAssign",
           summary: "Assign a board member or agent to a card",
-          description: "fl-api refuses anyone not on the board, in words (#189801 ADR-02: assigning is not access).",
+          description: "Assigning someone not on the board gives them access to the cards assigned to them (#189801 ADR-02); only the board owner can grant that.",
         }),
       ),
       HttpApiEndpoint.delete("itemUnassign", IrisPaths.itemAssignee, {
         params: { itemID: Schema.NumberFromString, assigneeID: Schema.NumberFromString },
-        success: described(Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String), assignees: Schema.optional(Schema.Array(Schema.Struct({ id: Schema.Finite, type: Schema.Literals(["user", "agent"]), userId: Schema.optional(Schema.Finite), agentId: Schema.optional(Schema.Finite), name: Schema.optional(Schema.String) }))) }), "The card's assignees after"),
+        success: described(Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String), accessRemoved: Schema.optional(Schema.Boolean), assignees: Schema.optional(Schema.Array(Schema.Struct({ id: Schema.Finite, type: Schema.Literals(["user", "agent"]), userId: Schema.optional(Schema.Finite), agentId: Schema.optional(Schema.Finite), name: Schema.optional(Schema.String) }))) }), "The card's assignees after"),
       }).annotateMerge(OpenApi.annotations({ identifier: "iris.itemUnassign", summary: "Unassign someone from a card" })),
       HttpApiEndpoint.get("atlasLive", IrisPaths.atlasLive, {
         params: { bloqID: Schema.NumberFromString },
