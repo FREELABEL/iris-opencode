@@ -1,4 +1,4 @@
-name: Release iris2 (preview)
+name: Release iris2 (preview) and iris on v2 (stable)
 
 # iris2 — IRIS on the opencode v2 engine — ships BESIDE the stable `iris`, never in place of it
 # (#188596). Users opt in with `iris iris2 install`; `iris2 upgrade` moves them forward.
@@ -18,11 +18,22 @@ name: Release iris2 (preview)
 # updater the front door imports) — the build fails loudly if it does not.
 #
 # Cut one:  git tag iris2-v1.5.0-beta.1 <commit-on-the-iris2-branch> && git push origin iris2-v1.5.0-beta.1
+#
+# STABLE (the switch-over, #188596): a bare vX.Y.Z tag (1.5.0 or higher) on this branch builds the
+# same binary as the stable `iris` — assets `iris-<os>-<arch>.*`, binary named `iris`, a normal
+# (not pre-) release. `iris update` and the installers take the highest `v*` release, so this is
+# what every user gets. main's release.yml refuses anything lower once it exists, so a 1.3.x
+# cannot take users back. make_latest stays false: GitHub's "latest" is what the Electron desktop
+# download links resolve through, and this release carries no desktop assets.
+# main's release.yml does NOT fire for these tags: a tag runs the workflows of the commit it
+# points at, and this branch has no release.yml.
+#   git tag v1.5.0 <commit-on-the-iris2-branch> && git push origin v1.5.0
 
 on:
   push:
     tags:
       - 'iris2-v*'
+      - 'v*'
 
 permissions:
   contents: write
@@ -36,20 +47,39 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
+      channel: ${{ steps.v.outputs.channel }}
+      name: ${{ steps.v.outputs.name }}
       main_sha: ${{ steps.main.outputs.sha }}
     steps:
       - name: Version from tag
         id: v
         run: |
           set -euo pipefail
-          V="${GITHUB_REF_NAME#iris2-v}"
-          # Prerelease semver only: 1.5.0-beta.N. A bare 1.5.0 is reserved for the switch-over,
-          # when this build replaces `iris` through main's release.yml under a v1.5.0 tag.
-          if ! [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+$ ]]; then
-            echo "::error::iris2 tags must be iris2-vX.Y.Z-<pre> (e.g. iris2-v1.5.0-beta.1); got $GITHUB_REF_NAME"
+          if [[ "$GITHUB_REF_NAME" == iris2-v* ]]; then
+            V="${GITHUB_REF_NAME#iris2-v}"
+            # Prerelease semver only: 1.5.0-beta.N. Bare versions are stable and use a v tag.
+            if ! [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+$ ]]; then
+              echo "::error::iris2 tags must be iris2-vX.Y.Z-<pre> (e.g. iris2-v1.5.0-beta.1); got $GITHUB_REF_NAME"
+              exit 1
+            fi
+            { echo "version=$V"; echo "channel=preview"; echo "name=iris2"; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          V="${GITHUB_REF_NAME#v}"
+          if ! [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || [ "$(printf '%s\n1.5.0\n' "$V" | sort -V | head -1)" != "1.5.0" ]; then
+            echo "::error::stable tags on this branch must be vX.Y.Z at or above v1.5.0 (the switch-over); got $GITHUB_REF_NAME"
             exit 1
           fi
-          echo "version=$V" >> "$GITHUB_OUTPUT"
+          # Same rule as main's release.yml: never publish below the newest CLI release.
+          HIGHEST=$(gh api "repos/${{ github.repository }}/releases?per_page=100" --paginate -q '.[] | select(.draft | not) | .tag_name' \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' | sort -V | tail -1)
+          if [ -n "$HIGHEST" ] && [ "$V" != "$HIGHEST" ] && [ "$(printf '%s\n%s\n' "$V" "$HIGHEST" | sort -V | tail -1)" = "$HIGHEST" ]; then
+            echo "::error::v$V is below v$HIGHEST, the newest CLI release"
+            exit 1
+          fi
+          { echo "version=$V"; echo "channel=stable"; echo "name=iris"; } >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
       - name: Resolve main
         id: main
         run: |
@@ -123,7 +153,7 @@ jobs:
           # `iris` keeps the -iris DB suffix the spike used (#187712 I4), so preview users keep
           # their history when this build later becomes the stable `iris`.
           OPENCODE_CHANNEL: iris
-          IRIS_CLI_NAME: iris2
+          IRIS_CLI_NAME: ${{ needs.prepare.outputs.name }}
 
       - name: Locate binary
         id: bin
@@ -139,6 +169,9 @@ jobs:
           # Git-bash paths (/d/a/...) mean nothing to the pwsh packaging step (beta.3).
           [ "${{ runner.os }}" = "Windows" ] && P=$(cygpath -w "$P")
           echo "path=$P" >> "$GITHUB_OUTPUT"
+          # Stable also ships the musl builds: the installer falls back to them on musl Linux.
+          MUSL=$(ls -d cli-*-musl/bin/$EXE 2>/dev/null | grep -v -- '-baseline' | head -1 || true)
+          echo "musl=${MUSL:+$(pwd)/$MUSL}" >> "$GITHUB_OUTPUT"
 
       # The compiled binary must answer as iris2, carry the platform commands, and be able to
       # search its capability index (the v1.3.156 lesson: files read at runtime are not bundled).
@@ -154,7 +187,11 @@ jobs:
           [ "$V" = "${{ needs.prepare.outputs.version }}" ] || { echo "::error::--version says '$V'"; exit 1; }
           HELP=$("$BIN" --help)
           echo "$HELP" | head -3
-          echo "$HELP" | grep -q '^iris2 ' || { echo "::error::help does not identify as iris2"; exit 1; }
+          if [ "${{ needs.prepare.outputs.channel }}" = "preview" ]; then
+            echo "$HELP" | grep -q '^iris2 ' || { echo "::error::help does not identify as iris2"; exit 1; }
+          else
+            ! echo "$HELP" | grep -qi 'preview' || { echo "::error::a stable build must not call itself a preview"; exit 1; }
+          fi
           echo "$HELP" | grep -q atlas && echo "$HELP" | grep -q bloq || { echo "::error::platform commands missing from help"; exit 1; }
           "$BIN" find "genesis bespoke html page" --json | grep -q '"matched": [1-9]' || { echo "::error::capability discovery is dead in this build"; exit 1; }
           "$BIN" iris2 --help | grep -q 'install' || { echo "::error::the iris2 updater is not in this build"; exit 1; }
@@ -165,13 +202,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          N="${{ needs.prepare.outputs.name }}"
           mkdir -p out pkg
-          cp "${{ steps.bin.outputs.path }}" pkg/iris2
-          chmod 755 pkg/iris2
+          cp "${{ steps.bin.outputs.path }}" "pkg/$N"
+          chmod 755 "pkg/$N"
           if [[ "${{ matrix.target }}" == linux-* ]]; then
-            tar -czf "out/iris2-${{ matrix.target }}.tar.gz" -C pkg iris2
+            tar -czf "out/$N-${{ matrix.target }}.tar.gz" -C pkg "$N"
+            if [ "${{ needs.prepare.outputs.channel }}" = "stable" ] && [ -n "${{ steps.bin.outputs.musl }}" ]; then
+              mkdir -p pkg-musl && cp "${{ steps.bin.outputs.musl }}" "pkg-musl/$N" && chmod 755 "pkg-musl/$N"
+              tar -czf "out/$N-${{ matrix.target }}-musl.tar.gz" -C pkg-musl "$N"
+            fi
           else
-            (cd pkg && zip -q "../out/iris2-${{ matrix.target }}.zip" iris2)
+            (cd pkg && zip -q "../out/$N-${{ matrix.target }}.zip" "$N")
           fi
           ls -la out
 
@@ -180,14 +222,15 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path out, pkg | Out-Null
-          Copy-Item "${{ steps.bin.outputs.path }}" pkg/iris2.exe
-          & pkg/iris2.exe --version
-          if ($LASTEXITCODE -ne 0) { throw "iris2.exe --version failed" }
-          Compress-Archive -Path pkg/iris2.exe -DestinationPath "out/iris2-${{ matrix.target }}.zip"
+          $N = "${{ needs.prepare.outputs.name }}"
+          Copy-Item "${{ steps.bin.outputs.path }}" "pkg/$N.exe"
+          & "pkg/$N.exe" --version
+          if ($LASTEXITCODE -ne 0) { throw "$N.exe --version failed" }
+          Compress-Archive -Path "pkg/$N.exe" -DestinationPath "out/$N-${{ matrix.target }}.zip"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: iris2-${{ matrix.target }}
+          name: ${{ needs.prepare.outputs.name }}-${{ matrix.target }}
           path: out/*
 
   release:
@@ -207,10 +250,15 @@ jobs:
           set -euo pipefail
           MISSING=""
           PRESENT=0
-          for a in iris2-darwin-arm64.zip iris2-darwin-x64.zip iris2-linux-x64.tar.gz iris2-linux-arm64.tar.gz iris2-windows-x64.zip; do
+          N="${{ needs.prepare.outputs.name }}"
+          for a in $N-darwin-arm64.zip $N-darwin-x64.zip $N-linux-x64.tar.gz $N-linux-arm64.tar.gz $N-windows-x64.zip; do
             if [ -f "artifacts/$a" ]; then PRESENT=$((PRESENT+1)); else MISSING="$MISSING $a"; fi
           done
           [ "$PRESENT" -gt 0 ] || { echo "::error::nothing built — refusing to publish"; exit 1; }
+          # Stable replaces every user's `iris`: the four Unix platforms are required, not best-effort.
+          if [ "${{ needs.prepare.outputs.channel }}" = "stable" ] && echo "$MISSING" | grep -qE 'darwin|linux'; then
+            echo "::error::stable release is missing a required platform:$MISSING"; exit 1
+          fi
           if [ -n "$MISSING" ]; then
             echo "::warning::partial iris2 release — missing:$MISSING"
             echo "note=> [!WARNING] Not built for:$MISSING — \`iris iris2 install\` on those platforms reports no asset." >> "$GITHUB_OUTPUT"
@@ -228,7 +276,8 @@ jobs:
           for f in *.zip *.tar.gz; do sha256sum -c "$f.sha256" >/dev/null; done
           { echo '### Checksums'; echo '```'; cat *.sha256; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Publish (prerelease, never latest)
+      - name: Publish preview (prerelease, never latest)
+        if: needs.prepare.outputs.channel == 'preview'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
@@ -247,6 +296,34 @@ jobs:
 
             Platform commands synced from `main` @ `${{ needs.prepare.outputs.main_sha }}`.
             Known gaps: chat history from `iris` does not carry over; you may need to log in once; not every command is verified yet. Tracking: #188596.
+
+            ${{ steps.assets.outputs.note }}
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.zip
+            artifacts/*.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish stable (a normal release; never GitHub's "latest")
+        if: needs.prepare.outputs.channel == 'stable'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: IRIS Code v${{ needs.prepare.outputs.version }}
+          draft: false
+          prerelease: false
+          make_latest: false
+          body: |
+            **IRIS Code ${{ needs.prepare.outputs.version }} — on the new engine.** Plain `iris` now opens the new TUI. Every `iris` command you use works as before.
+
+            ```
+            iris upgrade
+            ```
+
+            Your MCP servers (including IRIS OS), agents and commands carry over. Chat history from earlier versions stays where it was and does not appear in the new TUI.
+
+            Platform commands synced from `main` @ `${{ needs.prepare.outputs.main_sha }}`. Tracking: #188596.
 
             ${{ steps.assets.outputs.note }}
           files: |

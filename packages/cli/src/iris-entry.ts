@@ -184,8 +184,13 @@ function irisProviderConfig(traceId: string): string {
 
 const argv = process.argv.slice(2)
 const first = argv[0]
+// A prerelease version is the opt-in iris2 preview that sits beside `iris`. A bare version is
+// the stable `iris` itself (#188596): it gets v1's full help and v1's uninstall, not the
+// "your stable iris is separate" wording, which would be false.
+const PREVIEW = IRIS_VERSION.includes("-")
+const help = first === "--help" || first === "-h" || first === "help"
 
-if (first === "--help" || first === "-h" || first === "help") {
+if (help && PREVIEW) {
   process.stdout.write(helpText())
   process.exit(0)
 }
@@ -202,7 +207,7 @@ if (first === "upgrade" || first === "update") {
   const { selfUpdate } = await import("./iris-v1/cli/cmd/iris2")
   process.exit(await selfUpdate(argv.slice(1), IRIS_VERSION))
 }
-if (first === "uninstall") {
+if (first === "uninstall" && PREVIEW) {
   process.stdout.write("Remove iris2 with: iris iris2 remove   (your stable iris and its data are untouched)\n")
   process.exit(0)
 }
@@ -221,11 +226,13 @@ const head = first?.split(":")[0]
 // hung silently: `iris --continue` drew nothing. Same rule v1's thread.ts used for a directory —
 // it contains "/" or ".", so a plain word is still read as a command. Help/version are claimed above.
 const toV2 =
-  first === undefined ||
+  !help &&
+  first !== "uninstall" &&
+  (first === undefined ||
   V2_OWNED.has(head!) ||
   first.startsWith("-") ||
   first.includes("/") ||
-  first.includes(".")
+  first.includes("."))
 
 if (toV2) {
   // ── Isolation from the user's own opencode data (I4) is NOT done here ───────
