@@ -1482,6 +1482,82 @@ export function SessionIrisTab() {
       else localStorage.removeItem(foldKey())
     } catch {}
   }
+  /*
+   * QUICK ADD (#189768). One composer open at a time — a list id, or "list" for a new list.
+   * Enter saves and keeps it open for the next card; Esc closes it. The card shows at the end
+   * of the list straight away, dimmed, until the board re-reads with it; a refusal takes it
+   * back and says why under the box.
+   */
+  const [composer, setComposer] = createSignal<number | "list" | undefined>()
+  const [composerText, setComposerText] = createSignal("")
+  const [composerError, setComposerError] = createSignal<string | undefined>()
+  const [pendingCards, setPendingCards] = createSignal<{ key: number; listId: number; title: string }[]>([])
+  let pendingSeq = 0
+  const openComposer = (target: number | "list") => {
+    setComposer(target)
+    setComposerText("")
+    setComposerError(undefined)
+  }
+  async function submitComposer() {
+    const target = composer()
+    const b = activeBloq()
+    const text = composerText().trim()
+    if (target === undefined || b == null || !text) return
+    setComposerError(undefined)
+    setComposerText("")
+    if (target === "list") {
+      const res = await doFetch(`/iris/atlas/${b}/lists`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: text, position: rows().length }),
+      })
+      const j = (await res.json().catch(() => ({}))) as { ok?: boolean; reason?: string }
+      if (!res.ok || !j.ok) {
+        setComposerText(text)
+        setComposerError(j.reason ?? `HTTP ${res.status}`)
+        return
+      }
+      setComposer(undefined)
+      liveRefresh(false)
+      return
+    }
+    const list = (rows() as AtlasList[]).find((l) => l.id === target)
+    const key = ++pendingSeq
+    setPendingCards((p) => [...p, { key, listId: target, title: text }])
+    const drop = () => setPendingCards((p) => p.filter((x) => x.key !== key))
+    try {
+      const res = await doFetch(`/iris/atlas/${b}/lists/${target}/items`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: text,
+          position: (list?.items.length ?? 0) + pendingCards().filter((x) => x.listId === target).length - 1,
+        }),
+      })
+      const j = (await res.json().catch(() => ({}))) as { ok?: boolean; reason?: string }
+      if (!res.ok || !j.ok) {
+        drop()
+        if (composer() === target && !composerText()) setComposerText(text)
+        setComposerError(j.reason ?? `HTTP ${res.status}`)
+        return
+      }
+      await refetchSurface()
+    } catch (e) {
+      setComposerError(e instanceof Error ? e.message : String(e))
+    }
+    drop()
+  }
+  const composerKeys = (e: KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+      e.preventDefault()
+      void submitComposer()
+    } else if (e.key === "Escape") {
+      e.preventDefault()
+      e.stopPropagation()
+      setComposer(undefined)
+    }
+  }
+
   const [copiedId, setCopiedId] = createSignal<number | undefined>()
   const copyItemId = (id: number) => {
     void navigator.clipboard?.writeText(`#${id}`).catch(() => {})
@@ -3207,19 +3283,33 @@ export function SessionIrisTab() {
                     <section class="iris-atlas-list" classList={{ "iris-atlas-list--folded": isFolded(list) }}>
                       {/* The header folds the list. Counts in mono + tabular, so columns of numbers
                           line up and read as data. */}
-                      <button
-                        type="button"
-                        class="iris-atlas-list__head"
-                        aria-expanded={!isFolded(list)}
-                        title={isFolded(list) ? "Show this list" : "Fold this list"}
-                        onClick={() => toggleFold(list)}
-                      >
-                        <span class="iris-atlas-list__chev" aria-hidden="true">
-                          ›
-                        </span>
-                        <h3 class="text-12-medium text-text-base">{list.name}</h3>
-                        <span class="font-mono tabular-nums text-11-regular text-text-weak">{list.items.length}</span>
-                      </button>
+                      <div class="iris-atlas-list__bar">
+                        <button
+                          type="button"
+                          class="iris-atlas-list__head"
+                          aria-expanded={!isFolded(list)}
+                          title={isFolded(list) ? "Show this list" : "Fold this list"}
+                          onClick={() => toggleFold(list)}
+                        >
+                          <span class="iris-atlas-list__chev" aria-hidden="true">
+                            ›
+                          </span>
+                          <h3 class="text-12-medium text-text-base">{list.name}</h3>
+                          <span class="font-mono tabular-nums text-11-regular text-text-weak">{list.items.length}</span>
+                        </button>
+                        <button
+                          type="button"
+                          class="iris-atlas-list__add"
+                          title={`Add a card to ${list.name}`}
+                          aria-label={`Add a card to ${list.name}`}
+                          onClick={() => {
+                            if (isFolded(list)) toggleFold(list)
+                            openComposer(list.id)
+                          }}
+                        >
+                          +
+                        </button>
+                      </div>
                       <Show when={!isFolded(list)}>
                         <For each={list.items}>
                           {(item) => {
@@ -3281,10 +3371,69 @@ export function SessionIrisTab() {
                             )
                           }}
                         </For>
+                        <For each={pendingCards().filter((p) => p.listId === list.id)}>
+                          {(p) => (
+                            <div class="iris-atlas-row iris-atlas-row--pending" aria-busy="true">
+                              <span class="iris-atlas-row__mark" aria-hidden="true">
+                                ·
+                              </span>
+                              <span class="iris-atlas-row__text">
+                                <span class="iris-atlas-row__title">{p.title}</span>
+                              </span>
+                              <span class="iris-atlas-row__meta font-mono text-11-regular text-text-weaker">saving…</span>
+                            </div>
+                          )}
+                        </For>
+                        <Show
+                          when={composer() === list.id}
+                          fallback={
+                            <button type="button" class="iris-atlas-addcard" onClick={() => openComposer(list.id)}>
+                              + Add card
+                            </button>
+                          }
+                        >
+                          <div class="iris-atlas-composer">
+                            <input
+                              ref={(el) => queueMicrotask(() => el.focus())}
+                              type="text"
+                              placeholder="Card title — Enter to add, Esc to close"
+                              value={composerText()}
+                              onInput={(e) => setComposerText(e.currentTarget.value)}
+                              onKeyDown={composerKeys}
+                            />
+                            <Show when={composerError()}>
+                              <p class="iris-atlas-composer__error">Not added — {composerError()}</p>
+                            </Show>
+                          </div>
+                        </Show>
                       </Show>
                     </section>
                   )}
                 </For>
+                <Show when={rows().length > 0 || current()?.measured}>
+                  <Show
+                    when={composer() === "list"}
+                    fallback={
+                      <button type="button" class="iris-atlas-addcard iris-atlas-addlist" onClick={() => openComposer("list")}>
+                        + Add list
+                      </button>
+                    }
+                  >
+                    <div class="iris-atlas-composer">
+                      <input
+                        ref={(el) => queueMicrotask(() => el.focus())}
+                        type="text"
+                        placeholder="List name — Enter to add, Esc to close"
+                        value={composerText()}
+                        onInput={(e) => setComposerText(e.currentTarget.value)}
+                        onKeyDown={composerKeys}
+                      />
+                      <Show when={composerError()}>
+                        <p class="iris-atlas-composer__error">Not added — {composerError()}</p>
+                      </Show>
+                    </div>
+                  </Show>
+                </Show>
               </Match>
 
               <Match when={pane() === "agents"}>

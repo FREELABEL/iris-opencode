@@ -900,6 +900,80 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Quick add (#189768). */
+.iris-atlas-list__bar {
+  display: flex;
+  align-items: center;
+}
+.iris-atlas-list__add {
+  appearance: none;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border-radius: 4px;
+  color: var(--text-weaker);
+  cursor: pointer;
+  opacity: 0;
+}
+.iris-atlas-list__bar:hover .iris-atlas-list__add,
+.iris-atlas-list__add:focus-visible {
+  opacity: 1;
+}
+.iris-atlas-list__add:hover {
+  color: var(--text-base);
+  background: var(--background-element);
+}
+.iris-atlas-addcard {
+  appearance: none;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 11px;
+  color: var(--text-weaker);
+  padding: 3px 8px 3px 26px;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: start;
+}
+.iris-atlas-addcard:hover {
+  color: var(--text-base);
+  background: var(--background-element);
+}
+.iris-atlas-addlist {
+  padding-inline-start: 8px;
+  margin: 2px 0 8px;
+}
+.iris-atlas-composer {
+  padding: 3px 8px 6px 26px;
+}
+.iris-atlas-composer input {
+  width: 100%;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-base);
+  background: var(--background-element);
+  border: 1px solid var(--border-weak-base);
+  border-radius: 5px;
+  padding: 5px 8px;
+  outline: none;
+}
+.iris-atlas-composer input:focus {
+  border-color: var(--text-weak);
+}
+.iris-atlas-composer__error {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--text-weak);
+}
+.iris-atlas-row--pending {
+  cursor: default;
+  opacity: 0.55;
+}
 /* A done card reads as done before you find the tick. */
 .iris-atlas-row--done .iris-atlas-row__title {
   color: var(--text-weaker);
