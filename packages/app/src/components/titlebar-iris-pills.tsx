@@ -120,16 +120,16 @@ interface PlanState {
 export const TITLEBAR_UPGRADE_URL = "https://web.heyiris.io/pricing?source=desktop-titlebar"
 
 /**
- * Whether to show Upgrade — ONLY to someone we KNOW has not paid.
+ * Upgrade is ALWAYS shown — paid, unpaid, unknown, admin, or before the plan has loaded.
  *
- * Keyed on `paid`, never on `plan`. Checkout writes the plan name as the package's own name
- * ("IRIS Solo", "Creator Plan") and the server's tier mapping turns every one of those into
- * `free`, so a tier-keyed button told paying customers to upgrade. Paid, unknown, unmeasured,
- * or a server too old to report `paid`: nothing at all.
+ * It used to show only when the server said `paid === false` (ad53aa7c). In practice that hid
+ * it from nearly everyone: admins are reported paid, any account with a licence seat is paid, and
+ * a slow or failed plan lookup is null — so new users, and the people testing checkout, had no
+ * way in. The button opens the plans dialog, which is useful to a paying customer too (moving up
+ * a tier), so there is no one it is wrong to show it to. `state` only chooses the URL.
  */
-export function planBadge(state: PlanState | undefined): { text: string; url: string } | null {
-  if (!state?.measured || state.paid !== false) return null
-  return { text: "Upgrade", url: state.upgradeUrl || TITLEBAR_UPGRADE_URL }
+export function planBadge(state: PlanState | undefined): { text: string; url: string } {
+  return { text: "Upgrade", url: state?.upgradeUrl || TITLEBAR_UPGRADE_URL }
 }
 
 export function TitlebarIrisPills() {

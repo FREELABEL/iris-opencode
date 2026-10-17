@@ -68,24 +68,25 @@ describe("inboxLabel", () => {
 
 
 describe("planBadge", () => {
-  test("only an account we KNOW has not paid sees Upgrade", () => {
-    expect(planBadge({ measured: true, plan: "free", paid: false, upgradeUrl: "https://x.test/plans" })).toEqual({
-      text: "Upgrade",
-      url: "https://x.test/plans",
-    })
-    expect(planBadge({ measured: true, plan: "free", paid: false, upgradeUrl: null })?.url).toBe(TITLEBAR_UPGRADE_URL)
+  test("everyone sees Upgrade — unpaid, paid, admin, unknown, unmeasured, still loading", () => {
+    // It used to key on paid === false, which hid it from admins, licence holders, and anyone
+    // whose plan lookup was slow or failed — new users included.
+    for (const state of [
+      undefined,
+      { measured: false, plan: null, upgradeUrl: null },
+      { measured: true, plan: "free", paid: false, upgradeUrl: null },
+      { measured: true, plan: "free", paid: true, upgradeUrl: null },
+      { measured: true, plan: "pro", paid: true, upgradeUrl: null },
+      { measured: true, plan: null, paid: null, upgradeUrl: null },
+      { measured: true, plan: "free", upgradeUrl: null },
+    ]) {
+      expect(planBadge(state)).toEqual({ text: "Upgrade", url: TITLEBAR_UPGRADE_URL })
+    }
   })
 
-  test("a paying customer whose plan name maps to free is NOT told to upgrade", () => {
-    // The bug this keys on `paid` to avoid: "IRIS Solo" normalises to the free tier server-side.
-    expect(planBadge({ measured: true, plan: "free", paid: true, upgradeUrl: null })).toBeNull()
-    expect(planBadge({ measured: true, plan: "pro", paid: true, upgradeUrl: null })).toBeNull()
-  })
-
-  test("unknown, unmeasured, or a server too old to report paid shows nothing", () => {
-    expect(planBadge(undefined)).toBeNull()
-    expect(planBadge({ measured: false, plan: "free", paid: false, upgradeUrl: null })).toBeNull()
-    expect(planBadge({ measured: true, plan: "free", paid: null, upgradeUrl: null })).toBeNull()
-    expect(planBadge({ measured: true, plan: "free", upgradeUrl: null })).toBeNull()
+  test("the server's upgrade URL wins over the built-in one", () => {
+    expect(planBadge({ measured: true, plan: "free", paid: true, upgradeUrl: "https://x.test/plans" }).url).toBe(
+      "https://x.test/plans",
+    )
   })
 })
