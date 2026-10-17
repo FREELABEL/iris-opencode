@@ -291,14 +291,14 @@ describe("capture pipeline (fake ffmpeg)", () => {
     expect(currentLevel()).toEqual({ level: 0, seconds: 0 })
   })
 
-  linuxOnly("output goes to stdout, not a file: 16 kHz mono s16le, capped at five minutes", async () => {
+  linuxOnly("output goes to stdout, not a file: 16 kHz mono s16le, hard-capped at the background maximum (the take cap is a timer, #189519)", async () => {
     startCapture()
     await sleep(200)
     await stopCapture()
     const argv = await Bun.file(join(dir, "argv.log")).text()
     expect(argv).toContain("-ar 16000")
     expect(argv).toContain("-f s16le")
-    expect(argv).toContain("-t 300")
+    expect(argv).toContain("-t 3600")
     expect(argv.trim().endsWith("pipe:1")).toBe(true)
   })
 

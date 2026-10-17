@@ -369,6 +369,16 @@ const HiveTaskResponse = Schema.Struct({
       error: Schema.NullOr(Schema.String),
       nodeName: Schema.NullOr(Schema.String),
       durationMs: Schema.NullOr(Schema.Finite),
+      held: described(Schema.Boolean, "Constellation Gate held this run for its owner's approval. It has NOT been sent."),
+      gate: Schema.NullOr(
+        Schema.Struct({
+          explanation: Schema.String,
+          reasons: Schema.Array(Schema.String),
+          action: Schema.NullOr(Schema.String),
+          score: Schema.NullOr(Schema.Finite),
+          hardware: Schema.Array(Schema.String),
+        }),
+      ),
     }).annotate({ identifier: "IrisHiveTask" }),
   ),
 }).annotate({ identifier: "IrisHiveTaskResponse" })
@@ -1053,7 +1063,11 @@ const PlanResponse = Schema.Struct({
   measured: described(Schema.Boolean, "FALSE means we could not ask. Never render that as the Free plan."),
   reason: Schema.optional(Schema.String),
   plan: described(Schema.NullOr(Schema.String), "free | pro | business; NULL for staff."),
-  paid: described(Schema.NullOr(Schema.Boolean), "Has this person paid. NULL = unknown; only false shows Upgrade."),
+  paid: described(Schema.NullOr(Schema.Boolean), "Has this person paid. NULL = unknown."),
+  label: described(
+    Schema.NullOr(Schema.String),
+    "What to call the plan on screen (Free, IRIS Solo, Staff). NULL = the server did not say.",
+  ),
   uncapped: Schema.Boolean,
   upgradeUrl: Schema.NullOr(Schema.String),
 })
@@ -1082,6 +1096,100 @@ const MeResponse = Schema.Struct({
   plan: PlanResponse,
   allowance: AllowanceResponse,
 })
+
+/**
+ * Settings › Security (#189589). Whether Constellation Gate screens this account's model traffic,
+ * WHY (the reason is the rollout policy's own), and what it has done. The policy is the server's;
+ * the panel renders it and never decides it, so it cannot drift from what the proxy does.
+ */
+const GateEventSchema = Schema.Struct({
+  id: Schema.Finite,
+  at: Schema.NullOr(Schema.String),
+  segment: Schema.String,
+  action: described(Schema.String, "clean | flagged | held | error"),
+  mode: Schema.String,
+  verdict: Schema.NullOr(Schema.String),
+  score: Schema.NullOr(Schema.Finite),
+  reasonCode: Schema.NullOr(Schema.String),
+  detected: Schema.Array(Schema.String),
+  sensitivity: Schema.NullOr(Schema.String),
+  latencyMs: Schema.NullOr(Schema.Finite),
+  cached: Schema.Boolean,
+  errorCode: Schema.NullOr(Schema.String),
+  reportedFalse: Schema.Boolean,
+}).annotate({ identifier: "IrisGateEvent" })
+
+const SecurityResponse = Schema.Struct({
+  measured: described(Schema.Boolean, "FALSE means we could not ask. Never render that as Gate off."),
+  reason: Schema.optional(Schema.String),
+  gate: Schema.Struct({
+    enabled: Schema.Boolean,
+    reason: described(Schema.String, "The rollout policy's reason: allowlisted, new_user, phi_no_baa, not_in_rollout, …"),
+    explanation: Schema.String,
+    mode: described(Schema.String, "shadow = scan and record only · enforce = hold flagged tool results"),
+    org: Schema.NullOr(Schema.String),
+    sensitivity: Schema.NullOr(Schema.String),
+    categories: Schema.Array(Schema.String),
+    segments: Schema.Array(Schema.String),
+    failOpen: Schema.Boolean,
+    availableChecks: Schema.Array(Schema.String),
+    sensitivities: Schema.Array(Schema.String),
+    stats: Schema.Struct({
+      windowDays: Schema.Finite,
+      scanned: Schema.Finite,
+      clean: Schema.Finite,
+      flagged: Schema.Finite,
+      held: Schema.Finite,
+      errors: Schema.Finite,
+      reportedFalse: Schema.Finite,
+      reportedFalsePct: Schema.NullOr(Schema.Finite),
+      p50LatencyMs: Schema.NullOr(Schema.Finite),
+      billableTokens: Schema.Finite,
+    }),
+    recent: Schema.Array(GateEventSchema),
+  }),
+  phiGuard: Schema.Struct({ active: Schema.Boolean, mode: Schema.String, explanation: Schema.String }),
+  platform: described(
+    Schema.NullOr(
+      Schema.Struct({
+        rollout: Schema.NullOr(
+          Schema.Struct({
+            enabled: Schema.Boolean,
+            mode: Schema.String,
+            percent: Schema.Finite,
+            newUserDays: Schema.Finite,
+            tiers: Schema.Array(Schema.String),
+            allowUsers: Schema.Finite,
+          }),
+        ),
+        keySource: Schema.String,
+        last24h: Schema.Struct({
+          scanned: Schema.Finite,
+          clean: Schema.Finite,
+          flagged: Schema.Finite,
+          held: Schema.Finite,
+          errors: Schema.Finite,
+          accounts: Schema.Finite,
+          cached: Schema.Finite,
+          p50Ms: Schema.NullOr(Schema.Finite),
+          p95Ms: Schema.NullOr(Schema.Finite),
+          billableTokens: Schema.Finite,
+          reportedFalsePct: Schema.NullOr(Schema.Finite),
+        }),
+        recent: Schema.Array(
+          Schema.Struct({ ...GateEventSchema.fields, userId: Schema.NullOr(Schema.Finite), smoke: Schema.Boolean }),
+        ),
+      }),
+    ),
+    "Platform admins only: the rollout across all of IRIS. Null for everyone else.",
+  ),
+}).annotate({ identifier: "IrisSecurityResponse" })
+
+const GateReportResponse = Schema.Struct({
+  measured: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  event: Schema.NullOr(GateEventSchema),
+}).annotate({ identifier: "IrisGateReportResponse" })
 
 /**
  * ARTIFACTS (epic #186508). What the agent made in this session, from the store in
@@ -1192,6 +1300,7 @@ export const IrisPaths = {
   pageSave: `${root}/page/:pageID/save`,
   item: `${root}/item/:itemID`,
   itemSave: `${root}/item/:itemID/save`,
+  itemMove: `${root}/item/:itemID/move`,
   itemTaskAdd: `${root}/item/:itemID/tasks`,
   itemTaskSave: `${root}/item/:itemID/tasks/:taskID/save`,
   itemTaskDelete: `${root}/item/:itemID/tasks/:taskID/delete`,
@@ -1225,9 +1334,12 @@ export const IrisPaths = {
   hiveMarketScript: `${root}/hive/market/:slug`,
   hiveMarketInstall: `${root}/hive/market/:slug/install`,
   hiveTask: `${root}/hive/tasks/:taskID`,
+  hiveTaskDecide: `${root}/hive/tasks/:taskID/:decision`,
   allowance: `${root}/allowance`,
   plan: `${root}/plan`,
   me: `${root}/me`,
+  security: `${root}/security`,
+  securityGateReport: `${root}/security/gate/events/:id/report`,
   signOut: `${root}/sign-out`,
   accounts: `${root}/accounts`,
   accountSwitch: `${root}/accounts/switch`,
@@ -1278,6 +1390,26 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Account",
           description:
             "Identity from fl-api, plan and allowance from fl-iris-api. The allowance is peeked, so this never consumes the weekly notice and is safe to call whenever Settings opens.",
+        }),
+      ),
+      HttpApiEndpoint.get("security", IrisPaths.security, {
+        success: described(SecurityResponse, "What protects this account's model traffic, and why"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.security",
+          summary: "Security settings",
+          description:
+            "Constellation Gate's state for the account chat uses — on or off and the rollout policy's reason, mode, checks, 30-day stats and recent scans — plus the health-data guard. Decided by fl-iris-api from a remote flag; read-only here.",
+        }),
+      ),
+      HttpApiEndpoint.post("securityGateReport", IrisPaths.securityGateReport, {
+        params: { id: Schema.String },
+        success: described(GateReportResponse, "The event, marked as reported"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.securityGateReport",
+          summary: "Report a Gate mistake",
+          description: "Marks one of your own scan events as wrong. It feeds the false-positive rate; it does not change the verdict.",
         }),
       ),
       HttpApiEndpoint.post("signOut", IrisPaths.signOut, {
@@ -1855,6 +1987,27 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Save a card's fields",
           description:
             "A PATCH in spirit: only the fields present are sent to fl-api's PUT /user/bloqs/list/item/{id}, so saving a title cannot blank the body. Status is checked against the set fl-api accepts before the request is made, and a 422 comes back as the field errors it named, not as a status code.",
+        }),
+      ),
+      HttpApiEndpoint.post("itemMove", IrisPaths.itemMove, {
+        params: { itemID: Schema.NumberFromString },
+        payload: Schema.Struct({
+          listId: described(Schema.Finite, "The list (column) to put the card in, on the same board"),
+          position: described(Schema.Finite, "0-based index in that list's full order, with the card itself taken out"),
+        }),
+        success: described(
+          Schema.Struct({
+            ok: Schema.Boolean,
+            reason: Schema.optional(Schema.String),
+          }).annotate({ identifier: "IrisItemMoveResult" }),
+          "Whether the move landed",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.itemMove",
+          summary: "Move a card to a list and position",
+          description:
+            "The Board view's drag. Sends fl-api's PATCH /user/{uid}/bloqs/list/item/{id}/position, which renumbers the target column and the one the card left — so the order the board shows is the order saved.",
         }),
       ),
       HttpApiEndpoint.post("itemTaskAdd", IrisPaths.itemTaskAdd, {
@@ -2761,6 +2914,7 @@ export const IrisApi = HttpApi.make("iris").add(
         payload: Schema.Struct({
           node: described(Schema.String, "Node id or name, resolved as the CLI does."),
           timeout: Schema.optional(Schema.Finite),
+          args: Schema.optional(described(Schema.Record(Schema.String, Schema.String), "Values for the script's declared settings (# iris: arg=). The hub checks them; the node passes them as IRIS_ARG_<NAME>.")),
         }),
         success: described(ScriptRunResponse, "The dispatched task — poll /iris/hive/tasks/:taskID"),
       }).annotateMerge(
@@ -2771,6 +2925,13 @@ export const IrisApi = HttpApi.make("iris").add(
             "Pins the content hash like the CLI. Takes no arguments: the daemon does not pass a header's `arg=` values to a user script today, and sending them under an invented key would change nothing.",
         }),
       ),
+      HttpApiEndpoint.post("hiveTaskDecide", IrisPaths.hiveTaskDecide, {
+        params: { taskID: Schema.String, decision: Schema.Literals(["approve", "reject", "cancel"]) },
+        success: described(
+          Schema.Struct({ ...Measured, taskId: Schema.NullOr(Schema.String) }).annotate({ identifier: "IrisHiveTaskDecision" }),
+          "Approve or reject a run Constellation Gate held (approve answers with the NEW task to follow), or cancel/stop any run of yours.",
+        ),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.hiveTaskDecide", summary: "Approve or reject a held Hive run" })),
       HttpApiEndpoint.get("hiveTask", IrisPaths.hiveTask, {
         params: { taskID: Schema.String },
         success: described(HiveTaskResponse, "A Hive task's stage timestamps, output and exit"),

@@ -329,6 +329,13 @@ export type StepFinishPart = {
       write: number
     }
   }
+  gate?: {
+    scanned: number
+    held: number
+    flagged: number
+    errors: number
+    mode: string
+  }
 }
 
 export type SnapshotPart = {

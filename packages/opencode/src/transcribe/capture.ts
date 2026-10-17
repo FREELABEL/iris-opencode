@@ -44,14 +44,18 @@ interface Active {
   input: CaptureInput
   /** Inputs not yet tried. One that dies before producing a byte hands over to the next. */
   fallbacks: CaptureInput[]
-  /** The recording so far, straight from ffmpeg's stdout. 300 s caps it at ~9.6 MB. */
+  /** The recording so far, straight from ffmpeg's stdout: ~9.6 MB per 5 minutes. */
   chunks: Buffer[]
   bytes: number
   startedAt: number
   /** ffmpeg's own words. Without these, every capture failure is just "no audio". */
   stderr: string[]
-  /** ffmpeg -t for this take: MAX_SECONDS inline, up to MAX_BACKGROUND_SECONDS in background mode. */
+  /** This take's cap: MAX_SECONDS inline, up to MAX_BACKGROUND_SECONDS in background mode. */
   maxSeconds: number
+  /** Ends the take at maxSeconds. A timer, not ffmpeg -t, so "Keep recording" can move it. */
+  deadline?: ReturnType<typeof setTimeout>
+  /** The deadline fired: the process ending now is the cap, not a device to fall back from. */
+  expired?: boolean
 }
 
 let active: Active | undefined
@@ -183,7 +187,33 @@ export function startCapture(device?: string, maxSeconds = MAX_SECONDS): { start
     maxSeconds: Math.min(Math.max(1, Math.floor(maxSeconds)), MAX_BACKGROUND_SECONDS),
   }
   spawnInput(active, first!)
+  armDeadline(active)
   return { startedAt: active.startedAt }
+}
+
+/**
+ * "Keep recording": lift the running take to a longer cap. ffmpeg was launched with -t at the
+ * background maximum, so only this timer moves. Before (#189519) the cap was ffmpeg's -t from the
+ * start, so a take extended on macOS (always the sidecar) silently stopped capturing at 5:00 while
+ * the composer's clock kept running, and everything said after it was lost.
+ */
+export function extendCapture(maxSeconds: number): boolean {
+  const current = active
+  if (!current || current.expired) return false
+  current.maxSeconds = Math.min(Math.max(current.maxSeconds, Math.floor(maxSeconds)), MAX_BACKGROUND_SECONDS)
+  armDeadline(current)
+  return true
+}
+
+function armDeadline(session: Active) {
+  clearTimeout(session.deadline)
+  const left = session.maxSeconds * 1000 - (Date.now() - session.startedAt)
+  session.deadline = setTimeout(() => {
+    if (active !== session) return
+    session.expired = true
+    // SIGINT, as stop does: raw PCM needs no clean close, and what was captured stays for /dictate/stop.
+    session.proc.kill("SIGINT")
+  }, Math.max(0, left))
 }
 
 function spawnInput(session: Active, input: CaptureInput) {
@@ -215,9 +245,10 @@ function spawnInput(session: Active, input: CaptureInput) {
       // level meter reads this stream live, and a stop must not wait on a buffer.
       "-flush_packets",
       "1",
-      // A hard cap so a forgotten recording cannot run forever.
+      // A hard cap so a forgotten recording cannot run forever. The take's own cap (5 min inline)
+      // is the deadline timer, which "Keep recording" can extend; this one never moves.
       "-t",
-      String(session.maxSeconds),
+      String(MAX_BACKGROUND_SECONDS),
       // STDOUT, not a file: the same bytes feed the level meter (GET /dictate/level) and the
       // recording, with no second process and nothing of someone's voice left on disk.
       "pipe:1",
@@ -246,7 +277,7 @@ function spawnInput(session: Active, input: CaptureInput) {
   // pulse-only host): hand over to the next one while the person is still talking. Not once
   // audio has flowed — that is a recording ending, and the stop reports it.
   const next = () => {
-    if (active !== session || session.proc !== proc || session.bytes > 0) return
+    if (active !== session || session.proc !== proc || session.bytes > 0 || session.expired) return
     const fallback = session.fallbacks.shift()
     if (fallback) spawnInput(session, fallback)
   }
@@ -258,12 +289,15 @@ function spawnInput(session: Active, input: CaptureInput) {
  * Loudness of roughly the last 50 ms of the active recording: RMS, 0..1. `{0, 0}` when idle.
  * Read from the stream already being collected — the meter costs a few hundred multiplies.
  */
-export function currentLevel(): { level: number; seconds: number } {
+export function currentLevel(): { level: number; seconds: number; capturing?: boolean } {
   const current = active
   if (!current) return { level: 0, seconds: 0 }
   return {
     level: tailRms(current.chunks, current.bytes, LEVEL_WINDOW_BYTES),
     seconds: Math.round((Date.now() - current.startedAt) / 100) / 10,
+    // false once the recorder has ended — its cap, an unplugged mic, a crash. The take is still
+    // here for /dictate/stop; the composer stops rather than run a clock over nothing (#189519).
+    capturing: !current.expired && current.proc.exitCode === null && current.proc.signalCode === null,
   }
 }
 
@@ -304,6 +338,7 @@ export async function stopCapture(): Promise<{ audio: Uint8Array; ms: number; in
   const current = active
   if (!current) throw new TranscribeError("Not recording.")
   active = undefined
+  clearTimeout(current.deadline)
 
   const proc = current.proc
   if (proc.exitCode === null && proc.signalCode === null) {
@@ -510,6 +545,7 @@ export function cancelCapture(): void {
   const current = active
   if (!current) return
   active = undefined
+  clearTimeout(current.deadline)
   try {
     current.proc.kill("SIGKILL")
   } catch {

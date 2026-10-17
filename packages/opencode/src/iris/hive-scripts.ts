@@ -72,6 +72,9 @@ export type TaskView = {
   error: string | null
   nodeName: string | null
   durationMs: number | null
+  /** Constellation Gate held this run for its owner's approval (#189589). It has not been sent. */
+  held: boolean
+  gate: { explanation: string; reasons: string[]; action: string | null; score: number | null; hardware: string[] } | null
 }
 
 /** The CLI's terminal set (platform-scripts.ts RunCmd). */
@@ -173,6 +176,17 @@ export function readTask(t: any): TaskView | null {
     error: nul(t.error),
     nodeName: str(t.node?.name) ?? str(r.metadata?.executed_by_node_name) ?? null,
     durationMs: typeof t.duration_ms === "number" ? t.duration_ms : null,
+    held: status === "awaiting_approval",
+    gate:
+      t.gate && typeof t.gate === "object"
+        ? {
+            explanation: String(t.gate.explanation ?? ""),
+            reasons: Array.isArray(t.gate.reasons) ? t.gate.reasons.map(String) : [],
+            action: t.gate.action ?? null,
+            score: typeof t.gate.score === "number" ? t.gate.score : null,
+            hardware: Array.isArray(t.gate.hardware) ? t.gate.hardware.map(String) : [],
+          }
+        : null,
   }
 }
 
@@ -434,7 +448,7 @@ export function clampTimeout(v: unknown): number {
 }
 
 /** `iris scripts run <slug> --node <node>`: dispatch, return the task id. The caller polls. */
-export async function runScript(slug: string, node: string, timeout?: number): Promise<RunResult> {
+export async function runScript(slug: string, node: string, timeout?: number, args?: Record<string, string>): Promise<RunResult> {
   const userId = await resolveUserId()
   if (!userId) return { ok: false, reason: notSignedIn() }
   try {
@@ -462,11 +476,21 @@ export async function runScript(slug: string, node: string, timeout?: number): P
         type: "user_script",
         node_id: target.id,
         prompt: slug,
-        config: { script_slug: slug, ...(digest ? { script_sha256: digest } : {}) },
+        // #189589: the run's settings. The hub checks them against the script's declarations,
+        // carries them in the signed task, and the node hands them over as IRIS_ARG_<NAME>.
+        config: { script_slug: slug, ...(digest ? { script_sha256: digest } : {}), ...(args && Object.keys(args).length ? { args } : {}) },
         timeout_seconds: timeoutSeconds,
       }),
     })
-    if (!res.ok) return { ok: false, reason: `Dispatch failed: ${res.status} ${(await res.text().catch(() => "")).slice(0, 300)}` }
+    if (!res.ok) {
+      // The hub answers a refused run with a sentence ({error, message}); show that, not raw JSON.
+      const raw = await res.text().catch(() => "")
+      let said: string | undefined
+      try {
+        said = (JSON.parse(raw) as any)?.message
+      } catch {}
+      return { ok: false, reason: said ? String(said) : `Dispatch failed: ${res.status} ${raw.slice(0, 300)}` }
+    }
     const created = (await res.json()) as any
     const taskId = created?.task?.id
     if (!taskId) return { ok: false, reason: "the hub accepted the dispatch but returned no task id" }
@@ -474,6 +498,23 @@ export async function runScript(slug: string, node: string, timeout?: number): P
     return { ok: true, taskId: String(taskId), nodeId: target.id, nodeName: target.name, sha256: digest, timeoutSeconds }
   } catch (e) {
     return { ok: false, reason: errText(e) }
+  }
+}
+
+/**
+ * Approve or reject a run Constellation Gate held (#189589). Approving re-runs it through the hub's
+ * single dispatch path; the answer names the NEW task, which is the one to follow.
+ */
+export async function decideHeldTask(id: string, decision: "approve" | "reject" | "cancel"): Promise<Result<{ taskId: string | null }>> {
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: notSignedIn(), data: { taskId: null } }
+  try {
+    const res = await irisFetch(`/api/v6/nodes/tasks/${encodeURIComponent(id)}/${decision}?user_id=${userId}`, IRIS_API, { method: "POST" })
+    const body = (await res.json().catch(() => ({}))) as any
+    if (!res.ok) return { measured: false, reason: String(body?.message ?? `iris-api ${res.status}`), data: { taskId: null } }
+    return { measured: true, data: { taskId: body?.task?.id != null ? String(body.task.id) : null } }
+  } catch (e) {
+    return { measured: false, reason: errText(e), data: { taskId: null } }
   }
 }
 

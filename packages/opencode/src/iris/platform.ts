@@ -381,6 +381,8 @@ export interface HiveNode {
   tasksCompleted?: number
   /** Which things this node can actually do — bash, docker, browser, python3, bridge_call. */
   capabilities?: string[]
+  /** Physical cameras by factory product name ("OBSBOT Tiny Camera"); never a personal name. */
+  cameras?: string[]
   /** A machine that heartbeats once per restart looks healthy while crash-looping (#182434). */
   recentRestarts?: number
   transport?: string
@@ -484,6 +486,9 @@ export async function fetchHiveNodes(): Promise<PlatformResult<{ nodes: HiveNode
         .filter(([, v]) => v)
         .map(([k]) => k),
       recentRestarts: Array.isArray(n.recent_restarts) ? n.recent_restarts.length : undefined,
+      cameras: Array.isArray(n.devices?.camera?.names)
+        ? n.devices.camera.names.filter((x: unknown) => typeof x === "string").slice(0, 8)
+        : undefined,
       transport: n.transport?.default_rail ?? undefined,
       tailscaleIp: n.tailscale_ip ?? undefined,
       hardwareDetectedAt: n.hardware_profile?.detected_at ?? undefined,
@@ -652,6 +657,8 @@ export interface Plan {
    * older than dd9d0dfa. Only `false` may show an Upgrade button.
    */
   paid: boolean | null
+  /** What to call the plan on screen ("Free", "IRIS Solo", "Staff"), from the server. Display only. */
+  label: string | null
   uncapped: boolean
   upgradeUrl: string | null
 }
@@ -702,6 +709,248 @@ export async function fetchPlans(): Promise<PlatformResult<PlanOffer[]>> {
 }
 
 /**
+ * Settings › Security (#189589): what protects this account's model traffic, and why.
+ *
+ * Every judgement here is the server's. Whether Gate is on, why, which mode, which checks —
+ * GateRolloutPolicy on fl-iris-api decides it from a remote flag, and the same policy runs in
+ * the model proxy, so the panel cannot say "on" while the proxy says "off". This only reshapes
+ * snake_case into the app's casing.
+ */
+export interface GateEvent {
+  id: number
+  at: string | null
+  segment: string
+  action: string
+  mode: string
+  verdict: string | null
+  score: number | null
+  reasonCode: string | null
+  detected: string[]
+  sensitivity: string | null
+  latencyMs: number | null
+  cached: boolean
+  errorCode: string | null
+  reportedFalse: boolean
+}
+
+export interface SecurityState {
+  gate: {
+    enabled: boolean
+    reason: string
+    explanation: string
+    mode: string
+    org: string | null
+    sensitivity: string | null
+    categories: string[]
+    segments: string[]
+    failOpen: boolean
+    availableChecks: string[]
+    sensitivities: string[]
+    stats: {
+      windowDays: number
+      scanned: number
+      clean: number
+      flagged: number
+      held: number
+      errors: number
+      reportedFalse: number
+      reportedFalsePct: number | null
+      p50LatencyMs: number | null
+      billableTokens: number
+    }
+    recent: GateEvent[]
+  }
+  phiGuard: { active: boolean; mode: string; explanation: string }
+  /** Platform admins only: the rollout across all of IRIS. Null for everyone else. */
+  platform: SecurityPlatform | null
+}
+
+export interface SecurityPlatform {
+  rollout: { enabled: boolean; mode: string; percent: number; newUserDays: number; tiers: string[]; allowUsers: number } | null
+  keySource: string
+  last24h: {
+    scanned: number
+    clean: number
+    flagged: number
+    held: number
+    errors: number
+    accounts: number
+    cached: number
+    p50Ms: number | null
+    p95Ms: number | null
+    billableTokens: number
+    reportedFalsePct: number | null
+  }
+  recent: (GateEvent & { userId: number | null; smoke: boolean })[]
+}
+
+export const EMPTY_SECURITY: SecurityState = {
+  gate: {
+    enabled: false,
+    reason: "unknown",
+    explanation: "",
+    mode: "shadow",
+    org: null,
+    sensitivity: null,
+    categories: [],
+    segments: [],
+    failOpen: true,
+    availableChecks: [],
+    sensitivities: [],
+    stats: {
+      windowDays: 30,
+      scanned: 0,
+      clean: 0,
+      flagged: 0,
+      held: 0,
+      errors: 0,
+      reportedFalse: 0,
+      reportedFalsePct: null,
+      p50LatencyMs: null,
+      billableTokens: 0,
+    },
+    recent: [],
+  },
+  phiGuard: { active: false, mode: "report", explanation: "" },
+  platform: null,
+}
+
+const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null)
+const strs = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [])
+
+export function gateEventFrom(e: any): GateEvent {
+  return {
+    id: Number(e?.id ?? 0),
+    at: e?.at ?? null,
+    segment: String(e?.segment ?? ""),
+    action: String(e?.action ?? ""),
+    mode: String(e?.mode ?? ""),
+    verdict: e?.verdict ?? null,
+    score: num(e?.score),
+    reasonCode: e?.reason_code ?? null,
+    detected: strs(e?.detected),
+    sensitivity: e?.sensitivity ?? null,
+    latencyMs: num(e?.latency_ms),
+    cached: Boolean(e?.cached),
+    errorCode: e?.error_code ?? null,
+    reportedFalse: Boolean(e?.reported_false),
+  }
+}
+
+/** Reshape GET /api/v6/security. Exported so the mapping is tested without a network. */
+export function securityFrom(j: any): SecurityState {
+  const g = j?.data?.gate ?? {}
+  const st = g.stats ?? {}
+  const p = j?.data?.phi_guard ?? {}
+  return {
+    gate: {
+      enabled: Boolean(g.enabled),
+      reason: String(g.reason ?? "unknown"),
+      explanation: String(g.explanation ?? ""),
+      mode: String(g.mode ?? "shadow"),
+      org: g.org ?? null,
+      sensitivity: g.sensitivity ?? null,
+      categories: strs(g.categories),
+      segments: strs(g.segments),
+      failOpen: g.fail_open !== false,
+      availableChecks: strs(g.available_checks),
+      sensitivities: strs(g.sensitivities),
+      stats: {
+        windowDays: num(st.window_days) ?? 30,
+        scanned: num(st.scanned) ?? 0,
+        clean: num(st.clean) ?? 0,
+        flagged: num(st.flagged) ?? 0,
+        held: num(st.held) ?? 0,
+        errors: num(st.errors) ?? 0,
+        reportedFalse: num(st.reported_false) ?? 0,
+        reportedFalsePct: num(st.reported_false_pct),
+        p50LatencyMs: num(st.p50_latency_ms),
+        billableTokens: num(st.billable_tokens) ?? 0,
+      },
+      recent: Array.isArray(g.recent) ? g.recent.map(gateEventFrom) : [],
+    },
+    phiGuard: {
+      active: Boolean(p.active),
+      mode: String(p.mode ?? "report"),
+      explanation: String(p.explanation ?? ""),
+    },
+    platform: platformFrom(j?.data?.platform),
+  }
+}
+
+function platformFrom(x: any): SecurityPlatform | null {
+  if (!x || typeof x !== "object" || x.unavailable) return null
+  const r = x.rollout
+  const d = x.last_24h ?? {}
+  return {
+    rollout: r
+      ? {
+          enabled: Boolean(r.enabled),
+          mode: String(r.mode ?? "shadow"),
+          percent: num(r.percent) ?? 0,
+          newUserDays: num(r.new_user_days) ?? 0,
+          tiers: strs(r.tiers),
+          allowUsers: num(r.allow_users) ?? 0,
+        }
+      : null,
+    keySource: String(x.key_source ?? "none"),
+    last24h: {
+      scanned: num(d.scanned) ?? 0,
+      clean: num(d.clean) ?? 0,
+      flagged: num(d.flagged) ?? 0,
+      held: num(d.held) ?? 0,
+      errors: num(d.errors) ?? 0,
+      accounts: num(d.accounts) ?? 0,
+      cached: num(d.cached) ?? 0,
+      p50Ms: num(d.p50_ms),
+      p95Ms: num(d.p95_ms),
+      billableTokens: num(d.billable_tokens) ?? 0,
+      reportedFalsePct: num(d.reported_false_pct),
+    },
+    recent: Array.isArray(x.recent)
+      ? x.recent.map((e: any) => ({ ...gateEventFrom(e), userId: num(e?.user_id), smoke: Boolean(e?.smoke) }))
+      : [],
+  }
+}
+
+export async function fetchSecurity(
+  opts: { token?: string | null; signal?: AbortSignal } = {},
+): Promise<PlatformResult<SecurityState>> {
+  try {
+    const res = await irisFetch(
+      "/api/v6/security",
+      IRIS_API,
+      { signal: opts.signal },
+      opts.token === undefined ? resolveToken() : opts.token,
+    )
+    if (!res.ok) return { measured: false, reason: `iris-api ${res.status}`, data: EMPTY_SECURITY }
+    return { measured: true, data: securityFrom(await res.json()) }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: EMPTY_SECURITY }
+  }
+}
+
+/** "Gate got this one wrong." Only the caller's own events can be reported — the server scopes it. */
+export async function reportGateEvent(
+  id: number,
+  opts: { token?: string | null; signal?: AbortSignal } = {},
+): Promise<PlatformResult<GateEvent | null>> {
+  try {
+    const res = await irisFetch(
+      `/api/v6/security/gate/events/${encodeURIComponent(String(id))}/report`,
+      IRIS_API,
+      { method: "POST", signal: opts.signal },
+      opts.token === undefined ? resolveToken() : opts.token,
+    )
+    if (!res.ok) return { measured: false, reason: `iris-api ${res.status}`, data: null }
+    const j = (await res.json()) as any
+    return { measured: true, data: gateEventFrom(j?.data) }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: null }
+  }
+}
+
+/**
  * The caller's plan, WITHOUT consuming a notice (`?peek=1`, fl-iris-api 4eda580d). Unlike
  * fetchAllowance this is safe to poll: the title bar asks every few minutes to decide between
  * an Upgrade button and a plan label. A server without the `plan` field (older than 4eda580d)
@@ -712,7 +961,7 @@ export async function fetchPlans(): Promise<PlatformResult<PlanOffer[]>> {
 export async function fetchPlan(
   opts: { token?: string | null; signal?: AbortSignal } = {},
 ): Promise<PlatformResult<Plan>> {
-  const empty: Plan = { plan: null, paid: null, uncapped: false, upgradeUrl: null }
+  const empty: Plan = { plan: null, paid: null, label: null, uncapped: false, upgradeUrl: null }
   try {
     const res = await irisFetch(
       "/api/v6/allowance/me?peek=1",
@@ -728,6 +977,7 @@ export async function fetchPlan(
       data: {
         plan: typeof j.plan === "string" ? j.plan : null,
         paid: typeof j.paid === "boolean" ? j.paid : null,
+        label: typeof j.plan_label === "string" && j.plan_label.trim() ? j.plan_label.trim() : null,
         uncapped: Boolean(j.uncapped),
         upgradeUrl: typeof j.upgrade_url === "string" ? j.upgrade_url : null,
       },
@@ -2546,6 +2796,36 @@ export async function createList(
     if (!res.ok) return { ok: false, reason: apiFailure(j, res.status) }
     const id = Number(j?.data?.id ?? j?.id)
     return Number.isFinite(id) ? { ok: true, id } : { ok: true }
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+/**
+ * Move a card to a list and a position on it — the Board view's drag (#189723).
+ *
+ * fl-api's /position renumbers the whole column (and the one the card left), which `saveItem`
+ * with `listId` cannot do: that changes the list and leaves the card wherever its old
+ * sort_order happens to fall. `position` is 0-based in the target list's full order.
+ *
+ * The route answers 404 for a card on a board you do not own — including one shared WITH you —
+ * so that is said in words: "item not found" about a card on screen reads as a broken app.
+ */
+export async function moveItem(id: number, listId: number, position: number): Promise<{ ok: boolean; reason?: string }> {
+  const userId = await resolveUserId()
+  if (!userId) return { ok: false, reason: `not signed in (token: ${tokenSource()})` }
+  if (!Number.isInteger(position) || position < 0) return { ok: false, reason: "position must be a whole number, 0 or more" }
+  try {
+    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/list/item/${id}/position`, FL_API, {
+      method: "PATCH",
+      body: JSON.stringify({ list_id: listId, position }),
+    })
+    const j = (await res.json().catch(() => ({}))) as any
+    if (res.status === 404) {
+      return { ok: false, reason: "Atlas would not move this card — only the board's owner can rearrange it" }
+    }
+    if (!res.ok) return { ok: false, reason: apiFailure(j, res.status) }
+    return { ok: true }
   } catch (e) {
     return { ok: false, reason: e instanceof Error ? e.message : String(e) }
   }

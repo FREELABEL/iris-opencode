@@ -58,19 +58,25 @@ import { IrisPulseContact, IrisPulseTopic } from "./iris-pulse"
 import { itemCommands, renderMarkdown } from "./iris-item"
 import {
   ATLAS_EDITED,
+  ATLAS_LAYOUTS,
   ATLAS_SORTS,
   ATLAS_STATUSES,
   ATLAS_VIEW_DEFAULT,
   applyAtlasView,
   atlasCountLine,
+  atlasDropPosition,
   cardPreview,
   changedItemIds,
   editedSince,
   isDefaultView,
   isDone,
   keepUnchanged,
+  moveAtlasItem,
+  readAtlasLayout,
   readAtlasView,
   relativeTime,
+  type AtlasDrop,
+  type AtlasLayout,
   type AtlasViewOptions,
 } from "./iris-atlas-view"
 import { liveLabel, readSse, type LiveState } from "./iris-atlas-live"
@@ -1447,12 +1453,73 @@ export function SessionIrisTab() {
       else localStorage.setItem(atlasViewKey(), JSON.stringify(next))
     } catch {}
   }
+  /*
+   * BOARD VIEW (#189723). List or Board, remembered per board and apart from the filters, so
+   * "reset" clears what you filter by, not how you look at the board.
+   */
+  const atlasLayoutKey = () => `iris.atlas.layout.${activeBloq() ?? "none"}`
+  const [atlasLayout, setAtlasLayoutSig] = createSignal<AtlasLayout>("list")
+  createEffect(
+    on(atlasLayoutKey, (key) => {
+      let raw: string | null = null
+      try {
+        raw = localStorage.getItem(key)
+      } catch {}
+      setAtlasLayoutSig(readAtlasLayout(raw))
+    }),
+  )
+  const setAtlasLayout = (layout: AtlasLayout) => {
+    setAtlasLayoutSig(layout)
+    try {
+      if (layout === "list") localStorage.removeItem(atlasLayoutKey())
+      else localStorage.setItem(atlasLayoutKey(), layout)
+    } catch {}
+  }
+  /**
+   * A dragged card is shown in its new place before fl-api answers. That overlay is dropped by
+   * the next payload — which carries the saved order — or put back if the save fails. A card
+   * that LOOKS moved but is not is the most expensive thing a board can show: the next person
+   * trusts it.
+   */
+  const [atlasMoved, setAtlasMoved] = createSignal<AtlasList[] | null>(null)
+  createEffect(on(current, () => setAtlasMoved(null), { defer: true }))
+  const atlasBoard = () => atlasMoved() ?? (rows() as AtlasList[])
+  const [moveNote, setMoveNote] = createSignal<string | null>(null)
+  const [dragging, setDragging] = createSignal<number | null>(null)
+  const [dropAt, setDropAt] = createSignal<{ listId: number; beforeId: number | null } | null>(null)
+  /** Drag follows board order. Under another sort, "in front of this card" means nothing that
+   *  survives a refresh, so the board says so instead of saving a position nobody chose. */
+  const canDrag = () => atlasView().sort === "board"
+  async function dropCard(drop: AtlasDrop) {
+    const full = atlasBoard()
+    const from = full.find((l) => l.items.some((i) => i.id === drop.itemId))
+    const position = atlasDropPosition(full, drop)
+    if (!from || position === null) return
+    if (from.id === drop.toListId && from.items.findIndex((i) => i.id === drop.itemId) === position) return
+    const previous = atlasMoved()
+    setAtlasMoved(moveAtlasItem(full, drop))
+    setMoveNote(null)
+    try {
+      const res = await doFetch(`/iris/item/${drop.itemId}/move`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ listId: drop.toListId, position }),
+      })
+      const r = (await res.json().catch(() => null)) as { ok?: boolean; reason?: string } | null
+      if (!res.ok || !r?.ok) throw new Error(r?.reason || `HTTP ${res.status}`)
+      void refetchSurface()
+    } catch (e: any) {
+      setAtlasMoved(previous)
+      setMoveNote(`Not moved — ${e?.message ?? String(e)}`)
+    }
+  }
+
   // A clock for the relative times, so "2m" does not sit there for an hour.
   const [now, setNow] = createSignal(Date.now())
   const clock = setInterval(() => setNow(Date.now()), 60_000)
   onCleanup(() => clearInterval(clock))
   const atlasRows = createMemo<AtlasList[]>((prev) =>
-    pane() === "atlas" ? keepUnchanged(prev, applyAtlasView(rows() as AtlasList[], atlasView(), now())) : [],
+    pane() === "atlas" ? keepUnchanged(prev, applyAtlasView(atlasBoard(), atlasView(), now())) : [],
   )
 
   /*
@@ -2648,6 +2715,15 @@ export function SessionIrisTab() {
 
       <Show when={pane() === "atlas" && !openRow() && view() === "rows"}>
         <div class="iris-atlas-tools shrink-0">
+          <div class="iris-atlas-tools__chips" role="group" aria-label="Layout">
+            <For each={ATLAS_LAYOUTS}>
+              {(o) => (
+                <button type="button" aria-pressed={atlasLayout() === o.id} onClick={() => setAtlasLayout(o.id)}>
+                  {o.label}
+                </button>
+              )}
+            </For>
+          </div>
           <label class="iris-atlas-tools__field">
             <span>Sort</span>
             <select
@@ -3447,6 +3523,132 @@ export function SessionIrisTab() {
                     </button>
                   </p>
                 </Show>
+                <Show when={moveNote()}>
+                  {(note) => (
+                    <p class="px-2 pb-2 text-12-regular text-text-weak" role="status">
+                      {note()}{" "}
+                      <button type="button" class="underline cursor-pointer" onClick={() => setMoveNote(null)}>
+                        Dismiss
+                      </button>
+                    </p>
+                  )}
+                </Show>
+                <Show when={atlasLayout() === "board"}>
+                  <Show when={!canDrag()}>
+                    <p class="px-2 pb-2 text-11-regular text-text-weak">
+                      Sorted by {ATLAS_SORTS.find((o) => o.id === atlasView().sort)?.label.toLowerCase()} — switch to
+                      Board order to drag cards.
+                    </p>
+                  </Show>
+                  <div class="iris-board" aria-label="Board">
+                    <For each={atlasRows()}>
+                      {(list) => (
+                        <section
+                          class="iris-board__col"
+                          classList={{
+                            "iris-board__col--over": dropAt()?.listId === list.id && dropAt()?.beforeId === null,
+                          }}
+                          onDragOver={(e) => {
+                            if (dragging() === null) return
+                            e.preventDefault()
+                            if (e.dataTransfer) e.dataTransfer.dropEffect = "move"
+                            setDropAt({ listId: list.id, beforeId: null })
+                          }}
+                          onDrop={(e) => {
+                            e.preventDefault()
+                            const itemId = dragging()
+                            const at = dropAt()
+                            setDragging(null)
+                            setDropAt(null)
+                            if (itemId !== null) void dropCard({ itemId, toListId: list.id, beforeId: at?.listId === list.id ? at.beforeId : null })
+                          }}
+                        >
+                          <header class="iris-board__head">
+                            <h3 class="text-12-medium text-text-base min-w-0 truncate">{list.name}</h3>
+                            <span class="font-mono tabular-nums text-11-regular text-text-weak">{list.items.length}</span>
+                          </header>
+                          <div class="iris-board__cards">
+                            <For each={list.items}>
+                              {(item) => (
+                                <div
+                                  role="button"
+                                  tabindex="0"
+                                  class="iris-board__card"
+                                  classList={{
+                                    "iris-board__card--dragging": dragging() === item.id,
+                                    "iris-board__card--before":
+                                      dragging() !== null &&
+                                      dragging() !== item.id &&
+                                      dropAt()?.listId === list.id &&
+                                      dropAt()?.beforeId === item.id,
+                                  }}
+                                  draggable={canDrag()}
+                                  title={canDrag() ? "Open this card, or drag it to move it" : "Open this card"}
+                                  onClick={() => openCard(item.id)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter" || e.key === " ") {
+                                      e.preventDefault()
+                                      openCard(item.id)
+                                    }
+                                  }}
+                                  onDragStart={(e) => {
+                                    setDragging(item.id)
+                                    setMoveNote(null)
+                                    if (e.dataTransfer) {
+                                      e.dataTransfer.effectAllowed = "move"
+                                      e.dataTransfer.setData("text/plain", `atlas-item:${item.id}`)
+                                    }
+                                  }}
+                                  onDragEnd={() => {
+                                    setDragging(null)
+                                    setDropAt(null)
+                                  }}
+                                  onDragOver={(e) => {
+                                    if (dragging() === null) return
+                                    e.preventDefault()
+                                    e.stopPropagation()
+                                    if (e.dataTransfer) e.dataTransfer.dropEffect = "move"
+                                    setDropAt({ listId: list.id, beforeId: item.id })
+                                  }}
+                                  onDrop={(e) => {
+                                    e.preventDefault()
+                                    e.stopPropagation()
+                                    const itemId = dragging()
+                                    setDragging(null)
+                                    setDropAt(null)
+                                    if (itemId !== null) void dropCard({ itemId, toListId: list.id, beforeId: item.id })
+                                  }}
+                                >
+                                  <span class="text-12-regular text-text-base">{item.title}</span>
+                                  <span class="iris-board__meta">
+                                    <Show when={isDone(item.status)}>
+                                      <span>✓ done</span>
+                                    </Show>
+                                    <Show when={item.updatedAt ?? item.createdAt}>
+                                      {(ts) => (
+                                        <span
+                                          class="font-mono tabular-nums"
+                                          title={`Last edited ${new Date(ts()).toLocaleString()}`}
+                                        >
+                                          {relativeTime(ts(), now())}
+                                        </span>
+                                      )}
+                                    </Show>
+                                    <span class="font-mono tabular-nums text-text-weaker ml-auto">#{item.id}</span>
+                                  </span>
+                                </div>
+                              )}
+                            </For>
+                            <Show when={list.items.length === 0}>
+                              <p class="iris-board__empty">{dragging() !== null ? "Drop here" : "No cards"}</p>
+                            </Show>
+                          </div>
+                        </section>
+                      )}
+                    </For>
+                  </div>
+                </Show>
+                <Show when={atlasLayout() === "list"}>
                 <For each={atlasRows()}>
                   {(list) => (
                     // data-prevent-autofocus: the session page sends any printable key to the chat
@@ -3612,6 +3814,7 @@ export function SessionIrisTab() {
                       </Show>
                     </div>
                   </Show>
+                </Show>
                 </Show>
               </Match>
 

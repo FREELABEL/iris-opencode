@@ -36,6 +36,10 @@ const PROBE_MS = 400
  * mono): a long take uploaded fine, failed there, and was held and retried until pruned.
  */
 export const MAX_SECONDS = 300
+/** A take torn down mid-recording is kept (held) from this length up; shorter is a mis-press. */
+const KEEP_ON_UNMOUNT_SECONDS = 3
+/** An automatic retry that comes due during a take looks again after this. */
+const RETRY_WHILE_BUSY_MS = 5000
 /**
  * A shortcut held at least this long is push-to-talk: letting go stops. Anything shorter is a
  * tap, which toggles — the recording keeps going until the next press.
@@ -241,7 +245,13 @@ function encodeWav(samples: Float32Array, rate: number): Blob {
 }
 
 export function createDictation(opts: DictationOptions) {
-  const [phase, setPhase] = createSignal<DictationPhase>("idle")
+  /** Retried transcripts that came back while a take was running (#189523). */
+  const afterTake: string[] = []
+  const [phase, setPhaseSignal] = createSignal<DictationPhase>("idle")
+  const setPhase = (next: DictationPhase) => {
+    setPhaseSignal(next)
+    if (next === "idle") flushAfterTake()
+  }
   // A moving number is the difference between "recording" and "hung".
   const [seconds, setSeconds] = createSignal(0)
   let ticker: ReturnType<typeof setInterval> | undefined
@@ -334,6 +344,9 @@ export function createDictation(opts: DictationOptions) {
         .then((body) => {
           if (!levelPoll || typeof body?.level !== "number") return
           setLevels((h) => pushLevel(h, levelFromRms(body.level)))
+          // The recorder ended on its own (its cap, an unplugged mic): stop and transcribe what it
+          // captured, rather than keep a clock running over audio that is no longer recorded (#189519).
+          if (body.capturing === false && phase() === "recording") void stop()
         })
         .catch(() => stopLevelPoll())
     }, LEVEL_POLL_MS)
@@ -719,13 +732,7 @@ export function createDictation(opts: DictationOptions) {
       )
     }
 
-    const merged = new Float32Array(total)
-    let offset = 0
-    for (const f of frames) {
-      merged.set(f, offset)
-      offset += f.length
-    }
-    const blob = encodeWav(downsample(merged, rate, TARGET_RATE), TARGET_RATE)
+    const blob = capturedWav(frames, rate)
 
     try {
       const res = await call("/transcribe?filename=dictation.wav", {
@@ -738,6 +745,26 @@ export function createDictation(opts: DictationOptions) {
     } catch (e) {
       reachError(e)
     }
+  }
+
+  /** Retried transcripts that came back while a take was running, in order. */
+  function deliverWhenIdle(text: string) {
+    if (phase() === "idle") return opts.onTranscript(text)
+    afterTake.push(text)
+  }
+  function flushAfterTake() {
+    for (const text of afterTake.splice(0)) opts.onTranscript(text)
+  }
+
+  /** The window recorder's frames as the 16 kHz WAV the server expects. */
+  function capturedWav(frames: Float32Array[], rate: number) {
+    const merged = new Float32Array(frames.reduce((n, f) => n + f.length, 0))
+    let offset = 0
+    for (const f of frames) {
+      merged.set(f, offset)
+      offset += f.length
+    }
+    return encodeWav(downsample(merged, rate, TARGET_RATE), TARGET_RATE)
   }
 
   /** `wait` is the server's Retry-After: the automatic retry comes no sooner. */
@@ -803,6 +830,12 @@ export function createDictation(opts: DictationOptions) {
   async function retryHeld(automatic = false) {
     if (retrying()) return
     clearRetryTimers()
+    // Not while a take is running: its transcript would land in that take's panel and the take's
+    // own transcript was then dropped (#189523). Look again shortly, without spending a step.
+    if (automatic && phase() !== "idle") {
+      retryTimer = setTimeout(() => void retryHeld(true), RETRY_WHILE_BUSY_MS)
+      return
+    }
     if (!automatic) retryStep = 0
     setRetrying(true)
     try {
@@ -825,7 +858,9 @@ export function createDictation(opts: DictationOptions) {
           return
         }
         setHeld((list) => list.filter((h) => h.id !== item.id))
-        if (body.text.trim()) opts.onTranscript(body.text.trim())
+        // The server has released the file, so this text exists only here now: a take started
+        // while this was in flight gets it AFTER its own transcript, never instead of it.
+        if (body.text.trim()) deliverWhenIdle(body.text.trim())
       }
       retryStep = 0
     } catch (e) {
@@ -910,12 +945,14 @@ export function createDictation(opts: DictationOptions) {
 
   /**
    * Lift a running take to the background cap ("Keep recording"). The window recorder honours it
-   * at once; a sidecar take keeps the limit ffmpeg was launched with (-t), so it still ends at
-   * the inline cap and its transcript goes to review.
+   * at once; a sidecar take is extended on the server too. Before, the sidecar kept ffmpeg's
+   * launch cap and silently stopped capturing at 5:00 while this clock ran on (#189519).
    */
   function extend() {
     if (phase() !== "recording") return
     maxSeconds = BACKGROUND_MAX_SECONDS
+    if (mode === "sidecar")
+      void call(`/dictate/extend?max_seconds=${BACKGROUND_MAX_SECONDS}`, { method: "POST" }).catch(() => {})
   }
 
   function toggle() {
@@ -926,15 +963,27 @@ export function createDictation(opts: DictationOptions) {
 
   onCleanup(() => {
     disposed = true
+    const recording = phase() === "recording" && !probing
+    // Torn down mid-take — New session, a session in another project — the take is KEPT, not
+    // thrown away: it waits in the held list with Retry (#189520). A take this short is a
+    // mis-press and is dropped, as before.
+    const keep = recording && seconds() >= KEEP_ON_UNMOUNT_SECONDS
+    const wav = keep && mode !== "sidecar" && captured.length && peak >= SILENCE_FLOOR ? capturedWav(captured, capturedRate) : undefined
     closeLive()
     clearRetryTimers()
     stopTicker()
     teardownWebview()
+    captured = []
     // Leaving the sidecar recording after the prompt unmounts is a hot microphone nobody can
-    // see or stop. Fire-and-forget: unmount must not wait on the network.
-    if (phase() === "recording" && mode === "sidecar") {
-      void call("/dictate/cancel", { method: "POST" }).catch(() => {})
-    }
+    // see or stop: it is always ended here. Fire-and-forget: unmount must not wait on the network.
+    if (recording && mode === "sidecar")
+      void call(keep ? "/dictate/hold" : "/dictate/cancel", { method: "POST" }).catch(() => {})
+    if (wav)
+      void call("/transcribe?hold=1&filename=dictation.wav", {
+        method: "POST",
+        headers: { "Content-Type": "audio/wav" },
+        body: wav,
+      }).catch(() => {})
   })
 
   return {
