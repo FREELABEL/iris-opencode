@@ -60,12 +60,18 @@ import {
   ATLAS_STATUSES,
   ATLAS_VIEW_DEFAULT,
   applyAtlasView,
+  atlasCountLine,
+  cardPreview,
+  changedItemIds,
+  editedSince,
   isDefaultView,
   isDone,
+  keepUnchanged,
   readAtlasView,
   relativeTime,
   type AtlasViewOptions,
 } from "./iris-atlas-view"
+import { liveLabel, readSse, type LiveState } from "./iris-atlas-live"
 
 // Re-exported: the panel tests assert on these, and they were defined here before the card
 // editor needed them too.
@@ -1357,7 +1363,20 @@ export function SessionIrisTab() {
         } as unknown as SurfacePayload
       }
       const project = which === "playbooks" && projectParam() ? `&${projectParam()}` : ""
-      const res = await doFetch(`${url}${sep}page=${pageNo}&perPage=${perPage}${search}${project}`)
+      /*
+       * A REFETCH RE-READS EVERY PAGE YOU HAVE, not just the last one asked for.
+       *
+       * Asking again for page 3 returned only page 3, so a refetch after "Load more" swapped
+       * three pages for one — which is why saving a card used to jump back to page 1. A live
+       * update (#189767) refetches every few seconds and would have done it constantly. One
+       * request for pages 1..n at once, inside the server's 200 cap (iris/pagination.ts).
+       */
+      const whole = info.refetching && pageNo > 1
+      const res = await doFetch(
+        whole
+          ? `${url}${sep}page=1&perPage=${Math.min(200, perPage * pageNo)}${search}${project}`
+          : `${url}${sep}page=${pageNo}&perPage=${perPage}${search}${project}`,
+      )
       // Stamped with the pane it was fetched FOR, so a held payload can be told apart from an
       // answer about what is currently on screen. See surfaceView.
       const next = { ...((await res.json()) as SurfacePayload), __pane: which } as SurfacePayload
@@ -1367,7 +1386,7 @@ export function SessionIrisTab() {
       // Annotated: the resource's own value type is still being inferred here, so info.value
       // lands as {} and every index below would be an implicit any.
       const prev = (info.refetching ? undefined : info.value) as SurfacePayload | undefined
-      if (pageNo > 1 && prev) {
+      if (pageNo > 1 && prev && !whole) {
         const key = arrayKeyFor(which)
         const a = Array.isArray(prev[key]) ? (prev[key] as unknown[]) : []
         const b = Array.isArray(next[key]) ? (next[key] as unknown[]) : []
@@ -1426,9 +1445,166 @@ export function SessionIrisTab() {
   const [now, setNow] = createSignal(Date.now())
   const clock = setInterval(() => setNow(Date.now()), 60_000)
   onCleanup(() => clearInterval(clock))
-  const atlasRows = createMemo(() =>
-    pane() === "atlas" ? applyAtlasView(rows() as AtlasList[], atlasView(), now()) : ([] as AtlasList[]),
+  const atlasRows = createMemo<AtlasList[]>((prev) =>
+    pane() === "atlas" ? keepUnchanged(prev, applyAtlasView(rows() as AtlasList[], atlasView(), now())) : [],
   )
+
+  /*
+   * COLLAPSED LISTS (#189764), per board. An empty list folds to its header by default — "In
+   * Progress 0" took as much room as a list of twelve — and any list can be folded by its
+   * header. Stored as the lists you OPENED or CLOSED against that default, so a list that
+   * fills up later opens without anyone touching it.
+   */
+  const foldKey = () => `iris.atlas.fold.${activeBloq() ?? "none"}`
+  const [folds, setFolds] = createSignal<Record<string, boolean>>({})
+  createEffect(
+    on(foldKey, (key) => {
+      try {
+        setFolds(JSON.parse(localStorage.getItem(key) ?? "{}") ?? {})
+      } catch {
+        setFolds({})
+      }
+    }),
+  )
+  const isFolded = (list: AtlasList) => folds()[list.id] ?? list.items.length === 0
+  const toggleFold = (list: AtlasList) => {
+    const next = { ...folds() }
+    const want = !isFolded(list)
+    // Back at the default: forget it, so the default can change with the list.
+    if (want === (list.items.length === 0)) delete next[list.id]
+    else next[list.id] = want
+    setFolds(next)
+    try {
+      if (Object.keys(next).length) localStorage.setItem(foldKey(), JSON.stringify(next))
+      else localStorage.removeItem(foldKey())
+    } catch {}
+  }
+  const [copiedId, setCopiedId] = createSignal<number | undefined>()
+  const copyItemId = (id: number) => {
+    void navigator.clipboard?.writeText(`#${id}`).catch(() => {})
+    setCopiedId(id)
+    setTimeout(() => setCopiedId((c) => (c === id ? undefined : c)), 1200)
+  }
+
+  /*
+   * LIVE (#189767) — the board moves when anyone moves it: you in another window, a teammate,
+   * or the agent in this chat. The sidecar watches the board and says "changed"; this re-reads
+   * it in place (content stays on screen through the refetch, see `current`) and marks the
+   * cards that moved, the way Trello does.
+   *
+   * Watched only while Atlas is on screen AND the window is visible — a hidden panel costs
+   * nothing, and coming back re-reads once so it is current the moment you look.
+   */
+  const [liveState, setLiveState] = createSignal<LiveState>("off")
+  /** Cards that changed while you were looking — flashed, then kept as a dot. */
+  const [liveIds, setLiveIds] = createSignal<Set<number>>(new Set())
+  /** Cards edited since your last visit to this board — a dot until you leave it. */
+  const [awayIds, setAwayIds] = createSignal<Set<number>>(new Set())
+  const [docVisible, setDocVisible] = createSignal(
+    typeof document === "undefined" || document.visibilityState !== "hidden",
+  )
+  if (typeof document !== "undefined") {
+    const onVis = () => setDocVisible(document.visibilityState !== "hidden")
+    document.addEventListener("visibilitychange", onVis)
+    onCleanup(() => document.removeEventListener("visibilitychange", onVis))
+  }
+  const seenKey = (b: string | number) => `iris.atlas.seen.${b}`
+
+  let liveBaseline: { board: string; lists: AtlasList[] } | undefined
+  let livePending = false
+  let liveQueued = false
+  /** `mark` false for your own save: the card you just edited is not news to you. */
+  function liveRefresh(mark = true) {
+    // One refetch at a time; a change that lands mid-flight runs once more when it finishes.
+    if (data.loading) {
+      liveQueued = true
+      return
+    }
+    livePending = mark
+    void refetchSurface()
+  }
+  createEffect(
+    on(
+      () => data.loading,
+      (loading) => {
+        if (!loading && liveQueued) {
+          liveQueued = false
+          liveRefresh()
+        }
+      },
+    ),
+  )
+
+  createEffect(
+    on(
+      () => (pane() === "atlas" && activeBloq() != null ? ([String(activeBloq()), rows() as AtlasList[]] as const) : undefined),
+      (cur) => {
+        if (!cur) return
+        const [board, lists] = cur
+        if (!liveBaseline || liveBaseline.board !== board) {
+          // A board opened: what moved since you last had it open, then mark it seen.
+          setLiveIds(new Set<number>())
+          let seen: string | null = null
+          try {
+            seen = localStorage.getItem(seenKey(board))
+            localStorage.setItem(seenKey(board), new Date().toISOString())
+          } catch {}
+          setAwayIds(editedSince(lists, seen))
+        } else if (livePending) {
+          const moved = changedItemIds(liveBaseline.lists, lists)
+          if (moved.size) setLiveIds((prev) => new Set([...prev, ...moved]))
+          try {
+            localStorage.setItem(seenKey(board), new Date().toISOString())
+          } catch {}
+        }
+        livePending = false
+        liveBaseline = { board, lists }
+      },
+    ),
+  )
+
+  createEffect(
+    on(docVisible, (visible, was) => {
+      if (visible && was === false && pane() === "atlas") liveRefresh()
+    }),
+  )
+
+  createEffect(() => {
+    const b = activeBloq()
+    if (pane() !== "atlas" || b == null || !docVisible()) {
+      setLiveState("off")
+      return
+    }
+    const ctrl = new AbortController()
+    let stopped = false
+    void (async () => {
+      let backoff = 2_000
+      while (!stopped) {
+        try {
+          const res = await doFetch(`/iris/atlas/${b}/live`, {
+            headers: { Accept: "text/event-stream" },
+            signal: ctrl.signal,
+          })
+          if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
+          setLiveState("polling")
+          backoff = 2_000
+          await readSse(res.body, (event, body) => {
+            if (event === "change") liveRefresh()
+            else if (event === "status") setLiveState(body?.pusher === "connected" ? "instant" : "polling")
+          })
+        } catch {}
+        if (stopped) return
+        // The sidecar restarted or the stream dropped: say so, and come back.
+        setLiveState("off")
+        await new Promise((r) => setTimeout(r, backoff))
+        backoff = Math.min(backoff * 2, 30_000)
+      }
+    })()
+    onCleanup(() => {
+      stopped = true
+      ctrl.abort()
+    })
+  })
 
   /*
    * HOW HANDS-OFF (Playbooks · "03 Flow"). A lens over the rows already fetched, so it composes
@@ -2024,10 +2200,7 @@ export function SessionIrisTab() {
         bloqId={Number(b)}
         lists={lists}
         doFetch={doFetch}
-        onChanged={() => {
-          if (page() !== 1) setPage(1)
-          else void refetchSurface()
-        }}
+        onChanged={() => liveRefresh(false)}
       />
     ))
   }
@@ -2317,6 +2490,15 @@ export function SessionIrisTab() {
               reset
             </button>
           </Show>
+          <span
+            class="iris-atlas-live"
+            data-state={liveState()}
+            title={liveLabel(liveState()).title}
+            aria-live="polite"
+          >
+            <span class="iris-atlas-live__dot" aria-hidden="true" />
+            {liveLabel(liveState()).text}
+          </span>
         </div>
       </Show>
 
@@ -3019,40 +3201,84 @@ export function SessionIrisTab() {
                 </Show>
                 <For each={atlasRows()}>
                   {(list) => (
-                    <section class="mb-4">
-                      <header class="flex items-baseline gap-2 px-2 pb-1 pt-1">
+                    <section class="iris-atlas-list" classList={{ "iris-atlas-list--folded": isFolded(list) }}>
+                      {/* The header folds the list. Counts in mono + tabular, so columns of numbers
+                          line up and read as data. */}
+                      <button
+                        type="button"
+                        class="iris-atlas-list__head"
+                        aria-expanded={!isFolded(list)}
+                        title={isFolded(list) ? "Show this list" : "Fold this list"}
+                        onClick={() => toggleFold(list)}
+                      >
+                        <span class="iris-atlas-list__chev" aria-hidden="true">
+                          ›
+                        </span>
                         <h3 class="text-12-medium text-text-base">{list.name}</h3>
-                        {/* Counts in mono + tabular, so columns of numbers line up and read as data. */}
                         <span class="font-mono tabular-nums text-11-regular text-text-weak">{list.items.length}</span>
-                      </header>
-                      <For each={list.items}>
-                        {(item) => (
-                          <button
-                            type="button"
-                            class="w-full flex gap-2 px-2 py-1 text-start rounded cursor-pointer hover:bg-background-element"
-                            title="Open this card"
-                            onClick={() => openCard(item.id)}
-                          >
-                            <span class="text-12-regular text-text-weak shrink-0">
-                              {isDone(item.status) ? "✓" : "·"}
-                            </span>
-                            <span class="text-12-regular text-text-muted min-w-0 flex-1">{item.title}</span>
-                            <Show when={item.updatedAt ?? item.createdAt}>
-                              {(ts) => (
-                                <span
-                                  class="shrink-0 font-mono tabular-nums text-11-regular text-text-weak"
-                                  title={`Last edited ${new Date(ts()).toLocaleString()}`}
-                                >
-                                  {relativeTime(ts(), now())}
+                      </button>
+                      <Show when={!isFolded(list)}>
+                        <For each={list.items}>
+                          {(item) => {
+                            const preview = createMemo(() => cardPreview(item.content, item.title))
+                            return (
+                              <div
+                                role="button"
+                                tabindex="0"
+                                class="iris-atlas-row"
+                                classList={{
+                                  "iris-atlas-row--done": isDone(item.status),
+                                  "iris-atlas-row--live": liveIds().has(item.id),
+                                  "iris-atlas-row--new": awayIds().has(item.id) && !liveIds().has(item.id),
+                                }}
+                                title="Open this card"
+                                onClick={() => openCard(item.id)}
+                                onKeyDown={(e) => {
+                                  if (e.target !== e.currentTarget) return
+                                  if (e.key === "Enter" || e.key === " ") {
+                                    e.preventDefault()
+                                    openCard(item.id)
+                                  }
+                                }}
+                              >
+                                <span class="iris-atlas-row__mark" aria-hidden="true">
+                                  {isDone(item.status) ? "✓" : "·"}
                                 </span>
-                              )}
-                            </Show>
-                            <span class="shrink-0 font-mono tabular-nums text-11-regular text-text-weaker">
-                              #{item.id}
-                            </span>
-                          </button>
-                        )}
-                      </For>
+                                <span class="iris-atlas-row__text">
+                                  <span class="iris-atlas-row__title">{item.title}</span>
+                                  <Show when={preview()}>
+                                    <span class="iris-atlas-row__preview">{preview()}</span>
+                                  </Show>
+                                </span>
+                                <Show when={liveIds().has(item.id) || awayIds().has(item.id)}>
+                                  <span class="iris-atlas-row__changed" title="Changed since you last looked" />
+                                </Show>
+                                <Show when={item.updatedAt ?? item.createdAt}>
+                                  {(ts) => (
+                                    <span
+                                      class="iris-atlas-row__meta font-mono tabular-nums text-11-regular text-text-weak"
+                                      title={`Last edited ${new Date(ts()).toLocaleString()}`}
+                                    >
+                                      {relativeTime(ts(), now())}
+                                    </span>
+                                  )}
+                                </Show>
+                                <button
+                                  type="button"
+                                  class="iris-atlas-row__id font-mono tabular-nums text-11-regular"
+                                  title={`Copy #${item.id}`}
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    copyItemId(item.id)
+                                  }}
+                                >
+                                  {copiedId() === item.id ? "copied" : `#${item.id}`}
+                                </button>
+                              </div>
+                            )
+                          }}
+                        </For>
+                      </Show>
                     </section>
                   )}
                 </For>
@@ -3583,8 +3809,22 @@ export function SessionIrisTab() {
             would both be noise. */}
         <Show when={view() === "rows" && pane() !== "graph" && !SELF_PANES.has(pane())}>
           <div class="flex items-center gap-2 px-2 py-2 text-11-regular text-text-weaker">
-            <Show when={pageSummary({ shown: rows().length, env: current() as PageEnvelope | undefined })}>
-              {(text) => <span class="font-mono tabular-nums">{text()}</span>}
+            <Show
+              when={pane() === "atlas"}
+              fallback={
+                <Show when={pageSummary({ shown: rows().length, env: current() as PageEnvelope | undefined })}>
+                  {(text) => <span class="font-mono tabular-nums">{text()}</span>}
+                </Show>
+              }
+            >
+              <Show when={(current() as PageEnvelope | undefined)?.measured}>
+                <span class="font-mono tabular-nums">
+                  {atlasCountLine(rows() as AtlasList[], atlasRows(), {
+                    total: (current() as PageEnvelope | undefined)?.total ?? null,
+                    hasMore: !!(current() as PageEnvelope | undefined)?.hasMore,
+                  })}
+                </span>
+              </Show>
             </Show>
             <Show when={(current() as PageEnvelope | undefined)?.hasMore}>
               <button
