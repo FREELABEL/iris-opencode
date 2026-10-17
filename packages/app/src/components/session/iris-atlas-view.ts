@@ -149,3 +149,60 @@ export function readAtlasView(raw: string | null | undefined): AtlasViewOptions 
     return { ...ATLAS_VIEW_DEFAULT }
   }
 }
+
+/*
+ * BOARD VIEW (#189723). The same lists, laid out as columns side by side; a card is moved by
+ * dragging it. Layout is stored apart from the filters on purpose: "reset" clears what you are
+ * filtering by, not how you like to look at the board.
+ */
+export type AtlasLayout = "list" | "board"
+export const ATLAS_LAYOUTS: { id: AtlasLayout; label: string }[] = [
+  { id: "list", label: "List" },
+  { id: "board", label: "Board" },
+]
+export const readAtlasLayout = (raw: string | null | undefined): AtlasLayout => (raw === "board" ? "board" : "list")
+
+/**
+ * Where a dragged card lands. `beforeId` is the card it was dropped onto (it goes in front of
+ * that card); null means the end of the column. One meaning, shared by the optimistic move and
+ * the position sent to fl-api — if the two disagreed, the board would show one order and save
+ * another, and the next refresh would quietly move the card.
+ */
+export interface AtlasDrop {
+  itemId: number
+  toListId: number
+  beforeId: number | null
+}
+
+/** The board after the move, for showing it before the server answers. Unknown ids → unchanged. */
+export function moveAtlasItem<I extends AtlasViewItem, L extends AtlasViewList<I>>(lists: L[], drop: AtlasDrop): L[] {
+  let moving: I | undefined
+  for (const l of lists) moving ??= l.items.find((i) => i.id === drop.itemId)
+  if (!moving || !lists.some((l) => l.id === drop.toListId)) return lists
+  if (drop.beforeId === drop.itemId) return lists
+  return lists.map((l) => {
+    const items = l.items.filter((i) => i.id !== drop.itemId)
+    if (l.id !== drop.toListId) return items.length === l.items.length ? l : { ...l, items }
+    const at = drop.beforeId == null ? -1 : items.findIndex((i) => i.id === drop.beforeId)
+    const next = at < 0 ? [...items, moving!] : [...items.slice(0, at), moving!, ...items.slice(at)]
+    return { ...l, items: next }
+  })
+}
+
+/**
+ * The 0-based position fl-api's /position endpoint wants: the index in the target list's FULL
+ * order with the moving card taken out. Computed on the unfiltered board — with a filter on,
+ * the card you dropped in front of may be the 40th, not the 3rd, and the visible index would
+ * put it in the wrong place. Null when the drop names a list or card that is not on the board.
+ */
+export function atlasDropPosition<I extends AtlasViewItem, L extends AtlasViewList<I>>(
+  fullLists: L[],
+  drop: AtlasDrop,
+): number | null {
+  const target = fullLists.find((l) => l.id === drop.toListId)
+  if (!target) return null
+  const rest = target.items.filter((i) => i.id !== drop.itemId)
+  if (drop.beforeId == null) return rest.length
+  const at = rest.findIndex((i) => i.id === drop.beforeId)
+  return at < 0 ? null : at
+}

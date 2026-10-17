@@ -1924,3 +1924,94 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 }
 .pbf-actions .pbf-run[data-variant="primary"]:hover:not(:disabled) { background-color: color-mix(in srgb, var(--pbf-ink) 88%, var(--pbf-surface)); }
 .pbf-actions [data-component="button"] { display: inline-flex; align-items: center; gap: 6px; }
+
+/*
+ * Atlas › Board (#189723) — the same lists as columns, side by side, scrolling sideways like
+ * Trello. Columns are fixed-width so a long list and an empty one line up; a card shows where it
+ * will land with a line above the card it is dropped in front of.
+ */
+.iris-board {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 0 8px 12px;
+  scroll-snap-type: x proximity;
+}
+.iris-board__col {
+  flex: 0 0 248px;
+  max-width: 248px;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 220px);
+  background: var(--background-element);
+  border: 1px solid var(--border-weaker-base);
+  border-radius: 8px;
+  scroll-snap-align: start;
+}
+.iris-board__col--over {
+  border-color: var(--border-weak-base);
+}
+.iris-board__head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 8px 10px 6px;
+}
+.iris-board__cards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 40px;
+  padding: 0 6px 8px;
+  overflow-y: auto;
+}
+.iris-board__card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 7px 9px;
+  text-align: start;
+  background: var(--background-base);
+  border: 1px solid var(--border-weaker-base);
+  border-radius: 6px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.iris-board__card[draggable="true"] {
+  cursor: grab;
+}
+.iris-board__card:hover,
+.iris-board__card:focus-visible {
+  border-color: var(--border-weak-base);
+  outline: none;
+}
+.iris-board__card--dragging {
+  opacity: 0.4;
+}
+.iris-board__card--before {
+  box-shadow: 0 -3px 0 0 var(--text-base);
+}
+.iris-board__meta {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-weak);
+}
+.iris-board__empty {
+  margin: 0;
+  padding: 10px 4px;
+  font-size: 11px;
+  text-align: center;
+  color: var(--text-weak);
+  border: 1px dashed var(--border-weaker-base);
+  border-radius: 6px;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .iris-board__card {
+    transition:
+      border-color 0.12s,
+      opacity 0.12s;
+  }
+}

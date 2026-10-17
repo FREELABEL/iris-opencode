@@ -2744,6 +2744,36 @@ export async function saveItem(id: number, patch: ItemPatch): Promise<{ ok: bool
 }
 
 /**
+ * Move a card to a list and a position on it — the Board view's drag (#189723).
+ *
+ * fl-api's /position renumbers the whole column (and the one the card left), which `saveItem`
+ * with `listId` cannot do: that changes the list and leaves the card wherever its old
+ * sort_order happens to fall. `position` is 0-based in the target list's full order.
+ *
+ * The route answers 404 for a card on a board you do not own — including one shared WITH you —
+ * so that is said in words: "item not found" about a card on screen reads as a broken app.
+ */
+export async function moveItem(id: number, listId: number, position: number): Promise<{ ok: boolean; reason?: string }> {
+  const userId = await resolveUserId()
+  if (!userId) return { ok: false, reason: `not signed in (token: ${tokenSource()})` }
+  if (!Number.isInteger(position) || position < 0) return { ok: false, reason: "position must be a whole number, 0 or more" }
+  try {
+    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/list/item/${id}/position`, FL_API, {
+      method: "PATCH",
+      body: JSON.stringify({ list_id: listId, position }),
+    })
+    const j = (await res.json().catch(() => ({}))) as any
+    if (res.status === 404) {
+      return { ok: false, reason: "Atlas would not move this card — only the board's owner can rearrange it" }
+    }
+    if (!res.ok) return { ok: false, reason: apiFailure(j, res.status) }
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+/**
  * Add a task to an item. With `agentId` this IS "assign an agent to this card" — there is
  * deliberately no agent column on items; assignment is a task carrying the agent, which is
  * what `iris agents tasks` and the Tasks tab both read back.
