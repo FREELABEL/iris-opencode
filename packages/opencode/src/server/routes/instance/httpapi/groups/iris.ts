@@ -1293,6 +1293,7 @@ export const IrisPaths = {
   pageSave: `${root}/page/:pageID/save`,
   item: `${root}/item/:itemID`,
   itemSave: `${root}/item/:itemID/save`,
+  itemMove: `${root}/item/:itemID/move`,
   itemTaskAdd: `${root}/item/:itemID/tasks`,
   itemTaskSave: `${root}/item/:itemID/tasks/:taskID/save`,
   itemTaskDelete: `${root}/item/:itemID/tasks/:taskID/delete`,
@@ -1936,6 +1937,27 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Save a card's fields",
           description:
             "A PATCH in spirit: only the fields present are sent to fl-api's PUT /user/bloqs/list/item/{id}, so saving a title cannot blank the body. Status is checked against the set fl-api accepts before the request is made, and a 422 comes back as the field errors it named, not as a status code.",
+        }),
+      ),
+      HttpApiEndpoint.post("itemMove", IrisPaths.itemMove, {
+        params: { itemID: Schema.NumberFromString },
+        payload: Schema.Struct({
+          listId: described(Schema.Finite, "The list (column) to put the card in, on the same board"),
+          position: described(Schema.Finite, "0-based index in that list's full order, with the card itself taken out"),
+        }),
+        success: described(
+          Schema.Struct({
+            ok: Schema.Boolean,
+            reason: Schema.optional(Schema.String),
+          }).annotate({ identifier: "IrisItemMoveResult" }),
+          "Whether the move landed",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.itemMove",
+          summary: "Move a card to a list and position",
+          description:
+            "The Board view's drag. Sends fl-api's PATCH /user/{uid}/bloqs/list/item/{id}/position, which renumbers the target column and the one the card left — so the order the board shows is the order saved.",
         }),
       ),
       HttpApiEndpoint.post("itemTaskAdd", IrisPaths.itemTaskAdd, {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { ATLAS_VIEW_DEFAULT, applyAtlasView, isDone, readAtlasView, relativeTime } from "./iris-atlas-view"
+import { ATLAS_VIEW_DEFAULT, applyAtlasView, atlasDropPosition, isDone, moveAtlasItem, readAtlasLayout, readAtlasView, relativeTime } from "./iris-atlas-view"
 
 const NOW = Date.parse("2026-09-23T12:00:00Z")
 const ago = (h: number) => new Date(NOW - h * 3_600_000).toISOString()
@@ -79,4 +79,53 @@ test("readAtlasView drops unknown values", () => {
   })
   expect(readAtlasView("not json")).toEqual(ATLAS_VIEW_DEFAULT)
   expect(readAtlasView(null)).toEqual(ATLAS_VIEW_DEFAULT)
+})
+
+describe("board view — moving a card (#189723)", () => {
+  const board = [
+    { id: 1, name: "To do", items: [{ id: 10, title: "a" }, { id: 11, title: "b" }, { id: 12, title: "c" }] },
+    { id: 2, name: "Doing", items: [{ id: 20, title: "x" }] },
+    { id: 3, name: "Done", items: [] as { id: number; title: string }[] },
+  ]
+  const shape = (r: typeof board) => r.map((l) => l.items.map((i) => i.id))
+
+  test("onto a card in another column: lands in front of it", () => {
+    expect(shape(moveAtlasItem(board, { itemId: 11, toListId: 2, beforeId: 20 }))).toEqual([[10, 12], [11, 20], []])
+  })
+  test("onto a column: lands at the end, including an empty column", () => {
+    expect(shape(moveAtlasItem(board, { itemId: 10, toListId: 3, beforeId: null }))).toEqual([[11, 12], [20], [10]])
+    expect(shape(moveAtlasItem(board, { itemId: 10, toListId: 2, beforeId: null }))).toEqual([[11, 12], [20, 10], []])
+  })
+  test("within a column: reorders without duplicating", () => {
+    expect(shape(moveAtlasItem(board, { itemId: 12, toListId: 1, beforeId: 10 }))).toEqual([[12, 10, 11], [20], []])
+  })
+  test("dropped on itself, or an unknown card/list: nothing changes", () => {
+    expect(moveAtlasItem(board, { itemId: 11, toListId: 1, beforeId: 11 })).toBe(board)
+    expect(moveAtlasItem(board, { itemId: 99, toListId: 1, beforeId: null })).toBe(board)
+    expect(moveAtlasItem(board, { itemId: 10, toListId: 99, beforeId: null })).toBe(board)
+  })
+  test("the saved position matches where the board shows it", () => {
+    for (const drop of [
+      { itemId: 11, toListId: 2, beforeId: 20 },
+      { itemId: 10, toListId: 3, beforeId: null },
+      { itemId: 12, toListId: 1, beforeId: 10 },
+      { itemId: 10, toListId: 1, beforeId: null },
+    ]) {
+      const after = moveAtlasItem(board, drop).find((l) => l.id === drop.toListId)!
+      expect(atlasDropPosition(board, drop)).toBe(after.items.findIndex((i) => i.id === drop.itemId))
+    }
+  })
+  test("position is counted on the FULL list, not the filtered one", () => {
+    // With "open" on, the board shows only 12 in column 1; dropping in front of 12 is position 2.
+    expect(atlasDropPosition(board, { itemId: 20, toListId: 1, beforeId: 12 })).toBe(2)
+  })
+  test("an unknown target has no position, so nothing is sent", () => {
+    expect(atlasDropPosition(board, { itemId: 10, toListId: 99, beforeId: null })).toBeNull()
+    expect(atlasDropPosition(board, { itemId: 10, toListId: 2, beforeId: 999 })).toBeNull()
+  })
+  test("layout reads back only a known value", () => {
+    expect(readAtlasLayout("board")).toBe("board")
+    expect(readAtlasLayout("kanban")).toBe("list")
+    expect(readAtlasLayout(null)).toBe("list")
+  })
 })
