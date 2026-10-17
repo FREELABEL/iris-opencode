@@ -2212,6 +2212,7 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 }
 .iris-table__sort:hover {
   color: var(--text-base);
+}
 
 /*
  * Atlas › Board (#189723) — the same lists as columns, side by side, scrolling sideways like
