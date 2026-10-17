@@ -478,7 +478,7 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
     )
 
     const itemTaskAdd = Effect.fn("IrisHttpApi.itemTaskAdd")(
-      (ctx: { params: { itemID: number }; payload: { title: string; agentId?: number; dueDate?: string } }) =>
+      (ctx: { params: { itemID: number }; payload: { title: string; agentId?: number; dueDate?: string; parentId?: number } }) =>
         Effect.promise(() => addItemTask(ctx.params.itemID, ctx.payload)),
     )
 

@@ -323,3 +323,47 @@ export function atlasDropPosition<I extends AtlasViewItem, L extends AtlasViewLi
   const at = rest.findIndex((i) => i.id === drop.beforeId)
   return at < 0 ? null : at
 }
+
+/**
+ * A due date as a card face says it (#189806): overdue (red), due within 48 h (amber), later.
+ * Date-only values ("2026-10-20") are the END of that day — a card due today is not overdue at 9am.
+ */
+export type DueState = "overdue" | "soon" | "later"
+/**
+ * fl-api stores a due DATE as midnight UTC ("2026-10-18T00:00:00.000000Z"). Read as a timestamp
+ * that is the previous evening anywhere west of UTC, so a card due today turns overdue before
+ * the day starts. Midnight-UTC is treated as the date it names.
+ */
+const asDate = (due: string) => (/^\d{4}-\d{2}-\d{2}T00:00:00(\.0+)?Z$/.test(due) ? due.slice(0, 10) : due)
+export function dueState(rawDue: string | undefined, now: number): DueState | undefined {
+  if (!rawDue) return undefined
+  const due = asDate(rawDue)
+  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(due)
+  const t = Date.parse(dateOnly ? `${due}T23:59:59` : due)
+  if (Number.isNaN(t)) return undefined
+  if (t < now) return "overdue"
+  if (t - now <= 48 * 3_600_000) return "soon"
+  return "later"
+}
+
+/** "Mar 4", "Today", "Tomorrow", "Yesterday" — short enough for a chip. */
+export function dueLabel(rawDue: string, now: number): string {
+  const due = asDate(rawDue)
+  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(due)
+  const d = new Date(dateOnly ? `${due}T12:00:00` : due)
+  if (Number.isNaN(d.getTime())) return due
+  const day = (x: Date) => Math.floor((Date.UTC(x.getFullYear(), x.getMonth(), x.getDate())) / 86_400_000)
+  const diff = day(d) - day(new Date(now))
+  if (diff === 0) return "Today"
+  if (diff === 1) return "Tomorrow"
+  if (diff === -1) return "Yesterday"
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+}
+
+/** Two letters for an avatar: "Ana Pérez" → "AP", "elon" → "EL", nothing → "?". */
+export function initials(name: string | undefined): string {
+  const parts = (name ?? "").trim().split(/[\s._@-]+/).filter(Boolean)
+  if (!parts.length) return "?"
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+}

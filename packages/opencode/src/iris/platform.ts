@@ -2894,7 +2894,7 @@ export async function moveItem(id: number, listId: number, position: number): Pr
  */
 export async function addItemTask(
   itemId: number,
-  input: { title: string; agentId?: number; dueDate?: string },
+  input: { title: string; agentId?: number; dueDate?: string; parentId?: number },
 ): Promise<{ ok: boolean; reason?: string; task?: ItemTask }> {
   const userId = await resolveUserId()
   if (!userId) return { ok: false, reason: `not signed in (token: ${tokenSource()})` }
@@ -2905,6 +2905,8 @@ export async function addItemTask(
     const body: Record<string, unknown> = { title, status: "todo" }
     if (input.agentId != null) body.agent_id = input.agentId
     if (input.dueDate) body.due_date = input.dueDate
+    // A subtask (#189794): fl-api nests by parent_id and rolls completion up the chain.
+    if (input.parentId != null) body.parent_id = input.parentId
     const res = await irisFetch(`/api/v1/user/bloqs/list/item/${itemId}/tasks`, FL_API, {
       method: "POST",
       body: JSON.stringify(body),
@@ -3284,6 +3286,10 @@ export async function fetchAssignees(itemId: number): Promise<PlatformResult<{ a
   try {
     const res = await irisFetch(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/assignees`)
     const j = (await res.json().catch(() => ({}))) as any
+    // A route fl-api does not have answers 404 with an EMPTY message; the route's own refusal
+    // says "Item not found". The first means this IRIS server predates assignees (#189792).
+    if (res.status === 404 && !j?.message)
+      return { measured: false, reason: "this IRIS server does not support assigning yet", data: { assignees: [] } }
     if (!res.ok) return { measured: false, reason: apiFailure(j, res.status), data: { assignees: [] } }
     return { measured: true, data: { assignees: readAssignees(j?.data?.assignees) } }
   } catch (e) {

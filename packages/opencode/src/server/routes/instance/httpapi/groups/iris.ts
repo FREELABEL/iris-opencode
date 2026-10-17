@@ -2086,6 +2086,7 @@ export const IrisApi = HttpApi.make("iris").add(
         params: { itemID: Schema.NumberFromString },
         payload: Schema.Struct({
           title: Schema.String,
+          parentId: described(Schema.optional(Schema.Finite), "Make it a subtask of this task (#189794)."),
           agentId: described(
             Schema.optional(Schema.Finite),
             "Assign the task to this agent. This is how an agent is put on a card.",
