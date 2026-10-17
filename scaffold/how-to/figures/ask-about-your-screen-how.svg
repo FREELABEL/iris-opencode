@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1040 440" width="1040" height="440" role="img" aria-labelledby="t d" font-family="'Instrument Sans', -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <title id="t">Ask about what's on your screen</title>
+  <desc id="d">Run iris look with a question. Drag a box over the part of the screen you mean, such as a failing test. IRIS reads that region and prints a short answer in your terminal. The screenshot is deleted after the answer unless you add --keep.</desc>
+  <defs>
+    <linearGradient id="g" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0" stop-color="#d946ef"/><stop offset=".55" stop-color="#3b82f6"/><stop offset="1" stop-color="#22d3ee"/>
+    </linearGradient>
+    <marker id="ahg" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#22d3ee"/></marker>
+  </defs>
+  <rect width="1040" height="440" rx="20" fill="#0a0a0a"/>
+  <rect x=".5" y=".5" width="1039" height="439" rx="20" fill="none" stroke="#262626"/>
+  <text x="70" y="44" fill="#737373" font-size="13" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">ASK ABOUT WHAT'S ON YOUR SCREEN</text>
+
+  <!-- 1 the screen, with a drag box over the failure -->
+  <g transform="translate(70 96)">
+    <rect width="300" height="200" rx="14" fill="#111" stroke="#262626"/>
+    <rect x="20" y="24" width="140" height="8" rx="4" fill="#262626"/>
+    <rect x="20" y="46" width="200" height="8" rx="4" fill="#262626"/>
+    <rect x="34" y="78" width="170" height="8" rx="4" fill="#e0705f"/>
+    <rect x="48" y="98" width="110" height="8" rx="4" fill="#a3a3a3"/>
+    <rect x="48" y="118" width="110" height="8" rx="4" fill="#a3a3a3"/>
+    <rect x="20" y="150" width="160" height="8" rx="4" fill="#262626"/>
+    <rect x="24" y="66" width="196" height="72" rx="6" fill="none" stroke="#3b82f6" stroke-width="3"/>
+    <path d="M214 132 l0 26 l7 -6 l5 12 l6 -3 l-5 -11 l9 0 Z" fill="#fafafa" stroke="#0a0a0a" stroke-width="1.5"/>
+    <text x="0" y="234" fill="#fafafa" font-size="17" font-weight="700"><tspan fill="#a3a3a3">1 </tspan>Drag over it</text>
+    <text x="0" y="258" fill="#a3a3a3" font-size="14" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">iris look "why?"</text>
+  </g>
+  <path d="M380 196 H434" stroke="url(#g)" stroke-width="3" marker-end="url(#ahg)"/>
+
+  <!-- 2 IRIS reads that region -->
+  <g transform="translate(446 136)">
+    <polygon points="74,0 148,42 148,122 74,164 0,122 0,42" fill="#111" stroke="url(#g)" stroke-width="3"/>
+    <rect x="44" y="58" width="60" height="48" rx="4" fill="none" stroke="#3b82f6" stroke-width="3"/>
+    <text x="74" y="194" fill="#fafafa" font-size="17" font-weight="700" text-anchor="middle"><tspan fill="#a3a3a3">2 </tspan>IRIS reads it</text>
+    <text x="74" y="218" fill="#a3a3a3" font-size="14" text-anchor="middle">just that region</text>
+  </g>
+  <path d="M604 196 H658" stroke="url(#g)" stroke-width="3" marker-end="url(#ahg)"/>
+
+  <!-- 3 the answer in your terminal -->
+  <g transform="translate(670 96)">
+    <rect width="300" height="200" rx="14" fill="#111" stroke="#262626"/>
+    <text x="20" y="40" fill="#34d399" font-size="12" font-weight="700" letter-spacing=".1em" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">ANSWER</text>
+    <text x="20" y="72" fill="#fafafa" font-size="15">The test expects 81 but</text>
+    <text x="20" y="94" fill="#fafafa" font-size="15">the code produces 90.</text>
+    <text x="20" y="138" fill="#a3a3a3" font-size="13">screenshot deleted after</text>
+    <text x="20" y="158" fill="#a3a3a3" font-size="13" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">(keep it: --keep)</text>
+    <text x="0" y="234" fill="#fafafa" font-size="17" font-weight="700"><tspan fill="#a3a3a3">3 </tspan>Read the answer</text>
+    <text x="0" y="258" fill="#a3a3a3" font-size="14">right in your terminal</text>
+  </g>
+</svg>

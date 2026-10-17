@@ -11,9 +11,14 @@ duration_min: 3
 Drag over any part of your screen — an error, a chart, a message — and get an answer about it in
 a few sentences. Nothing to install on a Mac; on Linux it uses the screenshot tool you already have.
 
-## Steps
+![Run iris look with a question. Drag a box over the part of the screen you mean, such as a failing test. IRIS reads that region and prints a short answer in your terminal. The screenshot is deleted after the answer unless you add --keep.](https://cdn.heyiris.io/cloud-files/1792224194_ask-about-your-screen-how.png)
 
-**1. Ask**
+## Before you start
+
+- IRIS installed and signed in: `iris auth login`
+- A machine with a screen: a Mac, or Linux with a desktop. On a server, use `--image` instead.
+
+## Step 1: Ask
 
 ```bash
 iris look "why is this test failing?"
@@ -28,13 +33,13 @@ test's expectation or the discount rule is wrong.
 
 The screenshot is deleted after the answer, unless you add `--keep`.
 
-**2. Ask about an image you already have**
+## Step 2: Ask about an image you already have
 
 ```bash
 iris look --image chart.png "what does this chart say?"
 ```
 
-**3. Put it on a key**
+## Step 3: Put it on a key
 
 - **macOS**: Shortcuts app → new shortcut → *Run Shell Script* → `iris look`, then assign a
   keyboard shortcut.
@@ -49,3 +54,7 @@ iris look --image chart.png "what does this chart say?"
 looking at, or use `--image`.
 
 To pull just the text out of an image instead, use `iris ocr <image>`.
+
+## Related
+
+- `run-code-in-a-sandbox.md`: run the fix it suggests in a throwaway box

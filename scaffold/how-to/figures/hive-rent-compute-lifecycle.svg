@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1040 440" width="1040" height="440" role="img" aria-labelledby="t d" font-family="'Instrument Sans', -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <title id="t">A rental, from rent to release</title>
+  <desc id="d">iris hive rent starts a machine, which shows as starting up until it checks in. Once it checks in it shows as in your hive, and iris hive run sends it work. It is billed the whole time it is up, from rent until iris hive release, which is the only thing that stops the bill.</desc>
+  <defs>
+    <linearGradient id="g" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0" stop-color="#d946ef"/><stop offset=".55" stop-color="#3b82f6"/><stop offset="1" stop-color="#22d3ee"/>
+    </linearGradient>
+  </defs>
+  <rect width="1040" height="440" rx="20" fill="#0a0a0a"/>
+  <rect x=".5" y=".5" width="1039" height="439" rx="20" fill="none" stroke="#262626"/>
+
+  <!-- the path of the work -->
+  <line x1="110" y1="190" x2="930" y2="190" stroke="#262626" stroke-width="4" stroke-linecap="round"/>
+  <line x1="350" y1="190" x2="720" y2="190" stroke="url(#g)" stroke-width="6" stroke-linecap="round"/>
+
+  <!-- 1 rent -->
+  <g transform="translate(110 190)">
+    <circle r="34" fill="#9333ea"/>
+    <path d="M-12 -6 H12 V14 H-12 Z M-8 -6 V-14 H8 V-6" fill="none" stroke="#0a0a0a" stroke-width="4" stroke-linejoin="round"/>
+    <text y="-58" text-anchor="middle" fill="#fafafa" font-size="18" font-weight="700">Rent</text>
+    <text y="72" text-anchor="middle" fill="#a3a3a3" font-size="14" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">iris hive rent</text>
+  </g>
+
+  <!-- 2 starting up: a half circle (not yet whole) -->
+  <g transform="translate(350 190)">
+    <circle r="34" fill="#111" stroke="#262626" stroke-width="2"/>
+    <path d="M0 -24 A24 24 0 0 1 0 24 Z" fill="#a3a3a3"/>
+    <text y="-58" text-anchor="middle" fill="#fafafa" font-size="18" font-weight="700">Starting up</text>
+    <text y="72" text-anchor="middle" fill="#a3a3a3" font-size="14">booting, not checked in</text>
+  </g>
+
+  <!-- 3 in your hive: whole, success -->
+  <g transform="translate(560 190)">
+    <circle r="34" fill="#111" stroke="#34d399" stroke-width="3"/>
+    <circle r="16" fill="#34d399"/>
+    <text y="-58" text-anchor="middle" fill="#fafafa" font-size="18" font-weight="700">In your hive</text>
+    <text y="72" text-anchor="middle" fill="#a3a3a3" font-size="14">checked in · takes work</text>
+    <text y="94" text-anchor="middle" fill="#a3a3a3" font-size="14" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">iris hive run</text>
+  </g>
+
+  <!-- 4 release -->
+  <g transform="translate(930 190)">
+    <circle r="34" fill="#111" stroke="#262626" stroke-width="2"/>
+    <rect x="-14" y="-14" width="28" height="28" rx="3" fill="#fafafa"/>
+    <text y="-58" text-anchor="middle" fill="#fafafa" font-size="18" font-weight="700">Release</text>
+    <text y="72" text-anchor="middle" fill="#a3a3a3" font-size="14" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">iris hive release</text>
+  </g>
+
+  <!-- the bill: from rent to release, and only release stops it -->
+  <rect x="110" y="320" width="820" height="14" rx="7" fill="#f59e0b"/>
+  <text x="110" y="364" fill="#fafafa" font-size="15" font-weight="700">Billed the whole time it's up</text>
+  <text x="930" y="364" fill="#a3a3a3" font-size="15" text-anchor="end">only release stops the bill</text>
+
+  <text x="70" y="44" fill="#737373" font-size="13" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">A RENTAL, FROM RENT TO RELEASE</text>
+</svg>

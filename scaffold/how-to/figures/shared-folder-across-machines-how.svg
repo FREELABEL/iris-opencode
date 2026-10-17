@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1040 440" width="1040" height="440" role="img" aria-labelledby="t d" font-family="'Instrument Sans', -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <title id="t">One folder, every machine</title>
+  <desc id="d">Every machine in your Hive mounts the same folder at ~/IrisDrive/team. A small file index on one of your Hive machines, reached over your tailnet, keeps the list of files. Your own storage bucket, such as Cloudflare R2 or any S3, holds the contents, and a machine downloads only the parts of a file it reads.</desc>
+  <defs>
+    <linearGradient id="g" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0" stop-color="#d946ef"/><stop offset=".55" stop-color="#3b82f6"/><stop offset="1" stop-color="#22d3ee"/>
+    </linearGradient>
+  </defs>
+  <rect width="1040" height="440" rx="20" fill="#0a0a0a"/>
+  <rect x=".5" y=".5" width="1039" height="439" rx="20" fill="none" stroke="#262626"/>
+  <text x="70" y="44" fill="#737373" font-size="13" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">ONE FOLDER, EVERY MACHINE</text>
+
+  <!-- three machines, each with the same folder -->
+  <g font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">
+    <g transform="translate(110 76)">
+      <rect width="230" height="96" rx="14" fill="#111" stroke="#262626"/>
+      <path d="M22 30 h34 l8 8 h40 v36 h-82 Z" fill="#9333ea"/>
+      <text x="112" y="46" fill="#fafafa" font-size="15" font-weight="700" font-family="'Instrument Sans', sans-serif">Your laptop</text>
+      <text x="112" y="68" fill="#a3a3a3" font-size="11">~/IrisDrive/team</text>
+    </g>
+    <g transform="translate(405 76)">
+      <rect width="230" height="96" rx="14" fill="#111" stroke="#262626"/>
+      <path d="M22 30 h34 l8 8 h40 v36 h-82 Z" fill="#3b82f6"/>
+      <text x="112" y="46" fill="#fafafa" font-size="15" font-weight="700" font-family="'Instrument Sans', sans-serif">A server</text>
+      <text x="112" y="68" fill="#a3a3a3" font-size="11">~/IrisDrive/team</text>
+    </g>
+    <g transform="translate(700 76)">
+      <rect width="230" height="96" rx="14" fill="#111" stroke="#262626"/>
+      <path d="M22 30 h34 l8 8 h40 v36 h-82 Z" fill="#22d3ee"/>
+      <text x="112" y="46" fill="#fafafa" font-size="15" font-weight="700" font-family="'Instrument Sans', sans-serif">An agent's box</text>
+      <text x="112" y="68" fill="#a3a3a3" font-size="11">~/IrisDrive/team</text>
+    </g>
+  </g>
+
+  <!-- the file list (dashed: small, frequent) -->
+  <g stroke="#a3a3a3" stroke-width="2" stroke-dasharray="5 6" fill="none">
+    <path d="M225 172 C225 230 260 268 300 284"/>
+    <path d="M520 172 C520 230 400 262 340 284"/>
+    <path d="M815 172 C815 236 440 270 352 292"/>
+  </g>
+  <!-- the contents (gradient: only the parts you read) -->
+  <g stroke="url(#g)" stroke-width="3" fill="none">
+    <path d="M260 172 C280 240 640 262 690 286"/>
+    <path d="M560 172 C580 230 680 262 712 284"/>
+    <path d="M850 172 C850 230 790 262 760 284"/>
+  </g>
+
+  <!-- file index -->
+  <g transform="translate(110 284)">
+    <rect width="300" height="110" rx="14" fill="#111" stroke="#262626"/>
+    <rect x="22" y="26" width="58" height="8" rx="4" fill="#a3a3a3"/>
+    <rect x="22" y="44" width="40" height="8" rx="4" fill="#a3a3a3"/>
+    <rect x="22" y="62" width="50" height="8" rx="4" fill="#a3a3a3"/>
+    <text x="100" y="40" fill="#fafafa" font-size="16" font-weight="700">The file list</text>
+    <text x="100" y="62" fill="#a3a3a3" font-size="13">a small index on one Hive</text>
+    <text x="100" y="80" fill="#a3a3a3" font-size="13">machine, over your tailnet</text>
+  </g>
+
+  <!-- bucket -->
+  <g transform="translate(630 284)">
+    <rect width="300" height="110" rx="14" fill="#111" stroke="#262626"/>
+    <rect x="22" y="22" width="20" height="20" rx="3" fill="#d946ef"/>
+    <rect x="46" y="22" width="20" height="20" rx="3" fill="#3b82f6"/>
+    <rect x="22" y="46" width="20" height="20" rx="3" fill="#22d3ee"/>
+    <rect x="46" y="46" width="20" height="20" rx="3" fill="#262626"/>
+    <text x="90" y="40" fill="#fafafa" font-size="16" font-weight="700">Your bucket</text>
+    <text x="90" y="62" fill="#a3a3a3" font-size="13">R2 or any S3 holds the files</text>
+    <text x="90" y="80" fill="#a3a3a3" font-size="13">only the parts you read move</text>
+  </g>
+</svg>

@@ -12,21 +12,36 @@ One folder that lives on every machine in your Hive — your laptop, a server, a
 Open a file and only the parts you read are downloaded (a 200 MB video does not fill your disk);
 save a file and every other machine sees it straight away.
 
-## Prerequisites
+![Every machine in your Hive mounts the same folder at ~/IrisDrive/team. A small file index on one of your Hive machines, reached over your tailnet, keeps the list of files. Your own storage bucket, such as Cloudflare R2 or any S3, holds the contents, and a machine downloads only the parts of a file it reads.](https://cdn.heyiris.io/cloud-files/1792224204_shared-folder-across-machines-how.png)
+
+## Before you start
 
 - A storage bucket (Cloudflare R2 or any S3) — **use one for drives only, with a key limited to it**
 - A small file index every machine can reach — e.g. Redis on one of your Hive machines, over the
   tailnet, with a password
 
-## Steps
+## Step 1: Install the drive engine on each machine
 
-**1. Install the drive engine — on each machine**
+On a machine that doesn't have it yet, `iris hive drive status` says so:
+
+```bash
+iris hive drive status
+```
+
+```
+  juicefs   not installed — iris hive drive install
+  no drives — iris hive drive create <name> --meta … --bucket …
+```
+
+Install it:
 
 ```bash
 iris hive drive install
 ```
 
-**2. Create the drive — once, on one machine**
+This installs JuiceFS 1.4.1 into `~/.iris/bin`, checksum-verified.
+
+## Step 2: Create the drive, once, on one machine
 
 ```bash
 ACCESS_KEY=… SECRET_KEY=… iris hive drive create team \
@@ -34,13 +49,13 @@ ACCESS_KEY=… SECRET_KEY=… iris hive drive create team \
   --bucket "https://ACCOUNT.r2.cloudflarestorage.com/BUCKET"
 ```
 
-**3. Join it — on every other machine, with the same `--meta`**
+## Step 3: Join it from every other machine, with the same `--meta`
 
 ```bash
 iris hive drive join team --meta "redis://:PASSWORD@100.x.y.z:6379/1"
 ```
 
-**4. Mount it**
+## Step 4: Mount it
 
 ```bash
 iris hive drive mount team        # → ~/IrisDrive/team
@@ -52,7 +67,7 @@ iris hive drive mount team        # → ~/IrisDrive/team
 iris hive drive serve team        # http://127.0.0.1:9007/
 ```
 
-**5. Check**
+## Step 5: Check it
 
 ```bash
 iris hive drive status
@@ -74,3 +89,9 @@ or the password is wrong.
 
 **Writes refused in a folder another machine created** — that machine is not using the drive's
 shared identity; remount it with `iris hive drive mount`.
+
+## Related
+
+- `hive-dispatch.md`: connect a machine to your Hive first
+- `hive-tailscale.md`: reach a machine that isn't on your network (the file list is reached over your tailnet)
+- `run-code-in-a-sandbox.md`: run something in a throwaway box instead

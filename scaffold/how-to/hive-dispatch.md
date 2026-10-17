@@ -15,6 +15,8 @@ command on it from any other machine you're signed in on and read the output whe
 Proven on `iris-hive-001`, a Dell OptiPlex from 2016 running Ubuntu: it joined the Hive minutes after
 IRIS was installed, and it has run jobs for the rest of the network since.
 
+![The old PC connects outward to the IRIS Hive with no open ports. Your laptop sends a job with iris hive run. The Hive hands the job to the old PC, which runs it, and the output comes back to your laptop.](https://cdn.heyiris.io/cloud-files/1792224196_hive-dispatch-flow.png)
+
 ## Before you start
 
 - The old machine boots, is on the internet, and runs macOS, Linux or Windows.
