@@ -1253,6 +1253,9 @@ export const IrisPaths = {
   bloqs: `${root}/bloqs`,
   inbox: `${root}/inbox`,
   atlas: `${root}/atlas/:bloqID`,
+  atlasLive: `${root}/atlas/:bloqID/live`,
+  atlasItemCreate: `${root}/atlas/:bloqID/lists/:listID/items`,
+  atlasListCreate: `${root}/atlas/:bloqID/lists`,
   agents: `${root}/agents/:bloqID`,
   leads: `${root}/leads/:bloqID`,
   pages: `${root}/pages/:bloqID`,
@@ -1528,6 +1531,49 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Get Atlas for a bloq",
           description:
             "Lists and items for one bloq, fetched from fl-api with the signed-in user's token. Check `measured` before rendering: false means the fetch failed, not that the bloq is empty.",
+        }),
+      ),
+      HttpApiEndpoint.post("atlasItemCreate", IrisPaths.atlasItemCreate, {
+        params: { bloqID: Schema.NumberFromString, listID: Schema.NumberFromString },
+        payload: Schema.Struct({
+          title: Schema.String,
+          body: Schema.optional(Schema.String),
+          position: described(Schema.optional(Schema.Finite), "Where in the list; the panel sends the list's length (the end)"),
+        }),
+        success: described(
+          Schema.Struct({ ok: Schema.Boolean, id: Schema.optional(Schema.Finite), reason: Schema.optional(Schema.String) }).annotate({
+            identifier: "IrisAtlasCreateResult",
+          }),
+          "Whether the card was created, and its id",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.atlasItemCreate",
+          summary: "Add a card to a list (quick add)",
+          description: "#189768. fl-api checks the caller may write to that list; a refusal comes back as `reason`.",
+        }),
+      ),
+      HttpApiEndpoint.post("atlasListCreate", IrisPaths.atlasListCreate, {
+        params: { bloqID: Schema.NumberFromString },
+        payload: Schema.Struct({ name: Schema.String, position: Schema.optional(Schema.Finite) }),
+        success: described(
+          Schema.Struct({ ok: Schema.Boolean, id: Schema.optional(Schema.Finite), reason: Schema.optional(Schema.String) }).annotate({
+            identifier: "IrisAtlasListCreateResult",
+          }),
+          "Whether the list was created, and its id",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({ identifier: "iris.atlasListCreate", summary: "Add a list to a board", description: "#189768." }),
+      ),
+      HttpApiEndpoint.get("atlasLive", IrisPaths.atlasLive, {
+        params: { bloqID: Schema.NumberFromString },
+        success: Schema.String.pipe(HttpApiSchema.asText({ contentType: "text/event-stream" })),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.atlasLive",
+          summary: "Watch an Atlas board for changes (server-sent events)",
+          description:
+            "#189767. `ready` once connected, `change` {at} when the board's fingerprint (lists, and each card's list, position, status, title, edit time) differs from the last check, `status` {pusher} when the instant channel connects or is refused, and `ping` every 25 s. Carries no board data — on `change`, re-read /atlas/:bloqID.",
         }),
       ),
       HttpApiEndpoint.get("agents", IrisPaths.agents, {

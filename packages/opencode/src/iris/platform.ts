@@ -2744,6 +2744,64 @@ export async function saveItem(id: number, patch: ItemPatch): Promise<{ ok: bool
 }
 
 /**
+ * QUICK ADD (#189768) — a card at the END of a list, on the board on screen.
+ *
+ * fl-api's create route puts a card at sort_order 0 unless told otherwise — the TOP, tied with
+ * whatever was already first — so the caller passes the list's length. It checks the caller may
+ * write to that list (#183652-b); the refusal comes back in its words.
+ */
+export async function createItem(
+  bloqId: number,
+  listId: number,
+  input: { title: string; body?: string; position?: number },
+): Promise<{ ok: boolean; id?: number; reason?: string }> {
+  const userId = await resolveUserId()
+  if (!userId) return { ok: false, reason: `not signed in (token: ${tokenSource()})` }
+  const title = input.title.trim()
+  if (!title) return { ok: false, reason: "a card needs a title" }
+  try {
+    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}/lists/${listId}/items`, FL_API, {
+      method: "POST",
+      body: JSON.stringify({
+        title,
+        content: input.body ?? "",
+        type: "default",
+        ...(input.position !== undefined ? { sort_order: input.position } : {}),
+      }),
+    })
+    const j = (await res.json().catch(() => ({}))) as any
+    if (!res.ok) return { ok: false, reason: apiFailure(j, res.status) }
+    const id = Number(j?.data?.id ?? j?.data?.data?.id ?? j?.id)
+    return Number.isFinite(id) ? { ok: true, id } : { ok: true }
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+/** A new list at the end of the board (#189768). */
+export async function createList(
+  bloqId: number,
+  input: { name: string; position?: number },
+): Promise<{ ok: boolean; id?: number; reason?: string }> {
+  const userId = await resolveUserId()
+  if (!userId) return { ok: false, reason: `not signed in (token: ${tokenSource()})` }
+  const name = input.name.trim()
+  if (!name) return { ok: false, reason: "a list needs a name" }
+  try {
+    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}/lists`, FL_API, {
+      method: "POST",
+      body: JSON.stringify({ name, ...(input.position !== undefined ? { sort_order: input.position } : {}) }),
+    })
+    const j = (await res.json().catch(() => ({}))) as any
+    if (!res.ok) return { ok: false, reason: apiFailure(j, res.status) }
+    const id = Number(j?.data?.id ?? j?.id)
+    return Number.isFinite(id) ? { ok: true, id } : { ok: true }
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+/**
  * Move a card to a list and a position on it — the Board view's drag (#189723).
  *
  * fl-api's /position renumbers the whole column (and the one the card left), which `saveItem`

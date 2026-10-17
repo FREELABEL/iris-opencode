@@ -150,6 +150,123 @@ export function readAtlasView(raw: string | null | undefined): AtlasViewOptions 
   }
 }
 
+/**
+ * LIVE (#189767). Which cards changed between two reads of the same board — a card that is new,
+ * or whose edit time, status, title or list moved. Removed cards are not returned: there is no
+ * row left to mark.
+ */
+export function changedItemIds<I extends AtlasViewItem & { listId?: number }>(
+  prev: AtlasViewList<I>[],
+  next: AtlasViewList<I>[],
+): Set<number> {
+  const before = new Map<number, string>()
+  const sig = (i: AtlasViewItem, listId: number) => `${listId}|${i.status ?? ""}|${i.title}|${i.updatedAt ?? ""}`
+  for (const l of prev) for (const i of l.items) before.set(i.id, sig(i, l.id))
+  const out = new Set<number>()
+  for (const l of next) for (const i of l.items) if (before.get(i.id) !== sig(i, l.id)) out.add(i.id)
+  return out
+}
+
+/** Cards edited after `since` (an ISO time) — what moved while you were away from this board. */
+export function editedSince(lists: AtlasViewList[], since: string | null | undefined): Set<number> {
+  const t = ms(since ?? undefined)
+  const out = new Set<number>()
+  if (Number.isNaN(t)) return out
+  for (const l of lists)
+    for (const i of l.items) {
+      const e = ms(i.updatedAt ?? i.createdAt)
+      if (!Number.isNaN(e) && e > t) out.add(i.id)
+    }
+  return out
+}
+
+/**
+ * One line from a card's body for the row under its title (#189764) — markdown and HTML
+ * stripped, whitespace folded. Empty when the body only repeats the title, so a row never says
+ * the same thing twice.
+ */
+export function cardPreview(body: string | undefined, title: string, max = 160): string {
+  if (!body) return ""
+  // A body often opens with its own title as a heading, sometimes shorter or longer than the
+  // card's title ("# EPIC — Links open inside IRIS Desktop" under "… Desktop (#187864)").
+  const fold = (x: string) => x.replace(/[#*_`>]/g, "").replace(/\s+/g, " ").trim().toLowerCase()
+  const lines = body.split("\n")
+  const first = lines.findIndex((l) => l.trim() !== "")
+  if (first >= 0) {
+    const a = fold(lines[first])
+    const b = fold(title)
+    if (a && b.startsWith(a)) lines.splice(first, 1)
+  }
+  let t = lines
+    .join("\n")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/^\s{0,3}(#{1,6}|>|[-*+]|\d+\.)\s+/gm, "")
+    .replace(/^\s*\|?[\s:|-]+\|?\s*$/gm, " ")
+    .replace(/[*_`~|]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+  const head = title.trim().toLowerCase()
+  if (head && t.toLowerCase().startsWith(head)) t = t.slice(head.length).replace(/^[\s:;,.—–-]+/, "")
+  if (!t) return ""
+  return t.length > max ? `${t.slice(0, max - 1).trimEnd()}…` : t
+}
+
+/**
+ * The footer, in nouns (#189770). It used to print the number of LISTS bare — "6" under a board
+ * of nine cards, read as a stray glyph. Counts what is loaded; says when more lists exist and
+ * when the filters are hiding cards.
+ */
+export function atlasCountLine(
+  loaded: AtlasViewList[],
+  shown: AtlasViewList[],
+  more?: { total: number | null; hasMore: boolean },
+): string {
+  const n = (k: number, one: string, many: string) => `${k} ${k === 1 ? one : many}`
+  const cards = loaded.reduce((s, l) => s + l.items.length, 0)
+  const showing = shown.reduce((s, l) => s + l.items.length, 0)
+  const lists =
+    more?.hasMore && more.total != null
+      ? `${loaded.length} of ${more.total} lists`
+      : n(loaded.length, "list", "lists")
+  const base = `${lists} · ${n(cards, "card", "cards")}`
+  return showing === cards ? base : `${base} · showing ${showing}`
+}
+
+/**
+ * Keep the objects of what did not change (#189767).
+ *
+ * Solid's <For> matches rows by object, and every refetch returns new objects — so a live update
+ * every few seconds rebuilt every row, lost keyboard focus, and replayed the "just changed"
+ * flash on cards that changed minutes ago. Reusing the previous object for an unchanged card
+ * (and an unchanged list) means only what moved is rebuilt, which is also what flashes.
+ */
+export function keepUnchanged<L extends AtlasViewList>(prev: L[] | undefined, next: L[]): L[] {
+  if (!prev) return next
+  const oldItems = new Map<number, AtlasViewItem>()
+  const oldLists = new Map<number, L>()
+  for (const l of prev) {
+    oldLists.set(l.id, l)
+    for (const i of l.items) oldItems.set(i.id, i)
+  }
+  const same = (a: Record<string, unknown>, b: Record<string, unknown>) => {
+    const ka = Object.keys(a)
+    if (ka.length !== Object.keys(b).length) return false
+    return ka.every((k) => a[k] === b[k])
+  }
+  return next.map((l) => {
+    const items = l.items.map((i) => {
+      const o = oldItems.get(i.id)
+      return o && same(o as any, i as any) ? o : i
+    })
+    const ol = oldLists.get(l.id)
+    if (ol && ol.name === l.name && ol.items.length === items.length && ol.items.every((x, k) => x === items[k])) return ol
+    return { ...l, items } as L
+  })
+}
+
 /*
  * BOARD VIEW (#189723). The same lists, laid out as columns side by side; a card is moved by
  * dragging it. Layout is stored apart from the filters on purpose: "reset" clears what you are
