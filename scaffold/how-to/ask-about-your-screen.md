@@ -11,7 +11,7 @@ duration_min: 3
 Drag over any part of your screen — an error, a chart, a message — and get an answer about it in
 a few sentences. Nothing to install on a Mac; on Linux it uses the screenshot tool you already have.
 
-![Run iris look with a question. Drag a box over the part of the screen you mean, such as a failing test. IRIS reads that region and prints a short answer in your terminal. The screenshot is deleted after the answer unless you add --keep.](https://cdn.heyiris.io/cloud-files/1792224194_ask-about-your-screen-how.png)
+![Run iris look with a question. Drag a box over the part of the screen you mean, such as a failing test. IRIS reads that region and prints a short answer in your terminal. The screenshot is deleted after the answer unless you add --keep.](https://cdn.heyiris.io/cloud-files/1792224641_ask-about-your-screen-how.png)
 
 ## Before you start
 

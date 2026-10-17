@@ -12,7 +12,7 @@ Rents a **long-lived machine**: a server you keep, not a job that finishes. IRIS
 puts the IRIS agent on it so it joins your Hive, and you run work on it like any other machine you
 own. You release it when you're done, and that stops the bill.
 
-![iris hive rent starts a machine, which shows as starting up until it checks in. Once it checks in it shows as in your hive, and iris hive run sends it work. It is billed the whole time it is up, from rent until iris hive release, which is the only thing that stops the bill.](https://cdn.heyiris.io/cloud-files/1792224198_hive-rent-compute-lifecycle.png)
+![iris hive rent starts a machine, which shows as starting up until it checks in. Once it checks in it shows as in your hive, and iris hive run sends it work. It is billed the whole time it is up, from rent until iris hive release, which is the only thing that stops the bill.](https://cdn.heyiris.io/cloud-files/1792224646_hive-rent-compute-lifecycle.png)
 
 **Just need to run one command somewhere safe?** That's a sandbox, not a rental: it costs nothing
 when idle and is gone afterwards. See `run-code-in-a-sandbox.md`.

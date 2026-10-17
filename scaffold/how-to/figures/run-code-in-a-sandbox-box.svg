@@ -1,47 +1,30 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1040 440" width="1040" height="440" role="img" aria-labelledby="t d" font-family="'Instrument Sans', -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 830" width="720" height="830" role="img" aria-labelledby="t d" font-family="'Instrument Sans', -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
   <title id="t">What a sandbox is</title>
   <desc id="d">Your command goes into a fresh Linux box that exists only for that command. Inside are bash, Python 3, Node and npm, git, curl and jq. Not inside are your files, your keys and your accounts, and the internet is off unless you add --internet. You get the output and the exit code back, and then the box is gone.</desc>
-  <defs>
-    <linearGradient id="g" x1="0" x2="1" y1="0" y2="0">
-      <stop offset="0" stop-color="#d946ef"/><stop offset=".55" stop-color="#3b82f6"/><stop offset="1" stop-color="#22d3ee"/>
-    </linearGradient>
-    <marker id="ahg" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#22d3ee"/></marker>
-  </defs>
-  <rect width="1040" height="440" rx="20" fill="#0a0a0a"/>
-  <rect x=".5" y=".5" width="1039" height="439" rx="20" fill="none" stroke="#262626"/>
-  <text x="70" y="44" fill="#737373" font-size="13" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">WHAT A SANDBOX IS</text>
+  <defs><linearGradient id="g" x1="0" x2="1" y1="0" y2="1"><stop offset="0" stop-color="#d946ef"/><stop offset=".55" stop-color="#3b82f6"/><stop offset="1" stop-color="#22d3ee"/></linearGradient>
+<linearGradient id="gh" x1="0" x2="1" y1="0" y2="0"><stop offset="0" stop-color="#d946ef"/><stop offset=".55" stop-color="#3b82f6"/><stop offset="1" stop-color="#22d3ee"/></linearGradient>
+<marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#a3a3a3"/></marker>
+<marker id="ahg" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#22d3ee"/></marker></defs>
+  <rect width="720" height="830" rx="22" fill="#0a0a0a"/><rect x=".5" y=".5" width="719" height="829" rx="22" fill="none" stroke="#262626"/>
+  <text x="40" y="58" fill="#737373" font-size="24" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace" letter-spacing=".04em">WHAT A SANDBOX IS</text>
+  <g transform="translate(40 92)"><rect width="160" height="130" rx="16" fill="#111" stroke="#262626"/>
+  <path d="M30 44 l22 18 l-22 18" fill="none" stroke="#34d399" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/><rect x="66" y="74" width="56" height="8" rx="4" fill="#a3a3a3"/></g>
+  <text x="232" y="140" fill="#fafafa" font-size="32" font-weight="700" text-anchor="start">Your command</text>
+  <text x="232" y="180" fill="#a3a3a3" font-size="24" font-weight="400" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace" text-anchor="start">iris hive sandbox "…"</text>
+  <path d="M120 232 L120 296" stroke="#22d3ee" stroke-width="4" marker-end="url(#ahg)"/>
+  <rect x="40" y="304" width="640" height="300" rx="20" fill="#111" stroke="url(#g)" stroke-width="4"/>
+  <text x="72" y="358" fill="#fafafa" font-size="32" font-weight="700" text-anchor="start">A fresh Linux box</text>
+  <text x="72" y="394" fill="#a3a3a3" font-size="24" font-weight="400" text-anchor="start">for this one command, then gone</text>
+  <text x="72" y="446" fill="#34d399" font-size="24" font-weight="700" text-anchor="start">INSIDE</text>
+  <text x="72" y="482" fill="#fafafa" font-size="24" font-weight="400" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace" text-anchor="start">bash · python3 · node · git · curl</text>
+  <text x="72" y="532" fill="#e0705f" font-size="24" font-weight="700" text-anchor="start">NOT INSIDE</text>
+  <text x="72" y="568" fill="#fafafa" font-size="24" font-weight="400" text-anchor="start">your files · your keys · accounts</text>
+  <path d="M120 612 L120 676" stroke="#22d3ee" stroke-width="4" marker-end="url(#ahg)"/>
+  <rect x="40" y="684" width="300" height="110" rx="16" fill="#111" stroke="#262626"/>
+  <text x="64" y="730" fill="#fafafa" font-size="28" font-weight="700" text-anchor="start">Output back</text>
+  <text x="64" y="770" fill="#a3a3a3" font-size="24" font-weight="400" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace" text-anchor="start">42 · exit 0</text>
+  <rect x="380" y="684" width="300" height="110" rx="16" fill="none" stroke="#262626" stroke-dasharray="8 8"/>
+  <text x="404" y="730" fill="#a3a3a3" font-size="28" font-weight="700" text-anchor="start">Box is gone</text>
+  <text x="404" y="770" fill="#a3a3a3" font-size="24" font-weight="400" text-anchor="start">internet off by default</text>
 
-  <!-- your command -->
-  <g transform="translate(70 168)">
-    <rect width="220" height="104" rx="14" fill="#111" stroke="#262626"/>
-    <text x="20" y="40" fill="#fafafa" font-size="16" font-weight="700">Your command</text>
-    <text x="20" y="70" fill="#a3a3a3" font-size="13" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">iris hive sandbox</text>
-    <text x="20" y="88" fill="#a3a3a3" font-size="13" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">"python3 …"</text>
-  </g>
-  <path d="M298 220 H352" stroke="url(#g)" stroke-width="3" marker-end="url(#ahg)"/>
-
-  <!-- the box: what's in, what's not -->
-  <g transform="translate(364 96)">
-    <rect width="320" height="250" rx="18" fill="#111" stroke="url(#g)" stroke-width="3"/>
-    <text x="24" y="40" fill="#fafafa" font-size="18" font-weight="700">A fresh Linux box</text>
-    <text x="24" y="62" fill="#a3a3a3" font-size="13">for this one command</text>
-    <text x="24" y="98" fill="#34d399" font-size="13" font-weight="700" letter-spacing=".08em">INSIDE</text>
-    <text x="24" y="120" fill="#fafafa" font-size="13" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">bash · python3 · node · npm</text>
-    <text x="24" y="140" fill="#fafafa" font-size="13" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">git · curl · jq</text>
-    <text x="24" y="178" fill="#e0705f" font-size="13" font-weight="700" letter-spacing=".08em">NOT INSIDE</text>
-    <text x="24" y="200" fill="#fafafa" font-size="14">your files · your keys · your accounts</text>
-    <text x="24" y="222" fill="#a3a3a3" font-size="14">internet off unless --internet</text>
-  </g>
-  <path d="M692 220 H746" stroke="url(#g)" stroke-width="3" marker-end="url(#ahg)"/>
-
-  <!-- what comes back, then the box is gone -->
-  <g transform="translate(758 140)">
-    <rect width="212" height="80" rx="14" fill="#111" stroke="#262626"/>
-    <text x="20" y="34" fill="#fafafa" font-size="16" font-weight="700">Output back</text>
-    <text x="20" y="58" fill="#a3a3a3" font-size="13" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">42 · exit 0</text>
-  </g>
-  <g transform="translate(758 236)">
-    <rect width="212" height="64" rx="14" fill="none" stroke="#262626" stroke-dasharray="6 6"/>
-    <text x="20" y="38" fill="#a3a3a3" font-size="15">Then the box is gone</text>
-  </g>
 </svg>

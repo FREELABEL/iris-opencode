@@ -19,12 +19,12 @@ internet), or when you need Python or Node and do not have them where you are.
 keys, your accounts — a sandbox sees only the command you give it. Internet access is **off**
 unless you ask for it, so a command cannot send anything anywhere by accident.
 
-![Your command goes into a fresh Linux box that exists only for that command. Inside are bash, Python 3, Node and npm, git, curl and jq. Not inside are your files, your keys and your accounts, and the internet is off unless you add --internet. You get the output and the exit code back, and then the box is gone.](https://cdn.heyiris.io/cloud-files/1792224201_run-code-in-a-sandbox-box.png)
+![Your command goes into a fresh Linux box that exists only for that command. Inside are bash, Python 3, Node and npm, git, curl and jq. Not inside are your files, your keys and your accounts, and the internet is off unless you add --internet. You get the output and the exit code back, and then the box is gone.](https://cdn.heyiris.io/cloud-files/1792224648_run-code-in-a-sandbox-box.png)
 
 **Proven at scale:** we ran the same 200 checks, each in its own sandbox. Ten at a time they finished in
 107.2 s; one after another took 663.5 s. All 200 exited 0 both times (measured 2026-10-11).
 
-![Bar chart. The same 200 checks, each in its own sandbox, took 107.2 seconds running 10 at a time and 663.5 seconds running one after another, 6.2 times as long. All 200 exited 0 both times. Measured 2026-10-11. The limit of 10 at a time was set by us to keep load off the production API, not by Hive.](https://cdn.heyiris.io/cloud-files/1792224202_run-code-in-a-sandbox-speed.png)
+![Bar chart. The same 200 checks, each in its own sandbox, took 107.2 seconds running 10 at a time and 663.5 seconds running one after another, 6.2 times as long. All 200 exited 0 both times. Measured 2026-10-11. The limit of 10 at a time was set by us to keep load off the production API, not by Hive.](https://cdn.heyiris.io/cloud-files/1792224651_run-code-in-a-sandbox-speed.png)
 
 ## Before you start
 

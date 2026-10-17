@@ -12,7 +12,7 @@ One folder that lives on every machine in your Hive — your laptop, a server, a
 Open a file and only the parts you read are downloaded (a 200 MB video does not fill your disk);
 save a file and every other machine sees it straight away.
 
-![Every machine in your Hive mounts the same folder at ~/IrisDrive/team. A small file index on one of your Hive machines, reached over your tailnet, keeps the list of files. Your own storage bucket, such as Cloudflare R2 or any S3, holds the contents, and a machine downloads only the parts of a file it reads.](https://cdn.heyiris.io/cloud-files/1792224204_shared-folder-across-machines-how.png)
+![Every machine in your Hive mounts the same folder at ~/IrisDrive/team. A small file index on one of your Hive machines, reached over your tailnet, keeps the list of files. Your own storage bucket, such as Cloudflare R2 or any S3, holds the contents, and a machine downloads only the parts of a file it reads.](https://cdn.heyiris.io/cloud-files/1792224654_shared-folder-across-machines-how.png)
 
 ## Before you start
 
