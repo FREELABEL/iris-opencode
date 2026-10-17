@@ -267,6 +267,23 @@ export interface AtlasItem {
   /** ISO timestamps from fl-api — what the panel's "last edited", sort and filter read. */
   createdAt?: string
   updatedAt?: string
+  /** What a card FACE shows (#189806). Columns on every item, so present even on an older fl-api. */
+  dueDate?: string
+  priority?: string
+  cardType?: string
+  /** Label ids — from fl-api's card summary when it has one, else read from the body. */
+  labels?: string[]
+  /** From fl-api's `?summary=1` (#189793); absent on an fl-api that predates it. */
+  tasks?: { open: number; done: number; total: number }
+  attachments?: number
+  assignees?: AtlasAssignee[]
+}
+export interface AtlasAssignee {
+  id: number
+  type: "user" | "agent"
+  userId?: number
+  agentId?: number
+  name?: string
 }
 export interface AtlasList {
   id: number
@@ -309,6 +326,42 @@ export function filterAtlas(lists: AtlasList[], query: string): AtlasList[] {
   return out
 }
 
+/**
+ * The card-face fields of one fl-api item (#189806). Summary fields only when fl-api sent them —
+ * an absent count is "not measured", never 0.
+ */
+export function cardFace(i: any): Partial<AtlasItem> {
+  const out: Partial<AtlasItem> = {}
+  if (typeof i?.due_date === "string" && i.due_date) out.dueDate = i.due_date
+  if (typeof i?.priority === "string" && i.priority) out.priority = i.priority
+  if (typeof i?.card_type === "string" && i.card_type) out.cardType = i.card_type
+  const s = i?.summary
+  if (s && typeof s === "object") {
+    if (Array.isArray(s.labels)) out.labels = s.labels.map(String)
+    if (s.tasks && typeof s.tasks.total === "number")
+      out.tasks = { open: Number(s.tasks.open) || 0, done: Number(s.tasks.done) || 0, total: Number(s.tasks.total) || 0 }
+    if (typeof s.attachments === "number") out.attachments = s.attachments
+    if (Array.isArray(s.assignees))
+      out.assignees = s.assignees
+        .filter((a: any) => a && (a.type === "user" || a.type === "agent"))
+        .map((a: any) => ({
+          id: Number(a.id),
+          type: a.type,
+          ...(a.user_id != null ? { userId: Number(a.user_id) } : {}),
+          ...(a.agent_id != null ? { agentId: Number(a.agent_id) } : {}),
+          ...(a.name ? { name: String(a.name) } : {}),
+        }))
+  }
+  if (!out.labels) {
+    // Older fl-api: labels still live in the body.
+    try {
+      const body = typeof i?.content === "string" && i.content.startsWith("{") ? JSON.parse(i.content) : i?.content
+      if (Array.isArray(body?.labels)) out.labels = [...new Set(body.labels.map(String))] as string[]
+    } catch {}
+  }
+  return out
+}
+
 export async function fetchAtlas(bloqId: number): Promise<PlatformResult<{ lists: AtlasList[] }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { lists: [] } }
@@ -333,7 +386,9 @@ export async function fetchAtlas(bloqId: number): Promise<PlatformResult<{ lists
      *   no_searchable_content=1     2,139,422 bytes   <- here
      *   light=1                       625,237 bytes   <- once the reader fetches bodies
      */
-    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}?no_searchable_content=1`)
+    // summary=1 (#189793): labels, assignees, task progress and attachment count per card, in
+    // one grouped query server-side. An fl-api that predates it ignores the flag.
+    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}?no_searchable_content=1&summary=1`)
     if (!res.ok) return { measured: false, reason: `fl-api ${res.status}`, data: { lists: [] } }
     const json = (await res.json()) as any
     const raw = json?.data ?? json
@@ -349,6 +404,7 @@ export async function fetchAtlas(bloqId: number): Promise<PlatformResult<{ lists
         content: i.content || undefined,
         createdAt: typeof i.created_at === "string" ? i.created_at : undefined,
         updatedAt: typeof i.updated_at === "string" ? i.updated_at : undefined,
+        ...cardFace(i),
       })),
     }))
     return { measured: true, data: { lists } }
@@ -2838,7 +2894,7 @@ export async function moveItem(id: number, listId: number, position: number): Pr
  */
 export async function addItemTask(
   itemId: number,
-  input: { title: string; agentId?: number; dueDate?: string },
+  input: { title: string; agentId?: number; dueDate?: string; parentId?: number },
 ): Promise<{ ok: boolean; reason?: string; task?: ItemTask }> {
   const userId = await resolveUserId()
   if (!userId) return { ok: false, reason: `not signed in (token: ${tokenSource()})` }
@@ -2849,6 +2905,8 @@ export async function addItemTask(
     const body: Record<string, unknown> = { title, status: "todo" }
     if (input.agentId != null) body.agent_id = input.agentId
     if (input.dueDate) body.due_date = input.dueDate
+    // A subtask (#189794): fl-api nests by parent_id and rolls completion up the chain.
+    if (input.parentId != null) body.parent_id = input.parentId
     const res = await irisFetch(`/api/v1/user/bloqs/list/item/${itemId}/tasks`, FL_API, {
       method: "POST",
       body: JSON.stringify(body),
@@ -2943,6 +3001,8 @@ export interface ShareMember {
   name: string
   email: string
   permission: string
+  /** A narrowed membership — "assigned" means only the cards assigned to them. */
+  scope?: string
 }
 export interface ShareLink {
   id: string
@@ -2990,11 +3050,14 @@ export function readEmailList(v: unknown): string[] {
 
 /** BloqUserController@index rows: {id, name, email, username, permission: viewer|editor|owner, status, …}. */
 export function readShareMember(r: any): ShareMember {
+  const scope = r?.scope_type ?? r?.pivot?.scope_type
   return {
     userId: Number(r?.id ?? r?.user_id),
     name: String(r?.name ?? r?.username ?? ""),
     email: String(r?.email ?? ""),
     permission: String(r?.permission ?? "viewer"),
+    // 'assigned' = sees only the cards assigned to them (#189801 ADR-02). Absent = whole board.
+    ...(scope && scope !== "bloq" ? { scope: String(scope) } : {}),
   }
 }
 
@@ -3191,6 +3254,87 @@ export async function revokeMember(bloqId: number, memberUserId: number): Promis
   const r = await postJson(`/api/v1/user/bloqs/${bloqId}/share/${memberUserId}`, undefined, "DELETE")
   return { ok: r.ok, reason: r.reason }
 }
+/**
+ * Who is on a board (#189795): the owner first, then members with their permission. The same
+ * fl-api reads the card editor's Share tab uses, at board level.
+ */
+export async function fetchBoardMembers(
+  bloqId: number,
+): Promise<PlatformResult<{ ownerId: number | null; youAreOwner: boolean; members: ShareMember[] }>> {
+  const empty = { ownerId: null, youAreOwner: false, members: [] as ShareMember[] }
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: notSignedIn(), data: empty }
+  try {
+    const [boardRes, usersRes] = await Promise.all([
+      irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}?light=1`),
+      irisFetch(`/api/v1/user/bloqs/${bloqId}/shared-users`),
+    ])
+    if (!boardRes.ok) return { measured: false, reason: `fl-api ${boardRes.status}`, data: empty }
+    const board = ((await boardRes.json()) as any)?.data ?? {}
+    const ownerId = typeof board.user_id === "number" ? board.user_id : null
+    let rows: any[] = []
+    if (usersRes.ok) {
+      const d = ((await usersRes.json()) as any)?.data
+      rows = Array.isArray(d) ? d : (d?.shared_users ?? [])
+    } else if (Array.isArray(board.shared_users)) rows = board.shared_users
+    const members = rows.map((r) => readShareMember({ ...r, permission: r?.permission ?? r?.pivot?.permission })).filter((m) => m.userId)
+    return { measured: true, data: { ownerId, youAreOwner: ownerId === userId, members } }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: empty }
+  }
+}
+
+/** A card's assignees (#189796), through fl-api's /assignees routes (#189792). */
+export async function fetchAssignees(itemId: number): Promise<PlatformResult<{ assignees: AtlasAssignee[] }>> {
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: notSignedIn(), data: { assignees: [] } }
+  try {
+    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/assignees`)
+    const j = (await res.json().catch(() => ({}))) as any
+    // A route fl-api does not have answers 404 with an EMPTY message; the route's own refusal
+    // says "Item not found". The first means this IRIS server predates assignees (#189792).
+    if (res.status === 404 && !j?.message)
+      return { measured: false, reason: "this IRIS server does not support assigning yet", data: { assignees: [] } }
+    if (!res.ok) return { measured: false, reason: apiFailure(j, res.status), data: { assignees: [] } }
+    return { measured: true, data: { assignees: readAssignees(j?.data?.assignees) } }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { assignees: [] } }
+  }
+}
+
+/**
+ * Assign a person (by id or email) or an agent. Assigning someone who is not on the board gives
+ * them access to the cards assigned to them (#189801 ADR-02) — `accessGranted` says when it did.
+ */
+export async function assign(
+  itemId: number,
+  who: { userId?: number; agentId?: number; email?: string },
+): Promise<Ok & { assignees?: AtlasAssignee[]; accessGranted?: boolean }> {
+  const userId = await resolveUserId()
+  if (!userId) return { ok: false, reason: notSignedIn() }
+  const given = [who.userId, who.agentId, who.email?.trim()].filter(Boolean)
+  if (given.length !== 1) return { ok: false, reason: "assign one person, email or agent" }
+  const r = await postJson(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/assignees`, {
+    ...(who.userId ? { user_id: who.userId } : who.agentId ? { agent_id: who.agentId } : { email: who.email!.trim() }),
+  })
+  if (!r.ok) return { ok: false, reason: r.reason }
+  const d = r.data?.data ?? r.data
+  return { ok: true, assignees: readAssignees(d?.assignees), accessGranted: d?.access_granted === true }
+}
+
+export async function unassign(itemId: number, assigneeId: number): Promise<Ok & { assignees?: AtlasAssignee[]; accessRemoved?: boolean }> {
+  const userId = await resolveUserId()
+  if (!userId) return { ok: false, reason: notSignedIn() }
+  const r = await postJson(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/assignees/${assigneeId}`, undefined, "DELETE")
+  if (!r.ok) return { ok: false, reason: r.reason }
+  const d = r.data?.data ?? r.data
+  return { ok: true, assignees: readAssignees(d?.assignees), accessRemoved: d?.access_removed === true }
+}
+
+function readAssignees(rows: any): AtlasAssignee[] {
+  return (cardFace({ summary: { assignees: Array.isArray(rows) ? rows : [] } }).assignees ?? []) as AtlasAssignee[]
+}
+
 export async function createShareLink(bloqId: number, expiresInDays?: number): Promise<Ok & { link?: ShareLink }> {
   const userId = await resolveUserId()
   if (!userId) return { ok: false, reason: notSignedIn() }
