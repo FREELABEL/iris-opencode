@@ -26,13 +26,15 @@ export interface PageEnvelope {
  * MEASURED response means we hold rows but nobody counted the whole set, so "12 of 0" and
  * "12 of 12" are both lies. It says "12 shown" and stops.
  */
-export function pageSummary(input: { shown: number; env?: PageEnvelope }): string | null {
+/** `noun` names what is counted ("records"), so a complete count is not a bare number (#189770). */
+export function pageSummary(input: { shown: number; env?: PageEnvelope; noun?: string }): string | null {
   const e = input.env
   if (!e || !e.measured) return null
-  if (e.total == null) return `${input.shown} shown`
-  if (!e.totalIsExact) return `${input.shown} of ${e.total}+ so far`
-  if (input.shown >= e.total) return `${e.total}`
-  return `${input.shown} of ${e.total}`
+  const n = input.noun ? ` ${input.noun}` : ""
+  if (e.total == null) return `${input.shown}${n} shown`
+  if (!e.totalIsExact) return `${input.shown} of ${e.total}+${n} so far`
+  if (input.shown >= e.total) return `${e.total}${n}`
+  return `${input.shown} of ${e.total}${n}`
 }
 
 export function createPagedSurface(reset: () => unknown) {

@@ -3296,6 +3296,7 @@ export function SessionIrisTab() {
                         {pageSummary({
                           shown: (recordPage() - 1) * RECORDS_PER_PAGE + records.latest!.rows.length,
                           env: records.latest as unknown as PageEnvelope,
+                          noun: "records",
                         })}
                       </span>
                       <span class="ms-auto flex items-center gap-1">
@@ -3448,7 +3449,14 @@ export function SessionIrisTab() {
                 </Show>
                 <For each={atlasRows()}>
                   {(list) => (
-                    <section class="iris-atlas-list" classList={{ "iris-atlas-list--folded": isFolded(list) }}>
+                    // data-prevent-autofocus: the session page sends any printable key to the chat
+                    // box (pages/session.tsx handleKeyDown) unless it comes from inside one of
+                    // these — on a card, j/k/x/c/n are this board's keys (#189771).
+                    <section
+                      class="iris-atlas-list"
+                      classList={{ "iris-atlas-list--folded": isFolded(list) }}
+                      data-prevent-autofocus
+                    >
                       {/* The header folds the list. Counts in mono + tabular, so columns of numbers
                           line up and read as data. */}
                       <div class="iris-atlas-list__bar">
