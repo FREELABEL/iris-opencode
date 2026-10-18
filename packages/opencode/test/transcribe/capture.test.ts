@@ -4,8 +4,10 @@ import { tmpdir } from "os"
 import { join } from "path"
 import {
   cancelCapture,
+  captureShortfall,
   currentLevel,
   inputCandidates,
+  micHelperPath,
   parseDshowAudioDevices,
   parseFfmpegDevices,
   peakAmplitude,
@@ -313,5 +315,93 @@ describe("capture pipeline (fake ffmpeg)", () => {
     const argv = await Bun.file(join(dir, "argv.log")).text()
     expect(argv).toContain("-f alsa")
     expect(argv).toContain("-f pulse")
+  })
+})
+
+// ── #189828: macOS records through the CoreAudio helper, and a take that lost audio says so ─────
+
+describe("captureShortfall — a recorder that drops samples is never trusted silently", () => {
+  test("a take with as much audio as the clock ran is fine", () => {
+    expect(captureShortfall(6 * 32000, 6000)).toBeUndefined()
+  })
+
+  test("the measured failure: 6 s on the clock, 2.67 s of audio (ffmpeg avfoundation, 96 kHz mic)", () => {
+    const bytes = Math.round(2.67 * 32000)
+    expect(captureShortfall(bytes, 6000)).toEqual({ audioSeconds: bytes / 32000, wallSeconds: 6 })
+  })
+
+  test("start-up latency under 3 s is not a shortfall", () => {
+    expect(captureShortfall(0, 2500)).toBeUndefined()
+  })
+
+  test("a few percent short is normal; 20% short is not", () => {
+    expect(captureShortfall(Math.round(5.7 * 32000), 6000)).toBeUndefined()
+    expect(captureShortfall(Math.round(4.7 * 32000), 6000)).toBeDefined()
+  })
+})
+
+describe("micHelperPath — only macOS, and only a helper that exists", () => {
+  const prior = process.env["IRIS_MIC_HELPER"]
+  afterEach(() => {
+    if (prior === undefined) delete process.env["IRIS_MIC_HELPER"]
+    else process.env["IRIS_MIC_HELPER"] = prior
+  })
+
+  test("other platforms never get one", () => {
+    process.env["IRIS_MIC_HELPER"] = process.execPath
+    expect(micHelperPath("linux")).toBeNull()
+    expect(micHelperPath("win32")).toBeNull()
+  })
+
+  test("an override that does not exist is null, not a path that fails later", () => {
+    process.env["IRIS_MIC_HELPER"] = "/nonexistent/iris-mic"
+    expect(micHelperPath("darwin")).toBeNull()
+  })
+
+  test("an override that exists is used, and macOS is then ready with no ffmpeg", () => {
+    process.env["IRIS_MIC_HELPER"] = process.execPath
+    expect(micHelperPath("darwin")).toBe(process.execPath)
+    expect(recorderReadiness("darwin", null)).toEqual({ sidecar: true })
+  })
+})
+
+describe.skipIf(process.platform !== "darwin")("startCapture with the macOS helper", () => {
+  let dir: string
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "iris-mic-test-"))
+  })
+  afterAll(() => rmSync(dir, { recursive: true, force: true }))
+  afterEach(() => {
+    cancelCapture()
+    delete process.env["IRIS_MIC_HELPER"]
+  })
+
+  test("records what the helper writes, passes the chosen device by name, and needs no ffmpeg", async () => {
+    const helper = join(dir, "iris-mic")
+    // One second of PCM16 silence, then wait to be stopped. Echo argv so the device handoff is checked.
+    writeFileSync(helper, `#!/bin/sh\necho "$@" >&2\nhead -c 32000 /dev/zero\nsleep 5\n`)
+    chmodSync(helper, 0o755)
+    process.env["IRIS_MIC_HELPER"] = helper
+    process.env["IRIS_FFMPEG"] = "/nonexistent/ffmpeg"
+    try {
+      startCapture("MacBook Pro Microphone")
+      await new Promise((r) => setTimeout(r, 400))
+      const take = await stopCapture()
+      expect(take.input).toBe("coreaudio")
+      expect(take.audio.byteLength).toBe(44 + 32000)
+      expect(take.shortfall).toBeUndefined()
+    } finally {
+      delete process.env["IRIS_FFMPEG"]
+    }
+  })
+
+  test("a helper that fails to start is an error, not a quiet switch to ffmpeg", async () => {
+    const helper = join(dir, "iris-mic-fail")
+    writeFileSync(helper, `#!/bin/sh\necho '{"event":"error","error":"device-not-found"}' >&2\nexit 3\n`)
+    chmodSync(helper, 0o755)
+    process.env["IRIS_MIC_HELPER"] = helper
+    startCapture("No Such Mic")
+    await new Promise((r) => setTimeout(r, 300))
+    await expect(stopCapture()).rejects.toThrow(/captured nothing/)
   })
 })
