@@ -143,6 +143,16 @@ jobs:
             exit 1
           }
 
+      # The TUI offers exactly the models IRIS Desktop serves (#188596): take the desktop's own
+      # provider file from its release branch rather than trusting the committed copy.
+      - name: Model list from IRIS Desktop
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin iris/1.18.23
+          git show FETCH_HEAD:packages/desktop/src-tauri/resources/iris-provider.json > packages/cli/src/iris-provider.json
+          node -e "const p=require('./packages/cli/src/iris-provider.json'); const n=Object.keys(p.provider.iris.models).length; if(!n) throw new Error('no models'); console.log(n+' models, default '+p.model)"
+
       - name: Build
         shell: bash
         run: |

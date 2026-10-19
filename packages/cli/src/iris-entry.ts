@@ -13,6 +13,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { OPENCODE_VERSION } from "./version"
+import irisDesktopProvider from "./iris-provider.json"
 
 // Release builds get 1.5.0-beta.N from the tag (release-iris2.yml); telemetry rows carry it as
 // cli_version, which is how iris2 traffic is told apart from stable.
@@ -79,8 +80,40 @@ function v1Carryover(): Record<string, unknown> {
   const v1 = readJson(path.join(dir, "opencode.json")) ?? readJson(path.join(dir, "opencode.jsonc")) ?? {}
   const permission = process.env.OPENCODE_PERMISSION ? readJsonText(process.env.OPENCODE_PERMISSION) : undefined
   return Object.fromEntries(
-    Object.entries({ mcp: v1.mcp, agent: v1.agent, command: v1.command, permission }).filter(([, v]) => v),
+    Object.entries({ mcp: irisOsServer(v1.mcp), agent: v1.agent, command: v1.command, permission }).filter(
+      ([, v]) => v,
+    ),
   )
+}
+
+// IRIS OS is launched by THIS binary, directly (#189991). `iris mcp install` writes it in several
+// forms — bare `iris` (PATH-dependent), an absolute path that may be stale, or a
+// `/bin/bash -l -c "exec iris mcp serve"` wrapper whose login shell can print to stdout before the
+// server speaks, which breaks the MCP handshake. Any entry that launches `iris mcp serve` (under any
+// key) collapses into one "IRIS OS" entry; the user's environment and enabled flag are kept, and it
+// is added when missing so every user has it.
+function irisOsServer(mcp: unknown): Record<string, unknown> {
+  const servers = mcp && typeof mcp === "object" && !Array.isArray(mcp) ? (mcp as Record<string, unknown>) : {}
+  const launchesIris = (entry: unknown) => {
+    if (!entry || typeof entry !== "object") return false
+    const e = entry as { command?: unknown; args?: unknown }
+    const words = [e.command, e.args].flat().filter((w) => typeof w === "string").join(" ").toLowerCase()
+    return words.includes("iris") && words.includes("mcp") && words.includes("serve")
+  }
+  const iris = Object.values(servers).find(launchesIris) as { enabled?: boolean; environment?: unknown } | undefined
+  const others = Object.fromEntries(Object.entries(servers).filter(([, entry]) => !launchesIris(entry)))
+  const self = /^iris2?(\.exe)?$/i.test(path.basename(process.execPath))
+    ? process.execPath
+    : path.join(os.homedir(), ".iris", "bin", process.platform === "win32" ? "iris.exe" : "iris")
+  return {
+    ...others,
+    "IRIS OS": {
+      type: "local",
+      command: [self, "mcp", "serve"],
+      enabled: iris?.enabled ?? true,
+      ...(iris?.environment ? { environment: iris.environment } : {}),
+    },
+  }
 }
 
 // Agent and command markdown, and the global AGENTS.md, live beside the v1 config. Link them
@@ -120,33 +153,22 @@ function readJsonText(text: string): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined
 }
 
+// The model rail is the IRIS Desktop's own provider file (#188596): same models, capabilities,
+// default and endpoint, so the TUI never offers a different list than the app. Copied from
+// iris/1.18.23 packages/desktop/src-tauri/resources/iris-provider.json — release-iris2.yml
+// refreshes it from that branch on every build. Only the key and trace header are added here.
 function irisProviderConfig(traceId: string): string {
   const sdk = readSdkEnv()
-  const baseURL = (process.env.IRIS_API_URL ?? sdk.IRIS_API_URL ?? "https://freelabel.net") + "/api/v6/openai"
-  const models: Record<string, { name: string; tool_call: boolean }> = {}
-  for (const [id, name] of [
-    ["iris-ai", "IRIS AI"],
-    ["iris-ai-reasoning", "IRIS AI Reasoning"],
-    ["grok-4.3", "Grok 4.3"],
-    ["gpt-4o-mini", "GPT-4o Mini"],
-    ["gpt-4.1-nano", "GPT-4.1 Nano"],
-    ["gpt-5-nano", "GPT-5 Nano"],
-    ["gpt-5.4-nano", "GPT-5.4 Nano"],
-    ["gpt-5.6-luna", "GPT-5.6 Luna"],
-    ["gpt-5.6-terra", "GPT-5.6 Terra"],
-    ["gpt-5.6-sol", "GPT-5.6 Sol"],
-    ["big-pickle", "Big Pickle"],
-    ["deepseek-v4-flash", "DeepSeek V4 Flash"],
-  ] as const) {
-    models[id] = { name, tool_call: true }
-  }
+  const iris = irisDesktopProvider.provider.iris
+  const apiURL = process.env.IRIS_API_URL ?? sdk.IRIS_API_URL
+  const baseURL = apiURL ? apiURL + "/api/v6/openai" : iris.options.baseURL
   return JSON.stringify({
     ...v1Carryover(),
     $schema: "https://opencode.ai/config.json",
-    model: "iris/gpt-4.1-nano",
-    // v1's model picker listed IRIS models only; v2 adds its own free `opencode/*` models.
-    // Hide those. A provider the user connects themselves still shows.
-    disabled_providers: ["opencode"],
+    model: irisDesktopProvider.model,
+    // v2 adds its own free `opencode/*` models; the desktop file hides them. Its enabled_providers
+    // (iris only) is NOT applied: it would also hide a provider the user connected themselves.
+    disabled_providers: irisDesktopProvider.disabled_providers,
     // IRIS slash commands — v1 offered these in prompt autocomplete. Each runs the real
     // `iris` platform command, so the behaviour stays in one place (the platform layer).
     commands: {
@@ -169,14 +191,18 @@ function irisProviderConfig(traceId: string): string {
     },
     provider: {
       iris: {
-        npm: "@ai-sdk/openai-compatible",
-        name: "IRIS",
+        npm: iris.npm,
+        name: iris.name,
         options: {
+          ...iris.options,
           baseURL,
           apiKey: "{env:IRIS_API_KEY}",
           headers: { "X-Iris-Trace-Id": traceId },
         },
-        models,
+        // The desktop file says `tools`; the v1 model schema v2 migrates from calls it `tool_call`.
+        models: Object.fromEntries(
+          Object.entries(iris.models).map(([id, { tools, ...model }]) => [id, { ...model, tool_call: tools }]),
+        ),
       },
     },
   })
@@ -205,7 +231,15 @@ if (first === "--version" || first === "-v" || first === "-V") {
 // stable iris. v2's `upgrade` would instead install upstream OpenCode (I3). Neither may run.
 if (first === "upgrade" || first === "update") {
   const { selfUpdate } = await import("./iris-v1/cli/cmd/iris2")
-  process.exit(await selfUpdate(argv.slice(1), IRIS_VERSION))
+  const code = await selfUpdate(argv.slice(1), IRIS_VERSION)
+  // The v2 background service outlives the binary that started it, so after an update it kept
+  // serving the old version's config — old model list included — until something restarted it
+  // (#188596). Stop it only when the version actually changed; the next command starts the new one.
+  const { spawnSync } = await import("node:child_process")
+  const installed = spawnSync(process.execPath, ["--version"], { encoding: "utf8", timeout: 30_000 }).stdout?.trim()
+  if (code === 0 && installed && installed !== IRIS_VERSION)
+    spawnSync(process.execPath, ["service", "stop"], { stdio: "ignore", timeout: 30_000 })
+  process.exit(code)
 }
 if (first === "uninstall" && PREVIEW) {
   process.stdout.write("Remove iris2 with: iris iris2 remove   (your stable iris and its data are untouched)\n")
