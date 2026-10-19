@@ -33,6 +33,12 @@
       "purpose": "How to: Use Atlas Datasets (schema-driven data)"
     },
     {
+      "src": "how-to/atlas-local-copy.md",
+      "dest": "how-to/atlas-local-copy.md",
+      "managed": true,
+      "purpose": "Keep a local copy of an Atlas dataset on your computer as plain files, in step with the cloud in both directions (offline edits, scripting)."
+    },
+    {
       "src": "how-to/bespoke.md",
       "dest": "how-to/bespoke.md",
       "managed": true,
