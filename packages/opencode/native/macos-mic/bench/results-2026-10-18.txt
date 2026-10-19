@@ -1,0 +1,20 @@
+Reference sentence: 'I need a 3D model of a BMW 750Li'; scorer reads the clean file as 'I need a 3D model of a BMW 750 Li.' (1.00).
+Onset 0.3s after start is a SCENARIO input. Every other column is MEASURED, N=5 per method.
+
+method            ttfa med ttfa worst integrity med  acc med acc worst kept start
+---------------------------------------------------------------------------------
+ffmpeg-default      0.572s     0.725s          0.45     0.04      0.00      2/5
+ffmpeg-builtin      0.570s     0.617s          0.45     0.38      0.08      3/5
+helper-avengine     0.636s     1.100s          1.01     0.79      0.50      3/5
+helper-auhal        0.284s     0.573s          1.00     0.92      0.75      5/5
+
+THE FLIP — the onset is the one input this does not measure (when a person starts talking).
+Share of runs that would lose the first words, by onset:
+method             0.00s   0.25s   0.50s   0.75s   1.00s   1.50s
+ffmpeg-default     100%    100%    100%      0%      0%      0% 
+ffmpeg-builtin     100%    100%     80%      0%      0%      0% 
+helper-avengine    100%    100%    100%     40%     20%      0% 
+helper-auhal       100%     80%     20%      0%      0%      0% 
+
+Disqualified (integrity < 0.90 — audio lost, speed is irrelevant): ffmpeg-default, ffmpeg-builtin
+Fastest valid method: helper-auhal (median 0.284s).

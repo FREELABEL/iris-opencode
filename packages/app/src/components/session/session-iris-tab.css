@@ -855,10 +855,10 @@
 /* Atlas › Lists (#189764). A list folds by its header; an empty one starts folded, so it costs
    one line instead of a section. */
 .iris-atlas-list {
-  margin-bottom: 14px;
+  margin-bottom: 16px;
 }
 .iris-atlas-list--folded {
-  margin-bottom: 2px;
+  margin-bottom: 4px;
 }
 .iris-atlas-list__head {
   appearance: none;
@@ -869,7 +869,7 @@
   display: flex;
   align-items: baseline;
   gap: 8px;
-  padding: 4px 8px;
+  padding: 6px 8px;
   text-align: start;
   cursor: pointer;
   border-radius: 4px;
@@ -880,15 +880,42 @@
 .iris-atlas-list__chev {
   display: inline-block;
   width: 8px;
-  color: var(--text-weaker);
+  color: var(--text-weak);
   transform: rotate(90deg);
   transition: transform 0.12s ease;
 }
 .iris-atlas-list--folded .iris-atlas-list__chev {
   transform: none;
 }
-.iris-atlas-list--folded .iris-atlas-list__head h3 {
+/* A list title is a HEADING, not another row (#189764): larger, heavier and brighter than any
+   card under it. A folded list stays a heading too — it used to dim below the cards, so a board
+   of folded lists read as a page of grey text with no structure. */
+.iris-atlas-list__title {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 20px;
+  font-weight: 700;
+  letter-spacing: -0.005em;
+  color: var(--text-strong);
+}
+.iris-atlas-list--folded .iris-atlas-list__title {
+  color: var(--text-base);
+  font-weight: 650;
+}
+.iris-atlas-list__count {
+  font-size: 10.5px;
+  line-height: 16px;
+  padding: 0 6px;
+  border-radius: 8px;
   color: var(--text-weak);
+  background: var(--background-element);
+}
+/* The list's cards hang one step in from its title, on a guide line that starts under the
+   chevron — so which list a card belongs to is visible without reading the headings. */
+.iris-atlas-list__items {
+  margin: 2px 0 0 12px;
+  padding-inline-start: 6px;
+  border-inline-start: 1px solid var(--border-weaker-base);
 }
 
 .iris-atlas-row {

@@ -6,12 +6,14 @@ import {
   applyAtlasView,
   atlasCountLine,
   atlasDropPosition,
+  boardLabels,
   cardPreview,
   changedItemIds,
   dueLabel,
   dueState,
   initials,
   editedSince,
+  isDefaultView,
   isDone,
   keepUnchanged,
   moveAtlasItem,
@@ -91,6 +93,7 @@ test("isDone", () => {
 
 test("readAtlasView drops unknown values", () => {
   expect(readAtlasView('{"sort":"edited","status":"bogus","hideEmpty":true}')).toEqual({
+    ...ATLAS_VIEW_DEFAULT,
     sort: "edited",
     status: "all",
     edited: "any",
@@ -138,6 +141,11 @@ describe("row preview (#189764)", () => {
   test("a first line that is a shorter or longer copy of the title is dropped", () => {
     expect(cardPreview("# EPIC — Links open inside IRIS Desktop\n\nThe goal, as said", "EPIC — Links open inside IRIS Desktop (#187864)")).toBe("The goal, as said")
     expect(cardPreview("RELEASE — ship it, then tell her\nUntil then nothing", "RELEASE — ship it")).toBe("then tell her Until then nothing")
+  })
+  test("a structured body shows its prose, never its JSON", () => {
+    expect(cardPreview(JSON.stringify({ text: "The plan", body: "The plan in full", labels: ["x"] }), "Card")).toBe("The plan in full")
+    expect(cardPreview(JSON.stringify({ text: "Card", labels: ["x"], attachments: [{}] }), "Card")).toBe("")
+    expect(cardPreview("{not json", "Card")).toBe("{not json")
   })
   test("long bodies are cut with an ellipsis; empty stays empty", () => {
     expect(cardPreview("x ".repeat(200), "t", 20).length).toBe(20)
@@ -284,5 +292,47 @@ describe("where a held card lands (drag preview)", () => {
     expect(sameDrop({ toListId: 1, beforeId: 2 }, { toListId: 1, beforeId: null })).toBe(false)
     expect(sameDrop(null, null)).toBe(true)
     expect(sameDrop(null, { toListId: 1, beforeId: null })).toBe(false)
+  })
+})
+
+describe("filters: label, assignee, due, files (#189798)", () => {
+  const NOW = Date.parse("2026-10-19T12:00:00")
+  const card = (id: number, f: any = {}) => ({ id, title: `c${id}`, ...f })
+  const board = [
+    {
+      id: 1,
+      name: "A",
+      items: [
+        card(1, { labels: ["bug"], assignees: [{ type: "user", userId: 193 }], dueDate: "2026-10-18T00:00:00.000000Z", attachments: 2 }),
+        card(2, { labels: ["design", "bug"], dueDate: "2026-10-22" }),
+        card(3, { assignees: [{ type: "agent", agentId: 9 }], dueDate: "2026-11-30" }),
+        card(4, {}),
+      ],
+    },
+  ]
+  const ids = (o: any, me?: number | null) =>
+    applyAtlasView(board as any, { ...ATLAS_VIEW_DEFAULT, ...o }, NOW, me)[0].items.map((i: any) => i.id)
+
+  test("label", () => expect(ids({ label: "bug" })).toEqual([1, 2]))
+  test("assigned to me, nobody; an agent assignee is not 'me'", () => {
+    expect(ids({ assigned: "me" }, 193)).toEqual([1])
+    expect(ids({ assigned: "none" })).toEqual([2, 4])
+  })
+  test("'me' with no known user matches nothing, not everything", () => expect(ids({ assigned: "me" }, null)).toEqual([]))
+  test("due: overdue, next 7 days, no date", () => {
+    expect(ids({ due: "overdue" })).toEqual([1])
+    expect(ids({ due: "week" })).toEqual([2])
+    expect(ids({ due: "none" })).toEqual([4])
+  })
+  test("has files", () => expect(ids({ hasFiles: true })).toEqual([1]))
+  test("filters combine", () => expect(ids({ label: "bug", hasFiles: true, assigned: "me" }, 193)).toEqual([1]))
+  test("the label picker offers only labels in use, A-Z", () => expect(boardLabels(board as any)).toEqual(["bug", "design"]))
+  test("a stored view from before these filters still reads; garbage falls back to any", () => {
+    expect(readAtlasView(JSON.stringify({ sort: "title" }))).toEqual({ ...ATLAS_VIEW_DEFAULT, sort: "title" })
+    expect(readAtlasView(JSON.stringify({ assigned: "everyone", due: 5, label: 3 }))).toEqual(ATLAS_VIEW_DEFAULT)
+  })
+  test("any filter set is not the default view", () => {
+    expect(isDefaultView({ ...ATLAS_VIEW_DEFAULT, hasFiles: true })).toBe(false)
+    expect(isDefaultView(ATLAS_VIEW_DEFAULT)).toBe(true)
   })
 })
