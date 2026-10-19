@@ -80,8 +80,40 @@ function v1Carryover(): Record<string, unknown> {
   const v1 = readJson(path.join(dir, "opencode.json")) ?? readJson(path.join(dir, "opencode.jsonc")) ?? {}
   const permission = process.env.OPENCODE_PERMISSION ? readJsonText(process.env.OPENCODE_PERMISSION) : undefined
   return Object.fromEntries(
-    Object.entries({ mcp: v1.mcp, agent: v1.agent, command: v1.command, permission }).filter(([, v]) => v),
+    Object.entries({ mcp: irisOsServer(v1.mcp), agent: v1.agent, command: v1.command, permission }).filter(
+      ([, v]) => v,
+    ),
   )
+}
+
+// IRIS OS is launched by THIS binary, directly (#189991). `iris mcp install` writes it in several
+// forms — bare `iris` (PATH-dependent), an absolute path that may be stale, or a
+// `/bin/bash -l -c "exec iris mcp serve"` wrapper whose login shell can print to stdout before the
+// server speaks, which breaks the MCP handshake. Any entry that launches `iris mcp serve` (under any
+// key) collapses into one "IRIS OS" entry; the user's environment and enabled flag are kept, and it
+// is added when missing so every user has it.
+function irisOsServer(mcp: unknown): Record<string, unknown> {
+  const servers = mcp && typeof mcp === "object" && !Array.isArray(mcp) ? (mcp as Record<string, unknown>) : {}
+  const launchesIris = (entry: unknown) => {
+    if (!entry || typeof entry !== "object") return false
+    const e = entry as { command?: unknown; args?: unknown }
+    const words = [e.command, e.args].flat().filter((w) => typeof w === "string").join(" ").toLowerCase()
+    return words.includes("iris") && words.includes("mcp") && words.includes("serve")
+  }
+  const iris = Object.values(servers).find(launchesIris) as { enabled?: boolean; environment?: unknown } | undefined
+  const others = Object.fromEntries(Object.entries(servers).filter(([, entry]) => !launchesIris(entry)))
+  const self = /^iris2?(\.exe)?$/i.test(path.basename(process.execPath))
+    ? process.execPath
+    : path.join(os.homedir(), ".iris", "bin", process.platform === "win32" ? "iris.exe" : "iris")
+  return {
+    ...others,
+    "IRIS OS": {
+      type: "local",
+      command: [self, "mcp", "serve"],
+      enabled: iris?.enabled ?? true,
+      ...(iris?.environment ? { environment: iris.environment } : {}),
+    },
+  }
 }
 
 // Agent and command markdown, and the global AGENTS.md, live beside the v1 config. Link them
