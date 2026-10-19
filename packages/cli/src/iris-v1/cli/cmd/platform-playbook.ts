@@ -353,7 +353,7 @@ const SkillShowCommand = cmd({
       prompts.intro(`◈  Skill: ${plan.name}`)
 
       printDivider()
-      printKV("Version", plan.version)
+      printKV("Version", versionLabel(plan))
       printKV("Description", plan.description)
       // What a model routes on. Printed next to the description because the two are
       // easy to conflate: description is WHAT this does, triggers are WHEN to reach
@@ -819,7 +819,7 @@ const SkillTestCommand = cmd({
       prompts.intro(`◈  Validate: ${plan.name}`)
 
       printDivider()
-      printKV("Version", plan.version)
+      printKV("Version", versionLabel(plan))
       printKV("Steps", plan.steps.length)
       printKV("Args", Object.keys(plan.args).length)
 
@@ -1703,6 +1703,8 @@ const PlaybookSyncCommand = cmd({
         }
       }
 
+      // #189878 — files the loader could not parse are skipped, not fatal; say which.
+      const unparseable = await Skill.invalid()
       if (args.json) {
         // Additive fields; the three original keys are unchanged.
         console.log(JSON.stringify({
@@ -1713,11 +1715,15 @@ const PlaybookSyncCommand = cmd({
           targets: [...targets],
           published: false,
           scope: "local",
+          unparseable,
         }))
       } else {
         printDivider()
         const apiMsg = args.api ? `, ${apiSynced} to API` : ""
         console.log(dim(`  ${synced} synced${apiMsg}, ${skipped} skipped`))
+        for (const bad of unparseable) {
+          console.log(`  ! skipped ${bad.path} — could not parse: ${bad.message}`)
+        }
         if (skillSyncFailures.length > 0) {
           console.log(dim(`  ${skillSyncFailures.length} could not be written: ${skillSyncFailures.join(", ")}`))
           console.log(dim(`  The playbooks themselves are installed in .iris/playbooks/ and still run.`))
@@ -3118,6 +3124,20 @@ const PlaybookInstallCommand = cmd({
 })
 
 // ============================================================================
+
+
+/**
+ * #189894 — `show`/`test` printed the engine version (`plan.version`, always 1 or 2) as "Version",
+ * so a file declaring `version: 3` read as "Version: 2" and the field's real value was invisible
+ * exactly where someone would look for it. Show what the file says when it differs.
+ */
+export function versionLabel(plan: { version: number; declaredVersion?: unknown }): string {
+  const d = plan.declaredVersion
+  const same = d === plan.version || (typeof d === "string" && d.trim() === String(plan.version))
+  if (same) return String(plan.version)
+  const said = d === undefined ? "no version field" : `version: ${JSON.stringify(d)}`
+  return `${plan.version} (file has ${said} — runs as v${plan.version})`
+}
 
 export const PlatformPlaybookCommand = cmd({
   command: "playbook <subcommand>",

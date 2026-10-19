@@ -1,7 +1,7 @@
 import { spawnSync } from "child_process"
 import { UI } from "../ui"
 import { irisFetch, IRIS_API, dim, bold, highlight, printDivider } from "./iris-api"
-import { loadIndex, searchCapabilities } from "./platform-find"
+import { loadIndex, loadMergedIndex, searchCapabilities, type Index } from "./platform-find"
 import { loadAgents, NO_DESCRIPTION, rankAgents, type AgentCandidate } from "./platform-intent-agents"
 
 /**
@@ -121,9 +121,24 @@ export function namesClient(q: string, client?: string): boolean {
 }
 
 /** The index and its command names, read ONCE per process — `intent` used to re-parse per step. */
-let _index: ReturnType<typeof loadIndex> | undefined
+let _index: Index | undefined
 let _names: string[] | undefined
 const index = () => (_index ??= loadIndex())
+
+/**
+ * Swap in the MERGED index — embedded commands/how-tos plus the signed-in user's workspace
+ * playbooks and skills (IP-07 #189850; they are no longer embedded). selectTool awaits this once
+ * before ranking; without it `intent` sees the embedded index only, i.e. no guided projects.
+ */
+export async function primeIndex(): Promise<void> {
+  useIndex((await loadMergedIndex()).index)
+}
+
+/** Test seam (and primeIndex's setter): rank against this index from now on. */
+export function useIndex(next: Index | undefined) {
+  _index = next
+  _names = undefined
+}
 const commandNames = () =>
   (_names ??= index()
     .entries.filter((e) => e.kind === "command")
@@ -696,6 +711,7 @@ export async function selectTool(a: {
   // Agents load (cache or API) while the index is searched — never on the critical path twice.
   const agentsLoad = a.agents === false ? Promise.resolve({ agents: [], source: "off" }) : loadAgents()
   const steps = splitSteps(text)
+  await primeIndex()
   const pools = steps.map((step) => candidatePools(step, a.limit || 12))
   const perStep = pools.map((p) => p.pick)
   const candidates = [...new Map(perStep.flat().map((c) => [c.name, c])).values()]

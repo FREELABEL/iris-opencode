@@ -1547,6 +1547,7 @@ const UpdateCommand = cmd({
     const data = await res.json().catch(() => ({}) as any)
     if (!res.ok || data?.success === false) {
       console.error(`Update failed: ${data?.error ?? `HTTP ${res.status}`}`)
+      for (const line of bugUpdateNotFoundHint(res.status, data?.error, itemId)) console.error(line)
       process.exitCode = 1
       return
     }
@@ -1746,3 +1747,19 @@ export const PlatformBugCommand = cmd({
   builder: (yargs) => yargs.command(ReportCommand).command(ListCommand).command(ShowCommand).command(VerifyCommand).command(CloseCommand).command(UpdateCommand).command(CommentCommand).command(FlushCommand).demandCommand(),
   async handler() {},
 })
+
+
+/**
+ * #189895 — `bugs update` on an id that exists but is not a bug report (an epic, a note on another
+ * board) answered only "Bug report not found", which reads as "that id does not exist". Say what
+ * it means and name the commands that do edit any Atlas item.
+ */
+export function bugUpdateNotFoundHint(status: number, error: unknown, itemId: string | number): string[] {
+  const notFound = status === 404 || /not found/i.test(String(error ?? ""))
+  if (!notFound) return []
+  return [
+    `  #${itemId} is not on a bug board. If it is another Atlas item (an epic, a note), edit it with:`,
+    `    iris atlas use ${itemId} --out item.md                      # read it; drop the leading --- header`,
+    `    iris bloqs update-item ${itemId} --content="$(cat item.md)"  # write it back WHOLE (it replaces)`,
+  ]
+}

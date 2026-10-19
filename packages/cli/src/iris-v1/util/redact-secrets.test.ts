@@ -15,6 +15,10 @@ test("leaves ordinary prose alone", () => {
   expect(redactSecrets(t)).toBe(t)
 })
 
+// Workspace playbook/skill prose no longer lives in capabilities.json (IP-07 #189850). Its
+// redaction is now proven against the generator's --workspace-out output, in
+// src/cli/cmd/capabilities-ip-guard.test.ts ("workspace prose is still redacted on the way out").
+// This guard still covers everything that IS committed: command and how-to text.
 test("GUARD: the committed capability index carries no credential shapes (#186275)", () => {
   const index = readFileSync(join(import.meta.dir, "..", "..", "capabilities.json"), "utf8")
   expect(findSecretShapes(index)).toEqual([])

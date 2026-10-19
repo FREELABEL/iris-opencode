@@ -13,6 +13,12 @@
  *    never from training data), not from taking tools away. Only commands that cannot
  *    be undone ask first.
  *
+ * 3. THE REAL AGENT, NOT A POINTER (#189970). The file once carried only the name and "ask the
+ *    cloud agent", so the local agent was nobody in particular. It now carries the agent's own
+ *    identity (settings.system_prompt), mission (initial_prompt) and IRIS tool scope
+ *    (config.tools). Not its model: the Desktop's model serves it, and naming a model the
+ *    Desktop has no provider for would break the agent.
+ *
  * 2. THE KEY IS `permission:` (singular) AND IT IS A MAP. `permissions:` is silently
  *    ignored — every deny in it resolved to allow, nothing said so. A list under
  *    `permission:` is a ConfigInvalidError that stops the Desktop app from opening at
@@ -79,9 +85,27 @@ function oneLine(s: string | null | undefined, max = 160): string {
   return t.length > max ? t.slice(0, max - 1).trimEnd() + "…" : t
 }
 
+/** Long enough for any real system prompt; a runaway one must not bloat every session's context. */
+export const MAX_CARRIED_PROMPT_CHARS = 12_000
+
+function carried(s: string | null | undefined): string {
+  const t = String(s ?? "").trim()
+  return t.length > MAX_CARRIED_PROMPT_CHARS
+    ? t.slice(0, MAX_CARRIED_PROMPT_CHARS).trimEnd() + `\n\n[cut at ${MAX_CARRIED_PROMPT_CHARS} characters — the full text is on the IRIS agent]`
+    : t
+}
+
+function irisTools(a: RawAgent): string[] {
+  const t = a.config?.tools
+  return Array.isArray(t) ? t.filter((x): x is string => typeof x === "string" && x.trim() !== "") : []
+}
+
 export function renderDesktopAgent(a: RawAgent): string {
   const name = a.name.trim()
   const what = oneLine(a.description)
+  const identity = carried(a.settings?.system_prompt)
+  const mission = carried(a.initial_prompt)
+  const tools = irisTools(a)
   const description = `${name} (IRIS agent #${a.id})${what ? ` — ${what}` : ""}`
   return [
     "---",
@@ -109,6 +133,14 @@ export function renderDesktopAgent(a: RawAgent): string {
     "  machine. Do it directly with your own tools. You don't need to route this through IRIS.",
     "",
     "Most real tasks use both: pull the facts from IRIS, then do the work locally.",
+    "",
+    ...(identity ? ["## Who you are", "", identity, ""] : []),
+    ...(mission ? ["## Your mission", "", mission, ""] : []),
+    "## Your IRIS tools",
+    "",
+    tools.length
+      ? `In IRIS you are scoped to: ${tools.join(", ")}. Ask the IRIS agent for anything those cover.`
+      : "In IRIS this agent has no tool allowlist, which means every tool. Be deliberate about what you ask it to do.",
     "",
   ].join("\n")
 }

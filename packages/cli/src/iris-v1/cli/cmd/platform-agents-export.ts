@@ -184,7 +184,7 @@ export const AgentsExportCommand = cmd({
         "## Importing it",
         "",
         "```sh",
-        "iris agents create --name \"" + String(agent.name).replace(/"/g, '\\"') + "\"",
+        "iris agents create --bloq <project-id> --name \"" + String(agent.name).replace(/"/g, '\\"') + "\"",
         "# then paste agent.md's system prompt, or push agent.json onto the new id:",
         "iris agents push <new-id> --file agent.json",
         "```",

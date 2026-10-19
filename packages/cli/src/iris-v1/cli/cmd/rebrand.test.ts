@@ -8,8 +8,8 @@ const moodyLike = () => ({
   components: [
     { type: "SiteNavigation", props: { logo: { text: "MOODY BEAUTY", imageUrl: "https://cdn.heyiris.io/cloud-files/1_mb-logo.png" }, ctaButton: { text: "Book with Lisa", url: "https://www.vagaro.com/moodybeauty" } } },
     { type: "Hero", props: { title: "EFFORTLESS BEAUTY", backgroundImage: "https://images.unsplash.com/photo-1.jpg", primaryButtonUrl: "https://www.vagaro.com/moodybeauty" } },
-    { type: "MapSection", props: { locations: [{ name: "Moody Beauty Studio", phone: "(512) 953-7902", email: "moodybeauty.atx@gmail.com", address: ["4012 Marathon Boulevard", "Austin, TX 78756"] }] } },
-    { type: "ContactSection", props: { contactInfo: [{ label: "Phone", value: "(512) 953-7902", link: "tel:5129537902" }, { label: "Email", value: "moodybeauty.atx@gmail.com" }] } },
+    { type: "MapSection", props: { locations: [{ name: "Moody Beauty Studio", phone: "(512) 953-7902", email: "shop@example.com", address: ["4012 Marathon Boulevard", "Austin, TX 78756"] }] } },
+    { type: "ContactSection", props: { contactInfo: [{ label: "Phone", value: "(512) 953-7902", link: "tel:5129537902" }, { label: "Email", value: "shop@example.com" }] } },
     { type: "InstagramFeed", props: { instagram: "moodybeauty.atx" } },
     { type: "SiteFooter", props: { brandName: "Moody Beauty", logo: { tagline: "Lash artistry by Lisa Martinez · Austin" }, columns: [{ links: [{ label: "Call us: (512) 953-7902" }] }] } },
   ],
@@ -20,14 +20,14 @@ const dentLike = () => ({
   theme: { branding: { name: "Dent Society", primaryColor: "#FF192C" } },
   components: [
     { type: "Hero", props: { title: "HAIL REPAIR", secondaryButtonText: "(214) 919-2237", secondaryButtonUrl: "tel:2149192237" } },
-    { type: "SiteFooter", props: { brandName: "Dent Society", columns: [{ links: [{ label: "sales@dentsociety.com", href: "mailto:sales@dentsociety.com" }] }] } },
+    { type: "SiteFooter", props: { brandName: "Dent Society", columns: [{ links: [{ label: "sales@firm-i.example.com", href: "mailto:sales@firm-i.example.com" }] }] } },
   ],
 })
 
 const TARGET: BrandProfile = {
   name: "Monarch Beauty", tagline: "Lash artistry — Austin", bookingUrl: "https://www.vagaro.com/monarchbeauty",
   colors: { primary: "#7C3AED" }, social: { instagram: "monarchbeauty.atx" },
-  contact: { phone: "(737) 555-0188", email: "hello@monarchbeauty.co", address: { street: "98 San Jacinto Blvd", city: "Austin", state: "TX", zip: "78701" } },
+  contact: { phone: "(737) 555-0188", email: "hello@firm-j.example.com", address: { street: "98 San Jacinto Blvd", city: "Austin", state: "TX", zip: "78701" } },
 }
 
 test("isAssetUrl distinguishes template images from links", () => {
@@ -50,7 +50,7 @@ test("rebrand swaps name, applies target contact/colors, preserves template imag
   expect(json.theme.branding.name).toBe("Monarch Beauty")
   expect(json.components[0].props.logo.imageUrl).toBe("") // logo wordmark cleared -> text shows
   expect(json.components[2].props.locations[0].phone).toBe("(737) 555-0188")
-  expect(json.components[3].props.contactInfo[1].value).toBe("hello@monarchbeauty.co")
+  expect(json.components[3].props.contactInfo[1].value).toBe("hello@firm-j.example.com")
   expect(s).toContain("images.unsplash.com/photo-1.jpg")
   // founder name stripped from CTA + tagline
   expect(json.components[0].props.ctaButton.text).not.toContain("Lisa")

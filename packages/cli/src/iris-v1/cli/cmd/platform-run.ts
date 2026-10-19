@@ -409,13 +409,28 @@ async function executeMacosLocal(
     if ([...qs].length > 0) url += `?${qs.toString()}`
   }
 
+  // The bridge requires X-Bridge-Key on these routes. This call was the one bridge client that
+  // never sent it, so every macOS action through `integrations exec` answered 401 — and the
+  // generic hint sent people to `iris auth login`, which has nothing to do with it (#189836).
+  const headers: Record<string, string> = {}
+  if (route.useBody) headers["Content-Type"] = "application/json"
+  const bridgeKey = getBridgeToken()
+  if (bridgeKey) headers["X-Bridge-Key"] = bridgeKey
+
   let res: Response
   try {
     res = await fetch(url, {
       method: route.method,
-      headers: route.useBody ? { "Content-Type": "application/json" } : undefined,
+      headers,
       body,
     })
+    // When the bridge hosts the daemon (embedded mode), the daemon's routes are mounted under
+    // /daemon — /api/calendar/list and /create-event exist only there, and the bare path is an
+    // Express "Cannot GET". Retry once under the prefix before calling it missing.
+    if (res.status === 404) {
+      const embedded = await fetch(url.replace(bridgeBase, `${bridgeBase}/daemon`), { method: route.method, headers, body })
+      if (embedded.status !== 404) res = embedded
+    }
   } catch (e) {
     throw new Error(
       `Cannot reach local bridge at ${bridgeBase}. ` +
@@ -430,6 +445,14 @@ async function executeMacosLocal(
       const parsed = JSON.parse(text)
       errMsg = parsed.error ?? text
     } catch { /* keep raw text */ }
+    if (res.status === 401) {
+      throw new Error(
+        `The local bridge refused ${route.method} ${route.path}: ` +
+          (bridgeKey
+            ? "the key in ~/.iris/bridge-token is not the one this daemon expects (stale after a reinstall?). Run: iris bridge status"
+            : "~/.iris/bridge-token is missing, so no key was sent. Run: iris bridge status"),
+      )
+    }
     throw new Error(`Bridge ${route.method} ${route.path} failed (HTTP ${res.status}): ${errMsg}`)
   }
 
