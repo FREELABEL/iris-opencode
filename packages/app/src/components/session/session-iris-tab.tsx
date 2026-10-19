@@ -2840,46 +2840,52 @@ export function SessionIrisTab() {
               reset
             </button>
           </Show>
-          <button
-            type="button"
-            class="iris-atlas-members"
-            title="Members — who is on this board"
-            onClick={() => {
-              const b = activeBloq()
-              if (b == null) return
-              dialog.show(() => (
-                <IrisBoardMembers
-                  bloqId={Number(b)}
-                  boardName={activeBloqName()}
-                  doFetch={doFetch}
-                  onChanged={() => void refetchMembers()}
-                />
-              ))
-            }}
-          >
-            <span class="iris-avatars">
-              <For each={(boardMembers.latest?.members ?? []).slice(0, 3)}>
-                {(m) => <span class="iris-avatar">{initials(m.name || m.email)}</span>}
-              </For>
-            </span>
-            <span>
-              {boardMembers.latest?.measured
-                ? (() => {
-                    const n = boardMembers.latest!.members.length + 1
-                    return `${n} ${n === 1 ? "member" : "members"}`
-                  })()
-                : "Members"}
-            </span>
-          </button>
-          <span
-            class="iris-atlas-live"
-            data-state={liveState()}
-            title={liveLabel(liveState()).title}
-            aria-live="polite"
-          >
-            <span class="iris-atlas-live__dot" aria-hidden="true" />
-            {liveLabel(liveState()).text}
-          </span>
+          {/* PRESENCE: who is on this board and whether it is live, in one pill. The dot is the
+              live state, the faces and the number are the members; words move to the tooltip,
+              and the live state is still announced to screen readers. */}
+          {(() => {
+            const memberCount = () =>
+              boardMembers.latest?.measured ? boardMembers.latest!.members.length + 1 : undefined
+            const membersText = () => {
+              const n = memberCount()
+              return n === undefined ? "Members" : `${n} ${n === 1 ? "member" : "members"}`
+            }
+            const shown = () => (boardMembers.latest?.members ?? []).slice(0, 3)
+            return (
+              <button
+                type="button"
+                class="iris-atlas-presence"
+                data-state={liveState()}
+                title={`${membersText()} — who is on this board\n${liveLabel(liveState()).text}: ${liveLabel(liveState()).title}`}
+                aria-label={`${membersText()}, ${liveLabel(liveState()).text}`}
+                onClick={() => {
+                  const b = activeBloq()
+                  if (b == null) return
+                  dialog.show(() => (
+                    <IrisBoardMembers
+                      bloqId={Number(b)}
+                      boardName={activeBloqName()}
+                      doFetch={doFetch}
+                      onChanged={() => void refetchMembers()}
+                    />
+                  ))
+                }}
+              >
+                <span class="iris-atlas-live__dot" aria-hidden="true" />
+                <Show when={shown().length > 0}>
+                  <span class="iris-avatars" aria-hidden="true">
+                    <For each={shown()}>{(m) => <span class="iris-avatar">{initials(m.name || m.email)}</span>}</For>
+                  </span>
+                </Show>
+                <span class="iris-atlas-presence__count" aria-hidden="true">
+                  {memberCount() ?? "Members"}
+                </span>
+                <span class="sr-only" aria-live="polite">
+                  {liveLabel(liveState()).text}
+                </span>
+              </button>
+            )
+          })()}
         </div>
       </Show>
 

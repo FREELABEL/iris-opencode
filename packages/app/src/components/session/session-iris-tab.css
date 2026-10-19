@@ -795,43 +795,59 @@
 
 /* LIVE (#189767). The promise a live board makes has to be visible: a dot that breathes while
    the board is being watched, and goes quiet when it is not. */
-.iris-atlas-members {
+.iris-atlas-presence {
   margin-inline-start: auto;
   appearance: none;
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  height: 22px;
   font: inherit;
   color: var(--text-weak);
-  background: none;
+  background: var(--background-base);
   border: 1px solid var(--border-weaker-base);
-  border-radius: 5px;
-  padding: 1px 8px 1px 4px;
+  border-radius: 999px;
+  padding: 0 8px 0 7px;
   cursor: pointer;
 }
-.iris-atlas-members:hover {
+.iris-atlas-presence:hover {
   color: var(--text-base);
   background: var(--background-element);
 }
-.iris-atlas-live {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--text-weaker);
-  cursor: default;
+/* Faces in the pill: solid, not translucent — overlapping translucent circles bleed into each
+   other — and ringed in the pill's own colour so each one reads as separate. */
+.iris-atlas-presence .iris-avatars {
+  margin-inline-start: 0;
+}
+.iris-atlas-presence .iris-avatar {
+  width: 16px;
+  height: 16px;
+  font-size: 7px;
+  letter-spacing: 0;
+  color: var(--text-base);
+  background: color-mix(in srgb, var(--text-base) 12%, var(--background-base));
+  border: 0;
+  box-shadow: 0 0 0 1.5px var(--background-base);
+  margin-inline-start: -2px;
+}
+.iris-atlas-presence .iris-avatar:first-child {
+  margin-inline-start: 0;
+}
+.iris-atlas-presence:hover .iris-avatar {
+  box-shadow: 0 0 0 1.5px var(--background-element);
+}
+.iris-atlas-presence__count {
+  font-variant-numeric: tabular-nums;
 }
 .iris-atlas-live__dot {
+  flex: 0 0 auto;
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: var(--text-weaker);
 }
-.iris-atlas-live[data-state="polling"],
-.iris-atlas-live[data-state="instant"] {
-  color: var(--text-weak);
-}
-.iris-atlas-live[data-state="polling"] .iris-atlas-live__dot,
-.iris-atlas-live[data-state="instant"] .iris-atlas-live__dot {
+.iris-atlas-presence[data-state="polling"] .iris-atlas-live__dot,
+.iris-atlas-presence[data-state="instant"] .iris-atlas-live__dot {
   background: var(--surface-success-strong);
   animation: iris-live-breathe 2.4s ease-in-out infinite;
 }
