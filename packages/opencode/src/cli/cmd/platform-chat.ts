@@ -316,7 +316,7 @@ export async function executeChat(args: {
     }
 
     // No server-side workflow id in the sync stream path → pass "" (suppresses --continue).
-    outputResult(run, "", agentId, isJson, result.toolsUsed, tracer.enabled ? tracer.steps : undefined)
+    outputResult(run, "", agentId, isJson, result.toolsUsed, tracer.enabled ? tracer.steps : undefined, result.runId)
   } catch (err) {
     if (heartbeat) clearInterval(heartbeat)
     process.stderr.write("\r" + " ".repeat(40) + "\r")
@@ -490,7 +490,7 @@ export async function runVoiceChat(args: {
   prompts.outro("Call ended 👋")
 }
 
-function outputResult(run: WorkflowRun, workflowId: string, agentId: number | undefined, isJson: boolean, toolsUsed: string[] = [], trace?: TraceStep[]): void {
+function outputResult(run: WorkflowRun, workflowId: string, agentId: number | undefined, isJson: boolean, toolsUsed: string[] = [], trace?: TraceStep[], runId?: string): void {
   const response = run.summary ?? run.response ?? run.output ?? "(no response)"
 
   if (isJson) {
@@ -504,6 +504,7 @@ function outputResult(run: WorkflowRun, workflowId: string, agentId: number | un
       tools_used: toolsUsed,
       elapsed_ms: run.elapsed_ms,
       requires_approval: run.requires_approval ?? false,
+      run_id: runId,
       // Present only under -V. Absent (not empty) otherwise, so a consumer can tell
       // "not traced" from "traced and nothing happened".
       trace,
@@ -528,6 +529,7 @@ function outputResult(run: WorkflowRun, workflowId: string, agentId: number | un
   if (run.tokens_used) metrics.push(`tokens: ${run.tokens_used}`)
   if (run.iteration_count) metrics.push(`iterations: ${run.iteration_count}`)
   if (run.elapsed_ms) metrics.push(`time: ${(run.elapsed_ms / 1000).toFixed(1)}s`)
+  if (runId) metrics.push(`replay: iris agents replay ${runId.slice(0, 8)}`)
   if (metrics.length > 0) {
     console.log(`  ${dim(metrics.join("  ·  "))}`)
     console.log()

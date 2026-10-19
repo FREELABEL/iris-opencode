@@ -650,6 +650,8 @@ export type AgentChatResult = {
   // Distinguishes failure modes so callers can set distinct exit codes (#137418):
   // timedOut → exit 2, any other failure → exit 1, ok → exit 0.
   timedOut?: boolean
+  // The flight-recorder id (#190085) — `iris agents replay <runId>` walks the run back.
+  runId?: string
 }
 
 /** Normalize the heterogeneous tools_used payload into a flat list of tool names. */
@@ -792,6 +794,7 @@ export async function streamAgentChat(opts: {
         if (tu.length > 0) result.toolsUsed = tu
         if (typeof evt.iterations === "number") result.iterations = evt.iterations
         if (typeof evt.status === "string") result.status = evt.status
+        if (typeof evt.run_id === "string" && evt.run_id) result.runId = evt.run_id
       } else if (evt.type === "error") {
         streamError = evt.error ?? "stream error"
       }
