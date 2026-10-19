@@ -229,3 +229,138 @@ describe("Gemini folder trust", () => {
     await expect(fs.readFile(McpClients.geminiTrustFile(), "utf8")).rejects.toThrow()
   })
 })
+
+/**
+ * Eval #189927 gap 2: `iris mcp install` had no Codex target. Codex reads
+ * ~/.codex/config.toml ([mcp_servers.<name>] with command/args) — TOML that people
+ * hand-edit, so the install must change only its own table and keep everything else.
+ */
+describe("Codex CLI registration", () => {
+  let home: string
+  let prevHome: string | undefined
+  let prevCodex: string | undefined
+
+  beforeEach(async () => {
+    home = await fs.mkdtemp(path.join(os.tmpdir(), "iris-codex-"))
+    prevHome = process.env.OPENCODE_TEST_HOME
+    prevCodex = process.env.CODEX_HOME
+    process.env.OPENCODE_TEST_HOME = home
+    delete process.env.CODEX_HOME
+  })
+
+  afterEach(async () => {
+    if (prevHome === undefined) delete process.env.OPENCODE_TEST_HOME
+    else process.env.OPENCODE_TEST_HOME = prevHome
+    if (prevCodex === undefined) delete process.env.CODEX_HOME
+    else process.env.CODEX_HOME = prevCodex
+    await fs.rm(home, { recursive: true, force: true })
+  })
+
+  const parse = async (p: string) => Bun.TOML.parse(await fs.readFile(p, "utf8")) as any
+
+  test("is a known client at ~/.codex/config.toml, detected by ~/.codex", async () => {
+    let client = McpClients.get("codex")!
+    expect(client.configPath).toBe(path.join(home, ".codex", "config.toml"))
+    expect(client.detected).toBe(false)
+    await fs.mkdir(path.join(home, ".codex"))
+    client = McpClients.get("codex")!
+    expect(client.detected).toBe(true)
+  })
+
+  test("honours CODEX_HOME", () => {
+    process.env.CODEX_HOME = path.join(home, "elsewhere")
+    expect(McpClients.get("codex")!.configPath).toBe(path.join(home, "elsewhere", "config.toml"))
+  })
+
+  test("creates config.toml with [mcp_servers.iris] command + args", async () => {
+    const client = McpClients.get("codex")!
+    const res = await McpClients.wire(client, "/abs/iris")
+    expect(res.action).toBe("created")
+    const cfg = await parse(client.configPath)
+    // Not "IRIS OS": Codex rejects server names outside [A-Za-z0-9_-].
+    expect(cfg.mcp_servers).toEqual({ iris: { command: "/abs/iris", args: ["mcp", "serve"] } })
+  })
+
+  test("preserves comments, settings and other servers byte-for-byte", async () => {
+    const client = McpClients.get("codex")!
+    const original = [
+      "# my codex config",
+      'model = "gpt-5-codex"',
+      "",
+      "[mcp_servers.github]",
+      'command = "npx"',
+      'args = ["-y", "@github/mcp"]',
+      "",
+      "[mcp_servers.github.env]",
+      'GITHUB_TOKEN = "x" # keep me',
+      "",
+      "[profiles.fast]",
+      'model = "o4-mini"',
+      "",
+    ].join("\n")
+    await fs.mkdir(path.dirname(client.configPath), { recursive: true })
+    await fs.writeFile(client.configPath, original)
+
+    expect((await McpClients.wire(client, "/abs/iris")).action).toBe("updated")
+    const text = await fs.readFile(client.configPath, "utf8")
+    expect(text.startsWith(original.trimEnd())).toBe(true)
+    const cfg = await parse(client.configPath)
+    expect(cfg.model).toBe("gpt-5-codex")
+    expect(cfg.profiles.fast.model).toBe("o4-mini")
+    expect(cfg.mcp_servers.github).toEqual({ command: "npx", args: ["-y", "@github/mcp"], env: { GITHUB_TOKEN: "x" } })
+    expect(cfg.mcp_servers.iris).toEqual({ command: "/abs/iris", args: ["mcp", "serve"] })
+  })
+
+  test("idempotent — second install is unchanged and does not rewrite the file", async () => {
+    const client = McpClients.get("codex")!
+    expect(await McpClients.isWired(client)).toBe(false)
+    expect((await McpClients.wire(client, "/abs/iris")).action).toBe("created")
+    const before = await fs.readFile(client.configPath, "utf8")
+    expect((await McpClients.wire(client, "/abs/iris")).action).toBe("unchanged")
+    expect(await fs.readFile(client.configPath, "utf8")).toBe(before)
+    expect(await McpClients.isWired(client)).toBe(true)
+  })
+
+  test("updates a stale binary path in place and de-dupes a legacy entry", async () => {
+    const client = McpClients.get("codex")!
+    await fs.mkdir(path.dirname(client.configPath), { recursive: true })
+    await fs.writeFile(
+      client.configPath,
+      [
+        "[mcp_servers.iris]",
+        'command = "/old/iris"',
+        'args = ["mcp", "serve"]',
+        "",
+        "[mcp_servers.other]",
+        'command = "x"',
+        "",
+        "[mcp_servers.iris-local]",
+        'command = "/bin/bash"',
+        'args = ["-l", "-c", "exec iris mcp serve"]',
+        "",
+      ].join("\n"),
+    )
+    expect((await McpClients.wire(client, "/abs/iris")).action).toBe("updated")
+    const cfg = await parse(client.configPath)
+    expect(Object.keys(cfg.mcp_servers).sort()).toEqual(["iris", "other"])
+    expect(cfg.mcp_servers.iris.command).toBe("/abs/iris")
+    expect(cfg.mcp_servers.other).toEqual({ command: "x" })
+  })
+
+  test("refuses to touch a file that is not valid TOML", async () => {
+    const client = McpClients.get("codex")!
+    await fs.mkdir(path.dirname(client.configPath), { recursive: true })
+    await fs.writeFile(client.configPath, "this is = = not toml [")
+    await expect(McpClients.wire(client, "/abs/iris")).rejects.toThrow(/not valid TOML/)
+    expect(await fs.readFile(client.configPath, "utf8")).toBe("this is = = not toml [")
+  })
+
+  test("refuses rather than duplicates when IRIS is defined inline", async () => {
+    const client = McpClients.get("codex")!
+    await fs.mkdir(path.dirname(client.configPath), { recursive: true })
+    const inline = '[mcp_servers]\nlegacy = { command = "iris", args = ["mcp", "serve"] }\n'
+    await fs.writeFile(client.configPath, inline)
+    await expect(McpClients.wire(client, "/abs/iris")).rejects.toThrow(/could not safely edit/)
+    expect(await fs.readFile(client.configPath, "utf8")).toBe(inline)
+  })
+})

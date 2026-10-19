@@ -14,7 +14,7 @@ import { Installation } from "../../installation"
 import fs from "fs"
 import path from "path"
 import { Global } from "../../global"
-import { McpServeCommand } from "./mcp-serve"
+import { McpServeCommand, McpProfileCommand } from "./mcp-serve"
 import { McpInstallCommand } from "./mcp-install"
 import { McpClients } from "../../mcp/clients"
 import { firstArray } from "../../util/array"
@@ -194,6 +194,7 @@ export const McpCommand = cmd({
       .command(McpCallCommand)
       .command(McpToolsCommand)
       .command(McpInstallCommand)
+      .command(McpProfileCommand)
       .command(McpAddCommand)
       .command(McpListCommand)
       .command(McpAuthCommand)

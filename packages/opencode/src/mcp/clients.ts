@@ -33,6 +33,13 @@ export namespace McpClients {
   export const GEMINI_SERVER_KEY = "iris"
 
   /**
+   * Codex CLI cannot use the canonical key either: it rejects MCP server names that
+   * are not `^[a-zA-Z0-9_-]+$` (a space fails), and the name becomes part of every
+   * tool name it sends to the model. "iris" is what users would type themselves.
+   */
+  export const CODEX_SERVER_KEY = "iris"
+
+  /**
    * True if a client entry already launches `iris mcp serve`, under ANY key or
    * format (stdio array, command+args, or a `/bin/bash -l -c "exec iris mcp
    * serve"` wrapper). Used to de-dupe and to detect existing registration.
@@ -58,8 +65,12 @@ export namespace McpClients {
    *
    * Gemini CLI reuses the "mcpServers" shape (in ~/.gemini/settings.json), so it
    * needs no new format — only a different server KEY. See GEMINI_SERVER_KEY.
+   *  - "codex": ~/.codex/config.toml — TOML, not JSON
+   *      [mcp_servers.iris]
+   *      command = "<abs>"
+   *      args = ["mcp", "serve"]
    */
-  export type Format = "mcpServers" | "opencode"
+  export type Format = "mcpServers" | "opencode" | "codex"
 
   export interface Client {
     id: string
@@ -251,6 +262,20 @@ export namespace McpClients {
       detected: exists(gemini) || exists(path.join(home, ".gemini")),
     })
 
+    // Codex CLI — $CODEX_HOME/config.toml (default ~/.codex), [mcp_servers.<name>]
+    // tables with command/args. Keyed "iris" (CODEX_SERVER_KEY). Codex passes HOME to
+    // stdio servers, so `iris` finds its token in ~/.iris/sdk/.env as usual.
+    const codexHome = process.env.CODEX_HOME || path.join(home, ".codex")
+    const codex = path.join(codexHome, "config.toml")
+    clients.push({
+      id: "codex",
+      label: "Codex CLI",
+      configPath: codex,
+      format: "codex",
+      serverKey: CODEX_SERVER_KEY,
+      detected: exists(codex) || exists(codexHome),
+    })
+
     // Project — a .mcp.json in the working directory (Claude Code reads this).
     clients.push({
       id: "project",
@@ -269,6 +294,7 @@ export namespace McpClients {
 
   /** Build the IRIS server entry in the shape the given client expects. */
   function entryFor(client: Client, bin: string): Record<string, unknown> {
+    if (client.format === "codex") return { command: bin, args: ["mcp", "serve"] }
     if (client.format === "opencode") {
       return { type: "local", command: [bin, "mcp", "serve"], enabled: true }
     }
@@ -307,6 +333,7 @@ export namespace McpClients {
    * correct.
    */
   export async function wire(client: Client, bin = irisBinary()): Promise<WireResult> {
+    if (client.format === "codex") return wireCodex(client, bin)
     const existed = exists(client.configPath)
     const config = await readJson(client.configPath)
     const entry = entryFor(client, bin)
@@ -348,11 +375,119 @@ export namespace McpClients {
    * reports a hand-written "IRIS OS"/"iris" entry as registered too).
    */
   export async function isWired(client: Client): Promise<boolean> {
+    if (client.format === "codex") {
+      const map = codexServers(await readText(client.configPath))
+      if (!map) return false
+      if (map[serverKey(client)]) return true
+      return Object.values(map).some((e) => isIrisServeEntry(e))
+    }
     const config = await readJson(client.configPath)
     const mapKey = client.format === "opencode" ? "mcp" : "mcpServers"
     const map = config?.[mapKey]
     if (!map || typeof map !== "object") return false
     if (map[serverKey(client)]) return true
     return Object.values(map).some((e) => isIrisServeEntry(e))
+  }
+
+  // ── Codex (TOML) ───────────────────────────────────────────────────────
+  //
+  // config.toml is hand-edited by people (comments, model settings, profiles), so it is
+  // never re-serialized. Bun's TOML parser READS it; the write is a surgical text edit
+  // that replaces only the [mcp_servers.<key>] tables we own and leaves every other byte
+  // alone. The result is re-parsed before it is written, and if it does not say exactly
+  // what we meant, nothing is written.
+
+  async function readText(p: string): Promise<string> {
+    try {
+      return await fs.readFile(p, "utf8")
+    } catch {
+      return ""
+    }
+  }
+
+  function codexServers(text: string): Record<string, unknown> | undefined {
+    if (!text.trim()) return {}
+    try {
+      const parsed = Bun.TOML.parse(text) as Record<string, any>
+      const map = parsed?.mcp_servers
+      return map && typeof map === "object" ? (map as Record<string, unknown>) : {}
+    } catch {
+      return undefined
+    }
+  }
+
+  /** Split a TOML header key (`mcp_servers."IRIS OS".env`) into its unquoted parts. */
+  function headerPath(raw: string): string[] {
+    const parts: string[] = []
+    const re = /\s*(?:"((?:[^"\\]|\\.)*)"|'([^']*)'|([A-Za-z0-9_-]+))\s*(?:\.|$)/y
+    let m: RegExpExecArray | null
+    while (re.lastIndex < raw.length && (m = re.exec(raw))) parts.push(m[1] ?? m[2] ?? m[3])
+    return parts
+  }
+
+  function tomlString(v: string): string {
+    return JSON.stringify(v) // a JSON string literal is a valid TOML basic string
+  }
+
+  /** Exported for tests: rewrite `text` so mcp_servers.<key> is the IRIS entry and no other server runs `iris mcp serve`. */
+  export function editCodexToml(text: string, key: string, bin: string, removeKeys: string[]): string {
+    const lines = text.length ? text.replace(/\r\n/g, "\n").split("\n") : []
+    const drop = new Set([key, ...removeKeys])
+    const out: string[] = []
+    let skipping = false
+    let insertAt = -1
+    for (const line of lines) {
+      const h = /^\s*\[\[?\s*([^\[\]]+?)\s*\]\]?\s*(#.*)?$/.exec(line)
+      if (h) {
+        const p = headerPath(h[1])
+        skipping = p[0] === "mcp_servers" && p.length >= 2 && drop.has(p[1])
+        if (skipping && p[1] === key && insertAt === -1) insertAt = out.length
+      }
+      if (!skipping) out.push(line)
+    }
+    const block = [`[mcp_servers.${/^[A-Za-z0-9_-]+$/.test(key) ? key : tomlString(key)}]`, `command = ${tomlString(bin)}`, `args = ["mcp", "serve"]`, ""]
+    if (insertAt >= 0) {
+      out.splice(insertAt, 0, ...block)
+    } else {
+      while (out.length && out[out.length - 1].trim() === "") out.pop()
+      if (out.length) out.push("")
+      out.push(...block)
+    }
+    return out.join("\n").replace(/\n{3,}/g, "\n\n").replace(/\n*$/, "\n")
+  }
+
+  async function wireCodex(client: Client, bin: string): Promise<WireResult> {
+    const existed = exists(client.configPath)
+    const text = await readText(client.configPath)
+    const map = codexServers(text)
+    if (!map) throw new Error(`${client.configPath} is not valid TOML — fix it first; nothing was changed`)
+    const key = serverKey(client)
+    const entry = entryFor(client, bin)
+    const others = Object.keys(map).filter((k) => k !== key && isIrisServeEntry(map[k]))
+
+    if (existed && others.length === 0 && JSON.stringify(map[key]) === JSON.stringify(entry)) {
+      return { client, action: "unchanged", bin }
+    }
+
+    const next = editCodexToml(text, key, bin, others)
+    // Verify before writing: the edit must yield exactly our entry, no leftover duplicate,
+    // and every other server untouched.
+    const after = codexServers(next)
+    const ok =
+      after !== undefined &&
+      JSON.stringify(after[key]) === JSON.stringify(entry) &&
+      others.every((k) => after[k] === undefined) &&
+      Object.keys(map)
+        .filter((k) => k !== key && !others.includes(k))
+        .every((k) => JSON.stringify(after[k]) === JSON.stringify(map[k]))
+    if (!ok) {
+      throw new Error(
+        `could not safely edit ${client.configPath} (the server may be defined inline) — add this yourself:\n[mcp_servers.${key}]\ncommand = ${tomlString(bin)}\nargs = ["mcp", "serve"]`,
+      )
+    }
+
+    await fs.mkdir(path.dirname(client.configPath), { recursive: true })
+    await fs.writeFile(client.configPath, next, "utf8")
+    return { client, action: existed ? "updated" : "created", bin }
   }
 }

@@ -2,21 +2,23 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { McpClients } from "../../mcp/clients"
+import { runIris } from "./mcp-serve"
+import { refreshInstructions, localProfilePath, PROFILE_TITLE } from "./mcp-profile"
 
 /**
  * `iris mcp install` — idempotently register `iris mcp serve` into detected MCP
- * client configs (Claude Code, Claude Desktop, Cursor, Gemini CLI, opencode,
- * project .mcp.json) using an ABSOLUTE binary path so GUI-launched clients (no
+ * client configs (Claude Code, Claude Desktop, Cursor, Gemini CLI, Codex CLI,
+ * opencode, project .mcp.json) using an ABSOLUTE binary path so GUI-launched clients (no
  * login shell) can resolve it. Closes bug #150264.
  */
 export const McpInstallCommand = cmd({
   command: "install",
-  describe: "register the IRIS MCP server into your MCP clients (Claude Code, Cursor, Gemini CLI, opencode, ...)",
+  describe: "register the IRIS MCP server into your MCP clients (Claude Code, Cursor, Gemini CLI, Codex, opencode, ...)",
   builder: (yargs) =>
     yargs
       .option("client", {
         type: "string",
-        describe: "wire only this client (claude-code|claude-desktop|cursor|gemini|opencode|project)",
+        describe: "wire only this client (claude-code|claude-desktop|cursor|gemini|codex|opencode|project)",
       })
       .option("all", {
         type: "boolean",
@@ -77,6 +79,11 @@ export const McpInstallCommand = cmd({
       }
     }
 
+    // Warm the connect-time profile cache (#189927) so the FIRST session a newly wired
+    // client opens already knows the user's rules — `serve` never waits on Atlas itself.
+    // Never fatal: signed out or offline just means the static guidance for now.
+    const profile = await refreshInstructions(runIris).catch(() => undefined)
+
     if (args.json) {
       process.stdout.write(
         JSON.stringify(
@@ -88,6 +95,7 @@ export const McpInstallCommand = cmd({
               action: r.action,
               ...("error" in r ? { error: (r as any).error } : {}),
             })),
+            profile: profile ? { chars: profile.text.length, sources: profile.sources } : null,
           },
           null,
           2,
@@ -129,6 +137,14 @@ export const McpInstallCommand = cmd({
       } catch (e) {
         prompts.log.warn(`Could not write Gemini's trusted-folders file: ${e instanceof Error ? e.message : String(e)}`)
       }
+    }
+
+    if (profile?.sources.some((src) => src.startsWith("Atlas item") || src.startsWith("~/"))) {
+      prompts.log.info(`✓ Connect-time profile ready ${UI.Style.TEXT_DIM}(${profile.sources.join(", ")}) — see: iris mcp profile`)
+    } else {
+      prompts.log.info(
+        `○ No personal profile yet — agents connect with generic guidance. ${UI.Style.TEXT_DIM}Write your rules in ${localProfilePath()} or an Atlas item titled "${PROFILE_TITLE}", then: iris mcp profile`,
+      )
     }
 
     const changed = results.filter((r) => r.action === "created" || r.action === "updated").length

@@ -22,6 +22,7 @@ import { homedir } from "os"
 import { join } from "path"
 import { readFileSync, existsSync } from "fs"
 import { spill } from "./mcp-overflow"
+import { instructionsNow, isFresh, readCache, refreshInstructions, cachePath, localProfilePath, PROFILE_TITLE, type IrisRunner } from "./mcp-profile"
 
 // A bare "{" string literal silently breaks `script/build-capabilities.ts`: its block
 // reader brace-MATCHES `cmd({ ... })` without skipping string literals, so one unmatched
@@ -583,6 +584,17 @@ async function execIris(args: string[], timeoutMs: number = TIMEOUT_MS): Promise
   }
 }
 
+/**
+ * `iris <args>` → stdout, throwing on a non-zero exit. The same execIris path the
+ * iris_memory tool uses, so the connect-time profile reads Atlas exactly as a tool
+ * call would (same auth, same child env, same output handling).
+ */
+export const runIris: IrisRunner = async (args) => {
+  const r = await execIris(args, 20_000)
+  if (r.exitCode !== 0) throw new Error(r.stderr || r.stdout || `iris ${args[0]} failed`)
+  return r.stdout
+}
+
 export const McpServeCommand = cmd({
   command: "serve",
   describe: "start IRIS MCP gateway server (stdio, or streamable HTTP with --http)",
@@ -604,6 +616,9 @@ export const McpServeCommand = cmd({
           "  playbook_*    one typed tool per executable playbook (--no-playbooks to omit)",
           "",
           "RESOURCES:  iris://guide  iris://commands  iris://recipes",
+          "",
+          "INSTRUCTIONS: initialize returns the user's rules (see `iris mcp profile`),",
+          "served from a cache so the handshake never waits on the network.",
           "",
           "A schema is prompt-enforced, not API-enforced, and an agent given a required shape",
           "will INVENT values to fill it — measured: a required enum produced a confident answer",
@@ -649,10 +664,23 @@ export const McpServeCommand = cmd({
 
     const playbooksEnabled = argv.playbooks !== false
 
+    // Connect-time profile (#189927): the user's rules ride along on `initialize`, so a
+    // fresh client session knows them before its first tool call. Served from cache —
+    // never awaited here — and refreshed in the background when stale; a failed or
+    // signed-out refresh leaves the cached/static text in place. See mcp-profile.ts.
     const server = new Server(
       { name: "IRIS OS", version: "1.0.0" },
-      { capabilities: { resources: {}, tools: {} } },
+      { capabilities: { resources: {}, tools: {} }, instructions: instructionsNow() },
     )
+    if (!isFresh(readCache())) {
+      refreshInstructions(runIris)
+        .then((c) => {
+          // The SDK reads this field when it answers `initialize`, so a refresh that
+          // lands before the client connects (or before the next HTTP session) is used.
+          ;(server as unknown as { _instructions?: string })._instructions = c.text
+        })
+        .catch(() => {})
+    }
 
     // --- Resources ---
 
@@ -1690,5 +1718,33 @@ parts you did not mean to touch.`,
       process.on("SIGINT", resolve)
       process.on("SIGTERM", resolve)
     })
+  },
+})
+
+/**
+ * `iris mcp profile` — print exactly what `iris mcp serve` tells a connecting agent on
+ * initialize, and refresh the cache it is served from. This is the way to check what
+ * Codex / Claude / Cursor will "already know", and to warm the cache before the first
+ * connect (`iris mcp install` does the same).
+ */
+export const McpProfileCommand = cmd({
+  command: "profile",
+  describe: "show (and refresh) the rules IRIS hands every MCP client on connect",
+  builder: (yargs) =>
+    yargs
+      .option("cached", { type: "boolean", default: false, describe: "print the cached text without refreshing from Atlas" })
+      .option("json", { type: "boolean", default: false, describe: "machine-readable output" }),
+  async handler(argv) {
+    const entry = argv.cached ? readCache() : await refreshInstructions(runIris)
+    const text = entry?.text ?? instructionsNow()
+    if (argv.json) {
+      process.stdout.write(JSON.stringify({ instructions: text, chars: text.length, built_at: entry?.built_at ?? null, sources: entry?.sources ?? [], cache: cachePath() }, null, 2) + "\n")
+      return
+    }
+    process.stdout.write(text + "\n")
+    process.stderr.write(
+      `\n— ${text.length} chars · sources: ${entry?.sources?.join(", ") || "static guidance only"} · cache: ${cachePath()}\n` +
+        `  Edit your rules in ${localProfilePath()} or an Atlas item titled "${PROFILE_TITLE}" (or set profile_item in ~/.iris/config.json).\n`,
+    )
   },
 })
