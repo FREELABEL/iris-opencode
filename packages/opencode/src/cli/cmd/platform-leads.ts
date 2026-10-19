@@ -51,6 +51,7 @@ import {
 } from "./lead-mentions"
 import { firstArray } from "../../util/array"
 import { appleMailLedgerItems, fetchLeadMail, unansweredInbound } from "./comms-apple-mail"
+import { normalizeLeadQuery, rankLeads, searchFetchSize, typoMatches, typoProbes } from "./lead-search-rank"
 import {
   groupChannelBlindness,
   mergeRefreshIntoChecks,
@@ -783,8 +784,13 @@ const LeadsSearchCommand = cmd({
   async handler(args) {
     UI.empty()
 
+    // #189943: the query goes to the server as typed (trimmed, whitespace collapsed) — quotes,
+    // apostrophes and % are data, not syntax.
+    const query = normalizeLeadQuery(args.query)
+    const shown = Math.max(1, Number(args.limit) || 10)
+
     // Bug #4: validate non-empty query
-    if (!args.query || !args.query.trim()) {
+    if (!query) {
       prompts.log.error("Search query cannot be empty")
       prompts.log.info(dim(`iris leads search "haroon"`))
       process.exitCode = 1
@@ -813,7 +819,9 @@ const LeadsSearchCommand = cmd({
         ? null
         : ((args["user-id"] as number | undefined) ?? (await resolveUserId()))
 
-      const params = new URLSearchParams({ search: args.query, per_page: String(args.limit) })
+      // Over-fetch: with per_page=--limit the SERVER's page order chose which matches you saw, and
+      // a real "Darren Cummings" could lose its slot to handles containing "darren" (#189943).
+      const params = new URLSearchParams({ search: query, per_page: String(searchFetchSize(shown)) })
 
       // Both sources run CONCURRENTLY. The mention sweep is one API call against an
       // endpoint the CRM query does not touch, so it costs latency only when it is slower
@@ -823,7 +831,7 @@ const LeadsSearchCommand = cmd({
         args["crm-only"]
           ? Promise.resolve<MentionSearchResult>({ hits: [], searched: false, reason: "--crm-only" })
           : userId
-            ? searchBloqMentions(String(args.query), userId, Math.max(Number(args.limit) * 2, 25))
+            ? searchBloqMentions(query, userId, Math.max(shown * 2, 25))
             : Promise.resolve<MentionSearchResult>({ hits: [], searched: false, reason: "not signed in" }),
       ])
 
@@ -838,7 +846,8 @@ const LeadsSearchCommand = cmd({
       }
 
       const data = (await res.json()) as { data?: any[]; total?: number; meta?: { total?: number } }
-      let leads: any[] = firstArray(data?.data)
+      let leads: any[] = rankLeads(firstArray(data?.data), query)
+      let fuzzy = false
 
       // Whether these rows answer the WHOLE query or only part of it. The fallback below
       // is allowed to widen the search; it is not allowed to let the widened results
@@ -846,11 +855,11 @@ const LeadsSearchCommand = cmd({
       let crmMatch: CrmMatch = leads.length ? "exact" : "none"
 
       // Fallback: if multi-word query returned 0, try searching by last name only
-      if (leads.length === 0 && args.query.includes(" ")) {
-        const words = args.query.trim().split(/\s+/)
+      if (leads.length === 0 && query.includes(" ")) {
+        const words = query.split(/\s+/)
         for (const word of words) {
           if (word.length < 3) continue
-          const fallbackParams = new URLSearchParams({ search: word, per_page: String(args.limit) })
+          const fallbackParams = new URLSearchParams({ search: word, per_page: String(searchFetchSize(shown)) })
           const fbRes = await irisFetch(`/api/v1/leads?${fallbackParams}`)
           if (fbRes.ok) {
             const fbData = (await fbRes.json()) as { data?: any[] }
@@ -879,7 +888,28 @@ const LeadsSearchCommand = cmd({
         }
       }
 
-      const total = data?.total ?? data?.meta?.total ?? leads.length
+      // Still nothing: one typo-tolerant pass (#189943 — "haripurkah" for "Haripurkh" was 0).
+      // Search server-side by a prefix of each long word, keep rows within a small edit distance,
+      // and LABEL them — a close match is never presented as an exact one.
+      if (leads.length === 0) {
+        const pool: any[] = []
+        for (const probe of typoProbes(query)) {
+          const pr = await irisFetch(`/api/v1/leads?${new URLSearchParams({ search: probe, per_page: "100" })}`).catch(() => null)
+          if (pr?.ok) {
+            const pd = (await pr.json().catch(() => ({}))) as { data?: any[] }
+            for (const row of firstArray(pd?.data)) if (!pool.some((p) => p.id === row.id)) pool.push(row)
+          }
+        }
+        const close = typoMatches(pool, query)
+        if (close.length > 0) {
+          leads = close
+          crmMatch = "partial"
+          fuzzy = true
+        }
+      }
+
+      const total = fuzzy ? leads.length : (data?.total ?? data?.meta?.total ?? leads.length)
+      leads = leads.slice(0, shown)
 
       // Attribute each mention to a lead where we can. Unattributed hits are the
       // interesting half: a person written about in projects who has no CRM row at all.
@@ -911,8 +941,9 @@ const LeadsSearchCommand = cmd({
         // false` is not zero mentions, and a caller that cannot tell them apart will
         // publish "we have no record of this person" off a sweep that never ran.
         await writeJson({
-          query: args.query,
+          query,
           crm_match: crmMatch,
+          fuzzy,
           leads: evidence.map((e) => ({
             ...e.lead,
             evidence: e.evidence,
@@ -940,9 +971,11 @@ const LeadsSearchCommand = cmd({
       }
 
       if (leads.length > 0) {
-        if (crmMatch === "partial") {
+        if (fuzzy) {
+          prompts.log.warn(`No CRM lead matches "${query}" exactly — close spellings below (did you mean one of these?).`)
+        } else if (crmMatch === "partial") {
           prompts.log.warn(
-            `No CRM lead matches all of "${args.query}" — showing partial name matches below.`,
+            `No CRM lead matches all of "${query}" — showing partial name matches below.`,
           )
         }
         printDivider()
