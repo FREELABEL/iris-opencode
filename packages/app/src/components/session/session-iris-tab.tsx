@@ -3805,8 +3805,8 @@ export function SessionIrisTab() {
                           <span class="iris-atlas-list__chev" aria-hidden="true">
                             ›
                           </span>
-                          <h3 class="text-12-medium text-text-base">{list.name}</h3>
-                          <span class="font-mono tabular-nums text-11-regular text-text-weak">{list.items.length}</span>
+                          <h3 class="iris-atlas-list__title">{list.name}</h3>
+                          <span class="iris-atlas-list__count font-mono tabular-nums">{list.items.length}</span>
                         </button>
                         <button
                           type="button"
@@ -3822,6 +3822,7 @@ export function SessionIrisTab() {
                         </button>
                       </div>
                       <Show when={!isFolded(list)}>
+                        <div class="iris-atlas-list__items">
                         <For each={list.items}>
                           {(item) => {
                             const preview = createMemo(() => cardPreview(item.content, item.title))
@@ -3921,6 +3922,7 @@ export function SessionIrisTab() {
                             </Show>
                           </div>
                         </Show>
+                        </div>
                       </Show>
                     </section>
                   )}
