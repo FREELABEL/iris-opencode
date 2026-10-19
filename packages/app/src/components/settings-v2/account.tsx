@@ -32,6 +32,8 @@ export interface AccountState {
     paid: boolean | null
     /** The server's own name for the plan ("Free", "IRIS Solo"). Absent from older servers. */
     label?: string | null
+    /** When a trial ends, ISO-8601 (#189988). Absent from older servers. */
+    trialEndsAt?: string | null
     uncapped: boolean
     upgradeUrl: string | null
   }
@@ -568,7 +570,7 @@ export const SettingsAccountV2: Component = () => {
 
           <div class="settings-v2-section" ref={plansSection} data-action="account-plans">
             <h3 class="settings-v2-section-title">Plans</h3>
-            <PlanCards fetchJson={fetchJson} pricingUrl={upgradeUrl()} />
+            <PlanCards fetchJson={fetchJson} pricingUrl={upgradeUrl()} me={() => me()} />
           </div>
         </Show>
       </div>

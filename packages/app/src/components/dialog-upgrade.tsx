@@ -3,6 +3,7 @@ import { Button } from "@opencode-ai/ui/button"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { usePlatform } from "@/context/platform"
+import { planSummary, type SummaryInput } from "./plan-summary"
 
 export interface PlanOffer {
   slug: string
@@ -48,11 +49,21 @@ export function PlanCards(props: {
   pricingUrl: string
   /** Called after a plan opens in the browser (the dialog closes itself here). */
   onChosen?: () => void
+  /**
+   * The account, when the caller already has it (Settings). Without it the cards ask /iris/me
+   * themselves, so the dialog can say which plan you are on and what is left (#189988).
+   */
+  me?: () => SummaryInput | undefined
 }) {
   const platform = usePlatform()
   const [plans] = createResource(() =>
     props.fetchJson<PlansState>("/iris/plans").catch((): PlansState => ({ measured: false, plans: [] })),
   )
+  const [fetched] = createResource(
+    () => (props.me ? false : true),
+    () => props.fetchJson<SummaryInput>("/iris/me").catch(() => undefined),
+  )
+  const summary = () => planSummary(props.me ? props.me() : fetched())
 
   const open = (slug?: string) => {
     platform.openExternal(checkoutUrl(props.pricingUrl, slug))
@@ -61,6 +72,31 @@ export function PlanCards(props: {
 
   return (
     <div data-slot="iris-upgrade" class="flex flex-col gap-4">
+      <Show when={summary().plan || summary().allowance || summary().trial}>
+        <div
+          data-slot="iris-plan-summary"
+          class="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-v2-border-border-base px-4 py-3 text-[13px]"
+        >
+          <Show when={summary().plan}>
+            <span>
+              <span class="text-v2-text-text-weak">Current plan </span>
+              <b class="text-v2-text-text-strong" data-slot="iris-plan-summary-plan">
+                {summary().plan}
+              </b>
+            </span>
+          </Show>
+          <Show when={summary().allowance}>
+            <span class="tabular-nums text-v2-text-text-base" data-slot="iris-plan-summary-allowance">
+              {summary().allowance}
+            </span>
+          </Show>
+          <Show when={summary().trial}>
+            <span class="text-v2-icon-icon-accent font-medium" data-slot="iris-plan-summary-trial">
+              {summary().trial}
+            </span>
+          </Show>
+        </div>
+      </Show>
       <Show when={!plans.loading} fallback={<div class="text-v2-text-text-weak py-8 text-center">Loading plans…</div>}>
         <Show
           when={plans()?.measured && plans()!.plans.length > 0}
