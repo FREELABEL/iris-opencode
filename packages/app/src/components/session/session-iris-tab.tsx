@@ -1778,15 +1778,24 @@ export function SessionIrisTab() {
   /** The face editor (#189806): which card, where it is on screen, and the field a key named. */
   const [quick, setQuick] = createSignal<{ itemId: number; anchor: { left: number; top: number; bottom: number }; field?: QuickField } | null>(null)
   const [quickNote, setQuickNote] = createSignal<string | null>(null)
-  const [quickSchema] = createResource(
-    () => (quick() && activeBloq() != null ? Number(activeBloq()) : undefined),
-    async (b) => {
-      try {
-        return (await (await doFetch(`/iris/card-schema/${b}`)).json()) as CardSchema
-      } catch {
-        return undefined
-      }
-    },
+  /*
+   * The board's status/priority vocabulary, fetched the first time the editor opens on a board.
+   * A plain signal, not a resource: a resource read under the panel's Suspense blanked the whole
+   * board behind the editor while it loaded.
+   */
+  const [quickSchema, setQuickSchema] = createSignal<{ bloq: number; schema?: CardSchema }>()
+  createEffect(
+    on(
+      () => (quick() && activeBloq() != null ? Number(activeBloq()) : undefined),
+      (b) => {
+        if (b === undefined || quickSchema()?.bloq === b) return
+        setQuickSchema({ bloq: b })
+        doFetch(`/iris/card-schema/${b}`)
+          .then((r) => r.json() as Promise<CardSchema>)
+          .then((schema) => quickSchema()?.bloq === b && setQuickSchema({ bloq: b, schema }))
+          .catch(() => {})
+      },
+    ),
   )
   const quickCard = () => {
     const q = quick()
@@ -2835,8 +2844,8 @@ export function SessionIrisTab() {
             card={card()}
             anchor={quick()!.anchor}
             field={quick()!.field}
-            status={quickSchema.latest?.status}
-            priority={quickSchema.latest?.priority}
+            status={quickSchema()?.schema?.status}
+            priority={quickSchema()?.schema?.priority}
             boardLabels={labelsInUse()}
             now={now()}
             note={quickNote()}

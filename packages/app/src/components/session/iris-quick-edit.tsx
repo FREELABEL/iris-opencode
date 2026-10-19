@@ -8,7 +8,8 @@
  * card goes back and the panel says why — a face that shows a status that did not save is the
  * one thing this must never do.
  */
-import { createSignal, For, onCleanup, onMount, Show } from "solid-js"
+import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from "solid-js"
+import { Portal } from "solid-js/web"
 import { WRITABLE_STATUSES, type SchemaOption } from "./iris-card-editor"
 import type { QuickField, QuickPatch } from "./iris-atlas-view"
 
@@ -63,22 +64,46 @@ export function IrisQuickEdit(props: {
   const toggleLabel = (l: string) =>
     props.onSave({ labels: labels().includes(l) ? labels().filter((x) => x !== l) : [...labels(), l] })
 
+  // The section the key named gets focus; a right-click focuses the first choice.
+  const focusField = () =>
+    el
+      ?.querySelector<HTMLElement>(
+        props.field ? `[data-quick="${props.field}"] button, [data-quick="${props.field}"] input` : "button",
+      )
+      ?.focus()
   onMount(() => {
-    // The section the key named gets focus; a right-click focuses the first choice.
-    const first = el?.querySelector<HTMLElement>(
-      props.field ? `[data-quick="${props.field}"] button, [data-quick="${props.field}"] input` : "button",
-    )
-    queueMicrotask(() => first?.focus())
+    queueMicrotask(focusField)
     const away = (e: MouseEvent) => {
       if (el && !el.contains(e.target as Node)) props.onClose()
     }
+    // Escape from anywhere while it is open, not only from inside it: focus can leave it.
+    const esc = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return
+      e.preventDefault()
+      e.stopPropagation()
+      props.onClose()
+    }
+    document.addEventListener("keydown", esc, true)
     // Next tick: the right-click that opened it must not close it.
     const t = setTimeout(() => document.addEventListener("mousedown", away), 0)
     onCleanup(() => {
       clearTimeout(t)
       document.removeEventListener("mousedown", away)
+      document.removeEventListener("keydown", esc, true)
     })
   })
+  // The board's own vocabulary arrives after the editor opens and replaces the chips; the one
+  // that had focus is gone with them. Put focus back rather than strand it on the page.
+  createEffect(
+    on(
+      () => [statuses(), priorities()],
+      () =>
+        queueMicrotask(() => {
+          if (el && !el.contains(document.activeElement)) focusField()
+        }),
+      { defer: true },
+    ),
+  )
 
   // Below the card when there is room, above it when there is not.
   const style = () => {
@@ -89,7 +114,10 @@ export function IrisQuickEdit(props: {
       : { left: `${left}px`, bottom: `${window.innerHeight - props.anchor.top + 4}px` }
   }
 
+  // On document.body: the panel is a containing block for `position: fixed` (it is transformed),
+  // so drawn inside it the editor landed hundreds of pixels from the card it belongs to.
   return (
+    <Portal>
     <div
       ref={el}
       class="iris-quick"
@@ -97,13 +125,7 @@ export function IrisQuickEdit(props: {
       aria-label={`Change ${props.card.title}`}
       style={style()}
       data-prevent-autofocus
-      onKeyDown={(e) => {
-        e.stopPropagation()
-        if (e.key === "Escape") {
-          e.preventDefault()
-          props.onClose()
-        }
-      }}
+      onKeyDown={(e) => e.stopPropagation()}
     >
       <div class="iris-quick__title truncate">{props.card.title}</div>
 
@@ -208,5 +230,6 @@ export function IrisQuickEdit(props: {
         </p>
       </Show>
     </div>
+    </Portal>
   )
 }
