@@ -17,6 +17,7 @@ import {
   readWindowsOutlook,
   uniqueAttendees,
 } from "./calendar-search"
+import { forEachAccount, intersectFreeSlots, listGoogleCalendarConnections, type AccountResult } from "./calendar-accounts"
 import { executeIntegrationCall } from "./platform-run"
 import { firstArray } from "../../util/array"
 
@@ -669,11 +670,40 @@ const CalendarFreeCommand = cmd({
     }
 
     let result: any
-    try {
-      result = await calExec("find_free_slots", params, getAccountOpts(args))
-    } catch (err: any) {
-      reportCalendarFailure(err, "Failed to find free slots")
-      return
+    // #189944: free/busy is a READ. With several accounts it used to refuse until you picked one
+    // with --account; now it asks every account and keeps only time that is free on all of them.
+    const acctOpts = getAccountOpts(args)
+    let accountReport: AccountResult<any>[] | null = null
+    if (!acctOpts.account && !acctOpts.integrationId) {
+      let conns: any[] = []
+      try {
+        conns = await listGoogleCalendarConnections()
+      } catch {
+        /* fall through to the single-account call, which reports its own failure */
+      }
+      if (conns.length === 1) acctOpts.integrationId = Number(conns[0].id)
+      if (conns.length > 1) {
+        accountReport = await forEachAccount(conns, (integrationId) => calExec("find_free_slots", params, { integrationId }))
+        const okRs = accountReport.filter((r) => r.ok)
+        result = okRs.length
+          ? {
+              success: true,
+              free_slots: intersectFreeSlots(okRs.map((r) => firstArray(r.value?.free_slots))),
+              busy_times: okRs.flatMap((r) => firstArray(r.value?.busy_times)),
+              time_range: okRs[0].value?.time_range,
+              accounts: accountReport.map((r) => ({ account: r.label, integration_id: Number(r.conn.id), ok: r.ok, error: r.error })),
+              partial: okRs.length < accountReport.length,
+            }
+          : { success: false, error: `no calendar account could be read — ${accountReport.map((r) => `${r.label}: ${r.error}`).join("; ")}`, accounts: accountReport.map((r) => ({ account: r.label, ok: false, error: r.error })) }
+      }
+    }
+    if (!result) {
+      try {
+        result = await calExec("find_free_slots", params, acctOpts)
+      } catch (err: any) {
+        reportCalendarFailure(err, "Failed to find free slots")
+        return
+      }
     }
 
     if (args.json) {
@@ -686,6 +716,13 @@ const CalendarFreeCommand = cmd({
     if (!result?.success) {
       reportCalendarFailure(result?.error, "Failed to find free slots")
       return
+    }
+
+    if (accountReport) {
+      const okN = accountReport.filter((r) => r.ok).length
+      console.log(`  ${dim(`Free on all of ${okN} account(s) that answered (of ${accountReport.length}):`)}`)
+      for (const r of accountReport) console.log(`    ${r.ok ? success("✓") : "✗"} ${r.label}${r.ok ? "" : dim(` — ${r.error} (NOT checked: a slot below may be busy here)`)}`)
+      console.log()
     }
 
     const slots: any[] = firstArray(result.free_slots)

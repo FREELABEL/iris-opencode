@@ -127,3 +127,48 @@ describe("platform probe timeout (#178279)", () => {
     expect(PLATFORM_PROBE_TIMEOUT_MS).toBeGreaterThanOrEqual(15000)
   })
 })
+
+// ============================================================================
+// #189944 — "Google Calendar connected + verified" from a probe that never called Google
+// ============================================================================
+import { googleCalendarHealth } from "../../src/cli/cmd/platform-leads"
+import { readFileSync } from "node:fs"
+import { join } from "node:path"
+
+describe("Google Calendar health (#189944)", () => {
+  test("the Mac's calendar store answering is NOT Google Calendar being verified", () => {
+    const src = readFileSync(join(import.meta.dir, "../../src/cli/cmd/platform-leads.ts"), "utf8")
+    expect(src).not.toMatch(/bridgeChannelHealth\(\s*"Google Calendar"/)
+  })
+
+  test("verified only when every connected account answers a real call", async () => {
+    const h = await googleCalendarHealth({
+      listConnections: async () => [{ id: 1, account_email: "a@x.com" }, { id: 85, account_email: "alex@freelabel.net" }],
+      probe: async (id) => (id === 85 ? { success: false, error: "google-calendar #85 no active connection" } : { success: true, calendars: [] }),
+    })
+    expect(h.ok).toBe(false)
+    expect(h.error).toContain("alex@freelabel.net")
+    expect(h.error).toContain("no active connection")
+  })
+
+  test("could not even list connections → not verified, says why", async () => {
+    const h = await googleCalendarHealth({
+      listConnections: async () => {
+        throw new Error("HTTP 500")
+      },
+      probe: async () => ({ success: true }),
+    })
+    expect(h.ok).toBe(false)
+    expect(h.status).toBe("error")
+    expect(h.error).toContain("could not list")
+  })
+
+  test("all accounts healthy → verified", async () => {
+    const h = await googleCalendarHealth({
+      listConnections: async () => [{ id: 1, account_email: "a@x.com" }],
+      probe: async () => ({ success: true, calendars: [] }),
+    })
+    expect(h.ok).toBe(true)
+    expect(h.status).toBe("verified")
+  })
+})

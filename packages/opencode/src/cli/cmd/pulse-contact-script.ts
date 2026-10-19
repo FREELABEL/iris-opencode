@@ -12,6 +12,7 @@ import { irisFetch, BRIDGE_URL, getBridgeToken } from "./iris-api"
 import { executeIntegrationCall } from "./platform-run"
 import { emailChannelLabel, readCalendarEvents, threadInWindow } from "./platform-leads-honesty"
 import { fetchLeadMail } from "./comms-apple-mail"
+import { forEachAccount, listGoogleCalendarConnections, mergeAccountEvents } from "./calendar-accounts"
 
 /** One channel the pulse lists — the shape the handler has always rendered and emitted as JSON. */
 export interface Channel {
@@ -75,16 +76,35 @@ function reading(channels: Channel[], provenance: string[]): ContactReading {
 export async function fetchLeadCalendarEvents(
   lead: { name?: string; email?: string; emails?: string[]; id: number },
   opts: { days?: number; futureDays?: number } = {},
-): Promise<{ past: any[]; upcoming: any[] }> {
+  deps: { listConnections?: () => Promise<any[]>; call?: (params: any, opts: { integrationId?: number }) => Promise<any> } = {},
+): Promise<{ past: any[]; upcoming: any[]; unread: string[] }> {
   const pastDays = opts.days ?? 30
   const futureDays = opts.futureDays ?? 30
   const now = new Date()
   const timeMin = new Date(now.getTime() - pastDays * 86400000).toISOString()
   const timeMax = new Date(now.getTime() + futureDays * 86400000).toISOString()
 
-  const result = await executeIntegrationCall("google-calendar", "get_events", { time_min: timeMin, time_max: timeMax, max_results: 2500 }, {})
-  // Throws when no calendar was read (#189155) — an unread calendar is "not measured", never 0.
-  const events: any[] = readCalendarEvents(result)
+  const params = { time_min: timeMin, time_max: timeMax, max_results: 2500 }
+  // #189944: a lead's meetings are a READ — ask every connected account and merge, instead of the
+  // single call that the API refused outright with 5 accounts ("choose which with --account").
+  let conns: any[] = []
+  try {
+    conns = await (deps.listConnections ?? listGoogleCalendarConnections)()
+  } catch {
+    /* fall back to the single call below, which reports its own failure */
+  }
+  const call = deps.call ?? ((p: any, o: any) => executeIntegrationCall("google-calendar", "get_events", p, o))
+  let events: any[]
+  let unread: string[] = []
+  if (conns.length > 1) {
+    const merged = mergeAccountEvents(await forEachAccount(conns, async (integrationId) => readCalendarEvents(await call(params, { integrationId }))))
+    // Throws when no calendar was read (#189155) — an unread calendar is "not measured", never 0.
+    if (merged.read === 0) throw new Error(`not measured — no calendar account could be read (${merged.failed.join("; ").slice(0, 200)})`)
+    events = merged.events
+    unread = merged.failed
+  } else {
+    events = readCalendarEvents(await call(params, conns.length === 1 ? { integrationId: Number(conns[0].id) } : {}))
+  }
 
   // Client-side filter: match lead name or ANY email in summary/description/attendees
   const nameL = (lead.name ?? "").toLowerCase()
@@ -105,7 +125,7 @@ export async function fetchLeadCalendarEvents(
   }
   past.sort((a, b) => new Date(b.start || "").getTime() - new Date(a.start || "").getTime())
   upcoming.sort((a, b) => new Date(a.start || "").getTime() - new Date(b.start || "").getTime())
-  return { past, upcoming }
+  return { past, upcoming, unread }
 }
 
 // ── sources ─────────────────────────────────────────────────────────────────
@@ -315,14 +335,19 @@ const calendarSource: Source<ContactQuery, ContactReading> = {
       q.timeoutMs,
       "Calendar",
     )
-      .then(({ past, upcoming }) => {
+      .then(({ past, upcoming, unread }) => {
         const allEvents = [...upcoming, ...past].map((ev) => ({
           summary: ev.summary || "(no title)",
           date: ev.start || ev.start_time || "",
           status: new Date(ev.start || ev.start_time || "") >= new Date() ? "upcoming" : "past",
           location: ev.location || "",
         }))
-        channels.push({ name: "Meetings", messages: allEvents })
+        channels.push({
+          name: "Meetings",
+          messages: allEvents,
+          // Some accounts unreadable: the list is real but incomplete — say which, on the label.
+          ...(unread.length ? { label: `Meetings (${unread.length} calendar account(s) unreadable: ${unread.join("; ").slice(0, 160)})` } : {}),
+        })
       })
       .catch((e) => {
         channels.push({ name: "Meetings", messages: [], error: e.message })

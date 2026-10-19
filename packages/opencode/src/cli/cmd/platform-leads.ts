@@ -52,6 +52,7 @@ import {
 import { firstArray } from "../../util/array"
 import { appleMailLedgerItems, fetchLeadMail, unansweredInbound } from "./comms-apple-mail"
 import { normalizeLeadQuery, rankLeads, searchFetchSize, typoMatches, typoProbes } from "./lead-search-rank"
+import { calendarHealthFrom, forEachAccount, listGoogleCalendarConnections } from "./calendar-accounts"
 import {
   groupChannelBlindness,
   mergeRefreshIntoChecks,
@@ -2695,6 +2696,40 @@ async function bridgeChannelHealth(name: string, path: string): Promise<ChannelH
   }
 }
 
+/**
+ * Google Calendar, checked the only way that means anything: a real Google API call per connected
+ * account (#189944). This used to be the bridge's /api/calendar/events — the MAC's Calendar store —
+ * printed as "Google Calendar connected + verified" next to a revoked Google account.
+ */
+export async function googleCalendarHealth(
+  deps: {
+    listConnections?: () => Promise<any[]>
+    probe?: (integrationId: number) => Promise<any>
+  } = {},
+): Promise<ChannelHealth> {
+  const list = deps.listConnections ?? listGoogleCalendarConnections
+  const probe =
+    deps.probe ??
+    (async (integrationId: number) => {
+      const { executeIntegrationCall } = await import("./platform-run")
+      return executeIntegrationCall("google-calendar", "get_calendars", {}, { integrationId })
+    })
+  let conns: any[]
+  try {
+    conns = await list()
+  } catch (e: any) {
+    return {
+      name: "Google Calendar",
+      ok: false,
+      status: "error",
+      error: `could not list calendar connections (${String(e?.message ?? e).slice(0, 120)}) — not verified`,
+      hint: "check: iris integrations list",
+    }
+  }
+  const h = calendarHealthFrom(await forEachAccount(conns, probe))
+  return { name: h.name, ok: h.ok, status: h.status, error: h.error, hint: h.hint }
+}
+
 export async function runChannelHealthChecks(): Promise<ChannelHealth[]> {
   const results: ChannelHealth[] = []
 
@@ -2732,8 +2767,11 @@ export async function runChannelHealthChecks(): Promise<ChannelHealth[]> {
       }
     })(),
 
-    // Google Calendar — verify via bridge, over the endpoint pulse actually reads
-    bridgeChannelHealth("Google Calendar", "/api/calendar/events?days=1&limit=1"),
+    // Google Calendar — a real per-account Google call (#189944).
+    googleCalendarHealth(),
+
+    // This Mac's Calendar store, through the bridge. It is NOT Google Calendar and is labelled so.
+    bridgeChannelHealth("Mac Calendar", "/api/calendar/events?days=1&limit=1"),
 
     // iMessage — probe the bridge, because that is what pulse reads iMessage
     // through. Checking the local Messages DB from this process instead proved

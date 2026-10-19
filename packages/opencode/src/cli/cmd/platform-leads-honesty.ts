@@ -28,6 +28,7 @@ const CHANNEL_SHORT_NAMES: Record<string, string> = {
   gmail: "gmail",
   "google calendar": "calendar",
   calendar: "calendar",
+  "mac calendar": "maccalendar",
   imessage: "imessage",
   whatsapp: "whatsapp",
   "apple mail": "applemail",
