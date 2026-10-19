@@ -153,19 +153,30 @@ function readJsonText(text: string): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined
 }
 
-// The model rail is the IRIS Desktop's own provider file (#188596): same models, capabilities,
-// default and endpoint, so the TUI never offers a different list than the app. Copied from
-// iris/1.18.23 packages/desktop/src-tauri/resources/iris-provider.json — release-iris2.yml
-// refreshes it from that branch on every build. Only the key and trace header are added here.
-function irisProviderConfig(traceId: string): string {
+// The model rail matches IRIS Desktop (#188596). The models are the server's live list, the
+// desktop's own rule: only `available` models, so switching one off on the server removes it here
+// with no release (iris-models.ts). The desktop's provider file — iris/1.18.23
+// packages/desktop/src-tauri/resources/iris-provider.json, refreshed by release-iris2.yml on every
+// build — supplies the default, the endpoint, and the offline fallback list.
+async function irisProviderConfig(traceId: string): Promise<string> {
   const sdk = readSdkEnv()
   const iris = irisDesktopProvider.provider.iris
   const apiURL = process.env.IRIS_API_URL ?? sdk.IRIS_API_URL
   const baseURL = apiURL ? apiURL + "/api/v6/openai" : iris.options.baseURL
+  const { loadIrisModels, modelsFromSeed } = await import("./iris-models")
+  const { models } = await loadIrisModels({
+    baseURL,
+    apiKey: process.env.IRIS_API_KEY,
+    cacheFile: path.join(process.env.XDG_CACHE_HOME ?? path.join(os.homedir(), ".cache"), "iris", "iris-models.json"),
+    seed: modelsFromSeed(iris.models),
+  })
+  // The desktop default, unless the server has switched it off — then the first model it offers.
+  const seedDefault = irisDesktopProvider.model.replace(/^iris\//, "")
+  const model = `iris/${seedDefault in models ? seedDefault : Object.keys(models)[0]}`
   return JSON.stringify({
     ...v1Carryover(),
     $schema: "https://opencode.ai/config.json",
-    model: irisDesktopProvider.model,
+    model,
     // v2 adds its own free `opencode/*` models; the desktop file hides them. Its enabled_providers
     // (iris only) is NOT applied: it would also hide a provider the user connected themselves.
     disabled_providers: irisDesktopProvider.disabled_providers,
@@ -199,10 +210,7 @@ function irisProviderConfig(traceId: string): string {
           apiKey: "{env:IRIS_API_KEY}",
           headers: { "X-Iris-Trace-Id": traceId },
         },
-        // The desktop file says `tools`; the v1 model schema v2 migrates from calls it `tool_call`.
-        models: Object.fromEntries(
-          Object.entries(iris.models).map(([id, { tools, ...model }]) => [id, { ...model, tool_call: tools }]),
-        ),
+        models,
       },
     },
   })
@@ -321,7 +329,7 @@ if (toV2) {
   process.once("exit", end)
 
   linkV1Files()
-  process.env.OPENCODE_CONFIG_CONTENT ??= irisProviderConfig(traceId)
+  process.env.OPENCODE_CONFIG_CONTENT ??= await irisProviderConfig(traceId)
 
   // ── Hand off to v2 (A5) ───────────────────────────────────────────────────
   // No process.exit() after this import: v2 STARTS its CLI via NodeRuntime.runMain,
