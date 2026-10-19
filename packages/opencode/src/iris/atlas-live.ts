@@ -19,7 +19,14 @@
 import { irisFetch, resolveUserId, resolveToken, FL_API } from "./platform"
 
 export const ATLAS_POLL_MS = 10_000
-const PUSHER_KEY = process.env.IRIS_PUSHER_KEY ?? "f585d980668c9a8369ef"
+/*
+ * The key fl-api SIGNS with, not the one in the web app's config. Elon's nuxt.config falls
+ * back to f585d980…, an older Pusher app: a socket on that app with a signature for this one is
+ * a pusher:error, and the board silently stays on polling. Measured 2026-10-19 — fl-api's auth
+ * returns `e7fd19c0…:<sig>`, that key subscribes on us2 (4001 "not in this cluster" on mt1, us3,
+ * eu, ap1), and a write reaches the socket in ~2 s.
+ */
+const PUSHER_KEY = process.env.IRIS_PUSHER_KEY ?? "e7fd19c071bd376122c1"
 const PUSHER_CLUSTER = process.env.IRIS_PUSHER_CLUSTER ?? "us2"
 
 interface LiteItem {
@@ -173,6 +180,12 @@ function connectPusher(bloqId: number, onEvent: () => void, onStatus: (s: "conne
       return
     }
     if (e.event === "pusher_internal:subscription_succeeded") return onStatus("connected")
+    // A wrong key, a signature for another app, a cluster mismatch: Pusher answers with an error
+    // and nothing else. Say "refused" so the panel's indicator does not claim an instant board.
+    if (e.event === "pusher:error") {
+      onStatus("refused")
+      return ws.close()
+    }
     if (e.channel === channel && e.event && !e.event.startsWith("pusher")) onEvent()
   }
   return {
