@@ -132,8 +132,8 @@ describe("suggestMerges", () => {
 
   test("suggests cards sharing an email even when names differ", () => {
     const s = suggestMerges([
-      { name: "rashadbernard", handle: "rashadbernard4@gmail.com" },
-      { name: "R. Bernard", handle: "rashadbernard4@gmail.com" },
+      { name: "rashadbernard", handle: "person2@example.com" },
+      { name: "R. Bernard", handle: "person2@example.com" },
     ])
     expect(s.length).toBeGreaterThan(0)
     expect(s[0].reason).toMatch(/handle|email/i)

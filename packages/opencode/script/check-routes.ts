@@ -15,7 +15,7 @@
  * plausible-looking result. Only a static check sees it.
  *
  * HOW IT WORKS. Extracts every irisFetch() path from src/cli/cmd and matches it against a
- * committed snapshot of both services' real route tables (php artisan route:list --json).
+ * snapshot of both services' real route tables (php artisan route:list --json).
  * Offline, deterministic, no auth, no network, no fixtures, and immune to the failure that
  * bit the first runtime attempt at this — grepping output for "404" matched item IDs inside
  * the response data. This never reads a payload.
@@ -31,12 +31,47 @@
  */
 import { readFileSync, readdirSync, existsSync } from "fs"
 import { join, dirname } from "path"
+import { homedir } from "os"
 import { fileURLToPath } from "url"
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const CMD_DIR = join(HERE, "..", "src", "cli", "cmd")
-const SNAPSHOT = join(HERE, "routes.snapshot.json")
 const BASELINE = join(HERE, "routes.baseline.json")
+
+/**
+ * WHERE THE SNAPSHOT LIVES (#189851). The snapshot is the FULL route table of fl-api and
+ * iris-api, admin and internal routes included. That is far more than the CLI calls. This
+ * repo is public, so the snapshot is no longer committed. In order, it is read from:
+ *
+ *   1. $IRIS_ROUTES_SNAPSHOT                                  an explicit path
+ *   2. script/routes.snapshot.json                            gitignored; `routes:refresh` writes it
+ *   3. <workspace>/ops/iris-cli/routes.snapshot.json          the private workspace repo
+ *      (<workspace> = $IRIS_PROJECT_ROOT, else ~/sites/freelabel, the same as build-capabilities)
+ *
+ * If none exists the check skips with a warning, the same as the capability check without a
+ * workspace. A contributor without the private repo must still be able to push. Set
+ * IRIS_ROUTES_REQUIRED=1 to turn a missing snapshot into a failure.
+ */
+const PROJECT = process.env.IRIS_PROJECT_ROOT || join(homedir(), "sites/freelabel")
+const CANDIDATES = [
+  process.env.IRIS_ROUTES_SNAPSHOT,
+  join(HERE, "routes.snapshot.json"),
+  join(PROJECT, "ops", "iris-cli", "routes.snapshot.json"),
+].filter((p): p is string => !!p)
+const SNAPSHOT = CANDIDATES.find((p) => existsSync(p))
+
+if (!SNAPSHOT) {
+  const msg =
+    `routes:check — no route snapshot found. Looked in:\n` +
+    CANDIDATES.map((p) => `    ${p}`).join("\n") +
+    `\n  Get one with \`bun run routes:refresh\` (needs Railway access), or set IRIS_PROJECT_ROOT to the workspace checkout.`
+  if (process.env.IRIS_ROUTES_REQUIRED === "1") {
+    console.error(msg)
+    process.exit(1)
+  }
+  console.warn(`\n  SKIPPED — ${msg}\n`)
+  process.exit(0)
+}
 
 interface Route { method: string; uri: string; service: string }
 interface Site { method: string; path: string; file: string }
@@ -106,7 +141,7 @@ for (const s of sites) {
 const fresh = [...seen.entries()].filter(([k]) => !allowed.has(k))
 const healed = baseline.allowed.filter((a) => !seen.has(`${a.method} ${a.path}`))
 
-console.log(`checked ${sites.length} call sites against ${snapshot.routes.length} routes`)
+console.log(`checked ${sites.length} call sites against ${snapshot.routes.length} routes (${SNAPSHOT})`)
 console.log(`  dead: ${seen.size}   baselined: ${allowed.size}   new: ${fresh.length}`)
 
 if (healed.length) {

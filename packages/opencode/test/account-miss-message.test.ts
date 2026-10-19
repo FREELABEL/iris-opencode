@@ -14,7 +14,7 @@ import { describeAccountMiss } from "../src/cli/cmd/platform-run"
  */
 const GMAIL = [
   { id: 3, account_email: null, name: "Gmail" },
-  { id: 14, account_email: "admin@vanguardhcs.com", name: "Gmail" },
+  { id: 14, account_email: "admin@firm-e.example.com", name: "Gmail" },
 ]
 
 describe("describeAccountMiss", () => {
@@ -23,7 +23,7 @@ describe("describeAccountMiss", () => {
     expect(m).toContain("2 'gmail' connections exist")
     expect(m).toContain("#3")
     expect(m).toContain("#14")
-    expect(m).toContain("admin@vanguardhcs.com")
+    expect(m).toContain("admin@firm-e.example.com")
   })
 
   test("names the rows that can never match, and why", () => {
