@@ -88,11 +88,36 @@
 .iris-delegate__target[data-tone="off"] {
   opacity: 0.55;
 }
-.iris-delegate__note {
+.iris-delegate__note,
+.iris-delegate__intent {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
   font-size: 11px;
-  padding-top: 2px;
+  line-height: 16px;
+  padding-top: 3px;
   color: var(--text-weak);
 }
-.iris-delegate__note[data-ok="false"] {
+.iris-delegate__note [data-component="icon"],
+.iris-delegate__intent [data-component="icon"] {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+/* The outcome's colour sits on the icon only; the words stay readable grey. */
+.iris-delegate__note[data-outcome="assigned"] [data-component="icon"],
+.iris-delegate__note[data-outcome="sent"] [data-component="icon"] {
+  color: var(--icon-success-base, #4a9);
+}
+.iris-delegate__note[data-outcome="queued"] [data-component="icon"] {
+  color: var(--icon-warning-base, #c8a349);
+}
+.iris-delegate__note[data-outcome="already"] [data-component="icon"] {
+  color: var(--icon-weak-base, #888);
+}
+.iris-delegate__note[data-outcome="failed"] {
   color: var(--text-critical-base, #c44);
+}
+/* While held over a row: the action, in the text colour — a promise, not yet a result. */
+.iris-delegate__intent {
+  color: var(--text-base);
 }

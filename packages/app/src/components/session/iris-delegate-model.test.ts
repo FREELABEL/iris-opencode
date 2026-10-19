@@ -4,6 +4,7 @@ import {
   alreadyAssigned,
   cardFromDrag,
   dragPayload,
+  dropIntent,
   handoffPrompt,
   isImportedPerson,
   openWork,
@@ -96,6 +97,14 @@ describe("Delegate › people are not agents", () => {
       { id: 709, description: undefined },
     ]
     expect(rows.filter((a) => !isImportedPerson(a)).map((a) => a.id)).toEqual([750, 709])
+  })
+})
+
+describe("Delegate › what a drop will do", () => {
+  test("an agent takes it onto its list; a session starts now, or queues when busy", () => {
+    expect(dropIntent({ kind: "agent" })).toBe("assigned")
+    expect(dropIntent({ kind: "session", busy: false })).toBe("sent")
+    expect(dropIntent({ kind: "session", busy: true })).toBe("queued")
   })
 })
 

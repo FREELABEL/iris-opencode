@@ -1,10 +1,12 @@
 import { createEffect, createMemo, createResource, createSignal, For, on, Show } from "solid-js"
+import { Icon, type IconProps } from "@opencode-ai/ui/icon"
 import { useLanguage } from "@/context/language"
 import "./iris-delegate-rail.css"
 import {
   agentTone,
   alreadyAssigned,
   cardFromDrag,
+  dropIntent,
   handoffPrompt,
   isImportedPerson,
   openWork,
@@ -13,6 +15,7 @@ import {
   type AgentTaskRow,
   type DelegateAgent,
   type DelegateSession,
+  type DropOutcome,
   type HandoffCard,
 } from "./iris-delegate-model"
 
@@ -27,7 +30,21 @@ import {
  */
 type AgentsPayload = { measured: boolean; reason?: string | null; agents: DelegateAgent[] }
 type TasksPayload = { measured: boolean; reason?: string | null; tasks: AgentTaskRow[] }
-type Note = { ok: boolean; text: string }
+type Note = { outcome: DropOutcome; text: string }
+
+/** One icon per outcome — the note under a row, and the preview while a card is held over it. */
+const OUTCOME_ICON: Record<DropOutcome, IconProps["name"]> = {
+  assigned: "checklist",
+  sent: "send",
+  queued: "clock",
+  already: "circle-check",
+  failed: "warning",
+}
+const INTENT_KEY = {
+  assigned: "iris.delegate.intent.assigned",
+  sent: "iris.delegate.intent.sent",
+  queued: "iris.delegate.intent.queued",
+} as const
 
 export function IrisDelegateRail(props: {
   doFetch: (path: string, init?: RequestInit) => Promise<Response>
@@ -116,7 +133,7 @@ export function IrisDelegateRail(props: {
         .then((r) => r.json())
         .catch(() => null)) as { tasksMeasured?: boolean; tasks?: { agentId?: number; done: boolean }[] } | null
       if (current?.tasksMeasured && alreadyAssigned(current.tasks ?? [], agent.id)) {
-        note(key, { ok: true, text: language.t("iris.delegate.agent.already", { id: String(itemId) }) })
+        note(key, { outcome: "already", text: language.t("iris.delegate.agent.already", { id: String(itemId) }) })
         return
       }
       const res = await props.doFetch(`/iris/item/${itemId}/tasks`, {
@@ -126,15 +143,16 @@ export function IrisDelegateRail(props: {
       })
       const r = (await res.json().catch(() => null)) as { ok?: boolean; reason?: string } | null
       if (!res.ok || !r?.ok) throw new Error(r?.reason || `HTTP ${res.status}`)
-      note(key, { ok: true, text: language.t("iris.delegate.agent.assigned", { id: String(itemId) }) })
-      void readLoad(agent.id)
+      note(key, { outcome: "assigned", text: language.t("iris.delegate.agent.assigned", { id: String(itemId) }) })
       props.onChanged()
     } catch (err) {
       note(key, {
-        ok: false,
+        outcome: "failed",
         text: language.t("iris.delegate.agent.failed", { reason: err instanceof Error ? err.message : String(err) }),
       })
     } finally {
+      // Re-read the queue whatever happened: after a failure the count is the thing in doubt.
+      void readLoad(agent.id)
       setPending(null)
     }
   }
@@ -150,18 +168,42 @@ export function IrisDelegateRail(props: {
     try {
       await props.sendToSession(sessionID, handoffPrompt(card))
       note(key, {
-        ok: true,
+        outcome: wasBusy ? "queued" : "sent",
         text: language.t(wasBusy ? "iris.delegate.session.queued" : "iris.delegate.session.sent", { id: String(itemId) }),
       })
     } catch (err) {
       note(key, {
-        ok: false,
+        outcome: "failed",
         text: language.t("iris.delegate.session.failed", { reason: err instanceof Error ? err.message : String(err) }),
       })
     } finally {
       setPending(null)
     }
   }
+
+  const Outcome = (p: { outcome: DropOutcome; text: string; class: string; live?: boolean }) => (
+    <p class={p.class} data-outcome={p.outcome} role={p.live ? "status" : undefined}>
+      <Icon name={OUTCOME_ICON[p.outcome]} size="small" aria-hidden="true" />
+      <span class="min-w-0">{p.text}</span>
+    </p>
+  )
+  /** The note after a drop, or — while a card is held over this row — what letting go will do. */
+  const RowFoot = (p: { key: string; intent: DropOutcome }) => (
+    <Show
+      when={over() === p.key}
+      fallback={
+        <Show when={notes()[p.key]}>
+          {(n) => <Outcome outcome={n().outcome} text={n().text} class="iris-delegate__note" live />}
+        </Show>
+      }
+    >
+      <Outcome
+        outcome={p.intent}
+        text={language.t(INTENT_KEY[p.intent as keyof typeof INTENT_KEY])}
+        class="iris-delegate__intent"
+      />
+    </Show>
+  )
 
   const toneText = (agent: DelegateAgent) => {
     const open = openOf(agent.id)
@@ -224,13 +266,7 @@ export function IrisDelegateRail(props: {
                   <p class="text-11-regular text-text-weak truncate">
                     {agent.model ? `${agent.model} · ${toneText(agent)}` : toneText(agent)}
                   </p>
-                  <Show when={notes()[key]}>
-                    {(n) => (
-                      <p class="iris-delegate__note" data-ok={n().ok} role="status">
-                        {n().text}
-                      </p>
-                    )}
-                  </Show>
+                  <RowFoot key={key} intent={dropIntent({ kind: "agent" })} />
                 </div>
               </div>
             )
@@ -271,13 +307,7 @@ export function IrisDelegateRail(props: {
                     <p class="text-11-regular text-text-weak truncate">
                       {busy() ? language.t("iris.delegate.session.busy") : language.t("iris.delegate.session.idle")}
                     </p>
-                    <Show when={notes()[key]}>
-                      {(n) => (
-                        <p class="iris-delegate__note" data-ok={n().ok} role="status">
-                          {n().text}
-                        </p>
-                      )}
-                    </Show>
+                    <RowFoot key={key} intent={dropIntent({ kind: "session", busy: busy() })} />
                   </div>
                 </div>
               )

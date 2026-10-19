@@ -1220,5 +1220,8 @@ export const dict = {
   "iris.delegate.session.sent": "#{{id}} sent to this session",
   "iris.delegate.session.queued": "#{{id}} queued behind its current turn",
   "iris.delegate.session.failed": "Not sent — {{reason}}",
+  "iris.delegate.intent.assigned": "Add to its list",
+  "iris.delegate.intent.sent": "Start on it now",
+  "iris.delegate.intent.queued": "Queue after its current turn",
   "iris.delegate.sort": "Sorted — switch to Board order to move cards between lists. Dragging onto an agent or session still works.",
 }

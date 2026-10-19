@@ -61,6 +61,22 @@ export function alreadyAssigned(tasks: readonly { agentId?: number; done: boolea
   return tasks.some((t) => t.agentId === agentId && !t.done)
 }
 
+/**
+ * The five things a drop can come to. They are not degrees of one thing: "assigned" means on the
+ * agent's list for later, "sent" means a session starts now, "queued" means a session takes it
+ * after its current turn, "already" means nothing changed. Each gets its own icon in the rail.
+ */
+export type DropOutcome = "assigned" | "sent" | "queued" | "already" | "failed"
+
+/**
+ * What a drop on this target WILL do — shown while the card is held over it, so nobody has to let
+ * go to find out. An agent always takes it onto its list; a session starts now or queues.
+ */
+export function dropIntent(target: { kind: "agent" } | { kind: "session"; busy: boolean }): DropOutcome {
+  if (target.kind === "agent") return "assigned"
+  return target.busy ? "queued" : "sent"
+}
+
 export type AgentTone = "free" | "busy" | "off" | "unknown"
 
 /**
