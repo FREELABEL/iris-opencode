@@ -165,6 +165,19 @@ describe("auditSentMail — orchestration, bounded and honest", () => {
     expect(r.error).toContain("cannot list sent mail")
   })
 
+  test("a 200 from a bridge that does not advertise from_me is not trusted as 'what I sent'", async () => {
+    const r = await auditSentMail(
+      { days: 14, limit: 200 },
+      {
+        bridge: async () => new Response(JSON.stringify({ emails: [{ subject: "x", sender: "someone@else.com", date_sent: NOW.toISOString(), to: ["hpk@m42.com"] }] })),
+        resolveLead: async () => [29285],
+        ledger: async () => [],
+      },
+    )
+    expect(r.error).toContain("cannot list sent mail")
+    expect(r.unlogged).toEqual([])
+  })
+
   test("a ledger read failure is an error for that lead, not a finding and not clean", async () => {
     const r = await auditSentMail(
       { days: 14, limit: 200 },
