@@ -44,6 +44,9 @@ export namespace RemotePrompts {
   }
 
   const defaultToken = async () => {
+    // Set by test/preload.ts: behave as signed out, so a test run on a machine holding a
+    // real IRIS token never reaches the API. Same idea as OPENCODE_DISABLE_MODELS_FETCH.
+    if (process.env["OPENCODE_DISABLE_REMOTE_PROMPTS"] === "true") return ""
     const { resolveToken } = await import("../cli/cmd/iris-api")
     return resolveToken()
   }

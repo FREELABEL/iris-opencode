@@ -33,6 +33,8 @@ if (response.ok) {
 }
 // Disable models.dev refresh to avoid race conditions during tests
 process.env["OPENCODE_DISABLE_MODELS_FETCH"] = "true"
+// Keep the IRIS prompt fetch (session/remote-prompts.ts) off the network in every test
+process.env["OPENCODE_DISABLE_REMOTE_PROMPTS"] = "true"
 
 // Clear provider env vars to ensure clean test state
 delete process.env["ANTHROPIC_API_KEY"]

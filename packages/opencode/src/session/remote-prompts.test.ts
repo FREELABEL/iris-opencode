@@ -177,3 +177,26 @@ describe("SystemPrompt.header identity (IP-07 #189850)", () => {
     expect(header[0].split("\n")).toHaveLength(1)
   })
 })
+
+describe("RemotePrompts under test (IP-07 #189850)", () => {
+  test("OPENCODE_DISABLE_REMOTE_PROMPTS keeps the real defaults off the network", async () => {
+    // The preload sets this flag. Without it, a test run on a machine with a real
+    // IRIS token made one real request to the API through the default fetcher.
+    expect(process.env["OPENCODE_DISABLE_REMOTE_PROMPTS"]).toBe("true")
+    const realFetch = globalThis.fetch
+    let fetched = 0
+    globalThis.fetch = (async () => {
+      fetched++
+      throw new Error("network must not be touched")
+    }) as unknown as typeof fetch
+    try {
+      RemotePrompts.reset()
+      RemotePrompts.configure({ cacheFile: path.join(os.tmpdir(), `rp-none-${process.pid}.json`) })
+      expect(await RemotePrompts.get("iris.identity", "FALLBACK")).toBe("FALLBACK")
+      expect(fetched).toBe(0)
+    } finally {
+      globalThis.fetch = realFetch
+      RemotePrompts.reset()
+    }
+  })
+})
