@@ -296,6 +296,14 @@ const RaiseCommand = cmd({
       )
       .epilogue(
         [
+          // What this command CANNOT produce belongs here, not only on the parent's
+          // epilogue: `raise --help` is the screen a user reads after deciding to raise
+          // something, and it used to say nothing about the two types it accepts (#190002).
+          "TYPES: --type nda or baa, nothing else. An NDA gates who may SEE something; a BAA",
+          "gates who may touch PHI. For a services agreement or statement of work there is no",
+          "type here — that paperwork lives in a payment gate:",
+          "  iris leads payment-gate <lead-id> --amount 500 --scope \"...\"",
+          "",
           "--term and the expiry date state the same fact, so the date is DERIVED from the term.",
           'A term this cannot read ("for the duration of the engagement") is refused, not guessed —',
           "pass --expires=YYYY-MM-DD instead.",

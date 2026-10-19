@@ -350,7 +350,11 @@ const LeadsListCommand = cmd({
       // had been computed from.
       const totalFromApi = data?.total ?? data?.meta?.total ?? leads.length
       let prospectedCount = 0
+      // The Prospected count is over FETCHED rows, not the book. Keep the window size so
+      // the report can say which population the number describes (#190003).
+      let scanned: number | undefined
       if (!args.all && !args.status && !args.search) {
+        scanned = leads.length
         prospectedCount = leads.filter((l: any) => (l.status ?? "").toLowerCase() === "prospected").length
         leads = leads.filter((l: any) => {
           const s = (l.status ?? "").toLowerCase()
@@ -394,6 +398,7 @@ const LeadsListCommand = cmd({
         shown: leads.length,
         total: totalFromApi,
         prospectedHidden: prospectedCount,
+        scanned,
         // The report must describe the ordering that actually ran. It used to say
         // "newest … by id" unconditionally, which stops being true the moment --sort
         // does anything.
@@ -11802,7 +11807,13 @@ const DealsRecoverCommand = cmd({
 const DealsCreateCommand = cmd({
   command: "create <id>",
   aliases: ["gate", "invoice"],
-  describe: "create a payment gate for a lead (alias for leads payment-gate)",
+  // `invoice` is kept as an alias for compatibility, but the describe line has to say what
+  // it does NOT do: this builds a payment gate (proposal page + contract + Stripe), which is
+  // a different object from `iris invoices create` (#190000). A user who types "invoice"
+  // and gets a proposal page has been lied to by the name, and the help screen is where
+  // that gets caught.
+  describe:
+    "create a payment gate for a lead — proposal page, contract and Stripe, NOT an invoice. For an invoice use: iris invoices create. Alias for leads payment-gate",
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "lead ID", type: "number", demandOption: true })
@@ -12037,7 +12048,18 @@ const LeadsCollectCommand = cmd({
       })
       .option("date", { describe: "payment date if marking paid (YYYY-MM-DD)", type: "string" })
       .option("notes", { describe: "notes about the payment", type: "string" })
-      .option("send", { describe: "send payment link via email", type: "boolean", default: true })
+      .option("send", {
+        // SENDING IS OUTWARD AND IRREVERSIBLE. It cannot be un-sent, and it names a real
+        // amount of money to a real person, so it must never be what happens because a
+        // flag was omitted. It defaulted to true, which meant `collect <id> -a 500` — a
+        // command that reads like bookkeeping — emailed a live Stripe payment link to the
+        // client the first time anyone tried it (#189999). Creating the invoice is now the
+        // default and sending is a separate, deliberate act, matching the `invoices create`
+        // then `invoices send` pair that already got this right.
+        describe: "email the payment link to the client now; the invoice is created either way",
+        type: "boolean",
+        default: false,
+      })
       .option("subscribe", { describe: "create recurring subscription instead of one-time", type: "boolean" })
       .option("interval", {
         describe: "subscription interval",
@@ -12195,18 +12217,32 @@ const LeadsCollectCommand = cmd({
       if (!args.json && results.checkout_url) console.log(success("  ✓ Checkout link ready"))
     }
 
-    // Send email
+    // Send email — ONLY when asked (#189999). The recipient is named before the write so a
+    // mis-addressed lead is visible in the output rather than discovered by the client.
     if (args.send) {
-      if (!args.json) console.log(dim("  Sending payment email..."))
-      const sendRes = await irisFetch(`/api/v1/custom-requests/${invoiceId}/send-reminder`, { method: "POST" })
-      const sendBody = await sendRes.json().catch(() => ({}))
-      if (sendBody?.success !== false) {
-        steps.push("email_sent")
-        if (!args.json) console.log(success(`  ✓ Payment email sent to ${lead?.email ?? "lead"}`))
+      const to = typeof lead?.email === "string" ? lead.email.trim() : ""
+      if (!to) {
+        steps.push("email_skipped_no_address")
+        if (!args.json)
+          console.log(
+            highlight(`  ⚠ ${leadName} has no email address — invoice #${invoiceId} created but not sent`),
+          )
       } else {
-        steps.push("email_failed")
-        if (!args.json) console.log(highlight(`  ⚠ Email failed: ${sendBody?.message ?? "unknown"}`))
+        if (!args.json) console.log(dim(`  Sending payment email to ${to}...`))
+        const sendRes = await irisFetch(`/api/v1/custom-requests/${invoiceId}/send-reminder`, { method: "POST" })
+        const sendBody = await sendRes.json().catch(() => ({}))
+        if (sendBody?.success !== false) {
+          steps.push("email_sent")
+          if (!args.json) console.log(success(`  ✓ Payment email sent to ${to}`))
+        } else {
+          steps.push("email_failed")
+          if (!args.json) console.log(highlight(`  ⚠ Email failed: ${sendBody?.message ?? "unknown"}`))
+        }
       }
+    } else if (!args.json) {
+      // Nothing left the machine. Say so, and name the next step, so "collect" not mailing
+      // the client reads as deliberate rather than as a silent failure.
+      console.log(dim(`  Not emailed (pass --send to email it now). Next: iris invoices send ${invoiceId}`))
     }
 
     if (args.json) {
