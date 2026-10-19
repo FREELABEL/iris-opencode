@@ -1,5 +1,5 @@
 import { createEffect, createMemo, createSignal, For, Show, type Accessor, type JSX } from "solid-js"
-import { isLiveDictation, showLiveText } from "./live-text"
+import { isLiveDictation, showLiveTextFollowing } from "./live-text"
 import { FileIcon } from "@opencode-ai/ui/file-icon"
 import { Icon } from "@opencode-ai/ui/icon"
 import { IconButton } from "@opencode-ai/ui/icon-button"
@@ -267,7 +267,7 @@ export function PromptInputV2(props: PromptInputV2Props) {
                   live={(text) => {
                     // The take, typed into the chat box while it is spoken (live-text.ts). Kept out
                     // of prompt state — no input event — so the final transcript is what is sent.
-                    if (editor) liveSpan = showLiveText(editor, liveSpan, text)
+                    if (editor) liveSpan = showLiveTextFollowing(editor, liveSpan, text)
                     setLiveShown(!!text)
                   }}
                   insert={(text) => {
@@ -288,6 +288,8 @@ export function PromptInputV2(props: PromptInputV2Props) {
                     const sel = window.getSelection()
                     sel?.removeAllRanges()
                     sel?.addRange(range)
+                    // The caret is at the end of the transcript; so is the view (#189977).
+                    editor.scrollTop = editor.scrollHeight
                   }}
                 />
               )}

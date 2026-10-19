@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { appendFinal, composeLive, speechKey } from "./live-text"
+import { appendFinal, atBottom, composeLive, growFollowing, speechKey } from "./live-text"
 
 /** What the chat box shows after a run of engine events. */
 function play(events: Array<["partial" | "final", string]>) {
@@ -74,4 +74,43 @@ describe("live words — one spoken sentence is shown once (#189546)", () => {
 
 test("speechKey ignores case, punctuation and spacing", () => {
   expect(speechKey("  I need, to build — a LIST. ")).toBe("i need to build a list")
+})
+
+describe("live words stay in view as the take grows (#189977)", () => {
+  /** A chat box 180px tall holding `content` px, scrolled to `top`; the browser clamps scrollTop. */
+  function box(content: number, top: number) {
+    const el = {
+      content,
+      clientHeight: 180,
+      get scrollHeight() {
+        return this.content
+      },
+      _top: top,
+      get scrollTop() {
+        return this._top
+      },
+      set scrollTop(v: number) {
+        this._top = Math.max(0, Math.min(v, this.content - 180))
+      },
+    }
+    return el
+  }
+
+  test("at the bottom: the take grows by a line and the view follows it", () => {
+    const el = box(400, 220) // 400 - 220 - 180 = 0 from the bottom
+    growFollowing(el, () => (el.content += 60))
+    expect(el.scrollTop).toBe(280)
+    expect(atBottom(el, 0)).toBe(true)
+  })
+
+  test("scrolled up on purpose: the take grows without yanking the view down", () => {
+    const el = box(400, 0) // rereading the top of a long draft
+    growFollowing(el, () => (el.content += 60))
+    expect(el.scrollTop).toBe(0)
+  })
+
+  test("within a few pixels of the bottom still counts as the bottom", () => {
+    expect(atBottom({ scrollTop: 200, scrollHeight: 400, clientHeight: 180 })).toBe(true)
+    expect(atBottom({ scrollTop: 100, scrollHeight: 400, clientHeight: 180 })).toBe(false)
+  })
 })
