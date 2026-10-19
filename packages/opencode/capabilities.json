@@ -5790,13 +5790,13 @@
     {
       "kind": "command",
       "name": "exposure",
-      "describe": "who can reach your pages, notes and playbooks — and what it takes to change that",
+      "describe": "who can reach your pages, notes, boards and playbooks, the link to give a person, and how to change it",
       "aliases": [
         "reach",
         "sharing"
       ],
       "run": "iris exposure",
-      "haystack": "exposure reach sharing who can reach your pages, notes and playbooks — and what it takes to change that"
+      "haystack": "exposure reach sharing who can reach your pages, notes, boards and playbooks, the link to give a person, and how to change it"
     },
     {
       "kind": "command",

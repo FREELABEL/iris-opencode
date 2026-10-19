@@ -29,7 +29,8 @@ import { BloqsExportCommand } from "./platform-bloq-export"
 import { AtlasFilesCommandExport } from "./platform-atlas-files"
 import path from "path"
 import { firstArray } from "../../util/array"
-import { bloqWebUrl as atlasBloqUrl, bloqUrlFrom } from "./bloq-web-url"
+import { bloqWebUrl as atlasBloqUrl, bloqUrlFrom, itemUrlFrom } from "./bloq-web-url"
+import { withAccessFooter } from "./access-guide"
 import { openBrowser } from "../../util/browser"
 import { AtlasDocCommand } from "./platform-atlas-item"
 import {
@@ -1447,6 +1448,17 @@ const BloqsAddItemCommand = cmd({
       // the destination this command verified; when it could not verify one, it says
       // so rather than echoing the caller's own input back as if it were a fact.
       const writtenList = addBody?.data?.list_id ?? addBody?.data?.data?.list_id ?? destinationList?.id ?? null
+      // Where the new card lives (#190012). Without it the caller had an id and nothing to hand
+      // a person, and built a link by hand — which is how the retired Elon route got handed out.
+      // Prefer fl-api's atlas_url; build the same address locally against an older API.
+      const created = addBody?.data?.data ?? addBody?.data ?? {}
+      const itemUrl = newItemId
+        ? itemUrlFrom({ ...created, id: newItemId }, PUBLIC_SITE, Boolean(process.env.IRIS_PUBLIC_URL), {
+            bloqId: args["bloq-id"],
+            listId: writtenList,
+          })
+        : null
+      const boardUrl = bloqWebUrl(args["bloq-id"])
       if (args.json) {
         console.log(
           JSON.stringify({
@@ -1456,13 +1468,21 @@ const BloqsAddItemCommand = cmd({
             list_id: writtenList,
             list_name: destinationList?.name ?? null,
             list_verified: destinationList !== null,
+            // The link to give a person, and who it opens for. A new item is private.
+            url: itemUrl,
+            board_url: boardUrl,
+            access: "private",
+            audience: "signed in — board owner and members",
+            public_url: created?.public_url ?? null,
+            share: newItemId ? `iris bloqs make-public ${newItemId}` : null,
           }),
         )
         return
       }
       spinner?.stop(`${success("✓")} Item added${newItemId ? ` (#${newItemId})` : ""}`)
+      if (itemUrl) printKV("Link", `${itemUrl}  ${dim("(private · signed in, board members only)")}`)
       const hint = newItemId
-        ? `iris bloqs get ${args["bloq-id"]}  |  iris bloqs share ${newItemId}  (publish + get a shareable link)`
+        ? `public link: iris bloqs make-public ${newItemId}   ·   who can open it: iris exposure show note:${newItemId}`
         : `iris bloqs get ${args["bloq-id"]}`
       prompts.outro(dim(hint))
     } catch (err) {
@@ -1534,7 +1554,9 @@ const BloqsGetItemCommand = cmd({
     const item = body?.data ?? body
 
     if (args.json) {
-      console.log(JSON.stringify(item, null, 2))
+      // atlas_url = the signed-in link to this card (#190012); null when the API did not say which
+      // board the item is on, rather than a guess that opens some other project.
+      console.log(JSON.stringify({ ...item, atlas_url: itemUrlFrom(item, PUBLIC_SITE, Boolean(process.env.IRIS_PUBLIC_URL)) }, null, 2))
       return
     }
     if (args["content-only"]) {
@@ -1548,7 +1570,11 @@ const BloqsGetItemCommand = cmd({
     if (item.list_name) printKV("List", `${item.list_name}${item.bloq_list_id ? ` (#${item.bloq_list_id})` : ""}`)
     if (item.status) printKV("Status", String(item.status))
     if (item.created_at) printKV("Created", String(item.created_at).slice(0, 16).replace("T", " "))
-    if (item.public_url) printKV("Public", String(item.public_url))
+    // The addresses a person can be handed, each with its audience (#190012).
+    const signedIn = itemUrlFrom(item, PUBLIC_SITE, Boolean(process.env.IRIS_PUBLIC_URL))
+    printKV("Access", item.is_public ? String(item.access_level ?? "public") : "private")
+    if (signedIn) printKV("Link", `${signedIn}  ${dim("(signed in · board members)")}`)
+    if (item.public_url) printKV("Public", `${item.public_url}  ${dim(item.access_level && item.access_level !== "public" ? `(gated · ${item.access_level})` : "(anyone with the link)")}`)
     printDivider()
     console.log(String(item.content ?? "").trimEnd())
     printDivider()
@@ -4448,13 +4474,13 @@ export const PlatformBloqsCommand = productCommand({
       .command(BloqsCreateCommand)
       .command(BloqsUpdateCommand)
       .command(BloqsIngestCommand)
-      .command(BloqsAddItemCommand)
-      .command(BloqsGetItemCommand)
+      .command(withAccessFooter(BloqsAddItemCommand))
+      .command(withAccessFooter(BloqsGetItemCommand))
       .command(BloqsDeleteItemCommand)
       .command(BloqsRestoreItemCommand)
       .command(BloqsDeleteCommand)
-      .command(BloqsPublishCommand)
-      .command(BloqsMakePublicCommand)
+      .command(withAccessFooter(BloqsPublishCommand))
+      .command(withAccessFooter(BloqsMakePublicCommand))
       .command(BloqsMakePrivateCommand)
       .command(BloqsCreateListCommand)
       .command(BloqsRenameListCommand)
