@@ -134,3 +134,30 @@ export function mergeAccountEvents(results: AccountResult<any[]>[]): { events: a
   }
   return { events, failed: results.filter((r) => !r.ok).map((r) => `${r.label}: ${r.error}`), read: results.filter((r) => r.ok).length }
 }
+
+/**
+ * Free time in [from, to] computed from an account's events: the window minus every event that
+ * blocks time. Used when the provider's free/busy action fails for a reason that is not auth
+ * (measured 2026-10-19: Composio FREE_BUSY_QUERY 400 "missing items" on every account).
+ * Transparent ("show as free") and declined events do not block time.
+ */
+export function freeFromEvents(events: any[], from: string, to: string): Slot[] {
+  const w0 = new Date(from).getTime()
+  const w1 = new Date(to).getTime()
+  if (!(w1 > w0)) return []
+  const when = (t: any) => new Date(t && typeof t === "object" ? (t.dateTime ?? t.date) : t).getTime()
+  const busy = events
+    .filter((e) => e?.transparency !== "transparent")
+    .filter((e) => !(Array.isArray(e?.attendees) && e.attendees.some((a: any) => a?.self && a?.responseStatus === "declined")))
+    .map((e) => [Math.max(w0, when(e?.start ?? e?.start_time)), Math.min(w1, when(e?.end ?? e?.end_time))] as [number, number])
+    .filter(([a, b]) => Number.isFinite(a) && Number.isFinite(b) && b > a)
+    .sort((x, y) => x[0] - y[0])
+  const free: Slot[] = []
+  let cursor = w0
+  for (const [a, b] of busy) {
+    if (a > cursor) free.push({ start: new Date(cursor).toISOString(), end: new Date(a).toISOString(), duration_minutes: Math.round((a - cursor) / 60000) })
+    cursor = Math.max(cursor, b)
+  }
+  if (w1 > cursor) free.push({ start: new Date(cursor).toISOString(), end: new Date(w1).toISOString(), duration_minutes: Math.round((w1 - cursor) / 60000) })
+  return free
+}

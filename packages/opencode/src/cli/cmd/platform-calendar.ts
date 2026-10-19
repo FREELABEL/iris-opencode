@@ -17,7 +17,8 @@ import {
   readWindowsOutlook,
   uniqueAttendees,
 } from "./calendar-search"
-import { forEachAccount, intersectFreeSlots, listGoogleCalendarConnections, type AccountResult } from "./calendar-accounts"
+import { forEachAccount, freeFromEvents, intersectFreeSlots, listGoogleCalendarConnections, type AccountResult } from "./calendar-accounts"
+import { readCalendarEvents } from "./platform-leads-honesty"
 import { executeIntegrationCall } from "./platform-run"
 import { firstArray } from "../../util/array"
 
@@ -643,6 +644,25 @@ const CalendarCalendarsCommand = cmd({
 })
 
 // ── FREE SLOTS ────────────────────────────────────────────────
+
+/**
+ * One account's free time. find_free_slots first; when the PROVIDER rejects it for a reason that
+ * is not auth (measured 2026-10-19: Composio FREE_BUSY_QUERY 400 "missing items" on every
+ * account), derive it from that account's events instead and say so (#189944).
+ */
+async function freeSlotsForAccount(params: Record<string, any>, integrationId: number): Promise<any> {
+  const r = await calExec("find_free_slots", params, { integrationId })
+  if (r?.success !== false) return r
+  const why = String(typeof r?.error === "string" ? r.error : JSON.stringify(r?.error ?? ""))
+  if (/no active|expired|revoked|invalid_grant|unauthori|not found or may have been deleted|ConnectedAccountNotFound/i.test(why)) return r
+  const evs = await calExec(
+    "get_events",
+    { time_min: params.start_time, time_max: params.end_time, max_results: 250, ...(Array.isArray(params.calendar_ids) && params.calendar_ids.length === 1 ? { calendar_id: params.calendar_ids[0] } : {}) },
+    { integrationId },
+  )
+  const events = readCalendarEvents(evs)
+  return { success: true, free_slots: freeFromEvents(events, String(params.start_time), String(params.end_time)), derived_from_events: true, provider_error: why.slice(0, 200) }
+}
 const CalendarFreeCommand = cmd({
   command: "free",
   aliases: ["avail", "availability"],
@@ -681,16 +701,24 @@ const CalendarFreeCommand = cmd({
       } catch {
         /* fall through to the single-account call, which reports its own failure */
       }
-      if (conns.length === 1) acctOpts.integrationId = Number(conns[0].id)
+      if (conns.length === 1) {
+        try {
+          result = await freeSlotsForAccount(params, Number(conns[0].id))
+        } catch (err: any) {
+          reportCalendarFailure(err, "Failed to find free slots")
+          return
+        }
+      }
       if (conns.length > 1) {
-        accountReport = await forEachAccount(conns, (integrationId) => calExec("find_free_slots", params, { integrationId }))
+        accountReport = await forEachAccount(conns, (integrationId) => freeSlotsForAccount(params, integrationId))
         const okRs = accountReport.filter((r) => r.ok)
         result = okRs.length
           ? {
               success: true,
               free_slots: intersectFreeSlots(okRs.map((r) => firstArray(r.value?.free_slots))),
               busy_times: okRs.flatMap((r) => firstArray(r.value?.busy_times)),
-              time_range: okRs[0].value?.time_range,
+              time_range: okRs[0].value?.time_range ?? { start: params.start_time, end: params.end_time },
+              derived_from_events: okRs.some((r) => r.value?.derived_from_events),
               accounts: accountReport.map((r) => ({ account: r.label, integration_id: Number(r.conn.id), ok: r.ok, error: r.error })),
               partial: okRs.length < accountReport.length,
             }
@@ -718,6 +746,9 @@ const CalendarFreeCommand = cmd({
       return
     }
 
+    if (result?.derived_from_events) {
+      console.log(`  ${dim("Free/busy lookup failed at the provider — computed from your events instead (transparent and declined events ignored).")}`)
+    }
     if (accountReport) {
       const okN = accountReport.filter((r) => r.ok).length
       console.log(`  ${dim(`Free on all of ${okN} account(s) that answered (of ${accountReport.length}):`)}`)

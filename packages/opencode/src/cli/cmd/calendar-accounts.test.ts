@@ -164,3 +164,37 @@ describe("per-account get_events answers in Google's raw shape (measured live 20
     expect(r.unread).toEqual([])
   })
 })
+
+import { freeFromEvents } from "./calendar-accounts"
+
+describe("free time derived from events (fallback while the provider's free/busy call is broken)", () => {
+  const from = "2026-10-20T19:00:00.000Z"
+  const to = "2026-10-20T23:00:00.000Z"
+  const ev = (a: string, b: string, extra: any = {}) => ({ start: { dateTime: `2026-10-20T${a}:00.000Z` }, end: { dateTime: `2026-10-20T${b}:00.000Z` }, ...extra })
+
+  test("window minus busy events, overlapping events merged", () => {
+    const out = freeFromEvents([ev("20:00", "21:00"), ev("20:30", "21:30"), ev("22:00", "22:15")], from, to)
+    expect(out.map((s) => [s.start.slice(11, 16), s.end.slice(11, 16)])).toEqual([
+      ["19:00", "20:00"],
+      ["21:30", "22:00"],
+      ["22:15", "23:00"],
+    ])
+  })
+
+  test("transparent (free) and declined events do not block time; all-day events do", () => {
+    const out = freeFromEvents(
+      [
+        ev("19:00", "23:00", { transparency: "transparent" }),
+        ev("19:00", "23:00", { attendees: [{ self: true, responseStatus: "declined" }] }),
+      ],
+      from,
+      to,
+    )
+    expect(out).toHaveLength(1)
+    expect(freeFromEvents([{ start: { date: "2026-10-20" }, end: { date: "2026-10-21" } }], from, to)).toEqual([])
+  })
+
+  test("no events → the whole window is free", () => {
+    expect(freeFromEvents([], from, to)).toEqual([{ start: from, end: to, duration_minutes: 240 }])
+  })
+})
