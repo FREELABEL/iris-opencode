@@ -77,3 +77,34 @@ export function composeLive(finals: readonly string[], partial: string): string 
   return text.replace(/\s+/g, " ").trim()
 }
 
+
+/** The parts of a scroll container this needs — an element, or a plain object in a test. */
+type Scrollable = { scrollTop: number; scrollHeight: number; clientHeight: number }
+
+/**
+ * Is the chat box scrolled to its bottom, within `slack` px? Asked BEFORE the live words grow, so a
+ * person who scrolled up to reread is left where they are, and everyone else is followed (#189977).
+ */
+export function atBottom(el: Scrollable, slack = 24): boolean {
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= slack
+}
+
+/**
+ * Show the live take and keep the newest words in view. Past the box's height the text kept
+ * growing below the fold, under the waveform lane, until someone scrolled by hand (#189977).
+ */
+export function showLiveTextFollowing(
+  editor: HTMLElement,
+  current: HTMLElement | undefined,
+  text: string | undefined,
+): HTMLElement | undefined {
+  return growFollowing(editor, () => showLiveText(editor, current, text))
+}
+
+/** Run `grow` (anything that adds content), then keep the view at the bottom if it was there before. */
+export function growFollowing<T>(el: Scrollable, grow: () => T): T {
+  const follow = atBottom(el)
+  const result = grow()
+  if (follow) el.scrollTop = el.scrollHeight
+  return result
+}

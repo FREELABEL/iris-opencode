@@ -1,0 +1,228 @@
+{
+  "sentence": "I need a 3D model of a BMW 750Li",
+  "onset_s": 0.3,
+  "runs": 5,
+  "reference_transcript": "I need a 3D model of a BMW 750 Li.",
+  "rows": [
+    {
+      "method": "ffmpeg-default",
+      "ttfa_s": 0.5900893330108374,
+      "integrity": 0.45010201114705506,
+      "audio_s": 2.176,
+      "bytes": 69632,
+      "helper_bytes": null,
+      "transcript": "I need a 3D model at the NW-750V.",
+      "accuracy": 0.6666666666666667,
+      "kept_start": true
+    },
+    {
+      "method": "ffmpeg-builtin",
+      "ttfa_s": 0.6036420830059797,
+      "integrity": 0.4510585728726123,
+      "audio_s": 2.176,
+      "bytes": 69632,
+      "helper_bytes": null,
+      "transcript": "[laughs]",
+      "accuracy": 0.08333333333333337,
+      "kept_start": false
+    },
+    {
+      "method": "helper-avengine",
+      "ttfa_s": 1.100065791979432,
+      "integrity": 1.0101290269006393,
+      "audio_s": 3.8998125,
+      "bytes": 124794,
+      "helper_bytes": 124794,
+      "transcript": "3D model to BMW 750 lead.",
+      "accuracy": 0.5,
+      "kept_start": false
+    },
+    {
+      "method": "helper-auhal",
+      "ttfa_s": 0.5733768329955637,
+      "integrity": 1.000774069650714,
+      "audio_s": 5.0825,
+      "bytes": 162640,
+      "helper_bytes": 162640,
+      "transcript": "I need a 3D model of a BMW 750.",
+      "accuracy": 0.9166666666666666,
+      "kept_start": true
+    },
+    {
+      "method": "ffmpeg-default",
+      "ttfa_s": 0.5724457920296118,
+      "integrity": 0.44982712811038555,
+      "audio_s": 2.1546875,
+      "bytes": 68950,
+      "helper_bytes": null,
+      "transcript": "[SOUND]",
+      "accuracy": 0.04166666666666663,
+      "kept_start": false
+    },
+    {
+      "method": "ffmpeg-builtin",
+      "ttfa_s": 0.5700223330641165,
+      "integrity": 0.45077152672675086,
+      "audio_s": 2.176,
+      "bytes": 69632,
+      "helper_bytes": null,
+      "transcript": "I need a 3D model of BMW 750V.",
+      "accuracy": 0.875,
+      "kept_start": true
+    },
+    {
+      "method": "helper-avengine",
+      "ttfa_s": 0.544474707916379,
+      "integrity": 1.0144671570881245,
+      "audio_s": 4.8998125,
+      "bytes": 156794,
+      "helper_bytes": 156794,
+      "transcript": "I need a 3D model of the BMW 750.",
+      "accuracy": 0.7916666666666666,
+      "kept_start": true
+    },
+    {
+      "method": "helper-auhal",
+      "ttfa_s": 0.29142291692551225,
+      "integrity": 1.0009365411462214,
+      "audio_s": 5.1038125,
+      "bytes": 163322,
+      "helper_bytes": 163322,
+      "transcript": "I need a 3D model of a BMW 750.",
+      "accuracy": 0.9166666666666666,
+      "kept_start": true
+    },
+    {
+      "method": "ffmpeg-default",
+      "ttfa_s": 0.5361758340150118,
+      "integrity": 0.44999978362315407,
+      "audio_s": 1.9626875,
+      "bytes": 62806,
+      "helper_bytes": null,
+      "transcript": "I need a 3D model at the NW-750V.",
+      "accuracy": 0.6666666666666667,
+      "kept_start": true
+    },
+    {
+      "method": "ffmpeg-builtin",
+      "ttfa_s": 0.48782604199368507,
+      "integrity": 0.44672768360427506,
+      "audio_s": 1.973375,
+      "bytes": 63148,
+      "helper_bytes": null,
+      "transcript": "I need a 3D model at the NW750.",
+      "accuracy": 0.6666666666666667,
+      "kept_start": true
+    },
+    {
+      "method": "helper-avengine",
+      "ttfa_s": 0.8646005829796195,
+      "integrity": 1.0019555108117921,
+      "audio_s": 4.1998125,
+      "bytes": 134394,
+      "helper_bytes": 134394,
+      "transcript": "Need a 3D model of a BMW 750.",
+      "accuracy": 0.875,
+      "kept_start": false
+    },
+    {
+      "method": "helper-auhal",
+      "ttfa_s": 0.2466557079460472,
+      "integrity": 1.000986760283169,
+      "audio_s": 5.1305,
+      "bytes": 164176,
+      "helper_bytes": 164176,
+      "transcript": "I need a 3D model of a BMW 750.",
+      "accuracy": 0.9166666666666666,
+      "kept_start": true
+    },
+    {
+      "method": "ffmpeg-default",
+      "ttfa_s": 0.5266290830913931,
+      "integrity": 0.4398926608654836,
+      "audio_s": 1.9146875,
+      "bytes": 61270,
+      "helper_bytes": null,
+      "transcript": "[typing]",
+      "accuracy": 0.0,
+      "kept_start": false
+    },
+    {
+      "method": "ffmpeg-builtin",
+      "ttfa_s": 0.6172871249727905,
+      "integrity": 0.4565854167173836,
+      "audio_s": 2.192,
+      "bytes": 70144,
+      "helper_bytes": null,
+      "transcript": "[MUSIC PLAYING]",
+      "accuracy": 0.08333333333333337,
+      "kept_start": false
+    },
+    {
+      "method": "helper-avengine",
+      "ttfa_s": 0.5917527499841526,
+      "integrity": 1.0208575959203225,
+      "audio_s": 4.8998125,
+      "bytes": 156794,
+      "helper_bytes": 156794,
+      "transcript": "I need a 3D model of the BMW 750.",
+      "accuracy": 0.7916666666666666,
+      "kept_start": true
+    },
+    {
+      "method": "helper-auhal",
+      "ttfa_s": 0.28414920798968524,
+      "integrity": 1.0006295482488803,
+      "audio_s": 5.109125,
+      "bytes": 163492,
+      "helper_bytes": 163492,
+      "transcript": "I need a 3D model of the BMW 750 lead.",
+      "accuracy": 0.75,
+      "kept_start": true
+    },
+    {
+      "method": "ffmpeg-default",
+      "ttfa_s": 0.7246705000288785,
+      "integrity": 0.4545099629098994,
+      "audio_s": 2.117375,
+      "bytes": 67756,
+      "helper_bytes": null,
+      "transcript": "(crickets chirping)",
+      "accuracy": 0.04166666666666663,
+      "kept_start": false
+    },
+    {
+      "method": "ffmpeg-builtin",
+      "ttfa_s": 0.5289820829639211,
+      "integrity": 0.46008672937835027,
+      "audio_s": 2.021375,
+      "bytes": 64684,
+      "helper_bytes": null,
+      "transcript": "I need a 3D model for you at least 750 feet.",
+      "accuracy": 0.375,
+      "kept_start": true
+    },
+    {
+      "method": "helper-avengine",
+      "ttfa_s": 0.6357546669896692,
+      "integrity": 1.0106846260654683,
+      "audio_s": 4.7998125,
+      "bytes": 153594,
+      "helper_bytes": 153594,
+      "transcript": "I need a 3D model with a BMW 750.",
+      "accuracy": 0.75,
+      "kept_start": true
+    },
+    {
+      "method": "helper-auhal",
+      "ttfa_s": 0.2839637090219185,
+      "integrity": 1.0009435694988835,
+      "audio_s": 5.2425,
+      "bytes": 167760,
+      "helper_bytes": 167760,
+      "transcript": "I need a 3D model of a BMW 750.",
+      "accuracy": 0.9166666666666666,
+      "kept_start": true
+    }
+  ]
+}
