@@ -30,6 +30,8 @@ interface State {
   conflicts: Record<string, string[]>
   /** ids deleted on the server while edited here — kept, and not pushed back */
   deleted_remotely: number[]
+  /** kept in step by the Hive daemon (lib/atlas-sync.js reads exactly this flag) */
+  background?: boolean
 }
 
 export function storeDir(slug: string, dir?: string): string {
@@ -69,6 +71,11 @@ export function readBases(root: string): Base[] {
   const dir = p(root, ".iris", "base")
   if (!fs.existsSync(dir)) return []
   return fs.readdirSync(dir).filter((f) => f.endsWith(".json")).map((f) => readJson(p(dir, f)) as Base)
+}
+
+/** Opt a local copy in or out of background sync by the Hive daemon. Changes nothing else. */
+export function setBackground(root: string, slug: string, on: boolean): void {
+  writeJsonFile(p(root, ".iris", "state.json"), { ...readState(root, slug), background: on })
 }
 
 const ds = (slug: string) => `/api/v1/atlas/datasets/${encodeURIComponent(slug)}`
@@ -225,11 +232,20 @@ export const DatasetPushCommand = cmd({
 export const DatasetSyncCommand = cmd({
   command: "sync <slug>",
   describe: "pull, then push — what the Hive daemon runs in the background",
-  builder: (y: any) => common(y).option("prune", { type: "boolean", default: false, describe: "see push" }),
+  builder: (y: any) =>
+    common(y)
+      .option("prune", { type: "boolean", default: false, describe: "see push" })
+      .option("background", { type: "string", choices: ["on", "off"], describe: "keep this copy in step automatically: the Hive daemon on this machine runs sync every 5 minutes" }),
   async handler(args: any) {
     if (!(await requireAuth())) { process.exitCode = 1; return }
     const root = storeDir(args.slug, args.dir)
     const a = await pull(args.slug, root)
+    if (a && args.background) {
+      setBackground(root, args.slug, args.background === "on")
+      if (!args.json) prompts.log.info(args.background === "on"
+        ? `background sync ON — the IRIS daemon on this machine keeps ${root} in step every 5 minutes`
+        : "background sync OFF — this copy changes only when you run pull, push or sync")
+    }
     if (!a) { process.exitCode = 1; return }
     const b = await push(args.slug, root, { prune: !!args.prune })
     report(`sync ${args.slug}`, [["pulled", a.written + a.merged + a.removed], ["pushed", b.created + b.updated + b.deleted], ["conflicts", Object.keys(a.conflicts).length], ["refused", b.refused.length]], args, { dir: root, pull: a, push: b })
