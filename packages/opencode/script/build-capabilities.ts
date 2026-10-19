@@ -18,8 +18,18 @@
  * fails CI when something is missing — new capabilities become discoverable by default
  * instead of when someone remembers.
  *
- *   bun run script/build-capabilities.ts            # writes capabilities.json
+ *   bun run script/build-capabilities.ts            # writes capabilities.json (commands + how-tos)
  *   bun run script/build-capabilities.ts --check    # exits 1 if stale (CI)
+ *   bun run script/build-capabilities.ts --workspace-out <path>
+ *       # ALSO writes {"entries":[…playbook+skill…]} to <path> — for the PRIVATE server repo
+ *       # (fl-iris-api resources/cli-capabilities/workspace.json). Needs IRIS_PROJECT_ROOT.
+ *   --out <path>   write the public index somewhere other than capabilities.json (tests)
+ *   --prune        let --workspace-out drop workspace entries absent from this machine
+ *
+ * IP-07 phase 2 (#189850): capabilities.json is committed to a PUBLIC repo and embedded in every
+ * public binary, so it carries ONLY repo-sourced kinds (commands, how-tos). Workspace playbooks
+ * and skills are private prose; they go to --workspace-out and are served to signed-in users by
+ * GET /api/v1/cli/capabilities. capabilities-ip-guard.test.ts fails if either leaks back.
  */
 
 import { readdirSync, readFileSync, writeFileSync, existsSync, statSync } from "fs"
@@ -29,7 +39,19 @@ import { redactSecrets } from "../src/util/redact-secrets"
 import { execSync } from "child_process"
 
 const ROOT = join(import.meta.dir, "..")
-const OUT = join(ROOT, "capabilities.json")
+function flag(name: string): string | undefined {
+  const i = process.argv.indexOf(name)
+  if (i === -1) return undefined
+  const v = process.argv[i + 1]
+  if (!v || v.startsWith("--")) {
+    console.error(`${name} needs a path`)
+    process.exit(2)
+  }
+  return v
+}
+const OUT = flag("--out") ?? join(ROOT, "capabilities.json")
+/** Where workspace (playbook + skill) entries go. Unset → they are not collected at all. */
+const WORKSPACE_OUT = flag("--workspace-out")
 const PROJECT = process.env.IRIS_PROJECT_ROOT || join(homedir(), "sites/freelabel")
 
 /**
@@ -556,14 +578,24 @@ const TERMS: Record<string, string[]> = {
   ],
 }
 
+/** Kinds whose source is the private WORKSPACE repo — never written to the public index. */
+const isWorkspaceKind = (k: string) => k === "playbook" || k === "skill"
+
+// PUBLIC: sourced from this repo, committed, embedded in the binary.
 const entries: Entry[] = [
   ...collectCommands(),
   ...collectMarkdown(HOWTO_DIR, "how-to", (n) => `iris how-to ${n}`),
-  // Project content lives in the workspace, not in this package. IRIS_PROJECT_ROOT lets CI
-  // and the generator agree on where that is; the default is the repo this CLI ships beside.
-  ...collectMarkdown(join(PROJECT, ".iris/playbooks"), "playbook", (n) => `iris playbook run ${n}`),
-  ...collectMarkdown(join(PROJECT, ".claude/skills"), "skill", (n) => `iris playbook run ${n}`),
 ]
+
+// PRIVATE: project content lives in the workspace, not in this package. IRIS_PROJECT_ROOT lets
+// the generator find it; the default is the repo this CLI ships beside. Only collected when it
+// has somewhere private to go.
+const workspaceEntries: Entry[] = WORKSPACE_OUT
+  ? [
+      ...collectMarkdown(join(PROJECT, ".iris/playbooks"), "playbook", (n) => `iris playbook run ${n}`),
+      ...collectMarkdown(join(PROJECT, ".claude/skills"), "skill", (n) => `iris playbook run ${n}`),
+    ]
+  : []
 
 /**
  * WORKSPACE-SOURCED ENTRIES ARE ADDITIVE. A missing playbook means "not on THIS machine".
@@ -584,16 +616,18 @@ const entries: Entry[] = [
  */
 const PRUNE = process.argv.includes("--prune")
 
-if (!PRUNE && !process.argv.includes("--check") && existsSync(OUT)) {
+const preserved = new Set<Entry>()
+// The previous WORKSPACE output (not the public index — it no longer holds these) is what an
+// additive regeneration preserves.
+if (WORKSPACE_OUT && !PRUNE && existsSync(WORKSPACE_OUT)) {
   try {
-    const prev = JSON.parse(readFileSync(OUT, "utf-8"))
+    const prev = JSON.parse(readFileSync(WORKSPACE_OUT, "utf-8"))
     const key = (e: any) => `${e.kind}:${e.name}`
-    const found = new Set(entries.map(key))
-    const kept = ((prev.entries ?? []) as any[]).filter(
-      (e) => (e.kind === "playbook" || e.kind === "skill") && !found.has(key(e)),
-    )
+    const found = new Set(workspaceEntries.map(key))
+    const kept = ((prev.entries ?? []) as any[]).filter((e) => isWorkspaceKind(e.kind) && !found.has(key(e)))
     if (kept.length) {
-      entries.push(...kept)
+      workspaceEntries.push(...kept)
+      for (const e of kept) preserved.add(e)
       console.warn(
         `note: kept ${kept.length} playbook/skill entr${kept.length === 1 ? "y" : "ies"} whose source is not in this ` +
           `workspace — they belong to a machine that has it.\n` +
@@ -607,22 +641,33 @@ if (!PRUNE && !process.argv.includes("--check") && existsSync(OUT)) {
 }
 
 // Fold the terminology into each entry's haystack so an intent search reaches it.
-for (const e of entries) {
+// (Entries preserved from a previous workspace output already carry their synonyms.)
+for (const e of [...entries, ...workspaceEntries]) {
+  if (preserved.has(e)) continue
   const syn = TERMS[e.name]
   if (syn) e.haystack += " " + syn.join(" ")
 }
 
+const byKindName = (a: Entry, b: Entry) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name)
+
+// Top-level fields: `terms` is the hand-written map above (it lives in this public script, not in
+// any playbook), `counts` covers ONLY the public kinds. The playbook/skill counts used to be here
+// too; they are workspace-derived, so they moved out — `iris find` recounts after its runtime merge.
 const index = {
   generated_note: "GENERATED by script/build-capabilities.ts — do not edit by hand. Run `bun run capabilities` to refresh.",
   counts: {
     command: entries.filter((e) => e.kind === "command").length,
     "how-to": entries.filter((e) => e.kind === "how-to").length,
-    playbook: entries.filter((e) => e.kind === "playbook").length,
-    skill: entries.filter((e) => e.kind === "skill").length,
     total: entries.length,
   },
   terms: TERMS,
-  entries: entries.sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name)),
+  entries: entries.sort(byKindName),
+}
+
+// Belt and braces: nothing workspace-sourced can reach the public file, whatever changes above.
+if (index.entries.some((e) => isWorkspaceKind(e.kind))) {
+  console.error("refusing to write: a playbook/skill entry reached the PUBLIC index (IP-07 #189850)")
+  process.exit(1)
 }
 
 const json = JSON.stringify(index, null, 2) + "\n"
@@ -638,53 +683,27 @@ if (process.argv.includes("--check")) {
   const prev = JSON.parse(readFileSync(OUT, "utf-8"))
   const key = (e: any) => `${e.kind}:${e.name}`
 
-  // ONLY COMPARE WHAT THIS CHECKOUT CAN SEE.
+  // PUBLIC KINDS ONLY (IP-07 #189850). The committed index no longer carries playbooks or skills,
+  // so the check compares commands and how-tos — both sourced from THIS checkout, so the result no
+  // longer depends on whether the private workspace happens to be on the machine (it used to skip
+  // 406 entries on CI and on any contributor's laptop).
   //
-  // Playbooks and skills live in the WORKSPACE repo, not in this package, and collectMarkdown
-  // returns [] for a directory that is not there. On a CI runner that checks out only
-  // iris-opencode, every one of them therefore reads as "indexed but gone" — 83 phantom
-  // deletions — and the check can never pass no matter what anyone commits.
-  //
-  // Nobody had noticed because the workflow was never actually executing (#180527); the first
-  // real run failed on this. The pre-push hook has always guarded it with a directory test.
-  // Now the generator does, so the answer does not depend on which harness invoked it.
-  const projectAvailable =
-    existsSync(join(PROJECT, ".iris/playbooks")) || existsSync(join(PROJECT, ".claude/skills"))
-  const comparable = (k: string) => projectAvailable || (k !== "playbook" && k !== "skill")
-
-  const before = new Set<string>(
-    ((prev.entries ?? []) as any[]).filter((e) => comparable(e.kind)).map(key),
-  )
-  const after = new Set<string>(entries.filter((e) => comparable(e.kind)).map(key))
-
-  if (!projectAvailable) {
-    // Say what was NOT checked. A narrowed check that does not announce its narrowing reads as
-    // full coverage, which is the failure this whole guard exists to avoid.
-    const skipped = ((prev.entries ?? []) as any[]).filter((e) => !comparable(e.kind)).length
-    console.warn(
-      `note: workspace content not present — ${skipped} playbook/skill entries were NOT checked.\n` +
-        `      Set IRIS_PROJECT_ROOT to include them. Commands and how-tos are checked in full.`,
+  // A workspace entry IN the committed file is not drift, it is a leak: fail on it outright.
+  const leaked = ((prev.entries ?? []) as any[]).filter((e) => isWorkspaceKind(e.kind)).map(key)
+  if (leaked.length) {
+    console.error(
+      `capabilities.json carries ${leaked.length} PRIVATE playbook/skill entr${leaked.length === 1 ? "y" : "ies"} — ` +
+        `they must not be committed to the public repo (IP-07 #189850).\n    ${leaked.slice(0, 10).join("\n    ")}\n` +
+        `  fix: bun run capabilities   (workspace entries go to --workspace-out, for the server)`,
     )
+    process.exit(1)
   }
+
+  const before = new Set<string>(((prev.entries ?? []) as any[]).map(key))
+  const after = new Set<string>(entries.map(key))
   const added = [...after].filter((k) => !before.has(k))
-  const allRemoved = [...before].filter((k) => !after.has(k))
-
-  // The SAME reasoning the generator applies, or the two disagree about the same file: a
-  // playbook/skill that is absent here is absent from THIS WORKSPACE, not deleted. Blocking on
-  // it makes the check unpassable on any machine holding a partial slice — which is every
-  // machine — and an unpassable check is one people route around.
-  //
-  // Repo-sourced kinds are different: commands and how-tos live in this checkout, so their
-  // absence IS a deletion and still blocks.
-  const removed = allRemoved.filter((k) => !k.startsWith("playbook:") && !k.startsWith("skill:"))
-  const workspaceMissing = allRemoved.filter((k) => k.startsWith("playbook:") || k.startsWith("skill:"))
-  if (workspaceMissing.length) {
-    console.warn(
-      `note: ${workspaceMissing.length} indexed playbook/skill entr${workspaceMissing.length === 1 ? "y is" : "ies are"} ` +
-        `not in this workspace — kept, because absence here is not deletion.\n` +
-        `      ${workspaceMissing.slice(0, 6).join(", ")}${workspaceMissing.length > 6 ? `, …${workspaceMissing.length - 6} more` : ""}`,
-    )
-  }
+  // Commands and how-tos live in this checkout, so their absence IS a deletion and blocks.
+  const removed = [...before].filter((k) => !after.has(k))
 
   // IS THE TREE DIRTY? It changes what the drift means (#180517).
   //
@@ -773,6 +792,20 @@ if (process.argv.includes("--check")) {
 
 writeFileSync(OUT, json)
 console.log(
-  `wrote ${OUT}\n  ${index.counts.command} commands · ${index.counts["how-to"]} how-tos · ` +
-  `${index.counts.playbook} playbooks · ${index.counts.skill} skills = ${index.counts.total} capabilities`,
+  `wrote ${OUT}\n  ${index.counts.command} commands · ${index.counts["how-to"]} how-tos = ${index.counts.total} capabilities`,
 )
+
+if (WORKSPACE_OUT) {
+  // Exactly the shape the server serves under `entries` (it adds `version` itself).
+  const workspace = { entries: workspaceEntries.sort(byKindName) }
+  writeFileSync(WORKSPACE_OUT, JSON.stringify(workspace, null, 2) + "\n")
+  const n = (k: string) => workspaceEntries.filter((e) => e.kind === k).length
+  console.log(
+    `wrote ${WORKSPACE_OUT}  (PRIVATE — do not commit to this repo)\n  ${n("playbook")} playbooks · ${n("skill")} skills`,
+  )
+} else {
+  console.log(
+    `  playbooks and skills are NOT in this file (private — IP-07 #189850). For the server copy:\n` +
+      `  IRIS_PROJECT_ROOT=<workspace> bun run capabilities --workspace-out <fl-iris-api>/resources/cli-capabilities/workspace.json`,
+  )
+}
