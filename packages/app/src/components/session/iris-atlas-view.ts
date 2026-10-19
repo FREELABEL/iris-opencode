@@ -325,6 +325,24 @@ export function atlasDropPosition<I extends AtlasViewItem, L extends AtlasViewLi
 }
 
 /**
+ * WHERE A HELD CARD LANDS (the drag preview). Over another card: before it in its top half, after
+ * it in its bottom half — Sortable's rule, which Elon's board uses. "Always before" made the last
+ * slot of a list unreachable except by the gap under it, and the line jumped as the pointer
+ * crossed each card. The card being dragged is not in the list it is measured against.
+ */
+export function dropBeforeId(items: { id: number }[], overId: number, lowerHalf: boolean, draggingId: number) {
+  const rest = items.filter((i) => i.id !== draggingId)
+  const at = rest.findIndex((i) => i.id === overId)
+  if (at < 0) return null
+  if (!lowerHalf) return overId
+  return rest[at + 1]?.id ?? null
+}
+
+/** Same landing spot — dragover fires many times a second, and only a change should move anything. */
+export const sameDrop = (a: Omit<AtlasDrop, "itemId"> | null, b: Omit<AtlasDrop, "itemId"> | null) =>
+  a?.toListId === b?.toListId && a?.beforeId === b?.beforeId
+
+/**
  * A due date as a card face says it (#189806): overdue (red), due within 48 h (amber), later.
  * Date-only values ("2026-10-20") are the END of that day — a card due today is not overdue at 9am.
  */

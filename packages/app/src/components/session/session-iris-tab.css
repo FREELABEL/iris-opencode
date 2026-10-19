@@ -2316,8 +2316,34 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 .iris-board__card--dragging {
   opacity: 0.4;
 }
-.iris-board__card--before {
-  box-shadow: 0 -3px 0 0 var(--text-base);
+/* THE DRAG PREVIEW — Elon's ghost: where the card will land, its own height, dashed and
+   breathing; the card itself leaves its old slot so the list closes up behind it. */
+.iris-board__card--source {
+  display: none;
+}
+.iris-board__ghost {
+  --ghost: var(--border-interactive-base, #3b82f6);
+  flex: none;
+  border: 1.5px dashed color-mix(in srgb, var(--ghost) 70%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--ghost) 12%, transparent);
+  animation: iris-ghost-pulse 1.5s ease-in-out infinite;
+}
+@keyframes iris-ghost-pulse {
+  0%,
+  100% {
+    border-color: color-mix(in srgb, var(--ghost) 45%, transparent);
+    background: color-mix(in srgb, var(--ghost) 8%, transparent);
+  }
+  50% {
+    border-color: var(--ghost);
+    background: color-mix(in srgb, var(--ghost) 18%, transparent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .iris-board__ghost {
+    animation: none;
+  }
 }
 .iris-board__meta {
   display: flex;
