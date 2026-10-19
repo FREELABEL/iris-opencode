@@ -353,7 +353,7 @@ const SkillShowCommand = cmd({
       prompts.intro(`◈  Skill: ${plan.name}`)
 
       printDivider()
-      printKV("Version", plan.version)
+      printKV("Version", versionLabel(plan))
       printKV("Description", plan.description)
       // What a model routes on. Printed next to the description because the two are
       // easy to conflate: description is WHAT this does, triggers are WHEN to reach
@@ -819,7 +819,7 @@ const SkillTestCommand = cmd({
       prompts.intro(`◈  Validate: ${plan.name}`)
 
       printDivider()
-      printKV("Version", plan.version)
+      printKV("Version", versionLabel(plan))
       printKV("Steps", plan.steps.length)
       printKV("Args", Object.keys(plan.args).length)
 
@@ -3124,6 +3124,20 @@ const PlaybookInstallCommand = cmd({
 })
 
 // ============================================================================
+
+
+/**
+ * #189894 — `show`/`test` printed the engine version (`plan.version`, always 1 or 2) as "Version",
+ * so a file declaring `version: 3` read as "Version: 2" and the field's real value was invisible
+ * exactly where someone would look for it. Show what the file says when it differs.
+ */
+export function versionLabel(plan: { version: number; declaredVersion?: unknown }): string {
+  const d = plan.declaredVersion
+  const same = d === plan.version || (typeof d === "string" && d.trim() === String(plan.version))
+  if (same) return String(plan.version)
+  const said = d === undefined ? "no version field" : `version: ${JSON.stringify(d)}`
+  return `${plan.version} (file has ${said} — runs as v${plan.version})`
+}
 
 export const PlatformPlaybookCommand = cmd({
   command: "playbook <subcommand>",
