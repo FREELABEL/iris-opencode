@@ -63,6 +63,9 @@ jobs:
           cp "$BIN" packages/desktop/src-tauri/sidecars/iris-cli-aarch64-apple-darwin
           chmod +x packages/desktop/src-tauri/sidecars/iris-cli-aarch64-apple-darwin
 
+      - name: Build and stage the microphone helper (#189828)
+        run: sh packages/opencode/native/macos-mic/build-sidecar.sh aarch64-apple-darwin packages/desktop/src-tauri/sidecars
+
       - name: Build IRIS desktop app
         run: |
           cd packages/desktop

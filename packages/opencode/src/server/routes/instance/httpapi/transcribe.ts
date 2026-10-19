@@ -15,6 +15,7 @@ import {
   resolveCaptureDevice,
   soundSettingsHint,
   startCapture,
+  waitForAudio,
   stopCapture,
 } from "@/transcribe/capture"
 import { ChainError, effectiveEngines, transcribeWithFallback } from "@/transcribe/chain"
@@ -244,7 +245,7 @@ function holdOrNull(audio: Uint8Array) {
 export const dictateRoute = HttpRouter.use((router) =>
   Effect.gen(function* () {
     yield* add(router, "POST", "/dictate/start", (request) =>
-      Effect.sync(() => {
+      Effect.promise(async () => {
         try {
           // ?device=<name> is the Settings choice. A mic that is not plugged in records from the
           // default instead of failing the take, and the response says so.
@@ -254,9 +255,15 @@ export const dictateRoute = HttpRouter.use((router) =>
           // ?max_seconds= lifts the 5-minute cap for background recordings; capture.ts bounds it.
           const maxSeconds = Number(params.get("max_seconds")) || undefined
           const { startedAt } = startCapture(device, maxSeconds)
+          // Answer when the microphone is live, not when the recorder was spawned: the composer
+          // shows the ring on this response, and a person talks as soon as they see it (#189875).
+          // A recorder that is slow past the timeout still records; `live` says it was not yet.
+          const live = await waitForAudio(1500)
           return HttpServerResponse.jsonUnsafe({
             recording: true,
             startedAt,
+            live,
+            waitedMs: Date.now() - startedAt,
             device: requested ? { requested, found: device !== undefined } : undefined,
           })
         } catch (e) {
