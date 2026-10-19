@@ -1,0 +1,76 @@
+# ONE-OFF (IP-06 #189849). Runs only in the PRIVATE FREELABEL/iris-code, on this temporary branch.
+# Proves the release secrets copied into iris-code are the right ones, without printing any value:
+#   1. TAURI_SIGNING_PRIVATE_KEY signs a test file, and the signature VERIFIES against the public
+#      key compiled into the shipped desktop app (minisign key id 2A10681A228C03AC). A wrong key, a
+#      wrong password, or a truncated copy all fail here.
+#   2. APPLE_CERTIFICATE opens with APPLE_CERTIFICATE_PASSWORD and its subject matches
+#      APPLE_SIGNING_IDENTITY / APPLE_TEAM_ID.
+#   3. CROSS_REPO_PAT can read FREELABEL/fl-elon-web-ui (what the desktop build needs it for).
+name: signing-proof-189849
+on:
+  push:
+    branches: [wt/189849-signing-proof]
+permissions:
+  contents: read
+jobs:
+  proof:
+    if: github.repository == 'FREELABEL/iris-code'
+    runs-on: ubuntu-latest
+    env:
+      # Public key the installed desktop apps trust — copied from
+      # packages/desktop/src-tauri/tauri.prod.conf.json (plugins.updater.pubkey) on iris/1.18.23.
+      TRUSTED_PUBKEY_B64: dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJBMTA2ODFBMjI4QzAzQUMKUldTc0E0d2lHbWdRS21aQ1dzQUVlcUllczYrS1lJU0JWS2tFOUZFcWh1K0syVnhWdkQ2L1lUQ0MK
+    steps:
+      - name: 1 · Tauri key signs, and the signature verifies against the app's trusted key
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y -qq minisign >/dev/null
+          cd "$RUNNER_TEMP"
+          echo "iris-code signing proof $(date -u +%FT%TZ)" > probe.txt
+          npx -y @tauri-apps/cli@2 signer sign probe.txt > /dev/null
+          test -s probe.txt.sig || { echo "FAIL: no signature produced"; exit 1; }
+          printf '%s' "$TRUSTED_PUBKEY_B64" | base64 -d > trusted.pub
+          base64 -d probe.txt.sig > probe.txt.minisig
+          echo "trusted key: $(head -1 trusted.pub)"
+          if minisign -Vm probe.txt -p trusted.pub -x probe.txt.minisig >/dev/null; then
+            echo "PASS: signature from the iris-code key verifies against 2A10681A228C03AC"
+          else
+            echo "FAIL: signature does NOT verify against the key installed apps trust"; exit 1
+          fi
+          # A negative control, so a check that always passes cannot hide here.
+          echo tampered >> probe.txt
+          if minisign -Vm probe.txt -p trusted.pub -x probe.txt.minisig >/dev/null 2>&1; then
+            echo "FAIL: negative control passed — the check proves nothing"; exit 1
+          else
+            echo "PASS: negative control (tampered file) correctly rejected"
+          fi
+      - name: 2 · Apple certificate opens and matches the signing identity
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 -d > cert.p12
+          subj=$(openssl pkcs12 -in cert.p12 -nokeys -passin env:APPLE_CERTIFICATE_PASSWORD -legacy 2>/dev/null \
+                 | openssl x509 -noout -subject -enddate 2>/dev/null \
+              || openssl pkcs12 -in cert.p12 -nokeys -passin env:APPLE_CERTIFICATE_PASSWORD 2>/dev/null \
+                 | openssl x509 -noout -subject -enddate)
+          rm -f cert.p12
+          [ -n "$subj" ] || { echo "FAIL: certificate did not open with its password"; exit 1; }
+          echo "PASS: certificate opens with its password"
+          echo "$subj" | grep -q "$APPLE_TEAM_ID" && echo "PASS: certificate belongs to APPLE_TEAM_ID" || { echo "FAIL: team id mismatch"; exit 1; }
+          cn=$(echo "$subj" | sed -n 's/.*CN *= *\([^,/]*\(([A-Z0-9]*)\)\?\).*/\1/p' | head -1)
+          [ "$cn" = "$APPLE_SIGNING_IDENTITY" ] && echo "PASS: certificate CN equals APPLE_SIGNING_IDENTITY" || echo "WARN: CN differs from APPLE_SIGNING_IDENTITY (check by eye in the Apple step of a real build)"
+          echo "certificate expiry: $(echo "$subj" | sed -n 's/^notAfter=//p')"
+      - name: 3 · CROSS_REPO_PAT can read fl-elon-web-ui
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_PAT }}
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/FREELABEL/fl-elon-web-ui)
+          [ "$code" = 200 ] && echo "PASS: CROSS_REPO_PAT reads fl-elon-web-ui" || { echo "FAIL: CROSS_REPO_PAT got HTTP $code"; exit 1; }
