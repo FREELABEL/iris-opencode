@@ -27,17 +27,21 @@ export function isCliReleaseTag(tag: string | undefined): boolean {
 }
 
 /**
- * The newest CLI release tag, or null when the page holds none.
+ * The highest-versioned CLI release tag, or null when the page holds none.
  *
- * GitHub returns releases newest-first, so the first match wins — deliberately NOT a semver
- * sort. A rolled-back or re-cut release should win by RECENCY, the same way /releases/latest
- * behaved before desktop tags started outranking it.
+ * This was newest-first (recency) so a re-cut release could win. It cannot stay that way once
+ * the v2 engine ships as 1.5.x (#188596): one more 1.3.x cut from main would be listed above it
+ * and every user's `iris update` would leave v2 for it. A rollback is now a new, higher version.
  */
 export function pickLatestCliTag(rows: ReleaseRow[] | null | undefined): string | null {
   if (!Array.isArray(rows)) return null
-  for (const r of rows) {
-    if (r?.draft) continue
-    if (isCliReleaseTag(r?.tag_name)) return r!.tag_name!
-  }
-  return null
+  return rows
+    .filter((r) => !r?.draft && isCliReleaseTag(r?.tag_name))
+    .map((r) => r.tag_name!)
+    .reduce<string | null>((best, tag) => (best === null || compareTags(tag, best) > 0 ? tag : best), null)
+}
+
+function compareTags(a: string, b: string) {
+  const [x, y] = [a, b].map((tag) => tag.slice(1).split(".").map(Number))
+  return x[0] - y[0] || x[1] - y[1] || x[2] - y[2]
 }

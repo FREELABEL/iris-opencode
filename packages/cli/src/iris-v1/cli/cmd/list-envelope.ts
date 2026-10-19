@@ -88,7 +88,7 @@ export function buildListEnvelope<T>(
  */
 export const LIST_FIELDS: Record<string, string[]> = {
   bloqs: ["id", "name", "type", "is_owner"],
-  agents: ["id", "name", "type", "active", "description", "last_active_at"],
+  agents: ["id", "name", "type", "active", "description", "last_active_at", "bloq_id", "workspace_id"],
   leads: ["id", "name", "email", "company", "status", "updated_at"],
   pages: ["id", "title", "slug", "status", "updated_at"],
   // No status/active field exists on a workflow record — verified against a live

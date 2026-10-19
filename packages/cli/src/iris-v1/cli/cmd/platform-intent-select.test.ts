@@ -147,12 +147,34 @@ describe("related-list noise (#187829)", () => {
     expect(namesClient("reconcile my books", undefined)).toBe(true)
   })
   test("the index never offers `find`, a stub, or another client's playbook", async () => {
-    const { candidatePools } = await import("./platform-intent-select")
-    const names = candidatePools("reconcile my books", 12).pool.map((x) => x.name)
-    expect(names).not.toContain("find")
-    expect(names).not.toContain("atlas:ledger ledger reconcile")
-    expect(names.filter((n) => n.startsWith("playbook run pathways-"))).toEqual([])
-    expect(names).toContain("playbook run bills-to-books")
+    const { candidatePools, useIndex } = await import("./platform-intent-select")
+    const { loadIndex, mergeIndex } = await import("./platform-find")
+    // Workspace playbooks are no longer embedded (IP-07 #189850): they arrive from the API at
+    // runtime, so this test supplies two in that same shape — one generic, one client-scoped.
+    const play = (name: string, describe: string, client?: string) => ({
+      kind: "playbook" as const,
+      name,
+      describe,
+      aliases: [],
+      run: `iris playbook run ${name}`,
+      haystack: `${name} ${describe}`.toLowerCase(),
+      ...(client ? { client } : {}),
+    })
+    useIndex(
+      mergeIndex(loadIndex(), [
+        play("bills-to-books", "reconcile my books: match bills to the books"),
+        play("pathways-books-reconcile", "reconcile the pathways books", "pathways"),
+      ]),
+    )
+    try {
+      const names = candidatePools("reconcile my books", 12).pool.map((x) => x.name)
+      expect(names).not.toContain("find")
+      expect(names).not.toContain("atlas:ledger ledger reconcile")
+      expect(names.filter((n) => n.startsWith("playbook run pathways-"))).toEqual([])
+      expect(names).toContain("playbook run bills-to-books")
+    } finally {
+      useIndex(undefined)
+    }
   })
 })
 
