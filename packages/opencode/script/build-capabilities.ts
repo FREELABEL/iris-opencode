@@ -237,7 +237,7 @@ function collectCommands(): Entry[] {
   // exist.
   const indexFile = join(ROOT, "src/index.ts")
   const indexSrc = readFileSync(indexFile, "utf-8")
-  const registered = [...indexSrc.matchAll(/\.command\((?:reg\()?([A-Za-z0-9_]+Command)/g)].map((m) => m[1])
+  const registered = [...indexSrc.matchAll(/\.command\((?:reg\(|withAccessFooter\()?([A-Za-z0-9_]+Command)/g)].map((m) => m[1])
 
   // index.ts lives outside src/cli/cmd, so its imports are not in the map yet — and it is
   // the parent of every top-level verb, i.e. the one file whose resolution matters most.
@@ -340,7 +340,9 @@ function collectCommands(): Entry[] {
     const nextSeen = new Set(seen).add(`${b.file}::${constName}`)
 
     // Direct children only — those named in THIS block's builder.
-    const childNames = [...b.body.matchAll(/\.command\((?:reg\()?([A-Za-z0-9_]+(?:Command|Group|Cmd))/g)].map((m) => m[1])
+    // `withAccessFooter(X)` (#190012) only appends a help footer — read through it like `reg(X)`,
+    // or every command it wraps silently drops out of the capability index.
+    const childNames = [...b.body.matchAll(/\.command\((?:reg\(|withAccessFooter\()?([A-Za-z0-9_]+(?:Command|Group|Cmd))/g)].map((m) => m[1])
     const childTokens: string[] = []
     for (const child of childNames) {
       childTokens.push(...walk(child, path, nextSeen, depth + 1, b.file))
