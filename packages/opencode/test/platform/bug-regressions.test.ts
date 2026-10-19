@@ -395,8 +395,11 @@ describe("endpoint URL contracts: leads pulse", () => {
   })
 
   test("pulse uses bridge /api/mail/search for Apple Mail", () => {
-    const src = readSource("platform-leads.ts")
-    expect(src).toContain("${BRIDGE_BASE}/api/mail/search")
+    // #189941: the read moved into comms-apple-mail.ts (participant=, both directions); sync-comms
+    // and the pulse source call it with their bridge base.
+    expect(readSource("comms-apple-mail.ts")).toContain("/api/mail/search?")
+    expect(readSource("platform-leads.ts")).toContain("fetch(`${BRIDGE_BASE}${path}`")
+    expect(readSource("pulse-contact-script.ts")).toContain("fetchLeadMail(")
   })
 })
 
