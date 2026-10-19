@@ -15,7 +15,9 @@ permissions:
 jobs:
   proof:
     if: github.repository == 'FREELABEL/iris-code'
-    runs-on: ubuntu-latest
+    # Self-hosted (org runner group private-ci): GitHub-hosted minutes on private repos are billed
+    # and the account's Actions billing is currently blocked.
+    runs-on: [self-hosted, hive]
     env:
       # Public key the installed desktop apps trust — copied from
       # packages/desktop/src-tauri/tauri.prod.conf.json (plugins.updater.pubkey) on iris/1.18.23.
@@ -27,7 +29,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          sudo apt-get install -y -qq minisign >/dev/null
+          command -v minisign >/dev/null || sudo apt-get install -y -qq minisign >/dev/null
           cd "$RUNNER_TEMP"
           echo "iris-code signing proof $(date -u +%FT%TZ)" > probe.txt
           npx -y @tauri-apps/cli@2 signer sign probe.txt > /dev/null
