@@ -68,6 +68,8 @@ import {
   atlasCountLine,
   atlasDropPosition,
   boardLabels,
+  dropBeforeId,
+  sameDrop,
   cardPreview,
   changedItemIds,
   editedSince,
@@ -87,6 +89,7 @@ import { liveLabel, readSse, type LiveState } from "./iris-atlas-live"
 import { CardBadges, type CardFace } from "./iris-card-badges"
 import { IrisBoardMembers, readMembers } from "./iris-board-members"
 import { IrisDelegateRail } from "./iris-delegate-rail"
+import { slideCards } from "./iris-board-motion"
 import { useLanguage } from "@/context/language"
 import { filterRecords, sortRecords, toCsv, type SortDir } from "./iris-records-view"
 
@@ -1496,6 +1499,32 @@ export function SessionIrisTab() {
   const [moveNote, setMoveNote] = createSignal<string | null>(null)
   const [dragging, setDragging] = createSignal<number | null>(null)
   const [dropAt, setDropAt] = createSignal<{ listId: number; beforeId: number | null } | null>(null)
+  /*
+   * THE DRAG PREVIEW (Elon's board, rebuilt on native drag — the Delegate rail reads its
+   * dataTransfer). While a card is held, its slot is a dashed placeholder of the same height at the
+   * spot it would land, and the other cards slide out of the way. `lifted` turns the card into the
+   * placeholder ONE FRAME after dragstart: collapse it inside dragstart and the browser snapshots
+   * an empty box as the drag image.
+   */
+  const [lifted, setLifted] = createSignal(false)
+  const [dragHeight, setDragHeight] = createSignal(0)
+  let boardEl: HTMLDivElement | undefined
+  const moveDropAt = (next: { listId: number; beforeId: number | null } | null) => {
+    const cur = dropAt()
+    const key = (d: typeof cur) => (d ? { toListId: d.listId, beforeId: d.beforeId } : null)
+    if (sameDrop(key(cur), key(next))) return
+    slideCards(boardEl, () => setDropAt(next))
+  }
+  /** Put everything back — the card where it lands (drop) or where it was (cancel) — sliding. */
+  const endDrag = (commit?: () => void) =>
+    slideCards(boardEl, () => {
+      setDragging(null)
+      setLifted(false)
+      setDropAt(null)
+      commit?.()
+    })
+  const ghostAt = (listId: number, beforeId: number | null) =>
+    lifted() && dropAt()?.listId === listId && dropAt()?.beforeId === beforeId
   /** Drag follows board order. Under another sort, "in front of this card" means nothing that
    *  survives a refresh, so the board says so instead of saving a position nobody chose. */
   const canDrag = () => atlasView().sort === "board"
@@ -3701,29 +3730,44 @@ export function SessionIrisTab() {
                   <Show when={!canDrag() && delegateOpen()}>
                     <p class="px-2 pb-2 text-11-regular text-text-weak">{language.t("iris.delegate.sort")}</p>
                   </Show>
-                  <div class="iris-board-wrap">
-                  <div class="iris-board" aria-label="Board">
+                  <div
+                    class="iris-board-wrap"
+                    onDragOver={(e) => {
+                      // Held over the Delegate rail: the card is not going into the board, so the
+                      // placeholder leaves it. Letting go on the rail puts the card back.
+                      if (dragging() !== null && (e.target as HTMLElement).closest(".iris-delegate")) moveDropAt(null)
+                    }}
+                  >
+                  <div class="iris-board" aria-label="Board" ref={boardEl}>
                     <For each={atlasRows()}>
                       {(list) => (
                         <section
                           class="iris-board__col"
                           classList={{
-                            "iris-board__col--over": dropAt()?.listId === list.id && dropAt()?.beforeId === null,
+                            "iris-board__col--over": lifted() && dropAt()?.listId === list.id,
                           }}
                           onDragOver={(e) => {
                             if (dragging() === null || !canDrag()) return
                             e.preventDefault()
                             if (e.dataTransfer) e.dataTransfer.dropEffect = "move"
-                            setDropAt({ listId: list.id, beforeId: null })
+                            // In a gap between cards, or on the placeholder: stay put. Below the
+                            // last card, or arriving from another list: the end of this one.
+                            const cards = Array.from(
+                              e.currentTarget.querySelectorAll<HTMLElement>("[data-board-card]:not(.iris-board__card--source)"),
+                            )
+                            const last = cards.at(-1)?.getBoundingClientRect()
+                            if (dropAt()?.listId === list.id && last && e.clientY < last.bottom) return
+                            moveDropAt({ listId: list.id, beforeId: null })
                           }}
                           onDrop={(e) => {
                             if (!canDrag()) return
                             e.preventDefault()
                             const itemId = dragging()
                             const at = dropAt()
-                            setDragging(null)
-                            setDropAt(null)
-                            if (itemId !== null) void dropCard({ itemId, toListId: list.id, beforeId: at?.listId === list.id ? at.beforeId : null })
+                            endDrag(() => {
+                              if (itemId !== null)
+                                void dropCard({ itemId, toListId: list.id, beforeId: at?.listId === list.id ? at.beforeId : null })
+                            })
                           }}
                         >
                           <header class="iris-board__head">
@@ -3733,17 +3777,18 @@ export function SessionIrisTab() {
                           <div class="iris-board__cards">
                             <For each={list.items}>
                               {(item) => (
+                                <>
+                                <Show when={ghostAt(list.id, item.id)}>
+                                  <div class="iris-board__ghost" style={{ height: `${dragHeight()}px` }} aria-hidden="true" />
+                                </Show>
                                 <div
                                   role="button"
                                   tabindex="0"
                                   class="iris-board__card"
+                                  data-board-card={item.id}
                                   classList={{
-                                    "iris-board__card--dragging": dragging() === item.id,
-                                    "iris-board__card--before":
-                                      dragging() !== null &&
-                                      dragging() !== item.id &&
-                                      dropAt()?.listId === list.id &&
-                                      dropAt()?.beforeId === item.id,
+                                    "iris-board__card--dragging": dragging() === item.id && !lifted(),
+                                    "iris-board__card--source": dragging() === item.id && lifted(),
                                   }}
                                   draggable={canDrag() || delegateOpen()}
                                   title={canDrag() ? "Open this card, or drag it to move it" : "Open this card"}
@@ -3757,30 +3802,47 @@ export function SessionIrisTab() {
                                   onDragStart={(e) => {
                                     setDragging(item.id)
                                     setMoveNote(null)
+                                    setDragHeight(e.currentTarget.getBoundingClientRect().height)
                                     if (e.dataTransfer) {
                                       e.dataTransfer.effectAllowed = "move"
                                       e.dataTransfer.setData("text/plain", `atlas-item:${item.id}`)
                                     }
+                                    // Moving between lists needs board order; delegating does not,
+                                    // and then the card stays where it is, dimmed.
+                                    if (!canDrag()) return
+                                    const id = item.id
+                                    requestAnimationFrame(() => {
+                                      if (dragging() !== id) return
+                                      slideCards(boardEl, () => {
+                                        setLifted(true)
+                                        setDropAt({ listId: list.id, beforeId: dropBeforeId(list.items, id, true, -1) })
+                                      })
+                                    })
                                   }}
                                   onDragEnd={() => {
-                                    setDragging(null)
-                                    setDropAt(null)
+                                    if (dragging() !== null) endDrag()
                                   }}
                                   onDragOver={(e) => {
                                     if (dragging() === null || !canDrag()) return
                                     e.preventDefault()
                                     e.stopPropagation()
                                     if (e.dataTransfer) e.dataTransfer.dropEffect = "move"
-                                    setDropAt({ listId: list.id, beforeId: item.id })
+                                    const r = e.currentTarget.getBoundingClientRect()
+                                    moveDropAt({
+                                      listId: list.id,
+                                      beforeId: dropBeforeId(list.items, item.id, e.clientY > r.top + r.height / 2, dragging()!),
+                                    })
                                   }}
                                   onDrop={(e) => {
                                     if (!canDrag()) return
                                     e.preventDefault()
                                     e.stopPropagation()
                                     const itemId = dragging()
-                                    setDragging(null)
-                                    setDropAt(null)
-                                    if (itemId !== null) void dropCard({ itemId, toListId: list.id, beforeId: item.id })
+                                    const at = dropAt()
+                                    endDrag(() => {
+                                      if (itemId !== null)
+                                        void dropCard({ itemId, toListId: list.id, beforeId: at?.listId === list.id ? at.beforeId : item.id })
+                                    })
                                   }}
                                 >
                                   <span class="text-12-regular text-text-base">{item.title}</span>
@@ -3802,9 +3864,13 @@ export function SessionIrisTab() {
                                     <span class="font-mono tabular-nums text-text-weaker ml-auto">#{item.id}</span>
                                   </span>
                                 </div>
+                                </>
                               )}
                             </For>
-                            <Show when={list.items.length === 0}>
+                            <Show when={ghostAt(list.id, null)}>
+                              <div class="iris-board__ghost" style={{ height: `${dragHeight()}px` }} aria-hidden="true" />
+                            </Show>
+                            <Show when={list.items.length === 0 && !ghostAt(list.id, null)}>
                               <p class="iris-board__empty">{dragging() !== null ? "Drop here" : "No cards"}</p>
                             </Show>
                           </div>
@@ -3821,10 +3887,7 @@ export function SessionIrisTab() {
                       sessions={delegateSessions}
                       sessionBusy={sessionBusy}
                       sendToSession={sendToSession}
-                      onDropped={() => {
-                        setDragging(null)
-                        setDropAt(null)
-                      }}
+                      onDropped={() => endDrag()}
                       onChanged={() => void refetchSurface()}
                     />
                   </Show>

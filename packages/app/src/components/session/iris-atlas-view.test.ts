@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
+  dropBeforeId,
+  sameDrop,
   ATLAS_VIEW_DEFAULT,
   applyAtlasView,
   atlasCountLine,
@@ -267,6 +269,29 @@ describe("card face: due dates and avatars (#189806)", () => {
     expect(initials("elon")).toBe("EL")
     expect(initials("alex@freelabel.net")).toBe("AN")
     expect(initials(undefined)).toBe("?")
+  })
+})
+
+describe("where a held card lands (drag preview)", () => {
+  const items = [{ id: 1 }, { id: 2 }, { id: 3 }]
+  test("top half: before the card under the pointer", () => {
+    expect(dropBeforeId(items, 2, false, 9)).toBe(2)
+  })
+  test("bottom half: before the NEXT card, or the end of the list", () => {
+    expect(dropBeforeId(items, 2, true, 9)).toBe(3)
+    expect(dropBeforeId(items, 3, true, 9)).toBeNull()
+  })
+  test("the dragged card is not counted: over 1's bottom half while dragging 2 lands before 3", () => {
+    expect(dropBeforeId(items, 1, true, 2)).toBe(3)
+  })
+  test("over a card that is not in this list: nowhere", () => {
+    expect(dropBeforeId(items, 42, false, 9)).toBeNull()
+  })
+  test("sameDrop compares the spot, not the object", () => {
+    expect(sameDrop({ toListId: 1, beforeId: 2 }, { toListId: 1, beforeId: 2 })).toBe(true)
+    expect(sameDrop({ toListId: 1, beforeId: 2 }, { toListId: 1, beforeId: null })).toBe(false)
+    expect(sameDrop(null, null)).toBe(true)
+    expect(sameDrop(null, { toListId: 1, beforeId: null })).toBe(false)
   })
 })
 
