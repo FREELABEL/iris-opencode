@@ -85,6 +85,12 @@ describe("reconcileSent — a sent message to a lead with no ledger row is repor
     expect(reconcileSent([m], leads, ledger)).toEqual([])
   })
 
+  test("a note to yourself is not lead correspondence, even if your address is on a lead (measured: heartbeat reports)", () => {
+    const self = new Map([["alex@freelabel.net", [1, 2]], ...leads])
+    expect(reconcileSent([sent({ to: ["alex@freelabel.net"], subject: "Heartbeat Report" })], self, new Map())).toEqual([])
+    expect(reconcileSent([sent({ to: ["ALEX@freelabel.net", "hpk@m42.com"] })], self, new Map())[0].ambiguous).toEqual([])
+  })
+
   test("mail to non-leads is not a finding", () => {
     expect(reconcileSent([sent({ to: ["someone@else.com"] })], leads, new Map())).toEqual([])
   })

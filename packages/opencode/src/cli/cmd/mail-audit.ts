@@ -87,10 +87,14 @@ function isLogged(m: SentMail, rows: LedgerRow[]): boolean {
  */
 export function reconcileSent(sent: SentMail[], leadsByAddress: Map<string, number[]>, ledgerByLead: Map<number, LedgerRow[]>): UnloggedSent[] {
   const out: UnloggedSent[] = []
+  // Our own addresses (anyone who appears as a sender here) are never "the lead" — a heartbeat
+  // report mailed to yourself matched every lead that carries your address (measured live).
+  const own = new Set(sent.map((m) => addressKey(m.sender)).filter(Boolean))
   for (const m of sent) {
     const leadIds: number[] = []
     const ambiguous: string[] = []
     for (const addr of [...m.to, ...m.cc]) {
+      if (own.has(addressKey(addr))) continue
       const ids = leadsByAddress.get(addressKey(addr)) ?? []
       if (ids.length > 1) ambiguous.push(addr.toLowerCase())
       else if (ids.length === 1 && !leadIds.includes(ids[0])) leadIds.push(ids[0])
