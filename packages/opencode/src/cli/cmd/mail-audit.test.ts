@@ -169,7 +169,7 @@ describe("auditSentMail — orchestration, bounded and honest", () => {
     const r = await auditSentMail(
       { days: 14, limit: 200 },
       {
-        bridge: async () => new Response(JSON.stringify({ emails: [{ subject: "x", sender: "someone@else.com", date_sent: NOW.toISOString(), to: ["hpk@m42.com"] }] })),
+        bridge: async () => new Response(JSON.stringify({ emails: [{ subject: "x", sender: "someone@else.com", date_sent: NOW.toISOString(), to: ["hpk@m42.com"] }], capabilities: ["participant", "body"] })),
         resolveLead: async () => [29285],
         ledger: async () => [],
       },
