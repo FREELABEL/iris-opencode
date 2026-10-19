@@ -63,3 +63,48 @@ describe("mailRows", () => {
     expect(() => mailRows({ results: [] })).toThrow(/keys: results/)
   })
 })
+
+// #189941 — `iris mail search` / `read` argument handling.
+import { mailSearchParams, describeMailQuery, bodyMissingNote } from "./mail-response"
+
+describe("mailSearchParams", () => {
+  test("a sender query is trimmed and passed through unmangled (quotes, %, _, ;)", () => {
+    for (const q of ["o'brien", '"quoted"', "100%", "a_b", "x;y LIMIT 5;"]) {
+      const r = mailSearchParams({ query: `  ${q} `, days: 7, limit: 5 })
+      expect("error" in r).toBe(false)
+      expect((r as URLSearchParams).get("from")).toBe(q)
+    }
+  })
+
+  test("subject-only search works with no sender (was: 'No emails from \"\"')", () => {
+    const r = mailSearchParams({ query: "", subject: "Iris demo", days: 7, limit: 5 }) as URLSearchParams
+    expect(r.get("subject")).toBe("Iris demo")
+    expect(r.has("from")).toBe(false)
+  })
+
+  test("nothing to search for is an error, not a search for everything", () => {
+    expect("error" in (mailSearchParams({ query: "   ", days: 7, limit: 5 }) as any)).toBe(true)
+    expect("error" in (mailSearchParams({ days: 7, limit: 5 }) as any)).toBe(true)
+    expect("error" in (mailSearchParams({ query: "", subject: "  ", days: 7, limit: 5 }) as any)).toBe(true)
+  })
+
+  test("--full asks for bodies; --thread asks for both directions", () => {
+    const r = mailSearchParams({ query: "hpk@m42.com", days: 30, limit: 5, full: true, maxBody: 900, thread: true }) as URLSearchParams
+    expect(r.get("include_body")).toBe("1")
+    expect(r.get("max_body")).toBe("900")
+    expect(r.get("participant")).toBe("hpk@m42.com")
+    expect(r.has("from")).toBe(false)
+  })
+
+  test("describeMailQuery names what was actually searched", () => {
+    expect(describeMailQuery({ query: "", subject: "demo", days: 7 })).toBe('No emails with subject "demo" in the last 7 days')
+    expect(describeMailQuery({ query: "khalsa", days: 7 })).toBe('No emails from "khalsa" in the last 7 days')
+    expect(describeMailQuery({ query: "a@b.c", thread: true, days: 7 })).toBe('No emails to or from "a@b.c" in the last 7 days')
+  })
+
+  test("--full against a bridge that returned no body says so instead of printing nothing", () => {
+    expect(bodyMissingNote({ subject: "x" })).toContain("older than body support")
+    expect(bodyMissingNote({ body: null, body_error: "message file not on disk" })).toContain("not on disk")
+    expect(bodyMissingNote({ body: "hello" })).toBeNull()
+  })
+})

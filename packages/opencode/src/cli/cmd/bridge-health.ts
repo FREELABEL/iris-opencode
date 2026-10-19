@@ -124,7 +124,10 @@ export async function probeWithHeal(
   url: string,
   opts: { firstTimeoutMs?: number; retryTimeoutMs?: number; backoffMs?: number } = {},
 ): Promise<BridgeHealth> {
-  const { firstTimeoutMs = 3000, retryTimeoutMs = 6000, backoffMs = 400 } = opts
+  // #189941: 3s + 6s was not enough for a bridge answering its first request after the Mac woke
+  // (measured: "did not answer /health in time" on the first call, fine on the second). A cold
+  // daemon gets a longer second look; a healthy one still answers the first probe in ms.
+  const { firstTimeoutMs = 4000, retryTimeoutMs = 15000, backoffMs = 500 } = opts
 
   const first = bridgeHealthFrom(await probe(firstTimeoutMs), url)
   if (first.ok || !first.transient) return { ...first, attempts: 1, healed: false }

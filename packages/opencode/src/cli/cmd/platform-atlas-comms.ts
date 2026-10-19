@@ -309,10 +309,15 @@ async function ingestGmail(lead: any, requested: "gmail" | "apple_mail"): Promis
 
   for (const addr of emails) {
     try {
-      const res = await fetch(`${BRIDGE_URL}/api/mail/search?from=${encodeURIComponent(addr)}&days=90&limit=50&include_body=1`, {
-        headers: bridgeHeaders,
-        signal: AbortSignal.timeout(15000),
-      })
+      // participant= (#189941): both directions. A bridge older than that answers 400 "from is
+      // required" — fall back to the sender-only read rather than reporting nothing.
+      const get = (key: "participant" | "from") =>
+        fetch(`${BRIDGE_URL}/api/mail/search?${key}=${encodeURIComponent(addr)}&days=90&limit=50&include_body=1`, {
+          headers: bridgeHeaders,
+          signal: AbortSignal.timeout(45000),
+        })
+      let res = await get("participant")
+      if (res.status === 400) res = await get("from")
       if (!res.ok) {
         // KEEP THE BRIDGE'S REASON (#185776). It answers 503 with a precise sentence — "the iris
         // daemon has no Full Disk Access (the DAEMON's own grant, not your terminal's)" — and this

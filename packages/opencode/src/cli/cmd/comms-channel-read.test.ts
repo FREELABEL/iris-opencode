@@ -112,3 +112,20 @@ describe("the bridge mail contract (drift found 2026-09-17)", () => {
     expect(bridgeMailItems({ error: "nope" }, "x@y.z")).toBeNull()
   })
 })
+
+describe("#189941 — participant= rows keep their direction", () => {
+  test("outbound is filed as outbound with recipients; third-party thread mail is dropped", () => {
+    const items = bridgeMailItems(
+      {
+        emails: [
+          { subject: "Re: demo", sender: "alex@freelabel.net", date_sent: "2026-10-19T14:46:11.000Z", direction: "outbound", to: ["hpk@m42.com"], cc: ["dc@m42.com"] },
+          { subject: "demo", sender: "hpk@m42.com", date_sent: "2026-10-19T03:13:36.000Z", direction: "inbound" },
+          { subject: "fyi", sender: "dave@c.io", date_sent: "2026-10-18T03:13:36.000Z", direction: "other" },
+        ],
+      },
+      "hpk@m42.com",
+    )!
+    expect(items.map((i) => i.direction)).toEqual(["outbound", "inbound"])
+    expect((items[0].metadata as any).cc).toEqual(["dc@m42.com"])
+  })
+})

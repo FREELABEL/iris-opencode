@@ -43,3 +43,50 @@ export function mailRows(data: any): any[] {
       : r,
   )
 }
+
+export interface MailSearchArgs {
+  query?: string
+  subject?: string
+  days: number
+  limit: number
+  full?: boolean
+  maxBody?: number
+  attachments?: boolean
+  /** Match the query as an address that SENT or RECEIVED the message (both directions). */
+  thread?: boolean
+}
+
+/**
+ * Query string for /api/mail/search (#189941). The query is passed through as data — the bridge
+ * escapes it — and an empty one is refused here rather than becoming `from=` + "No emails from """.
+ */
+export function mailSearchParams(a: MailSearchArgs): URLSearchParams | { error: string } {
+  const q = String(a.query ?? "").trim()
+  const s = String(a.subject ?? "").trim()
+  if (!q && !s) return { error: "Give a sender (name or address) to search for, or a subject with -s \"…\"." }
+  const p = new URLSearchParams({ days: String(a.days), limit: String(a.limit) })
+  if (q) p.set(a.thread ? "participant" : "from", q)
+  if (s) p.set("subject", s)
+  if (a.full) {
+    p.set("include_body", "1")
+    p.set("max_body", String(a.maxBody ?? 4000))
+  }
+  if (a.attachments) p.set("include_attachments", "1")
+  return p
+}
+
+export function describeMailQuery(a: { query?: string; subject?: string; thread?: boolean; days: number }): string {
+  const q = String(a.query ?? "").trim()
+  const s = String(a.subject ?? "").trim()
+  const who = q ? (a.thread ? `to or from "${q}"` : `from "${q}"`) : ""
+  const subj = s ? `with subject "${s}"` : ""
+  return `No emails ${[who, subj].filter(Boolean).join(" ")} in the last ${a.days} days`
+}
+
+/** Why a row asked for with --full has no body, or null when it has one. */
+export function bodyMissingNote(row: any): string | null {
+  if (typeof row?.body === "string" && row.body.length > 0) return null
+  if (row?.body_error) return `(no body — ${row.body_error})`
+  if (!row || !("body" in row)) return "(no body — this bridge is older than body support; update the IRIS daemon)"
+  return "(empty body)"
+}

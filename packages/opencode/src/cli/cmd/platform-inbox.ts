@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { appleMailLedgerItems, fetchLeadMail } from "./comms-apple-mail"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, IRIS_API, requireAuth, requireUserId, handleApiError, printDivider, dim, bold, isNonInteractive, bridgeFetch, writeJson } from "./iris-api"
@@ -585,23 +586,15 @@ async function inboxViewHandler(args: any) {
         // Apple Mail via bridge
         if ((!channelFilter || channelFilter === "email") && email) {
           try {
-            const r = await bridgeFetch(`/api/mail/search?from=${encodeURIComponent(email)}&days=${days}&limit=10&include_body=0`)
-            if (r.ok) {
-              const d = (await r.json()) as any
-              const msgs = (d?.messages ?? []).slice(0, 10)
-              for (const msg of msgs) {
-                entries.push({ lead_id: leadId, lead_name: leadName, channel: "email", direction: "inbound", preview: (msg.subject ?? msg.snippet ?? "").slice(0, 120), timestamp: msg.date ?? msg.ts ?? null })
-              }
-              if (msgs.length > 0) {
-                commsToIngest.push({ channel: "apple_mail", items: msgs.map((msg: any) => ({
-                  direction: "inbound",
-                  from_identifier: email,
-                  subject: msg.subject ?? "",
-                  body: msg.body ?? msg.subject ?? "",
-                  sent_at: msg.date ?? msg.ts ?? null,
-                  metadata: { source: "inbox_scan" },
-                })) })
-              }
+            // #189941: `d.messages` was always undefined (the bridge answers `emails`) and from=
+            // only saw their side. Both directions now, one row per message.
+            const mail = await fetchLeadMail([email], { days, limit: 10 }, (path) => bridgeFetch(path))
+            const msgs = mail.messages.filter((m) => m.direction !== "other").slice(0, 10)
+            for (const msg of msgs) {
+              entries.push({ lead_id: leadId, lead_name: leadName, channel: "email", direction: msg.direction === "outbound" ? "outbound" : "inbound", preview: (msg.subject ?? "").slice(0, 120), timestamp: msg.date ?? null })
+            }
+            if (msgs.length > 0) {
+              commsToIngest.push({ channel: "apple_mail", items: appleMailLedgerItems(msgs, email, "inbox_scan") })
             }
           } catch { /* bridge may be offline */ }
         }

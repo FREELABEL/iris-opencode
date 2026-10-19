@@ -50,6 +50,7 @@ import {
   type CrmMatch,
 } from "./lead-mentions"
 import { firstArray } from "../../util/array"
+import { appleMailLedgerItems, fetchLeadMail, unansweredInbound } from "./comms-apple-mail"
 import {
   groupChannelBlindness,
   mergeRefreshIntoChecks,
@@ -2772,7 +2773,8 @@ const LeadsSyncCommsCommand = cmd({
     yargs
       .positional("ids", { describe: "lead IDs to sync", type: "string", array: true, demandOption: true })
       .option("days", { describe: "look-back window in days", type: "number", default: 30 })
-      .option("limit", { describe: "max messages per channel per lead", type: "number", default: 50 }),
+      .option("limit", { describe: "max messages per channel per lead", type: "number", default: 50 })
+      .option("dry-run", { describe: "read every channel and print what WOULD be ingested; write nothing", type: "boolean", default: false }),
   async handler(args) {
     const token = await requireAuth()
     if (!token) {
@@ -2782,6 +2784,7 @@ const LeadsSyncCommsCommand = cmd({
 
     const days = args.days as number
     const msgLimit = args.limit as number
+    const dryRun = !!((args as any)["dry-run"] ?? (args as any).dryRun)
     const ids = (args.ids as string[]).map((s) => parseInt(s, 10)).filter((n) => !isNaN(n))
 
     let totalIngested = 0
@@ -2854,18 +2857,19 @@ const LeadsSyncCommsCommand = cmd({
         }
 
         // ── Apple Mail (via local bridge) ──
-        if (email) {
-          try {
-            const r = await fetch(
-              `${BRIDGE_BASE}/api/mail/search?from=${encodeURIComponent(email)}&days=${days}&limit=${msgLimit}`,
-              { headers: bridgeHeaders(), signal: AbortSignal.timeout(10000) },
-            )
-            if (r.ok) {
-              const d = (await r.json()) as any
-              channels.push({ name: "Apple Mail", messages: d?.messages ?? [] })
-            }
-          } catch {
-            /* non-fatal */
+        // #189941: this read `d.messages` (the bridge answers `emails`) and asked from= (sender
+        // only), so it ingested 0 for every lead while Mail held the whole thread. Now: every
+        // address on the lead, both directions, one row per message, and a failure is reported.
+        const ci = lead?.contact_info ?? {}
+        const mailAddrs = [email, ci?.email, ...(Array.isArray(ci?.emails) ? ci.emails : [])].filter((e: any) => typeof e === "string" && e.includes("@"))
+        let appleMailErrors: string[] = []
+        if (mailAddrs.length > 0) {
+          const mail = await fetchLeadMail(mailAddrs, { days, limit: msgLimit, includeBody: true, maxBody: 4000 }, (path) =>
+            fetch(`${BRIDGE_BASE}${path}`, { headers: bridgeHeaders(), signal: AbortSignal.timeout(45000) }),
+          )
+          appleMailErrors = mail.errors
+          if (mail.messages.length > 0 || mail.errors.length < mailAddrs.length) {
+            channels.push({ name: "Apple Mail", messages: mail.messages, error: mail.errors.join("; ") || undefined })
           }
         }
 
@@ -2900,7 +2904,9 @@ const LeadsSyncCommsCommand = cmd({
           const wa = require("../lib/whatsapp")
           if (wa.isAvailable()) {
             const gItems = wa.readGroupsForLead(lead, days, msgLimit)
-            if (gItems.length > 0) {
+            if (gItems.length > 0 && dryRun) {
+              leadIngested += gItems.length
+            } else if (gItems.length > 0) {
               const ingestRes = await irisFetch("/api/v1/atlas/comms/ingest", {
                 method: "POST",
                 body: JSON.stringify({ lead_id: leadId, channel: "whatsapp", items: gItems }),
@@ -2953,19 +2959,18 @@ const LeadsSyncCommsCommand = cmd({
                 external_message_id: msg.id != null ? `gmail_${msg.id}` : undefined,
                 metadata: { gmail_thread_id: msg.thread_id, source: "comms_sync_task" },
               }
-            } else {
-              return {
-                direction: "inbound",
-                from_identifier: email,
-                subject: msg.subject ?? "",
-                body: msg.body ?? msg.subject ?? "",
-                sent_at: msg.date ?? msg.ts ?? null,
-                metadata: { source: "comms_sync_task" },
-              }
+            } else if (ch.name === "Apple Mail") {
+              return appleMailLedgerItems([msg], email || mailAddrs[0], "comms_sync_task")[0] ?? null
             }
-          })
+            return null
+          }).filter(Boolean)
 
-          if (items.length > 0) {
+          if (items.length > 0 && dryRun) {
+            leadIngested += items.length
+            for (const it of items as any[]) {
+              console.log(JSON.stringify({ lead_id: leadId, dry_run: true, channel: channelKey, direction: it.direction, sent_at: it.sent_at, subject: it.subject ?? "", external_message_id: it.external_message_id }))
+            }
+          } else if (items.length > 0) {
             try {
               const ingestRes = await irisFetch("/api/v1/atlas/comms/ingest", {
                 method: "POST",
@@ -2979,7 +2984,16 @@ const LeadsSyncCommsCommand = cmd({
         }
 
         totalIngested += leadIngested
-        console.log(JSON.stringify({ lead_id: leadId, ingested: leadIngested, channels: channels.length }))
+        console.log(
+          JSON.stringify({
+            lead_id: leadId,
+            [dryRun ? "would_ingest" : "ingested"]: leadIngested,
+            channels: channels.length,
+            // Per channel, what was read — so "0" can be told apart from "could not read".
+            read: Object.fromEntries(channels.map((c) => [c.name, c.messages.length])),
+            ...(appleMailErrors.length ? { apple_mail_errors: appleMailErrors } : {}),
+          }),
+        )
       } catch (e: any) {
         totalErrors++
         console.log(JSON.stringify({ lead_id: leadId, ingested: 0, error: e?.message ?? String(e) }))
@@ -4394,14 +4408,8 @@ const LeadsPulseCommand = cmd({
                   metadata: { gmail_thread_id: msg.thread_id, source: "pulse_scan" },
                 }
               } else if (ch.name === "Apple Mail") {
-                return {
-                  direction: "inbound",
-                  from_identifier: email,
-                  subject: msg.subject ?? "",
-                  body: msg.body ?? msg.subject ?? "",
-                  sent_at: msg.date ?? msg.ts ?? null,
-                  metadata: { source: "pulse_scan" },
-                }
+                // #189941: the row's own direction, and the same id atlas:comms writes.
+                return appleMailLedgerItems([msg], email, "pulse_scan")[0] ?? null
               } else if (ch.name === "Meetings") {
                 return {
                   direction: "outbound",
@@ -4493,7 +4501,9 @@ const LeadsPulseCommand = cmd({
           } else if (ch.name === "Apple Mail") {
             const subj = msg.subject ?? "(no subject)"
             const ts = msg.date ?? msg.ts ?? dim("(no date)")
-            console.log(`    ${dim(ts)}  ${subj.slice(0, 120)}`)
+            const dir = msg.direction === "outbound" ? "→" : msg.direction === "other" ? dim("·") : "←"
+            const who = msg.direction === "other" && msg.sender ? dim(`${msg.sender}: `) : ""
+            console.log(`    ${dim(ts)}  ${dir}  ${who}${subj.slice(0, 120)}`)
           } else if (ch.name === "Meetings") {
             const tag = msg.status === "upcoming" ? success("upcoming") : dim("past")
             const dateStr = msg.date ? `${formatDate(msg.date)} ${formatTime(msg.date)}` : "(no date)"
@@ -4563,7 +4573,7 @@ const LeadsPulseCommand = cmd({
       // Sentiment analysis + response time metrics (#104244: per-section try-catch)
       try {
       if (channels.length > 0) {
-        const allMessages: Array<{ text: string; date: string; isOutbound: boolean; channel: string }> = []
+        const allMessages: Array<{ text: string; date: string; isOutbound: boolean; channel: string; direction?: "inbound" | "outbound" | "other" }> = []
 
         for (const ch of channels) {
           for (const msg of ch.messages) {
@@ -4576,10 +4586,15 @@ const LeadsPulseCommand = cmd({
                   ? !(msg.from ?? "").toLowerCase().includes(email.toLowerCase())
                   : ch.name === "Meetings"
                     ? msg.status === "upcoming" || msg.status === "past"
-                    : false
+                    : ch.name === "Apple Mail"
+                      ? msg.direction === "outbound"
+                      : false
+            // #189941: third-party mail on the lead's thread is neither their word nor ours.
+            const direction: "inbound" | "outbound" | "other" =
+              ch.name === "Apple Mail" && msg.direction === "other" ? "other" : isOutbound ? "outbound" : "inbound"
 
-            if (text && date) {
-              allMessages.push({ text, date, isOutbound, channel: ch.name })
+            if (text && date && direction !== "other") {
+              allMessages.push({ text, date, isOutbound, channel: ch.name, direction })
             }
           }
         }
@@ -4732,6 +4747,18 @@ Consider context: "fixed the DNS issue" is positive (problem solved), not negati
 
         // Response times
         const fmtH = (h: number) => h < 1 ? `${Math.round(h * 60)}m` : h < 24 ? `${h.toFixed(1)}h` : `${(h / 24).toFixed(1)}d`
+
+        // #189941 — the most actionable fact in the section, and it used to be silent: a lead
+        // whose last word has sat unanswered printed only "INSUFFICIENT DATA". Meetings are
+        // excluded: a calendar entry is not a reply to an email.
+        const waiting = unansweredInbound(allMessages.filter((m) => m.channel !== "Meetings"))
+        if (waiting) {
+          const n = waiting.count
+          printKV(
+            "  Unanswered",
+            `${UI.Style.TEXT_DANGER}${n} message${n === 1 ? "" : "s"} from them with no reply${UI.Style.TEXT_NORMAL}  ${dim(`(last ${fmtH(waiting.ageHours)} ago, since ${waiting.since.slice(0, 10)})`)}`,
+          )
+        }
         if (avgYourResponse !== null) {
           const bizNote = avgYourBiz !== null ? dim(` (${fmtH(avgYourBiz)} biz hrs)`) : ""
           printKV("  Your Avg Response", `${fmtH(avgYourResponse)}${bizNote}`)

@@ -11,6 +11,7 @@ import { registerDefault, type PulseScript, type Source, type SourceResult, type
 import { irisFetch, BRIDGE_URL, getBridgeToken } from "./iris-api"
 import { executeIntegrationCall } from "./platform-run"
 import { emailChannelLabel, readCalendarEvents, threadInWindow } from "./platform-leads-honesty"
+import { fetchLeadMail } from "./comms-apple-mail"
 
 /** One channel the pulse lists — the shape the handler has always rendered and emitted as JSON. */
 export interface Channel {
@@ -277,47 +278,29 @@ const whatsappGroupsSource: Source<ContactQuery, ContactReading> = {
   },
 }
 
-/** Apple Mail through the bridge, every known address, merged into one channel (dedup by date+subject). */
+/**
+ * Apple Mail through the bridge: every known address, BOTH directions, one row per message
+ * (#189941). Rows carry `direction` (inbound | outbound | other) and `date`.
+ */
 const appleMailSource: Source<ContactQuery, ContactReading> = {
   id: "apple_mail",
   label: "Apple Mail",
   isAvailable: (q) =>
     q.allEmails.length > 0 || q.email ? { ok: true } : { ok: false, reason: "the lead has no email address" },
   async read(q) {
-    let channel: Channel | null = null
     const addresses = q.allEmails.length > 0 ? q.allEmails : q.email ? [q.email] : []
-    await Promise.allSettled(
-      addresses.map((scanEmail) =>
-        withTimeout(
-          fetch(
-            `${BRIDGE_BASE}/api/mail/search?from=${encodeURIComponent(scanEmail)}&days=${q.days}&limit=${q.msgLimit}&include_body=0&include_attachments=1`,
-            { headers: bridgeHeaders() },
-          ),
-          q.timeoutMs,
-          `Apple Mail (${scanEmail})`,
-        )
-          .then(async (r) => {
-            if (r.ok) {
-              const d = (await r.json()) as any
-              const msgs = d?.messages ?? []
-              if (channel) {
-                for (const m of msgs) {
-                  if (!channel.messages.some((e: any) => e.date === m.date && e.subject === m.subject)) channel.messages.push(m)
-                }
-              } else {
-                channel = { name: "Apple Mail", messages: msgs }
-              }
-            } else {
-              const body = await r.text().catch(() => "")
-              if (!channel) channel = { name: "Apple Mail", messages: [], error: body || `HTTP ${r.status}` }
-            }
-          })
-          .catch((e) => {
-            if (!channel) channel = { name: "Apple Mail", messages: [], error: e.message }
-          }),
+    const r = await withTimeout(
+      fetchLeadMail(addresses, { days: q.days, limit: q.msgLimit }, (path) =>
+        fetch(`${BRIDGE_BASE}${path}`, { headers: bridgeHeaders() }),
       ),
-    )
-    return reading(channel ? [channel] : [], addresses.map((a) => `bridge /api/mail/search?from=${a}`))
+      q.timeoutMs,
+      "Apple Mail",
+    ).catch((e: any) => ({ messages: [], errors: [String(e?.message ?? e)], outboundBlind: false }))
+    const channel: Channel = { name: "Apple Mail", messages: r.messages }
+    // Any address that answered makes the channel measured; only an all-failed read is an error.
+    if (r.errors.length > 0 && r.messages.length === 0 && r.errors.length >= addresses.length) channel.error = r.errors.join("; ")
+    if (r.outboundBlind) channel.label = "Apple Mail (inbound only — bridge predates participant search; update the daemon)"
+    return reading([channel], addresses.map((a) => `bridge /api/mail/search?participant=${a}`))
   },
 }
 

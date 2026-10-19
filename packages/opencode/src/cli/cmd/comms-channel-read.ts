@@ -93,10 +93,12 @@ export function failedRunWarning(failedChannels: string[]): string | null {
 export function bridgeMailItems(data: any, addr: string): any[] | null {
   const list = Array.isArray(data?.emails) ? data.emails : Array.isArray(data?.messages) ? data.messages : null
   if (list === null) return null
-  return list.map((m: any) => {
+  // #189941: a participant= bridge returns outbound rows (direction) and third-party thread mail
+  // ("other"). File each with its real direction; third-party mail is not this lead's comms.
+  return list.filter((m: any) => m?.direction !== "other").map((m: any) => {
     const sentAt = m.date_sent ?? m.date ?? null
     return {
-      direction: "inbound" as const,
+      direction: (m.direction === "outbound" ? "outbound" : "inbound") as "inbound" | "outbound",
       from_identifier: m.sender || m.from || addr,
       subject: m.subject,
       body: m.body || m.snippet || "",
@@ -104,7 +106,13 @@ export function bridgeMailItems(data: any, addr: string): any[] | null {
       // Envelopes carry no Message-ID. Sender + time + subject is stable across re-reads of the
       // same index, which is all dedup needs from this source.
       external_message_id: m.messageId || m.id || `mailenv_${String(m.sender || addr).toLowerCase()}_${sentAt}_${m.subject ?? ""}`,
-      metadata: { source: data?.source ?? "apple_mail", matched_address: addr, mailbox: m.mailbox },
+      metadata: {
+        source: data?.source ?? "apple_mail",
+        matched_address: addr,
+        mailbox: m.mailbox,
+        ...(Array.isArray(m.to) && m.to.length ? { to: m.to } : {}),
+        ...(Array.isArray(m.cc) && m.cc.length ? { cc: m.cc } : {}),
+      },
       channel: "apple_mail",
     }
   })

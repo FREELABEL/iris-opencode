@@ -3,7 +3,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { printDivider, printKV, dim, bold, success, BRIDGE_URL, bridgeFetch, writeJson } from "./iris-api"
 import { probeWithHeal, type BridgeProbe, type BridgeHealth } from "./bridge-health"
-import { mailRows } from "./mail-response"
+import { mailRows, mailSearchParams, describeMailQuery, bodyMissingNote } from "./mail-response"
 import { fetchDaemonPermissions, isTccDenial, renderTccBlindSpot } from "./daemon-permissions"
 import {
   routerSend,
@@ -75,13 +75,14 @@ async function reportMailFailure(verb: string, err: string): Promise<void> {
 }
 
 const MailSearchCommand = cmd({
-  command: "search <query>",
+  command: "search [query]",
   aliases: ["find"],
-  describe: "search Apple Mail by sender name or email",
+  describe: "search Apple Mail by sender name/email, and/or subject (-s)",
   builder: (yargs) =>
     yargs
-      .positional("query", { type: "string", demandOption: true, describe: "sender name or email substring" })
-      .option("subject", { type: "string", alias: "s", describe: "filter by subject" })
+      .positional("query", { type: "string", describe: "sender name or email substring (omit to search by -s subject only)" })
+      .option("subject", { type: "string", alias: "s", describe: "filter by subject (alone: subject-only search)" })
+      .option("thread", { type: "boolean", default: false, describe: "match the address as sender OR recipient — both directions of a conversation" })
       .option("days", { type: "number", default: 7, describe: "search last N days" })
       .option("limit", { type: "number", default: 10, describe: "max results" })
       .option("full", { type: "boolean", default: false, describe: "include full email body (up to 10000 chars)" })
@@ -99,17 +100,23 @@ const MailSearchCommand = cmd({
       return
     }
 
-    const params = new URLSearchParams({
-      from: args.query,
-      days: String(args.days),
-      limit: String(args.limit),
-    })
-    if (args.full) {
-      params.set("include_body", "1")
-      params.set("max_body", String(args.maxBody ?? args["max-body"] ?? 4000))
+    const searchArgs = {
+      query: args.query,
+      subject: args.subject,
+      days: args.days,
+      limit: args.limit,
+      full: args.full,
+      maxBody: Number(args.maxBody ?? args["max-body"] ?? 4000),
+      attachments: args.attachments,
+      thread: args.thread,
     }
-    if (args.subject) params.set("subject", args.subject)
-    if (args.attachments) params.set("include_attachments", "1")
+    const params = mailSearchParams(searchArgs)
+    if ("error" in params) {
+      prompts.log.error(params.error)
+      process.exitCode = 1
+      prompts.outro("Done")
+      return
+    }
 
     const res = await bridgeFetch(`/api/mail/search?${params}`)
     if (!res.ok) {
@@ -123,13 +130,15 @@ const MailSearchCommand = cmd({
     const messages: any[] = mailRows(data)
 
     if (args.json) {
-      await writeJson(messages)
+      // --full in JSON: a row the bridge could not give a body for says why, instead of the key
+      // silently being absent (#189941).
+      await writeJson(args.full ? messages.map((m) => (bodyMissingNote(m) ? { ...m, body: m.body ?? null, body_note: bodyMissingNote(m) } : m)) : messages)
       prompts.outro("Done")
       return
     }
 
     if (messages.length === 0) {
-      prompts.log.info(`No emails from "${args.query}" in the last ${args.days} days`)
+      prompts.log.info(describeMailQuery(searchArgs))
       prompts.outro("Done")
       return
     }
@@ -137,11 +146,12 @@ const MailSearchCommand = cmd({
     for (const msg of messages) {
       printDivider()
       printKV("Date", msg.date)
-      printKV("From", msg.sender)
+      printKV("From", msg.sender_name ? `${msg.sender_name} <${msg.sender}>` : msg.sender)
+      if (args.thread && msg.direction) printKV("Direction", msg.direction)
       printKV("Subject", bold(msg.subject))
-      if (args.full && msg.body) {
+      if (args.full) {
         console.log()
-        console.log(msg.body)
+        console.log(msg.body || dim(bodyMissingNote(msg) ?? ""))
       }
       if (msg.attachments?.length > 0) {
         console.log(`  ${bold("Attachments")}  ${dim(`(${msg.attachments.length})`)}`)
@@ -158,11 +168,11 @@ const MailSearchCommand = cmd({
 })
 
 const MailReadCommand = cmd({
-  command: "read <query>",
-  describe: "read the latest email from a sender (full body)",
+  command: "read [query]",
+  describe: "read the latest email from a sender, or matching -s subject (full body)",
   builder: (yargs) =>
     yargs
-      .positional("query", { type: "string", demandOption: true, describe: "sender name or email" })
+      .positional("query", { type: "string", describe: "sender name or email (omit to match by -s subject only)" })
       .option("subject", { type: "string", alias: "s", describe: "filter by subject" })
       .option("days", { type: "number", default: 14, describe: "search last N days" })
       .option("max-body", { type: "number", default: 10000, describe: "max body chars" })
@@ -170,7 +180,7 @@ const MailReadCommand = cmd({
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
-    prompts.intro(`◈  Read Mail — from "${args.query}"`)
+    prompts.intro(`◈  Read Mail — ${args.query ? `from "${args.query}"` : `subject "${args.subject ?? ""}"`}`)
 
     const bridge = await probeBridge()
     if (!bridge.ok) {
@@ -180,16 +190,22 @@ const MailReadCommand = cmd({
     }
 
     const saveAttachments = args.saveAttachments ?? args["save-attachments"] ?? false
-    const params = new URLSearchParams({
-      from: args.query,
-      days: String(args.days),
-      limit: "1",
-      include_body: "1",
-      include_attachments: "1",
-      max_body: String(args.maxBody ?? args["max-body"] ?? 10000),
+    const params = mailSearchParams({
+      query: args.query,
+      subject: args.subject,
+      days: args.days,
+      limit: 1,
+      full: true,
+      maxBody: Number(args.maxBody ?? args["max-body"] ?? 10000),
+      attachments: true,
     })
+    if ("error" in params) {
+      prompts.log.error(params.error)
+      process.exitCode = 1
+      prompts.outro("Done")
+      return
+    }
     if (saveAttachments) params.set("save_attachments", "1")
-    if (args.subject) params.set("subject", args.subject)
 
     const res = await bridgeFetch(`/api/mail/search?${params}`)
     if (!res.ok) {
@@ -202,7 +218,7 @@ const MailReadCommand = cmd({
     const messages: any[] = mailRows(data)
 
     if (messages.length === 0) {
-      prompts.log.info(`No emails from "${args.query}" in the last ${args.days} days`)
+      prompts.log.info(describeMailQuery({ query: args.query, subject: args.subject, days: args.days }))
       prompts.outro("Done")
       return
     }
@@ -210,7 +226,7 @@ const MailReadCommand = cmd({
     const msg = messages[0]
 
     if (args.json) {
-      await writeJson(msg)
+      await writeJson(bodyMissingNote(msg) ? { ...msg, body: msg.body ?? null, body_note: bodyMissingNote(msg) } : msg)
       prompts.outro("Done")
       return
     }
@@ -230,7 +246,7 @@ const MailReadCommand = cmd({
     }
     printDivider()
     console.log()
-    console.log(msg.body || dim("(no body)"))
+    console.log(msg.body || dim(bodyMissingNote(msg) ?? "(no body)"))
     console.log()
     prompts.outro("Done")
   },
