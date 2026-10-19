@@ -7,6 +7,7 @@ import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, pr
 import { matchesSearchQuery } from "./bloq-item-format"
 import { executeChat } from "./platform-chat"
 import { runMint } from "./platform-agents-mint"
+import { askAgent } from "./platform-agents-ask"
 import { AgentsBenchCommand } from "./platform-agents-bench"
 import { AgentsExportCommand } from "./platform-agents-export"
 import { AgentsJoinCommand, AgentsLeaveCommand } from "./platform-agents-rooms"
@@ -2071,6 +2072,54 @@ const AgentsMintCommand = cmd({
   },
 })
 
+/**
+ * `iris agents ask <agent> "<prompt>"` (#182785) — one question, only the answer on stdout.
+ * Same path as `iris chat -a` (see platform-agents-ask.ts), plus a provenance stamp.
+ */
+const AgentsAskCommand = cmd({
+  command: "ask <agent> <prompt>",
+  describe: "ask an agent one question and print only its answer (for scripts and agent-to-agent)",
+  builder: (yargs) =>
+    yargs
+      .positional("agent", { describe: "agent ID or name", type: "string", demandOption: true })
+      .positional("prompt", { describe: "the question", type: "string", demandOption: true })
+      .option("from", { describe: "the asking agent's ID — stamped as provenance (metadata.from_agent_id)", type: "number" })
+      .option("thread", { alias: "conversation", describe: "pin a conversation instead of the agent's canonical one", type: "string" })
+      .option("fresh", { describe: "ask in a brand-new conversation", type: "boolean", default: false })
+      .option("timeout", { describe: "max seconds to wait for the answer", type: "number", default: 300 })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
+      .option("json", { describe: "print {answer, agent_id, conversation_id}", type: "boolean", default: false })
+      .example('iris agents ask 642 "is the door closed?"', "print the answer")
+      .example('iris agents ask patrol "status?" --from 420 --json', "an agent asking another agent"),
+  async handler(args) {
+    const json = Boolean(args.json)
+    const token = await requireAuth()
+    if (!token) { process.exitCode = 1; return }
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { process.exitCode = 1; return }
+    const agentId = await resolveAgentId(args.agent as string, userId, json)
+    if (!agentId) return
+
+    const r = await askAgent({
+      agentId,
+      prompt: String(args.prompt),
+      from: typeof args.from === "number" ? args.from : null,
+      thread: args.thread as string | undefined,
+      fresh: Boolean(args.fresh),
+      timeoutSecs: args.timeout as number,
+    })
+    if (!r.ok) {
+      if (json) await writeJson({ error: r.error, agent_id: r.agent_id, conversation_id: r.conversation_id })
+      else console.error(r.error)
+      // Same exit codes as `iris chat` (#137418): 2 = timeout, 1 = any other failure.
+      process.exitCode = r.timedOut ? 2 : 1
+      return
+    }
+    if (json) await writeJson({ answer: r.answer, agent_id: r.agent_id, conversation_id: r.conversation_id })
+    else console.log(r.answer)
+  },
+})
+
 export const PlatformAgentsCommand = cmd({
   command: "agents",
   describe: "manage IRIS platform agents — pull, push, diff, CRUD, assign, pause/resume/stop",
@@ -2092,6 +2141,7 @@ export const PlatformAgentsCommand = cmd({
       .command(AgentsTakeOverCommand)
       .command(AgentsHandBackCommand)
       .command(AgentsChatCommand)
+      .command(AgentsAskCommand)
       .command(AgentsProveCommand)
       .command(AgentsMintCommand)
       .command(AgentsAssignCommand)

@@ -698,6 +698,8 @@ export async function streamAgentChat(opts: {
   // (The server also has a `freshThread` flag, but ChatStreamController's validator does
   // not accept `fresh_thread`, so a caller-generated unique id is the only route today.)
   threadId?: string | null
+  /** Provenance stamped into the request body as `metadata` — who asked, through what (#182785). */
+  metadata?: Record<string, unknown> | null
   onEvent?: (event: AgentChatEvent) => void
 }): Promise<AgentChatResult> {
   const body: Record<string, unknown> = {
@@ -726,6 +728,7 @@ export async function streamAgentChat(opts: {
   // Endpoint validator only accepts nano/flash models — keeps test runs cheap.
   if (opts.overrideModel) body.override_model = opts.overrideModel
   if (opts.voice) body.voice = true
+  if (opts.metadata && Object.keys(opts.metadata).length > 0) body.metadata = opts.metadata
 
   const failure = (error?: string, timedOut = false): AgentChatResult => ({
     ok: false,
