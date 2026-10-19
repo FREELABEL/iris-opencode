@@ -17,6 +17,7 @@ import { firstArray } from "../../util/array"
 import { Global } from "../../global"
 import { DEFAULT_MAX_DESKTOP_AGENTS, planDesktopSync, selectRoster } from "../lib/desktop-agents"
 import { installHome } from "../../skill/install-location"
+import { bulkDeleteRefusal, fieldIsEvaluable, filterByOwnership, ownershipQueryParams, resolveOwnerBloq, unevaluableWarning } from "./agent-ownership"
 import { AUTONOMY_CHOICES, AUTONOMY_LEVELS, CLI_DEFAULT_AUTONOMY, describeAutonomy, parseAutonomy } from "./agent-autonomy"
 
 /**
@@ -153,6 +154,9 @@ const AgentsListCommand = cmd({
       if (args.search) params.set("search", args.search)
       if (args.bloq) params.set("bloq_id", String(args.bloq))
       if (args.active) params.set("active", "1")
+      if (args.workspace) params.set("workspace_id", String(args.workspace))
+      const ownership = { orphaned: !!args.orphaned, workspaceOrphaned: !!args["workspace-orphaned"] }
+      for (const [k, v] of Object.entries(ownershipQueryParams(ownership))) params.set(k, v)
 
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents?${params}`)
       const ok = await handleApiError(res, "List agents")
@@ -164,13 +168,21 @@ const AgentsListCommand = cmd({
       const currentPage = args.page
       const lastPage = Math.ceil(total / args.limit)
 
-      // Client-side filters (for fields the API may not support)
-      if (args.orphaned) agents = agents.filter((a: any) => !a.bloq_id)
-      if (args.bloq && !params.has("bloq_id")) agents = agents.filter((a: any) => a.bloq_id === args.bloq)
-      if (args.workspace) agents = agents.filter((a: any) => a.workspace_id === args.workspace)
-      if (args["workspace-orphaned"]) agents = agents.filter((a: any) => !a.workspace_id)
+      // Ownership filters are sent server-side (?orphaned=1 / ?workspace_orphaned=1) and
+      // re-checked here. An old server ignores the params AND omits bloq_id/workspace_id, in
+      // which case the filter cannot be evaluated — say so instead of presenting a count (#189967).
+      const owned = filterByOwnership(agents, ownership)
+      agents = owned.agents
+      if (args.workspace) {
+        if (fieldIsEvaluable(agents, "workspace_id")) agents = agents.filter((a: any) => a.workspace_id === args.workspace)
+        else owned.unevaluable.push("workspace_id")
+      }
 
       if (spinner) spinner.stop(`${agents.length} agent(s)${total > agents.length ? ` (${total} total — page ${currentPage}/${lastPage})` : ""}`)
+      if (owned.unevaluable.length > 0) {
+        if (args.json) process.stderr.write(`warning: ${unevaluableWarning(owned.unevaluable)}\n`)
+        else prompts.log.warn(unevaluableWarning(owned.unevaluable))
+      }
 
       if (args.json) {
         // Identity, not everything. This listing was 30 records x 72 fields =
@@ -189,7 +201,7 @@ const AgentsListCommand = cmd({
 
       if (agents.length === 0) {
         prompts.log.warn("No agents found")
-        prompts.outro(`Create one: ${dim("iris agents create")}`)
+        prompts.outro(`Create one: ${dim("iris agents create --bloq <id>")}`)
         return
       }
 
@@ -399,7 +411,7 @@ const AgentsCreateCommand = cmd({
       .option("initial-prompt", { alias: "mission", describe: "the agent's recurring MISSION — injected into every heartbeat, not just the first (heartbeat truncates at 2000 chars). Accepts a string or @path/to/file", type: "string" })
       .option("model", { alias: "m", describe: "AI model (e.g. gpt-4o-mini)", type: "string" })
       .option("type", { describe: "agent type (content, chat, assistant, support)", type: "string", default: "content" })
-      .option("bloq-id", { alias: "b", describe: "knowledge base bloq ID", type: "number" })
+      .option("bloq-id", { alias: ["b", "bloq"], describe: "owner project (bloq) ID — REQUIRED: every agent belongs to a project (iris atlas list)", type: "number" })
       // Same enum as `agents update` (#146506 flagged the create/update mismatch).
       .option("heartbeat-mode", { describe: "heartbeat mode: off, passive, reactive, autonomous, briefing", type: "string", choices: ["off", "passive", "reactive", "autonomous", "briefing"] })
       .option("heartbeat-tools", { describe: "comma-separated tool names for heartbeat", type: "string" })
@@ -429,6 +441,16 @@ const AgentsCreateCommand = cmd({
     }
     if (!name) { if (args.json) console.log(JSON.stringify({ error: "--name is required" })); else prompts.log.error("--name is required"); process.exitCode = 1; return }
 
+    // Every agent belongs to a project (#189966). Checked before any prompt or network write
+    // so an ownerless agent is never created.
+    const owner = resolveOwnerBloq(args["bloq-id"])
+    if ("error" in owner) {
+      if (args.json) console.log(JSON.stringify({ error: owner.error }))
+      else { prompts.log.error(owner.error); if (!nonInteractive) prompts.outro("Done") }
+      process.exitCode = 1
+      return
+    }
+
     let description = args.description
     if (!description && !nonInteractive) {
       description = (await prompts.text({
@@ -456,7 +478,7 @@ const AgentsCreateCommand = cmd({
 
     try {
       const payload: Record<string, unknown> = { name, description: description ?? "", initial_prompt: prompt, model, type: args.type ?? "content" }
-      if (args["bloq-id"]) payload.bloq_id = args["bloq-id"]
+      payload.bloq_id = owner.bloqId
       if (args["initial-prompt"]) payload.initial_prompt = readPromptArg(args["initial-prompt"])
       if (args["heartbeat-mode"]) payload.heartbeat_mode = args["heartbeat-mode"]
       // These three persist under settings.*, NOT top-level — top-level model /
@@ -1182,6 +1204,8 @@ const AgentsBulkDeleteCommand = cmd({
         // Fetch agents and filter
         const params = new URLSearchParams({ per_page: "500" })
         if (args.search) params.set("search", args.search)
+        if (args.bloq) params.set("bloq_id", String(args.bloq))
+        if (args.orphaned) params.set("orphaned", "1")
         const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents?${params}`)
         const ok = await handleApiError(res, "List agents")
         if (!ok) { spinner.stop("Failed", 1); return }
@@ -1189,8 +1213,18 @@ const AgentsBulkDeleteCommand = cmd({
         const raw = (await res.json()) as Record<string, any>
         let agents: any[] = firstArray(raw?.data)
 
+        // Never bulk-delete on a predicate the payload cannot answer: with bloq_id absent,
+        // `!a.bloq_id` is true for EVERY agent, so --orphaned selected the whole account (#189967).
+        const refusal = bulkDeleteRefusal(agents, { orphaned: !!args.orphaned, bloq: args.bloq })
+        if (refusal) {
+          spinner.stop("Refused", 1)
+          prompts.log.error(refusal)
+          process.exitCode = 1
+          prompts.outro("Nothing deleted")
+          return
+        }
         if (args.bloq) agents = agents.filter((a: any) => a.bloq_id === args.bloq)
-        if (args.orphaned) agents = agents.filter((a: any) => !a.bloq_id)
+        if (args.orphaned) agents = filterByOwnership(agents, { orphaned: true }).agents
         if (args.inactive) agents = agents.filter((a: any) => !a.active)
 
         targetIds = agents.map((a: any) => a.id)
