@@ -68,7 +68,8 @@ let cachedMode: CaptureMode | null = null
  * for a person on THIS platform. The composer is built against exactly this shape.
  */
 export type DictationReadiness = {
-  recorder: { sidecar: boolean; reason?: string }
+  /** `native`: the sidecar records through a native helper (macOS iris-mic), so it is the recorder from the first take. */
+  recorder: { sidecar: boolean; native?: boolean; reason?: string }
   cloud: { configured: boolean; reason?: string }
   local: { whisper: boolean }
   /** The engines a dictation would try, in order. */
@@ -494,6 +495,11 @@ export function createDictation(opts: DictationOptions) {
 
   async function openRecorder() {
     const id = ++attempt
+
+    // A native recorder (macOS iris-mic) is the right one from the first take. The webview probe
+    // would show the ring over ~400 ms that nobody records, then hand over to it anyway (#189531,
+    // #189875). Measured in the first test build: the first take of a session came back "No speech heard".
+    if (cachedMode === null && readiness()?.recorder.native) cachedMode = "sidecar"
 
     // Known-good path from a previous dictation in this session.
     if (cachedMode === "sidecar") {

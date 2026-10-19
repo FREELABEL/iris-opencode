@@ -598,3 +598,28 @@ describe("createDictation — live words cost a streaming session; only open one
   })
 })
 
+
+describe("createDictation — a native recorder skips the webview probe (#189531, #189875)", () => {
+  test("the first take of a session goes straight to the sidecar: no getUserMedia, no 400 ms probe", async () => {
+    health = { recorder: { sidecar: true, native: true }, cloud: { configured: true }, local: { whisper: true }, engines: ["xai"] }
+    const { d, dispose } = await mount()
+    await sleep(20)
+    d.toggle()
+    await sleep(150)
+    expect(gumCalls).toBe(0)
+    expect(posted("/dictate/start")).toBe(1)
+    expect(d.phase()).toBe("recording")
+    dispose()
+  })
+
+  test("without the native flag the probe still runs first (an older server, or Windows/Linux)", async () => {
+    health = { recorder: { sidecar: true }, cloud: { configured: true }, local: { whisper: true }, engines: ["xai"] }
+    const { d, dispose } = await mount()
+    await sleep(20)
+    d.toggle()
+    await sleep(150)
+    expect(gumCalls).toBe(1)
+    expect(posted("/dictate/start")).toBe(0)
+    dispose()
+  })
+})
