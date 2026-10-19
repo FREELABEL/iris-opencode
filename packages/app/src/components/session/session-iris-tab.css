@@ -1321,6 +1321,40 @@
   align-items: center;
   gap: 2px;
 }
+/* Record a meeting into the card (#190041). Recording must be obvious at a glance. */
+.iris-card__rec {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: 6px;
+  color: var(--text-base);
+}
+.iris-card__rec:hover:not(:disabled) {
+  background: var(--surface-raised-base-hover, var(--surface-base-hover));
+}
+.iris-card__rec[data-phase="recording"] {
+  color: var(--text-danger-base, #e07d7d);
+}
+.iris-card__rec[data-phase="recording"] svg {
+  animation: iris-card-rec-pulse 1.4s ease-in-out infinite;
+}
+.iris-card__rec:disabled {
+  color: var(--text-weak);
+}
+@keyframes iris-card-rec-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+.iris-card__recbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 4px 6px;
+}
 .iris-card__frame {
   display: flex;
   flex-direction: column;

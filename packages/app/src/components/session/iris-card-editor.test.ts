@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { diffDraft, draftFrom, statusOptions, type CardDoc } from "./iris-card-editor"
+import { appendTranscript, diffDraft, draftFrom, statusOptions, type CardDoc } from "./iris-card-editor"
 
 const doc: CardDoc = {
   measured: true,
@@ -93,5 +93,20 @@ describe("card editor — attachment sizes", () => {
     expect(fileSize(4 * 1024)).toBe("4.0 KB")
     expect(fileSize(42 * 1024 * 1024)).toBe("42.0 MB")
     expect(fileSize(undefined)).toBe("")
+  })
+})
+
+describe("appendTranscript — a meeting lands at the END of the body, never over it (#190041)", () => {
+  test("a new line after what is there", () => {
+    expect(appendTranscript("Agenda\n- budget", "We agreed on the budget.")).toBe("Agenda\n- budget\n\nWe agreed on the budget.")
+  })
+  test("an empty body becomes the transcript", () => {
+    expect(appendTranscript("", "  hello  ")).toBe("hello")
+  })
+  test("trailing whitespace is not stacked into blank lines", () => {
+    expect(appendTranscript("notes\n\n\n", "more")).toBe("notes\n\nmore")
+  })
+  test("an empty transcript leaves the body exactly as it was", () => {
+    expect(appendTranscript("keep  \n", "   ")).toBe("keep  \n")
   })
 })

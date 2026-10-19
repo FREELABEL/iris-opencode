@@ -2,6 +2,8 @@ import { createEffect, createMemo, createResource, createSignal, For, Match, onC
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { IconButton } from "@opencode-ai/ui/icon-button"
+import { Icon } from "@opencode-ai/ui/icon"
+import { createDictation } from "@opencode-ai/session-ui/v2/prompt-input/dictation"
 import { itemCommands, renderMarkdown } from "./iris-item"
 
 /**
@@ -276,6 +278,22 @@ export interface IrisCardEditorProps {
   doFetch: (path: string, init?: RequestInit) => Promise<Response>
   /** Called after any write landed, so the list behind the dialog can refresh its row. */
   onChanged?: () => void
+  /**
+   * The local server that records (its /dictate routes). With it the header gets a microphone:
+   * record a meeting straight into this card (#190041). Without it, no microphone is drawn.
+   */
+  recorderUrl?: string
+}
+
+/**
+ * A meeting transcript lands as a new line at the END of the body, as Elon's CardEditor does
+ * (transcriptInsert: 'newline'). Never replaces what is there.
+ */
+export function appendTranscript(body: string, transcript: string): string {
+  const text = transcript.trim()
+  if (!text) return body
+  const kept = body.replace(/\s+$/, "")
+  return kept ? `${kept}\n\n${text}` : text
 }
 
 type SideTab = "details" | "sharing" | "tasks" | "chat"
@@ -509,6 +527,55 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
       setBodyNote({ ok: false, text: out.reason ?? "save failed" })
     }
     setSavingBody(false)
+  }
+
+  // ── Record a meeting into this card (#190041) ───────────────────────────
+  // The same engine as the chat composer — iris-mic capture, hour-long takes, held recordings —
+  // scoped to THIS card's board, so the platform applies the card's board policy, not the
+  // person's default board's (ADR-01). Raw transcript, no live words, audio not kept: as Elon.
+  const [recNote, setRecNote] = createSignal<{ ok: boolean; text: string } | null>(null)
+  const recorder = props.recorderUrl
+    ? createDictation({
+        url: () => props.recorderUrl!,
+        bloqId: () => String(props.bloqId),
+        // No background retries: a retried meeting must not land in whatever card is open later.
+        // Retry is offered on this card, by hand.
+        autoRetry: false,
+        onError: (message) => setRecNote({ ok: false, text: message }),
+        onTranscript: (text) => void landTranscript(text),
+      })
+    : undefined
+
+  /**
+   * Put a finished take into the body and save it. A body being edited gets the line in its
+   * draft and is saved WITH the edit (as Elon autosaves the card); otherwise the card is re-read
+   * first, so an hour-long meeting does not save over a body changed elsewhere in that hour.
+   */
+  async function landTranscript(text: string) {
+    setRecNote(null)
+    if (!editingBody()) await refetchDoc()
+    const d = doc.latest
+    if (!d?.measured) {
+      // Nowhere to save it: keep the words on screen rather than lose them.
+      setEditingBody(true)
+      setBodyDraft(appendTranscript("", text))
+      setRecNote({ ok: false, text: "Could not load the card to save the transcript — it is in the body, unsaved." })
+      return
+    }
+    setBodyDraft(appendTranscript(bodyDraft() ?? d.content ?? "", text))
+    await saveBody()
+    if (bodyDirty()) {
+      // The save failed: the transcript stays in an open, unsaved body, with the reason beside it.
+      setEditingBody(true)
+      setRecNote({ ok: false, text: "The transcript is in the body but did not save — press Save body." })
+      return
+    }
+    setRecNote({ ok: true, text: "Transcript added to the card" })
+  }
+
+  const recClock = () => {
+    const s = recorder?.seconds() ?? 0
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`
   }
 
   // ── Window shape: full screen and a sidebar you can put away (#186549) ───
@@ -944,6 +1011,39 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
       classList={{ "iris-card--full": full() }}
       action={
         <span class="iris-card__winbtns">
+          <Show when={recorder}>
+            {(rec) => (
+              <button
+                type="button"
+                class="iris-card__rec"
+                data-phase={rec().phase()}
+                disabled={rec().phase() === "transcribing"}
+                aria-label={rec().phase() === "recording" ? "Stop recording" : "Record a meeting into this card"}
+                title={
+                  rec().phase() === "recording"
+                    ? "Stop — the transcript is added to the end of the body"
+                    : rec().phase() === "transcribing"
+                      ? "Transcribing…"
+                      : "Record a meeting into this card (up to 1 hour)"
+                }
+                onClick={() => {
+                  if (rec().phase() === "recording") rec().toggle()
+                  else if (rec().phase() === "idle") {
+                    setRecNote(null)
+                    void rec().startBackground()
+                  }
+                }}
+              >
+                <Icon name={rec().phase() === "recording" ? "stop" : "microphone"} size="small" />
+                <Show when={rec().phase() === "recording"}>
+                  <span class="font-mono text-11-regular tabular-nums">{recClock()}</span>
+                </Show>
+                <Show when={rec().phase() === "transcribing"}>
+                  <span class="text-11-regular">Transcribing…</span>
+                </Show>
+              </button>
+            )}
+          </Show>
           <IconButton
             icon={full() ? "collapse" : "expand"}
             size="small"
@@ -1011,6 +1111,35 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
             <div class="iris-card__cols" data-side-collapsed={collapsed() ? "" : undefined}>
               {/* LEFT — the body. Read by default; one toggle to a plain textarea. */}
               <section class="iris-card__body">
+                <Show when={recNote() || (recorder?.held().length ?? 0) > 0}>
+                  <div class="iris-card__recbar" role="status">
+                    <Show when={recNote()}>
+                      {(n) => (
+                        <span class="text-11-regular" classList={{ "text-text-base": n().ok, "text-text-weak": !n().ok }}>
+                          {n().text}
+                        </span>
+                      )}
+                    </Show>
+                    <Show when={(recorder?.held().length ?? 0) > 0}>
+                      <span class="text-11-regular text-text-weak">
+                        {recorder!.held().length === 1
+                          ? "A recording for this board is saved, not yet transcribed."
+                          : `${recorder!.held().length} recordings for this board are saved, not yet transcribed.`}
+                      </span>
+                      <button
+                        type="button"
+                        class="iris-card__linkbtn"
+                        disabled={recorder!.retrying() || recorder!.phase() !== "idle"}
+                        onClick={() => void recorder!.retryHeld()}
+                      >
+                        {recorder!.retrying() ? "Retrying…" : "Retry"}
+                      </button>
+                      <button type="button" class="iris-card__linkbtn" onClick={() => void recorder!.discardHeld()}>
+                        Discard
+                      </button>
+                    </Show>
+                  </div>
+                </Show>
                 <div class="iris-card__bodybar">
                   <span class="text-11-regular text-text-weaker">
                     {doc.latest!.contentKind === "structured" ? "Body · structured (text is merged on save)" : "Body · markdown"}

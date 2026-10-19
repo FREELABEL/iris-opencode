@@ -32,6 +32,8 @@ import { useSync } from "@/context/sync"
 import { promotedFiles } from "./iris-promote"
 import type { FileContent } from "./iris-file-artifact"
 import { IrisCardEditor } from "./iris-card-editor"
+import { setDictationAuth } from "@opencode-ai/session-ui/v2/prompt-input/dictation"
+import { dictationAuthFor } from "@/utils/dictation-auth"
 import { IrisArtifacts } from "./iris-artifacts"
 import { IrisBrandKits } from "./iris-brand-kits"
 import { IrisAtlasArtifacts } from "./iris-atlas-artifacts"
@@ -2573,6 +2575,8 @@ export function SessionIrisTab() {
     const lists =
       fromGraph ??
       (((data.latest ?? data())?.lists as AtlasList[] | undefined) ?? []).map((l) => ({ id: l.id, name: l.name }))
+    // The card's microphone records through this same server, with the SDK's credentials (#190041).
+    setDictationAuth((url) => dictationAuthFor(serverSDK().server.http, url))
     dialog.show(() => (
       <IrisCardEditor
         itemId={itemId}
@@ -2580,6 +2584,7 @@ export function SessionIrisTab() {
         lists={lists}
         doFetch={doFetch}
         onChanged={() => liveRefresh(false)}
+        recorderUrl={base()}
       />
     ))
   }
