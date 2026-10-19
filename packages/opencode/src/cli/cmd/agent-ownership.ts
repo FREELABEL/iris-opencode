@@ -95,3 +95,19 @@ export function bulkDeleteRefusal(
     `agents by a field that is not there. Delete by explicit id instead: iris agents bulk-delete --ids 1,2,3`
   )
 }
+
+/**
+ * Did the server apply the ownership filter, or ignore it? A server that does not know
+ * ?orphaned=1 returns one ordinary PAGE, and filtering only that page client-side reported
+ * "0 agents" while 147 agents had no project (2026-10-19). If any returned record fails the
+ * predicate the server ignored it, and the caller must evaluate EVERY page, not this one.
+ */
+export function serverIgnoredOwnership(agents: Record<string, unknown>[], filters: OwnershipFilters): boolean {
+  if (!filters.orphaned && !filters.workspaceOrphaned) return false
+  const empty = (v: unknown) => v === null || v === undefined || v === 0 || v === ""
+  return agents.some(
+    (a) =>
+      (filters.orphaned && Object.prototype.hasOwnProperty.call(a, "bloq_id") && !empty(a.bloq_id)) ||
+      (filters.workspaceOrphaned && Object.prototype.hasOwnProperty.call(a, "workspace_id") && !empty(a.workspace_id)),
+  )
+}
