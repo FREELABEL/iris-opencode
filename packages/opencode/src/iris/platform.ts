@@ -2809,21 +2809,24 @@ export async function saveItem(id: number, patch: ItemPatch): Promise<{ ok: bool
 export async function createItem(
   bloqId: number,
   listId: number,
-  input: { title: string; body?: string; position?: number },
+  input: { title: string; body?: string },
 ): Promise<{ ok: boolean; id?: number; reason?: string }> {
   const userId = await resolveUserId()
   if (!userId) return { ok: false, reason: `not signed in (token: ${tokenSource()})` }
   const title = input.title.trim()
   if (!title) return { ok: false, reason: "a card needs a title" }
   try {
-    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}/lists/${listId}/items`, FL_API, {
+    /*
+     * storeForBloq, with the list in the BODY — the route the CLI uses. The per-list route
+     * (/{bloq}/lists/{list}/items) is a closure in fl-api's routes: closures are serialised into
+     * the route cache and signed with APP_KEY, and when that signature stopped verifying every
+     * call through it was a bare 500. storeForBloq also puts the card at the END of its list
+     * itself, so `position` is no longer sent; and its `content` is required, so a title-only
+     * card carries its title (the row preview drops a body that only repeats the title).
+     */
+    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}/items`, FL_API, {
       method: "POST",
-      body: JSON.stringify({
-        title,
-        content: input.body ?? "",
-        type: "default",
-        ...(input.position !== undefined ? { sort_order: input.position } : {}),
-      }),
+      body: JSON.stringify({ title, content: input.body?.trim() || title, type: "default", list_id: listId }),
     })
     const j = (await res.json().catch(() => ({}))) as any
     if (!res.ok) return { ok: false, reason: apiFailure(j, res.status) }
@@ -3437,6 +3440,17 @@ export async function deleteAttachment(itemId: number, fileId: string): Promise<
     if (!del.ok && !/not found|404|no query results/i.test(del.reason ?? ""))
       return { ok: false, reason: `cloud file: ${del.reason}` }
   }
+  // ONE attachment, removed server-side under a row lock (fl-api #121, #189791) — by the id fl-api
+  // matches on. Only a legacy entry with neither id falls back to rewriting the whole array.
+  const key = gone.cloud_file_id ?? gone.id
+  if (key != null) {
+    const r = await postJson(
+      `/api/v1/user/${userId}/bloqs/list/item/${itemId}/attachments/${encodeURIComponent(String(key))}`,
+      undefined,
+      "DELETE",
+    )
+    return { ok: r.ok, reason: r.reason }
+  }
   // Whole object: content_merge cannot remove an array element (array_replace_recursive).
   const r = await postJson(
     `/api/v1/user/bloqs/list/item/${itemId}`,
@@ -3504,21 +3518,20 @@ export async function uploadAttachment(
     upload_date: new Date().toISOString(),
     created_at: new Date().toISOString(),
   }
-  const item = await rawItem(itemId)
-  if (!item.ok) return { ok: false, reason: `uploaded, but the card could not be read to attach it: ${item.reason}` }
-  const c = parseContent(item.raw.content)
-  const list: any[] = Array.isArray(c.obj?.attachments) ? c.obj!.attachments : []
-  const body: Record<string, unknown> =
-    c.kind === "structured"
-      ? { content_merge: { attachments: [...list, ref] } }
-      : { content: JSON.stringify({ text: c.text, body: c.text, attachments: [ref] }) }
-  const saved = await postJson(`/api/v1/user/bloqs/list/item/${itemId}`, body, "PUT")
+  /*
+   * ONE attachment, appended server-side under a row lock (fl-api #121, #189791). This used to
+   * read the card, append, and write the whole attachments array back — so an agent editing the
+   * body between that read and write lost its edit, or this upload lost the file. fl-api turns a
+   * prose card into a structured one itself, keeping the text.
+   */
+  const saved = await postJson(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/attachments`, { attachment: ref })
   if (!saved.ok)
     return {
       ok: false,
       reason: `uploaded (cloud file ${ref.cloud_file_id}) but not attached to the card: ${saved.reason}`,
     }
-  return { ok: true, file: readAttachment(ref, list.length) }
+  const now: unknown[] = Array.isArray(saved.data?.attachments) ? saved.data.attachments : [ref]
+  return { ok: true, file: readAttachment(ref, Math.max(0, now.length - 1)) }
 }
 
 // ── Events ──────────────────────────────────────────────────────────────────
