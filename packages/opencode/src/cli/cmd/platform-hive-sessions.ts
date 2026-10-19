@@ -13,7 +13,7 @@ import os from "os"
  * door onto it, not new plumbing.
  */
 
-type Session = {
+export type Session = {
   session_id: string
   provider: string
   name: string
@@ -24,7 +24,7 @@ type Session = {
   updated_at: string | null
 }
 
-function age(iso: string | null): string {
+export function age(iso: string | null): string {
   if (!iso) return "—"
   const ms = Date.now() - Date.parse(iso)
   if (Number.isNaN(ms)) return "—"
@@ -42,7 +42,7 @@ function age(iso: string | null): string {
  * box-drawing rule, and private-use Unicode glyphs. Those are not identifiers. The provider
  * and project are, so an unusable name falls back to `project · last-8-of-id`.
  */
-function label(s: Session): string {
+export function label(s: Session): string {
   // Strip control characters, box drawing, and the private-use area — all three were
   // observed as session "names" on the live fleet.
   const clean = (s.name || "")
@@ -78,9 +78,7 @@ const SessionsCommand = cmd({
     const userId = await requireUserId(argv["user-id"] as number | undefined)
     if (!userId) process.exit(1)
 
-    const res = await hiveFetch(`/api/v6/nodes/?user_id=${userId}&detailed=1`)
-    const body = (await res.json().catch(() => ({}))) as any
-    const nodes = (body.nodes || body.data || []) as any[]
+    const nodes = await fetchFleetNodes(userId)
 
     const rows: Array<Session & { node: string }> = []
     // A node that has STOPPED reporting keeps its last known list on the server, so the
@@ -157,6 +155,57 @@ const SessionsCommand = cmd({
   },
 })
 
+/** Every node in the fleet, with the `active_sessions` each one last reported. */
+export async function fetchFleetNodes(userId: number): Promise<any[]> {
+  const res = await hiveFetch(`/api/v6/nodes/?user_id=${userId}&detailed=1`)
+  const body = (await res.json().catch(() => ({}))) as any
+  return (body.nodes || body.data || []) as any[]
+}
+
+/**
+ * Match the FULL id, or an unambiguous suffix. Never a prefix: session ids share leading
+ * characters, and a truncated match is how a wrong diagnosis got filed on this project
+ * once already (#182312). Returns every hit — deciding what to do with 0 or 2+ is the caller's.
+ */
+export function matchSessionId(nodes: any[], wanted: string): Array<{ node: any; s: Session }> {
+  const hits: Array<{ node: any; s: Session }> = []
+  for (const n of nodes) {
+    for (const s of (n.active_sessions || []) as Session[]) {
+      if (s.session_id === wanted || (wanted.length >= 6 && s.session_id.endsWith(wanted))) {
+        hits.push({ node: n, s })
+      }
+    }
+  }
+  return hits
+}
+
+/**
+ * The one transport into a running session: a `session_message` task pinned to the node that
+ * holds it. `hive send-input` and `hive room` both go through here.
+ */
+export async function createSessionMessageTask(userId: number, node: any, s: Session, message: string) {
+  return hiveFetch(`/api/v6/nodes/tasks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      user_id: userId,
+      node_id: node.id,
+      type: "session_message",
+      title: `send-input to ${label(s)}`,
+      prompt: message,
+      // PROVENANCE (#182785): name the machine this came FROM. Without it the message lands
+      // looking exactly like something the recipient typed, and the node id the daemon falls
+      // back to is a UUID no human recognises.
+      config: {
+        session_id: s.session_id,
+        provider: s.provider,
+        message,
+        from: os.hostname().replace(/\.local$/, ""),
+      },
+    }),
+  })
+}
+
 /**
  * `iris hive send-input` — put a message into a session that is already running, on whichever
  * machine holds it.
@@ -186,21 +235,7 @@ const SendInputCommand = cmd({
 
     const wanted = String(argv["session-id"])
 
-    const res = await hiveFetch(`/api/v6/nodes/?user_id=${userId}&detailed=1`)
-    const body = (await res.json().catch(() => ({}))) as any
-    const nodes = (body.nodes || body.data || []) as any[]
-
-    // Match the FULL id, or an unambiguous suffix. Never a prefix: session ids share leading
-    // characters, and a truncated match is how a wrong diagnosis got filed on this project
-    // once already (#182312).
-    const hits: Array<{ node: any; s: Session }> = []
-    for (const n of nodes) {
-      for (const s of (n.active_sessions || []) as Session[]) {
-        if (s.session_id === wanted || (wanted.length >= 6 && s.session_id.endsWith(wanted))) {
-          hits.push({ node: n, s })
-        }
-      }
-    }
+    const hits = matchSessionId(await fetchFleetNodes(userId), wanted)
 
     if (hits.length === 0) {
       console.error(`No session matching "${wanted}".`)
@@ -221,26 +256,7 @@ const SendInputCommand = cmd({
       process.exit(1)
     }
 
-    const create = await hiveFetch(`/api/v6/nodes/tasks`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        user_id: userId,
-        node_id: node.id,
-        type: "session_message",
-        title: `send-input to ${label(s)}`,
-        prompt: String(argv.message),
-        // PROVENANCE (#182785): name the machine this came FROM. Without it the message lands
-        // looking exactly like something the recipient typed, and the node id the daemon falls
-        // back to is a UUID no human recognises.
-        config: {
-          session_id: s.session_id,
-          provider: s.provider,
-          message: String(argv.message),
-          from: os.hostname().replace(/\.local$/, ""),
-        },
-      }),
-    })
+    const create = await createSessionMessageTask(userId, node, s, String(argv.message))
 
     if (!create.ok) {
       const t = await create.text()
