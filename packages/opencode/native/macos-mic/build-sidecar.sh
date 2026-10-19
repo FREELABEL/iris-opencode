@@ -12,8 +12,12 @@ case "$TARGET" in
   x86_64-apple-darwin) SWIFT=x86_64-apple-macos12.0 ;;
   *) echo "iris-mic is macOS only (got $TARGET)" >&2; exit 1 ;;
 esac
-cd "$(dirname "$0")"
+# Resolve the output BEFORE changing directory: CI passes a path relative to the repo root, and
+# resolving it after the cd wrote the helper inside this folder, where Tauri never looks (release
+# run 39180060453: "resource path sidecars/iris-mic-aarch64-apple-darwin doesn't exist").
 mkdir -p "$OUT"
+OUT=$(cd "$OUT" && pwd)
+cd "$(dirname "$0")"
 # Info.plist is embedded in the binary: a bare command-line tool has no bundle to carry a microphone
 # usage string, and macOS reads it from the binary itself.
 swiftc -O -target "$SWIFT" iris-mic.swift -o "$OUT/iris-mic-$TARGET" \
