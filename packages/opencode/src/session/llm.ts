@@ -1,4 +1,5 @@
 import { Provider } from "@/provider/provider"
+import { repairToolName } from "./tool-name-repair"
 import { Log } from "@/util/log"
 import {
   streamText,
@@ -132,8 +133,10 @@ export namespace LLM {
         })
       },
       async experimental_repairToolCall(failed) {
-        const lower = failed.toolCall.toolName.toLowerCase()
-        if (lower !== failed.toolCall.toolName && tools[lower]) {
+        // Case, then a doubled segment (IRIS_OS_iris_iris_help → IRIS_OS_iris_help) — only onto
+        // exactly one real tool, never a guess between two (#189837).
+        const lower = repairToolName(failed.toolCall.toolName, Object.keys(tools)) ?? ""
+        if (lower && tools[lower]) {
           l.info("repairing tool call", {
             tool: failed.toolCall.toolName,
             repaired: lower,
