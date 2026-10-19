@@ -35,6 +35,12 @@ export interface ProductSpec {
   howtos?: string[]
   /** Playbook names this product runs on. */
   playbooks?: string[]
+  /**
+   * A reference block printed FIRST under --help, before how-tos and keywords. For the few
+   * products whose help is the documentation an agent reads (`exposure` carries the access
+   * guide, #190012). Keep it to facts a caller needs to act; prose belongs in a how-to.
+   */
+  guide?: string
   /** The product's subcommands. Use this for a NEW product. */
   subcommands?: CommandModule<any, any>[]
   /**
@@ -63,6 +69,7 @@ export const PRODUCTS: ProductSpec[] = []
 
 export function productEpilogue(spec: ProductSpec): string {
   const lines: string[] = []
+  if (spec.guide) lines.push(spec.guide, "")
   if (spec.howtos?.length) {
     lines.push("How-tos:")
     for (const h of spec.howtos) lines.push(`  iris how-to view ${h}`)

@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { withAccessFooter } from "./access-guide"
 import { brandContract, brandContractCss, applyBrandBlock } from "./brand-contract"
 import { TEMPLATE_GALLERY_SLUG, briefQuestions, findTemplate, parseTemplateCatalogue, type TemplateRow } from "./genesis-templates"
 import { productCommand } from "./product-command"
@@ -5665,12 +5666,12 @@ export const PlatformPagesCommand = productCommand({
       .command(DevCmd)
       .command(DiffCmd)
       .command(MergeCmd)
-      .command(PublishCmd)
+      .command(withAccessFooter(PublishCmd))
       .command(UnpublishCmd)
-      .command(PreviewCmd)
-      .command(VisibilityCmd)
+      .command(withAccessFooter(PreviewCmd))
+      .command(withAccessFooter(VisibilityCmd))
       .command(RedirectCmd)
-      .command(ShareCmd)
+      .command(withAccessFooter(ShareCmd))
       .command(ShareListCmd)
       .command(ShareRevokeCmd)
       .command(CreateCmd)
@@ -5688,7 +5689,7 @@ export const PlatformPagesCommand = productCommand({
       .command(ScreenshotCmd)
       .command(ReadCmd)
       .command(VerifyCmd)
-      .command(PublishHtmlCmd)
+      .command(withAccessFooter(PublishHtmlCmd))
       .command(ReassignCmd)
       .command(UngateCmd)
       .command(PagesGateCommand)
