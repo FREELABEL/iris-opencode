@@ -14,6 +14,7 @@ import {
   recorderReadiness,
   startCapture,
   stopCapture,
+  waitForAudio,
 } from "../../src/transcribe/capture"
 import { TranscribeError } from "../../src/transcribe/local"
 
@@ -232,6 +233,17 @@ describe("inputCandidates — what each platform records from", () => {
 })
 
 describe("recorderReadiness — can the sidecar record here, and if not, why", () => {
+
+  // These describe the ffmpeg path. A developer machine that has built iris-mic would otherwise find
+  // it and answer for it instead, so the helper is pinned absent here (it has its own tests).
+  const priorHelper = process.env["IRIS_MIC_HELPER"]
+  beforeAll(() => {
+    process.env["IRIS_MIC_HELPER"] = "/nonexistent/iris-mic"
+  })
+  afterAll(() => {
+    if (priorHelper === undefined) delete process.env["IRIS_MIC_HELPER"]
+    else process.env["IRIS_MIC_HELPER"] = priorHelper
+  })
   test("ready where ffmpeg and an input exist", () => {
     expect(recorderReadiness("win32", fake)).toEqual({ sidecar: true })
     expect(recorderReadiness("linux", fake)).toEqual({ sidecar: true })
@@ -252,8 +264,16 @@ describe("recorderReadiness — can the sidecar record here, and if not, why", (
     expect(r.reason).not.toMatch(/brew|winget|System Settings ›/)
   })
 
-  test("no ffmpeg on macOS: brew", () => {
-    expect(recorderReadiness("darwin", null).reason).toContain("brew install ffmpeg")
+  test("no ffmpeg and no helper on macOS: brew", () => {
+    // Pinned: a developer machine that has built iris-mic would otherwise find it and be ready.
+    const prior = process.env["IRIS_MIC_HELPER"]
+    process.env["IRIS_MIC_HELPER"] = "/nonexistent/iris-mic"
+    try {
+      expect(recorderReadiness("darwin", null).reason).toContain("brew install ffmpeg")
+    } finally {
+      if (prior === undefined) delete process.env["IRIS_MIC_HELPER"]
+      else process.env["IRIS_MIC_HELPER"] = prior
+    }
   })
 
   test("Windows with no microphone is not ready, and says so", () => {
@@ -361,7 +381,7 @@ describe("micHelperPath — only macOS, and only a helper that exists", () => {
   test("an override that exists is used, and macOS is then ready with no ffmpeg", () => {
     process.env["IRIS_MIC_HELPER"] = process.execPath
     expect(micHelperPath("darwin")).toBe(process.execPath)
-    expect(recorderReadiness("darwin", null)).toEqual({ sidecar: true })
+    expect(recorderReadiness("darwin", null)).toEqual({ sidecar: true, native: true })
   })
 })
 
@@ -393,6 +413,38 @@ describe.skipIf(process.platform !== "darwin")("startCapture with the macOS help
     } finally {
       delete process.env["IRIS_FFMPEG"]
     }
+  })
+
+  test("waitForAudio answers when the first audio arrives, not when the recorder was spawned (#189875)", async () => {
+    const helper = join(dir, "iris-mic-slow")
+    // Silent for 0.4 s — the time a real audio unit takes to start — then audio.
+    writeFileSync(helper, `#!/bin/sh\nsleep 0.4\nhead -c 3200 /dev/zero\nsleep 5\n`)
+    chmodSync(helper, 0o755)
+    process.env["IRIS_MIC_HELPER"] = helper
+    const t0 = Date.now()
+    startCapture()
+    expect(await waitForAudio(3000)).toBe(true)
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(350)
+  })
+
+  test("waitForAudio is false when the recorder exits without audio, and does not hang", async () => {
+    const helper = join(dir, "iris-mic-dead")
+    writeFileSync(helper, `#!/bin/sh\nexit 3\n`)
+    chmodSync(helper, 0o755)
+    process.env["IRIS_MIC_HELPER"] = helper
+    const t0 = Date.now()
+    startCapture()
+    expect(await waitForAudio(3000)).toBe(false)
+    expect(Date.now() - t0).toBeLessThan(2000)
+  })
+
+  test("waitForAudio gives up at its timeout while the recorder is still silent", async () => {
+    const helper = join(dir, "iris-mic-mute")
+    writeFileSync(helper, `#!/bin/sh\nsleep 5\n`)
+    chmodSync(helper, 0o755)
+    process.env["IRIS_MIC_HELPER"] = helper
+    startCapture()
+    expect(await waitForAudio(300)).toBe(false)
   })
 
   test("a helper that fails to start is an error, not a quiet switch to ffmpeg", async () => {

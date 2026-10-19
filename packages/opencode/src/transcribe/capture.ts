@@ -56,6 +56,8 @@ interface Active {
   deadline?: ReturnType<typeof setTimeout>
   /** The deadline fired: the process ending now is the cap, not a device to fall back from. */
   expired?: boolean
+  /** Callers of waitForAudio(), told when the first byte arrives or the recorder exits. */
+  waiters?: Array<(live: boolean) => void>
 }
 
 let active: Active | undefined
@@ -177,9 +179,9 @@ export function inputCandidates(platform: string, ffmpeg: string, device?: strin
 export function recorderReadiness(
   platform: string = process.platform,
   ffmpeg: string | null = ffmpegPath(),
-): { sidecar: boolean; reason?: string } {
+): { sidecar: boolean; native?: boolean; reason?: string } {
   if (!SUPPORTED.has(platform)) return { sidecar: false, reason: unsupportedMessage(platform) }
-  if (micHelperPath(platform)) return { sidecar: true }
+  if (micHelperPath(platform)) return { sidecar: true, native: true }
   if (!ffmpeg) return { sidecar: false, reason: missingFfmpegMessage(platform) }
   if (platform === "win32") {
     try {
@@ -316,6 +318,7 @@ function spawnInput(session: Active, input: CaptureInput) {
   proc.stdout?.on("data", (b: Buffer) => {
     session.chunks.push(b)
     session.bytes += b.length
+    if (session.waiters?.length) for (const w of session.waiters.splice(0)) w(true)
     // Live dictation tees the same PCM to the relay. A listener that throws must never cost the
     // recording, which is the source of truth.
     for (const listener of chunkListeners) {
@@ -338,6 +341,33 @@ function spawnInput(session: Active, input: CaptureInput) {
   }
   proc.on("close", next)
   proc.on("error", next)
+  // A recorder that exits before any audio has nothing to wait for — unless a fallback took over.
+  proc.on("close", () => {
+    if (session.bytes === 0 && session.proc === proc && session.waiters?.length) for (const w of session.waiters.splice(0)) w(false)
+  })
+}
+
+/**
+ * Resolves true once the active recording has produced audio, false if it ends first or `timeoutMs`
+ * passes (#189875). /dictate/start awaits this, and the composer shows the recording ring only when
+ * that request returns — so the ring appears when the microphone is live, not ~0.3–1 s before, which
+ * is speech nobody recorded.
+ */
+export function waitForAudio(timeoutMs = 1500): Promise<boolean> {
+  const session = active
+  if (!session) return Promise.resolve(false)
+  if (session.bytes > 0) return Promise.resolve(true)
+  return new Promise((resolve) => {
+    const done = (live: boolean) => {
+      clearTimeout(timer)
+      resolve(live)
+    }
+    const timer = setTimeout(() => {
+      session.waiters = session.waiters?.filter((w) => w !== done)
+      resolve(false)
+    }, timeoutMs)
+    ;(session.waiters ??= []).push(done)
+  })
 }
 
 /**
