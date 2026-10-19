@@ -1565,7 +1565,7 @@ export const IrisApi = HttpApi.make("iris").add(
         payload: Schema.Struct({
           title: Schema.String,
           body: Schema.optional(Schema.String),
-          position: described(Schema.optional(Schema.Finite), "Where in the list; the panel sends the list's length (the end)"),
+          position: described(Schema.optional(Schema.Finite), "Ignored since #189791: fl-api appends to the end of the list itself"),
         }),
         success: described(
           Schema.Struct({ ok: Schema.Boolean, id: Schema.optional(Schema.Finite), reason: Schema.optional(Schema.String) }).annotate({
