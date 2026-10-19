@@ -297,6 +297,9 @@ export async function resolveBloqId(idOrQuery: string | number, userId: number, 
 
 const BloqsGetCommand = cmd({
   command: "get <id>",
+  // #189896 — `bloqs show 352` answered "Did you mean who?" (members' alias). `show` is what
+  // people type; every sibling has a show-ish spelling (get-item: item/show-item).
+  aliases: ["show"],
   describe: "show bloq details and lists (accepts a bloq ID or name)",
   builder: (yargs) =>
     yargs

@@ -315,11 +315,28 @@ const outOpt = (y: any) => y.option("out", { describe: "folder to pull into (def
   .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
 
 export const AtlasPullCommand = cmd({
-  command: "pull <bloq-id>",
+  command: "pull <bloq-id> [dir]",
   describe: "pull a whole board into a folder of markdown files (lists become directories)",
-  builder: (y: any) => outOpt(y.positional("bloq-id", { describe: "board id", type: "string", demandOption: true })),
-  async handler(args: any) { await doPull(args) },
+  builder: (y: any) =>
+    outOpt(
+      y.positional("bloq-id", { describe: "board id", type: "string", demandOption: true })
+        .positional("dir", { describe: "folder to pull into (same as --out)", type: "string" }),
+    ),
+  async handler(args: any) {
+    const out = resolvePullDir(args.dir, args.out)
+    if ("error" in out) { console.error(out.error); process.exitCode = 1; return }
+    await doPull({ ...args, out: out.dir })
+  },
 })
+
+/**
+ * #189896 — `pull 352 /tmp/dir` was rejected as "Unknown argument" under a full help dump; a
+ * folder is the natural second word. It means --out; both given and different is ambiguous.
+ */
+export function resolvePullDir(dir: string | undefined, out: string | undefined): { dir: string | undefined } | { error: string } {
+  if (dir && out && dir !== out) return { error: `Two folders given: "${dir}" and --out "${out}". Pass one.` }
+  return { dir: out ?? dir }
+}
 
 export const AtlasDiffCommand = cmd({
   command: "diff <dir>",
