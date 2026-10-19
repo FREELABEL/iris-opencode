@@ -148,3 +148,19 @@ describe("pulse Meetings reads every account (#189944)", () => {
     expect(seen).toEqual([{ integrationId: 7 }])
   })
 })
+
+describe("per-account get_events answers in Google's raw shape (measured live 2026-10-19)", () => {
+  test("data.items with {dateTime} starts is read, and the start is a usable string", async () => {
+    const future = new Date(Date.now() + 2 * 86400_000).toISOString()
+    const r = await fetchLeadCalendarEvents({ id: 29284, name: "Darren Cummings", email: "dc@m42.com" }, { days: 30 }, {
+      listConnections: async () => [{ id: 10 }, { id: 91 }],
+      call: async () => ({
+        success: true,
+        data: { kind: "calendar#events", items: [{ id: "g1", summary: "Gate: Technical Pilot Checkin", start: { dateTime: future }, end: { dateTime: future }, attendees: [{ email: "dc@m42.com" }] }] },
+      }),
+    })
+    expect(r.upcoming).toHaveLength(1)
+    expect(typeof r.upcoming[0].start).toBe("string")
+    expect(r.unread).toEqual([])
+  })
+})

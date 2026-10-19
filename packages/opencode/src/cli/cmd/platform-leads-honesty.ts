@@ -636,8 +636,18 @@ export function readCalendarEvents(result: unknown): any[] {
     if (Array.isArray(r.events)) return r.events
     if (Array.isArray(r.data?.events)) return r.data.events
     if (Array.isArray(r.data)) return r.data
+    // #189944: a call pinned to one account (integration_id) answers with Google's raw list —
+    // { data: { kind: "calendar#events", items: [...] } } — and start/end are {dateTime}|{date}.
+    const items = Array.isArray(r.data?.items) ? r.data.items : Array.isArray(r.items) ? r.items : null
+    if (items) return items.map(normalizeGoogleEvent)
   }
   throw new Error("not measured — calendar not read (no events in the response)")
+}
+
+/** Google's event resource → the flat shape every calendar reader here uses (start/end strings). */
+export function normalizeGoogleEvent(ev: any): any {
+  const when = (t: any) => (t && typeof t === "object" ? (t.dateTime ?? t.date ?? null) : t)
+  return { ...ev, start: when(ev?.start), end: when(ev?.end) }
 }
 
 /**
