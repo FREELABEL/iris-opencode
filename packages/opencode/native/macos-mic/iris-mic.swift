@@ -12,6 +12,7 @@
 //   iris-mic --device "<name>"     a named input (case-insensitive substring)
 //   iris-mic --seconds 6           stop by itself (tests)
 //   iris-mic --list                one JSON line per input, then exit
+//   iris-mic --backend avengine    open the mic with AVAudioEngine instead of the HAL unit (benchmark only)
 //
 // stdout: raw PCM only. stderr: one JSON line "start", one JSON line "stop" with frames/wall.
 import AVFoundation
@@ -98,37 +99,54 @@ if let want = option("--device"), !want.isEmpty {
 }
 guard let input = chosen else { err(json(["event": "error", "error": "no-input"])); exit(4) }
 
-let engine = AVAudioEngine()
-var devId = input.id
-if let unit = engine.inputNode.audioUnit {
-  AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &devId, UInt32(MemoryLayout<AudioDeviceID>.size))
-}
-let hw = engine.inputNode.inputFormat(forBus: 0)
-guard hw.sampleRate > 0, hw.channelCount > 0 else { err(json(["event": "error", "error": "no-format", "device": input.name])); exit(5) }
 
-let mono = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: hw.sampleRate, channels: 1, interleaved: false)!
-let out = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16000, channels: 1, interleaved: true)!
-let converter = AVAudioConverter(from: mono, to: out)!
+// ── AUHAL input callback state. A C callback cannot capture context, so it lives in globals. ──
+let halMaxFrames = 8192
+var halUnit: AudioUnit?
+var halList: UnsafeMutableAudioBufferListPointer!
+let halInput: AURenderCallback = { _, flags, ts, bus, frames, _ in
+  guard let unit = halUnit, Int(frames) <= halMaxFrames else { return noErr }
+  for c in 0..<halList.count { halList[c].mDataByteSize = frames * 4 }
+  let status = AudioUnitRender(unit, flags, ts, bus, frames, halList.unsafeMutablePointer)
+  guard status == noErr else { return status }
+  emit((0..<halList.count).map { UnsafePointer($0 < halList.count ? halList[$0].mData!.assumingMemoryBound(to: Float.self) : halList[0].mData!.assumingMemoryBound(to: Float.self)) }, frames: Int(frames))
+  return noErr
+}
+
+// Two capture backends, chosen with --backend (default avengine). Both feed emit(), so everything after
+// the microphone is identical and a benchmark compares only how the audio is opened (#189875).
+//   avengine  AVAudioEngine's input node: median 0.64 s to first audio, worst 1.10 s (bench, N=5).
+//   auhal     the HAL unit AVAudioEngine is built on: median 0.28 s, worst 0.57 s. The default.
+let backend = option("--backend") ?? "auhal"
 let stdout = FileHandle.standardOutput
 var signalSources: [DispatchSourceSignal] = []
 var inFrames = 0, outBytes = 0
 let t0 = Date()
+var rate: Double = 0
+var mono: AVAudioFormat!
+let out = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16000, channels: 1, interleaved: true)!
+var converter: AVAudioConverter!
 
-engine.inputNode.installTap(onBus: 0, bufferSize: 2048, format: hw) { buf, _ in
-  guard let data = buf.floatChannelData else { return }
-  let n = Int(buf.frameLength)
-  guard n > 0, let m = AVAudioPCMBuffer(pcmFormat: mono, frameCapacity: buf.frameLength) else { return }
-  m.frameLength = buf.frameLength
-  // Average the first two channels: a mono mic is itself, a stereo mic is its mix, and a many-channel
-  // interface does not dilute the one live mic across sixteen silent channels.
-  let used = Int(min(2, hw.channelCount))
+func prepare(rate r: Double) {
+  rate = r
+  mono = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: r, channels: 1, interleaved: false)!
+  converter = AVAudioConverter(from: mono, to: out)!
+}
+
+/// Average the first two of `channels` planar channels to mono, resample to 16 kHz PCM16, write it.
+/// A mono mic is itself, a stereo mic is its mix, and a many-channel interface does not dilute the
+/// one live mic across sixteen silent channels.
+func emit(_ planes: [UnsafePointer<Float>], frames n: Int) {
+  guard n > 0, let m = AVAudioPCMBuffer(pcmFormat: mono, frameCapacity: AVAudioFrameCount(n)) else { return }
+  m.frameLength = AVAudioFrameCount(n)
+  let used = min(2, planes.count)
   let dst = m.floatChannelData![0]
   for i in 0..<n {
     var s: Float = 0
-    for c in 0..<used { s += data[c][i] }
+    for c in 0..<used { s += planes[c][i] }
     dst[i] = s / Float(used)
   }
-  let cap = AVAudioFrameCount(Double(n) * 16000 / hw.sampleRate) + 64
+  let cap = AVAudioFrameCount(Double(n) * 16000 / rate) + 64
   guard let o = AVAudioPCMBuffer(pcmFormat: out, frameCapacity: cap) else { return }
   var fed = false
   var e: NSError?
@@ -143,22 +161,75 @@ engine.inputNode.installTap(onBus: 0, bufferSize: 2048, format: hw) { buf, _ in
   stdout.write(Data(bytes: ch[0], count: bytes))
 }
 
+var devId = input.id
+var stopCapture: () -> Void = {}
+var channelCount = 0
+
+if backend == "auhal" {
+  var desc = AudioComponentDescription(componentType: kAudioUnitType_Output, componentSubType: kAudioUnitSubType_HALOutput,
+                                       componentManufacturer: kAudioUnitManufacturer_Apple, componentFlags: 0, componentFlagsMask: 0)
+  guard let comp = AudioComponentFindNext(nil, &desc) else { err(json(["event": "error", "error": "no-hal-unit"])); exit(5) }
+  var unitOpt: AudioUnit?
+  AudioComponentInstanceNew(comp, &unitOpt)
+  guard let unit = unitOpt else { err(json(["event": "error", "error": "no-hal-unit"])); exit(5) }
+  var one: UInt32 = 1, zero: UInt32 = 0
+  AudioUnitSetProperty(unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Input, 1, &one, 4)
+  AudioUnitSetProperty(unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Output, 0, &zero, 4)
+  AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &devId, UInt32(MemoryLayout<AudioDeviceID>.size))
+  var devFmt = AudioStreamBasicDescription()
+  var fsize = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+  AudioUnitGetProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 1, &devFmt, &fsize)
+  guard devFmt.mSampleRate > 0, devFmt.mChannelsPerFrame > 0 else { err(json(["event": "error", "error": "no-format", "device": input.name])); exit(5) }
+  channelCount = Int(devFmt.mChannelsPerFrame)
+  // The HAL unit converts layout but not rate, so the client side keeps the device's own rate.
+  var client = AudioStreamBasicDescription(mSampleRate: devFmt.mSampleRate, mFormatID: kAudioFormatLinearPCM,
+    mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked | kAudioFormatFlagIsNonInterleaved,
+    mBytesPerPacket: 4, mFramesPerPacket: 1, mBytesPerFrame: 4, mChannelsPerFrame: devFmt.mChannelsPerFrame, mBitsPerChannel: 32, mReserved: 0)
+  AudioUnitSetProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, 1, &client, fsize)
+  prepare(rate: devFmt.mSampleRate)
+  halUnit = unit
+  halList = AudioBufferList.allocate(maximumBuffers: channelCount)
+  for c in 0..<channelCount {
+    halList[c] = AudioBuffer(mNumberChannels: 1, mDataByteSize: UInt32(halMaxFrames * 4),
+                             mData: UnsafeMutableRawPointer.allocate(byteCount: halMaxFrames * 4, alignment: 16))
+  }
+  var cb = AURenderCallbackStruct(inputProc: halInput, inputProcRefCon: nil)
+  AudioUnitSetProperty(unit, kAudioOutputUnitProperty_SetInputCallback, kAudioUnitScope_Global, 0, &cb, UInt32(MemoryLayout<AURenderCallbackStruct>.size))
+  guard AudioUnitInitialize(unit) == noErr, AudioOutputUnitStart(unit) == noErr else {
+    err(json(["event": "error", "error": "start-failed", "device": input.name])); exit(6)
+  }
+  stopCapture = { AudioOutputUnitStop(unit) }
+} else {
+  let engine = AVAudioEngine()
+  if let unit = engine.inputNode.audioUnit {
+    AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &devId, UInt32(MemoryLayout<AudioDeviceID>.size))
+  }
+  let hw = engine.inputNode.inputFormat(forBus: 0)
+  guard hw.sampleRate > 0, hw.channelCount > 0 else { err(json(["event": "error", "error": "no-format", "device": input.name])); exit(5) }
+  channelCount = Int(hw.channelCount)
+  prepare(rate: hw.sampleRate)
+  engine.inputNode.installTap(onBus: 0, bufferSize: 2048, format: hw) { buf, _ in
+    guard let data = buf.floatChannelData else { return }
+    emit((0..<channelCount).map { UnsafePointer(data[$0]) }, frames: Int(buf.frameLength))
+  }
+  do { try engine.start() } catch { err(json(["event": "error", "error": "start-failed", "detail": "\(error)"])); exit(6) }
+  stopCapture = { engine.stop() }
+}
+
 func finish(_ code: Int32) -> Never {
-  engine.stop()
+  stopCapture()
   let wall = Date().timeIntervalSince(t0)
-  err(json(["event": "stop", "wall_s": (wall * 100).rounded() / 100, "audio_s": (Double(inFrames) / hw.sampleRate * 100).rounded() / 100, "out_bytes": outBytes]))
+  err(json(["event": "stop", "wall_s": (wall * 100).rounded() / 100, "audio_s": (Double(inFrames) / rate * 100).rounded() / 100, "out_bytes": outBytes]))
   exit(code)
 }
 
-do { try engine.start() } catch { err(json(["event": "error", "error": "start-failed", "detail": "\(error)"])); exit(6) }
-err(json(["event": "start", "device": input.name, "reason": reason, "channels": Int(hw.channelCount), "rate": hw.sampleRate]))
+err(json(["event": "start", "device": input.name, "reason": reason, "channels": channelCount, "rate": rate, "backend": backend]))
 
 for sig in [SIGINT, SIGTERM] {
   signal(sig, SIG_IGN)
   let src = DispatchSource.makeSignalSource(signal: sig, queue: .main)
   src.setEventHandler { finish(0) }
   src.resume()
-  withExtendedLifetime(src) {}
   signalSources.append(src)
 }
 if let s = option("--seconds"), let secs = Double(s) {
