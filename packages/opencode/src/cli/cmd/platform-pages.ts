@@ -5192,6 +5192,8 @@ const VerifyCmd = cmd({
 export interface ParsedHtmlDoc {
   title: string | null
   description: string | null
+  /** The file's share image (og:image, else twitter:image). Raw — see shareImageProblem(). */
+  ogImage: string | null
   css: string
   body: string
   isFullDocument: boolean
@@ -5205,6 +5207,38 @@ export interface ParsedHtmlDoc {
  * literal is out of contract — and `pages verify` is the backstop that catches it, which
  * is the point of shipping the two together.
  */
+/**
+ * Every <meta> in the file as name/property → content. Attribute ORDER varies by author
+ * (`content` before `property` is common), so each tag's attributes are read as a set rather
+ * than with one positional regex. First declaration of a key wins.
+ */
+export function parseMetaTags(src: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const tag of src.match(/<meta\b[^>]*>/gi) ?? []) {
+    const attrs: Record<string, string> = {}
+    // The value closes on the SAME quote that opened it (#188610: an apostrophe inside "…" is content).
+    const attrRe = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(["'])([\s\S]*?)\2/g
+    let a: RegExpExecArray | null
+    while ((a = attrRe.exec(tag)) !== null) attrs[a[1].toLowerCase()] = a[3]
+    const key = (attrs.property ?? attrs.name ?? "").toLowerCase()
+    if (key && attrs.content !== undefined && !(key in out)) out[key] = attrs.content.trim()
+  }
+  return out
+}
+
+const SHARE_IMAGE_KEYS = ["og:image", "og:image:secure_url", "og:image:url", "twitter:image", "twitter:image:src"]
+
+/**
+ * Why a share image cannot be used, or null. Link-preview crawlers (iMessage, Slack, X,
+ * Facebook, LinkedIn) fetch og:image with no page context, so a relative path or a data: URI
+ * resolves to nothing and the share shows a blank or generic card — silently.
+ */
+export function shareImageProblem(url: string): string | null {
+  if (/^data:/i.test(url)) return "it is a data: URI — crawlers cannot fetch it"
+  if (!/^https?:\/\//i.test(url)) return "it is not an absolute http(s) URL — crawlers fetch it without the page, so a relative path resolves to nothing"
+  return null
+}
+
 export function parseHtmlDocument(src: string): ParsedHtmlDoc {
   const titleMatch = src.match(/<title[^>]*>([\s\S]*?)<\/title>/i)
   // The value closes on the SAME quote that opened it. Accepting either quote ended
@@ -5232,9 +5266,13 @@ export function parseHtmlDocument(src: string): ParsedHtmlDoc {
   }
   body = body.replace(styleRe, "").trim()
 
+  const metas = parseMetaTags(src)
+  const ogKey = SHARE_IMAGE_KEYS.find((k) => metas[k])
+
   return {
     title: titleMatch ? titleMatch[1].replace(/\s+/g, " ").trim() : null,
     description: descMatch ? descMatch[1].replace(/\s+/g, " ").trim() : null,
+    ogImage: ogKey ? metas[ogKey] : null,
     css: styles.join("\n\n"),
     body,
     isFullDocument,
@@ -5261,9 +5299,14 @@ export function buildBespokeJsonContent(
   opts?: { themeMode?: string; backgroundColor?: string; brandName?: string; requiresAuth?: boolean },
 ): Record<string, any> {
   const requireOtp = !!opts?.requiresAuth
+  // The share image. json_content.og_image is FIRST in the server's og:image chain, so the
+  // file's own <meta property="og:image"> decides the link preview. Before this the head was
+  // discarded and every hand-written page unfurled as the generic IRIS card. Absent (or
+  // unusable) → the key is omitted, and an update carries the live page's value forward.
+  const share = doc.ogImage && !shareImageProblem(doc.ogImage) ? { og_image: doc.ogImage } : {}
   if (lane === "standalone") {
     // render_mode:html -> public-html.blade.php serves the document with a minimal reset.
-    return { version: "2.0", type: "article", render_mode: "html", html: doc.body, css: doc.css, requireOtp }
+    return { version: "2.0", type: "article", render_mode: "html", html: doc.body, css: doc.css, requireOtp, ...share }
   }
   // CustomHtml lane: one v-html block inside the normal composable shell. The CSS has to
   // ride along inside the fragment because props.html is a single field.
@@ -5278,6 +5321,7 @@ export function buildBespokeJsonContent(
     },
     requireOtp,
     components: [{ type: "CustomHtml", id: "doc", props: { html: fragment } }],
+    ...share,
   }
 }
 
@@ -5433,6 +5477,12 @@ const PublishHtmlCmd = cmd({
     printKV("HTML", `${doc.body.length} chars`)
     printKV("CSS", `${doc.css.length} chars`)
     if (description) printKV("Description", description)
+    // The link preview. Silent until someone shares the page and sees the generic card — so say
+    // it here, before anything is sent.
+    const shareProblem = doc.ogImage ? shareImageProblem(doc.ogImage) : null
+    if (doc.ogImage && !shareProblem) printKV("Share image", doc.ogImage)
+    else if (doc.ogImage && shareProblem) prompts.log.warn(`og:image ignored — ${shareProblem}: ${doc.ogImage}`)
+    else prompts.log.warn('No og:image in the file — on a NEW page, links will unfurl as the generic IRIS card (an update keeps the current one). Add <meta property="og:image" content="https://…1200x630.png">.')
 
     if (args["dry-run"]) {
       console.log()
