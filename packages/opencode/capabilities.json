@@ -8253,7 +8253,15 @@
         "kinetics"
       ],
       "run": "iris kinetic",
-      "haystack": "kinetic kinetics kinetic — which agent may move which body on this node, and on what terms seal issuer new trust list untrust couple add list revoke export import bodies spend check lock log"
+      "haystack": "kinetic kinetics kinetic — which agent may move which body on this node, and on what terms seal issuer new trust list untrust couple add list revoke export import bodies spend check act lock log"
+    },
+    {
+      "kind": "command",
+      "name": "kinetic act",
+      "describe": "record an act on a body driven by a script (a drone) — refused acts exit 5, nothing recorded as allowed",
+      "aliases": [],
+      "run": "iris kinetic act <body> <verb>",
+      "haystack": "kinetic act record an act on a body driven by a script (a drone) — refused acts exit 5, nothing recorded as allowed cents estimated cost of the act, in cents yes confirm a couple that asks for a human (you are the human)"
     },
     {
       "kind": "command",
