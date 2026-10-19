@@ -83,6 +83,8 @@ import {
 import { liveLabel, readSse, type LiveState } from "./iris-atlas-live"
 import { CardBadges, type CardFace } from "./iris-card-badges"
 import { IrisBoardMembers, readMembers } from "./iris-board-members"
+import { IrisDelegateRail } from "./iris-delegate-rail"
+import { useLanguage } from "@/context/language"
 import { filterRecords, sortRecords, toCsv, type SortDir } from "./iris-records-view"
 
 // Re-exported: the panel tests assert on these, and they were defined here before the card
@@ -1109,6 +1111,7 @@ export function requestIrisSurface(surface: string, sub?: string) {
 
 export function SessionIrisTab() {
   const dialog = useDialog()
+  const language = useLanguage()
   const serverSDK = useServerSDK()
   const sessionLayout = useSessionLayout()
   const platform = usePlatform()
@@ -1493,6 +1496,54 @@ export function SessionIrisTab() {
   /** Drag follows board order. Under another sort, "in front of this card" means nothing that
    *  survives a refresh, so the board says so instead of saving a position nobody chose. */
   const canDrag = () => atlasView().sort === "board"
+  /*
+   * DELEGATE (#189933): the rail of agents and sessions beside the board. Open or closed is one
+   * choice for every board — it is how you work, not a property of a board. Delegating does not
+   * need board order, so cards drag whenever the rail is open; dropping BETWEEN lists still does.
+   */
+  const [delegateOpen, setDelegateOpenSig] = createSignal(
+    (() => {
+      try {
+        return localStorage.getItem("iris.atlas.delegate") === "1"
+      } catch {
+        return false
+      }
+    })(),
+  )
+  const setDelegateOpen = (open: boolean) => {
+    setDelegateOpenSig(open)
+    try {
+      if (open) localStorage.setItem("iris.atlas.delegate", "1")
+      else localStorage.removeItem("iris.atlas.delegate")
+    } catch {}
+  }
+  const delegateCard = (itemId: number) => {
+    for (const list of atlasBoard()) {
+      const item = list.items.find((i) => i.id === itemId)
+      if (item) return { id: item.id, title: item.title, listName: list.name, boardName: activeBloqName() }
+    }
+    return undefined
+  }
+  const delegateSessions = () => {
+    try {
+      return (dirSync?.().data.session ?? []) as { id: string; title?: string; parentID?: string; time?: any }[]
+    } catch {
+      return []
+    }
+  }
+  const sessionBusy = (id: string) => {
+    try {
+      const st = dirSync?.().data.session_status?.[id]
+      return !!st && st.type !== "idle"
+    } catch {
+      return false
+    }
+  }
+  const sendToSession = dirSdk
+    ? async (sessionID: string, text: string) => {
+        await dirSdk().api.session.prompt({ sessionID, text, delivery: "queue" })
+      }
+    : undefined
   async function dropCard(drop: AtlasDrop) {
     const full = atlasBoard()
     const from = full.find((l) => l.items.some((i) => i.id === drop.itemId))
@@ -2733,6 +2784,18 @@ export function SessionIrisTab() {
               )}
             </For>
           </div>
+          <Show when={atlasLayout() === "board"}>
+            <div class="iris-atlas-tools__chips" role="group" aria-label={language.t("iris.delegate.title")}>
+              <button
+                type="button"
+                aria-pressed={delegateOpen()}
+                title={language.t("iris.delegate.toggle.title")}
+                onClick={() => setDelegateOpen(!delegateOpen())}
+              >
+                {language.t("iris.delegate.toggle")}
+              </button>
+            </div>
+          </Show>
           <label class="iris-atlas-tools__field">
             <span>Sort</span>
             <select
@@ -3574,12 +3637,16 @@ export function SessionIrisTab() {
                   )}
                 </Show>
                 <Show when={atlasLayout() === "board"}>
-                  <Show when={!canDrag()}>
+                  <Show when={!canDrag() && !delegateOpen()}>
                     <p class="px-2 pb-2 text-11-regular text-text-weak">
                       Sorted by {ATLAS_SORTS.find((o) => o.id === atlasView().sort)?.label.toLowerCase()} — switch to
                       Board order to drag cards.
                     </p>
                   </Show>
+                  <Show when={!canDrag() && delegateOpen()}>
+                    <p class="px-2 pb-2 text-11-regular text-text-weak">{language.t("iris.delegate.sort")}</p>
+                  </Show>
+                  <div class="iris-board-wrap">
                   <div class="iris-board" aria-label="Board">
                     <For each={atlasRows()}>
                       {(list) => (
@@ -3589,12 +3656,13 @@ export function SessionIrisTab() {
                             "iris-board__col--over": dropAt()?.listId === list.id && dropAt()?.beforeId === null,
                           }}
                           onDragOver={(e) => {
-                            if (dragging() === null) return
+                            if (dragging() === null || !canDrag()) return
                             e.preventDefault()
                             if (e.dataTransfer) e.dataTransfer.dropEffect = "move"
                             setDropAt({ listId: list.id, beforeId: null })
                           }}
                           onDrop={(e) => {
+                            if (!canDrag()) return
                             e.preventDefault()
                             const itemId = dragging()
                             const at = dropAt()
@@ -3622,7 +3690,7 @@ export function SessionIrisTab() {
                                       dropAt()?.listId === list.id &&
                                       dropAt()?.beforeId === item.id,
                                   }}
-                                  draggable={canDrag()}
+                                  draggable={canDrag() || delegateOpen()}
                                   title={canDrag() ? "Open this card, or drag it to move it" : "Open this card"}
                                   onClick={() => openCard(item.id)}
                                   onKeyDown={(e) => {
@@ -3644,13 +3712,14 @@ export function SessionIrisTab() {
                                     setDropAt(null)
                                   }}
                                   onDragOver={(e) => {
-                                    if (dragging() === null) return
+                                    if (dragging() === null || !canDrag()) return
                                     e.preventDefault()
                                     e.stopPropagation()
                                     if (e.dataTransfer) e.dataTransfer.dropEffect = "move"
                                     setDropAt({ listId: list.id, beforeId: item.id })
                                   }}
                                   onDrop={(e) => {
+                                    if (!canDrag()) return
                                     e.preventDefault()
                                     e.stopPropagation()
                                     const itemId = dragging()
@@ -3687,6 +3756,23 @@ export function SessionIrisTab() {
                         </section>
                       )}
                     </For>
+                  </div>
+                  <Show when={delegateOpen()}>
+                    <IrisDelegateRail
+                      doFetch={doFetch}
+                      bloqId={activeBloq() != null ? Number(activeBloq()) : undefined}
+                      dragging={dragging}
+                      card={delegateCard}
+                      sessions={delegateSessions}
+                      sessionBusy={sessionBusy}
+                      sendToSession={sendToSession}
+                      onDropped={() => {
+                        setDragging(null)
+                        setDropAt(null)
+                      }}
+                      onChanged={() => void refetchSurface()}
+                    />
+                  </Show>
                   </div>
                 </Show>
                 <Show when={atlasLayout() === "list"}>

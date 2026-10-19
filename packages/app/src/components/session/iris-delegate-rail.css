@@ -1,0 +1,98 @@
+/* DELEGATE RAIL (#189933) — beside Atlas › Board. Theme tokens only, so light and dark follow. */
+.iris-board-wrap {
+  display: flex;
+  align-items: flex-start;
+  min-width: 0;
+}
+.iris-board-wrap > .iris-board {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.iris-delegate {
+  flex: 0 0 220px;
+  max-width: 220px;
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: calc(100vh - 220px);
+  overflow-y: auto;
+  margin: 0 8px 12px 0;
+  padding: 8px;
+  background: var(--background-element);
+  border: 1px solid var(--border-weaker-base);
+  border-radius: 8px;
+}
+.iris-delegate--live {
+  border-color: var(--border-weak-base);
+}
+.iris-delegate__head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.iris-delegate__group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.iris-delegate__label {
+  font-size: 11px;
+  color: var(--text-weaker);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.iris-delegate__empty {
+  font-size: 11px;
+  color: var(--text-weak);
+  padding: 2px 0;
+}
+.iris-delegate__target {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px dashed transparent;
+  border-radius: 6px;
+  background: var(--background-base);
+  transition:
+    border-color 80ms,
+    background 80ms;
+}
+.iris-delegate--live .iris-delegate__target {
+  border-color: var(--border-weaker-base);
+}
+.iris-delegate__target--over {
+  border-color: var(--border-interactive-base, var(--border-strong-base)) !important;
+  border-style: solid;
+  background: var(--surface-interactive-weak, var(--background-element));
+}
+.iris-delegate__target--pending {
+  opacity: 0.6;
+}
+.iris-delegate__dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  margin-top: 5px;
+  border-radius: 999px;
+  background: var(--icon-weak-base, #888);
+}
+.iris-delegate__target[data-tone="free"] .iris-delegate__dot {
+  background: var(--icon-success-base, #4a9);
+}
+.iris-delegate__target[data-tone="busy"] .iris-delegate__dot {
+  background: var(--icon-warning-base, #c8a349);
+}
+.iris-delegate__target[data-tone="off"] {
+  opacity: 0.55;
+}
+.iris-delegate__note {
+  font-size: 11px;
+  padding-top: 2px;
+  color: var(--text-weak);
+}
+.iris-delegate__note[data-ok="false"] {
+  color: var(--text-critical-base, #c44);
+}
