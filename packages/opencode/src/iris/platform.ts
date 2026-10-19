@@ -3291,6 +3291,46 @@ export async function fetchBoardMembers(
 }
 
 /** A card's assignees (#189796), through fl-api's /assignees routes (#189792). */
+/** One row of a card's trail (#189799): who did what to it, in words. */
+export interface CardActivity {
+  id: number
+  type: string
+  text: string
+  icon?: string
+  actor?: string
+  at?: string
+}
+
+export function readActivity(raw: unknown): CardActivity[] {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter((r: any) => r && Number.isFinite(Number(r.id)) && typeof r.content === "string")
+    .map((r: any) => ({
+      id: Number(r.id),
+      type: String(r.type ?? "note"),
+      text: r.content,
+      icon: typeof r.icon === "string" ? r.icon : undefined,
+      actor: typeof r.actor === "string" && r.actor ? r.actor : undefined,
+      at: typeof r.created_at === "string" ? r.created_at : undefined,
+    }))
+}
+
+/** A card's trail, newest first: assignments, finished subtasks, moves, field changes (#189799). */
+export async function fetchActivity(itemId: number): Promise<PlatformResult<{ activity: CardActivity[] }>> {
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: notSignedIn(), data: { activity: [] } }
+  try {
+    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/activity`)
+    const j = (await res.json().catch(() => ({}))) as any
+    if (res.status === 404 && !j?.message)
+      return { measured: false, reason: "this IRIS server does not keep card activity yet", data: { activity: [] } }
+    if (!res.ok) return { measured: false, reason: apiFailure(j, res.status), data: { activity: [] } }
+    return { measured: true, data: { activity: readActivity(j?.data?.activity) } }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { activity: [] } }
+  }
+}
+
 export async function fetchAssignees(itemId: number): Promise<PlatformResult<{ assignees: AtlasAssignee[] }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: notSignedIn(), data: { assignees: [] } }

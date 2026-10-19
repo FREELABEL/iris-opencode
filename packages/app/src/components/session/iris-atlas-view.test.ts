@@ -20,6 +20,8 @@ import {
   readAtlasLayout,
   readAtlasView,
   relativeTime,
+  applyFaceEdits,
+  quickFieldFor,
 } from "./iris-atlas-view"
 
 const NOW = Date.parse("2026-09-23T12:00:00Z")
@@ -335,5 +337,38 @@ describe("filters: label, assignee, due, files (#189798)", () => {
   test("any filter set is not the default view", () => {
     expect(isDefaultView({ ...ATLAS_VIEW_DEFAULT, hasFiles: true })).toBe(false)
     expect(isDefaultView(ATLAS_VIEW_DEFAULT)).toBe(true)
+  })
+})
+
+describe("face edits (#189806)", () => {
+  const board = [
+    { id: 1, name: "Todo", items: [{ id: 10, title: "a", status: "todo" }, { id: 11, title: "b" }] },
+    { id: 2, name: "Done", items: [{ id: 20, title: "c" }] },
+  ] as any[]
+
+  test("keys name the field they open", () => {
+    expect(quickFieldFor("s")).toBe("status")
+    expect(quickFieldFor("p")).toBe("priority")
+    expect(quickFieldFor("d")).toBe("due")
+    expect(quickFieldFor("l")).toBe("labels")
+    expect(quickFieldFor("x")).toBeUndefined()
+  })
+
+  test("a pending change shows at once, and nothing else is rebuilt", () => {
+    const out = applyFaceEdits(board, new Map([[10, { status: "done", dueDate: "2026-11-02", labels: ["bug"] }]]))
+    expect(out[0].items[0]).toMatchObject({ status: "done", dueDate: "2026-11-02", labels: ["bug"] })
+    expect(out[0].items[1]).toBe(board[0].items[1])
+    expect(out[1]).toBe(board[1])
+  })
+
+  test("null clears priority and the due date", () => {
+    const withBoth = [{ id: 1, name: "L", items: [{ id: 5, title: "x", priority: "high", dueDate: "2026-11-01" }] }] as any[]
+    const out = applyFaceEdits(withBoth, new Map([[5, { priority: null, dueDate: null }]]))
+    expect(out[0].items[0].priority).toBeUndefined()
+    expect(out[0].items[0].dueDate).toBeUndefined()
+  })
+
+  test("no edits is the same board", () => {
+    expect(applyFaceEdits(board, new Map())).toBe(board)
   })
 })

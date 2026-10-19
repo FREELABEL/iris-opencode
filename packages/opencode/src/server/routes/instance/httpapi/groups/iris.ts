@@ -1284,6 +1284,7 @@ export const IrisPaths = {
   atlasMember: `${root}/atlas/:bloqID/members/:memberID`,
   itemAssignees: `${root}/item/:itemID/assignees`,
   itemAssignee: `${root}/item/:itemID/assignees/:assigneeID`,
+  itemActivity: `${root}/item/:itemID/activity`,
   agents: `${root}/agents/:bloqID`,
   leads: `${root}/leads/:bloqID`,
   pages: `${root}/pages/:bloqID`,
@@ -1627,6 +1628,25 @@ export const IrisApi = HttpApi.make("iris").add(
         params: { bloqID: Schema.NumberFromString, memberID: Schema.NumberFromString },
         success: described(Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String) }), "Whether it landed"),
       }).annotateMerge(OpenApi.annotations({ identifier: "iris.atlasMemberRemove", summary: "Remove a member from a board" })),
+      HttpApiEndpoint.get("itemActivity", IrisPaths.itemActivity, {
+        params: { itemID: Schema.NumberFromString },
+        success: described(
+          Schema.Struct({
+            ...Measured,
+            activity: Schema.Array(
+              Schema.Struct({
+                id: Schema.Finite,
+                type: Schema.String,
+                text: Schema.String,
+                icon: Schema.optional(Schema.String),
+                actor: Schema.optional(Schema.String),
+                at: Schema.optional(Schema.String),
+              }),
+            ),
+          }).annotate({ identifier: "IrisItemActivity" }),
+          "A card's trail, newest first (#189799)",
+        ),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.itemActivity", summary: "What happened to a card, and who did it" })),
       HttpApiEndpoint.get("itemAssignees", IrisPaths.itemAssignees, {
         params: { itemID: Schema.NumberFromString },
         success: described(Schema.Struct({ ...Measured, assignees: Schema.Array(Schema.Struct({ id: Schema.Finite, type: Schema.Literals(["user", "agent"]), userId: Schema.optional(Schema.Finite), agentId: Schema.optional(Schema.Finite), name: Schema.optional(Schema.String) })) }).annotate({ identifier: "IrisItemAssignees" }), "A card's assignees (#189796)"),

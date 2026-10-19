@@ -85,7 +85,13 @@ import {
   type AtlasDrop,
   type AtlasLayout,
   type AtlasViewOptions,
+  applyFaceEdits,
+  quickFieldFor,
+  type QuickField,
+  type QuickPatch,
 } from "./iris-atlas-view"
+import { IrisQuickEdit } from "./iris-quick-edit"
+import type { CardSchema } from "./iris-card-editor"
 import { liveLabel, readSse, type LiveState } from "./iris-atlas-live"
 import { CardBadges, type CardFace } from "./iris-card-badges"
 import { IrisBoardMembers, readMembers } from "./iris-board-members"
@@ -1496,7 +1502,27 @@ export function SessionIrisTab() {
    */
   const [atlasMoved, setAtlasMoved] = createSignal<AtlasList[] | null>(null)
   createEffect(on(current, () => setAtlasMoved(null), { defer: true }))
-  const atlasBoard = () => atlasMoved() ?? (rows() as AtlasList[])
+  /*
+   * FACE EDITS (#189806): a change made from the card face shows at once. Each entry stays until
+   * its save lands AND a payload has arrived after it (which carries the saved value), or is
+   * dropped at once if the save is refused, so the card goes back.
+   */
+  const [faceEdits, setFaceEdits] = createSignal<Map<number, QuickPatch>>(new Map())
+  const settledFaces = new Set<number>()
+  createEffect(
+    on(
+      current,
+      () => {
+        if (settledFaces.size === 0) return
+        const next = new Map(faceEdits())
+        for (const id of settledFaces) next.delete(id)
+        settledFaces.clear()
+        setFaceEdits(next)
+      },
+      { defer: true },
+    ),
+  )
+  const atlasBoard = () => applyFaceEdits(atlasMoved() ?? (rows() as AtlasList[]), faceEdits())
   const [moveNote, setMoveNote] = createSignal<string | null>(null)
   const [dragging, setDragging] = createSignal<number | null>(null)
   const [dropAt, setDropAt] = createSignal<{ listId: number; beforeId: number | null } | null>(null)
@@ -1749,6 +1775,86 @@ export function SessionIrisTab() {
     }).catch(() => {})
     liveRefresh(false)
   }
+  /** The face editor (#189806): which card, where it is on screen, and the field a key named. */
+  const [quick, setQuick] = createSignal<{ itemId: number; anchor: { left: number; top: number; bottom: number }; field?: QuickField } | null>(null)
+  const [quickNote, setQuickNote] = createSignal<string | null>(null)
+  /*
+   * The board's status/priority vocabulary, fetched the first time the editor opens on a board.
+   * A plain signal, not a resource: a resource read under the panel's Suspense blanked the whole
+   * board behind the editor while it loaded.
+   */
+  const [quickSchema, setQuickSchema] = createSignal<{ bloq: number; schema?: CardSchema }>()
+  createEffect(
+    on(
+      () => (quick() && activeBloq() != null ? Number(activeBloq()) : undefined),
+      (b) => {
+        if (b === undefined || quickSchema()?.bloq === b) return
+        setQuickSchema({ bloq: b })
+        doFetch(`/iris/card-schema/${b}`)
+          .then((r) => r.json() as Promise<CardSchema>)
+          .then((schema) => quickSchema()?.bloq === b && setQuickSchema({ bloq: b, schema }))
+          .catch(() => {})
+      },
+    ),
+  )
+  const quickCard = () => {
+    const q = quick()
+    return q ? (atlasBoard() as AtlasList[]).flatMap((l) => l.items).find((i) => i.id === q.itemId) : undefined
+  }
+  function openQuick(itemId: number, el: HTMLElement, field?: QuickField, at?: { x: number; y: number }) {
+    const r = el.getBoundingClientRect()
+    setQuickNote(null)
+    setQuick({ itemId, field, anchor: at ? { left: at.x, top: at.y, bottom: at.y } : { left: r.left, top: r.top, bottom: r.bottom } })
+  }
+  function closeQuick() {
+    const q = quick()
+    setQuick(null)
+    // Back to the card it came from, so j/k and the keys carry on from there.
+    if (q) document.querySelector<HTMLElement>(`[data-item-id="${q.itemId}"], [data-board-card="${q.itemId}"]`)?.focus()
+  }
+  async function saveFace(itemId: number, patch: QuickPatch) {
+    setQuickNote(null)
+    settledFaces.delete(itemId)
+    setFaceEdits((m) => new Map(m).set(itemId, { ...m.get(itemId), ...patch }))
+    const { labels, ...fields } = patch
+    let reason: string | undefined
+    try {
+      const writes: Promise<Response>[] = []
+      if (Object.keys(fields).length)
+        writes.push(
+          doFetch(`/iris/item/${itemId}/save`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(fields),
+          }),
+        )
+      if (labels)
+        writes.push(
+          doFetch(`/iris/item/${itemId}/labels`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ labels }),
+          }),
+        )
+      for (const res of await Promise.all(writes)) {
+        const j = (await res.json().catch(() => ({}))) as { ok?: boolean; reason?: string; message?: string }
+        if (!res.ok || j.ok === false) reason ??= j.reason ?? j.message ?? `request failed (${res.status})`
+      }
+    } catch (e) {
+      reason = e instanceof Error ? e.message : String(e)
+    }
+    if (reason) {
+      setFaceEdits((m) => {
+        const next = new Map(m)
+        next.delete(itemId)
+        return next
+      })
+      setQuickNote(`Not saved — ${reason}`)
+      return
+    }
+    settledFaces.add(itemId)
+    liveRefresh(false)
+  }
   function atlasKeys(e: KeyboardEvent) {
     if (pane() !== "atlas" || view() !== "rows" || openRow()) return
     if (e.metaKey || e.ctrlKey || e.altKey) return
@@ -1789,6 +1895,9 @@ export function SessionIrisTab() {
     } else if (key === "x") {
       e.preventDefault()
       void toggleDone(itemId)
+    } else if (quickFieldFor(key)) {
+      e.preventDefault()
+      openQuick(itemId, row, quickFieldFor(key))
     } else if ((key === "[" && list && !isFolded(list)) || (key === "]" && list && isFolded(list))) {
       e.preventDefault()
       toggleFold(list)
@@ -2729,6 +2838,22 @@ export function SessionIrisTab() {
 
   return (
     <div class="relative flex flex-col h-full min-h-0 gap-2 px-2 pb-2" onKeyDown={atlasKeys}>
+      <Show when={pane() === "atlas" && quick() && quickCard()}>
+        {(card) => (
+          <IrisQuickEdit
+            card={card()}
+            anchor={quick()!.anchor}
+            field={quick()!.field}
+            status={quickSchema()?.schema?.status}
+            priority={quickSchema()?.schema?.priority}
+            boardLabels={labelsInUse()}
+            now={now()}
+            note={quickNote()}
+            onSave={(patch) => void saveFace(card().id, patch)}
+            onClose={closeQuick}
+          />
+        )}
+      </Show>
       <Show when={busy()}>
         <div class="iris-activity" aria-hidden="true" />
       </Show>
@@ -3795,10 +3920,18 @@ export function SessionIrisTab() {
                                   draggable={canDrag() || delegateOpen()}
                                   title={canDrag() ? "Open this card, or drag it to move it" : "Open this card"}
                                   onClick={() => openCard(item.id)}
+                                  onContextMenu={(e) => {
+                                    e.preventDefault()
+                                    openQuick(item.id, e.currentTarget, undefined, { x: e.clientX, y: e.clientY })
+                                  }}
                                   onKeyDown={(e) => {
                                     if (e.key === "Enter" || e.key === " ") {
                                       e.preventDefault()
                                       openCard(item.id)
+                                    } else if (!e.metaKey && !e.ctrlKey && !e.altKey && quickFieldFor(e.key)) {
+                                      e.preventDefault()
+                                      e.stopPropagation()
+                                      openQuick(item.id, e.currentTarget, quickFieldFor(e.key))
                                     }
                                   }}
                                   onDragStart={(e) => {
@@ -3979,15 +4112,19 @@ export function SessionIrisTab() {
                                 tabindex="0"
                                 data-item-id={item.id}
                                 data-list-id={list.id}
-                                aria-keyshortcuts="Enter x c n"
+                                aria-keyshortcuts="Enter x s p d l c n"
                                 class="iris-atlas-row"
                                 classList={{
                                   "iris-atlas-row--done": isDone(item.status),
                                   "iris-atlas-row--live": liveIds().has(item.id),
                                   "iris-atlas-row--new": awayIds().has(item.id) && !liveIds().has(item.id),
                                 }}
-                                title="Open this card — keys: j/k move · Enter open · x done · c copy #id · n new card · / search"
+                                title="Open this card — keys: j/k move · Enter open · x done · s status · p priority · d due · l labels · c copy #id · n new card · / search · right-click to change"
                                 onClick={() => openCard(item.id)}
+                                onContextMenu={(e) => {
+                                  e.preventDefault()
+                                  openQuick(item.id, e.currentTarget, undefined, { x: e.clientX, y: e.clientY })
+                                }}
                                 onKeyDown={(e) => {
                                   if (e.target !== e.currentTarget) return
                                   if (e.key === "Enter" || e.key === " ") {

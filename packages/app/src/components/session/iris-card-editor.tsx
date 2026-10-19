@@ -278,7 +278,7 @@ export interface IrisCardEditorProps {
   onChanged?: () => void
 }
 
-type SideTab = "details" | "sharing" | "tasks" | "chat"
+type SideTab = "details" | "sharing" | "tasks" | "activity" | "chat"
 
 export function IrisCardEditor(props: IrisCardEditorProps) {
   const dialog = useDialog()
@@ -630,6 +630,16 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
     } else setFileNote({ ok: false, text: out.reason ?? "could not delete" })
   }
   const missingFiles = createMemo(() => (files.latest?.files ?? []).filter((f) => !f.stored).length)
+
+  // ── Activity (#189799): what happened to this card, and who did it ──────
+  const [trail, { refetch: refetchTrail }] = createResource(
+    () => (side() === "activity" ? props.itemId : undefined),
+    (id) =>
+      wire<{ activity: { id: number; type: string; text: string; icon?: string; actor?: string; at?: string }[] }>(
+        `/iris/item/${id}/activity`,
+        { activity: [] },
+      ),
+  )
 
   // ── Events + asks (HANDOFF) ─────────────────────────────────────────────
   const [events, { refetch: refetchEvents }] = createResource(
@@ -1083,6 +1093,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                         ["details", "Details", undefined],
                         ["sharing", "Sharing", undefined],
                         ["tasks", "Checklist", doc.latest!.tasksMeasured ? openTasks() : undefined],
+                        ["activity", "Activity", undefined],
                         ["chat", "Chat", undefined],
                       ] as [SideTab, string, number | undefined][]
                     }
@@ -1692,6 +1703,37 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                         <p class="text-11-regular text-text-weak">Agents unavailable — {agents.latest!.reason}.</p>
                       </Show>
                       <NoteLine note={taskNote()} />
+                    </Match>
+
+                    {/* ───────────── ACTIVITY (#189799) ───────────── */}
+                    <Match when={side() === "activity"}>
+                      <NotConnected state={trail.latest} />
+                      <Show when={trail.latest?.measured && trail.latest.activity.length === 0}>
+                        <p class="text-11-regular text-text-weaker">
+                          Nothing recorded yet. Assignments, finished subtasks, moves and changes to status, priority
+                          and due date show here.
+                        </p>
+                      </Show>
+                      <ul class="iris-trail">
+                        <For each={trail.latest?.activity ?? []}>
+                          {(a) => (
+                            <li class="iris-trail__row">
+                              <span aria-hidden="true">{a.icon ?? "·"}</span>
+                              <span>
+                                {a.text}
+                                <span class="iris-trail__meta">
+                                  {[a.actor, a.at ? new Date(a.at).toLocaleString() : undefined].filter(Boolean).join(" · ")}
+                                </span>
+                              </span>
+                            </li>
+                          )}
+                        </For>
+                      </ul>
+                      <Show when={trail.latest?.measured}>
+                        <button type="button" class="iris-card__linkbtn" onClick={() => void refetchTrail()}>
+                          Refresh
+                        </button>
+                      </Show>
                     </Match>
 
                     {/* ───────────── CHAT ───────────── */}
