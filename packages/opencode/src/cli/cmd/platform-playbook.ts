@@ -1703,6 +1703,8 @@ const PlaybookSyncCommand = cmd({
         }
       }
 
+      // #189878 — files the loader could not parse are skipped, not fatal; say which.
+      const unparseable = await Skill.invalid()
       if (args.json) {
         // Additive fields; the three original keys are unchanged.
         console.log(JSON.stringify({
@@ -1713,11 +1715,15 @@ const PlaybookSyncCommand = cmd({
           targets: [...targets],
           published: false,
           scope: "local",
+          unparseable,
         }))
       } else {
         printDivider()
         const apiMsg = args.api ? `, ${apiSynced} to API` : ""
         console.log(dim(`  ${synced} synced${apiMsg}, ${skipped} skipped`))
+        for (const bad of unparseable) {
+          console.log(`  ! skipped ${bad.path} — could not parse: ${bad.message}`)
+        }
         if (skillSyncFailures.length > 0) {
           console.log(dim(`  ${skillSyncFailures.length} could not be written: ${skillSyncFailures.join(", ")}`))
           console.log(dim(`  The playbooks themselves are installed in .iris/playbooks/ and still run.`))
