@@ -65,6 +65,54 @@ describe("a generated agent, loaded by opencode", () => {
   })
 })
 
+// #189970: the file used to carry only the name and a pointer ("ask the cloud agent"), so the
+// local agent was nobody in particular. It now carries who the agent IS and what it is FOR.
+describe("a generated agent carries the real IRIS agent (#189970)", () => {
+  const full = {
+    ...patty,
+    initial_prompt: "Every morning, list intake forms missing a signature.",
+    settings: { system_prompt: "You are PATTY. You triage intake: never give medical advice.\n---\nKeep answers short." },
+    config: { tools: ["get_overdue_followups", "bloqItems"] },
+  }
+
+  test("its identity, mission and IRIS tool scope reach the loaded prompt", async () => {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        await Bun.write(path.join(dir, ".opencode", "agent", "iris-patty.md"), renderDesktopAgent(full))
+      },
+    })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const a = await Agent.get("iris-patty")
+        expect(a).toBeDefined()
+        expect(a!.prompt).toContain("never give medical advice")
+        expect(a!.prompt).toContain("Keep answers short.") // a "---" inside the prompt does not end it
+        expect(a!.prompt).toContain("list intake forms missing a signature")
+        expect(a!.prompt).toContain("get_overdue_followups")
+        expect(a!.prompt).toContain("agent id 791") // still knows where grounded facts come from
+      },
+    })
+  })
+
+  test("an agent with no prompt says so instead of inventing one", () => {
+    const out = renderDesktopAgent(patty)
+    expect(out).not.toContain("## Who you are")
+    expect(out).toContain("agent id 791")
+  })
+
+  test("an empty IRIS tool list is called what it is", () => {
+    const out = renderDesktopAgent({ ...full, config: { tools: [] } })
+    expect(out).toContain("no tool allowlist")
+  })
+
+  test("a very long prompt is cut, and says it was", () => {
+    const out = renderDesktopAgent({ ...full, settings: { system_prompt: "x".repeat(50_000) } })
+    expect(out.length).toBeLessThan(30_000)
+    expect(out).toContain("[cut")
+  })
+})
+
 describe("planDesktopSync", () => {
   const human = { id: 2, name: "Jane Doe", type: "human" }
   const bench = { id: 3, name: "Model Bench gpt-5-nano" }
