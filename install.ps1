@@ -139,14 +139,12 @@ if ($RequestedVersion) {
     # skip drafts, and take the newest one that actually HAS this platform's asset.
     try {
         $Releases = Invoke-RestMethod -Uri "https://api.github.com/repos/FREELABEL/iris-opencode/releases?per_page=100" -UseBasicParsing -ErrorAction Stop
-        $Chosen = $null
-        foreach ($r in $Releases) {
-            if ($r.draft) { continue }
-            if ($r.tag_name -notmatch '^v\d+\.\d+\.\d+$') { continue }
-            if (-not ($r.assets | Where-Object { $_.name -eq $Filename })) { continue }
-            $Chosen = $r
-            break
-        }
+        # The HIGHEST version with this platform's asset, not the first listed (#188596): GitHub
+        # lists a release by its tag's commit date, so v1.5.0 (the v2 engine) sat below v1.3.355.
+        $Chosen = $Releases |
+            Where-Object { -not $_.draft -and $_.tag_name -match '^v\d+\.\d+\.\d+$' -and ($_.assets | Where-Object { $_.name -eq $Filename }) } |
+            Sort-Object { [version]($_.tag_name.Substring(1)) } -Descending |
+            Select-Object -First 1
         if (-not $Chosen) {
             Write-Host "No published release contains $Filename yet." -ForegroundColor Red
             Write-Host "A release may still be uploading  -  try again shortly." -ForegroundColor DarkGray
