@@ -2565,3 +2565,28 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 .iris-card__assignmail input {
   width: 100%;
 }
+
+/* Quick add on the board (#189768). */
+.iris-board__add {
+  padding: 4px 8px;
+  margin-top: 2px;
+  width: 100%;
+}
+.iris-board__composer input {
+  width: 100%;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-base);
+  background: var(--background-element);
+  border: 1px solid var(--border-weak-base);
+  border-radius: 5px;
+  padding: 6px 8px;
+  outline: none;
+}
+.iris-board__composer input:focus {
+  border-color: var(--text-weak);
+}
+.iris-board__card--pending {
+  opacity: 0.55;
+  cursor: default;
+}

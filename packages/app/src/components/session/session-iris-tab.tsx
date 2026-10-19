@@ -61,6 +61,7 @@ import {
   ATLAS_DUE,
   ATLAS_EDITED,
   ATLAS_LAYOUTS,
+  ATLAS_LAYOUT_DEFAULT,
   ATLAS_SORTS,
   ATLAS_STATUSES,
   ATLAS_VIEW_DEFAULT,
@@ -1470,7 +1471,7 @@ export function SessionIrisTab() {
    * "reset" clears what you filter by, not how you look at the board.
    */
   const atlasLayoutKey = () => `iris.atlas.layout.${activeBloq() ?? "none"}`
-  const [atlasLayout, setAtlasLayoutSig] = createSignal<AtlasLayout>("list")
+  const [atlasLayout, setAtlasLayoutSig] = createSignal<AtlasLayout>(ATLAS_LAYOUT_DEFAULT)
   createEffect(
     on(atlasLayoutKey, (key) => {
       let raw: string | null = null
@@ -1483,7 +1484,7 @@ export function SessionIrisTab() {
   const setAtlasLayout = (layout: AtlasLayout) => {
     setAtlasLayoutSig(layout)
     try {
-      if (layout === "list") localStorage.removeItem(atlasLayoutKey())
+      if (layout === ATLAS_LAYOUT_DEFAULT) localStorage.removeItem(atlasLayoutKey())
       else localStorage.setItem(atlasLayoutKey(), layout)
     } catch {}
   }
@@ -3771,8 +3772,9 @@ export function SessionIrisTab() {
                           }}
                         >
                           <header class="iris-board__head">
-                            <h3 class="text-12-medium text-text-base min-w-0 truncate">{list.name}</h3>
-                            <span class="font-mono tabular-nums text-11-regular text-text-weak">{list.items.length}</span>
+                            {/* Same heading as List view (#189764): a column title is not a card. */}
+                            <h3 class="iris-atlas-list__title min-w-0 truncate">{list.name}</h3>
+                            <span class="iris-atlas-list__count font-mono tabular-nums">{list.items.length}</span>
                           </header>
                           <div class="iris-board__cards">
                             <For each={list.items}>
@@ -3872,6 +3874,39 @@ export function SessionIrisTab() {
                             </Show>
                             <Show when={list.items.length === 0 && !ghostAt(list.id, null)}>
                               <p class="iris-board__empty">{dragging() !== null ? "Drop here" : "No cards"}</p>
+                            </Show>
+                            {/* Quick add on the board too (#189768) — Board is the primary view now,
+                                so adding a card must not mean switching to List. Same composer,
+                                same Enter-adds / Esc-closes, same optimistic card. */}
+                            <For each={pendingCards().filter((p) => p.listId === list.id)}>
+                              {(p) => (
+                                <div class="iris-board__card iris-board__card--pending" aria-busy="true">
+                                  <span class="text-12-regular text-text-base">{p.title}</span>
+                                  <span class="iris-board__meta">saving…</span>
+                                </div>
+                              )}
+                            </For>
+                            <Show
+                              when={composer() === list.id}
+                              fallback={
+                                <button type="button" class="iris-atlas-addcard iris-board__add" onClick={() => openComposer(list.id)}>
+                                  + Add card
+                                </button>
+                              }
+                            >
+                              <div class="iris-board__composer">
+                                <input
+                                  ref={(el) => queueMicrotask(() => el.focus())}
+                                  type="text"
+                                  placeholder="Card title — Enter to add, Esc to close"
+                                  value={composerText()}
+                                  onInput={(e) => setComposerText(e.currentTarget.value)}
+                                  onKeyDown={composerKeys}
+                                />
+                                <Show when={composerError()}>
+                                  <p class="iris-atlas-composer__error">Not added — {composerError()}</p>
+                                </Show>
+                              </div>
                             </Show>
                           </div>
                         </section>

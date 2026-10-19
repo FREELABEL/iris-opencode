@@ -237,10 +237,11 @@ describe("board view — moving a card (#189723)", () => {
     expect(atlasDropPosition(board, { itemId: 10, toListId: 99, beforeId: null })).toBeNull()
     expect(atlasDropPosition(board, { itemId: 10, toListId: 2, beforeId: 999 })).toBeNull()
   })
-  test("layout reads back only a known value", () => {
+  test("Board is the default; List only when chosen; anything else is Board", () => {
+    expect(readAtlasLayout(null)).toBe("board")
     expect(readAtlasLayout("board")).toBe("board")
-    expect(readAtlasLayout("kanban")).toBe("list")
-    expect(readAtlasLayout(null)).toBe("list")
+    expect(readAtlasLayout("kanban")).toBe("board")
+    expect(readAtlasLayout("list")).toBe("list")
   })
 })
 

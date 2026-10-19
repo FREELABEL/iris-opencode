@@ -365,11 +365,17 @@ export function keepUnchanged<L extends AtlasViewList>(prev: L[] | undefined, ne
  * filtering by, not how you like to look at the board.
  */
 export type AtlasLayout = "list" | "board"
+/*
+ * BOARD FIRST (Alex, 2026-10-19): Board is the primary view and the first tab; List is the
+ * secondary one. Only a choice of List is stored now — before this, only Board was, so someone
+ * who had picked List cannot be told from someone who never chose, and both open on Board once.
+ */
 export const ATLAS_LAYOUTS: { id: AtlasLayout; label: string }[] = [
-  { id: "list", label: "List" },
   { id: "board", label: "Board" },
+  { id: "list", label: "List" },
 ]
-export const readAtlasLayout = (raw: string | null | undefined): AtlasLayout => (raw === "board" ? "board" : "list")
+export const ATLAS_LAYOUT_DEFAULT: AtlasLayout = "board"
+export const readAtlasLayout = (raw: string | null | undefined): AtlasLayout => (raw === "list" ? "list" : "board")
 
 /**
  * Where a dragged card lands. `beforeId` is the card it was dropped onto (it goes in front of
