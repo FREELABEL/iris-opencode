@@ -1090,6 +1090,7 @@ const PlanResponse = Schema.Struct({
     Schema.NullOr(Schema.String),
     "What to call the plan on screen (Free, IRIS Solo, Staff). NULL = the server did not say.",
   ),
+  trialEndsAt: described(Schema.NullOr(Schema.String), "When a trial ends, ISO-8601. NULL = not on a trial."),
   uncapped: Schema.Boolean,
   upgradeUrl: Schema.NullOr(Schema.String),
 })

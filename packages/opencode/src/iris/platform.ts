@@ -715,6 +715,8 @@ export interface Plan {
   paid: boolean | null
   /** What to call the plan on screen ("Free", "IRIS Solo", "Staff"), from the server. Display only. */
   label: string | null
+  /** When a licence or Stripe trial ends, ISO-8601; null when not on one (#189988). */
+  trialEndsAt: string | null
   uncapped: boolean
   upgradeUrl: string | null
 }
@@ -1017,7 +1019,7 @@ export async function reportGateEvent(
 export async function fetchPlan(
   opts: { token?: string | null; signal?: AbortSignal } = {},
 ): Promise<PlatformResult<Plan>> {
-  const empty: Plan = { plan: null, paid: null, label: null, uncapped: false, upgradeUrl: null }
+  const empty: Plan = { plan: null, paid: null, label: null, trialEndsAt: null, uncapped: false, upgradeUrl: null }
   try {
     const res = await irisFetch(
       "/api/v6/allowance/me?peek=1",
@@ -1034,6 +1036,7 @@ export async function fetchPlan(
         plan: typeof j.plan === "string" ? j.plan : null,
         paid: typeof j.paid === "boolean" ? j.paid : null,
         label: typeof j.plan_label === "string" && j.plan_label.trim() ? j.plan_label.trim() : null,
+        trialEndsAt: typeof j.trial_ends_at === "string" && j.trial_ends_at ? j.trial_ends_at : null,
         uncapped: Boolean(j.uncapped),
         upgradeUrl: typeof j.upgrade_url === "string" ? j.upgrade_url : null,
       },
