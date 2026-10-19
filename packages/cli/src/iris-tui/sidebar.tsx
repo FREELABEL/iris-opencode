@@ -203,8 +203,11 @@ export function IrisSidebar(props: { context: Plugin.Context; sessionID: string 
               if (pickerOpen()) setTimeout(() => searchInput?.focus(), 10)
             }}
           >
-            <text fg={c.accent()}>◈</text>
-            <text fg={c.text()} wrapMode="none" truncate flexShrink={1} minWidth={0}>
+            {/* One text run, like the "◈ IRIS" header: as its own element the glyph renders wider than
+                one cell in some terminals and swallowed the gap. No `truncate` — opentui cuts from the
+                middle ("highlight-r...randing Champions account)"); clipping at the end reads (#189992). */}
+            <text fg={c.text()} wrapMode="none" flexShrink={1} flexGrow={1} minWidth={0} overflow="hidden">
+              <span style={{ fg: c.accent() }}>◈ </span>
               {bloqName()}
             </text>
             <Show when={iris.data.selectedBloqId}>
