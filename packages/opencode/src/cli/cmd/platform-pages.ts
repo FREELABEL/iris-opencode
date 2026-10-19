@@ -5503,7 +5503,9 @@ const PublishHtmlCmd = cmd({
     let requiresAuth = !!authFlag
     try {
       // WITH json: the update below keeps what the file does not decide (carryForward).
-      let page = await getBySlug(slug, true)
+      // quiet404: a missing page here means CREATE, not failure — without it every first
+      // publish of a new page printed "Published" and then "Failed (exit 1)" (#189281, #183670).
+      let page = await getBySlug(slug, true, { quiet404: true })
 
       if (!page) {
         sp.message("No page for that slug yet — creating…")
