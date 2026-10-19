@@ -97,6 +97,160 @@ function stableStringify(v: unknown): string {
   return "{" + Object.keys(o).sort().map((k) => JSON.stringify(k) + ":" + stableStringify(o[k])).join(",") + "}"
 }
 
+// ── Mint seal v1 (#184905) ────────────────────────────────────────────────────────────────
+//
+// The CLI's seal used to hash {name, model: a.model, instructions: a.instructions ?? a.prompt, …}.
+// Agent rows have no `model`, `instructions` or `prompt` field, so every agent sealed model:null,
+// instructions:null — two agents differing only in prompt or model shared a hash. Server Mint
+// (fl-api App\Services\Agents\AgentSeal, VERSION 1) defines the canonical seal; this is a
+// byte-for-byte port of that docblock. Change it only together with the server.
+//
+// HASH FORM. The server's mint_hash is bare lower-case hex. A couple stores `sha256:<hex>`
+// (AGENT_HASH) — that prefix predates Mint, and every couples file and IRIS_AGENT value on disk
+// carries it. So agentSealV1 returns the bare hex (what the server prints, what `agents mint`
+// compares), `coupleHash()` adds the prefix for couples, and `mintHex()` strips it for
+// comparison. Same 64 hex digits either way; only the label differs.
+
+/** Keys inside `config` written by schedulers and heartbeats, not people — never sealed. */
+export const VOLATILE_CONFIG_KEYS = [
+  "schedule",
+  "heartbeat",
+  "heartbeat_mode",
+  "last_run_at",
+  "last_status",
+  "last_error",
+  "last_heartbeat_at",
+  "cloud_sync",
+  "stats",
+] as const
+
+export const RESEAL_MESSAGE = "re-seal: the seal format changed to match server Mint (#184905)"
+
+type Row = Record<string, unknown>
+
+/** PHP AgentSeal::asMap — a JSON string is decoded, an array/object kept, anything else is {}. */
+function asMap(v: unknown): Row {
+  if (typeof v === "string") {
+    try {
+      v = JSON.parse(v)
+    } catch {
+      return {}
+    }
+  }
+  if (v === null || typeof v !== "object") return {}
+  // A list is a PHP array too; its index keys become "0", "1", … when encoded as an object.
+  return Array.isArray(v) ? Object.fromEntries(v.map((x, i) => [String(i), x])) : (v as Row)
+}
+
+/** PHP `??`: missing or null falls through; "" and 0 do not. */
+function coalesce(...vs: unknown[]): unknown {
+  for (const v of vs) if (v !== undefined && v !== null) return v
+  return null
+}
+
+/** PHP `(string)` on a scalar. */
+function phpString(v: unknown): string {
+  if (v === null || v === undefined || v === false) return ""
+  if (v === true) return "1"
+  return String(v)
+}
+
+/** The six sealed values, before serialisation — AgentSeal::components. */
+export function agentSealComponentsV1(row: Row) {
+  const config = asMap(row?.config)
+  const settings = asMap(row?.settings)
+  const sealedConfig: Row = { ...config }
+  for (const k of VOLATILE_CONFIG_KEYS) delete sealedConfig[k]
+  return {
+    name: phpString(row?.name),
+    model: coalesce(config.model, settings.model),
+    instructions: coalesce(row?.initial_prompt),
+    system_prompt: coalesce(settings.system_prompt, config.system_prompt),
+    tools: coalesce(config.tools) ?? [],
+    config: sealedConfig,
+  }
+}
+
+// UTF-16 code-unit order is exactly what Array.prototype.sort does with no comparator.
+function encodeObjectV1(o: Row): string {
+  return "{" + Object.keys(o).sort().map((k) => JSON.stringify(k) + ":" + encodeV1(o[k])).join(",") + "}"
+}
+
+/**
+ * One value, server rules. JSON.stringify already matches PHP's flags on strings (no escaping of
+ * "/", non-ASCII or U+2028/U+2029; lower-case \u00XX for control characters) and writes an
+ * integer-valued number as an integer. What it does not do: sort keys, and turn an empty object
+ * into `[]` — PHP cannot tell `{}` from `[]`, so neither can anyone reading the API.
+ */
+function encodeV1(v: unknown): string {
+  if (v === null || v === undefined) return "null"
+  if (Array.isArray(v)) return v.length === 0 ? "[]" : "[" + v.map(encodeV1).join(",") + "]"
+  if (typeof v === "object") return Object.keys(v as Row).length === 0 ? "[]" : encodeObjectV1(v as Row)
+  if (typeof v === "number") {
+    // PHP json_encode refuses these, so the server could never have sealed one.
+    if (!Number.isFinite(v)) throw new Error(`cannot seal a non-finite number (${v})`)
+    return JSON.stringify(v)
+  }
+  if (typeof v === "string" || typeof v === "boolean") return JSON.stringify(v)
+  return "null"
+}
+
+/** The exact string the server hashes — AgentSeal::canonicalJson. */
+export function agentCanonicalJsonV1(row: Row): string {
+  const c = agentSealComponentsV1(row) as Row
+  const parts = Object.keys(c)
+    .sort()
+    .map((k) => {
+      // Top level and `config` are always objects (`{}` when empty); `tools` empty is `[]`,
+      // which encodeV1 already yields for an empty list or object.
+      const value = k === "config" ? encodeObjectV1(c.config as Row) : encodeV1(c[k])
+      return JSON.stringify(k) + ":" + value
+    })
+  return "{" + parts.join(",") + "}"
+}
+
+/** Mint seal v1: lower-case hex sha256 of the canonical JSON's UTF-8 bytes. Equals the server's mint_hash. */
+export function agentSealV1(row: Row): string {
+  return createHash("sha256").update(agentCanonicalJsonV1(row), "utf8").digest("hex")
+}
+
+/** The couple form of a seal: `sha256:<hex>`. Accepts either form. */
+export function coupleHash(h: string): string {
+  return "sha256:" + mintHex(h)
+}
+
+/** The server form of a seal: bare lower-case hex. Accepts either form. */
+export function mintHex(h: string): string {
+  return String(h ?? "").trim().toLowerCase().replace(/^sha256:/, "")
+}
+
+/**
+ * The pre-v1 CLI seal of an agent row, kept ONLY to recognise couples made with it. Never use it
+ * to make a new couple: it sealed model and instructions as null for every real agent.
+ */
+export function agentSealLegacy(row: Row): string {
+  const a = row as any
+  return sealAgent({
+    name: a?.name,
+    model: a?.model,
+    instructions: a?.instructions ?? a?.prompt ?? null,
+    tools: a?.tools ?? a?.config?.tools ?? null,
+    config: a?.config ?? null,
+  })
+}
+
+/**
+ * Couples sealed to this agent under the OLD format. They will never match the v1 hash the agent
+ * now presents, and a guard refusal reads "no couple binds" — which looks like a missing couple,
+ * not a changed format. Callers print RESEAL_MESSAGE for these instead of letting them rot.
+ */
+export function couplesNeedingReseal(couples: Couple[], legacyHash: string, v1Hash: string): Couple[] {
+  const legacy = coupleHash(legacyHash)
+  const v1 = coupleHash(v1Hash)
+  if (legacy === v1) return []
+  return (couples ?? []).filter((c) => c && !c.revoked_at && c.agent === legacy)
+}
+
 /** `Camera:OBSBOT-Tiny ` → `camera:obsbot-tiny`. Returns null for anything that is not `class:instance`. */
 export function normalizeBody(raw: string | null | undefined): string | null {
   const s = String(raw ?? "").trim().toLowerCase()

@@ -15,7 +15,7 @@ import * as prompts from "./clack"
 import { dim, bold, success, irisFetch, handleApiError, requireAuth, requireUserId } from "./iris-api"
 import { readFileSync, existsSync, mkdirSync, writeFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
-import { AGENT_HASH, sealAgent, normalizeBody, coupleId, decide, findCouples, type Couple } from "./kinetic-couple"
+import { AGENT_HASH, sealAgent, agentSealV1, agentSealLegacy, coupleHash, couplesNeedingReseal, RESEAL_MESSAGE, normalizeBody, coupleId, decide, findCouples, type Couple } from "./kinetic-couple"
 import { revokedIds, readCouples, writeCouples, nodeKey, couplesPath, actLogPath, kineticDir, nodeIsLocked, currentActor, trustedIssuers, trustIssuer, untrustIssuer, issuerKeyPath, markRevoked, sigVerifier, recentActs, currentRunId } from "./kinetic-store"
 import { generateIssuer, signCouple, verifyCoupleSig, issuerFingerprint } from "./kinetic-sign"
 import { unknownVerbs, knownVerbs, BODY_CLASSES } from "./kinetic-bodies"
@@ -51,12 +51,18 @@ const SealCommand = cmd({
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
-    let definition: unknown
+    // Both forms of an agent are an agent ROW (the API's shape, or `iris agents get --json`),
+    // sealed with Mint v1 so the hash equals the server's mint_hash (#184905). `legacy` is the
+    // pre-v1 CLI hash of the same input, computed only to find couples it would orphan.
+    let row: Record<string, unknown>
+    let legacy: string
     let label: string | null = null
 
     if (args.file) {
       if (!existsSync(String(args.file))) { console.error(`No such file: ${args.file}`); process.exitCode = 1; return }
-      definition = JSON.parse(readFileSync(String(args.file), "utf-8"))
+      const parsed = JSON.parse(readFileSync(String(args.file), "utf-8"))
+      legacy = sealAgent(parsed)
+      row = parsed?.data && typeof parsed.data === "object" && !Array.isArray(parsed.data) ? parsed.data : parsed
       label = String(args.file)
     } else if (args.agent) {
       const token = await requireAuth()
@@ -70,7 +76,8 @@ const SealCommand = cmd({
       if (!a?.id) { console.error("Agent not found"); process.exitCode = 1; return }
       // Seal the DEFINITION, not the envelope: ids, timestamps and counters change without the
       // agent changing, and a hash that moves on its own would revoke couples at random.
-      definition = { name: a.name, model: a.model, instructions: a.instructions ?? a.prompt ?? null, tools: a.tools ?? a.config?.tools ?? null, config: a.config ?? null }
+      row = a
+      legacy = agentSealLegacy(a)
       label = String(a.name ?? `agent-${a.id}`)
     } else {
       console.error("Give --agent <id|name> or --file <definition.json>.")
@@ -78,12 +85,26 @@ const SealCommand = cmd({
       return
     }
 
-    const hash = sealAgent(definition)
-    if (args.json) { console.log(JSON.stringify({ hash, label })); return }
+    const mint = agentSealV1(row)
+    const hash = coupleHash(mint)
+    const { couples } = readCouples()
+    const stale = couplesNeedingReseal(couples, legacy, mint)
+
+    if (args.json) {
+      console.log(JSON.stringify({ hash, mint_hash: mint, seal_version: 1, label, reseal: stale.map((c) => c.id) }))
+      return
+    }
     UI.empty()
     console.log(`  ${bold(hash)}`)
     if (label) console.log(dim(`  ${label}`))
     console.log("")
+    if (stale.length > 0) {
+      console.log(`  ${bold(RESEAL_MESSAGE)}`)
+      console.log(dim(`  ${stale.length} couple(s) on this node hold this agent's OLD hash and will never match again:`))
+      for (const c of stale) console.log(dim(`    ${c.id}  ${c.body}  allow ${(c.allowlist ?? []).join(",")}`))
+      console.log(dim(`  Revoke each (iris kinetic couple revoke <id>) and couple the hash above instead.`))
+      console.log("")
+    }
     console.log(dim(`  Couple it to a body on this node:`))
     console.log(dim(`    iris kinetic couple add --agent ${hash} --body camera:obsbot-tiny --allow move,preset`))
     console.log(dim(`  Edit the agent and this hash changes — the couple stops matching, by design.`))
@@ -111,7 +132,9 @@ const CoupleAddCommand = cmd({
       .option("expires", { describe: "ISO timestamp after which the couple is dead", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
-    const agent = String(args.agent).trim()
+    // A bare 64-hex value is a server mint_hash (#184905) — the same seal, without the couple prefix.
+    const rawAgent = String(args.agent).trim()
+    const agent = /^[0-9a-f]{64}$/i.test(rawAgent) ? coupleHash(rawAgent) : rawAgent
     if (!AGENT_HASH.test(agent)) {
       console.error(`Not a sealed hash: ${agent.slice(0, 24)}…\n  Get one with: iris kinetic seal --agent <id>`)
       process.exitCode = 1

@@ -6,6 +6,7 @@ import { buildListEnvelope, projectFields, LIST_FIELDS } from "./list-envelope"
 import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, IRIS_API, writeJson, failNoOp} from "./iris-api"
 import { matchesSearchQuery } from "./bloq-item-format"
 import { executeChat } from "./platform-chat"
+import { runMint } from "./platform-agents-mint"
 import { AgentsBenchCommand } from "./platform-agents-bench"
 import { AgentsExportCommand } from "./platform-agents-export"
 import { AgentsJoinCommand, AgentsLeaveCommand } from "./platform-agents-rooms"
@@ -2019,6 +2020,57 @@ const AgentsDesktopSyncCommand = cmd({
   },
 })
 
+/**
+ * `iris agents mint <id> [--status]` (#184905). Logic lives in platform-agents-mint.ts; this is
+ * only the printing. Exit 1 when the server has no Mint, when the request fails, or when the
+ * CLI's seal of the live agent disagrees with the server's mint_hash.
+ */
+const AgentsMintCommand = cmd({
+  command: "mint <id>",
+  describe: "mint an agent: the server seals its definition once and locks the sealed fields (--status to read)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "agent ID or name", type: "string", demandOption: true })
+      .option("status", { describe: "read the mint record instead of minting", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const json = Boolean(args.json)
+    const token = await requireAuth()
+    if (!token) { process.exitCode = 1; return }
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { process.exitCode = 1; return }
+    const agentId = await resolveAgentId(args.id as string, userId, json)
+    if (!agentId) return
+
+    const out = await runMint({ userId, agentId, status: Boolean(args.status) })
+    if (out.kind !== "ok") {
+      if (json) await writeJson({ success: false, error: out.message, ...(out.kind === "unavailable" ? { error_code: "mint_unavailable" } : {}) })
+      else console.error(out.message)
+      process.exitCode = 1
+      return
+    }
+
+    const p = out.payload
+    const verdict = out.local_matches_mint ?? out.local_matches_current
+    if (json) {
+      await writeJson({ success: true, agent_id: agentId, already_minted: out.already, ...p, local_hash: out.local_hash, local_matches_mint: out.local_matches_mint, local_matches_current: out.local_matches_current })
+    } else {
+      UI.empty()
+      const head = p.minted ? (out.already ? "already minted" : args.status ? "minted" : success("minted")) : "not minted"
+      console.log(`  ${bold(`Agent #${agentId}`)}  ${head}`)
+      printKV("minted_at", p.minted_at ?? dim("—"))
+      printKV("mint_hash", p.mint_hash ?? dim("—"))
+      printKV("local seal", out.local_hash)
+      if (out.local_matches_mint !== null) printKV("local = mint", out.local_matches_mint ? success("yes") : bold("NO — the CLI and the server disagree on this agent's seal"))
+      else printKV("local = server", out.local_matches_current ? success("yes") : bold("NO — the CLI and the server disagree on this agent's seal"))
+      if (!p.minted) console.log(dim(`  Mint it: iris agents mint ${agentId}`))
+      console.log("")
+    }
+    if (verdict === false) process.exitCode = 1
+  },
+})
+
 export const PlatformAgentsCommand = cmd({
   command: "agents",
   describe: "manage IRIS platform agents — pull, push, diff, CRUD, assign, pause/resume/stop",
@@ -2041,6 +2093,7 @@ export const PlatformAgentsCommand = cmd({
       .command(AgentsHandBackCommand)
       .command(AgentsChatCommand)
       .command(AgentsProveCommand)
+      .command(AgentsMintCommand)
       .command(AgentsAssignCommand)
       .command(AgentsTasksCommand)
       .command(AgentsMessageCommand)
