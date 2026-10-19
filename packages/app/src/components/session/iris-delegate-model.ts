@@ -52,6 +52,15 @@ export function openWork(tasks: readonly AgentTaskRow[]): number {
   return tasks.filter((t) => !t.done && t.source !== "heartbeat_bloq").length
 }
 
+/**
+ * Whether the card already carries an open task for this agent. Dropping twice must not queue the
+ * same work twice — found on 2026-10-19, when two drops of one card left it at "0/2" and the
+ * agent at "2 open tasks" for a single piece of work.
+ */
+export function alreadyAssigned(tasks: readonly { agentId?: number; done: boolean }[], agentId: number): boolean {
+  return tasks.some((t) => t.agentId === agentId && !t.done)
+}
+
 export type AgentTone = "free" | "busy" | "off" | "unknown"
 
 /**

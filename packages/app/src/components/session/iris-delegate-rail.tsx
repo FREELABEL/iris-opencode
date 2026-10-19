@@ -3,6 +3,7 @@ import { useLanguage } from "@/context/language"
 import "./iris-delegate-rail.css"
 import {
   agentTone,
+  alreadyAssigned,
   cardFromDrag,
   handoffPrompt,
   isImportedPerson,
@@ -108,6 +109,16 @@ export function IrisDelegateRail(props: {
     const card = props.card(itemId)
     setPending(key)
     try {
+      // Already on its list? Say so instead of queueing the same work twice. A card that could
+      // not be read is not proof of absence, so the add goes ahead — fl-api is the judge then.
+      const current = (await props
+        .doFetch(`/iris/item/${itemId}`)
+        .then((r) => r.json())
+        .catch(() => null)) as { tasksMeasured?: boolean; tasks?: { agentId?: number; done: boolean }[] } | null
+      if (current?.tasksMeasured && alreadyAssigned(current.tasks ?? [], agent.id)) {
+        note(key, { ok: true, text: language.t("iris.delegate.agent.already", { id: String(itemId) }) })
+        return
+      }
       const res = await props.doFetch(`/iris/item/${itemId}/tasks`, {
         method: "POST",
         headers: { "content-type": "application/json" },

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   agentTone,
+  alreadyAssigned,
   cardFromDrag,
   dragPayload,
   handoffPrompt,
@@ -43,6 +44,17 @@ describe("Delegate › agents", () => {
       ]),
     ).toBe(3)
     expect(openWork([])).toBe(0)
+  })
+
+  test("a second drop of the same card on the same agent is not a second task", () => {
+    // card #189951's tasks after two drops on IRIS (agent 750), 2026-10-19
+    const tasks = [
+      { agentId: 750, done: false },
+      { agentId: 701, done: true },
+    ]
+    expect(alreadyAssigned(tasks, 750)).toBe(true)
+    expect(alreadyAssigned(tasks, 701)).toBe(false) // done work does not block new work
+    expect(alreadyAssigned([], 750)).toBe(false)
   })
 
   test("a queue that could not be read is unknown, never free", () => {

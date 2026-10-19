@@ -1209,6 +1209,7 @@ export const dict = {
   "iris.delegate.agent.reading": "Reading…",
   "iris.delegate.agent.unread": "Queue unknown",
   "iris.delegate.agent.assigned": "#{{id}} is on its list",
+  "iris.delegate.agent.already": "#{{id}} is already on its list",
   "iris.delegate.agent.failed": "Not assigned — {{reason}}",
   "iris.delegate.sessions": "Sessions",
   "iris.delegate.sessions.none": "No sessions in this project yet.",
