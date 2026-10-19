@@ -7,6 +7,7 @@ import * as fs from "fs"
 import * as path from "path"
 import { firstArray } from "../../util/array"
 import { DatasetHooksGroup } from "./platform-atlas-dataset-hooks"
+import { DatasetPullCommand, DatasetPushCommand, DatasetSyncCommand, DatasetStatusCommand, DatasetResolveCommand } from "./platform-atlas-dataset-sync"
 import { DRAFT_SYSTEM_PROMPT, checkFields, fieldsForCreate, normalizeDraft, parseModelJson } from "./atlas-schema-draft"
 
 // ============================================================================
@@ -1868,6 +1869,8 @@ export const PlatformAtlasDatasetsCommand = cmd({
   describe: "Schema-driven datasets — define once, store anything, no migrations",
   builder: (y) =>
     y.command(SchemasGroup).command(RecordsGroup).command(ImportCommand).command(AggregateCommand).command(DeriveCommand)
-     .command(FeedsGroup).command(DatasetHooksGroup).command(ExportCommand).command(AuditCommand).command(ApiCommand).command(EconomicsGroup).demandCommand(),
+     .command(FeedsGroup).command(DatasetHooksGroup).command(ExportCommand).command(AuditCommand).command(ApiCommand).command(EconomicsGroup)
+     // #189972 — a local copy kept in step: pull merges, push names its base revision
+     .command(DatasetPullCommand).command(DatasetPushCommand).command(DatasetSyncCommand).command(DatasetStatusCommand).command(DatasetResolveCommand).demandCommand(),
   async handler() {},
 })
