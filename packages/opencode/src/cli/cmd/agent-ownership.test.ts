@@ -80,3 +80,22 @@ describe("bulk-delete --orphaned refuses what it cannot evaluate (#189967)", () 
     expect(bulk).not.toContain("agents.filter((a: any) => !a.bloq_id)")
   })
 })
+
+describe("serverIgnoredOwnership — a filter applied to one page is not an answer", () => {
+  const { serverIgnoredOwnership } = require("./agent-ownership")
+  test("rows that fail the predicate mean the server ignored ?orphaned=1", () => {
+    expect(serverIgnoredOwnership([{ id: 1, bloq_id: 5 }, { id: 2, bloq_id: null }], { orphaned: true })).toBe(true)
+  })
+  test("all rows orphaned means the server applied it", () => {
+    expect(serverIgnoredOwnership([{ id: 1, bloq_id: null }, { id: 2, bloq_id: 0 }], { orphaned: true })).toBe(false)
+  })
+  test("an empty page proves nothing either way, so it is treated as applied", () => {
+    expect(serverIgnoredOwnership([], { orphaned: true })).toBe(false)
+  })
+  test("no ownership filter requested", () => {
+    expect(serverIgnoredOwnership([{ id: 1, bloq_id: 5 }], {})).toBe(false)
+  })
+  test("workspace filter is checked on workspace_id", () => {
+    expect(serverIgnoredOwnership([{ id: 1, bloq_id: null, workspace_id: 9 }], { workspaceOrphaned: true })).toBe(true)
+  })
+})

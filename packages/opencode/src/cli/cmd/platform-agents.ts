@@ -17,7 +17,7 @@ import { firstArray } from "../../util/array"
 import { Global } from "../../global"
 import { DEFAULT_MAX_DESKTOP_AGENTS, planDesktopSync, selectRoster } from "../lib/desktop-agents"
 import { installHome } from "../../skill/install-location"
-import { bulkDeleteRefusal, fieldIsEvaluable, filterByOwnership, ownershipQueryParams, resolveOwnerBloq, unevaluableWarning } from "./agent-ownership"
+import { bulkDeleteRefusal, fieldIsEvaluable, filterByOwnership, ownershipQueryParams, resolveOwnerBloq, serverIgnoredOwnership, unevaluableWarning } from "./agent-ownership"
 import { AUTONOMY_CHOICES, AUTONOMY_LEVELS, CLI_DEFAULT_AUTONOMY, describeAutonomy, parseAutonomy } from "./agent-autonomy"
 
 /**
@@ -164,9 +164,31 @@ const AgentsListCommand = cmd({
 
       const raw = (await res.json()) as Record<string, any>
       let agents: any[] = firstArray(raw?.data)
-      const total = raw?.total ?? raw?.meta?.total ?? agents.length
+      let total = raw?.total ?? raw?.meta?.total ?? agents.length
       const currentPage = args.page
-      const lastPage = Math.ceil(total / args.limit)
+      let lastPage = Math.ceil(total / args.limit)
+
+      // The server ignored ?orphaned / ?workspace_orphaned and returned an ordinary page:
+      // filtering just that page answered "0" while 147 agents had no project. Evaluate every
+      // page, then paginate the filtered result here (#189967).
+      if (serverIgnoredOwnership(agents, ownership)) {
+        const all: any[] = []
+        const per = 500
+        for (let page = 1; page <= Math.max(1, Math.ceil(total / per)) && page <= 50; page++) {
+          const p = new URLSearchParams(params)
+          p.set("per_page", String(per))
+          p.set("page", String(page))
+          const r = await irisFetch(`/api/v1/users/${userId}/bloqs/agents?${p}`)
+          if (!(await handleApiError(r, "List agents"))) { if (spinner) spinner.stop("Failed", 1); process.exitCode = 1; return }
+          const rows = firstArray(((await r.json()) as Record<string, any>)?.data)
+          all.push(...rows)
+          if (rows.length < per) break
+        }
+        const filtered = filterByOwnership(all, ownership)
+        total = filtered.agents.length
+        lastPage = Math.max(1, Math.ceil(total / args.limit))
+        agents = filtered.agents.slice((currentPage - 1) * args.limit, currentPage * args.limit)
+      }
 
       // Ownership filters are sent server-side (?orphaned=1 / ?workspace_orphaned=1) and
       // re-checked here. An old server ignores the params AND omits bloq_id/workspace_id, in
