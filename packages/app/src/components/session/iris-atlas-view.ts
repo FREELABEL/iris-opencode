@@ -21,14 +21,57 @@ export interface AtlasViewList<I extends AtlasViewItem = AtlasViewItem> {
 export type AtlasSort = "board" | "edited" | "newest" | "oldest" | "title"
 export type AtlasStatus = "all" | "open" | "done"
 export type AtlasEdited = "any" | "24h" | "7d" | "30d"
+export type AtlasAssigned = "any" | "me" | "none"
+export type AtlasDue = "any" | "overdue" | "week" | "none"
 export interface AtlasViewOptions {
   sort: AtlasSort
   status: AtlasStatus
   edited: AtlasEdited
   hideEmpty: boolean
+  /** One label id, or "" for any (#189798). */
+  label: string
+  assigned: AtlasAssigned
+  due: AtlasDue
+  hasFiles: boolean
 }
 
-export const ATLAS_VIEW_DEFAULT: AtlasViewOptions = { sort: "board", status: "all", edited: "any", hideEmpty: false }
+export const ATLAS_VIEW_DEFAULT: AtlasViewOptions = {
+  sort: "board",
+  status: "all",
+  edited: "any",
+  hideEmpty: false,
+  label: "",
+  assigned: "any",
+  due: "any",
+  hasFiles: false,
+}
+
+export const ATLAS_ASSIGNED: { id: AtlasAssigned; label: string }[] = [
+  { id: "any", label: "Anyone" },
+  { id: "me", label: "Me" },
+  { id: "none", label: "Nobody" },
+]
+export const ATLAS_DUE: { id: AtlasDue; label: string }[] = [
+  { id: "any", label: "Any" },
+  { id: "overdue", label: "Overdue" },
+  { id: "week", label: "Next 7 days" },
+  { id: "none", label: "No date" },
+]
+
+/** The card-face facts the filters read (#189806). All optional: an older fl-api sends none. */
+interface CardFacts {
+  labels?: string[]
+  dueDate?: string
+  attachments?: number
+  assignees?: { type: "user" | "agent"; userId?: number }[]
+}
+
+/** Every label on the board, A–Z, for the Label picker — only what is actually used. */
+export function boardLabels(lists: AtlasViewList[]): string[] {
+  const all = new Set<string>()
+  for (const l of lists) for (const i of l.items) for (const x of (i as CardFacts).labels ?? []) all.add(x)
+  return [...all].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }))
+}
 
 export const ATLAS_SORTS: { id: AtlasSort; label: string }[] = [
   { id: "board", label: "Board order" },
@@ -101,6 +144,8 @@ export function applyAtlasView<I extends AtlasViewItem, L extends AtlasViewList<
   lists: L[],
   opts: AtlasViewOptions,
   now: number,
+  /** The signed-in user, for "Assigned: Me". Unknown → "Me" matches nothing rather than everything. */
+  me?: number | null,
 ): L[] {
   const since = opts.edited === "any" ? undefined : now - WINDOW_MS[opts.edited]
   const cmp =
@@ -122,7 +167,7 @@ export function applyAtlasView<I extends AtlasViewItem, L extends AtlasViewList<
         const t = ms(i.updatedAt ?? i.createdAt)
         if (Number.isNaN(t) || t < since) return false
       }
-      return true
+      return matchesFacts(i as CardFacts, opts, now, me)
     })
     // Array.prototype.sort is stable, so ties keep board order.
     if (cmp) items = [...items].sort(cmp)
@@ -132,8 +177,35 @@ export function applyAtlasView<I extends AtlasViewItem, L extends AtlasViewList<
   return out
 }
 
+/** Label, assignee, due date and files (#189798). A card with no facts passes only "any". */
+function matchesFacts(i: CardFacts, opts: AtlasViewOptions, now: number, me?: number | null): boolean {
+  if (opts.label && !(i.labels ?? []).includes(opts.label)) return false
+  const people = i.assignees ?? []
+  if (opts.assigned === "me" && !(me != null && people.some((a) => a.type === "user" && a.userId === me))) return false
+  if (opts.assigned === "none" && people.length > 0) return false
+  if (opts.due !== "any") {
+    const state = dueState(i.dueDate, now)
+    if (opts.due === "none" && i.dueDate) return false
+    if (opts.due === "overdue" && state !== "overdue") return false
+    if (opts.due === "week") {
+      if (!i.dueDate || state === "overdue") return false
+      const t = Date.parse(/^\d{4}-\d{2}-\d{2}/.test(i.dueDate) ? `${i.dueDate.slice(0, 10)}T23:59:59` : i.dueDate)
+      if (Number.isNaN(t) || t - now > 7 * 86_400_000) return false
+    }
+  }
+  if (opts.hasFiles && !((i.attachments ?? 0) > 0)) return false
+  return true
+}
+
 export const isDefaultView = (o: AtlasViewOptions) =>
-  o.sort === "board" && o.status === "all" && o.edited === "any" && !o.hideEmpty
+  o.sort === "board" &&
+  o.status === "all" &&
+  o.edited === "any" &&
+  !o.hideEmpty &&
+  !o.label &&
+  o.assigned === "any" &&
+  o.due === "any" &&
+  !o.hasFiles
 
 /** Parse a stored view, dropping anything that is not a known option. */
 export function readAtlasView(raw: string | null | undefined): AtlasViewOptions {
@@ -144,6 +216,10 @@ export function readAtlasView(raw: string | null | undefined): AtlasViewOptions 
       status: ATLAS_STATUSES.some((s) => s.id === v.status) ? v.status : "all",
       edited: ATLAS_EDITED.some((s) => s.id === v.edited) ? v.edited : "any",
       hideEmpty: v.hideEmpty === true,
+      label: typeof v.label === "string" ? v.label : "",
+      assigned: ATLAS_ASSIGNED.some((s) => s.id === v.assigned) ? v.assigned : "any",
+      due: ATLAS_DUE.some((s) => s.id === v.due) ? v.due : "any",
+      hasFiles: v.hasFiles === true,
     }
   } catch {
     return { ...ATLAS_VIEW_DEFAULT }
@@ -185,7 +261,11 @@ export function editedSince(lists: AtlasViewList[], since: string | null | undef
  * stripped, whitespace folded. Empty when the body only repeats the title, so a row never says
  * the same thing twice.
  */
-export function cardPreview(body: string | undefined, title: string, max = 160): string {
+export function cardPreview(rawBody: string | undefined, title: string, max = 160): string {
+  if (!rawBody) return ""
+  // A STRUCTURED body is JSON — {text, body, labels, attachments, …} — once a card has labels or
+  // files. Its prose is `body` (or `text`); the rest is not something to read on a row.
+  const body = structuredProse(rawBody)
   if (!body) return ""
   // A body often opens with its own title as a heading, sometimes shorter or longer than the
   // card's title ("# EPIC — Links open inside IRIS Desktop" under "… Desktop (#187864)").
@@ -212,6 +292,18 @@ export function cardPreview(body: string | undefined, title: string, max = 160):
   if (head && t.toLowerCase().startsWith(head)) t = t.slice(head.length).replace(/^[\s:;,.—–-]+/, "")
   if (!t) return ""
   return t.length > max ? `${t.slice(0, max - 1).trimEnd()}…` : t
+}
+
+function structuredProse(raw: string): string {
+  const t = raw.trim()
+  if (!t.startsWith("{") || !t.endsWith("}")) return raw
+  try {
+    const o = JSON.parse(t) as Record<string, unknown>
+    const prose = typeof o.body === "string" && o.body ? o.body : typeof o.text === "string" ? o.text : ""
+    return prose
+  } catch {
+    return raw
+  }
 }
 
 /**

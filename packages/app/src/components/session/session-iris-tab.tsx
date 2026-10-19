@@ -57,6 +57,8 @@ import { IrisHeartbeats } from "./iris-heartbeats"
 import { IrisPulseContact, IrisPulseTopic } from "./iris-pulse"
 import { itemCommands, renderMarkdown } from "./iris-item"
 import {
+  ATLAS_ASSIGNED,
+  ATLAS_DUE,
   ATLAS_EDITED,
   ATLAS_LAYOUTS,
   ATLAS_SORTS,
@@ -65,6 +67,7 @@ import {
   applyAtlasView,
   atlasCountLine,
   atlasDropPosition,
+  boardLabels,
   cardPreview,
   changedItemIds,
   editedSince,
@@ -1572,8 +1575,25 @@ export function SessionIrisTab() {
   const [now, setNow] = createSignal(Date.now())
   const clock = setInterval(() => setNow(Date.now()), 60_000)
   onCleanup(() => clearInterval(clock))
+  /*
+   * Who "Assigned: Me" means (#189798). A signal, not a resource: atlasRows reads it, and a
+   * resource read before its first value suspends the boundary around the whole side panel.
+   * /iris/me asks two services, so the panel must not wait on it; "Me" matches nothing until it
+   * lands.
+   */
+  const [meId, setMeId] = createSignal<number | null>(null)
+  let meAsked = false
+  createEffect(() => {
+    if (pane() !== "atlas" || meAsked) return
+    meAsked = true
+    void doFetch("/iris/me")
+      .then((r) => r.json())
+      .then((j: { id?: number | null }) => setMeId(j.id ?? null))
+      .catch(() => {})
+  })
+  const labelsInUse = createMemo(() => (pane() === "atlas" ? boardLabels(atlasBoard()) : []))
   const atlasRows = createMemo<AtlasList[]>((prev) =>
-    pane() === "atlas" ? keepUnchanged(prev, applyAtlasView(atlasBoard(), atlasView(), now())) : [],
+    pane() === "atlas" ? keepUnchanged(prev, applyAtlasView(atlasBoard(), atlasView(), now(), meId())) : [],
   )
 
   /*
@@ -2834,6 +2854,35 @@ export function SessionIrisTab() {
               onChange={(e) => setAtlasView({ hideEmpty: e.currentTarget.checked })}
             />
             <span>Hide empty</span>
+          </label>
+          {/* Card-face filters (#189798): what is on the card, not when it was edited. */}
+          <Show when={labelsInUse().length > 0 || atlasView().label}>
+            <label class="iris-atlas-tools__field">
+              <span>Label</span>
+              <select value={atlasView().label} onChange={(e) => setAtlasView({ label: e.currentTarget.value })}>
+                <option value="">Any</option>
+                <For each={labelsInUse()}>{(l) => <option value={l}>{l}</option>}</For>
+              </select>
+            </label>
+          </Show>
+          <label class="iris-atlas-tools__field">
+            <span>Assigned</span>
+            <select
+              value={atlasView().assigned}
+              onChange={(e) => setAtlasView({ assigned: e.currentTarget.value as AtlasViewOptions["assigned"] })}
+            >
+              <For each={ATLAS_ASSIGNED}>{(o) => <option value={o.id}>{o.label}</option>}</For>
+            </select>
+          </label>
+          <label class="iris-atlas-tools__field">
+            <span>Due</span>
+            <select value={atlasView().due} onChange={(e) => setAtlasView({ due: e.currentTarget.value as AtlasViewOptions["due"] })}>
+              <For each={ATLAS_DUE}>{(o) => <option value={o.id}>{o.label}</option>}</For>
+            </select>
+          </label>
+          <label class="iris-atlas-tools__check">
+            <input type="checkbox" checked={atlasView().hasFiles} onChange={(e) => setAtlasView({ hasFiles: e.currentTarget.checked })} />
+            <span>Has files</span>
           </label>
           <Show when={!isDefaultView(atlasView())}>
             <button type="button" class="iris-search__clear" onClick={() => setAtlasView({ ...ATLAS_VIEW_DEFAULT })}>
