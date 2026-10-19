@@ -47,7 +47,7 @@ import {
   scopeChipLabel,
   visibleTabs,
 } from "./iris-panel-nav"
-import { irisNavRequest, clearIrisNav } from "./iris-nav"
+import { irisNavRequest, clearIrisNav, setIrisPanelView } from "./iris-nav"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { IrisRooms } from "./iris-rooms"
 import { IrisAgentLive } from "./iris-agent-live"
@@ -1017,6 +1017,17 @@ export function surfaceView(input: {
  * What the panel's + menu offers (#186531). One list, derived from SURFACES, so a surface added
  * there appears in the menu without a second table to keep in step.
  */
+/**
+ * Every product and its views, for the agent (#190093): reported to the engine so `side_panel`
+ * can name what exists and refuse what does not, from the same lists the switcher draws.
+ */
+export const IRIS_PANEL_CATALOG: readonly { id: string; label: string; subs: { id: string; label: string }[] }[] =
+  SURFACES.map((s) => ({
+    id: s.id,
+    label: s.label,
+    subs: (SUBVIEWS[s.id] ?? []).map((v) => ({ id: v.id, label: v.label })),
+  }))
+
 export const IRIS_SURFACE_CHOICES: readonly { id: string; label: string }[] = SURFACES.map((s) => ({
   id: s.id,
   label: s.label,
@@ -2160,6 +2171,14 @@ export function SessionIrisTab() {
   const activeBloqName = createMemo(
     () => (bloqs.latest ?? bloqs())?.bloqs?.find((b) => b.id === activeBloq())?.name ?? "Select a board",
   )
+
+  // Where the panel actually is, for the agent (#190093). The board's name only once it is known —
+  // "Select a board" is a placeholder, not a name.
+  createEffect(() => {
+    const id = activeBloq()
+    const name = bloqs.latest?.bloqs?.find((b) => b.id === id)?.name
+    setIrisPanelView({ surface: surface(), sub: resolved().sub?.id, bloq: id ? { id, name } : undefined })
+  })
 
   /** A non-Atlas row being inspected. Atlas has its own reader because it has a BODY; the rest
    *  are records, so they get a field list rather than prose. */

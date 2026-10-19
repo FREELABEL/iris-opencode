@@ -1,0 +1,13 @@
+See and steer the IRIS Desktop side panel beside this conversation — the panel with the Genesis, Atlas, Agents, Playbooks and Integrations products, their views (Atlas › Lists / Schemas / Graph / Artifacts, …), the board picker, Files & changes, and the Browser tab.
+
+Use it to show the user something in the panel: the artifact you just made, a board, a product view, a page in the Browser tab. Use action=state first when you need to know what the user is looking at. Do not move the panel on a whim — change it only when it serves what the user asked, and say what you showed.
+
+Actions:
+- state: what the panel is showing right now (open or closed, active tab, product › view, board, selected artifact, browser address) and which products and views exist.
+- open / close: open or close the side panel.
+- show: surface (product id or label, e.g. "atlas", "Genesis", "agents", "playbooks", "integrations"), optional sub (view id or label, e.g. "lists", "schemas", "graph", "artifacts"), optional bloq (board id). Opens the panel on it.
+- artifact: id — opens Genesis › Artifacts with that genesis_artifact selected.
+- tab: tab = "review" (Files & changes) or "context".
+- browse: url — opens an http(s) address in the panel's Browser tab.
+
+Every change returns what the desktop reports AFTER applying it. If no desktop answers, the user is not looking at this session in IRIS Desktop (they may be in the terminal) — tell them rather than retrying.

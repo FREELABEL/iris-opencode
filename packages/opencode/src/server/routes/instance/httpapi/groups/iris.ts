@@ -1375,7 +1375,60 @@ export const IrisPaths = {
   plans: `${root}/plans`,
   atlasNote: `${root}/atlas-note`,
   frameCheck: `${root}/frame-check`,
+  panel: `${root}/panel`,
+  panelState: `${root}/panel/state`,
+  panelCommand: `${root}/panel/command`,
 } as const
+
+/**
+ * THE SIDE PANEL (#190093) — see src/iris/panel.ts. The desktop reports what its panel shows; the
+ * agent (side_panel tool) and any local caller read it and steer it. Loose on purpose: an older
+ * desktop sends fewer fields, and the report is a description, not a contract the engine enforces.
+ */
+const PanelCatalog = Schema.Array(
+  Schema.Struct({
+    id: Schema.String,
+    label: Schema.String,
+    subs: Schema.Array(Schema.Struct({ id: Schema.String, label: Schema.String })),
+  }),
+)
+export const PanelStatePayload = Schema.Struct({
+  session: described(Schema.String, "The session on screen. One path segment: letters, digits, _ and -."),
+  open: Schema.Boolean,
+  tab: Schema.optional(Schema.String),
+  tabs: Schema.optional(Schema.Array(Schema.String)),
+  surface: Schema.optional(Schema.String),
+  sub: Schema.optional(Schema.String),
+  bloq: Schema.optional(Schema.Struct({ id: Schema.Finite, name: Schema.optional(Schema.String) })),
+  artifact: Schema.optional(Schema.String),
+  url: Schema.optional(Schema.String),
+  catalog: Schema.optional(PanelCatalog),
+  ack: Schema.optional(described(Schema.String, "The id of the iris.panel.command this report answers.")),
+  error: Schema.optional(Schema.String),
+}).annotate({ identifier: "IrisPanelState" })
+const PanelReport = Schema.Struct({
+  ...PanelStatePayload.fields,
+  received: described(Schema.Finite, "When the engine received this report (ms since epoch)."),
+}).annotate({ identifier: "IrisPanelReport" })
+const PanelReadResponse = Schema.Struct({
+  reported: described(Schema.Boolean, "false: no desktop has reported for this session since the engine started."),
+  state: Schema.optional(PanelReport),
+}).annotate({ identifier: "IrisPanelRead" })
+export const PanelCommandPayload = Schema.Struct({
+  session: Schema.String,
+  action: Schema.Literals(["open", "close", "show", "artifact", "tab", "browse"]),
+  surface: Schema.optional(Schema.String),
+  sub: Schema.optional(Schema.String),
+  bloq: Schema.optional(Schema.Finite),
+  id: Schema.optional(Schema.String),
+  tab: Schema.optional(Schema.String),
+  url: Schema.optional(Schema.String),
+}).annotate({ identifier: "IrisPanelCommand" })
+const PanelCommandResponse = Schema.Struct({
+  answered: described(Schema.Boolean, "false: no desktop answered within 4 s — the session is not on screen in IRIS Desktop."),
+  refused: Schema.optional(described(Schema.String, "Why the command was not sent.")),
+  state: Schema.optional(PanelReport),
+}).annotate({ identifier: "IrisPanelCommandResult" })
 
 export const IrisApi = HttpApi.make("iris").add(
   HttpApiGroup.make("iris")
@@ -2428,6 +2481,38 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Can a page be framed",
           description:
             "A refused cross-origin frame fires load like a working one, and the deciding headers are invisible to the page — so the side panel's Browser tab asks the sidecar (#187864).",
+        }),
+      ),
+      HttpApiEndpoint.get("panel", IrisPaths.panel, {
+        query: Schema.Struct({ session: Schema.optional(Schema.String) }),
+        success: described(PanelReadResponse, "What the desktop last said its side panel shows"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.panel",
+          summary: "Read the side panel",
+          description:
+            "#190093. The desktop's own report of its side panel: open or closed, active tab, IRIS product and view, board, selected artifact, Browser address, and the catalogue of products and views. Without `session`, the most recent report from any session. In memory only; `received` says how old it is.",
+        }),
+      ),
+      HttpApiEndpoint.post("panelState", IrisPaths.panelState, {
+        payload: PanelStatePayload,
+        success: described(Schema.Struct({ ok: Schema.Boolean }), "Stored"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.panelState",
+          summary: "Report the side panel (desktop → engine)",
+          description: "Sent by the desktop whenever its panel changes, and in answer to an iris.panel.command (with `ack`).",
+        }),
+      ),
+      HttpApiEndpoint.post("panelCommand", IrisPaths.panelCommand, {
+        payload: PanelCommandPayload,
+        success: described(PanelCommandResponse, "What the desktop reported after applying it"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.panelCommand",
+          summary: "Steer the side panel",
+          description:
+            "#190093. Emits iris.panel.command and waits up to 4 s for the desktop showing `session` to apply it and report back. The same path the side_panel tool takes; for agents outside the engine (MCP, scripts).",
         }),
       ),
       HttpApiEndpoint.get("atlasNote", IrisPaths.atlasNote, {

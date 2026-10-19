@@ -16,6 +16,7 @@ import { GenesisArtifactTool } from "./genesis-artifact"
 import { AtlasArtifactTool } from "./atlas-artifact"
 import { AtlasEpicTool } from "./atlas-epic"
 import { BrowserTool } from "./browser"
+import { SidePanelTool } from "./side-panel"
 import { WebFetchTool } from "./webfetch"
 import { WriteTool } from "./write"
 import { InvalidTool } from "./invalid"
@@ -113,6 +114,7 @@ const layer = Layer.effect(
     const atlasartifacttool = yield* AtlasArtifactTool
     const atlasepictool = yield* AtlasEpicTool
     const browsertool = yield* BrowserTool
+    const sidepaneltool = yield* SidePanelTool
     const lsptool = yield* LspTool
     const plan = yield* PlanExitTool
     const webfetch = yield* WebFetchTool
@@ -231,6 +233,7 @@ const layer = Layer.effect(
           atlasArtifact: Tool.init(atlasartifacttool),
           atlasEpic: Tool.init(atlasepictool),
           browser: Tool.init(browsertool),
+          sidePanel: Tool.init(sidepaneltool),
           search: Tool.init(websearch),
           skill: Tool.init(skilltool),
           patch: Tool.init(patchtool),
@@ -267,6 +270,10 @@ const layer = Layer.effect(
             // close. The refusals (private hosts, credential URLs, off-origin) are in
             // iris/browser-verbs; the screenshot lands in the Artifacts pane above.
             tool.browser,
+            // `side_panel` — see and steer the desktop side panel (#190093): which product, view, board
+            // and artifact is on screen, and switching it. Commands go through the same iris-nav path
+            // the chat cards use; each answer is the desktop's own report after applying it.
+            tool.sidePanel,
             tool.search,
             tool.skill,
             tool.patch,

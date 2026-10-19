@@ -105,6 +105,7 @@ import { useUsageExceededDialogs } from "./session/usage-exceeded-dialogs"
 import { useAllowanceNotice } from "./session/allowance-toast"
 import { createSessionOwnership } from "./session/session-ownership"
 import { createSessionLineage } from "./session/session-lineage"
+import { usePanelControl } from "@/components/session/use-panel-control"
 
 type FollowupItem = FollowupDraft & { id: string }
 type FollowupEdit = Pick<FollowupItem, "id" | "prompt" | "context">
@@ -468,6 +469,8 @@ export default function Page() {
     newSessionDesign() ? desktopV2ReviewOpen() || desktopTerminalOpen() : desktopReviewOpen(),
   )
   const desktopSidePanelOpen = createMemo(() => desktopSessionResizeOpen() || desktopFileTreeOpen())
+  // The agent sees and steers the side panel through this (#190093) — see use-panel-control.ts.
+  usePanelControl({ open: desktopSidePanelOpen })
   let panelRow: HTMLDivElement | undefined
   const [panelRowWidth, setPanelRowWidth] = createSignal<number>()
   createResizeObserver(
