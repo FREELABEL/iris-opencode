@@ -196,7 +196,9 @@ describe("paths check", () => {
   test("directory globs and ** globs", async () => {
     const dir = repo({ "logs/run.txt": "x\n", "pages/acme.json": "{}\n", "pkg/a/pages/b.json": "{}\n" })
     const r = await run(["--paths", "--json"], { cwd: dir, env: env() })
-    const paths = JSON.parse(r.output).findings.map((f: any) => f.path).sort()
+    const paths = JSON.parse(r.output)
+      .findings.map((f: any) => f.path)
+      .sort()
     expect(paths).toEqual(["logs/run.txt", "pages/acme.json", "pkg/a/pages/b.json"])
   })
 
@@ -233,6 +235,15 @@ describe("paths check", () => {
     expect(globMatch("**/pages/*.json", "x/y/pages/a.json")).toBe(true)
     expect(globMatch("**/pages/*.json", "x/pages/sub/a.json")).toBe(false)
   })
+
+  test("a leading slash anchors a glob to the repo root", () => {
+    expect(globMatch("/logs/", "logs/a.txt")).toBe(true)
+    expect(globMatch("/logs/", "pkg/tui/logs/table.go")).toBe(false)
+    expect(globMatch("/STATS.md", "STATS.md")).toBe(true)
+    expect(globMatch("/STATS.md", "docs/STATS.md")).toBe(false)
+    expect(globMatch("/SPEC_*", "SPEC_a.md")).toBe(true)
+    expect(globMatch("/SPEC_*", "specs/SPEC_a.md")).toBe(false)
+  })
 })
 
 describe("artifact check", () => {
@@ -259,6 +270,49 @@ describe("artifact check", () => {
     expect(r.code).toBe(1)
     expect(r.output).toContain("bin/iris")
     expect(r.output).not.toContain("SENTINEL-7f3a9c")
+  })
+
+  // The Bun runtime itself carries `sourcesContent` (its source-map parser, its HMR runtime):
+  // every compiled binary has the same 4 hits on linux, darwin and windows as of 1.3.11. --runtime
+  // lets a BINARY carry up to as many as the runtime it was compiled from, and no more.
+  describe("--runtime baseline", () => {
+    const binWith = (n: number) => {
+      const parts: number[] = [0x7f, 0x45, 0x4c, 0x46, 0]
+      for (let i = 0; i < n; i++) parts.push(...new TextEncoder().encode("..sourcesContent.."), 0)
+      return new Uint8Array(parts)
+    }
+    let runtime: string
+    beforeEach(() => {
+      runtime = join(tmp, "bun-runtime")
+      writeFileSync(runtime, binWith(2))
+    })
+
+    test("a binary with no more hits than the runtime -> exit 0", async () => {
+      const t = tarball({ iris: binWith(2) })
+      expect((await run(["--artifact", t, "--runtime", runtime], { env: env() })).code).toBe(0)
+    })
+
+    test("a binary with MORE hits than the runtime -> exit 1", async () => {
+      const t = tarball({ iris: binWith(3) })
+      const r = await run(["--artifact", t, "--runtime", runtime], { env: env() })
+      expect(r.code).toBe(1)
+      expect(r.output).toContain("sourcesContent")
+    })
+
+    test("the baseline never excuses a text file", async () => {
+      const t = tarball({ "dist/index.js": '{"sourcesContent":["x"]}' })
+      expect((await run(["--artifact", t, "--runtime", runtime], { env: env() })).code).toBe(1)
+    })
+
+    test("without --runtime a binary hit is a finding", async () => {
+      const t = tarball({ iris: binWith(1) })
+      expect((await run(["--artifact", t], { env: env() })).code).toBe(1)
+    })
+
+    test("a missing --runtime file -> exit 2", async () => {
+      const t = tarball({ iris: binWith(1) })
+      expect((await run(["--artifact", t, "--runtime", join(tmp, "nope")], { env: env() })).code).toBe(2)
+    })
   })
 
   test("clean tarball -> exit 0", async () => {

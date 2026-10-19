@@ -673,6 +673,32 @@ jobs:
             fi
           done
 
+      # Audit every asset before anything is uploaded (#189852). v1.3.349 and earlier shipped
+      # index.js.map with full sourcesContent — the original TypeScript and system prompts — in
+      # every public archive (#189593). This fails the release on any *.map, any sourcesContent
+      # beyond what the Bun runtime itself carries, and any private-prompt sentinel. The denylist
+      # is private and arrives as a secret; without it the step exits 2 and nothing publishes.
+      - name: Setup Bun (for the release-asset audit)
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Audit release assets before upload
+        env:
+          DENYLIST_B64: ${{ secrets.PUBLIC_AUDIT_DENYLIST_B64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DENYLIST_B64}" ]; then
+            echo "::error::PUBLIC_AUDIT_DENYLIST_B64 is not set — refusing to publish unaudited assets."
+            exit 2
+          fi
+          f="$RUNNER_TEMP/public-audit-denylist.txt"
+          printf '%s' "$DENYLIST_B64" | base64 -d > "$f"
+          trap 'rm -f "$f"' EXIT
+          # --runtime: the bun the binaries were compiled with (same package.json pin as build).
+          PUBLIC_AUDIT_DENYLIST_FILE="$f" bun packages/opencode/script/public-audit.ts \
+            --artifact artifacts --runtime "$(command -v bun)"
+
       # Publish a checksum next to every asset.
       #
       # Until now NOTHING published was checksummed or signed (#185158), so between the
@@ -786,6 +812,45 @@ jobs:
           path: desktop
           pattern: IRIS-app-*
           merge-multiple: true
+
+      # Same audit as the release job, over what THIS job uploads (#189852).
+      - name: Checkout the audit script
+        uses: actions/checkout@v4
+        with:
+          path: src
+          sparse-checkout: |
+            packages/opencode/script/public-audit.ts
+            package.json
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Bun (for the release-asset audit)
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: src/package.json
+
+      - name: Audit desktop assets before upload
+        # ADVISORY for now. Measured on v1.3.350's IRIS-app-darwin-arm64.zip: 4 findings —
+        # 3 in Electron Framework (Chromium's own devtools strings; needs an Electron baseline
+        # the way --runtime is a Bun one) and app.asar, which carries ~1,179 *.map entries and
+        # 109 sourcesContent blobs. Blocking today would stop every desktop upload. Flip this to
+        # false once the asar ships without maps (#189852 follow-up).
+        continue-on-error: true
+        env:
+          DENYLIST_B64: ${{ secrets.PUBLIC_AUDIT_DENYLIST_B64 }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          assets=(desktop/IRIS-app-*.zip)
+          if [ ${#assets[@]} -eq 0 ]; then echo "nothing to audit"; exit 0; fi
+          if [ -z "${DENYLIST_B64}" ]; then
+            echo "::error::PUBLIC_AUDIT_DENYLIST_B64 is not set — refusing to publish unaudited assets."
+            exit 2
+          fi
+          f="$RUNNER_TEMP/public-audit-denylist.txt"
+          printf '%s' "$DENYLIST_B64" | base64 -d > "$f"
+          trap 'rm -f "$f"' EXIT
+          PUBLIC_AUDIT_DENYLIST_FILE="$f" bun src/packages/opencode/script/public-audit.ts \
+            --artifact desktop --runtime "$(command -v bun)"
 
       - name: Upload desktop assets to release
         run: |
