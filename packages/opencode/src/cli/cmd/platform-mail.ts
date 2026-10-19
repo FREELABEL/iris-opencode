@@ -1,9 +1,10 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { printDivider, printKV, dim, bold, success, BRIDGE_URL, bridgeFetch, writeJson } from "./iris-api"
+import { printDivider, printKV, dim, bold, success, BRIDGE_URL, bridgeFetch, writeJson, irisFetch } from "./iris-api"
 import { probeWithHeal, type BridgeProbe, type BridgeHealth } from "./bridge-health"
 import { mailRows, mailSearchParams, describeMailQuery, bodyMissingNote } from "./mail-response"
+import { auditSentMail, parseCcList, routedCcConfirmed, type SentAudit } from "./mail-audit"
 import { fetchDaemonPermissions, isTccDenial, renderTccBlindSpot } from "./daemon-permissions"
 import {
   routerSend,
@@ -265,7 +266,7 @@ const MailSendCommand = cmd({
       })
       .option("subject", { type: "string", alias: "s", demandOption: true })
       .option("body", { type: "string", alias: "b", demandOption: true })
-      .option("cc", { type: "string", describe: "CC email address" })
+      .option("cc", { type: "string", describe: "CC address(es), comma-separated — works with --sender (routed + logged once, cc in metadata)" })
       // Repeatable. The bridge has always accepted `attachments` as an ARRAY; the CLI wrapped a
       // single string in a one-element array, so five files meant five sends. On 2026-08-28 an
       // agent asked to attach five images concluded the task was impossible and told the user to
@@ -360,9 +361,19 @@ const MailSendCommand = cmd({
     // than not routing: fall back to the direct bridge call and say so, rather than sending a
     // different email than the operator asked for.
     const attachments = ((args.attachment as string[] | undefined) ?? []).filter(Boolean)
+    const ccParsed = parseCcList(args.cc)
+    if ("error" in ccParsed) {
+      prompts.log.error(ccParsed.error)
+      prompts.outro("Not sent")
+      process.exitCode = 1
+      return
+    }
+    const cc = ccParsed.list
     // --draft joins this list because the comms router only knows how to SEND. Routing a draft
     // would either send it or drop the flag, and both are worse than saying which path was taken.
-    const needsDirectBridge = Boolean(attachments.length || args.cc || args.from || args.draft)
+    // #189942: --cc no longer forces the direct path when --sender is given — refusing it is what
+    // sent CC'd lead mail out of Mail.app by hand, where nothing logged it.
+    const needsDirectBridge = Boolean(attachments.length || (cc.length && !args.sender) || args.from || args.draft)
 
     // --sender and --from answer the same question in opposite directions. `--from` is a raw
     // address nothing has checked, taking the unrouted bridge path; `--sender` is a registered
@@ -376,14 +387,41 @@ const MailSendCommand = cmd({
 
     if (args.sender && needsDirectBridge) {
       prompts.log.error(
-        "--sender cannot be combined with --attachment/--cc/--draft: those take the direct bridge path, which does not read channel bindings.",
+        "--sender cannot be combined with --attachment/--draft: those take the direct bridge path, which does not read channel bindings.",
       )
       prompts.outro("Done")
       return
     }
 
+    if (!needsDirectBridge && cc.length) {
+      // Ask before sending: an API that predates cc would drop it and send anyway (#189942).
+      const plan = await routerSend({
+        toLeadId: leadId,
+        toHandle: leadId ? undefined : args.to,
+        channel: "apple_mail",
+        subject: args.subject,
+        message: args.body,
+        sender: args.sender,
+        cc,
+        dryRun: true,
+        origin: "cli.reachr",
+      })
+      if (!plan.ok || !routedCcConfirmed(plan.plan, cc)) {
+        prompts.log.error(
+          plan.ok
+            ? "The comms API did not confirm it can CC on a routed send, so this was NOT sent (it would have gone out without the CC)."
+            : `Router preflight failed: ${plan.error ?? "unknown"} — nothing sent.`,
+        )
+        prompts.log.info("Until the API supports it: send without --sender (`--cc` on the direct path is logged afterwards).")
+        prompts.outro("Not sent")
+        process.exitCode = 1
+        return
+      }
+    }
+
     if (!needsDirectBridge) {
       const result = await routerSend({
+        cc: cc.length ? cc : undefined,
         // The id when we have it — this is what stops the API running its own
         // findDuplicate()->first(), which shares the exact defect this command just fixed.
         toLeadId: leadId,
@@ -401,6 +439,10 @@ const MailSendCommand = cmd({
 
       if (result.ok && result.sent) {
         prompts.log.info(describeSend(result))
+        if (cc.length) {
+          if (routedCcConfirmed(result, cc)) prompts.log.info(`CC: ${cc.join(", ")}`)
+          else prompts.log.warn(`Sent, but the API did not confirm the CC (${cc.join(", ")}) — check the message in Mail's Sent folder.`)
+        }
         // "Sent" and "sent AND on the record" are different states, and the router can report the
         // first without the second. A send with no comm id is exactly what the sweeper exists for.
         if (!result.commId) {
@@ -442,7 +484,7 @@ const MailSendCommand = cmd({
     // cc_email, NOT cc. The bridge destructures `cc_email` and always has; the CLI sent `cc`, so
     // --cc was silently dropped on every send while the warning above told the operator it had
     // been applied. A field name is not a contract until something checks it.
-    if (args.cc) payload.cc_email = args.cc
+    if (cc.length) payload.cc_email = cc
     if (attachments.length) payload.attachments = attachments
     if (args.draft) payload.draft = true
 
@@ -475,6 +517,7 @@ const MailSendCommand = cmd({
             subject: args.subject,
             message: args.body,
             origin: "cli.mail.direct",
+            cc: cc.length ? cc : undefined,
           })
         : { ok: false as const, error: "sent with --force and no lead to attach it to" }
 
@@ -522,38 +565,91 @@ const MailSendCommand = cmd({
  */
 const MailAuditCommand = cmd({
   command: "audit",
-  describe: "list sends that never reached the comms log — and backfill them",
+  describe: "find sends that never reached the comms log (CLI spool + Mail's Sent, every account) — and backfill them",
   builder: (yargs) =>
     yargs
-      .option("backfill", { type: "boolean", default: false, describe: "write the spooled sends to their leads and clear them" })
-      .option("lead", { type: "number", describe: "attach every unattributed entry to this lead id" })
+      .option("backfill", { type: "boolean", default: false, describe: "write the missing sends to their leads (spool entries are cleared)" })
+      .option("dry-run", { type: "boolean", default: false, describe: "with --backfill: print what would be written, write nothing" })
+      .option("lead", { type: "number", describe: "attach every unattributed SPOOL entry to this lead id" })
+      .option("days", { type: "number", default: 14, describe: "how far back to reconcile Mail's sent messages" })
+      .option("limit", { type: "number", default: 200, describe: "max sent messages to examine (newest first; the bridge caps at 200)" })
+      .option("sent", { type: "boolean", default: true, describe: "reconcile Mail's sent messages against lead emails (--no-sent: spool only)" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     const entries = await readUnlogged()
+    const days = Math.max(1, Math.min(365, Number(args.days) || 14))
+    const limit = Math.max(1, Math.min(200, Number(args.limit) || 200))
+    const dryRun = !!((args as any)["dry-run"] ?? (args as any).dryRun)
 
-    if (args.json) {
-      console.log(JSON.stringify({ ok: true, spool: unloggedSpoolPath(), count: entries.length, entries }, null, 2))
+    // #189942: the spool only sees sends the CLI made. Mail's own Sent is the ground truth.
+    let sent: SentAudit | null = null
+    if (args.sent !== false) {
+      sent = await auditSentMail(
+        { days, limit, includeBody: !!args.backfill },
+        {
+          bridge: (path) => bridgeFetch(path),
+          resolveLead: async (addr) => {
+            const r = await resolveLeadForHandle(addr)
+            if (r.reason === "error") throw new Error(r.error)
+            return r.matches.map((m) => m.id)
+          },
+          ledger: async (leadId, since) => {
+            const res = await irisFetch(`/api/v1/atlas/comms?lead_id=${leadId}&direction=outbound&from=${encodeURIComponent(since)}&per_page=200`)
+            if (!res.ok) throw new Error(`HTTP ${res.status}`)
+            const payload = (await res.json()) as any
+            const rows = payload?.data?.data ?? payload?.data ?? []
+            if (!Array.isArray(rows)) throw new Error("unrecognised comms response")
+            return rows
+          },
+        },
+      )
+    }
+
+    const sentFindings = sent?.unlogged ?? []
+    const clean = entries.length === 0 && sentFindings.length === 0 && !sent?.error && !(sent?.ledgerErrors.length)
+
+    if (args.json && !args.backfill) {
+      console.log(JSON.stringify({ ok: true, clean, spool: unloggedSpoolPath(), count: entries.length, entries, sent }, null, 2))
+      if (!clean) process.exitCode = 1
       return
     }
 
     UI.empty()
     prompts.intro("◈  Comms audit — sends with no ledger row")
 
-    if (entries.length === 0) {
-      prompts.log.info(`Nothing unlogged. Spool: ${unloggedSpoolPath()}`)
+    if (sent?.error) prompts.log.error(`Sent mail: ${sent.error}`)
+    if (sent && !sent.error) {
+      prompts.log.info(
+        dim(
+          `Sent mail: ${sent.scanned} message(s) in the last ${days} day(s) checked against leads + the ledger` +
+            (sent.truncated ? ` — capped at ${limit}; older sends in the window were NOT checked (narrow --days)` : "") +
+            (sent.unresolvedAddresses ? ` — ${sent.unresolvedAddresses} recipient address(es) not looked up (lookup cap)` : ""),
+        ),
+      )
+      for (const e of sent.ledgerErrors) prompts.log.warn(`  ${e} — its sends were not judged either way`)
+    }
+
+    if (clean) {
+      prompts.log.info(`Nothing unlogged. Spool: ${unloggedSpoolPath()}${sent ? " · Sent mail reconciled" : " · Sent mail NOT checked (--no-sent)"}`)
       prompts.outro("Clean")
       return
     }
 
     for (const e of entries) {
       const who = e.leadId ? `lead #${e.leadId}` : dim("UNATTRIBUTED")
-      prompts.log.warn(`${e.at}  ${e.channel}  ${e.to}  ${who}`)
+      prompts.log.warn(`${e.at}  ${e.channel}  ${e.to}  ${who}  ${dim("(spool)")}`)
       prompts.log.info(`   subject: ${e.subject ?? "(none)"}`)
       prompts.log.info(`   why:     ${e.reason}`)
     }
+    for (const m of sentFindings) {
+      const who = m.leadIds.length ? m.leadIds.map((id) => `lead #${id}`).join(", ") : dim(`AMBIGUOUS (${m.ambiguous.join(", ")})`)
+      prompts.log.warn(`${m.date}  apple_mail  ${[...m.to, ...m.cc.map((c) => `cc:${c}`)].join(" ")}  ${who}  ${dim("(sent from Mail, no ledger row)")}`)
+      prompts.log.info(`   subject: ${m.subject || "(none)"}`)
+    }
 
     if (!args.backfill) {
-      prompts.log.info(`${entries.length} unlogged send(s). Backfill with: iris mail audit --backfill${entries.some((e) => !e.leadId) ? " --lead <id>" : ""}`)
+      const n = entries.length + sentFindings.length
+      if (n) prompts.log.info(`${n} unlogged send(s). Backfill with: iris mail audit --backfill${entries.some((e) => !e.leadId) ? " --lead <id>" : ""} (add --dry-run to preview)`)
       prompts.outro("Done")
       process.exitCode = 1
       return
@@ -571,6 +667,10 @@ const MailAuditCommand = cmd({
         failed++
         continue
       }
+      if (dryRun) {
+        prompts.log.info(`  would log ${e.to} → lead #${target}  ${dim(e.subject ?? "")}`)
+        continue
+      }
       const r = await logComm({ leadId: target, channel: e.channel, subject: e.subject, message: e.message, sentAt: e.at })
       if (r.ok) {
         prompts.log.info(`  ✓ ${e.to} → lead #${target}${r.commId ? ` as comm #${r.commId}` : ""}`)
@@ -581,8 +681,55 @@ const MailAuditCommand = cmd({
       }
     }
 
+    // Sent-from-Mail findings: ONE row per message, on the first lead it reached, with the other
+    // recipients in metadata. message_group_id makes a re-run a no-op instead of a duplicate.
+    let sentLogged = 0
+    for (const m of sentFindings) {
+      if (m.leadIds.length === 0) {
+        prompts.log.error(`  skipped "${m.subject}" — ${m.ambiguous.join(", ")} match more than one lead; log it by hand with --lead`)
+        failed++
+        continue
+      }
+      const groupKey = (m.message_id ?? `${m.sender}_${m.date}`).replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 50)
+      const payload = {
+        lead_id: m.leadIds[0],
+        channel: "apple_mail",
+        direction: "outbound",
+        body: m.body || m.subject || "(sent from Mail.app — body not available)",
+        subject: m.subject || null,
+        sent_at: m.date,
+        from_identifier: m.sender,
+        to_identifiers: [...m.to, ...m.cc],
+        message_group_id: `mailaudit_${groupKey}`,
+        metadata: {
+          source: "mail_audit_backfill",
+          to: m.to,
+          cc: m.cc,
+          also_leads: m.leadIds.slice(1),
+          mail_message_id: m.message_id,
+        },
+      }
+      if (dryRun) {
+        prompts.log.info(`  would log "${m.subject}" (${m.date}) → lead #${payload.lead_id}${m.cc.length ? `  cc ${m.cc.join(", ")}` : ""}`)
+        continue
+      }
+      try {
+        const res = await irisFetch("/api/v1/atlas/comms/log", { method: "POST", body: JSON.stringify(payload) })
+        if (!res.ok) throw new Error(`comms/log returned ${res.status}`)
+        prompts.log.info(`  ✓ "${m.subject}" → lead #${payload.lead_id}`)
+        sentLogged++
+      } catch (e: any) {
+        prompts.log.error(`  ✗ "${m.subject}" — ${e?.message ?? e}`)
+        failed++
+      }
+    }
+
     if (done.length) await clearUnlogged(done)
-    prompts.outro(`${success("✓")} Backfilled ${done.length}${failed ? `, ${failed} still unlogged` : ""}`)
+    prompts.outro(
+      dryRun
+        ? "Dry run — nothing written"
+        : `${success("✓")} Backfilled ${done.length + sentLogged}${failed ? `, ${failed} still unlogged` : ""}`,
+    )
     if (failed) process.exitCode = 1
   },
 })

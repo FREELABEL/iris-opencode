@@ -34,6 +34,12 @@ export interface RouterSendInput {
    * another. The API rejects that rather than ignoring the flag.
    */
   sender?: string
+  /**
+   * CC addresses (#189942). Sent as `cc`; the API must ECHO the applied list back (`data.cc`) —
+   * an API that predates cc drops the key in validate() and would send without it. Callers check
+   * the echo with routedCcConfirmed() on a dry-run before sending.
+   */
+  cc?: string[]
 }
 
 export interface RouterSendResult {
@@ -45,7 +51,9 @@ export interface RouterSendResult {
   stepAdvanced?: number | null
   error?: string
   /** Present for --dry-run: which channel would be used and why. */
-  plan?: { channel: string | null; reason: string; alternatives: Record<string, string> }
+  plan?: { channel: string | null; reason: string; alternatives: Record<string, string>; cc?: string[] }
+  /** The cc list the API says it applied. Absent = the API did not apply any. */
+  cc?: string[]
 }
 
 const ENDPOINT = "/api/v1/atlas/comms/send"
@@ -65,6 +73,7 @@ export async function routerSend(input: RouterSendInput): Promise<RouterSendResu
   if (input.scriptId != null) body.script_id = input.scriptId
   if (input.campaignId != null) body.campaign_id = input.campaignId
   if (input.sender) body.sender = input.sender
+  if (input.cc?.length) body.cc = input.cc
   if (input.dryRun) body.dry_run = true
   body.origin = input.origin ?? "cli.reachr"
 
@@ -105,6 +114,7 @@ export async function routerSend(input: RouterSendInput): Promise<RouterSendResu
     externalId: data.external_id ?? null,
     stepAdvanced: data.step_advanced ?? null,
     error: data.error,
+    cc: Array.isArray(data.cc) ? data.cc : undefined,
   }
 }
 
@@ -139,6 +149,8 @@ export interface RecordSendInput {
   message: string
   /** Where it went out from, for the record. */
   origin?: string
+  /** CC'd addresses — kept on the ONE row this send writes (#189942), not as extra rows. */
+  cc?: string[]
 }
 
 export interface RecordSendResult {
@@ -175,6 +187,9 @@ export async function recordDirectSend(input: RecordSendInput): Promise<RecordSe
         body: input.message,
         subject: input.subject ?? null,
         sent_at: new Date().toISOString(),
+        ...(input.cc?.length
+          ? { to_identifiers: [input.toHandle, ...input.cc], metadata: { cc: input.cc, origin: input.origin ?? null } }
+          : {}),
       }),
     })
 
