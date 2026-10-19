@@ -52,9 +52,24 @@ export namespace Skill {
     // clone) silently shadows the real one; `get`/`all` only ever see the
     // first, so nothing before this said the shadow existed at all.
     const allMatches: Record<string, Info[]> = {}
+    // Files that could not be parsed. ONE malformed file used to throw out of the whole scan, so
+    // `iris playbook sync` exited 1 with a YAML error naming no file and regenerated nothing —
+    // hit on 2026-10-18 with a SKILL.md still holding merge-conflict markers (#189878). Skip the
+    // file, keep scanning, and let callers say which file it was.
+    const invalid: { path: string; message: string }[] = []
 
     const addSkill = async (match: string) => {
-      const md = await ConfigMarkdown.parse(match)
+      let md
+      try {
+        md = await ConfigMarkdown.parse(match)
+      } catch (e) {
+        // NamedError keeps the useful text in .data.message; .message is only the error's name.
+        const detail = (e as { data?: { message?: unknown } })?.data?.message
+        const message = String(typeof detail === "string" && detail ? detail : e instanceof Error ? e.message : e).split("\n")[0]
+        invalid.push({ path: match, message })
+        log.warn("skipping unparseable skill file", { path: match, message })
+        return
+      }
       if (!md) {
         return
       }
@@ -120,7 +135,7 @@ export namespace Skill {
       }
     }
 
-    return { skills, allMatches }
+    return { skills, allMatches, invalid }
   })
 
   export async function get(name: string) {
@@ -129,6 +144,11 @@ export namespace Skill {
 
   export async function all() {
     return state().then((x) => Object.values(x.skills))
+  }
+
+  /** Skill/playbook files that were skipped because they could not be parsed, with the reason. */
+  export async function invalid(): Promise<{ path: string; message: string }[]> {
+    return state().then((x) => x.invalid)
   }
 
   /** Every discovered location for `name`, in scan/priority order — [0] is the winner `get()` returns. */

@@ -183,3 +183,52 @@ test("returns empty array when no skills exist", async () => {
     },
   })
 })
+
+// #189878 — one malformed SKILL.md (here: merge-conflict markers in its frontmatter) used to
+// throw out of the whole scan, so `iris playbook sync` exited 1 and regenerated nothing.
+test("an unparseable skill file is skipped and reported, not fatal", async () => {
+  await using tmp = await tmpdir({
+    git: true,
+    init: async (dir) => {
+      await Bun.write(
+        path.join(dir, ".iris", "playbooks", "good", "PLAYBOOK.md"),
+        `---
+name: good
+description: A valid playbook next to a broken skill file.
+version: 2
+---
+
+# Good
+`,
+      )
+      await Bun.write(
+        path.join(dir, ".claude", "skills", "broken", "SKILL.md"),
+        `---
+name: "broken"
+<<<<<<< ours
+client: pathways
+=======
+client: other
+>>>>>>> theirs
+description: "x"
+---
+
+body
+`,
+      )
+    },
+  })
+
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const skills = await Skill.all()
+      expect(skills.map((s) => s.name)).toContain("good")
+      expect(skills.map((s) => s.name)).not.toContain("broken")
+      const invalid = await Skill.invalid()
+      expect(invalid.length).toBe(1)
+      expect(invalid[0].path).toContain(path.join("skills", "broken", "SKILL.md"))
+      expect(invalid[0].message.length).toBeGreaterThan(0)
+    },
+  })
+})
