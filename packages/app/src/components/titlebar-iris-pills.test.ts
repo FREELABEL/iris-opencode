@@ -11,7 +11,13 @@ describe("fleetDotClass", () => {
   })
   test("a measured fleet with a machine up is green", () => {
     expect(
-      fleetDotClass({ measured: true, nodes: [{ online: true, name: "n" }, { online: false, name: "n" }] }),
+      fleetDotClass({
+        measured: true,
+        nodes: [
+          { online: true, name: "n" },
+          { online: false, name: "n" },
+        ],
+      }),
     ).toBe("text-v2-state-fg-success")
   })
   test("measured and all down is muted, NOT danger — reachable and dead are different facts", () => {
@@ -36,7 +42,16 @@ describe("fleetLabel", () => {
   })
 
   test("a measured fleet counts online against total", () => {
-    expect(fleetLabel({ measured: true, nodes: [{ online: true, name: "n" }, { online: false, name: "n" }, { online: true, name: "n" }] })).toBe("2/3")
+    expect(
+      fleetLabel({
+        measured: true,
+        nodes: [
+          { online: true, name: "n" },
+          { online: false, name: "n" },
+          { online: true, name: "n" },
+        ],
+      }),
+    ).toBe("2/3")
   })
 
   test("a measured fleet that really is all down says so", () => {
@@ -66,7 +81,6 @@ describe("inboxLabel", () => {
   })
 })
 
-
 describe("planBadge", () => {
   test("everyone sees Upgrade — unpaid, paid, admin, unknown, unmeasured, still loading", () => {
     // It used to key on paid === false, which hid it from admins, licence holders, and anyone
@@ -80,7 +94,7 @@ describe("planBadge", () => {
       { measured: true, plan: null, paid: null, upgradeUrl: null },
       { measured: true, plan: "free", upgradeUrl: null },
     ]) {
-      expect(planBadge(state)).toEqual({ text: "Upgrade", url: TITLEBAR_UPGRADE_URL })
+      expect(planBadge(state)).toEqual({ text: "Upgrade", url: TITLEBAR_UPGRADE_URL, tone: "accent" })
     }
   })
 
@@ -88,5 +102,26 @@ describe("planBadge", () => {
     expect(planBadge({ measured: true, plan: "free", paid: true, upgradeUrl: "https://x.test/plans" }).url).toBe(
       "https://x.test/plans",
     )
+  })
+})
+
+describe("planBadge — the out-of-allowance indicator (#190087)", () => {
+  const at = (fraction: number | null | undefined) =>
+    planBadge({ measured: true, plan: "free", paid: false, upgradeUrl: null, fraction })
+
+  test("used up: red, says so, still the way to upgrade", () => {
+    expect(at(1)).toEqual({ text: "Out of allowance · Upgrade", url: TITLEBAR_UPGRADE_URL, tone: "danger" })
+    expect(at(2.67)?.tone).toBe("danger")
+  })
+
+  test("at 90% or more: amber, a warning not an alarm", () => {
+    expect(at(0.9)).toEqual({ text: "Almost out · Upgrade", url: TITLEBAR_UPGRADE_URL, tone: "warning" })
+  })
+
+  test("below that, or unknown, the plain Upgrade — never red on a reading we do not have", () => {
+    for (const f of [0, 0.5, 0.899, null, undefined])
+      expect(at(f)).toEqual({ text: "Upgrade", url: TITLEBAR_UPGRADE_URL, tone: "accent" })
+    expect(planBadge(undefined).tone).toBe("accent")
+    expect(planBadge({ measured: false, plan: null, upgradeUrl: null, fraction: 1.5 }).tone).toBe("accent")
   })
 })

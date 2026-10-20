@@ -114,6 +114,8 @@ interface PlanState {
   /** From billing and licence seats (fl-iris-api dd9d0dfa). Null = could not tell. */
   paid?: boolean | null
   upgradeUrl: string | null
+  /** Share of the allowance used, from the server. Null/absent = unknown, never "0%" (#190087). */
+  fraction?: number | null
 }
 
 /** Where "Upgrade" goes when the server names no URL. Same page the limit dialog sends people to. */
@@ -128,8 +130,28 @@ export const TITLEBAR_UPGRADE_URL = "https://web.heyiris.io/pricing?source=deskt
  * way in. The button opens the plans dialog, which is useful to a paying customer too (moving up
  * a tier), so there is no one it is wrong to show it to. `state` only chooses the URL.
  */
-export function planBadge(state: PlanState | undefined): { text: string; url: string } {
-  return { text: "Upgrade", url: state?.upgradeUrl || TITLEBAR_UPGRADE_URL }
+export type BadgeTone = "accent" | "warning" | "danger"
+
+/**
+ * #190087: being OUT of allowance was invisible unless you opened Settings — the 90% toast fires
+ * once a week, after a turn, and the wall only shows when something is refused. The pill is always
+ * on screen, so it carries the state: red when the allowance is used up, amber from 90%, the
+ * plain Upgrade otherwise. An unknown or unmeasured reading is never red.
+ */
+export function planBadge(state: PlanState | undefined): { text: string; url: string; tone: BadgeTone } {
+  const url = state?.upgradeUrl || TITLEBAR_UPGRADE_URL
+  const f = state?.measured ? state.fraction : null
+  if (typeof f === "number" && Number.isFinite(f)) {
+    if (f >= 1) return { text: "Out of allowance · Upgrade", url, tone: "danger" }
+    if (f >= 0.9) return { text: "Almost out · Upgrade", url, tone: "warning" }
+  }
+  return { text: "Upgrade", url, tone: "accent" }
+}
+
+const BADGE_CLASS: Record<BadgeTone, string> = {
+  accent: "bg-v2-icon-icon-accent/20 text-v2-icon-icon-accent hover:bg-v2-icon-icon-accent/30",
+  warning: "bg-v2-state-bg-warning text-v2-state-fg-warning hover:opacity-90",
+  danger: "bg-v2-state-bg-danger text-v2-state-fg-danger hover:opacity-90 font-semibold",
 }
 
 export function TitlebarIrisPills() {
@@ -173,11 +195,12 @@ export function TitlebarIrisPills() {
   const [inbox] = createResource<InboxState | undefined, Key>(key, poll<InboxState>("/iris/inbox"))
   const [auth] = createResource<AuthState | undefined, Key>(key, poll<AuthState>("/iris/auth"))
 
-  // The plan changes when someone buys, not every 30s: ask every 10 minutes (20 ticks). /iris/plan
-  // peeks — it never consumes the weekly allowance notice, unlike /iris/allowance.
+  // Every 2 minutes (4 ticks): the pill now shows when the allowance runs OUT (#190087), which
+  // happens mid-session, not only when someone buys. /iris/plan peeks — it never consumes the
+  // weekly allowance notice, unlike /iris/allowance — so asking more often costs nothing but a GET.
   const planKey = createMemo(() => {
     const b = base()
-    return b ? ([b, Math.floor(tick() / 20)] as const) : undefined
+    return b ? ([b, Math.floor(tick() / 4)] as const) : undefined
   })
   const [plan] = createResource<PlanState | undefined, Key>(planKey, poll<PlanState>("/iris/plan"))
   const badge = createMemo(() => planBadge(plan()))
@@ -277,11 +300,23 @@ export function TitlebarIrisPills() {
 
           <Show when={badge()}>
             {(b) => (
-              <TooltipV2 placement="bottom" value={<>See IRIS plans: every product, every model, more compute</>}>
+              <TooltipV2
+                placement="bottom"
+                value={
+                  <>
+                    {b().tone === "danger"
+                      ? "Your allowance for this period is used up. Upgrade to keep chatting and keep your agents running."
+                      : b().tone === "warning"
+                        ? "You've used 90% of your allowance. Upgrade for 5x or 20x compute."
+                        : "See IRIS plans: every product, every model, more compute"}
+                  </>
+                }
+              >
                 <button
                   type="button"
                   data-slot="iris-plan-pill"
-                  class="shrink-0 rounded-full bg-v2-icon-icon-accent/20 px-2 py-0.5 text-[11px] font-medium leading-4 text-v2-icon-icon-accent transition-colors hover:bg-v2-icon-icon-accent/30"
+                  data-tone={b().tone}
+                  class={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium leading-4 transition-colors ${BADGE_CLASS[b().tone]}`}
                   onClick={() =>
                     dialog.show(() => (
                       <DialogUpgrade
