@@ -147,6 +147,7 @@ import { PlatformPagesCommand } from "./cli/cmd/platform-pages"
 import { PlatformExposureCommand } from "./cli/cmd/platform-exposure"
 import { PlatformFindCommand } from "./cli/cmd/platform-find"
 import { LocateCommand } from "./cli/cmd/platform-locate"
+import { PlatformWtCommand } from "./cli/cmd/platform-wt"
 import { PlatformDashboardCommand } from "./cli/cmd/platform-dashboard"
 import { PlatformContentEngineCommand } from "./cli/cmd/platform-content-engine"
 import { PlatformNewsroomCommand } from "./cli/cmd/platform-newsroom"
@@ -373,6 +374,7 @@ const cli = yargs(rawArgs)
   .command(reg(TelemetryCommand))
   .command(reg(PlatformFindCommand))
   .command(reg(LocateCommand))
+  .command(reg(PlatformWtCommand))
   // Core CLI commands
   .command(reg(AcpCommand))
   .command(reg(BuzzCommand))
