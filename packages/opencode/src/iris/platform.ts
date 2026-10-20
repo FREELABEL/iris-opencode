@@ -577,6 +577,8 @@ export interface Allowance {
   spendUsd: number | null
   fraction: number | null
   resetsAt: string | null
+  /** Tokens used this window, same sources as the meter (#190087). Null = not reported. */
+  tokensUsed: number | null
   thresholds: number[]
   surface: string
   upgradeUrl: string | null
@@ -600,6 +602,7 @@ const EMPTY_ALLOWANCE: Allowance = {
   spendUsd: null,
   fraction: null,
   resetsAt: null,
+  tokensUsed: null,
   thresholds: [],
   surface: "chat",
   upgradeUrl: null,
@@ -651,6 +654,7 @@ export async function fetchAllowance(
         spendUsd: num(j?.spend_usd),
         fraction: num(j?.fraction),
         resetsAt: j?.resets_at ?? null,
+        tokensUsed: num(j?.tokens_used),
         thresholds: Array.isArray(j?.thresholds) ? j.thresholds.map(Number).filter(Number.isFinite) : [],
         surface: String(j?.surface ?? "chat"),
         upgradeUrl: j?.upgrade_url ?? null,

@@ -1056,6 +1056,7 @@ const AllowanceResponse = Schema.Struct({
   spendUsd: Schema.NullOr(Schema.Finite),
   fraction: described(Schema.NullOr(Schema.Finite), "NULL means uncapped or unmeasured. Not 0."),
   resetsAt: Schema.NullOr(Schema.String),
+  tokensUsed: Schema.optional(described(Schema.NullOr(Schema.Finite), "Tokens used this window. NULL = not reported.")),
   thresholds: described(Schema.Array(Schema.Finite), "POLICY. Read it, never hold it."),
   surface: Schema.String,
   upgradeUrl: Schema.NullOr(Schema.String),
