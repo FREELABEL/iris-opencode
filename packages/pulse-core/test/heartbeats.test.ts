@@ -135,9 +135,12 @@ describe("the enforced schedule (#189170)", () => {
       runs: [{ ...o.runs[0], status: "completed", error: null, response: "ok", startedAt: "2026-10-12T20:10:00Z", completedAt: "2026-10-12T20:11:00Z" }],
       lastRunAt: "2026-10-13T12:10:00Z",
     }
-    expect(silentSince(quiet)).toBeNull()
+    // judged just after each wake — with no clock pinned it drifts into "missed its next beat"
+    expect(silentSince(quiet, Date.parse("2026-10-13T12:15:00Z"))).toBeNull()
     // one more wake that WAS inside its hours, with nothing to show → silent
-    expect(silentSince({ ...quiet, lastRunAt: "2026-10-13T20:10:00Z" })).toBe("2026-10-12T20:11:00Z")
+    expect(silentSince({ ...quiet, lastRunAt: "2026-10-13T20:10:00Z" }, Date.parse("2026-10-13T20:15:00Z"))).toBe(
+      "2026-10-12T20:11:00Z",
+    )
   })
   test("the editors' cadence and the one that fires are compared, and called out when they differ", () => {
     expect(cadenceDrift(by("Market Watch Agent"))).toBe("every_5_minutes")
