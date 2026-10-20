@@ -483,3 +483,43 @@ export function initials(name: string | undefined): string {
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
 }
+
+// ─── Change a card from its face (#189806) ──────────────────────────────────
+
+export type QuickField = "status" | "priority" | "due" | "labels"
+/** One change from the card face. `null` clears priority or the due date. */
+export interface QuickPatch {
+  status?: string
+  priority?: string | null
+  dueDate?: string | null
+  labels?: string[]
+}
+
+/** s / p / d / l on a focused card open the face editor at that field. */
+export function quickFieldFor(key: string): QuickField | undefined {
+  return ({ s: "status", p: "priority", d: "due", l: "labels" } as Record<string, QuickField>)[key]
+}
+
+/**
+ * The board as it will look once pending face changes land. Unchanged lists and cards keep their
+ * identity, so the rows that did not change are not rebuilt (the same rule as keepUnchanged).
+ */
+export function applyFaceEdits<I extends AtlasViewItem, L extends AtlasViewList<I>>(lists: L[], edits: Map<number, QuickPatch>): L[] {
+  if (edits.size === 0) return lists
+  return lists.map((list) => {
+    if (!list.items.some((i) => edits.has(i.id))) return list
+    return {
+      ...list,
+      items: list.items.map((item) => {
+        const p = edits.get(item.id)
+        if (!p) return item
+        const next: any = { ...item }
+        if (p.status !== undefined) next.status = p.status
+        if (p.priority !== undefined) next.priority = p.priority ?? undefined
+        if (p.dueDate !== undefined) next.dueDate = p.dueDate ?? undefined
+        if (p.labels !== undefined) next.labels = p.labels
+        return next as I
+      }),
+    }
+  })
+}

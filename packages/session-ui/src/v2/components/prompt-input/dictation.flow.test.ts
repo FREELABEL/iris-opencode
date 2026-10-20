@@ -22,6 +22,8 @@ let health: unknown
 let holdHealth: (() => void) | undefined
 let healthHeld = false
 let stopFails = false
+/** GET /transcribe/held: what the server says it is holding. */
+let heldOnServer: unknown[] = []
 let gumCalls = 0
 const realFetch = globalThis.fetch
 const realInterval = globalThis.setInterval
@@ -40,6 +42,7 @@ beforeEach(() => {
   healthHeld = false
   holdHealth = undefined
   stopFails = false
+  heldOnServer = []
   gumCalls = 0
   sidecarCapturing = undefined
   setUserAgent("Mozilla/5.0 (Macintosh) AppleWebKit")
@@ -81,7 +84,7 @@ beforeEach(() => {
       })
     const body =
       path === "/transcribe/held"
-        ? { held: [] }
+        ? { held: heldOnServer }
         : path === "/transcribe/retry"
           ? { text: "older words" }
         : path === "/dictate/level"
@@ -620,6 +623,61 @@ describe("createDictation — a native recorder skips the webview probe (#189531
     await sleep(150)
     expect(gumCalls).toBe(1)
     expect(posted("/dictate/start")).toBe(0)
+    dispose()
+  })
+})
+
+describe("createDictation — a surface that records for a board (#190041 ADR-01)", () => {
+  const recorded = { id: "1700000000000-aaaaaa", seconds: 60, bloqId: "777" }
+  const chat = { id: "1700000000001-bbbbbb", seconds: 4 }
+
+  test("the stop carries the board: the take is transcribed under the card's board", async () => {
+    const { d, dispose } = await mount({ bloqId: () => "777" })
+    d.toggle()
+    await sleep(500)
+    d.toggle()
+    await sleep(50)
+    const stop = calls.find((c) => c.path === "/dictate/stop")
+    expect(new URLSearchParams(stop!.search).get("bloq_id")).toBe("777")
+    dispose()
+  })
+
+  test("without a board nothing changes: no bloq_id is sent", async () => {
+    const { d, dispose } = await mount()
+    d.toggle()
+    await sleep(500)
+    d.toggle()
+    await sleep(50)
+    expect(calls.find((c) => c.path === "/dictate/stop")!.search).not.toContain("bloq_id")
+    dispose()
+  })
+
+  test("a window take uploads under the board too", async () => {
+    setUserAgent("Mozilla/5.0 (Windows NT 10.0)")
+    const { d, dispose } = await mount({ bloqId: () => "777" })
+    d.toggle()
+    await sleep(10)
+    processor!.onaudioprocess!({ inputBuffer: { getChannelData: () => new Float32Array(4096).fill(0.3) } })
+    d.toggle()
+    await sleep(50)
+    const upload = calls.find((c) => c.path === "/transcribe")
+    expect(new URLSearchParams(upload!.search).get("bloq_id")).toBe("777")
+    dispose()
+  })
+
+  test("a card lists only the held takes recorded for its board — never a chat take", async () => {
+    heldOnServer = [recorded, chat, { ...recorded, id: "1700000000002-cccccc", bloqId: "9" }]
+    const { d, dispose } = await mount({ bloqId: () => "777" })
+    await sleep(20)
+    expect(d.held().map((h: { id: string }) => h.id)).toEqual([recorded.id])
+    dispose()
+  })
+
+  test("the composer lists only takes recorded without a board — never a card's meeting", async () => {
+    heldOnServer = [recorded, chat]
+    const { d, dispose } = await mount()
+    await sleep(20)
+    expect(d.held().map((h: { id: string }) => h.id)).toEqual([chat.id])
     dispose()
   })
 })

@@ -1,4 +1,4 @@
-import { createResource, For, Show } from "solid-js"
+import { createResource, createSignal, For, Show } from "solid-js"
 import { Button } from "@opencode-ai/ui/button"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { Dialog } from "@opencode-ai/ui/dialog"
@@ -27,27 +27,47 @@ export function formatPrice(price: number, period: string): string {
   return `$${Math.round(price).toLocaleString("en-US")}${unit}`
 }
 
-/** Checkout lives on the web pricing page; `source` tells it the click came from here. */
-export function checkoutUrl(base: string, slug?: string): string {
-  const u = new URL(base)
-  u.searchParams.set("source", "desktop-upgrade")
-  if (slug) u.searchParams.set("package", slug)
-  return u.toString()
+/** GET by default; checkout passes a POST. The sidecar answers both as JSON. */
+export type FetchJson = <T>(path: string, init?: RequestInit) => Promise<T>
+
+export type CheckoutAnswer = { ok: boolean; url?: string; reason?: string }
+
+/**
+ * Ask the sidecar for Stripe's URL for one plan (#190190). Every failure comes back as a sentence
+ * the dialog can show — a network error included — because the bug this replaced was a button
+ * that did nothing: the customer clicked it again and again and never learned why.
+ */
+export async function requestCheckout(fetchJson: FetchJson, slug: string): Promise<{ url: string } | { error: string }> {
+  try {
+    const r = await fetchJson<CheckoutAnswer>("/iris/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ slug }),
+    })
+    if (r?.ok && r.url) return { url: r.url }
+    return { error: r?.reason || "Checkout didn't open. Try again." }
+  } catch (e) {
+    return { error: `Checkout didn't open: ${e instanceof Error ? e.message : String(e)}` }
+  }
+}
+
+/** The plan button's words. The weekly allowance is the trial, so a plan is chosen, not trialled. */
+export function planButtonLabel(plan: Pick<PlanOffer, "slug" | "title">, opening: string | null): string {
+  return opening === plan.slug ? "Opening checkout…" : `Choose ${plan.title}`
 }
 
 /**
  * The plans on sale, as cards — shared by the Upgrade dialog and Settings > Account. Prices come
  * from the sidecar (/iris/plans), which reads the same package list the web pricing page does, so
- * the two never quote different numbers. Choosing a plan opens Stripe checkout on the web with
- * that plan already picked: Stripe, the trial and the account all live there.
+ * the two never quote different numbers. Choosing a plan asks the sidecar for a Stripe Checkout
+ * session on this account and opens Stripe itself — no web app, no second sign-in (#190190).
  *
- * If the list cannot be read, it says so and still offers the pricing page — it never renders an
- * empty grid that looks like there is nothing to buy.
+ * If the list cannot be read, it says so — it never renders an empty grid that looks like there
+ * is nothing to buy.
  */
 export function PlanCards(props: {
-  fetchJson: <T>(path: string) => Promise<T>
-  pricingUrl: string
-  /** Called after a plan opens in the browser (the dialog closes itself here). */
+  fetchJson: FetchJson
+  /** Called after Stripe opens in the browser (the dialog closes itself here). */
   onChosen?: () => void
   /**
    * The account, when the caller already has it (Settings). Without it the cards ask /iris/me
@@ -65,8 +85,20 @@ export function PlanCards(props: {
   )
   const summary = () => planSummary(props.me ? props.me() : fetched())
 
-  const open = (slug?: string) => {
-    platform.openExternal(checkoutUrl(props.pricingUrl, slug))
+  const [opening, setOpening] = createSignal<string | null>(null)
+  const [error, setError] = createSignal<string | null>(null)
+
+  const choose = async (slug: string) => {
+    if (opening()) return
+    setError(null)
+    setOpening(slug)
+    const r = await requestCheckout(props.fetchJson, slug)
+    setOpening(null)
+    if ("error" in r) {
+      setError(r.error)
+      return
+    }
+    platform.openExternal(r.url)
     props.onChosen?.()
   }
 
@@ -101,9 +133,7 @@ export function PlanCards(props: {
         <Show
           when={plans()?.measured && plans()!.plans.length > 0}
           fallback={
-            <div class="text-v2-text-text-weak py-6 text-center">
-              Couldn't load plans here. The pricing page has them all.
-            </div>
+            <div class="text-v2-text-text-weak py-6 text-center">Couldn't load plans. Close this and try again.</div>
           }
         >
           <div class="grid gap-3" style={{ "grid-template-columns": "repeat(auto-fit, minmax(200px, 1fr))" }}>
@@ -141,8 +171,13 @@ export function PlanCards(props: {
                       )}
                     </For>
                   </ul>
-                  <Button variant={p.popular ? "primary" : "secondary"} size="large" onClick={() => open(p.slug)}>
-                    {p.trialDays ? `Start ${p.trialDays}-day trial` : `Choose ${p.title}`}
+                  <Button
+                    variant={p.popular ? "primary" : "secondary"}
+                    size="large"
+                    disabled={opening() !== null}
+                    onClick={() => void choose(p.slug)}
+                  >
+                    {planButtonLabel(p, opening())}
                   </Button>
                 </div>
               )}
@@ -150,27 +185,31 @@ export function PlanCards(props: {
           </div>
         </Show>
       </Show>
-      <div class="flex items-center justify-between gap-2 text-[12px]">
-        <span class="text-v2-text-text-weak">Secure checkout by Stripe · Cancel anytime</span>
-        <Button variant="ghost" size="small" onClick={() => open()}>
-          Compare all plans
-        </Button>
-      </div>
+      <Show when={error()}>
+        <div
+          data-slot="iris-upgrade-error"
+          role="alert"
+          class="rounded-lg border border-v2-border-border-base px-4 py-3 text-[13px] text-v2-text-text-danger"
+        >
+          {error()}
+        </div>
+      </Show>
+      <div class="text-[12px] text-v2-text-text-weak">Secure checkout by Stripe · Cancel anytime</div>
     </div>
   )
 }
 
 /** The plans, inside the app — not a bounce to a browser tab for someone who only wanted to look. */
-export function DialogUpgrade(props: { fetchJson: <T>(path: string) => Promise<T>; pricingUrl: string }) {
+export function DialogUpgrade(props: { fetchJson: FetchJson }) {
   const dialog = useDialog()
   return (
     <Dialog
       title="Upgrade IRIS"
-      description="Every plan includes all twelve products and every model. Pick a plan to finish on the web."
+      description="Every plan includes all twelve products and every model. Pick a plan to pay securely with Stripe."
       size="x-large"
     >
       <div class="px-6 pb-5">
-        <PlanCards fetchJson={props.fetchJson} pricingUrl={props.pricingUrl} onChosen={() => dialog.close()} />
+        <PlanCards fetchJson={props.fetchJson} onChosen={() => dialog.close()} />
       </div>
     </Dialog>
   )

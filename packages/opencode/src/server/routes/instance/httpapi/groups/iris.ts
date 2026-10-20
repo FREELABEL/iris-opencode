@@ -1091,6 +1091,7 @@ const PlanResponse = Schema.Struct({
     "What to call the plan on screen (Free, IRIS Solo, Staff). NULL = the server did not say.",
   ),
   trialEndsAt: described(Schema.NullOr(Schema.String), "When a trial ends, ISO-8601. NULL = not on a trial."),
+  fraction: described(Schema.NullOr(Schema.Finite), "Share of the allowance used; 1 = used up. NULL = uncapped or unknown."),
   uncapped: Schema.Boolean,
   upgradeUrl: Schema.NullOr(Schema.String),
 })
@@ -1284,6 +1285,7 @@ export const IrisPaths = {
   atlasMember: `${root}/atlas/:bloqID/members/:memberID`,
   itemAssignees: `${root}/item/:itemID/assignees`,
   itemAssignee: `${root}/item/:itemID/assignees/:assigneeID`,
+  itemActivity: `${root}/item/:itemID/activity`,
   agents: `${root}/agents/:bloqID`,
   leads: `${root}/leads/:bloqID`,
   pages: `${root}/pages/:bloqID`,
@@ -1373,6 +1375,7 @@ export const IrisPaths = {
   accountSwitch: `${root}/accounts/switch`,
   accountRemove: `${root}/accounts/remove`,
   plans: `${root}/plans`,
+  checkout: `${root}/checkout`,
   atlasNote: `${root}/atlas-note`,
   frameCheck: `${root}/frame-check`,
   panel: `${root}/panel`,
@@ -1575,6 +1578,22 @@ export const IrisApi = HttpApi.make("iris").add(
           description: "Self-serve IRIS plans with live prices, for the desktop Upgrade dialog.",
         }),
       ),
+      HttpApiEndpoint.post("checkout", IrisPaths.checkout, {
+        payload: Schema.Struct({ slug: Schema.String }),
+        success: described(
+          Schema.Struct({ ok: Schema.Boolean, url: Schema.optional(Schema.String), reason: Schema.optional(Schema.String) }).annotate({
+            identifier: "IrisCheckoutResult",
+          }),
+          "Stripe's checkout URL for the plan, or why there is none",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.checkout",
+          summary: "Start checkout",
+          description:
+            "Creates a Stripe Checkout session for one plan, for the signed-in account, and returns its URL. The desktop opens it directly — checkout never goes through a web app sign-in.",
+        }),
+      ),
       HttpApiEndpoint.get("bloqs", IrisPaths.bloqs, {
         query: PageQuery,
         success: described(BloqsResponse, "The account's bloqs"),
@@ -1681,6 +1700,25 @@ export const IrisApi = HttpApi.make("iris").add(
         params: { bloqID: Schema.NumberFromString, memberID: Schema.NumberFromString },
         success: described(Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String) }), "Whether it landed"),
       }).annotateMerge(OpenApi.annotations({ identifier: "iris.atlasMemberRemove", summary: "Remove a member from a board" })),
+      HttpApiEndpoint.get("itemActivity", IrisPaths.itemActivity, {
+        params: { itemID: Schema.NumberFromString },
+        success: described(
+          Schema.Struct({
+            ...Measured,
+            activity: Schema.Array(
+              Schema.Struct({
+                id: Schema.Finite,
+                type: Schema.String,
+                text: Schema.String,
+                icon: Schema.optional(Schema.String),
+                actor: Schema.optional(Schema.String),
+                at: Schema.optional(Schema.String),
+              }),
+            ),
+          }).annotate({ identifier: "IrisItemActivity" }),
+          "A card's trail, newest first (#189799)",
+        ),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.itemActivity", summary: "What happened to a card, and who did it" })),
       HttpApiEndpoint.get("itemAssignees", IrisPaths.itemAssignees, {
         params: { itemID: Schema.NumberFromString },
         success: described(Schema.Struct({ ...Measured, assignees: Schema.Array(Schema.Struct({ id: Schema.Finite, type: Schema.Literals(["user", "agent"]), userId: Schema.optional(Schema.Finite), agentId: Schema.optional(Schema.Finite), name: Schema.optional(Schema.String) })) }).annotate({ identifier: "IrisItemAssignees" }), "A card's assignees (#189796)"),

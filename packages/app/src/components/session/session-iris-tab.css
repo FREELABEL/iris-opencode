@@ -1321,6 +1321,40 @@
   align-items: center;
   gap: 2px;
 }
+/* Record a meeting into the card (#190041). Recording must be obvious at a glance. */
+.iris-card__rec {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: 6px;
+  color: var(--text-base);
+}
+.iris-card__rec:hover:not(:disabled) {
+  background: var(--surface-raised-base-hover, var(--surface-base-hover));
+}
+.iris-card__rec[data-phase="recording"] {
+  color: var(--text-danger-base, #e07d7d);
+}
+.iris-card__rec[data-phase="recording"] svg {
+  animation: iris-card-rec-pulse 1.4s ease-in-out infinite;
+}
+.iris-card__rec:disabled {
+  color: var(--text-weak);
+}
+@keyframes iris-card-rec-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+.iris-card__recbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 4px 6px;
+}
 .iris-card__frame {
   display: flex;
   flex-direction: column;
@@ -2589,4 +2623,107 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 .iris-board__card--pending {
   opacity: 0.55;
   cursor: default;
+}
+
+/* ── Change a card from its face (#189806) ─────────────────────────────── */
+.iris-quick {
+  position: fixed;
+  z-index: 60;
+  width: 280px;
+  max-height: min(420px, calc(100vh - 16px));
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  background: var(--background-base);
+  border: 1px solid var(--border-weak-base, var(--border-weaker-base));
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.22);
+}
+.iris-quick__title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+.iris-quick__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-weak);
+}
+.iris-quick__head kbd {
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  padding: 0 4px;
+  border: 1px solid var(--border-weaker-base);
+  border-radius: 3px;
+  text-transform: none;
+  color: var(--text-weaker, var(--text-weak));
+}
+.iris-quick__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.iris-quick__chip {
+  font-size: 11px;
+  line-height: 20px;
+  padding: 0 8px;
+  border-radius: 4px;
+  color: var(--text-base);
+  background: var(--background-element);
+  border: 1px solid var(--border-weaker-base);
+  cursor: pointer;
+}
+.iris-quick__chip:hover,
+.iris-quick__chip:focus-visible {
+  border-color: var(--text-weak);
+  outline: none;
+}
+.iris-quick__chip[aria-pressed="true"] {
+  color: var(--text-strong);
+  border-color: var(--text-strong);
+  font-weight: 600;
+}
+.iris-quick__chip--quiet {
+  background: transparent;
+  color: var(--text-weak);
+}
+.iris-quick__date {
+  height: 22px;
+  font-size: 11px;
+  max-width: 130px;
+}
+.iris-quick__note {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-critical-base, #d33);
+}
+
+/* ── A card's trail (#189799) ──────────────────────────────────────────── */
+.iris-trail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.iris-trail__row {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-base);
+}
+.iris-trail__meta {
+  display: block;
+  font-size: 10.5px;
+  color: var(--text-weak);
 }

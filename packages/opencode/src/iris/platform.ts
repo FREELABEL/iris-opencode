@@ -717,6 +717,8 @@ export interface Plan {
   label: string | null
   /** When a licence or Stripe trial ends, ISO-8601; null when not on one (#189988). */
   trialEndsAt: string | null
+  /** Share of the allowance used (1 = used up); null when uncapped or unknown (#190087). */
+  fraction: number | null
   uncapped: boolean
   upgradeUrl: string | null
 }
@@ -763,6 +765,57 @@ export async function fetchPlans(): Promise<PlatformResult<PlanOffer[]>> {
     return { measured: true, data: offers }
   } catch (e) {
     return { measured: false, reason: e instanceof Error ? e.message : String(e), data: [] }
+  }
+}
+
+/** Where Stripe sends the buyer once they have paid: a heyiris.io page, never Elon (#190191). */
+export const CHECKOUT_RETURN_URL = "https://heyiris.io/p/upgraded"
+
+export type CheckoutResult = { ok: true; url: string } | { ok: false; reason: string }
+
+/**
+ * A Stripe Checkout session for one plan, created for the signed-in account (#190190).
+ *
+ * Choosing a plan used to open Elon's pricing page with the plan pre-picked, and Elon finished
+ * the checkout. That is a second sign-in on a second app that is being retired, and it is where a
+ * paying customer got stuck on 2026-10-20: her Elon session was dead, the checkout behind it was
+ * refused, and the button did nothing. The account's own key is already here — fl-api resolves
+ * the buyer from it (`resolveCaller`), so no user id is sent — and the answer is Stripe's URL.
+ *
+ * The price is the catalogue's, read the same way the cards that showed it were, so the number on
+ * the button and the number on Stripe come from one place. Trial days are always 0: the weekly
+ * allowance is the trial.
+ */
+export async function createCheckout(slug: string): Promise<CheckoutResult> {
+  try {
+    const plans = await fetchPlans()
+    const plan = plans.data.find((p) => p.slug === slug)
+    if (!plan) {
+      return { ok: false, reason: plans.measured ? `No plan called ${slug} is on sale.` : "Couldn't load the plans." }
+    }
+    const res = await irisFetch("/api/v1/users/upgrade/checkout", FL_API, {
+      method: "POST",
+      body: JSON.stringify({
+        package_slug: plan.slug,
+        price: plan.price,
+        billing_interval: plan.period === "year" ? "year" : "month",
+        product: "desktop-upgrade",
+        trial_days: 0,
+        redirect_url: CHECKOUT_RETURN_URL,
+      }),
+    })
+    const body = (await res.json().catch(() => null)) as {
+      data?: { url?: string }
+      url?: string
+      message?: string
+      error?: string
+    } | null
+    const url = body?.data?.url ?? body?.url
+    if (res.ok && url) return { ok: true, url }
+    if (res.status === 401) return { ok: false, reason: "Your sign-in has expired. Sign in again, then choose the plan." }
+    return { ok: false, reason: `Checkout refused (${res.status})${body?.message ? `: ${body.message}` : ""}` }
+  } catch (e) {
+    return { ok: false, reason: `Couldn't reach checkout: ${e instanceof Error ? e.message : String(e)}` }
   }
 }
 
@@ -1019,7 +1072,7 @@ export async function reportGateEvent(
 export async function fetchPlan(
   opts: { token?: string | null; signal?: AbortSignal } = {},
 ): Promise<PlatformResult<Plan>> {
-  const empty: Plan = { plan: null, paid: null, label: null, trialEndsAt: null, uncapped: false, upgradeUrl: null }
+  const empty: Plan = { plan: null, paid: null, label: null, trialEndsAt: null, fraction: null, uncapped: false, upgradeUrl: null }
   try {
     const res = await irisFetch(
       "/api/v6/allowance/me?peek=1",
@@ -1037,6 +1090,7 @@ export async function fetchPlan(
         paid: typeof j.paid === "boolean" ? j.paid : null,
         label: typeof j.plan_label === "string" && j.plan_label.trim() ? j.plan_label.trim() : null,
         trialEndsAt: typeof j.trial_ends_at === "string" && j.trial_ends_at ? j.trial_ends_at : null,
+        fraction: typeof j.fraction === "number" && Number.isFinite(j.fraction) ? j.fraction : null,
         uncapped: Boolean(j.uncapped),
         upgradeUrl: typeof j.upgrade_url === "string" ? j.upgrade_url : null,
       },
@@ -3291,6 +3345,46 @@ export async function fetchBoardMembers(
 }
 
 /** A card's assignees (#189796), through fl-api's /assignees routes (#189792). */
+/** One row of a card's trail (#189799): who did what to it, in words. */
+export interface CardActivity {
+  id: number
+  type: string
+  text: string
+  icon?: string
+  actor?: string
+  at?: string
+}
+
+export function readActivity(raw: unknown): CardActivity[] {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter((r: any) => r && Number.isFinite(Number(r.id)) && typeof r.content === "string")
+    .map((r: any) => ({
+      id: Number(r.id),
+      type: String(r.type ?? "note"),
+      text: r.content,
+      icon: typeof r.icon === "string" ? r.icon : undefined,
+      actor: typeof r.actor === "string" && r.actor ? r.actor : undefined,
+      at: typeof r.created_at === "string" ? r.created_at : undefined,
+    }))
+}
+
+/** A card's trail, newest first: assignments, finished subtasks, moves, field changes (#189799). */
+export async function fetchActivity(itemId: number): Promise<PlatformResult<{ activity: CardActivity[] }>> {
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: notSignedIn(), data: { activity: [] } }
+  try {
+    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/activity`)
+    const j = (await res.json().catch(() => ({}))) as any
+    if (res.status === 404 && !j?.message)
+      return { measured: false, reason: "this IRIS server does not keep card activity yet", data: { activity: [] } }
+    if (!res.ok) return { measured: false, reason: apiFailure(j, res.status), data: { activity: [] } }
+    return { measured: true, data: { activity: readActivity(j?.data?.activity) } }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { activity: [] } }
+  }
+}
+
 export async function fetchAssignees(itemId: number): Promise<PlatformResult<{ assignees: AtlasAssignee[] }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: notSignedIn(), data: { assignees: [] } }
