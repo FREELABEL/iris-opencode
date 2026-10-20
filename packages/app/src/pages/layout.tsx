@@ -91,7 +91,6 @@ import { SidebarContent } from "./layout/sidebar-shell"
  */
 const COLLAPSED_RAIL = "4rem"
 
-
 export default function LegacyLayout(props: ParentProps) {
   const serverSDK = useServerSDK()
   const [store, setStore, , ready] = persisted(
@@ -2271,7 +2270,12 @@ export default function LegacyLayout(props: ParentProps) {
         }
       />
       <Show when={updateVersion() !== undefined}>
-        <UpdateAvailableToast version={updateVersion() ?? ""} install={installUpdate} language={language} />
+        <UpdateAvailableToast
+          version={updateVersion() ?? ""}
+          install={installUpdate}
+          decline={() => void platform.updater?.decline?.()}
+          language={language}
+        />
       </Show>
       <div class="flex-1 min-h-0 min-w-0 flex">
         <div class="flex-1 min-h-0 relative">
@@ -2426,6 +2430,7 @@ export default function LegacyLayout(props: ParentProps) {
 function UpdateAvailableToast(props: {
   version: string
   install: () => void
+  decline?: () => void
   language: ReturnType<typeof useLanguage>
 }) {
   let toastId: number | undefined
@@ -2443,7 +2448,10 @@ function UpdateAvailableToast(props: {
         },
         {
           label: props.language.t("toast.update.action.notYet"),
-          onClick: "dismiss",
+          onClick: () => {
+            props.decline?.()
+            if (toastId !== undefined) dismissToast(toastId)
+          },
         },
       ],
     })
