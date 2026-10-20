@@ -44,6 +44,7 @@ export interface AccountState {
     spendUsd: number | null
     fraction: number | null
     resetsAt: string | null
+    tokensUsed?: number | null
     thresholds: number[]
     upgradeUrl: string | null
   }
@@ -565,7 +566,7 @@ export const SettingsAccountV2: Component = () => {
 
           <div class="settings-v2-section" ref={plansSection} data-action="account-plans">
             <h3 class="settings-v2-section-title">Plans</h3>
-            <PlanCards fetchJson={fetchJson} me={() => me()} />
+            <PlanCards fetchJson={fetchJson} me={() => me()} layout="rows" />
           </div>
         </Show>
       </div>

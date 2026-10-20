@@ -4,6 +4,10 @@ import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { usePlatform } from "@/context/platform"
 import { planSummary, type SummaryInput } from "./plan-summary"
+import { IRIS_COLORS, PlanMark } from "./plan-mark"
+
+const GRADIENT = `linear-gradient(90deg, ${IRIS_COLORS.fuchsia}, ${IRIS_COLORS.blue}, ${IRIS_COLORS.cyan})`
+const BUTTON_GRADIENT = `linear-gradient(90deg, ${IRIS_COLORS.violet}, #2563eb)`
 
 export interface PlanOffer {
   slug: string
@@ -37,7 +41,10 @@ export type CheckoutAnswer = { ok: boolean; url?: string; reason?: string }
  * the dialog can show — a network error included — because the bug this replaced was a button
  * that did nothing: the customer clicked it again and again and never learned why.
  */
-export async function requestCheckout(fetchJson: FetchJson, slug: string): Promise<{ url: string } | { error: string }> {
+export async function requestCheckout(
+  fetchJson: FetchJson,
+  slug: string,
+): Promise<{ url: string } | { error: string }> {
   try {
     const r = await fetchJson<CheckoutAnswer>("/iris/checkout", {
       method: "POST",
@@ -53,7 +60,8 @@ export async function requestCheckout(fetchJson: FetchJson, slug: string): Promi
 
 /** The plan button's words. The weekly allowance is the trial, so a plan is chosen, not trialled. */
 export function planButtonLabel(plan: Pick<PlanOffer, "slug" | "title">, opening: string | null): string {
-  return opening === plan.slug ? "Opening checkout…" : `Choose ${plan.title}`
+  // "Get started", not a trial or "Choose X" (Alex, 2026-10-20): checkout decides the terms.
+  return opening === plan.slug ? "Opening checkout…" : "Get started"
 }
 
 /**
@@ -74,7 +82,10 @@ export function PlanCards(props: {
    * themselves, so the dialog can say which plan you are on and what is left (#189988).
    */
   me?: () => SummaryInput | undefined
+  /** "rows" for a narrow panel (Settings): one full-width row per plan instead of squeezed columns. */
+  layout?: "columns" | "rows"
 }) {
+  const rows = () => props.layout === "rows"
   const platform = usePlatform()
   const [plans] = createResource(() =>
     props.fetchJson<PlansState>("/iris/plans").catch((): PlansState => ({ measured: false, plans: [] })),
@@ -107,25 +118,66 @@ export function PlanCards(props: {
       <Show when={summary().plan || summary().allowance || summary().trial}>
         <div
           data-slot="iris-plan-summary"
-          class="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-v2-border-border-base px-4 py-3 text-[13px]"
+          data-over={summary().over ? "true" : undefined}
+          class="flex flex-col gap-2 rounded-lg border px-4 py-3 text-[13px]"
+          classList={{
+            "border-v2-border-border-base": !summary().over,
+            "border-v2-state-fg-warning bg-v2-state-bg-warning": summary().over,
+          }}
         >
-          <Show when={summary().plan}>
-            <span>
-              <span class="text-v2-text-text-weak">Current plan </span>
-              <b class="text-v2-text-text-strong" data-slot="iris-plan-summary-plan">
-                {summary().plan}
-              </b>
-            </span>
-          </Show>
-          <Show when={summary().allowance}>
-            <span class="tabular-nums text-v2-text-text-base" data-slot="iris-plan-summary-allowance">
-              {summary().allowance}
-            </span>
-          </Show>
-          <Show when={summary().trial}>
-            <span class="text-v2-icon-icon-accent font-medium" data-slot="iris-plan-summary-trial">
-              {summary().trial}
-            </span>
+          <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
+            <Show when={summary().plan}>
+              <span>
+                <span class="text-v2-text-text-weak">Current plan </span>
+                <b class="text-v2-text-text-strong" data-slot="iris-plan-summary-plan">
+                  {summary().plan}
+                </b>
+              </span>
+            </Show>
+            <Show when={summary().allowance}>
+              <span
+                class="tabular-nums"
+                classList={{
+                  "text-v2-state-fg-warning font-medium": summary().over,
+                  "text-v2-text-text-base": !summary().over,
+                }}
+                data-slot="iris-plan-summary-allowance"
+              >
+                {summary().allowance}
+              </span>
+            </Show>
+            <Show when={summary().trial}>
+              <span class="text-v2-icon-icon-accent font-medium" data-slot="iris-plan-summary-trial">
+                {summary().trial}
+              </span>
+            </Show>
+            <Show when={summary().percent !== null}>
+              <span class="ml-auto font-mono text-[12px] tabular-nums text-v2-text-text-weak">
+                {summary().percent}%
+              </span>
+            </Show>
+          </div>
+          <Show when={summary().percent !== null}>
+            <div
+              role="meter"
+              aria-label="Allowance used this week"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={summary().percent ?? 0}
+              data-slot="iris-plan-summary-meter"
+              class="h-1.5 w-full overflow-hidden rounded-full bg-v2-border-border-base"
+            >
+              <div
+                class="h-full rounded-full transition-[width] duration-500"
+                style={{
+                  width: `${summary().percent}%`,
+                  "background-image":
+                    (summary().percent ?? 0) >= 90
+                      ? "linear-gradient(90deg, #f59e0b, #facc15)"
+                      : `linear-gradient(90deg, ${IRIS_COLORS.fuchsia}, ${IRIS_COLORS.blue}, ${IRIS_COLORS.cyan})`,
+                }}
+              />
+            </div>
           </Show>
         </div>
       </Show>
@@ -136,51 +188,99 @@ export function PlanCards(props: {
             <div class="text-v2-text-text-weak py-6 text-center">Couldn't load plans. Close this and try again.</div>
           }
         >
-          <div class="grid gap-3" style={{ "grid-template-columns": "repeat(auto-fit, minmax(200px, 1fr))" }}>
+          <div
+            class="grid gap-3"
+            style={{ "grid-template-columns": rows() ? "1fr" : "repeat(auto-fit, minmax(220px, 1fr))" }}
+          >
             <For each={plans()!.plans}>
-              {(p) => (
-                <div
-                  data-slot="iris-upgrade-plan"
-                  class="flex flex-col gap-3 rounded-lg border p-4"
-                  classList={{
-                    "border-v2-icon-icon-accent": p.popular,
-                    "border-v2-border-border-base": !p.popular,
-                  }}
-                >
-                  <div class="flex items-center justify-between gap-2">
-                    <span class="text-v2-text-text-strong text-[15px] font-semibold">{p.title}</span>
-                    <Show when={p.popular}>
-                      <span class="bg-v2-icon-icon-accent/20 text-v2-icon-icon-accent rounded-full px-2 py-0.5 text-[11px] font-medium">
-                        Most popular
-                      </span>
-                    </Show>
-                  </div>
-                  <div class="text-v2-text-text-strong font-mono text-[22px] font-semibold tabular-nums">
-                    {formatPrice(p.price, p.period)}
-                  </div>
-                  <Show when={p.subtitle}>
-                    <div class="text-v2-text-text-weak text-[12px]">{p.subtitle}</div>
-                  </Show>
-                  <ul class="text-v2-text-text-base flex flex-1 flex-col gap-1.5 text-[12px]">
+              {(p) => {
+                const button = (
+                  <button
+                    type="button"
+                    data-slot="iris-upgrade-choose"
+                    class="h-10 rounded-lg px-4 text-[14px] font-semibold transition-opacity hover:opacity-90 disabled:opacity-60"
+                    classList={{
+                      "text-white": !!p.popular,
+                      "border border-v2-border-border-base text-v2-text-text-strong hover:bg-v2-background-bg-base":
+                        !p.popular,
+                    }}
+                    style={p.popular ? { background: BUTTON_GRADIENT } : undefined}
+                    disabled={opening() !== null}
+                    onClick={() => void choose(p.slug)}
+                  >
+                    {planButtonLabel(p, opening())}
+                  </button>
+                )
+                const features = (
+                  <ul class="text-v2-text-text-base flex flex-1 flex-col gap-2 text-[12.5px]">
                     <For each={p.features}>
-                      {(f) => (
-                        <li class="flex gap-1.5">
-                          <span aria-hidden="true">✓</span>
+                      {(f, i) => (
+                        <li class="flex gap-2">
+                          <span
+                            aria-hidden="true"
+                            class="mt-[5px] inline-block h-2 w-2 shrink-0 rounded-full"
+                            style={{ background: [IRIS_COLORS.fuchsia, IRIS_COLORS.blue, IRIS_COLORS.cyan][i() % 3] }}
+                          />
                           {f}
                         </li>
                       )}
                     </For>
                   </ul>
-                  <Button
-                    variant={p.popular ? "primary" : "secondary"}
-                    size="large"
-                    disabled={opening() !== null}
-                    onClick={() => void choose(p.slug)}
+                )
+                return (
+                  <div
+                    data-slot="iris-upgrade-plan"
+                    data-layout={rows() ? "rows" : "columns"}
+                    class="rounded-xl border p-5"
+                    classList={{ "flex flex-col gap-3": !rows(), "grid gap-x-8 gap-y-3": rows() }}
+                    style={{
+                      "grid-template-columns": rows() ? "minmax(200px, 240px) 1fr" : undefined,
+                      "border-color": p.popular
+                        ? IRIS_COLORS.blue
+                        : "var(--v2-border-border-base, rgba(127,127,127,.25))",
+                      "box-shadow": p.popular ? `0 0 0 1px ${IRIS_COLORS.blue}33` : undefined,
+                    }}
                   >
-                    {planButtonLabel(p, opening())}
-                  </Button>
-                </div>
-              )}
+                    <div class="flex flex-col gap-3">
+                      <div class="flex items-center gap-2.5">
+                        <PlanMark slug={p.slug} size={32} />
+                        <span class="font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-v2-text-text-strong">
+                          {p.title}
+                        </span>
+                        <Show when={p.popular}>
+                          <span
+                            class="whitespace-nowrap rounded-full px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wider text-white"
+                            style={{ background: BUTTON_GRADIENT }}
+                          >
+                            Most popular
+                          </span>
+                        </Show>
+                      </div>
+                      <div
+                        class="text-[36px] font-black leading-none tracking-tight tabular-nums"
+                        style={{
+                          // background-IMAGE, not the shorthand: the shorthand resets background-clip,
+                          // which paints the gradient as a solid bar behind the text.
+                          "background-image": GRADIENT,
+                          "-webkit-background-clip": "text",
+                          "background-clip": "text",
+                          "-webkit-text-fill-color": "transparent",
+                          color: "transparent",
+                          width: "fit-content",
+                        }}
+                      >
+                        {formatPrice(p.price, p.period)}
+                      </div>
+                      <Show when={p.subtitle}>
+                        <div class="text-v2-text-text-weak text-[12px]">{p.subtitle}</div>
+                      </Show>
+                      <Show when={rows()}>{button}</Show>
+                    </div>
+                    {features}
+                    <Show when={!rows()}>{button}</Show>
+                  </div>
+                )
+              }}
             </For>
           </div>
         </Show>
@@ -205,7 +305,7 @@ export function DialogUpgrade(props: { fetchJson: FetchJson }) {
   return (
     <Dialog
       title="Upgrade IRIS"
-      description="Every plan includes all twelve products and every model. Pick a plan to pay securely with Stripe."
+      description="Pick a plan to pay securely with Stripe."
       size="x-large"
     >
       <div class="px-6 pb-5">
