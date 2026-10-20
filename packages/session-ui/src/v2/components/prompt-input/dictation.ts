@@ -57,7 +57,7 @@ const RETRY_BACKOFF_MS = [5_000, 20_000, 60_000, 180_000]
 
 export type DictationPhase = "idle" | "recording" | "transcribing"
 /** A recording the server saved because every engine failed — retryable without re-recording. */
-export type HeldRecording = { id: string; seconds: number }
+export type HeldRecording = { id: string; seconds: number; bloqId?: string }
 type CaptureMode = "webview" | "sidecar"
 
 /** Remembered across dictations; null until the first probe has run. */
@@ -195,6 +195,13 @@ export interface DictationOptions {
    * on screen saying a recording was waiting. Held recordings stay saved for a surface that shows them.
    */
   autoRetry?: boolean
+  /**
+   * The board this surface records for — an Atlas card's (#190041 ADR-01). Every upload carries it,
+   * so the platform applies THAT board's cloud/PHI policy, not the person's default board's. Held
+   * takes remember it, and each surface lists only the held takes recorded for its own board: a
+   * card's Retry must never insert a chat take, nor the composer a card's meeting.
+   */
+  bloqId?: () => string | undefined
 }
 
 /** Live preview state for the current take. */
@@ -287,6 +294,12 @@ export function createDictation(opts: DictationOptions) {
   let openError: unknown
 
   const base = () => opts.url().replace(/\/$/, "")
+  const board = () => opts.bloqId?.()?.trim() || undefined
+  /** `path` with this surface's board appended, when it has one. */
+  const withBoard = (path: string) => {
+    const id = board()
+    return id ? `${path}${path.includes("?") ? "&" : "?"}bloq_id=${encodeURIComponent(id)}` : path
+  }
 
   // Live preview for the current take. See DictationOptions.onPartial.
   const [live, setLive] = createSignal<DictationLive>("off")
@@ -711,7 +724,7 @@ export function createDictation(opts: DictationOptions) {
 
   async function stopSidecar() {
     try {
-      const res = await call("/dictate/stop", { method: "POST" })
+      const res = await call(withBoard("/dictate/stop"), { method: "POST" })
       const body = await res.json().catch(() => null)
       deliver(res.ok, body, retryAfterMs(res))
     } catch (e) {
@@ -741,7 +754,7 @@ export function createDictation(opts: DictationOptions) {
     const blob = capturedWav(frames, rate)
 
     try {
-      const res = await call("/transcribe?filename=dictation.wav", {
+      const res = await call(withBoard("/transcribe?filename=dictation.wav"), {
         method: "POST",
         headers: { "Content-Type": "audio/wav" },
         body: blob,
@@ -778,7 +791,7 @@ export function createDictation(opts: DictationOptions) {
     // A 413 (over the platform's size limit) carries no `held`: nothing is kept, nothing retried,
     // and the server's message — which names the limit — is shown as is, below.
     if (!ok && typeof body?.held?.id === "string") {
-      setHeld((list) => [...list, { id: body.held.id, seconds: Number(body.held.seconds) || 0 }])
+      setHeld((list) => [...list, { id: body.held.id, seconds: Number(body.held.seconds) || 0, bloqId: board() }])
       scheduleRetry(wait)
       return opts.onError?.(`${body.error || "Transcription failed."} Your recording is saved.`)
     }
@@ -896,8 +909,12 @@ export function createDictation(opts: DictationOptions) {
     .then((body) => {
       if (disposed || !Array.isArray(body?.held)) return
       const recovered = body.held
-        .filter((h: { id?: unknown }) => typeof h?.id === "string")
-        .map((h: { id: string; seconds?: number }) => ({ id: h.id, seconds: Number(h.seconds) || 0 }))
+        .filter((h: { id?: unknown; bloqId?: unknown }) => typeof h?.id === "string" && (h.bloqId || undefined) === board())
+        .map((h: { id: string; seconds?: number; bloqId?: string }) => ({
+          id: h.id,
+          seconds: Number(h.seconds) || 0,
+          bloqId: h.bloqId,
+        }))
       if (recovered.length)
         setHeld((list) => [...recovered.filter((r: HeldRecording) => !list.some((h) => h.id === r.id)), ...list])
     })
@@ -983,9 +1000,9 @@ export function createDictation(opts: DictationOptions) {
     // Leaving the sidecar recording after the prompt unmounts is a hot microphone nobody can
     // see or stop: it is always ended here. Fire-and-forget: unmount must not wait on the network.
     if (recording && mode === "sidecar")
-      void call(keep ? "/dictate/hold" : "/dictate/cancel", { method: "POST" }).catch(() => {})
+      void call(keep ? withBoard("/dictate/hold") : "/dictate/cancel", { method: "POST" }).catch(() => {})
     if (wav)
-      void call("/transcribe?hold=1&filename=dictation.wav", {
+      void call(withBoard("/transcribe?hold=1&filename=dictation.wav"), {
         method: "POST",
         headers: { "Content-Type": "audio/wav" },
         body: wav,

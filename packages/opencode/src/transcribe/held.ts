@@ -24,14 +24,38 @@ export interface Held {
   /** Duration, assuming the 16 kHz mono 16-bit WAV both capture paths produce. */
   seconds: number
   createdAt: number
+  /** The board it was recorded under, when it was recorded for one (an Atlas card). */
+  bloqId?: string
 }
 
-export function hold(audio: Uint8Array, dir = defaultDir()): Held {
+/** What a held take must keep besides its audio. */
+export interface HeldMeta {
+  /**
+   * The board it was recorded under (#190041 ADR-01). A retry uploads under THIS board, never the
+   * person's default: the platform applies the named board's cloud/PHI policy, so a retry that
+   * drifted to another board would be judged by the wrong policy.
+   */
+  bloqId?: string
+}
+
+export function hold(audio: Uint8Array, dir = defaultDir(), meta: HeldMeta = {}): Held {
   mkdirSync(dir, { recursive: true, mode: 0o700 })
   chmodSync(dir, 0o700)
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8).padEnd(6, "0")}`
   writeFileSync(join(dir, `${id}.wav`), audio, { mode: 0o600 })
-  return describe(id, audio.byteLength, Date.now())
+  if (meta.bloqId) writeFileSync(join(dir, `${id}.json`), JSON.stringify(meta), { mode: 0o600 })
+  return { ...describe(id, audio.byteLength, Date.now()), ...(meta.bloqId ? { bloqId: meta.bloqId } : {}) }
+}
+
+/** The board a held take was recorded under, or {} for one taken without a board. */
+export function readHeldMeta(id: string, dir = defaultDir()): HeldMeta {
+  if (!ID.test(id)) return {}
+  try {
+    const meta = JSON.parse(readFileSync(join(dir, `${id}.json`), "utf8")) as HeldMeta
+    return typeof meta.bloqId === "string" && /^[0-9]+$/.test(meta.bloqId) ? { bloqId: meta.bloqId } : {}
+  } catch {
+    return {}
+  }
 }
 
 /** Read a held recording, or null if the id is malformed or the file is gone. */
@@ -47,6 +71,7 @@ export function readHeld(id: string, dir = defaultDir()): Uint8Array | null {
 export function release(id: string, dir = defaultDir()) {
   if (!ID.test(id)) return
   rmSync(join(dir, `${id}.wav`), { force: true })
+  rmSync(join(dir, `${id}.json`), { force: true })
 }
 
 /** Every held recording, oldest first. Prunes anything past MAX_AGE_MS on the way. */
@@ -67,7 +92,7 @@ export function listHeld(dir = defaultDir(), now = Date.now()): Held[] {
         release(id, dir)
         return []
       }
-      return [describe(id, stat.size, stat.mtimeMs)]
+      return [{ ...describe(id, stat.size, stat.mtimeMs), ...readHeldMeta(id, dir) }]
     })
     .sort((a, b) => a.createdAt - b.createdAt)
 }
