@@ -29,4 +29,6 @@ export type UpdaterPlatform = {
    */
   mode?: Accessor<UpdateMode>
   setMode?: (mode: UpdateMode) => Promise<void>
+  /** "Not yet" on the update toast: stop offering this version (#190091). */
+  decline?: () => Promise<void>
 }
