@@ -12,6 +12,7 @@ import { opencodeGlobal } from "./opencode-global"
 import { createMenu } from "./menu"
 import { check, Update } from "@tauri-apps/plugin-updater"
 import { invoke } from "@tauri-apps/api/core"
+import { listen } from "@tauri-apps/api/event"
 import { getCurrentWindow } from "@tauri-apps/api/window"
 import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification"
 import { relaunch } from "@tauri-apps/plugin-process"
@@ -174,6 +175,31 @@ const platform: Platform = {
   restart: async () => {
     await invoke("kill_sidecar").catch(() => undefined)
     await relaunch()
+  },
+
+  // iris:// links (#190233). The shell queues every link (one can arrive before this window
+  // exists) and emits `iris-deep-link`; draining on subscribe AND on each event is one path
+  // for a cold start and a running app, so each link is handled exactly once.
+  onDeepLink: (handler) => {
+    let stopped = false
+    const drain = () =>
+      invoke<string[]>("take_deep_links")
+        .then((urls) => {
+          if (!stopped) urls.forEach(handler)
+        })
+        .catch(() => undefined)
+    let unlisten: (() => void) | undefined
+    void listen("iris-deep-link", () => void drain())
+      .then((fn) => {
+        if (stopped) fn()
+        else unlisten = fn
+      })
+      .catch(() => undefined)
+    void drain()
+    return () => {
+      stopped = true
+      unlisten?.()
+    }
   },
 
   openSignIn: () => {
