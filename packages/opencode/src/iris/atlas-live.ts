@@ -142,9 +142,13 @@ async function check(bloqId: number, w: Watcher) {
  * token every other call uses, subscribe, answer pings. No dependency for ~40 lines. Any
  * failure leaves the poll running and says so once.
  */
-function connectPusher(bloqId: number, onEvent: () => void, onStatus: (s: "connected" | "refused") => void) {
+function connectPusher(
+  channel: string,
+  onEvent: (event: string, data: unknown) => void,
+  onStatus: (s: "connected" | "refused") => void,
+  onClose?: () => void,
+) {
   if (typeof WebSocket === "undefined") return undefined
-  const channel = `private-bloq.${bloqId}`
   let closed = false
   let ws: WebSocket
   try {
@@ -186,7 +190,10 @@ function connectPusher(bloqId: number, onEvent: () => void, onStatus: (s: "conne
       onStatus("refused")
       return ws.close()
     }
-    if (e.channel === channel && e.event && !e.event.startsWith("pusher")) onEvent()
+    if (e.channel === channel && e.event && !e.event.startsWith("pusher")) onEvent(e.event, e.data)
+  }
+  ws.onclose = () => {
+    if (!closed) onClose?.()
   }
   return {
     close() {
@@ -209,7 +216,7 @@ export function watchAtlas(bloqId: number, listener: Listener): () => void {
     void check(bloqId, ww)
     if (resolveToken()) {
       ww.pusher = connectPusher(
-        bloqId,
+        `private-bloq.${bloqId}`,
         () => void check(bloqId, ww),
         (s) => emit(ww, { type: "status", pusher: s }),
       )
@@ -230,3 +237,102 @@ export function watchAtlas(bloqId: number, listener: Listener): () => void {
 
 /** For tests. */
 export const _watcherCount = () => watchers.size
+
+// ─── A person's own channel (#189799) ───────────────────────────────────────
+
+/**
+ * Something on an Atlas card that is about YOU — assigned to you, mentioning you, due tomorrow
+ * on your card. fl-api sends `card.notification` on private-user.{you}; on a board marked
+ * contains_phi it carries no title and no excerpt, so neither can reach the OS notification.
+ */
+export interface CardNotice {
+  kind: "assign" | "mention" | "due"
+  text: string
+  excerpt?: string
+  bloqId: number
+  itemId: number
+  title?: string
+  by?: string
+}
+
+/** Pusher's `data` is a JSON string of {notification: {...}}. Anything else is not a notice. */
+export function readCardNotice(data: unknown): CardNotice | undefined {
+  let d: any = data
+  if (typeof d === "string") {
+    try {
+      d = JSON.parse(d)
+    } catch {
+      return undefined
+    }
+  }
+  const n = d?.notification
+  if (!n || !["assign", "mention", "due"].includes(n.kind) || typeof n.text !== "string") return undefined
+  const bloqId = Number(n.bloq_id)
+  const itemId = Number(n.item_id)
+  if (!Number.isFinite(bloqId) || !Number.isFinite(itemId)) return undefined
+  return {
+    kind: n.kind,
+    text: n.text,
+    bloqId,
+    itemId,
+    ...(typeof n.excerpt === "string" && n.excerpt ? { excerpt: n.excerpt } : {}),
+    ...(typeof n.title === "string" && n.title ? { title: n.title } : {}),
+    ...(typeof n.by === "string" && n.by ? { by: n.by } : {}),
+  }
+}
+
+export type MeLiveEvent = { type: "notice"; notice: CardNotice } | { type: "status"; pusher: "connected" | "refused" | "off" }
+
+const meListeners = new Set<(e: MeLiveEvent) => void>()
+let meConn: { close(): void } | undefined
+let meRetry: ReturnType<typeof setTimeout> | undefined
+let meStatus: "connected" | "refused" | "off" = "off"
+
+function meEmit(e: MeLiveEvent) {
+  if (e.type === "status") meStatus = e.pusher
+  for (const l of meListeners) {
+    try {
+      l(e)
+    } catch {}
+  }
+}
+
+async function meConnect() {
+  if (meConn || meListeners.size === 0) return
+  const userId = resolveToken() ? await resolveUserId() : undefined
+  if (!userId || meListeners.size === 0) {
+    meEmit({ type: "status", pusher: "off" })
+    meRetry = setTimeout(() => void meConnect(), 60_000)
+    return
+  }
+  meConn = connectPusher(
+    `private-user.${userId}`,
+    (event, data) => {
+      if (event !== "card.notification") return
+      const notice = readCardNotice(data)
+      if (notice) meEmit({ type: "notice", notice })
+    },
+    (s) => meEmit({ type: "status", pusher: s }),
+    // A dropped socket (sleep, network change) comes back by itself; a refusal waits longer.
+    () => {
+      meConn = undefined
+      if (meListeners.size === 0) return
+      meRetry = setTimeout(() => void meConnect(), meStatus === "refused" ? 60_000 : 5_000)
+    },
+  )
+}
+
+/** Hear about your own cards. One connection, shared, closed when the last listener leaves. */
+export function watchMe(listener: (e: MeLiveEvent) => void): () => void {
+  meListeners.add(listener)
+  void meConnect()
+  return () => {
+    meListeners.delete(listener)
+    if (meListeners.size > 0) return
+    if (meRetry) clearTimeout(meRetry)
+    meRetry = undefined
+    const c = meConn
+    meConn = undefined
+    c?.close()
+  }
+}

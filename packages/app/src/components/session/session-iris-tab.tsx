@@ -97,6 +97,8 @@ import type { CardSchema } from "./iris-card-editor"
 import { liveLabel, readSse, type LiveState } from "./iris-atlas-live"
 import { CardBadges, type CardFace } from "./iris-card-badges"
 import { IrisBoardMembers, readMembers } from "./iris-board-members"
+import { IrisNotifySettings } from "./iris-notify-settings"
+import { dragHasFiles, uploadCardFiles } from "./iris-card-files"
 import { IrisDelegateRail } from "./iris-delegate-rail"
 import { slideCards } from "./iris-board-motion"
 import { useLanguage } from "@/context/language"
@@ -1857,6 +1859,36 @@ export function SessionIrisTab() {
     settledFaces.add(itemId)
     liveRefresh(false)
   }
+  /*
+   * FILES ONTO A CARD (#189797): drop them on its face in List or Board view. The card says
+   * "Uploading 2 of 3…" while they go, and the board note says why if any did not.
+   */
+  const [fileDrop, setFileDrop] = createSignal<{ itemId: number; text: string } | null>(null)
+  const [fileOver, setFileOver] = createSignal<number | null>(null)
+  async function dropFiles(itemId: number, files: File[]) {
+    if (!files.length || fileDrop()) return
+    setFileOver(null)
+    setMoveNote(null)
+    setFileDrop({ itemId, text: `Uploading ${files.length === 1 ? files[0].name : `${files.length} files`}…` })
+    const b = activeBloq()
+    const out = await uploadCardFiles(doFetch, itemId, b == null ? undefined : Number(b), files, (done, total) =>
+      setFileDrop({ itemId, text: total > 1 ? `Uploading ${Math.min(done + 1, total)} of ${total}…` : "Uploading…" }),
+    )
+    setFileDrop(null)
+    if (out.reason) setMoveNote(`${out.ok} of ${out.total} uploaded — ${out.reason}`)
+    if (out.ok) liveRefresh(false)
+  }
+  /** The drag handlers a card face needs for files; card-to-card drags pass straight through. */
+  const fileDropHandlers = (itemId: number) => ({
+    onDragEnter: (e: DragEvent) => {
+      if (dragging() !== null || !dragHasFiles(e.dataTransfer)) return
+      e.preventDefault()
+      setFileOver(itemId)
+    },
+    onDragLeave: (e: DragEvent) => {
+      if (fileOver() === itemId && !(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) setFileOver(null)
+    },
+  })
   function atlasKeys(e: KeyboardEvent) {
     if (pane() !== "atlas" || view() !== "rows" || openRow()) return
     if (e.metaKey || e.ctrlKey || e.altKey) return
@@ -2746,6 +2778,11 @@ export function SessionIrisTab() {
       const known = SURFACES.some((x) => x.id === req.surface)
       if (known) chooseSurface(req.surface as SurfaceId)
       if (req.sub) chooseSub(req.sub, known ? (req.surface as SurfaceId) : surface())
+      // A notification about a card, clicked: the board first, then the card itself (#189799).
+      if (req.itemId && req.itemId > 0) {
+        const id = req.itemId
+        queueMicrotask(() => openCard(id))
+      }
     })
     clearIrisNav()
   })
@@ -3095,6 +3132,24 @@ export function SessionIrisTab() {
               </button>
             )
           })()}
+          <button
+            type="button"
+            class="iris-atlas-bell"
+            title="Notifications — what Atlas tells you about your cards"
+            aria-label="Notification settings"
+            onClick={() => dialog.show(() => <IrisNotifySettings doFetch={doFetch} />)}
+          >
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+              <path
+                d="M8 1.5a4 4 0 0 0-4 4v2.3L2.8 10a.6.6 0 0 0 .5.9h9.4a.6.6 0 0 0 .5-.9L12 7.8V5.5a4 4 0 0 0-4-4ZM6.3 12.5a1.8 1.8 0 0 0 3.4 0"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.3"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
         </div>
       </Show>
 
@@ -3921,7 +3976,9 @@ export function SessionIrisTab() {
                                   classList={{
                                     "iris-board__card--dragging": dragging() === item.id && !lifted(),
                                     "iris-board__card--source": dragging() === item.id && lifted(),
+                                    "iris-card--fileover": fileOver() === item.id,
                                   }}
+                                  {...fileDropHandlers(item.id)}
                                   draggable={canDrag() || delegateOpen()}
                                   title={canDrag() ? "Open this card, or drag it to move it" : "Open this card"}
                                   onClick={() => openCard(item.id)}
@@ -3963,6 +4020,12 @@ export function SessionIrisTab() {
                                     if (dragging() !== null) endDrag()
                                   }}
                                   onDragOver={(e) => {
+                                    if (dragging() === null && dragHasFiles(e.dataTransfer)) {
+                                      e.preventDefault()
+                                      e.stopPropagation()
+                                      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy"
+                                      return
+                                    }
                                     if (dragging() === null || !canDrag()) return
                                     e.preventDefault()
                                     e.stopPropagation()
@@ -3974,6 +4037,12 @@ export function SessionIrisTab() {
                                     })
                                   }}
                                   onDrop={(e) => {
+                                    if (dragging() === null && dragHasFiles(e.dataTransfer)) {
+                                      e.preventDefault()
+                                      e.stopPropagation()
+                                      void dropFiles(item.id, Array.from(e.dataTransfer?.files ?? []))
+                                      return
+                                    }
                                     if (!canDrag()) return
                                     e.preventDefault()
                                     e.stopPropagation()
@@ -3985,8 +4054,14 @@ export function SessionIrisTab() {
                                     })
                                   }}
                                 >
+                                  <Show when={item.cover}>
+                                    {(src) => <img class="iris-board__cover" src={src()} alt="" loading="lazy" draggable={false} />}
+                                  </Show>
                                   <span class="text-12-regular text-text-base">{item.title}</span>
                                   <CardBadges item={item} now={now()} />
+                                  <Show when={fileDrop()?.itemId === item.id}>
+                                    <span class="iris-card__uploading" role="status">{fileDrop()!.text}</span>
+                                  </Show>
                                   <span class="iris-board__meta">
                                     <Show when={isDone(item.status)}>
                                       <span>✓ done</span>
@@ -4119,7 +4194,19 @@ export function SessionIrisTab() {
                                 data-list-id={list.id}
                                 aria-keyshortcuts="Enter x s p d l c n"
                                 class="iris-atlas-row"
+                                {...fileDropHandlers(item.id)}
+                                onDragOver={(e) => {
+                                  if (dragging() !== null || !dragHasFiles(e.dataTransfer)) return
+                                  e.preventDefault()
+                                  if (e.dataTransfer) e.dataTransfer.dropEffect = "copy"
+                                }}
+                                onDrop={(e) => {
+                                  if (dragging() !== null || !dragHasFiles(e.dataTransfer)) return
+                                  e.preventDefault()
+                                  void dropFiles(item.id, Array.from(e.dataTransfer?.files ?? []))
+                                }}
                                 classList={{
+                                  "iris-card--fileover": fileOver() === item.id,
                                   "iris-atlas-row--done": isDone(item.status),
                                   "iris-atlas-row--live": liveIds().has(item.id),
                                   "iris-atlas-row--new": awayIds().has(item.id) && !liveIds().has(item.id),

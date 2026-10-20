@@ -276,6 +276,8 @@ export interface AtlasItem {
   /** From fl-api's `?summary=1` (#189793); absent on an fl-api that predates it. */
   tasks?: { open: number; done: number; total: number }
   attachments?: number
+  /** First image attachment's URL, for the Board face (#189797). Never set on a PHI board. */
+  cover?: string
   assignees?: AtlasAssignee[]
 }
 export interface AtlasAssignee {
@@ -341,6 +343,7 @@ export function cardFace(i: any): Partial<AtlasItem> {
     if (s.tasks && typeof s.tasks.total === "number")
       out.tasks = { open: Number(s.tasks.open) || 0, done: Number(s.tasks.done) || 0, total: Number(s.tasks.total) || 0 }
     if (typeof s.attachments === "number") out.attachments = s.attachments
+    if (typeof s.cover === "string" && /^https?:\/\//.test(s.cover)) out.cover = s.cover
     if (Array.isArray(s.assignees))
       out.assignees = s.assignees
         .filter((a: any) => a && (a.type === "user" || a.type === "agent"))
@@ -3386,6 +3389,74 @@ export async function fetchActivity(itemId: number): Promise<PlatformResult<{ ac
     return { measured: true, data: { activity: readActivity(j?.data?.activity) } }
   } catch (e) {
     return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { activity: [] } }
+  }
+}
+
+/**
+ * A comment on a card (#189799). `mentions` are the board people picked in the composer; fl-api
+ * also reads "@email" and "@user_name" in the text, and tells only people on the board.
+ */
+export async function addComment(
+  itemId: number,
+  input: { body: string; mentions?: number[] },
+): Promise<Ok & { mentioned?: number[] }> {
+  const userId = await resolveUserId()
+  if (!userId) return { ok: false, reason: notSignedIn() }
+  const body = input.body.trim()
+  if (!body) return { ok: false, reason: "a comment needs words" }
+  try {
+    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/comments`, FL_API, {
+      method: "POST",
+      body: JSON.stringify({ body, mentions: input.mentions ?? [] }),
+    })
+    const j = (await res.json().catch(() => ({}))) as any
+    if (res.status === 404 && !j?.message) return { ok: false, reason: "this IRIS server does not take comments yet" }
+    if (!res.ok) return { ok: false, reason: apiFailure(j, res.status) }
+    return { ok: true, mentioned: Array.isArray(j?.data?.mentioned) ? j.data.mentioned.map(Number) : [] }
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+/** What you hear about from Atlas (#189799). Everything is on until you turn it off. */
+export interface NotifySettings {
+  emailAssign: boolean
+  emailMention: boolean
+  emailDue: boolean
+  push: boolean
+}
+const NOTIFY_WIRE: Record<keyof NotifySettings, string> = {
+  emailAssign: "email_assign",
+  emailMention: "email_mention",
+  emailDue: "email_due",
+  push: "push",
+}
+export function readNotifySettings(raw: any): NotifySettings {
+  const on = (k: string) => raw?.[k] !== false
+  return { emailAssign: on("email_assign"), emailMention: on("email_mention"), emailDue: on("email_due"), push: on("push") }
+}
+
+export async function notifySettings(
+  change?: Partial<NotifySettings>,
+): Promise<PlatformResult<{ settings: NotifySettings }>> {
+  const fallback = { settings: readNotifySettings({}) }
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: notSignedIn(), data: fallback }
+  try {
+    const body: Record<string, boolean> = {}
+    for (const [k, v] of Object.entries(change ?? {})) if (typeof v === "boolean") body[NOTIFY_WIRE[k as keyof NotifySettings]] = v
+    const res = await irisFetch(
+      `/api/v1/user/${userId}/bloqs/notification-settings`,
+      FL_API,
+      change ? { method: "PUT", body: JSON.stringify(body) } : undefined,
+    )
+    const j = (await res.json().catch(() => ({}))) as any
+    if (res.status === 404 && !j?.data)
+      return { measured: false, reason: "this IRIS server does not have notification settings yet", data: fallback }
+    if (!res.ok) return { measured: false, reason: apiFailure(j, res.status), data: fallback }
+    return { measured: true, data: { settings: readNotifySettings(j?.data?.settings) } }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: fallback }
   }
 }
 

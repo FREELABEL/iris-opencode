@@ -1,4 +1,5 @@
 import { createEffect, createMemo, createResource, createSignal, For, Match, onCleanup, onMount, Show, Switch, type JSX } from "solid-js"
+import { pastedFiles } from "./iris-card-files"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { IconButton } from "@opencode-ai/ui/icon-button"
@@ -659,7 +660,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
   )
   const [fileNote, setFileNote] = createSignal<{ ok: boolean; text: string } | null>(null)
   const [uploading, setUploading] = createSignal(false)
-  async function upload(list: FileList | null) {
+  async function upload(list: FileList | File[] | null) {
     const d = doc.latest
     if (!d || !list || list.length === 0 || uploading()) return
     setUploading(true)
@@ -707,6 +708,55 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
         { activity: [] },
       ),
   )
+
+  // A comment, and the board people it @mentions (#189799). Picking someone from the list writes
+  // "@their-email" — the one handle fl-api matches without ambiguity — and remembers their id.
+  const [comment, setComment] = createSignal("")
+  const [picked, setPicked] = createSignal<{ userId: number; handle: string }[]>([])
+  const [commentNote, setCommentNote] = createSignal<{ ok: boolean; text: string } | null>(null)
+  const [posting, setPosting] = createSignal(false)
+  const mentionQuery = createMemo(() => /(?:^|\s)@([\w.+-]*)$/.exec(comment())?.[1])
+  const mentionable = createMemo(() => {
+    const q = mentionQuery()
+    if (q === undefined) return []
+    const lower = q.toLowerCase()
+    return (members.latest?.members ?? [])
+      .filter((m) => !lower || (m.name ?? "").toLowerCase().includes(lower) || (m.email ?? "").toLowerCase().includes(lower))
+      .slice(0, 6)
+  })
+  function pickMention(m: { userId: number; name: string; email: string }) {
+    const handle = m.email || m.name
+    setComment((t) => t.replace(/@([\w.+-]*)$/, `@${handle} `))
+    setPicked((p) => (p.some((x) => x.userId === m.userId) ? p : [...p, { userId: m.userId, handle }]))
+  }
+  async function postComment() {
+    const d = doc.latest
+    const body = comment().trim()
+    if (!d || !body || posting()) return
+    setPosting(true)
+    setCommentNote(null)
+    const mentions = picked().filter((p) => body.includes(`@${p.handle}`)).map((p) => p.userId)
+    const out = await post(`/iris/item/${d.id}/comments`, { body, mentions })
+    setPosting(false)
+    if (!out.ok) return setCommentNote({ ok: false, text: out.reason ?? "could not post" })
+    setComment("")
+    setPicked([])
+    const told = (out.mentioned as number[] | undefined)?.length ?? 0
+    setCommentNote({ ok: true, text: told ? `Posted — told ${told} ${told === 1 ? "person" : "people"}` : "Posted" })
+    void refetchTrail()
+  }
+
+  // Paste a screenshot or file anywhere in an open card and it is attached (#189797).
+  onMount(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const files = pastedFiles(e)
+      if (!files.length) return
+      e.preventDefault()
+      void upload(files)
+    }
+    document.addEventListener("paste", onPaste)
+    onCleanup(() => document.removeEventListener("paste", onPaste))
+  })
 
   // ── Events + asks (HANDOFF) ─────────────────────────────────────────────
   const [events, { refetch: refetchEvents }] = createResource(
@@ -1837,16 +1887,58 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                     {/* ───────────── ACTIVITY (#189799) ───────────── */}
                     <Match when={side() === "activity"}>
                       <NotConnected state={trail.latest} />
+                      <form
+                        class="iris-card__compose iris-comment"
+                        onSubmit={(e) => {
+                          e.preventDefault()
+                          void postComment()
+                        }}
+                      >
+                        <textarea
+                          class="iris-field__input iris-card__composetext"
+                          rows={2}
+                          placeholder="Write a comment… @ to mention someone on this board"
+                          aria-label="Comment"
+                          value={comment()}
+                          onInput={(e) => setComment(e.currentTarget.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && !e.shiftKey && mentionable().length === 0) {
+                              e.preventDefault()
+                              void postComment()
+                            }
+                          }}
+                        />
+                        <button type="submit" class="iris-card__linkbtn iris-card__linkbtn--primary" disabled={!comment().trim() || posting()}>
+                          {posting() ? "…" : "Comment"}
+                        </button>
+                        <Show when={mentionable().length > 0}>
+                          <ul class="iris-comment__mentions" role="listbox" aria-label="Mention someone">
+                            <For each={mentionable()}>
+                              {(m) => (
+                                <li>
+                                  <button type="button" onClick={() => pickMention(m)}>
+                                    <span>{m.name || m.email}</span>
+                                    <span class="iris-trail__meta">{m.email}</span>
+                                  </button>
+                                </li>
+                              )}
+                            </For>
+                          </ul>
+                        </Show>
+                      </form>
+                      <Show when={commentNote()}>
+                        <NoteLine note={commentNote()} />
+                      </Show>
                       <Show when={trail.latest?.measured && trail.latest.activity.length === 0}>
                         <p class="text-11-regular text-text-weaker">
-                          Nothing recorded yet. Assignments, finished subtasks, moves and changes to status, priority
-                          and due date show here.
+                          Nothing recorded yet. Comments, assignments, finished subtasks, moves and changes to status,
+                          priority and due date show here.
                         </p>
                       </Show>
                       <ul class="iris-trail">
                         <For each={trail.latest?.activity ?? []}>
                           {(a) => (
-                            <li class="iris-trail__row">
+                            <li class="iris-trail__row" classList={{ "iris-trail__row--comment": a.type === "comment" }}>
                               <span aria-hidden="true">{a.icon ?? "·"}</span>
                               <span>
                                 {a.text}
