@@ -156,7 +156,12 @@ export function SessionComposerRegion(props: {
               </Show>
               <Show
                 when={controller.child()}
-                fallback={<Show when={!controller.state.blocked()}>{props.promptInput}</Show>}
+                fallback={
+                  <Show when={!controller.state.blocked()}>
+                    {/* Above the allowance tab, which tucks 18px behind it (#190087). */}
+                    <div class="relative z-[1]">{props.promptInput}</div>
+                  </Show>
+                }
               >
                 <div
                   ref={controller.setPromptRef}

@@ -46,7 +46,9 @@ export function NewSessionView(props: {
               <div>
                 {/* Out of (or nearly out of) allowance — the same bar the session composer shows (#190087). */}
                 <SessionAllowanceDock />
-                <PromptInputV2Composer controller={props.input} />
+                <div class="relative z-[1]">
+                  <PromptInputV2Composer controller={props.input} />
+                </div>
               </div>
               <Show when={props.project.empty()}>
                 <div class="flex min-h-7 min-w-0 items-center text-v2-text-text-faint">

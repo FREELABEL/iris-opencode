@@ -38,6 +38,9 @@ export function SessionAllowanceDock() {
   )
   const state = createMemo(() => allowanceDockState(plan.latest))
   const [open, setOpen] = createSignal(false)
+  // Two shapes under review (Alex, 2026-10-20): "tab" tucks behind the composer like the todos bar;
+  // "float" is its own card, 12px above (the composer's own padding). Kept switchable until chosen.
+  const tab = () => (globalThis.localStorage?.getItem("iris.allowanceDock") ?? "tab") === "tab"
   const upgrade = (event?: MouseEvent) => {
     event?.stopPropagation()
     dialog.show(() => (
@@ -51,16 +54,23 @@ export function SessionAllowanceDock() {
     <Show when={state()}>
       {(s) => (
         <div
-          class="pb-2"
-          classList={{ "iris-glow": s().tone === "out" }}
+          class="iris-glow relative z-0"
+          classList={{ "mb-3": !tab(), "-mb-[18px]": tab() }}
+          style={{
+            "border-radius": tab() ? "12px 12px 0 0" : "12px",
+            "--iris-glow-ring": `${(glowDurations[settings.glow.speed()] ?? glowDurations.normal)[0]}s`,
+          }}
+          data-thin=""
+          data-tab={tab() ? "" : undefined}
           data-wait={s().tone === "out" && settings.glow.ring() ? "" : undefined}
+          data-halo={s().tone === "out" && settings.glow.halo() ? "" : undefined}
           data-still={settings.glow.reduceMotion() ? "" : undefined}
-          style={{ "--iris-glow-ring": `${(glowDurations[settings.glow.speed()] ?? glowDurations.normal)[0]}s` }}
         >
           <div
             data-component="session-allowance-dock"
             data-tone={s().tone}
-            class="w-full overflow-hidden rounded-xl border-[0.5px] border-v2-border-border-base bg-v2-background-bg-layer-01"
+            class="w-full overflow-hidden border-[0.5px] border-v2-border-border-base bg-v2-background-bg-layer-01"
+            classList={{ "rounded-xl": !tab(), "rounded-t-xl border-b-0 pb-[18px]": tab() }}
           >
             <div
               data-action="session-allowance-toggle"
