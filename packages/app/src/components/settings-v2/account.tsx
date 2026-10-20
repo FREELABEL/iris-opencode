@@ -4,7 +4,6 @@ import { usePlatform } from "@/context/platform"
 import { useServer } from "@/context/server"
 import { SettingsListV2 } from "./parts/list"
 import { SettingsRowV2 } from "./parts/row"
-import { TITLEBAR_UPGRADE_URL } from "../titlebar-iris-pills"
 import { PlanCards } from "../dialog-upgrade"
 import "./settings-v2.css"
 
@@ -305,13 +304,9 @@ export const SettingsAccountV2: Component = () => {
 
   const meter = () => meterView(me()?.allowance)
   let plansSection: HTMLDivElement | undefined
-  const fetchJson = async <T,>(path: string) => {
+  const fetchJson = async <T,>(path: string, init?: RequestInit) => {
     const base = server.current?.http?.url?.replace(/\/$/, "")
-    return (await (await (platform.fetch ?? globalThis.fetch)(`${base}${path}`)).json()) as T
-  }
-  const upgradeUrl = () => {
-    // Always offered, like the title bar's Upgrade (see planBadge): every account can move up a plan.
-    return me()?.plan?.upgradeUrl ?? me()?.allowance.upgradeUrl ?? TITLEBAR_UPGRADE_URL
+    return (await (await (platform.fetch ?? globalThis.fetch)(`${base}${path}`, init)).json()) as T
   }
 
   return (
@@ -570,7 +565,7 @@ export const SettingsAccountV2: Component = () => {
 
           <div class="settings-v2-section" ref={plansSection} data-action="account-plans">
             <h3 class="settings-v2-section-title">Plans</h3>
-            <PlanCards fetchJson={fetchJson} pricingUrl={upgradeUrl()} me={() => me()} />
+            <PlanCards fetchJson={fetchJson} me={() => me()} />
           </div>
         </Show>
       </div>

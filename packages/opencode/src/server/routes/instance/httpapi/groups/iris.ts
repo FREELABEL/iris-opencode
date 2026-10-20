@@ -1375,6 +1375,7 @@ export const IrisPaths = {
   accountSwitch: `${root}/accounts/switch`,
   accountRemove: `${root}/accounts/remove`,
   plans: `${root}/plans`,
+  checkout: `${root}/checkout`,
   atlasNote: `${root}/atlas-note`,
   frameCheck: `${root}/frame-check`,
 } as const
@@ -1521,6 +1522,22 @@ export const IrisApi = HttpApi.make("iris").add(
           identifier: "iris.plans",
           summary: "Plans",
           description: "Self-serve IRIS plans with live prices, for the desktop Upgrade dialog.",
+        }),
+      ),
+      HttpApiEndpoint.post("checkout", IrisPaths.checkout, {
+        payload: Schema.Struct({ slug: Schema.String }),
+        success: described(
+          Schema.Struct({ ok: Schema.Boolean, url: Schema.optional(Schema.String), reason: Schema.optional(Schema.String) }).annotate({
+            identifier: "IrisCheckoutResult",
+          }),
+          "Stripe's checkout URL for the plan, or why there is none",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.checkout",
+          summary: "Start checkout",
+          description:
+            "Creates a Stripe Checkout session for one plan, for the signed-in account, and returns its URL. The desktop opens it directly — checkout never goes through a web app sign-in.",
         }),
       ),
       HttpApiEndpoint.get("bloqs", IrisPaths.bloqs, {
