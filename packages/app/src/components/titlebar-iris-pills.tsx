@@ -118,9 +118,6 @@ interface PlanState {
   fraction?: number | null
 }
 
-/** Where "Upgrade" goes when the server names no URL. Same page the limit dialog sends people to. */
-export const TITLEBAR_UPGRADE_URL = "https://web.heyiris.io/pricing?source=desktop-titlebar"
-
 /**
  * Upgrade is ALWAYS shown — paid, unpaid, unknown, admin, or before the plan has loaded.
  *
@@ -128,7 +125,8 @@ export const TITLEBAR_UPGRADE_URL = "https://web.heyiris.io/pricing?source=deskt
  * it from nearly everyone: admins are reported paid, any account with a licence seat is paid, and
  * a slow or failed plan lookup is null — so new users, and the people testing checkout, had no
  * way in. The button opens the plans dialog, which is useful to a paying customer too (moving up
- * a tier), so there is no one it is wrong to show it to. `state` only chooses the URL.
+ * a tier), so there is no one it is wrong to show it to. `state` only chooses the words and tone.
+ * There is no URL: the button opens the in-app plans dialog, which goes straight to Stripe (#190190).
  */
 export type BadgeTone = "accent" | "warning" | "danger"
 
@@ -138,14 +136,13 @@ export type BadgeTone = "accent" | "warning" | "danger"
  * on screen, so it carries the state: red when the allowance is used up, amber from 90%, the
  * plain Upgrade otherwise. An unknown or unmeasured reading is never red.
  */
-export function planBadge(state: PlanState | undefined): { text: string; url: string; tone: BadgeTone } {
-  const url = state?.upgradeUrl || TITLEBAR_UPGRADE_URL
+export function planBadge(state: PlanState | undefined): { text: string; tone: BadgeTone } {
   const f = state?.measured ? state.fraction : null
   if (typeof f === "number" && Number.isFinite(f)) {
-    if (f >= 1) return { text: "Out of allowance · Upgrade", url, tone: "danger" }
-    if (f >= 0.9) return { text: "Almost out · Upgrade", url, tone: "warning" }
+    if (f >= 1) return { text: "Out of allowance · Upgrade", tone: "danger" }
+    if (f >= 0.9) return { text: "Almost out · Upgrade", tone: "warning" }
   }
-  return { text: "Upgrade", url, tone: "accent" }
+  return { text: "Upgrade", tone: "accent" }
 }
 
 const BADGE_CLASS: Record<BadgeTone, string> = {
@@ -165,9 +162,19 @@ export function TitlebarIrisPills() {
 
   // The fleet heartbeats about every 30s and the inbox is a local file, so a slower poll would
   // show the same numbers and a faster one would only cost requests.
+  //
+  // Coming BACK to the window also counts as a tick (#190190). Paying happens in the browser, so
+  // the moment someone returns from Stripe is the moment the plan pill is most likely stale — and
+  // waiting up to two minutes for the plan poll made a just-paid customer think it had not worked.
+  // A tick on focus moves planKey too, so the plan is re-read immediately.
   onMount(() => {
     const timer = setInterval(() => setTick((t) => t + 1), 30_000)
-    onCleanup(() => clearInterval(timer))
+    const onFocus = () => setTick((t) => t + (4 - (t % 4)))
+    window.addEventListener("focus", onFocus)
+    onCleanup(() => {
+      clearInterval(timer)
+      window.removeEventListener("focus", onFocus)
+    })
   })
 
   const key = createMemo(() => {
@@ -175,7 +182,7 @@ export function TitlebarIrisPills() {
     return b ? ([b, tick()] as const) : undefined
   })
 
-  const doFetch = (path: string) => (platform.fetch ?? globalThis.fetch)(`${base()}${path}`)
+  const doFetch = (path: string, init?: RequestInit) => (platform.fetch ?? globalThis.fetch)(`${base()}${path}`, init)
 
   // These poll every 30s from OUTSIDE the session's error boundary, so a rejected fetch (sidecar
   // restarting, Windows resuming from sleep) used to throw straight to app.tsx and replace the whole
@@ -320,8 +327,9 @@ export function TitlebarIrisPills() {
                   onClick={() =>
                     dialog.show(() => (
                       <DialogUpgrade
-                        pricingUrl={b().url}
-                        fetchJson={async <T,>(path: string) => (await (await doFetch(path)).json()) as T}
+                        fetchJson={async <T,>(path: string, init?: RequestInit) =>
+                          (await (await doFetch(path, init)).json()) as T
+                        }
                       />
                     ))
                   }

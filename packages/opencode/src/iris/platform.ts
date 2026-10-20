@@ -768,6 +768,57 @@ export async function fetchPlans(): Promise<PlatformResult<PlanOffer[]>> {
   }
 }
 
+/** Where Stripe sends the buyer once they have paid: a heyiris.io page, never Elon (#190191). */
+export const CHECKOUT_RETURN_URL = "https://heyiris.io/p/upgraded"
+
+export type CheckoutResult = { ok: true; url: string } | { ok: false; reason: string }
+
+/**
+ * A Stripe Checkout session for one plan, created for the signed-in account (#190190).
+ *
+ * Choosing a plan used to open Elon's pricing page with the plan pre-picked, and Elon finished
+ * the checkout. That is a second sign-in on a second app that is being retired, and it is where a
+ * paying customer got stuck on 2026-10-20: her Elon session was dead, the checkout behind it was
+ * refused, and the button did nothing. The account's own key is already here — fl-api resolves
+ * the buyer from it (`resolveCaller`), so no user id is sent — and the answer is Stripe's URL.
+ *
+ * The price is the catalogue's, read the same way the cards that showed it were, so the number on
+ * the button and the number on Stripe come from one place. Trial days are always 0: the weekly
+ * allowance is the trial.
+ */
+export async function createCheckout(slug: string): Promise<CheckoutResult> {
+  try {
+    const plans = await fetchPlans()
+    const plan = plans.data.find((p) => p.slug === slug)
+    if (!plan) {
+      return { ok: false, reason: plans.measured ? `No plan called ${slug} is on sale.` : "Couldn't load the plans." }
+    }
+    const res = await irisFetch("/api/v1/users/upgrade/checkout", FL_API, {
+      method: "POST",
+      body: JSON.stringify({
+        package_slug: plan.slug,
+        price: plan.price,
+        billing_interval: plan.period === "year" ? "year" : "month",
+        product: "desktop-upgrade",
+        trial_days: 0,
+        redirect_url: CHECKOUT_RETURN_URL,
+      }),
+    })
+    const body = (await res.json().catch(() => null)) as {
+      data?: { url?: string }
+      url?: string
+      message?: string
+      error?: string
+    } | null
+    const url = body?.data?.url ?? body?.url
+    if (res.ok && url) return { ok: true, url }
+    if (res.status === 401) return { ok: false, reason: "Your sign-in has expired. Sign in again, then choose the plan." }
+    return { ok: false, reason: `Checkout refused (${res.status})${body?.message ? `: ${body.message}` : ""}` }
+  } catch (e) {
+    return { ok: false, reason: `Couldn't reach checkout: ${e instanceof Error ? e.message : String(e)}` }
+  }
+}
+
 /**
  * Settings › Security (#189589): what protects this account's model traffic, and why.
  *
