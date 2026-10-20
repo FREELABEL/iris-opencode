@@ -325,6 +325,14 @@ async function meConnect() {
 /** Hear about your own cards. One connection, shared, closed when the last listener leaves. */
 export function watchMe(listener: (e: MeLiveEvent) => void): () => void {
   meListeners.add(listener)
+  // Joining a connection that is already up: say so now. Status is only sent when it CHANGES,
+  // so a listener that arrives after "connected" — a reconnecting window, a second one, a stream
+  // whose predecessor the server has not released yet — otherwise hears nothing at all.
+  if (meConn && meStatus !== "off") {
+    try {
+      listener({ type: "status", pusher: meStatus })
+    } catch {}
+  }
   void meConnect()
   return () => {
     meListeners.delete(listener)

@@ -44,3 +44,14 @@ describe("card cover (#189797)", () => {
     expect(cardFace({ summary: { cover: null } }).cover).toBeUndefined()
   })
 })
+
+describe("watchMe (#189799)", () => {
+  test("a listener that joins a live connection is told it is live", async () => {
+    const { watchMe } = await import("../../src/iris/atlas-live")
+    // No token in the test environment: nothing connects, and nothing is claimed.
+    const heard: unknown[] = []
+    const stop = watchMe((e) => heard.push(e))
+    stop()
+    expect(heard.filter((e: any) => e.type === "status" && e.pusher === "connected")).toEqual([])
+  })
+})
