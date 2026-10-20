@@ -31,12 +31,15 @@ type Command =
   | { action: "tab"; tab: string }
   | { action: "browse"; url: string }
 
-/** How long a command may take to show up before the ack says it did not. Under the engine's 4 s. */
-const SETTLE_MS = 3200
+/** How long a command may take to show up before the ack says it did not. Under the engine's 6 s: the IRIS tab mounts lazily, measured 1.6 s after a reopen. */
+const SETTLE_MS = 5000
 /** How long the panel must hold the asked-for state before it counts. */
 const STABLE_MS = 300
 const REAPPLY_GAP_MS = 250
 const MAX_REAPPLY = 6
+
+/** Commands already applied, by id — one application per command, however many pages listen. */
+const handled = new Set<string>()
 const REPORT_DEBOUNCE_MS = 250
 
 /**
@@ -169,26 +172,42 @@ export function usePanelControl(input: { open: () => boolean }) {
 
   /**
    * Ack only once the panel has STAYED where it was asked for STABLE_MS — a first glance can be
-   * undone a frame later. While it is wrong, apply again (spaced, bounded). Two measured causes of
-   * being undone: the remounting strip (see showTab), and an UNPINNED product — showing it adds its
-   * trigger, and while the strip rebuilds, Kobalte falls back to its first tab and reports that as
-   * a choice (traced: onSelectionChange → activateTab("review")). A later try finds the trigger.
+   * undone a frame later. Until it has matched ONCE, apply again (spaced, bounded): a freshly
+   * mounted IRIS tab takes over a second to read the request, and the strip can bounce while it
+   * rebuilds (see session-side-panel's looksLikeFallback).
+   *
+   * NEVER AGAINST THE USER. Once the panel has matched, nothing is re-applied — a later difference
+   * is the person clicking, and the ack simply reports where they went. A new command cancels a
+   * settle still running. The first version re-applied on any mismatch for five seconds and put
+   * the panel back each time the user clicked a tab.
    */
+  let cancelSettle: (() => void) | undefined
+  onCleanup(() => cancelSettle?.())
   const settle = (cmd: Command, ack: string) => {
+    cancelSettle?.()
+    let cancelled = false
+    cancelSettle = () => (cancelled = true)
     const started = Date.now()
     let applied = 0
     let lastApply = started
+    let matchedOnce = false
     let okSince: number | undefined
     const tick = () => {
+      if (cancelled) return
       const now = Date.now()
       const why = mismatch(cmd)
-      if (!why) okSince ??= now
-      else okSince = undefined
-      if ((okSince !== undefined && now - okSince >= STABLE_MS) || now - started > SETTLE_MS) {
-        post({ ...untrack(snapshot), ack, error: why })
+      if (!why) {
+        matchedOnce = true
+        okSince ??= now
+      } else okSince = undefined
+      const settled = okSince !== undefined && now - okSince >= STABLE_MS
+      // Matched, then moved: the user took over. Report where they are; do not chase it.
+      if (settled || (matchedOnce && why) || now - started > SETTLE_MS) {
+        cancelSettle = undefined
+        post({ ...untrack(snapshot), ack, error: matchedOnce && why ? undefined : why })
         return
       }
-      if (why && untrack(input.open) && applied < MAX_REAPPLY && now - lastApply >= REAPPLY_GAP_MS) {
+      if (!matchedOnce && untrack(input.open) && applied < MAX_REAPPLY && now - lastApply >= REAPPLY_GAP_MS) {
         applied++
         lastApply = now
         apply(cmd)
@@ -204,6 +223,9 @@ export function usePanelControl(input: { open: () => boolean }) {
     if (event?.type !== PANEL_COMMAND_EVENT) return
     const props = event.properties as { id?: string; session?: string; command?: Command } | undefined
     if (!props?.id || !props.command || !params.id || props.session !== params.id) return
+    if (handled.has(props.id)) return
+    handled.add(props.id)
+    if (handled.size > 500) handled.delete(handled.values().next().value!)
     const command: Command = props.command.action === "show" ? { ...props.command, ...resolveShow(props.command) } : props.command
     try {
       apply(command)

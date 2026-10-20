@@ -59,7 +59,12 @@ const run = Effect.fn("SidePanelToolTest.run")(function* (args: Tool.InferParame
 })
 
 const catalog: Panel.State["catalog"] = [
-  { id: "atlas", label: "Atlas", subs: [{ id: "lists", label: "Lists" }, { id: "schemas", label: "Schemas" }] },
+  {
+    id: "atlas",
+    label: "Atlas",
+    hint: "Boards of lists and cards",
+    subs: [{ id: "lists", label: "Lists" }, { id: "schemas", label: "Schemas", hint: "The record types" }],
+  },
   { id: "pages", label: "Genesis", subs: [{ id: "artifacts", label: "Artifacts" }] },
 ]
 
@@ -117,7 +122,10 @@ describe("side_panel tool", () => {
         expect(r.output).toContain("product: Atlas › Schemas")
 
         const st = yield* run({ action: "state" }, ctxFor(child.id))
-        expect(st.output).toContain("atlas (Atlas): lists, schemas")
+        // The agent's map of the app: every place, with what it is for.
+        expect(st.output).toContain("atlas (Atlas) — Boards of lists and cards")
+        expect(st.output).toContain("  atlas/schemas (Schemas) — The record types")
+        expect(st.output).toContain("  atlas/lists (Lists)")
       } finally {
         desk.stop()
       }

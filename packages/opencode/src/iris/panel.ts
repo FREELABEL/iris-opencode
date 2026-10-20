@@ -46,7 +46,7 @@ export namespace Panel {
     /** The Browser tab's address. */
     url?: string
     /** What the desktop can show: product id → its sub-view ids. Lets callers validate. */
-    catalog?: { id: string; label: string; subs: { id: string; label: string }[] }[]
+    catalog?: { id: string; label: string; hint?: string; subs: { id: string; label: string; hint?: string }[] }[]
     /** The command this report answers, if any. */
     ack?: string
     /** Set by the desktop when a command could not be applied as asked. */
@@ -156,7 +156,7 @@ export namespace Panel {
       const timer = setTimeout(() => {
         waiters.delete(id)
         resolve(undefined)
-      }, input.timeoutMs ?? 4000)
+      }, input.timeoutMs ?? 6000)
       waiters.set(id, (s) => {
         clearTimeout(timer)
         resolve(s)
@@ -187,8 +187,16 @@ export namespace Panel {
     return lines.join("\n")
   }
 
+  /** One line per product, then one per view, each with what it is for — the agent's map of the app. */
   export function describeCatalog(catalog: State["catalog"]): string {
     if (!catalog?.length) return ""
-    return catalog.map((x) => `${x.id} (${x.label})${x.subs.length ? `: ${x.subs.map((v) => v.id).join(", ")}` : ""}`).join("\n")
+    return catalog
+      .map((x) =>
+        [
+          `${x.id} (${x.label})${x.hint ? ` — ${x.hint}` : ""}`,
+          ...x.subs.map((v) => `  ${x.id}/${v.id} (${v.label})${v.hint ? ` — ${v.hint}` : ""}`),
+        ].join("\n"),
+      )
+      .join("\n")
   }
 }

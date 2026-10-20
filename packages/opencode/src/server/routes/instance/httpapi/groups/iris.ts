@@ -1389,7 +1389,8 @@ const PanelCatalog = Schema.Array(
   Schema.Struct({
     id: Schema.String,
     label: Schema.String,
-    subs: Schema.Array(Schema.Struct({ id: Schema.String, label: Schema.String })),
+    hint: Schema.optional(Schema.String),
+    subs: Schema.Array(Schema.Struct({ id: Schema.String, label: Schema.String, hint: Schema.optional(Schema.String) })),
   }),
 )
 export const PanelStatePayload = Schema.Struct({
@@ -1425,7 +1426,7 @@ export const PanelCommandPayload = Schema.Struct({
   url: Schema.optional(Schema.String),
 }).annotate({ identifier: "IrisPanelCommand" })
 const PanelCommandResponse = Schema.Struct({
-  answered: described(Schema.Boolean, "false: no desktop answered within 4 s — the session is not on screen in IRIS Desktop."),
+  answered: described(Schema.Boolean, "false: no desktop answered within 6 s — the session is not on screen in IRIS Desktop."),
   refused: Schema.optional(described(Schema.String, "Why the command was not sent.")),
   state: Schema.optional(PanelReport),
 }).annotate({ identifier: "IrisPanelCommandResult" })
@@ -2512,7 +2513,7 @@ export const IrisApi = HttpApi.make("iris").add(
           identifier: "iris.panelCommand",
           summary: "Steer the side panel",
           description:
-            "#190093. Emits iris.panel.command and waits up to 4 s for the desktop showing `session` to apply it and report back. The same path the side_panel tool takes; for agents outside the engine (MCP, scripts).",
+            "#190093. Emits iris.panel.command and waits up to 6 s for the desktop showing `session` to apply it and report back. The same path the side_panel tool takes; for agents outside the engine (MCP, scripts).",
         }),
       ),
       HttpApiEndpoint.get("atlasNote", IrisPaths.atlasNote, {

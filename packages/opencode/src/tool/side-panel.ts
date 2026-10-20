@@ -93,7 +93,7 @@ export const SidePanelTool = Tool.define<typeof Parameters, Metadata, Session.Se
             return {
               title: "no desktop answered",
               output:
-                "No IRIS Desktop panel answered within 4s. The user is not looking at this session in the desktop app (they may be in the terminal, or on another session). Nothing changed.",
+                "No IRIS Desktop panel answered within 6s. The user is not looking at this session in the desktop app (they may be in the terminal, or on another session). Nothing changed.",
               metadata: { answered: false },
             }
           }
