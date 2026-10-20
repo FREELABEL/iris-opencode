@@ -252,8 +252,47 @@ export function unknownBloqReason(bloqId: number, list: PlatformResult<{ bloqs: 
   return list.data.bloqs.some((b) => b.id === bloqId) ? null : `unknown bloq ${bloqId}`
 }
 
-async function unknownBloq(bloqId: number): Promise<string | null> {
+/**
+ * ONE BOARD-LIST REQUEST, NOT ONE PER SURFACE (#190231 phase 0b).
+ *
+ * This guard ran fetchBloqs() — a full /bloqs call to fl-api — in front of every bloq-scoped
+ * request, one after the other. Opening a board asked for the list twice: once for the picker
+ * (/iris/bloqs) and again inside /iris/atlas before the board itself could start. Now the guard
+ * reuses the list the picker just fetched (or is still fetching) for the same account.
+ *
+ * It only reuses a YES. A reused list can predate a board made a moment ago, so "not one of
+ * yours" is always asked again, fresh, before it refuses. A failed list is never reused, so an
+ * outage still fails open exactly as before.
+ */
+export async function unknownBloq(bloqId: number): Promise<string | null> {
+  if (!unknownBloqReason(bloqId, await recentBloqs())) return null
   return unknownBloqReason(bloqId, await fetchBloqs())
+}
+
+const BLOQ_LIST_REUSE_MS = 30_000
+type BloqList = PlatformResult<{ bloqs: Bloq[] }>
+/** The request most recently started, finished or not. */
+let lastBloqs: { userId: number; at: number; result: Promise<BloqList> } | undefined
+/** The most recent list that actually ARRIVED and was measured. */
+let lastGoodBloqs: { userId: number; at: number; result: BloqList } | undefined
+
+async function recentBloqs(): Promise<BloqList> {
+  const userId = await resolveUserId()
+  const fresh = (x?: { userId: number; at: number }) => !!userId && !!x && x.userId === userId && Date.now() - x.at < BLOQ_LIST_REUSE_MS
+  // A list already in hand beats waiting for a newer one. The picker re-fetches on every panel
+  // open, so preferring "newest" made this guard wait a full round trip each time anyway.
+  if (fresh(lastGoodBloqs)) return lastGoodBloqs!.result
+  if (fresh(lastBloqs)) {
+    const r = await lastBloqs!.result
+    if (r.measured) return r
+  }
+  return fetchBloqs()
+}
+
+/** Tests only: forget the shared board list. */
+export function resetRecentBloqs() {
+  lastBloqs = undefined
+  lastGoodBloqs = undefined
 }
 
 export interface AtlasItem {
@@ -1127,7 +1166,17 @@ export interface Bloq {
 export async function fetchBloqs(): Promise<PlatformResult<{ bloqs: Bloq[] }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { bloqs: [] } }
+  // Remembered while in flight, so a guard asking a moment later waits for THIS request.
+  const at = Date.now()
+  const result = loadBloqs(userId).then((r) => {
+    if (r.measured) lastGoodBloqs = { userId, at, result: r }
+    return r
+  })
+  lastBloqs = { userId, at, result }
+  return result
+}
 
+async function loadBloqs(userId: number): Promise<PlatformResult<{ bloqs: Bloq[] }>> {
   try {
     const res = await irisFetch(`/api/v1/user/${userId}/bloqs?simplified=true`)
     if (!res.ok) return { measured: false, reason: `fl-api ${res.status}`, data: { bloqs: [] } }
@@ -1748,7 +1797,14 @@ export async function fetchRecords(
      *
      * Resolved from the same schema list the columns come from, so the check and the column
      * definitions cannot disagree about which dataset this is.
+     *
+     * The check and the records are fetched TOGETHER, not one after the other (#190231 phase
+     * 0c) — opening a dataset waited a whole schema-list round trip before asking for a row. The
+     * records are only RETURNED once the check passes; a refusal throws them away. Not reused
+     * from a cached schema list: this is the board boundary, and a cached answer could be stale.
      */
+    const recordsReq = irisFetch(`/api/v1/atlas/datasets/${encodeURIComponent(slug)}?page=${page}&per_page=${perPage}`)
+    recordsReq.catch(() => {}) // a refusal below never awaits it; do not let it reject unobserved
     const defn = await schemaRow(slug)
     if (!defn) return { measured: false, reason: `no dataset "${slug}"`, data: { ...empty, page, perPage } }
     if (opts.bloqId != null && Number(defn.bloq_id) !== opts.bloqId) {
@@ -1760,7 +1816,7 @@ export async function fetchRecords(
       }
     }
 
-    const res = await irisFetch(`/api/v1/atlas/datasets/${encodeURIComponent(slug)}?page=${page}&per_page=${perPage}`)
+    const res = await recordsReq
     if (!res.ok) return { measured: false, reason: `fl-api ${res.status}`, data: { ...empty, page, perPage } }
     const json = (await res.json()) as any
     const d = json?.data ?? json
