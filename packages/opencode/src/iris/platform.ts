@@ -726,6 +726,9 @@ export interface Plan {
   trialEndsAt: string | null
   /** Share of the allowance used (1 = used up); null when uncapped or unknown (#190087). */
   fraction: number | null
+  /** Tokens used this window, and when it resets — for the composer's allowance bar (#190087). */
+  tokensUsed: number | null
+  resetsAt: string | null
   uncapped: boolean
   upgradeUrl: string | null
 }
@@ -1079,7 +1082,7 @@ export async function reportGateEvent(
 export async function fetchPlan(
   opts: { token?: string | null; signal?: AbortSignal } = {},
 ): Promise<PlatformResult<Plan>> {
-  const empty: Plan = { plan: null, paid: null, label: null, trialEndsAt: null, fraction: null, uncapped: false, upgradeUrl: null }
+  const empty: Plan = { plan: null, paid: null, label: null, trialEndsAt: null, fraction: null, tokensUsed: null, resetsAt: null, uncapped: false, upgradeUrl: null }
   try {
     const res = await irisFetch(
       "/api/v6/allowance/me?peek=1",
@@ -1098,6 +1101,8 @@ export async function fetchPlan(
         label: typeof j.plan_label === "string" && j.plan_label.trim() ? j.plan_label.trim() : null,
         trialEndsAt: typeof j.trial_ends_at === "string" && j.trial_ends_at ? j.trial_ends_at : null,
         fraction: typeof j.fraction === "number" && Number.isFinite(j.fraction) ? j.fraction : null,
+        tokensUsed: typeof j.tokens_used === "number" && Number.isFinite(j.tokens_used) ? j.tokens_used : null,
+        resetsAt: typeof j.resets_at === "string" && j.resets_at ? j.resets_at : null,
         uncapped: Boolean(j.uncapped),
         upgradeUrl: typeof j.upgrade_url === "string" ? j.upgrade_url : null,
       },

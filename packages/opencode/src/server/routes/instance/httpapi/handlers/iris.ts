@@ -1101,6 +1101,8 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
           label: r.data.label,
           trialEndsAt: r.data.trialEndsAt,
           fraction: r.data.fraction,
+          tokensUsed: r.data.tokensUsed,
+          resetsAt: r.data.resetsAt,
           uncapped: r.data.uncapped,
           upgradeUrl: r.data.upgradeUrl,
         })),
