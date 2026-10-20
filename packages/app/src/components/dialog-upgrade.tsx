@@ -256,7 +256,7 @@ export function PlanCards(props: {
                         </Show>
                       </div>
                       <div
-                        class="text-[36px] font-black leading-none tracking-tight tabular-nums"
+                        class="text-[32px] font-black leading-none tracking-tight tabular-nums"
                         style={{
                           // background-IMAGE, not the shorthand: the shorthand resets background-clip,
                           // which paints the gradient as a solid bar behind the text.
@@ -302,11 +302,7 @@ export function PlanCards(props: {
 export function DialogUpgrade(props: { fetchJson: FetchJson }) {
   const dialog = useDialog()
   return (
-    <Dialog
-      title="Upgrade IRIS"
-      description="Pick a plan to pay securely with Stripe."
-      size="x-large"
-    >
+    <Dialog title="Upgrade IRIS" description="Pick a plan to pay securely with Stripe." size="x-large">
       <div class="px-6 pb-5">
         <PlanCards fetchJson={props.fetchJson} onChosen={() => dialog.close()} />
       </div>

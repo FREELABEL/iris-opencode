@@ -30,7 +30,6 @@ export interface PlanSummary {
   over: boolean
 }
 
-const usd = (n: number) => `$${n.toFixed(2)}`
 const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v)
 /** 850K, 12.4M, 2.3B — how the plans describe compute. */
 const tokenCount = (n: number) =>
@@ -76,18 +75,16 @@ export function planSummary(me: SummaryInput | undefined | null, now: Date = new
       const resets = reset
         ? ` · resets ${reset.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}`
         : ""
-      // People see TOKENS and a share, never dollars (Alex, 2026-10-20): the plans are sold as
-      // 5x / 20x and "M tokens", so the meter speaks the same language. Staff also get the
-      // dollars, for debugging.
+      // People see TOKENS and a share (Alex, 2026-10-20): the plans are sold as 5x / 20x and
+      // "M tokens", so the meter speaks the same language.
       const used = finite(a.tokensUsed) ? `${tokenCount(a.tokensUsed)} tokens used this ${window}` : null
+      // Tokens, never dollars — for staff too (Alex, 2026-10-20).
       const words = out.over
-        ? `This ${window}'s allowance is used up`
+        ? `This ${window}'s allowance is used up${used ? ` · ${used}` : ""}`
         : used
           ? `${used} · ${out.percent}% of your allowance`
           : `${out.percent}% of this ${window}'s allowance used`
-      const staff = me.plan?.measured && (me.plan.label === "Staff" || me.plan.plan === null)
-      const debug = staff ? ` · ${used && out.over ? `${used} · ` : ""}${usd(a.spendUsd)} of ${usd(a.capUsd)}` : ""
-      out.allowance = `${words}${debug}${resets}`
+      out.allowance = `${words}${resets}`
     }
   }
   return out

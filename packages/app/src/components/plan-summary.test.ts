@@ -67,7 +67,10 @@ describe("planSummary — the usage meter", () => {
 })
 
 describe("planSummary — tokens for people, dollars for staff (#190087)", () => {
-  const me = (over: object, plan: { measured: boolean; plan: string | null; label?: string } = { measured: true, plan: "free", label: "Free" }) => ({
+  const me = (
+    over: object,
+    plan: { measured: boolean; plan: string | null; label?: string } = { measured: true, plan: "free", label: "Free" },
+  ) => ({
     plan,
     allowance: {
       measured: true,
@@ -87,7 +90,7 @@ describe("planSummary — tokens for people, dollars for staff (#190087)", () =>
   })
   test("used up says so in words, without the price of it", () => {
     const a = planSummary(me({ spendUsd: 1.4 }), now).allowance!
-    expect(a).toStartWith("This week's allowance is used up · resets ")
+    expect(a).toStartWith("This week's allowance is used up · 12.4M tokens used this week · resets ")
     expect(a).not.toContain("$")
   })
   test("no token count yet: the share alone", () => {
@@ -95,10 +98,13 @@ describe("planSummary — tokens for people, dollars for staff (#190087)", () =>
       "28% of this week's allowance used · resets ",
     )
   })
-  test("staff also see the dollars, for debugging", () => {
+  test("staff see tokens too — no dollars for anyone (Alex, 2026-10-20)", () => {
     const a = planSummary(me({}, { measured: true, plan: null, label: "Staff" }), now).allowance!
     expect(a).toContain("12.4M tokens used this week")
-    expect(a).toContain("$0.28 of $1.00")
+    expect(a).not.toContain("$")
+    expect(
+      planSummary(me({ spendUsd: 3 }, { measured: true, plan: null, label: "Staff" }), now).allowance,
+    ).not.toContain("$")
   })
   test("token counts read like the plans: K, M, B", () => {
     expect(planSummary(me({ tokensUsed: 850_000 }), now).allowance).toStartWith("850K tokens")
