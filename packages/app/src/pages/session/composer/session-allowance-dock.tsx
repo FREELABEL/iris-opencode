@@ -38,9 +38,9 @@ export function SessionAllowanceDock() {
   )
   const state = createMemo(() => allowanceDockState(plan.latest))
   const [open, setOpen] = createSignal(false)
-  // Two shapes under review (Alex, 2026-10-20): "tab" tucks behind the composer like the todos bar;
-  // "float" is its own card, 12px above (the composer's own padding). Kept switchable until chosen.
-  const tab = () => (globalThis.localStorage?.getItem("iris.allowanceDock") ?? "tab") === "tab"
+  // A FOLDER TAB tucked behind the composer, like the todos bar (Alex, 2026-10-20: "it works as a
+  // family rather than a competing object"). The floating card was the alternative.
+  const tab = () => true
   const upgrade = (event?: MouseEvent) => {
     event?.stopPropagation()
     dialog.show(() => (
