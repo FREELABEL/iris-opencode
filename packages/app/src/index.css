@@ -328,3 +328,16 @@
     }
   }
 }
+
+/*
+ * #190116: the IRIS side panel's product tabs (Genesis, Atlas…), its view tabs (Pages, Sites…)
+ * and the chat's send button showed the arrow. The shared button style sets `cursor: default`
+ * (a native-app convention); these read as links in a panel, and people looked for the hand
+ * before clicking. Scoped to tabs and the send button, so every other control is unchanged.
+ */
+[role="tab"]:not([aria-disabled="true"]):not(:disabled),
+[data-action="prompt-submit"]:not(:disabled),
+.iris-subnav__item,
+.iris-detailnav__item {
+  cursor: pointer;
+}
