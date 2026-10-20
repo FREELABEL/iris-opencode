@@ -60,8 +60,7 @@ export async function requestCheckout(
 
 /** The plan button's words. The weekly allowance is the trial, so a plan is chosen, not trialled. */
 export function planButtonLabel(plan: Pick<PlanOffer, "slug" | "title">, opening: string | null): string {
-  // "Get started", not a trial or "Choose X" (Alex, 2026-10-20): checkout decides the terms.
-  return opening === plan.slug ? "Opening checkout…" : "Get started"
+  return opening === plan.slug ? "Opening checkout…" : `Choose ${plan.title}`
 }
 
 /**

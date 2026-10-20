@@ -19,10 +19,7 @@ describe("requestCheckout — the plan button goes to Stripe, not a web page (#1
 
   test("POSTs the plan to the sidecar and hands back Stripe's URL", async () => {
     const seen: { path?: string; init?: RequestInit } = {}
-    const r = await requestCheckout(
-      answering({ ok: true, url: "https://checkout.stripe.com/c/pay/cs_x" }, seen),
-      "iris-personal-monthly",
-    )
+    const r = await requestCheckout(answering({ ok: true, url: "https://checkout.stripe.com/c/pay/cs_x" }, seen), "iris-personal-monthly")
     expect(r).toEqual({ url: "https://checkout.stripe.com/c/pay/cs_x" })
     expect(seen.path).toBe("/iris/checkout")
     expect(seen.init?.method).toBe("POST")
@@ -42,22 +39,19 @@ describe("requestCheckout — the plan button goes to Stripe, not a web page (#1
   })
 
   test("a thrown fetch (sidecar restarting) is a message, not an exception", async () => {
-    const r = await requestCheckout(
-      (async () => {
-        throw new Error("connection refused")
-      }) as FetchJson,
-      "x",
-    )
+    const r = await requestCheckout((async () => {
+      throw new Error("connection refused")
+    }) as FetchJson, "x")
     expect("error" in r && r.error).toContain("connection refused")
   })
 })
 
 describe("planButtonLabel", () => {
-  test("no trial wording — every plan says Get started (Alex, 2026-10-20)", () => {
-    expect(planButtonLabel({ slug: "a", title: "Solo" }, null)).toBe("Get started")
+  test("no trial wording — the weekly allowance is the trial", () => {
+    expect(planButtonLabel({ slug: "a", title: "Solo" }, null)).toBe("Choose Solo")
   })
   test("only the chosen plan says it is opening", () => {
     expect(planButtonLabel({ slug: "a", title: "Solo" }, "a")).toBe("Opening checkout…")
-    expect(planButtonLabel({ slug: "b", title: "Pro" }, "a")).toBe("Get started")
+    expect(planButtonLabel({ slug: "b", title: "Pro" }, "a")).toBe("Choose Pro")
   })
 })
