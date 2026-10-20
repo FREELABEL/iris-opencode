@@ -1,11 +1,12 @@
 import { IconButton } from "@opencode-ai/ui/icon-button"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
-import { Show, createMemo, createResource, createSignal, onCleanup, onMount } from "solid-js"
+import { Show, createEffect, createMemo, createResource, createSignal, on, onCleanup, onMount } from "solid-js"
 import { DialogUpgrade } from "@/components/dialog-upgrade"
 import { usePlatform } from "@/context/platform"
 import { useServer } from "@/context/server"
 import { glowDurations, useSettings } from "@/context/settings"
 import { allowanceDockState, type AllowancePlan } from "./allowance-dock-state"
+import { allowanceRefusal } from "./allowance-events"
 
 /**
  * The allowance bar above the composer (#190087, Alex 2026-10-20: "just like the tasks bar").
@@ -41,6 +42,19 @@ export function SessionAllowanceDock() {
   // A FOLDER TAB tucked behind the composer, like the todos bar (Alex, 2026-10-20: "it works as a
   // family rather than a competing object"). The floating card was the alternative.
   const tab = () => true
+  // The API refused a message: open the tab with the upgrade, and re-read the allowance now
+  // rather than at the next poll (#190087).
+  createEffect(
+    on(
+      () => allowanceRefusal()?.count,
+      (count) => {
+        if (!count) return
+        setTick((t) => t + 1)
+        setOpen(true)
+      },
+      { defer: true },
+    ),
+  )
   const upgrade = (event?: MouseEvent) => {
     event?.stopPropagation()
     dialog.show(() => (

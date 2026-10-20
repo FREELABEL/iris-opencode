@@ -10,6 +10,7 @@ import { DialogUpgrade } from "@/components/dialog-upgrade"
 import { useServer } from "@/context/server"
 import { usePlatform } from "@/context/platform"
 import { useI18n } from "@opencode-ai/ui/context"
+import { markAllowanceRefused } from "./composer/allowance-events"
 
 const GO_UPSELL_FREE_TIER_LAST_SEEN_AT = "go_upsell_last_seen_at"
 const GO_UPSELL_FREE_TIER_DONT_SHOW = "go_upsell_dont_show"
@@ -107,6 +108,9 @@ export function useUsageExceededDialogs() {
       if (evt.properties.status.type !== "retry") return
       const { action } = evt.properties.status
       if (!action) return
+      // THE IRIS ALLOWANCE (#190087): the API refused; the allowance tab above the composer opens
+      // with the upgrade — every time, not once per window, and with no modal on top of the chat.
+      if (action.reason === "iris_budget_exceeded") return markAllowanceRefused(action.resetsAt)
       if (dialog.active) return
 
       const keys = goUpsellKeys(evt.properties.status)
@@ -134,25 +138,6 @@ export function useUsageExceededDialogs() {
                   void dialog.show(() => <x.DialogConnectProvider controller={controller} />)
                 })
               }
-            }}
-          />
-        ))
-      } else if (action.reason === "iris_budget_exceeded") {
-        // Title, message, label and link all come from the server action. Nothing about the
-        // plan or the price is typed here, so this dialog cannot go stale when the price list
-        // moves — the same rule the web CTAs are getting.
-        dialog.show(() => (
-          <DialogUsageExceeded
-            title={action.title}
-            description={action.message}
-            actionLabel={action.label}
-            link={action.link}
-            guarantee={UPGRADE_GUARANTEE}
-            // The plans, here, straight to Stripe — not the server's web pricing link (#190190).
-            onAction={() => dialog.show(() => <DialogUpgrade fetchJson={fetchJson} />)}
-            onClose={(dontShowAgain) => {
-              setGoUpsellState(keys.lastSeenAt, Date.now())
-              if (dontShowAgain) setGoUpsellState(keys.dontShow, Date.now())
             }}
           />
         ))
