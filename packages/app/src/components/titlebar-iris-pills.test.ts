@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { fleetDotClass, fleetLabel, inboxLabel, planBadge, TITLEBAR_UPGRADE_URL } from "./titlebar-iris-pills"
+import { fleetDotClass, fleetLabel, inboxLabel, planBadge } from "./titlebar-iris-pills"
 
 describe("fleetDotClass", () => {
   // The dot is a verdict, so its colours must obey the same three-fact rule as the label:
@@ -94,13 +94,15 @@ describe("planBadge", () => {
       { measured: true, plan: null, paid: null, upgradeUrl: null },
       { measured: true, plan: "free", upgradeUrl: null },
     ]) {
-      expect(planBadge(state)).toEqual({ text: "Upgrade", url: TITLEBAR_UPGRADE_URL, tone: "accent" })
+      expect(planBadge(state)).toEqual({ text: "Upgrade", tone: "accent" })
     }
   })
 
-  test("the server's upgrade URL wins over the built-in one", () => {
-    expect(planBadge({ measured: true, plan: "free", paid: true, upgradeUrl: "https://x.test/plans" }).url).toBe(
-      "https://x.test/plans",
+  test("carries no URL — Upgrade opens the in-app plans dialog, never a web page (#190190)", () => {
+    // The server's upgrade_url was Elon's pricing page. A paying customer whose Elon session had
+    // died clicked "Start free trial" there again and again with nothing happening.
+    expect(planBadge({ measured: true, plan: "free", paid: true, upgradeUrl: "https://x.test/plans" })).not.toHaveProperty(
+      "url",
     )
   })
 })
@@ -110,17 +112,17 @@ describe("planBadge — the out-of-allowance indicator (#190087)", () => {
     planBadge({ measured: true, plan: "free", paid: false, upgradeUrl: null, fraction })
 
   test("used up: red, says so, still the way to upgrade", () => {
-    expect(at(1)).toEqual({ text: "Out of allowance · Upgrade", url: TITLEBAR_UPGRADE_URL, tone: "danger" })
+    expect(at(1)).toEqual({ text: "Out of allowance · Upgrade", tone: "danger" })
     expect(at(2.67)?.tone).toBe("danger")
   })
 
   test("at 90% or more: amber, a warning not an alarm", () => {
-    expect(at(0.9)).toEqual({ text: "Almost out · Upgrade", url: TITLEBAR_UPGRADE_URL, tone: "warning" })
+    expect(at(0.9)).toEqual({ text: "Almost out · Upgrade", tone: "warning" })
   })
 
   test("below that, or unknown, the plain Upgrade — never red on a reading we do not have", () => {
     for (const f of [0, 0.5, 0.899, null, undefined])
-      expect(at(f)).toEqual({ text: "Upgrade", url: TITLEBAR_UPGRADE_URL, tone: "accent" })
+      expect(at(f)).toEqual({ text: "Upgrade", tone: "accent" })
     expect(planBadge(undefined).tone).toBe("accent")
     expect(planBadge({ measured: false, plan: null, upgradeUrl: null, fraction: 1.5 }).tone).toBe("accent")
   })

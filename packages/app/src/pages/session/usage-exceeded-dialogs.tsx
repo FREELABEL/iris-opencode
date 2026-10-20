@@ -6,6 +6,9 @@ import { createStore } from "solid-js/store"
 import { useSessionLayout } from "./session-layout"
 import { useDialog } from "@opencode-ai/ui/context"
 import { DialogUsageExceeded, UPGRADE_GUARANTEE } from "@/components/dialog-usage-exceeded"
+import { DialogUpgrade } from "@/components/dialog-upgrade"
+import { useServer } from "@/context/server"
+import { usePlatform } from "@/context/platform"
 import { useI18n } from "@opencode-ai/ui/context"
 
 const GO_UPSELL_FREE_TIER_LAST_SEEN_AT = "go_upsell_last_seen_at"
@@ -75,7 +78,14 @@ function goUpsellKeys(status: SessionStatus) {
 export function useUsageExceededDialogs() {
   const sdk = useSDK()
   const dialog = useDialog()
+  const server = useServer()
+  const platform = usePlatform()
   const { params } = useSessionLayout()
+  // The plans dialog's fetch: the sidecar, GET for plans and POST for checkout.
+  const fetchJson = async <T,>(path: string, init?: RequestInit) => {
+    const base = server.current?.http?.url?.replace(/\/$/, "")
+    return (await (await (platform.fetch ?? globalThis.fetch)(`${base}${path}`, init)).json()) as T
+  }
   const { t, locale } = useI18n()
   const isEnglish = () => locale() === "en"
 
@@ -137,7 +147,9 @@ export function useUsageExceededDialogs() {
             description={action.message}
             actionLabel={action.label}
             link={action.link}
-            guarantee={action.link ? UPGRADE_GUARANTEE : undefined}
+            guarantee={UPGRADE_GUARANTEE}
+            // The plans, here, straight to Stripe — not the server's web pricing link (#190190).
+            onAction={() => dialog.show(() => <DialogUpgrade fetchJson={fetchJson} />)}
             onClose={(dontShowAgain) => {
               setGoUpsellState(keys.lastSeenAt, Date.now())
               if (dontShowAgain) setGoUpsellState(keys.dontShow, Date.now())
