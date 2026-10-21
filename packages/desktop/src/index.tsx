@@ -1,5 +1,6 @@
 // @refresh reload
 import { render } from "solid-js/web"
+import { createSignal, onCleanup, Show } from "solid-js"
 import { AppBaseProviders, AppInterface, PlatformProvider, Platform, ServerConnection } from "@opencode-ai/app"
 import { open, save } from "@tauri-apps/plugin-dialog"
 import { open as shellOpen } from "@tauri-apps/plugin-shell"
@@ -312,12 +313,30 @@ const sidecarConnection: ServerConnection.Any = {
 const servers = [sidecarConnection]
 const defaultServer = ServerConnection.key(sidecarConnection)
 
+// The h-8 strip below makes room for the macOS traffic lights over the overlay
+// title bar. In full screen macOS hides both the title bar and the lights, so the
+// strip was left as an empty band across the top of the window (#190242).
+function useFullscreen() {
+  const [fullscreen, setFullscreen] = createSignal(false)
+  const win = getCurrentWindow()
+  const sync = () =>
+    void win
+      .isFullscreen()
+      .then(setFullscreen)
+      .catch(() => undefined)
+  sync()
+  const unlisten = win.onResized(sync)
+  onCleanup(() => void unlisten.then((off) => off()).catch(() => undefined))
+  return fullscreen
+}
+
 render(() => {
+  const fullscreen = useFullscreen()
   return (
     <PlatformProvider value={platform}>
-      {ostype() === "macos" && (
+      <Show when={ostype() === "macos" && !fullscreen()}>
         <div class="mx-px bg-background-base border-b border-border-weak-base h-8" data-tauri-drag-region />
-      )}
+      </Show>
       <AppBaseProviders>
         <AppInterface defaultServer={defaultServer} servers={servers} />
       </AppBaseProviders>
