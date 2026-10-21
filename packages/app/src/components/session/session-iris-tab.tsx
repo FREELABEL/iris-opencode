@@ -130,7 +130,10 @@ interface AtlasItem extends CardFace {
   title: string
   type?: string
   status?: string
+  /** Only when the board was read WITH bodies (a search). Otherwise see `preview`. */
   content?: string
+  /** The start of the body, from fl-api's card summary (#190231 0d). */
+  preview?: string
   createdAt?: string
   updatedAt?: string
 }
@@ -4203,7 +4206,9 @@ export function SessionIrisTab() {
                         <div class="iris-atlas-list__items">
                         <For each={list.items}>
                           {(item) => {
-                            const preview = createMemo(() => cardPreview(item.content, item.title))
+                            // The board is read without bodies (#190231 0d): the row's line is fl-api's preview, or the
+                            // body when there is one (a search reads bodies).
+                            const preview = createMemo(() => cardPreview(item.content ?? item.preview, item.title))
                             return (
                               <div
                                 role="button"
