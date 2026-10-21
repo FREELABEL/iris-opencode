@@ -1389,6 +1389,32 @@ export interface Agent {
  * built from `/agents` alone can tell you a heartbeat agent exists and never that it has not
  * run in four days. That distinction is the whole reason anyone opens this list.
  */
+/**
+ * Every agent you own, on any board (#190269) — the members picker offers them, because fl-api
+ * lets a card be assigned any agent that belongs to the board OR to the board's owner. A board
+ * with no agents of its own otherwise offered none, which read as "you cannot add agents".
+ */
+export async function fetchMyAgents(): Promise<PlatformResult<{ agents: { id: number; name: string }[] }>> {
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: notSignedIn(), data: { agents: [] } }
+  try {
+    const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents?per_page=200`)
+    const j = (await res.json().catch(() => ({}))) as any
+    if (!res.ok) return { measured: false, reason: apiFailure(j, res.status), data: { agents: [] } }
+    const list = Array.isArray(j?.data?.data) ? j.data.data : Array.isArray(j?.data) ? j.data : []
+    return {
+      measured: true,
+      data: {
+        agents: list
+          .filter((a: any) => Number.isFinite(Number(a?.id)) && typeof a?.name === "string")
+          .map((a: any) => ({ id: Number(a.id), name: a.name as string })),
+      },
+    }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { agents: [] } }
+  }
+}
+
 export async function fetchAgents(bloqId: number): Promise<PlatformResult<{ agents: Agent[] }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { agents: [] } }

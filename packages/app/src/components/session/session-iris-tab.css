@@ -2834,3 +2834,467 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   background: var(--background-element);
   white-space: pre-wrap;
 }
+
+/* ── The card's facts, at the top (#190269) ─────────────────────────────── */
+/* The IRIS hairline: the brand's gradient, once, across the top of the card. */
+.iris-card__head {
+  position: relative;
+  gap: 10px;
+  padding: 4px 18px 14px;
+}
+.iris-card__head::before {
+  content: "";
+  position: absolute;
+  inset: -2px 18px auto;
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #d946ef, #3b82f6, #22d3ee);
+  opacity: 0.85;
+}
+.iris-card__title {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  padding: 6px 0 2px;
+}
+
+.iris-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.iris-fact {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-weaker-base);
+  background: var(--background-element);
+  color: var(--text-base);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+}
+.iris-fact:hover,
+.iris-fact:focus-within,
+.iris-fact:focus-visible {
+  border-color: var(--text-weak);
+  outline: none;
+}
+.iris-fact__label {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-weak);
+}
+.iris-fact__value {
+  font-weight: 560;
+  color: var(--text-strong);
+  text-transform: capitalize;
+  white-space: nowrap;
+}
+.iris-fact[data-empty] .iris-fact__value {
+  font-weight: 400;
+  color: var(--text-weak);
+  text-transform: none;
+}
+.iris-fact__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 0%, transparent);
+}
+.iris-fact[data-tone="danger"] {
+  border-color: color-mix(in srgb, #ef4444 55%, transparent);
+  background: color-mix(in srgb, #ef4444 12%, var(--background-element));
+}
+.iris-fact[data-tone="warn"] {
+  border-color: color-mix(in srgb, #f59e0b 55%, transparent);
+  background: color-mix(in srgb, #f59e0b 12%, var(--background-element));
+}
+.iris-fact--select {
+  padding-right: 4px;
+}
+.iris-fact__select {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-strong);
+  font: inherit;
+  font-weight: 560;
+  padding: 0 14px 0 0;
+  cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 7px) 55%, calc(100% - 3px) 55%;
+  background-size: 4px 4px;
+  background-repeat: no-repeat;
+}
+.iris-fact__select:focus {
+  outline: none;
+}
+.iris-facts__labels {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-left: 4px;
+}
+.iris-label {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(90deg, #9333ea, #2563eb);
+}
+.iris-label--add {
+  color: var(--text-weak);
+  background: transparent;
+  border: 1px dashed var(--border-weak-base, var(--border-weaker-base));
+  cursor: pointer;
+}
+.iris-label--add:hover:not(:disabled) {
+  color: var(--text-strong);
+  border-color: var(--text-weak);
+}
+.iris-label--add:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Members: faces, not a select. */
+.iris-members2 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+}
+.iris-members2__faces {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.iris-members2__face {
+  position: relative;
+  display: inline-flex;
+}
+.iris-members2__x {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--text-strong);
+  background: var(--background-base);
+  border: 1px solid var(--border-weaker-base);
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 0.12s;
+}
+.iris-members2__face:hover .iris-members2__x,
+.iris-members2__x:focus-visible {
+  opacity: 1;
+}
+.iris-members2__add {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--text-weak);
+  border: 1px dashed var(--border-weak-base, var(--border-weaker-base));
+  background: transparent;
+  cursor: pointer;
+}
+.iris-members2__add:hover:not(:disabled) {
+  color: var(--text-strong);
+  border-color: var(--text-weak);
+}
+.iris-members2__empty {
+  font-size: 12px;
+  color: var(--text-weak);
+  margin-left: 4px;
+}
+.iris-members2__note {
+  font-size: 11.5px;
+  color: var(--text-critical-base, #ef4444);
+}
+.iris-members2__note[data-ok] {
+  color: var(--text-weak);
+}
+.iris-avatar2 {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: 999px;
+  color: #fff;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  box-shadow: 0 0 0 2px var(--background-base);
+  user-select: none;
+}
+.iris-avatar2[data-kind="agent"] {
+  border-radius: 8px;
+}
+
+/* The picker: tick as many as you like. */
+.iris-pick {
+  position: fixed;
+  z-index: 70;
+  width: 320px;
+  max-height: min(420px, calc(100vh - 24px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border-weaker-base);
+  background: var(--background-base);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.28);
+}
+.iris-pick__search {
+  width: 100%;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-weaker-base);
+  background: var(--background-element);
+  color: var(--text-strong);
+  font-size: 12.5px;
+}
+.iris-pick__search:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+.iris-pick__list {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.iris-pick__head {
+  padding: 8px 6px 4px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-weak);
+}
+.iris-pick__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text-base);
+  cursor: pointer;
+}
+.iris-pick__row:hover {
+  background: var(--background-element);
+}
+.iris-pick__row[data-on] .iris-pick__name {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+.iris-pick__row input {
+  accent-color: #3b82f6;
+  cursor: pointer;
+}
+.iris-pick__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.iris-pick__hint {
+  font-size: 11px;
+  color: var(--text-weak);
+}
+.iris-pick__none {
+  padding: 8px 6px;
+}
+.iris-pick__invite {
+  padding-top: 8px;
+  border-top: 1px solid var(--border-weaker-base);
+}
+
+/* ── Card layout, consolidated (#190280 #190281 #190282) ───────────────── */
+.iris-card__crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+/* Members in the top bar: overlapping faces, people round, agents square. */
+.iris-members2[data-compact] {
+  margin-left: 10px;
+  padding-left: 12px;
+  border-left: 1px solid var(--border-weaker-base);
+  gap: 6px;
+}
+.iris-members2[data-compact] .iris-members2__face + .iris-members2__face {
+  margin-left: -3px;
+}
+.iris-members2[data-compact] .iris-members2__faces {
+  gap: 0;
+}
+.iris-members2[data-compact] .iris-members2__add {
+  margin-left: 6px;
+  width: 26px;
+  height: 26px;
+}
+.iris-members2__more {
+  margin-left: -6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-strong);
+  background: var(--background-element);
+  box-shadow: 0 0 0 2px var(--background-base);
+}
+.iris-avatar2 {
+  position: relative;
+}
+.iris-avatar2[data-kind="agent"] {
+  border-radius: 7px;
+}
+.iris-avatar2__spark {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 12px;
+  height: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  font-size: 8px;
+  line-height: 1;
+  color: #fff;
+  background: #22d3ee;
+  box-shadow: 0 0 0 2px var(--background-base);
+}
+
+/* Share, in the window bar. */
+.iris-card__share {
+  height: 26px;
+  padding: 0 10px;
+  margin-right: 4px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-strong);
+  border: 1px solid var(--border-weaker-base);
+  background: var(--background-element);
+  cursor: pointer;
+}
+.iris-card__share:hover,
+.iris-card__share[aria-pressed="true"] {
+  border-color: #3b82f6;
+}
+
+/* Left column: description, checklist, files — one scroll. */
+.iris-card__body {
+  overflow-y: auto;
+  gap: 4px;
+}
+/* A block in the left column (checklist, files): laid out like the sidebar it came from. */
+.iris-card__block {
+  display: block;
+  margin-top: 8px;
+}
+.iris-card__body .iris-card__read {
+  flex: none;
+  overflow: visible;
+  min-height: 2.5em;
+}
+.iris-card__read {
+  border-radius: 6px;
+  padding: 4px 6px;
+  margin: 0 -6px;
+  cursor: text;
+}
+.iris-card__read:hover {
+  background: var(--background-element);
+}
+.iris-card__read:focus-visible {
+  outline: 1px solid #3b82f6;
+}
+.iris-card__editbtn {
+  opacity: 0.6;
+}
+.iris-card__body:hover .iris-card__editbtn {
+  opacity: 1;
+}
+
+/* Right column: one conversation, two faces. */
+.iris-seg {
+  display: inline-flex;
+  margin: 10px 12px 4px;
+  padding: 3px;
+  gap: 2px;
+  border-radius: 999px;
+  border: 1px solid var(--border-weaker-base);
+  background: var(--background-element);
+  align-self: flex-start;
+}
+.iris-seg__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 560;
+  color: var(--text-weak);
+  cursor: pointer;
+}
+.iris-seg__item[aria-selected="true"] {
+  color: #fff;
+  background: linear-gradient(90deg, #9333ea, #2563eb);
+}
+.iris-seg__item[aria-selected="true"] .iris-card__count {
+  color: rgb(255 255 255 / 0.8);
+}
+.iris-card__sidebar-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 12px 4px;
+}
+/* Editing in the left column: room to write, growing with the text. */
+.iris-card__body .iris-card__textarea {
+  flex: none;
+  min-height: 180px;
+  height: auto;
+  field-sizing: content;
+  max-height: 60vh;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.55;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #3b82f6;
+  background: var(--background-element);
+}

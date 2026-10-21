@@ -1297,6 +1297,7 @@ export const IrisPaths = {
   notifySettings: `${root}/notifications/settings`,
   meLive: `${root}/me/live`,
   agents: `${root}/agents/:bloqID`,
+  agentsMine: `${root}/agents-mine`,
   leads: `${root}/leads/:bloqID`,
   pages: `${root}/pages/:bloqID`,
   schemas: `${root}/schemas/:bloqID`,
@@ -1745,6 +1746,12 @@ export const IrisApi = HttpApi.make("iris").add(
             "#189799. `ready` once connected, `notice` {kind, text, excerpt?, bloqId, itemId, title?, by?} when a card is assigned to you, mentions you or is due tomorrow, `status` {pusher}, and `ping` every 25 s. A contains_phi board's notice carries no title and no excerpt.",
         }),
       ),
+      HttpApiEndpoint.get("agentsMine", IrisPaths.agentsMine, {
+        success: described(
+          Schema.Struct({ ...Measured, agents: Schema.Array(Schema.Struct({ id: Schema.Finite, name: Schema.String })) }).annotate({ identifier: "IrisAgentsMine" }),
+          "Every agent you own, on any board",
+        ),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.agentsMine", summary: "Your agents across all boards (#190269)" })),
       HttpApiEndpoint.get("itemActivity", IrisPaths.itemActivity, {
         params: { itemID: Schema.NumberFromString },
         success: described(
