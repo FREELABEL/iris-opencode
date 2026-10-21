@@ -112,7 +112,7 @@ describe("planBadge — the out-of-allowance indicator (#190087)", () => {
     planBadge({ measured: true, plan: "free", paid: false, upgradeUrl: null, fraction })
 
   test("used up: red, says so, still the way to upgrade", () => {
-    expect(at(1)).toEqual({ text: "Out of allowance · Upgrade", tone: "danger" })
+    expect(at(1)).toEqual({ text: "⚡ Upgrade · Out of tokens", tone: "danger" })
     expect(at(2.67)?.tone).toBe("danger")
   })
 

@@ -160,6 +160,16 @@
     transform-origin: 50% 50%;
   }
 
+  /* Inside the green update pill (#190257) the spinner takes the pill's colour and size. */
+  [data-slot="titlebar-update-pill"] [data-slot="titlebar-update-loader"] {
+    margin: 0;
+    width: 8px;
+    height: 8px;
+    border-width: 1.5px;
+    border-color: color-mix(in srgb, currentColor 30%, transparent);
+    border-top-color: currentColor;
+  }
+
   @media (prefers-reduced-motion: reduce) {
     [data-slot="titlebar-update-loader"] {
       animation: none;
