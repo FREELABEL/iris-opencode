@@ -789,6 +789,16 @@ const SkillTestCommand = cmd({
         process.exit(1)
       }
 
+      // #190275: a generated SKILL.md is a summary of a playbook, with no steps. Calling it
+      // "Valid · 0 steps" told the author their playbook was fine when the playbook itself
+      // had not been read at all.
+      if (Skill.isGeneratedSummary(await Bun.file(info.location).text())) {
+        const msg = generatedSummaryMessage(String(args.name), info.location)
+        if (args.json) await writeJson({ valid: false, errors: [msg] })
+        else console.error(msg)
+        process.exit(1)
+      }
+
       let plan: SkillPlan
       try {
         plan = await parsePlan(info)
@@ -2386,6 +2396,18 @@ const UnpublishCommand = cmd({
   },
 })
 
+/** Why a generated SKILL.md is refused, and where the real playbook should be (#190275). */
+function generatedSummaryMessage(name: string, location: string): string {
+  return [
+    `  ${location}`,
+    `  is the summary \`iris playbook sync\` generates for Claude Code, not the playbook '${name}'.`,
+    `  It has no steps. Refusing to use it as the playbook.`,
+    ``,
+    `  The playbook is a PLAYBOOK.md in .iris/playbooks/${name}/ (in this project or ~/.iris).`,
+    `  If one exists, it did not resolve — \`iris playbook list\` names files that failed to parse.`,
+  ].join("\n")
+}
+
 const PublishCommand = cmd({
   command: "publish <name>",
   describe: "publish a playbook with a scope: local | private | project | unlisted | public",
@@ -2413,6 +2435,18 @@ const PublishCommand = cmd({
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Publish Playbook — ${highlight(String(args.name))}`)
+
+    // #190275 — refuse to publish a generated summary, for every scope, before anything else.
+    // When the playbook could not be found or read, the name resolved to the SKILL.md that
+    // `sync` writes for Claude Code, and publish uploaded it: atlas-epic's 16 steps were
+    // replaced in the registry by a 168-line stub with none, and `verify` then reported the
+    // upload "identical" — because it compares against the same wrong file.
+    const pre = await withInstance(() => Skill.get(String(args.name)))
+    if (pre && Skill.isGeneratedSummary(await Bun.file(pre.location).text())) {
+      console.error(generatedSummaryMessage(String(args.name), pre.location))
+      process.exitCode = 1
+      return
+    }
 
     // #182937 — `local` returns HERE, above everything.
     //
