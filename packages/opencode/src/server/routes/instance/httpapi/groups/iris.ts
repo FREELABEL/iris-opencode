@@ -61,13 +61,16 @@ const Measured = {
   ),
 }
 
-const AtlasItem = Schema.Struct({
+export const AtlasItem = Schema.Struct({
   id: Schema.Finite,
   title: Schema.String,
   type: Schema.optional(Schema.String),
   status: Schema.optional(Schema.String),
   description: Schema.optional(Schema.String),
-  content: Schema.optional(described(Schema.String, "The item body, as markdown.")),
+  content: Schema.optional(described(Schema.String, "The item body, as markdown. Only on a search: boards are read without bodies (#190231 0d).")),
+  preview: Schema.optional(
+    described(Schema.String, "The start of the body (fl-api summary.preview, up to 400 chars of prose) — a list row's second line (#190231 0d)."),
+  ),
   createdAt: Schema.optional(described(Schema.String, "ISO timestamp the item was created.")),
   updatedAt: Schema.optional(described(Schema.String, "ISO timestamp the item was last edited.")),
   dueDate: Schema.optional(described(Schema.String, "Due date as fl-api stores it (#189806).")),
