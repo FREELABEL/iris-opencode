@@ -1,4 +1,5 @@
-import { Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
+import { Show, createEffect, createMemo, on, onCleanup } from "solid-js"
+import { sessionsDrawerOpen, setSessionsDrawerOpen } from "./sessions-drawer-state"
 import { useLocation } from "@solidjs/router"
 import { useTabs } from "@/context/tabs"
 import { ScrollView } from "@opencode-ai/ui/scroll-view"
@@ -19,10 +20,8 @@ import { HomeSessions } from "@/pages/home/home-sessions"
  * Opened by the IRIS cube in the title bar. Closes on Esc, a click outside, or when a chat is
  * opened from it (the route changes).
  */
-const [open, setOpen] = createSignal(false)
-export const sessionsDrawerOpen = open
-export const toggleSessionsDrawer = () => setOpen((v) => !v)
-export const closeSessionsDrawer = () => setOpen(false)
+const open = sessionsDrawerOpen
+const setOpen = setSessionsDrawerOpen
 
 export function SessionsDrawer() {
   const location = useLocation()

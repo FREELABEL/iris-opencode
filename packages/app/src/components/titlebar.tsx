@@ -10,7 +10,7 @@ import {
   Switch,
   untrack,
 } from "solid-js"
-import { sessionsDrawerOpen, toggleSessionsDrawer } from "@/components/sessions-drawer"
+import { sessionsDrawerOpen, toggleSessionsDrawer } from "@/components/sessions-drawer-state"
 import { createStore } from "solid-js/store"
 import { useLocation, useNavigate, useParams } from "@solidjs/router"
 import { IconButton } from "@opencode-ai/ui/icon-button"
