@@ -303,6 +303,11 @@ export interface AtlasItem {
   description?: string
   /** The item's body. This is the thing a person actually opens an item to read. */
   content?: string
+  /**
+   * The start of the body (fl-api's summary.preview, up to 400 chars of raw prose) — what a list
+   * row shows under the title. Present when the board was read without bodies (#190231 0d).
+   */
+  preview?: string
   /** ISO timestamps from fl-api — what the panel's "last edited", sort and filter read. */
   createdAt?: string
   updatedAt?: string
@@ -383,6 +388,7 @@ export function cardFace(i: any): Partial<AtlasItem> {
       out.tasks = { open: Number(s.tasks.open) || 0, done: Number(s.tasks.done) || 0, total: Number(s.tasks.total) || 0 }
     if (typeof s.attachments === "number") out.attachments = s.attachments
     if (typeof s.cover === "string" && /^https?:\/\//.test(s.cover)) out.cover = s.cover
+    if (typeof s.preview === "string") out.preview = s.preview
     if (Array.isArray(s.assignees))
       out.assignees = s.assignees
         .filter((a: any) => a && (a.type === "user" || a.type === "agent"))
@@ -404,7 +410,35 @@ export function cardFace(i: any): Partial<AtlasItem> {
   return out
 }
 
-export async function fetchAtlas(bloqId: number): Promise<PlatformResult<{ lists: AtlasList[] }>> {
+/**
+ * WITHOUT BODIES BY DEFAULT (#190231 phase 0d).
+ *
+ * The board read is downloaded over the user's own connection on every open and on every live
+ * change. Measured on board 174: 2,139,422 bytes with bodies, 625,237 without. Nothing on the
+ * board needs a whole body any more — the card editor fetches its own item, and a list row's
+ * second line comes from fl-api's `summary.preview` — so only SEARCH asks for bodies, because
+ * "the card that mentions Servis" is a body match.
+ *
+ * An fl-api that predates `summary.preview` would leave every row's second line blank, so a
+ * light read that comes back without it is thrown away and the board is read again with bodies.
+ * That makes the desktop release safe to ship before or after the fl-api one.
+ */
+// Set when fl-api answered a light read without previews: skip the light read for a while rather
+// than paying for both reads on every open until fl-api is updated.
+let previewsUnsupportedUntil = 0
+const PREVIEW_RECHECK_MS = 10 * 60_000
+
+/** Tests only. */
+export function resetPreviewSupport() {
+  previewsUnsupportedUntil = 0
+}
+
+export function lightReadUsable(raw: any): boolean {
+  for (const l of raw?.lists ?? []) for (const i of l?.items ?? []) if (typeof i?.summary?.preview !== "string") return false
+  return true
+}
+
+export async function fetchAtlas(bloqId: number, opts: { bodies?: boolean } = {}): Promise<PlatformResult<{ lists: AtlasList[] }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { lists: [] } }
 
@@ -413,27 +447,30 @@ export async function fetchAtlas(bloqId: number): Promise<PlatformResult<{ lists
 
   try {
     /*
-     * ?no_searchable_content=1 — drop the duplicate, keep the bodies.
-     *
-     * `searchable_content` is an $appends accessor that ships a near-copy of `content` on every
-     * item. Measured on board 174: 3.42 MB total, of which content is 1,468 KB and its
-     * duplicate 1,397 KB. Nothing here reads the duplicate.
-     *
-     * NOT `?light=1`, which also drops `content` and would be 0.60 MB — 83% off — because two
-     * things in this panel read the body: the reader renders it, and the search filters on it.
-     * Taking the cheaper number would break search into a title-only match and call it a
-     * performance win. That version needs a per-item fetch on open first.
+     * Which read (see lightReadUsable above for why):
      *
      *   default                     3,590,030 bytes
-     *   no_searchable_content=1     2,139,422 bytes   <- here
-     *   light=1                       625,237 bytes   <- once the reader fetches bodies
+     *   no_searchable_content=1     2,139,422 bytes   <- search, and the fallback for an older fl-api
+     *   light=1                       625,237 bytes   <- everything else
+     *
+     * `searchable_content` is an $appends near-copy of `content`; nothing here reads it.
      */
     // summary=1 (#189793): labels, assignees, task progress and attachment count per card, in
     // one grouped query server-side. An fl-api that predates it ignores the flag.
-    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}?no_searchable_content=1&summary=1`)
-    if (!res.ok) return { measured: false, reason: `fl-api ${res.status}`, data: { lists: [] } }
-    const json = (await res.json()) as any
-    const raw = json?.data ?? json
+    const read = async (q: string) => {
+      const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}?${q}`)
+      if (!res.ok) return { error: `fl-api ${res.status}` }
+      const json = (await res.json()) as any
+      return { raw: json?.data ?? json }
+    }
+    const light = !opts.bodies && Date.now() >= previewsUnsupportedUntil
+    let got = await read(light ? "light=1&summary=1" : "no_searchable_content=1&summary=1")
+    if (light && "raw" in got && !lightReadUsable(got.raw)) {
+      previewsUnsupportedUntil = Date.now() + PREVIEW_RECHECK_MS
+      got = await read("no_searchable_content=1&summary=1")
+    }
+    if (!("raw" in got)) return { measured: false, reason: got.error, data: { lists: [] } }
+    const raw = got.raw
     const lists: AtlasList[] = (raw?.lists ?? []).map((l: any) => ({
       id: l.id,
       name: l.name,

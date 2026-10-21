@@ -205,7 +205,7 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
 
     const atlas = Effect.fn("IrisHttpApi.atlas")(
       (ctx: { params: { bloqID: number }; query: { page?: number; perPage?: number; q?: string } }) =>
-        Effect.promise(() => fetchAtlas(ctx.params.bloqID)).pipe(
+        Effect.promise(() => fetchAtlas(ctx.params.bloqID, { bodies: !!ctx.query.q })).pipe(
           Effect.map((r) => {
             // Filter BEFORE paging — see filterAtlas. Filtering after would count a page.
             const lists = ctx.query.q ? filterAtlas(r.data.lists, ctx.query.q) : r.data.lists
