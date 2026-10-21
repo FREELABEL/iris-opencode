@@ -30,3 +30,34 @@ describe("IrisAtlasItem keeps what the sidecar sends", () => {
     expect(out.preview).toBe("The start of the body")
   })
 })
+
+// #190231 phase 1: the panel decides "copy or live, offline or not" from these three fields.
+// A route schema that drops them shows a stale copy as if it were live.
+import { AtlasResponse } from "../../src/server/routes/instance/httpapi/groups/iris"
+describe("IrisAtlasResponse keeps where the board came from", () => {
+  test("source, copiedAt and offline survive encoding", () => {
+    const answer = {
+      measured: true,
+      reason: "fetch failed",
+      page: 1,
+      perPage: 25,
+      total: 1,
+      totalIsExact: true,
+      hasMore: false,
+      lists: [],
+      source: "copy",
+      copiedAt: "2026-10-21T03:00:00.000Z",
+      offline: true,
+    }
+    const out = Schema.encodeUnknownSync(AtlasResponse)(answer) as Record<string, unknown>
+    expect(out).toMatchObject({ source: "copy", copiedAt: answer.copiedAt, offline: true })
+  })
+})
+
+import { BloqsResponse } from "../../src/server/routes/instance/httpapi/groups/iris"
+describe("IrisBloqsResponse keeps offline", () => {
+  test("offline and copiedAt survive encoding", () => {
+    const a = { measured: true, page: 1, perPage: 5, total: 1, totalIsExact: true, hasMore: false, bloqs: [{ id: 1, name: "b" }], offline: true, copiedAt: "2026-10-21T03:00:00.000Z" }
+    expect(Schema.encodeUnknownSync(BloqsResponse)(a)).toMatchObject({ offline: true, copiedAt: a.copiedAt })
+  })
+})

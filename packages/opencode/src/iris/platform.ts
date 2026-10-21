@@ -438,7 +438,10 @@ export function lightReadUsable(raw: any): boolean {
   return true
 }
 
-export async function fetchAtlas(bloqId: number, opts: { bodies?: boolean } = {}): Promise<PlatformResult<{ lists: AtlasList[] }>> {
+export async function fetchAtlas(
+  bloqId: number,
+  opts: { bodies?: boolean } = {},
+): Promise<PlatformResult<{ lists: AtlasList[]; containsPhi?: boolean }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { lists: [] } }
 
@@ -486,7 +489,8 @@ export async function fetchAtlas(bloqId: number, opts: { bodies?: boolean } = {}
         ...cardFace(i),
       })),
     }))
-    return { measured: true, data: { lists } }
+    // fl-api says per board whether it holds patient data; the local copy needs to know (#190231 phase 1).
+    return { measured: true, data: { lists, containsPhi: raw?.contains_phi === true } }
   } catch (e) {
     return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { lists: [] } }
   }

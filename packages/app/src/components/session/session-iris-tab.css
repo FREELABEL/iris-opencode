@@ -2764,6 +2764,21 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   background: var(--background-element);
   outline: none;
 }
+/* The board drew from this machine's copy (#190231 phase 1): "Updating…", or offline. */
+.iris-atlas-copy {
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--text-weak);
+  background: var(--background-element);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.iris-atlas-copy[data-offline] {
+  color: var(--text-strong);
+  box-shadow: inset 0 0 0 1px var(--border-warning-base, var(--border-base));
+}
 .iris-notify {
   display: flex;
   flex-direction: column;
