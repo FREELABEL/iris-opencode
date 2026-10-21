@@ -51,7 +51,7 @@ import {
   scopeChipLabel,
   visibleTabs,
 } from "./iris-panel-nav"
-import { irisNavRequest, clearIrisNav } from "./iris-nav"
+import { irisNavRequest, clearIrisNav, setIrisPanelView } from "./iris-nav"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { IrisRooms } from "./iris-rooms"
 import { IrisAgentLive } from "./iris-agent-live"
@@ -1032,6 +1032,66 @@ export function surfaceView(input: {
  * What the panel's + menu offers (#186531). One list, derived from SURFACES, so a surface added
  * there appears in the menu without a second table to keep in step.
  */
+/**
+ * Every product and its views, for the agent (#190093): reported to the engine so `side_panel`
+ * can name what exists and refuse what does not, from the same lists the switcher draws.
+ */
+/**
+ * WHAT EACH PLACE IS FOR, in a user's words — so the agent can answer "where do I…?" by taking
+ * them there (#190093). Keyed `surface` and `surface/sub`. A place without a line is still
+ * reachable; it just cannot be recommended by purpose.
+ */
+const PANEL_HINTS: Record<string, string> = {
+  atlas: "Boards of lists and cards — tasks, plans, records",
+  "atlas/lists": "The board's lists and cards, as a board or a list",
+  "atlas/schemas": "The record types (fields) the board's cards use",
+  "atlas/graph": "How boards relate to each other, across the account",
+  "atlas/artifacts": "Atlas notes this conversation produced",
+  agents: "The account's AI agents",
+  "agents/all": "Every agent",
+  "agents/scheduled": "Agents that run on a schedule",
+  "agents/ondemand": "Agents that run when asked",
+  "agents/rooms": "Group chats with several agents (@mention them)",
+  "agents/live": "What an agent is doing right now — take over or hand back",
+  "agents/heartbeats": "Scheduled agents: did the last run work, when is the next — run now or pause",
+  leads: "Leads and contacts in the CRM",
+  pages: "Genesis — web pages, sites, drafts and brand kits",
+  "pages/pages": "Published and draft Genesis pages",
+  "pages/sites": "Sites: pages under shared navigation, with a form inbox",
+  "pages/artifacts": "Drafts the agent made in this conversation, before publishing",
+  "pages/brands": "Brand kits: colours, type and voice pages take their look from",
+  mcp: "MCP servers connected to this project and machine, and their tools",
+  hive: "The user's computers (Hive) and tasks that run on them",
+  "hive/machines": "Computers connected to the account; send one a task",
+  "hive/scripts": "Saved scripts to run on a machine",
+  "hive/inbox": "Tasks waiting for a decision",
+  "hive/peers": "Other machines on the mesh",
+  pulse: "What people are saying about a topic or a contact",
+  "pulse/topic": "Recent conversation about a topic",
+  "pulse/contact": "Recent activity of one contact",
+  playbooks: "Playbooks (skills): repeatable procedures the agent can run",
+  "playbooks/all": "Every playbook available here",
+  "playbooks/project": "Playbooks this project uses",
+  "playbooks/marketplace": "Public playbooks to install",
+  integrations: "Connected accounts — Gmail, Calendar, Slack, Stripe and others",
+  "integrations/project": "Accounts this board may use",
+  "integrations/organization": "Accounts shared across the organization",
+  "integrations/user": "The user's personal connected accounts",
+  "integrations/add": "Connect a new account (Gmail, Slack, …)",
+}
+
+export const IRIS_PANEL_CATALOG: readonly {
+  id: string
+  label: string
+  hint?: string
+  subs: { id: string; label: string; hint?: string }[]
+}[] = SURFACES.map((s) => ({
+  id: s.id,
+  label: s.label,
+  hint: PANEL_HINTS[s.id],
+  subs: (SUBVIEWS[s.id] ?? []).map((v) => ({ id: v.id, label: v.label, hint: PANEL_HINTS[`${s.id}/${v.id}`] })),
+}))
+
 export const IRIS_SURFACE_CHOICES: readonly { id: string; label: string }[] = SURFACES.map((s) => ({
   id: s.id,
   label: s.label,
@@ -1073,6 +1133,17 @@ const [pinsRawSig, setPinsRawSig] = createSignal<string | null>(storage(PINNED_K
 export const irisOpensOnAtlas = () => pinnedByChoice(pinsRawSig(), "atlas")
 export const irisPinned = irisPinnedSig
 export const irisActiveSurface = irisSurfaceSig
+/**
+ * When the product on screen last changed, written WITH the signal (#190093). The strip's
+ * fallback guard needs this moment; an effect watching the signal fires too late — product
+ * switches run in a transition, and effects downstream of it wait for the commit.
+ */
+let surfaceChangedAt = 0
+export const irisSurfaceChangedAt = () => surfaceChangedAt
+const setIrisSurface = (id: SurfaceId) => {
+  if (id !== irisSurfaceSig()) surfaceChangedAt = performance.now()
+  setIrisSurfaceSig(id)
+}
 export function irisStripTabs(): { id: SurfaceId; label: string; pinned: boolean }[] {
   return visibleTabs(irisPinnedSig(), irisSurfaceSig()).map((id) => ({
     id,
@@ -1289,7 +1360,7 @@ export function SessionIrisTab() {
   // this launch is still the one on screen.
   const [surface, setSurface] = createSignal<SurfaceId>(irisSurfaceSig())
   // The side panel's strip highlights the product on screen — keep the shared signal current.
-  createEffect(() => setIrisSurfaceSig(surface()))
+  createEffect(() => setIrisSurface(surface()))
 
   // Remembered PER SURFACE — see LAST_SUBVIEW_KEY. A malformed or missing entry is not an
   // error worth surfacing; resolvePane falls back to the first sub-view of whatever you open.
@@ -2313,6 +2384,14 @@ export function SessionIrisTab() {
   const activeBloqName = createMemo(
     () => settled(bloqs)?.bloqs?.find((b) => b.id === activeBloq())?.name ?? "Select a board",
   )
+
+  // Where the panel actually is, for the agent (#190093). The board's name only once it is known —
+  // "Select a board" is a placeholder, not a name.
+  createEffect(() => {
+    const id = activeBloq()
+    const name = bloqs.latest?.bloqs?.find((b) => b.id === id)?.name
+    setIrisPanelView({ surface: surface(), sub: resolved().sub?.id, bloq: id ? { id, name } : undefined })
+  })
 
   /** A non-Atlas row being inspected. Atlas has its own reader because it has a BODY; the rest
    *  are records, so they get a field list rather than prose. */
