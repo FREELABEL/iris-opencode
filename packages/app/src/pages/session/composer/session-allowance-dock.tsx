@@ -7,6 +7,7 @@ import { useServer } from "@/context/server"
 import { glowDurations, useSettings } from "@/context/settings"
 import { allowanceDockState, type AllowancePlan } from "./allowance-dock-state"
 import { allowanceRefusal } from "./allowance-events"
+import { trackPromptedOnce } from "@/utils/upgrade-funnel"
 
 /**
  * The allowance bar above the composer (#190087, Alex 2026-10-20: "just like the tasks bar").
@@ -51,6 +52,7 @@ export function SessionAllowanceDock() {
         if (!count) return
         setTick((t) => t + 1)
         setOpen(true)
+        trackPromptedOnce(doFetch, "refused")
       },
       { defer: true },
     ),
@@ -59,6 +61,7 @@ export function SessionAllowanceDock() {
     event?.stopPropagation()
     dialog.show(() => (
       <DialogUpgrade
+        source="dock"
         fetchJson={async <T,>(path: string, init?: RequestInit) => (await (await doFetch(path, init)).json()) as T}
       />
     ))
