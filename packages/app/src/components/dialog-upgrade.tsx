@@ -1,8 +1,9 @@
-import { createResource, createSignal, For, Show } from "solid-js"
+import { createResource, createSignal, For, onMount, Show } from "solid-js"
 import { Button } from "@opencode-ai/ui/button"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { usePlatform } from "@/context/platform"
+import { trackUpgrade } from "@/utils/upgrade-funnel"
 import { planSummary, type SummaryInput } from "./plan-summary"
 import { IRIS_COLORS, PlanMark } from "./plan-mark"
 
@@ -83,6 +84,8 @@ export function PlanCards(props: {
   me?: () => SummaryInput | undefined
   /** "rows" for a narrow panel (Settings): one full-width row per plan instead of squeezed columns. */
   layout?: "columns" | "rows"
+  /** Where the plans were opened from, for the funnel (#190373). */
+  source: "pill" | "dock" | "settings"
 }) {
   const rows = () => props.layout === "rows"
   const platform = usePlatform()
@@ -97,11 +100,13 @@ export function PlanCards(props: {
 
   const [opening, setOpening] = createSignal<string | null>(null)
   const [error, setError] = createSignal<string | null>(null)
+  onMount(() => trackUpgrade(props.fetchJson, "upgrade.opened", props.source))
 
   const choose = async (slug: string) => {
     if (opening()) return
     setError(null)
     setOpening(slug)
+    trackUpgrade(props.fetchJson, "upgrade.checkout_started", slug)
     const r = await requestCheckout(props.fetchJson, slug)
     setOpening(null)
     if ("error" in r) {
@@ -299,12 +304,12 @@ export function PlanCards(props: {
 }
 
 /** The plans, inside the app — not a bounce to a browser tab for someone who only wanted to look. */
-export function DialogUpgrade(props: { fetchJson: FetchJson }) {
+export function DialogUpgrade(props: { fetchJson: FetchJson; source: "pill" | "dock" }) {
   const dialog = useDialog()
   return (
     <Dialog title="Upgrade IRIS" description="Pick a plan to pay securely with Stripe." size="x-large">
       <div class="px-6 pb-5">
-        <PlanCards fetchJson={props.fetchJson} onChosen={() => dialog.close()} />
+        <PlanCards fetchJson={props.fetchJson} source={props.source} onChosen={() => dialog.close()} />
       </div>
     </Dialog>
   )

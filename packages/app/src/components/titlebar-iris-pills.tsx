@@ -1,4 +1,5 @@
 import {
+  createEffect,
   createMemo,
   createResource,
   createSignal,
@@ -19,6 +20,7 @@ import { useTitlebarRightMount } from "./titlebar"
 import { DialogUpgrade } from "./dialog-upgrade"
 import { parseIrisLink } from "@/utils/iris-deep-link"
 import { showToast } from "@/utils/toast"
+import { trackPromptedOnce } from "@/utils/upgrade-funnel"
 
 /**
  * Two pills in the titlebar: how many machines are up, and whether anything is waiting for you.
@@ -241,6 +243,12 @@ export function TitlebarIrisPills() {
   })
   const [plan] = createResource<PlanState | undefined, Key>(planKey, poll<PlanState>("/iris/plan"))
   const badge = createMemo(() => planBadge(plan()))
+  // The pill turning amber or red IS the ask (#190373): record it, once per kind per app run.
+  createEffect(() => {
+    const tone = badge().tone
+    if (tone === "danger") trackPromptedOnce(doFetch, "out")
+    else if (tone === "warning") trackPromptedOnce(doFetch, "almost")
+  })
 
   const notice = createMemo(() => authNotice(auth()))
 
@@ -357,6 +365,7 @@ export function TitlebarIrisPills() {
                   onClick={() =>
                     dialog.show(() => (
                       <DialogUpgrade
+                        source="pill"
                         fetchJson={async <T,>(path: string, init?: RequestInit) =>
                           (await (await doFetch(path, init)).json()) as T
                         }

@@ -566,7 +566,7 @@ export const SettingsAccountV2: Component = () => {
 
           <div class="settings-v2-section" ref={plansSection} data-action="account-plans">
             <h3 class="settings-v2-section-title">Plans</h3>
-            <PlanCards fetchJson={fetchJson} me={() => me()} layout="rows" />
+            <PlanCards fetchJson={fetchJson} me={() => me()} layout="rows" source="settings" />
           </div>
         </Show>
       </div>
