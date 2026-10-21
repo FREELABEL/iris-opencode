@@ -10,6 +10,7 @@ import {
   Switch,
   untrack,
 } from "solid-js"
+import { sessionsDrawerOpen, toggleSessionsDrawer } from "@/components/sessions-drawer"
 import { createStore } from "solid-js/store"
 import { useLocation, useNavigate, useParams } from "@solidjs/router"
 import { IconButton } from "@opencode-ai/ui/icon-button"
@@ -372,7 +373,17 @@ export function Titlebar(props: { update?: TitlebarUpdate; debugTools?: { visibl
                   "md:pl-4": !macTrafficLights(),
                 }}
               >
-                <IrisMark />
+                {/* The cube opens every chat as a drawer over this one (#190273). It did nothing. */}
+                <button
+                  type="button"
+                  class="flex size-8 shrink-0 items-center justify-center rounded-md hover:bg-v2-background-bg-hover aria-pressed:bg-v2-background-bg-hover"
+                  aria-label="All chats"
+                  aria-pressed={sessionsDrawerOpen()}
+                  title="All chats"
+                  onClick={toggleSessionsDrawer}
+                >
+                  <IrisMark />
+                </button>
                 <ChannelIndicator debugTools={props.debugTools} />
                 <Show when={windows() || linux()}>
                   <WindowsAppMenu command={command} platform={platform} variant="v2" />
