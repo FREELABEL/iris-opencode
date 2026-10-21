@@ -1,4 +1,5 @@
 import {
+  batch,
   createEffect,
   createMemo,
   createResource,
@@ -34,6 +35,7 @@ import type { FileContent } from "./iris-file-artifact"
 import { IrisCardEditor } from "./iris-card-editor"
 import { setDictationAuth } from "@opencode-ai/session-ui/v2/prompt-input/dictation"
 import { dictationAuthFor } from "@/utils/dictation-auth"
+import { settled } from "@/utils/settled"
 import { IrisArtifacts } from "./iris-artifacts"
 import { IrisBrandKits } from "./iris-brand-kits"
 import { IrisAtlasArtifacts } from "./iris-atlas-artifacts"
@@ -97,6 +99,8 @@ import type { CardSchema } from "./iris-card-editor"
 import { liveLabel, readSse, type LiveState } from "./iris-atlas-live"
 import { CardBadges, type CardFace } from "./iris-card-badges"
 import { IrisBoardMembers, readMembers } from "./iris-board-members"
+import { IrisNotifySettings } from "./iris-notify-settings"
+import { dragHasFiles, uploadCardFiles } from "./iris-card-files"
 import { IrisDelegateRail } from "./iris-delegate-rail"
 import { slideCards } from "./iris-board-motion"
 import { useLanguage } from "@/context/language"
@@ -126,7 +130,10 @@ interface AtlasItem extends CardFace {
   title: string
   type?: string
   status?: string
+  /** Only when the board was read WITH bodies (a search). Otherwise see `preview`. */
   content?: string
+  /** The start of the body, from fl-api's card summary (#190231 0d). */
+  preview?: string
   createdAt?: string
   updatedAt?: string
 }
@@ -1307,7 +1314,7 @@ export function SessionIrisTab() {
     })(),
   )
 
-  const activeBloq = createMemo(() => selected() ?? (bloqs.latest ?? bloqs())?.bloqs?.[0]?.id)
+  const activeBloq = createMemo(() => selected() ?? settled(bloqs)?.bloqs?.[0]?.id)
 
   /**
    * WARM THE PLAYBOOK LIST before anyone asks for it. Its first load waits on fl-api's board call,
@@ -1332,8 +1339,8 @@ export function SessionIrisTab() {
   createEffect(() => {
     const wanted = requestedSurface()
     if (!wanted) return
-    // In a transition — see chooseSurface. This is the path every product-tab click takes.
-    void startTransition(() => {
+    // NOT in a transition — see chooseSurface. This is the path every product-tab click takes.
+    batch(() => {
       setSurface(wanted.surface)
       // The sub-view is written through the SAME store the switcher uses, so the strip highlights
       // where you actually are rather than where it was last time.
@@ -1507,8 +1514,13 @@ export function SessionIrisTab() {
    * for the length of a network round trip — reported as "everything goes black and then it
    * shows again". `data.latest` keeps the previous value until the new one lands, which is the
    * whole point of it. The panel now swaps content instead of blinking through nothing.
+   *
+   * Read through `settled`, never `data.latest ?? data()`. Before the first value `.latest`
+   * suspends, which put the boundary round the whole panel into "Loading…" and held every effect
+   * under it — including the one that applies a product-tab click (#190230). Same for `bloqs`,
+   * `boardMembers` and `projectInterior`: anything read from a place that is always on screen.
    */
-  const current = createMemo(() => data.latest ?? data())
+  const current = createMemo(() => settled(data))
 
   /** The rows of whichever pane is active — every response names its own array. */
   const rows = createMemo<any[]>(() => {
@@ -1928,6 +1940,36 @@ export function SessionIrisTab() {
     settledFaces.add(itemId)
     liveRefresh(false)
   }
+  /*
+   * FILES ONTO A CARD (#189797): drop them on its face in List or Board view. The card says
+   * "Uploading 2 of 3…" while they go, and the board note says why if any did not.
+   */
+  const [fileDrop, setFileDrop] = createSignal<{ itemId: number; text: string } | null>(null)
+  const [fileOver, setFileOver] = createSignal<number | null>(null)
+  async function dropFiles(itemId: number, files: File[]) {
+    if (!files.length || fileDrop()) return
+    setFileOver(null)
+    setMoveNote(null)
+    setFileDrop({ itemId, text: `Uploading ${files.length === 1 ? files[0].name : `${files.length} files`}…` })
+    const b = activeBloq()
+    const out = await uploadCardFiles(doFetch, itemId, b == null ? undefined : Number(b), files, (done, total) =>
+      setFileDrop({ itemId, text: total > 1 ? `Uploading ${Math.min(done + 1, total)} of ${total}…` : "Uploading…" }),
+    )
+    setFileDrop(null)
+    if (out.reason) setMoveNote(`${out.ok} of ${out.total} uploaded — ${out.reason}`)
+    if (out.ok) liveRefresh(false)
+  }
+  /** The drag handlers a card face needs for files; card-to-card drags pass straight through. */
+  const fileDropHandlers = (itemId: number) => ({
+    onDragEnter: (e: DragEvent) => {
+      if (dragging() !== null || !dragHasFiles(e.dataTransfer)) return
+      e.preventDefault()
+      setFileOver(itemId)
+    },
+    onDragLeave: (e: DragEvent) => {
+      if (fileOver() === itemId && !(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) setFileOver(null)
+    },
+  })
   function atlasKeys(e: KeyboardEvent) {
     if (pane() !== "atlas" || view() !== "rows" || openRow()) return
     if (e.metaKey || e.ctrlKey || e.altKey) return
@@ -2128,12 +2170,12 @@ export function SessionIrisTab() {
    *  refetch now that the content deliberately stays on screen through one. */
   const busy = createMemo(() => bloqs.loading || data.loading)
 
-  const firstLoad = createMemo(() => (data.loading && !data.latest) || (bloqs.loading && !bloqs.latest))
+  const firstLoad = createMemo(() => (data.loading && !settled(data)) || (bloqs.loading && !settled(bloqs)))
 
   const view = createMemo(() =>
     surfaceView({
       loading: firstLoad(),
-      bloqs: bloqs.latest ?? bloqs(),
+      bloqs: settled(bloqs),
       data: current(),
       rows: rows(),
       dataPane: current()?.["__pane"] as string | undefined,
@@ -2275,7 +2317,7 @@ export function SessionIrisTab() {
       return { measured: true, ...got }
     },
   )
-  const project = () => (projectScope() ? (projectInterior.latest ?? projectInterior()) : undefined)
+  const project = () => (projectScope() ? settled(projectInterior) : undefined)
 
   /** Lists as the card editor wants them, read off the graph's own `list-<id>` nodes. */
   const projectLists = () =>
@@ -2340,7 +2382,7 @@ export function SessionIrisTab() {
   })
 
   const activeBloqName = createMemo(
-    () => (bloqs.latest ?? bloqs())?.bloqs?.find((b) => b.id === activeBloq())?.name ?? "Select a board",
+    () => settled(bloqs)?.bloqs?.find((b) => b.id === activeBloq())?.name ?? "Select a board",
   )
 
   // Where the panel actually is, for the agent (#190093). The board's name only once it is known —
@@ -2762,7 +2804,7 @@ export function SessionIrisTab() {
     // List picker nothing. The graph already holds every list as a `list-<id>` node.
     const lists =
       fromGraph ??
-      (((data.latest ?? data())?.lists as AtlasList[] | undefined) ?? []).map((l) => ({ id: l.id, name: l.name }))
+      ((settled(data)?.lists as AtlasList[] | undefined) ?? []).map((l) => ({ id: l.id, name: l.name }))
     // The card's microphone records through this same server, with the SDK's credentials (#190041).
     setDictationAuth((url) => dictationAuthFor(serverSDK().server.http, url))
     dialog.show(() => (
@@ -2790,26 +2832,26 @@ export function SessionIrisTab() {
   const rowScope = createMemo(() => panelScope(surface(), pane()))
 
   /**
-   * SWITCHING IS A TRANSITION, OR THE PANEL GOES BLACK.
+   * SWITCHING IS IMMEDIATE; THE PANE WAITS IN ITS OWN BOX (#190230).
    *
-   * The pane a switch lands on reads resources that have not loaded yet — Rooms, Artifacts, a
-   * playbook or page doc. Read outside a transition, that suspends the nearest <Suspense>, which
-   * holds the whole side panel and has no fallback: every product-tab click blanked the panel to
-   * its dark ground until the fetch returned. Inside one, the pane you were on stays up until the
-   * next one is ready.
+   * The pane a switch lands on reads resources that have not loaded yet — Rooms, Artifacts, Hive.
+   * That used to suspend the boundary round the whole side panel, so the switch ran in a
+   * transition to keep the old pane up until the new one was ready. Measured on a preview build:
+   * that transition made every click wait for the new pane's own first request (0.4–0.9 s for
+   * Hive), with nothing on screen saying the click had registered. Now the tab and header change
+   * at once and only the pane body shows "Loading…", in its own <Suspense> round the pane <Switch>.
    */
   function chooseSurface(id: SurfaceId) {
-    void startTransition(() => setSurface(id))
+    setSurface(id)
     try {
       localStorage.setItem(LAST_SURFACE_KEY, id)
     } catch {}
   }
 
-  // `target` is explicit for a caller that has just chosen a surface: inside the transition above,
-  // surface() still reads the one being left until the switch commits.
+  // `target` is explicit for a caller that has just chosen a surface.
   function chooseSub(id: string, target: SurfaceId = surface()) {
     const next = { ...subviews(), [target]: id }
-    void startTransition(() => setSubviews(next))
+    setSubviews(next)
     try {
       localStorage.setItem(LAST_SUBVIEW_KEY, JSON.stringify(next))
     } catch {}
@@ -2825,6 +2867,11 @@ export function SessionIrisTab() {
       const known = SURFACES.some((x) => x.id === req.surface)
       if (known) chooseSurface(req.surface as SurfaceId)
       if (req.sub) chooseSub(req.sub, known ? (req.surface as SurfaceId) : surface())
+      // A notification about a card, clicked: the board first, then the card itself (#189799).
+      if (req.itemId && req.itemId > 0) {
+        const id = req.itemId
+        queueMicrotask(() => openCard(id))
+      }
     })
     clearIrisNav()
   })
@@ -2867,7 +2914,7 @@ export function SessionIrisTab() {
    * this button used to live in.
    */
   function openBoardPicker() {
-    const all = (bloqs.latest ?? bloqs())?.bloqs ?? []
+    const all = settled(bloqs)?.bloqs ?? []
     dialog.show(() => (
       <Dialog title="Board" description={`${all.length} boards`}>
         <List
@@ -2910,7 +2957,7 @@ export function SessionIrisTab() {
   // open the picker; session and account views state the scope and have nothing to pick.
   createEffect(() => {
     const scope = rowScope()
-    const hasBoards = ((bloqs.latest ?? bloqs())?.bloqs?.length ?? 0) > 0
+    const hasBoards = (settled(bloqs)?.bloqs?.length ?? 0) > 0
     const project = scope === "project"
     setScopeChip({
       scope,
@@ -3133,12 +3180,12 @@ export function SessionIrisTab() {
               and the live state is still announced to screen readers. */}
           {(() => {
             const memberCount = () =>
-              boardMembers.latest?.measured ? boardMembers.latest!.members.length + 1 : undefined
+              settled(boardMembers)?.measured ? settled(boardMembers)!.members.length + 1 : undefined
             const membersText = () => {
               const n = memberCount()
               return n === undefined ? "Members" : `${n} ${n === 1 ? "member" : "members"}`
             }
-            const shown = () => (boardMembers.latest?.members ?? []).slice(0, 3)
+            const shown = () => (settled(boardMembers)?.members ?? []).slice(0, 3)
             return (
               <button
                 type="button"
@@ -3174,6 +3221,24 @@ export function SessionIrisTab() {
               </button>
             )
           })()}
+          <button
+            type="button"
+            class="iris-atlas-bell"
+            title="Notifications — what Atlas tells you about your cards"
+            aria-label="Notification settings"
+            onClick={() => dialog.show(() => <IrisNotifySettings doFetch={doFetch} />)}
+          >
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+              <path
+                d="M8 1.5a4 4 0 0 0-4 4v2.3L2.8 10a.6.6 0 0 0 .5.9h9.4a.6.6 0 0 0 .5-.9L12 7.8V5.5a4 4 0 0 0-4-4ZM6.3 12.5a1.8 1.8 0 0 0 3.4 0"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.3"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
         </div>
       </Show>
 
@@ -3814,6 +3879,17 @@ export function SessionIrisTab() {
           "flex flex-col overflow-hidden": pane() === "graph" || SELF_PANES.has(pane()),
         }}
       >
+        {/* ITS OWN LOADING BOUNDARY (#190230). A pane that reads a resource on first load used to
+            suspend the boundary round the whole panel, so product switches ran in a transition
+            and every click waited for the new pane's data with no sign it had registered. Now the
+            switch is immediate and only this box waits. See chooseSurface. */}
+        <Suspense
+          fallback={
+            <div data-slot="iris-pane-loading" class="flex h-full items-center justify-center text-12-regular text-text-weak py-6">
+              Loading…
+            </div>
+          }
+        >
         <Switch>
           {/* Rooms own the pane, ahead of the loading/empty states: a first-time user has zero
               rooms, and "empty" must still show the New room button. */}
@@ -3863,7 +3939,7 @@ export function SessionIrisTab() {
               project={projectDir()}
               bloqId={activeBloq()}
               bloqName={activeBloqName()}
-              boards={() => ((bloqs.latest ?? bloqs())?.bloqs ?? []).map((b) => ({ id: b.id, name: b.name }))}
+              boards={() => (settled(bloqs)?.bloqs ?? []).map((b) => ({ id: b.id, name: b.name }))}
               listen={(fn) => serverSDK().event.listen(fn as any)}
               files={sessionFiles}
               readFile={readSessionFile}
@@ -3892,7 +3968,7 @@ export function SessionIrisTab() {
           {/* NOT MEASURED. Never rendered as an empty surface — see surfaceView. */}
           <Match when={view() === "unreachable"}>
             <p class="px-2 py-2 text-12-regular text-text-weak">
-              Could not reach IRIS — {(bloqs.latest ?? bloqs())?.reason ?? "unknown"}.
+              Could not reach IRIS — {settled(bloqs)?.reason ?? "unknown"}.
             </p>
           </Match>
           <Match when={view() === "surface-error"}>
@@ -4000,7 +4076,9 @@ export function SessionIrisTab() {
                                   classList={{
                                     "iris-board__card--dragging": dragging() === item.id && !lifted(),
                                     "iris-board__card--source": dragging() === item.id && lifted(),
+                                    "iris-card--fileover": fileOver() === item.id,
                                   }}
+                                  {...fileDropHandlers(item.id)}
                                   draggable={canDrag() || delegateOpen()}
                                   title={canDrag() ? "Open this card, or drag it to move it" : "Open this card"}
                                   onClick={() => openCard(item.id)}
@@ -4042,6 +4120,12 @@ export function SessionIrisTab() {
                                     if (dragging() !== null) endDrag()
                                   }}
                                   onDragOver={(e) => {
+                                    if (dragging() === null && dragHasFiles(e.dataTransfer)) {
+                                      e.preventDefault()
+                                      e.stopPropagation()
+                                      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy"
+                                      return
+                                    }
                                     if (dragging() === null || !canDrag()) return
                                     e.preventDefault()
                                     e.stopPropagation()
@@ -4053,6 +4137,12 @@ export function SessionIrisTab() {
                                     })
                                   }}
                                   onDrop={(e) => {
+                                    if (dragging() === null && dragHasFiles(e.dataTransfer)) {
+                                      e.preventDefault()
+                                      e.stopPropagation()
+                                      void dropFiles(item.id, Array.from(e.dataTransfer?.files ?? []))
+                                      return
+                                    }
                                     if (!canDrag()) return
                                     e.preventDefault()
                                     e.stopPropagation()
@@ -4064,8 +4154,14 @@ export function SessionIrisTab() {
                                     })
                                   }}
                                 >
+                                  <Show when={item.cover}>
+                                    {(src) => <img class="iris-board__cover" src={src()} alt="" loading="lazy" draggable={false} />}
+                                  </Show>
                                   <span class="text-12-regular text-text-base">{item.title}</span>
                                   <CardBadges item={item} now={now()} />
+                                  <Show when={fileDrop()?.itemId === item.id}>
+                                    <span class="iris-card__uploading" role="status">{fileDrop()!.text}</span>
+                                  </Show>
                                   <span class="iris-board__meta">
                                     <Show when={isDone(item.status)}>
                                       <span>✓ done</span>
@@ -4189,7 +4285,9 @@ export function SessionIrisTab() {
                         <div class="iris-atlas-list__items">
                         <For each={list.items}>
                           {(item) => {
-                            const preview = createMemo(() => cardPreview(item.content, item.title))
+                            // The board is read without bodies (#190231 0d): the row's line is fl-api's preview, or the
+                            // body when there is one (a search reads bodies).
+                            const preview = createMemo(() => cardPreview(item.content ?? item.preview, item.title))
                             return (
                               <div
                                 role="button"
@@ -4198,7 +4296,19 @@ export function SessionIrisTab() {
                                 data-list-id={list.id}
                                 aria-keyshortcuts="Enter x s p d l c n"
                                 class="iris-atlas-row"
+                                {...fileDropHandlers(item.id)}
+                                onDragOver={(e) => {
+                                  if (dragging() !== null || !dragHasFiles(e.dataTransfer)) return
+                                  e.preventDefault()
+                                  if (e.dataTransfer) e.dataTransfer.dropEffect = "copy"
+                                }}
+                                onDrop={(e) => {
+                                  if (dragging() !== null || !dragHasFiles(e.dataTransfer)) return
+                                  e.preventDefault()
+                                  void dropFiles(item.id, Array.from(e.dataTransfer?.files ?? []))
+                                }}
                                 classList={{
+                                  "iris-card--fileover": fileOver() === item.id,
                                   "iris-atlas-row--done": isDone(item.status),
                                   "iris-atlas-row--live": liveIds().has(item.id),
                                   "iris-atlas-row--new": awayIds().has(item.id) && !liveIds().has(item.id),
@@ -4833,6 +4943,7 @@ export function SessionIrisTab() {
             </p>
           </Match>
         </Switch>
+        </Suspense>
 
         {/* Logo.dev attribution. A CONDITION of the free tier, so it renders from the same
             payload that supplies the marks — the panel cannot show logos without the credit.

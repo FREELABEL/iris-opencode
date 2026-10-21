@@ -48,5 +48,14 @@
         "installerHooks": "installer-hooks.nsh"
       }
     }
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "iris"
+        ]
+      }
+    }
   }
 }

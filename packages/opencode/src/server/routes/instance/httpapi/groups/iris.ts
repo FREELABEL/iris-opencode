@@ -81,6 +81,7 @@ const AtlasItem = Schema.Struct({
     ),
   ),
   attachments: Schema.optional(described(Schema.Finite, "Attachment count. Absent = not measured.")),
+  cover: Schema.optional(described(Schema.String, "The card's first image attachment, for the board face (#189797). Never sent for a contains_phi board.")),
   assignees: Schema.optional(
     Schema.Array(
       Schema.Struct({
@@ -1056,6 +1057,7 @@ const AllowanceResponse = Schema.Struct({
   spendUsd: Schema.NullOr(Schema.Finite),
   fraction: described(Schema.NullOr(Schema.Finite), "NULL means uncapped or unmeasured. Not 0."),
   resetsAt: Schema.NullOr(Schema.String),
+  tokensUsed: Schema.optional(described(Schema.NullOr(Schema.Finite), "Tokens used this window. NULL = not reported.")),
   thresholds: described(Schema.Array(Schema.Finite), "POLICY. Read it, never hold it."),
   surface: Schema.String,
   upgradeUrl: Schema.NullOr(Schema.String),
@@ -1092,6 +1094,8 @@ const PlanResponse = Schema.Struct({
   ),
   trialEndsAt: described(Schema.NullOr(Schema.String), "When a trial ends, ISO-8601. NULL = not on a trial."),
   fraction: described(Schema.NullOr(Schema.Finite), "Share of the allowance used; 1 = used up. NULL = uncapped or unknown."),
+  tokensUsed: Schema.optional(described(Schema.NullOr(Schema.Finite), "Tokens used this window. NULL = not reported.")),
+  resetsAt: Schema.optional(described(Schema.NullOr(Schema.String), "When the allowance window resets, ISO-8601.")),
   uncapped: Schema.Boolean,
   upgradeUrl: Schema.NullOr(Schema.String),
 })
@@ -1286,6 +1290,9 @@ export const IrisPaths = {
   itemAssignees: `${root}/item/:itemID/assignees`,
   itemAssignee: `${root}/item/:itemID/assignees/:assigneeID`,
   itemActivity: `${root}/item/:itemID/activity`,
+  itemComments: `${root}/item/:itemID/comments`,
+  notifySettings: `${root}/notifications/settings`,
+  meLive: `${root}/me/live`,
   agents: `${root}/agents/:bloqID`,
   leads: `${root}/leads/:bloqID`,
   pages: `${root}/pages/:bloqID`,
@@ -1700,6 +1707,41 @@ export const IrisApi = HttpApi.make("iris").add(
         params: { bloqID: Schema.NumberFromString, memberID: Schema.NumberFromString },
         success: described(Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String) }), "Whether it landed"),
       }).annotateMerge(OpenApi.annotations({ identifier: "iris.atlasMemberRemove", summary: "Remove a member from a board" })),
+      HttpApiEndpoint.post("itemComment", IrisPaths.itemComments, {
+        params: { itemID: Schema.NumberFromString },
+        payload: Schema.Struct({ body: Schema.String, mentions: Schema.optional(Schema.Array(Schema.Finite)) }),
+        success: described(
+          Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String), mentioned: Schema.optional(Schema.Array(Schema.Finite)) }).annotate({ identifier: "IrisItemCommentResult" }),
+          "Whether it landed, and who it told",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.itemComment",
+          summary: "Comment on a card; @mentioned board members are told (#189799)",
+        }),
+      ),
+      HttpApiEndpoint.get("notifySettings", IrisPaths.notifySettings, {
+        success: described(Schema.Struct({ ...Measured, settings: Schema.Struct({ emailAssign: Schema.Boolean, emailMention: Schema.Boolean, emailDue: Schema.Boolean, push: Schema.Boolean }) }).annotate({ identifier: "IrisNotifySettings" }), "What you hear about from Atlas"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.notifySettings", summary: "Your Atlas notification settings (#189799)" })),
+      HttpApiEndpoint.post("notifySettingsSave", IrisPaths.notifySettings, {
+        payload: Schema.Struct({
+          emailAssign: Schema.optional(Schema.Boolean),
+          emailMention: Schema.optional(Schema.Boolean),
+          emailDue: Schema.optional(Schema.Boolean),
+          push: Schema.optional(Schema.Boolean),
+        }),
+        success: described(Schema.Struct({ ...Measured, settings: Schema.Struct({ emailAssign: Schema.Boolean, emailMention: Schema.Boolean, emailDue: Schema.Boolean, push: Schema.Boolean }) }), "Your settings after the change"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.notifySettingsSave", summary: "Change your Atlas notification settings" })),
+      HttpApiEndpoint.get("meLive", IrisPaths.meLive, {
+        success: Schema.String.pipe(HttpApiSchema.asText({ contentType: "text/event-stream" })),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.meLive",
+          summary: "Hear about your own Atlas cards (server-sent events)",
+          description:
+            "#189799. `ready` once connected, `notice` {kind, text, excerpt?, bloqId, itemId, title?, by?} when a card is assigned to you, mentions you or is due tomorrow, `status` {pusher}, and `ping` every 25 s. A contains_phi board's notice carries no title and no excerpt.",
+        }),
+      ),
       HttpApiEndpoint.get("itemActivity", IrisPaths.itemActivity, {
         params: { itemID: Schema.NumberFromString },
         success: described(

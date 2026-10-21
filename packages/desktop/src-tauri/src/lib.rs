@@ -1,5 +1,6 @@
 mod accounts;
 mod cli;
+mod deep_link;
 mod google_signin;
 mod history_home;
 mod login;
@@ -842,6 +843,14 @@ pub fn run() {
     let updater_enabled = option_env!("TAURI_SIGNING_PRIVATE_KEY").is_some();
 
     let mut builder = tauri::Builder::default()
+        // FIRST, per the plugin: a second launch (opening an iris:// link while IRIS is running,
+        // on Windows and Linux) must focus this instance, not start another. With the
+        // `deep-link` feature it also forwards that launch's URL to on_open_url below (#190233).
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            deep_link::focus_main(app);
+        }))
+        .plugin(tauri_plugin_deep_link::init())
+        .manage(deep_link::PendingDeepLinks::default())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_window_state::Builder::new().build())
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -866,10 +875,32 @@ pub fn run() {
             login::open_login_window,
             onboarding::track_onboarding,
             google_signin::google_sign_in,
-            signin_in_app
+            signin_in_app,
+            deep_link::take_deep_links
         ])
         .setup(move |app| {
             let app = app.handle().clone();
+
+            // iris:// links (#190233). Registered before anything can return early, so a link
+            // that launched the app is never lost to a startup branch.
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                // An installer registers the scheme (macOS Info.plist, the NSIS registry entry,
+                // the .deb desktop file). An AppImage or a dev run has no installer, so register
+                // at runtime too; an already-registered scheme makes this a no-op.
+                #[cfg(any(windows, target_os = "linux"))]
+                if let Err(e) = app.deep_link().register_all() {
+                    eprintln!("deep link: could not register iris:// ({e})");
+                }
+                let handle = app.clone();
+                app.deep_link().on_open_url(move |event| {
+                    deep_link::queue(&handle, event.urls().into_iter().map(|u| u.to_string()));
+                });
+                // The link that launched the app, where the platform reports it this way.
+                if let Ok(Some(urls)) = app.deep_link().get_current() {
+                    deep_link::queue(&app, urls.into_iter().map(|u| u.to_string()));
+                }
+            }
 
             // FIRST, before anything tries to start: a translocated app cannot spawn its
             // sidecar, so every later step would fail in a way that looks like a bug in IRIS.
@@ -976,7 +1007,11 @@ pub fn run() {
                   {
                       window_builder = window_builder
                           .title_bar_style(tauri::TitleBarStyle::Overlay)
-                          .hidden_title(true);
+                          .hidden_title(true)
+                          // Centre the lights in the app's 36px title bar, which now sits
+                          // flush at the top of the window (#190245). tao keeps each button
+                          // centred `y` points below the top edge.
+                          .traffic_light_position(tauri::LogicalPosition::new(14.0, 18.0));
                   }
 
                   window_builder.build().expect("Failed to create window");

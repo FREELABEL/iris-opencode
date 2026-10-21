@@ -17,6 +17,8 @@ import { usePlatform } from "@/context/platform"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useTitlebarRightMount } from "./titlebar"
 import { DialogUpgrade } from "./dialog-upgrade"
+import { parseIrisLink } from "@/utils/iris-deep-link"
+import { showToast } from "@/utils/toast"
 
 /**
  * Two pills in the titlebar: how many machines are up, and whether anything is waiting for you.
@@ -171,11 +173,39 @@ export function TitlebarIrisPills() {
     const timer = setInterval(() => setTick((t) => t + 1), 30_000)
     const onFocus = () => setTick((t) => t + (4 - (t % 4)))
     window.addEventListener("focus", onFocus)
+    // An iris://upgraded link from the post-payment page (#190233) is the same moment as a
+    // return to the window — but a link can open the app without a focus event ever firing,
+    // so it re-reads the plan itself and says what was bought.
+    const stopLinks = platform.onDeepLink?.((raw) => {
+      const link = parseIrisLink(raw)
+      if (link?.kind !== "upgraded") return
+      onFocus()
+      void announceUpgrade(link.plan)
+    })
     onCleanup(() => {
       clearInterval(timer)
       window.removeEventListener("focus", onFocus)
+      stopLinks?.()
     })
   })
+
+  // The name comes from the plans the app already lists, never from the link itself.
+  const announceUpgrade = async (slug: string | null) => {
+    let title: string | undefined
+    if (slug) {
+      try {
+        const res = (await (await doFetch("/iris/plans")).json()) as { plans?: { slug: string; title: string }[] }
+        title = res.plans?.find((p) => p.slug === slug)?.title
+      } catch {
+        title = undefined
+      }
+    }
+    showToast({
+      variant: "success",
+      title: title ? `You're on ${title}` : "Your plan is active",
+      description: "Thanks — the new plan and its allowance are on this account now.",
+    })
+  }
 
   const key = createMemo(() => {
     const b = base()

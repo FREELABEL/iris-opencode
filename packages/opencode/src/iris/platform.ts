@@ -252,8 +252,47 @@ export function unknownBloqReason(bloqId: number, list: PlatformResult<{ bloqs: 
   return list.data.bloqs.some((b) => b.id === bloqId) ? null : `unknown bloq ${bloqId}`
 }
 
-async function unknownBloq(bloqId: number): Promise<string | null> {
+/**
+ * ONE BOARD-LIST REQUEST, NOT ONE PER SURFACE (#190231 phase 0b).
+ *
+ * This guard ran fetchBloqs() — a full /bloqs call to fl-api — in front of every bloq-scoped
+ * request, one after the other. Opening a board asked for the list twice: once for the picker
+ * (/iris/bloqs) and again inside /iris/atlas before the board itself could start. Now the guard
+ * reuses the list the picker just fetched (or is still fetching) for the same account.
+ *
+ * It only reuses a YES. A reused list can predate a board made a moment ago, so "not one of
+ * yours" is always asked again, fresh, before it refuses. A failed list is never reused, so an
+ * outage still fails open exactly as before.
+ */
+export async function unknownBloq(bloqId: number): Promise<string | null> {
+  if (!unknownBloqReason(bloqId, await recentBloqs())) return null
   return unknownBloqReason(bloqId, await fetchBloqs())
+}
+
+const BLOQ_LIST_REUSE_MS = 30_000
+type BloqList = PlatformResult<{ bloqs: Bloq[] }>
+/** The request most recently started, finished or not. */
+let lastBloqs: { userId: number; at: number; result: Promise<BloqList> } | undefined
+/** The most recent list that actually ARRIVED and was measured. */
+let lastGoodBloqs: { userId: number; at: number; result: BloqList } | undefined
+
+async function recentBloqs(): Promise<BloqList> {
+  const userId = await resolveUserId()
+  const fresh = (x?: { userId: number; at: number }) => !!userId && !!x && x.userId === userId && Date.now() - x.at < BLOQ_LIST_REUSE_MS
+  // A list already in hand beats waiting for a newer one. The picker re-fetches on every panel
+  // open, so preferring "newest" made this guard wait a full round trip each time anyway.
+  if (fresh(lastGoodBloqs)) return lastGoodBloqs!.result
+  if (fresh(lastBloqs)) {
+    const r = await lastBloqs!.result
+    if (r.measured) return r
+  }
+  return fetchBloqs()
+}
+
+/** Tests only: forget the shared board list. */
+export function resetRecentBloqs() {
+  lastBloqs = undefined
+  lastGoodBloqs = undefined
 }
 
 export interface AtlasItem {
@@ -264,6 +303,11 @@ export interface AtlasItem {
   description?: string
   /** The item's body. This is the thing a person actually opens an item to read. */
   content?: string
+  /**
+   * The start of the body (fl-api's summary.preview, up to 400 chars of raw prose) — what a list
+   * row shows under the title. Present when the board was read without bodies (#190231 0d).
+   */
+  preview?: string
   /** ISO timestamps from fl-api — what the panel's "last edited", sort and filter read. */
   createdAt?: string
   updatedAt?: string
@@ -276,6 +320,8 @@ export interface AtlasItem {
   /** From fl-api's `?summary=1` (#189793); absent on an fl-api that predates it. */
   tasks?: { open: number; done: number; total: number }
   attachments?: number
+  /** First image attachment's URL, for the Board face (#189797). Never set on a PHI board. */
+  cover?: string
   assignees?: AtlasAssignee[]
 }
 export interface AtlasAssignee {
@@ -341,6 +387,8 @@ export function cardFace(i: any): Partial<AtlasItem> {
     if (s.tasks && typeof s.tasks.total === "number")
       out.tasks = { open: Number(s.tasks.open) || 0, done: Number(s.tasks.done) || 0, total: Number(s.tasks.total) || 0 }
     if (typeof s.attachments === "number") out.attachments = s.attachments
+    if (typeof s.cover === "string" && /^https?:\/\//.test(s.cover)) out.cover = s.cover
+    if (typeof s.preview === "string") out.preview = s.preview
     if (Array.isArray(s.assignees))
       out.assignees = s.assignees
         .filter((a: any) => a && (a.type === "user" || a.type === "agent"))
@@ -362,7 +410,35 @@ export function cardFace(i: any): Partial<AtlasItem> {
   return out
 }
 
-export async function fetchAtlas(bloqId: number): Promise<PlatformResult<{ lists: AtlasList[] }>> {
+/**
+ * WITHOUT BODIES BY DEFAULT (#190231 phase 0d).
+ *
+ * The board read is downloaded over the user's own connection on every open and on every live
+ * change. Measured on board 174: 2,139,422 bytes with bodies, 625,237 without. Nothing on the
+ * board needs a whole body any more — the card editor fetches its own item, and a list row's
+ * second line comes from fl-api's `summary.preview` — so only SEARCH asks for bodies, because
+ * "the card that mentions Servis" is a body match.
+ *
+ * An fl-api that predates `summary.preview` would leave every row's second line blank, so a
+ * light read that comes back without it is thrown away and the board is read again with bodies.
+ * That makes the desktop release safe to ship before or after the fl-api one.
+ */
+// Set when fl-api answered a light read without previews: skip the light read for a while rather
+// than paying for both reads on every open until fl-api is updated.
+let previewsUnsupportedUntil = 0
+const PREVIEW_RECHECK_MS = 10 * 60_000
+
+/** Tests only. */
+export function resetPreviewSupport() {
+  previewsUnsupportedUntil = 0
+}
+
+export function lightReadUsable(raw: any): boolean {
+  for (const l of raw?.lists ?? []) for (const i of l?.items ?? []) if (typeof i?.summary?.preview !== "string") return false
+  return true
+}
+
+export async function fetchAtlas(bloqId: number, opts: { bodies?: boolean } = {}): Promise<PlatformResult<{ lists: AtlasList[] }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { lists: [] } }
 
@@ -371,27 +447,30 @@ export async function fetchAtlas(bloqId: number): Promise<PlatformResult<{ lists
 
   try {
     /*
-     * ?no_searchable_content=1 — drop the duplicate, keep the bodies.
-     *
-     * `searchable_content` is an $appends accessor that ships a near-copy of `content` on every
-     * item. Measured on board 174: 3.42 MB total, of which content is 1,468 KB and its
-     * duplicate 1,397 KB. Nothing here reads the duplicate.
-     *
-     * NOT `?light=1`, which also drops `content` and would be 0.60 MB — 83% off — because two
-     * things in this panel read the body: the reader renders it, and the search filters on it.
-     * Taking the cheaper number would break search into a title-only match and call it a
-     * performance win. That version needs a per-item fetch on open first.
+     * Which read (see lightReadUsable above for why):
      *
      *   default                     3,590,030 bytes
-     *   no_searchable_content=1     2,139,422 bytes   <- here
-     *   light=1                       625,237 bytes   <- once the reader fetches bodies
+     *   no_searchable_content=1     2,139,422 bytes   <- search, and the fallback for an older fl-api
+     *   light=1                       625,237 bytes   <- everything else
+     *
+     * `searchable_content` is an $appends near-copy of `content`; nothing here reads it.
      */
     // summary=1 (#189793): labels, assignees, task progress and attachment count per card, in
     // one grouped query server-side. An fl-api that predates it ignores the flag.
-    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}?no_searchable_content=1&summary=1`)
-    if (!res.ok) return { measured: false, reason: `fl-api ${res.status}`, data: { lists: [] } }
-    const json = (await res.json()) as any
-    const raw = json?.data ?? json
+    const read = async (q: string) => {
+      const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}?${q}`)
+      if (!res.ok) return { error: `fl-api ${res.status}` }
+      const json = (await res.json()) as any
+      return { raw: json?.data ?? json }
+    }
+    const light = !opts.bodies && Date.now() >= previewsUnsupportedUntil
+    let got = await read(light ? "light=1&summary=1" : "no_searchable_content=1&summary=1")
+    if (light && "raw" in got && !lightReadUsable(got.raw)) {
+      previewsUnsupportedUntil = Date.now() + PREVIEW_RECHECK_MS
+      got = await read("no_searchable_content=1&summary=1")
+    }
+    if (!("raw" in got)) return { measured: false, reason: got.error, data: { lists: [] } }
+    const raw = got.raw
     const lists: AtlasList[] = (raw?.lists ?? []).map((l: any) => ({
       id: l.id,
       name: l.name,
@@ -577,6 +656,8 @@ export interface Allowance {
   spendUsd: number | null
   fraction: number | null
   resetsAt: string | null
+  /** Tokens used this window, same sources as the meter (#190087). Null = not reported. */
+  tokensUsed: number | null
   thresholds: number[]
   surface: string
   upgradeUrl: string | null
@@ -600,6 +681,7 @@ const EMPTY_ALLOWANCE: Allowance = {
   spendUsd: null,
   fraction: null,
   resetsAt: null,
+  tokensUsed: null,
   thresholds: [],
   surface: "chat",
   upgradeUrl: null,
@@ -651,6 +733,7 @@ export async function fetchAllowance(
         spendUsd: num(j?.spend_usd),
         fraction: num(j?.fraction),
         resetsAt: j?.resets_at ?? null,
+        tokensUsed: num(j?.tokens_used),
         thresholds: Array.isArray(j?.thresholds) ? j.thresholds.map(Number).filter(Number.isFinite) : [],
         surface: String(j?.surface ?? "chat"),
         upgradeUrl: j?.upgrade_url ?? null,
@@ -719,6 +802,9 @@ export interface Plan {
   trialEndsAt: string | null
   /** Share of the allowance used (1 = used up); null when uncapped or unknown (#190087). */
   fraction: number | null
+  /** Tokens used this window, and when it resets — for the composer's allowance bar (#190087). */
+  tokensUsed: number | null
+  resetsAt: string | null
   uncapped: boolean
   upgradeUrl: string | null
 }
@@ -1072,7 +1158,7 @@ export async function reportGateEvent(
 export async function fetchPlan(
   opts: { token?: string | null; signal?: AbortSignal } = {},
 ): Promise<PlatformResult<Plan>> {
-  const empty: Plan = { plan: null, paid: null, label: null, trialEndsAt: null, fraction: null, uncapped: false, upgradeUrl: null }
+  const empty: Plan = { plan: null, paid: null, label: null, trialEndsAt: null, fraction: null, tokensUsed: null, resetsAt: null, uncapped: false, upgradeUrl: null }
   try {
     const res = await irisFetch(
       "/api/v6/allowance/me?peek=1",
@@ -1091,6 +1177,8 @@ export async function fetchPlan(
         label: typeof j.plan_label === "string" && j.plan_label.trim() ? j.plan_label.trim() : null,
         trialEndsAt: typeof j.trial_ends_at === "string" && j.trial_ends_at ? j.trial_ends_at : null,
         fraction: typeof j.fraction === "number" && Number.isFinite(j.fraction) ? j.fraction : null,
+        tokensUsed: typeof j.tokens_used === "number" && Number.isFinite(j.tokens_used) ? j.tokens_used : null,
+        resetsAt: typeof j.resets_at === "string" && j.resets_at ? j.resets_at : null,
         uncapped: Boolean(j.uncapped),
         upgradeUrl: typeof j.upgrade_url === "string" ? j.upgrade_url : null,
       },
@@ -1115,7 +1203,17 @@ export interface Bloq {
 export async function fetchBloqs(): Promise<PlatformResult<{ bloqs: Bloq[] }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { bloqs: [] } }
+  // Remembered while in flight, so a guard asking a moment later waits for THIS request.
+  const at = Date.now()
+  const result = loadBloqs(userId).then((r) => {
+    if (r.measured) lastGoodBloqs = { userId, at, result: r }
+    return r
+  })
+  lastBloqs = { userId, at, result }
+  return result
+}
 
+async function loadBloqs(userId: number): Promise<PlatformResult<{ bloqs: Bloq[] }>> {
   try {
     const res = await irisFetch(`/api/v1/user/${userId}/bloqs?simplified=true`)
     if (!res.ok) return { measured: false, reason: `fl-api ${res.status}`, data: { bloqs: [] } }
@@ -1736,7 +1834,14 @@ export async function fetchRecords(
      *
      * Resolved from the same schema list the columns come from, so the check and the column
      * definitions cannot disagree about which dataset this is.
+     *
+     * The check and the records are fetched TOGETHER, not one after the other (#190231 phase
+     * 0c) — opening a dataset waited a whole schema-list round trip before asking for a row. The
+     * records are only RETURNED once the check passes; a refusal throws them away. Not reused
+     * from a cached schema list: this is the board boundary, and a cached answer could be stale.
      */
+    const recordsReq = irisFetch(`/api/v1/atlas/datasets/${encodeURIComponent(slug)}?page=${page}&per_page=${perPage}`)
+    recordsReq.catch(() => {}) // a refusal below never awaits it; do not let it reject unobserved
     const defn = await schemaRow(slug)
     if (!defn) return { measured: false, reason: `no dataset "${slug}"`, data: { ...empty, page, perPage } }
     if (opts.bloqId != null && Number(defn.bloq_id) !== opts.bloqId) {
@@ -1748,7 +1853,7 @@ export async function fetchRecords(
       }
     }
 
-    const res = await irisFetch(`/api/v1/atlas/datasets/${encodeURIComponent(slug)}?page=${page}&per_page=${perPage}`)
+    const res = await recordsReq
     if (!res.ok) return { measured: false, reason: `fl-api ${res.status}`, data: { ...empty, page, perPage } }
     const json = (await res.json()) as any
     const d = json?.data ?? json
@@ -3382,6 +3487,74 @@ export async function fetchActivity(itemId: number): Promise<PlatformResult<{ ac
     return { measured: true, data: { activity: readActivity(j?.data?.activity) } }
   } catch (e) {
     return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { activity: [] } }
+  }
+}
+
+/**
+ * A comment on a card (#189799). `mentions` are the board people picked in the composer; fl-api
+ * also reads "@email" and "@user_name" in the text, and tells only people on the board.
+ */
+export async function addComment(
+  itemId: number,
+  input: { body: string; mentions?: number[] },
+): Promise<Ok & { mentioned?: number[] }> {
+  const userId = await resolveUserId()
+  if (!userId) return { ok: false, reason: notSignedIn() }
+  const body = input.body.trim()
+  if (!body) return { ok: false, reason: "a comment needs words" }
+  try {
+    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/comments`, FL_API, {
+      method: "POST",
+      body: JSON.stringify({ body, mentions: input.mentions ?? [] }),
+    })
+    const j = (await res.json().catch(() => ({}))) as any
+    if (res.status === 404 && !j?.message) return { ok: false, reason: "this IRIS server does not take comments yet" }
+    if (!res.ok) return { ok: false, reason: apiFailure(j, res.status) }
+    return { ok: true, mentioned: Array.isArray(j?.data?.mentioned) ? j.data.mentioned.map(Number) : [] }
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+/** What you hear about from Atlas (#189799). Everything is on until you turn it off. */
+export interface NotifySettings {
+  emailAssign: boolean
+  emailMention: boolean
+  emailDue: boolean
+  push: boolean
+}
+const NOTIFY_WIRE: Record<keyof NotifySettings, string> = {
+  emailAssign: "email_assign",
+  emailMention: "email_mention",
+  emailDue: "email_due",
+  push: "push",
+}
+export function readNotifySettings(raw: any): NotifySettings {
+  const on = (k: string) => raw?.[k] !== false
+  return { emailAssign: on("email_assign"), emailMention: on("email_mention"), emailDue: on("email_due"), push: on("push") }
+}
+
+export async function notifySettings(
+  change?: Partial<NotifySettings>,
+): Promise<PlatformResult<{ settings: NotifySettings }>> {
+  const fallback = { settings: readNotifySettings({}) }
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: notSignedIn(), data: fallback }
+  try {
+    const body: Record<string, boolean> = {}
+    for (const [k, v] of Object.entries(change ?? {})) if (typeof v === "boolean") body[NOTIFY_WIRE[k as keyof NotifySettings]] = v
+    const res = await irisFetch(
+      `/api/v1/user/${userId}/bloqs/notification-settings`,
+      FL_API,
+      change ? { method: "PUT", body: JSON.stringify(body) } : undefined,
+    )
+    const j = (await res.json().catch(() => ({}))) as any
+    if (res.status === 404 && !j?.data)
+      return { measured: false, reason: "this IRIS server does not have notification settings yet", data: fallback }
+    if (!res.ok) return { measured: false, reason: apiFailure(j, res.status), data: fallback }
+    return { measured: true, data: { settings: readNotifySettings(j?.data?.settings) } }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: fallback }
   }
 }
 

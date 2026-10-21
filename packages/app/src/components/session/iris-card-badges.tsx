@@ -15,6 +15,8 @@ export interface CardFace {
   labels?: string[]
   tasks?: { open: number; done: number; total: number }
   attachments?: number
+  /** First image attachment, drawn above the title in Board view (#189797). Never on a PHI board. */
+  cover?: string
   assignees?: { id: number; type: "user" | "agent"; name?: string }[]
 }
 

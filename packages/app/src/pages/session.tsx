@@ -1,4 +1,5 @@
 import type { FilePart, Project, UserMessage, VcsFileDiff } from "@opencode-ai/sdk/v2"
+import { IrisCardNotices } from "@/components/session/iris-card-notices"
 import { getFilename } from "@opencode-ai/core/util/path"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { createQuery, skipToken, useMutation, useQueryClient } from "@tanstack/solid-query"
@@ -2311,6 +2312,18 @@ export default function Page() {
   return (
     <SessionRouteFrame>
       <SessionHeader />
+      {/* Your own Atlas cards — assigned, mentioned, due tomorrow — as OS notifications (#189799). */}
+      <IrisCardNotices
+        url={() => serverSDK().url}
+        fetch={platform.fetch}
+        notify={(title, body, onClick) => platform.notify(title, body, onClick)}
+        open={() => {
+          view().reviewPanel.open("other")
+          if (layout.fileTree.opened() && layout.fileTree.tab() !== "all") layout.fileTree.setTab("all")
+          void tabs().open("iris")
+          tabs().setActive("iris")
+        }}
+      />
       <div
         ref={panelRow}
         class="flex-1 min-h-0 flex flex-col md:flex-row"

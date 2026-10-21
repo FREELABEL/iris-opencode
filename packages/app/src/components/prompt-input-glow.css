@@ -278,3 +278,21 @@ button.iris-glow__chip:focus-visible {
     animation: none;
   }
 }
+
+/* THIN — a 1px ring with a short halo, for small surfaces that sit beside the composer (the
+   allowance bar, #190087). The composer's 2px ring read as "too fat" on a 42px bar (Alex, 2026-10-20). */
+.iris-glow[data-thin]::before {
+  inset: -1px;
+  border-radius: 13px;
+}
+.iris-glow[data-thin]::after {
+  inset: -1px;
+  border-width: 2px;
+  filter: blur(2px);
+}
+/* A TAB tucked behind the composer: square bottom, so the ring traces only the visible tab. */
+.iris-glow[data-tab]::before,
+.iris-glow[data-tab]::after {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}

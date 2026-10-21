@@ -8,6 +8,7 @@ import { createStore } from "solid-js/store"
 import { Portal } from "solid-js/web"
 import createPresence from "solid-presence"
 import { PromptInputV2Composer } from "@/components/prompt-input-v2"
+import { SessionAllowanceDock } from "@/pages/session/composer/session-allowance-dock"
 import { PromptIntegrationsMenu } from "@/components/prompt-integrations-menu"
 import { PromptWorkspaceSelector } from "@/components/prompt-workspace-selector"
 import {
@@ -42,7 +43,13 @@ export function NewSessionView(props: {
           <div class={NEW_SESSION_CONTENT_WIDTH}>
             <WordmarkV2 class="h-auto w-full text-v2-background-bg-inverse" />
             <div class="mt-8 flex flex-col gap-8">
-              <PromptInputV2Composer controller={props.input} />
+              <div>
+                {/* Out of (or nearly out of) allowance — the same bar the session composer shows (#190087). */}
+                <SessionAllowanceDock />
+                <div class="relative z-[1]">
+                  <PromptInputV2Composer controller={props.input} />
+                </div>
+              </div>
               <Show when={props.project.empty()}>
                 <div class="flex min-h-7 min-w-0 items-center text-v2-text-text-faint">
                   <PromptProjectAddButton controller={props.project} />

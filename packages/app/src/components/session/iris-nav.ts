@@ -15,6 +15,8 @@ export type IrisNavRequest = {
   artifactId?: string
   /** Switch the panel to this board first — an Atlas Epic card opening the board it saved to. */
   bloqId?: number
+  /** Atlas: open this card once the board is on screen — a notification about it, clicked (#189799). */
+  itemId?: number
   nonce: number
 }
 

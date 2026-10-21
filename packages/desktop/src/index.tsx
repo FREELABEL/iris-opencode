@@ -1,5 +1,6 @@
 // @refresh reload
 import { render } from "solid-js/web"
+import { createSignal } from "solid-js"
 import { AppBaseProviders, AppInterface, PlatformProvider, Platform, ServerConnection } from "@opencode-ai/app"
 import { open, save } from "@tauri-apps/plugin-dialog"
 import { open as shellOpen } from "@tauri-apps/plugin-shell"
@@ -12,6 +13,7 @@ import { opencodeGlobal } from "./opencode-global"
 import { createMenu } from "./menu"
 import { check, Update } from "@tauri-apps/plugin-updater"
 import { invoke } from "@tauri-apps/api/core"
+import { listen } from "@tauri-apps/api/event"
 import { getCurrentWindow } from "@tauri-apps/api/window"
 import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification"
 import { relaunch } from "@tauri-apps/plugin-process"
@@ -26,8 +28,27 @@ if (import.meta.env.DEV && !(root instanceof HTMLElement)) {
 
 let update: Update | null = null
 
+// macOS draws the traffic lights over the overlay title bar; the app's Titlebar insets
+// itself around them when it knows it is on macOS and drops the inset in full screen,
+// where macOS hides the lights (#190242, #190245). Windows and Linux are left unset on
+// purpose: their Tauri windows keep native frames, and the Titlebar's windows()/linux()
+// branches assume a frameless window with app-drawn caption controls.
+const mac = ostype() === "macos"
+const [windowFullscreen, setWindowFullscreen] = createSignal(false)
+if (mac) {
+  const win = getCurrentWindow()
+  const sync = () =>
+    void win
+      .isFullscreen()
+      .then(setWindowFullscreen)
+      .catch(() => undefined)
+  sync()
+  void win.onResized(sync).catch(() => undefined)
+}
+
 const platform: Platform = {
   platform: "desktop",
+  ...(mac ? { os: "macos" as const, windowFullscreen } : {}),
   version: pkg.version,
 
   // 1.18's application-global updater (PlatformBase.updater). The older
@@ -176,6 +197,31 @@ const platform: Platform = {
     await relaunch()
   },
 
+  // iris:// links (#190233). The shell queues every link (one can arrive before this window
+  // exists) and emits `iris-deep-link`; draining on subscribe AND on each event is one path
+  // for a cold start and a running app, so each link is handled exactly once.
+  onDeepLink: (handler) => {
+    let stopped = false
+    const drain = () =>
+      invoke<string[]>("take_deep_links")
+        .then((urls) => {
+          if (!stopped) urls.forEach(handler)
+        })
+        .catch(() => undefined)
+    let unlisten: (() => void) | undefined
+    void listen("iris-deep-link", () => void drain())
+      .then((fn) => {
+        if (stopped) fn()
+        else unlisten = fn
+      })
+      .catch(() => undefined)
+    void drain()
+    return () => {
+      stopped = true
+      unlisten?.()
+    }
+  },
+
   openSignIn: () => {
     void invoke("open_login_window").catch(() => undefined)
   },
@@ -289,9 +335,6 @@ const defaultServer = ServerConnection.key(sidecarConnection)
 render(() => {
   return (
     <PlatformProvider value={platform}>
-      {ostype() === "macos" && (
-        <div class="mx-px bg-background-base border-b border-border-weak-base h-8" data-tauri-drag-region />
-      )}
       <AppBaseProviders>
         <AppInterface defaultServer={defaultServer} servers={servers} />
       </AppBaseProviders>

@@ -1111,12 +1111,9 @@ export function ContextToolGroup(props: {
                 <Show when={cmd().ms !== undefined}>
                   <span data-slot="context-tool-group-time">{" · "}{formatDuration(cmd().ms!)}</span>
                 </Show>
-                <Show when={cmd().failed > 0}>
-                  <span data-slot="context-tool-group-failed">
-                    {" · "}
-                    {i18n.t(cmd().failed === 1 ? "ui.messagePart.iris.failed.one" : "ui.messagePart.iris.failed.other", { count: cmd().failed })}
-                  </span>
-                </Show>
+                {/* No failed count up here (#190220): agents run probe commands that exit non-zero on
+                    purpose, and a red tally at the top reads as "something broke". The reason
+                    stays on the command itself, inside the fold. */}
               </Show>
               <Show when={!pending() && props.gate}>
                 {(g) => (

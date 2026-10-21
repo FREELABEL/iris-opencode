@@ -372,3 +372,32 @@ describe("face edits (#189806)", () => {
     expect(applyFaceEdits(board, new Map())).toBe(board)
   })
 })
+
+// #190231 0d: a list row's line now comes from fl-api's summary.preview — up to 400 characters
+// of the body's prose, chosen as structuredProse chooses it (CardSummaryService::preview). The
+// row must read the same as it did from the whole body.
+describe("cardPreview from fl-api's preview reads the same as from the whole body", () => {
+  // CardSummaryService::preview, in TS: a JSON object body → body, else text; else as stored; ≤400.
+  const serverPreview = (raw: string) => {
+    const t = raw.trim()
+    let prose = raw
+    if (t.startsWith("{") && t.endsWith("}")) {
+      try {
+        const o = JSON.parse(t)
+        prose = typeof o.body === "string" && o.body ? o.body : typeof o.text === "string" ? o.text : ""
+      } catch {}
+    }
+    return [...prose].slice(0, 400).join("")
+  }
+  const bodies = [
+    JSON.stringify({ text: "x", body: "## Plan\n\nShip the **light** board, then [phase 1](https://x).", labels: ["a"] }),
+    JSON.stringify({ text: "only text here" }),
+    "# Card title\nPlain prose under a heading that repeats the title.",
+    "Long " + "word ".repeat(400),
+    "",
+  ]
+  for (const b of bodies)
+    test(JSON.stringify(b.slice(0, 40)), () => {
+      expect(cardPreview(serverPreview(b), "Card title")).toBe(cardPreview(b, "Card title"))
+    })
+})
