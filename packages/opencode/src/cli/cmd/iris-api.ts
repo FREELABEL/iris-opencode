@@ -889,25 +889,38 @@ export async function requireUserId(flagValue?: number): Promise<number | null> 
 // Display helpers
 // ============================================================================
 
+/**
+ * Colour is for a person at a terminal (#190328). These helpers emitted raw ANSI
+ * even when stdout was a pipe, so an agent reading the CLI over MCP got `[1m` and
+ * `[90m` wrapped around the text it was parsing.
+ */
+export const colorEnabled: boolean =
+  Boolean(process.stdout.isTTY) && !process.env.NO_COLOR && process.env.TERM !== "dumb"
+
+/** Apply a UI style, or return the text untouched when colour is off. */
+export function paint(style: string, s: string): string {
+  return colorEnabled ? `${style}${s}${UI.Style.TEXT_NORMAL}` : s
+}
+
 export function dim(s: string): string {
-  return `${UI.Style.TEXT_DIM}${s}${UI.Style.TEXT_NORMAL}`
+  return paint(UI.Style.TEXT_DIM, s)
 }
 
 export function bold(s: string): string {
-  return `${UI.Style.TEXT_NORMAL_BOLD}${s}${UI.Style.TEXT_NORMAL}`
+  return paint(UI.Style.TEXT_NORMAL_BOLD, s)
 }
 
 export function success(s: string): string {
-  return `${UI.Style.TEXT_SUCCESS}${s}${UI.Style.TEXT_NORMAL}`
+  return paint(UI.Style.TEXT_SUCCESS, s)
 }
 
 export function highlight(s: string): string {
-  return `${UI.Style.TEXT_HIGHLIGHT}${s}${UI.Style.TEXT_NORMAL}`
+  return paint(UI.Style.TEXT_HIGHLIGHT, s)
 }
 
 /** Amber. For a number that is not an error but must not be skimmed past. */
 export function warn(s: string): string {
-  return `${UI.Style.TEXT_WARNING}${s}${UI.Style.TEXT_NORMAL}`
+  return paint(UI.Style.TEXT_WARNING, s)
 }
 
 /**

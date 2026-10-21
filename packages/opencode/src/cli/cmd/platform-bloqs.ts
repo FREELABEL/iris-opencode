@@ -1975,6 +1975,81 @@ const BloqsMakePrivateCommand = cmd({
   },
 })
 
+/**
+ * `iris bloqs lists <bloq>` — the list ids on a board (#190329). create-list and
+ * add-item both REQUIRE one, and nothing returned it: bloqs get --json is huge and
+ * truncated, boards list did not say. So an agent had to guess and read the error.
+ */
+const BloqsListsCommand = cmd({
+  command: "lists <bloq-id>",
+  aliases: ["list-lists"],
+  describe: "list the lists on a bloq — id, name and item count",
+  builder: (yargs) =>
+    yargs
+      .positional("bloq-id", { describe: "bloq ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Lists — Bloq #${args["bloq-id"]}`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    try {
+      const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args["bloq-id"]}/lists`)
+      if (!res.ok) {
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        await handleApiError(res, "List bloq lists")
+        prompts.outro("Done")
+        return
+      }
+
+      const body = await res.json().catch(() => ({}))
+      const lists = listSummary(firstArray((body as any)?.data))
+
+      if (args.json) {
+        await writeJson({ success: true, bloq_id: args["bloq-id"], count: lists.length, lists })
+        return
+      }
+
+      if (lists.length === 0) {
+        prompts.log.warn(`Bloq #${args["bloq-id"]} has no lists.`)
+        prompts.outro(dim(`Create one: iris bloqs create-list ${args["bloq-id"]} "<name>"`))
+        return
+      }
+
+      printDivider()
+      for (const l of lists) {
+        const label = l.item_count === 1 ? "1 item" : `${l.item_count} items`
+        console.log(`  ${bold(String(l.name || "untitled"))}  ${dim(`#${l.id}`)}  ${dim(label)}`)
+      }
+      printDivider()
+      prompts.outro(dim(`iris bloqs add-item ${args["bloq-id"]} <list-id> "<content>"`))
+    } catch (err) {
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+/**
+ * id, name and item count — what a caller needs to pick a list. Payload shapes
+ * differ (items_count, nested items, neither); a count that silently reads 0 is
+ * worse than an error, because it looks like an empty list.
+ */
+export function listSummary(lists: unknown): Array<{ id: number; name: string; item_count: number }> {
+  if (!Array.isArray(lists)) return []
+  return lists.map((l: any) => {
+    const nested = Array.isArray(l?.items) ? l.items.length : undefined
+    const declared = l?.items_count ?? l?.item_count
+    return { id: Number(l?.id ?? 0), name: String(l?.name ?? ""), item_count: Number(declared ?? nested ?? 0) }
+  })
+}
+
 const BloqsCreateListCommand = cmd({
   command: "create-list <bloq-id> <name>",
   aliases: ["add-list", "new-list"],
@@ -4514,6 +4589,7 @@ export const PlatformBloqsCommand = productCommand({
       .command(withAccessFooter(BloqsPublishCommand))
       .command(withAccessFooter(BloqsMakePublicCommand))
       .command(BloqsMakePrivateCommand)
+      .command(BloqsListsCommand)
       .command(BloqsCreateListCommand)
       .command(BloqsRenameListCommand)
       .command(BloqsDeleteListCommand)
