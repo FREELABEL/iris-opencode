@@ -1,13 +1,16 @@
-import { createEffect, Suspense, type ParentProps } from "solid-js"
+import { createEffect, Show, Suspense, type ParentProps } from "solid-js"
 import { createStore } from "solid-js/store"
 import { DebugBar } from "@/components/debug-bar"
 import { TabsInfoPopup } from "@/components/help-button"
 import { Titlebar, type TitlebarUpdate } from "@/components/titlebar"
+import { UpdateAvailableToast } from "@/components/update-available-toast"
+import { useLanguage } from "@/context/language"
 import { usePlatform } from "@/context/platform"
 import { setV2Toast, ToastRegion } from "@/utils/toast"
 
 export default function NewLayout(props: ParentProps) {
   const platform = usePlatform()
+  const language = useLanguage()
   const [state, setState] = createStore({ debugTools: true })
 
   createEffect(() => setV2Toast(true))
@@ -43,6 +46,17 @@ export default function NewLayout(props: ParentProps) {
       </main>
       {import.meta.env.DEV && state.debugTools && <DebugBar inline />}
       <TabsInfoPopup />
+      {/* The pill in the title bar is the quick-click; this is the part people actually see (#190253). */}
+      <Show when={update.version()}>
+        {(version) => (
+          <UpdateAvailableToast
+            version={version()}
+            install={update.install}
+            decline={() => void platform.updater?.decline?.()}
+            language={language}
+          />
+        )}
+      </Show>
       <ToastRegion v2 />
     </div>
   )

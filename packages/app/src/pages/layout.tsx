@@ -59,6 +59,7 @@ import { Titlebar, type TitlebarUpdate } from "@/components/titlebar"
 import { useDirectoryPicker } from "@/components/directory-picker"
 import { ServerConnection, useServer } from "@/context/server"
 import { useLanguage, type Locale } from "@/context/language"
+import { UpdateAvailableToast } from "@/components/update-available-toast"
 import { pathKey } from "@/utils/path-key"
 import {
   displayName,
@@ -2425,42 +2426,4 @@ export default function LegacyLayout(props: ParentProps) {
       <ToastRegion v2={false} />
     </div>
   )
-}
-
-function UpdateAvailableToast(props: {
-  version: string
-  install: () => void
-  decline?: () => void
-  language: ReturnType<typeof useLanguage>
-}) {
-  let toastId: number | undefined
-
-  onMount(() => {
-    toastId = showToast({
-      persistent: true,
-      icon: "download",
-      title: props.language.t("toast.update.title"),
-      description: props.language.t("toast.update.description", { version: props.version }),
-      actions: [
-        {
-          label: props.language.t("toast.update.action.installRestart"),
-          onClick: props.install,
-        },
-        {
-          label: props.language.t("toast.update.action.notYet"),
-          onClick: () => {
-            props.decline?.()
-            if (toastId !== undefined) dismissToast(toastId)
-          },
-        },
-      ],
-    })
-  })
-
-  onCleanup(() => {
-    if (toastId === undefined) return
-    dismissToast(toastId)
-  })
-
-  return null
 }
