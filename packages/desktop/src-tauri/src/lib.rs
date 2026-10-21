@@ -1007,7 +1007,11 @@ pub fn run() {
                   {
                       window_builder = window_builder
                           .title_bar_style(tauri::TitleBarStyle::Overlay)
-                          .hidden_title(true);
+                          .hidden_title(true)
+                          // Centre the lights in the app's 36px title bar, which now sits
+                          // flush at the top of the window (#190245). tao keeps each button
+                          // centred `y` points below the top edge.
+                          .traffic_light_position(tauri::LogicalPosition::new(14.0, 18.0));
                   }
 
                   window_builder.build().expect("Failed to create window");
