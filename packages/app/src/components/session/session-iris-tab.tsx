@@ -100,6 +100,7 @@ import { liveLabel, readSse, type LiveState } from "./iris-atlas-live"
 import { CardBadges, type CardFace } from "./iris-card-badges"
 import { IrisBoardMembers, readMembers } from "./iris-board-members"
 import { IrisNotifySettings } from "./iris-notify-settings"
+import { IrisLocalCopySettings } from "./iris-local-copy-settings"
 import { dragHasFiles, uploadCardFiles } from "./iris-card-files"
 import { IrisDelegateRail } from "./iris-delegate-rail"
 import { slideCards } from "./iris-board-motion"
@@ -1483,10 +1484,14 @@ export function SessionIrisTab() {
        * request for pages 1..n at once, inside the server's 200 cap (iris/pagination.ts).
        */
       const whole = info.refetching && pageNo > 1
+      // THE BOARD'S SAVED COPY IS FOR THE FIRST DRAW ONLY (#190231 phase 1). The first read of a
+      // board may come from this machine's copy; every REFETCH — the follow-up below, a live
+      // change, a save — goes to fl-api, so an edit never redraws from a copy older than itself.
+      const fresh = info.refetching && which === "atlas" ? "&fresh=1" : ""
       const res = await doFetch(
         whole
-          ? `${url}${sep}page=1&perPage=${Math.min(200, perPage * pageNo)}${search}${project}`
-          : `${url}${sep}page=${pageNo}&perPage=${perPage}${search}${project}`,
+          ? `${url}${sep}page=1&perPage=${Math.min(200, perPage * pageNo)}${search}${project}${fresh}`
+          : `${url}${sep}page=${pageNo}&perPage=${perPage}${search}${project}${fresh}`,
       )
       // Stamped with the pane it was fetched FOR, so a held payload can be told apart from an
       // answer about what is currently on screen. See surfaceView.
@@ -1521,6 +1526,28 @@ export function SessionIrisTab() {
    * `boardMembers` and `projectInterior`: anything read from a place that is always on screen.
    */
   const current = createMemo(() => settled(data))
+
+  /**
+   * Drew from the saved copy? Bring it up to date at once (#190231 phase 1). A refetch reads
+   * fl-api (see `fresh` above), and the copy stays on screen until the answer lands. Offline
+   * answers are not chased: the copy is all there is, and the indicator says so.
+   */
+  createEffect(
+    on(current, (d) => {
+      const x = d as any
+      if (x?.__pane === "atlas" && x.source === "copy" && !x.offline) void refetchSurface()
+    }),
+  )
+  /** "Saved copy · 2m ago" / "Offline · copy from 2m ago" — empty when the board is live. */
+  const copyNote = createMemo(() => {
+    const x = current() as any
+    if (x?.__pane !== "atlas" || x.source !== "copy") return null
+    const mins = x.copiedAt ? Math.max(0, Math.round((Date.now() - Date.parse(x.copiedAt)) / 60_000)) : null
+    const ago = mins == null ? "" : mins < 1 ? "just now" : mins < 60 ? `${mins}m ago` : `${Math.round(mins / 60)}h ago`
+    return x.offline
+      ? { text: `Offline · copy from ${ago}`, title: `Could not reach IRIS (${x.reason ?? "no connection"}). Showing this machine's copy from ${ago}.`, offline: true }
+      : { text: "Updating…", title: `Showing this machine's copy from ${ago} while the board updates.`, offline: false }
+  })
 
   /** The rows of whichever pane is active — every response names its own array. */
   const rows = createMemo<any[]>(() => {
@@ -3221,6 +3248,35 @@ export function SessionIrisTab() {
               </button>
             )
           })()}
+          <Show when={copyNote()}>
+            <button
+              type="button"
+              class="iris-atlas-copy"
+              data-offline={copyNote()!.offline ? "" : undefined}
+              title={copyNote()!.title}
+              onClick={() => dialog.show(() => <IrisLocalCopySettings doFetch={doFetch} onChanged={() => void refetchSurface()} />)}
+            >
+              {copyNote()!.text}
+            </button>
+          </Show>
+          <button
+            type="button"
+            class="iris-atlas-bell"
+            title="Offline copy — boards kept on this machine"
+            aria-label="Offline copy settings"
+            onClick={() => dialog.show(() => <IrisLocalCopySettings doFetch={doFetch} onChanged={() => void refetchSurface()} />)}
+          >
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+              <path
+                d="M2.5 4.5h11v7h-11zM2.5 8.5h11M5 10h.01"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.3"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
           <button
             type="button"
             class="iris-atlas-bell"

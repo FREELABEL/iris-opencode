@@ -98,9 +98,23 @@ export const AtlasItem = Schema.Struct({
   ),
 }).annotate({ identifier: "IrisAtlasItem" })
 
-const AtlasResponse = Schema.Struct({
+const LocalCopySettingsSchema = Schema.Struct({
+  enabled: described(Schema.Boolean, "Keep a copy of each opened board on this machine. Off deletes every copy."),
+  includePhi: described(Schema.Boolean, "Also keep boards fl-api marks contains_phi. Off by default: a copy on disk is unencrypted."),
+  maxBoards: described(Schema.Finite, "Most recently opened boards kept, per account."),
+  maxMB: described(Schema.Finite, "Total size kept, per account, in MB."),
+}).annotate({ identifier: "IrisAtlasLocalCopySettings" })
+
+export const AtlasResponse = Schema.Struct({
   ...Measured,
   ...Paged,
+  source: Schema.optional(
+    described(Schema.Literals(["live", "copy"]), "live = read from fl-api now; copy = this machine's saved copy of the board (#190231 phase 1)."),
+  ),
+  copiedAt: Schema.optional(described(Schema.String, "When the saved copy was taken (ISO). Only with source = copy.")),
+  offline: Schema.optional(
+    described(Schema.Boolean, "True when fl-api could not be reached and the saved copy is shown instead. `reason` says why."),
+  ),
   lists: Schema.Array(
     Schema.Struct({
       id: Schema.Finite,
@@ -409,10 +423,12 @@ const HiveTaskResponse = Schema.Struct({
   ),
 }).annotate({ identifier: "IrisHiveTaskResponse" })
 
-const BloqsResponse = Schema.Struct({
+export const BloqsResponse = Schema.Struct({
   ...Measured,
   ...Paged,
   bloqs: Schema.Array(Schema.Struct({ id: Schema.Finite, name: Schema.String }).annotate({ identifier: "IrisBloq" })),
+  offline: Schema.optional(described(Schema.Boolean, "fl-api could not be reached; this is the machine's saved board list (#190231 phase 1).")),
+  copiedAt: Schema.optional(described(Schema.String, "When that saved list was taken (ISO).")),
 }).annotate({ identifier: "IrisBloqsResponse" })
 
 const InboxResponse = Schema.Struct({
@@ -1295,6 +1311,7 @@ export const IrisPaths = {
   itemActivity: `${root}/item/:itemID/activity`,
   itemComments: `${root}/item/:itemID/comments`,
   notifySettings: `${root}/notifications/settings`,
+  atlasLocalCopy: `${root}/atlas-local-copy`,
   meLive: `${root}/me/live`,
   agents: `${root}/agents/:bloqID`,
   agentsMine: `${root}/agents-mine`,
@@ -1634,6 +1651,10 @@ export const IrisApi = HttpApi.make("iris").add(
             Schema.optional(Schema.String),
             "Filter this board's lists and items by title, description or BODY. Applied to the whole board before paging, so the count describes the matches and not a page. NOT the platform's global search, which is account-wide and would put another board's items under this board's heading.",
           ),
+          fresh: described(
+            Schema.optional(Schema.String),
+            "Any value: skip the saved copy and read fl-api now (then update the copy). Without it, a saved copy is answered first (#190231 phase 1).",
+          ),
         }),
         params: { bloqID: Schema.NumberFromString },
         success: described(AtlasResponse, "Atlas lists and items for one bloq"),
@@ -1736,6 +1757,18 @@ export const IrisApi = HttpApi.make("iris").add(
         }),
         success: described(Schema.Struct({ ...Measured, settings: Schema.Struct({ emailAssign: Schema.Boolean, emailMention: Schema.Boolean, emailDue: Schema.Boolean, push: Schema.Boolean }) }), "Your settings after the change"),
       }).annotateMerge(OpenApi.annotations({ identifier: "iris.notifySettingsSave", summary: "Change your Atlas notification settings" })),
+      HttpApiEndpoint.get("atlasLocalCopy", IrisPaths.atlasLocalCopy, {
+        success: described(LocalCopySettingsSchema, "Whether this machine keeps a copy of each Atlas board, and on what terms (#190231 phase 1)"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.atlasLocalCopy", summary: "Local copy of Atlas: settings" })),
+      HttpApiEndpoint.post("atlasLocalCopySave", IrisPaths.atlasLocalCopy, {
+        payload: Schema.Struct({
+          enabled: Schema.optional(Schema.Boolean),
+          includePhi: Schema.optional(Schema.Boolean),
+          maxBoards: Schema.optional(Schema.Finite),
+          maxMB: Schema.optional(Schema.Finite),
+        }),
+        success: described(LocalCopySettingsSchema, "The settings after the change. Turning it off deletes every copy; turning includePhi off deletes the copies of contains_phi boards."),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.atlasLocalCopySave", summary: "Local copy of Atlas: change settings" })),
       HttpApiEndpoint.get("meLive", IrisPaths.meLive, {
         success: Schema.String.pipe(HttpApiSchema.asText({ contentType: "text/event-stream" })),
       }).annotateMerge(
