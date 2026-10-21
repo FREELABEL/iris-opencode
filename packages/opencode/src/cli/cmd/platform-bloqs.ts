@@ -296,6 +296,30 @@ export async function resolveBloqId(idOrQuery: string | number, userId: number, 
   return choice as number
 }
 
+/**
+ * #190209 — `bloqs get 190207` on an Atlas ITEM id answered only 404 "Bloq not found", and the
+ * agent that ran it went on to try three more commands. Same shape as #189895 (`bugs update`):
+ * when the id is not a board, check whether it is an item and say which command reads it.
+ * Returns null when the id is not an item either (the plain 404 is then the right answer).
+ */
+export async function itemHintForMissingBloq(
+  id: string | number,
+  fetchItem: (id: string) => Promise<Response>,
+): Promise<{ message: string; json: { success: false; error: string; hint: "item"; item_id: number } } | null> {
+  const s = String(id).trim()
+  if (!/^\d+$/.test(s)) return null
+  try {
+    const r = await fetchItem(s)
+    if (!r.ok) return null
+  } catch {
+    return null
+  }
+  return {
+    message: `#${s} is an Atlas item, not a board — read it with: iris atlas use ${s}`,
+    json: { success: false, error: "Bloq not found.", hint: "item", item_id: Number(s) },
+  }
+}
+
 const BloqsGetCommand = cmd({
   command: "get <id>",
   // #189896 — `bloqs show 352` answered "Did you mean who?" (members' alias). `show` is what
@@ -332,6 +356,14 @@ const BloqsGetCommand = cmd({
       const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}`)
       if (!res.ok) {
         if (spinner) spinner.stop("Failed", 1)
+        // #190209 — an ITEM id read as a BOARD id. Ask get-item before saying "not found".
+        const hint = res.status === 404 ? await itemHintForMissingBloq(args.id as any, (id) => irisFetch(`/api/v1/user/bloqs/list/item/${id}`)) : null
+        if (hint) {
+          if (args.json) console.log(JSON.stringify(hint.json))
+          else { prompts.log.error(hint.message); prompts.outro("Done") }
+          process.exitCode = 1
+          return
+        }
         await handleApiError(res, "Get bloq")
         if (!args.json) prompts.outro("Done")
         return

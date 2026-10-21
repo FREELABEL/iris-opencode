@@ -7,7 +7,7 @@ import { irisFetch, requireAuth, requireUserId, dim, bold, success, writeJson } 
 import { resolveLocalNode } from "./hive-local-node"
 import { describeUptime } from "./hive-uptime"
 import { describeIsolation } from "./hive-isolation"
-import { exitCodeForResult, verdictForResult, renderOutput, fromHiveTask } from "./hive-script-result"
+import { exitCodeForResult, verdictForResult, renderOutput, fromHiveTask, TIMEOUT_EXIT } from "./hive-script-result"
 
 // ============================================================================
 // iris hive nodes / run
@@ -609,80 +609,126 @@ const HiveRunCommand = cmd({
         },
         onStatus: argv.json
           ? undefined
-          : (t) => console.log(`${dim("→")} status=${t.status}${t.progress ? `  progress=${t.progress}%` : ""}`),
+          : (t) => {
+              // #190219: a terminal status is NOT printed here. The final line below is the one
+              // verdict; printing the raw server word too put "status=failed" above "✓ completed".
+              if (!TERMINAL_TASK_STATUSES.has(t.status))
+                console.log(`${dim("→")} status=${t.status}${t.progress ? `  progress=${t.progress}%` : ""}`)
+            },
       })
     } catch (e) {
       console.error(e instanceof Error ? e.message : String(e))
       process.exit(1)
     }
 
+    // #190219: the CLI's own wait ran out. Ask once more before giving up — the task may have
+    // finished in the gap — and never call that a task failure: the task is not cancelled.
+    const waitedSec = timeoutSec + 30
+    let stoppedWaiting = false
     if (!final) {
-      console.error(`Timed out after ${timeoutSec + 30}s waiting for task ${taskId}`)
-      process.exit(124)
+      stoppedWaiting = true
+      try {
+        const r = await hiveFetch(`/api/v6/nodes/tasks/${encodeURIComponent(taskId)}?user_id=${userId}`)
+        const t = r.ok ? ((await r.json()) as { task: any }).task : null
+        if (t && String(t.id ?? taskId) === taskId && TERMINAL_TASK_STATUSES.has(t.status)) final = t
+      } catch {
+        /* the report below says we stopped waiting */
+      }
     }
 
     if (argv.json) {
-      await writeJson(final)
+      if (final) await writeJson(final)
+      else await writeJson({ task_id: taskId, status: "unknown", stopped_waiting_after_s: waitedSec })
+      if (!final) process.exit(TIMEOUT_EXIT)
       return
     }
 
-    // The exit-code and output contract lives in hive-script-result.ts, written after two
-    // measured incidents. This handler used to re-derive a weaker version of it inline and
-    // got it wrong in the exact way that module exists to prevent: an unknown exit code
-    // printed as "?" underneath a green check (#182016).
-    //
-    // The field-name half of the same bug: the daemon submits the exit code under
-    // metadata.exit_code (coding-agent-bridge task-executor.js, submitResult), and this
-    // read result.exit_code, which nothing ever sets. Both are read now, metadata first
-    // because that is the one the daemon actually writes.
-    const runResult = fromHiveTask(final)
-
-    const exitCode = exitCodeForResult(runResult)
-    const verdict = verdictForResult(runResult)
-
-    // renderOutput keeps the TAIL, because the failure is at the bottom of a log, and it
-    // distinguishes truncation by the node from truncation here.
-    const OUTPUT_LINES = 500
-    const out = renderOutput(runResult.stdout, OUTPUT_LINES)
-    const err = renderOutput(runResult.stderr, OUTPUT_LINES)
-
-    console.log()
-    if (out.lines.length) {
-      console.log(bold("─── output ───"))
-      console.log(out.lines.join("\n"))
-      if (out.notice) console.log(dim(`  (${out.notice})`))
-    }
-    if (err.lines.length) {
-      console.log(bold("─── stderr ───"))
-      console.log(err.lines.join("\n"))
-      if (err.notice) console.log(dim(`  (${err.notice})`))
-    }
-    if (final.error) {
-      console.log(bold("─── error ───"))
-      console.log(final.error)
-    }
-    console.log()
-
-    // Never a green check over an unknown exit code. "exit=?" beside a ✓ reads as success,
-    // and that is how a transport returning nothing at all (#181633, #182004) went on
-    // looking healthy for two days.
-    const tag = verdict === "completed" ? success("✓") : dim("✗")
-    const exitLabel =
-      typeof runResult.exit_code !== "number"
-        ? dim("unknown — the node reported none")
-        : runResult.exit_code_source === "error_text"
-          ? `${runResult.exit_code} ${dim("(inferred from the node's error text, not reported — #182004)")}`
-          : String(runResult.exit_code)
-    console.log(
-      `  ${tag} ${verdict}  ${dim("exit=")}${exitLabel}  ${dim("duration=")}${final.duration_ms ?? "?"}ms`,
-    )
-    console.log(dim(`  task ${taskId}  ·  iris hive tasks get ${taskId}`))
+    const report = hiveRunReport(final, taskId, stoppedWaiting ? waitedSec : undefined)
+    for (const line of report.lines) console.log(line)
 
     // Exit with the command's own code, so `iris hive run <node> "..." && next` means what
     // it says. A timeout is 124 (distinct, so CI can retry only those) per the contract.
+    const exitCode = report.exitCode
     if (exitCode !== 0) process.exit(exitCode)
   },
 })
+
+/**
+ * The report `iris hive run` prints once its wait ends (#190219). Pure, so it is tested.
+ *
+ * Where "failed" + "Request timeout" came from: NOT the CLI. The node daemon's result POST has
+ * a 30 s socket timeout (coding-agent-bridge cloud-client.js `Request timeout`); when it fires
+ * after the command already finished, the executor's catch re-submits the task as
+ * status=failed, error="Request timeout" — while metadata.exit_code still holds the command's
+ * real 0. The CLI printed the raw status (→ status=failed), then the error under an
+ * "─── error ───" heading, then "✓ completed exit=0", in one output.
+ *
+ * Now: one final state, taken from the reported exit code (the task's real exit); an error
+ * beside a successful exit is a delivery note, not an error; and if the CLI's own wait ran
+ * out the line says "stopped waiting after Ns", never "failed".
+ */
+export function hiveRunReport(
+  final: any | null,
+  taskId: string,
+  stoppedWaitingAfterSec?: number,
+): { lines: string[]; exitCode: number } {
+  const lines: string[] = []
+  const footer = dim(`  task ${taskId}  ·  iris hive tasks get ${taskId}`)
+  if (!final) {
+    lines.push(
+      `  ${dim("…")} stopped waiting after ${stoppedWaitingAfterSec ?? "?"}s  ${dim("— the task is still running on the node; it was not cancelled")}`,
+    )
+    lines.push(footer)
+    return { lines, exitCode: TIMEOUT_EXIT }
+  }
+
+  const runResult = fromHiveTask(final)
+  const exitCode = exitCodeForResult(runResult)
+  const verdict = verdictForResult(runResult)
+
+  // renderOutput keeps the TAIL, because the failure is at the bottom of a log, and it
+  // distinguishes truncation by the node from truncation here.
+  const OUTPUT_LINES = 500
+  const out = renderOutput(runResult.stdout, OUTPUT_LINES)
+  const err = renderOutput(runResult.stderr, OUTPUT_LINES)
+
+  lines.push("")
+  if (out.lines.length) {
+    lines.push(bold("─── output ───"))
+    lines.push(out.lines.join("\n"))
+    if (out.notice) lines.push(dim(`  (${out.notice})`))
+  }
+  if (err.lines.length) {
+    lines.push(bold("─── stderr ───"))
+    lines.push(err.lines.join("\n"))
+    if (err.notice) lines.push(dim(`  (${err.notice})`))
+  }
+  if (final.error) {
+    if (exitCode === 0) {
+      // The command succeeded; the error is about delivering its result, not about running it.
+      lines.push(dim(`  note: the node reported "${String(final.error).trim()}" while delivering the result — the command itself exited 0`))
+    } else {
+      lines.push(bold("─── error ───"))
+      lines.push(String(final.error))
+    }
+  }
+  lines.push("")
+
+  // Never a green check over an unknown exit code. "exit=?" beside a ✓ reads as success,
+  // and that is how a transport returning nothing at all (#181633, #182004) went on
+  // looking healthy for two days.
+  const tag = verdict === "completed" ? success("✓") : dim("✗")
+  const exitLabel =
+    typeof runResult.exit_code !== "number"
+      ? dim("unknown — the node reported none")
+      : runResult.exit_code_source === "error_text"
+        ? `${runResult.exit_code} ${dim("(inferred from the node's error text, not reported — #182004)")}`
+        : String(runResult.exit_code)
+  const late = stoppedWaitingAfterSec ? `  ${dim(`(stopped waiting after ${stoppedWaitingAfterSec}s; it finished after)`)}` : ""
+  lines.push(`  ${tag} ${verdict}  ${dim("exit=")}${exitLabel}  ${dim("duration=")}${final.duration_ms ?? "?"}ms${late}`)
+  lines.push(footer)
+  return { lines, exitCode }
+}
 
 export const HiveNodesCommandExport = HiveNodesCommand
 export const HiveRunCommandExport = HiveRunCommand

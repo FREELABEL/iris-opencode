@@ -544,6 +544,23 @@ async function submitBug(args: {
  * The signal that DOES separate them: in a collapse, positional words appear AFTER an option
  * flag. Nothing legitimate puts a bare title word after `--json`.
  */
+const SEVERITY_TAG = /^\s*\[\s*(low|medium|high|critical)\s*\]\s*/i
+
+/**
+ * #190214 — split leading severity tags off a bug title. `[HIGH] [high] foo` → title `foo`.
+ * The --severity flag wins when given; otherwise the first tag in the title; otherwise medium.
+ */
+export function resolveTitleSeverity(title: string, flag?: string): { title: string; severity: string } {
+  let rest = title
+  let tag: string | undefined
+  for (let m = rest.match(SEVERITY_TAG); m; m = rest.match(SEVERITY_TAG)) {
+    tag ??= m[1].toLowerCase()
+    rest = rest.slice(m[0].length)
+  }
+  rest = rest.trim()
+  return { title: rest || title.trim(), severity: (flag ?? tag ?? "medium").toLowerCase() }
+}
+
 export function titleProvenance(argv: string[]): {
   explicit?: string
   collapsed?: { flag: string; strayAfter: string }
@@ -596,7 +613,9 @@ const ReportCommand = cmd({
         alias: "s",
         describe: "bug severity",
         choices: ["low", "medium", "high", "critical"] as const,
-        default: "medium" as const,
+        // No yargs default: an unset flag must be distinguishable from `--severity medium`, so a
+        // title tag like "[HIGH] …" can supply the severity when the flag is absent (#190214).
+        // The effective default is still medium — see resolveTitleSeverity().
       })
       .option("command", {
         alias: "c",
@@ -713,7 +732,14 @@ const ReportCommand = cmd({
       }
     }
     let description = args.description
-    let severity = args.severity as string
+    // #190214: the server prefixes "[SEVERITY] " to the title, so a title that already carries
+    // a tag was saved as "[HIGH] [HIGH] …". Strip it here; the flag wins, else the tag, else medium.
+    let severity: string = "medium"
+    if (title) {
+      const r = resolveTitleSeverity(title, args.severity as string | undefined)
+      title = r.title
+      severity = r.severity
+    } else if (args.severity) severity = String(args.severity)
 
     // Guard: catch known subcommand names passed as titles (e.g. "iris bug report list")
     const subcommands = ["list", "ls", "close", "done", "resolve", "complete"]
