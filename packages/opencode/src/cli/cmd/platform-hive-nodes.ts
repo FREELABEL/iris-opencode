@@ -469,8 +469,11 @@ export async function waitForTask(
   const now = opts.now ?? Date.now
   const deadline = now() + opts.deadlineMs
   let lastStatus = opts.initialStatus
+  let attempt = 0
   while (now() < deadline) {
-    await sleep(opts.intervalMs ?? 1500)
+    // An explicit intervalMs wins (the regression tests drive time themselves); otherwise
+    // back off from 100ms, so the first check happens while a short command is still fresh.
+    await sleep(opts.intervalMs ?? pollDelayMs(++attempt))
     const t = await opts.fetchTask(taskId)
     if (!t || typeof t !== "object") throw new Error(`Poll for task ${taskId} returned no task`)
     if (t.id !== undefined && String(t.id) !== taskId) {
@@ -487,6 +490,18 @@ export async function waitForTask(
   return null
 }
 
+/**
+ * How long to wait before the next poll of a task (#190406).
+ *
+ * The first poll used to be a flat 1500ms after dispatch, so a command that finished in 50ms
+ * was discovered up to 1.5s late — on every command, which is most of why `hive run` felt slow
+ * next to ssh. Start at 100ms and double, capped at 1500ms: a short task is seen almost at once,
+ * and a long one settles back to the old rate instead of hammering the API.
+ */
+export function pollDelayMs(attempt: number): number {
+  return Math.min(100 * 2 ** Math.max(0, attempt - 1), 1500)
+}
+
 const HiveRunCommand = cmd({
   command: "run <target> <command>",
   describe: "run a shell command on a Hive node and stream the output back (fails fast on the first error unless --no-fail-fast is given — see `command`)",
@@ -494,7 +509,11 @@ const HiveRunCommand = cmd({
     yargs
       .positional("target", { describe: "node name or id", type: "string", demandOption: true })
       .positional("command", { describe: "shell command (quote it). Runs with `set -e` by default, so it stops at the first failing statement instead of running the rest — pass --no-fail-fast to run without it", type: "string", demandOption: true })
-      .option("timeout", { describe: "task timeout in seconds", type: "number", default: 60 })
+      .option("timeout", {
+        describe: "task timeout in seconds (default 300 — a repo build or pre-push hook routinely exceeds 60; use --queue for jobs longer than that)",
+        type: "number",
+        default: 300,
+      })
       .option("title", { describe: "task title shown in the dashboard", type: "string" })
       .option("priority", { describe: "task priority 1-10 (higher = sooner)", type: "number" })
       .option("queue", { alias: "fire-and-forget", describe: "queue the task and exit immediately (don't wait for completion)", type: "boolean", default: false })
@@ -512,7 +531,7 @@ const HiveRunCommand = cmd({
 
     const target = String(argv.target)
     const command = String(argv.command)
-    const timeoutSec = Math.max(30, Math.min(3600, Number(argv.timeout) || 60))
+    const timeoutSec = Math.max(30, Math.min(3600, Number(argv.timeout) || 300))
 
     const node = await resolveNode(userId, target)
     if (!node) {
