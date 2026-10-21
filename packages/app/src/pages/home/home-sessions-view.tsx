@@ -42,6 +42,8 @@ export type HomeSessionsViewProps = {
   showProjectName: Accessor<boolean>
   server: Accessor<ServerConnection.Key>
   canCreateSession: Accessor<boolean>
+  /** Drawer layout (#190273): no top breathing room above the search. */
+  compact?: boolean
   searchValue: Accessor<string>
   searchPlaceholder: Accessor<string>
   searchOpen: Accessor<boolean>
@@ -76,13 +78,16 @@ export function HomeSessionsView(props: HomeSessionsViewProps) {
     <section
       ref={props.onSetHoverTarget}
       class="min-h-0 min-w-0 flex-1 flex flex-col"
+      // The sticky header's height, which every offset below is measured from. Compact (the
+      // sessions drawer, #190273) drops Home's top breathing room; the page keeps 84 / 108.
+      classList={{ "[--hs-head:72px]": !!props.compact, "[--hs-head:84px] lg:[--hs-head:108px]": !props.compact }}
       aria-label={props.language.t("sidebar.project.recentSessions")}
     >
-      <div class="sticky top-0 z-30 shrink-0 bg-v2-background-bg-base pb-3 pt-6 lg:pt-12" onWheel={props.onWheel}>
+      <div class="sticky top-0 z-30 shrink-0 bg-v2-background-bg-base pb-3 pt-[calc(var(--hs-head)-60px)]" onWheel={props.onWheel}>
         <HomeSessionSearch {...props} />
         <Suspense>
           <Show when={props.groups().length > 0 && props.canCreateSession()}>
-            <div class="pointer-events-none absolute right-0 top-[84px] z-20 flex lg:top-[108px]">
+            <div class="pointer-events-none absolute right-0 top-[var(--hs-head)] z-20 flex">
               <ButtonV2
                 data-action="home-new-session"
                 variant="ghost-muted"
@@ -97,11 +102,11 @@ export function HomeSessionsView(props: HomeSessionsViewProps) {
           </Show>
         </Suspense>
       </div>
-      <div class="pointer-events-none sticky top-[84px] z-40 h-0 -mr-3 lg:top-[108px]">
+      <div class="pointer-events-none sticky top-[var(--hs-head)] z-40 h-0 -mr-3">
         <div
           ref={props.onSetThumbTrack}
           data-component="home-session-scroll-track"
-          class="relative ml-auto h-[calc(100cqh-84px)] w-3 lg:h-[calc(100cqh-108px)]"
+          class="relative ml-auto h-[calc(100cqh-var(--hs-head))] w-3"
         />
       </div>
       <div class="-mr-3 min-h-[calc(100cqh-72px)] lg:min-h-[calc(100cqh-96px)]">
@@ -402,8 +407,8 @@ function HomeSessionGroupHeader(props: {
     <div
       ref={props.onSetRef}
       class={`
-        pointer-events-none sticky top-[84px] flex h-7 min-w-0 items-center justify-between
-        bg-v2-background-bg-base pl-3 lg:top-[108px]
+        pointer-events-none sticky top-[var(--hs-head)] flex h-7 min-w-0 items-center justify-between
+        bg-v2-background-bg-base pl-3
       `}
       classList={{ "home-session-group-header z-[5]": !!props.elevated, "z-10": !props.elevated }}
     >

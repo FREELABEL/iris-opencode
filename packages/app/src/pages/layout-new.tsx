@@ -4,6 +4,7 @@ import { DebugBar } from "@/components/debug-bar"
 import { TabsInfoPopup } from "@/components/help-button"
 import { Titlebar, type TitlebarUpdate } from "@/components/titlebar"
 import { UpdateAvailableToast } from "@/components/update-available-toast"
+import { SessionsDrawer } from "@/components/sessions-drawer"
 import { useLanguage } from "@/context/language"
 import { usePlatform } from "@/context/platform"
 import { setV2Toast, ToastRegion } from "@/utils/toast"
@@ -44,6 +45,8 @@ export default function NewLayout(props: ParentProps) {
       <main class="flex-1 min-h-0 min-w-0 overflow-x-hidden flex flex-col items-start contain-strict">
         <Suspense>{props.children}</Suspense>
       </main>
+      {/* Every chat over this one, opened by the IRIS cube (#190273). */}
+      <SessionsDrawer />
       {import.meta.env.DEV && state.debugTools && <DebugBar inline />}
       <TabsInfoPopup />
       {/* The pill in the title bar is the quick-click; this is the part people actually see (#190253). */}
