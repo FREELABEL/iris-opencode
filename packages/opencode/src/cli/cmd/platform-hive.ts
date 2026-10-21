@@ -968,6 +968,25 @@ function readNodeKey(): string | null {
   return null
 }
 
+/**
+ * Cancel one task as its OWNER (#190292). `hive cancel` used to post a "failed" result with THIS
+ * machine's node key, and the node-agent endpoint only finds tasks assigned to the node that
+ * calls it — so cancelling a task running on any other machine answered "No query results for
+ * model NodeTask". The user endpoint finds any of your tasks; the daemon running it sees the
+ * cancellation on its next heartbeat and kills the process.
+ */
+export async function cancelTaskWith(
+  fetcher: (path: string, init: RequestInit) => Promise<Response>,
+  taskId: string,
+): Promise<{ ok: boolean; message: string }> {
+  const res = await fetcher(`/api/v6/nodes/tasks/${encodeURIComponent(taskId)}/cancel`, { method: "POST" })
+  if (res.ok) return { ok: true, message: "cancelled" }
+  const body = (await res.json().catch(() => ({}))) as Record<string, unknown>
+  if (res.status === 404) return { ok: false, message: `No task ${taskId} on your account` }
+  return { ok: false, message: String(body.message ?? body.error ?? `HTTP ${res.status}`) }
+}
+const cancelTask = (taskId: string) => cancelTaskWith(hiveFetch, taskId)
+
 async function nodeFetch(path: string, options: RequestInit = {}) {
   const nodeKey = readNodeKey()
   if (!nodeKey) throw new Error("No node_api_key in ~/.iris/config.json. Run the IRIS installer first.")
@@ -1108,7 +1127,7 @@ const HiveTasksCommand = cmd({
       .option("not-after", { describe: "(create) never run it after this — a duration from now (30s, 5m) or an ISO time. Late tasks EXPIRE instead of running", type: "string" })
       .option("key", { describe: "(create) idempotency key: the same key returns the same task, and a node never runs it twice", type: "string" })
       .option("retries", { describe: "(create) retry a failure up to N more times — needs --key, never past --not-after", type: "number" })
-      .option("json", { describe: "(create) JSON output (the full task object)", type: "boolean", default: false })
+      .option("json", { describe: "(create) JSON output: the finished task object — it waits for the task like the default; add --queue to get {task_id} at once (#190308)", type: "boolean", default: false })
       .option("user-id", { describe: "user ID", type: "number" })
       .example("iris hive tasks create --type mcp_call --node studio --config '{\"server\":\"argent\"}'", "ask a node's MCP server what tools it has")
       .example("iris hive tasks create --type mcp_call --node studio --config '{\"server\":\"argent\",\"tool\":\"list_devices\"}'", "call one tool and print the result")
@@ -1757,10 +1776,8 @@ const HiveCancelCommand = cmd({
         let cancelled = 0
         for (const t of tasks) {
           try {
-            await nodeFetch(`/api/v6/node-agent/tasks/${t.id}/result`, {
-              method: "POST",
-              body: JSON.stringify({ status: "failed", output: "Cancelled via iris hive cancel", error: "Manually cancelled" }),
-            })
+            const r = await cancelTask(String(t.id))
+            if (!r.ok) throw new Error(r.message)
             cancelled++
             console.log(`  ${success("✓")} ${String(t.id).substring(0, 12)}… — ${t.title}`)
           } catch (err) {
@@ -1785,16 +1802,13 @@ const HiveCancelCommand = cmd({
           cancelId = r.id
         }
         spinner.start(`Cancelling ${cancelId}…`)
-        const res = await nodeFetch(`/api/v6/node-agent/tasks/${cancelId}/result`, {
-          method: "POST",
-          body: JSON.stringify({ status: "failed", output: "Cancelled via iris hive cancel", error: "Manually cancelled" }),
-        })
-        if (res.ok) {
+        const r = await cancelTask(cancelId)
+        if (r.ok) {
           spinner.stop(success("Task cancelled"))
         } else {
-          const err = await res.text()
           spinner.stop("Failed", 1)
-          prompts.log.error(err)
+          prompts.log.error(r.message)
+          process.exitCode = 1
         }
       } else {
         // Interactive: show pending and let user pick
@@ -1819,11 +1833,9 @@ const HiveCancelCommand = cmd({
         })
         if (prompts.isCancel(selected)) { prompts.outro("Cancelled"); return }
 
-        await nodeFetch(`/api/v6/node-agent/tasks/${selected}/result`, {
-          method: "POST",
-          body: JSON.stringify({ status: "failed", output: "Cancelled via iris hive cancel", error: "Manually cancelled" }),
-        })
-        prompts.log.success("Task cancelled")
+        const r = await cancelTask(String(selected))
+        if (r.ok) prompts.log.success("Task cancelled")
+        else { prompts.log.error(r.message); process.exitCode = 1 }
       }
     } catch (err) {
       spinner.stop("Error", 1)
