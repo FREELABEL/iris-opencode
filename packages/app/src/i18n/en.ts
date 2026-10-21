@@ -821,7 +821,7 @@ export const dict = {
   "terminal.connectTicket.statusError": "PTY connect ticket failed with {{status}}",
 
   "titlebar.update": "Update",
-  "titlebar.updateVersion": "Update {{version}}",
+  "titlebar.updateVersion": "Update to v{{version}}",
 
   "common.closeTab": "Close tab",
   "common.dismiss": "Dismiss",

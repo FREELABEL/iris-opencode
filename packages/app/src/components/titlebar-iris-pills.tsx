@@ -141,7 +141,7 @@ export type BadgeTone = "accent" | "warning" | "danger"
 export function planBadge(state: PlanState | undefined): { text: string; tone: BadgeTone } {
   const f = state?.measured ? state.fraction : null
   if (typeof f === "number" && Number.isFinite(f)) {
-    if (f >= 1) return { text: "Out of allowance · Upgrade", tone: "danger" }
+    if (f >= 1) return { text: "⚡ Upgrade · Out of tokens", tone: "danger" }
     if (f >= 0.9) return { text: "Almost out · Upgrade", tone: "warning" }
   }
   return { text: "Upgrade", tone: "accent" }
