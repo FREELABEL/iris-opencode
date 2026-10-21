@@ -42,7 +42,8 @@ export namespace UI {
   let blank = false
   export function empty() {
     if (blank) return
-    println("" + Style.TEXT_NORMAL)
+    // The reset is for a terminal; piped to an agent it is a stray escape code (#190328).
+    println(process.stdout.isTTY && !process.env.NO_COLOR ? Style.TEXT_NORMAL : "")
     blank = true
   }
 

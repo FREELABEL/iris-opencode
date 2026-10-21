@@ -959,7 +959,7 @@ export async function writeJson(value: unknown): Promise<void> {
 }
 
 export function printDivider(width = 60): void {
-  console.log(`  ${UI.Style.TEXT_DIM}${"─".repeat(width)}${UI.Style.TEXT_NORMAL}`)
+  console.log(`  ${paint(UI.Style.TEXT_DIM, "─".repeat(width))}`)
 }
 
 export function printKV(key: string, value: unknown): void {

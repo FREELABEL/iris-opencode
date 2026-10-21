@@ -2000,10 +2000,10 @@ const BloqsListsCommand = cmd({
 
     try {
       const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args["bloq-id"]}/lists`)
-      if (!res.ok) {
-        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
-        await handleApiError(res, "List bloq lists")
-        prompts.outro("Done")
+      // handleApiError answers in JSON under --json, with the server's own reason, and sets
+      // a failing exit code — the same contract as boards list, so an agent can trust $?.
+      if (!(await handleApiError(res, "List bloq lists"))) {
+        if (!args.json) prompts.outro("Done")
         return
       }
 
@@ -2029,6 +2029,7 @@ const BloqsListsCommand = cmd({
       printDivider()
       prompts.outro(dim(`iris bloqs add-item ${args["bloq-id"]} <list-id> "<content>"`))
     } catch (err) {
+      process.exitCode = 1
       if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
