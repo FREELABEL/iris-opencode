@@ -664,15 +664,16 @@
     padding: 0;
   }
 
-  /* A failed IRIS call (#189316): a red rule and the reason, so it is findable inside the fold. */
+  /* A command that exited non-zero (#189316): a rule and the reason, so it is findable inside the
+     fold. Neutral, not red (#190220): a probe that exits 1 is routine, not an alarm. */
   [data-slot="context-tool-group-item"][data-error] {
-    border-left: 2px solid var(--v2-state-fg-danger);
+    border-left: 2px solid var(--v2-border-border-strong);
     padding-left: 8px;
     margin-left: -10px;
   }
   [data-slot="context-tool-group-error"] {
     display: block;
-    color: var(--v2-state-fg-danger);
+    color: var(--v2-text-text-muted);
     font-size: var(--font-size-small);
     line-height: var(--line-height-large);
     overflow-wrap: anywhere;
@@ -694,10 +695,6 @@
     color: var(--v2-text-text-base);
     background: var(--v2-overlay-simple-overlay-hover);
   }
-}
-
-[data-slot="context-tool-group-failed"] {
-  color: var(--v2-state-fg-danger);
 }
 
 /* Commands row (#188457). */
