@@ -10,8 +10,9 @@
  */
 import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from "solid-js"
 import { Portal } from "solid-js/web"
-import { WRITABLE_STATUSES, type SchemaOption } from "./iris-card-editor"
+import { WRITABLE_STATUSES, type SchemaOption } from "./iris-card-vocab"
 import type { QuickField, QuickPatch } from "./iris-atlas-view"
+import { floatingLayer } from "./iris-card-facts"
 
 export interface QuickEditCard {
   id: number
@@ -51,6 +52,8 @@ export function IrisQuickEdit(props: {
   boardLabels: string[]
   now: number
   note?: string | null
+  /** Opened inside a dialog (the card editor): the element to join, so it stays clickable. */
+  within?: Element | null
   onSave: (patch: QuickPatch) => void
   onClose: () => void
 }) {
@@ -80,16 +83,18 @@ export function IrisQuickEdit(props: {
     const esc = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return
       e.preventDefault()
-      e.stopPropagation()
+      // Immediate, on the window: opened inside a card (a dialog that closes on Escape), the
+      // Escape must close this and nothing under it.
+      e.stopImmediatePropagation()
       props.onClose()
     }
-    document.addEventListener("keydown", esc, true)
+    window.addEventListener("keydown", esc, true)
     // Next tick: the right-click that opened it must not close it.
     const t = setTimeout(() => document.addEventListener("mousedown", away), 0)
     onCleanup(() => {
       clearTimeout(t)
       document.removeEventListener("mousedown", away)
-      document.removeEventListener("keydown", esc, true)
+      window.removeEventListener("keydown", esc, true)
     })
   })
   // The board's own vocabulary arrives after the editor opens and replaces the chips; the one
@@ -106,21 +111,23 @@ export function IrisQuickEdit(props: {
   )
 
   // Below the card when there is room, above it when there is not.
+  const layer = floatingLayer(props.within)
   const style = () => {
     const below = window.innerHeight - props.anchor.bottom > 320
-    const left = Math.max(8, Math.min(props.anchor.left, window.innerWidth - 288))
+    const left = Math.max(8, Math.min(props.anchor.left, window.innerWidth - 288)) - layer.dx
     return below
-      ? { left: `${left}px`, top: `${props.anchor.bottom + 4}px` }
-      : { left: `${left}px`, bottom: `${window.innerHeight - props.anchor.top + 4}px` }
+      ? { left: `${left}px`, top: `${props.anchor.bottom + 4 - layer.dy}px` }
+      : { left: `${left}px`, top: `${props.anchor.top - 4 - layer.dy}px`, transform: "translateY(-100%)" }
   }
 
   // On document.body: the panel is a containing block for `position: fixed` (it is transformed),
   // so drawn inside it the editor landed hundreds of pixels from the card it belongs to.
   return (
-    <Portal>
+    <Portal mount={layer.mount}>
     <div
       ref={el}
       class="iris-quick"
+      data-dismiss-first
       role="dialog"
       aria-label={`Change ${props.card.title}`}
       style={style()}
