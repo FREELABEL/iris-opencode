@@ -225,6 +225,30 @@ describe("fromHiveTask — iris hive run", () => {
     expect(exitCodeForResult(fromHiveTask({}))).toBe(GENERIC_FAILURE)
     expect(fromHiveTask({}).stdout).toBe("")
   })
+
+  test("does not re-print stderr when a node omits stdout but sends stderr (#190640)", () => {
+    // Measured 2026-10-22: `iris hive run <node> "echo err >&2"` printed the line twice —
+    // once as a raw "[stderr] err" line and again inside the --- stderr --- block. The daemon
+    // sends `output` merged from both streams with an invented "[stderr] " prefix; falling
+    // back to it when `stdout` is absent duplicated every stderr line.
+    const r = fromHiveTask({
+      status: "completed",
+      result: { output: "[stderr] err", stderr: "err" },
+    })
+    expect(r.stdout).toBe("")
+    expect(r.stderr).toBe("err")
+  })
+
+  test("an empty stdout beside a stderr stream stays empty", () => {
+    const r = fromHiveTask({ status: "completed", result: { output: "", stdout: "", stderr: "boom" } })
+    expect(r.stdout).toBe("")
+    expect(r.stderr).toBe("boom")
+  })
+
+  test("still falls back to output for a node that predates separated streams", () => {
+    const r = fromHiveTask({ status: "completed", result: { output: "legacy line" } })
+    expect(r.stdout).toBe("legacy line")
+  })
 })
 
 describe("fromHiveTask — recovering the exit code the daemon throws away", () => {
