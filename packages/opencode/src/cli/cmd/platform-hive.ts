@@ -38,6 +38,7 @@ import { HiveDriveCommand } from "./platform-hive-drive"
 import { HiveAnswerCommand, HiveAnswerHookCommand, HiveAnswersCommand, HiveAwayCommand } from "./platform-hive-answer"
 import { HiveTriggerCommand } from "./platform-hive-trigger"
 import { HiveClaimCommand } from "./platform-hive-claim"
+import { route, type Verdict } from "./hive-route"
 import { HiveProofCommand } from "./platform-hive-proof"
 import { HiveRunnerCommand } from "./platform-hive-runner"
 import { HiveRentCommand, HiveRentalsCommand, HiveReleaseCommand, HiveProvidersCommand, HiveSandboxCommand } from "./platform-hive-rent"
@@ -1082,6 +1083,19 @@ function timeAgo(iso: string | null | undefined): string {
   return `${Math.round(hrs / 24)}d ago`
 }
 
+/** Recorded gate verdicts (hive-gate-verdicts, bloq 381) for the route. None on any failure: the table decides. */
+async function loadGateVerdicts(): Promise<Verdict[]> {
+  try {
+    const res = await irisFetch(`/api/v1/atlas/datasets/hive-gate-verdicts?per_page=200&bloq_id=381`)
+    if (!res.ok) return []
+    const body = (await res.json()) as any
+    const rows: any[] = Array.isArray(body?.data?.records?.data) ? body.data.records.data : Array.isArray(body?.data?.records) ? body.data.records : []
+    return rows.map((r) => r?.data ?? {}) as Verdict[]
+  } catch {
+    return []
+  }
+}
+
 const HiveTasksCommand = cmd({
   command: "tasks [subcommand] [task-id]",
   describe: "list, inspect or CREATE tasks on your nodes (create dispatches any task type)",
@@ -1090,7 +1104,7 @@ const HiveTasksCommand = cmd({
       .positional("subcommand", { describe: "create, get or logs", type: "string" })
       .positional("task-id", { describe: "task ID (for get/logs)", type: "string" })
       .option("status", { describe: "filter by status", type: "string", choices: ["pending", "running", "completed", "failed", "all"], default: "all" })
-      .option("type", { describe: "task type — filters the list, or names what to dispatch with `create` (mcp_call, remotion, browser_agent, discover…)", type: "string" })
+      .option("type", { describe: "task type — filters the list, or names what to dispatch with `create` (code, mcp_call, remotion, browser_agent, discover…). `code` picks the agent runtime for you and prints why", type: "string" })
       .option("history", { describe: "include completed tasks (last 48h)", type: "boolean", default: false })
       .option("since", { describe: "time window (e.g. 24h, 7d)", type: "string", default: "48h" })
       .option("limit", { describe: "max tasks to show", type: "number", default: 20 })
@@ -1110,6 +1124,7 @@ const HiveTasksCommand = cmd({
       .option("retries", { describe: "(create) retry a failure up to N more times — needs --key, never past --not-after", type: "number" })
       .option("json", { describe: "(create) JSON output (the full task object)", type: "boolean", default: false })
       .option("user-id", { describe: "user ID", type: "number" })
+      .example("iris hive tasks create --type code --prompt 'Fix the typo in the README' --queue", "a coding task — the runtime is picked from the prompt and recorded on the task")
       .example("iris hive tasks create --type mcp_call --node studio --config '{\"server\":\"argent\"}'", "ask a node's MCP server what tools it has")
       .example("iris hive tasks create --type mcp_call --node studio --config '{\"server\":\"argent\",\"tool\":\"list_devices\"}'", "call one tool and print the result")
       .example("iris hive tasks create --type sandbox_execute --node drone-01 --prompt 'dronectl goto ring --at 8' --not-after 8s --key ring-8-01 --retries 2 --queue", "deliver by T or not at all; safe to retry, never runs twice"),
@@ -1148,6 +1163,21 @@ const HiveTasksCommand = cmd({
         prompts.log.error(check.error)
         if (check.hint) console.log(dim(`  ${check.hint}`))
         process.exit(1)
+      }
+
+      // `--type code`: pick the agent runtime from the task, and say why (#189154). A runtime named
+      // in --config is the caller's decision and is kept; the route is still recorded beside it.
+      let taskType = type
+      if (type === "code") {
+        taskType = "code_generation"
+        const verdicts = await loadGateVerdicts()
+        const r = route(String(args.prompt ?? ""), verdicts)
+        const chosen = typeof config.runtime === "string" && config.runtime ? String(config.runtime) : r.runtime
+        config.runtime = chosen
+        config.route = { class: r.cls, runtime: chosen, source: chosen === r.runtime ? r.source : "caller", why: r.why }
+        if (!args.json) {
+          console.log(`${dim("→")} route ${bold(chosen)}  ${dim(chosen === r.runtime ? r.why : `named in --config (the route would have picked ${r.runtime}: ${r.why})`)}`)
+        }
       }
 
       // The delivery contract (#187568) — checked before anything is sent.
@@ -1194,7 +1224,7 @@ const HiveTasksCommand = cmd({
 
       const payload = buildTaskPayload({
         userId,
-        type,
+        type: taskType,
         nodeId,
         prompt: args.prompt as string | undefined,
         title: args.title as string | undefined,
@@ -1210,7 +1240,7 @@ const HiveTasksCommand = cmd({
       })
 
       if (!args.json) {
-        console.log(`${dim("→")} ${bold(describeTask(type, config))}${nodeName ? ` on ${bold(nodeName)}` : dim(" (any capable node)")}`)
+        console.log(`${dim("→")} ${bold(describeTask(taskType, config))}${nodeName ? ` on ${bold(nodeName)}` : dim(" (any capable node)")}`)
         if (payload.metadata) console.log(dim("  status and report will appear in this session"))
       }
 
