@@ -118,21 +118,29 @@ try {
   // @heyiris/pulse-core is a workspace package on main that this branch does not have. Without
   // it the v1.5.6 build failed on `Could not resolve: "@heyiris/pulse-core"`. Vendored like util,
   // and resolved by the tsconfig paths onto vendor/pulse-core.
-  let pulseImported = false
+  // Any OTHER @heyiris/* package would fail the build the same way, on every platform, after
+  // the release has started — so stop here instead, before anything is built (#190256).
+  const heyiris = new Set<string>()
   for await (const file of new Bun.Glob("**/*.{ts,tsx}").scan(built)) {
-    if (/["']@heyiris\/pulse-core(\/[a-z0-9-]+)?["']/.test(await fs.readFile(path.join(built, file), "utf8"))) {
-      pulseImported = true
-      break
-    }
+    const text = await fs.readFile(path.join(built, file), "utf8")
+    for (const m of text.matchAll(/["']@heyiris\/([a-z0-9-]+)(?:\/[^"']*)?["']/g)) heyiris.add(m[1])
   }
-  if (pulseImported) {
+  const unhandled = [...heyiris].filter((name) => name !== "pulse-core")
+  if (unhandled.length) {
+    throw new Error(
+      `v1 code imports ${unhandled.map((n) => "@heyiris/" + n).join(", ")}, which this sync does not vendor. ` +
+        `Vendor it like pulse-core (copy its src into vendor/, add tsconfig paths) before releasing.`,
+    )
+  }
+  if (heyiris.has("pulse-core")) {
     await extract(sha, ["packages/pulse-core/src"], staging).catch(() => {
       throw new Error(`v1 code imports @heyiris/pulse-core, which ${ref} does not have`)
     })
     await fs.cp(path.join(staging, "packages/pulse-core/src"), path.join(vendorOut, "pulse-core"), { recursive: true })
   }
 
-  const diff = await $`diff -rq ${v1Dir} ${built}`.nothrow().quiet()
+  // SYNCED_FROM is the marker this script writes after a sync; it is never in the ref.
+  const diff = await $`diff -rq -x SYNCED_FROM ${v1Dir} ${built}`.nothrow().quiet()
   const changes = diff.stdout.toString().trim().split("\n").filter(Boolean)
 
   // Dependencies the new code needs that packages/cli does not declare. Reported, never
