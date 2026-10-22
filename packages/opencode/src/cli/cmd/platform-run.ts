@@ -800,6 +800,9 @@ export function validateActionParams(
   const declared = new Set(sig.parameters.map((p) => p.name))
   // An action that declares no parameters is a passthrough; do not lecture the caller.
   if (declared.size === 0) return { ok: true, unknown: [], missing: [] }
+  // No parameters at all is the caller asking "how do I call this?" — exec answers that with
+  // the full signature (exit 2, signature_only), which a "missing required" refusal would hide (#188781).
+  if (Object.keys(params).length === 0) return { ok: true, unknown: [], missing: [] }
 
   const accepted = new Set(declared)
   for (const group of synonyms) {

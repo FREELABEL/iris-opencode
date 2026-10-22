@@ -58,6 +58,16 @@ describe("unknown parameters are refused, not ignored", () => {
     expect(res.missing).toEqual(["subject"])
   })
 
+  test("a call with no parameters is left to the signature answer, not refused (#188781)", () => {
+    const write: ActionSignature = {
+      ...gmail,
+      name: "send_email",
+      writes: true,
+      parameters: [{ name: "to", type: "string", required: true, description: "" }],
+    }
+    expect(validateActionParams(write, {}, []).ok).toBe(true)
+  })
+
   test("an action with no declared parameters is not second-guessed", () => {
     const bare: ActionSignature = { ...gmail, parameters: [] }
     expect(validateActionParams(bare, { anything: 1 }, []).ok).toBe(true)
