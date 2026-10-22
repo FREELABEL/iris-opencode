@@ -740,6 +740,11 @@ export function isFailedResult(result: any): boolean {
   if (result === null || result === undefined) return true
   if (typeof result !== "object") return false
   if (result.success === false) return true
+  // A page can arrive AND the fetch after it can fail. Composio answers 413
+  // (Upstream_PayloadTooLarge) as `error_after_page` on an otherwise successful payload, so
+  // `success: true` was reported with exit 0 for a call that did not return what was asked
+  // (#190573). A partial result with an upstream failure is a failed result.
+  if (result.error_after_page) return true
   return result.success !== true && !!result.error
 }
 
@@ -773,6 +778,42 @@ export type ActionSignature = {
   writes: boolean
   effect?: string | null
   parameters: { name: string; type: string; required: boolean; description: string }[]
+}
+
+/**
+ * Refuse a parameter the action does not declare, and name a required one that is absent.
+ *
+ * A typo used to be DROPPED IN SILENCE — `exec gmail read_emails totally_bogus=1` completed
+ * and returned 10 messages, so a wrong parameter looked exactly like a right one (#190572).
+ * The catalogue is the signature; this is the client-side check that spends nothing upstream
+ * to prove the call is wrong.
+ *
+ * `synonyms` are the groups the executor already broadcasts (limit / max_results / maxResults).
+ * A name in the same group as a declared parameter is legitimate, not a typo — otherwise this
+ * guard would reject the very spellings the CLI adds itself (#182866).
+ */
+export function validateActionParams(
+  sig: ActionSignature,
+  params: Record<string, unknown>,
+  synonyms: string[][] = [],
+): { ok: boolean; unknown: string[]; missing: string[] } {
+  const declared = new Set(sig.parameters.map((p) => p.name))
+  // An action that declares no parameters is a passthrough; do not lecture the caller.
+  if (declared.size === 0) return { ok: true, unknown: [], missing: [] }
+
+  const accepted = new Set(declared)
+  for (const group of synonyms) {
+    if (group.some((k) => declared.has(k))) for (const k of group) accepted.add(k)
+  }
+
+  const unknown = Object.keys(params)
+    .filter((k) => !accepted.has(k))
+    .sort()
+  const missing = sig.parameters
+    .filter((p) => p.required && (params[p.name] === undefined || params[p.name] === null))
+    .map((p) => p.name)
+
+  return { ok: unknown.length === 0 && missing.length === 0, unknown, missing }
 }
 
 export async function actionSignaturesLive(target: string): Promise<ActionSignature[] | undefined> {
@@ -2225,6 +2266,28 @@ const ExecCommand = cmd({
         // When the upstream says the function does not exist, answer with the ones that do,
         // in the same response — the caller is usually an agent that will otherwise guess again.
         const known = await knownFunctionsLive(target)
+
+        // Refuse a parameter this action does not declare, before spending a call. The server
+        // told us this in a dry run; doing it on every run is what stops a typo from becoming
+        // a silent wrong answer (#190572/#190573).
+        const signature = (await actionSignaturesLive(target))?.find((a) => a.name === fn)
+        if (signature) {
+          const check = validateActionParams(signature, params, PARAM_SYNONYMS)
+          if (!check.ok) {
+            const problems: string[] = []
+            if (check.unknown.length) problems.push(`unknown parameter(s): ${check.unknown.join(", ")}`)
+            if (check.missing.length) problems.push(`missing required: ${check.missing.join(", ")}`)
+            const message = `${target}.${fn} — ${problems.join("; ")}. Parameters: ${signature.parameters.map((p) => p.name).join(", ") || "(none)"}.`
+            process.exitCode = 1
+            if (args.json) {
+              await writeJson({ success: false, error: message, unknown: check.unknown, missing: check.missing })
+              return
+            }
+            prompts.log.error(message)
+            prompts.outro("Nothing was run.")
+            return
+          }
+        }
 
         // A write called with NO parameters is asking "how do I call this?" — answer with the
         // signature instead of a failed dry run (#188781). Reads with no required params still run.
