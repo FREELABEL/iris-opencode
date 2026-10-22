@@ -1,6 +1,6 @@
 import { describeListScope } from "./leads-scope"
 import { cmd } from "./cmd"
-import { PulseCheckCommand, pulseCheckOptions, runPulseCheck } from "./platform-pulse-check"
+import { PulseCheckCommand, PulseSourcesCommand, pulseCheckOptions, runPulseCheck } from "./platform-pulse-check"
 import { readAtlasDiary } from "./pulse-check-sweep"
 import { fetchLeadCalendarEvents, type Channel, type ContactQuery } from "./pulse-contact-script"
 import { runScript, scriptFor } from "../../pulse/core"
@@ -13204,6 +13204,7 @@ export const PlatformPulseCommand = productCommand({
     )
       .command(PulseAlertsCommand)
       .command(PulseCheckCommand)
+      .command(PulseSourcesCommand)
       .option("admin", { describe: "agency view: diary digest + lead scorecard + ungated leads", type: "boolean", default: false })
       .option("status", { describe: "filter by lead status (admin mode)", type: "string", default: "Won,Active,In Negotiation,Negotiating" })
       .option("bloq", { alias: "b", describe: "filter by bloq ID (admin mode)", type: "number" })
