@@ -2567,8 +2567,8 @@ echo "=== Report Complete ==="
 
       // Optionally schedule it
       if (args.schedule) {
-        const schedUrl = await bridgeUrl("/daemon/schedules")
-        const schedRes = await fetch(schedUrl, {
+        // bridgeFetch: the /daemon prefix AND the bridge key (#189156 — a bare fetch 404s/401s).
+        const schedRes = await bridgeFetch("/daemon/schedules", {
           method: "POST",
           headers: bridgeHeaders(),
           body: JSON.stringify({
@@ -2681,7 +2681,7 @@ const HiveScheduleAddCommand = cmd({
     spinner.start("Creating schedule...")
 
     try {
-      const res = await fetch(`${BRIDGE_URL}/schedules`, {
+      const res = await bridgeFetch(`/schedules`, {
         method: "POST",
         headers: bridgeHeaders(),
         body: JSON.stringify({
@@ -2725,7 +2725,7 @@ const HiveScheduleRmCommand = cmd({
     prompts.intro("◈  Remove Schedule")
 
     try {
-      const res = await fetch(`${BRIDGE_URL}/schedules/${encodeURIComponent(args.id as string)}`, {
+      const res = await bridgeFetch(`/schedules/${encodeURIComponent(args.id as string)}`, {
         method: "DELETE",
         headers: bridgeHeaders(),
       })
@@ -2753,7 +2753,7 @@ const HiveSchedulePauseCommand = cmd({
   async handler(args) {
     UI.empty()
     try {
-      const res = await fetch(`${BRIDGE_URL}/schedules/${encodeURIComponent(args.id as string)}/pause`, {
+      const res = await bridgeFetch(`/schedules/${encodeURIComponent(args.id as string)}/pause`, {
         method: "POST",
         headers: bridgeHeaders(),
       })
@@ -2777,7 +2777,7 @@ const HiveScheduleResumeCommand = cmd({
   async handler(args) {
     UI.empty()
     try {
-      const res = await fetch(`${BRIDGE_URL}/schedules/${encodeURIComponent(args.id as string)}/resume`, {
+      const res = await bridgeFetch(`/schedules/${encodeURIComponent(args.id as string)}/resume`, {
         method: "POST",
         headers: bridgeHeaders(),
       })
