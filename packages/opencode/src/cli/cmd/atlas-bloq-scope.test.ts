@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { buildDatasetQuery, buildSummaryQuery, resolutionHint } from "./platform-atlas-datasets"
+import { buildDatasetQuery, buildSchemaDeleteQuery, buildSummaryQuery, resolutionHint } from "./platform-atlas-datasets"
 
 /**
  * A dataset slug is unique per (user, bloq) — not per account. So the same slug can exist
@@ -63,5 +63,20 @@ describe("an unpinned read says which schema answered", () => {
 
   test("an unknown schema id produces no hint", () => {
     expect(resolutionHint("shared", undefined, undefined)).toBeNull()
+  })
+})
+
+describe("a schema delete can name one board or every board", () => {
+  test("a pinned delete carries bloq_id next to cascade", () => {
+    expect(buildSchemaDeleteQuery({ cascade: true, bloq: 766 })).toBe("?cascade=true&bloq_id=766")
+  })
+
+  test("all_boards is an explicit choice, not the default", () => {
+    expect(buildSchemaDeleteQuery({ cascade: true, allBoards: true })).toBe("?cascade=true&all_boards=true")
+  })
+
+  test("no scope flags leaves the old single-board call unchanged", () => {
+    expect(buildSchemaDeleteQuery({ cascade: true })).toBe("?cascade=true")
+    expect(buildSchemaDeleteQuery({})).toBe("")
   })
 })

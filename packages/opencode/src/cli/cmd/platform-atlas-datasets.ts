@@ -59,6 +59,20 @@ export function buildSummaryQuery(opts: { bloq?: number; groupBy?: string; sum?:
 }
 
 /**
+ * A schema delete is the one call that cannot be undone, so the scope is explicit in the
+ * URL: `bloq_id` for one board, `all_boards=true` for every version. With neither, the
+ * server refuses a slug that spans boards (#190580).
+ */
+export function buildSchemaDeleteQuery(opts: { cascade?: boolean; bloq?: number; allBoards?: boolean }): string {
+  const p = new URLSearchParams()
+  if (opts.cascade) p.set("cascade", "true")
+  if (opts.bloq != null) p.set("bloq_id", String(opts.bloq))
+  if (opts.allBoards) p.set("all_boards", "true")
+  const s = p.toString()
+  return s ? `?${s}` : ""
+}
+
+/**
  * Which schema answered, when the caller did not pin a board — and how to pin the next read.
  *
  * `GET /atlas/schemas` returns only the latest version of each slug, so the CLI cannot count
@@ -435,10 +449,12 @@ const SchemaUpdateCommand = cmd({
 const SchemaDeleteCommand = cmd({
   command: "delete <slug>",
   aliases: ["rm", "destroy"],
-  describe: "delete a dataset schema (all versions)",
+  describe: "delete a dataset schema — one board, or every version with --all-boards",
   builder: (y) =>
     y
       .positional("slug", { type: "string", demandOption: true })
+      .option("bloq", { type: "number", describe: "delete only this board's version of the slug" })
+      .option("all-boards", { type: "boolean", default: false, describe: "delete every board's version of a shared slug" })
       .option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false })
       .option("cascade", { describe: "also delete the dataset's records", type: "boolean", default: false })
       .option("json", { type: "boolean", default: false }),
@@ -463,7 +479,7 @@ const SchemaDeleteCommand = cmd({
     }
     if (!confirmed || prompts.isCancel(confirmed)) { if (!isJson) prompts.outro("Cancelled"); return }
 
-    const query = args.cascade ? "?cascade=true" : ""
+    const query = buildSchemaDeleteQuery({ cascade: args.cascade, bloq: args.bloq, allBoards: args["all-boards"] })
     const res = await irisFetch(`/api/v1/atlas/schemas/${args.slug}${query}`, { method: "DELETE" })
     if (!(await handleApiError(res, "Delete schema"))) {
       process.exitCode = 1
