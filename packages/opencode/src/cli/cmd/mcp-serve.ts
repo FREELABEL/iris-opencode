@@ -7,6 +7,8 @@ import {
   ReadResourceRequestSchema,
   ListToolsRequestSchema,
   CallToolRequestSchema,
+  type CallToolRequest,
+  type ServerNotification,
 } from "@modelcontextprotocol/sdk/types.js"
 import { getRegistry, CATEGORIES, COMMAND_CATEGORY_MAP } from "./command-groups"
 import {
@@ -495,6 +497,38 @@ export function validateCommand(command: string): { args: string[]; error?: stri
  * would otherwise come from Date.now()/Math.random(), and a mapping test that cannot predict
  * its own output tests nothing.
  */
+export const HEARTBEAT_MS = 15_000
+
+/**
+ * Keep a long tool call alive. MCP clients time a request out at 60s by default
+ * (#189470) — the desktop chat killed every `iris_agent ask` at exactly 1m 00s while
+ * the ask itself is allowed 120s. Clients that send a progressToken and set
+ * resetTimeoutOnProgress restart that clock on each progress notification, so a
+ * beat every 15s keeps the call open until the real work finishes or its own
+ * timeout fires. No token, no beats: a client that did not ask is not sent any.
+ */
+export async function withProgressHeartbeat<T>(
+  token: string | number | undefined,
+  send: (n: ServerNotification) => Promise<void>,
+  run: () => Promise<T>,
+  everyMs: number = HEARTBEAT_MS,
+): Promise<T> {
+  if (token === undefined) return run()
+  let beats = 0
+  const timer = setInterval(() => {
+    beats++
+    send({
+      method: "notifications/progress",
+      params: { progressToken: token, progress: beats, message: `still working (${Math.round((beats * everyMs) / 1000)}s)` },
+    }).catch(() => {})
+  }, everyMs)
+  try {
+    return await run()
+  } finally {
+    clearInterval(timer)
+  }
+}
+
 export function buildAgentAskArgs(input: {
   agentId: number
   message: string
@@ -979,7 +1013,7 @@ parts you did not mean to touch.`,
       ],
     }))
 
-    server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const callTool = async (request: CallToolRequest) => {
       const { name, arguments: args } = request.params
 
       if (playbooksEnabled && name.startsWith(TOOL_PREFIX)) {
@@ -1584,7 +1618,11 @@ parts you did not mean to touch.`,
       }
 
       return { content: [{ type: "text" as const, text: `Unknown tool: ${name}` }], isError: true }
-    })
+    }
+
+    server.setRequestHandler(CallToolRequestSchema, (request, extra) =>
+      withProgressHeartbeat(request.params._meta?.progressToken, extra.sendNotification, () => callTool(request)),
+    )
 
     // --- Streamable HTTP transport (--http) ---
     //
