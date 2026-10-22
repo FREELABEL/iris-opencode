@@ -16,13 +16,14 @@
  * Expected to FAIL until fl-api W1 is deployed — that failure is the point of writing it first.
  * No fake anywhere: every request goes to the real server.
  */
-import { afterAll, describe, expect, test } from "bun:test"
+import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test"
 import { irisFetch, resolveUserId } from "../../src/cli/cmd/iris-api"
 
 const ON = process.env.IRIS_CONTRACT === "1"
 const BLOQ = Number(process.env.IRIS_CONTRACT_BLOQ ?? 0)
 const LIST = Number(process.env.IRIS_CONTRACT_LIST ?? 0)
 const made: number[] = []
+setDefaultTimeout(30_000) // each test is several round trips to production
 
 async function json(res: Response): Promise<any> {
   const t = await res.text()
@@ -91,6 +92,22 @@ describe.skipIf(!ON || !BLOQ || !LIST)("contract: stale writes are refused (#190
     expect(res.status).toBe(200)
     expect((await readCard(id))!.status).toBe("done")
   })
+
+  // Locally every job runs inline; in production indexing and other jobs run after the save. If one
+  // of them touched the card, the rev a save returned would be stale at once, and a client
+  // chaining saves would be refused for a conflict nobody caused.
+  test("saves chained from the rev each save returns all succeed, even with time for jobs to run", async () => {
+    const id = await createCard(`w0 chain ${Date.now()}`)
+    let rev = (await readCard(id))!.rev
+    for (const status of ["in_progress", "done", "todo", "done"]) {
+      const res = await save(id, { status, base_rev: rev })
+      expect(res.status).toBe(200)
+      rev = (await json(res))?.rev
+      expect(typeof rev).toBe("string")
+      await Bun.sleep(3000)
+    }
+    expect((await readCard(id))!.rev).toBe(rev)
+  }, 60_000)
 
   test("deleting a card someone changed since you read it is refused", async () => {
     const id = await createCard(`w0 delete ${Date.now()}`)
