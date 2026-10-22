@@ -387,6 +387,12 @@
       "purpose": "Pulse from inside IRIS Desktop chat — ask where a topic stands (commits, diary, files, sessions, tasks, mail) or how a contact is doing, without leaving the conversation."
     },
     {
+      "src": "how-to/desktop-atlas-offline-copy.md",
+      "dest": "how-to/desktop-atlas-offline-copy.md",
+      "managed": true,
+      "purpose": "Open Atlas boards instantly and read them offline in IRIS Desktop: where the copy lives, the patient-data rule, and how to turn it off."
+    },
+    {
       "src": "how-to/desktop-agents.md",
       "dest": "how-to/desktop-agents.md",
       "managed": true,

@@ -1,6 +1,7 @@
 import { cmd } from "./cmd"
 import { productCommand } from "./product-command"
 import { ScenarioCommand } from "./mint-scenario-cmd"
+import { MintAgentCommand } from "./platform-mint-agent"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, dim, bold, writeJson, IRIS_API } from "./iris-api"
@@ -3716,7 +3717,7 @@ const DoctorCommand = cmd({
 export const PlatformMintCommand = productCommand({
   name: "mint",
   purpose: "Mint — budgets vs actuals for personal and business money",
-  keywords: ["mint", "budget", "actuals", "spend", "money", "finance", "scenario", "ledger", "bill", "bills", "receipt", "receipts", "invoice", "ocr"],
+  keywords: ["mint", "budget", "agent", "seal", "hash", "version", "actuals", "spend", "money", "finance", "scenario", "ledger", "bill", "bills", "receipt", "receipts", "invoice", "ocr"],
   // track-money-with-iris-mint FIRST: it is the only recipe that covers this command.
   // Until 2026-09-19 the sole pointer here was track-finances-atlas-ledger, which is about
   // `iris atlas:ledger` — a different subsystem — and never says "mint" once. Mint therefore
@@ -3748,5 +3749,7 @@ export const PlatformMintCommand = productCommand({
       .command(AuditCommand)
       .command(VerifyCommand)
       .command(ScenarioCommand)
+      // Mint an agent: seal one exact version to a hash (#190380 SH-05, epic #184944 step 3).
+      .command(MintAgentCommand)
       .demandCommand(),
 })
