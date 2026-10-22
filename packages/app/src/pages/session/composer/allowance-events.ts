@@ -10,6 +10,15 @@ const [refusal, setRefusal] = createRoot(() => createSignal<{ count: number; res
 
 export const allowanceRefusal = refusal
 
+/**
+ * The allowance tab is on screen. Its header row takes over the "N working in the background" chip
+ * (#190391): both used to sit in the same corner above the composer, Upgrade drawn over the chip.
+ */
+const [dockShown, setDockShown] = createRoot(() => createSignal(false))
+
+export const allowanceDockShown = dockShown
+export const setAllowanceDockShown = setDockShown
+
 export function markAllowanceRefused(resetsAt?: string) {
   setRefusal((prev) => ({ count: (prev?.count ?? 0) + 1, resetsAt }))
 }

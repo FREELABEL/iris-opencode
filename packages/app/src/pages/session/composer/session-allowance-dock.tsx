@@ -6,7 +6,8 @@ import { usePlatform } from "@/context/platform"
 import { useServer } from "@/context/server"
 import { glowDurations, useSettings } from "@/context/settings"
 import { allowanceDockState, type AllowancePlan } from "./allowance-dock-state"
-import { allowanceRefusal } from "./allowance-events"
+import { allowanceRefusal, setAllowanceDockShown } from "./allowance-events"
+import { BackgroundWorkMenu } from "@/components/background-work-menu"
 import { trackPromptedOnce } from "@/utils/upgrade-funnel"
 
 /**
@@ -40,6 +41,8 @@ export function SessionAllowanceDock() {
   )
   const state = createMemo(() => allowanceDockState(plan.latest))
   const [open, setOpen] = createSignal(false)
+  createEffect(() => setAllowanceDockShown(!!state()))
+  onCleanup(() => setAllowanceDockShown(false))
   // A FOLDER TAB tucked behind the composer, like the todos bar (Alex, 2026-10-20: "it works as a
   // family rather than a competing object"). The floating card was the alternative.
   const tab = () => true
@@ -113,6 +116,11 @@ export function SessionAllowanceDock() {
               <span class="min-w-0 flex-1 truncate font-[440] text-[13px] leading-5 tracking-[-0.04px] text-v2-text-text-muted">
                 {s().title}
               </span>
+              <Show when={settings.glow.background()}>
+                <span class="flex min-w-0 shrink" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
+                  <BackgroundWorkMenu inline />
+                </span>
+              </Show>
               <button
                 type="button"
                 data-action="session-allowance-upgrade"
