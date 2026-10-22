@@ -81,8 +81,14 @@ describe.skipIf(!ON || !BLOQ || !LIST)("contract: stale writes are refused (#190
 
     expect(after.title).toBe("edited by A") // A's edit must not be silently undone
     expect(second.status).toBe(409)
-    const body = await json(second)
+    const raw = await second.clone().json()
+    expect(raw.error).toBe("card_changed")
+    expect(typeof raw.message).toBe("string") // a sentence the app shows as it is
+    const body = raw.data
     expect(body?.current?.rev).toBe(after.rev) // the refusal hands back what to merge with
+    expect(body?.retry?.base_rev).toBe(after.rev)
+    expect(body?.your_edit?.status?.yours).toBe("done")
+    expect(second.headers.get("x-card-rev")).toBe(after.rev)
   })
 
   test("a save based on the current rev still succeeds (the guard does not block normal edits)", async () => {
@@ -102,7 +108,7 @@ describe.skipIf(!ON || !BLOQ || !LIST)("contract: stale writes are refused (#190
     for (const status of ["in_progress", "done", "todo", "done"]) {
       const res = await save(id, { status, base_rev: rev })
       expect(res.status).toBe(200)
-      rev = (await json(res))?.rev
+      rev = (await res.clone().json())?.card_rev
       expect(typeof rev).toBe("string")
       await Bun.sleep(3000)
     }
