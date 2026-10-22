@@ -115,6 +115,23 @@ try {
     await fs.copyFile(src, path.join(vendorOut, `${name}.ts`))
   }
 
+  // @heyiris/pulse-core is a workspace package on main that this branch does not have. Without
+  // it the v1.5.6 build failed on `Could not resolve: "@heyiris/pulse-core"`. Vendored like util,
+  // and resolved by the tsconfig paths onto vendor/pulse-core.
+  let pulseImported = false
+  for await (const file of new Bun.Glob("**/*.{ts,tsx}").scan(built)) {
+    if (/["']@heyiris\/pulse-core(\/[a-z0-9-]+)?["']/.test(await fs.readFile(path.join(built, file), "utf8"))) {
+      pulseImported = true
+      break
+    }
+  }
+  if (pulseImported) {
+    await extract(sha, ["packages/pulse-core/src"], staging).catch(() => {
+      throw new Error(`v1 code imports @heyiris/pulse-core, which ${ref} does not have`)
+    })
+    await fs.cp(path.join(staging, "packages/pulse-core/src"), path.join(vendorOut, "pulse-core"), { recursive: true })
+  }
+
   const diff = await $`diff -rq ${v1Dir} ${built}`.nothrow().quiet()
   const changes = diff.stdout.toString().trim().split("\n").filter(Boolean)
 
