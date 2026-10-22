@@ -105,4 +105,34 @@ describe("describeListScope", () => {
     const r = describeListScope({ shown: 20, total: 5, prospectedHidden: 0 })
     expect(r.truncated).toBe(false)
   })
+
+  /**
+   * #190003 — the hidden count describes the FETCHED WINDOW, not the book.
+   *
+   * The filter runs client-side over the rows the server returned (default fetch is
+   * 100), then the list is trimmed to --limit. So the count is "how many Prospected
+   * rows were among those 100", and it printed beside "20 of 28750". A reader sees
+   * "73 Prospected hidden" and "20 of 28750" and cannot tell what either counts — the
+   * two numbers look like they describe one population and do not.
+   */
+  test("the Prospected count names the window it was counted over", () => {
+    const r = describeListScope({ shown: 20, total: 28750, prospectedHidden: 73, scanned: 100 })
+    const line = r.notes.join(" · ")
+    expect(line).toContain("73 Prospected hidden of 100 scanned")
+    // Both figures still present, and now each is attributable.
+    expect(line).toContain("28750")
+    expect(r.warnings.join(" ")).toContain("of 100 scanned")
+  })
+
+  test("without a window the count stays unqualified rather than inventing one", () => {
+    const r = describeListScope({ shown: 20, total: 20, prospectedHidden: 62 })
+    expect(r.notes.join(" ")).toContain("62 Prospected hidden")
+    expect(r.notes.join(" ")).not.toContain("scanned")
+  })
+
+  test("a window smaller than the page is not a window — no dangling 'of 3 scanned'", () => {
+    // Defensive: `scanned` is a caller-supplied number. If it is nonsense, say less.
+    const r = describeListScope({ shown: 20, total: 20, prospectedHidden: 2, scanned: 3 })
+    expect(r.notes.join(" ")).not.toContain("scanned")
+  })
 })
