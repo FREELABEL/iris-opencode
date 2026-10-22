@@ -29,6 +29,12 @@
       ],
       "@opencode-ai/sdk/v2": [
         "./src/iris-v1/vendor/js/src/v2/index.ts"
+      ],
+      "@heyiris/pulse-core": [
+        "./src/iris-v1/vendor/pulse-core/index.ts"
+      ],
+      "@heyiris/pulse-core/*": [
+        "./src/iris-v1/vendor/pulse-core/*.ts"
       ]
     }
   },
