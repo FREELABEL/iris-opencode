@@ -1106,7 +1106,7 @@ const HiveTasksCommand = cmd({
   describe: "list, inspect or CREATE tasks on your nodes (create dispatches any task type)",
   builder: (yargs) =>
     yargs
-      .positional("subcommand", { describe: "create, get or logs", type: "string" })
+      .positional("subcommand", { describe: "create, get, logs or rerun", type: "string" })
       .positional("task-id", { describe: "task ID (for get/logs)", type: "string" })
       .option("status", { describe: "filter by status", type: "string", choices: ["pending", "running", "completed", "failed", "all"], default: "all" })
       .option("type", { describe: "task type — filters the list, or names what to dispatch with `create` (mcp_call, remotion, browser_agent, discover…)", type: "string" })
@@ -1131,7 +1131,8 @@ const HiveTasksCommand = cmd({
       .option("user-id", { describe: "user ID", type: "number" })
       .example("iris hive tasks create --type mcp_call --node studio --config '{\"server\":\"argent\"}'", "ask a node's MCP server what tools it has")
       .example("iris hive tasks create --type mcp_call --node studio --config '{\"server\":\"argent\",\"tool\":\"list_devices\"}'", "call one tool and print the result")
-      .example("iris hive tasks create --type sandbox_execute --node drone-01 --prompt 'dronectl goto ring --at 8' --not-after 8s --key ring-8-01 --retries 2 --queue", "deliver by T or not at all; safe to retry, never runs twice"),
+      .example("iris hive tasks create --type sandbox_execute --node drone-01 --prompt 'dronectl goto ring --at 8' --not-after 8s --key ring-8-01 --retries 2 --queue", "deliver by T or not at all; safe to retry, never runs twice")
+      .example("iris hive tasks rerun 01a0bab8 --node studio", "re-run a finished task on another machine; keeps the same task and idempotency key"),
   async handler(args) {
     UI.empty()
     let sub = args.subcommand as string | undefined
@@ -1339,6 +1340,60 @@ const HiveTasksCommand = cmd({
       if (answer.node) console.log(`  ${dim("ran on")} ${answer.node}`)
       const code = exitCodeForStatus(st)
       if (code !== 0) process.exit(code)
+      return
+    }
+
+    // ── iris hive tasks rerun <id> [--node <other>] ──
+    //
+    // #190524 — a finished task can be re-run on another machine without minting a new
+    // idempotency key. The API keeps the SAME task row (and key) and re-dispatches it, so
+    // every audit row that pointed at the work still points at it.
+    if (sub === "rerun") {
+      if (!userId) process.exit(1)
+      let taskId = (args["task-id"] as string) || extraArgs[extraArgs.length - 1]
+      if (!taskId) {
+        prompts.log.error("Usage: iris hive tasks rerun <task-id> [--node <other>]")
+        process.exitCode = 1
+        return
+      }
+      if (!isFullTaskId(String(taskId))) {
+        const r = await resolveTaskIdArg(String(taskId), Number(userId))
+        if ("error" in r) {
+          prompts.log.error(r.error)
+          process.exitCode = 1
+          return
+        }
+        taskId = r.id
+      }
+
+      let nodeId: string | undefined
+      const target = args.node as string | undefined
+      if (target) {
+        const node = await resolveNode(userId, String(target))
+        if (!node) {
+          prompts.log.error(`No node matching "${target}". Run: iris hive nodes list`)
+          process.exit(1)
+        }
+        nodeId = node.id
+      }
+
+      const res = await hiveFetch(`/api/v6/nodes/tasks/${taskId}/rerun`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(nodeId ? { node_id: nodeId } : {}),
+      })
+      if (!res.ok) {
+        prompts.log.error(describeApiError(res.status, await res.text().catch(() => "")))
+        process.exit(1)
+      }
+      const data = (await res.json()) as { task?: Record<string, unknown> }
+      if (args.json) {
+        await writeJson(data)
+        return
+      }
+      const st = String(data.task?.status ?? "pending")
+      console.log(`${success("✓")} re-ran ${bold(taskId)}  status=${st}${nodeId ? `  node=${nodeId}` : ""}`)
+      console.log(dim(`  Same idempotency key. Read it: iris hive tasks get ${taskId}`))
       return
     }
 
