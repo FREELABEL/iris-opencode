@@ -1605,6 +1605,17 @@ const RECEIPT_QUERY =
  */
 type Candidate = { subject: string; body: string; sender: string; date: string; term?: string }
 
+/**
+ * A rail that returns envelopes and no bodies has not found "nothing" — it cannot
+ * VERIFY anything, because every amount must be checked against the source text.
+ * Measured 2026-10-20 (#190264): the local mail rail moved to Mail's Envelope
+ * Index, which does not hold bodies, so every candidate came back bodyless and the
+ * scan printed "0 new · $0.00". That reads exactly like a clean inbox.
+ */
+export function isBodylessScan(candidates: Candidate[]): boolean {
+  return candidates.length > 0 && candidates.every((c) => String(c.body ?? "").trim() === "")
+}
+
 type Merchant = {
   term: string
   label: string
@@ -1821,18 +1832,29 @@ const ScanCommand = cmd({
       .option("write", { type: "boolean", default: false, describe: "actually write (default is preview only)" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
-    UI.empty()
-    prompts.intro("◈  Mint Scan")
+    // --json means machine-readable output ONLY (#190265). Every human line below is
+    // guarded by this flag: the scan's human output used to be printed before the
+    // JSON, so piping it into jq failed on ANSI-coloured headers.
+    const json = Boolean(args.json)
+    const say = (...parts: unknown[]) => {
+      if (!json) console.log(...parts)
+    }
+    if (!json) {
+      UI.empty()
+      prompts.intro("◈  Mint Scan")
+    }
     const token = await requireAuth()
     if (!token) {
-      prompts.outro("Done")
+      if (!json) prompts.outro("Done")
       return
     }
 
     const scope =
       args.scope ?? (args.account ? (ACCOUNT_SCOPE[args.account.toLowerCase()] ?? DEFAULT_SCOPE) : DEFAULT_SCOPE)
     const rail = String(args.rail)
-    const spinner = prompts.spinner()
+    const spinner = json
+      ? { start: () => {}, stop: (_msg?: string, _code?: number) => {} }
+      : prompts.spinner()
     spinner.start(`Scanning ${rail === "mail" ? "Apple Mail" : "Gmail"} (last ${args.days} days)…`)
 
     let candidates: Candidate[] = []
@@ -1868,13 +1890,19 @@ const ScanCommand = cmd({
       }
     } catch (err) {
       spinner.stop("Scan failed", 1)
-      prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
+      const message = err instanceof Error ? err.message : String(err)
+      if (json) {
+        await writeJson({ success: false, error: message, candidates: [], fresh: [], quarantined: [] })
+      } else {
+        prompts.log.error(message)
+        prompts.outro("Done")
+      }
+      process.exitCode = 1
       return
     }
-    spinner.stop(`${candidates.length} candidate email(s)`)
+    spinner.stop(json ? undefined : `${candidates.length} candidate email(s)`)
     if (rail === "mail") {
-      console.log(
+      say(
         "  " +
           dim(
             `${senders.length} merchant term(s)${usedFallback ? " — built-in fallback list; `mint-merchants` dataset is empty" : " from mint-merchants"}`,
@@ -1886,9 +1914,10 @@ const ScanCommand = cmd({
     // message. Say so rather than reporting "no receipts", which reads as a clean
     // result from a broken instrument.
     if (rail === "gmail" && candidates.length <= 1) {
-      prompts.log.warn(
-        "Gmail returned <=1 result regardless of query — this is bug #181361, not an empty inbox. Use --rail mail.",
-      )
+      if (!json)
+        prompts.log.warn(
+          "Gmail returned <=1 result regardless of query — this is bug #181361, not an empty inbox. Use --rail mail.",
+        )
       await recordRun({
         kind: "scan",
         scope,
@@ -1900,16 +1929,62 @@ const ScanCommand = cmd({
         notes: "gmail search returns a fixed response regardless of query — bug #181361",
       })
     }
-    if (mailErrors.length) {
-      prompts.log.error(
-        `${mailErrors.length} of ${senders.length} mail searches FAILED — results below are incomplete:`,
-      )
-      for (const e of mailErrors.slice(0, 6)) console.log("    " + dim(e))
-      if (mailErrors.length > 6) console.log("    " + dim(`… ${mailErrors.length - 6} more`))
-      if (mailErrors.length === senders.length) {
-        prompts.log.error(
-          "EVERY search failed. This is not an empty inbox — Apple Mail/osascript is wedged. Try: quit and reopen Mail.app, then `iris bridge restart`.",
+
+    // #190264: the local rail resolves mail through Mail's Envelope Index, which holds
+    // envelopes only — no bodies. Every candidate then quarantines as "no body
+    // returned" and the run printed "0 new · $0.00", which is indistinguishable from
+    // a clean inbox. A bodyless rail is a BROKEN INSTRUMENT, not an empty one: fail.
+    if (rail === "mail" && isBodylessScan(candidates)) {
+      const note =
+        `${candidates.length} candidate(s) returned, 0 with a body — the local mail rail reads Mail's Envelope Index, ` +
+        "which does not contain message bodies, so no amount can be verified"
+      if (json) {
+        await writeJson({
+          success: false,
+          error: note,
+          rail,
+          candidates: candidates.length,
+          bodyless: true,
+          fresh: [],
+          quarantined: candidates.map((c) => ({ subject: c.subject, reason: "no body returned" })),
+        })
+      } else {
+        prompts.log.error("Every candidate came back without a body — this is NOT an empty inbox.")
+        console.log("")
+        console.log("  " + dim(note))
+        console.log(
+          "  " +
+            dim(
+              "The scan cannot verify an amount it cannot read, so nothing was imported. Import a statement (iris mint import) or use a rail that returns bodies.",
+            ),
         )
+        prompts.outro("Failed")
+      }
+      await recordRun({
+        kind: "scan",
+        scope,
+        rail,
+        ok: false,
+        failures: candidates.length,
+        candidates: candidates.length,
+        written: 0,
+        notes: `bodyless rail: ${candidates.length} candidate(s), 0 bodies — bug #190264`.slice(0, 400),
+      })
+      process.exitCode = 1
+      return
+    }
+    if (mailErrors.length) {
+      if (!json)
+        prompts.log.error(
+          `${mailErrors.length} of ${senders.length} mail searches FAILED — results below are incomplete:`,
+        )
+      for (const e of mailErrors.slice(0, 6)) say("    " + dim(e))
+      if (mailErrors.length > 6) say("    " + dim(`… ${mailErrors.length - 6} more`))
+      if (mailErrors.length === senders.length) {
+        if (!json)
+          prompts.log.error(
+            "EVERY search failed. This is not an empty inbox — Apple Mail/osascript is wedged. Try: quit and reopen Mail.app, then `iris bridge restart`.",
+          )
       }
       // Recorded as a FAILED run, never as a zero-value one.
       await recordRun({
@@ -1927,8 +2002,12 @@ const ScanCommand = cmd({
       })
     }
     if (candidates.length === 0) {
-      prompts.log.warn(mailErrors.length ? "No usable results (see failures above)" : "Nothing matched")
-      prompts.outro("Done")
+      if (json) {
+        await writeJson({ success: true, fresh: [], quarantined: [], candidates: 0, errors: mailErrors })
+      } else {
+        prompts.log.warn(mailErrors.length ? "No usable results (see failures above)" : "Nothing matched")
+        prompts.outro("Done")
+      }
       return
     }
 
@@ -1979,8 +2058,12 @@ const ScanCommand = cmd({
     }
 
     if (found.length === 0 && quarantined.length === 0) {
-      prompts.log.warn("No receipts found")
-      prompts.outro("Done")
+      if (json) {
+        await writeJson({ success: true, fresh: [], quarantined: [], candidates: candidates.length })
+      } else {
+        prompts.log.warn("No receipts found")
+        prompts.outro("Done")
+      }
       return
     }
 
@@ -1993,29 +2076,30 @@ const ScanCommand = cmd({
       fresh = found.filter((f) => !seen.has(fingerprint(f.date, centsOf(f), f.desc)))
     }
 
-    printDivider()
-    for (const f of fresh)
+    if (!json) {
+      printDivider()
+      for (const f of fresh)
+        console.log(
+          `  ${dim(f.date)}  ${fmtCents(centsOf(f)).padEnd(12)}  ${bold(f.desc)}  ${dim([f.category ?? "uncategorised", f.rowScope].filter(Boolean).join(" · "))}`,
+        )
+      if (fresh.length === 0) console.log("  " + dim("nothing new"))
+      printDivider()
       console.log(
-        `  ${dim(f.date)}  ${fmtCents(centsOf(f)).padEnd(12)}  ${bold(f.desc)}  ${dim([f.category ?? "uncategorised", f.rowScope].filter(Boolean).join(" · "))}`,
+        `  ${bold(String(fresh.length))} new  ·  ${dim(`${found.length - fresh.length} already recorded`)}  ·  ${bold(fmtCents(fresh.reduce((s, f) => s + centsOf(f), 0)))}  ${dim(`scope=${scope}`)}`,
       )
-    if (fresh.length === 0) console.log("  " + dim("nothing new"))
-    printDivider()
-    console.log(
-      `  ${bold(String(fresh.length))} new  ·  ${dim(`${found.length - fresh.length} already recorded`)}  ·  ${bold(fmtCents(fresh.reduce((s, f) => s + centsOf(f), 0)))}  ${dim(`scope=${scope}`)}`,
-    )
 
-    if (quarantined.length) {
-      console.log("")
-      console.log("  " + bold(`${quarantined.length} held for review — extracted but NOT verified against the email:`))
-      for (const q of quarantined.slice(0, 10))
-        console.log(`    ${dim("·")} ${q.subject.slice(0, 60)}  ${dim(q.reason)}`)
-      if (quarantined.length > 10) console.log("    " + dim(`… ${quarantined.length - 10} more`))
+      if (quarantined.length) {
+        console.log("")
+        console.log("  " + bold(`${quarantined.length} held for review — extracted but NOT verified against the email:`))
+        for (const q of quarantined.slice(0, 10))
+          console.log(`    ${dim("·")} ${q.subject.slice(0, 60)}  ${dim(q.reason)}`)
+        if (quarantined.length > 10) console.log("    " + dim(`… ${quarantined.length - 10} more`))
+      }
     }
 
     const scanOk = mailErrors.length === 0
-    if (args.json) {
-      await writeJson({ fresh, quarantined })
-      prompts.outro("Done")
+    if (json) {
+      await writeJson({ success: true, fresh, quarantined })
       return
     }
     if (!args.write) {
