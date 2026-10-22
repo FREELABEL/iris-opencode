@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { appendTranscript, diffDraft, draftFrom, statusOptions, type CardDoc } from "./iris-card-editor"
+import { appendTranscript, diffDraft, draftFrom, groupTrail, statusOptions, timeAgo, type CardDoc, type TrailRow } from "./iris-card-editor"
 
 const doc: CardDoc = {
   measured: true,
@@ -108,5 +108,55 @@ describe("appendTranscript — a meeting lands at the END of the body, never ove
   })
   test("an empty transcript leaves the body exactly as it was", () => {
     expect(appendTranscript("keep  \n", "   ")).toBe("keep  \n")
+  })
+})
+
+describe("card editor — the chat thread (Elon layout)", () => {
+  // fl-api sends the trail newest first.
+  const rows: TrailRow[] = [
+    { id: 9, type: "comment", text: "Moved it.", actor: "FREELABEL", actorId: 193, at: "2026-10-22T10:09:00Z" },
+    { id: 8, type: "item_updated", text: "Item updated: x", actor: "FREELABEL", actorId: 193, at: "2026-10-22T10:08:00Z" },
+    { id: 7, type: "item_updated", text: "Item updated: x", actor: "FREELABEL", actorId: 193, at: "2026-10-22T10:07:00Z" },
+    { id: 6, type: "item_updated", text: "Item updated: x", actor: "FREELABEL", actorId: 193, at: "2026-10-22T10:06:00Z" },
+    { id: 5, type: "comment", text: "Looks good", actor: "Sam", actorId: 7, at: "2026-10-22T10:05:00Z" },
+    { id: 4, type: "item_assigned", text: "Assigned Crate Keeper", actor: "Sam", actorId: 7, at: "2026-10-22T10:04:00Z" },
+  ]
+
+  test("reads oldest first, and folds a run of edits by one person into one line", () => {
+    const t = groupTrail(rows, { id: 193 })
+    expect(t.map((e) => e.kind)).toEqual(["change", "comment", "change", "comment"])
+    const edits = t[2]
+    expect(edits.kind === "change" && edits.rows.length).toBe(3)
+    expect(edits.kind === "change" && edits.summary).toBe("edited the card 3×")
+    expect(edits.kind === "change" && edits.at).toBe("2026-10-22T10:08:00Z")
+  })
+
+  test("a single change keeps its own words; mixed changes are counted", () => {
+    const one = groupTrail([rows[5]])
+    expect(one[0].kind === "change" && one[0].summary).toBe("Assigned Crate Keeper")
+    const mixed = groupTrail([rows[1], { ...rows[5], actor: "FREELABEL", actorId: 193 }])
+    expect(mixed[0].kind === "change" && mixed[0].summary).toBe("made 2 changes")
+  })
+
+  test("your own comments are yours by id, not by a display name that differs", () => {
+    const t = groupTrail(rows, { id: 193, name: "admin", email: "admin@freelabel.net" })
+    const comments = t.filter((e) => e.kind === "comment")
+    expect(comments.map((c) => c.kind === "comment" && c.mine)).toEqual([false, true])
+  })
+
+  test("without an id, the name or email still finds them", () => {
+    const noIds = rows.map(({ actorId, ...r }) => r)
+    const t = groupTrail(noIds, { name: "freelabel" })
+    expect(t.filter((e) => e.kind === "comment").map((c) => c.kind === "comment" && c.mine)).toEqual([false, true])
+  })
+
+  test("relative times", () => {
+    const now = Date.parse("2026-10-22T12:00:00Z")
+    expect(timeAgo("2026-10-22T11:59:40Z", now)).toBe("just now")
+    expect(timeAgo("2026-10-22T11:55:00Z", now)).toBe("5m ago")
+    expect(timeAgo("2026-10-22T10:00:00Z", now)).toBe("2h ago")
+    expect(timeAgo("2026-10-19T12:00:00Z", now)).toBe("3d ago")
+    expect(timeAgo(undefined, now)).toBe("")
+    expect(timeAgo("not a date", now)).toBe("not a date")
   })
 })

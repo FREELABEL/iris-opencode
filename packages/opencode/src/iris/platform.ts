@@ -3593,6 +3593,8 @@ export interface CardActivity {
   text: string
   icon?: string
   actor?: string
+  /** Who did it, by id — how a client knows a comment is its own (#card-elon). */
+  actorId?: number
   at?: string
 }
 
@@ -3606,6 +3608,7 @@ export function readActivity(raw: unknown): CardActivity[] {
       text: r.content,
       icon: typeof r.icon === "string" ? r.icon : undefined,
       actor: typeof r.actor === "string" && r.actor ? r.actor : undefined,
+      actorId: Number.isFinite(Number(r.actor_id)) && r.actor_id != null ? Number(r.actor_id) : undefined,
       at: typeof r.created_at === "string" ? r.created_at : undefined,
     }))
 }

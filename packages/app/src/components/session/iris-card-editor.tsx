@@ -1,12 +1,11 @@
 import { createEffect, createMemo, createResource, createSignal, For, Match, onCleanup, onMount, Show, Switch, type JSX } from "solid-js"
 import { pastedFiles } from "./iris-card-files"
 import { WRITABLE_STATUSES, type SchemaOption } from "./iris-card-vocab"
-import { FactChip, MembersRow, statusDot, type MemberChoice } from "./iris-card-facts"
+import { Avatar, avatarColor, MembersRow, statusDot, type MemberChoice } from "./iris-card-facts"
 import { IrisQuickEdit } from "./iris-quick-edit"
 import { dueLabel, dueState, type QuickField, type QuickPatch } from "./iris-atlas-view"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
-import { IconButton } from "@opencode-ai/ui/icon-button"
 import { Icon } from "@opencode-ai/ui/icon"
 import { createDictation } from "@opencode-ai/session-ui/v2/prompt-input/dictation"
 import { renderMarkdown } from "./iris-item"
@@ -269,6 +268,75 @@ function shortWhen(iso: string | undefined): string {
     : d.toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })
 }
 
+/** "just now", "5m ago", "2h ago", "3d ago", then a date — how Elon dates a card's history. */
+export function timeAgo(iso: string | undefined, now: number): string {
+  if (!iso) return ""
+  const t = new Date(iso).getTime()
+  if (Number.isNaN(t)) return iso
+  const s = Math.max(0, Math.round((now - t) / 1000))
+  if (s < 45) return "just now"
+  const m = Math.round(s / 60)
+  if (m < 60) return `${m}m ago`
+  const h = Math.round(m / 60)
+  if (h < 24) return `${h}h ago`
+  const d = Math.round(h / 24)
+  if (d < 30) return `${d}d ago`
+  return shortDate(iso)
+}
+
+export interface TrailRow {
+  id: number
+  type: string
+  text: string
+  icon?: string
+  actor?: string
+  actorId?: number
+  at?: string
+}
+
+/** One line of the card's conversation: a comment, or a run of changes by one person. */
+export type TrailEntry =
+  | { kind: "comment"; row: TrailRow; mine: boolean }
+  | { kind: "change"; actor?: string; at?: string; rows: TrailRow[]; summary: string }
+
+/**
+ * The trail as a conversation, oldest first (#card-elon). Comments stay as they are; a run of
+ * consecutive changes by the same person becomes ONE line ("Alex edited the card 12×"), because
+ * nineteen identical "Item updated" rows bury the two comments that matter. `rows` arrive newest
+ * first, as fl-api sends them. `me` is the signed-in person's name and email, for own bubbles.
+ */
+export function groupTrail(rows: TrailRow[], me: { id?: number | null; name?: string | null; email?: string | null } = {}): TrailEntry[] {
+  const mine = (actor?: string, actorId?: number) => {
+    if (me.id != null && actorId != null) return me.id === actorId
+    const a = (actor ?? "").trim().toLowerCase()
+    if (!a) return false
+    const name = (me.name ?? "").trim().toLowerCase()
+    const email = (me.email ?? "").trim().toLowerCase()
+    return a === name || a === email || (!!email && a === email.split("@")[0])
+  }
+  const out: TrailEntry[] = []
+  for (const row of [...rows].reverse()) {
+    if (row.type === "comment") {
+      out.push({ kind: "comment", row, mine: mine(row.actor, row.actorId) })
+      continue
+    }
+    const last = out[out.length - 1]
+    if (last?.kind === "change" && (last.actor ?? "") === (row.actor ?? "")) {
+      last.rows.push(row)
+      last.at = row.at ?? last.at
+      continue
+    }
+    out.push({ kind: "change", actor: row.actor, at: row.at, rows: [row], summary: "" })
+  }
+  for (const e of out) {
+    if (e.kind !== "change") continue
+    const n = e.rows.length
+    const edits = e.rows.every((r) => r.type === "item_updated" || /^item updated\b/i.test(r.text))
+    e.summary = n === 1 ? e.rows[0].text : edits ? `edited the card ${n}×` : `made ${n} changes`
+  }
+  return out
+}
+
 export interface IrisCardEditorProps {
   itemId: number
   bloqId: number
@@ -295,7 +363,7 @@ export function appendTranscript(body: string, transcript: string): string {
   return kept ? `${kept}\n\n${text}` : text
 }
 
-type SideTab = "details" | "sharing" | "tasks" | "activity" | "chat"
+type SideTab = "details" | "sharing" | "tasks" | "chat"
 
 export function IrisCardEditor(props: IrisCardEditorProps) {
   const dialog = useDialog()
@@ -456,8 +524,10 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
     } else setAssignNote({ ok: false, text: out.reason ?? "could not unassign" })
   }
 
-  // Activity first: a card is a conversation about work, and its history is the first read (#190269).
-  const [side, setSide] = createSignal<SideTab>("activity")
+  // Elon's sidebar: Details first, then Tasks and Chat. Chat holds the people's thread (Team,
+  // with the activity folded in) and the agent's (AI).
+  const [side, setSide] = createSignal<SideTab>("details")
+  const [chatSub, setChatSub] = createSignal<"team" | "ai">("team")
   createEffect(() => {
     // Details lists agents too: they are assignable (#189796).
     // The members row under the title lists agents too, on every tab (#190269).
@@ -756,13 +826,31 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
 
   // ── Activity (#189799): what happened to this card, and who did it ──────
   const [trail, { refetch: refetchTrail }] = createResource(
-    () => (side() === "activity" ? props.itemId : undefined),
+    () => (side() === "chat" && chatSub() === "team" ? props.itemId : undefined),
     (id) =>
-      wire<{ activity: { id: number; type: string; text: string; icon?: string; actor?: string; at?: string }[] }>(
+      wire<{ activity: TrailRow[] }>(
         `/iris/item/${id}/activity`,
         { activity: [] },
       ),
   )
+
+  // Who is signed in — only so your own comments sit on the right, as in Elon's team chat.
+  const [me] = createResource(
+    () => (side() === "chat" ? props.itemId : undefined),
+    async () => {
+      try {
+        return (await (await props.doFetch(`/iris/me`)).json()) as { id: number | null; name: string | null; email: string | null }
+      } catch {
+        return { id: null, name: null, email: null }
+      }
+    },
+  )
+  const thread = createMemo(() => groupTrail(trail.latest?.activity ?? [], me.latest ?? {}))
+  let threadScroll: HTMLDivElement | undefined
+  createEffect(() => {
+    thread().length
+    if (threadScroll) queueMicrotask(() => threadScroll && (threadScroll.scrollTop = threadScroll.scrollHeight))
+  })
 
   // A comment, and the board people it @mentions (#189799). Picking someone from the list writes
   // "@their-email" — the one handle fl-api matches without ambiguity — and remembers their id.
@@ -953,7 +1041,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
 
   // ── Chat (HANDOFF: GET/POST /iris/item/:id/chat) ────────────────────────
   const [chat, { mutate: mutateChat }] = createResource(
-    () => (side() === "chat" ? props.itemId : undefined),
+    () => (side() === "chat" && chatSub() === "ai" ? props.itemId : undefined),
     (id) => wire<{ agentId?: number; messages: ChatMessage[] }>(`/iris/item/${id}/chat?bloq=${props.bloqId}`, { messages: [] }),
   )
   const [chatAgent, setChatAgent] = createSignal("")
@@ -1116,21 +1204,68 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
     setTimeout(() => (el.textContent = was), 900)
   }
 
+  // Elon's card (CardEditor.vue): the title sits in the header row with who is on the card and a
+  // cluster of icon buttons; the body fills the left; Details | Tasks | Chat on the right.
+  const [editingTitle, setEditingTitle] = createSignal(false)
+  const [evOpen, setEvOpen] = createSignal(false)
+  const [askOpen, setAskOpen] = createSignal(false)
+  const [moreOpen, setMoreOpen] = createSignal(false)
+  const saveState = () =>
+    saving() || savingBody() ? "saving" : dirty() || bodyDirty() ? "unsaved" : note()?.ok === false || bodyNote()?.ok === false ? "error" : "saved"
+  const priorityTone = (p: string | undefined) =>
+    /^(urgent|critical|p0)$/i.test(p ?? "") ? "#ef4444" : /^(high|p1)$/i.test(p ?? "") ? "#f59e0b" : /^(low|p3)$/i.test(p ?? "") ? "#94a3b8" : undefined
+  const typeColor = (id: string | undefined) => (schema.latest?.type ?? []).find((o) => o.id === id)?.color
+  const labelTint = (l: string) => {
+    const known = [...(schema.latest?.type ?? []), ...(schema.latest?.priority ?? [])].find((o) => o.label === l)?.color
+    return known ?? avatarColor(l)
+  }
+  const Dd = (p: {
+    icon: Parameters<typeof Icon>[0]["name"]
+    label: string
+    value: string
+    placeholder: string
+    color?: string
+    onClick: (e: MouseEvent & { currentTarget: HTMLButtonElement }) => void
+  }) => (
+    <button type="button" class="iris-dd" data-empty={p.value ? undefined : ""} title={p.label} onClick={p.onClick}>
+      <Icon name={p.icon} size="small" />
+      <span class="iris-dd__label">{p.label}</span>
+      <span class="iris-dd__value" style={p.color ? { color: p.color } : undefined}>
+        {p.value || p.placeholder}
+      </span>
+      <Icon name="chevron-down" size="small" />
+    </button>
+  )
+  const SideHead = (p: { icon: Parameters<typeof Icon>[0]["name"]; children: JSX.Element; count?: number | string; tint?: string; right?: JSX.Element }) => (
+    <h4 class="iris-sh">
+      <Icon name={p.icon} size="small" />
+      <span>{p.children}</span>
+      <Show when={p.count !== undefined && p.count !== "—"}>
+        <span class="iris-sh__count" style={p.tint ? { "--tint": p.tint } : undefined}>
+          {p.count}
+        </span>
+      </Show>
+      <Show when={p.right}>
+        <span class="iris-sh__right">{p.right}</span>
+      </Show>
+    </h4>
+  )
+
   return (
-    // Full screen and the sidebar are window controls, so they belong in the header beside
-    // the close — not buried in the sidebar they resize (#186549). Supplying an `action`
-    // replaces the dialog's own close button, so this action carries the close too.
     <Dialog
       size="x-large"
-      class="iris-card"
+      class="iris-card iris-card--elon"
       classList={{ "iris-card--full": full() }}
       action={
         <span class="iris-card__winbtns">
+          <span class="iris-card__saved" data-state={saveState()} title={{ saving: "Saving…", unsaved: "Unsaved changes", error: "Last save failed", saved: "All changes saved" }[saveState()]}>
+            <Icon name={saveState() === "error" ? "warning" : saveState() === "unsaved" ? "dot-grid" : "circle-check"} size="small" />
+          </span>
           <Show when={recorder}>
             {(rec) => (
               <button
                 type="button"
-                class="iris-card__rec"
+                class="iris-card__rec iris-ib"
                 data-phase={rec().phase()}
                 disabled={rec().phase() === "transcribing"}
                 aria-label={rec().phase() === "recording" ? "Stop recording" : "Record a meeting into this card"}
@@ -1161,42 +1296,83 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
           </Show>
           <button
             type="button"
-            class="iris-card__share"
+            class="iris-ib"
             aria-pressed={side() === "sharing"}
+            aria-label="Share"
             title="Who can open this card, and its links"
-            onClick={() => setSide(side() === "sharing" ? "activity" : "sharing")}
+            onClick={() => {
+              if (collapsed()) toggleSide()
+              setSide(side() === "sharing" ? "details" : "sharing")
+            }}
           >
-            ↗ Share
+            <Icon name="share" size="small" />
           </button>
-          <IconButton
-            icon={full() ? "collapse" : "expand"}
-            size="small"
-            variant="ghost"
-            aria-label={full() ? "Exit full screen" : "Full screen"}
-            title={full() ? "Exit full screen" : "Full screen"}
-            onClick={toggleFull}
-          />
-          <IconButton
-            icon={collapsed() ? "layout-right" : "layout-right-full"}
-            size="small"
-            variant="ghost"
+          <button type="button" class="iris-ib" aria-label={full() ? "Exit full screen" : "Full screen"} title={full() ? "Exit full screen" : "Full screen"} onClick={toggleFull}>
+            <Icon name={full() ? "collapse" : "expand"} size="small" />
+          </button>
+          <button
+            type="button"
+            class="iris-ib"
             aria-label={collapsed() ? "Show the sidebar" : "Hide the sidebar"}
             title={collapsed() ? "Show the sidebar" : "Hide the sidebar"}
             onClick={toggleSide}
-          />
-          <IconButton icon="close" size="small" variant="ghost" aria-label="Close" title="Close" onClick={() => dialog.close()} />
+          >
+            <Icon name={collapsed() ? "layout-right" : "layout-right-full"} size="small" />
+          </button>
+          <button type="button" class="iris-ib iris-ib--close" aria-label="Close" title="Close" onClick={() => dialog.close()}>
+            <Icon name="close" size="small" />
+          </button>
         </span>
       }
       title={
-        <span class="iris-card__crumb">
-          <span class="text-text-weaker">{doc.latest?.listName ?? "Card"}</span>
-          <span class="font-mono tabular-nums text-text-weaker">#{props.itemId}</span>
+        <span class="iris-card__hdr">
+          <Show
+            when={editingTitle()}
+            fallback={
+              <span
+                class="iris-card__htitle"
+                tabindex="0"
+                title="Double-click to rename"
+                onDblClick={() => setEditingTitle(true)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault()
+                    setEditingTitle(true)
+                  }
+                }}
+              >
+                {form()?.title || doc.latest?.title || "Card"}
+              </span>
+            }
+          >
+            <input
+              ref={(el) => queueMicrotask(() => el.select())}
+              class="iris-card__title"
+              aria-label="Title"
+              data-dismiss-first
+              value={form()?.title ?? ""}
+              onInput={(e) => set("title", e.currentTarget.value)}
+              onBlur={() => {
+                setEditingTitle(false)
+                if (dirty()) void saveDetails()
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault()
+                  e.currentTarget.blur()
+                } else if (e.key === "Escape") {
+                  e.preventDefault()
+                  set("title", doc.latest?.title ?? "")
+                  setEditingTitle(false)
+                }
+              }}
+            />
+          </Show>
           <Show when={doc.latest?.isPublic}>
             <span class="iris-card__pub" title="This card is public — see Sharing">public</span>
           </Show>
-          {/* Who is on it, beside where it is (#190280). */}
           <Show when={doc.latest?.measured}>
-              <MembersRow
+            <MembersRow
               compact
               choices={memberChoices()}
               loading={assignees.loading || members.loading}
@@ -1220,125 +1396,34 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
         </Match>
         <Match when={doc.latest?.measured}>
           <div class="iris-card__frame">
-            {/* THE TITLE is the one field that lives above both columns: it names the card. */}
-            <div class="iris-card__head">
-              <input
-                class="iris-card__title"
-                aria-label="Title"
-                value={form()?.title ?? ""}
-                onInput={(e) => set("title", e.currentTarget.value)}
-                onBlur={() => dirty() && void saveDetails()}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault()
-                    void saveDetails()
-                  }
-                }}
-              />
-              <div class="iris-facts">
-                <FactChip
-                  label="Status"
-                  value={(form()?.status ?? "").replace(/_/g, " ")}
-                  placeholder="Set"
-                  dot={statusDot(form()?.status)}
-                  onClick={(e) => openQuick("status", e.currentTarget)}
+            <Show when={quick()}>
+              {(q) => (
+                <IrisQuickEdit
+                  card={{
+                    id: props.itemId,
+                    title: form()?.title ?? doc.latest!.title,
+                    status: form()?.status || undefined,
+                    priority: form()?.priority || undefined,
+                    dueDate: form()?.dueDate || undefined,
+                    labels: doc.latest!.labels,
+                  }}
+                  anchor={q().anchor}
+                  within={q().within}
+                  field={q().field}
+                  only
+                  status={schema.latest?.status}
+                  priority={schema.latest?.priority}
+                  boardLabels={[...(schema.latest?.type ?? []), ...(schema.latest?.priority ?? [])].map((o) => o.label)}
+                  now={now()}
+                  note={note()?.ok === false ? note()!.text : labelNote()?.ok === false ? labelNote()!.text : null}
+                  onSave={saveFact}
+                  onClose={() => setQuick(null)}
                 />
-                <FactChip
-                  label="Priority"
-                  value={form()?.priority || ""}
-                  placeholder="None"
-                  tone={/^(urgent|critical|high|p0|p1)$/i.test(form()?.priority ?? "") ? "danger" : undefined}
-                  onClick={(e) => openQuick("priority", e.currentTarget)}
-                />
-                <FactChip
-                  label="Due"
-                  value={form()?.dueDate ? dueLabel(form()!.dueDate, now()) : ""}
-                  placeholder="No date"
-                  tone={
-                    form()?.dueDate
-                      ? ({ overdue: "danger", soon: "warn", later: undefined } as const)[dueState(form()!.dueDate, now()) ?? "later"]
-                      : undefined
-                  }
-                  onClick={(e) => openQuick("due", e.currentTarget)}
-                />
-                <label class="iris-fact iris-fact--select">
-                  <span class="iris-fact__label">List</span>
-                  <select
-                    class="iris-fact__select"
-                    value={form()?.listId ?? ""}
-                    onChange={(e) => {
-                      set("listId", e.currentTarget.value)
-                      void saveDetails()
-                    }}
-                  >
-                    <Show when={form()?.listId && !props.lists.some((l) => String(l.id) === form()!.listId)}>
-                      <option value={form()!.listId}>{doc.latest!.listName ?? `list ${form()!.listId}`}</option>
-                    </Show>
-                    <For each={props.lists}>{(l) => <option value={String(l.id)}>{l.name}</option>}</For>
-                  </select>
-                </label>
-                <label class="iris-fact iris-fact--select">
-                  <span class="iris-fact__label">Type</span>
-                  <select
-                    class="iris-fact__select"
-                    value={form()?.cardType ?? ""}
-                    onChange={(e) => {
-                      set("cardType", e.currentTarget.value)
-                      void saveDetails()
-                    }}
-                  >
-                    <option value="">None</option>
-                    <For each={schema.latest?.type ?? []}>{(o) => <option value={o.id}>{o.label}</option>}</For>
-                    <Show when={form()?.cardType && !(schema.latest?.type ?? []).some((o) => o.id === form()!.cardType)}>
-                      <option value={form()!.cardType}>{form()!.cardType}</option>
-                    </Show>
-                  </select>
-                </label>
-                <span class="iris-facts__labels">
-                  <For each={doc.latest!.labels}>{(l) => <span class="iris-label">{l}</span>}</For>
-                  <button
-                    type="button"
-                    class="iris-label iris-label--add"
-                    disabled={doc.latest!.contentKind === "markdown"}
-                    title={
-                      doc.latest!.contentKind === "markdown"
-                        ? "Labels live in a card's structured body; this card's body is plain markdown"
-                        : "Add or remove labels"
-                    }
-                    onClick={(e) => openQuick("labels", e.currentTarget)}
-                  >
-                    + Label
-                  </button>
-                </span>
-              </div>
-              <Show when={quick()}>
-                {(q) => (
-                  <IrisQuickEdit
-                    card={{
-                      id: props.itemId,
-                      title: form()?.title ?? doc.latest!.title,
-                      status: form()?.status || undefined,
-                      priority: form()?.priority || undefined,
-                      dueDate: form()?.dueDate || undefined,
-                      labels: doc.latest!.labels,
-                    }}
-                    anchor={q().anchor}
-                    within={q().within}
-                    field={q().field}
-                    status={schema.latest?.status}
-                    priority={schema.latest?.priority}
-                    boardLabels={[...(schema.latest?.type ?? []), ...(schema.latest?.priority ?? [])].map((o) => o.label)}
-                    now={now()}
-                    note={note()?.ok === false ? note()!.text : labelNote()?.ok === false ? labelNote()!.text : null}
-                    onSave={saveFact}
-                    onClose={() => setQuick(null)}
-                  />
-                )}
-              </Show>
-            </div>
+              )}
+            </Show>
 
             <div class="iris-card__cols" data-side-collapsed={collapsed() ? "" : undefined}>
-              {/* LEFT — the body. Read by default; one toggle to a plain textarea. */}
+              {/* LEFT — the body, and nothing else: Elon's document pane. */}
               <section class="iris-card__body">
                 <Show when={recNote() || (recorder?.held().length ?? 0) > 0}>
                   <div class="iris-card__recbar" role="status">
@@ -1369,124 +1454,523 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                     </Show>
                   </div>
                 </Show>
-                <div class="iris-card__bodybar">
-                  {/* People read a description, not a storage format (#190269). */}
-                  <span class="iris-fact__label">Description</span>
-                  <Show when={bodyNote()}>
-                    {(n) => (
-                      <span class="text-11-regular" classList={{ "text-text-base": n().ok, "text-text-weak": !n().ok }}>
-                        {n().text}
-                      </span>
-                    )}
-                  </Show>
-                  <Show
-                    when={editingBody()}
-                    fallback={
-                      <button type="button" class="iris-card__linkbtn iris-card__editbtn" onClick={() => setEditingBody(true)}>
-                        ✎ Edit
-                      </button>
-                    }
-                  >
-                    <button
-                      type="button"
-                      class="iris-card__linkbtn"
-                      data-body-cancel
-                      onClick={() => {
-                        setBodyDraft(null)
-                        setEditingBody(false)
-                        setBodyNote(null)
-                      }}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      class="iris-card__save"
-                      disabled={!bodyDirty() || savingBody()}
-                      onClick={() => void saveBody()}
-                    >
-                      {savingBody() ? "Saving…" : bodyDirty() ? "Save body" : "No changes"}
-                    </button>
-                  </Show>
-                </div>
+                <Show when={bodyNote()}>
+                  {(n) => (
+                    <p class="iris-card__bodynote text-11-regular" classList={{ "text-text-base": n().ok, "text-text-weak": !n().ok }}>
+                      {n().text}
+                    </p>
+                  )}
+                </Show>
                 <Show
                   when={editingBody()}
                   fallback={
-                    <Show
-                      when={doc.latest!.content}
-                      fallback={<p class="px-1 py-2 text-12-regular text-text-weak">This card has no body.</p>}
-                    >
-                      {/* Triple-click, ⌘/Ctrl-click or E to edit (#190282). Triple, not double: a
-                          double-click still selects a word to copy. A link inside still opens. */}
-                      <div
-                        class="iris-markdown iris-card__read text-12-regular text-text-base"
-                        tabindex="0"
-                        title="Triple-click, ⌘-click or press E to edit"
-                        innerHTML={renderMarkdown(doc.latest!.content)}
-                        onClick={(e) => {
-                          if ((e.target as HTMLElement).closest("a")) return
-                          if (e.detail >= 3 || e.metaKey || e.ctrlKey) {
-                            window.getSelection()?.removeAllRanges()
-                            setEditingBody(true)
-                          }
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === "e" && !e.metaKey && !e.ctrlKey && !e.altKey) {
-                            e.preventDefault()
-                            setEditingBody(true)
-                          }
-                        }}
-                      />
-                    </Show>
+                    <div class="iris-card__doc">
+                      <button
+                        type="button"
+                        class="iris-card__fab"
+                        aria-label="Edit description"
+                        title="Edit (E, triple-click or ⌘-click)"
+                        onClick={() => setEditingBody(true)}
+                      >
+                        <Icon name="pencil-line" size="small" />
+                      </button>
+                      <Show
+                        when={doc.latest!.content}
+                        fallback={
+                          <button type="button" class="iris-card__empty" onClick={() => setEditingBody(true)}>
+                            Start writing your thoughts…
+                          </button>
+                        }
+                      >
+                        {/* Triple-click, ⌘/Ctrl-click or E to edit (#190282). Triple, not double: a
+                            double-click still selects a word to copy. A link inside still opens. */}
+                        <div
+                          class="iris-markdown iris-card__read"
+                          tabindex="0"
+                          title="Triple-click, ⌘-click or press E to edit"
+                          innerHTML={renderMarkdown(doc.latest!.content)}
+                          onClick={(e) => {
+                            if ((e.target as HTMLElement).closest("a")) return
+                            if (e.detail >= 3 || e.metaKey || e.ctrlKey) {
+                              window.getSelection()?.removeAllRanges()
+                              setEditingBody(true)
+                            }
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "e" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+                              e.preventDefault()
+                              setEditingBody(true)
+                            }
+                          }}
+                        />
+                      </Show>
+                    </div>
                   }
                 >
-                  <textarea
-                    ref={(el) => queueMicrotask(() => el.focus())}
-                    class="iris-editor iris-card__textarea"
-                    spellcheck={false}
-                    data-dismiss-first
-                    value={bodyDraft() ?? doc.latest!.content}
-                    onInput={(e) => setBodyDraft(e.currentTarget.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                        e.preventDefault()
-                        void saveBody()
-                      } else if (e.key === "Escape") {
-                        // Cancel the edit; the card stays open (the dialog skips Escape while this exists).
-                        e.preventDefault()
-                        setBodyDraft(null)
-                        setEditingBody(false)
-                        setBodyNote(null)
-                      }
-                    }}
-                    onBlur={(e) => {
-                      // Clicking away keeps what you typed — unless it was onto Cancel.
-                      const to = e.relatedTarget as HTMLElement | null
-                      if (to?.dataset.bodyCancel !== undefined) return
-                      if (bodyDirty()) void saveBody()
-                      else setEditingBody(false)
-                    }}
-                  />
+                  <div class="iris-card__editwrap">
+                    <textarea
+                      ref={(el) => queueMicrotask(() => el.focus())}
+                      class="iris-card__textarea"
+                      spellcheck={false}
+                      data-dismiss-first
+                      placeholder="Start writing your thoughts…"
+                      value={bodyDraft() ?? doc.latest!.content}
+                      onInput={(e) => setBodyDraft(e.currentTarget.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                          e.preventDefault()
+                          void saveBody()
+                        } else if (e.key === "Escape") {
+                          // Cancel the edit; the card stays open (the dialog skips Escape while this exists).
+                          e.preventDefault()
+                          setBodyDraft(null)
+                          setEditingBody(false)
+                          setBodyNote(null)
+                        }
+                      }}
+                      onBlur={(e) => {
+                        // Clicking away keeps what you typed — unless it was onto Cancel.
+                        const to = e.relatedTarget as HTMLElement | null
+                        if (to?.dataset.bodyCancel !== undefined) return
+                        if (bodyDirty()) void saveBody()
+                        else setEditingBody(false)
+                      }}
+                    />
+                    <div class="iris-card__editbar">
+                      <span class="text-11-regular text-text-weaker">⌘↵ to save · Esc to cancel</span>
+                      <button
+                        type="button"
+                        class="iris-card__linkbtn"
+                        data-body-cancel
+                        onClick={() => {
+                          setBodyDraft(null)
+                          setEditingBody(false)
+                          setBodyNote(null)
+                        }}
+                      >
+                        Cancel
+                      </button>
+                      <button type="button" class="iris-card__save" disabled={!bodyDirty() || savingBody()} onClick={() => void saveBody()}>
+                        {savingBody() ? "Saving…" : bodyDirty() ? "Save" : "No changes"}
+                      </button>
+                    </div>
+                  </div>
                 </Show>
+              </section>
 
-                {/* CHECKLIST — the steps, under the description they belong to (#190281). */}
-                <div class="iris-card__block">
-                  <SectionHead count={doc.latest!.tasksMeasured ? `${doc.latest!.tasks.filter((t) => t.done).length}/${doc.latest!.tasks.length}` : "—"}>Checklist</SectionHead>
+              {/* RIGHT — Elon's sidebar: underline tabs, then sections. */}
+              <aside class="iris-card__side">
+                <Show
+                  when={side() !== "sharing"}
+                  fallback={
+                    <div class="iris-tabs iris-tabs--back">
+                      <button type="button" class="iris-card__linkbtn" onClick={() => setSide("details")}>
+                        ← Back
+                      </button>
+                      <span class="iris-tabs__title">Sharing</span>
+                    </div>
+                  }
+                >
+                  <div class="iris-tabs" role="tablist" aria-label="Card">
+                    <button type="button" role="tab" class="iris-tabs__tab" aria-selected={side() === "details"} onClick={() => setSide("details")}>
+                      Details
+                    </button>
+                    <button type="button" role="tab" class="iris-tabs__tab" aria-selected={side() === "tasks"} onClick={() => setSide("tasks")}>
+                      Tasks
+                      <Show when={doc.latest!.tasksMeasured && doc.latest!.tasks.length > 0}>
+                        <span class="iris-tabs__count">
+                          {doc.latest!.tasks.filter((t) => t.done).length}/{doc.latest!.tasks.length}
+                        </span>
+                      </Show>
+                    </button>
+                    <button type="button" role="tab" class="iris-tabs__tab" aria-selected={side() === "chat"} onClick={() => setSide("chat")}>
+                      Chat
+                    </button>
+                  </div>
+                </Show>
+                <div class="iris-card__sidebody">
+                  <Switch>
+                    {/* ───────────── DETAILS ───────────── */}
+                    <Match when={side() === "details"}>
+                      <div class="iris-sec">
+                        <SideHead icon="subagent" count={assignees.latest?.measured ? memberChoices().filter((c) => c.assignedId != null).length : undefined} tint="#3b82f6">
+                          Assigned
+                        </SideHead>
+                        <MembersRow
+                          list
+                          choices={memberChoices()}
+                          loading={assignees.loading || members.loading}
+                          unavailable={assignees.latest && !assignees.latest.measured ? assignees.latest.reason : undefined}
+                          note={assignNote()}
+                          onAdd={addMember}
+                          onRemove={removeMember}
+                          onEmail={inviteMember}
+                        />
+                      </div>
+
+                      <div class="iris-sec">
+                        <div class="iris-dds">
+                          <Dd
+                            icon="status"
+                            label="Status"
+                            value={(form()?.status ?? "").replace(/_/g, " ")}
+                            placeholder="Set"
+                            color={form()?.status ? statusDot(form()?.status) : undefined}
+                            onClick={(e) => openQuick("status", e.currentTarget)}
+                          />
+                          <Dd
+                            icon="pin"
+                            label="Priority"
+                            value={form()?.priority || ""}
+                            placeholder="None"
+                            color={priorityTone(form()?.priority)}
+                            onClick={(e) => openQuick("priority", e.currentTarget)}
+                          />
+                          <label class="iris-dd" data-empty={form()?.cardType ? undefined : ""} title="Type">
+                            <Icon name="box" size="small" />
+                            <span class="iris-dd__label">Type</span>
+                            <select
+                              class="iris-dd__select"
+                              style={typeColor(form()?.cardType) ? { color: typeColor(form()?.cardType) } : undefined}
+                              value={form()?.cardType ?? ""}
+                              onChange={(e) => {
+                                set("cardType", e.currentTarget.value)
+                                void saveDetails()
+                              }}
+                            >
+                              <option value="">None</option>
+                              <For each={schema.latest?.type ?? []}>{(o) => <option value={o.id}>{o.label}</option>}</For>
+                              <Show when={form()?.cardType && !(schema.latest?.type ?? []).some((o) => o.id === form()!.cardType)}>
+                                <option value={form()!.cardType}>{form()!.cardType}</option>
+                              </Show>
+                            </select>
+                            <Icon name="chevron-down" size="small" />
+                          </label>
+                          <Dd
+                            icon="clock"
+                            label="Due"
+                            value={form()?.dueDate ? dueLabel(form()!.dueDate, now()) : ""}
+                            placeholder="No date"
+                            color={
+                              form()?.dueDate
+                                ? ({ overdue: "#ef4444", soon: "#f59e0b", later: undefined } as const)[dueState(form()!.dueDate, now()) ?? "later"]
+                                : undefined
+                            }
+                            onClick={(e) => openQuick("due", e.currentTarget)}
+                          />
+                          <label class="iris-dd iris-dd--wide" title="List">
+                            <Icon name="bullet-list" size="small" />
+                            <span class="iris-dd__label">List</span>
+                            <select
+                              class="iris-dd__select"
+                              value={form()?.listId ?? ""}
+                              onChange={(e) => {
+                                set("listId", e.currentTarget.value)
+                                void saveDetails()
+                              }}
+                            >
+                              <Show when={form()?.listId && !props.lists.some((l) => String(l.id) === form()!.listId)}>
+                                <option value={form()!.listId}>{doc.latest!.listName ?? `list ${form()!.listId}`}</option>
+                              </Show>
+                              <For each={props.lists}>{(l) => <option value={String(l.id)}>{l.name}</option>}</For>
+                            </select>
+                            <Icon name="chevron-down" size="small" />
+                          </label>
+                        </div>
+                        <NoteLine note={note()?.ok === false ? note() : null} />
+                      </div>
+
+                      <div class="iris-sec">
+                        <SideHead
+                          icon="pin"
+                          count={doc.latest!.labels.length || undefined}
+                          tint="#a855f7"
+                          right={
+                            <button
+                              type="button"
+                              class="iris-sh__add"
+                              disabled={doc.latest!.contentKind === "markdown" || labelBusy()}
+                              title={
+                                doc.latest!.contentKind === "markdown"
+                                  ? "Labels live in a card's structured body; this card's body is plain markdown"
+                                  : "Add or remove labels"
+                              }
+                              onClick={(e) => openQuick("labels", e.currentTarget)}
+                            >
+                              + Add
+                            </button>
+                          }
+                        >
+                          Labels
+                        </SideHead>
+                        <div class="iris-pills">
+                          <For each={doc.latest!.labels}>
+                            {(l) => (
+                              <span class="iris-pill" style={{ "--tint": labelTint(l) }}>
+                                {l}
+                                <Show when={doc.latest!.contentKind !== "markdown"}>
+                                  <button
+                                    type="button"
+                                    class="iris-pill__x"
+                                    aria-label={`Remove label ${l}`}
+                                    disabled={labelBusy()}
+                                    onClick={() => void writeLabels(doc.latest!.labels.filter((x) => x !== l))}
+                                  >
+                                    ×
+                                  </button>
+                                </Show>
+                              </span>
+                            )}
+                          </For>
+                          <Show when={doc.latest!.labels.length === 0}>
+                            <span class="iris-sec__none">No labels</span>
+                          </Show>
+                        </div>
+                        <NoteLine note={labelNote()?.ok === false ? labelNote() : null} />
+                      </div>
+
+                      <div
+                        class="iris-sec"
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={(e) => {
+                          e.preventDefault()
+                          void upload(e.dataTransfer?.files ?? null)
+                        }}
+                      >
+                        <SideHead
+                          icon="photo"
+                          count={files.latest?.measured ? files.latest.files.length || undefined : undefined}
+                          tint="#22c55e"
+                          right={
+                            <label class="iris-sh__add" style={{ cursor: uploading() ? "default" : "pointer" }}>
+                              {uploading() ? "Uploading…" : "+ Add"}
+                              <input type="file" multiple hidden disabled={uploading()} onChange={(e) => void upload(e.currentTarget.files)} />
+                            </label>
+                          }
+                        >
+                          Attachments
+                        </SideHead>
+                        <NotConnected state={files.latest} />
+                        <Show when={missingFiles() > 0}>
+                          <p class="iris-card__warn">
+                            {missingFiles()} file{missingFiles() === 1 ? "" : "s"} referenced but not stored. Upload {missingFiles() === 1 ? "it" : "them"} again.
+                          </p>
+                        </Show>
+                        <div class="iris-pills">
+                          <For each={files.latest?.files ?? []}>
+                            {(f) => (
+                              <span class="iris-file" classList={{ "iris-file--missing": !f.stored }} title={`${f.name}${f.stored ? ` · ${fileSize(f.size)}` : " · missing"}`}>
+                                <span class="iris-file__type">{(f.type ?? f.name.split(".").pop() ?? "file").slice(0, 4)}</span>
+                                <Show when={f.url} fallback={<span class="iris-file__name">{f.name}</span>}>
+                                  <a class="iris-file__name" href={f.url} target="_blank" rel="noreferrer">
+                                    {f.name}
+                                  </a>
+                                </Show>
+                                <button type="button" class="iris-pill__x" aria-label={`Remove ${f.name}`} onClick={() => void removeFile(f)}>
+                                  ×
+                                </button>
+                              </span>
+                            )}
+                          </For>
+                        </div>
+                        <Show when={(files.latest?.files.length ?? 0) === 0}>
+                          <p class="iris-drop">Drop files here, or paste a screenshot.</p>
+                        </Show>
+                        <NoteLine note={fileNote()} />
+                      </div>
+
+                      <div class="iris-sec">
+                        <SideHead
+                          icon="checklist"
+                          count={doc.latest!.tasksMeasured && doc.latest!.tasks.length ? `${doc.latest!.tasks.filter((t) => t.done).length}/${doc.latest!.tasks.length}` : undefined}
+                          tint="#3b82f6"
+                          right={
+                            <button type="button" class="iris-sh__add" onClick={() => setSide("tasks")}>
+                              {doc.latest!.tasks.length ? "View all" : "+ Add"}
+                            </button>
+                          }
+                        >
+                          Tasks
+                        </SideHead>
+                        <Show when={doc.latest!.tasksMeasured} fallback={<p class="iris-sec__none">Could not read tasks — {doc.latest!.tasksReason ?? "unknown"}.</p>}>
+                          <Show when={doc.latest!.tasks.length > 0} fallback={<p class="iris-sec__none">No tasks yet</p>}>
+                            <ul class="iris-minitasks">
+                              <For each={doc.latest!.tasks.slice(0, 3)}>
+                                {(t) => (
+                                  <li class="iris-minitask" classList={{ "iris-minitask--done": t.done }}>
+                                    <input
+                                      type="checkbox"
+                                      class="iris-card__check"
+                                      checked={t.done}
+                                      disabled={busyTask() === t.id}
+                                      aria-label={`${t.done ? "Reopen" : "Complete"}: ${t.title}`}
+                                      onChange={() => void toggleTask(t)}
+                                    />
+                                    <span class="iris-minitask__text">{t.title}</span>
+                                    <Show when={t.agentName}>
+                                      <Avatar name={t.agentName!} kind="agent" size={18} />
+                                    </Show>
+                                  </li>
+                                )}
+                              </For>
+                            </ul>
+                            <Show when={doc.latest!.tasks.length > 3}>
+                              <button type="button" class="iris-sec__more" onClick={() => setSide("tasks")}>
+                                +{doc.latest!.tasks.length - 3} more
+                              </button>
+                            </Show>
+                          </Show>
+                        </Show>
+                      </div>
+
+                      <div class="iris-sec">
+                        <SideHead
+                          icon="clock"
+                          count={events.latest?.measured ? events.latest.events.length || undefined : undefined}
+                          tint="#22c55e"
+                          right={
+                            <button type="button" class="iris-sh__add" onClick={() => setEvOpen(!evOpen())}>
+                              {evOpen() ? "Cancel" : "+ Add"}
+                            </button>
+                          }
+                        >
+                          Events &amp; deadlines
+                        </SideHead>
+                        <NotConnected state={events.latest} />
+                        <ul class="iris-card__rows">
+                          <For each={events.latest?.events ?? []}>
+                            {(ev) => (
+                              <li class="iris-card__row">
+                                <span class="iris-sec__when">{shortWhen(ev.startsAt)}</span>
+                                <span class="iris-card__rowtext">{ev.title}</span>
+                              </li>
+                            )}
+                          </For>
+                        </ul>
+                        <Show when={(events.latest?.events.length ?? 0) === 0 && !evOpen()}>
+                          <p class="iris-sec__none">Nothing scheduled</p>
+                        </Show>
+                        <Show when={evOpen()}>
+                          <form
+                            class="iris-card__inline iris-card__inline--ev"
+                            onSubmit={(e) => {
+                              e.preventDefault()
+                              void addEvent().then(() => !evTitle() && setEvOpen(false))
+                            }}
+                          >
+                            <input class="iris-field__input" placeholder="Event or deadline…" aria-label="Event title" value={evTitle()} onInput={(e) => setEvTitle(e.currentTarget.value)} />
+                            <input class="iris-field__input" type="datetime-local" aria-label="Event time" value={evAt()} onInput={(e) => setEvAt(e.currentTarget.value)} />
+                            <button type="submit" class="iris-card__linkbtn iris-card__linkbtn--primary" disabled={!evTitle().trim() || !evAt()}>
+                              Add
+                            </button>
+                          </form>
+                        </Show>
+                        <NoteLine note={evNote()} />
+                      </div>
+
+                      <div class="iris-sec">
+                        <SideHead
+                          icon="hand"
+                          count={asks.latest?.measured ? asks.latest.asks.filter((a) => a.status === "open").length || undefined : undefined}
+                          tint="#f59e0b"
+                          right={
+                            <button type="button" class="iris-sh__add" onClick={() => setAskOpen(!askOpen())}>
+                              {askOpen() ? "Cancel" : "+ Add"}
+                            </button>
+                          }
+                        >
+                          Asks
+                        </SideHead>
+                        <NotConnected state={asks.latest} />
+                        <ul class="iris-card__rows">
+                          <For each={asks.latest?.asks ?? []}>
+                            {(a) => (
+                              <li class="iris-card__row">
+                                <input
+                                  type="checkbox"
+                                  class="iris-card__check"
+                                  checked={a.status === "answered"}
+                                  disabled={a.status === "answered"}
+                                  aria-label={`Answered: ${a.what}`}
+                                  onChange={() => void answerAsk(a)}
+                                />
+                                <span class="iris-card__rowtext" classList={{ "iris-card__tasktext--done": a.status === "answered" }}>
+                                  <span class="text-text-strong">{a.to}</span> — {a.what}
+                                  <Show when={a.dueAt}>
+                                    <span class="iris-sec__when ms-1">{shortDate(a.dueAt)}</span>
+                                  </Show>
+                                </span>
+                              </li>
+                            )}
+                          </For>
+                        </ul>
+                        <Show when={(asks.latest?.asks.length ?? 0) === 0 && !askOpen()}>
+                          <p class="iris-sec__none">Nothing asked of anyone</p>
+                        </Show>
+                        <Show when={askOpen()}>
+                          <form
+                            class="iris-card__inline iris-card__inline--ask"
+                            onSubmit={(e) => {
+                              e.preventDefault()
+                              void addAsk().then(() => !askWhat() && setAskOpen(false))
+                            }}
+                          >
+                            <input class="iris-field__input" placeholder="From whom…" aria-label="Ask: from whom" value={askTo()} onInput={(e) => setAskTo(e.currentTarget.value)} />
+                            <input class="iris-field__input" type="date" aria-label="Ask: by when" value={askDue()} onInput={(e) => setAskDue(e.currentTarget.value)} />
+                            <input class="iris-field__input" placeholder="What you need…" aria-label="Ask: what" value={askWhat()} onInput={(e) => setAskWhat(e.currentTarget.value)} />
+                            <button type="submit" class="iris-card__linkbtn iris-card__linkbtn--primary" disabled={!askTo().trim() || !askWhat().trim()}>
+                              Add
+                            </button>
+                          </form>
+                        </Show>
+                        <NoteLine note={askNote()} />
+                      </div>
+
+                      <div class="iris-sec iris-sec--more">
+                        <button type="button" class="iris-more" aria-expanded={moreOpen()} onClick={() => setMoreOpen(!moreOpen())}>
+                          <Icon name={moreOpen() ? "chevron-down" : "chevron-right"} size="small" />
+                          More
+                        </button>
+                        <Show when={moreOpen()}>
+                          <dl class="iris-more__facts">
+                            <dt>Sharing</dt>
+                            <dd>
+                              <button type="button" class="iris-sh__add" onClick={() => setSide("sharing")}>
+                                {doc.latest!.isPublic ? "Public link · manage" : "Private · manage"}
+                              </button>
+                            </dd>
+                            <dt>List</dt>
+                            <dd>{doc.latest!.listName ?? "—"}</dd>
+                            <dt>Card</dt>
+                            <dd class="font-mono tabular-nums">#{props.itemId}</dd>
+                            <Show when={assigned().length}>
+                              <dt>Task agents</dt>
+                              <dd>{assigned().map((a) => a.name).join(", ")}</dd>
+                            </Show>
+                            <dt>Updated</dt>
+                            <dd title={doc.latest!.updatedAt}>{timeAgo(doc.latest!.updatedAt, now()) || "—"}</dd>
+                          </dl>
+                        </Show>
+                      </div>
+                    </Match>
+
+                    {/* ───────────── TASKS ───────────── */}
+                    <Match when={side() === "tasks"}>
                       <Show
                         when={doc.latest!.tasksMeasured}
                         fallback={<p class="text-12-regular text-text-weak">Could not read tasks — {doc.latest!.tasksReason ?? "unknown"}.</p>}
                       >
                         <Show
                           when={doc.latest!.tasks.length > 0}
-                          fallback={<p class="text-12-regular text-text-weak pb-2">No checklist yet. Add the first step below.</p>}
+                          fallback={<p class="iris-sec__none pb-2">No tasks yet. Add the first step below.</p>}
                         >
                           {(() => {
                             const done = () => doc.latest!.tasks.filter((t) => t.done).length
                             const total = () => doc.latest!.tasks.length
                             return (
                               <div class="iris-card__progress" title={`${done()} of ${total()} done`}>
-                                <span class="font-mono tabular-nums text-11-regular text-text-weak">
-                                  {Math.round((done() / total()) * 100)}%
+                                <span class="tabular-nums text-11-regular text-text-weak">
+                                  {done()}/{total()} done
                                 </span>
                                 <span class="iris-card__progressbar">
                                   <span style={{ width: `${(done() / total()) * 100}%` }} />
@@ -1498,7 +1982,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                         <ul class="iris-card__tasks">
                           <For each={doc.latest!.tasks}>
                             {(t) => (
-                              <li class="iris-card__task" style={{ "padding-inline-start": `${t.depth * 14}px` }}>
+                              <li class="iris-card__task" style={{ "padding-inline-start": `${8 + t.depth * 14}px` }}>
                                 <input
                                   type="checkbox"
                                   class="iris-card__check"
@@ -1513,7 +1997,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                                     <span class="iris-card__chip ms-1">{t.agentName}</span>
                                   </Show>
                                   <Show when={t.dueDate}>
-                                    <span class="font-mono tabular-nums text-11-regular text-text-weaker ms-1">{t.dueDate}</span>
+                                    <span class="iris-sec__when ms-1">{t.dueDate}</span>
                                   </Show>
                                 </span>
                                 <button
@@ -1542,7 +2026,6 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                           </For>
                         </ul>
                       </Show>
-
                       <form
                         class="iris-card__addtask"
                         onSubmit={(e) => {
@@ -1562,7 +2045,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                         </Show>
                         <input
                           class="iris-field__input"
-                          placeholder={addParent() ? "Add a subtask…" : "Add a checklist item…"}
+                          placeholder={addParent() ? "Add a subtask…" : "Add a task…"}
                           aria-label="New checklist item"
                           value={newTask()}
                           onInput={(e) => setNewTask(e.currentTarget.value)}
@@ -1587,179 +2070,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                         <p class="text-11-regular text-text-weak">Agents unavailable — {agents.latest!.reason}.</p>
                       </Show>
                       <NoteLine note={taskNote()} />
-                </div>
-
-                {/* FILES, DATES, ASKS — what the work carries (#190281). */}
-                <div class="iris-card__block">
-                      {/* ATTACHMENTS */}
-                      <SectionHead
-                        count={files.latest?.measured ? files.latest.files.length : "—"}
-                        right={
-                          <label class="iris-card__linkbtn iris-card__linkbtn--primary" style={{ cursor: uploading() ? "default" : "pointer" }}>
-                            {uploading() ? "Uploading…" : "Upload"}
-                            <input type="file" multiple hidden disabled={uploading()} onChange={(e) => void upload(e.currentTarget.files)} />
-                          </label>
-                        }
-                      >
-                        Files
-                      </SectionHead>
-                      <NotConnected state={files.latest} />
-                      <Show when={missingFiles() > 0}>
-                        <p class="iris-card__warn">
-                          {missingFiles()} file{missingFiles() === 1 ? "" : "s"} referenced but not stored. Upload {missingFiles() === 1 ? "it" : "them"} again.
-                        </p>
-                      </Show>
-                      <div
-                        class="iris-card__drop"
-                        onDragOver={(e) => e.preventDefault()}
-                        onDrop={(e) => {
-                          e.preventDefault()
-                          void upload(e.dataTransfer?.files ?? null)
-                        }}
-                      >
-                        <Show when={(files.latest?.files.length ?? 0) === 0}>
-                          <span class="text-11-regular text-text-weaker">Drop files here, or Upload.</span>
-                        </Show>
-                        <For each={files.latest?.files ?? []}>
-                          {(f) => (
-                            <div class="iris-card__file" classList={{ "iris-card__file--missing": !f.stored }}>
-                              <span class="iris-card__filetype">{(f.type ?? f.name.split(".").pop() ?? "file").slice(0, 4)}</span>
-                              <span class="iris-card__filename" title={f.name}>
-                                {f.name}
-                                <span class="font-mono tabular-nums text-11-regular text-text-weaker ms-1">{f.stored ? fileSize(f.size) : "missing"}</span>
-                              </span>
-                              <Show when={f.url}>
-                                <a class="iris-card__linkbtn" href={f.url} target="_blank" rel="noreferrer">
-                                  Open
-                                </a>
-                              </Show>
-                              <button type="button" class="iris-card__x" title="Remove attachment" onClick={() => void removeFile(f)}>
-                                ×
-                              </button>
-                            </div>
-                          )}
-                        </For>
-                      </div>
-                      <NoteLine note={fileNote()} />
-
-                      {/* EVENTS */}
-                      <SectionHead count={events.latest?.measured ? events.latest.events.length : "—"}>Events &amp; deadlines</SectionHead>
-                      <NotConnected state={events.latest} />
-                      <ul class="iris-card__rows">
-                        <For each={events.latest?.events ?? []}>
-                          {(ev) => (
-                            <li class="iris-card__row">
-                              <span class="font-mono tabular-nums text-11-regular text-text-weaker shrink-0">{shortWhen(ev.startsAt)}</span>
-                              <span class="iris-card__rowtext">{ev.title}</span>
-                            </li>
-                          )}
-                        </For>
-                      </ul>
-                      <form
-                        class="iris-card__inline iris-card__inline--ev"
-                        onSubmit={(e) => {
-                          e.preventDefault()
-                          void addEvent()
-                        }}
-                      >
-                        <input class="iris-field__input" placeholder="Event or deadline…" aria-label="Event title" value={evTitle()} onInput={(e) => setEvTitle(e.currentTarget.value)} />
-                        <input class="iris-field__input" type="datetime-local" aria-label="Event time" value={evAt()} onInput={(e) => setEvAt(e.currentTarget.value)} />
-                        <button type="submit" class="iris-card__linkbtn iris-card__linkbtn--primary" disabled={!evTitle().trim() || !evAt()}>
-                          Add
-                        </button>
-                      </form>
-                      <NoteLine note={evNote()} />
-
-                      {/* ASKS — "I need X from Y by Z". The thing nothing modelled. */}
-                      <SectionHead count={asks.latest?.measured ? asks.latest.asks.filter((a) => a.status === "open").length : "—"}>Asks</SectionHead>
-                      <NotConnected state={asks.latest} />
-                      <ul class="iris-card__rows">
-                        <For each={asks.latest?.asks ?? []}>
-                          {(a) => (
-                            <li class="iris-card__row">
-                              <input
-                                type="checkbox"
-                                class="iris-card__check"
-                                checked={a.status === "answered"}
-                                disabled={a.status === "answered"}
-                                aria-label={`Answered: ${a.what}`}
-                                onChange={() => void answerAsk(a)}
-                              />
-                              <span class="iris-card__rowtext" classList={{ "iris-card__tasktext--done": a.status === "answered" }}>
-                                <span class="text-text-strong">{a.to}</span> — {a.what}
-                                <Show when={a.dueAt}>
-                                  <span class="font-mono tabular-nums text-11-regular text-text-weaker ms-1">{shortDate(a.dueAt)}</span>
-                                </Show>
-                              </span>
-                            </li>
-                          )}
-                        </For>
-                      </ul>
-                      <form
-                        class="iris-card__inline iris-card__inline--ask"
-                        onSubmit={(e) => {
-                          e.preventDefault()
-                          void addAsk()
-                        }}
-                      >
-                        <input class="iris-field__input" placeholder="From whom…" aria-label="Ask: from whom" value={askTo()} onInput={(e) => setAskTo(e.currentTarget.value)} />
-                        <input class="iris-field__input" type="date" aria-label="Ask: by when" value={askDue()} onInput={(e) => setAskDue(e.currentTarget.value)} />
-                        <input class="iris-field__input" placeholder="What you need…" aria-label="Ask: what" value={askWhat()} onInput={(e) => setAskWhat(e.currentTarget.value)} />
-                        <button type="submit" class="iris-card__linkbtn iris-card__linkbtn--primary" disabled={!askTo().trim() || !askWhat().trim()}>
-                          Add
-                        </button>
-                      </form>
-                      <NoteLine note={askNote()} />
-
-                      {/* READ-ONLY facts. Agents live in tasks; shown so the panel does not
-                          hide what Elon shows, and not written here so there is one write path. */}
-                      <dl class="iris-card__facts">
-                        <Show when={assigned().length}>
-                          <dt>Agents</dt>
-                          <dd>
-                            <For each={assigned()}>{(a) => <span class="iris-card__chip">{a.name}</span>}</For>
-                          </dd>
-                        </Show>
-                        <dt>Updated</dt>
-                        <dd class="font-mono tabular-nums text-11-regular">{shortDate(doc.latest!.updatedAt)}</dd>
-                      </dl>
-                </div>
-              </section>
-
-              {/* RIGHT — level-3 chips, the panel's own vocabulary for "which face of one record". */}
-              <aside class="iris-card__side">
-                <Show
-                  when={side() !== "sharing"}
-                  fallback={
-                    <div class="iris-card__sidebar-head">
-                      <button type="button" class="iris-card__linkbtn" onClick={() => setSide("activity")}>
-                        ← Activity
-                      </button>
-                      <span class="iris-fact__label">Sharing</span>
-                    </div>
-                  }
-                >
-                  {/* Two faces of one conversation: the people's, and the agent's (#190281). */}
-                  <div class="iris-seg" role="tablist" aria-label="Conversation">
-                    <button
-                      type="button"
-                      role="tab"
-                      class="iris-seg__item"
-                      aria-selected={side() !== "chat"}
-                      onClick={() => setSide("activity")}
-                    >
-                      Activity
-                      <Show when={trail.latest?.measured}>
-                        <span class="iris-card__count">{trail.latest!.activity.length}</span>
-                      </Show>
-                    </button>
-                    <button type="button" role="tab" class="iris-seg__item" aria-selected={side() === "chat"} onClick={() => setSide("chat")}>
-                      ✦ Agent
-                    </button>
-                  </div>
-                </Show>
-                <div class="iris-card__sidebody">
-                  <Switch>
+                    </Match>
 
                     {/* ───────────── SHARING ───────────── */}
                     <Match when={side() === "sharing"}>
@@ -1928,137 +2239,198 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                       <p class="text-11-regular text-text-weaker pt-1">A share link is a bearer link: whoever holds it is in. Revoke it here when it has done its job.</p>
                     </Match>
 
-
-                    {/* ───────────── ACTIVITY (#189799) ───────────── */}
-                    <Match when={side() === "activity"}>
-                      <NotConnected state={trail.latest} />
-                      <form
-                        class="iris-card__compose iris-comment"
-                        onSubmit={(e) => {
-                          e.preventDefault()
-                          void postComment()
-                        }}
-                      >
-                        <textarea
-                          class="iris-field__input iris-card__composetext"
-                          rows={2}
-                          placeholder="Write a comment… @ to mention someone on this board"
-                          aria-label="Comment"
-                          value={comment()}
-                          onInput={(e) => setComment(e.currentTarget.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" && !e.shiftKey && mentionable().length === 0) {
-                              e.preventDefault()
-                              void postComment()
-                            }
-                          }}
-                        />
-                        <button type="submit" class="iris-card__linkbtn iris-card__linkbtn--primary" disabled={!comment().trim() || posting()}>
-                          {posting() ? "…" : "Comment"}
-                        </button>
-                        <Show when={mentionable().length > 0}>
-                          <ul class="iris-comment__mentions" role="listbox" aria-label="Mention someone">
-                            <For each={mentionable()}>
-                              {(m) => (
-                                <li>
-                                  <button type="button" onClick={() => pickMention(m)}>
-                                    <span>{m.name || m.email}</span>
-                                    <span class="iris-trail__meta">{m.email}</span>
-                                  </button>
-                                </li>
-                              )}
-                            </For>
-                          </ul>
-                        </Show>
-                      </form>
-                      <Show when={commentNote()}>
-                        <NoteLine note={commentNote()} />
-                      </Show>
-                      <Show when={trail.latest?.measured && trail.latest.activity.length === 0}>
-                        <p class="text-11-regular text-text-weaker">
-                          Nothing recorded yet. Comments, assignments, finished subtasks, moves and changes to status,
-                          priority and due date show here.
-                        </p>
-                      </Show>
-                      <ul class="iris-trail">
-                        <For each={trail.latest?.activity ?? []}>
-                          {(a) => (
-                            <li class="iris-trail__row" classList={{ "iris-trail__row--comment": a.type === "comment" }}>
-                              <span aria-hidden="true">{a.icon ?? "·"}</span>
-                              <span>
-                                {a.text}
-                                <span class="iris-trail__meta">
-                                  {[a.actor, a.at ? new Date(a.at).toLocaleString() : undefined].filter(Boolean).join(" · ")}
-                                </span>
-                              </span>
-                            </li>
-                          )}
-                        </For>
-                      </ul>
-                      <Show when={trail.latest?.measured}>
-                        <button type="button" class="iris-card__linkbtn" onClick={() => void refetchTrail()}>
-                          Refresh
-                        </button>
-                      </Show>
-                    </Match>
-
-                    {/* ───────────── CHAT ───────────── */}
+                    {/* ───────────── CHAT: Team (people + what happened) | AI ───────────── */}
                     <Match when={side() === "chat"}>
                       <div class="iris-card__chat">
-                        <div class="iris-card__chathead">
-                          <select class="iris-field__input" aria-label="Chat with agent" value={chatAgent() || String(chat.latest?.agentId ?? "")} onChange={(e) => setChatAgent(e.currentTarget.value)}>
-                            <option value="">Pick an agent…</option>
-                            <For each={agents.latest?.agents ?? []}>{(a) => <option value={String(a.id)}>{a.name}</option>}</For>
-                          </select>
+                        <div class="iris-subtabs" role="tablist" aria-label="Chat">
+                          <button type="button" role="tab" class="iris-subtabs__tab" data-tone="team" aria-selected={chatSub() === "team"} onClick={() => setChatSub("team")}>
+                            Team
+                          </button>
+                          <button type="button" role="tab" class="iris-subtabs__tab" data-tone="ai" aria-selected={chatSub() === "ai"} onClick={() => setChatSub("ai")}>
+                            ✦ AI
+                          </button>
                         </div>
-                        <NotConnected state={chat.latest} />
-                        <div class="iris-card__msgs" ref={chatScroll}>
-                          <Show when={chat.latest?.measured && chat.latest.messages.length === 0}>
-                            <p class="text-11-regular text-text-weaker">No messages yet. The agent sees this card's body and tasks.</p>
-                          </Show>
-                          <For each={chat.latest?.messages ?? []}>
-                            {(m) => (
-                              <div class="iris-card__msg" classList={{ "iris-card__msg--me": m.role === "user" }}>
-                                <span class="iris-card__msgwho">{m.role === "user" ? "you" : (m.agentName ?? "agent")}</span>
-                                <div class="iris-card__msgtext iris-markdown" innerHTML={renderMarkdown(m.text)} />
-                              </div>
-                            )}
-                          </For>
-                          <Show when={thinking()}>
-                            <div class="iris-card__msg">
-                              <span class="iris-card__msgwho">agent</span>
-                              <div class="iris-card__msgtext text-text-weak">thinking…</div>
+                        <Switch>
+                          <Match when={chatSub() === "team"}>
+                            <NotConnected state={trail.latest} />
+                            <div class="iris-thread" ref={threadScroll}>
+                              <Show when={trail.latest?.measured && thread().length === 0}>
+                                <p class="iris-sec__none">
+                                  No messages yet. Comments, assignments, finished tasks, moves and changes to status, priority and
+                                  due date show here.
+                                </p>
+                              </Show>
+                              <For each={thread()}>
+                                {(e) => (
+                                  <Switch>
+                                    <Match when={e.kind === "comment" && e}>
+                                      {(c) => (
+                                        <div class="iris-bubble" classList={{ "iris-bubble--me": c().mine }}>
+                                          <Avatar name={c().row.actor || "?"} kind="user" size={26} />
+                                          <div class="iris-bubble__col">
+                                            <div class="iris-bubble__meta">
+                                              <span class="iris-bubble__who">{c().mine ? "You" : c().row.actor || "Someone"}</span>
+                                              <span title={c().row.at}>{timeAgo(c().row.at, now())}</span>
+                                            </div>
+                                            <div class="iris-bubble__text">{c().row.text}</div>
+                                          </div>
+                                        </div>
+                                      )}
+                                    </Match>
+                                    <Match when={e.kind === "change" && e}>
+                                      {(g) => (
+                                        <Show
+                                          when={g().rows.length > 1}
+                                          fallback={
+                                            <div class="iris-event">
+                                              <span aria-hidden="true">{g().rows[0].icon ?? "·"}</span>
+                                              <span class="iris-event__text">
+                                                <Show when={g().actor}>
+                                                  <b>{g().actor}</b>{" "}
+                                                </Show>
+                                                {g().summary}
+                                              </span>
+                                              <span class="iris-event__at" title={g().at}>
+                                                {timeAgo(g().at, now())}
+                                              </span>
+                                            </div>
+                                          }
+                                        >
+                                          <details class="iris-event iris-event--group">
+                                            <summary>
+                                              <span aria-hidden="true">{g().rows[0].icon ?? "·"}</span>
+                                              <span class="iris-event__text">
+                                                <b>{g().actor ?? "Someone"}</b> {g().summary}
+                                              </span>
+                                              <span class="iris-event__at" title={g().at}>
+                                                {timeAgo(g().at, now())}
+                                              </span>
+                                            </summary>
+                                            <ul>
+                                              <For each={[...g().rows].reverse()}>
+                                                {(r) => (
+                                                  <li>
+                                                    <span>{r.text}</span>
+                                                    <span class="iris-event__at">{timeAgo(r.at, now())}</span>
+                                                  </li>
+                                                )}
+                                              </For>
+                                            </ul>
+                                          </details>
+                                        </Show>
+                                      )}
+                                    </Match>
+                                  </Switch>
+                                )}
+                              </For>
                             </div>
-                          </Show>
-                        </div>
-                        <Show when={chatNote()}>
-                          <p class="text-11-regular text-text-weak">{chatNote()}</p>
-                        </Show>
-                        <form
-                          class="iris-card__compose"
-                          onSubmit={(e) => {
-                            e.preventDefault()
-                            void sendChat()
-                          }}
-                        >
-                          <textarea
-                            class="iris-field__input iris-card__composetext"
-                            rows={2}
-                            placeholder="Ask about this card…"
-                            aria-label="Message"
-                            value={chatText()}
-                            onInput={(e) => setChatText(e.currentTarget.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" && !e.shiftKey) {
+                            <Show when={commentNote()}>
+                              <NoteLine note={commentNote()} />
+                            </Show>
+                            <form
+                              class="iris-card__compose iris-comment"
+                              onSubmit={(e) => {
+                                e.preventDefault()
+                                void postComment()
+                              }}
+                            >
+                              <textarea
+                                class="iris-field__input iris-card__composetext"
+                                rows={2}
+                                placeholder="Message the team… @ to mention someone on this board"
+                                aria-label="Comment"
+                                value={comment()}
+                                onInput={(e) => setComment(e.currentTarget.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter" && !e.shiftKey && mentionable().length === 0) {
+                                    e.preventDefault()
+                                    void postComment()
+                                  }
+                                }}
+                              />
+                              <button type="submit" class="iris-send" aria-label="Send" disabled={!comment().trim() || posting()}>
+                                <Icon name="send" size="small" />
+                              </button>
+                              <Show when={mentionable().length > 0}>
+                                <ul class="iris-comment__mentions" role="listbox" aria-label="Mention someone">
+                                  <For each={mentionable()}>
+                                    {(m) => (
+                                      <li>
+                                        <button type="button" onClick={() => pickMention(m)}>
+                                          <span>{m.name || m.email}</span>
+                                          <span class="iris-trail__meta">{m.email}</span>
+                                        </button>
+                                      </li>
+                                    )}
+                                  </For>
+                                </ul>
+                              </Show>
+                            </form>
+                          </Match>
+                          <Match when={chatSub() === "ai"}>
+                            <div class="iris-card__chathead">
+                              <select class="iris-field__input" aria-label="Chat with agent" value={chatAgent() || String(chat.latest?.agentId ?? "")} onChange={(e) => setChatAgent(e.currentTarget.value)}>
+                                <option value="">Pick an agent…</option>
+                                <For each={agents.latest?.agents ?? []}>{(a) => <option value={String(a.id)}>{a.name}</option>}</For>
+                              </select>
+                            </div>
+                            <NotConnected state={chat.latest} />
+                            <div class="iris-card__msgs" ref={chatScroll}>
+                              <Show when={chat.latest?.measured && chat.latest.messages.length === 0}>
+                                <p class="iris-sec__none">No messages yet. The agent sees this card's body and tasks.</p>
+                              </Show>
+                              <For each={chat.latest?.messages ?? []}>
+                                {(m) => (
+                                  <div class="iris-bubble" classList={{ "iris-bubble--me": m.role === "user" }}>
+                                    <Avatar name={m.role === "user" ? "You" : (m.agentName ?? "Agent")} kind={m.role === "user" ? "user" : "agent"} size={26} />
+                                    <div class="iris-bubble__col">
+                                      <div class="iris-bubble__meta">
+                                        <span class="iris-bubble__who">{m.role === "user" ? "You" : (m.agentName ?? "Agent")}</span>
+                                      </div>
+                                      <div class="iris-bubble__text iris-markdown" innerHTML={renderMarkdown(m.text)} />
+                                    </div>
+                                  </div>
+                                )}
+                              </For>
+                              <Show when={thinking()}>
+                                <div class="iris-bubble">
+                                  <Avatar name="Agent" kind="agent" size={26} />
+                                  <div class="iris-bubble__col">
+                                    <div class="iris-bubble__text text-text-weak">thinking…</div>
+                                  </div>
+                                </div>
+                              </Show>
+                            </div>
+                            <Show when={chatNote()}>
+                              <p class="text-11-regular text-text-weak">{chatNote()}</p>
+                            </Show>
+                            <form
+                              class="iris-card__compose"
+                              onSubmit={(e) => {
                                 e.preventDefault()
                                 void sendChat()
-                              }
-                            }}
-                          />
-                          <button type="submit" class="iris-card__linkbtn iris-card__linkbtn--primary" disabled={!chatText().trim() || thinking()}>
-                            {thinking() ? "…" : "Send"}
-                          </button>
-                        </form>
+                              }}
+                            >
+                              <textarea
+                                class="iris-field__input iris-card__composetext"
+                                rows={2}
+                                placeholder="Ask about this card…"
+                                aria-label="Message"
+                                value={chatText()}
+                                onInput={(e) => setChatText(e.currentTarget.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter" && !e.shiftKey) {
+                                    e.preventDefault()
+                                    void sendChat()
+                                  }
+                                }}
+                              />
+                              <button type="submit" class="iris-send" aria-label="Send" disabled={!chatText().trim() || thinking()}>
+                                <Icon name="send" size="small" />
+                              </button>
+                            </form>
+                          </Match>
+                        </Switch>
                       </div>
                     </Match>
                   </Switch>

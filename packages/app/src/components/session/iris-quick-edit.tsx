@@ -47,6 +47,8 @@ export function IrisQuickEdit(props: {
   /** Where to draw it: the card's on-screen box. */
   anchor: { left: number; top: number; bottom: number }
   field?: QuickField
+  /** Show only `field` — a single dropdown, the way Elon's card sidebar opens one (#card-elon). */
+  only?: boolean
   status?: SchemaOption[]
   priority?: SchemaOption[]
   boardLabels: string[]
@@ -127,6 +129,7 @@ export function IrisQuickEdit(props: {
     <div
       ref={el}
       class="iris-quick"
+      data-only={props.only && props.field ? "" : undefined}
       data-dismiss-first
       role="dialog"
       aria-label={`Change ${props.card.title}`}
@@ -134,9 +137,11 @@ export function IrisQuickEdit(props: {
       data-prevent-autofocus
       onKeyDown={(e) => e.stopPropagation()}
     >
-      <div class="iris-quick__title truncate">{props.card.title}</div>
+      <Show when={!(props.only && props.field)}>
+        <div class="iris-quick__title truncate">{props.card.title}</div>
+      </Show>
 
-      <section data-quick="status">
+      <section data-quick="status" data-active={props.field === "status" ? "" : undefined}>
         <h4 class="iris-quick__head">Status <kbd>s</kbd></h4>
         <div class="iris-quick__chips">
           <For each={statuses()}>
@@ -154,7 +159,7 @@ export function IrisQuickEdit(props: {
         </div>
       </section>
 
-      <section data-quick="priority">
+      <section data-quick="priority" data-active={props.field === "priority" ? "" : undefined}>
         <h4 class="iris-quick__head">Priority <kbd>p</kbd></h4>
         <div class="iris-quick__chips">
           <For each={priorities()}>
@@ -177,7 +182,7 @@ export function IrisQuickEdit(props: {
         </div>
       </section>
 
-      <section data-quick="due">
+      <section data-quick="due" data-active={props.field === "due" ? "" : undefined}>
         <h4 class="iris-quick__head">Due <kbd>d</kbd></h4>
         <div class="iris-quick__chips">
           <input
@@ -204,7 +209,7 @@ export function IrisQuickEdit(props: {
         </div>
       </section>
 
-      <section data-quick="labels">
+      <section data-quick="labels" data-active={props.field === "labels" ? "" : undefined}>
         <h4 class="iris-quick__head">Labels <kbd>l</kbd></h4>
         <div class="iris-quick__chips">
           <For each={allLabels()}>

@@ -3330,3 +3330,532 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   border: 1px solid #3b82f6;
   background: var(--background-element);
 }
+
+/* ── Card editor, Elon's layout (CardEditor.vue) ─────────────────────────────────────────
+   Title in the header row beside who is on the card and an icon cluster; the description fills
+   the left; Details | Tasks | Chat on a ~440px right sidebar. Theme tokens throughout, so light
+   and dark both hold; the one fixed colour is Elon's red accent on the active tab. */
+.iris-card--elon {
+  --iris-elon-accent: #ef4444;
+}
+[data-slot="dialog-container"]:has(> .iris-card--elon) {
+  height: min(85vh, 1100px);
+  width: min(calc(100vw - 32px), 1280px);
+}
+[data-slot="dialog-container"]:has(> .iris-card--elon.iris-card--full) {
+  height: calc(100vh - 12px);
+  width: calc(100vw - 12px);
+}
+.iris-card--elon [data-slot="dialog-header"] {
+  padding: 10px 12px 10px 20px;
+  gap: 12px;
+  border-bottom: 1px solid var(--border-weaker-base);
+}
+.iris-card--elon [data-slot="dialog-title"] {
+  flex: 1;
+  min-width: 0;
+}
+.iris-card__hdr {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+.iris-card__htitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+  color: var(--text-strong);
+  cursor: text;
+  border-bottom: 1px solid transparent;
+}
+.iris-card__htitle:hover { border-bottom-color: var(--border-weaker-base); }
+.iris-card__htitle:focus-visible { outline: none; border-bottom-color: var(--iris-elon-accent); }
+.iris-card--elon .iris-card__title {
+  flex: 1;
+  min-width: 120px;
+  font-size: 20px;
+  font-weight: 500;
+  padding: 0;
+  border-bottom: 1px solid var(--iris-elon-accent);
+}
+.iris-card--elon .iris-members2__add { width: 24px; height: 24px; font-size: 14px; }
+.iris-card--elon .iris-members2[data-compact] .iris-members2__empty { display: none; }
+
+/* The icon cluster: 32px squares, muted, highlighted on hover (Elon L151-410). */
+.iris-card--elon .iris-card__winbtns { gap: 2px; flex-shrink: 0; }
+.iris-ib {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 6px;
+  border-radius: 6px;
+  color: var(--text-weak);
+  background: transparent;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.iris-ib:hover:not(:disabled) { color: var(--text-interactive-base); background: var(--surface-raised-base-hover); }
+.iris-ib[aria-pressed="true"] { color: var(--text-strong); background: var(--surface-raised-base-active); }
+.iris-ib--close:hover:not(:disabled) { color: var(--iris-elon-accent); }
+.iris-card__saved {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  color: #22c55e;
+}
+.iris-card__saved[data-state="unsaved"] { color: var(--text-interactive-base); }
+.iris-card__saved[data-state="saving"] { color: var(--text-interactive-base); animation: iris-card-rec-pulse 1s ease-in-out infinite; }
+.iris-card__saved[data-state="error"] { color: var(--iris-elon-accent); }
+
+/* Body: the document pane. 16px, relaxed, p-6 — Elon's reading size, not a 12px log. */
+.iris-card--elon .iris-card__frame { position: relative; }
+.iris-card--elon .iris-card__cols { border-top: 0; }
+.iris-card--elon .iris-card__body { padding: 0; }
+.iris-card__doc {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.iris-card--elon .iris-card__read {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 24px 28px;
+  font-size: 16px;
+  line-height: 1.65;
+  color: var(--text-base);
+  outline: none;
+}
+.iris-card--elon .iris-card__read p { margin: 0 0 0.85em; }
+.iris-card__fab {
+  position: absolute;
+  top: 14px;
+  right: 18px;
+  z-index: 2;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-strong);
+  background: var(--surface-raised-stronger, var(--background-strong));
+  border: 1px solid var(--border-weak-base);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  opacity: 0;
+  transform: translateY(-2px);
+  transition: opacity 0.15s, transform 0.15s;
+  cursor: pointer;
+}
+.iris-card__doc:hover .iris-card__fab,
+.iris-card__fab:focus-visible { opacity: 1; transform: none; }
+.iris-card__fab:hover { color: var(--text-interactive-base); }
+.iris-card__empty {
+  margin: 24px 28px;
+  text-align: left;
+  font-size: 16px;
+  color: var(--text-weaker);
+  cursor: text;
+}
+.iris-card__bodynote { padding: 8px 28px 0; }
+.iris-card__editwrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.iris-card--elon .iris-card__textarea {
+  flex: 1;
+  min-height: 0;
+  resize: none;
+  border: 0;
+  outline: none;
+  background: transparent;
+  padding: 24px 28px;
+  font-family: var(--font-family-sans);
+  font-size: 16px;
+  line-height: 1.65;
+  color: var(--text-strong);
+}
+.iris-card__editbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px 16px;
+  border-top: 1px solid var(--border-weaker-base);
+}
+.iris-card__editbar > span { margin-inline-end: auto; }
+
+/* Sidebar: 440 / 400 / 360, like Elon's 460 / 400 / 360. */
+.iris-card--elon .iris-card__side {
+  width: 440px;
+  padding-top: 0;
+  background: var(--surface-raised-base, transparent);
+}
+@media (max-width: 1200px) { .iris-card--elon .iris-card__side { width: 400px; } }
+@media (max-width: 1024px) { .iris-card--elon .iris-card__side { width: 360px; } }
+.iris-card--elon .iris-card__sidebody { padding: 4px 16px 16px; }
+
+.iris-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border-weaker-base);
+  flex-shrink: 0;
+}
+.iris-tabs--back { align-items: center; gap: 10px; min-height: 48px; }
+.iris-tabs__title { font-size: 13px; font-weight: 500; color: var(--text-strong); }
+.iris-tabs__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 14px 10px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-weak);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  background: transparent;
+  cursor: pointer;
+}
+.iris-tabs__tab:hover { color: var(--text-strong); }
+.iris-tabs__tab[aria-selected="true"] { color: var(--text-strong); border-bottom-color: var(--iris-elon-accent); }
+.iris-tabs__count {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  padding: 0 6px;
+  border-radius: 999px;
+  color: #93c5fd;
+  background: color-mix(in srgb, #3b82f6 25%, transparent);
+}
+
+/* Sections: icon + sentence-case grey head + tinted count + "+ Add" on the right. */
+.iris-sec { padding: 14px 0 4px; }
+.iris-sec + .iris-sec { border-top: 1px solid var(--border-weaker-base); }
+.iris-sh {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-weak);
+}
+.iris-sh > [data-component="icon"] { color: var(--text-weaker); }
+.iris-sh__count {
+  --tint: #3b82f6;
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  padding: 1px 7px;
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--tint) 75%, var(--text-strong));
+  background: color-mix(in srgb, var(--tint) 22%, transparent);
+}
+.iris-sh__right { margin-inline-start: auto; display: inline-flex; }
+.iris-sh__add {
+  font-size: 12px;
+  font-weight: 500;
+  padding: 3px 9px;
+  border-radius: 6px;
+  color: var(--text-base);
+  background: var(--surface-raised-base-hover);
+  cursor: pointer;
+}
+.iris-sh__add:hover:not(:disabled) { color: var(--text-strong); background: var(--surface-raised-base-active); }
+.iris-sh__add:disabled { cursor: default; color: var(--text-weaker); }
+.iris-sec__none { font-size: 12.5px; color: var(--text-weaker); margin: 0 0 6px; }
+.iris-sec__when { font-size: 11.5px; color: var(--text-weaker); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.iris-sec__more { font-size: 12px; color: var(--text-interactive-base); padding: 4px 0; cursor: pointer; }
+
+/* Assigned list. */
+.iris-members2__list { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.iris-members2__row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--surface-raised-base-hover);
+}
+.iris-members2__name { flex: 1; min-width: 0; font-size: 13px; color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iris-members2__kind { font-size: 11px; color: var(--text-weaker); }
+.iris-members2__rowx { width: 20px; height: 20px; border-radius: 6px; color: var(--text-weaker); cursor: pointer; }
+.iris-members2__rowx:hover:not(:disabled) { color: var(--iris-elon-accent, #ef4444); background: var(--surface-raised-base-active); }
+.iris-members2__faces[data-list] .iris-members2__add {
+  width: auto;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  border-style: dashed;
+}
+.iris-card--elon .iris-sec .iris-members2 { display: block; }
+
+/* Status, Priority, Type, Due, List: Elon's UtilityDropdown buttons, two per row. */
+.iris-dds { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.iris-dd {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-weaker-base);
+  background: var(--surface-raised-base-hover);
+  color: var(--text-weak);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+}
+.iris-dd:hover, .iris-dd:focus-within { border-color: var(--border-weak-base); background: var(--surface-raised-base-active); }
+.iris-dd--wide { grid-column: 1 / -1; }
+.iris-dd__label { font-size: 12px; color: var(--text-weaker); flex-shrink: 0; }
+.iris-dd__value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  color: var(--text-strong);
+  text-transform: capitalize;
+}
+.iris-dd[data-empty] .iris-dd__value { font-weight: 400; color: var(--text-weaker); text-transform: none; }
+.iris-dd__select {
+  flex: 1;
+  min-width: 0;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-weight: 500;
+  color: var(--text-strong);
+  cursor: pointer;
+  outline: none;
+}
+.iris-dd[data-empty] .iris-dd__select { color: var(--text-weaker); font-weight: 400; }
+.iris-dd__select option { color: var(--text-strong); background: var(--background-base); }
+.iris-dd > [data-component="icon"]:last-child { color: var(--text-weaker); flex-shrink: 0; }
+
+/* Labels and attachments: tinted pills (Elon: color+20 background, matching border and text). */
+.iris-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+.iris-pill {
+  --tint: #94a3b8;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 4px 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  color: color-mix(in srgb, var(--tint) 80%, var(--text-strong));
+  background: color-mix(in srgb, var(--tint) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tint) 45%, transparent);
+}
+.iris-pill__x {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  font-size: 13px;
+  line-height: 1;
+  color: inherit;
+  opacity: 0.7;
+  cursor: pointer;
+}
+.iris-pill__x:hover:not(:disabled) { opacity: 1; background: color-mix(in srgb, currentColor 18%, transparent); }
+.iris-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 3px 4px 3px 4px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--text-base);
+  background: var(--surface-raised-base-hover);
+  border: 1px solid var(--border-weaker-base);
+}
+.iris-file__type {
+  font-size: 9.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: #86efac;
+  background: color-mix(in srgb, #22c55e 22%, transparent);
+}
+.iris-file__name { min-width: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: inherit; }
+a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: underline; }
+.iris-file--missing { border-color: color-mix(in srgb, #ef4444 50%, transparent); color: #f0836a; }
+.iris-drop {
+  margin: 8px 0 4px;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px dashed var(--border-weak-base);
+  font-size: 12px;
+  text-align: center;
+  color: var(--text-weaker);
+}
+
+/* Tasks summary (Elon L1427-1494): square checkbox rows, done = struck and dim. */
+.iris-minitasks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.iris-minitask {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: var(--surface-raised-base-hover);
+  font-size: 13px;
+  color: var(--text-base);
+}
+.iris-minitask .iris-card__check { margin: 0; }
+.iris-minitask__text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iris-minitask--done { opacity: 0.55; }
+.iris-minitask--done .iris-minitask__text { text-decoration: line-through; }
+.iris-card--elon .iris-card__row { padding: 6px 0; font-size: 13px; }
+
+/* "More": sharing, list and id, updated — Elon's collapsible at the foot of Details. */
+.iris-more { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500; color: var(--text-weak); cursor: pointer; }
+.iris-more:hover { color: var(--text-strong); }
+.iris-more__facts {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 8px 10px;
+  margin: 12px 0 4px;
+  font-size: 12.5px;
+}
+.iris-more__facts dt { color: var(--text-weaker); }
+.iris-more__facts dd { margin: 0; min-width: 0; color: var(--text-base); }
+
+/* Tasks tab. */
+.iris-card--elon .iris-card__progress { margin: 6px 0 10px; }
+.iris-card--elon .iris-card__task { padding-top: 6px; padding-bottom: 6px; border-radius: 6px; }
+.iris-card--elon .iris-card__task:hover { background: var(--surface-raised-base-hover); }
+.iris-card--elon .iris-card__tasktext { font-size: 13px; }
+
+/* Chat: Team | AI, with Elon's colours (green team, blue AI). */
+.iris-card--elon .iris-card__chat { gap: 8px; }
+.iris-subtabs { display: flex; gap: 14px; border-bottom: 1px solid var(--border-weaker-base); flex-shrink: 0; }
+.iris-subtabs__tab {
+  padding: 6px 2px 8px;
+  margin-bottom: -1px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-weak);
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+.iris-subtabs__tab:hover { color: var(--text-strong); }
+.iris-subtabs__tab[aria-selected="true"][data-tone="team"] { color: #4ade80; border-bottom-color: #4ade80; }
+.iris-subtabs__tab[aria-selected="true"][data-tone="ai"] { color: #60a5fa; border-bottom-color: #60a5fa; }
+.iris-thread,
+.iris-card--elon .iris-card__msgs {
+  flex: 1;
+  min-height: 160px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 2px 8px;
+}
+.iris-bubble { display: flex; align-items: flex-start; gap: 8px; max-width: 94%; }
+.iris-bubble--me { align-self: flex-end; flex-direction: row-reverse; }
+.iris-bubble__col { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.iris-bubble--me .iris-bubble__col { align-items: flex-end; }
+.iris-bubble__meta { display: flex; gap: 6px; font-size: 11px; color: var(--text-weaker); }
+.iris-bubble__who { font-weight: 500; color: var(--text-weak); }
+.iris-bubble__text {
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-strong);
+  background: var(--surface-raised-strong, var(--background-strong));
+}
+.iris-bubble__text.iris-markdown { white-space: normal; }
+.iris-bubble--me .iris-bubble__text { color: #fff; background: #2563eb; }
+.iris-event {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  align-self: stretch;
+  font-size: 12px;
+  color: var(--text-weaker);
+  padding: 0 4px;
+}
+.iris-event--group { display: block; }
+.iris-event--group > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  list-style: none;
+  cursor: pointer;
+}
+.iris-event--group > summary::-webkit-details-marker { display: none; }
+.iris-event--group > summary:hover .iris-event__text { color: var(--text-weak); }
+.iris-event__text { flex: 1; min-width: 0; }
+.iris-event__text b { font-weight: 500; color: var(--text-weak); }
+.iris-event__at { flex-shrink: 0; font-size: 11px; color: var(--text-weaker); font-variant-numeric: tabular-nums; }
+.iris-event--group ul { list-style: none; margin: 6px 0 2px 18px; padding: 0 0 0 10px; border-left: 1px solid var(--border-weaker-base); }
+.iris-event--group li { display: flex; gap: 8px; justify-content: space-between; padding: 2px 0; }
+.iris-card--elon .iris-card__compose { border-top: 1px solid var(--border-weaker-base); padding-top: 8px; align-items: end; }
+.iris-card--elon .iris-card__composetext { min-height: 40px; font-size: 13px; }
+.iris-send {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  background: #2563eb;
+  cursor: pointer;
+}
+.iris-send:disabled { cursor: default; opacity: 0.4; }
+.iris-send:hover:not(:disabled) { background: #1d4ed8; }
+.iris-quick[data-only] section[data-quick]:not([data-active]) { display: none; }
+.iris-quick[data-only] { min-width: 240px; }
+
+/* The old left-column rules sized the body for a column it shared with the checklist; in Elon's
+   layout the description owns the pane, so they are undone here. */
+.iris-card--elon .iris-card__body { overflow: hidden; }
+.iris-card--elon .iris-card__body .iris-card__read {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  min-height: 0;
+  margin: 0;
+  border-radius: 0;
+  padding: 24px 28px;
+}
+.iris-card--elon .iris-card__body .iris-card__read:hover { background: transparent; }
+.iris-card--elon .iris-card__body .iris-card__read:focus-visible { outline: none; }
+.iris-card--elon .iris-card__body .iris-card__textarea {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+  max-height: none;
+  field-sizing: fixed;
+  border: 0;
+  border-radius: 0;
+  padding: 24px 28px;
+  font-size: 16px;
+  line-height: 1.65;
+  background: transparent;
+}
