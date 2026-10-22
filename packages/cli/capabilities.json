@@ -8026,7 +8026,7 @@
     {
       "kind": "command",
       "name": "integrations",
-      "describe": "execute integration functions, V6 system tools, OAuth connect",
+      "describe": "manage integrations — connect, rotate, call, share, list, disconnect; list shows key age and last use",
       "aliases": [
         "int"
       ],

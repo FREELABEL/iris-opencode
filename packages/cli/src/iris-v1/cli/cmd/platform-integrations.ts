@@ -777,7 +777,7 @@ const IntegrationsExecCommand = cmd({
 export const PlatformIntegrationsCommand = cmd({
   command: "integrations",
   aliases: ["int", "connect", "apps"],
-  describe: "manage integrations — connect, call, share, list, disconnect",
+  describe: "manage integrations — connect, rotate, call, share, list, disconnect; list shows key age and last use",
   builder: (yargs) =>
     yargs
       .command(IntegrationsListCommand)
