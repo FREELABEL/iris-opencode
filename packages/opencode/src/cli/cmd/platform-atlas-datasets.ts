@@ -58,37 +58,17 @@ export function buildSummaryQuery(opts: { bloq?: number; groupBy?: string; sum?:
   return p
 }
 
-/** The distinct boards a slug lives on. More than one means an unpinned read spans them all. */
-export function sameSlugBloqs(rows: any[], slug: string): number[] {
-  const ids = new Set<number>()
-  for (const r of rows ?? []) {
-    if (r?.slug !== slug) continue
-    if (r?.bloq_id == null) continue
-    ids.add(Number(r.bloq_id))
-  }
-  return [...ids].sort((a, b) => a - b)
-}
-
 /**
- * Say out loud that a summary or an export is about to span more than one board. The server
- * cannot refuse an unpinned read (the CLI has always allowed one), but it must not be silent:
- * an aggregate that quietly includes another client's rows is the dangerous half of #190579.
+ * Which schema answered, when the caller did not pin a board — and how to pin the next read.
+ *
+ * `GET /atlas/schemas` returns only the latest version of each slug, so the CLI cannot count
+ * the boards a slug lives on. It can still do what `list` already does: name the resolved
+ * schema and say how to scope it. Silence here is the dangerous part of #190579 — a summary
+ * that spans two boards looks exactly like a summary of one.
  */
-async function warnIfSlugSpansBoards(slug: string, bloq: number | undefined): Promise<void> {
-  if (bloq != null) return
-  try {
-    const res = await irisFetch(`/api/v1/atlas/schemas`)
-    if (!res.ok) return
-    const body = (await res.json()) as any
-    const boards = sameSlugBloqs(firstArray(body?.data), slug)
-    if (boards.length > 1) {
-      prompts.log.warn(
-        `'${slug}' exists on ${boards.length} boards (${boards.join(", ")}). This read spans ALL of them — pin one with --bloq=<id>.`,
-      )
-    }
-  } catch {
-    /* a warning is not worth failing a read over */
-  }
+export function resolutionHint(slug: string, schemaId: number | null | undefined, bloq: number | undefined): string | null {
+  if (bloq != null || schemaId == null) return null
+  return `Resolved '${slug}' -> schema #${schemaId}. If you have this slug on more than one bloq, pin it with --bloq=<id>.`
 }
 
 // A schema's `settings` blob is not decoration — an ONBOARDING FLOW lives entirely
@@ -730,7 +710,6 @@ const RecordsSummaryCommand = cmd({
     prompts.intro(`◈  Dataset Summary: ${args.schema}${args.bloq != null ? ` (bloq ${args.bloq})` : ""}`)
     const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
 
-    await warnIfSlugSpansBoards(args.schema, args.bloq)
     const p = buildSummaryQuery({ bloq: args.bloq, groupBy: args["group-by"], sum: args.sum })
 
     const res = await irisFetch(`/api/v1/atlas/datasets/${args.schema}/summary?${p}`)
@@ -739,6 +718,9 @@ const RecordsSummaryCommand = cmd({
     const data = body?.data
 
     if (args.json) { await writeJson(data); prompts.outro("Done"); return }
+
+    const hint = resolutionHint(args.schema, data?.schema?.id, args.bloq)
+    if (hint) prompts.log.info(dim(hint))
 
     printDivider()
     console.log(`  ${bold("Total Records:")} ${data?.total_records ?? 0}`)
@@ -811,13 +793,14 @@ const ExportCommand = cmd({
     spinner.start("Fetching records…")
 
     try {
-      await warnIfSlugSpansBoards(args.schema, args.bloq)
       // Get schema for field labels — pinned too, or a shared slug would take its labels
       // from whichever board the server resolved first.
       const schemaRes = await irisFetch(`/api/v1/atlas/schemas/${args.schema}${args.bloq != null ? `?bloq_id=${args.bloq}` : ""}`)
       const schemaOk = await handleApiError(schemaRes, "Get schema"); if (!schemaOk) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       const schemaBody = (await schemaRes.json()) as any
       const schema = schemaBody?.data?.schema ?? schemaBody?.data
+      const hint = resolutionHint(args.schema, schema?.id, args.bloq)
+      if (hint) prompts.log.info(dim(hint))
 
       // Get records (paginate the full dataset with --all; otherwise capped by --limit)
       const { records, total, truncated } = await fetchDatasetRecords(args.schema, { limit: args.limit, all: args.all, bloq: args.bloq })

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { buildDatasetQuery, buildSummaryQuery, sameSlugBloqs } from "./platform-atlas-datasets"
+import { buildDatasetQuery, buildSummaryQuery, resolutionHint } from "./platform-atlas-datasets"
 
 /**
  * A dataset slug is unique per (user, bloq) — not per account. So the same slug can exist
@@ -44,25 +44,24 @@ describe("dataset reads carry the board pin", () => {
   })
 })
 
-describe("an ambiguous slug is visible before it is aggregated or exported", () => {
-  test("the same slug on two boards reports both board ids", () => {
-    const rows = [
-      { slug: "shared", bloq_id: 766 },
-      { slug: "shared", bloq_id: 754 },
-      { slug: "other", bloq_id: 1 },
-    ]
-    expect(sameSlugBloqs(rows, "shared")).toEqual([754, 766])
+describe("an unpinned read says which schema answered", () => {
+  /**
+   * `/api/v1/atlas/schemas` returns only the latest version of each slug, so the CLI cannot
+   * count the boards a slug lives on. It can still do the honest thing `list` already does:
+   * say which schema resolved and how to pin the next read. A summary that silently spans
+   * two boards is the dangerous half of #190579.
+   */
+  test("an unpinned read names the schema it resolved", () => {
+    const hint = resolutionHint("shared", 323, undefined)
+    expect(hint).toContain("#323")
+    expect(hint).toContain("--bloq")
   })
 
-  test("a slug on one board is not ambiguous", () => {
-    expect(sameSlugBloqs([{ slug: "solo", bloq_id: 38 }], "solo")).toEqual([38])
+  test("a pinned read has nothing to explain", () => {
+    expect(resolutionHint("shared", 323, 766)).toBeNull()
   })
 
-  test("an account-global schema reports no board", () => {
-    expect(sameSlugBloqs([{ slug: "global", bloq_id: null }], "global")).toEqual([])
-  })
-
-  test("a schema that is not there reports no boards", () => {
-    expect(sameSlugBloqs([{ slug: "other", bloq_id: 1 }], "missing")).toEqual([])
+  test("an unknown schema id produces no hint", () => {
+    expect(resolutionHint("shared", undefined, undefined)).toBeNull()
   })
 })
