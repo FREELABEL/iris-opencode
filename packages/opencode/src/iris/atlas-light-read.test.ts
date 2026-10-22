@@ -39,7 +39,7 @@ describe("fetchAtlas reads the board without bodies", () => {
 
   test("by default: one light read, and each row carries its preview, not a body", async () => {
     const r = await platform.fetchAtlas(42)
-    expect(asked).toEqual(["light=1&summary=1"])
+    expect(asked).toEqual(["light=1&summary=1&version=1"])
     const it = r.data.lists[0].items![0]
     expect(it.preview).toBe("the start of the body")
     expect(it.content).toBeUndefined()
@@ -47,14 +47,14 @@ describe("fetchAtlas reads the board without bodies", () => {
 
   test("search asks for bodies, because a search matches the body", async () => {
     const r = await platform.fetchAtlas(42, { bodies: true })
-    expect(asked).toEqual(["no_searchable_content=1&summary=1"])
+    expect(asked).toEqual(["no_searchable_content=1&summary=1&version=1"])
     expect(r.data.lists[0].items![0].content).toBe("the whole body")
   })
 
   test("an fl-api without previews: the board is read again with bodies, so no row goes blank", async () => {
     previews = false
     const r = await platform.fetchAtlas(42)
-    expect(asked).toEqual(["light=1&summary=1", "no_searchable_content=1&summary=1"])
+    expect(asked).toEqual(["light=1&summary=1&version=1", "no_searchable_content=1&summary=1&version=1"])
     expect(r.data.lists[0].items![0].content).toBe("the whole body")
   })
 
@@ -63,7 +63,7 @@ describe("fetchAtlas reads the board without bodies", () => {
     await platform.fetchAtlas(42)
     asked = []
     await platform.fetchAtlas(42)
-    expect(asked).toEqual(["no_searchable_content=1&summary=1"])
+    expect(asked).toEqual(["no_searchable_content=1&summary=1&version=1"])
   })
 
   test("an empty preview is a real answer, not a missing one", () => {

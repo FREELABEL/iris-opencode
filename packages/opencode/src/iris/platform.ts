@@ -298,6 +298,11 @@ export function resetRecentBloqs() {
 export interface AtlasItem {
   id: number
   title: string
+  /**
+   * fl-api's hash of everything this card's face depends on (#190231 phase 3) — what lets a
+   * refresh fetch only the cards that moved. Absent on an fl-api that predates it.
+   */
+  rev?: string
   type?: string
   status?: string
   description?: string
@@ -376,6 +381,22 @@ export function filterAtlas(lists: AtlasList[], query: string): AtlasList[] {
  * The card-face fields of one fl-api item (#189806). Summary fields only when fl-api sent them —
  * an absent count is "not measured", never 0.
  */
+/** One fl-api card as the panel reads it — shared by the whole-board read and the changed-cards read. */
+export function atlasItemOf(i: any): AtlasItem {
+  return {
+    id: i.id,
+    title: i.title ?? "Untitled",
+    type: i.type ?? undefined,
+    status: i.status ?? undefined,
+    description: i.description || undefined,
+    content: i.content || undefined,
+    createdAt: typeof i.created_at === "string" ? i.created_at : undefined,
+    updatedAt: typeof i.updated_at === "string" ? i.updated_at : undefined,
+    ...(typeof i.rev === "string" ? { rev: i.rev } : {}),
+    ...cardFace(i),
+  }
+}
+
 export function cardFace(i: any): Partial<AtlasItem> {
   const out: Partial<AtlasItem> = {}
   if (typeof i?.due_date === "string" && i.due_date) out.dueDate = i.due_date
@@ -441,7 +462,7 @@ export function lightReadUsable(raw: any): boolean {
 export async function fetchAtlas(
   bloqId: number,
   opts: { bodies?: boolean } = {},
-): Promise<PlatformResult<{ lists: AtlasList[]; containsPhi?: boolean }>> {
+): Promise<PlatformResult<{ lists: AtlasList[]; containsPhi?: boolean; version?: string }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { lists: [] } }
 
@@ -467,33 +488,118 @@ export async function fetchAtlas(
       return { raw: json?.data ?? json }
     }
     const light = !opts.bodies && Date.now() >= previewsUnsupportedUntil
-    let got = await read(light ? "light=1&summary=1" : "no_searchable_content=1&summary=1")
+    // version=1 (#190231 phase 3): the board's version and each card's rev. Ignored by an older fl-api.
+    let got = await read(light ? "light=1&summary=1&version=1" : "no_searchable_content=1&summary=1&version=1")
     if (light && "raw" in got && !lightReadUsable(got.raw)) {
       previewsUnsupportedUntil = Date.now() + PREVIEW_RECHECK_MS
-      got = await read("no_searchable_content=1&summary=1")
+      got = await read("no_searchable_content=1&summary=1&version=1")
     }
     if (!("raw" in got)) return { measured: false, reason: got.error, data: { lists: [] } }
     const raw = got.raw
-    const lists: AtlasList[] = (raw?.lists ?? []).map((l: any) => ({
-      id: l.id,
-      name: l.name,
-      items: (l.items ?? []).map((i: any) => ({
-        id: i.id,
-        title: i.title ?? "Untitled",
-        type: i.type ?? undefined,
-        status: i.status ?? undefined,
-        description: i.description || undefined,
-        content: i.content || undefined,
-        createdAt: typeof i.created_at === "string" ? i.created_at : undefined,
-        updatedAt: typeof i.updated_at === "string" ? i.updated_at : undefined,
-        ...cardFace(i),
-      })),
-    }))
+    const lists: AtlasList[] = (raw?.lists ?? []).map((l: any) => ({ id: l.id, name: l.name, items: (l.items ?? []).map(atlasItemOf) }))
     // fl-api says per board whether it holds patient data; the local copy needs to know (#190231 phase 1).
-    return { measured: true, data: { lists, containsPhi: raw?.contains_phi === true } }
+    // `version` (phase 3) is what the next refresh asks "changed since?" with.
+    return {
+      measured: true,
+      data: { lists, containsPhi: raw?.contains_phi === true, ...(typeof raw?.version === "string" ? { version: raw.version } : {}) },
+    }
   } catch (e) {
     return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { lists: [] } }
   }
+}
+
+/**
+ * WHAT CHANGED ON A BOARD, NOT THE WHOLE BOARD AGAIN (#190231 phase 3).
+ *
+ * Given the copy we hold (its fl-api `version` and the lists with each card's `rev`), ask fl-api
+ * `if_version`: it answers `unchanged` (a few bytes), or the board's SKELETON — every list and,
+ * per card, only its id and rev. Cards whose rev differs from ours are fetched by id; the rest
+ * come from the copy, placed where the skeleton says. A one-card edit on a 90-card board costs
+ * the skeleton plus that card, not 0.8 MB.
+ *
+ * `full` means "do the whole read instead": an fl-api without versions, a copy without revs, a
+ * skeleton our copy cannot fill, or so many changed cards that one read is cheaper.
+ */
+export type AtlasChanges =
+  | { kind: "unchanged"; version: string }
+  | { kind: "merged"; version: string; lists: AtlasList[]; containsPhi: boolean; fetched: number }
+  | { kind: "full" }
+  | { kind: "error"; reason: string }
+
+/** Past this share of the board changed, one whole read is cheaper than skeleton + ids. */
+const CHANGED_SHARE_FOR_FULL = 0.5
+const MAX_IDS = 500
+
+export async function fetchAtlasChanges(bloqId: number, have: { version: string; lists: AtlasList[] }): Promise<AtlasChanges> {
+  const userId = await resolveUserId()
+  if (!userId) return { kind: "error", reason: `not signed in (token: ${tokenSource()})` }
+  try {
+    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}?if_version=${encodeURIComponent(have.version)}`)
+    if (!res.ok) return { kind: "error", reason: `fl-api ${res.status}` }
+    const json = (await res.json()) as any
+    const skel = json?.data ?? json
+    if (typeof skel?.version !== "string") return { kind: "full" } // an fl-api without versions
+    if (skel.unchanged === true) return { kind: "unchanged", version: skel.version }
+    if (!Array.isArray(skel.lists)) return { kind: "full" }
+
+    const held = new Map<number, AtlasItem>()
+    for (const l of have.lists) for (const i of l.items) held.set(i.id, i)
+    const wanted: number[] = []
+    let total = 0
+    for (const l of skel.lists)
+      for (const i of l?.items ?? []) {
+        total++
+        const mine = held.get(i.id)
+        if (!mine || !mine.rev || mine.rev !== i.rev) wanted.push(i.id)
+      }
+    if (wanted.length > MAX_IDS || (total > 0 && wanted.length / total > CHANGED_SHARE_FOR_FULL)) return { kind: "full" }
+
+    const fetched = new Map<number, AtlasItem>()
+    if (wanted.length) {
+      const q = Date.now() >= previewsUnsupportedUntil ? "light=1&summary=1" : "no_searchable_content=1&summary=1"
+      const r = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}?ids=${wanted.join(",")}&${q}`)
+      if (!r.ok) return { kind: "error", reason: `fl-api ${r.status}` }
+      const j = (await r.json()) as any
+      for (const l of (j?.data ?? j)?.lists ?? []) for (const i of l?.items ?? []) fetched.set(i.id, atlasItemOf(i))
+    }
+    const lists = mergeSkeleton(skel.lists, held, fetched)
+    if (!lists) return { kind: "full" }
+    return { kind: "merged", version: skel.version, lists, containsPhi: skel.contains_phi === true, fetched: wanted.length }
+  } catch (e) {
+    return { kind: "error", reason: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+/**
+ * The board as the skeleton lays it out: each card from `fetched` when it moved, else from what we
+ * held — only when the held rev still matches. `undefined` when any card can be filled from
+ * neither (a card changed between the two requests): the caller does a whole read instead of
+ * guessing.
+ */
+export function mergeSkeleton(
+  skeleton: { id: number; name?: string; items?: { id: number; rev?: string | null }[] }[],
+  held: Map<number, AtlasItem>,
+  fetched: Map<number, AtlasItem>,
+): AtlasList[] | undefined {
+  const out: AtlasList[] = []
+  for (const l of skeleton) {
+    const items: AtlasItem[] = []
+    for (const s of l.items ?? []) {
+      const f = fetched.get(s.id)
+      if (f && f.rev === s.rev) {
+        items.push(f)
+        continue
+      }
+      const h = held.get(s.id)
+      if (h && h.rev && h.rev === s.rev) {
+        items.push(h)
+        continue
+      }
+      return undefined
+    }
+    out.push({ id: l.id, name: l.name ?? "", items })
+  }
+  return out
 }
 
 export interface HiveNode {

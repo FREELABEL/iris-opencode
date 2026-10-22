@@ -2765,20 +2765,37 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   outline: none;
 }
 /* The board drew from this machine's copy (#190231 phase 1): "Updating…", or offline. */
-.iris-atlas-copy {
+/* The sync chip (#190231 phase 2): what the view on screen is, against the server. Quiet when
+   synced; it only asks for attention when what you see is not current. */
+.iris-sync {
   height: 22px;
   padding: 0 8px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   border-radius: 6px;
   font-size: 11px;
   color: var(--text-weak);
-  background: var(--background-element);
+  background: transparent;
   cursor: pointer;
   white-space: nowrap;
 }
-.iris-atlas-copy[data-offline] {
+.iris-sync:hover { background: var(--background-weak); color: var(--text-strong); }
+.iris-sync__dot { width: 6px; height: 6px; border-radius: 50%; background: var(--icon-success-base, var(--text-weak)); }
+.iris-sync[data-state="checking"] .iris-sync__dot { background: var(--text-weak); animation: iris-sync-pulse 1.2s ease-in-out infinite; }
+.iris-sync[data-state="offline"],
+.iris-sync[data-state="error"] {
   color: var(--text-strong);
+  background: var(--background-weak);
   box-shadow: inset 0 0 0 1px var(--border-warning-base, var(--border-base));
 }
+.iris-sync[data-state="offline"] .iris-sync__dot,
+.iris-sync[data-state="error"] .iris-sync__dot { background: var(--icon-warning-base, var(--text-strong)); }
+@keyframes iris-sync-pulse { 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .iris-sync[data-state="checking"] .iris-sync__dot { animation: none; } }
+/* A product tab showing something that is not current (offline, or the server refused). */
+.iris-tabdot { width: 6px; height: 6px; border-radius: 50%; background: var(--icon-warning-base, var(--text-strong)); flex-shrink: 0; }
 .iris-notify {
   display: flex;
   flex-direction: column;

@@ -77,6 +77,7 @@ import {
 import { setSessionHandoff } from "@/pages/session/handoff"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { IrisProductIcon } from "@/components/session/iris-product-icon"
+import { needsAttention, surfaceSync, syncLabel } from "@/components/session/iris-surface-store"
 import { SessionFileBrowserTab, type SessionFileBrowserState } from "@/pages/session/v2/session-file-browser-tab"
 
 type ReviewDiff = FileDiffInfo | SnapshotFileDiff | VcsFileDiff
@@ -322,6 +323,10 @@ export function SessionSidePanel(props: {
           <div class="flex items-center gap-1.5">
             <IrisProductIcon id={id} />
             <div>{irisStripTabs().find((t) => t.id === id)?.label ?? id}</div>
+            {/* Showing something that is not current — offline, or the server refused (#190231 phase 2). */}
+            <Show when={needsAttention(surfaceSync(id))}>
+              <span class="iris-tabdot" title={syncLabel(surfaceSync(id), Date.now())?.text} />
+            </Show>
           </div>
         </Tabs.Trigger>
       )}

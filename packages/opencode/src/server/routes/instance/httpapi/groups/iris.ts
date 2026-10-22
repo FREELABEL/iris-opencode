@@ -115,6 +115,12 @@ export const AtlasResponse = Schema.Struct({
   offline: Schema.optional(
     described(Schema.Boolean, "True when fl-api could not be reached and the saved copy is shown instead. `reason` says why."),
   ),
+  sync: Schema.optional(
+    described(
+      Schema.Literals(["unchanged", "delta", "full"]),
+      "How a refresh reached fl-api (#190231 phase 3): unchanged = nothing moved, no board sent; delta = only changed cards fetched; full = the whole board.",
+    ),
+  ),
   lists: Schema.Array(
     Schema.Struct({
       id: Schema.Finite,
