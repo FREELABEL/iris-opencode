@@ -41,6 +41,8 @@ export interface BoardCopy<L = unknown> {
   copiedAt: string
   containsPhi: boolean
   lists: L[]
+  /** fl-api's board version when this copy was taken (#190231 phase 3) — what a refresh asks "changed since?" with. */
+  version?: string
 }
 
 /** ~/.iris/atlas, or IRIS_ATLAS_HOME (tests). */
@@ -142,7 +144,7 @@ export function readBoardCopy<L>(userId: number, bloqId: number): BoardCopy<L> |
 }
 
 /** Save (or, when the board may not be kept, delete) the copy for this board. */
-export function writeBoardCopy<L>(userId: number, bloqId: number, containsPhi: boolean, lists: L[]): boolean {
+export function writeBoardCopy<L>(userId: number, bloqId: number, containsPhi: boolean, lists: L[], version?: string): boolean {
   const s = readLocalCopySettings()
   const p = boardFile(userId, bloqId)
   if (!mayKeep(containsPhi, s)) {
@@ -150,7 +152,7 @@ export function writeBoardCopy<L>(userId: number, bloqId: number, containsPhi: b
     return false
   }
   mkdirPrivate(accountDir(userId))
-  const copy: BoardCopy<L> = { bloqId, userId, copiedAt: new Date().toISOString(), containsPhi, lists }
+  const copy: BoardCopy<L> = { bloqId, userId, copiedAt: new Date().toISOString(), containsPhi, lists, ...(version ? { version } : {}) }
   // Write then rename: a crash mid-write must not leave a half file that reads as "no lists".
   const tmp = `${p}.${process.pid}.tmp`
   fs.writeFileSync(tmp, JSON.stringify(copy), { mode: 0o600 })

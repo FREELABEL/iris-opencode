@@ -69,8 +69,49 @@ export function atlasFingerprint(lists: LiteList[]): string {
   return String(Bun.hash(parts.join("\n")))
 }
 
+/*
+ * THE CHECK ASKS FOR A VERSION, NOT THE BOARD (#190231 phase 3). fl-api versions a board:
+ * `?if_version=V` answers `unchanged` in a few bytes, and only a changed board sends its skeleton
+ * (ids + revs). The fingerprint below — the whole light board, ~0.8 MB on a 90-card board, every
+ * 10 s — stays as the fallback for an fl-api that predates versions, rechecked every 10 minutes.
+ */
+let versionsUnsupportedUntil = 0
+const VERSION_RECHECK_MS = 10 * 60_000
+
+/** Tests only. */
+export function resetVersionSupport() {
+  versionsUnsupportedUntil = 0
+}
+
+/** The board's version as a fingerprint (`v:` + fl-api's version), or null when it cannot be had. */
+async function fetchVersion(bloqId: number, last: string | undefined): Promise<string | null | "unsupported"> {
+  const userId = await resolveUserId()
+  if (!userId) return null
+  try {
+    const held = last?.startsWith("v:") ? last.slice(2) : undefined
+    const q = held ? `if_version=${encodeURIComponent(held)}` : "skeleton=1"
+    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}?${q}`)
+    if (!res.ok) return null
+    const json = (await res.json()) as any
+    const raw = json?.data ?? json
+    if (typeof raw?.version !== "string") return "unsupported"
+    return `v:${raw.version}`
+  } catch {
+    return null
+  }
+}
+
+export async function fetchFingerprint(bloqId: number, last?: string): Promise<string | null> {
+  if (Date.now() >= versionsUnsupportedUntil) {
+    const v = await fetchVersion(bloqId, last)
+    if (v !== "unsupported") return v
+    versionsUnsupportedUntil = Date.now() + VERSION_RECHECK_MS
+  }
+  return fetchLightFingerprint(bloqId)
+}
+
 /** `light=1` drops bodies — measured 61 KB for board 628 against 413 KB with them. */
-async function fetchFingerprint(bloqId: number): Promise<string | null> {
+async function fetchLightFingerprint(bloqId: number): Promise<string | null> {
   const userId = await resolveUserId()
   if (!userId) return null
   try {
@@ -120,7 +161,7 @@ async function check(bloqId: number, w: Watcher) {
   w.inFlight = true
   if (w.timer) clearTimeout(w.timer)
   try {
-    const fp = await fetchFingerprint(bloqId)
+    const fp = await fetchFingerprint(bloqId, w.last)
     // An unreachable check is NOT a change — it keeps the last known fingerprint.
     if (fp && !w.stopped) {
       if (w.last !== undefined && fp !== w.last) emit(w, { type: "change", at: new Date().toISOString() })
