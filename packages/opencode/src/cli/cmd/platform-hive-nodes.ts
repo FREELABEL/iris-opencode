@@ -71,16 +71,42 @@ export async function fetchNodes(userId: number): Promise<HiveNode[]> {
   return (data.nodes ?? []).map(redactNode)
 }
 
+/**
+ * Exact id first, then name (case-insensitive), then id prefix, then name prefix.
+ *
+ * #190299: a machine re-registered keeps its name, so one name can belong to a live node and a
+ * dead one. "First listed" picked the dead MacBook (last heartbeat 2026-09-13) over the live one
+ * beside it. Among nodes sharing a name: online first, then the most recent heartbeat.
+ * `sameName` says how many matched, so callers can say the name was ambiguous.
+ */
+export function pickNode(nodes: HiveNode[], target: string): { node: HiveNode | null; sameName: number } {
+  const exact = nodes.find((n) => n.id === target)
+  if (exact) return { node: exact, sameName: 1 }
+  const t = target.toLowerCase()
+  const best = (list: HiveNode[]) =>
+    [...list].sort(
+      (a, b) =>
+        Number(b.connection_status === "online") - Number(a.connection_status === "online") ||
+        Date.parse(b.last_heartbeat_at ?? "") - Date.parse(a.last_heartbeat_at ?? "") ||
+        0,
+    )[0] ?? null
+  for (const match of [
+    (n: HiveNode) => n.name.toLowerCase() === t,
+    (n: HiveNode) => n.id.startsWith(target),
+    (n: HiveNode) => n.name.toLowerCase().startsWith(t),
+  ]) {
+    const hits = nodes.filter(match)
+    if (hits.length) return { node: best(hits), sameName: hits.length }
+  }
+  return { node: null, sameName: 0 }
+}
+
 export async function resolveNode(userId: number, target: string): Promise<HiveNode | null> {
-  const nodes = await fetchNodes(userId)
-  // Exact ID match first, then name (case-insensitive), then prefix
-  return (
-    nodes.find((n) => n.id === target) ??
-    nodes.find((n) => n.name.toLowerCase() === target.toLowerCase()) ??
-    nodes.find((n) => n.id.startsWith(target)) ??
-    nodes.find((n) => n.name.toLowerCase().startsWith(target.toLowerCase())) ??
-    null
-  )
+  const { node, sameName } = pickNode(await fetchNodes(userId), target)
+  if (node && sameName > 1) {
+    console.error(dim(`  ${sameName} nodes match "${target}" — using ${node.id} (${node.connection_status}, heartbeat ${timeAgo(node.last_heartbeat_at)}). Pass the id to choose another.`))
+  }
+  return node
 }
 
 /**
