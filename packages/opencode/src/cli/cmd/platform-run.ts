@@ -748,6 +748,20 @@ export function isFailedResult(result: any): boolean {
   return result.success !== true && !!result.error
 }
 
+/**
+ * An upstream WAF answers with a whole HTML page, and the CLI printed it verbatim:
+ * `Composio action failed: <!DOCTYPE html> … Attention Required! | Cloudflare …` (#190575).
+ * The refusal is correct; the markup is not an error message. Keep one line, keep the Ray ID
+ * (the only thing support can act on), drop the document.
+ */
+export function summarizeUpstreamError(raw: string): string {
+  if (!/<!DOCTYPE|<html[\s>]|<\/html>/i.test(raw)) return raw
+  const ray = raw.match(/Ray ID:\s*([a-f0-9]+)/i)?.[1]
+  const blocked = /cloudflare|attention required/i.test(raw)
+  const head = blocked ? "upstream blocked the request (Cloudflare)" : "upstream returned an HTML error page"
+  return `${head}${ray ? ` — Ray ID ${ray}` : ""}. The request was not executed.`
+}
+
 /** The function-name guess failed upstream ("Tool GOOGLEDRIVE_FIND_FOLDER not found"). */
 export function isUnknownFunctionError(result: any): boolean {
   const err = typeof result?.error === "string" ? result.error : JSON.stringify(result?.error ?? "")
@@ -1004,10 +1018,18 @@ const ListToolsCommand = cmd({
 const ListIntegrationsCommand = cmd({
   command: "list-integrations",
   describe: "list known integration types",
-  async handler() {
+  // The one list command without --json, so scripting it meant screen-scraping (#190578).
+  builder: (y) => y.option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    const { entries, degraded } = await loadCatalog()
+    if (args.json) {
+      // `degraded` is part of the answer: a list served from the binary's built-in copy is
+      // not the registry, and a caller that cannot see that will treat it as complete.
+      await writeJson({ integrations: entries, count: entries.length, degraded })
+      return
+    }
     UI.empty()
     prompts.intro("◈  Available Integrations")
-    const { entries, degraded } = await loadCatalog()
     if (degraded) prompts.log.warn(`Showing this binary's built-in list only — could not read the registry (${degraded}).`)
     printDivider()
     for (const e of entries) console.log(`  ${highlight(e.type)}`)
@@ -2383,14 +2405,21 @@ const ExecCommand = cmd({
           return
         }
 
-        const withHint = (result: any) =>
-          isFailedResult(result) && isUnknownFunctionError(result) && known
+        const withHint = (result: any) => {
+          // A WAF page is not an error message (#190575). Summarise before either surface —
+          // the text output and the JSON — so neither carries a document.
+          const cleaned =
+            isFailedResult(result) && typeof result?.error === "string"
+              ? { ...result, error: summarizeUpstreamError(result.error) }
+              : result
+          return isFailedResult(cleaned) && isUnknownFunctionError(cleaned) && known
             ? {
-                ...result,
+                ...cleaned,
                 hint: `${fn} is not a ${target} function. Use one of: ${known.map((f) => f.name).join(", ")}`,
                 available_functions: known,
               }
-            : result
+            : cleaned
+        }
         if (args.json) {
           const result = withHint(outcome.result)
           await writeJson(result && typeof result === "object" ? { ...result, client_node: os.hostname() } : result)
