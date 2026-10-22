@@ -6,6 +6,7 @@ import {
   IntegrationsUnshareCommand,
   IntegrationsDisconnectCommand,
   IntegrationsSetupNativeCommand,
+  IntegrationsRotateCommand,
 } from "./platform-integrations"
 import * as prompts from "./clack"
 import { UI } from "../ui"
@@ -2820,6 +2821,8 @@ export const PlatformRunCommand = cmd({
       .command(IntegrationsUnshareCommand)
       .command(IntegrationsDisconnectCommand)
       .command(IntegrationsSetupNativeCommand)
+      // #190525 — replace a stored key, test it, keep the old one if the test fails.
+      .command(IntegrationsRotateCommand)
       .command(PathwaysCommand)
       .demandCommand(),
   async handler() {},
