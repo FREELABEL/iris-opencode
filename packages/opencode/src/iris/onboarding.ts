@@ -369,6 +369,10 @@ const APP_STEPS = new Set([
 
 export async function track(event: string, label?: string): Promise<void> {
   if (!APP_STEPS.has(event)) return
+  // Our own release checks launch the real app; they must not count as installs (#190488).
+  // Same switch, and the same reading of it, as the desktop shell's onboarding.rs.
+  const off = process.env.IRIS_NO_TELEMETRY?.trim()
+  if (off && off !== "0") return
   let visitor: string | undefined
   try {
     visitor = readFileSync(path.join(homedir(), ".iris", "install-id"), "utf8").trim()
