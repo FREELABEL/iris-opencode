@@ -135,6 +135,10 @@ export HOME="$FRESH_HOME"
 export XDG_CONFIG_HOME="$FRESH_HOME/.config"
 export XDG_DATA_HOME="$FRESH_HOME/.local/share"
 export XDG_STATE_HOME="$FRESH_HOME/.local/state"
+# The throwaway HOME above mints a new install id on every run, so without this each release
+# check was counted as a new macOS install that reached sign-in and gave up — 48 of 71 macOS
+# "installs" over two weeks (#190488). The app and its sidecar both honour this switch.
+export IRIS_NO_TELEMETRY=1
 
 step "5. Run it — a real round-trip, not a status code"
 # A bundle built for another architecture cannot be booted here, and Rosetta does NOT help:
