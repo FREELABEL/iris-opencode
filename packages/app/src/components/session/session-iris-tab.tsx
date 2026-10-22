@@ -52,6 +52,7 @@ import {
   visibleTabs,
 } from "./iris-panel-nav"
 import { irisNavRequest, clearIrisNav, setIrisPanelView } from "./iris-nav"
+import { heldPayload, holdPayload, setSurfaceSync, surfaceSync, syncLabel, syncOfPayload } from "./iris-surface-store"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { IrisRooms } from "./iris-rooms"
 import { IrisAgentLive } from "./iris-agent-live"
@@ -1438,8 +1439,18 @@ export function SessionIrisTab() {
       if (SELF_PANES.has(resolved().pane)) return undefined
       return id ? ([base(), id, surface(), resolved().sub?.id ?? "", page(), applied()] as SurfaceKey) : undefined
     },
-    async ([, id, , , pageNo, q], info): Promise<SurfacePayload> => {
+    async ([b, id, surf, sub, pageNo, q], info): Promise<SurfacePayload> => {
       const { pane: which, path } = resolved()
+      /*
+       * BACK TO A VIEW YOU HAD: draw what we held, at once (#190231 phase 2). The effect below
+       * (`__held`) refreshes it straight away; the chip says "Checking…" until it lands. Page 1
+       * only — "Load more" is a choice made on that visit, not something to replay.
+       */
+      const heldKey = `${b}|${id}|${surf}|${sub}|${q}`
+      if (!info.refetching && pageNo === 1) {
+        const h = heldPayload<SurfacePayload>(heldKey)
+        if (h) return { ...h, __held: true, __pane: which } as SurfacePayload
+      }
       const url = path(id)
       const sep = url.includes("?") ? "&" : "?"
       // The query goes to the SERVER, which filters the whole board before paging. Filtering
@@ -1495,7 +1506,9 @@ export function SessionIrisTab() {
       )
       // Stamped with the pane it was fetched FOR, so a held payload can be told apart from an
       // answer about what is currently on screen. See surfaceView.
-      const next = { ...((await res.json()) as SurfacePayload), __pane: which } as SurfacePayload
+      const next = { ...((await res.json()) as SurfacePayload), __pane: which, __at: Date.now() } as SurfacePayload
+      // Only an answer worth coming back to is held: data, not an error, not an offline copy.
+      if (pageNo === 1 && !whole && (next as any).measured !== false && !(next as any).offline) holdPayload(heldKey, next)
 
       // APPEND rather than replace when we asked for a later page of the same surface. The
       // previous value is the earlier pages; dropping it would make "Load more" a "Replace".
@@ -1528,25 +1541,28 @@ export function SessionIrisTab() {
   const current = createMemo(() => settled(data))
 
   /**
-   * Drew from the saved copy? Bring it up to date at once (#190231 phase 1). A refetch reads
-   * fl-api (see `fresh` above), and the copy stays on screen until the answer lands. Offline
-   * answers are not chased: the copy is all there is, and the indicator says so.
+   * Drew from something we held — the board's saved copy (#190231 phase 1) or this panel's store
+   * (phase 2)? Bring it up to date at once. A refetch reads the server (and fl-api, see `fresh`
+   * above), and what we held stays on screen until the answer lands. Offline answers are not
+   * chased: the copy is all there is, and the chip says so.
    */
   createEffect(
     on(current, (d) => {
       const x = d as any
-      if (x?.__pane === "atlas" && x.source === "copy" && !x.offline) void refetchSurface()
+      if (!x || x.offline) return
+      if (x.__held || (x.__pane === "atlas" && x.source === "copy")) void refetchSurface()
     }),
   )
-  /** "Saved copy · 2m ago" / "Offline · copy from 2m ago" — empty when the board is live. */
-  const copyNote = createMemo(() => {
-    const x = current() as any
-    if (x?.__pane !== "atlas" || x.source !== "copy") return null
-    const mins = x.copiedAt ? Math.max(0, Math.round((Date.now() - Date.parse(x.copiedAt)) / 60_000)) : null
-    const ago = mins == null ? "" : mins < 1 ? "just now" : mins < 60 ? `${mins}m ago` : `${Math.round(mins / 60)}h ago`
-    return x.offline
-      ? { text: `Offline · copy from ${ago}`, title: `Could not reach IRIS (${x.reason ?? "no connection"}). Showing this machine's copy from ${ago}.`, offline: true }
-      : { text: "Updating…", title: `Showing this machine's copy from ${ago} while the board updates.`, offline: false }
+
+  /**
+   * THE SYNC STATE of what is on screen, published to the shared store so the chip below and the
+   * product tab strip read the same answer (#190231 phase 2). Panes that fetch for themselves
+   * (Hive, Rooms…) say nothing here rather than borrow another view's state.
+   */
+  createEffect(() => {
+    const d = current() as any
+    if (!d || d.__pane !== pane() || SELF_PANES.has(pane())) return
+    setSurfaceSync(surface(), syncOfPayload(d, data.loading))
   })
 
   /** The rows of whichever pane is active — every response names its own array. */
@@ -1743,6 +1759,13 @@ export function SessionIrisTab() {
   const [now, setNow] = createSignal(Date.now())
   const clock = setInterval(() => setNow(Date.now()), 60_000)
   onCleanup(() => clearInterval(clock))
+  /** "Checking…" · "Synced · 2m ago" · "Offline · copy from 12m ago" · "Couldn't update" (#190231 phase 2). Declared after `now`: a memo runs when created. */
+  const syncChip = createMemo(() => {
+    if (SELF_PANES.has(pane())) return null
+    const s = surfaceSync(surface())
+    const label = syncLabel(s, now())
+    return label && s ? { ...label, state: s.state } : null
+  })
   /*
    * Who "Assigned: Me" means (#189798). A signal, not a resource: atlasRows reads it, and a
    * resource read before its first value suspends the boundary around the whole side panel.
@@ -3052,6 +3075,21 @@ export function SessionIrisTab() {
                 )}
               </For>
             </div>
+            <Show when={syncChip()}>
+              {(c) => (
+                <button
+                  type="button"
+                  class="iris-sync"
+                  data-state={c().state}
+                  title={c().title}
+                  aria-live="polite"
+                  onClick={() => void refetchSurface()}
+                >
+                  <span class="iris-sync__dot" aria-hidden="true" />
+                  {c().text}
+                </button>
+              )}
+            </Show>
             <button
               type="button"
               class="iris-focusbtn"
@@ -3248,17 +3286,6 @@ export function SessionIrisTab() {
               </button>
             )
           })()}
-          <Show when={copyNote()}>
-            <button
-              type="button"
-              class="iris-atlas-copy"
-              data-offline={copyNote()!.offline ? "" : undefined}
-              title={copyNote()!.title}
-              onClick={() => dialog.show(() => <IrisLocalCopySettings doFetch={doFetch} onChanged={() => void refetchSurface()} />)}
-            >
-              {copyNote()!.text}
-            </button>
-          </Show>
           <button
             type="button"
             class="iris-atlas-bell"
