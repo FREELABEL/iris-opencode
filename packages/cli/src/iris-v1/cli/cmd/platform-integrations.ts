@@ -215,7 +215,11 @@ export const IntegrationsRotateCommand = cmd({
         const body = await res.json()
         if (args.json) { await writeJson({ ...body, store: store.label }); return }
         console.log(`${success("✓")} rotated integration #${args.id} in ${store.label}`)
-        console.log(dim("  The new credential passed its connection test; the old one was kept on failure."))
+        if (body.verified === false) {
+          console.log(dim("  Saved. This integration type has no live connection test, so the new key was not verified."))
+        } else {
+          console.log(dim("  The new credential passed its connection test."))
+        }
         if (body.max_age_days) console.log(dim(`  Rotation warning threshold: ${body.max_age_days} days`))
         prompts.outro("Done")
         return
