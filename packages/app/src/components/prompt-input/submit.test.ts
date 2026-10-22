@@ -25,7 +25,24 @@ const optimistic: Array<{
 const optimisticSeeded: boolean[] = []
 const storedSessions: Record<string, Array<{ id: string; title?: string }>> = {}
 const promoted: Array<{ directory: string; sessionID: string }> = []
-const sentShell: Array<{ sessionID: string; id?: string; command: string }> = []
+// Shell mode runs commands through the terminal routes now (#190530), not session.shell.
+const terminalStarts: Array<{ url: string; directory: string | null; command: string }> = []
+const terminalFetch = async (url: string | URL | Request, init?: RequestInit) => {
+  const href = String(url)
+  if (href.endsWith("/terminal") && init?.method === "POST") {
+    const headers = new Headers(init.headers)
+    terminalStarts.push({
+      url: href,
+      directory: decodeURIComponent(headers.get("x-opencode-directory") ?? ""),
+      command: JSON.parse(String(init.body)).command,
+    })
+    return new Response(JSON.stringify({ id: `run-${terminalStarts.length}` }), { status: 200 })
+  }
+  return new Response(
+    JSON.stringify({ status: "exited", output: "", next: 0, truncated: false, exitCode: 0, error: null }),
+    { status: 200 },
+  )
+}
 const syncedDirectories: string[] = []
 const promotedDrafts: Array<{ draftID: string; server: string; sessionId: string }> = []
 const sentPrompts: string[] = []
@@ -99,9 +116,6 @@ const clientFor = (directory: string) => {
         },
         command: async (input: unknown) => {
           sentCommands.push(input)
-        },
-        shell: async (input: { sessionID: string; id?: string; command: string }) => {
-          sentShell.push(input)
         },
       },
     },
@@ -264,7 +278,7 @@ beforeAll(async () => {
 
   mock.module("@/context/platform", () => ({
     usePlatform: () => ({
-      fetch: fetch,
+      fetch: terminalFetch,
     }),
   }))
 
@@ -294,7 +308,7 @@ beforeEach(() => {
   promptValue = [{ type: "text", content: "ls", start: 0, end: 2 }]
   params = {}
   search = {}
-  sentShell.length = 0
+  terminalStarts.length = 0
   syncedDirectories.length = 0
   selected = "/repo/worktree-a"
   variant = undefined
@@ -346,9 +360,9 @@ describe("prompt submit worktree selection", () => {
         location: { directory: "/repo/worktree-b" },
       },
     ])
-    expect(sentShell).toEqual([
-      expect.objectContaining({ sessionID: "session-1", id: expect.stringMatching(/^evt_/), command: "ls" }),
-      expect.objectContaining({ sessionID: "session-2", id: expect.stringMatching(/^evt_/), command: "ls" }),
+    expect(terminalStarts).toEqual([
+      { url: "http://localhost:4096/session/session-1/terminal", directory: "/repo/worktree-a", command: "ls" },
+      { url: "http://localhost:4096/session/session-2/terminal", directory: "/repo/worktree-b", command: "ls" },
     ])
     expect(syncedDirectories).toEqual(["/repo/worktree-a", "/repo/worktree-a", "/repo/worktree-b", "/repo/worktree-b"])
     expect(serverSessionSyncs).toBe(0)

@@ -42,7 +42,8 @@ import { Truncate } from "@/tool/truncate"
 import { Image } from "@/image/image"
 import * as AttachmentText from "./attachment-text"
 import { Process } from "@/util/process"
-import { Cause, Effect, Exit, Latch, Layer, Option, Scope, Context, Schema, Types } from "effect"
+import { Cause, Effect, Exit, Fiber, Latch, Layer, Option, Scope, Context, Schema, Types } from "effect"
+import { TerminalRun } from "./terminal-run"
 import { InstanceState } from "@/effect/instance-state"
 import { TaskTool, type TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
@@ -104,6 +105,9 @@ export interface Interface {
   readonly prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
   readonly loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts>
   readonly shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
+  /** Terminal mode (#190530): run a command like `shell` does, but record nothing in the session. */
+  readonly terminalStart: (input: TerminalStartInput) => Effect.Effect<{ id: string }, TerminalBusyError>
+  readonly terminalCancel: (sessionID: SessionID, id: string) => Effect.Effect<boolean>
   readonly command: (input: CommandInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
   readonly resolvePromptParts: (template: string) => Effect.Effect<PromptInput["parts"]>
 }
@@ -593,6 +597,56 @@ const layer = Layer.effect(
           return { info: msg, parts: [part] }
         }),
       )
+    })
+
+    // Terminal mode (#190530). Same shell, arguments, shell.env plugin hook and TERM as
+    // shellImpl above, so a command behaves the same in both; the difference is only where the
+    // output goes — TerminalRun, not a user turn and a tool part.
+    const terminalStart = Effect.fn("SessionPrompt.terminalStart")(function* (input: TerminalStartInput) {
+      if (TerminalRun.running(input.sessionID) >= TerminalRun.RUNNING_LIMIT) {
+        return yield* new TerminalBusyError({ limit: TerminalRun.RUNNING_LIMIT })
+      }
+      const ctx = yield* InstanceState.context
+      const cwd = ctx.directory
+      const cfg = yield* config.get()
+      const sh = Shell.preferred(cfg.shell)
+      const args = Shell.args(sh, input.command, cwd)
+      const run = TerminalRun.create(input.sessionID, input.command)
+      const shellEnv = yield* plugin.trigger("shell.env", { cwd, sessionID: input.sessionID, callID: run.id }, { env: {} })
+
+      const fiber = yield* Effect.gen(function* () {
+        const cmd = ChildProcess.make(sh, args, {
+          cwd,
+          extendEnv: true,
+          env: { ...shellEnv.env, TERM: "dumb" },
+          stdin: "ignore",
+          forceKillAfter: "3 seconds",
+        })
+        const handle = yield* spawner.spawn(cmd)
+        yield* Stream.runForEach(Stream.decodeText(handle.all), (chunk) => Effect.sync(() => TerminalRun.append(run, chunk)))
+        const exitCode = Number(yield* handle.exitCode)
+        TerminalRun.finish(run, { status: "exited", exitCode })
+      }).pipe(
+        Effect.scoped,
+        Effect.onExit((exit) =>
+          Effect.sync(() => {
+            if (Exit.isSuccess(exit)) return
+            if (Cause.hasInterruptsOnly(exit.cause)) return TerminalRun.finish(run, { status: "cancelled" })
+            TerminalRun.finish(run, { status: "error", error: String(Cause.squash(exit.cause)) })
+          }),
+        ),
+        Effect.ignore,
+        Effect.forkIn(scope),
+      )
+      if (run.status === "running") run.cancel = () => Effect.runFork(Fiber.interrupt(fiber))
+      return { id: run.id }
+    })
+
+    const terminalCancel = Effect.fn("SessionPrompt.terminalCancel")(function* (sessionID: SessionID, id: string) {
+      const run = TerminalRun.get(sessionID, id)
+      if (!run || run.status !== "running" || !run.cancel) return false
+      run.cancel()
+      return true
     })
 
     const getModel = Effect.fn("SessionPrompt.getModel")(function* (
@@ -1527,6 +1581,8 @@ const layer = Layer.effect(
       prompt,
       loop,
       shell,
+      terminalStart,
+      terminalCancel,
       command,
       resolvePromptParts,
     })
@@ -1574,6 +1630,16 @@ export const ShellInput = Schema.Struct({
   command: Schema.String,
 })
 export type ShellInput = Schema.Schema.Type<typeof ShellInput>
+
+export const TerminalStartInput = Schema.Struct({
+  sessionID: SessionID,
+  command: Schema.String.check(Schema.isMinLength(1)),
+})
+export type TerminalStartInput = Schema.Schema.Type<typeof TerminalStartInput>
+
+export class TerminalBusyError extends Schema.TaggedErrorClass<TerminalBusyError>()("SessionPrompt.TerminalBusyError", {
+  limit: Schema.Number,
+}) {}
 
 export const CommandInput = Schema.Struct({
   messageID: Schema.optional(MessageID),
