@@ -126,7 +126,7 @@ export function PlanCards(props: {
           class="flex flex-col gap-2 rounded-lg border px-4 py-3 text-[13px]"
           classList={{
             "border-v2-border-border-base": !summary().over,
-            "border-v2-state-fg-warning bg-v2-state-bg-warning": summary().over,
+            "border-v2-state-fg-warning": summary().over,
           }}
         >
           <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
@@ -178,7 +178,7 @@ export function PlanCards(props: {
                   "background-image":
                     (summary().percent ?? 0) >= 90
                       ? "linear-gradient(90deg, #f59e0b, #facc15)"
-                      : `linear-gradient(90deg, ${IRIS_COLORS.fuchsia}, ${IRIS_COLORS.blue}, ${IRIS_COLORS.cyan})`,
+                      : GRADIENT,
                 }}
               />
             </div>
@@ -261,17 +261,7 @@ export function PlanCards(props: {
                         </Show>
                       </div>
                       <div
-                        class="text-[32px] font-black leading-none tracking-tight tabular-nums"
-                        style={{
-                          // background-IMAGE, not the shorthand: the shorthand resets background-clip,
-                          // which paints the gradient as a solid bar behind the text.
-                          "background-image": GRADIENT,
-                          "-webkit-background-clip": "text",
-                          "background-clip": "text",
-                          "-webkit-text-fill-color": "transparent",
-                          color: "transparent",
-                          width: "fit-content",
-                        }}
+                        class="text-[32px] font-black leading-none tracking-tight tabular-nums text-v2-text-text-strong"
                       >
                         {formatPrice(p.price, p.period)}
                       </div>
