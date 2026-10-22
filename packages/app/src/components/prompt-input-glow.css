@@ -203,6 +203,21 @@ button.iris-glow__chip:focus-visible {
   outline-offset: 2px;
 }
 
+/* Inside the allowance tab's header row (#190391): in the row beside Upgrade, not floating over it. */
+button.iris-glow__chip[data-inline] {
+  position: static;
+  min-width: 0;
+  max-width: 100%;
+  white-space: nowrap;
+}
+.iris-glow__chip[data-inline] > i {
+  flex-shrink: 0;
+}
+.iris-glow__chip[data-inline] .iris-glow__chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* The list (#189437). Rows after upstream 2.0's running menu: dot, name, a muted line, ✕ on hover. */
 .iris-bg-menu {
   width: 280px;

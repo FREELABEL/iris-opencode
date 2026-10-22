@@ -13,7 +13,7 @@ import { backgroundRows } from "./background-work-model"
  * chat and sub-agent: click a row to open it, ✕ (or Delete) to stop it. Same set as the count, so
  * they cannot disagree. Interaction copied from upstream OpenCode 2.0's running menu.
  */
-export function BackgroundWorkMenu() {
+export function BackgroundWorkMenu(props: { inline?: boolean } = {}) {
   const serverSync = useServerSync()
   const serverSDK = useServerSDK()
   const navigate = useNavigate()
@@ -57,9 +57,9 @@ export function BackgroundWorkMenu() {
   return (
     <Show when={rows().length > 0}>
       <MenuV2 gutter={6} modal={false} placement="top-end" open={open()} onOpenChange={setOpen}>
-        <MenuV2.Trigger as="button" type="button" class="iris-glow__chip" data-action="background-work" aria-label={`${rows().length} working in the background`}>
+        <MenuV2.Trigger as="button" type="button" class="iris-glow__chip" data-inline={props.inline ? "" : undefined} data-action="background-work" aria-label={`${rows().length} working in the background`}>
           <i aria-hidden="true" />
-          {rows().length} working in the background
+          <span class="iris-glow__chip-label">{rows().length} working in the background</span>
         </MenuV2.Trigger>
         <MenuV2.Portal>
           <MenuV2.Content class="iris-bg-menu" aria-label="Working in the background">
