@@ -19,7 +19,7 @@ This directory contains step-by-step recipes for common IRIS workflows. Each fil
 | "rss", "feed", "syndicate", "subscribe to the newsroom", "json feed", "google news", "news sitemap", "aggregator", "feed.xml", "newsroom feed" | `newsroom-syndication.md` |
 | "their own database", "bring your own storage", "client's postgres", "client's S3 bucket", "move a workspace's data", "migrate storage", "bind a storage backend", "data residency", "provider proxy", "get off our servers" | `storage-backends.md` |
 | "dataset", "schema", "custom data", "store records", "atlas datasets", "create a tracker" | `atlas-datasets.md` |
-| "desktop offline", "atlas offline", "boards load slow", "Offline · copy from", "Updating… pill", "local copy of boards", "turn off the cache", "patient data on disk", "includePhi" | `desktop-atlas-offline-copy.md` |
+| "desktop offline", "atlas offline", "boards load slow", "Offline · copy from", "Updating… pill", "sync chip", "Checking…", "Synced · ago", "Couldn't update", "warning dot on tab", "local copy of boards", "turn off the cache", "patient data on disk", "includePhi" | `desktop-atlas-offline-copy.md` |
 | "expose data", "REST API", "public endpoint", "serve data", "embed dataset", "dashboard API" | `expose-dataset-api.md` |
 | "pathways", "CFO", "cases", "servis ai", "quickbooks", "billing audit", "service AI sync" | `pathways-cfo-workflow.md` |
 | "track finances", "ledger", "transactions", "revenue", "expenses", "accounts" | `track-finances-atlas-ledger.md` |

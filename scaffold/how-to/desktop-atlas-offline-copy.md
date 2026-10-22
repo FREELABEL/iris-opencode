@@ -1,14 +1,14 @@
 ---
 category: Data & Atlas
 level: beginner
-tags: [atlas, desktop, offline, cache, phi]
+tags: [atlas, desktop, offline, cache, phi, sync]
 duration_min: 5
 ---
 # How to: Open Atlas boards instantly and read them offline (IRIS Desktop)
 
-IRIS Desktop keeps a copy of each Atlas board you open on your own machine. Boards draw at once from that copy, update from the cloud a moment later, and stay readable with no connection. It is **on by default**; boards holding patient data are **never copied** unless you say so.
+IRIS Desktop keeps a copy of each Atlas board you open on your own machine. Boards draw at once from that copy, update from the cloud a moment later, and stay readable with no connection. A chip on every panel tab says whether what you see is current, and a refresh downloads only the cards that changed. It is **on by default**; boards holding patient data are **never copied** unless you say so.
 
-Live since **IRIS Desktop 1.18.143** (2026-10-22), macOS (Apple Silicon + Intel), Windows, Linux.
+Offline copy since **IRIS Desktop 1.18.143** (2026-10-22); the sync chip, instant tab switching and changed-cards-only refresh since **IRIS Desktop 1.18.145**. macOS (Apple Silicon + Intel), Windows, Linux.
 
 ## Prerequisites
 - IRIS Desktop **1.18.143 or later** (the app updates itself — restart when it asks)
@@ -20,24 +20,31 @@ Looking for an offline copy of a **dataset** you can edit from the CLI? That is 
 
 1. **You open a board.**
 2. **Is there a copy on this machine?**
-   - **Yes** → the board is drawn from the copy at once (pill: *Updating…*), and the cloud is asked for the latest right away.
+   - **Yes** → the board is drawn from the copy at once (chip: *Checking…*), and the cloud is asked what changed since that copy.
    - **No** → the cloud is asked directly.
 3. **The cloud answers one of three ways:**
-   - **Answer arrives** → the copy is replaced, the board is live.
+   - **Answer arrives** → only the cards that changed are downloaded, the copy is updated, and the chip turns to *Synced*. Nothing changed means almost nothing is downloaded.
    - **Cloud says no** (board deleted, access removed, signed out) → the copy is **deleted**, not shown.
-   - **Cloud unreachable** → the copy is shown with the *Offline* pill.
+   - **Cloud unreachable** → the copy is shown and the chip says *Offline*.
 
 A search inside a board always goes to the cloud.
 
+Switching panel tabs keeps what each tab last showed. Go from Atlas to Agents and back, and the board is on screen at once while it checks for changes behind it.
+
 ## What you see
 
-A small pill next to the board name in the Atlas tab says where the cards came from. No pill = live.
+A chip in the row under the tab name says whether what is on screen is current. Click it to check again.
 
-| Pill | What it means | What to do |
+| Chip | What it means | What to do |
 | --- | --- | --- |
-| Updating… | Drawn from this machine's copy; the latest is being fetched. Usually clears in under a second. | Nothing. |
-| Offline · copy from 12m ago | IRIS could not be reached, so you are reading the last copy. | Read freely. Reconnect and press Refresh. |
-| (none) | Live from the cloud. | — |
+| Checking… | Showing what this tab last had (or the board's copy) while IRIS is asked for what is current. Usually clears in under a second. | Nothing. |
+| Synced · 5m ago | This is what IRIS returned, at that time. The open board is also checked for changes every 10 seconds. | Nothing. |
+| Offline · copy from 12m ago | IRIS could not be reached, so you are reading the last copy. | Read freely. Reconnect and click the chip. |
+| Couldn't update | IRIS answered without data (signed out, access refused). Hover for the reason. | Sign in again, or check your access. |
+
+When a tab is *Offline* or *Couldn't update*, its name in the tab strip gets a small warning dot, so you can see it from any other tab.
+
+Tabs that load their own data (Hive, Rooms…) show no chip.
 
 The board list works the same way: offline you still see your boards and can open any you have opened before.
 
@@ -95,7 +102,8 @@ Offline you can read; you cannot change anything yet.
 
 | Problem | Fix |
 | --- | --- |
-| A board looks out of date | Wait for *Updating…* to clear, or press Refresh. |
-| *Offline* shows while you are online | IRIS could not reach the cloud. Check your connection, then Refresh. |
+| A board looks out of date | Wait for *Checking…* to clear, or click the chip. |
+| *Offline* shows while you are online | IRIS could not reach the cloud. Check your connection, then click the chip. |
+| *Couldn't update* | Hover the chip for the reason. Usually: sign in again. |
 | You want everything gone from this machine | Turn *Keep a copy* off, or delete `~/.iris/atlas/cache`. |
 | Disk use | Lower `maxBoards` or `maxMB` in the settings file. |
