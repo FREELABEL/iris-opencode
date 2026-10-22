@@ -163,6 +163,9 @@ function info(file: string): Item {
   }
 }
 
+// zsh and bash read their rc files first, so the command is eval'd. It is passed as "$2" and
+// never pasted into the script: inside the script's double quotes `$i` in
+// `for i in 1 2 3; do echo $i; done` expanded before the loop ran and printed nothing (#190530).
 export function args(file: string, command: string, cwd: string) {
   const n = name(file)
   if (n === "nu" || n === "fish") return ["-c", command]
@@ -174,10 +177,11 @@ export function args(file: string, command: string, cwd: string) {
         [[ -f ~/.zshenv ]] && source ~/.zshenv >/dev/null 2>&1 || true
         [[ -f "\${ZDOTDIR:-$HOME}/.zshrc" ]] && source "\${ZDOTDIR:-$HOME}/.zshrc" >/dev/null 2>&1 || true
         cd -- "$1"
-        eval ${JSON.stringify(command)}
+        eval "$2"
       `,
       "opencode",
       cwd,
+      command,
     ]
   }
   if (n === "bash") {
@@ -188,10 +192,11 @@ export function args(file: string, command: string, cwd: string) {
         shopt -s expand_aliases
         [[ -f ~/.bashrc ]] && source ~/.bashrc >/dev/null 2>&1 || true
         cd -- "$1"
-        eval ${JSON.stringify(command)}
+        eval "$2"
       `,
       "opencode",
       cwd,
+      command,
     ]
   }
   if (n === "cmd") return ["/c", command]

@@ -8,6 +8,7 @@ import { SessionFollowupDock } from "@/pages/session/composer/session-followup-d
 import { SessionRevertDock } from "@/pages/session/composer/session-revert-dock"
 import { SessionTodoDock } from "@/pages/session/composer/session-todo-dock"
 import { SessionAllowanceDock } from "@/pages/session/composer/session-allowance-dock"
+import { SessionTerminalDock } from "@/pages/session/composer/session-terminal-dock"
 import type { SessionComposerRegionController } from "./session-composer-region-controller"
 
 export function SessionComposerRegion(props: {
@@ -145,6 +146,7 @@ export function SessionComposerRegion(props: {
                 "margin-top": `${-controller.lift()}px`,
               }}
             >
+              <SessionTerminalDock />
               <SessionAllowanceDock />
               <Show when={controller.followup()?.items.length}>
                 <SessionFollowupDock
