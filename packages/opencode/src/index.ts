@@ -171,6 +171,7 @@ import { PlatformBloqIngestCommand } from "./cli/cmd/platform-bloq-ingest"
 import { PlatformDataSourcesCommand } from "./cli/cmd/platform-data-sources"
 import { PlatformBloqMembersCommand } from "./cli/cmd/platform-bloq-members"
 import { PlatformWisprCommand } from "./cli/cmd/platform-wispr"
+import { PlatformDesktopCommand } from "./cli/cmd/platform-desktop"
 import { PlatformEvalCommand } from "./cli/cmd/platform-eval"
 import { PlatformSdkCallCommand } from "./cli/cmd/platform-sdk-call"
 import { PlatformDiaryCommand } from "./cli/cmd/platform-diary"
@@ -562,6 +563,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformDataSourcesCommand))
   .command(reg(PlatformBloqMembersCommand))
   .command(reg(PlatformWisprCommand))
+  .command(reg(PlatformDesktopCommand))
   .command(reg(PlatformEvalCommand))
   .command(reg(PlatformSdkCallCommand))
   .command(reg(PlatformDiaryCommand))
