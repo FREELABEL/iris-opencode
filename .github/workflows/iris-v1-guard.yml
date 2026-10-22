@@ -1,0 +1,34 @@
+# [IRIS] src/iris-v1 is a copy of main, replaced at every iris2 release by
+# packages/cli/script/sync-iris-v1.ts. An edit made to it on this branch merges green and is
+# thrown away at the next release — three features were lost that way on 2026-10-22 (#190589).
+# This fails a PR whose change to a vendored file is not already on main, and names the main
+# file to edit instead. Sync PRs pass: their files are identical to main.
+name: iris-v1-guard
+
+on:
+  pull_request:
+    branches: [iris2/channel]
+    paths:
+      - "packages/cli/src/iris-v1/**"
+      - "packages/cli/capabilities.json"
+      - "packages/cli/src/capabilities.json"
+
+jobs:
+  guard:
+    name: vendored v1 edits are on main
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Fetch main and the base branch
+        run: git fetch --no-tags origin main iris2/channel
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+
+      - name: Check
+        working-directory: packages/cli
+        run: bun script/check-iris-v1-edits.ts --base=origin/iris2/channel --main=origin/main --head=HEAD
