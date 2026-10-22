@@ -60,7 +60,6 @@ export function SessionTerminalDock() {
           <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-v2-text-text-muted">
             {TerminalMode.directory(sessionID())}
           </span>
-          <span class="shrink-0 text-[11px] text-v2-text-text-muted">Closing adds this transcript to the chat</span>
           <button
             type="button"
             data-action="terminal-close"
