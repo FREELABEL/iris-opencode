@@ -1,6 +1,6 @@
 import { Beacon } from "../../telemetry/beacon"
 import { cmd } from "./cmd"
-import { parseTargets, toCursorRule, isGenerated, upsertAgentsBlock, type SyncTarget } from "../lib/playbook-targets"
+import { resolveTargets, toCursorRule, isGenerated, upsertAgentsBlock, upsertPlaybookSection, type SyncTarget } from "../lib/playbook-targets"
 import { PlaybookContentsCommands } from "./platform-playbook-contents"
 import * as prompts from "./clack"
 // Aliased: `Tier` is already taken in this file by the e2e runner's own unrelated enum.
@@ -1548,12 +1548,16 @@ const PlaybookSyncCommand = cmd({
       .option("api", { type: "boolean", default: false, describe: "also push metadata to iris-api for frontend/API access" })
       .option("target", {
         type: "string",
-        describe: "where to sync: claude (default, .claude/skills), cursor (.cursor/rules), agents (AGENTS.md), or all — comma-separate for several",
+        describe: "where to sync: claude (default, .claude/skills), cursor (.cursor/rules), agents (AGENTS.md), gemini (GEMINI.md), auto (detect), or all — comma-separate for several",
       }),
   async handler(args) {
     let syncTargets: SyncTarget[]
     try {
-      syncTargets = parseTargets(args.target as string | undefined)
+      syncTargets = resolveTargets(args.target as string | undefined, {
+        home: installHome(),
+        cwd: process.cwd(),
+        exists: existsSync,
+      })
     } catch (e: any) {
       prompts.log.error(e.message)
       process.exitCode = 1
@@ -1656,6 +1660,13 @@ const PlaybookSyncCommand = cmd({
       }
       if (syncTargets.includes("agents") && rendered.length) {
         const file = join(cwd, "AGENTS.md")
+        const existing = existsSync(file) ? readFileSync(file, "utf8") : null
+        writeFileAtomic(file, upsertAgentsBlock(existing, rendered))
+        extraWritten.push(`${rendered.length} playbook(s) indexed in ${file}`)
+      }
+      if (syncTargets.includes("gemini") && rendered.length) {
+        // Gemini CLI reads GEMINI.md as a context file, the same way Codex reads AGENTS.md.
+        const file = join(cwd, "GEMINI.md")
         const existing = existsSync(file) ? readFileSync(file, "utf8") : null
         writeFileAtomic(file, upsertAgentsBlock(existing, rendered))
         extraWritten.push(`${rendered.length} playbook(s) indexed in ${file}`)
@@ -3020,7 +3031,7 @@ const PlaybookAvailableCommand = cmd({
 const PlaybookInstallCommand = cmd({
   command: "install <name>",
   aliases: ["pull"],
-  describe: "download a published playbook (to ~/.iris/playbooks by default) and sync it to .claude/skills/ for Claude Code and the IRIS app",
+  describe: "download a published playbook (to ~/.iris/playbooks by default), sync it to .claude/skills/ for Claude Code and the IRIS app, and — with --target — write the native format for Cursor, Codex or Gemini CLI",
   builder: (yargs) =>
     yargs
       .positional("name", { type: "string", demandOption: true })
@@ -3036,9 +3047,25 @@ const PlaybookInstallCommand = cmd({
       // default REGENERATES .claude/skills/, so in a shared checkout the flag that
       // protects uncommitted skill edits was the one that would not parse.
       .option("no-sync", { type: "boolean", default: false, describe: "skip regenerating .claude/skills/" })
+      .option("target", {
+        type: "string",
+        describe: "also install for another agent: cursor (.cursor/rules), agents (AGENTS.md / ~/.codex/AGENTS.md), gemini (GEMINI.md / ~/.gemini/GEMINI.md), auto (detect), or all — comma-separate for several",
+      })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     const name = String(args.name)
+    let installTargets: SyncTarget[]
+    try {
+      installTargets = resolveTargets(args.target as string | undefined, {
+        home: installHome(),
+        cwd: process.cwd(),
+        exists: existsSync,
+      })
+    } catch (e: any) {
+      prompts.log.error(e.message)
+      process.exitCode = 1
+      return
+    }
     UI.empty()
     prompts.intro(`◈  Install Playbook — ${highlight(name)}`)
     const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
@@ -3089,13 +3116,21 @@ const PlaybookInstallCommand = cmd({
     // install, <project>/.claude/skills for a project one. Claude Code and the IRIS Desktop app
     // both scan ~/.claude/skills from every project.
     const syncSkills = args.sync && !args["no-sync"]
+    const extraTargets = installTargets.filter((t) => t !== "claude")
+    const info = { name, description: String(pb.description ?? ""), location: file }
+    let plan: Awaited<ReturnType<typeof parsePlan>> | null = null
     let skillFile: string | null = null
     let skillNote: string | null = null
     let skillVia: string | null = null
-    if (syncSkills) {
+    if (syncSkills || extraTargets.length) {
       try {
-        const info = { name, description: String(pb.description ?? ""), location: file }
-        const plan = await parsePlan(info)
+        plan = await parsePlan(info)
+      } catch (e: any) {
+        skillNote = `skill sync did not finish: ${String(e?.code ?? e?.message ?? e)}`
+      }
+    }
+    if (syncSkills && plan) {
+      try {
         const output = await renderSkillReplica(info, plan)
         const r = writeSkillReplica(root.skillsDir, plan.name, output, { home: root.scope === "global", followSymlink: true })
         if (r.ok) {
@@ -3105,6 +3140,51 @@ const PlaybookInstallCommand = cmd({
         else skillNote = `${pathJoin(root.skillsDir, plan.name)} is ${r.reason}`
       } catch (e: any) {
         skillNote = `skill sync did not finish: ${String(e?.code ?? e?.message ?? e)}`
+      }
+    }
+
+    // #190526 — the other agents on this machine read different files. Install only this
+    // playbook, in the shape its reader expects, beside the root it was installed into:
+    //   Cursor  <root>/.cursor/rules/<name>.mdc   (per repo; Cursor has no global rules file)
+    //   Codex   <root>/AGENTS.md, or ~/.codex/AGENTS.md for a global install
+    //   Gemini  <root>/GEMINI.md, or ~/.gemini/GEMINI.md for a global install
+    // A section per playbook (not a shared index) keeps a second install from erasing the first.
+    const extraPaths: string[] = []
+    const home = installHome()
+    if (plan && extraTargets.length) {
+      const output = await renderSkillReplica(info, plan)
+      if (extraTargets.includes("cursor")) {
+        if (root.scope === "global") {
+          extraPaths.push("Cursor rules are per-repo — rerun with --target cursor inside the project")
+        } else {
+          const rulesDir = pathJoin(root.root, ".cursor", "rules")
+          const ruleFile = pathJoin(rulesDir, `${plan.name}.mdc`)
+          const existing = existsSync(ruleFile) ? readFileSync(ruleFile, "utf8") : null
+          if (!isGenerated(existing)) {
+            extraPaths.push(`${ruleFile} is hand-written; left alone`)
+          } else {
+            mkdirSync(rulesDir, { recursive: true })
+            writeFileAtomic(ruleFile, toCursorRule(output, plan.description))
+            extraPaths.push(ruleFile)
+          }
+        }
+      }
+      const sectionTargets: { file: string }[] = []
+      if (extraTargets.includes("agents")) {
+        sectionTargets.push({
+          file: root.scope === "global" ? pathJoin(home, ".codex", "AGENTS.md") : pathJoin(root.root, "AGENTS.md"),
+        })
+      }
+      if (extraTargets.includes("gemini")) {
+        sectionTargets.push({
+          file: root.scope === "global" ? pathJoin(home, ".gemini", "GEMINI.md") : pathJoin(root.root, "GEMINI.md"),
+        })
+      }
+      for (const { file: sectionFile } of sectionTargets) {
+        const existing = existsSync(sectionFile) ? readFileSync(sectionFile, "utf8") : null
+        mkdirSync(pathJoin(sectionFile, ".."), { recursive: true })
+        writeFileAtomic(sectionFile, upsertPlaybookSection(existing, { name: plan.name, description: plan.description, readPath: file }))
+        extraPaths.push(sectionFile)
       }
     }
 
@@ -3122,6 +3202,8 @@ const PlaybookInstallCommand = cmd({
         skill_path: skillFile,
         skill_note: skillNote,
         skill_via_symlink: skillVia,
+        targets: installTargets,
+        target_paths: extraPaths,
         shadowed_by: shadows,
       })
       prompts.outro("Done"); return
@@ -3133,6 +3215,7 @@ const PlaybookInstallCommand = cmd({
     if (registryVersion) printKV("Version", registryVersion)
     printKV("Playbook", file)
     if (skillFile) printKV("Skill", skillFile)
+    for (const extra of extraPaths) printKV("Also", extra)
     printKV("Location", root.scope === "global" ? "global — your home folder" : `project — ${root.root}`)
     printDivider()
     if (root.scope === "global") {

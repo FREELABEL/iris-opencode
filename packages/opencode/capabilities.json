@@ -11384,10 +11384,10 @@
     {
       "kind": "command",
       "name": "playbook install",
-      "describe": "download a published playbook (to ~/.iris/playbooks by default) and sync it to .claude/skills/ for Claude Code and the IRIS app",
+      "describe": "download a published playbook (to ~/.iris/playbooks by default), sync it to .claude/skills/ for Claude Code and the IRIS app, and — with --target — write the native format for Cursor, Codex or Gemini CLI",
       "aliases": [],
       "run": "iris playbook install <name>",
-      "haystack": "playbook install pull download a published playbook (to ~/.iris/playbooks by default) and sync it to .claude/skills/ for claude code and the iris app force overwrite a local copy (discards local edits) global install to ~/.iris/playbooks even inside a project project install into this project (git root) instead of your home folder sync also regenerate .claude/skills/ (--no-sync to skip) no-sync skip regenerating .claude/skills/ json"
+      "haystack": "playbook install pull download a published playbook (to ~/.iris/playbooks by default), sync it to .claude/skills/ for claude code and the iris app, and — with --target — write the native format for cursor, codex or gemini cli force overwrite a local copy (discards local edits) global install to ~/.iris/playbooks even inside a project project install into this project (git root) instead of your home folder sync also regenerate .claude/skills/ (--no-sync to skip) no-sync skip regenerating .claude/skills/ target also install for another agent: cursor (.cursor/rules), agents (agents.md / ~/.codex/agents.md), gemini (gemini.md / ~/.gemini/gemini.md), auto (detect), or all — comma-separate for several json"
     },
     {
       "kind": "command",
@@ -11531,7 +11531,7 @@
       "describe": "sync playbooks to .claude/skills/ (and optionally to API with --api)",
       "aliases": [],
       "run": "iris playbook sync",
-      "haystack": "playbook sync sync playbooks to .claude/skills/ (and optionally to api with --api) json api also push metadata to iris-api for frontend/api access target where to sync: claude (default, .claude/skills), cursor (.cursor/rules), agents (agents.md), or all — comma-separate for several"
+      "haystack": "playbook sync sync playbooks to .claude/skills/ (and optionally to api with --api) json api also push metadata to iris-api for frontend/api access target where to sync: claude (default, .claude/skills), cursor (.cursor/rules), agents (agents.md), gemini (gemini.md), auto (detect), or all — comma-separate for several"
     },
     {
       "kind": "command",
@@ -13148,10 +13148,10 @@
     {
       "kind": "command",
       "name": "skill install",
-      "describe": "download a published playbook (to ~/.iris/playbooks by default) and sync it to .claude/skills/ for Claude Code and the IRIS app",
+      "describe": "download a published playbook (to ~/.iris/playbooks by default), sync it to .claude/skills/ for Claude Code and the IRIS app, and — with --target — write the native format for Cursor, Codex or Gemini CLI",
       "aliases": [],
       "run": "iris skill install <name>",
-      "haystack": "skill install pull download a published playbook (to ~/.iris/playbooks by default) and sync it to .claude/skills/ for claude code and the iris app force overwrite a local copy (discards local edits) global install to ~/.iris/playbooks even inside a project project install into this project (git root) instead of your home folder sync also regenerate .claude/skills/ (--no-sync to skip) no-sync skip regenerating .claude/skills/ json"
+      "haystack": "skill install pull download a published playbook (to ~/.iris/playbooks by default), sync it to .claude/skills/ for claude code and the iris app, and — with --target — write the native format for cursor, codex or gemini cli force overwrite a local copy (discards local edits) global install to ~/.iris/playbooks even inside a project project install into this project (git root) instead of your home folder sync also regenerate .claude/skills/ (--no-sync to skip) no-sync skip regenerating .claude/skills/ target also install for another agent: cursor (.cursor/rules), agents (agents.md / ~/.codex/agents.md), gemini (gemini.md / ~/.gemini/gemini.md), auto (detect), or all — comma-separate for several json"
     },
     {
       "kind": "command",
@@ -13279,7 +13279,7 @@
       "describe": "sync playbooks to .claude/skills/ (and optionally to API with --api)",
       "aliases": [],
       "run": "iris skill sync",
-      "haystack": "skill sync sync playbooks to .claude/skills/ (and optionally to api with --api) json api also push metadata to iris-api for frontend/api access target where to sync: claude (default, .claude/skills), cursor (.cursor/rules), agents (agents.md), or all — comma-separate for several"
+      "haystack": "skill sync sync playbooks to .claude/skills/ (and optionally to api with --api) json api also push metadata to iris-api for frontend/api access target where to sync: claude (default, .claude/skills), cursor (.cursor/rules), agents (agents.md), gemini (gemini.md), auto (detect), or all — comma-separate for several"
     },
     {
       "kind": "command",
