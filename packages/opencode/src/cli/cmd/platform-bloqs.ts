@@ -353,7 +353,10 @@ const BloqsGetCommand = cmd({
     if (spinner) spinner.start("Loading…")
 
     try {
-      const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}`)
+      // #190327 — `light` drops every item's body server-side. The board read carries all of a
+      // board's items; with bodies that was 1 MB for #544, and an agent's 100 KB window ended
+      // before the lists it asked for. Bodies are what `--items` / `get-item` are for.
+      const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}${args.items || args.list ? "" : "?light=1"}`)
       if (!res.ok) {
         if (spinner) spinner.stop("Failed", 1)
         // #190209 — an ITEM id read as a BOARD id. Ask get-item before saying "not found".
@@ -410,7 +413,13 @@ const BloqsGetCommand = cmd({
       if (args.json) {
         // Included so an agent reading a board gets its neighbours in the SAME call. Having to
         // know to make a second request is the machine-readable version of the same bug.
-        await writeJson({ ...b, web_url: bloqUrlOf(b, args.id), lists, relations })
+        //
+        // #190327 — bounded by default. This used to spread the whole board read AND the lists
+        // read, so every item arrived twice (b.lists[].items and lists[].items): 567 KB for #544,
+        // 91% of it item bodies. Now: the board's own fields, each list as id / name / count,
+        // members as who they are on the board, and relations. `--items` restores the lists with
+        // their items, for a caller that asked.
+        await writeJson(boundedBoardJson(b, lists, relations, bloqUrlOf(b, args.id), Boolean(args.items || args.list)))
         return
       }
 
@@ -2042,6 +2051,31 @@ const BloqsListsCommand = cmd({
  * differ (items_count, nested items, neither); a count that silently reads 0 is
  * worse than an error, because it looks like an empty list.
  */
+/**
+ * `bloqs get --json` at a size an agent can read (#190327): the board, its lists as id / name /
+ * item count, its members as id / name / email / permission, its relations. With `withItems`,
+ * the lists keep their items (the old shape, minus the duplicate copy inside the board read).
+ */
+export function boundedBoardJson(board: any, lists: unknown, relations: unknown, webUrl: string, withItems: boolean) {
+  const { lists: _dup, shared_users, ...meta } = board ?? {}
+  const members = Array.isArray(shared_users)
+    ? shared_users.map((u: any) => ({
+        id: u?.id ?? null,
+        name: u?.name ?? u?.full_name ?? u?.user_name ?? null,
+        email: u?.email ?? null,
+        permission: u?.pivot?.permission ?? u?.permission ?? null,
+      }))
+    : []
+  const listRows = Array.isArray(lists) ? lists : []
+  return {
+    ...meta,
+    web_url: webUrl,
+    shared_users: members,
+    lists: withItems ? listRows : listSummary(listRows),
+    relations: Array.isArray(relations) ? relations : [],
+  }
+}
+
 export function listSummary(lists: unknown): Array<{ id: number; name: string; item_count: number }> {
   if (!Array.isArray(lists)) return []
   return lists.map((l: any) => {
