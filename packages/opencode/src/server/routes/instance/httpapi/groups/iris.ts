@@ -1803,6 +1803,7 @@ export const IrisApi = HttpApi.make("iris").add(
                 text: Schema.String,
                 icon: Schema.optional(Schema.String),
                 actor: Schema.optional(Schema.String),
+                actorId: Schema.optional(Schema.Finite),
                 at: Schema.optional(Schema.String),
               }),
             ),

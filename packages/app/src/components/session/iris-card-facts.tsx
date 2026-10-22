@@ -124,6 +124,8 @@ export function MembersRow(props: {
   choices: MemberChoice[]
   /** The top-bar form: no label, faces overlap, more than five fold into "+N". */
   compact?: boolean
+  /** The sidebar form: one row per member with their name, like Elon's "Assigned" list. */
+  list?: boolean
   loading?: boolean
   unavailable?: string
   note?: { ok: boolean; text: string } | null
@@ -195,11 +197,34 @@ export function MembersRow(props: {
 
   return (
     <div class="iris-members2" data-compact={props.compact ? "" : undefined}>
-      <Show when={!props.compact}>
+      <Show when={!props.compact && !props.list}>
         <span class="iris-fact__label">Members</span>
       </Show>
-      <div class="iris-members2__faces">
-        <For each={faces()}>
+      <Show when={props.list}>
+        <ul class="iris-members2__list">
+          <For each={on()}>
+            {(c) => (
+              <li class="iris-members2__row">
+                <Avatar name={c.label} kind={c.kind} size={24} />
+                <span class="iris-members2__name">{c.label}</span>
+                <span class="iris-members2__kind">{c.kind === "agent" ? "Agent" : "Person"}</span>
+                <button
+                  type="button"
+                  class="iris-members2__rowx"
+                  title={`Take ${c.label} off this card`}
+                  aria-label={`Unassign ${c.label}`}
+                  disabled={busy() !== null}
+                  onClick={() => void toggle(c)}
+                >
+                  ×
+                </button>
+              </li>
+            )}
+          </For>
+        </ul>
+      </Show>
+      <div class="iris-members2__faces" data-list={props.list ? "" : undefined}>
+        <For each={props.list ? [] : faces()}>
           {(c) => (
             <span class="iris-members2__face">
               <Avatar name={c.label} kind={c.kind} />
@@ -240,9 +265,9 @@ export function MembersRow(props: {
             queueMicrotask(() => pop?.querySelector<HTMLInputElement>("input[type=search]")?.focus())
           }}
         >
-          +
+          {props.list ? "+ Assign person or agent" : "+"}
         </button>
-        <Show when={on().length === 0 && !props.unavailable}>
+        <Show when={on().length === 0 && !props.unavailable && !props.list}>
           <span class="iris-members2__empty">{props.compact ? "Add people or agents" : "Nobody yet"}</span>
         </Show>
         <Show when={props.unavailable}>
