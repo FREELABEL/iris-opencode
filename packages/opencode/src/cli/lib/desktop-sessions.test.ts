@@ -15,6 +15,8 @@ import {
   pickAccount,
   readTranscript,
   redact,
+  searchPassages,
+  excerpt,
 } from "./desktop-sessions"
 
 // The columns IRIS Desktop's engine writes (packages/core/src/session/sql.ts on iris/1.18.23).
@@ -80,6 +82,45 @@ describe("listing and paging (#190641)", () => {
   })
 })
 
+describe("passages and project folders (#190641 follow-up)", () => {
+  test("search returns the passages that mention the query, each traced to its session and message", () => {
+    const hits = searchPassages(seeded(), "Acme")
+    expect(hits.map((h) => [h.sessionId, h.messageId, h.role])).toEqual([
+      ["ses_a", "m2", "assistant"],
+      ["ses_a", "m1", "user"],
+    ])
+    expect(hits[0]).toMatchObject({ sessionTitle: "Quarterly pricing", directory: "/Users/me/app", excerpt: "Acme paid $4,200 per quarter." })
+    expect(hits[1].excerpt).toContain("[redacted key]")   // redacted before it leaves
+  })
+
+  test("passages never come from tool output or synthetic text", () => {
+    const db = seeded()
+    expect(searchPassages(db, "secret tool output")).toEqual([])
+    expect(searchPassages(db, "system reminder")).toEqual([])
+  })
+
+  test("--directory keeps a project folder and what is below it, not a sibling with the same prefix", () => {
+    const db = seeded()
+    db.close()
+    const w = new Database(join(dir, "opencode.db"))
+    w.run("INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated) VALUES ('ses_d','p','d','/Users/me/app/web','Nested','1',1,8000)")
+    w.run("INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated) VALUES ('ses_e','p','e','/Users/me/app2','Sibling','1',1,7000)")
+    w.close()
+    const db2 = openDesktopDb(join(dir, "opencode.db"))
+    expect(listSessions(db2, { directory: "/Users/me/app/" }).map((s) => s.id)).toEqual(["ses_b", "ses_d", "ses_a"])
+    expect(listSessions(db2, { directory: "/Users/me/old", archived: true }).map((s) => s.id)).toEqual(["ses_c"])
+    expect(searchPassages(db2, "Acme", { directory: "/Users/me/app2" })).toEqual([])
+  })
+
+  test("an excerpt is centred on the match and marks what it cut", () => {
+    const long = "a".repeat(300) + " the Acme invoice " + "b".repeat(300)
+    const e = excerpt(long, "acme", 60)
+    expect(e).toContain("Acme")
+    expect(e.startsWith("…") && e.endsWith("…")).toBe(true)
+    expect(e.length).toBeLessThanOrEqual(62)
+  })
+})
+
 describe("reading a session", () => {
   test("user and assistant text in order, tool output and synthetic text left out, secrets redacted", () => {
     const turns = readTranscript(seeded(), "ses_a")
@@ -94,6 +135,13 @@ describe("reading a session", () => {
     const md = asContext(getSession(db, "ses_a")!, readTranscript(db, "ses_a"))
     expect(md).toStartWith("# IRIS Desktop session: Quarterly pricing")
     expect(md).toContain("## assistant\n\nAcme paid $4,200 per quarter.")
+  })
+
+  test("--around returns the cited message and the turns either side", () => {
+    const db = seeded()
+    expect(readTranscript(db, "ses_a", { around: "m2", context: 0 }).map((t) => t.messageId)).toEqual(["m2"])
+    expect(readTranscript(db, "ses_a", { around: "m1", context: 1 }).map((t) => t.messageId)).toEqual(["m1", "m2"])
+    expect(() => readTranscript(db, "ses_a", { around: "m9" })).toThrow(DesktopSessionsError)
   })
 
   test("an unknown session is a plain refusal", () => {

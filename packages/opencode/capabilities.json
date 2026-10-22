@@ -4644,10 +4644,10 @@
     {
       "kind": "command",
       "name": "desktop sessions search",
-      "describe": "find Desktop sessions whose title or conversation mentions <query>",
+      "describe": "find what was said about <query> — the passages, each with the session and message it came from",
       "aliases": [],
       "run": "iris desktop sessions search <query>",
-      "haystack": "desktop sessions search find desktop sessions whose title or conversation mentions <query> limit offset archived include archived sessions json"
+      "haystack": "desktop sessions search find what was said about <query> — the passages, each with the session and message it came from sessions list matching sessions instead of passages limit offset archived include archived sessions json"
     },
     {
       "kind": "command",
@@ -4655,7 +4655,7 @@
       "describe": "print what was said in a Desktop session (secrets redacted; --context for Markdown to hand an agent)",
       "aliases": [],
       "run": "iris desktop sessions show <id>",
-      "haystack": "desktop sessions show print what was said in a desktop session (secrets redacted; --context for markdown to hand an agent) last only the last n turns context markdown for an agent json"
+      "haystack": "desktop sessions show print what was said in a desktop session (secrets redacted; --context for markdown to hand an agent) last only the last n turns around only this message (a search result turns with --around: how many turns either side context markdown for an agent json"
     },
     {
       "kind": "command",

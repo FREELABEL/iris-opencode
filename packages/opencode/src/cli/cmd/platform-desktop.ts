@@ -1,3 +1,4 @@
+import { resolve } from "path"
 import { cmd } from "./cmd"
 import { UI } from "../ui"
 import { dim, bold, printDivider } from "./iris-api"
@@ -12,6 +13,7 @@ import {
   openDesktopDb,
   pickAccount,
   readTranscript,
+  searchPassages,
 } from "../lib/desktop-sessions"
 
 // `iris desktop sessions …` — IRIS Desktop's chat history on THIS machine, read-only (#190641).
@@ -20,6 +22,17 @@ import {
 const accountOpt = {
   type: "string" as const,
   describe: "Desktop account (user id or email, see `iris desktop sessions accounts`). Default: the first account",
+}
+
+const directoryOpt = {
+  type: "string" as const,
+  describe: "only sessions in this project folder or below it (as Desktop recorded it, e.g. /Users/you/app; '.' = here)",
+}
+
+/** '.' or a relative folder means the folder you are in, the way Desktop records it (absolute). */
+function dirArg(d?: string): string | undefined {
+  if (!d) return undefined
+  return resolve(d)
 }
 
 const channelOpt = {
@@ -72,6 +85,7 @@ const ListCommand = cmd({
       .option("limit", { type: "number", default: 20, describe: "how many (max 200)" })
       .option("offset", { type: "number", default: 0, describe: "skip this many (paging)" })
       .option("archived", { type: "boolean", default: false, describe: "include archived sessions" })
+      .option("directory", directoryOpt)
       .option("since", { type: "string", describe: "only sessions active since this date/time (ISO) — for incremental sync" })
       .option("json", { type: "boolean", default: false }),
   handler: (a) =>
@@ -80,7 +94,12 @@ const ListCommand = cmd({
       try {
         const since = a.since ? Date.parse(a.since) : undefined
         if (a.since && Number.isNaN(since)) throw new DesktopSessionsError(`--since: not a date: ${a.since}`)
-        printList(listSessions(db, { limit: a.limit, offset: a.offset, archived: a.archived, since }), a.json, a.offset, a.limit)
+        printList(
+          listSessions(db, { limit: a.limit, offset: a.offset, archived: a.archived, since, directory: dirArg(a.directory) }),
+          a.json,
+          a.offset,
+          a.limit,
+        )
       } finally {
         db.close()
       }
@@ -89,12 +108,14 @@ const ListCommand = cmd({
 
 const SearchCommand = cmd({
   command: "search <query>",
-  describe: "find Desktop sessions whose title or conversation mentions <query>",
+  describe: "find what was said about <query> — the passages, each with the session and message it came from",
   builder: (y) =>
     y
       .positional("query", { type: "string", demandOption: true })
       .option("account", accountOpt)
       .option("channel", channelOpt)
+      .option("directory", directoryOpt)
+      .option("sessions", { type: "boolean", default: false, describe: "list matching sessions instead of passages" })
       .option("limit", { type: "number", default: 20 })
       .option("offset", { type: "number", default: 0 })
       .option("archived", { type: "boolean", default: true, describe: "include archived sessions" })
@@ -103,7 +124,16 @@ const SearchCommand = cmd({
     guarded(() => {
       const { db } = open(a.account, a.channel)
       try {
-        printList(listSessions(db, { query: a.query, limit: a.limit, offset: a.offset, archived: a.archived }), a.json, a.offset, a.limit)
+        const o = { query: a.query, limit: a.limit, offset: a.offset, archived: a.archived, directory: dirArg(a.directory) }
+        if (a.sessions) return printList(listSessions(db, o), a.json, a.offset, a.limit)
+        const hits = searchPassages(db, a.query, o)
+        if (a.json) return console.log(JSON.stringify({ passages: hits, offset: a.offset, limit: a.limit, more: hits.length === a.limit }, null, 2))
+        if (!hits.length) return console.log(dim("  no passages"))
+        for (const h of hits)
+          console.log(
+            `  ${bold(h.sessionTitle || "(untitled)")} ${dim(`· ${h.role} · ${when(h.time)}`)}\n    ${h.excerpt}\n    ${dim(`iris desktop sessions show ${h.sessionId} --around ${h.messageId}`)}`,
+          )
+        if (hits.length === a.limit) console.log(dim(`\n  more: --offset ${a.offset + a.limit}`))
       } finally {
         db.close()
       }
@@ -119,13 +149,15 @@ const ShowCommand = cmd({
       .option("account", accountOpt)
       .option("channel", channelOpt)
       .option("last", { type: "number", describe: "only the last N turns" })
+      .option("around", { type: "string", describe: "only this message (a search result's message id) and the turns either side" })
+      .option("turns", { type: "number", default: 2, describe: "with --around: how many turns either side" })
       .option("context", { type: "boolean", default: false, describe: "Markdown for an agent's context (e.g. > ctx.md, or pipe to iris chat)" })
       .option("json", { type: "boolean", default: false }),
   handler: (a) =>
     guarded(() => {
       const { db } = open(a.account, a.channel)
       try {
-        const turns = readTranscript(db, a.id, { limit: a.last })
+        const turns = readTranscript(db, a.id, { limit: a.last, around: a.around, context: a.turns })
         const s = getSession(db, a.id) ?? { id: a.id, title: "(untitled)", directory: "" }
         if (a.json) return console.log(JSON.stringify({ session: s, turns }, null, 2))
         if (a.context) return console.log(asContext(s, turns))
