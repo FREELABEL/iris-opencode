@@ -59,12 +59,14 @@ describe("McpClients registration", () => {
     })
 
     test("a temporary HOME is not a stable install either", () => {
+      // No iris installed anywhere (a fresh CI runner): the answer is where it WILL be under the
+      // account home — never the throwaway $HOME. Machine-independent: the account home is given.
       const bin = McpClients.irisBinary({
         execPath: "/fake-tmp/tmp.X/.iris/bin/iris",
         tmpRoots: ["/fake-tmp", home],
+        accountHome: "/no-such-account-home",
       })
-      expect(McpClients.isTemporaryPath(bin, ["/fake-tmp", home])).toBe(false)
-      expect(bin.endsWith(path.join(".iris", "bin", "iris"))).toBe(true)
+      expect(bin).toBe(path.join("/no-such-account-home", ".iris", "bin", "iris"))
     })
 
     // v1.5.9 shipped the fix above and still saved /tmp/tmp.y3zXyWHlyO/.iris/bin/iris: under Bun,

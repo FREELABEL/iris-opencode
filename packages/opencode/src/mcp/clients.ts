@@ -149,7 +149,16 @@ export namespace McpClients {
    * under the account's real home, because a throwaway HOME is exactly the case being refused.
    */
   export function irisBinary(opts: { execPath?: string; tmpRoots?: string[]; accountHome?: string } = {}): string {
-    return stableIrisBinary(opts) ?? path.join(homeDir(), ".iris", "bin", "iris")
+    const found = stableIrisBinary(opts)
+    if (found) return found
+    // Nothing installed yet: still name where it WILL be, never a temp folder (some callers write
+    // this into a launch agent or a PATH). The account home first: a throwaway $HOME is the trap.
+    const tmpRoots = opts.tmpRoots ?? temporaryRoots()
+    return (
+      [opts.accountHome ?? accountHome(), homeDir()]
+        .map((home) => path.join(home, ".iris", "bin", "iris"))
+        .find((p) => !isTemporaryPath(p, tmpRoots)) ?? path.join(homeDir(), ".iris", "bin", "iris")
+    )
   }
 
   /**
