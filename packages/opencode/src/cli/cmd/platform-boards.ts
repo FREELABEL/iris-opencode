@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, resolveUserId, writeJson, failNoOp} from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, paint, resolveUserId, writeJson, failNoOp} from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
 import { firstArray } from "../../util/array"
@@ -55,7 +55,24 @@ function statusColor(status: string): string {
     rejected: UI.Style.TEXT_DANGER,
   }
   const c = colors[status?.toLowerCase()] ?? UI.Style.TEXT_DIM
-  return `${c}${status}${UI.Style.TEXT_NORMAL}`
+  return paint(c, status)
+}
+
+/**
+ * The bounded, machine-readable shape of a board item (#190328). `--json` was
+ * rejected outright, so an agent's only option was the human rendering: no list
+ * membership, ANSI codes in the text. That is not something an agent can act on.
+ */
+export function boardItemJson(item: Record<string, unknown>) {
+  return {
+    id: item.id ?? null,
+    title: item.title ?? null,
+    status: item.status ?? null,
+    type: item.type ?? null,
+    list_id: item.bloq_list_id ?? item.list_id ?? null,
+    list_name: item.list_name ?? null,
+    due_date: item.due_date ?? null,
+  }
 }
 
 function printItem(item: Record<string, unknown>): void {
@@ -63,7 +80,8 @@ function printItem(item: Record<string, unknown>): void {
   const id = dim(`#${item.id}`)
   const status = item.status ? `  ${statusColor(String(item.status))}` : ""
   const type = item.type ? `  ${dim(String(item.type))}` : ""
-  console.log(`  ${title}  ${id}${status}${type}`)
+  const list = item.list_name ? `  ${dim(`in ${String(item.list_name)}`)}` : ""
+  console.log(`  ${title}  ${id}${status}${type}${list}`)
   if (item.description) {
     console.log(`    ${dim(String(item.description).slice(0, 100))}`)
   }
@@ -79,21 +97,22 @@ const BoardsListCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("bloq-id", { describe: "bloq ID", type: "number", demandOption: true })
-      .option("limit", { describe: "max results", type: "number", default: 30 }),
+      .option("limit", { describe: "max results", type: "number", default: 30 })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
-    prompts.intro(`◈  Board Items — Bloq #${args["bloq-id"]}`)
+    if (!args.json) prompts.intro(`◈  Board Items — Bloq #${args["bloq-id"]}`)
 
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
 
-    const spinner = prompts.spinner()
-    spinner.start("Loading items…")
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start("Loading items…")
 
     try {
       const userId = await resolveUserId()
       if (!userId) {
-        spinner.stop("Failed", 1)
+        spinner?.stop("Failed", 1)
         prompts.log.error("Could not resolve user ID. Set IRIS_USER_ID or run iris-login.")
         prompts.outro("Done")
         return
@@ -101,12 +120,22 @@ const BoardsListCommand = cmd({
       const params = new URLSearchParams({ per_page: String(args.limit) })
       const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args["bloq-id"]}/items?${params}`)
       const ok = await handleApiError(res, "List items")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) { spinner?.stop("Failed", 1); prompts.outro("Done"); return }
 
       const data = (await res.json()) as any
       const rawItems = data?.data?.items ?? data?.data?.data ?? data?.data ?? []
       const items: any[] = Array.isArray(rawItems) ? rawItems : Object.values(rawItems)
-      spinner.stop(`${items.length} item(s)`)
+      spinner?.stop(`${items.length} item(s)`)
+
+      if (args.json) {
+        await writeJson({
+          success: true,
+          bloq_id: args["bloq-id"],
+          count: items.length,
+          items: items.map(boardItemJson),
+        })
+        return
+      }
 
       if (items.length === 0) {
         prompts.log.warn("No items found")
@@ -123,7 +152,7 @@ const BoardsListCommand = cmd({
 
       prompts.outro(dim("iris boards get <item-id>  |  iris boards pull <item-id>"))
     } catch (err) {
-      spinner.stop("Error", 1)
+      spinner?.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }

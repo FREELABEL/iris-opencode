@@ -3,6 +3,10 @@ import { productCommand } from "./product-command"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold, writeJson } from "./iris-api"
+import { downloadAudioMp3 } from "./download"
+import { locateYtDlp, isDirectMediaUrl, fetchDirect } from "./media-fetch"
+import { mkdirSync, statSync } from "fs"
+import { join } from "path"
 
 // ============================================================================
 // Copycat CLI — Phase 6
@@ -135,16 +139,69 @@ const AudioCommand = cmd({
   describe: "download YouTube audio as MP3",
   builder: (y) => commonOpts(y)
     .positional("url", { type: "string", demandOption: true })
-    .option("filename", { type: "string" })
-    .option("gcs", { type: "boolean", default: false, describe: "upload to Google Cloud Storage" }),
+    .option("filename", { type: "string", describe: "file name without extension (default: the video id)" })
+    .option("out", { alias: "o", type: "string", describe: "output directory (default: current directory)" })
+    .option("server", { type: "boolean", default: false, describe: "run the old server-side download instead of this machine" })
+    .option("gcs", { type: "boolean", default: false, describe: "upload to Google Cloud Storage (server only)" }),
   async handler(args) {
-    await runAction(args, "download_youtube_audio", {
-      youtube_url: args.url,
-      output_filename: args.filename,
-      upload_to_gcs: args.gcs,
-    }, "Downloading audio…")
+    // #190460: the server path called a Docker-only host and left the MP3 on the server's disk,
+    // so the file never reached the person who asked. Default to the shared local engine — the
+    // same one `iris download` and `iris transcribe` use; --server/--gcs keep the old call.
+    if (args.server || args.gcs) {
+      await runAction(args, "download_youtube_audio", {
+        youtube_url: args.url,
+        output_filename: args.filename,
+        upload_to_gcs: args.gcs,
+      }, "Downloading audio…")
+      return
+    }
+    await downloadAudioHere(args)
   },
 })
+
+async function downloadAudioHere(args: any): Promise<void> {
+  UI.empty()
+  prompts.intro("◈  copycat audio")
+  const url = String(args.url)
+  const outDir = args.out ? String(args.out) : process.cwd()
+  mkdirSync(outDir, { recursive: true })
+  const base = join(outDir, args.filename ? String(args.filename) : audioSlug(url))
+
+  const spinner = prompts.spinner()
+  spinner.start("Downloading audio…")
+  let r: { ok: boolean; path?: string; error?: string }
+  if (isDirectMediaUrl(url)) {
+    // A plain file link needs no yt-dlp. Keep its own extension — renaming a .wav to .mp3 lies.
+    const ext = (new URL(url).pathname.match(/\.([a-z0-9]+)$/i)?.[1] ?? "mp3").toLowerCase()
+    r = await fetchDirect(url, `${base}.${ext}`)
+  } else {
+    const ytdlp = await locateYtDlp()
+    if (!ytdlp) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
+    r = await downloadAudioMp3(ytdlp, url, base)
+  }
+  if (!r.ok || !r.path) {
+    spinner.stop(`Failed: ${r.error ?? "unknown error"}`, 1)
+    process.exitCode = 1
+    prompts.outro("Done")
+    return
+  }
+  const mb = (statSync(r.path).size / 1024 / 1024).toFixed(1)
+  spinner.stop(`Saved (${mb} MB)`)
+  if (args.json) await writeJson({ success: true, path: r.path, bytes: statSync(r.path).size })
+  else console.log(`  ${dim("path:")} ${r.path}`)
+  prompts.outro("Done")
+}
+
+function audioSlug(url: string): string {
+  try {
+    const u = new URL(url)
+    const v = u.searchParams.get("v")
+    if (v) return v
+    const last = u.pathname.split("/").filter(Boolean).pop()
+    if (last) return last.replace(/\.[a-z0-9]+$/i, "")
+  } catch {}
+  return `audio-${Date.now()}`
+}
 
 const VideoCommand = cmd({
   command: "video <url>",

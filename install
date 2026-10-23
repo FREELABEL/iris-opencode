@@ -536,10 +536,14 @@ else
         # "Failed to fetch version information". The desktop app's release cadence must not be
         # able to break the CLI installer.
         #
-        # Ask for the newest release in THIS series instead. The `"v[0-9]` anchor is what
+        # Ask for the highest release in THIS series instead. The `"v[0-9]` anchor is what
         # excludes desktop-v*: after `"tag_name": "` that tag begins with `d`, not `v`.
-        specific_version=$(curl -s "https://api.github.com/repos/FREELABEL/iris-opencode/releases?per_page=30" \
-            | sed -n 's/.*"tag_name": *"v\([0-9][^"]*\)".*/\1/p' | head -1) || true
+        # HIGHEST, not first-listed (#188596): GitHub lists a release by its tag's commit date, so
+        # v1.5.0 (the v2 engine, tagged on an older commit) sat below v1.3.355 and fresh installs
+        # got v1. A field-wise numeric sort, because macOS's sort has no -V on older releases.
+        specific_version=$(curl -s "https://api.github.com/repos/FREELABEL/iris-opencode/releases?per_page=100" \
+            | sed -n 's/.*"tag_name": *"v\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)".*/\1/p' \
+            | sort -t. -k1,1n -k2,2n -k3,3n | tail -1) || true
 
         if [[ -z "$specific_version" ]]; then
             # Last resort: the redirect target of /releases/latest/download still resolves by

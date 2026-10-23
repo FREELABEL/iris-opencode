@@ -1,0 +1,90 @@
+name: public-audit
+
+# This repo is PUBLIC. Fail when anything that must not be published is in it (#189852):
+# client names, internal hostnames, private-prompt sentinels, specs/plans/logs, and
+# (via gitleaks) secrets. The release workflow runs the same matcher over every asset before
+# it is uploaded — see the "Audit release assets" steps in release.yml.
+#
+# The denylist is NOT in this repo — a public list of what must not be public is the leak. It
+# lives in FREELABEL/fl-eco-docker at security/public-audit-denylist.txt and reaches CI as the
+# PUBLIC_AUDIT_DENYLIST_B64 secret. With the secret missing the audit exits 2 and this job is
+# red, never green: an audit that passes because it had nothing to check is the failure mode.
+#
+# Consequence worth knowing: pull requests from FORKS do not receive secrets, so this job is red
+# on every fork PR. That is deliberate. A maintainer re-runs it after review (or the check is
+# satisfied on the merge queue / push to main).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-audit-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history — --history and gitleaks read every commit)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        # The matcher has no dependencies; no `bun install`.
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Load the private denylist
+        env:
+          DENYLIST_B64: ${{ secrets.PUBLIC_AUDIT_DENYLIST_B64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DENYLIST_B64}" ]; then
+            echo "::error::PUBLIC_AUDIT_DENYLIST_B64 is not set (or this is a fork PR, which gets no secrets). Refusing to report clean."
+            exit 2
+          fi
+          f="$RUNNER_TEMP/public-audit-denylist.txt"
+          printf '%s' "$DENYLIST_B64" | base64 -d > "$f"
+          echo "PUBLIC_AUDIT_DENYLIST_FILE=$f" >> "$GITHUB_ENV"
+
+      - name: Content, paths and history
+        # Findings print file:line and a denylist LINE number, never the matched term.
+        run: bun packages/opencode/script/public-audit.ts --content --history
+
+      - name: Remove the denylist from the runner
+        if: always()
+        run: rm -f "$RUNNER_TEMP/public-audit-denylist.txt"
+
+  gitleaks:
+    # Separate job and separate tool on purpose: generic secret scanning is gitleaks' job, not
+    # the matcher's. The binary, not gitleaks/gitleaks-action — the action needs a paid licence
+    # key for organisation repos.
+    runs-on: ubuntu-latest
+    env:
+      GITLEAKS_VERSION: 8.28.0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks (checksum-verified)
+        run: |
+          set -euo pipefail
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          tgz="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          cd "$RUNNER_TEMP"
+          curl -fsSLO "$base/$tgz"
+          curl -fsSL "$base/gitleaks_${GITLEAKS_VERSION}_checksums.txt" | grep " ${tgz}\$" | sha256sum -c -
+          tar -xzf "$tgz" gitleaks
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: gitleaks (full history, redacted)
+        run: gitleaks git --redact --no-banner --verbose .

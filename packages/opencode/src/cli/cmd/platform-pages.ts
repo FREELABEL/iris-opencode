@@ -1,4 +1,7 @@
 import { cmd } from "./cmd"
+import { withAccessFooter } from "./access-guide"
+import { brandContract, brandContractCss, applyBrandBlock } from "./brand-contract"
+import { TEMPLATE_GALLERY_SLUG, briefQuestions, findTemplate, parseTemplateCatalogue, type TemplateRow } from "./genesis-templates"
 import { productCommand } from "./product-command"
 import { buildListEnvelope, projectFields, LIST_FIELDS } from "./list-envelope"
 import * as prompts from "./clack"
@@ -175,6 +178,29 @@ export function isWritableTopKey(path: string, jsonContent: unknown): boolean {
   if (path.includes(".")) return true
   if (JSON_TOP_KEYS.has(path)) return true
   return !!jsonContent && typeof jsonContent === "object" && Object.prototype.hasOwnProperty.call(jsonContent, path)
+}
+
+/**
+ * Why `pages set` must refuse this path, or null when it may write it (#190870).
+ *
+ * `set <slug> totally.nonexistent.path x` printed "Updated totally.nonexistent.path" and stored
+ * nothing: a dotted path skipped the top-key check entirely, so a typo in the FIRST segment
+ * invented a whole new branch that the server then dropped. The first segment is where a typo
+ * becomes a dead key, so it must be a key the page has or one the renderer reads. Prototype
+ * names are refused by name: nothing is stored today, but a write that reports success on
+ * `__proto__` reads as if it reached the object model.
+ */
+export const FORBIDDEN_PATH_SEGMENTS = new Set(["__proto__", "constructor", "prototype"])
+export function setPathProblem(path: string, jsonContent: unknown): string | null {
+  const segments = String(path).replace(/\[(\d+)\]/g, ".$1").split(".")
+  const bad = segments.find((seg) => FORBIDDEN_PATH_SEGMENTS.has(seg))
+  if (bad) return `'${bad}' is not allowed in a path.`
+  if (segments.some((seg) => seg === "")) return `'${path}' has an empty segment.`
+  if (segments.length < 2) return null
+  const top = segments[0]
+  const has = !!jsonContent && typeof jsonContent === "object" && Object.prototype.hasOwnProperty.call(jsonContent, top)
+  if (!has && !JSON_TOP_KEYS.has(top)) return `Path not found: '${top}' is not a key on this page.`
+  return null
 }
 
 export function normaliseSetPath(path: string): { path: string; stripped: boolean } {
@@ -598,7 +624,7 @@ const GetCmd = cmd({
   },
 })
 
-const SetCmd = cmd({
+export const SetCmd = cmd({
   command: "set <slug> <path> <value>",
   describe: "set value at dot-notation path (auto-detects JSON values)",
   builder: (y) =>
@@ -730,6 +756,14 @@ const SetCmd = cmd({
       }
 
       const json = page.json_content ?? {}
+      const problem = setPathProblem(String(args.path), json)
+      if (problem) {
+        sp.stop("Refused", 1)
+        prompts.log.error(`${problem}\nSee what is there: iris pages get ${args.slug}`)
+        process.exitCode = 1
+        prompts.outro("Nothing changed")
+        return
+      }
       const parsed = parseValue(args.value)
       setNestedValue(json, args.path, parsed)
 
@@ -791,13 +825,18 @@ const SetCmd = cmd({
   },
 })
 
-const PullCmd = cmd({
+export const PullCmd = cmd({
   command: "pull <slug>",
   describe: "download page JSON to ./pages/<slug>.json (overwrites local edits — run `pages diff` first)",
   builder: (y) =>
     y
       .positional("slug", { describe: "page slug — e.g. `my-page`, not `pages/my-page.json`", type: "string", demandOption: true })
-      .option("dir", { describe: "output directory", type: "string", default: "./pages" }),
+      .option("dir", { describe: "output directory", type: "string", default: "./pages" })
+      // #190838. Pull always overwrites, so this changes nothing — but push and duplicate take
+      // --force, and without it here yargs rejected the flag and exited 1 BEFORE writing. A
+      // file left by an earlier pull made that look like success, so `pull --force && edit`
+      // skipped the edit and the next push republished the old page.
+      .option("force", { describe: "overwrite the local file (pull always does; accepted for scripts)", type: "boolean", default: false }),
   async handler(args) {
     const { slug, corrected } = normalizeSlugArg(args.slug)
     UI.empty()
@@ -808,7 +847,9 @@ const PullCmd = cmd({
     sp.start("Fetching…")
     try {
       const page = await getBySlug(slug, true)
-      if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+      // Exit non-zero on every failure: `pull && edit && push` must stop here, not edit a
+      // stale file and push it (#190838).
+      if (!page) { sp.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
       const dir = pagesDir(args.dir)
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
       const filePath = join(dir, `${slug}.json`)
@@ -848,7 +889,7 @@ const PullCmd = cmd({
       writeFileSync(filePath, JSON.stringify(exp, null, 2) + "\n")
       const cnt = exp.json_content?.components?.length ?? 0
       sp.stop(success(`Pulled → ${filePath} (${cnt} components)`))
-      if (base) prompts.log.info(dim(`based on v${base.version} — push will refuse if the live page moves past it`))
+      if (base) prompts.log.info(dim(`based on v${base.version} — if the live page moves past it, push merges the two and refuses only edits that collide`))
       else prompts.log.warn(`This page reports no version, so push cannot detect a concurrent edit. Run ${highlight(`iris pages diff ${slug}`)} before pushing.`)
       // Say it now, not after the edits: a push from this account will be refused.
       const access = editAccess(page)
@@ -857,12 +898,13 @@ const PullCmd = cmd({
     } catch (err) {
       sp.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
+      process.exitCode = 1
       prompts.outro("Done")
     }
   },
 })
 
-const PushCmd = cmd({
+export const PushCmd = cmd({
   command: "push <slug>",
   // A push on an already-live page DEMOTES it to draft unless --publish is passed,
   // and a drafted page 404s at its public url. Say that here — it is the single
@@ -885,7 +927,7 @@ const PushCmd = cmd({
     UI.empty()
     prompts.intro(`◈  Push ${slug}`)
     if (corrected) noteSlugCorrection(args.slug, slug)
-    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    if (!(await requireAuth())) { process.exitCode = 1; prompts.outro("Done"); return }
     const sp = prompts.spinner()
     try {
       const dirUsed = pagesDir(args.dir)
@@ -893,6 +935,7 @@ const PushCmd = cmd({
       if (!existsSync(filePath)) {
         prompts.log.error(`Local file not found: ${filePath}`)
         prompts.log.info(dim(`Pull first: iris pages pull ${slug}`))
+        process.exitCode = 1
         prompts.outro("Done")
         return
       }
@@ -967,6 +1010,7 @@ const PushCmd = cmd({
       else {
         sp.stop("Failed", 1)
         prompts.log.error("No 'json_content' or 'components' in file")
+        process.exitCode = 1
         prompts.outro("Done")
         return
       }
@@ -983,6 +1027,7 @@ const PushCmd = cmd({
           if (err === "") console.log()
           else prompts.log.error(err)
         }
+        process.exitCode = 1
         prompts.outro("Done")
         return
       }
@@ -1078,7 +1123,7 @@ const PushCmd = cmd({
         return
       }
 
-      if (!(await handleApiError(res, "Push page"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!(await handleApiError(res, "Push page"))) { sp.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
       const cnt = jsonContent?.components?.length ?? 0
 
       // Re-stamp the file's provenance from what the server now holds, so the NEXT push
@@ -1087,6 +1132,17 @@ const PushCmd = cmd({
       let putBody: any = null
       try { putBody = await res.json() } catch {}
       nextBase = baseFromPage(putBody?.data ?? putBody)
+      // The live page moved since the pull and the server MERGED the two (fl-api #187528) rather
+      // than refusing. Say so: "Pushed" alone read as "my file is now the page", and a stale
+      // file whose fields were superseded by newer live edits looked like a lost edit (#190867).
+      const merge = (putBody?.data ?? putBody)?.merge
+      if (merge?.merged) {
+        prompts.log.warn(
+          `The live page had moved to v${merge.merged_with_version} since your pull (v${merge.base_version}). ` +
+            `Your changes were MERGED with it — fields you did not change keep the newer live values.\n` +
+            `  Check the result: ${highlight(`iris pages pull ${slug}`)}`,
+        )
+      }
       // The PUT response may not echo the page. Ask for it rather than guessing — and do it
       // only when it can matter, i.e. this file is (or is about to become) guarded.
       if (!nextBase && (localBase || baseFromPage(page))) nextBase = baseFromPage(await getBySlug(slug, false))
@@ -1114,7 +1170,7 @@ const PushCmd = cmd({
       // --publish: push + publish in one step
       if (args.publish) {
         const pubRes = await pagesFetch(`/api/v1/pages/${page.id}/publish`, { method: "POST" })
-        if (!(await handleApiError(pubRes, "Publish"))) { sp.stop("Pushed but publish failed", 1); prompts.outro("Done"); return }
+        if (!(await handleApiError(pubRes, "Publish"))) { sp.stop("Pushed but publish failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
         // Explicitly purge iris-api cache
         await pagesFetch("/api/internal/cache/purge-page", {
           method: "POST",
@@ -1146,6 +1202,7 @@ const PushCmd = cmd({
     } catch (err) {
       sp.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
+      process.exitCode = 1
       prompts.outro("Done")
     }
   },
@@ -2043,7 +2100,12 @@ const RebrandCmd = cmd({
       .option("owner-id", { describe: "owner id (defaults to source)", type: "number" })
       .option("site", { describe: "attach the cloned page to this site id", type: "number" })
       .option("publish", { describe: "publish immediately", type: "boolean", default: false })
-      .option("force", { describe: "proceed even if PII leaks are detected", type: "boolean", default: false }),
+      .option("force", { describe: "proceed even if PII leaks are detected", type: "boolean", default: false })
+      .option("source-name", {
+        describe: "a name the source page must not carry into the clone (the client's business or people) — repeatable. HTML pages have no structured name, so without this their names are not checked",
+        type: "string",
+        array: true,
+      }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Rebrand ${args.source} → ${args.as}  ${dim(`(brand: ${args.brand})`)}`)
@@ -2066,8 +2128,37 @@ const RebrandCmd = cmd({
       }
 
       sp.message("Rebranding…")
-      const { json, leaks } = rebrandJsonContent(jsonContent, target)
-      sp.stop(leaks.length ? `${leaks.length} possible leak(s)` : success("Rebranded — clean"))
+      const { json, leaks, namesChecked } = rebrandJsonContent(jsonContent, target, { sourceNames: (args["source-name"] as string[] | undefined) ?? [] })
+      // #188409: a hand-written HTML page keeps its identity in CSS, which the composable rebrand
+      // above never touches. A TEMPLATE marks its brand values in one block; replace that block.
+      // A page without one is not a template, and saying so beats reporting a rebrand that left
+      // every colour where it was.
+      let brandBlockNote = ""
+      if (json?.render_mode === "html") {
+        const tr = await irisFetch(`/api/v1/public/brands/${encodeURIComponent(String(args.brand))}/design-tokens`)
+        const td = tr.ok ? ((await tr.json()) as { name?: string; design_tokens?: Record<string, unknown> }) : {}
+        const { values, missing } = brandContract(td?.design_tokens ?? {})
+        const block = brandContractCss(values, td?.name ?? String(args.brand))
+        let replaced = 0
+        for (const key of ["css", "html", "head"] as const) {
+          if (typeof json[key] === "string") {
+            const r = applyBrandBlock(json[key], block)
+            json[key] = r.text
+            replaced += r.replaced
+          }
+        }
+        brandBlockNote = replaced
+          ? `brand block replaced (${Object.keys(values).length} values${missing.length ? `; kept the template's own: ${missing.join(", ")}` : ""})`
+          : "NOT A TEMPLATE: this HTML page has no /* brand-tokens:start */ block, so its colours and fonts are unchanged"
+      }
+      sp.stop(
+        leaks.length
+          ? `${leaks.length} possible leak(s)`
+          : namesChecked
+            ? success("Rebranded — clean")
+            : "Rebranded — no phones or emails leaked; NAMES NOT CHECKED (this page has no structured brand name — pass --source-name)",
+      )
+      if (brandBlockNote) (brandBlockNote.startsWith("NOT") ? prompts.log.warn : prompts.log.info)(brandBlockNote)
 
       // --- Safety gate: refuse to create/publish if source PII survived ---
       if (leaks.length > 0) {
@@ -2103,11 +2194,19 @@ const RebrandCmd = cmd({
 
       // Save local file
       const filePath = join(pagesDir("./pages"), `${args.as}.json`)
-      writeFileSync(filePath, JSON.stringify({
-        id: p.id, slug: args.as, title,
-        seo_title: payload.seo_title, seo_description: payload.seo_description, og_image: payload.og_image,
-        status: p.status, owner_type: payload.owner_type, owner_id: payload.owner_id, json_content: json,
-      }, null, 2))
+      // The page already exists on the server; the local copy is a convenience. Run outside a
+      // project folder (no ./pages) and writeFileSync threw ENOENT, which jumped to the catch,
+      // SKIPPED --publish, and still ended on "Done" (found verifying templates, 2026-10-07).
+      try {
+        mkdirSync(dirname(filePath), { recursive: true })
+        writeFileSync(filePath, JSON.stringify({
+          id: p.id, slug: args.as, title,
+          seo_title: payload.seo_title, seo_description: payload.seo_description, og_image: payload.og_image,
+          status: p.status, owner_type: payload.owner_type, owner_id: payload.owner_id, json_content: json,
+        }, null, 2))
+      } catch (e) {
+        prompts.log.warn(`Page created, but its local copy was not saved (${e instanceof Error ? e.message : String(e)}). Pull it later: iris pages pull ${args.as}`)
+      }
 
       // Optional: attach to a site (sites live on FL_API)
       if (args.site != null) {
@@ -2138,9 +2237,116 @@ const RebrandCmd = cmd({
     } catch (err) {
       sp.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
+      process.exitCode = 1
       prompts.outro("Done")
     }
   },
+})
+
+// ============================================================================
+// genesis template — starter templates (#188411, epic #188359)
+// ============================================================================
+
+async function loadTemplateCatalogue(): Promise<TemplateRow[] | null> {
+  try {
+    const res = await fetch(`${publicUrl(TEMPLATE_GALLERY_SLUG)}?catalogue=${Date.now()}`)
+    if (!res.ok) return null
+    return parseTemplateCatalogue(await res.text())
+  } catch {
+    return null
+  }
+}
+
+const TemplateListCmd = cmd({
+  command: "list",
+  aliases: ["ls"],
+  describe: "list the Genesis starter templates (from the public gallery /p/genesis-templates)",
+  builder: (y) => y.option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    const rows = await loadTemplateCatalogue()
+    if (rows === null) {
+      if (args.json) console.log(JSON.stringify({ success: false, error: "template gallery unreachable" }))
+      else prompts.log.error(`Could not read the template gallery (${publicUrl(TEMPLATE_GALLERY_SLUG)}).`)
+      process.exitCode = 1
+      return
+    }
+    if (args.json) {
+      console.log(JSON.stringify({ success: true, templates: rows }))
+      return
+    }
+    UI.empty()
+    prompts.intro("◈  Genesis starter templates")
+    if (!rows.length) prompts.log.warn("The gallery has no templates yet.")
+    for (const r of rows) {
+      console.log(`  ${bold(r.slug)}  ${dim(r.archetype ?? "")}${r.audit_score ? dim(`  · audit ${r.audit_score}/10`) : ""}`)
+      if (r.description) console.log(`    ${r.description}`)
+    }
+    console.log()
+    console.log(`  ${dim("Use one:")} iris genesis template use <slug> --brand <brand> --as <new-slug> --bloq <your board>`)
+    prompts.outro("Done")
+  },
+})
+
+const TemplateUseCmd = cmd({
+  command: "use <template>",
+  describe: "clone a starter template in a brand's identity, onto YOUR board, then print its subject brief",
+  builder: (y) =>
+    y
+      .positional("template", { describe: "template slug or short name (iris genesis template list)", type: "string", demandOption: true })
+      .option("brand", { describe: "brand slug whose identity to apply", type: "string", demandOption: true })
+      .option("as", { describe: "slug for your new page", type: "string", demandOption: true })
+      .option("bloq", {
+        describe: "your board (bloq id) that will own the page. Required: the template lives on someone else's board",
+        type: "number",
+        demandOption: true,
+      })
+      .option("title", { describe: "page title (defaults to the brand name)", type: "string" })
+      .option("publish", { describe: "publish immediately", type: "boolean", default: false })
+      .option("force", { describe: "proceed even if the leak check finds the template's own names", type: "boolean", default: false }),
+  async handler(args) {
+    const rows = await loadTemplateCatalogue()
+    if (rows === null) {
+      prompts.log.error(`Could not read the template gallery (${publicUrl(TEMPLATE_GALLERY_SLUG)}).`)
+      process.exitCode = 1
+      return
+    }
+    const row = findTemplate(rows, String(args.template))
+    if (!row) {
+      prompts.log.error(`No template named "${args.template}". See: iris genesis template list`)
+      process.exitCode = 1
+      return
+    }
+    // One clone path. The owner is ALWAYS the caller's board: rebrand defaults the clone's owner
+    // to the SOURCE page's owner, which for a shared template is not the person using it.
+    await (RebrandCmd.handler as (a: Record<string, unknown>) => Promise<void>)({
+      ...args,
+      source: row.slug,
+      "owner-type": "bloq",
+      "owner-id": Number(args.bloq),
+    })
+    if (Number(process.exitCode ?? 0) !== 0) return
+    const own = String(row.source_names ?? "").split(",").map((n) => n.trim()).filter(Boolean)
+    if (own.length) {
+      console.log()
+      console.log(`  ${bold("The copy still names the template's owner:")} ${own.join(", ")}  ${dim("— expected; rewrite it")}`)
+    }
+    const qs = briefQuestions(row)
+    if (qs.length) {
+      console.log()
+      console.log(`  ${bold("Now make it about this business")} ${dim("(the colours are done; the subject is not)")}`)
+      qs.forEach((q, i) => console.log(`  ${dim(String(i + 1).padStart(2, " ") + ".")} ${q}`))
+      console.log(`  ${dim("Edit:")} iris pages pull ${args.as}  ${dim("→ change the copy →")}  iris pages push ${args.as}`)
+      console.log()
+    }
+  },
+})
+
+const TemplateCmd = cmd({
+  command: "template",
+  aliases: ["templates"],
+  describe: "Genesis starter templates — list them, or clone one in a brand's identity",
+  builder: (y) => y.command(TemplateListCmd).command(TemplateUseCmd).demandCommand(1),
+  async handler() {},
 })
 
 const ComponentsCmd = cmd({
@@ -2381,9 +2587,48 @@ export function assignComponentIds(jsonContent: any): number {
 }
 
 async function validateComponents(jsonContent: any): Promise<{ valid: boolean; errors: string[] }> {
-  const validTypes = await getValidComponentTypes()
+  return componentErrors(jsonContent, await getValidComponentTypes())
+}
+
+/** Edit distance, for "did you mean" (#190872). */
+function editDistance(a: string, b: string): number {
+  const x = a.toLowerCase(), y = b.toLowerCase()
+  let prev = Array.from({ length: y.length + 1 }, (_, j) => j)
+  for (let i = 1; i <= x.length; i++) {
+    const cur = [i]
+    for (let j = 1; j <= y.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (x[i - 1] === y[j - 1] ? 0 : 1))
+    }
+    prev = cur
+  }
+  return prev[y.length]
+}
+
+/** Up to `n` known types closest to `name` — a substring match first, then by edit distance. */
+export function closestComponentTypes(name: string, validTypes: Iterable<string>, n = 5): string[] {
+  const lower = name.toLowerCase()
+  return [...validTypes]
+    .map((t) => ({ t, score: t.toLowerCase().includes(lower) || lower.includes(t.toLowerCase()) ? -1 : editDistance(name, t) }))
+    .sort((a, b) => a.score - b.score || a.t.localeCompare(b.t))
+    .slice(0, n)
+    .map((r) => r.t)
+}
+
+/**
+ * Every reason a page's components cannot be pushed. Pure, so it is testable without the API.
+ *
+ * Two additions:
+ * - #190869: two components with the same `id` were stored. The id is the address `pages set`
+ *   and the renderer use, so a duplicate makes every later edit ambiguous — refused like an
+ *   unknown type.
+ * - #190872: an unknown type printed all ~247 valid names on one line, and the line that
+ *   mattered scrolled away. Now: the closest matches, and the registry command for the rest.
+ */
+export function componentErrors(jsonContent: any, validTypes: Set<string>): { valid: boolean; errors: string[] } {
   const components = jsonContent?.components ?? []
   const errors: string[] = []
+  const seen = new Map<string, number>()
+  let unknownType = false
 
   for (let i = 0; i < components.length; i++) {
     const c = components[i]
@@ -2392,17 +2637,22 @@ async function validateComponents(jsonContent: any): Promise<{ valid: boolean; e
       continue
     }
     if (!validTypes.has(c.type)) {
-      errors.push(`components[${i}]: "${c.type}" is not a valid component type`)
+      unknownType = true
+      const near = closestComponentTypes(String(c.type), validTypes)
+      errors.push(`components[${i}]: "${c.type}" is not a valid component type` + (near.length ? ` — did you mean ${near.join(", ")}?` : ""))
     }
     if (!c.id) {
       errors.push(`components[${i}] (${c.type}): missing "id" field`)
+    } else if (seen.has(String(c.id))) {
+      errors.push(`components[${i}] (${c.type}): id "${c.id}" is already used by components[${seen.get(String(c.id))}] — every component id must be unique`)
+    } else {
+      seen.set(String(c.id), i)
     }
   }
 
-  if (errors.length > 0) {
+  if (unknownType) {
     errors.push("")
-    errors.push(`Valid types: ${[...validTypes].join(", ")}`)
-    errors.push(`Run: iris pages component-registry`)
+    errors.push(`All ${validTypes.size} types: iris pages component-registry`)
   }
 
   return { valid: errors.length === 0, errors }
@@ -2896,7 +3146,7 @@ const ComponentRegistryCmd = cmd({
 // QR Code — generate short URL + QR for any page
 // ============================================================================
 
-const QrCmd = cmd({
+export const QrCmd = cmd({
   command: "qr <slug>",
   describe: "get short URL + QR code for a page",
   builder: (y) =>
@@ -2907,11 +3157,21 @@ const QrCmd = cmd({
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  QR Code: ${args.slug}`)
-    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    if (!(await requireAuth())) { process.exitCode = 1; prompts.outro("Done"); return }
 
     const sp = prompts.spinner()
     sp.start("Generating short URL + QR…")
     try {
+      // A QR for a page that does not exist is a printed link to nothing, and the short-url
+      // endpoint would mint a record for it. Check first (#190871).
+      const page = await getBySlug(String(args.slug), false, { quiet404: true })
+      if (!page) {
+        sp.stop("Not found", 1)
+        prompts.log.error(`No page "${args.slug}" — no QR made. Find it: iris pages search ${args.slug}`)
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
       const { FL_API } = await import("./iris-api")
       const res = await irisFetch(`/api/v1/pages/${encodeURIComponent(String(args.slug))}/short-url`, {
         method: "POST",
@@ -2922,6 +3182,7 @@ const QrCmd = cmd({
         const err = await res.text().catch(() => "")
         sp.stop("Failed")
         prompts.log.error(`Failed: ${err || `HTTP ${res.status}`}`)
+        process.exitCode = 1
         prompts.outro("Done")
         return
       }
@@ -2948,6 +3209,7 @@ const QrCmd = cmd({
     } catch (e: any) {
       sp.stop("Error")
       prompts.log.error(e.message ?? String(e))
+      process.exitCode = 1
       prompts.outro("Done")
     }
   },
@@ -3407,7 +3669,7 @@ const CacheClearCmd = cmd({
 const ReassignCmd = cmd({
   command: "reassign <slug>",
   aliases: ["chown"],
-  describe: "change page ownership (owner_type + owner_id)",
+  describe: "move a page to another bloq, user or lead — change who owns it",
   builder: (y) =>
     y
       .positional("slug", { describe: "page slug", type: "string", demandOption: true })
@@ -3705,6 +3967,142 @@ function renderReach(page: any, v: { mode: VisibilityMode; declared: boolean }, 
   }
   printDivider()
 }
+
+const RedirectCmd = cmd({
+  command: "redirect <slug> [target]",
+  aliases: ["forward"],
+  // WHY THIS EXISTS. A promoted post's destination url is immutable — it lives in the post
+  // body and there is no edit for it. So the /p/ address an ad was approved against is fixed
+  // forever, and re-pointing paid traffic used to mean new posts and new review (seven to nine
+  // hours, on this account). Setting a redirect turns that fixed address into a POINTER.
+  //
+  // The visit is recorded BEFORE the forward, so utm_content (which creative), twclid, and the
+  // first-touch cookie the server-side /download/{platform} route reads all survive the hop.
+  // That is the entire point: a plain DNS or edge redirect would move the traffic and lose the
+  // attribution, which is the thing that was hard to get.
+  describe:
+    "point a page at another url while still recording the visit (utm_content, twclid and the " +
+    "first-touch cookie survive the hop). Use it to re-aim an ad whose link can no longer be " +
+    "edited. Omit the target to show the current one; --clear removes it. Always a 302",
+  builder: (y) =>
+    y
+      .positional("slug", { describe: "page slug", type: "string", demandOption: true })
+      .positional("target", {
+        describe:
+          "where to forward: a site-relative path (/downloads) or an absolute https:// url. " +
+          "External hosts need a trusted owner — a redirect on this domain is a phishing " +
+          "primitive, so untrusted pages may only point at our own",
+        type: "string",
+      })
+      .option("clear", { describe: "remove the redirect and render the page normally", type: "boolean", default: false })
+      .option("json", { describe: "output as JSON", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    const slug = String(args.slug)
+    const clearing = !!args.clear
+    const target = args.target ? String(args.target).trim() : null
+
+    if (clearing && target) {
+      prompts.log.error("Pass a target or --clear, not both.")
+      process.exitCode = 1
+      return
+    }
+
+    prompts.intro(`◈  Redirect: ${slug}${clearing ? " → (cleared)" : target ? ` → ${target}` : ""}`)
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+    const sp = prompts.spinner()
+    sp.start("Loading…")
+    try {
+      const page = await getBySlug(slug, false)
+      if (!page) { sp.stop("Page not found", 1); process.exitCode = 1; prompts.outro("Done"); return }
+      const current: string | null = (page as any).redirect_to ?? null
+
+      // ---- Report mode -----------------------------------------------------
+      if (!clearing && !target) {
+        sp.stop(current ? `Forwarding to ${current}` : "No redirect — the page renders normally")
+        if (args.json) {
+          await writeJson({ slug: page.slug, id: page.id, redirect_to: current, status: page.status })
+          prompts.outro("Done")
+          return
+        }
+        if (current) {
+          prompts.log.info(
+            `${publicUrl(page)}\n  → ${current}\n\n` +
+            `  Every visit is still recorded first, so utm_content and twclid reach the target.`,
+          )
+        }
+        prompts.outro(dim(`iris genesis redirect ${slug} /downloads   ·   iris genesis redirect ${slug} --clear`))
+        return
+      }
+
+      const desired = clearing ? null : target
+      if ((current ?? null) === (desired ?? null)) {
+        sp.stop(desired ? `Already forwarding to ${desired}` : "Already has no redirect")
+        prompts.outro("Done")
+        return
+      }
+
+      sp.stop(current ? `Currently → ${current}` : "Currently no redirect")
+
+      const sp2 = prompts.spinner()
+      sp2.start(clearing ? "Clearing redirect…" : `Pointing at ${desired}…`)
+      const res = await pagesFetch(`/api/v1/pages/${page.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ redirect_to: desired }),
+      })
+      if (!(await handleApiError(res, "Set redirect"))) { sp2.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const updated = ((await res.json()) as any)?.data ?? {}
+      const after: string | null = updated.redirect_to ?? null
+
+      // Same guard the visibility command carries: a backend that predates the column
+      // accepts the PUT and drops the field, and claiming a change that did not happen is
+      // how someone spends an afternoon debugging an ad that still lands on the old page.
+      if ((after ?? null) !== (desired ?? null)) {
+        sp2.stop("Not applied", 1)
+        process.exitCode = 1
+        prompts.log.error(
+          `The API accepted the request but the page still reports redirect_to=${after ?? "(none)"}.\n` +
+          `  This backend doesn't support page redirects yet — nothing changed.`,
+        )
+        prompts.outro("Done")
+        return
+      }
+
+      // A cached render would keep serving the page body, so the redirect would appear to
+      // do nothing until the cache aged out.
+      await pagesFetch("/api/internal/cache/purge-page", {
+        method: "POST",
+        body: JSON.stringify({ slug: page.slug }),
+      }).catch(() => {})
+
+      sp2.stop(clearing ? "Redirect cleared" : `Forwarding to ${after}`)
+
+      if (args.json) {
+        await writeJson({ slug: page.slug, id: page.id, redirect_to: after, status: page.status })
+        prompts.outro("Done")
+        return
+      }
+
+      if (after) {
+        prompts.log.success(
+          `${publicUrl(page)}\n  → ${after}\n\n` +
+          `  302, so you can re-point it again later — a 301 would be cached by every browser\n` +
+          `  that saw it and could never be taken back.`,
+        )
+      } else {
+        prompts.log.success(`${publicUrl(page)} renders normally again.`)
+      }
+      prompts.outro("Done")
+    } catch (e: any) {
+      sp.stop("Failed", 1)
+      process.exitCode = 1
+      prompts.log.error(e?.message ?? String(e))
+      prompts.outro("Done")
+    }
+  },
+})
 
 const VisibilityCmd = cmd({
   command: "visibility <slug> [mode]",
@@ -4905,6 +5303,8 @@ const VerifyCmd = cmd({
 export interface ParsedHtmlDoc {
   title: string | null
   description: string | null
+  /** The file's share image (og:image, else twitter:image). Raw — see shareImageProblem(). */
+  ogImage: string | null
   css: string
   body: string
   isFullDocument: boolean
@@ -4918,9 +5318,44 @@ export interface ParsedHtmlDoc {
  * literal is out of contract — and `pages verify` is the backstop that catches it, which
  * is the point of shipping the two together.
  */
+/**
+ * Every <meta> in the file as name/property → content. Attribute ORDER varies by author
+ * (`content` before `property` is common), so each tag's attributes are read as a set rather
+ * than with one positional regex. First declaration of a key wins.
+ */
+export function parseMetaTags(src: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const tag of src.match(/<meta\b[^>]*>/gi) ?? []) {
+    const attrs: Record<string, string> = {}
+    // The value closes on the SAME quote that opened it (#188610: an apostrophe inside "…" is content).
+    const attrRe = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(["'])([\s\S]*?)\2/g
+    let a: RegExpExecArray | null
+    while ((a = attrRe.exec(tag)) !== null) attrs[a[1].toLowerCase()] = a[3]
+    const key = (attrs.property ?? attrs.name ?? "").toLowerCase()
+    if (key && attrs.content !== undefined && !(key in out)) out[key] = attrs.content.trim()
+  }
+  return out
+}
+
+const SHARE_IMAGE_KEYS = ["og:image", "og:image:secure_url", "og:image:url", "twitter:image", "twitter:image:src"]
+
+/**
+ * Why a share image cannot be used, or null. Link-preview crawlers (iMessage, Slack, X,
+ * Facebook, LinkedIn) fetch og:image with no page context, so a relative path or a data: URI
+ * resolves to nothing and the share shows a blank or generic card — silently.
+ */
+export function shareImageProblem(url: string): string | null {
+  if (/^data:/i.test(url)) return "it is a data: URI — crawlers cannot fetch it"
+  if (!/^https?:\/\//i.test(url)) return "it is not an absolute http(s) URL — crawlers fetch it without the page, so a relative path resolves to nothing"
+  return null
+}
+
 export function parseHtmlDocument(src: string): ParsedHtmlDoc {
   const titleMatch = src.match(/<title[^>]*>([\s\S]*?)<\/title>/i)
-  const descMatch = src.match(/<meta\s+[^>]*name\s*=\s*["']description["'][^>]*content\s*=\s*["']([\s\S]*?)["']/i)
+  // The value closes on the SAME quote that opened it. Accepting either quote ended
+  // content="Tonight's menu…" at the apostrophe — a template went live described as "Tonight" (#188610).
+  const descRaw = src.match(/<meta\s+[^>]*name\s*=\s*["']description["'][^>]*content\s*=\s*(["'])([\s\S]*?)\1/i)
+  const descMatch = descRaw ? [descRaw[0], descRaw[2]] : null
 
   const styles: string[] = []
   const styleRe = /<style[^>]*>([\s\S]*?)<\/style>/gi
@@ -4942,9 +5377,13 @@ export function parseHtmlDocument(src: string): ParsedHtmlDoc {
   }
   body = body.replace(styleRe, "").trim()
 
+  const metas = parseMetaTags(src)
+  const ogKey = SHARE_IMAGE_KEYS.find((k) => metas[k])
+
   return {
     title: titleMatch ? titleMatch[1].replace(/\s+/g, " ").trim() : null,
     description: descMatch ? descMatch[1].replace(/\s+/g, " ").trim() : null,
+    ogImage: ogKey ? metas[ogKey] : null,
     css: styles.join("\n\n"),
     body,
     isFullDocument,
@@ -4971,9 +5410,14 @@ export function buildBespokeJsonContent(
   opts?: { themeMode?: string; backgroundColor?: string; brandName?: string; requiresAuth?: boolean },
 ): Record<string, any> {
   const requireOtp = !!opts?.requiresAuth
+  // The share image. json_content.og_image is FIRST in the server's og:image chain, so the
+  // file's own <meta property="og:image"> decides the link preview. Before this the head was
+  // discarded and every hand-written page unfurled as the generic IRIS card. Absent (or
+  // unusable) → the key is omitted, and an update carries the live page's value forward.
+  const share = doc.ogImage && !shareImageProblem(doc.ogImage) ? { og_image: doc.ogImage } : {}
   if (lane === "standalone") {
     // render_mode:html -> public-html.blade.php serves the document with a minimal reset.
-    return { version: "2.0", type: "article", render_mode: "html", html: doc.body, css: doc.css, requireOtp }
+    return { version: "2.0", type: "article", render_mode: "html", html: doc.body, css: doc.css, requireOtp, ...share }
   }
   // CustomHtml lane: one v-html block inside the normal composable shell. The CSS has to
   // ride along inside the fragment because props.html is a single field.
@@ -4988,9 +5432,59 @@ export function buildBespokeJsonContent(
     },
     requireOtp,
     components: [{ type: "CustomHtml", id: "doc", props: { html: fragment } }],
+    ...share,
   }
 }
 
+
+/**
+ * The keys publish-html owns — what the HTML file decides. Both lanes' keys, so switching lane
+ * cannot carry the other lane's body across (a standalone page that kept a CustomHtml block is
+ * refused at save for an untrusted owner, and would run inline for a trusted one).
+ */
+export const PUBLISHER_KEYS = ["version", "type", "render_mode", "html", "css", "requireOtp", "theme", "components"]
+
+/**
+ * Everything ELSE on the live page survives a republish (#187241, #187461).
+ *
+ * publish-html used to PUT json_content built from the file alone. A page's dataset bindings
+ * live at `json_content.bindings` and its gate allowlist at `json_content.gate`, and neither is
+ * in the file — so every republish deleted them. The page still rendered with its layout
+ * intact; only the data vanished, which on a client dashboard reads as "you have nothing".
+ * Twice on 2026-10-01 (cottonwood-dashboard, genesis-charts).
+ */
+export function carryForward(
+  live: Record<string, any> | null | undefined,
+  fresh: Record<string, any>,
+): { json: Record<string, any>; kept: string[] } {
+  const json = { ...fresh }
+  const kept: string[] = []
+  for (const [k, v] of Object.entries(live ?? {})) {
+    if (PUBLISHER_KEYS.includes(k) || k in json) continue
+    json[k] = v
+    kept.push(k)
+  }
+  return { json, kept }
+}
+
+/**
+ * Whether the page is gated after this publish. The flag decides when it is GIVEN; otherwise an
+ * update keeps what the live page has. `--requires-auth` defaulted to false and was sent on
+ * every update, so republishing a gated page without the flag silently ungated it — the same
+ * shape as the bindings loss, on the page's access control.
+ */
+export function resolveGate(
+  flag: boolean | undefined,
+  live: { requires_auth?: unknown; json_content?: { requireOtp?: unknown } } | null | undefined,
+): { requiresAuth: boolean; requireOtp: boolean; kept: boolean } {
+  if (flag !== undefined || !live) {
+    const on = !!flag
+    return { requiresAuth: on, requireOtp: on, kept: false }
+  }
+  // Both flags, as the live page holds them: requires_auth without requireOtp is the
+  // frictionless capture form, and a republish is not the place to change which modal shows.
+  return { requiresAuth: !!live.requires_auth, requireOtp: !!live.json_content?.requireOtp, kept: true }
+}
 
 /**
  * The heads-up fl-api returns with a saved standalone page (`data.sandbox`).
@@ -5041,7 +5535,8 @@ const PublishHtmlCmd = cmd({
       .option("owner-type", { describe: "owner type", type: "string", default: "bloq" })
       .option("owner-id", { describe: "owner bloq id", type: "number", default: 38 })
       .option("theme-mode", { describe: "custom lane only: light | dark", type: "string", default: "light" })
-      .option("requires-auth", { describe: "put the page behind the OTP gate", type: "boolean", default: false })
+      // No default: an update with no flag KEEPS the live page's gate (see resolveGate).
+      .option("requires-auth", { describe: "put the page behind the OTP gate (on an update, omit to keep its current gate)", type: "boolean" })
       .option("publish", { describe: "publish after upload (default)", type: "boolean", default: true })
       // boolean-negation is disabled globally (src/index.ts:224), so `--no-publish` is NOT
       // the negation of `--publish` — it is an unknown key, and `.strict()` turns it into a
@@ -5083,10 +5578,9 @@ const PublishHtmlCmd = cmd({
     // semantic document is legitimate.
     if (!doc.css.trim()) prompts.log.warn("No <style> found — the page will publish unstyled.")
 
-    const jsonContent = buildBespokeJsonContent(doc, lane, {
-      themeMode: String(args["theme-mode"]),
-      requiresAuth: !!args["requires-auth"],
-    })
+    const authFlag = args["requires-auth"] as boolean | undefined
+    const build = (requiresAuth: boolean) =>
+      buildBespokeJsonContent(doc, lane, { themeMode: String(args["theme-mode"]), requiresAuth })
 
     prompts.log.info(dim(`from ${filePath}`))
     printKV("Lane", lane === "standalone" ? "standalone (render_mode:html)" : "custom (CustomHtml component)")
@@ -5094,9 +5588,16 @@ const PublishHtmlCmd = cmd({
     printKV("HTML", `${doc.body.length} chars`)
     printKV("CSS", `${doc.css.length} chars`)
     if (description) printKV("Description", description)
+    // The link preview. Silent until someone shares the page and sees the generic card — so say
+    // it here, before anything is sent.
+    const shareProblem = doc.ogImage ? shareImageProblem(doc.ogImage) : null
+    if (doc.ogImage && !shareProblem) printKV("Share image", doc.ogImage)
+    else if (doc.ogImage && shareProblem) prompts.log.warn(`og:image ignored — ${shareProblem}: ${doc.ogImage}`)
+    else prompts.log.warn('No og:image in the file — on a NEW page, links will unfurl as the generic IRIS card (an update keeps the current one). Add <meta property="og:image" content="https://…1200x630.png">.')
 
     if (args["dry-run"]) {
       console.log()
+      prompts.log.info(dim("On an update, the live page's bindings, gate and other settings are kept; only the HTML changes."))
       prompts.log.info("Dry run — nothing sent.")
       prompts.outro("Done")
       return
@@ -5109,8 +5610,13 @@ const PublishHtmlCmd = cmd({
     const sp = prompts.spinner()
     sp.start("Uploading…")
     let sandboxReport: any = undefined
+    let jsonContent: Record<string, any> = build(!!authFlag)
+    let requiresAuth = !!authFlag
     try {
-      let page = await getBySlug(slug, false)
+      // WITH json: the update below keeps what the file does not decide (carryForward).
+      // quiet404: a missing page here means CREATE, not failure — without it every first
+      // publish of a new page printed "Published" and then "Failed (exit 1)" (#189281, #183670).
+      let page = await getBySlug(slug, true, { quiet404: true })
 
       if (!page) {
         sp.message("No page for that slug yet — creating…")
@@ -5123,16 +5629,22 @@ const PublishHtmlCmd = cmd({
           owner_id: Number(args["owner-id"]),
           json_content: jsonContent,
           publish: shouldPublish,
-          requires_auth: !!args["requires-auth"],
+          requires_auth: requiresAuth,
         })
         if (!page) { sp.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
         sandboxReport = page.sandbox
       } else {
+        const live = typeof page.json_content === "string" ? JSON.parse(page.json_content) : page.json_content
+        const gate = resolveGate(authFlag, { requires_auth: page.requires_auth, json_content: live })
+        const carried = carryForward(live, { ...build(gate.requiresAuth), requireOtp: gate.requireOtp })
+        jsonContent = carried.json
+        requiresAuth = gate.requiresAuth
+        if (carried.kept.length) sp.message(`Keeping from the live page: ${carried.kept.join(", ")}`)
         const updateData: Record<string, unknown> = {
           json_content: jsonContent,
           title,
           seo_title: title,
-          requires_auth: !!args["requires-auth"],
+          requires_auth: requiresAuth,
         }
         if (description) updateData.seo_description = description
         const res = await pagesFetch(`/api/v1/pages/${page.id}`, { method: "PUT", body: JSON.stringify(updateData) })
@@ -5158,7 +5670,7 @@ const PublishHtmlCmd = cmd({
         writeFileSync(
           join(dir, `${slug}.json`),
           JSON.stringify(
-            { id: page.id, slug, title, seo_title: title, seo_description: description ?? null, status: shouldPublish ? "published" : "draft", owner_type: String(args["owner-type"]), owner_id: Number(args["owner-id"]), requires_auth: !!args["requires-auth"], json_content: jsonContent },
+            { id: page.id, slug, title, seo_title: title, seo_description: description ?? null, status: shouldPublish ? "published" : "draft", owner_type: String(args["owner-type"]), owner_id: Number(args["owner-id"]), requires_auth: requiresAuth, json_content: jsonContent },
             null,
             2,
           ) + "\n",
@@ -5175,6 +5687,9 @@ const PublishHtmlCmd = cmd({
       const after = await getBySlug(slug, false)
       const liveNow = after?.status === "published"
       sp.stop(success(liveNow ? "Published" : "Uploaded (draft)"))
+      const keptKeys = Object.keys(jsonContent).filter((k) => !PUBLISHER_KEYS.includes(k))
+      if (keptKeys.length) printKV("Kept", keptKeys.join(", "))
+      printKV("Gate", requiresAuth ? "on — visitors sign in" : "off — public")
 
       if (!shouldPublish && liveNow) {
         prompts.log.warn("--no-publish skips publishing; it does NOT unpublish.")
@@ -5245,7 +5760,7 @@ export const PlatformPagesCommand = productCommand({
   aliases: ["pages"],
   purpose:
     "Genesis — composable pages, sites and COMPONENTS: browse the component library with its props/emits/slots, see which pages use a component before changing it, roll a component back, plus pages list/view/get/set/pull/push/diff/publish/screenshot, and export a page to a server you control (export/deploy — IRIS Edge)",
-  keywords: ["genesis", "page", "site", "component", "components", "library", "catalogue", "props", "emits", "slots", "usage", "rollback", "versions", "stale", "publish", "artifact", "landing", "screenshot", "verify", "read", "bespoke", "html", "export", "deploy", "edge", "self-host", "static", "rollback"],
+  keywords: ["genesis", "page", "site", "component", "components", "library", "catalogue", "props", "emits", "slots", "usage", "rollback", "versions", "stale", "publish", "artifact", "landing", "screenshot", "verify", "read", "bespoke", "html", "export", "deploy", "edge", "self-host", "static", "rollback", "redirect", "forward", "utm", "attribution", "ads"],
   howtos: ["genesis-design-standard", "bespoke", "genesis-sdk", "pages", "edge-publish"],
   playbooks: ["pages", "seed-pages", "edge-publish"],
   builder: (y) =>
@@ -5261,17 +5776,19 @@ export const PlatformPagesCommand = productCommand({
       .command(DevCmd)
       .command(DiffCmd)
       .command(MergeCmd)
-      .command(PublishCmd)
+      .command(withAccessFooter(PublishCmd))
       .command(UnpublishCmd)
-      .command(PreviewCmd)
-      .command(VisibilityCmd)
-      .command(ShareCmd)
+      .command(withAccessFooter(PreviewCmd))
+      .command(withAccessFooter(VisibilityCmd))
+      .command(RedirectCmd)
+      .command(withAccessFooter(ShareCmd))
       .command(ShareListCmd)
       .command(ShareRevokeCmd)
       .command(CreateCmd)
       .command(DuplicateCmd)
       .command(CheckPublicCmd)
       .command(RebrandCmd)
+      .command(TemplateCmd)
       .command(ComponentsCmd)
       .command(ComposeCmd)
       .command(ComponentRegistryCmd)
@@ -5282,7 +5799,7 @@ export const PlatformPagesCommand = productCommand({
       .command(ScreenshotCmd)
       .command(ReadCmd)
       .command(VerifyCmd)
-      .command(PublishHtmlCmd)
+      .command(withAccessFooter(PublishHtmlCmd))
       .command(ReassignCmd)
       .command(UngateCmd)
       .command(PagesGateCommand)

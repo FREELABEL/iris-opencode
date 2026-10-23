@@ -1,6 +1,6 @@
 import { Beacon } from "../../telemetry/beacon"
 import { cmd } from "./cmd"
-import { parseTargets, toCursorRule, isGenerated, upsertAgentsBlock, type SyncTarget } from "../lib/playbook-targets"
+import { resolveTargets, toCursorRule, isGenerated, upsertAgentsBlock, upsertPlaybookSection, type SyncTarget } from "../lib/playbook-targets"
 import { PlaybookContentsCommands } from "./platform-playbook-contents"
 import * as prompts from "./clack"
 // Aliased: `Tier` is already taken in this file by the e2e runner's own unrelated enum.
@@ -27,6 +27,9 @@ import {
   type StepResult,
   type ExecuteOptions,
   NoPosixShellError,
+  InvalidPlaybookError,
+  StepNotFoundError,
+  runOutcome,
 } from "../../skill/executor"
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "fs"
 import {
@@ -48,6 +51,7 @@ import { runE2ESuite, probeServices, type E2ESuiteResult, type Tier, type ModeCo
 import { PlaybookDraftCommand } from "./playbook-draft"
 import { PlaybookSopDraftCommand } from "./sop-draft"
 import { firstArray } from "../../util/array"
+import { CliUsageError } from "../json-error"
 
 // Wrap callback in Instance.provide so Skill.all()/get() can find .claude/skills/
 async function withInstance<T>(fn: () => Promise<T>): Promise<T> {
@@ -93,9 +97,8 @@ const SkillSearchCommand = cmd({
       const need = ((args.tag as string[]) ?? []).map((t) => String(t).trim().toLowerCase()).filter(Boolean)
 
       if (!q && !need.length) {
-        console.log("Give a query or at least one --tag. `iris playbook list` shows everything.")
-        process.exitCode = 1
-        return
+        // Thrown, so --json callers get it as JSON (#190878).
+        throw new CliUsageError("Give a query or at least one --tag. `iris playbook list` shows everything.")
       }
 
       const skills = await Skill.all()
@@ -259,7 +262,17 @@ const SkillListCommand = cmd({
       const scopeOf = (name: string): string | null =>
         scopes === null ? null : (scopes.get(name) ?? "unpublished")
 
+      // #190274: a file whose header does not parse is not in `plans` — say so instead of
+      // dropping it. A playbook someone just wrote must not simply be absent from the list.
+      const unparseable = await Skill.invalid()
+      const unparseableLines = unparseable.flatMap((u) => [`  ✗ ${u.name}  ${u.path}`, `      ${u.message}`])
+
       if (args.json) {
+        // stdout stays the array every caller iterates; the broken files go to stderr.
+        if (unparseable.length) {
+          console.error(`${unparseable.length} playbook file(s) could not be read (iris playbook doctor):`)
+          for (const line of unparseableLines) console.error(line)
+        }
         await writeJson(plans.map((p) => ({
           name: p.plan.name,
           version: p.plan.version,
@@ -274,8 +287,15 @@ const SkillListCommand = cmd({
       UI.empty()
       prompts.intro("◈  Skills")
 
+      const printUnparseable = () => {
+        if (!unparseable.length) return
+        console.log(`  ${unparseable.length} file(s) could not be read — fix the header (a value containing ': ' must be quoted):`)
+        for (const line of unparseableLines) console.log(line)
+      }
+
       if (plans.length === 0) {
         console.log(dim("  No skills found."))
+        printUnparseable()
         prompts.outro("Done")
         return
       }
@@ -295,6 +315,7 @@ const SkillListCommand = cmd({
       }
       printDivider()
       console.log(dim(`  ${plans.length} skill(s) found`))
+      printUnparseable()
       if (!args.scope) {
         console.log(dim(`  Published or local? ${"iris playbook list --scope"}`))
       } else if (scopes === null) {
@@ -331,6 +352,7 @@ const SkillShowCommand = cmd({
     await withInstance(async () => {
       const info = await Skill.get(args.name as string)
       if (!info) {
+        if (args.json) throw new CliUsageError(await notInstalledMessage(String(args.name)))
         await reportNotInstalled(String(args.name))
         process.exit(1)
       }
@@ -353,7 +375,7 @@ const SkillShowCommand = cmd({
       prompts.intro(`◈  Skill: ${plan.name}`)
 
       printDivider()
-      printKV("Version", plan.version)
+      printKV("Version", versionLabel(plan))
       printKV("Description", plan.description)
       // What a model routes on. Printed next to the description because the two are
       // easy to conflate: description is WHAT this does, triggers are WHEN to reach
@@ -507,6 +529,7 @@ const SkillRunCommand = cmd({
     await withInstance(async () => {
       const info = await Skill.get(args.name as string)
       if (!info) {
+        if (args.json) throw new CliUsageError(await notInstalledMessage(String(args.name)))
         await reportNotInstalled(String(args.name))
         process.exit(1)
       }
@@ -534,22 +557,24 @@ const SkillRunCommand = cmd({
       const unknown = unknownPlaybookFlags(flagArgs, plan.args)
       if (unknown.length > 0) {
         const declared = Object.keys(plan.args)
-        console.error(`Unknown argument${unknown.length > 1 ? "s" : ""}: ${unknown.join(", ")}`)
-        console.error(
-          declared.length
-            ? `"${plan.name}" declares: ${declared.map((k) => `--${k}`).join(", ")}`
-            : `"${plan.name}" declares no arguments.`,
+        // Thrown, so --json callers get it as JSON (#190878).
+        throw new CliUsageError(
+          [
+            `Unknown argument${unknown.length > 1 ? "s" : ""}: ${unknown.join(", ")}`,
+            declared.length
+              ? `"${plan.name}" declares: ${declared.map((k) => `--${k}`).join(", ")}`
+              : `"${plan.name}" declares no arguments.`,
+            `  iris playbook show ${plan.name}`,
+          ].join("\n"),
         )
-        console.error(`  iris playbook show ${plan.name}`)
-        process.exit(1)
       }
 
       let resolvedArgs: Record<string, unknown>
       try {
         resolvedArgs = resolveArgs(plan.args, cleanPositional, flagArgs)
       } catch (e: any) {
-        console.error(e.message)
-        process.exit(1)
+        // Thrown, so --json callers get it as JSON (#190878).
+        throw new CliUsageError(e.message)
       }
       resolvedArgs._raw = cleanPositional.join(" ")
 
@@ -661,6 +686,13 @@ const SkillRunCommand = cmd({
           else console.error(`\n${e.message}\n`)
           process.exit(1)
         }
+        // An invalid header (#190876) or an unknown --step (#190879) is the same kind of
+        // answer: nothing ran, say why in one line, exit 1 — never the crash reporter.
+        if (e instanceof InvalidPlaybookError || e instanceof StepNotFoundError) {
+          if (args.json) await writeJson({ status: "refused", reason: e.message })
+          else console.error(`\n${e.message}\n`)
+          process.exit(1)
+        }
         throw e
       }
 
@@ -682,14 +714,25 @@ const SkillRunCommand = cmd({
       // legitimately done its job, and 94 playbooks plus whatever CI calls them depend on that
       // exiting 0. Narrowing to an explicitly-requested single step keeps automation intact and
       // fixes the case where the exit code is load-bearing.
-      const ranNothing =
-        Boolean(args.step) && result.status === "completed" && passedN === 0 && failedN === 0 && skippedN > 0
+      //
+      // A playbook with no steps at all is also reported as ran-nothing (exit 0 — it is a
+      // document, not a failure). The exit code comes from runOutcome for BOTH output modes — the
+      // --json branch used to return before it was set, so a failed run exited 0 (#182759).
+      const outcome = runOutcome(result, { stepFilter: args.step as string | undefined })
+      const ranNothing = outcome.ranNothing
 
       if (args.json) {
         // Additive fields — the existing shape is untouched, so anything already parsing this
         // keeps working, and anything that wants the truth can now read it.
-        await writeJson({ ...result, ran_nothing: ranNothing, warnings })
-        if (ranNothing) process.exitCode = 1
+        await writeJson({
+          ...result,
+          ran_nothing: ranNothing,
+          ...(ranNothing && Object.keys(result.steps).length === 0
+            ? { ran_nothing_reason: "this playbook has no steps" }
+            : {}),
+          warnings,
+        })
+        process.exitCode = outcome.exitCode
         return
       }
 
@@ -703,6 +746,14 @@ const SkillRunCommand = cmd({
 
       if (ranNothing) {
         console.log(`  ⚠  ${bold(result.skill)} — ${bold("NOTHING RAN")}`)
+        if (Object.keys(result.steps).length === 0) {
+          // Not a failure: a documentation-style playbook has nothing to execute.
+          console.log(dim(`  This playbook has no steps — it is a document. Read it:  iris playbook show ${plan.name}`))
+          printDivider()
+          prompts.outro("Nothing ran")
+          process.exitCode = outcome.exitCode
+          return
+        }
         for (const [id, sr] of Object.entries(result.steps)) {
           if (sr.status === "skipped") console.log(`    ○ ${id}: ${sr.output}`)
         }
@@ -764,8 +815,7 @@ const SkillRunCommand = cmd({
       )
       // 0 = done, 2 = paused on a human step, 1 = failed. Paused is not a failure,
       // but it is not success either — callers must be able to tell the difference.
-      if (result.status === "paused") process.exitCode = 2
-      else if (result.status !== "completed") process.exitCode = 1
+      process.exitCode = outcome.exitCode
     })
   },
 })
@@ -785,7 +835,18 @@ const SkillTestCommand = cmd({
     await withInstance(async () => {
       const info = await Skill.get(args.name as string)
       if (!info) {
+        if (args.json) throw new CliUsageError(await notInstalledMessage(String(args.name)))
         await reportNotInstalled(String(args.name))
+        process.exit(1)
+      }
+
+      // #190275: a generated SKILL.md is a summary of a playbook, with no steps. Calling it
+      // "Valid · 0 steps" told the author their playbook was fine when the playbook itself
+      // had not been read at all.
+      if (Skill.isGeneratedSummary(await Bun.file(info.location).text())) {
+        const msg = generatedSummaryMessage(String(args.name), info.location)
+        if (args.json) await writeJson({ valid: false, errors: [msg] })
+        else console.error(msg)
         process.exit(1)
       }
 
@@ -805,13 +866,16 @@ const SkillTestCommand = cmd({
       const issues = validatePlan(plan)
 
       if (args.json) {
+        const valid = !issues.some((i) => i.level === "error")
         await writeJson({
-          valid: !issues.some((i) => i.level === "error"),
+          valid,
           version: plan.version,
           steps: plan.steps.length,
           args: Object.keys(plan.args).length,
           issues,
         })
+        // Same exit code as the human path: an invalid playbook is not a 0.
+        if (!valid) process.exitCode = 1
         return
       }
 
@@ -819,7 +883,7 @@ const SkillTestCommand = cmd({
       prompts.intro(`◈  Validate: ${plan.name}`)
 
       printDivider()
-      printKV("Version", plan.version)
+      printKV("Version", versionLabel(plan))
       printKV("Steps", plan.steps.length)
       printKV("Args", Object.keys(plan.args).length)
 
@@ -1538,12 +1602,16 @@ const PlaybookSyncCommand = cmd({
       .option("api", { type: "boolean", default: false, describe: "also push metadata to iris-api for frontend/API access" })
       .option("target", {
         type: "string",
-        describe: "where to sync: claude (default, .claude/skills), cursor (.cursor/rules), agents (AGENTS.md), or all — comma-separate for several",
+        describe: "where to sync: claude (default, .claude/skills), cursor (.cursor/rules), agents (AGENTS.md), gemini (GEMINI.md), auto (detect), or all — comma-separate for several",
       }),
   async handler(args) {
     let syncTargets: SyncTarget[]
     try {
-      syncTargets = parseTargets(args.target as string | undefined)
+      syncTargets = resolveTargets(args.target as string | undefined, {
+        home: installHome(),
+        cwd: process.cwd(),
+        exists: existsSync,
+      })
     } catch (e: any) {
       prompts.log.error(e.message)
       process.exitCode = 1
@@ -1650,6 +1718,13 @@ const PlaybookSyncCommand = cmd({
         writeFileAtomic(file, upsertAgentsBlock(existing, rendered))
         extraWritten.push(`${rendered.length} playbook(s) indexed in ${file}`)
       }
+      if (syncTargets.includes("gemini") && rendered.length) {
+        // Gemini CLI reads GEMINI.md as a context file, the same way Codex reads AGENTS.md.
+        const file = join(cwd, "GEMINI.md")
+        const existing = existsSync(file) ? readFileSync(file, "utf8") : null
+        writeFileAtomic(file, upsertAgentsBlock(existing, rendered))
+        extraWritten.push(`${rendered.length} playbook(s) indexed in ${file}`)
+      }
       if (!args.json) for (const line of extraWritten) console.log(`  ${success("✓")} ${line}`)
 
       // --api: also push metadata to iris-api
@@ -1703,6 +1778,8 @@ const PlaybookSyncCommand = cmd({
         }
       }
 
+      // #189878 — files the loader could not parse are skipped, not fatal; say which.
+      const unparseable = await Skill.invalid()
       if (args.json) {
         // Additive fields; the three original keys are unchanged.
         console.log(JSON.stringify({
@@ -1713,11 +1790,15 @@ const PlaybookSyncCommand = cmd({
           targets: [...targets],
           published: false,
           scope: "local",
+          unparseable,
         }))
       } else {
         printDivider()
         const apiMsg = args.api ? `, ${apiSynced} to API` : ""
         console.log(dim(`  ${synced} synced${apiMsg}, ${skipped} skipped`))
+        for (const bad of unparseable) {
+          console.log(`  ! skipped ${bad.path} — could not parse: ${bad.message}`)
+        }
         if (skillSyncFailures.length > 0) {
           console.log(dim(`  ${skillSyncFailures.length} could not be written: ${skillSyncFailures.join(", ")}`))
           console.log(dim(`  The playbooks themselves are installed in .iris/playbooks/ and still run.`))
@@ -2216,19 +2297,34 @@ async function fetchRegistryRows(): Promise<any[] | null> {
  * execute them without the user ever choosing to install them.
  */
 export async function reportNotInstalled(name: string): Promise<void> {
+  const [first, hint] = await notInstalledLines(name)
+  console.error(first)
+  console.error(hint.startsWith("  iris playbook install") ? hint : dim(hint))
+}
+
+/** The same answer as reportNotInstalled, as one string — for --json callers (#190878). */
+export async function notInstalledMessage(name: string): Promise<string> {
+  return (await notInstalledLines(name)).map((l) => l.trim()).join(" ")
+}
+
+async function notInstalledLines(name: string): Promise<[string, string]> {
   const state = await fetchPublishState(name)
   if (state.state === "published") {
-    console.error(`Playbook "${name}" is not installed on this machine. It is published (${state.scope}) — install it, then run it again:`)
-    console.error(`  iris playbook install ${name}`)
-    return
+    return [
+      `Playbook "${name}" is not installed on this machine. It is published (${state.scope}) — install it, then run it again:`,
+      `  iris playbook install ${name}`,
+    ]
   }
   if (state.state === "unpublished") {
-    console.error(`Playbook "${name}" not found — it is not installed here, and nothing by that name is published that you can see.`)
-    console.error(dim("  What you can install: iris playbook available"))
-    return
+    return [
+      `Playbook "${name}" not found — it is not installed here, and nothing by that name is published that you can see.`,
+      "  What you can install: iris playbook available",
+    ]
   }
-  console.error(`Playbook "${name}" is not installed on this machine, and the marketplace could not be checked (${state.reason}).`)
-  console.error(dim(`  If it is published: iris playbook install ${name}`))
+  return [
+    `Playbook "${name}" is not installed on this machine, and the marketplace could not be checked (${state.reason}).`,
+    `  If it is published: iris playbook install ${name}`,
+  ]
 }
 
 async function fetchPublishState(name: string): Promise<PublishState> {
@@ -2380,6 +2476,18 @@ const UnpublishCommand = cmd({
   },
 })
 
+/** Why a generated SKILL.md is refused, and where the real playbook should be (#190275). */
+function generatedSummaryMessage(name: string, location: string): string {
+  return [
+    `  ${location}`,
+    `  is the summary \`iris playbook sync\` generates for Claude Code, not the playbook '${name}'.`,
+    `  It has no steps. Refusing to use it as the playbook.`,
+    ``,
+    `  The playbook is a PLAYBOOK.md in .iris/playbooks/${name}/ (in this project or ~/.iris).`,
+    `  If one exists, it did not resolve — \`iris playbook list\` names files that failed to parse.`,
+  ].join("\n")
+}
+
 const PublishCommand = cmd({
   command: "publish <name>",
   describe: "publish a playbook with a scope: local | private | project | unlisted | public",
@@ -2407,6 +2515,18 @@ const PublishCommand = cmd({
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Publish Playbook — ${highlight(String(args.name))}`)
+
+    // #190275 — refuse to publish a generated summary, for every scope, before anything else.
+    // When the playbook could not be found or read, the name resolved to the SKILL.md that
+    // `sync` writes for Claude Code, and publish uploaded it: atlas-epic's 16 steps were
+    // replaced in the registry by a 168-line stub with none, and `verify` then reported the
+    // upload "identical" — because it compares against the same wrong file.
+    const pre = await withInstance(() => Skill.get(String(args.name)))
+    if (pre && Skill.isGeneratedSummary(await Bun.file(pre.location).text())) {
+      console.error(generatedSummaryMessage(String(args.name), pre.location))
+      process.exitCode = 1
+      return
+    }
 
     // #182937 — `local` returns HERE, above everything.
     //
@@ -2687,10 +2807,7 @@ const PlaybookDoctorCommand = cmd({
 
       if (name) {
         const info = await Skill.get(name)
-        if (!info) {
-          console.error(`Skill "${name}" not found`)
-          process.exit(1)
-        }
+        if (!info) throw new CliUsageError(`Skill "${name}" not found`)
       }
 
       const targets = name ? [(await Skill.get(name))!] : await Skill.all()
@@ -2736,10 +2853,30 @@ const PlaybookDoctorCommand = cmd({
         reports.push({ name: info.name, location: info.location, problems })
       }
 
+      // #190274: files whose header does not parse never reach `targets` — they are not playbooks
+      // as far as discovery is concerned — so report them here. An error when the broken file
+      // would have been the one used (its name is refused); a warning for a stray copy below a
+      // working one.
+      for (const u of await Skill.invalid()) {
+        if (name && u.name !== name) continue
+        reports.push({
+          name: u.name,
+          location: u.path,
+          problems: [{
+            level: u.blocks ? "error" : "warning",
+            message: `Header does not parse: ${u.message}${u.blocks ? "" : " (a working copy is used instead)"}`,
+          }],
+        })
+      }
+
+      // #190877: copies under .trash and other hidden folders are deleted, not candidates. Name
+      // them so nobody wonders where they went.
+      const hiddenCopies = (await Skill.ignored()).filter((i) => !name || i.path.split(/[\\/]/).includes(name))
+
       const unhealthy = reports.filter((r) => r.problems.length > 0)
 
       if (args.json) {
-        await writeJson({ checked: reports.length, unhealthy: unhealthy.length, reports: unhealthy })
+        await writeJson({ checked: reports.length, unhealthy: unhealthy.length, reports: unhealthy, ignored: hiddenCopies })
         if (unhealthy.some((r) => r.problems.some((p) => p.level === "error"))) process.exitCode = 1
         return
       }
@@ -2759,6 +2896,11 @@ const PlaybookDoctorCommand = cmd({
           }
           console.log()
         }
+      }
+
+      if (hiddenCopies.length) {
+        console.log(dim(`  Ignored ${hiddenCopies.length} file(s) in hidden folders (.trash and similar) — treated as deleted:`))
+        for (const i of hiddenCopies) console.log(dim(`    · ${i.path}`))
       }
 
       printDivider()
@@ -2980,7 +3122,7 @@ const PlaybookAvailableCommand = cmd({
 const PlaybookInstallCommand = cmd({
   command: "install <name>",
   aliases: ["pull"],
-  describe: "download a published playbook (to ~/.iris/playbooks by default) and sync it to .claude/skills/ for Claude Code and the IRIS app",
+  describe: "download a published playbook (to ~/.iris/playbooks by default), sync it to .claude/skills/ for Claude Code and the IRIS app, and — with --target — write the native format for Cursor, Codex or Gemini CLI",
   builder: (yargs) =>
     yargs
       .positional("name", { type: "string", demandOption: true })
@@ -2996,9 +3138,25 @@ const PlaybookInstallCommand = cmd({
       // default REGENERATES .claude/skills/, so in a shared checkout the flag that
       // protects uncommitted skill edits was the one that would not parse.
       .option("no-sync", { type: "boolean", default: false, describe: "skip regenerating .claude/skills/" })
+      .option("target", {
+        type: "string",
+        describe: "also install for another agent: cursor (.cursor/rules), agents (AGENTS.md / ~/.codex/AGENTS.md), gemini (GEMINI.md / ~/.gemini/GEMINI.md), auto (detect), or all — comma-separate for several",
+      })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     const name = String(args.name)
+    let installTargets: SyncTarget[]
+    try {
+      installTargets = resolveTargets(args.target as string | undefined, {
+        home: installHome(),
+        cwd: process.cwd(),
+        exists: existsSync,
+      })
+    } catch (e: any) {
+      prompts.log.error(e.message)
+      process.exitCode = 1
+      return
+    }
     UI.empty()
     prompts.intro(`◈  Install Playbook — ${highlight(name)}`)
     const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
@@ -3049,13 +3207,21 @@ const PlaybookInstallCommand = cmd({
     // install, <project>/.claude/skills for a project one. Claude Code and the IRIS Desktop app
     // both scan ~/.claude/skills from every project.
     const syncSkills = args.sync && !args["no-sync"]
+    const extraTargets = installTargets.filter((t) => t !== "claude")
+    const info = { name, description: String(pb.description ?? ""), location: file }
+    let plan: Awaited<ReturnType<typeof parsePlan>> | null = null
     let skillFile: string | null = null
     let skillNote: string | null = null
     let skillVia: string | null = null
-    if (syncSkills) {
+    if (syncSkills || extraTargets.length) {
       try {
-        const info = { name, description: String(pb.description ?? ""), location: file }
-        const plan = await parsePlan(info)
+        plan = await parsePlan(info)
+      } catch (e: any) {
+        skillNote = `skill sync did not finish: ${String(e?.code ?? e?.message ?? e)}`
+      }
+    }
+    if (syncSkills && plan) {
+      try {
         const output = await renderSkillReplica(info, plan)
         const r = writeSkillReplica(root.skillsDir, plan.name, output, { home: root.scope === "global", followSymlink: true })
         if (r.ok) {
@@ -3065,6 +3231,51 @@ const PlaybookInstallCommand = cmd({
         else skillNote = `${pathJoin(root.skillsDir, plan.name)} is ${r.reason}`
       } catch (e: any) {
         skillNote = `skill sync did not finish: ${String(e?.code ?? e?.message ?? e)}`
+      }
+    }
+
+    // #190526 — the other agents on this machine read different files. Install only this
+    // playbook, in the shape its reader expects, beside the root it was installed into:
+    //   Cursor  <root>/.cursor/rules/<name>.mdc   (per repo; Cursor has no global rules file)
+    //   Codex   <root>/AGENTS.md, or ~/.codex/AGENTS.md for a global install
+    //   Gemini  <root>/GEMINI.md, or ~/.gemini/GEMINI.md for a global install
+    // A section per playbook (not a shared index) keeps a second install from erasing the first.
+    const extraPaths: string[] = []
+    const home = installHome()
+    if (plan && extraTargets.length) {
+      const output = await renderSkillReplica(info, plan)
+      if (extraTargets.includes("cursor")) {
+        if (root.scope === "global") {
+          extraPaths.push("Cursor rules are per-repo — rerun with --target cursor inside the project")
+        } else {
+          const rulesDir = pathJoin(root.root, ".cursor", "rules")
+          const ruleFile = pathJoin(rulesDir, `${plan.name}.mdc`)
+          const existing = existsSync(ruleFile) ? readFileSync(ruleFile, "utf8") : null
+          if (!isGenerated(existing)) {
+            extraPaths.push(`${ruleFile} is hand-written; left alone`)
+          } else {
+            mkdirSync(rulesDir, { recursive: true })
+            writeFileAtomic(ruleFile, toCursorRule(output, plan.description))
+            extraPaths.push(ruleFile)
+          }
+        }
+      }
+      const sectionTargets: { file: string }[] = []
+      if (extraTargets.includes("agents")) {
+        sectionTargets.push({
+          file: root.scope === "global" ? pathJoin(home, ".codex", "AGENTS.md") : pathJoin(root.root, "AGENTS.md"),
+        })
+      }
+      if (extraTargets.includes("gemini")) {
+        sectionTargets.push({
+          file: root.scope === "global" ? pathJoin(home, ".gemini", "GEMINI.md") : pathJoin(root.root, "GEMINI.md"),
+        })
+      }
+      for (const { file: sectionFile } of sectionTargets) {
+        const existing = existsSync(sectionFile) ? readFileSync(sectionFile, "utf8") : null
+        mkdirSync(pathJoin(sectionFile, ".."), { recursive: true })
+        writeFileAtomic(sectionFile, upsertPlaybookSection(existing, { name: plan.name, description: plan.description, readPath: file }))
+        extraPaths.push(sectionFile)
       }
     }
 
@@ -3082,6 +3293,8 @@ const PlaybookInstallCommand = cmd({
         skill_path: skillFile,
         skill_note: skillNote,
         skill_via_symlink: skillVia,
+        targets: installTargets,
+        target_paths: extraPaths,
         shadowed_by: shadows,
       })
       prompts.outro("Done"); return
@@ -3093,6 +3306,7 @@ const PlaybookInstallCommand = cmd({
     if (registryVersion) printKV("Version", registryVersion)
     printKV("Playbook", file)
     if (skillFile) printKV("Skill", skillFile)
+    for (const extra of extraPaths) printKV("Also", extra)
     printKV("Location", root.scope === "global" ? "global — your home folder" : `project — ${root.root}`)
     printDivider()
     if (root.scope === "global") {
@@ -3118,6 +3332,20 @@ const PlaybookInstallCommand = cmd({
 })
 
 // ============================================================================
+
+
+/**
+ * #189894 — `show`/`test` printed the engine version (`plan.version`, always 1 or 2) as "Version",
+ * so a file declaring `version: 3` read as "Version: 2" and the field's real value was invisible
+ * exactly where someone would look for it. Show what the file says when it differs.
+ */
+export function versionLabel(plan: { version: number; declaredVersion?: unknown }): string {
+  const d = plan.declaredVersion
+  const same = d === plan.version || (typeof d === "string" && d.trim() === String(plan.version))
+  if (same) return String(plan.version)
+  const said = d === undefined ? "no version field" : `version: ${JSON.stringify(d)}`
+  return `${plan.version} (file has ${said} — runs as v${plan.version})`
+}
 
 export const PlatformPlaybookCommand = cmd({
   command: "playbook <subcommand>",

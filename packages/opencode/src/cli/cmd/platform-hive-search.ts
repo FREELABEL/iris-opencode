@@ -3,9 +3,12 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { requireAuth, requireUserId, dim, bold, success, highlight, writeJson } from "./iris-api"
 import { hiveFetch, fetchNodes } from "./platform-hive-nodes"
+import { detectLocalNodeId } from "./hive-tailscale"
 import { existsSync, readFileSync, readdirSync, mkdirSync } from "fs"
 import { join } from "path"
-import { homedir } from "os"
+import { homedir, hostname } from "os"
+import { createRequire } from "module"
+import { execSync } from "child_process"
 
 // ============================================================================
 // iris hive search — distributed search across all Hive nodes
@@ -37,6 +40,46 @@ function timeAgo(iso: string | null | undefined): string {
   const hrs = Math.round(mins / 60)
   if (hrs < 24) return `${hrs}h ago`
   return `${Math.round(hrs / 24)}d ago`
+}
+
+/**
+ * Whole-disk file search on THIS machine (#188665). The node daemon owns the implementation
+ * (daemon/disk-search.js: fsearch → Spotlight → locate → a labelled home-folder scan); loading the
+ * installed copy keeps one implementation instead of two that drift. A machine that is not a Hive
+ * node has no copy, and is told how to become one rather than silently searching nothing.
+ */
+const DISK_SEARCH = join(homedir(), ".iris", "bridge", "daemon", "disk-search.js")
+
+/** This machine's file-search engines, from the installed node's own module. */
+export async function localProviders(modulePath = DISK_SEARCH): Promise<{ json: any } | { error: string }> {
+  if (!existsSync(modulePath)) return { error: "this machine is not a Hive node — run `iris node install`" }
+  try {
+    const mod = createRequire(import.meta.url)(modulePath)
+    if (typeof mod.listProviders !== "function") return { error: "this node's daemon predates search engines — run `iris node install` to update it" }
+    return { json: mod.listProviders() }
+  } catch (e: any) {
+    return { error: `could not read this machine's engines: ${String(e?.message ?? e).slice(0, 120)}` }
+  }
+}
+
+export async function searchLocalFiles(
+  query: string,
+  limit: number,
+  modulePath = DISK_SEARCH,
+  provider: string | null = null,
+): Promise<{ rows: SearchResult[]; note?: string }> {
+  if (!existsSync(modulePath)) {
+    return { rows: [], note: "this machine is not a Hive node, so its disk was not searched — run `iris node install`" }
+  }
+  try {
+    // createRequire, not require: the CLI runs as an ES module, where a bare require is undefined.
+    const mod = createRequire(import.meta.url)(modulePath)
+    const r = await mod.searchDisk(query, { limit, provider })
+    const rows: SearchResult[] = (r.rows ?? []).map((x: any) => ({ ...x, node_name: "local", node_id: "local" }))
+    return { rows, note: r.note }
+  } catch (e: any) {
+    return { rows: [], note: `file search failed here: ${String(e?.message ?? e).slice(0, 120)}` }
+  }
 }
 
 /** Search the local Hive inbox for matching items */
@@ -89,7 +132,6 @@ function searchLocalInbox(query: string): SearchResult[] {
 function searchLocalImessage(query: string): SearchResult[] {
   const results: SearchResult[] = []
   try {
-    const { execSync } = require("child_process")
     const dbPath = join(homedir(), "Library", "Messages", "chat.db")
     if (!existsSync(dbPath)) return []
 
@@ -139,9 +181,11 @@ export const HiveSearchCommand = cmd({
   describe: "search files, messages, and iMessages across all Hive nodes",
   builder: (yargs) =>
     yargs
+      .example('iris hive search "invoice march" --type files', "find a file on the disk of every machine you own")
+      .example('iris hive search "dentist"', "files, the Hive inbox and iMessages, on every node")
       .positional("query", { describe: "search term", type: "string", demandOption: true })
       .option("type", {
-        describe: "search scope",
+        describe: "search scope — files = the whole disk on each node (fsearch or Spotlight on a Mac, locate or a home-folder scan on Linux)",
         type: "string",
         choices: SEARCH_TYPES,
         default: "all" as SearchType,
@@ -158,9 +202,114 @@ export const HiveSearchCommand = cmd({
     const limit = argv.limit as number
     const sp = argv.json ? null : prompts.spinner()
 
-    // Step 1: Search local machine
-    sp?.start("Searching local node…")
+    // Step 1: dispatch to remote nodes FIRST and search this machine while they work. The
+    // remote leg is ~1.5 s of network round trips and the local search is CPU and disk, so
+    // running them one after the other paid for both (#188696 O3).
+    let remoteResults: SearchResult[] = []
+    let remoteNote: string | undefined
+    const remoteDone = (async () => {
+
+      if (argv.mesh) {
+        const token = await requireAuth()
+        if (token) {
+          const userId = await requireUserId(argv["user-id"] as number | undefined)
+          if (userId) {
+
+            try {
+              const nodes = await fetchNodes(userId)
+              const thisHostname = hostname()
+              // THIS machine is already searched above as "local". Excluding it by hostname
+              // missed: node "Alexs-MacBook-Pro-11711" on host "Alexs-MacBook-Pro-3" (macOS renames
+              // on mDNS collisions), so this Mac was dispatched a task and searched twice.
+              // The daemon knows its own id; the hostname check stays as the fallback.
+              const localNodeId = await detectLocalNodeId(nodes).catch(() => null)
+              const remoteNodes = nodes.filter(
+                (n) => n.connection_status === "online" && n.id !== localNodeId && !n.name.includes(thisHostname),
+              )
+
+              if (remoteNodes.length > 0) {
+                // Dispatch search tasks to all remote nodes
+                const searchPromises = remoteNodes.map(async (node) => {
+                  try {
+                    const res = await hiveFetch(`/api/v6/nodes/tasks`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        user_id: userId,
+                        title: `hive search: "${query}"`,
+                        type: "hive_search",
+                        node_id: node.id,
+                        prompt: query,
+                        config: {
+                          search_type: searchType,
+                          limit,
+                          sender_name: thisHostname,
+                        },
+                      }),
+                    })
+
+                    if (!res.ok) return []
+
+                    const data = (await res.json()) as { task: { id: string } }
+                    const taskId = data.task.id
+
+                    // Poll for results (search should be fast — 15s max). The first check used to
+                    // wait a flat 1.5 s, while the node's whole search takes ~0.4 s (#188696 O3):
+                    // poll at 150 ms, easing to 1 s, so a fast node answers in a fast command.
+                    const deadline = Date.now() + 15_000
+                    for (let i = 0; Date.now() < deadline; i++) {
+                      await new Promise((r) => setTimeout(r, Math.min(150 * 1.3 ** i, 1000)))
+                      const pollRes = await hiveFetch(
+                        `/api/v6/nodes/tasks/${taskId}?user_id=${userId}`,
+                      )
+                      if (!pollRes.ok) continue
+                      const pollData = (await pollRes.json()) as { task: any }
+                      const task = pollData.task
+
+                      if (task.status === "completed" || task.status === "failed") {
+                        // Parse search results from task output
+                        try {
+                          const output = task.result?.output ?? ""
+                          const parsed = JSON.parse(output)
+                          if (Array.isArray(parsed)) {
+                            return parsed.map((r: any) => ({
+                              ...r,
+                              node_name: node.name,
+                              node_id: node.id,
+                            }))
+                          }
+                        } catch { /* output wasn't JSON — skip */ }
+                        return []
+                      }
+                    }
+                    return [] // timeout
+                  } catch {
+                    return []
+                  }
+                })
+
+                const nodeResults = await Promise.allSettled(searchPromises)
+                for (const r of nodeResults) {
+                  if (r.status === "fulfilled") {
+                    remoteResults.push(...(r.value as SearchResult[]))
+                  }
+                }
+              }
+
+              remoteNote = `${remoteResults.length} remote result(s) from ${remoteNodes.length} node(s)`
+            } catch {
+              remoteNote = "Remote search failed"
+            }
+          }
+        }
+      }
+
+    })()
+
+    // Step 2: Search local machine (while the remote tasks run)
+    sp?.start(argv.mesh ? "Searching this machine and your other nodes…" : "Searching local node…")
     const localResults: SearchResult[] = []
+    let localFilesNote: string | undefined
 
     if (searchType === "all" || searchType === "inbox") {
       localResults.push(...searchLocalInbox(query).slice(0, limit))
@@ -169,98 +318,14 @@ export const HiveSearchCommand = cmd({
       localResults.push(...searchLocalImessage(query).slice(0, limit))
     }
 
-    sp?.stop(`${localResults.length} local result(s)`)
-
-    // Step 2: Search remote nodes (mesh mode)
-    let remoteResults: SearchResult[] = []
-
-    if (argv.mesh) {
-      const token = await requireAuth()
-      if (token) {
-        const userId = await requireUserId(argv["user-id"] as number | undefined)
-        if (userId) {
-          sp?.start("Searching remote nodes…")
-
-          try {
-            const nodes = await fetchNodes(userId)
-            const thisHostname = require("os").hostname()
-            const remoteNodes = nodes.filter(
-              (n) => n.connection_status === "online" && !n.name.includes(thisHostname),
-            )
-
-            if (remoteNodes.length > 0) {
-              // Dispatch search tasks to all remote nodes
-              const searchPromises = remoteNodes.map(async (node) => {
-                try {
-                  const res = await hiveFetch(`/api/v6/nodes/tasks`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      user_id: userId,
-                      title: `hive search: "${query}"`,
-                      type: "hive_search",
-                      node_id: node.id,
-                      prompt: query,
-                      config: {
-                        search_type: searchType,
-                        limit,
-                        sender_name: thisHostname,
-                      },
-                    }),
-                  })
-
-                  if (!res.ok) return []
-
-                  const data = (await res.json()) as { task: { id: string } }
-                  const taskId = data.task.id
-
-                  // Poll for results (search should be fast — 15s max)
-                  for (let i = 0; i < 10; i++) {
-                    await new Promise((r) => setTimeout(r, 1500))
-                    const pollRes = await hiveFetch(
-                      `/api/v6/nodes/tasks/${taskId}?user_id=${userId}`,
-                    )
-                    if (!pollRes.ok) continue
-                    const pollData = (await pollRes.json()) as { task: any }
-                    const task = pollData.task
-
-                    if (task.status === "completed" || task.status === "failed") {
-                      // Parse search results from task output
-                      try {
-                        const output = task.result?.output ?? ""
-                        const parsed = JSON.parse(output)
-                        if (Array.isArray(parsed)) {
-                          return parsed.map((r: any) => ({
-                            ...r,
-                            node_name: node.name,
-                            node_id: node.id,
-                          }))
-                        }
-                      } catch { /* output wasn't JSON — skip */ }
-                      return []
-                    }
-                  }
-                  return [] // timeout
-                } catch {
-                  return []
-                }
-              })
-
-              const nodeResults = await Promise.allSettled(searchPromises)
-              for (const r of nodeResults) {
-                if (r.status === "fulfilled") {
-                  remoteResults.push(...(r.value as SearchResult[]))
-                }
-              }
-            }
-
-            sp?.stop(`${remoteResults.length} remote result(s) from ${remoteNodes.length} node(s)`)
-          } catch {
-            sp?.stop("Remote search failed")
-          }
-        }
-      }
+    if (searchType === "all" || searchType === "files") {
+      const disk = await searchLocalFiles(query, limit)
+      localResults.push(...disk.rows)
+      localFilesNote = disk.note
     }
+
+    await remoteDone
+    sp?.stop(`${localResults.length} local result(s)` + (remoteNote ? ` · ${remoteNote}` : ""))
 
     // Step 3: Merge and display results
     const allResults = [...localResults, ...remoteResults]
@@ -272,6 +337,7 @@ export const HiveSearchCommand = cmd({
 
     if (allResults.length === 0) {
       console.log(dim(`  No results for "${query}"`))
+      if (localFilesNote) console.log(dim(`  ${localFilesNote}`))
       prompts.outro("Done")
       return
     }
@@ -292,7 +358,9 @@ export const HiveSearchCommand = cmd({
       console.log()
       console.log(bold(`  ${source.toUpperCase()} (${results.length})`))
 
-      for (const r of results.slice(0, limit)) {
+      // Files come back `limit` per node, so cap the group per node too, not in total.
+      const cap = source === "files" ? limit * Math.max(1, new Set(results.map((r) => r.node_name)).size) : limit
+      for (const r of results.slice(0, cap)) {
         const node = r.node_name === "local" ? dim("local") : highlight(r.node_name)
         const age = r.date ? dim(timeAgo(r.date)) : ""
         console.log(`    ${node}  ${bold(r.match)}  ${age}`)
@@ -303,6 +371,7 @@ export const HiveSearchCommand = cmd({
     }
 
     console.log()
+    if (localFilesNote) console.log(dim(`\n  ${localFilesNote}`))
     prompts.outro("Done")
   },
 })

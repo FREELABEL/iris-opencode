@@ -35,6 +35,12 @@ export interface ProductSpec {
   howtos?: string[]
   /** Playbook names this product runs on. */
   playbooks?: string[]
+  /**
+   * A reference block printed FIRST under --help, before how-tos and keywords. For the few
+   * products whose help is the documentation an agent reads (`exposure` carries the access
+   * guide, #190012). Keep it to facts a caller needs to act; prose belongs in a how-to.
+   */
+  guide?: string
   /** The product's subcommands. Use this for a NEW product. */
   subcommands?: CommandModule<any, any>[]
   /**
@@ -51,6 +57,11 @@ export interface ProductSpec {
    * headline behaviour a no-op while every other signal said the conversion worked.
    */
   handler?: (args: any) => Promise<void> | void
+  /**
+   * The yargs command string when it is more than the name — e.g. `pulse [keyword..]`, so a
+   * product can take a positional of its own beside its subcommands. Defaults to `name`.
+   */
+  command?: string
 }
 
 /** Registry of every declared product, so Gate 22 and `iris help` can enumerate them. */
@@ -58,6 +69,7 @@ export const PRODUCTS: ProductSpec[] = []
 
 export function productEpilogue(spec: ProductSpec): string {
   const lines: string[] = []
+  if (spec.guide) lines.push(spec.guide, "")
   if (spec.howtos?.length) {
     lines.push("How-tos:")
     for (const h of spec.howtos) lines.push(`  iris how-to view ${h}`)
@@ -77,7 +89,7 @@ export function productEpilogue(spec: ProductSpec): string {
 export function productCommand(spec: ProductSpec) {
   PRODUCTS.push(spec)
   return cmd({
-    command: spec.name,
+    command: spec.command ?? spec.name,
     aliases: spec.aliases ?? [],
     describe: spec.purpose,
     builder: (yargs: any) => {

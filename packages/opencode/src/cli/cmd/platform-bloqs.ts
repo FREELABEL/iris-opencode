@@ -29,9 +29,19 @@ import { BloqsExportCommand } from "./platform-bloq-export"
 import { AtlasFilesCommandExport } from "./platform-atlas-files"
 import path from "path"
 import { firstArray } from "../../util/array"
-import { bloqWebUrl as atlasBloqUrl, bloqUrlFrom } from "./bloq-web-url"
+import { bloqWebUrl as atlasBloqUrl, bloqUrlFrom, itemUrlFrom } from "./bloq-web-url"
+import { withAccessFooter } from "./access-guide"
 import { openBrowser } from "../../util/browser"
 import { AtlasDocCommand } from "./platform-atlas-item"
+import {
+  BloqsTasksCommand,
+  BloqsTaskAddCommand,
+  BloqsTaskDoneCommand,
+  BloqsTaskDeleteCommand,
+  BloqsAssigneesCommand,
+  BloqsAssignCommand,
+  BloqsUnassignCommand,
+} from "./platform-bloq-card"
 
 // ============================================================================
 // Display helpers
@@ -51,6 +61,58 @@ function bloqWebUrl(id: string | number): string {
 /** Prefer the address fl-api returned for this board. */
 function bloqUrlOf(b: any, id: string | number): string {
   return bloqUrlFrom(b, id, PUBLIC_SITE, Boolean(process.env.IRIS_PUBLIC_URL))
+}
+
+/**
+ * Print a machine-readable failure AND make the process exit non-zero (#190624).
+ *
+ * `--json` used to print {"success":false,...} and return 0, so a script that ran
+ * `iris atlas <write> --json && next-step` took the failure as a success. Human output
+ * already exited 1 for the same operation. An explicit process.exitCode set by the caller
+ * (e.g. 2 for a missing flag) is preserved.
+ */
+export function failJson(payload: Record<string, unknown>): void {
+  console.log(JSON.stringify(payload))
+  if (!process.exitCode) process.exitCode = 1
+}
+
+/** Normalise a board name. Blank is not a name: refuse it instead of letting the API
+ *  substitute its "My First Bloq" default (#190633). */
+export function normalizeBloqName(raw: unknown): string | null {
+  if (typeof raw !== "string") return null
+  const name = raw.trim()
+  return name === "" ? null : name
+}
+
+/**
+ * The lists on a board, normalized. Used to validate a `--list` target and to count the
+ * items in a list before deleting it (#190623/#190628).
+ */
+async function loadBloqLists(
+  userId: number,
+  bloqId: number,
+): Promise<Array<{ id: number; name: string; item_count: number }>> {
+  const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}/lists`)
+  if (!res.ok) throw new Error(`Could not read the lists on bloq ${bloqId} (HTTP ${res.status})`)
+  const body = (await res.json()) as any
+  const lists = body?.data?.data ?? body?.data ?? body
+  if (!Array.isArray(lists)) return []
+  return lists.map((l: any) => {
+    const nested = Array.isArray(l?.items) ? l.items.length : undefined
+    const declared = l?.items_count ?? l?.item_count
+    return {
+      id: Number(l?.id ?? 0),
+      name: String(l?.name ?? ""),
+      item_count: Number(declared ?? nested ?? 0),
+    }
+  })
+}
+
+function formatListChoices(lists: Array<{ id: number; name: string }>): string {
+  return lists
+    .slice(0, 12)
+    .map((l) => `${l.name} #${l.id}`)
+    .join(" · ") + (lists.length > 12 ? ` · …${lists.length - 12} more` : "")
 }
 
 // Passwordless tokenized auth link — anyone with this URL can claim access and
@@ -286,8 +348,35 @@ export async function resolveBloqId(idOrQuery: string | number, userId: number, 
   return choice as number
 }
 
+/**
+ * #190209 — `bloqs get 190207` on an Atlas ITEM id answered only 404 "Bloq not found", and the
+ * agent that ran it went on to try three more commands. Same shape as #189895 (`bugs update`):
+ * when the id is not a board, check whether it is an item and say which command reads it.
+ * Returns null when the id is not an item either (the plain 404 is then the right answer).
+ */
+export async function itemHintForMissingBloq(
+  id: string | number,
+  fetchItem: (id: string) => Promise<Response>,
+): Promise<{ message: string; json: { success: false; error: string; hint: "item"; item_id: number } } | null> {
+  const s = String(id).trim()
+  if (!/^\d+$/.test(s)) return null
+  try {
+    const r = await fetchItem(s)
+    if (!r.ok) return null
+  } catch {
+    return null
+  }
+  return {
+    message: `#${s} is an Atlas item, not a board — read it with: iris atlas use ${s}`,
+    json: { success: false, error: "Bloq not found.", hint: "item", item_id: Number(s) },
+  }
+}
+
 const BloqsGetCommand = cmd({
   command: "get <id>",
+  // #189896 — `bloqs show 352` answered "Did you mean who?" (members' alias). `show` is what
+  // people type; every sibling has a show-ish spelling (get-item: item/show-item).
+  aliases: ["show"],
   describe: "show bloq details and lists (accepts a bloq ID or name)",
   builder: (yargs) =>
     yargs
@@ -316,9 +405,20 @@ const BloqsGetCommand = cmd({
     if (spinner) spinner.start("Loading…")
 
     try {
-      const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}`)
+      // #190327 — `light` drops every item's body server-side. The board read carries all of a
+      // board's items; with bodies that was 1 MB for #544, and an agent's 100 KB window ended
+      // before the lists it asked for. Bodies are what `--items` / `get-item` are for.
+      const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}${args.items || args.list ? "" : "?light=1"}`)
       if (!res.ok) {
         if (spinner) spinner.stop("Failed", 1)
+        // #190209 — an ITEM id read as a BOARD id. Ask get-item before saying "not found".
+        const hint = res.status === 404 ? await itemHintForMissingBloq(args.id as any, (id) => irisFetch(`/api/v1/user/bloqs/list/item/${id}`)) : null
+        if (hint) {
+          if (args.json) console.log(JSON.stringify(hint.json))
+          else { prompts.log.error(hint.message); prompts.outro("Done") }
+          process.exitCode = 1
+          return
+        }
         await handleApiError(res, "Get bloq")
         if (!args.json) prompts.outro("Done")
         return
@@ -365,7 +465,13 @@ const BloqsGetCommand = cmd({
       if (args.json) {
         // Included so an agent reading a board gets its neighbours in the SAME call. Having to
         // know to make a second request is the machine-readable version of the same bug.
-        await writeJson({ ...b, web_url: bloqUrlOf(b, args.id), lists, relations })
+        //
+        // #190327 — bounded by default. This used to spread the whole board read AND the lists
+        // read, so every item arrived twice (b.lists[].items and lists[].items): 567 KB for #544,
+        // 91% of it item bodies. Now: the board's own fields, each list as id / name / count,
+        // members as who they are on the board, and relations. `--items` restores the lists with
+        // their items, for a caller that asked.
+        await writeJson(boundedBoardJson(b, lists, relations, bloqUrlOf(b, args.id), Boolean(args.items || args.list)))
         return
       }
 
@@ -551,7 +657,7 @@ const BloqsGetCommand = cmd({
 
 const BloqsCreateCommand = cmd({
   command: "create",
-  describe: "create a new knowledge base",
+  describe: "create a new bloq — a board / knowledge base for a project",
   builder: (yargs) =>
     yargs
       .option("name", { describe: "bloq name", type: "string" })
@@ -567,25 +673,38 @@ const BloqsCreateCommand = cmd({
     const userId = await requireUserId(args["user-id"])
     if (!userId) { if (!args.json) prompts.outro("Done"); return }
 
-    let name = args.name
-    if (!name && !args.slug) {
+    let name = normalizeBloqName(args.name) ?? undefined
+    if (args.name !== undefined && !name) {
+      const msg = "Bloq name is required — the name was blank after trimming."
+      if (args.json) { failJson({ success: false, error: msg }); process.exitCode = 2 }
+      else { prompts.log.error(msg); prompts.outro("Done") }
+      return
+    }
+    if (!name) {
       try {
-        name = (await promptOrFail("name", () =>
+        const entered = (await promptOrFail("name", () =>
           prompts.text({
             message: "Bloq name",
-            validate: (x) => (x && x.length > 0 ? undefined : "Required"),
+            validate: (x) => (x && x.trim().length > 0 ? undefined : "Required"),
           }),
         )) as string
+        if (prompts.isCancel(entered)) { prompts.outro("Cancelled"); return }
+        name = normalizeBloqName(entered) ?? undefined
+        if (!name) {
+          prompts.log.error("Bloq name is required.")
+          prompts.outro("Done")
+          process.exitCode = 1
+          return
+        }
       } catch (err) {
         if (err instanceof MissingFlagError) {
-          if (args.json) console.log(JSON.stringify({ success: false, error: err.message }))
+          if (args.json) failJson({ success: false, error: err.message })
           else { prompts.log.error(err.message); prompts.outro("Done") }
           process.exitCode = 2
           return
         }
         throw err
       }
-      if (prompts.isCancel(name)) { prompts.outro("Cancelled"); return }
     }
 
     // --description is optional. In a TTY we still prompt for it; in
@@ -614,7 +733,7 @@ const BloqsCreateCommand = cmd({
       })
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
         await handleApiError(res, "Create bloq")
         prompts.outro("Done")
         return
@@ -635,7 +754,7 @@ const BloqsCreateCommand = cmd({
       )
     } catch (err) {
       spinner?.stop("Error", 1)
-      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      if (args.json) { failJson({ success: false, error: err instanceof Error ? err.message : String(err) }); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -675,25 +794,40 @@ const BloqsUpdateCommand = cmd({
     const userId = await requireUserId(args["user-id"])
     if (!userId) { if (!args.json) prompts.outro("Done"); return }
 
-    let name = args.name
-    if (!name) {
+    let name = normalizeBloqName(args.name) ?? undefined
+    if (args.name !== undefined && !name) {
+      const msg = "Bloq name is required — the name was blank after trimming."
+      if (args.json) { failJson({ success: false, error: msg }); process.exitCode = 2 }
+      else { prompts.log.error(msg); prompts.outro("Done") }
+      return
+    }
+    // --slug alone is a valid update: the command summary says "rename a bloq, or set its
+    // slug", so do not demand --name when the caller only wants the slug (#190627).
+    if (!name && args.slug === undefined) {
       try {
-        name = (await promptOrFail("name", () =>
+        const entered = (await promptOrFail("name", () =>
           prompts.text({
             message: "New bloq name",
-            validate: (x) => (x && x.length > 0 ? undefined : "Required"),
+            validate: (x) => (x && x.trim().length > 0 ? undefined : "Required"),
           }),
         )) as string
+        if (prompts.isCancel(entered)) { prompts.outro("Cancelled"); return }
+        name = normalizeBloqName(entered) ?? undefined
+        if (!name) {
+          prompts.log.error("Bloq name is required.")
+          prompts.outro("Done")
+          process.exitCode = 1
+          return
+        }
       } catch (err) {
         if (err instanceof MissingFlagError) {
-          if (args.json) console.log(JSON.stringify({ success: false, error: err.message }))
+          if (args.json) failJson({ success: false, error: err.message })
           else { prompts.log.error(err.message); prompts.outro("Done") }
           process.exitCode = 2
           return
         }
         throw err
       }
-      if (prompts.isCancel(name)) { prompts.outro("Cancelled"); return }
     }
 
     const spinner = args.json ? null : prompts.spinner()
@@ -712,7 +846,7 @@ const BloqsUpdateCommand = cmd({
       })
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
         await handleApiError(res, "Update bloq")
         prompts.outro("Done")
         return
@@ -725,7 +859,7 @@ const BloqsUpdateCommand = cmd({
       if (args.slug !== undefined && b && b.slug !== args.slug) {
         spinner?.stop("Not applied", 1)
         const msg = `The API accepted the request but the slug reads back as ${JSON.stringify(b.slug)}, not ${JSON.stringify(args.slug)}.`
-        if (args.json) { console.log(JSON.stringify({ success: false, error: msg })); process.exitCode = 1; return }
+        if (args.json) { failJson({ success: false, error: msg }); process.exitCode = 1; return }
         prompts.log.error(msg)
         process.exitCode = 1
         prompts.outro("Done")
@@ -744,7 +878,7 @@ const BloqsUpdateCommand = cmd({
       prompts.outro(`${dim("iris bloqs get " + (b?.id ?? args.id))}  View it`)
     } catch (err) {
       spinner?.stop("Error", 1)
-      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      if (args.json) { failJson({ success: false, error: err instanceof Error ? err.message : String(err) }); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -1277,6 +1411,8 @@ const BloqsAddItemCommand = cmd({
       .option("title", { describe: "item title", type: "string" })
       .option("text", { describe: "item content (alternative to positional)", type: "string" })
       .option("due", { describe: "due date (ISO, e.g. 2026-07-22)", type: "string" })
+      // Any status update-item can set (#189804: fl-api's create used to accept only four).
+      .option("status", { describe: "create in this status", type: "string", choices: BLOQ_ITEM_STATUS_CHOICES })
       .option("reporter-lead", {
         describe: "lead ID of the person who reported this, for bounty attribution",
         type: "number",
@@ -1292,7 +1428,7 @@ const BloqsAddItemCommand = cmd({
       const normalized = normalizeDueDate(args.due as string)
       if (!normalized) {
         const emsg = `Invalid --due date "${args.due}" — use YYYY-MM-DD (e.g. 2026-07-22)`
-        if (args.json) console.log(JSON.stringify({ success: false, error: emsg }))
+        if (args.json) failJson({ success: false, error: emsg })
         else { prompts.log.error(emsg); prompts.outro("Done") }
         process.exitCode = 2
         return
@@ -1317,7 +1453,7 @@ const BloqsAddItemCommand = cmd({
         )) as string
       } catch (err) {
         if (err instanceof MissingFlagError) {
-          if (args.json) console.log(JSON.stringify({ success: false, error: err.message }))
+          if (args.json) failJson({ success: false, error: err.message })
           else { prompts.log.error(err.message); prompts.outro("Done") }
           process.exitCode = 2
           return
@@ -1367,7 +1503,7 @@ const BloqsAddItemCommand = cmd({
             // id + name ONLY. The lists endpoint returns every item nested inside every
             // list; echoing it whole turned a one-line refusal into a 4MB response.
             const choices = lists.map((l: any) => ({ id: Number(l?.id), name: l?.name ?? null }))
-            if (args.json) console.log(JSON.stringify({ success: false, error: emsg, lists: choices }))
+            if (args.json) failJson({ success: false, error: emsg, lists: choices })
             else { prompts.log.error(emsg); prompts.outro("Done") }
             process.exitCode = 2
             return
@@ -1387,6 +1523,7 @@ const BloqsAddItemCommand = cmd({
       const payload: Record<string, unknown> = { content }
       if (title) payload.title = title
       if (dueDate) payload.due_date = dueDate
+      if (args.status) payload.status = normalizeItemStatus(String(args.status))
       // Credit follows the work, not the board it lands on.
       //
       // Attribution used to be a property of `bug report` alone: anything filed through this
@@ -1416,7 +1553,7 @@ const BloqsAddItemCommand = cmd({
       )
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
         await handleApiError(res, "Add item")
         prompts.outro("Done")
         return
@@ -1432,6 +1569,17 @@ const BloqsAddItemCommand = cmd({
       // the destination this command verified; when it could not verify one, it says
       // so rather than echoing the caller's own input back as if it were a fact.
       const writtenList = addBody?.data?.list_id ?? addBody?.data?.data?.list_id ?? destinationList?.id ?? null
+      // Where the new card lives (#190012). Without it the caller had an id and nothing to hand
+      // a person, and built a link by hand — which is how the retired Elon route got handed out.
+      // Prefer fl-api's atlas_url; build the same address locally against an older API.
+      const created = addBody?.data?.data ?? addBody?.data ?? {}
+      const itemUrl = newItemId
+        ? itemUrlFrom({ ...created, id: newItemId }, PUBLIC_SITE, Boolean(process.env.IRIS_PUBLIC_URL), {
+            bloqId: args["bloq-id"],
+            listId: writtenList,
+          })
+        : null
+      const boardUrl = bloqWebUrl(args["bloq-id"])
       if (args.json) {
         console.log(
           JSON.stringify({
@@ -1441,18 +1589,26 @@ const BloqsAddItemCommand = cmd({
             list_id: writtenList,
             list_name: destinationList?.name ?? null,
             list_verified: destinationList !== null,
+            // The link to give a person, and who it opens for. A new item is private.
+            url: itemUrl,
+            board_url: boardUrl,
+            access: "private",
+            audience: "signed in — board owner and members",
+            public_url: created?.public_url ?? null,
+            share: newItemId ? `iris bloqs make-public ${newItemId}` : null,
           }),
         )
         return
       }
       spinner?.stop(`${success("✓")} Item added${newItemId ? ` (#${newItemId})` : ""}`)
+      if (itemUrl) printKV("Link", `${itemUrl}  ${dim("(private · signed in, board members only)")}`)
       const hint = newItemId
-        ? `iris bloqs get ${args["bloq-id"]}  |  iris bloqs share ${newItemId}  (publish + get a shareable link)`
+        ? `public link: iris bloqs make-public ${newItemId}   ·   who can open it: iris exposure show note:${newItemId}`
         : `iris bloqs get ${args["bloq-id"]}`
       prompts.outro(dim(hint))
     } catch (err) {
       spinner?.stop("Error", 1)
-      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      if (args.json) { failJson({ success: false, error: err instanceof Error ? err.message : String(err) }); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -1493,7 +1649,7 @@ const BloqsGetItemCommand = cmd({
     const ref = classifyRef(args["item-id"])
     if (ref.kind !== "item-id") {
       const msg = explainWrongRef(ref, "item-id")
-      if (args.json) console.log(JSON.stringify({ success: false, error: msg, ref_kind: ref.kind }))
+      if (args.json) failJson({ success: false, error: msg, ref_kind: ref.kind })
       else prompts.log.error(msg)
       process.exitCode = 2
       return
@@ -1509,7 +1665,7 @@ const BloqsGetItemCommand = cmd({
         res.status === 404
           ? `No item ${ref.value} visible to this account. Check the id, or whether the board is shared with you.`
           : `HTTP ${res.status}`
-      if (args.json) console.log(JSON.stringify({ success: false, error: msg }))
+      if (args.json) failJson({ success: false, error: msg })
       else prompts.log.error(msg)
       process.exitCode = 1
       return
@@ -1519,7 +1675,9 @@ const BloqsGetItemCommand = cmd({
     const item = body?.data ?? body
 
     if (args.json) {
-      console.log(JSON.stringify(item, null, 2))
+      // atlas_url = the signed-in link to this card (#190012); null when the API did not say which
+      // board the item is on, rather than a guess that opens some other project.
+      console.log(JSON.stringify({ ...item, atlas_url: itemUrlFrom(item, PUBLIC_SITE, Boolean(process.env.IRIS_PUBLIC_URL)) }, null, 2))
       return
     }
     if (args["content-only"]) {
@@ -1533,7 +1691,11 @@ const BloqsGetItemCommand = cmd({
     if (item.list_name) printKV("List", `${item.list_name}${item.bloq_list_id ? ` (#${item.bloq_list_id})` : ""}`)
     if (item.status) printKV("Status", String(item.status))
     if (item.created_at) printKV("Created", String(item.created_at).slice(0, 16).replace("T", " "))
-    if (item.public_url) printKV("Public", String(item.public_url))
+    // The addresses a person can be handed, each with its audience (#190012).
+    const signedIn = itemUrlFrom(item, PUBLIC_SITE, Boolean(process.env.IRIS_PUBLIC_URL))
+    printKV("Access", item.is_public ? String(item.access_level ?? "public") : "private")
+    if (signedIn) printKV("Link", `${signedIn}  ${dim("(signed in · board members)")}`)
+    if (item.public_url) printKV("Public", `${item.public_url}  ${dim(item.access_level && item.access_level !== "public" ? `(gated · ${item.access_level})` : "(anyone with the link)")}`)
     printDivider()
     console.log(String(item.content ?? "").trimEnd())
     printDivider()
@@ -1556,7 +1718,7 @@ const BloqsDeleteItemCommand = cmd({
     // --force is explicitly passed.
     if (!args.force && isNonInteractive()) {
       const msg = "Refusing to delete without --force in a non-interactive shell. Re-run with --force."
-      if (args.json) console.log(JSON.stringify({ success: false, error: msg }))
+      if (args.json) failJson({ success: false, error: msg })
       else prompts.log.error(msg)
       process.exitCode = 2
       return
@@ -1585,7 +1747,7 @@ const BloqsDeleteItemCommand = cmd({
       )
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
         await handleApiError(res, "Delete item")
         prompts.outro("Done")
         return
@@ -1596,7 +1758,7 @@ const BloqsDeleteItemCommand = cmd({
       prompts.outro(dim(`iris bloqs restore-item ${args["item-id"]}  (undo)`))
     } catch (err) {
       spinner?.stop("Error", 1)
-      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      if (args.json) { failJson({ success: false, error: err instanceof Error ? err.message : String(err) }); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -1632,7 +1794,7 @@ const BloqsRestoreItemCommand = cmd({
       )
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
         await handleApiError(res, "Restore item")
         prompts.outro("Done")
         return
@@ -1643,7 +1805,7 @@ const BloqsRestoreItemCommand = cmd({
       prompts.outro("Done")
     } catch (err) {
       spinner?.stop("Error", 1)
-      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      if (args.json) { failJson({ success: false, error: err instanceof Error ? err.message : String(err) }); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -1665,7 +1827,7 @@ const BloqsDeleteCommand = cmd({
     // Bug #162343/#162347: same non-interactive safety guard as delete-item.
     if (!args.force && isNonInteractive()) {
       const msg = "Refusing to delete a bloq without --force in a non-interactive shell. Re-run with --force."
-      if (args.json) console.log(JSON.stringify({ success: false, error: msg }))
+      if (args.json) failJson({ success: false, error: msg })
       else prompts.log.error(msg)
       process.exitCode = 2
       return
@@ -1694,7 +1856,7 @@ const BloqsDeleteCommand = cmd({
       )
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
         await handleApiError(res, "Delete bloq")
         prompts.outro("Done")
         return
@@ -1705,7 +1867,7 @@ const BloqsDeleteCommand = cmd({
       prompts.outro("Done")
     } catch (err) {
       spinner?.stop("Error", 1)
-      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      if (args.json) { failJson({ success: false, error: err instanceof Error ? err.message : String(err) }); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -1773,7 +1935,7 @@ const BloqsMakePublicCommand = cmd({
     // share-link password fails fast with a clear message, matching the server's
     // min:6 — validate before auth/network since it's purely input validation.
     if (args.password !== undefined && String(args.password).length < 6) {
-      if (args.json) { console.log(JSON.stringify({ success: false, error: "Password must be at least 6 characters" })); return }
+      if (args.json) { failJson({ success: false, error: "Password must be at least 6 characters" }); return }
       prompts.log.error("Password must be at least 6 characters")
       prompts.outro("Done")
       return
@@ -1797,7 +1959,7 @@ const BloqsMakePublicCommand = cmd({
     })
     if (!verdict.ok) {
       process.exitCode = verdict.reason === "needs-force" ? 1 : 0
-      if (args.json) console.log(JSON.stringify({ success: false, refused: verdict.reason }))
+      if (args.json) failJson({ success: false, refused: verdict.reason })
       else prompts.outro(verdict.reason === "needs-force" ? "Refused — nothing changed" : "Cancelled — nothing changed")
       return
     }
@@ -1819,7 +1981,7 @@ const BloqsMakePublicCommand = cmd({
       )
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
         await handleApiError(res, "Make public")
         prompts.outro("Done")
         return
@@ -1846,7 +2008,7 @@ const BloqsMakePublicCommand = cmd({
       prompts.outro("Done")
     } catch (err) {
       spinner?.stop("Error", 1)
-      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      if (args.json) { failJson({ success: false, error: err instanceof Error ? err.message : String(err) }); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -1884,7 +2046,7 @@ const BloqsMakePrivateCommand = cmd({
       )
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
         await handleApiError(res, "Make private")
         prompts.outro("Done")
         return
@@ -1895,12 +2057,113 @@ const BloqsMakePrivateCommand = cmd({
       prompts.outro("Done")
     } catch (err) {
       spinner?.stop("Error", 1)
-      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      if (args.json) { failJson({ success: false, error: err instanceof Error ? err.message : String(err) }); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
   },
 })
+
+/**
+ * `iris bloqs lists <bloq>` — the list ids on a board (#190329). create-list and
+ * add-item both REQUIRE one, and nothing returned it: bloqs get --json is huge and
+ * truncated, boards list did not say. So an agent had to guess and read the error.
+ */
+const BloqsListsCommand = cmd({
+  command: "lists <bloq-id>",
+  aliases: ["list-lists"],
+  describe: "list the lists on a bloq — id, name and item count",
+  builder: (yargs) =>
+    yargs
+      .positional("bloq-id", { describe: "bloq ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Lists — Bloq #${args["bloq-id"]}`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    try {
+      const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args["bloq-id"]}/lists`)
+      // handleApiError answers in JSON under --json, with the server's own reason, and sets
+      // a failing exit code — the same contract as boards list, so an agent can trust $?.
+      if (!(await handleApiError(res, "List bloq lists"))) {
+        if (!args.json) prompts.outro("Done")
+        return
+      }
+
+      const body = await res.json().catch(() => ({}))
+      const lists = listSummary(firstArray((body as any)?.data))
+
+      if (args.json) {
+        await writeJson({ success: true, bloq_id: args["bloq-id"], count: lists.length, lists })
+        return
+      }
+
+      if (lists.length === 0) {
+        prompts.log.warn(`Bloq #${args["bloq-id"]} has no lists.`)
+        prompts.outro(dim(`Create one: iris bloqs create-list ${args["bloq-id"]} "<name>"`))
+        return
+      }
+
+      printDivider()
+      for (const l of lists) {
+        const label = l.item_count === 1 ? "1 item" : `${l.item_count} items`
+        console.log(`  ${bold(String(l.name || "untitled"))}  ${dim(`#${l.id}`)}  ${dim(label)}`)
+      }
+      printDivider()
+      prompts.outro(dim(`iris bloqs add-item ${args["bloq-id"]} <list-id> "<content>"`))
+    } catch (err) {
+      process.exitCode = 1
+      if (args.json) { failJson({ success: false, error: err instanceof Error ? err.message : String(err) }); return }
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+/**
+ * id, name and item count — what a caller needs to pick a list. Payload shapes
+ * differ (items_count, nested items, neither); a count that silently reads 0 is
+ * worse than an error, because it looks like an empty list.
+ */
+/**
+ * `bloqs get --json` at a size an agent can read (#190327): the board, its lists as id / name /
+ * item count, its members as id / name / email / permission, its relations. With `withItems`,
+ * the lists keep their items (the old shape, minus the duplicate copy inside the board read).
+ */
+export function boundedBoardJson(board: any, lists: unknown, relations: unknown, webUrl: string, withItems: boolean) {
+  const { lists: _dup, shared_users, ...meta } = board ?? {}
+  const members = Array.isArray(shared_users)
+    ? shared_users.map((u: any) => ({
+        id: u?.id ?? null,
+        name: u?.name ?? u?.full_name ?? u?.user_name ?? null,
+        email: u?.email ?? null,
+        permission: u?.pivot?.permission ?? u?.permission ?? null,
+      }))
+    : []
+  const listRows = Array.isArray(lists) ? lists : []
+  return {
+    ...meta,
+    web_url: webUrl,
+    shared_users: members,
+    lists: withItems ? listRows : listSummary(listRows),
+    relations: Array.isArray(relations) ? relations : [],
+  }
+}
+
+export function listSummary(lists: unknown): Array<{ id: number; name: string; item_count: number }> {
+  if (!Array.isArray(lists)) return []
+  return lists.map((l: any) => {
+    const nested = Array.isArray(l?.items) ? l.items.length : undefined
+    const declared = l?.items_count ?? l?.item_count
+    return { id: Number(l?.id ?? 0), name: String(l?.name ?? ""), item_count: Number(declared ?? nested ?? 0) }
+  })
+}
 
 const BloqsCreateListCommand = cmd({
   command: "create-list <bloq-id> <name>",
@@ -1921,6 +2184,15 @@ const BloqsCreateListCommand = cmd({
     const userId = await requireUserId(args["user-id"])
     if (!userId) { if (!args.json) prompts.outro("Done"); return }
 
+    // A blank name used to reach the database and come back as HTTP 500 (#190625).
+    const name = normalizeBloqName(args.name)
+    if (!name) {
+      const msg = "List name is required — the name was blank after trimming."
+      if (args.json) { failJson({ success: false, error: msg }); process.exitCode = 2 }
+      else { prompts.log.error(msg); prompts.outro("Done") }
+      return
+    }
+
     const spinner = args.json ? null : prompts.spinner()
     spinner?.start("Creating list…")
 
@@ -1929,12 +2201,12 @@ const BloqsCreateListCommand = cmd({
         `/api/v1/user/bloqs/${args["bloq-id"]}/lists`,
         {
           method: "POST",
-          body: JSON.stringify({ name: args.name }),
+          body: JSON.stringify({ name }),
         },
       )
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
         await handleApiError(res, "Create list")
         prompts.outro("Done")
         return
@@ -1942,12 +2214,12 @@ const BloqsCreateListCommand = cmd({
 
       const data = (await res.json()) as { data?: any }
       const list = data?.data ?? data
-      if (args.json) { console.log(JSON.stringify({ success: true, id: list.id, name: args.name, bloq_id: args["bloq-id"] })); return }
-      spinner?.stop(`${success("✓")} List created: ${bold(args.name)} (ID: ${list.id})`)
+      if (args.json) { console.log(JSON.stringify({ success: true, id: list.id, name, bloq_id: args["bloq-id"] })); return }
+      spinner?.stop(`${success("✓")} List created: ${bold(name)} (ID: ${list.id})`)
       prompts.outro("Done")
     } catch (err) {
       spinner?.stop("Error", 1)
-      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      if (args.json) { failJson({ success: false, error: err instanceof Error ? err.message : String(err) }); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -1990,7 +2262,7 @@ const BloqsRenameListCommand = cmd({
       })
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
         await handleApiError(res, "Rename list")
         prompts.outro("Done")
         return
@@ -2001,7 +2273,7 @@ const BloqsRenameListCommand = cmd({
       prompts.outro("Done")
     } catch (err) {
       spinner?.stop("Error", 1)
-      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      if (args.json) { failJson({ success: false, error: err instanceof Error ? err.message : String(err) }); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -2023,7 +2295,7 @@ const BloqsDeleteListCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("list-id", { describe: "list ID", type: "number", demandOption: true })
-      .option("bloq-id", { describe: "bloq ID — enables the item-count safety check", type: "number" })
+      .option("bloq-id", { describe: "bloq ID (optional — the list is resolved from its id when omitted)", type: "number" })
       .option("force", { describe: "delete even if the list has items", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
@@ -2036,40 +2308,51 @@ const BloqsDeleteListCommand = cmd({
     const userId = await requireUserId(args["user-id"])
     if (!userId) { if (!args.json) prompts.outro("Done"); return }
 
-    // Count first, when we can. Without a bloq id there is no cheap way to enumerate the list,
-    // so say that rather than implying the check passed — a silent skip of a safety check reads
-    // exactly like the check succeeding.
+    // Count first — ALWAYS. `--bloq-id` used to be what turned the safety check on, so the
+    // normal invocation (just the list id) deleted a non-empty list and its items with no
+    // warning and reported items_removed: null (#190623). Now:
+    //   1. with --bloq-id, read that board's lists;
+    //   2. otherwise resolve the board from the list itself (GET user/bloqs/list/<id>).
+    // If neither yields a count, refuse rather than delete blind.
     let itemCount: number | null = null
-    if (args["bloq-id"]) {
-      try {
-        const listsRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${args["bloq-id"]}/lists`)
-        if (listsRes.ok) {
-          const body = (await listsRes.json()) as any
-          const lists = body?.data?.data ?? body?.data ?? body ?? []
-          const match = (Array.isArray(lists) ? lists : []).find(
-            (l: any) => Number(l.id) === Number(args["list-id"]),
-          )
-          if (match) itemCount = (match.items?.length ?? match.items_count ?? 0) as number
-        }
-      } catch {
-        // Leave itemCount null — reported as unknown below, never as zero.
+    let ownerBloqId: number | null = args["bloq-id"] ?? null
+    try {
+      if (ownerBloqId) {
+        const lists = await loadBloqLists(userId, ownerBloqId)
+        const match = lists.find((l) => l.id === Number(args["list-id"]))
+        if (match) itemCount = match.item_count
       }
+      if (itemCount === null) {
+        const res = await irisFetch(`/api/v1/user/bloqs/list/${args["list-id"]}`)
+        if (res.ok) {
+          const body = (await res.json()) as any
+          const data = body?.data?.data ?? body?.data ?? body
+          if (data) {
+            const board = Number(data.bloq_id ?? data.bloqId ?? 0)
+            if (Number.isInteger(board) && board > 0) ownerBloqId = board
+            const count = Number(data.items_count ?? data.itemsCount ?? (Array.isArray(data.items) ? data.items.length : NaN))
+            if (Number.isFinite(count)) itemCount = count
+          }
+        }
+      }
+    } catch {
+      // Leave itemCount null — reported as unknown below, never as zero.
     }
 
     if (itemCount !== null && itemCount > 0 && !args.force) {
       const msg = `List #${args["list-id"]} has ${itemCount} item(s). Re-run with --force to delete it and them.`
-      if (args.json) { console.log(JSON.stringify({ success: false, error: msg, items: itemCount })); return }
-      prompts.log.error(msg)
-      prompts.outro("Done")
+      if (args.json) failJson({ success: false, error: msg, items: itemCount })
+      else { prompts.log.error(msg); prompts.outro("Done") }
       return
     }
 
-    if (!args.json && itemCount === null) {
-      prompts.log.warn(
-        args["bloq-id"]
-          ? "Could not read the item count — deleting without that check."
-          : "No --bloq-id given, so the item count was NOT checked. Items in this list go with it.",
-      )
+    if (itemCount === null && !args.force) {
+      const msg =
+        `Could not count the items in list #${args["list-id"]}, so refusing to delete it blind. ` +
+        `Re-run with --bloq-id ${ownerBloqId ?? "<board>"} to check, or with --force to delete it and everything in it.`
+      if (args.json) { failJson({ success: false, error: msg }); process.exitCode = 2 }
+      else { prompts.log.error(msg); prompts.outro("Done") }
+      return
     }
 
     const spinner = args.json ? null : prompts.spinner()
@@ -2079,18 +2362,29 @@ const BloqsDeleteListCommand = cmd({
       const res = await irisFetch(`/api/v1/user/bloqs/list/${args["list-id"]}`, { method: "DELETE" })
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        if (args.json) {
+          const detail = (await res.json().catch(() => null)) as any
+          failJson({ success: false, status: res.status, ...(detail?.data ?? detail ?? { error: `HTTP ${res.status}` }) })
+          return
+        }
         await handleApiError(res, "Delete list")
         prompts.outro("Done")
         return
       }
 
-      if (args.json) { console.log(JSON.stringify({ success: true, id: args["list-id"], items_removed: itemCount })); return }
-      spinner?.stop(`${success("✓")} List #${args["list-id"]} deleted`)
+      // The server reports what it actually removed, so a forced delete says how much it
+      // took rather than guessing (#190623).
+      const deleted = (await res.json().catch(() => null)) as any
+      const body = deleted?.data?.data ?? deleted?.data ?? deleted
+      const removed = Number(body?.items_removed ?? body?.itemsRemoved ?? NaN)
+      const itemsRemoved = Number.isFinite(removed) ? removed : itemCount
+
+      if (args.json) { console.log(JSON.stringify({ success: true, id: args["list-id"], items_removed: itemsRemoved })); return }
+      spinner?.stop(`${success("✓")} List #${args["list-id"]} deleted${itemsRemoved ? ` (${itemsRemoved} item(s))` : ""}`)
       prompts.outro("Done")
     } catch (err) {
       spinner?.stop("Error", 1)
-      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      if (args.json) { failJson({ success: false, error: err instanceof Error ? err.message : String(err) }); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -2125,7 +2419,7 @@ const BloqsMoveItemCommand = cmd({
       )
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
         await handleApiError(res, "Move item")
         prompts.outro("Done")
         return
@@ -2136,7 +2430,7 @@ const BloqsMoveItemCommand = cmd({
       prompts.outro("Done")
     } catch (err) {
       spinner?.stop("Error", 1)
-      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      if (args.json) { failJson({ success: false, error: err instanceof Error ? err.message : String(err) }); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -2375,6 +2669,61 @@ const BloqsComposeCommand = cmd({
  * phrase is nowhere in your items"), whereas a silently-omitted section reads as "no such
  * capability". Same rule federated-search.ts states for skipped sources.
  */
+/** Types the server's /api/v1/atlas/search accepts (fl-api AtlasSearchController::TYPES). */
+export const ATLAS_TYPES = ["items", "boards", "pages", "files", "leads", "agents", "workflows"] as const
+
+/**
+ * Which atlas types one `search` invocation asks for. --type wins; otherwise the two legacy
+ * narrowing flags; otherwise items + boards + pages — pages because "atlas search should
+ * search everything" (#187964) and they were the one kind of record it could not reach.
+ * Unknown names are returned separately so the caller can say so instead of dropping them.
+ */
+export function atlasTypesFor(args: { type?: string; "boards-only"?: boolean; "items-only"?: boolean }): {
+  types: string[]
+  unknown: string[]
+} {
+  if (args.type) {
+    const asked = String(args.type).split(",").map((t) => t.trim().toLowerCase()).filter(Boolean)
+    return {
+      types: asked.filter((t) => (ATLAS_TYPES as readonly string[]).includes(t)),
+      unknown: asked.filter((t) => !(ATLAS_TYPES as readonly string[]).includes(t)),
+    }
+  }
+  if (args["boards-only"]) return { types: ["boards"], unknown: [] }
+  if (args["items-only"]) return { types: ["items"], unknown: [] }
+  return { types: ["items", "boards", "pages"], unknown: [] }
+}
+
+/**
+ * Split /atlas/search rows into the shapes this command already prints. Items keep the
+ * legacy field names (bloq_name, list_name, bloq_id, content) so the item printer and the
+ * --json contract don't change underneath existing callers.
+ */
+export function splitAtlasResults(rows: any[]): { items: any[]; boards: any[]; pages: any[]; other: any[] } {
+  const items: any[] = []
+  const boards: any[] = []
+  const pages: any[] = []
+  const other: any[] = []
+  for (const r of Array.isArray(rows) ? rows : []) {
+    if (r?.type === "item")
+      items.push({
+        id: r.id,
+        title: r.title,
+        bloq_id: r.board_id,
+        bloq_name: r.board,
+        list_name: r.list,
+        content: r.snippet,
+        updated_at: r.updated_at,
+        score: r.score,
+        found_by: r.found_by,
+      })
+    else if (r?.type === "board") boards.push({ id: r.id, name: r.title, found_by: r.found_by })
+    else if (r?.type === "page") pages.push(r)
+    else if (r) other.push(r)
+  }
+  return { items, boards, pages, other }
+}
+
 export const BloqsSearchCommand = cmd({
   command: "search <query>",
   aliases: ["find", "q"],
@@ -2386,6 +2735,10 @@ export const BloqsSearchCommand = cmd({
       .option("boards-only", { describe: "only match board names/descriptions (the old behaviour)", type: "boolean", default: false })
       .option("items-only", { describe: "only match item titles/content", type: "boolean", default: false })
       .option("bloq", { describe: "restrict item matches to one board ID", type: "number" })
+      .option("type", {
+        describe: `what to search, comma-separated: ${ATLAS_TYPES.join(", ")} (default items,boards,pages)`,
+        type: "string",
+      })
       // #180715: the multi-source fan-out was only reachable from `bloqs items <bloq-id>
       // --include-all`, which needs an ID you do not have when you are searching FOR something.
       // It is the same engine; it just had no front door at the top level.
@@ -2428,12 +2781,53 @@ export const BloqsSearchCommand = cmd({
     const spinner = args.json ? null : prompts.spinner()
     spinner?.start("Searching…")
 
-    // ── boards (name + description) ──
-    // The index endpoint ACCEPTS ?search= and ignores it, returning every board — so the
-    // filter has to happen here or every board would report as a match. Same tokenized
-    // AND-match `bloqs list --search` uses, so the two agree.
+    // ── your records: one call to the shared words engine (#187964 S2) ──
+    // /api/v1/atlas/search matches EVERY word, ranks by match, and covers boards you were added
+    // to (scoped as the board UI scopes them) — the content-items feed this used to read only
+    // saw boards you own (#187962) and sorted newest first. With --bloq the board-scoped
+    // endpoint stays exact. A server without the endpoint (404) gets the old two calls.
+    const { types, unknown } = atlasTypesFor(args as any)
+    if (unknown.length) {
+      const msg = `Unknown --type ${unknown.join(", ")}. Use any of: ${ATLAS_TYPES.join(", ")}`
+      spinner?.stop("Search not run")
+      if (args.json) await writeJson({ error: msg })
+      else prompts.outro(msg)
+      process.exitCode = 1
+      return
+    }
     let boards: any[] = []
-    if (wantBoards) {
+    let items: any[] = []
+    let pages: any[] = []
+    let otherTypes: any[] = []
+    let lanes: Record<string, string> | undefined
+    let recordsError: string | undefined
+    let usedAtlas = false
+
+    if (!args.bloq && types.length) {
+      try {
+        const params = new URLSearchParams({ q: query, type: types.join(","), limit: String(limit) })
+        const res = await irisFetch(`/api/v1/atlas/search?${params}`)
+        if (res.ok) {
+          const data = (await res.json()) as any
+          const split = splitAtlasResults(data?.results)
+          items = split.items
+          boards = split.boards
+          pages = split.pages
+          otherTypes = split.other
+          lanes = data?.lanes
+          if (Array.isArray(data?.failed_types) && data.failed_types.length)
+            recordsError = `could not search: ${data.failed_types.join(", ")}`
+          usedAtlas = true
+        } else if (res.status !== 404) {
+          recordsError = `atlas search HTTP ${res.status}`
+        }
+      } catch (e: any) {
+        recordsError = String(e?.message ?? e).slice(0, 120)
+      }
+    }
+
+    // Legacy path: --bloq, or a server that predates /atlas/search.
+    if (!usedAtlas && wantBoards && !args.type) {
       try {
         const res = await irisFetch(`/api/v1/user/${userId}/bloqs`)
         if (res.ok) {
@@ -2445,13 +2839,9 @@ export const BloqsSearchCommand = cmd({
         }
       } catch { /* reported as 0 below — never silently narrowed */ }
     }
-
-    // ── items (title + content, every board) ──
-    let items: any[] = []
-    if (wantItems) {
+    if (!usedAtlas && wantItems && (!args.type || types.includes("items"))) {
       try {
         const params = new URLSearchParams({ search: query, per_page: String(limit) })
-        // A board-scoped item search has its own endpoint; reuse it so --bloq is exact.
         const url = args.bloq
           ? `/api/v1/user/${userId}/bloqs/${args.bloq}/items?${params}`
           : `/api/v1/user/${userId}/bloqs/content-items?${params}`
@@ -2463,6 +2853,9 @@ export const BloqsSearchCommand = cmd({
         }
       } catch { /* same */ }
     }
+    const showItems = usedAtlas ? types.includes("items") : wantItems
+    const showBoards = usedAtlas ? types.includes("boards") : wantBoards && !args.type
+    const showPages = usedAtlas && types.includes("pages")
 
     // ── external sources (Obsidian, Drive) ──
     // Only when asked. `bloq` is excluded from the fan-out here because the cross-board item
@@ -2484,7 +2877,10 @@ export const BloqsSearchCommand = cmd({
     }
 
     spinner?.stop(
-      `${boards.length} board(s), ${items.length} item(s)` + (fanOut ? `, ${external.length} external` : ""),
+      `${items.length} item(s), ${boards.length} board(s)` +
+        (showPages ? `, ${pages.length} page(s)` : "") +
+        (otherTypes.length ? `, ${otherTypes.length} other` : "") +
+        (fanOut ? `, ${external.length} external` : ""),
     )
 
     if (args.json) {
@@ -2492,16 +2888,26 @@ export const BloqsSearchCommand = cmd({
         query,
         boards,
         items,
+        pages,
+        other: otherTypes,
         external,
+        // What actually ran on the server — "meaning: not built yet" is not the same as "no matches".
+        lanes: lanes ?? null,
+        records_error: recordsError ?? null,
         // Report every source's outcome, including failures — a source that errored must not
         // be indistinguishable from a source that found nothing.
         source_outcomes: outcomes,
-        counts: { boards: boards.length, items: items.length, external: external.length },
+        counts: { boards: boards.length, items: items.length, pages: pages.length, other: otherTypes.length, external: external.length },
       })
       return
     }
 
-    if (wantItems) {
+    if (recordsError) {
+      printDivider()
+      console.log(`  ${bold("Your records")} ${dim(`— ${recordsError}`)}`)
+    }
+
+    if (showItems) {
       printDivider()
       console.log(`  ${bold("Items")} ${dim(`(${items.length})`)}`)
       if (!items.length) console.log(`  ${dim(`No item matches for "${query}"`)}`)
@@ -2514,7 +2920,7 @@ export const BloqsSearchCommand = cmd({
       }
     }
 
-    if (wantBoards) {
+    if (showBoards) {
       printDivider()
       console.log(`  ${bold("Boards")} ${dim(`(${boards.length})`)}`)
       if (!boards.length) console.log(`  ${dim(`No board-name matches for "${query}"`)}`)
@@ -2522,6 +2928,33 @@ export const BloqsSearchCommand = cmd({
         console.log(`  ${dim(`#${b.id}`)} ${bold(b.name ?? "(untitled)")}`)
         if (b.description) console.log(`      ${dim(String(b.description).slice(0, 110))}`)
       }
+    }
+
+    if (showPages) {
+      printDivider()
+      console.log(`  ${bold("Pages")} ${dim(`(${pages.length})`)}`)
+      if (!pages.length) console.log(`  ${dim(`No page matches for "${query}"`)}`)
+      for (const p of pages) {
+        console.log(`  ${dim(`#${p.id}`)} ${bold(String(p.title ?? p.slug ?? "(untitled)"))}${p.status ? dim(`  ·  ${p.status}`) : ""}`)
+        console.log(`      ${dim(`/p/${p.slug}`)}`)
+        if (p.snippet) console.log(`      ${dim(String(p.snippet).replace(/\s+/g, " ").slice(0, 110))}`)
+      }
+    }
+
+    for (const t of ["files", "leads", "agents", "workflows"]) {
+      if (!usedAtlas || !types.includes(t)) continue
+      const rows = otherTypes.filter((r) => `${r.type}s` === t)
+      printDivider()
+      console.log(`  ${bold(t[0].toUpperCase() + t.slice(1))} ${dim(`(${rows.length})`)}`)
+      if (!rows.length) console.log(`  ${dim(`No ${t} match "${query}"`)}`)
+      for (const r of rows) {
+        console.log(`  ${dim(`#${r.id}`)} ${bold(String(r.title ?? "(untitled)"))}`)
+        if (r.snippet) console.log(`      ${dim(String(r.snippet).replace(/\s+/g, " ").slice(0, 110))}`)
+      }
+    }
+
+    if (usedAtlas && lanes) {
+      console.log(`  ${dim(`matched by: words${lanes.meaning && !/^ran/.test(lanes.meaning) ? "  ·  meaning search not built yet" : ""}`)}`)
     }
 
     if (fanOut) {
@@ -2585,7 +3018,7 @@ const BloqsRenameCommand = cmd({
         )) as string
       } catch (err) {
         if (err instanceof MissingFlagError) {
-          if (args.json) console.log(JSON.stringify({ success: false, error: err.message }))
+          if (args.json) failJson({ success: false, error: err.message })
           else { prompts.log.error(err.message); prompts.outro("Done") }
           process.exitCode = 2
           return
@@ -2622,14 +3055,14 @@ const BloqsRenameCommand = cmd({
           break
         default:
           spinner?.stop("Invalid type", 1)
-          if (args.json) console.log(JSON.stringify({ success: false, error: "Invalid type" }))
+          if (args.json) failJson({ success: false, error: "Invalid type" })
           else prompts.outro("Done")
           return
       }
 
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
         await handleApiError(res, `Rename ${args.type}`)
         prompts.outro("Done")
         return
@@ -2640,7 +3073,7 @@ const BloqsRenameCommand = cmd({
       prompts.outro("Done")
     } catch (err) {
       spinner?.stop("Error", 1)
-      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      if (args.json) { failJson({ success: false, error: err instanceof Error ? err.message : String(err) }); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -2676,7 +3109,7 @@ const BloqsAttachLeadCommand = cmd({
       })
       if (!res.ok) {
         if (spinner) spinner.stop("Failed", 1)
-        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
         await handleApiError(res, "Attach lead")
         prompts.outro("Done")
         return
@@ -2689,7 +3122,7 @@ const BloqsAttachLeadCommand = cmd({
       prompts.outro(dim(`iris leads get ${args["lead-id"]}`))
     } catch (err) {
       if (spinner) spinner.stop("Error", 1)
-      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      if (args.json) { failJson({ success: false, error: err instanceof Error ? err.message : String(err) }); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -2721,7 +3154,7 @@ const BloqsDetachLeadCommand = cmd({
       })
       if (!res.ok) {
         if (spinner) spinner.stop("Failed", 1)
-        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
         await handleApiError(res, "Detach lead")
         prompts.outro("Done")
         return
@@ -2734,7 +3167,7 @@ const BloqsDetachLeadCommand = cmd({
       prompts.outro(dim(`iris leads get ${args["lead-id"]}`))
     } catch (err) {
       if (spinner) spinner.stop("Error", 1)
-      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      if (args.json) { failJson({ success: false, error: err instanceof Error ? err.message : String(err) }); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -2771,7 +3204,7 @@ const BloqsAttachPlaybookCommand = cmd({
       })
       if (!res.ok) {
         if (spinner) spinner.stop("Failed", 1)
-        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
         await handleApiError(res, "Attach playbook")
         prompts.outro("Done")
         return
@@ -2784,7 +3217,7 @@ const BloqsAttachPlaybookCommand = cmd({
       prompts.outro(dim(`iris bloqs playbooks ${args["bloq-id"]}`))
     } catch (err) {
       if (spinner) spinner.stop("Error", 1)
-      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      if (args.json) { failJson({ success: false, error: err instanceof Error ? err.message : String(err) }); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -2817,7 +3250,7 @@ const BloqsDetachPlaybookCommand = cmd({
       })
       if (!res.ok) {
         if (spinner) spinner.stop("Failed", 1)
-        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
         await handleApiError(res, "Detach playbook")
         prompts.outro("Done")
         return
@@ -2830,7 +3263,7 @@ const BloqsDetachPlaybookCommand = cmd({
       prompts.outro(dim(`iris bloqs playbooks ${args["bloq-id"]}`))
     } catch (err) {
       if (spinner) spinner.stop("Error", 1)
-      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      if (args.json) { failJson({ success: false, error: err instanceof Error ? err.message : String(err) }); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -2855,7 +3288,7 @@ const BloqsRelateCommand = cmd({
     const type = String(args.type)
     if (!isValidRelationType(type)) {
       const msg = `Invalid --type "${type}". Must be one of: ${RELATION_TYPES.join(", ")}`
-      if (args.json) { console.log(JSON.stringify({ success: false, error: msg })); return }
+      if (args.json) { failJson({ success: false, error: msg }); return }
       prompts.log.error(msg)
       return
     }
@@ -2878,7 +3311,7 @@ const BloqsRelateCommand = cmd({
       })
       if (!res.ok) {
         if (spinner) spinner.stop("Failed", 1)
-        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
         await handleApiError(res, "Relate bloqs")
         prompts.outro("Done")
         return
@@ -2891,7 +3324,7 @@ const BloqsRelateCommand = cmd({
       prompts.outro(dim(`iris bloqs relations ${args["from-id"]}`))
     } catch (err) {
       if (spinner) spinner.stop("Error", 1)
-      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      if (args.json) { failJson({ success: false, error: err instanceof Error ? err.message : String(err) }); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -2912,7 +3345,7 @@ const BloqsUnrelateCommand = cmd({
     const type = String(args.type)
     if (!isValidRelationType(type)) {
       const msg = `Invalid --type "${type}". Must be one of: ${RELATION_TYPES.join(", ")}`
-      if (args.json) { console.log(JSON.stringify({ success: false, error: msg })); return }
+      if (args.json) { failJson({ success: false, error: msg }); return }
       prompts.log.error(msg)
       return
     }
@@ -2935,7 +3368,7 @@ const BloqsUnrelateCommand = cmd({
       })
       if (!res.ok) {
         if (spinner) spinner.stop("Failed", 1)
-        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
         await handleApiError(res, "Unrelate bloqs")
         prompts.outro("Done")
         return
@@ -2947,7 +3380,7 @@ const BloqsUnrelateCommand = cmd({
       prompts.outro(dim(`iris bloqs relations ${args["from-id"]}`))
     } catch (err) {
       if (spinner) spinner.stop("Error", 1)
-      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      if (args.json) { failJson({ success: false, error: err instanceof Error ? err.message : String(err) }); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -2978,7 +3411,7 @@ const BloqsRelationsCommand = cmd({
       const qs = params.toString()
       const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/relations${qs ? `?${qs}` : ""}`)
       if (!res.ok) {
-        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
         await handleApiError(res, "List bloq relations")
         return
       }
@@ -2996,7 +3429,7 @@ const BloqsRelationsCommand = cmd({
       console.log(bold(`Relations for Bloq #${args.id}:`))
       console.log(formatRelationsGrouped(relations))
     } catch (err) {
-      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      if (args.json) { failJson({ success: false, error: err instanceof Error ? err.message : String(err) }); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
     }
   },
@@ -3017,7 +3450,7 @@ const BloqsPlaybooksCommand = cmd({
     try {
       const res = await irisFetch(`/api/v1/bloqs/${args["bloq-id"]}/playbooks`, { method: "GET" })
       if (!res.ok) {
-        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
         await handleApiError(res, "List bloq playbooks")
         return
       }
@@ -3038,7 +3471,7 @@ const BloqsPlaybooksCommand = cmd({
         console.log(`  ${success("•")} ${p.name ?? "unknown"}${when}`)
       }
     } catch (err) {
-      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      if (args.json) { failJson({ success: false, error: err instanceof Error ? err.message : String(err) }); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
     }
   },
@@ -3072,7 +3505,7 @@ const BloqsContributorsCommand = cmd({
       const res = await irisFetch(`/api/v1/users/${userId}/leads?bloq_id=${args["bloq-id"]}&per_page=100`)
       if (!res.ok) {
         if (spinner) spinner.stop("Failed", 1)
-        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
         await handleApiError(res, "List contributors")
         prompts.outro("Done")
         return
@@ -3105,7 +3538,7 @@ const BloqsContributorsCommand = cmd({
       prompts.outro(dim(`iris bloqs attach-lead ${args["bloq-id"]} <lead-id>  |  iris bloqs detach-lead ${args["bloq-id"]} <lead-id>`))
     } catch (err) {
       if (spinner) spinner.stop("Error", 1)
-      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      if (args.json) { failJson({ success: false, error: err instanceof Error ? err.message : String(err) }); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -3135,36 +3568,48 @@ export async function collectListFiltered(
   listId: number,
   limit: number,
   maxPages = 25,
-): Promise<{ items: any[]; total: number; exhausted: boolean; pagesScanned: number }> {
+): Promise<{ items: any[]; total: number; exhausted: boolean; complete: boolean; pagesScanned: number }> {
   const inList = (i: any) => i?.bloq_list_id === listId || i?.list_id === listId
   const perPage = 200 // scan wide; `limit` governs what we return, not what we read
   const collected: any[] = []
   let page = 1
-  let total = 0
   let lastPage = 1
   let pagesScanned = 0
+  let complete = false
 
   while (page <= lastPage && pagesScanned < maxPages) {
     const { items, pagination } = await fetchPage(page, perPage)
     pagesScanned++
-    total = pagination?.total ?? total
     lastPage = pagination?.last_page ?? 1
 
     for (const item of items) {
       if (inList(item)) collected.push(item)
     }
+
+    const atEnd = page >= lastPage || items.length === 0
     if (collected.length >= limit) {
-      return { items: collected.slice(0, limit), total, exhausted: true, pagesScanned }
+      // The caller's page is full; the list may still hold more. `total` is what we have
+      // actually seen in the list — never the board's unfiltered total (#190628).
+      return {
+        items: collected.slice(0, limit),
+        total: collected.length,
+        exhausted: true,
+        complete: atEnd,
+        pagesScanned,
+      }
     }
-    if (!items.length) break
+    if (atEnd) { complete = true; break }
     page++
   }
 
   return {
     items: collected.slice(0, limit),
-    total,
+    // The count is the count of THIS LIST, so an empty list reports 0 rather than the
+    // board's total. When `complete` is false it is a lower bound and the caller says so.
+    total: collected.length,
     // The whole bloq was seen only if we ran off the end rather than hit the cap.
-    exhausted: page > lastPage || pagesScanned < maxPages,
+    exhausted: complete || pagesScanned < maxPages,
+    complete,
     pagesScanned,
   }
 }
@@ -3190,7 +3635,17 @@ const BloqsItemsCommand = cmd({
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
-    if (!args.json) { UI.empty(); prompts.intro(`◈  Bloq #${args["bloq-id"]} Items`) }
+    // `items notanumber` used to print "◈  Bloq #NaN Items" and then a 403 (#190634).
+    const bloqId = Number(args["bloq-id"])
+    if (!Number.isInteger(bloqId) || bloqId <= 0) {
+      const msg = `Not a bloq id: ${JSON.stringify(args["bloq-id"])} — expected a positive number.`
+      if (args.json) failJson({ success: false, error: msg })
+      else prompts.log.error(msg)
+      process.exitCode = 2
+      return
+    }
+
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Bloq #${bloqId} Items`) }
 
     const token = await requireAuth()
     if (!token) { if (!args.json) prompts.outro("Done"); return }
@@ -3271,6 +3726,22 @@ const BloqsItemsCommand = cmd({
       // Use the lean, server-paginated items endpoint (#164357/#164358). It returns
       // a curated per-row projection + a pagination envelope (total/last_page), so we
       // no longer dump the whole bloq's fat item models and slice client-side at 50.
+      // A --list id must belong to THIS board. add-item already refuses a foreign list;
+      // the read path used to accept one and answer "no items", which reads as an empty
+      // list rather than a wrong id (#190628).
+      if (args.list !== undefined) {
+        const lists = await loadBloqLists(userId, bloqId)
+        if (!lists.some((l) => l.id === Number(args.list))) {
+          if (spinner) spinner.stop("Failed", 1)
+          const msg = `List #${args.list} is not a list on bloq #${bloqId}.`
+          const detail = `${msg}\n  This bloq's lists: ${formatListChoices(lists)}`
+          if (args.json) failJson({ success: false, error: detail, lists })
+          else { prompts.log.error(detail); prompts.outro("Done") }
+          process.exitCode = 2
+          return
+        }
+      }
+
       const perPage = Math.min(Math.max(Number(args.limit) || 50, 1), 200)
       const page = Math.max(Number(args.page) || 1, 1)
       const params = new URLSearchParams()
@@ -3291,7 +3762,7 @@ const BloqsItemsCommand = cmd({
           // NOTE: this idiom appears ~25 times in this file alone. Fixed here because this is
           // the path verified end to end; the pattern is filed rather than blind-edited.
           const detail = (await res.json().catch(() => null)) as Record<string, unknown> | null
-          console.log(JSON.stringify({ success: false, status: res.status, ...(detail ?? { error: `HTTP ${res.status}` }) }))
+          failJson({ success: false, status: res.status, ...(detail ?? { error: `HTTP ${res.status}` }) })
           return
         }
         await handleApiError(res, "List items")
@@ -3327,8 +3798,10 @@ const BloqsItemsCommand = cmd({
           perPage,
         )
         items = collected.items
-        listScanIncomplete = !collected.exhausted
-        if (collected.total) pg.total = collected.total
+        listScanIncomplete = !collected.complete
+        // Always take the filtered count — including 0. The old truthy check left an
+        // empty list reporting the board's total (#190628).
+        pg.total = collected.total
       }
 
       const total = pg.total ?? items.length
@@ -3391,7 +3864,7 @@ const BloqsItemsCommand = cmd({
       return
     } catch (err) {
       if (spinner) spinner.stop("Error", 1)
-      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      if (args.json) { failJson({ success: false, error: err instanceof Error ? err.message : String(err) }); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -3427,6 +3900,10 @@ const BloqsUpdateItemCommand = cmd({
         describe: "merge key=value into content, preserving other fields (repeatable; dotted keys nest; e.g. --merge rate_cents=7900)",
         type: "array",
       })
+      .option("append", {
+        describe: "add text to the end of a TEXT item's content (a markdown section, a status line) — the safe way to add to an epic or ticket body",
+        type: "string",
+      })
       .option("due", { describe: "due date (ISO, e.g. 2026-07-22; 'none' to clear)", type: "string" })
       // MOVE. The API has accepted `bloq_id` and `bloq_list_id` on this endpoint for a while —
       // its own comment says there was no way to move an item "at any layer, not the CLI, not
@@ -3461,7 +3938,7 @@ const BloqsUpdateItemCommand = cmd({
         const normalized = normalizeDueDate(args.due as string)
         if (!normalized) {
           const emsg = `Invalid --due date "${args.due}" — use YYYY-MM-DD (e.g. 2026-07-22) or 'none' to clear`
-          if (args.json) console.log(JSON.stringify({ success: false, error: emsg }))
+          if (args.json) failJson({ success: false, error: emsg })
           else { prompts.log.error(emsg); prompts.outro("Done") }
           process.exitCode = 2
           return
@@ -3476,7 +3953,7 @@ const BloqsUpdateItemCommand = cmd({
     // --content (full replace); the backend also 422s if both arrive.
     if (args.content !== undefined && args.merge) {
       const emsg = "Use either --content (full replace) or --merge (partial), not both"
-      if (args.json) console.log(JSON.stringify({ success: false, error: emsg }))
+      if (args.json) failJson({ success: false, error: emsg })
       else { prompts.log.error(emsg); prompts.outro("Done") }
       process.exitCode = 2
       return
@@ -3486,16 +3963,51 @@ const BloqsUpdateItemCommand = cmd({
         payload.content_merge = parseMergePairs((args.merge as unknown[]).map(String))
       } catch (e) {
         const emsg = e instanceof Error ? e.message : String(e)
-        if (args.json) console.log(JSON.stringify({ success: false, error: emsg }))
+        if (args.json) failJson({ success: false, error: emsg })
         else { prompts.log.error(emsg); prompts.outro("Done") }
         process.exitCode = 2
         return
       }
     }
 
+    // --merge onto a TEXT body used to replace the body with the merged keys (the server took
+    // the undecodable text as {}), erasing five epic/ticket bodies on 2026-10-08. --append is
+    // the operation that was wanted. Both need the current content, so read it once.
+    if (args.append !== undefined || args.merge) {
+      const conflict = args.append !== undefined && (args.content !== undefined || args.merge)
+      if (conflict) {
+        const emsg = "--append cannot be combined with --content or --merge"
+        if (args.json) failJson({ success: false, error: emsg })
+        else prompts.log.error(emsg)
+        process.exitCode = 2
+        if (!args.json) prompts.outro("Done")
+        return
+      }
+      const cur = await irisFetch(`/api/v1/user/bloqs/list/item/${args["item-id"]}`)
+      if (!cur.ok) {
+        const emsg = `Could not read item ${args["item-id"]} (HTTP ${cur.status})`
+        if (args.json) failJson({ success: false, error: emsg })
+        else prompts.log.error(emsg)
+        process.exitCode = 1
+        if (!args.json) prompts.outro("Done")
+        return
+      }
+      const body = (await cur.json()) as any
+      const existing = (body?.data ?? body)?.content
+      const plan = planContentEdit(existing, args.append !== undefined ? { append: String(args.append) } : { merge: true })
+      if ("error" in plan) {
+        if (args.json) failJson({ success: false, error: plan.error })
+        else prompts.log.error(plan.error)
+        process.exitCode = 2
+        if (!args.json) prompts.outro("Done")
+        return
+      }
+      if (plan.content !== undefined) payload.content = plan.content
+    }
+
     if (Object.keys(payload).length === 0) {
-      const emsg = "Provide at least one of: --status, --title, --content, --merge, --due"
-      if (args.json) console.log(JSON.stringify({ success: false, error: emsg }))
+      const emsg = "Provide at least one of: --status, --title, --content, --merge, --append, --due"
+      if (args.json) failJson({ success: false, error: emsg })
       else { prompts.log.error(emsg); prompts.outro("Done") }
       process.exitCode = 2
       return
@@ -3511,8 +4023,10 @@ const BloqsUpdateItemCommand = cmd({
       })
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        // #188294: --json reported success:false and exited 0, so `iris ... --json && next` ran next.
+        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); process.exitCode = 1; return }
         await handleApiError(res, "Update item")
+        process.exitCode = 1
         prompts.outro("Done")
         return
       }
@@ -3523,6 +4037,7 @@ const BloqsUpdateItemCommand = cmd({
       if (args.status) parts.push(`status → ${payload.status}`)
       if (args.title) parts.push(`title updated`)
       if (args.content) parts.push(`content replaced`)
+      if (args.append !== undefined) parts.push(`text appended`)
       if (args.merge) parts.push(`content merged (${Object.keys(payload.content_merge as object).length} field(s))`)
       if (payload.due_date !== undefined) parts.push(payload.due_date === null ? `due cleared` : `due → ${payload.due_date}`)
 
@@ -3530,8 +4045,9 @@ const BloqsUpdateItemCommand = cmd({
       prompts.outro("Done")
     } catch (err) {
       spinner?.stop("Error", 1)
-      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      if (args.json) { failJson({ success: false, error: err instanceof Error ? err.message : String(err) }); process.exitCode = 1; return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
+      process.exitCode = 1
       prompts.outro("Done")
     }
   },
@@ -3540,6 +4056,41 @@ const BloqsUpdateItemCommand = cmd({
 // ============================================================================
 // Helpers
 // ============================================================================
+
+/** Stored content is TEXT when it is non-empty and not a JSON object/array (mirrors fl-api's guard). */
+export function contentIsText(content: unknown): boolean {
+  if (content === null || content === undefined) return false
+  if (typeof content === "object") return false
+  const s = String(content)
+  if (!s.trim()) return false
+  try {
+    const v = JSON.parse(s)
+    return !(v && typeof v === "object")
+  } catch {
+    return true
+  }
+}
+
+/**
+ * What an --append or --merge should send, given the item's current content.
+ * --merge is refused on a text body (it would erase it); --append is refused on a fields
+ * item (it would turn the map into text).
+ */
+export function planContentEdit(
+  existing: unknown,
+  op: { append: string } | { merge: true },
+): { content?: string } | { error: string } {
+  if ("merge" in op) {
+    return contentIsText(existing)
+      ? { error: "This item's content is text, not fields — --merge would erase it. Use --append \"…\" to add to it, or --content to replace it." }
+      : {}
+  }
+  if (!op.append.trim()) return { error: "--append needs some text" }
+  if (existing !== null && existing !== undefined && String(existing).trim() && !contentIsText(existing))
+    return { error: "This item's content is fields (JSON), not text — use --merge key=value to change a field." }
+  const base = existing === null || existing === undefined ? "" : String(existing).replace(/\s+$/, "")
+  return { content: base ? `${base}\n\n${op.append}` : op.append }
+}
 
 // #169753: parse repeatable `--merge key=value` pairs into a partial content object
 // for the backend's content_merge deep-merge. Values are JSON-parsed when possible
@@ -3795,7 +4346,7 @@ const BloqsAddMemberCommand = cmd({
 
     const who = await resolveMemberId(args as any)
     if ("error" in who) {
-      if (args.json) { console.log(JSON.stringify({ success: false, error: who.error })) }
+      if (args.json) { failJson({ success: false, error: who.error }) }
       else { UI.empty(); prompts.log.error(who.error) }
       process.exitCode = 2
       return
@@ -3837,7 +4388,7 @@ const BloqsAddMemberCommand = cmd({
       prompts.outro(dim(`iris bloqs members ${args["bloq-id"]}`))
     } catch (err) {
       if (spinner) spinner.stop("Error", 1)
-      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      if (args.json) { failJson({ success: false, error: err instanceof Error ? err.message : String(err) }); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -3860,7 +4411,7 @@ const BloqsRemoveMemberCommand = cmd({
 
     const who = await resolveMemberId(args as any)
     if ("error" in who) {
-      if (args.json) { console.log(JSON.stringify({ success: false, error: who.error })) }
+      if (args.json) { failJson({ success: false, error: who.error }) }
       else { UI.empty(); prompts.log.error(who.error) }
       process.exitCode = 2
       return
@@ -3881,7 +4432,7 @@ const BloqsRemoveMemberCommand = cmd({
       prompts.outro(dim(`iris bloqs members ${args["bloq-id"]}`))
     } catch (err) {
       if (spinner) spinner.stop("Error", 1)
-      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      if (args.json) { failJson({ success: false, error: err instanceof Error ? err.message : String(err) }); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -3903,7 +4454,7 @@ const BloqsShareCommand = cmd({
       // #179082 — address the link to a person, and narrow what it grants.
       // Naming the invitee does NOT email them; it records who the link is for.
       // Use `iris bloq-members invite --send-email` to actually notify someone.
-      .option("email", { describe: "address the invite to this person (does not send mail)", type: "string" })
+      .option("email", { describe: "only this address can redeem the link (#189719; does not send mail)", type: "string" })
       .option("scope-list", { describe: "grant access to ONE list only", type: "number" })
       .option("scope-item", { describe: "grant access to ONE item only", type: "number" })
       .option("scope-own", { describe: "grant access only to rows this person authored", type: "boolean", default: false })
@@ -4090,7 +4641,7 @@ const BloqsPublishPagesCommand = cmd({
       const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args["bloq-id"]}`)
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
         await handleApiError(res, "Load bloq"); prompts.outro("Done"); return
       }
       const bloq = (await res.json()) as Record<string, any>
@@ -4145,7 +4696,7 @@ const BloqsPublishPagesCommand = cmd({
       prompts.outro("Done")
     } catch (err) {
       spinner?.stop("Error", 1)
-      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      if (args.json) { failJson({ success: false, error: err instanceof Error ? err.message : String(err) }); return }
       prompts.log.error(err instanceof Error ? err.message : String(err)); prompts.outro("Done")
     }
   },
@@ -4216,14 +4767,15 @@ export const PlatformBloqsCommand = productCommand({
       .command(BloqsCreateCommand)
       .command(BloqsUpdateCommand)
       .command(BloqsIngestCommand)
-      .command(BloqsAddItemCommand)
-      .command(BloqsGetItemCommand)
+      .command(withAccessFooter(BloqsAddItemCommand))
+      .command(withAccessFooter(BloqsGetItemCommand))
       .command(BloqsDeleteItemCommand)
       .command(BloqsRestoreItemCommand)
       .command(BloqsDeleteCommand)
-      .command(BloqsPublishCommand)
-      .command(BloqsMakePublicCommand)
+      .command(withAccessFooter(BloqsPublishCommand))
+      .command(withAccessFooter(BloqsMakePublicCommand))
       .command(BloqsMakePrivateCommand)
+      .command(BloqsListsCommand)
       .command(BloqsCreateListCommand)
       .command(BloqsRenameListCommand)
       .command(BloqsDeleteListCommand)
@@ -4238,6 +4790,14 @@ export const PlatformBloqsCommand = productCommand({
       .command(BloqsDetachPlaybookCommand)
       .command(BloqsPlaybooksCommand)
       .command(BloqsUpdateItemCommand)
+      // A card's checklist and assignees (#189800)
+      .command(BloqsTasksCommand)
+      .command(BloqsTaskAddCommand)
+      .command(BloqsTaskDoneCommand)
+      .command(BloqsTaskDeleteCommand)
+      .command(BloqsAssigneesCommand)
+      .command(BloqsAssignCommand)
+      .command(BloqsUnassignCommand)
       .command(BloqsContributorsCommand)
       .command(BloqsItemsCommand)
       .command(BloqsPublishPagesCommand)

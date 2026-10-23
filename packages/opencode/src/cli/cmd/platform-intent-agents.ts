@@ -20,6 +20,12 @@ export type RawAgent = {
   active?: boolean
   description?: string | null
   last_active_at?: string | null
+  /** The agent's mission — what it does every heartbeat. */
+  initial_prompt?: string | null
+  /** settings.system_prompt is the agent's identity — who it is. */
+  settings?: { system_prompt?: string | null } | null
+  /** config.tools is its IRIS tool allowlist; empty means every tool. */
+  config?: { tools?: unknown } | null
 }
 export type AgentCandidate = { id: number; name: string; describe: string; run: string; score: number }
 
@@ -37,6 +43,9 @@ export function isDiscoverable(a: RawAgent): boolean {
   if (a.active === false) return false
   return !SCRATCH_NAME.test(a.name) && !SCRATCH_DESC.test(a.description ?? "")
 }
+
+/** Marks an agent candidate with nothing to say for itself — kept OUT of the related list (#187829). */
+export const NO_DESCRIPTION = "(no description)"
 
 /** `iris agents chat <id> "<request>"` — the request itself is the message. */
 export const agentRun = (id: number, text: string) => `iris agents chat ${id} "${text.replace(/"/g, "'")}"`
@@ -71,7 +80,7 @@ export function rankAgents(text: string, agents: RawAgent[], vocab: Index["terms
   return chosen.map(({ a, s }) => ({
     id: a.id,
     name: `agent ${a.id} · ${a.name}`,
-    describe: `AGENT — hand the whole job to this agent: ${a.description?.trim() || "(no description)"}`,
+    describe: `AGENT — hand the whole job to this agent: ${a.description?.trim() || NO_DESCRIPTION}`,
     run: agentRun(a.id, text),
     score: s,
   }))

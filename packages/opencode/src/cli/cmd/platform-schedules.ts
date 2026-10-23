@@ -1680,7 +1680,11 @@ const SchedulesHoursCommand = cmd({
 //
 // Proposed backend contract (see design notes in the bug — backend not yet built):
 //   GET    /api/v1/users/{userId}/bloqs/scheduled-jobs/approvals            ?status=pending
-//   POST   /api/v1/users/{userId}/bloqs/scheduled-jobs/approvals/{id}/approve  { notes? }
+//   POST   /api/v1/users/{userId}/bloqs/scheduled-jobs/approvals/{id}/approve  { notes?, args? }
+//
+// #187909: the list is the ONE approval queue — held tool calls (kind=tool_call) and an agent's
+// own questions (kind=checkpoint, formerly /workflow-approvals). #187911: `approve --args '{…}'`
+// approves with edited arguments; the server re-validates the edit and keeps both versions.
 //   POST   /api/v1/users/{userId}/bloqs/scheduled-jobs/approvals/{id}/reject   { notes? }
 // ============================================================================
 
@@ -1695,6 +1699,32 @@ interface PendingApproval {
   status: string
   created_at?: string | null
   expires_at?: string | null
+  kind?: "tool_call" | "checkpoint" | null
+  prompt?: string | null
+  edited_args?: Record<string, unknown> | null
+  notes?: string | null
+  execution_status?: string | null
+}
+
+/**
+ * `--args` for approve-with-edits (#187911): a JSON object of argument → new value, merged over
+ * what the agent asked for. Parsed here so a typo fails before anything is sent; the server is
+ * what decides whether the edit is allowed (schema, targets, destination).
+ */
+export function parseApprovalArgs(raw: string): { ok: true; args: Record<string, unknown> } | { ok: false; error: string } {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch (e) {
+    return { ok: false, error: `--args is not valid JSON: ${e instanceof Error ? e.message : String(e)}` }
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { ok: false, error: `--args must be a JSON object, e.g. '{"discount_pct": 10}'` }
+  }
+  if (Object.keys(parsed).length === 0) {
+    return { ok: false, error: "--args is empty — approve without it to run the action as asked" }
+  }
+  return { ok: true, args: parsed as Record<string, unknown> }
 }
 
 async function fetchApprovals(userId: number, status: string): Promise<PendingApproval[]> {
@@ -1716,10 +1746,11 @@ async function reviewApproval(
   id: number,
   action: "approve" | "reject",
   notes?: string,
+  args?: Record<string, unknown>,
 ): Promise<boolean> {
   const res = await irisFetch(
     `/api/v1/users/${userId}/bloqs/scheduled-jobs/approvals/${id}/${action}`,
-    { method: "POST", body: JSON.stringify({ notes: notes ?? null }) },
+    { method: "POST", body: JSON.stringify({ notes: notes ?? null, ...(args ? { args } : {}) }) },
     IRIS_API,
   )
   if (!res.ok) {
@@ -1760,16 +1791,24 @@ const ApprovalsListCommand = cmd({
     for (const a of items) {
       printDivider()
       printKV("ID", a.id)
-      printKV("Schedule", `#${a.schedule_id}`)
-      printKV("Tool", highlight(a.tool_name))
-      if (a.risk_reason) printKV("Why gated", a.risk_reason)
-      if (a.tool_args) printKV("Args", JSON.stringify(a.tool_args).slice(0, 160))
+      if (a.kind === "checkpoint") {
+        // An agent asking a question (#187909) — not a tool call.
+        printKV("Asks", highlight(a.prompt ?? a.risk_reason ?? "approval requested"))
+      } else {
+        if (a.schedule_id) printKV("Schedule", `#${a.schedule_id}`)
+        printKV("Tool", highlight(a.tool_name))
+        if (a.risk_reason) printKV("Why gated", a.risk_reason)
+        if (a.tool_args) printKV("Args", JSON.stringify(a.tool_args).slice(0, 160))
+        if (a.edited_args) printKV("Ran with", JSON.stringify(a.edited_args).slice(0, 160))
+      }
+      if (a.notes) printKV("Notes", a.notes)
       printKV("Status", a.status)
       if (a.expires_at) printKV("Expires", a.expires_at)
     }
     printDivider()
-    prompts.log.info(dim(`iris schedule approvals approve <id>   — let it run`))
-    prompts.log.info(dim(`iris schedule approvals reject <id>    — block it`))
+    prompts.log.info(dim(`iris schedule approvals approve <id>                 — let it run`))
+    prompts.log.info(dim(`iris schedule approvals approve <id> --args '{…}'  — run it with your edits`))
+    prompts.log.info(dim(`iris schedule approvals reject <id> --notes "why"  — block it; the agent reads why next run`))
     prompts.outro("Done")
   },
 })
@@ -1781,10 +1820,25 @@ const ApprovalsApproveCommand = cmd({
     yargs
       .positional("id", { describe: "approval ID", type: "number", demandOption: true })
       .option("notes", { describe: "optional note recorded with the decision", type: "string" })
+      .option("args", {
+        describe: "approve with edited arguments — JSON object merged over the agent's (the server re-checks it)",
+        type: "string",
+      })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Approve action #${args.id}`)
+    let edits: Record<string, unknown> | undefined
+    if (args.args !== undefined) {
+      const parsed = parseApprovalArgs(String(args.args))
+      if (!parsed.ok) {
+        prompts.log.error(parsed.error)
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
+      edits = parsed.args
+    }
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
     const userId = await requireUserId(args["user-id"])
@@ -1792,9 +1846,9 @@ const ApprovalsApproveCommand = cmd({
 
     const spinner = prompts.spinner()
     spinner.start("Approving…")
-    const ok = await reviewApproval(userId, Number(args.id), "approve", args.notes)
-    spinner.stop(ok ? success("Approved") : "Failed", ok ? 0 : 1)
-    prompts.outro(ok ? success(`Action #${args.id} approved — loop will resume it`) : "Done")
+    const ok = await reviewApproval(userId, Number(args.id), "approve", args.notes, edits)
+    spinner.stop(ok ? success(edits ? "Approved with edits" : "Approved") : "Failed", ok ? 0 : 1)
+    prompts.outro(ok ? success(`Action #${args.id} approved${edits ? " with your edits" : ""} — it will run`) : "Done")
   },
 })
 
@@ -1805,7 +1859,7 @@ const ApprovalsRejectCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "approval ID", type: "number", demandOption: true })
-      .option("notes", { describe: "optional reason recorded with the decision", type: "string" })
+      .option("notes", { describe: "why — the agent reads this on its next run (#187910)", type: "string" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
     UI.empty()

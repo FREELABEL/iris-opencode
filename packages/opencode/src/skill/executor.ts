@@ -95,6 +95,12 @@ export interface SkillPlan {
   timeout: number
   integrations: string[]
   location: string
+  /**
+   * `### step:` lines in the body that the step parser could NOT read (#190875) — e.g.
+   * `### step: one` (space after the colon). Written as steps, silently not steps; validation
+   * turns each into an error naming the line.
+   */
+  malformedStepHeadings?: Array<{ line: number; text: string }>
   /** Vertical/industry classification for playbook-library discovery — freeform, not a fixed taxonomy. */
   industries?: string[]
   /**
@@ -200,13 +206,17 @@ const DANGEROUS_PATTERNS = [
   /\bpkill\b/,
   /\bshutdown\b/,
   /\breboot\b/,
-  /\bformat\b/,
+  // Disk formatting only. A bare /\bformat\b/ flagged `ffprobe -show_entries format=duration`
+  // and `--format css` as dangerous, so unattended playbook runs skipped them and every step
+  // after them ("needs confirmation and no one is at a terminal").
+  /\bformat\s+[a-z]:/i,
+  /\bdiskutil\s+(erase\w*|zeroDisk|randomDisk|secureErase)\b/i,
   /\bmkfs\b/,
   /\bdd\s+if=/,
   /\bchmod\s+-R\s+777\b/,
 ]
 
-function isDangerousCommand(code: string): boolean {
+export function isDangerousCommand(code: string): boolean {
   return DANGEROUS_PATTERNS.some((p) => p.test(code))
 }
 
@@ -214,7 +224,13 @@ function isDangerousCommand(code: string): boolean {
 // Parser
 // ============================================================================
 
-const STEP_HEADING = /^### step:([\w-]+) +(.+)$/gm
+// The title is OPTIONAL (#190875). `### step:one` with no title used to match nothing, so the
+// step evaporated: `test` said valid, `run` said completed, nothing executed. A missing title
+// falls back to the id. Horizontal whitespace only — `\s` would eat the newline and swallow the
+// next line as the title (the bug the old ` +` fixed).
+export const STEP_HEADING = /^### step:([\w-]+)(?:[ \t]+(.*?))?[ \t\r]*$/gm
+/** Anything that LOOKS like a step heading. Lines matching this but not STEP_HEADING are malformed. */
+const STEP_HEADING_LIKE = /^###[ \t]*step[ \t]*:.*$/gm
 const FENCE = "\x60\x60\x60"  // three backticks, avoids bundler template literal issues
 const YAML_BLOCK_RE = new RegExp(`${FENCE}yaml\\n([\\s\\S]*?)${FENCE}`)
 const CODE_BLOCK_RE = new RegExp(`${FENCE}(\\w+)\\n([\\s\\S]*?)${FENCE}`)
@@ -252,6 +268,22 @@ export function parseGuidance(markdownBody: string): string {
 }
 
 /**
+ * `### step:` lines the step parser cannot read (#190875). Fenced regions are masked first, so
+ * a heading shown as an example inside a code block is not reported.
+ */
+export function findMalformedStepHeadings(markdownBody: string, lineOffset = 0): Array<{ line: number; text: string }> {
+  const masked = markdownBody.replace(new RegExp(`${FENCE}[\\s\\S]*?${FENCE}`, "g"), (m) => m.replace(/[^\n]/g, " "))
+  const out: Array<{ line: number; text: string }> = []
+  for (const m of masked.matchAll(STEP_HEADING_LIKE)) {
+    const text = m[0].replace(/\r$/, "")
+    if (new RegExp(STEP_HEADING.source).test(text)) continue
+    const line = markdownBody.slice(0, m.index!).split("\n").length + lineOffset
+    out.push({ line, text: text.trim() })
+  }
+  return out
+}
+
+/**
  * The prompt an `ai` step will ACTUALLY send.
  *
  * One function because this rule used to live in two places that disagreed. The validator
@@ -286,7 +318,7 @@ export function parseSteps(markdownBody: string): StepDef[] {
   for (let i = 0; i < matches.length; i++) {
     const match = matches[i]
     const id = match[1]
-    const title = match[2]
+    const title = match[2]?.trim() || id
     const startIdx = match.index! + match[0].length
     const endIdx = i + 1 < matches.length ? matches[i + 1].index! : docsIdx
     const section = markdownBody.slice(startIdx, endIdx)
@@ -347,6 +379,17 @@ export function parseSteps(markdownBody: string): StepDef[] {
   }
 
   return steps
+}
+
+/** Lines before the body, so a reported line number is a line in the FILE, not in the body. */
+async function frontmatterLineCount(location: string, body: string): Promise<number> {
+  try {
+    const raw = (await Bun.file(location).text()).replace(/\r\n/g, "\n")
+    const idx = raw.lastIndexOf(body.replace(/\r\n/g, "\n"))
+    return idx > 0 ? raw.slice(0, idx).split("\n").length - 1 : 0
+  } catch {
+    return 0
+  }
 }
 
 export async function parsePlan(skillInfo: Skill.Info): Promise<SkillPlan> {
@@ -430,6 +473,7 @@ export async function parsePlan(skillInfo: Skill.Info): Promise<SkillPlan> {
     timeout: fm.timeout ?? 300,
     integrations: fm.integrations ?? [],
     location: skillInfo.location,
+    malformedStepHeadings: findMalformedStepHeadings(md.content, await frontmatterLineCount(skillInfo.location, md.content)),
     industries,
     triggers,
     tags,
@@ -976,6 +1020,90 @@ export function resolveBash(
   for (const c of candidates) if (exists(c)) return c
   for (const c of onPath()) if (!isWslLauncher(c) && exists(c)) return c
   return null
+}
+
+/**
+ * The playbook header is invalid (#190876) — refused before any step runs. An unknown `on-error`
+ * used to behave as `continue`, and `timeout: 0` killed every step the instant it started.
+ */
+export class InvalidPlaybookError extends Error {
+  constructor(
+    readonly playbook: string,
+    readonly problems: string[],
+  ) {
+    super(`"${playbook}" cannot run — nothing was run:\n` + problems.map((p) => `  - ${p}`).join("\n"))
+  }
+}
+
+/** `--step <id>` named a step this playbook does not have (#190879). An answer, not a crash. */
+export class StepNotFoundError extends Error {
+  constructor(
+    readonly stepId: string,
+    readonly available: string[],
+  ) {
+    super(`Step '${stepId}' not found. Available: ${available.join(", ") || "(none)"}`)
+  }
+}
+
+export function malformedHeadingMessage(h: { line: number; text: string }): string {
+  return (
+    `line ${h.line}: "${h.text}" looks like a step heading but is not one, so it would never run. ` +
+    `Write it as "### step:<id> <optional title>" — no space after "step:", id of letters, digits, - or _.`
+  )
+}
+
+export const ON_ERROR_VALUES = ["continue", "stop", "ask"] as const
+
+/**
+ * Header problems that make a plan unsafe to RUN, shared by `validatePlan` (test time) and
+ * `executeSkill` (run time) so the two cannot disagree (#190876).
+ */
+export function planHeaderProblems(plan: Pick<SkillPlan, "onError" | "timeout">): string[] {
+  const problems: string[] = []
+  if (!(ON_ERROR_VALUES as readonly unknown[]).includes(plan.onError)) {
+    problems.push(
+      `on-error: ${JSON.stringify(plan.onError)} is not a valid value — use one of ${ON_ERROR_VALUES.join(", ")}. ` +
+        `(An unknown value used to behave as "continue".)`,
+    )
+  }
+  const t = plan.timeout as unknown
+  const n = typeof t === "number" ? t : typeof t === "string" && t.trim() !== "" ? Number(t) : Number.NaN
+  if (!Number.isFinite(n) || n <= 0) {
+    problems.push(
+      `timeout: ${JSON.stringify(t)} is not valid — it must be a positive number of seconds per step ` +
+        `(0 or less kills every step the moment it starts).`,
+    )
+  }
+  return problems
+}
+
+/**
+ * What a finished run means for the process exit code — ONE function for the human and --json
+ * paths, because they disagreed: the --json branch returned before the exit code was set, so a
+ * failed run printed `"status": "failed"` and exited 0 (#182759).
+ *
+ *   0 = completed · 2 = paused on a human · 1 = failed, interrupted, or --step ran nothing.
+ *
+ * `ranNothing` is reported honestly in two cases, with different exit codes:
+ *   - the playbook has NO steps at all — documentation-style playbooks (desktop-release and
+ *     others) that the daemon runs with --yes --json. Nothing was expected to run, so this is
+ *     not a failure: ranNothing true, exit 0. (Unparseable `### step:` headings never get here —
+ *     executeSkill refuses them up front, #190875.)
+ *   - `--step` ran only skips (#183406 defect 5): the step asked for did not execute, exit 1.
+ * A full run whose steps were all `if:`-gated off is NOT ranNothing: it did its job, exit 0.
+ */
+export function runOutcome(result: SkillResult, opts: { stepFilter?: string } = {}): { exitCode: number; ranNothing: boolean } {
+  const all = Object.values(result.steps)
+  const passed = all.filter((r) => r.status === "success").length
+  const failed = all.filter((r) => r.status === "failed").length
+  const skipped = all.filter((r) => r.status === "skipped").length
+  if (result.status === "completed" && all.length === 0) return { exitCode: 0, ranNothing: true }
+  const ranNothing =
+    result.status === "completed" && Boolean(opts.stepFilter) && passed === 0 && failed === 0 && skipped > 0
+  if (ranNothing) return { exitCode: 1, ranNothing }
+  if (result.status === "paused") return { exitCode: 2, ranNothing }
+  if (result.status !== "completed" || failed > 0) return { exitCode: 1, ranNothing }
+  return { exitCode: 0, ranNothing }
 }
 
 /** Refusing a run is the fix, not a symptom: running only the AI half LOOKS like success. */
@@ -1667,6 +1795,13 @@ export async function executeSkill(
     throw new Error("Maximum skill nesting depth (3) exceeded")
   }
 
+  // Refuse an invalid header before anything runs (#190876, #190875). Same rules `test` applies.
+  const headerProblems = [
+    ...planHeaderProblems(plan),
+    ...(plan.malformedStepHeadings ?? []).map(malformedHeadingMessage),
+  ]
+  if (headerProblems.length) throw new InvalidPlaybookError(plan.name, headerProblems)
+
   const now = new Date().toISOString()
   const stepResults: Record<string, StepResult> = {}
 
@@ -1726,9 +1861,7 @@ export async function executeSkill(
   let stepsToRun = plan.steps
   if (opts.stepFilter) {
     stepsToRun = plan.steps.filter((s) => s.id === opts.stepFilter)
-    if (stepsToRun.length === 0) {
-      throw new Error(`Step "${opts.stepFilter}" not found. Available: ${plan.steps.map((s) => s.id).join(", ")}`)
-    }
+    if (stepsToRun.length === 0) throw new StepNotFoundError(opts.stepFilter, plan.steps.map((s) => s.id))
   }
 
   // What is actually in this invocation. With --step, everything else is absent rather than
@@ -2220,6 +2353,11 @@ const KNOWN_STEP_MODES: ReadonlySet<string> = new Set([
 
 export function validatePlan(plan: SkillPlan): ValidationIssue[] {
   const issues: ValidationIssue[] = []
+
+  // Header values that would change how the run behaves without saying so (#190876), and
+  // `### step:` lines that are not steps (#190875). The runner refuses on exactly these too.
+  for (const message of planHeaderProblems(plan)) issues.push({ level: "error", message })
+  for (const h of plan.malformedStepHeadings ?? []) issues.push({ level: "error", message: malformedHeadingMessage(h) })
 
   if (!plan.name) issues.push({ level: "error", message: "Missing skill name" })
   if (!plan.description) issues.push({ level: "error", message: "Missing skill description" })

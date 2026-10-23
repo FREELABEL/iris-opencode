@@ -7,7 +7,7 @@ import { irisFetch, requireAuth, requireUserId, dim, bold, success, writeJson } 
 import { resolveLocalNode } from "./hive-local-node"
 import { describeUptime } from "./hive-uptime"
 import { describeIsolation } from "./hive-isolation"
-import { exitCodeForResult, verdictForResult, renderOutput, fromHiveTask } from "./hive-script-result"
+import { exitCodeForResult, verdictForResult, renderOutput, fromHiveTask, TIMEOUT_EXIT } from "./hive-script-result"
 
 // ============================================================================
 // iris hive nodes / run
@@ -22,7 +22,7 @@ export async function hiveFetch(path: string, options: RequestInit = {}) {
   return irisFetch(path, options, IRIS_API)
 }
 
-interface HiveNode {
+export interface HiveNode {
   id: string
   name: string
   status: string
@@ -71,16 +71,81 @@ export async function fetchNodes(userId: number): Promise<HiveNode[]> {
   return (data.nodes ?? []).map(redactNode)
 }
 
+/**
+ * Exact id first, then name (case-insensitive), then id prefix, then name prefix.
+ *
+ * #190299: a machine re-registered keeps its name, so one name can belong to a live node and a
+ * dead one. "First listed" picked the dead MacBook (last heartbeat 2026-09-13) over the live one
+ * beside it. Among nodes sharing a name: online first, then the most recent heartbeat.
+ * `sameName` says how many matched, so callers can say the name was ambiguous.
+ */
+export function pickNode(nodes: HiveNode[], target: string): { node: HiveNode | null; sameName: number } {
+  const exact = nodes.find((n) => n.id === target)
+  if (exact) return { node: exact, sameName: 1 }
+  const t = target.toLowerCase()
+  const best = (list: HiveNode[]) =>
+    [...list].sort(
+      (a, b) =>
+        Number(b.connection_status === "online") - Number(a.connection_status === "online") ||
+        Date.parse(b.last_heartbeat_at ?? "") - Date.parse(a.last_heartbeat_at ?? "") ||
+        0,
+    )[0] ?? null
+  for (const match of [
+    (n: HiveNode) => n.name.toLowerCase() === t,
+    (n: HiveNode) => n.id.startsWith(target),
+    (n: HiveNode) => n.name.toLowerCase().startsWith(t),
+  ]) {
+    const hits = nodes.filter(match)
+    if (hits.length) return { node: best(hits), sameName: hits.length }
+  }
+  return { node: null, sameName: 0 }
+}
+
 export async function resolveNode(userId: number, target: string): Promise<HiveNode | null> {
-  const nodes = await fetchNodes(userId)
-  // Exact ID match first, then name (case-insensitive), then prefix
-  return (
-    nodes.find((n) => n.id === target) ??
-    nodes.find((n) => n.name.toLowerCase() === target.toLowerCase()) ??
-    nodes.find((n) => n.id.startsWith(target)) ??
-    nodes.find((n) => n.name.toLowerCase().startsWith(target.toLowerCase())) ??
-    null
-  )
+  const { node, sameName } = pickNode(await fetchNodes(userId), target)
+  if (node && sameName > 1) {
+    console.error(dim(`  ${sameName} nodes match "${target}" — using ${node.id} (${node.connection_status}, heartbeat ${timeAgo(node.last_heartbeat_at)}). Pass the id to choose another.`))
+  }
+  return node
+}
+
+/**
+ * Dispatch one task and wait for it to finish — the create-then-poll that `hive run` and
+ * `hive tasks create` each do inline, as a function another command can call. Same endpoints,
+ * same terminal set, same bound (the task's own timeout plus 30 s of slack). Returns the final
+ * task, or `null` when it was still running at the bound (the task is NOT cancelled).
+ */
+export async function dispatchTaskAndWait(
+  userId: number,
+  payload: Record<string, unknown>,
+  onStatus?: (status: string) => void,
+): Promise<{ taskId: string; final: Record<string, unknown> | null }> {
+  const createRes = await hiveFetch(`/api/v6/nodes/tasks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  })
+  if (!createRes.ok) throw new Error(`Task creation failed: HTTP ${createRes.status} ${(await createRes.text().catch(() => "")).slice(0, 500)}`)
+  const created = (await createRes.json()) as { task: { id: string; status: string } }
+  const taskId = created.task.id
+  const timeoutSec = Number(payload.timeout_seconds ?? 300)
+  const deadline = Date.now() + (timeoutSec + 30) * 1000
+  const terminal = new Set(["succeeded", "completed", "failed", "cancelled", "timeout", "errored", "expired"])
+  let last = created.task.status
+  onStatus?.(last)
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 1500))
+    const r = await hiveFetch(`/api/v6/nodes/tasks/${taskId}?user_id=${userId}`)
+    if (!r.ok) throw new Error(`Poll failed for task ${taskId}: HTTP ${r.status}`)
+    const t = ((await r.json()) as { task: Record<string, unknown> }).task
+    const st = String(t.status ?? "")
+    if (st !== last) {
+      last = st
+      onStatus?.(st)
+    }
+    if (terminal.has(st)) return { taskId, final: t }
+  }
+  return { taskId, final: null }
 }
 
 // ============================================================================
@@ -164,6 +229,10 @@ const HiveNodesListCommand = cmd({
       const ip = n.last_ip ?? dim("—")
       console.log(`  ${name}${youTag}  ${status}  ${slot}  ${heartbeat}  ${ip}`)
       console.log(`    ${dim("id:")} ${n.id}`)
+      // Disk, live from the heartbeat (#188700). Only said when it is a problem — a full disk is how
+      // a node silently stops completing work, and nothing else in this list would show it.
+      const diskNote = describeDiskLive((n as any).disk_live)
+      if (diskNote) console.log(`    ${diskNote}`)
 
       // Which BUILD, and can it serve local data sources.
       //
@@ -394,6 +463,71 @@ const HiveNodesCommand = cmd({
 // run — execute a shell command on a specific node and wait for output
 // ============================================================================
 
+export const TERMINAL_TASK_STATUSES = new Set(["succeeded", "completed", "failed", "cancelled", "timeout", "errored"])
+
+/**
+ * Poll ONE task — the one a dispatch created — until it reaches a terminal status.
+ *
+ * #187990: `iris hive run` printed a failure (exit 1, 1000ms, no output) that belonged to a
+ * DIFFERENT task, while its own task completed with the right output. Task ids are UUIDv7, so
+ * tasks dispatched seconds apart share their first 8 characters, and the 8-character form is all
+ * `run` printed. This function is the contract that keeps `run` honest:
+ *
+ *   - it asks for the FULL id it was given, never a prefix and never "the latest task";
+ *   - it refuses a record whose id is not that id, rather than reporting someone else's result
+ *     as this command's — a wrong answer that looks right is worse than an error.
+ *
+ * Pure apart from the injected fetch, so the regression test drives it with a fake server.
+ */
+export async function waitForTask(
+  taskId: string,
+  opts: {
+    fetchTask: (id: string) => Promise<any>
+    initialStatus?: string
+    deadlineMs: number
+    intervalMs?: number
+    onStatus?: (task: any) => void
+    sleep?: (ms: number) => Promise<void>
+    now?: () => number
+  },
+): Promise<any | null> {
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+  const now = opts.now ?? Date.now
+  const deadline = now() + opts.deadlineMs
+  let lastStatus = opts.initialStatus
+  let attempt = 0
+  while (now() < deadline) {
+    // An explicit intervalMs wins (the regression tests drive time themselves); otherwise
+    // back off from 100ms, so the first check happens while a short command is still fresh.
+    await sleep(opts.intervalMs ?? pollDelayMs(++attempt))
+    const t = await opts.fetchTask(taskId)
+    if (!t || typeof t !== "object") throw new Error(`Poll for task ${taskId} returned no task`)
+    if (t.id !== undefined && String(t.id) !== taskId) {
+      throw new Error(
+        `Poll for task ${taskId} returned a different task (${t.id}) — refusing to report its result as this one's (#187990)`,
+      )
+    }
+    if (t.status !== lastStatus) {
+      opts.onStatus?.(t)
+      lastStatus = t.status
+    }
+    if (TERMINAL_TASK_STATUSES.has(t.status)) return t
+  }
+  return null
+}
+
+/**
+ * How long to wait before the next poll of a task (#190406).
+ *
+ * The first poll used to be a flat 1500ms after dispatch, so a command that finished in 50ms
+ * was discovered up to 1.5s late — on every command, which is most of why `hive run` felt slow
+ * next to ssh. Start at 100ms and double, capped at 1500ms: a short task is seen almost at once,
+ * and a long one settles back to the old rate instead of hammering the API.
+ */
+export function pollDelayMs(attempt: number): number {
+  return Math.min(100 * 2 ** Math.max(0, attempt - 1), 1500)
+}
+
 const HiveRunCommand = cmd({
   command: "run <target> <command>",
   describe: "run a shell command on a Hive node and stream the output back (fails fast on the first error unless --no-fail-fast is given — see `command`)",
@@ -401,7 +535,11 @@ const HiveRunCommand = cmd({
     yargs
       .positional("target", { describe: "node name or id", type: "string", demandOption: true })
       .positional("command", { describe: "shell command (quote it). Runs with `set -e` by default, so it stops at the first failing statement instead of running the rest — pass --no-fail-fast to run without it", type: "string", demandOption: true })
-      .option("timeout", { describe: "task timeout in seconds", type: "number", default: 60 })
+      .option("timeout", {
+        describe: "task timeout in seconds (default 300 — a repo build or pre-push hook routinely exceeds 60; use --queue for jobs longer than that)",
+        type: "number",
+        default: 300,
+      })
       .option("title", { describe: "task title shown in the dashboard", type: "string" })
       .option("priority", { describe: "task priority 1-10 (higher = sooner)", type: "number" })
       .option("queue", { alias: "fire-and-forget", describe: "queue the task and exit immediately (don't wait for completion)", type: "boolean", default: false })
@@ -419,7 +557,7 @@ const HiveRunCommand = cmd({
 
     const target = String(argv.target)
     const command = String(argv.command)
-    const timeoutSec = Math.max(30, Math.min(3600, Number(argv.timeout) || 60))
+    const timeoutSec = Math.max(30, Math.min(3600, Number(argv.timeout) || 300))
 
     const node = await resolveNode(userId, target)
     if (!node) {
@@ -496,101 +634,157 @@ const HiveRunCommand = cmd({
     }
 
     if (!argv.json) {
-      console.log(`${dim("→")} task ${taskId.slice(0, 8)}  status=${created.task.status}`)
+      // The FULL id. Task ids are UUIDv7 — time-ordered — so tasks created seconds apart share
+      // their first 8 characters, and a shortened id here pointed people at the wrong task
+      // when they went to look it up or cancel it (#187990).
+      console.log(`${dim("→")} task ${taskId}  status=${created.task.status}`)
       console.log(dim("waiting for completion..."))
     }
 
-    // Poll until terminal (succeeded / failed / cancelled / timeout). Bound by timeout + 30s slack.
-    const deadline = Date.now() + (timeoutSec + 30) * 1000
-    const terminal = new Set(["succeeded", "completed", "failed", "cancelled", "timeout", "errored"])
-    let lastStatus = created.task.status
+    // Poll EXACTLY the task this dispatch created, by its full id (#187990). See waitForTask.
     let final: any = null
-
-    while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 1500))
-      const r = await hiveFetch(`/api/v6/nodes/tasks/${taskId}?user_id=${userId}`)
-      if (!r.ok) {
-        console.error(`Poll failed: ${r.status} ${await r.text()}`)
-        process.exit(1)
-      }
-      const body = (await r.json()) as { task: any }
-      const t = body.task
-      if (!argv.json && t.status !== lastStatus) {
-        console.log(`${dim("→")} status=${t.status}${t.progress ? `  progress=${t.progress}%` : ""}`)
-        lastStatus = t.status
-      }
-      if (terminal.has(t.status)) {
-        final = t
-        break
-      }
+    try {
+      final = await waitForTask(taskId, {
+        initialStatus: created.task.status,
+        deadlineMs: (timeoutSec + 30) * 1000,
+        fetchTask: async (id) => {
+          const r = await hiveFetch(`/api/v6/nodes/tasks/${encodeURIComponent(id)}?user_id=${userId}`)
+          if (!r.ok) throw new Error(`Poll failed: ${r.status} ${await r.text()}`)
+          return ((await r.json()) as { task: any }).task
+        },
+        onStatus: argv.json
+          ? undefined
+          : (t) => {
+              // #190219: a terminal status is NOT printed here. The final line below is the one
+              // verdict; printing the raw server word too put "status=failed" above "✓ completed".
+              if (!TERMINAL_TASK_STATUSES.has(t.status))
+                console.log(`${dim("→")} status=${t.status}${t.progress ? `  progress=${t.progress}%` : ""}`)
+            },
+      })
+    } catch (e) {
+      console.error(e instanceof Error ? e.message : String(e))
+      process.exit(1)
     }
 
+    // #190219: the CLI's own wait ran out. Ask once more before giving up — the task may have
+    // finished in the gap — and never call that a task failure: the task is not cancelled.
+    const waitedSec = timeoutSec + 30
+    let stoppedWaiting = false
     if (!final) {
-      console.error(`Timed out after ${timeoutSec + 30}s waiting for task ${taskId}`)
-      process.exit(124)
+      stoppedWaiting = true
+      try {
+        const r = await hiveFetch(`/api/v6/nodes/tasks/${encodeURIComponent(taskId)}?user_id=${userId}`)
+        const t = r.ok ? ((await r.json()) as { task: any }).task : null
+        if (t && String(t.id ?? taskId) === taskId && TERMINAL_TASK_STATUSES.has(t.status)) final = t
+      } catch {
+        /* the report below says we stopped waiting */
+      }
     }
 
     if (argv.json) {
-      await writeJson(final)
+      if (final) await writeJson(final)
+      else await writeJson({ task_id: taskId, status: "unknown", stopped_waiting_after_s: waitedSec })
+      if (!final) process.exit(TIMEOUT_EXIT)
       return
     }
 
-    // The exit-code and output contract lives in hive-script-result.ts, written after two
-    // measured incidents. This handler used to re-derive a weaker version of it inline and
-    // got it wrong in the exact way that module exists to prevent: an unknown exit code
-    // printed as "?" underneath a green check (#182016).
-    //
-    // The field-name half of the same bug: the daemon submits the exit code under
-    // metadata.exit_code (coding-agent-bridge task-executor.js, submitResult), and this
-    // read result.exit_code, which nothing ever sets. Both are read now, metadata first
-    // because that is the one the daemon actually writes.
-    const runResult = fromHiveTask(final)
-
-    const exitCode = exitCodeForResult(runResult)
-    const verdict = verdictForResult(runResult)
-
-    // renderOutput keeps the TAIL, because the failure is at the bottom of a log, and it
-    // distinguishes truncation by the node from truncation here.
-    const OUTPUT_LINES = 500
-    const out = renderOutput(runResult.stdout, OUTPUT_LINES)
-    const err = renderOutput(runResult.stderr, OUTPUT_LINES)
-
-    console.log()
-    if (out.lines.length) {
-      console.log(bold("─── output ───"))
-      console.log(out.lines.join("\n"))
-      if (out.notice) console.log(dim(`  (${out.notice})`))
-    }
-    if (err.lines.length) {
-      console.log(bold("─── stderr ───"))
-      console.log(err.lines.join("\n"))
-      if (err.notice) console.log(dim(`  (${err.notice})`))
-    }
-    if (final.error) {
-      console.log(bold("─── error ───"))
-      console.log(final.error)
-    }
-    console.log()
-
-    // Never a green check over an unknown exit code. "exit=?" beside a ✓ reads as success,
-    // and that is how a transport returning nothing at all (#181633, #182004) went on
-    // looking healthy for two days.
-    const tag = verdict === "completed" ? success("✓") : dim("✗")
-    const exitLabel =
-      typeof runResult.exit_code !== "number"
-        ? dim("unknown — the node reported none")
-        : runResult.exit_code_source === "error_text"
-          ? `${runResult.exit_code} ${dim("(inferred from the node's error text, not reported — #182004)")}`
-          : String(runResult.exit_code)
-    console.log(
-      `  ${tag} ${verdict}  ${dim("exit=")}${exitLabel}  ${dim("duration=")}${final.duration_ms ?? "?"}ms`,
-    )
+    const report = hiveRunReport(final, taskId, stoppedWaiting ? waitedSec : undefined)
+    for (const line of report.lines) console.log(line)
 
     // Exit with the command's own code, so `iris hive run <node> "..." && next` means what
     // it says. A timeout is 124 (distinct, so CI can retry only those) per the contract.
+    const exitCode = report.exitCode
     if (exitCode !== 0) process.exit(exitCode)
   },
 })
 
+/**
+ * The report `iris hive run` prints once its wait ends (#190219). Pure, so it is tested.
+ *
+ * Where "failed" + "Request timeout" came from: NOT the CLI. The node daemon's result POST has
+ * a 30 s socket timeout (coding-agent-bridge cloud-client.js `Request timeout`); when it fires
+ * after the command already finished, the executor's catch re-submits the task as
+ * status=failed, error="Request timeout" — while metadata.exit_code still holds the command's
+ * real 0. The CLI printed the raw status (→ status=failed), then the error under an
+ * "─── error ───" heading, then "✓ completed exit=0", in one output.
+ *
+ * Now: one final state, taken from the reported exit code (the task's real exit); an error
+ * beside a successful exit is a delivery note, not an error; and if the CLI's own wait ran
+ * out the line says "stopped waiting after Ns", never "failed".
+ */
+export function hiveRunReport(
+  final: any | null,
+  taskId: string,
+  stoppedWaitingAfterSec?: number,
+): { lines: string[]; exitCode: number } {
+  const lines: string[] = []
+  const footer = dim(`  task ${taskId}  ·  iris hive tasks get ${taskId}`)
+  if (!final) {
+    lines.push(
+      `  ${dim("…")} stopped waiting after ${stoppedWaitingAfterSec ?? "?"}s  ${dim("— the task is still running on the node; it was not cancelled")}`,
+    )
+    lines.push(footer)
+    return { lines, exitCode: TIMEOUT_EXIT }
+  }
+
+  const runResult = fromHiveTask(final)
+  const exitCode = exitCodeForResult(runResult)
+  const verdict = verdictForResult(runResult)
+
+  // renderOutput keeps the TAIL, because the failure is at the bottom of a log, and it
+  // distinguishes truncation by the node from truncation here.
+  const OUTPUT_LINES = 500
+  const out = renderOutput(runResult.stdout, OUTPUT_LINES)
+  const err = renderOutput(runResult.stderr, OUTPUT_LINES)
+
+  lines.push("")
+  if (out.lines.length) {
+    lines.push(bold("─── output ───"))
+    lines.push(out.lines.join("\n"))
+    if (out.notice) lines.push(dim(`  (${out.notice})`))
+  }
+  if (err.lines.length) {
+    lines.push(bold("─── stderr ───"))
+    lines.push(err.lines.join("\n"))
+    if (err.notice) lines.push(dim(`  (${err.notice})`))
+  }
+  if (final.error) {
+    if (exitCode === 0) {
+      // The command succeeded; the error is about delivering its result, not about running it.
+      lines.push(dim(`  note: the node reported "${String(final.error).trim()}" while delivering the result — the command itself exited 0`))
+    } else {
+      lines.push(bold("─── error ───"))
+      lines.push(String(final.error))
+    }
+  }
+  lines.push("")
+
+  // Never a green check over an unknown exit code. "exit=?" beside a ✓ reads as success,
+  // and that is how a transport returning nothing at all (#181633, #182004) went on
+  // looking healthy for two days.
+  const tag = verdict === "completed" ? success("✓") : dim("✗")
+  const exitLabel =
+    typeof runResult.exit_code !== "number"
+      ? dim("unknown — the node reported none")
+      : runResult.exit_code_source === "error_text"
+        ? `${runResult.exit_code} ${dim("(inferred from the node's error text, not reported — #182004)")}`
+        : String(runResult.exit_code)
+  const late = stoppedWaitingAfterSec ? `  ${dim(`(stopped waiting after ${stoppedWaitingAfterSec}s; it finished after)`)}` : ""
+  lines.push(`  ${tag} ${verdict}  ${dim("exit=")}${exitLabel}  ${dim("duration=")}${final.duration_ms ?? "?"}ms${late}`)
+  lines.push(footer)
+  return { lines, exitCode }
+}
+
 export const HiveNodesCommandExport = HiveNodesCommand
 export const HiveRunCommandExport = HiveRunCommand
+
+/** One line about a node's disk when it is a problem, else null (#188700). Exported for tests. */
+export function describeDiskLive(d: unknown): string | null {
+  if (!d || typeof d !== "object") return null
+  const disk = d as { free_gb?: number; total_gb?: number; low?: boolean; last_write_error?: { code?: string; file?: string } }
+  const err = disk.last_write_error?.code
+    ? ` · last write failed: ${disk.last_write_error.code}${disk.last_write_error.file ? ` (${disk.last_write_error.file})` : ""}`
+    : ""
+  if (!disk.low && !err) return null
+  return `⚠ disk: ${disk.free_gb ?? "?"} GB free of ${disk.total_gb ?? "?"} GB${err}`
+}

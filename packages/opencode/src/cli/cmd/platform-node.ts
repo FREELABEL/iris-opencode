@@ -102,23 +102,70 @@ export function nodeVersion(): string | null {
   }
 }
 
+/** The installer's launch agent (daemon installers/install.sh) — the daemon's own supervisor. */
+export const INSTALLER_LABEL = "io.heyiris.daemon"
+/** The one this command writes when nothing else will start the daemon. */
+export const CLI_LABEL = "io.heyiris.daemon.cli"
+
+export type AutostartPlan = { label: string; write: boolean; removeStale: string | null }
+
+/**
+ * Decide which launch agent starts the daemon. Exactly ONE may.
+ *
+ * This used to write io.heyiris.daemon.cli unconditionally, beside the installer's
+ * io.heyiris.daemon. Both ran daemon.js, each asked the other to hand over on start,
+ * and KeepAlive restarted the loser forever: measured 2026-10-02 at 20 restarts in 15
+ * minutes, the node flagged crash-looping, and tasks executed twice whenever both ran
+ * at once. If the installer's agent exists, use it — and retire a .cli one an earlier
+ * run of this command left behind.
+ */
+export function planAutostart(agentsDir: string): AutostartPlan {
+  if (existsSync(join(agentsDir, `${INSTALLER_LABEL}.plist`)))
+    return {
+      label: INSTALLER_LABEL,
+      write: false,
+      removeStale: existsSync(join(agentsDir, `${CLI_LABEL}.plist`)) ? CLI_LABEL : null,
+    }
+  return { label: CLI_LABEL, write: true, removeStale: null }
+}
+
 /**
  * Register the daemon to start at login.
  *
- * macOS gets a LaunchAgent (RunAtLoad + KeepAlive), mirroring what the daemon's own
- * installer writes. Windows autostart is registered by install.ps1's scheduled task;
- * from here we report rather than duplicate it, because a second registration
- * mechanism competing with the installer's is worse than one that is honest about
- * its scope.
+ * macOS gets a LaunchAgent (RunAtLoad + KeepAlive) — the installer's own when it is
+ * there, otherwise one written here. Windows autostart is registered by install.ps1's
+ * scheduled task; from here we report rather than duplicate it, because a second
+ * registration mechanism competing with the installer's is worse than one that is
+ * honest about its scope.
  */
-export function registerAutostart(bridgeDir: string): StepResult {
+export function registerAutostart(bridgeDir: string, agentsDir = join(homedir(), "Library", "LaunchAgents")): StepResult {
   if (platform() !== "darwin")
     return { ok: false, detail: `autostart on ${platform()} is registered by the installer, not by this command` }
   try {
-    const label = "io.heyiris.daemon.cli"
-    const agents = join(homedir(), "Library", "LaunchAgents")
-    mkdirSync(agents, { recursive: true })
-    const plist = join(agents, `${label}.plist`)
+    const domain = `gui/${process.getuid?.() ?? 501}`
+    const plan = planAutostart(agentsDir)
+    if (plan.removeStale) {
+      spawnSync("launchctl", ["bootout", `${domain}/${plan.removeStale}`], { env: process.env, stdio: "pipe" })
+      rmSync(join(agentsDir, `${plan.removeStale}.plist`), { force: true })
+    }
+    const plist = join(agentsDir, `${plan.label}.plist`)
+
+    if (!plan.write) {
+      // The installer's agent already starts the daemon. Make sure it is loaded; never
+      // add a second one beside it.
+      const loaded = spawnSync("launchctl", ["print", `${domain}/${plan.label}`], { env: process.env, stdio: "pipe" })
+      if (loaded.status !== 0) {
+        const boot = spawnSync("launchctl", ["bootstrap", domain, plist], { env: process.env, stdio: "pipe" })
+        if (boot.status !== 0)
+          return { ok: false, detail: (boot.stderr?.toString() || "launchctl bootstrap failed").trim() }
+      }
+      return {
+        ok: true,
+        detail: `${plist} (the installer's${plan.removeStale ? `; retired ${plan.removeStale}` : ""})`,
+      }
+    }
+
+    mkdirSync(agentsDir, { recursive: true })
     const node = spawnSync("which", ["node"], { env: process.env, stdio: "pipe" }).stdout?.toString().trim()
     if (!node) return { ok: false, detail: "node is not on PATH, so there is nothing to launch" }
     writeFileSync(
@@ -127,7 +174,7 @@ export function registerAutostart(bridgeDir: string): StepResult {
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>${label}</string>
+  <key>Label</key><string>${plan.label}</string>
   <key>ProgramArguments</key><array><string>${node}</string><string>${join(bridgeDir, "daemon.js")}</string></array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
@@ -140,8 +187,8 @@ export function registerAutostart(bridgeDir: string): StepResult {
       "utf8",
     )
     // bootout first so a re-run replaces rather than duplicating.
-    spawnSync("launchctl", ["bootout", `gui/${process.getuid?.() ?? 501}/${label}`], { env: process.env, stdio: "pipe" })
-    const boot = spawnSync("launchctl", ["bootstrap", `gui/${process.getuid?.() ?? 501}`, plist], { env: process.env, stdio: "pipe" })
+    spawnSync("launchctl", ["bootout", `${domain}/${plan.label}`], { env: process.env, stdio: "pipe" })
+    const boot = spawnSync("launchctl", ["bootstrap", domain, plist], { env: process.env, stdio: "pipe" })
     if (boot.status !== 0)
       return { ok: false, detail: (boot.stderr?.toString() || "launchctl bootstrap failed").trim() }
     return { ok: true, detail: plist }

@@ -44,7 +44,9 @@ interface SessionStats {
 
 export const StatsCommand = cmd({
   command: "stats",
-  describe: "show token usage and cost statistics",
+  // Says WHICH sessions: "token usage and cost" won "how much have I spent on AI" from `usage`,
+  // and answered $0.00 for an account that had spent $238.88 (#187829, measured 2026-10-03).
+  describe: "token counts for the chat sessions run in this terminal app, on this machine only",
   builder: (yargs: Argv) => {
     return yargs
       .option("days", {

@@ -544,6 +544,23 @@ async function submitBug(args: {
  * The signal that DOES separate them: in a collapse, positional words appear AFTER an option
  * flag. Nothing legitimate puts a bare title word after `--json`.
  */
+const SEVERITY_TAG = /^\s*\[\s*(low|medium|high|critical)\s*\]\s*/i
+
+/**
+ * #190214 — split leading severity tags off a bug title. `[HIGH] [high] foo` → title `foo`.
+ * The --severity flag wins when given; otherwise the first tag in the title; otherwise medium.
+ */
+export function resolveTitleSeverity(title: string, flag?: string): { title: string; severity: string } {
+  let rest = title
+  let tag: string | undefined
+  for (let m = rest.match(SEVERITY_TAG); m; m = rest.match(SEVERITY_TAG)) {
+    tag ??= m[1].toLowerCase()
+    rest = rest.slice(m[0].length)
+  }
+  rest = rest.trim()
+  return { title: rest || title.trim(), severity: (flag ?? tag ?? "medium").toLowerCase() }
+}
+
 export function titleProvenance(argv: string[]): {
   explicit?: string
   collapsed?: { flag: string; strayAfter: string }
@@ -596,7 +613,9 @@ const ReportCommand = cmd({
         alias: "s",
         describe: "bug severity",
         choices: ["low", "medium", "high", "critical"] as const,
-        default: "medium" as const,
+        // No yargs default: an unset flag must be distinguishable from `--severity medium`, so a
+        // title tag like "[HIGH] …" can supply the severity when the flag is absent (#190214).
+        // The effective default is still medium — see resolveTitleSeverity().
       })
       .option("command", {
         alias: "c",
@@ -713,7 +732,14 @@ const ReportCommand = cmd({
       }
     }
     let description = args.description
-    let severity = args.severity as string
+    // #190214: the server prefixes "[SEVERITY] " to the title, so a title that already carries
+    // a tag was saved as "[HIGH] [HIGH] …". Strip it here; the flag wins, else the tag, else medium.
+    let severity: string = "medium"
+    if (title) {
+      const r = resolveTitleSeverity(title, args.severity as string | undefined)
+      title = r.title
+      severity = r.severity
+    } else if (args.severity) severity = String(args.severity)
 
     // Guard: catch known subcommand names passed as titles (e.g. "iris bug report list")
     const subcommands = ["list", "ls", "close", "done", "resolve", "complete"]
@@ -1547,6 +1573,7 @@ const UpdateCommand = cmd({
     const data = await res.json().catch(() => ({}) as any)
     if (!res.ok || data?.success === false) {
       console.error(`Update failed: ${data?.error ?? `HTTP ${res.status}`}`)
+      for (const line of bugUpdateNotFoundHint(res.status, data?.error, itemId)) console.error(line)
       process.exitCode = 1
       return
     }
@@ -1710,10 +1737,55 @@ const FlushCommand = cmd({
   },
 })
 
+/**
+ * `iris bug comment <id> "<text>"` (#189449). The append path already existed as
+ * `bug update <id> --note`, and nobody found it: the obvious verb is "comment", and the
+ * option sat under a command named for changing fields. Epics that attach existing bugs
+ * ("attach, don't duplicate") had no visible way to tell the bug it was picked up, so
+ * every cross-link was one-way. Same endpoint, same write verification — just a name
+ * people reach for.
+ */
+const CommentCommand = cmd({
+  command: "comment <id> <text..>",
+  aliases: ["note"],
+  describe: "add a note to a bug — e.g. link the epic that picked it up (status and title untouched)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "bug item ID", type: "number", demandOption: true })
+      .positional("text", { describe: "the note", type: "string", array: true, demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .example('$0 bug comment 186544 "Picked up by epic #189448"', "point a bug at the plan that closes it"),
+  async handler(args) {
+    const text = ([] as string[]).concat((args.text as any) ?? []).join(" ").trim()
+    if (!text) {
+      console.error('\n  Nothing to add. Usage: iris bug comment <id> "your note"\n')
+      process.exitCode = 1
+      return
+    }
+    await (UpdateCommand as any).handler({ ...args, description: text })
+  },
+})
+
 export const PlatformBugCommand = cmd({
   command: "bug",
   aliases: ["bugs", "report"],
   describe: "report bugs and view your submissions",
-  builder: (yargs) => yargs.command(ReportCommand).command(ListCommand).command(ShowCommand).command(VerifyCommand).command(CloseCommand).command(UpdateCommand).command(FlushCommand).demandCommand(),
+  builder: (yargs) => yargs.command(ReportCommand).command(ListCommand).command(ShowCommand).command(VerifyCommand).command(CloseCommand).command(UpdateCommand).command(CommentCommand).command(FlushCommand).demandCommand(),
   async handler() {},
 })
+
+
+/**
+ * #189895 — `bugs update` on an id that exists but is not a bug report (an epic, a note on another
+ * board) answered only "Bug report not found", which reads as "that id does not exist". Say what
+ * it means and name the commands that do edit any Atlas item.
+ */
+export function bugUpdateNotFoundHint(status: number, error: unknown, itemId: string | number): string[] {
+  const notFound = status === 404 || /not found/i.test(String(error ?? ""))
+  if (!notFound) return []
+  return [
+    `  #${itemId} is not on a bug board. If it is another Atlas item (an epic, a note), edit it with:`,
+    `    iris atlas use ${itemId} --out item.md                      # read it; drop the leading --- header`,
+    `    iris bloqs update-item ${itemId} --content="$(cat item.md)"  # write it back WHOLE (it replaces)`,
+  ]
+}

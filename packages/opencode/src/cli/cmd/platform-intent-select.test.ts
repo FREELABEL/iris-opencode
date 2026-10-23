@@ -74,6 +74,35 @@ test("a command group is not an answer when a real command matched", async () =>
     "genesis create",
   ])
 })
+test("a group that takes its own argument is an answer, not a menu", async () => {
+  const { leafOnly, actsItself } = await import("./platform-intent-select")
+  expect(actsItself("iris home [words..]")).toBe(true)
+  expect(actsItself("iris chat [message]")).toBe(true)
+  expect(actsItself("iris genesis")).toBe(false)
+  expect(actsItself("iris prod <subcommand>")).toBe(false)
+  expect(actsItself("iris hive inbox [action]")).toBe(false)
+  const home = { name: "home", describe: "", run: "iris home [words..]", score: 0 }
+  const pair = { name: "home devices pair-hue", describe: "", run: "iris home devices pair-hue [ip]", score: 0 }
+  expect(leafOnly([home, pair], ["home", "home devices", "home devices pair-hue"]).map((x) => x.name)).toEqual([
+    "home",
+    "home devices pair-hue",
+  ])
+})
+// The reported failure: 16 light requests, bare `home` a candidate for none of them.
+test("light requests reach `iris home`, not the Hue setup command", async () => {
+  const { candidatePools } = await import("./platform-intent-select")
+  for (const text of [
+    "turn the lights blue",
+    "turn off the bedroom lights",
+    "set the lights to warm white",
+    "set brightness 50 in the bedroom",
+    "turn the lamp on",
+    "lights off",
+    "bedroom purple",
+  ]) {
+    expect([text, candidatePools(text, 12, 40).pick[0]?.name]).toEqual([text, "home"])
+  }
+})
 test("the no-model fill uses a URL for <url> and never pastes the sentence where it does not belong", async () => {
   const { heuristicFill } = await import("./platform-intent-select")
   const t = { name: "transcribe", describe: "", run: "iris transcribe [url]", score: 0 }
@@ -87,6 +116,66 @@ test("related: ranked by Decide, p ≥ 0.25 kept, at least 5, never the pick its
   const probs = [0.9, 0.1, 0.8, 0.05, 0.3, 0.02, 0.6]
   expect(rankRelated(pool, probs, 10, new Set(["a"])).map((x) => x.name)).toEqual(["c", "g", "e", "b", "d"])
   expect(rankRelated(pool, [0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9], 3, new Set()).length).toBe(3)
+})
+
+describe("related-list noise (#187829)", () => {
+  test("web-search and atlas search stay out beside a confident local answer, and come back without one", async () => {
+    const { rankRelated } = await import("./platform-intent-select")
+    const pool = ["pick", "a", "b", "web-search", "atlas search"].map(c)
+    const sure = rankRelated(pool, [0.9, 0.7, 0.3, 0.8, 0.5], 10, new Set(["pick"])).map((x) => x.name)
+    expect(sure).not.toContain("web-search")
+    expect(sure).not.toContain("atlas search")
+    const unsure = rankRelated(pool, [0.5, 0.4, 0.3, 0.55, 0.5], 10, new Set(["pick"])).map((x) => x.name)
+    expect(unsure).toContain("web-search")
+  })
+  test("an agent with no description is never shown", async () => {
+    const { rankRelated } = await import("./platform-intent-select")
+    const { NO_DESCRIPTION } = await import("./platform-intent-agents")
+    const mute = {
+      ...c("agent 242 · Game Assistant"),
+      describe: `AGENT — hand the whole job to this agent: ${NO_DESCRIPTION}`,
+    }
+    const out = rankRelated([c("a"), mute, c("b")], [0.5, 0.95, 0.4], 10, new Set()).map((x) => x.name)
+    expect(out).toEqual(["a", "b"])
+  })
+  test("a client's playbook needs the request to name the client", async () => {
+    const { namesClient } = await import("./platform-intent-select")
+    expect(namesClient("reconcile my books", "pathways")).toBe(false)
+    expect(namesClient("reconcile pathways patient payables", "pathways")).toBe(true)
+    expect(namesClient("run the branding champions payout", "branding-champions")).toBe(true)
+    expect(namesClient("an x-art exhibit deck", "xart")).toBe(true)
+    expect(namesClient("reconcile my books", undefined)).toBe(true)
+  })
+  test("the index never offers `find`, a stub, or another client's playbook", async () => {
+    const { candidatePools, useIndex } = await import("./platform-intent-select")
+    const { loadIndex, mergeIndex } = await import("./platform-find")
+    // Workspace playbooks are no longer embedded (IP-07 #189850): they arrive from the API at
+    // runtime, so this test supplies two in that same shape — one generic, one client-scoped.
+    const play = (name: string, describe: string, client?: string) => ({
+      kind: "playbook" as const,
+      name,
+      describe,
+      aliases: [],
+      run: `iris playbook run ${name}`,
+      haystack: `${name} ${describe}`.toLowerCase(),
+      ...(client ? { client } : {}),
+    })
+    useIndex(
+      mergeIndex(loadIndex(), [
+        play("bills-to-books", "reconcile my books: match bills to the books"),
+        play("pathways-books-reconcile", "reconcile the pathways books", "pathways"),
+      ]),
+    )
+    try {
+      const names = candidatePools("reconcile my books", 12).pool.map((x) => x.name)
+      expect(names).not.toContain("find")
+      expect(names).not.toContain("atlas:ledger ledger reconcile")
+      expect(names.filter((n) => n.startsWith("playbook run pathways-"))).toEqual([])
+      expect(names).toContain("playbook run bills-to-books")
+    } finally {
+      useIndex(undefined)
+    }
+  })
 })
 
 test("the fallback query is the request's topic, not its verb", async () => {

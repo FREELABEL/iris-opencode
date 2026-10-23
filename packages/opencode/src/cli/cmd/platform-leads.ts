@@ -1,6 +1,9 @@
 import { describeListScope } from "./leads-scope"
 import { cmd } from "./cmd"
-import { PulseCheckCommand } from "./platform-pulse-check"
+import { PulseCheckCommand, PulseSourcesCommand, pulseCheckOptions, runPulseCheck } from "./platform-pulse-check"
+import { readAtlasDiary } from "./pulse-check-sweep"
+import { fetchLeadCalendarEvents, type Channel, type ContactQuery } from "./pulse-contact-script"
+import { runScript, scriptFor } from "../../pulse/core"
 import { summariseOutgoing, collectOutgoing, healOutgoing, type OutgoingReport } from "./comms-outgoing-health"
 import { probeBridge } from "./platform-mail"
 import { refreshLeadComms } from "./platform-atlas-comms"
@@ -61,6 +64,18 @@ import {
   buildTouchPayload,
   nextFollowUpState,
   type ChannelBlindness,
+  shouldFileComms,
+  countLeadTasks,
+  selectPulseLeads,
+  describeDrops,
+  storedLeadScore,
+  channelFetchLimit,
+  validPulseDays,
+  adminLeadName,
+  ungatedForLoaded,
+  pulseSortKey,
+  pulseSortKeyAsc,
+  measuredAverage,
 } from "./platform-leads-honesty"
 
 // ============================================================================
@@ -170,45 +185,6 @@ function formatDate(iso: string): string {
  * Search Google Calendar for events matching a lead's name/email.
  * Returns events split into past and upcoming.
  */
-async function fetchLeadCalendarEvents(
-  lead: { name?: string; email?: string; emails?: string[]; id: number },
-  opts: { days?: number; futureDays?: number } = {},
-): Promise<{ past: any[]; upcoming: any[] }> {
-  const pastDays = opts.days ?? 30
-  const futureDays = opts.futureDays ?? 30
-  const now = new Date()
-  const timeMin = new Date(now.getTime() - pastDays * 86400000).toISOString()
-  const timeMax = new Date(now.getTime() + futureDays * 86400000).toISOString()
-
-  const result = await calExec("get_events", { time_min: timeMin, time_max: timeMax, max_results: 2500 })
-  // calExec returns { success, events: [...] } — handle various shapes
-  let events: any[] = []
-  if (Array.isArray(result)) events = result
-  else if (result?.events) events = result.events
-  else if (result?.data?.events) events = result.data.events
-  else if (result?.data && Array.isArray(result.data)) events = result.data
-
-  // Client-side filter: match lead name or ANY email in summary/description/attendees
-  const nameL = (lead.name ?? "").toLowerCase()
-  const emailsToMatch = lead.emails?.length ? lead.emails : (lead.email ? [lead.email.toLowerCase()] : [])
-  const filtered = events.filter((ev: any) => {
-    const haystack = [ev.summary, ev.description, JSON.stringify(ev.attendees ?? [])].join(" ").toLowerCase()
-    if (emailsToMatch.some((e) => haystack.includes(e))) return true
-    if (nameL && nameL.length > 2 && haystack.includes(nameL)) return true
-    return false
-  })
-
-  const past: any[] = []
-  const upcoming: any[] = []
-  for (const ev of filtered) {
-    const start = new Date(ev.start || ev.start_time || "")
-    if (start < now) past.push(ev)
-    else upcoming.push(ev)
-  }
-  past.sort((a, b) => new Date(b.start || "").getTime() - new Date(a.start || "").getTime())
-  upcoming.sort((a, b) => new Date(a.start || "").getTime() - new Date(b.start || "").getTime())
-  return { past, upcoming }
-}
 
 /**
  * Resolve a lead ID from a numeric ID, name, or email.
@@ -374,7 +350,11 @@ const LeadsListCommand = cmd({
       // had been computed from.
       const totalFromApi = data?.total ?? data?.meta?.total ?? leads.length
       let prospectedCount = 0
+      // The Prospected count is over FETCHED rows, not the book. Keep the window size so
+      // the report can say which population the number describes (#190003).
+      let scanned: number | undefined
       if (!args.all && !args.status && !args.search) {
+        scanned = leads.length
         prospectedCount = leads.filter((l: any) => (l.status ?? "").toLowerCase() === "prospected").length
         leads = leads.filter((l: any) => {
           const s = (l.status ?? "").toLowerCase()
@@ -418,6 +398,7 @@ const LeadsListCommand = cmd({
         shown: leads.length,
         total: totalFromApi,
         prospectedHidden: prospectedCount,
+        scanned,
         // The report must describe the ordering that actually ran. It used to say
         // "newest … by id" unconditionally, which stops being true the moment --sort
         // does anything.
@@ -693,7 +674,16 @@ const LeadsGetCommand = cmd({
           { name: "company", has: !!l.company },
           { name: "stage", has: !!l.stage },
           { name: "source", has: !!(l.source ?? l.keywords?.source) },
-          { name: "bloq", has: Array.isArray(l.bloq_ids) ? l.bloq_ids.length > 0 : !!l.bloq_id },
+          // #189724: `leads get` returns attached boards as `bloqs` (objects), not `bloq_ids`;
+          // reading only bloq_ids fell through to the legacy singular column and reported
+          // "missing: bloq" for a lead on two boards.
+          {
+            name: "bloq",
+            has:
+              (Array.isArray(l.bloq_ids) && l.bloq_ids.length > 0) ||
+              (Array.isArray(l.bloqs) && l.bloqs.length > 0) ||
+              !!l.bloq_id,
+          },
           { name: "notes", has: Array.isArray(l.notes) && l.notes.length > 0 },
         ]
         const gScore = Math.round((gFields.filter((f) => f.has).length / gFields.length) * 100)
@@ -1059,7 +1049,7 @@ const LeadsCreateCommand = cmd({
       .option("bid", { describe: "deal amount — counts toward board pipeline value", type: "number" })
       .option("mrr", { describe: "monthly recurring revenue", type: "number" })
       .option("notes", { describe: "initial note to attach", type: "string" })
-      .option("bloq-id", { describe: "CRM bloq ID (default: auto-detect)", type: "number" })
+      .option("bloq-id", { describe: "board (bloq) this lead belongs to — required; prompted for when interactive", type: "number" })
       .option("json", { describe: "JSON output (returns the created lead — capture the new id)", type: "boolean", default: false }),
   async handler(args) {
     const isJson = args.json === true
@@ -1112,7 +1102,32 @@ const LeadsCreateCommand = cmd({
       }
     }
 
-    let bloqId = args["bloq-id"] ?? 38
+    // #189716: this used to be `args["bloq-id"] ?? 38` — every lead created without a board
+    // was silently attached to bloq 38, one specific account's board, for EVERY user. The API
+    // requires a board, so the honest default is to ask, or to refuse and say so.
+    let bloqId = args["bloq-id"]
+    if (bloqId === undefined) {
+      if (isNonInteractive() || isJson) {
+        if (isJson) console.log(JSON.stringify({ error: "Missing required --bloq-id flag (the board this lead belongs to)" }))
+        else {
+          prompts.log.error("Missing required --bloq-id — the board this lead belongs to.")
+          prompts.log.info(dim(`Find it: iris bloqs search <name>   then: iris leads create --name "${name}" --bloq-id <id>`))
+        }
+        process.exitCode = 1
+        if (!isJson) prompts.outro("Done")
+        return
+      }
+      const result = await prompts.text({
+        message: "Board (bloq) ID this lead belongs to",
+        placeholder: "find it with: iris bloqs search <name>",
+        validate: (x) => (x && /^\d+$/.test(x.trim()) ? undefined : "Enter a numeric board ID"),
+      })
+      if (prompts.isCancel(result)) {
+        prompts.outro("Cancelled")
+        return
+      }
+      bloqId = Number(String(result).trim())
+    }
 
     const spinner = isJson ? null : prompts.spinner()
     spinner?.start("Creating lead…")
@@ -2628,7 +2643,10 @@ async function bridgeChannelHealth(name: string, path: string): Promise<ChannelH
         ok: false,
         status: "no_permission",
         error: detail || `HTTP ${res.status}`,
-        hint: "grant Full Disk Access to iris-daemon (not just your terminal), then: iris-daemon restart",
+        // The guided fix when this daemon has it; the manual one otherwise.
+        hint: (await import("./daemon-permissions")).daemonSupportsGrantAccess()
+          ? "fix once: iris-daemon grant-access"
+          : "grant Full Disk Access to iris-daemon (not just your terminal), then: iris-daemon restart",
       }
     }
 
@@ -3352,6 +3370,11 @@ const LeadsPulseCommand = cmd({
         type: "boolean",
         default: false,
       })
+      .option("save", {
+        describe: "also file the messages found into the comms ledger (changes the lead's score). Off: pulse only reads",
+        type: "boolean",
+        default: false,
+      })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     const isJson = args.json === true
@@ -3371,8 +3394,19 @@ const LeadsPulseCommand = cmd({
     // write, so `… --json | jq` receives one document and nothing else.
     const gate = isJson ? muteStdout() : null
     const emitJson = async (payload: unknown) => {
+      // #189208: a failure object exits 1 — `success:false` with exit 0 reads to a script as success.
+      if ((payload as any)?.success === false) process.exitCode = 1
       if (!gate) return
       await gate.open(() => writeJson(payload))
+    }
+
+    // #189205: --days below 1 is not a window — every cutoff collapses to now.
+    if (validPulseDays(args.days) === null) {
+      const msg = `--days must be at least 1 (got ${args.days})`
+      process.exitCode = 1
+      if (gate) await emitJson({ success: false, error: msg })
+      else prompts.log.error(msg)
+      return
     }
 
     let leadId = Number(args.id)
@@ -3705,7 +3739,7 @@ const LeadsPulseCommand = cmd({
 
         // Meeting engagement
         if (meetS !== null && meetS !== undefined && meetS < 50) {
-          fixHints.push({ signal: "meet", score: meetS, reason: "no upcoming meetings", fix: `iris leads meet ${leadId} --at "next Tuesday 2pm"` })
+          fixHints.push({ signal: "meet", score: meetS, reason: "no meeting logged in IRIS (the score reads notes and tasks, not your calendar)", fix: `iris leads meet ${leadId} --at "next Tuesday 2pm"` })
         }
 
         // Deliverable completeness
@@ -3923,7 +3957,10 @@ const LeadsPulseCommand = cmd({
           irisFetch(`/api/v1/leads/${leadId}/deal-status`),
           irisFetch(`/api/v1/leads/${leadId}/stripe-payments`),
           irisFetch(`/api/v1/leads/${leadId}/tasks`),
-          irisFetch(`/api/v1/leads/${leadId}/score`),
+          // #189204: only --save recomputes the score. #189218 made GET /score a pure read on the
+          // server; `?save=1` asks it to persist — and an older server ignores the flag and saves
+          // anyway, so this works on both sides of that deploy.
+          shouldFileComms(args as { save?: unknown }) ? irisFetch(`/api/v1/leads/${leadId}/score?save=1`) : Promise.resolve(null),
           irisFetch(`/api/v1/leads/${leadId}/activities?limit=20`),
           irisFetch(`/api/v1/leads/${leadId}/outreach-steps`),
           bloqId && userId ? irisFetch(`/api/v1/users/${userId}/bloqs/workflows?bloq_id=${bloqId}&per_page=20`) : Promise.resolve(null),
@@ -3946,8 +3983,10 @@ const LeadsPulseCommand = cmd({
           if (!Array.isArray(leadTasks)) leadTasks = []
         }
         // #71782: Parse engagement score
-        if (scoreRes.status === "fulfilled" && scoreRes.value.ok) {
+        if (scoreRes.status === "fulfilled" && scoreRes.value?.ok) {
           leadScore = ((await scoreRes.value.json()) as any)?.data ?? null
+        } else if (!shouldFileComms(args as { save?: unknown })) {
+          leadScore = storedLeadScore(lead)
         }
         // #71785: Parse activity feed
         if (activityRes.status === "fulfilled" && activityRes.value.ok) {
@@ -4304,15 +4343,8 @@ const LeadsPulseCommand = cmd({
       channelSpinner.start("Scanning channels…")
 
       const days = args.days as number
-      const channels: { name: string; messages: any[]; error?: string }[] = []
+      const channels: Channel[] = []
 
-      // Timeout wrapper — prevents any single channel fetch from hanging the entire pulse (#104244)
-      const withTimeout = <T>(promise: Promise<T>, ms: number, label: string): Promise<T> => {
-        return Promise.race([
-          promise,
-          new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms)),
-        ])
-      }
       const CHANNEL_TIMEOUT = 15000 // 15s per channel
 
       // Check if the lead has any contact info at all (#55721)
@@ -4321,269 +4353,30 @@ const LeadsPulseCommand = cmd({
         prompts.log.warn(`Lead #${leadId} has no email or phone — cannot scan Gmail, iMessage, or Apple Mail.`)
         prompts.log.info(`Add contact info: ${dim(`iris leads update ${leadId} --email "…" --phone "…"`)}`)
       } else {
-        // Build parallel fetches
-        const fetches: Promise<void>[] = []
-        const msgLimit = args.limit as number
+        // #189205: --limit is how many rows are SHOWN. The fetch asks for a count's worth.
+        const msgLimit = channelFetchLimit(args.limit)
 
-        // Gmail (via lead-specific Gmail threads endpoint — avoids MCP 422) (#55620)
-        if (email) {
-          fetches.push(
-            withTimeout(irisFetch(`/api/v1/leads/${leadId}/gmail-threads`), CHANNEL_TIMEOUT, "Gmail")
-              .then(async (r) => {
-                if (r.ok) {
-                  const d = (await r.json()) as any
-                  const threads = d?.data ?? d?.threads ?? []
-                  // Flatten thread summaries into message-like entries
-                  const msgs = Array.isArray(threads)
-                    ? threads.slice(0, msgLimit).map((t: any) => ({
-                        // Must match fl-api getGmailThreads(): latest_subject / latest_from /
-                        // latest_snippet / thread_id. The old names never existed on the response,
-                        // so every field below fell through to its ?? default (#178548).
-                        subject: t.latest_subject ?? t.latest_snippet ?? "(no subject)",
-                        from: t.latest_from ?? "",
-                        date: t.last_message_at ?? t.first_message_at ?? "",
-                        message_count: t.message_count ?? 1,
-                        sent_count: Number(t.sent_count ?? 0),
-                        thread_id: t.thread_id ?? "",
-                      }))
-                    : []
-                  // Filter to only threads involving ANY of the lead's emails (#55723).
-                  // NOTE: this filter was INERT until #178548 — `from` was always "" because it
-                  // read a field the API does not emit, so the guard below matched every row and
-                  // nothing was ever filtered. With `from` now populated it runs for the first time.
-                  // The fail-open branch is kept deliberately: the source endpoint is already
-                  // scoped byLead($leadId) server-side, so an unknown sender is not evidence the
-                  // thread belongs to someone else, and dropping it would lose real history.
-                  //
-                  // CRITICAL: the original predicate keeps a thread only when the SENDER is the
-                  // lead, i.e. inbound only. Enabling it unchanged would have silently dropped
-                  // every OUTBOUND thread from Pulse — the first real thread checked was
-                  // "Follow-Up on Genesis Website Agreement" from alex@freelabel.net, which the
-                  // lead did not send. That would have starved the comms_freshness /
-                  // last_outbound_at signals that Pulse and the recap window depend on.
-                  // sent_count > 0 means we participated in the thread outbound, so keep it.
-                  const filtered = msgs.filter((m: any) => {
-                    if (!m.from) return true // unknown sender — source is already lead-scoped
-                    if ((m.sent_count ?? 0) > 0) return true // we sent into this thread
-                    const fromLower = m.from.toLowerCase()
-                    return allEmails.some((e) => fromLower.includes(e))
-                  })
-                  channels.push({ name: "Gmail", messages: filtered })
-                } else {
-                  // Fallback: try Apple Mail-style search via bridge as Gmail backup
-                  const body = await r.text().catch(() => "")
-                  let errorMsg = `HTTP ${r.status}`
-                  try {
-                    errorMsg = JSON.parse(body)?.error ?? JSON.parse(body)?.message ?? errorMsg
-                  } catch {}
-                  channels.push({ name: "Gmail", messages: [], error: errorMsg })
-                }
-              })
-              .catch((e) => {
-                channels.push({ name: "Gmail", messages: [], error: e.message })
-              }),
-          )
-        }
-
-        // iMessage (via local bridge daemon) — 1:1 by phone/email handle or contact name
-        const handle = phone || email
-        if (handle) {
-          fetches.push(
-            withTimeout(fetch(
-              `${BRIDGE_BASE}/api/imessage/search?handle=${encodeURIComponent(handle)}&days=${days}&limit=${msgLimit}`,
-              { headers: bridgeHeaders() },
-            ), CHANNEL_TIMEOUT, "iMessage")
-              .then(async (r) => {
-                if (r.ok) {
-                  const d = (await r.json()) as any
-                  channels.push({ name: "iMessage", messages: d?.messages ?? [] })
-                } else {
-                  const body = await r.text().catch(() => "")
-                  channels.push({ name: "iMessage", messages: [], error: body || `HTTP ${r.status}` })
-                }
-              })
-              .catch((e) => {
-                channels.push({ name: "iMessage", messages: [], error: e.message })
-              }),
-          )
-        } else if (name) {
-          // Fallback: search by contact name via Contacts.app resolution
-          fetches.push(
-            withTimeout(fetch(
-              `${BRIDGE_BASE}/api/imessage/search?name=${encodeURIComponent(name)}&days=${days}&limit=${msgLimit}`,
-              { headers: bridgeHeaders() },
-            ), CHANNEL_TIMEOUT, "iMessage")
-              .then(async (r) => {
-                if (r.ok) {
-                  const d = (await r.json()) as any
-                  channels.push({ name: "iMessage", messages: d?.messages ?? [] })
-                } else {
-                  const body = await r.text().catch(() => "")
-                  channels.push({ name: "iMessage", messages: [], error: body || `HTTP ${r.status}` })
-                }
-              })
-              .catch((e) => {
-                channels.push({ name: "iMessage", messages: [], error: e.message })
-              }),
-          )
-        } else {
-          channels.push({
-            name: "iMessage",
-            messages: [],
-            error: `No phone, email, or name — add with: iris leads update ${leadId} --phone "..."`,
-          })
-        }
-
-        // #71781: iMessage group chats — scan linked chat IDs or auto-discover via bridge
-        let chatIds: string[] = Array.isArray(lead.contact_info?.chat_ids) ? lead.contact_info.chat_ids : []
-        // Auto-discover group chats if none linked and we have a handle
-        if (chatIds.length === 0 && handle) {
-          fetches.push(
-            fetch(`${BRIDGE_BASE}/api/imessage/group-chats?handle=${encodeURIComponent(handle)}&days=${days}&limit=5`, {
-              headers: bridgeHeaders(),
-            })
-              .then(async (r) => {
-                if (r.ok) {
-                  const d = (await r.json()) as any
-                  const groups = d?.group_chats ?? []
-                  for (const gc of groups) {
-                    if (gc.recent_count > 0) {
-                      chatIds.push(gc.chat_identifier)
-                    }
-                  }
-                  // Now scan discovered group chats
-                  const gcFetches = chatIds.map((chatId: string) =>
-                    fetch(
-                      `${BRIDGE_BASE}/api/imessage/search?handle=${encodeURIComponent(chatId)}&days=${days}&limit=${msgLimit}`,
-                      { headers: bridgeHeaders() },
-                    )
-                      .then(async (r2) => {
-                        if (r2.ok) {
-                          const d2 = (await r2.json()) as any
-                          const label =
-                            groups.find((g: any) => g.chat_identifier === chatId)?.display_name || chatId.slice(0, 12)
-                          channels.push({ name: `iMessage Group (${label})`, messages: d2?.messages ?? [] })
-                        }
-                      })
-                      .catch(() => {}),
-                  )
-                  await Promise.allSettled(gcFetches)
-                }
-              })
-              .catch(() => {}), // non-fatal — bridge may not support this yet
-          )
-        } else {
-          // Scan explicitly linked chat IDs
-          for (const chatId of chatIds) {
-            fetches.push(
-              fetch(
-                `${BRIDGE_BASE}/api/imessage/search?handle=${encodeURIComponent(chatId)}&days=${days}&limit=${msgLimit}`,
-                { headers: bridgeHeaders() },
-              )
-                .then(async (r) => {
-                  if (r.ok) {
-                    const d = (await r.json()) as any
-                    channels.push({ name: `iMessage Group (${chatId.slice(0, 12)}…)`, messages: d?.messages ?? [] })
-                  } else {
-                    channels.push({
-                      name: `iMessage Group`,
-                      messages: [],
-                      error: `Chat ${chatId.slice(0, 20)} — HTTP ${r.status}`,
-                    })
-                  }
-                })
-                .catch((e) => {
-                  channels.push({ name: `iMessage Group`, messages: [], error: e.message })
-                }),
-            )
-          }
-        }
-
-        // WhatsApp GROUP chats — explicitly linked groups (contact_info.whatsapp_groups), local DB.
-        // Render-only here; ingest is owned by the pre-ingest block above (correct external IDs).
-        try {
-          const wa = require("../lib/whatsapp")
-          if (wa.isAvailable()) {
-            const waItems = wa.readGroupsForLead(lead, days, msgLimit)
-            const byGroup = new Map<string, any[]>()
-            for (const it of waItems) {
-              const arr = byGroup.get(it.metadata.group_name) ?? []
-              arr.push({ text: it.body, ts: it.sent_at, from_me: it.direction === "outbound", push_name: it.metadata.push_name })
-              byGroup.set(it.metadata.group_name, arr)
-            }
-            for (const [gName, msgs] of byGroup) channels.push({ name: `WhatsApp Group (${gName})`, messages: msgs })
-          }
-        } catch {}
-
-        // Apple Mail (via local bridge daemon) — scan ALL known emails
-        for (const scanEmail of allEmails.length > 0 ? allEmails : (email ? [email] : [])) {
-          fetches.push(
-            withTimeout(fetch(
-              `${BRIDGE_BASE}/api/mail/search?from=${encodeURIComponent(scanEmail)}&days=${days}&limit=${msgLimit}&include_body=0&include_attachments=1`,
-              { headers: bridgeHeaders() },
-            ), CHANNEL_TIMEOUT, `Apple Mail (${scanEmail})`)
-              .then(async (r) => {
-                if (r.ok) {
-                  const d = (await r.json()) as any
-                  const msgs = d?.messages ?? []
-                  // Merge into existing Apple Mail channel or create new
-                  const existing = channels.find((ch) => ch.name === "Apple Mail")
-                  if (existing) {
-                    // Dedup by date+subject
-                    for (const m of msgs) {
-                      if (!existing.messages.some((e: any) => e.date === m.date && e.subject === m.subject)) {
-                        existing.messages.push(m)
-                      }
-                    }
-                  } else {
-                    channels.push({ name: "Apple Mail", messages: msgs })
-                  }
-                } else {
-                  const body = await r.text().catch(() => "")
-                  if (!channels.find((ch) => ch.name === "Apple Mail")) {
-                    channels.push({ name: "Apple Mail", messages: [], error: body || `HTTP ${r.status}` })
-                  }
-                }
-              })
-              .catch((e) => {
-                if (!channels.find((ch) => ch.name === "Apple Mail")) {
-                  channels.push({ name: "Apple Mail", messages: [], error: e.message })
-                }
-              }),
-          )
-        }
-
-        // Google Calendar meetings (search by lead name/email)
-        fetches.push(
-          withTimeout(fetchLeadCalendarEvents({ name, email, emails: allEmails, id: leadId }, { days, futureDays: 90 }), CHANNEL_TIMEOUT, "Calendar")
-            .then(({ past, upcoming }) => {
-              const allEvents = [...upcoming, ...past].map((ev) => ({
-                summary: ev.summary || "(no title)",
-                date: ev.start || ev.start_time || "",
-                status: new Date(ev.start || ev.start_time || "") >= new Date() ? "upcoming" : "past",
-                location: ev.location || "",
-              }))
-              channels.push({ name: "Meetings", messages: allEvents })
-            })
-            .catch((e) => {
-              channels.push({ name: "Meetings", messages: [], error: e.message })
-            }),
-        )
-
-        await Promise.allSettled(fetches)
+        // The channels are the default "contact" PulseScript (#189244): one read-only stop per
+        // channel, run in parallel, listed in the order they answer.
+        const query: ContactQuery = { leadId, lead, name, email, phone, allEmails, days, msgLimit, timeoutMs: CHANNEL_TIMEOUT }
+        await runScript(scriptFor<ContactQuery, Channel[]>("contact"), query, {
+          onOutcome: (o) => channels.push(...o.output),
+        })
 
         const totalMessages = channels.reduce((sum, ch) => sum + ch.messages.length, 0)
         channelSpinner.stop(`${totalMessages} message(s) across ${channels.length} channel(s)`)
 
-        // Persist-after: fire-and-forget write to lead_comms for history (#57657)
-        // Maps live-scan results → atlas:comms ingest format. Dedup hash prevents duplicates.
+        // Persist-after (#57657) — ONLY with --save (#189155). A read must not change the record
+        // it reports on: filing on every run moved the lead's score between two reads minutes
+        // apart. Maps live-scan results → atlas:comms ingest format; dedup hash prevents duplicates.
+        const fileComms = shouldFileComms(args as { save?: unknown })
         const channelMap: Record<string, string> = {
           Gmail: "gmail",
           iMessage: "imessage",
           "Apple Mail": "apple_mail",
           Meetings: "calendar",
         }
-        for (const ch of channels) {
+        for (const ch of fileComms ? channels : []) {
           const channelKey = channelMap[ch.name]
           if (!channelKey || ch.messages.length === 0) continue
           const items = ch.messages
@@ -4670,6 +4463,8 @@ const LeadsPulseCommand = cmd({
           workflows: leadWorkflows,
           productUsage,
           channels,
+          // #189155: false = this run only READ; nothing was filed into the comms ledger.
+          saved: shouldFileComms(args as { save?: unknown }),
           recap,
         })
         prompts.outro("Done")
@@ -4680,7 +4475,8 @@ const LeadsPulseCommand = cmd({
       for (const ch of channels) {
         console.log()
         const count = ch.messages.length
-        const label = ch.error ? `${ch.name}  ${dim(`⚠ ${ch.error}`)}` : `${ch.name}  ${dim(`(${count})`)}`
+        const shown = ch.label ?? ch.name
+        const label = ch.error ? `${shown}  ${dim(`⚠ ${ch.error}`)}` : `${shown}  ${dim(`(${count})`)}`
         console.log(`  ${bold(label)}`)
 
         if (count === 0 && !ch.error) {
@@ -4688,7 +4484,7 @@ const LeadsPulseCommand = cmd({
           continue
         }
 
-        const displayLimit = Math.min(10, ch.messages.length)
+        const displayLimit = Math.min(10, Math.max(0, Number(args.limit ?? 10)), ch.messages.length)
         for (const msg of ch.messages.slice(0, displayLimit)) {
           if (ch.name === "iMessage") {
             const dir = msg.from_me ? "→" : "←"
@@ -7145,7 +6941,10 @@ const LeadsTasksDismissCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("lead-id", { type: "number", demandOption: true })
-      .positional("task-id", { type: "number", demandOption: true }),
+      .positional("task-id", { type: "number", demandOption: true })
+      // #187910: the agent reads the reason on its next heartbeat; a category stops that kind of task.
+      .option("reason", { type: "string", describe: "why — fed to the agent's next heartbeat" })
+      .option("category", { type: "string", describe: "suppress this kind of task (e.g. its pulse signal)" }),
   async handler(args) {
     UI.empty()
     if (!(await requireAuth())) {
@@ -7157,6 +6956,7 @@ const LeadsTasksDismissCommand = cmd({
     try {
       const res = await irisFetch(`/api/v6/workspace/heartbeat/tasks/${args["task-id"]}/dismiss`, {
         method: "DELETE",
+        body: JSON.stringify({ reason: args.reason ?? null, category: args.category ?? null }),
       }, IRIS_API)
       if (!res.ok) {
         spinner.stop("Failed", 1)
@@ -7172,7 +6972,7 @@ const LeadsTasksDismissCommand = cmd({
         prompts.outro("Done")
         return
       }
-      spinner.stop(success(`✓ Task #${args["task-id"]} dismissed (48h cooldown set)`))
+      spinner.stop(success(`✓ Task #${args["task-id"]} dismissed (48h cooldown set)${args.reason ? " — the agent will read why" : ""}`))
       prompts.outro(dim(`iris leads tasks list ${args["lead-id"]} --pending`))
     } catch (err) {
       spinner.stop("Error", 1)
@@ -8120,18 +7920,13 @@ const LeadsPulseAllCommand = cmd({
       const results = await Promise.all(fetches)
       const leads: any[] = results.flat()
 
-      // Skip junk leads (no email, social emails, self)
-      // Exception: Negotiating leads with phone numbers are always eligible (hand-picked, not scraped)
-      const eligible = leads.filter((l) => {
-        if (!l.email && !l.phone) return false
-        const isSocialEmail = l.email?.endsWith("@instagram.com") || l.email?.endsWith("@twitter.com")
-        const isNegotiating = l.status === "Negotiating" || l.status === "In Negotiation"
-        if (isSocialEmail && !(isNegotiating && l.phone)) return false
-        if (l.name === `Lead #${l.id}`) return false
-        return true
-      })
+      // Skip junk leads — the ONE rule `pulse --admin` uses too (#189155), so both count the same deals.
+      // Exception kept: Negotiating leads with phone numbers are eligible even on a social email.
+      const { leads: eligible, dropped: eligibleDrops } = selectPulseLeads(leads)
 
-      spinner.stop(`${leads.length} ${statuses.join(" + ")} leads (${eligible.length} eligible)`)
+      spinner.stop(
+        `${leads.length} ${statuses.join(" + ")} leads (${eligible.length} eligible${describeDrops(eligibleDrops) ? ` — ${describeDrops(eligibleDrops)}` : ""})`,
+      )
 
       // Fetch pulse data for each lead
       type PulseRow = {
@@ -8156,9 +7951,10 @@ const LeadsPulseAllCommand = cmd({
         proposalUrl: string | null
         kbCount: number
         recapEligible: boolean
-        tasksPending: number
-        tasksOverdue: number
-        tasksCompleted: number
+        /** null = not read on this run (#189155) — never a zero. */
+        tasksPending: number | null
+        tasksOverdue: number | null
+        tasksCompleted: number | null
         reqPassing: number
         reqTotal: number
         meetingScore: number | null
@@ -8180,21 +7976,22 @@ const LeadsPulseAllCommand = cmd({
           const stripe = stripeRes?.ok ? (((await stripeRes.json()) as any)?.data ?? {}) : {}
 
           // Extra fetches for --prepare (tasks + requirements)
-          let tasksPending = 0, tasksOverdue = 0, tasksCompleted = 0
+          // null = NOT READ (#189155). These were 0 whenever --prepare was off, so `--json` reported
+          // "0 tasks" for every deal. Tasks are now read for --json too; when they are not, null.
+          let tasksPending: number | null = null, tasksOverdue: number | null = null, tasksCompleted: number | null = null
           let reqPassing = 0, reqTotal = 0
-          if (args.prepare) {
+          if (args.prepare || args.json) {
             const [tasksRes, reqRes] = await Promise.allSettled([
               irisFetch(`/api/v1/leads/${lead.id}/tasks`),
-              irisFetch(`/api/v1/leads/${lead.id}/requirements/summary`),
+              args.prepare ? irisFetch(`/api/v1/leads/${lead.id}/requirements/summary`) : Promise.resolve(null),
             ])
             if (tasksRes.status === "fulfilled" && tasksRes.value?.ok) {
               const td = ((await tasksRes.value.json()) as any)?.data ?? []
               const tasks: any[] = firstArray(td, td?.tasks)
-              const now = new Date()
-              tasksCompleted = tasks.filter((t: any) => t.status === "completed" || t.completed).length
-              const pending = tasks.filter((t: any) => t.status !== "completed" && !t.completed)
-              tasksOverdue = pending.filter((t: any) => t.due_date && new Date(t.due_date) < now).length
-              tasksPending = pending.length
+              const c = countLeadTasks(tasks, new Date())
+              tasksCompleted = c.completed
+              tasksOverdue = c.overdue
+              tasksPending = c.pending
             }
             if (reqRes.status === "fulfilled" && reqRes.value?.ok) {
               const rd = (await reqRes.value.json()) as any
@@ -8295,9 +8092,9 @@ const LeadsPulseAllCommand = cmd({
             proposalUrl: null,
             kbCount: 0,
             recapEligible: !!(lead.email && !lead.email.endsWith("@instagram.com") && !lead.email.endsWith("@twitter.com")),
-            tasksPending: 0,
-            tasksOverdue: 0,
-            tasksCompleted: 0,
+            tasksPending: null,
+            tasksOverdue: null,
+            tasksCompleted: null,
             reqPassing: 0,
             reqTotal: 0,
             meetingScore: null,
@@ -8306,11 +8103,11 @@ const LeadsPulseAllCommand = cmd({
       }
 
       // Sort by pulse score descending
-      rows.sort((a, b) => b.pulse - a.pulse)
+      rows.sort((a, b) => pulseSortKey(b) - pulseSortKey(a)) // #189207: unmeasured never ranks as 0
 
       // --prepare: detailed lowest-pulse list with tasks, requirements, and 3 action items
       if (args.prepare) {
-        const sorted = [...rows].sort((a, b) => a.pulse - b.pulse) // ascending (worst first)
+        const sorted = [...rows].sort((a, b) => pulseSortKeyAsc(a) - pulseSortKeyAsc(b)) // ascending (worst first)
         console.log()
         console.log(`  ${bold("Prepare — Lowest Pulse Leads")} ${dim(`(${sorted.length} leads)`)}`)
         console.log(dim("  " + "=".repeat(100)))
@@ -8318,7 +8115,7 @@ const LeadsPulseAllCommand = cmd({
         for (const r of sorted) {
           const pulseColor =
             r.pulse >= 90 ? UI.Style.TEXT_SUCCESS : r.pulse >= 50 ? UI.Style.TEXT_WARNING : UI.Style.TEXT_DANGER
-          const pulseStr = `${pulseColor}${r.pulse}/100${UI.Style.TEXT_NORMAL}`
+          const pulseStr = r.band === "error" ? dim("—/100 not measured") : `${pulseColor}${r.pulse}/100${UI.Style.TEXT_NORMAL}`
 
           // Billing badge
           let billingBadge = ""
@@ -8331,9 +8128,11 @@ const LeadsPulseAllCommand = cmd({
           }
 
           // Stats line
-          const taskStr = r.tasksPending > 0
-            ? `${r.tasksOverdue > 0 ? `${UI.Style.TEXT_DANGER}${r.tasksOverdue} overdue${UI.Style.TEXT_NORMAL} · ` : ""}${r.tasksPending} pending · ${r.tasksCompleted} done`
-            : dim("no tasks")
+          const taskStr = r.tasksPending === null
+            ? dim("tasks not read")
+            : r.tasksPending > 0
+              ? `${(r.tasksOverdue ?? 0) > 0 ? `${UI.Style.TEXT_DANGER}${r.tasksOverdue} overdue${UI.Style.TEXT_NORMAL} · ` : ""}${r.tasksPending} pending · ${r.tasksCompleted ?? 0} done`
+              : dim(`no open tasks${r.tasksCompleted ? ` · ${r.tasksCompleted} done` : ""}`)
           const reqStr = r.reqTotal > 0
             ? `${r.reqPassing === r.reqTotal ? UI.Style.TEXT_SUCCESS : r.reqPassing === 0 ? UI.Style.TEXT_DANGER : UI.Style.TEXT_WARNING}${r.reqPassing}/${r.reqTotal} passing${UI.Style.TEXT_NORMAL}`
             : dim("no reqs")
@@ -8354,7 +8153,7 @@ const LeadsPulseAllCommand = cmd({
           if (!r.contentAgent) actions.push(`iris leads content-engine create ${r.id}`)
           if (r.comms !== null && r.comms < 30) actions.push(`iris leads pulse ${r.id} --recap`)
           if (r.meetingScore === null) actions.push(`iris leads meet ${r.id} --at …`)
-          if (r.tasksOverdue > 0) actions.push(`iris leads tasks ${r.id}`)
+          if ((r.tasksOverdue ?? 0) > 0) actions.push(`iris leads tasks ${r.id}`)
           if (r.hydrationEligible) actions.push(`iris leads pulse ${r.id} --hydrate`)
           // Deduplicate and take top 3
           const uniqueActions = [...new Set(actions)].slice(0, 3)
@@ -8374,13 +8173,13 @@ const LeadsPulseAllCommand = cmd({
 
         console.log()
         console.log(dim("  " + "-".repeat(100)))
-        const avgPulse = rows.length > 0 ? Math.round(rows.reduce((s, r) => s + r.pulse, 0) / rows.length) : 0
+        const avgPulse = measuredAverage(rows)
         // `insufficient_data` deliberately excluded: an account nobody could measure
         // is not an account that is failing, and counting it as one is how a fleet
         // summary manufactures bad news out of missing data.
         const failing = rows.filter((r) => r.band === "failing").length
-        const totalOverdue = rows.reduce((s, r) => s + r.tasksOverdue, 0)
-        const totalPending = rows.reduce((s, r) => s + r.tasksPending, 0)
+        const totalOverdue = rows.reduce((s, r) => s + (r.tasksOverdue ?? 0), 0)
+        const totalPending = rows.reduce((s, r) => s + (r.tasksPending ?? 0), 0)
         console.log(`  Avg Pulse: ${avgPulse}/100  |  ${UI.Style.TEXT_DANGER}${failing} failing${UI.Style.TEXT_NORMAL}  |  Tasks: ${totalPending} pending${totalOverdue > 0 ? `, ${UI.Style.TEXT_DANGER}${totalOverdue} overdue${UI.Style.TEXT_NORMAL}` : ""}`)
         console.log()
         printDivider()
@@ -8429,7 +8228,7 @@ const LeadsPulseAllCommand = cmd({
       for (const r of rows) {
         const pulseColor =
           r.pulse >= 90 ? UI.Style.TEXT_SUCCESS : r.pulse >= 50 ? UI.Style.TEXT_WARNING : UI.Style.TEXT_DANGER
-        const pulseStr = `${pulseColor}${String(r.pulse).padEnd(4)}${UI.Style.TEXT_NORMAL}`
+        const pulseStr = r.band === "error" ? dim("—".padEnd(4)) : `${pulseColor}${String(r.pulse).padEnd(4)}${UI.Style.TEXT_NORMAL}`
 
         // Billing status with color
         let billingStr: string
@@ -8512,7 +8311,7 @@ const LeadsPulseAllCommand = cmd({
       }
 
       // Pulse summary
-      const avgPulse = rows.length > 0 ? Math.round(rows.reduce((s, r) => s + r.pulse, 0) / rows.length) : 0
+      const avgPulse = measuredAverage(rows)
       const healthy = rows.filter((r) => r.band === "healthy").length
       const failing = rows.filter((r) => r.band === "failing").length
 
@@ -8531,7 +8330,7 @@ const LeadsPulseAllCommand = cmd({
       // Onboarding summary — fetch heartbeat for each lead to check onboarding progress
       // (lightweight: only uses cached heartbeat data already computed above)
       const onboardingComplete = rows.filter((r) => r.pulse >= 60).length
-      const onboardingStuck = rows.filter((r) => r.pulse < 60 && r.pulse > 0)
+      const onboardingStuck = rows.filter((r) => r.band !== "error" && r.pulse < 60 && r.pulse > 0)
       if (onboardingStuck.length > 0) {
         console.log()
         console.log(`  ${bold("Onboarding")}  ${success(`${onboardingComplete} ready`)}  ${UI.Style.TEXT_WARNING ?? ""}${onboardingStuck.length} stuck${UI.Style.TEXT_NORMAL}`)
@@ -12008,7 +11807,13 @@ const DealsRecoverCommand = cmd({
 const DealsCreateCommand = cmd({
   command: "create <id>",
   aliases: ["gate", "invoice"],
-  describe: "create a payment gate for a lead (alias for leads payment-gate)",
+  // `invoice` is kept as an alias for compatibility, but the describe line has to say what
+  // it does NOT do: this builds a payment gate (proposal page + contract + Stripe), which is
+  // a different object from `iris invoices create` (#190000). A user who types "invoice"
+  // and gets a proposal page has been lied to by the name, and the help screen is where
+  // that gets caught.
+  describe:
+    "create a payment gate for a lead — proposal page, contract and Stripe, NOT an invoice. For an invoice use: iris invoices create. Alias for leads payment-gate",
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "lead ID", type: "number", demandOption: true })
@@ -12243,7 +12048,18 @@ const LeadsCollectCommand = cmd({
       })
       .option("date", { describe: "payment date if marking paid (YYYY-MM-DD)", type: "string" })
       .option("notes", { describe: "notes about the payment", type: "string" })
-      .option("send", { describe: "send payment link via email", type: "boolean", default: true })
+      .option("send", {
+        // SENDING IS OUTWARD AND IRREVERSIBLE. It cannot be un-sent, and it names a real
+        // amount of money to a real person, so it must never be what happens because a
+        // flag was omitted. It defaulted to true, which meant `collect <id> -a 500` — a
+        // command that reads like bookkeeping — emailed a live Stripe payment link to the
+        // client the first time anyone tried it (#189999). Creating the invoice is now the
+        // default and sending is a separate, deliberate act, matching the `invoices create`
+        // then `invoices send` pair that already got this right.
+        describe: "email the payment link to the client now; the invoice is created either way",
+        type: "boolean",
+        default: false,
+      })
       .option("subscribe", { describe: "create recurring subscription instead of one-time", type: "boolean" })
       .option("interval", {
         describe: "subscription interval",
@@ -12401,18 +12217,32 @@ const LeadsCollectCommand = cmd({
       if (!args.json && results.checkout_url) console.log(success("  ✓ Checkout link ready"))
     }
 
-    // Send email
+    // Send email — ONLY when asked (#189999). The recipient is named before the write so a
+    // mis-addressed lead is visible in the output rather than discovered by the client.
     if (args.send) {
-      if (!args.json) console.log(dim("  Sending payment email..."))
-      const sendRes = await irisFetch(`/api/v1/custom-requests/${invoiceId}/send-reminder`, { method: "POST" })
-      const sendBody = await sendRes.json().catch(() => ({}))
-      if (sendBody?.success !== false) {
-        steps.push("email_sent")
-        if (!args.json) console.log(success(`  ✓ Payment email sent to ${lead?.email ?? "lead"}`))
+      const to = typeof lead?.email === "string" ? lead.email.trim() : ""
+      if (!to) {
+        steps.push("email_skipped_no_address")
+        if (!args.json)
+          console.log(
+            highlight(`  ⚠ ${leadName} has no email address — invoice #${invoiceId} created but not sent`),
+          )
       } else {
-        steps.push("email_failed")
-        if (!args.json) console.log(highlight(`  ⚠ Email failed: ${sendBody?.message ?? "unknown"}`))
+        if (!args.json) console.log(dim(`  Sending payment email to ${to}...`))
+        const sendRes = await irisFetch(`/api/v1/custom-requests/${invoiceId}/send-reminder`, { method: "POST" })
+        const sendBody = await sendRes.json().catch(() => ({}))
+        if (sendBody?.success !== false) {
+          steps.push("email_sent")
+          if (!args.json) console.log(success(`  ✓ Payment email sent to ${to}`))
+        } else {
+          steps.push("email_failed")
+          if (!args.json) console.log(highlight(`  ⚠ Email failed: ${sendBody?.message ?? "unknown"}`))
+        }
       }
+    } else if (!args.json) {
+      // Nothing left the machine. Say so, and name the next step, so "collect" not mailing
+      // the client reads as deliberate rather than as a silent failure.
+      console.log(dim(`  Not emailed (pass --send to email it now). Next: iris invoices send ${invoiceId}`))
     }
 
     if (args.json) {
@@ -13234,16 +13064,31 @@ const LeadsRequirementsCommand = cmd({
 const PulseAlertsListCommand = cmd({
   command: "list",
   describe: "list your pulse alert rules",
-  builder: (yargs) => yargs,
-  async handler() {
+  builder: (yargs) => yargs.option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args: any) {
     if (!(await requireAuth())) return
-    const spinner = prompts.spinner()
-    spinner.start("Loading alert rules…")
+    // #189209: --json was accepted (inherited from `pulse`) and ignored — the table went to stdout.
+    const json = !!args.json
+    const spinner = json ? null : prompts.spinner()
+    spinner?.start("Loading alert rules…")
     const res = await irisFetch("/api/v1/pulse/alerts")
-    if (!res.ok) { spinner.stop("Failed"); await handleApiError(res, "list alerts"); return }
+    if (!res.ok) {
+      spinner?.stop("Failed")
+      if (json) {
+        process.exitCode = 1
+        await writeJson({ success: false, error: `alert rules returned ${res.status}` })
+        return
+      }
+      await handleApiError(res, "list alerts")
+      return
+    }
     const body = (await res.json()) as any
-    const rules = body?.data ?? []
-    spinner.stop(dim("loaded"))
+    const rules = Array.isArray(body?.data) ? body.data : []
+    spinner?.stop(dim("loaded"))
+    if (json) {
+      await writeJson({ success: true, rules })
+      return
+    }
     if (rules.length === 0) {
       console.log(`\n  ${dim("No alert rules configured.")}`)
       console.log(`  ${dim("Create one:")} iris pulse alerts add --signal comms_freshness --below 40`)
@@ -13340,6 +13185,9 @@ const PulseAlertsCommand = cmd({
 
 export const PlatformPulseCommand = productCommand({
   name: "pulse",
+  // `iris pulse "<topic>"` IS the topic sweep (#189199) — it used to fail "Unknown argument", and
+  // only `iris pulse check <topic>` worked. Subcommands still win: `iris pulse alerts` is alerts.
+  command: "pulse [keyword..]",
   aliases: ["daily"],
   purpose:
     "Pulse — account and deal health, with an agency-wide view behind --admin",
@@ -13347,9 +13195,16 @@ export const PlatformPulseCommand = productCommand({
   howtos: ["pulse"],
   playbooks: ["lead-health-sweep"],
   builder: (yargs) =>
-    yargs
+    pulseCheckOptions(
+      yargs.positional("keyword", {
+        describe: 'a topic to sweep — same as `iris pulse check <topic>`',
+        type: "string",
+        array: true,
+      }),
+    )
       .command(PulseAlertsCommand)
       .command(PulseCheckCommand)
+      .command(PulseSourcesCommand)
       .option("admin", { describe: "agency view: diary digest + lead scorecard + ungated leads", type: "boolean", default: false })
       .option("status", { describe: "filter by lead status (admin mode)", type: "string", default: "Won,Active,In Negotiation,Negotiating" })
       .option("bloq", { alias: "b", describe: "filter by bloq ID (admin mode)", type: "number" })
@@ -13361,6 +13216,11 @@ export const PlatformPulseCommand = productCommand({
       .option("heal", { describe: "repair unlogged sends that already name their lead", type: "boolean", default: true })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
+    const topic = Array.isArray(args.keyword) ? args.keyword.filter((k: unknown) => String(k ?? "").trim()) : []
+    if (topic.length) {
+      await runPulseCheck({ ...args, keyword: topic }, true)
+      return
+    }
     if (!(await requireAuth())) return
 
     // ── Default: User-first pulse (YOUR account health) ──────────
@@ -13386,7 +13246,10 @@ export const PlatformPulseCommand = productCommand({
         clearTimeout(timer)
         if (!res.ok) {
           spinner.stop("Failed to load readiness")
-          console.error(`  API returned ${res.status}`)
+          // #189208: under --json, a failure is a JSON object and exit 1 — never an empty stdout.
+          process.exitCode = 1
+          if (args.json) await writeJson({ success: false, error: `readiness returned ${res.status}` })
+          else console.error(`  API returned ${res.status}`)
           return
         }
         const body = await res.json().catch(() => ({}))
@@ -13583,9 +13446,13 @@ export const PlatformPulseCommand = productCommand({
         return
       } catch (err: any) {
         const isTimeout = err.name === "AbortError" || err.message?.includes("aborted")
-        if (!isTimeout) {
+        // #189208: under --json the fallback below (human text only) is not an answer either.
+        if (!isTimeout || args.json) {
           spinner.stop("Failed")
-          console.error(`  Error: ${err.message}`)
+          process.exitCode = 1
+          const msg = isTimeout ? "readiness timed out after 15s" : String(err?.message ?? err)
+          if (args.json) await writeJson({ success: false, error: msg })
+          else console.error(`  Error: ${msg}`)
           return
         }
 
@@ -13679,6 +13546,7 @@ export const PlatformPulseCommand = productCommand({
           console.log(`  ${dim("Tip:")} Run ${highlight("iris init")} to complete your setup checklist`)
         } catch (fallbackErr: any) {
           fallbackSpinner.stop("Fallback failed")
+          process.exitCode = 1
           console.error(`  Error: ${fallbackErr.message}`)
         }
         return
@@ -13687,6 +13555,22 @@ export const PlatformPulseCommand = productCommand({
 
     // ── --admin: Agency view (original behavior) ─────────────────
     const lines: string[] = []
+    // The diary on its own (#189233): `lines` also carries the scorecard and ungated digest for
+    // --notify, and --json's `diary` used to be lines.slice(0, 5) — i.e. scorecard rows whenever
+    // there was no local diary folder.
+    const diaryLines: string[] = []
+    let diaryNote: string | null = null
+    // #189206: under --json the human view runs with stdout muted, and ONE document is written at
+    // the end — it used to print the whole scorecard and then a JSON object of five diary strings.
+    const adminGate = args.json ? muteStdout() : null
+    const adminOut: {
+      scorecard: Array<{ id: number; name: string; pulse: number | null; band: string; error?: string }>
+      ungated: Array<{ lead_id: number; name: string }>
+      loaded: number | null
+      dropped: string | null
+      errors: string[]
+    } = { scorecard: [], ungated: [], loaded: null, dropped: null, errors: [] }
+    let loadedLeadIds: Set<number> | null = null
 
     // ── 1. Daily diary digest ──────────────────────────────────────
     try {
@@ -13728,8 +13612,36 @@ export const PlatformPulseCommand = productCommand({
           console.log(`  ${highlight(datePrefix)}  ${title}`)
           if (summary) console.log(`    ${dim(summary.slice(0, 120))}`)
           lines.push(`${datePrefix}: ${title}`)
+          diaryLines.push(`${datePrefix}: ${title}`)
         }
         console.log()
+      } else {
+        // No local diary — read the Atlas Daily Diary, the same reader `pulse check` uses (#189233).
+        const uid = await resolveUserId().catch(() => null)
+        // Read two weeks so an empty digest can say WHEN the diary last moved, not just go quiet.
+        const read = await readAtlasDiary((p: string) => irisFetch(p), uid ?? undefined, Date.now() - 14 * 864e5)
+        const since = Date.parse(`${cutoff}T00:00:00Z`)
+        if ("error" in read) {
+          console.log(dim(`  (diary: ${read.error})`))
+        } else if (!read.entries.some((e) => e.at >= since)) {
+          const newest = read.entries[0] ? new Date(read.entries[0].at).toISOString().slice(0, 10) : null
+          diaryNote = newest ? `nothing in the last 2 days — newest entry ${newest}` : "no diary entries in the last 2 weeks"
+          console.log(dim(`  (diary: ${diaryNote})`))
+        } else {
+          read.entries = read.entries.filter((e) => e.at >= since)
+          console.log(bold("\n  Recent Work") + dim("  (Atlas diary)"))
+          console.log(dim("  ─────────────────────────────────"))
+          for (const e of read.entries.slice(0, 5)) {
+            const datePrefix = new Date(e.at).toISOString().slice(0, 10)
+            const title = e.title.replace(/^\s*\d{4}-\d{2}-\d{2}\s*[—:-]?\s*/, "").trim() || datePrefix
+            const summary = e.body.split("\n").map((l) => l.replace(/^[#*\-\s]+/, "").trim()).find((l) => l.length > 0) ?? ""
+            console.log(`  ${highlight(datePrefix)}  ${title}`)
+            if (summary) console.log(`    ${dim(summary.slice(0, 120))}`)
+            lines.push(`${datePrefix}: ${title}`)
+            diaryLines.push(`${datePrefix}: ${title}`)
+          }
+          console.log()
+        }
       }
     } catch (err: any) {
       console.log(dim(`  (diary unavailable: ${err.message})`))
@@ -13755,43 +13667,50 @@ export const PlatformPulseCommand = productCommand({
       const batches = await Promise.all(fetches)
       const allLeads: any[] = batches.flat()
 
-      const seen = new Set<number>()
-      const leads = allLeads.filter((l: any) => {
-        if (seen.has(l.id)) return false
-        seen.add(l.id)
-        if (!l.email && !l.phone) return false
-        if (!l.full_name && !l.company) return false
-        return true
-      })
+      // The same selector `pulse-all` uses (#189155): one rule, one deal count.
+      const { leads, dropped } = selectPulseLeads(allLeads)
+      loadedLeadIds = new Set(leads.map((l: any) => Number(l.id)))
+      adminOut.loaded = leads.length
+      adminOut.dropped = describeDrops(dropped) || null
 
-      spinner.stop(`${leads.length} leads loaded`)
+      spinner.stop(`${leads.length} leads loaded${describeDrops(dropped) ? ` (${describeDrops(dropped)})` : ""}`)
 
       if (leads.length === 0) {
         console.log(dim("  No active leads found."))
       } else {
-        const pulseResults: Array<{ id: number; name: string; pulse: number; band: string }> = []
+        const pulseResults: Array<{ id: number; name: string; pulse: number | null; band: string; error?: string }> = []
         const batchSize = 10
         for (let i = 0; i < leads.length; i += batchSize) {
           const batch = leads.slice(i, i + batchSize)
           const results = await Promise.all(batch.map(async (lead: any) => {
+            const name = adminLeadName(lead)
             try {
               const res = await irisFetch(`/api/v1/leads/${lead.id}/readiness?include=copy`)
-              if (!res.ok) return { id: lead.id, name: lead.full_name || lead.company || `#${lead.id}`, pulse: 0, band: "unknown" }
+              // #189207: a failed read is NOT MEASURED. It used to be pulse 0 and sort to the top
+              // as the worst deal in the agency.
+              if (!res.ok) return { id: lead.id, name, pulse: null, band: "not_measured", error: `readiness ${res.status}` }
               const body = await res.json().catch(() => ({}))
               const data = body?.data ?? {}
-              return { id: lead.id, name: lead.full_name || lead.company || `#${lead.id}`, pulse: data.score ?? 0, band: data.band ?? "unknown" }
-            } catch {
-              return { id: lead.id, name: lead.full_name || lead.company || `#${lead.id}`, pulse: 0, band: "error" }
+              const score = typeof data.score === "number" ? data.score : null
+              return { id: lead.id, name, pulse: score, band: score === null ? "not_measured" : (data.band ?? "unknown") }
+            } catch (e: any) {
+              return { id: lead.id, name, pulse: null, band: "not_measured", error: String(e?.message ?? e).slice(0, 120) }
             }
           }))
           pulseResults.push(...results)
         }
 
-        pulseResults.sort((a, b) => a.pulse - b.pulse)
+        // Measured scores ascending (worst first); the unmeasured after them, never mixed in as 0.
+        pulseResults.sort((a, b) => (a.pulse === null ? 1 : 0) - (b.pulse === null ? 1 : 0) || (a.pulse ?? 0) - (b.pulse ?? 0))
+        adminOut.scorecard = pulseResults
 
         const bandEmoji: Record<string, string> = { failing: "🔴", warning: "🟡", healthy: "🟢" }
         const scoreEmoji = (s: number) => s >= 70 ? "🟢" : s >= 40 ? "🟡" : "🔴"
         for (const r of pulseResults.slice(0, 20)) {
+          if (r.pulse === null) {
+            console.log(`  ${dim("·")}  ${dim("—")}/100  ${r.name} (#${r.id})  ${dim(`not measured${r.error ? ` — ${r.error}` : ""}`)}`)
+            continue
+          }
           const marker = bandEmoji[r.band] || scoreEmoji(r.pulse)
           const score = String(r.pulse).padStart(3)
           console.log(`  ${marker} ${score}/100  ${r.name} (#${r.id})`)
@@ -13804,6 +13723,7 @@ export const PlatformPulseCommand = productCommand({
     } catch (err: any) {
       spinner.stop("Failed to load leads")
       console.error(`  Error: ${err.message}`)
+      adminOut.errors.push(`leads: ${err.message}`)
     }
 
     // ── 3. Ungated leads ─────────────────────────────────────────
@@ -13816,14 +13736,18 @@ export const PlatformPulseCommand = productCommand({
       if (gateRes.ok) {
         const gateBody = await gateRes.json().catch(() => ({}))
         const deals: any[] = firstArray(gateBody?.data?.deals)
-        const ungated = deals.filter((d: any) => !d.has_gate)
+        // #189207: the same deals the scorecard loaded — --bloq and --status apply here too. The
+        // endpoint is account-wide, so --bloq 99999999 printed "No active leads" and then ten
+        // ungated leads from other boards.
+        const ungated = ungatedForLoaded(deals, loadedLeadIds)
+        adminOut.ungated = ungated.map((d: any) => ({ lead_id: Number(d.lead_id), name: d.lead_name || `Lead #${d.lead_id}` }))
         if (ungated.length > 0) {
           for (const d of ungated.slice(0, 10)) {
             console.log(`  ⚠️  ${d.lead_name || `Lead #${d.lead_id}`} — no payment gate`)
             lines.push(`⚠️ ${d.lead_name || `Lead #${d.lead_id}`} — ungated`)
           }
         } else {
-          console.log(dim("  All active deals are gated."))
+          console.log(dim(loadedLeadIds && loadedLeadIds.size === 0 ? "  No loaded deals to check." : "  All active deals are gated."))
         }
       } else {
         console.log(dim("  (deals endpoint unavailable)"))
@@ -13859,8 +13783,23 @@ export const PlatformPulseCommand = productCommand({
       }
     }
 
-    if (args.json) {
-      await writeJson({ diary: lines.slice(0, 5), timestamp: new Date().toISOString() })
+    if (adminGate) {
+      await adminGate.open(() =>
+        writeJson({
+          success: adminOut.errors.length === 0,
+          filters: { status: args.status, bloq: args.bloq ?? null },
+          loaded: adminOut.loaded,
+          dropped: adminOut.dropped,
+          scorecard: adminOut.scorecard,
+          not_measured: adminOut.scorecard.filter((r) => r.pulse === null).length,
+          ungated: adminOut.ungated,
+          diary: diaryLines.slice(0, 5),
+          ...(diaryNote ? { diary_note: diaryNote } : {}),
+          errors: adminOut.errors,
+          timestamp: new Date().toISOString(),
+        }),
+      )
+      if (adminOut.errors.length) process.exitCode = 1
     }
   },
 })

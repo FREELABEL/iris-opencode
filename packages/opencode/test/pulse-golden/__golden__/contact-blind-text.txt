@@ -1,0 +1,68 @@
+== exit 0
+== stdout
+  [90m────────────────────────────────────────────────────────────[0m
+  [90mID:[0m  7001
+  [90mEmail:[0m  dana@example.com
+  [90mAlt Emails:[0m  [90mdana.alt@example.com[0m
+  [90mPhone:[0m  +15550100
+  [90mStatus:[0m  Active
+  [90mCompany:[0m  Example Co
+  [90mPulse:[0m  [90mUNAVAILABLE[0m  [90m— 4/6 channels blind (gmail, calendar, applemail, bridge); server score 64/100 withheld[0m
+  [90mTrend:[0m  [90m▅▅[0m  [90m(2 days, 2 runs)[0m
+  [90mSignals:[0m  req [90m—[0m[90m · [0mlive [90m—[0m[90m · [0mcomms [93m40/100[0m[90m · [0mdeal [93m70/100[0m[90m · [0mcfg [90m—[0m[90m · [0mKB [90m—[0m[90m · [0mmeet [90m—[0m[90m · [0mdeliv [90m—[0m
+
+  [1mFix It[0m  [90m(1 signals below 50)[0m
+    [91m⚠[0m comms [91m40/100[0m — no recent messages → [90miris leads note 7001 "called — discussed next steps"[0m
+  [90mEngagement:[0m  [90mUNAVAILABLE[0m — 4/6 channels blind (gmail, calendar, applemail, bridge)
+
+  [1mDeal Health[0m
+  [90m  Payment Gate:[0m  [90mNone — create with: iris leads payment-gate 7001 -a 500[0m
+  [90m  Stripe:[0m  [90mNo Stripe customer[0m
+  [90m  Contracts:[0m  [90mNone[0m
+  [90m  Proposals:[0m  [90mNone[0m
+  [90m  Content Engine:[0m  [93mNot configured[0m  [90miris leads content-engine create 7001[0m
+
+  [1mTasks[0m  [90m(1)[0m
+  [90m  Pending:[0m  1
+  [90m  Completed:[0m  0
+    [90m○[0m Send the revised quote[90m due 2026-09-17[0m
+
+  [1mRecent Activity[0m  [90m(1)[0m
+    ~ [96mnote              [0mCall went well[90m 2026-09-11[0m
+
+  [1mIntegration Health[0m
+  [91m✗[0m [96mGmail             [0m[91mConnectedAccountExpired[0m[90m — reconnect: iris integrations connect gmail --yes[0m
+  [91m✗[0m [96mGoogle Calendar   [0m[91mbad bridge token[0m[90m — bridge key rejected — check ~/.iris/bridge-token[0m
+  [91m✗[0m [96miMessage          [0m[91mbad bridge token[0m[90m — bridge key rejected — check ~/.iris/bridge-token[0m
+  [91m✗[0m [96mWhatsApp          [0m[91mWhatsApp local database is only available on macOS.[0m[90m — System Settings → Privacy → Full Disk Access → enable terminal[0m
+  [91m✗[0m [96mApple Mail        [0m[91mbad bridge token[0m[90m — bridge key rejected — check ~/.iris/bridge-token[0m
+  [91m✗[0m [96mIRIS Bridge       [0m[91mHTTP 403[0m
+  [91m4/6 channels blind (gmail, calendar, applemail, bridge)[0m  [90m— scores below cannot distinguish silence from blindness[0m
+
+
+  [1miMessage  [90m⚠ {"error":"bad bridge token"}[0m[0m
+
+  [1mApple Mail  [90m⚠ {"error":"bad bridge token"}[0m[0m
+
+  [1mGmail  [90m⚠ Gmail is not connected for this lead[0m[0m
+
+  [1mMeetings  [90m⚠ not measured — calendar not read (calendar not connected)[0m[0m
+
+  [1mCommunication Intelligence[0m
+  [90m  Sentiment:[0m  [90mINSUFFICIENT DATA[0m  [90m— no messages sampled; 4 of 6 channels unreadable[0m
+
+  [1mNext Best Action[0m
+    [[91mHIGH[0m] Do not act on outreach — 4/6 channels blind (gmail, calendar, applemail, bridge). Fix channel access first.
+    [90mgrant Full Disk Access to iris-daemon, then: iris-daemon restart[0m
+
+  [90m────────────────────────────────────────────────────────────[0m
+
+== stderr
+[0m
+◈  Lead #7001 — Pulse Check
+Loading lead…
+[1mDana Example[0m
+Scanning channels…
+0 message(s) across 4 channel(s)
+[90miris leads pulse 7001 --recap[0m  ·  [90miris leads meet 7001 --at …[0m  ·  [90miris leads note 7001 "…"[0m
+

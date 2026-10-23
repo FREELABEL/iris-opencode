@@ -2,6 +2,10 @@ import { cmd } from "./cmd"
 import { dim, bold, success, writeJson } from "./iris-api"
 import { execSync, spawnSync, spawn } from "child_process"
 import { networkInterfaces } from "os"
+import { requireAuth, requireUserId } from "./iris-api"
+import { resolveNode } from "./platform-hive-nodes"
+import { resolveSshTarget, ensureSshUser, detectLocalNodeId } from "./hive-tailscale"
+import { askNodeUser, isIpTarget, sshArgs } from "./hive-ssh"
 
 // ============================================================================
 // iris hive scan / probe / ssh
@@ -323,14 +327,23 @@ const HiveProbeCommand = cmd({
 // ============================================================================
 
 const HiveSshCommand = cmd({
-  command: "ssh <ip> [user]",
-  describe: "test SSH access to a host (tries common users with key auth)",
+  command: "ssh <target> [user]",
+  describe: "open a shell on one of your Hive nodes by name (over your tailnet) — or, given an IP, test which users can log in",
   builder: (yargs) =>
     yargs
-      .positional("ip", { describe: "IP address", type: "string", demandOption: true })
-      .positional("user", { describe: "specific user to try", type: "string" }),
+      .positional("target", { describe: "node name or id (e.g. iris-hive-001) — or an IP address to test", type: "string", demandOption: true })
+      .positional("user", { describe: "login user on the node (remembered after the first success)", type: "string" })
+      .option("cmd", { alias: "c", describe: "run this one command instead of opening a shell", type: "string" })
+      .option("host", { describe: "address to use instead of resolving the node (remembered)", type: "string" })
+      .option("print", { describe: "print the ssh command and exit, without connecting", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID", type: "number" })
+      .example("iris hive ssh iris-hive-001", "a shell on that node")
+      .example('iris hive ssh iris-hive-001 -c "uptime"', "one command, then back")
+      .example("iris hive ssh 192.168.4.24", "test which users can log in at an IP"),
   async handler(argv) {
-    const ip = String(argv.ip)
+    const target = String(argv.target)
+    if (!isIpTarget(target)) return sshToNode(argv, target)
+    const ip = target
     const users = argv.user
       ? [String(argv.user)]
       : ["ubuntu", "debian", "admin", "root", "alex", "dell", "pi", "user"]
@@ -370,6 +383,55 @@ const HiveSshCommand = cmd({
     }
   },
 })
+
+// A shell on a Hive node, by name (#187797). Resolution is the same one `hive fs` uses, plus
+// asking the node itself for its login user. Not gated on the daemon being online: ssh does
+// not go through the daemon, and a node whose daemon is down is exactly when you want a shell.
+async function sshToNode(argv: Record<string, unknown>, target: string) {
+  await requireAuth()
+  const userId = await requireUserId(argv["user-id"] as number | undefined)
+  if (!userId) process.exit(1)
+
+  const node = await resolveNode(userId, target)
+  if (!node) {
+    console.error(`No node matching "${target}". Run: iris hive nodes list`)
+    process.exit(1)
+  }
+  if ((await detectLocalNodeId([node]).catch(() => null)) === node.id) {
+    console.log(`You are on ${bold(node.name)} already.`)
+    return
+  }
+
+  const resolved = await resolveSshTarget(node.id, node.name, {
+    host: argv.host as string | undefined,
+    user: argv.user as string | undefined,
+    advertised: (node as any).tailscale_ip ?? null,
+  })
+  if ("error" in resolved) {
+    console.error(resolved.error)
+    console.error(dim(`  Not on a tailnet? Commands still run over the Hive: iris hive run ${node.name} "<command>"`))
+    process.exit(1)
+  }
+  const online = node.connection_status === "online"
+  const withUser = await ensureSshUser(node.id, resolved, {
+    askNode: online ? () => askNodeUser(userId, node.id) : undefined,
+  })
+  if ("error" in withUser) {
+    console.error(withUser.error)
+    process.exit(1)
+  }
+
+  const dest = withUser.user ? `${withUser.user}@${withUser.host}` : withUser.host
+  const args = sshArgs(dest, argv.cmd as string | undefined)
+  if (argv.print) {
+    console.log(["ssh", ...args].map((a) => (/[\s"'$]/.test(a) ? JSON.stringify(a) : a)).join(" "))
+    return
+  }
+  const via = resolved.via === "tailscale" ? "tailnet" : resolved.via
+  console.error(dim(`→ ${node.name} via ${via} → ${dest}`))
+  const r = spawnSync("ssh", args, { stdio: "inherit" })
+  process.exit(r.status ?? 1)
+}
 
 export const HiveScanCommandExport = HiveScanCommand
 export const HiveProbeCommandExport = HiveProbeCommand

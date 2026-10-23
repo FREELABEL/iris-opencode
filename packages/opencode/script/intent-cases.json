@@ -3,7 +3,7 @@
   ["check platform health", ["monitor", "monitor overview"]],
   ["schedule a recurring task", ["schedules create"]],
   ["manage my outreach campaigns", ["outreach-campaign"]],
-  ["search my knowledge base for onboarding notes", ["search"]],
+  ["search my knowledge base for onboarding notes", ["search", "atlas search"]],
   ["report a bug in the CLI", ["bug report"]],
   ["run a playbook", ["playbook run", "playbook run"]],
   ["transcribe this video file", ["transcribe"]],

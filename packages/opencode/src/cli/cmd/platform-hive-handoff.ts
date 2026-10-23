@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { currentDelegationOrigin } from "./hive-delegation-origin"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { requireAuth, requireUserId, dim, bold, success, writeJson } from "./iris-api"
@@ -45,7 +46,7 @@ export const HiveHandoffCommand = cmd({
       .option("note", { alias: "m", describe: "what to do with it", type: "string" })
       .option("expires", { describe: "how long it stays deliverable: 30m, 4h, 7d (default 7d)", type: "string" })
       .option("burn", { describe: "delete it from their inbox the first time it is read", type: "boolean", default: false })
-      .option("run", { describe: "execute on YOUR node now; the result lands in your inbox as a job", type: "boolean", default: false })
+      .option("run", { describe: "execute on YOUR node now; follow it with iris hive tasks <id> (from an iris session, the report comes back to the session)", type: "boolean", default: false })
       .option("user-id", { describe: "user ID", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(argv) {
@@ -79,6 +80,7 @@ export const HiveHandoffCommand = cmd({
         prompts.log.error("--run executes on YOUR node only. A peer's machine runs what its owner chooses — send without --run to deliver it to their inbox.")
         process.exit(1)
       }
+      const origin = await currentDelegationOrigin()
       const res = await hiveFetch(`/api/v6/nodes/tasks`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -97,13 +99,19 @@ export const HiveHandoffCommand = cmd({
             expires_at: inboxExpiresAt(),
           },
           timeout_seconds: 600,
+          ...(origin ? { metadata: { origin } } : {}),
         }),
       })
       if (!res.ok) { sp?.stop("Failed", 1); prompts.log.error(`HTTP ${res.status}`); process.exit(1) }
       const data = (await res.json()) as { task?: { id: string } }
       sp?.stop(success(`Running ${item} on ${bold(target.node.name)}`))
       if (argv.json) { await writeJson({ ok: true, mode: "run", item, task_id: data.task?.id, node: target.node.name }); return }
-      console.log(`  ${dim("result lands in:")} iris hive inbox   ${dim(`task=${(data.task?.id ?? "").slice(0, 8)}`)}`)
+      // #188698: this used to say "result lands in: iris hive inbox". The job entry is written to the
+      // inbox of the machine that RUNS it, which is a local file there — from any other machine
+      // that pointer led nowhere. Say where the result actually is.
+      const id = data.task?.id ?? ""
+      console.log(`  ${dim("follow it:")} iris hive tasks ${id}`)
+      console.log(`  ${dim(origin ? "its report will also appear in this session" : `the job entry is in ${target.node.name}'s own inbox`)}`)
       prompts.outro("Done")
       return
     }

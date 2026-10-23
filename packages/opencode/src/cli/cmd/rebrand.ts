@@ -42,6 +42,11 @@ export function isAssetUrl(s: string): boolean {
 // Template-agnostic PII patterns (used by both the transform and the leak gate).
 const PHONE_RE = /(?:\+?1[\s.\-]?)?\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}/g
 const EMAIL_RE = /[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/g
+// PHONE_RE is North-American-shaped, so "+44 20 7946 0018" was neither scrubbed nor flagged
+// (#188547). International numbers in written form: a leading +, groups, 8+ digits in total.
+const INTL_PHONE_RE = /\+\d{1,3}(?:[\s.\-]?\(?\d{1,4}\)?){2,6}/g
+const intlPhones = (s: string): string[] =>
+  (s.match(INTL_PHONE_RE) ?? []).map((m) => m.trim()).filter((m) => m.replace(/\D/g, "").length >= 8)
 
 // Mirrors the normalizeHex fix in Render.vue — brand tokens sometimes store a
 // color as a Tailwind-style scale object instead of a hex string.
@@ -261,6 +266,7 @@ export function applyProfile(jc: any, target: BrandProfile, source: BrandProfile
     let out = s
     for (const [a, b] of forms) if (a !== b) out = out.split(a).join(b)
     out = out.replace(PHONE_RE, tPhone)
+    for (const m of intlPhones(out)) out = out.split(m).join(tPhone)
     out = out.replace(EMAIL_RE, tEmail)
     out = out.replace(/tel:\+?\d{10,}/gi, tDigits ? `tel:${tDigits}` : "")
     out = out.replace(/mailto:[^"'\s)]+/gi, tEmail ? `mailto:${tEmail}` : "")
@@ -318,6 +324,7 @@ export function sourceNeedles(sourceJc: any, source: BrandProfile): string[] {
     if (typeof o === "string") {
       if (isAssetUrl(o)) return
       for (const m of o.match(PHONE_RE) ?? []) add(m.trim())
+      for (const m of intlPhones(o)) add(m)
       for (const m of o.match(EMAIL_RE) ?? []) add(m.trim())
       const tel = o.match(/tel:\+?([\d]{10,})/i)
       if (tel) add(tel[1])
@@ -380,10 +387,20 @@ export function scanForLeaks(jc: any, needles: string[]): Leak[] {
 export function rebrandJsonContent(
   sourceJc: any,
   target: BrandProfile,
-): { json: any; leaks: Leak[]; source: BrandProfile } {
+  opts: { sourceNames?: string[] } = {},
+): { json: any; leaks: Leak[]; source: BrandProfile; namesChecked: boolean } {
   const source = deriveSourceProfile(sourceJc)
+  const named = (opts.sourceNames ?? []).map((n) => String(n).trim()).filter((n) => n.length >= 3)
+  // An HTML page has no structured name; the first supplied name stands in for it, so the
+  // transform REPLACES it with the target's everywhere (case variants too), not just flags it.
+  if (!source.name && named.length) source.name = named[0]
   const needles = sourceNeedles(sourceJc, source)
+  // #188547: a hand-written HTML page has no structured brand name (no theme.branding, nav or
+  // footer props), so the gate had nothing to look for and reported "clean" while the page's
+  // copy still named its owner. Names the caller supplies are needles too — at 3+ characters,
+  // because the auto-derived 5-character floor would skip "DreX" or "IRIS".
+  for (const n of named) if (!needles.includes(n)) needles.push(n)
   const json = applyProfile(sourceJc, target, source)
   const leaks = scanForLeaks(json, needles)
-  return { json, leaks, source }
+  return { json, leaks, source, namesChecked: Boolean(source.name) || named.length > 0 }
 }

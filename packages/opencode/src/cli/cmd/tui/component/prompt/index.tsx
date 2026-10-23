@@ -13,10 +13,11 @@ import { useKeybind } from "@tui/context/keybind"
 import { usePromptHistory, type PromptInfo } from "./history"
 import { usePromptStash } from "./stash"
 import { createDictation, dictationBar, formatDictationClock } from "./dictate"
+import { livePreviewLine } from "@/cli/lib/live-dictation"
 import { DialogStash } from "../dialog-stash"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { useCommandDialog } from "../dialog-command"
-import { useRenderer } from "@opentui/solid"
+import { useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { Editor } from "@tui/util/editor"
 import { useExit } from "../../context/exit"
 import { Clipboard } from "../../util/clipboard"
@@ -89,6 +90,7 @@ export function Prompt(props: PromptProps) {
   const stash = usePromptStash()
   const command = useCommandDialog()
   const renderer = useRenderer()
+  const terminal = useTerminalDimensions()
   const { theme, syntax } = useTheme()
   const kv = useKV()
 
@@ -960,6 +962,15 @@ export function Prompt(props: PromptProps) {
               cursorColor={theme.text}
               syntaxStyle={syntax()}
             />
+            <Show when={dictation.active() && dictation.live()}>
+              {/* Live preview of the words being spoken (lib/live-dictation). One line, newest
+                  words kept; what gets inserted is still the batch transcript. */}
+              <box flexDirection="row" flexShrink={0} paddingTop={1}>
+                <text fg={theme.textMuted} wrapMode="none">
+                  {livePreviewLine(dictation.live(), Math.max(10, terminal().width - 8))}
+                </text>
+              </box>
+            </Show>
             <box flexDirection="row" flexShrink={0} paddingTop={1} gap={1}>
               <text fg={highlight()}>
                 {store.mode === "shell" ? "Shell" : Locale.titlecase(local.agent.current().name)}{" "}

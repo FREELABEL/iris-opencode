@@ -1,9 +1,12 @@
+import os from "os"
+import { offerFirstPull } from "./integration-first-pull"
 import { cmd } from "./cmd"
 import {
   IntegrationsShareCommand,
   IntegrationsUnshareCommand,
   IntegrationsDisconnectCommand,
   IntegrationsSetupNativeCommand,
+  IntegrationsRotateCommand,
 } from "./platform-integrations"
 import * as prompts from "./clack"
 import { UI } from "../ui"
@@ -36,6 +39,7 @@ import { isLocalOAuthProvider, runLocalOAuthConnect } from "./integration-oauth-
 import { readIntegrationStores, findStatusDisagreements, describeDisagreement, type StoreRef } from "./integration-stores"
 import { PathwaysCommand } from "./platform-integrations-pathways"
 import { firstArray } from "../../util/array"
+import { knownFunction, dryRunResult, gatedExec, previewParams, recipientCount } from "./integration-write-gate"
 import { openBrowser } from "../../util/browser"
 
 // ============================================================================
@@ -97,10 +101,31 @@ const INTEGRATION_FUNCTIONS: Record<string, { name: string; description: string 
     { name: "create_custom_audience", description: "Create a custom audience" },
     { name: "get_insights", description: "Performance data for a campaign/ad set/ad" },
   ],
+  // Verified 2026-10-08 against fl-iris-api GmailIntegrationService::actions() (20). This list is a
+  // HELP list only: since v1.3.327 a dry run asks the server, which is the authority on what exists.
+  // This list showed three functions while the backend had sixteen, so a desktop agent guessed
+  // label-action names for an hour and one "probe" created a real label in a client's mailbox.
   "gmail": [
     { name: "read_emails", description: "Read emails from inbox (limit, unread_only, query)" },
-    { name: "search_emails", description: "Search emails with Gmail query syntax" },
-    { name: "send_email", description: "Send an email (to, subject, body)" },
+    { name: "search_emails", description: "Search emails with Gmail query syntax (query, limit)" },
+    { name: "get_email", description: "Read one email in full (message_id)" },
+    { name: "get_labels", description: "List your labels (include_system)" },
+    { name: "send_email", description: "Send an email (to, subject, body, cc, bcc) — WRITE" },
+    { name: "reply_to_email", description: "Reply to an email (message_id, body, reply_all) — WRITE" },
+    { name: "create_draft", description: "Create a draft (to, subject, body) — WRITE" },
+    { name: "create_label", description: "Create a label (label_name) — WRITE" },
+    { name: "add_label", description: "Add a label to emails (message_ids, label, create_if_missing) — WRITE" },
+    { name: "move_to_label", description: "Move emails out of the inbox into a label (message_ids, label, create_if_missing) — WRITE" },
+    { name: "remove_label", description: "Remove a label from emails (message_ids, label) — WRITE" },
+    { name: "mark_as_read", description: "Mark emails read (message_ids) — WRITE" },
+    { name: "mark_as_unread", description: "Mark emails unread (message_ids) — WRITE" },
+    { name: "archive_emails", description: "Archive emails (message_ids) — WRITE" },
+    { name: "move_to_inbox", description: "Move emails back to the inbox (message_ids) — WRITE" },
+    { name: "trash_emails", description: "Move emails to trash (message_ids) — WRITE" },
+    { name: "list_attachments", description: "List an email's attachments + Drive links (message_id)" },
+    { name: "read_attachment", description: "Read an attachment's TEXT — PDF, .docx, .eml, txt/csv/ics/html (message_id, filename | attachment_id | index)" },
+    { name: "delete_label", description: "Delete a user label entirely; emails keep everything else (label_name) — WRITE" },
+    { name: "rename_label", description: "Rename a user label (label_name, new_name) — WRITE" },
   ],
   // Verified against fl-iris-api GoogleDriveIntegrationService + ComposioClient. This list
   // used to show three functions with no parameters, so an agent looking for a folder guessed
@@ -385,13 +410,28 @@ async function executeMacosLocal(
     if ([...qs].length > 0) url += `?${qs.toString()}`
   }
 
+  // The bridge requires X-Bridge-Key on these routes. This call was the one bridge client that
+  // never sent it, so every macOS action through `integrations exec` answered 401 — and the
+  // generic hint sent people to `iris auth login`, which has nothing to do with it (#189836).
+  const headers: Record<string, string> = {}
+  if (route.useBody) headers["Content-Type"] = "application/json"
+  const bridgeKey = getBridgeToken()
+  if (bridgeKey) headers["X-Bridge-Key"] = bridgeKey
+
   let res: Response
   try {
     res = await fetch(url, {
       method: route.method,
-      headers: route.useBody ? { "Content-Type": "application/json" } : undefined,
+      headers,
       body,
     })
+    // When the bridge hosts the daemon (embedded mode), the daemon's routes are mounted under
+    // /daemon — /api/calendar/list and /create-event exist only there, and the bare path is an
+    // Express "Cannot GET". Retry once under the prefix before calling it missing.
+    if (res.status === 404) {
+      const embedded = await fetch(url.replace(bridgeBase, `${bridgeBase}/daemon`), { method: route.method, headers, body })
+      if (embedded.status !== 404) res = embedded
+    }
   } catch (e) {
     throw new Error(
       `Cannot reach local bridge at ${bridgeBase}. ` +
@@ -406,6 +446,14 @@ async function executeMacosLocal(
       const parsed = JSON.parse(text)
       errMsg = parsed.error ?? text
     } catch { /* keep raw text */ }
+    if (res.status === 401) {
+      throw new Error(
+        `The local bridge refused ${route.method} ${route.path}: ` +
+          (bridgeKey
+            ? "the key in ~/.iris/bridge-token is not the one this daemon expects (stale after a reinstall?). Run: iris bridge status"
+            : "~/.iris/bridge-token is missing, so no key was sent. Run: iris bridge status"),
+      )
+    }
     throw new Error(`Bridge ${route.method} ${route.path} failed (HTTP ${res.status}): ${errMsg}`)
   }
 
@@ -582,7 +630,7 @@ export async function executeIntegrationCall(
   type: string,
   fn: string,
   params: Record<string, unknown>,
-  options: { integrationId?: number; account?: string } = {},
+  options: { integrationId?: number; account?: string; dryRun?: boolean } = {},
 ): Promise<any> {
   // Local fast path for macos — calls the bridge directly, no remote API.
   if (type === "macos") {
@@ -625,20 +673,42 @@ export async function executeIntegrationCall(
 
   const body: Record<string, unknown> = { integration: normalized, action: fn, params }
   if (integrationId) body.integration_id = integrationId
+  // The server plans and executes nothing (#188638): account, real action name, upstream tool and
+  // whether that tool exists — the things a local echo could never know.
+  if (options.dryRun) body.dry_run = true
 
   const res = await irisFetch(
     `/api/v1/users/${userId}/integrations/execute-direct?user_id=${userId}`,
     {
       method: "POST",
       body: JSON.stringify(body),
+      headers: { "X-Iris-Node": os.hostname() },
     },
     IRIS_API, // execute-direct lives on iris-api, not fl-api
   )
   if (!res.ok) {
     const text = await res.text().catch(() => "")
+    // A refusal the server explains (409 account_ambiguous, 404 account_not_found) is an ANSWER —
+    // it lists the accounts to choose from. Throwing "HTTP 409: {...}" buried that list in a string.
+    try {
+      const data = JSON.parse(text)
+      if (data && typeof data === "object" && data.success === false) return data
+    } catch {}
     throw new Error(`HTTP ${res.status}: ${text}`)
   }
   return await res.json()
+}
+
+/**
+ * Which mailbox/account answered, and from which machine (#188637). Every exec result carries the
+ * server's `_account`; nothing printed it, so a person or agent could act for an hour on the wrong
+ * mailbox (2026-10-08). One line, every call.
+ */
+export function accountLine(result: any): string | null {
+  const a = result?._account ?? result?.would_run
+  if (!a || (!a.account && !a.integration_id)) return null
+  const who = a.account ?? `connection #${a.integration_id} (address unknown)`
+  return `↳ ${who}${a.integration_id ? ` (#${a.integration_id})` : ""} · from ${os.hostname()}`
 }
 
 function displayArrayItems(items: any[], indent = "    "): void {
@@ -670,6 +740,11 @@ export function isFailedResult(result: any): boolean {
   if (result === null || result === undefined) return true
   if (typeof result !== "object") return false
   if (result.success === false) return true
+  // A page can arrive AND the fetch after it can fail. Composio answers 413
+  // (Upstream_PayloadTooLarge) as `error_after_page` on an otherwise successful payload, so
+  // `success: true` was reported with exit 0 for a call that did not return what was asked
+  // (#190573). A partial result with an upstream failure is a failed result.
+  if (result.error_after_page) return true
   return result.success !== true && !!result.error
 }
 
@@ -679,8 +754,140 @@ export function isUnknownFunctionError(result: any): boolean {
   return /Tool_ToolNotFound|Tool \S+ not found|not a (valid|known) (action|function)/i.test(err)
 }
 
+/** The bundled list — an OFFLINE fallback only. The server's catalogue is the list (see below). */
 export function knownFunctionsFor(target: string): { name: string; description: string }[] | undefined {
   return INTEGRATION_FUNCTIONS[target] ?? INTEGRATION_FUNCTIONS[SLUG_ALIASES[target] ?? ""]
+}
+
+/**
+ * A connector's actions FROM THE SERVER — GET /api/v1/integrations/catalog/{type}, built from the
+ * connector's yml, the single source (fl-iris-api App\Support\IntegrationActions, 0aadaeca).
+ *
+ * 2026-10-08: the Gmail list existed in seven places that disagreed; this CLI's copy said 16 while
+ * the server had 20, and an agent concluded delete_label did not exist. Cached a day under
+ * ~/.iris/cache; the bundled list answers only when the server cannot be asked.
+ */
+/**
+ * A connector's actions WITH their parameters, from the server catalogue — the yml, the single source
+ * (#188781). 2026-10-09: an agent could not find create_draft's fields; it ran exec with no params,
+ * tried `iris integrations describe`, then `strings` on this binary, then guessed Composio's names.
+ */
+export type ActionSignature = {
+  name: string
+  description: string
+  writes: boolean
+  effect?: string | null
+  parameters: { name: string; type: string; required: boolean; description: string }[]
+}
+
+/**
+ * Refuse a parameter the action does not declare, and name a required one that is absent.
+ *
+ * A typo used to be DROPPED IN SILENCE — `exec gmail read_emails totally_bogus=1` completed
+ * and returned 10 messages, so a wrong parameter looked exactly like a right one (#190572).
+ * The catalogue is the signature; this is the client-side check that spends nothing upstream
+ * to prove the call is wrong.
+ *
+ * `synonyms` are the groups the executor already broadcasts (limit / max_results / maxResults).
+ * A name in the same group as a declared parameter is legitimate, not a typo — otherwise this
+ * guard would reject the very spellings the CLI adds itself (#182866).
+ */
+export function validateActionParams(
+  sig: ActionSignature,
+  params: Record<string, unknown>,
+  synonyms: string[][] = [],
+): { ok: boolean; unknown: string[]; missing: string[] } {
+  const declared = new Set(sig.parameters.map((p) => p.name))
+  // An action that declares no parameters is a passthrough; do not lecture the caller.
+  if (declared.size === 0) return { ok: true, unknown: [], missing: [] }
+  // No parameters at all is the caller asking "how do I call this?" — exec answers that with
+  // the full signature (exit 2, signature_only), which a "missing required" refusal would hide (#188781).
+  if (Object.keys(params).length === 0) return { ok: true, unknown: [], missing: [] }
+
+  const accepted = new Set(declared)
+  for (const group of synonyms) {
+    if (group.some((k) => declared.has(k))) for (const k of group) accepted.add(k)
+  }
+
+  const unknown = Object.keys(params)
+    .filter((k) => !accepted.has(k))
+    .sort()
+  const missing = sig.parameters
+    .filter((p) => p.required && (params[p.name] === undefined || params[p.name] === null))
+    .map((p) => p.name)
+
+  return { ok: unknown.length === 0 && missing.length === 0, unknown, missing }
+}
+
+export async function actionSignaturesLive(target: string): Promise<ActionSignature[] | undefined> {
+  const type = SLUG_ALIASES[target] ?? target
+  try {
+    const res = await irisFetch(`/api/v1/integrations/catalog/${encodeURIComponent(type)}`, {}, IRIS_API)
+    const body: any = res.ok ? await res.json() : null
+    const commands: any[] = body?.data?.commands ?? []
+    if (!commands.length) return undefined
+    return commands.map((c) => ({
+      name: String(c.name),
+      description: String(c.description ?? c.label ?? ""),
+      writes: Boolean(c.writes),
+      effect: c.effect ?? null,
+      parameters: (Array.isArray(c.parameters) ? c.parameters : []).map((p: any) => ({
+        name: String(p.name),
+        type: String(p.type ?? "string"),
+        required: Boolean(p.required),
+        description: String(p.description ?? ""),
+      })),
+    }))
+  } catch {
+    return undefined
+  }
+}
+
+/** Print one action the way an agent needs it: what it does, every parameter, and a runnable example. */
+export function printSignature(target: string, sig: ActionSignature): void {
+  console.log(`  ${bold(`${target}.${sig.name}`)}  ${dim(sig.writes ? `write${sig.effect ? ` (${sig.effect})` : ""} — dry run unless --apply` : "read")}`)
+  if (sig.description) console.log(`  ${sig.description.split(/(?<=\.)\s/)[0]}`)
+  if (!sig.parameters.length) console.log(dim("  (no parameters)"))
+  for (const p of sig.parameters) {
+    console.log(`    ${p.required ? bold(p.name) : p.name}${dim(`  ${p.type}${p.required ? " · required" : ""}`)}${p.description ? dim(`  — ${p.description}`) : ""}`)
+  }
+  const ex = sig.parameters
+    .filter((p) => p.required)
+    .map((p) => `${p.name}=${p.type === "array" ? "<id1>,<id2>" : p.type === "integer" || p.type === "number" ? "10" : `"…"`}`)
+    .join(" ")
+  console.log(dim(`  example: iris integrations exec ${target} ${sig.name} ${ex}${sig.writes ? " --apply" : ""}`.trimEnd()))
+}
+
+export async function knownFunctionsLive(target: string): Promise<{ name: string; description: string }[] | undefined> {
+  const type = SLUG_ALIASES[target] ?? target
+  const fs = await import("fs/promises")
+  const path = await import("path")
+  const file = path.join(os.homedir(), ".iris", "cache", `catalog-${type.replace(/[^a-z0-9-]/gi, "")}.json`)
+  const fresh = async () => {
+    try {
+      const st = await fs.stat(file)
+      if (Date.now() - st.mtimeMs < 24 * 3600 * 1000) return JSON.parse(await fs.readFile(file, "utf8"))
+    } catch {}
+    return null
+  }
+  let list: { name: string; description: string }[] | null = await fresh()
+  if (!list) {
+    try {
+      const res = await irisFetch(`/api/v1/integrations/catalog/${encodeURIComponent(type)}`, {}, IRIS_API)
+      const body: any = res.ok ? await res.json() : null
+      const commands: any[] = body?.data?.commands ?? []
+      if (body?.data?.detailed && commands.length) {
+        list = commands.map((c) => ({
+          name: String(c.name),
+          description: `${String(c.description ?? c.label ?? "").split(/(?<=\.)\s/)[0]}${c.writes ? " — WRITE" : ""}`.trim(),
+        }))
+        await fs.mkdir(path.dirname(file), { recursive: true }).catch(() => {})
+        await fs.writeFile(file, JSON.stringify(list)).catch(() => {})
+      }
+    } catch {}
+  }
+
+  return list ?? knownFunctionsFor(target)
 }
 
 function displayResult(result: any, name: string): void {
@@ -1161,7 +1368,7 @@ const ListAvailableCommand = cmd({
   },
 })
 
-const ConnectCommand = cmd({
+export const ConnectCommand = cmd({
   command: "connect <type>",
   describe: "start OAuth or show API-key instructions for an integration",
   builder: (y) =>
@@ -1448,6 +1655,7 @@ const ConnectCommand = cmd({
             const body = await r.json().catch(() => null)
             if (isProbeSuccess(body)) {
               vs.stop(`${success("✓")} ${bold(entry.type)} connected — verified by ${probe.label}`)
+              await offerFirstPull(String(entry.type), Number(userId))
             } else if (isProbeInconclusive(r.status, body)) {
               vs.stop(`${dim("Stored — could not verify from here (not an authorization failure)")}`)
             } else {
@@ -1828,6 +2036,8 @@ const ConnectCommand = cmd({
           ? `${success("✓")} ${bold(type)} connected — verified by ${verifiedBy}`
           : `${success("✓")} ${bold(type)} connected successfully!`,
       )
+      // T3 #188213: the next move after a connect is the person's own data, not a list command.
+      if (pollUserId) await offerFirstPull(String(type), Number(pollUserId))
       if (!verifiedBy && probe) {
         // Say which half we proved. A row exists; nobody has shown the credential works.
         console.log()
@@ -1846,10 +2056,43 @@ const ConnectCommand = cmd({
   },
 })
 
+/** `iris integrations describe <type> [action]` — every action, or one action's full signature (#188781). */
+const DescribeCommand = cmd({
+  command: "describe <target> [action]",
+  aliases: ["params", "signature"],
+  describe: "show an integration's actions and each one's parameters (from the server's catalogue)",
+  builder: (yargs) =>
+    yargs
+      .positional("target", { type: "string", demandOption: true, describe: "integration type, e.g. gmail" })
+      .positional("action", { type: "string", describe: "one action, e.g. create_draft" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    const target = String(args.target)
+    const sigs = await actionSignaturesLive(target)
+    if (!sigs) {
+      const msg = `No catalogue for '${target}'. Known integrations: iris integrations list-integrations`
+      if (args.json) { await writeJson({ success: false, error: msg }); process.exitCode = 1; return }
+      prompts.log.error(msg)
+      process.exitCode = 1
+      return
+    }
+    const pick = args.action ? sigs.filter((s) => s.name === args.action) : sigs
+    if (args.action && !pick.length) {
+      const msg = `'${args.action}' is not a ${target} action. Actions: ${sigs.map((s) => s.name).join(", ")}`
+      if (args.json) { await writeJson({ success: false, error: msg, actions: sigs.map((s) => s.name) }); process.exitCode = 1; return }
+      prompts.log.error(msg)
+      process.exitCode = 1
+      return
+    }
+    if (args.json) { await writeJson({ success: true, integration: target, actions: pick }); return }
+    for (const sig of pick) { printSignature(target, sig); console.log() }
+  },
+})
+
 const ExecCommand = cmd({
   command: "exec <target> [function] [params..]",
   aliases: ["call"],
-  describe: "execute an integration function or system tool",
+  describe: "execute an integration function or system tool — writes and sends are a dry run unless --apply",
   builder: (y) =>
     y
       .positional("target", { type: "string", demandOption: true, describe: "integration type or tool name" })
@@ -1872,7 +2115,22 @@ const ExecCommand = cmd({
       .option("account", {
         type: "string",
         describe: "target a connected account by email or name (e.g. --account=alex@gmail.com)",
-      }),
+      })
+      .option("apply", {
+        type: "boolean",
+        default: false,
+        describe: "actually run a write/send action (send, create, move, delete…). Without it, anything that is not a read is a dry run: it shows the account, the parameters and the recipient count, sends nothing, and exits 0",
+      })
+      .option("dry-run", {
+        type: "boolean",
+        default: false,
+        describe: "rehearse even a read action",
+      })
+      .example("iris integrations exec gmail create_label label_name=Clients", "dry run — shows what would happen, changes nothing")
+      .example("iris integrations exec gmail create_label label_name=Clients --apply", "does it for real")
+      .example("iris integrations exec mailjet send_transactional_email --integration-id 138 --params-file msg.json", "dry run — prints what would be sent, sends nothing")
+      .example("iris integrations exec mailjet send_transactional_email --integration-id 138 --params-file msg.json --apply", "sends it")
+      .example("iris integrations exec mailjet get_contact_lists", "reads run without --apply"),
   async handler(args) {
     // Suppress all UI chrome when --json for clean pipeable output (#55735)
     if (!args.json) {
@@ -1988,7 +2246,7 @@ const ExecCommand = cmd({
       if (await isIntegrationLive(target)) {
         if (!fn) {
           // Show available functions for this integration
-          const functions = INTEGRATION_FUNCTIONS[target] ?? INTEGRATION_FUNCTIONS[SLUG_ALIASES[target] ?? ""]
+          const functions = await knownFunctionsLive(target)
           if (functions) {
             prompts.log.warn(`No function specified for ${target}. Available functions:`)
             console.log()
@@ -2010,7 +2268,121 @@ const ExecCommand = cmd({
         }
         // When the upstream says the function does not exist, answer with the ones that do,
         // in the same response — the caller is usually an agent that will otherwise guess again.
-        const known = knownFunctionsFor(target)
+        const known = await knownFunctionsLive(target)
+
+        // Refuse a parameter this action does not declare, before spending a call. The server
+        // told us this in a dry run; doing it on every run is what stops a typo from becoming
+        // a silent wrong answer (#190572/#190573).
+        const signature = (await actionSignaturesLive(target))?.find((a) => a.name === fn)
+        if (signature) {
+          const check = validateActionParams(signature, params, PARAM_SYNONYMS)
+          if (!check.ok) {
+            const problems: string[] = []
+            if (check.unknown.length) problems.push(`unknown parameter(s): ${check.unknown.join(", ")}`)
+            if (check.missing.length) problems.push(`missing required: ${check.missing.join(", ")}`)
+            const message = `${target}.${fn} — ${problems.join("; ")}. Parameters: ${signature.parameters.map((p) => p.name).join(", ") || "(none)"}.`
+            process.exitCode = 1
+            if (args.json) {
+              await writeJson({ success: false, error: message, unknown: check.unknown, missing: check.missing })
+              return
+            }
+            prompts.log.error(message)
+            prompts.outro("Nothing was run.")
+            return
+          }
+        }
+
+        // A write called with NO parameters is asking "how do I call this?" — answer with the
+        // signature instead of a failed dry run (#188781). Reads with no required params still run.
+        if (Object.keys(params).length === 0 && !args.apply) {
+          const sig = (await actionSignaturesLive(target))?.find((a) => a.name === fn)
+          if (sig && (sig.writes || sig.parameters.some((p) => p.required))) {
+            if (args.json) { await writeJson({ success: false, signature_only: true, integration: target, action: sig }); process.exitCode = 2; return }
+            printSignature(target, sig)
+            process.exitCode = 2
+            prompts.outro(dim("Nothing was run — add the parameters above."))
+            return
+          }
+        }
+
+        // DRY RUN BY DEFAULT for anything that is not a read — the decision lives in ONE place,
+        // gatedExec (integration-write-gate.ts), so it can be tested without a network (#189462).
+        // A name with a write verb (send, create, delete…) never runs without --apply, whatever the
+        // server's plan says; the server can only make a rehearsal stricter.
+        const isKnown = knownFunction(fn, known)
+        const spinner = args.json ? null : prompts.spinner()
+        const accountLabel = accountOpts.integrationId
+          ? ` ${dim(`(#${accountOpts.integrationId})`)}`
+          : accountOpts.account
+            ? ` ${dim(`(${accountOpts.account})`)}`
+            : ""
+        const fnName = fn
+        const outcome = await gatedExec(fnName, { apply: Boolean(args.apply), forceDryRun: Boolean(args["dry-run"]) }, (dryRun) => {
+          if (!dryRun) spinner?.start(`Executing ${target}.${fnName}${accountLabel}…`)
+          return executeIntegrationCall(target, fnName, params, { ...accountOpts, dryRun })
+        })
+
+        if (outcome.kind === "refused") {
+          // A refusal (e.g. several accounts, none chosen) is the rehearsal's answer.
+          const plan = outcome.result
+          process.exitCode = 1
+          if (args.json) { await writeJson(plan); return }
+          prompts.log.error(String(plan.error))
+          prompts.outro("Nothing was changed.")
+          return
+        }
+
+        if (outcome.kind === "rehearsed") {
+          const plan = outcome.plan
+          const recipients = recipientCount(params)
+          const shown = previewParams(params)
+          const applyWith = `iris integrations exec ${target} ${fn} … --apply`
+          if (!plan && isKnown === false) {
+            const out = { success: false, dry_run: true, executed: false, error: `${fn} is not a known ${target} function — nothing was run.`, available_functions: known }
+            if (args.json) { await writeJson(out); process.exitCode = 1; return }
+            prompts.log.error(out.error)
+            for (const f of known ?? []) console.log(`  ${highlight(f.name)}  ${dim(f.description)}`)
+            process.exitCode = 1
+            prompts.outro("Done")
+            return
+          }
+          // A rehearsal is not a failure: exit 0 unless the plan found a problem (#189462). The JSON
+          // still says dry_run:true / executed:false / success:false, so nothing reads it as "sent".
+          const problems: string[] = plan?.problems ?? []
+          if (plan && plan.ok === false) process.exitCode = 1
+          if (outcome.server_ignored_dry_run) process.exitCode = 1
+          const out = {
+            ...(plan ?? dryRunResult(target, fn, params)),
+            success: false,
+            dry_run: true,
+            executed: false,
+            integration: target,
+            function: fn,
+            integration_id: plan?.would_run?.integration_id ?? accountOpts.integrationId ?? null,
+            account: plan?.would_run?.account ?? accountOpts.account ?? null,
+            params: shown,
+            recipients,
+            ...(outcome.server_ignored_dry_run ? { warning: "The server did not acknowledge the dry run — it may have performed the action. Check before retrying." } : {}),
+            client_node: os.hostname(),
+            apply_with: applyWith,
+          }
+          if (args.json) { await writeJson(out); return }
+          if (outcome.server_ignored_dry_run) prompts.log.error(out.warning as string)
+          if (!plan || plan.ok) prompts.log.warn(`DRY RUN — nothing was changed. This would run:`)
+          else prompts.log.error(`DRY RUN FAILED — this would not work:`)
+          const w = plan?.would_run
+          console.log(`  ${bold(`${w?.integration ?? target}.${w?.action ?? fn}`)}${w?.requested_action ? dim(` (you typed ${w.requested_action})`) : ""}  ${dim(w?.effect ?? "write")}`)
+          const line = plan ? accountLine(plan) : null
+          if (line) console.log(`  ${line}`)
+          else if (accountOpts.integrationId || accountOpts.account) console.log(`  ${dim(`↳ ${accountOpts.account ?? `connection #${accountOpts.integrationId}`}`)}`)
+          if (w?.upstream_tool) console.log(dim(`  upstream: ${w.upstream_tool}${w.upstream_tool_exists === false ? " — DOES NOT EXIST" : w.upstream_tool_exists ? " ✓" : ""}`))
+          if (recipients !== null) console.log(`  ${bold(`recipients: ${recipients}`)}`)
+          for (const [k, v] of Object.entries(shown)) console.log(`  ${dim(`${k}:`)} ${typeof v === "string" ? v : JSON.stringify(v)}`)
+          for (const p of problems) prompts.log.error(p)
+          prompts.outro(!plan || plan.ok ? `To do it for real, add ${highlight("--apply")}` : "Fix the above, then dry-run again.")
+          return
+        }
+
         const withHint = (result: any) =>
           isFailedResult(result) && isUnknownFunctionError(result) && known
             ? {
@@ -2020,21 +2392,18 @@ const ExecCommand = cmd({
               }
             : result
         if (args.json) {
-          const result = withHint(await executeIntegrationCall(target, fn, params, accountOpts))
-          await writeJson(result)
+          const result = withHint(outcome.result)
+          await writeJson(result && typeof result === "object" ? { ...result, client_node: os.hostname() } : result)
           if (isFailedResult(result)) process.exitCode = 1
           return
         }
-        const spinner = prompts.spinner()
-        const accountLabel = accountOpts.integrationId
-          ? ` ${dim(`(#${accountOpts.integrationId})`)}`
-          : accountOpts.account
-            ? ` ${dim(`(${accountOpts.account})`)}`
-            : ""
-        spinner.start(`Executing ${target}.${fn}${accountLabel}…`)
-        const result = withHint(await executeIntegrationCall(target, fn, params, accountOpts))
-        spinner.stop(`${target}.${fn}`)
+        const result = withHint(outcome.result)
+        spinner?.stop(`${target}.${fn}`)
         displayResult(result, `${target}.${fn}`)
+        const who = accountLine(result)
+        if (who) console.log(dim(`  ${who}`))
+        if (result?._account?.notice) console.log(dim(`  ${result._account.notice}`))
+        if (result?.hint) prompts.log.warn(String(result.hint))
         if (isFailedResult(result)) {
           process.exitCode = 1
           if (result?.available_functions) {
@@ -2498,6 +2867,7 @@ export const PlatformRunCommand = cmd({
   builder: (yargs) =>
     yargs
       .command(ExecCommand)
+      .command(DescribeCommand)
       .command(ListToolsCommand)
       .command(ListIntegrationsCommand)
       .command(ListConnectedCommand)
@@ -2517,6 +2887,8 @@ export const PlatformRunCommand = cmd({
       .command(IntegrationsUnshareCommand)
       .command(IntegrationsDisconnectCommand)
       .command(IntegrationsSetupNativeCommand)
+      // #190525 — replace a stored key, test it, keep the old one if the test fails.
+      .command(IntegrationsRotateCommand)
       .command(PathwaysCommand)
       .demandCommand(),
   async handler() {},

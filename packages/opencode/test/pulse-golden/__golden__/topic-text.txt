@@ -1,0 +1,56 @@
+== exit 0
+== stdout
+
+  [1mLast touched[0m  [1myesterday[0m   [90m14 hits across 8/8 sources[0m
+[90m  widget   ·   30d window[0m
+
+  commits      [1m2[0m[92m  +1[0m
+    [90m3d ago   [0m repo@cf09fff                                   [90mfeat(Widget): panel for the widget[0m
+    [90m10d ago  [0m repo@c02969f                                   [90mfix: widgets render twice[0m
+  diary        [1m1[0m[90m  flat[0m
+    [90m3d ago   [0m daily-diary/2026-09-12.md                      [90m- Shipped the widget panel.[0m
+  files        [1m3[0m
+    [90m3d ago   [0m src/widget-panel.ts                            [90m[0m
+    [90m10d ago  [0m src/widgets.ts                                 [90m[0m
+    [90m20d ago  [0m src/widget.ts                                  [90m[0m
+  Claude Code  [1m2[0m[90m  (its transcripts only go back to 2026-07-27, so there is no earlier window to compare)[0m
+    [90m2d ago   [0m -work-demo/11111111-aaaa-4bbb-8ccc-0000000000… [90m[0m
+    [90m12d ago  [0m -work-demo/11111111-aaaa-4bbb-8ccc-0000000000… [90m[0m
+  opencode     [1m1[0m[92m  +1[0m
+    [90m6d ago   [0m widget-app · ses_golden00                      [90mWidget refactor[0m
+  [90miMessage    [0m [90mnot searched[0m [90m— iMessage is only readable on macOS[0m
+  Apple Mail   [1m2[0m
+    [90myesterday[0m Sam Sample · Re: widget pricing                [90m[0m
+    [90m8d ago   [0m Lee Placeholder · widget specs                 [90m[0m
+  Gmail        [1m2[0m[92m  +1[0m
+    [90m2d ago   [0m Sam Sample <sam@example.net> · Widget demo     [90mthe widget demo went well[0m
+    [90m6d ago   [0m Lee Placeholder <lee@example.net> · (no subje… [90mabout the widgets[0m
+  Atlas        [1m1[0m[90m  flat[0m
+[90m    board  [1mWidget Lab[0m #9001 — 4 items across 3 lists[0m
+    [90m2d ago   [0m Backlog #101                                   [90mWidget sizing[0m
+
+[90m  Momentum: 7 this 30d vs 4 the 30d before — heating up[0m[90m  (from commits, diary, opencode, Gmail, Atlas)[0m
+[90m            7 of the 14 hits are from files, Claude Code, Apple Mail, [0m[90mwhich cannot see the prior window — counted in the total, not in the trend.[0m
+
+  [1mSilent in this board[0m
+    [96mempty[0m  Auto: nightly digest                          [90m#2 — 0 items; if a schedule feeds this, it has stopped[0m
+    [90mstale[0m  Old ideas                                     [90m#3 — 1 items, newest 5mo ago[0m
+[90m  Blind spots: iMessage — excluded from breadth, not counted as misses.[0m
+
+
+== stderr
+[0m
+◈  Pulse check — [1mwidget[0m
+sweeping
+sweeping commits
+sweeping diary
+sweeping files
+sweeping Claude Code
+sweeping opencode
+sweeping iMessage
+sweeping Apple Mail
+sweeping Gmail
+sweeping Atlas
+[90mswept[0m
+[90miris pulse check "widget" --days 30  ·  --json[0m
+

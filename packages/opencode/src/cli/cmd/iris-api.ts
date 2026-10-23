@@ -184,7 +184,7 @@ async function readSdkEnv(): Promise<Record<string, string>> {
 let _cachedToken: string | undefined
 let _cachedTokenSource: string | undefined
 
-async function resolveToken(): Promise<string> {
+export async function resolveToken(): Promise<string> {
   if (_cachedToken !== undefined) return _cachedToken
   _cachedToken = await resolveTokenUncached()
   return _cachedToken
@@ -650,6 +650,8 @@ export type AgentChatResult = {
   // Distinguishes failure modes so callers can set distinct exit codes (#137418):
   // timedOut → exit 2, any other failure → exit 1, ok → exit 0.
   timedOut?: boolean
+  // The flight-recorder id (#190085) — `iris agents replay <runId>` walks the run back.
+  runId?: string
 }
 
 /** Normalize the heterogeneous tools_used payload into a flat list of tool names. */
@@ -685,6 +687,8 @@ export async function streamAgentChat(opts: {
   conversationHistory?: Array<{ role: string; content: string }>
   maxIterations?: number
   overrideModel?: string
+  /** A spoken turn: the server answers it with the voice model (nano) unless overrideModel is set (#188701). */
+  voice?: boolean
   timeoutSecs?: number
   // Defaults to true. Set false (via `--no-rag`) to suppress knowledge-base/bloq
   // context injection so the model answers from its own weights only (#146915).
@@ -723,6 +727,7 @@ export async function streamAgentChat(opts: {
   if (opts.maxIterations) body.max_iterations = opts.maxIterations
   // Endpoint validator only accepts nano/flash models — keeps test runs cheap.
   if (opts.overrideModel) body.override_model = opts.overrideModel
+  if (opts.voice) body.voice = true
 
   const failure = (error?: string, timedOut = false): AgentChatResult => ({
     ok: false,
@@ -789,6 +794,7 @@ export async function streamAgentChat(opts: {
         if (tu.length > 0) result.toolsUsed = tu
         if (typeof evt.iterations === "number") result.iterations = evt.iterations
         if (typeof evt.status === "string") result.status = evt.status
+        if (typeof evt.run_id === "string" && evt.run_id) result.runId = evt.run_id
       } else if (evt.type === "error") {
         streamError = evt.error ?? "stream error"
       }
@@ -883,25 +889,38 @@ export async function requireUserId(flagValue?: number): Promise<number | null> 
 // Display helpers
 // ============================================================================
 
+/**
+ * Colour is for a person at a terminal (#190328). These helpers emitted raw ANSI
+ * even when stdout was a pipe, so an agent reading the CLI over MCP got `[1m` and
+ * `[90m` wrapped around the text it was parsing.
+ */
+export const colorEnabled: boolean =
+  Boolean(process.stdout.isTTY) && !process.env.NO_COLOR && process.env.TERM !== "dumb"
+
+/** Apply a UI style, or return the text untouched when colour is off. */
+export function paint(style: string, s: string): string {
+  return colorEnabled ? `${style}${s}${UI.Style.TEXT_NORMAL}` : s
+}
+
 export function dim(s: string): string {
-  return `${UI.Style.TEXT_DIM}${s}${UI.Style.TEXT_NORMAL}`
+  return paint(UI.Style.TEXT_DIM, s)
 }
 
 export function bold(s: string): string {
-  return `${UI.Style.TEXT_NORMAL_BOLD}${s}${UI.Style.TEXT_NORMAL}`
+  return paint(UI.Style.TEXT_NORMAL_BOLD, s)
 }
 
 export function success(s: string): string {
-  return `${UI.Style.TEXT_SUCCESS}${s}${UI.Style.TEXT_NORMAL}`
+  return paint(UI.Style.TEXT_SUCCESS, s)
 }
 
 export function highlight(s: string): string {
-  return `${UI.Style.TEXT_HIGHLIGHT}${s}${UI.Style.TEXT_NORMAL}`
+  return paint(UI.Style.TEXT_HIGHLIGHT, s)
 }
 
 /** Amber. For a number that is not an error but must not be skimmed past. */
 export function warn(s: string): string {
-  return `${UI.Style.TEXT_WARNING}${s}${UI.Style.TEXT_NORMAL}`
+  return paint(UI.Style.TEXT_WARNING, s)
 }
 
 /**
@@ -940,7 +959,7 @@ export async function writeJson(value: unknown): Promise<void> {
 }
 
 export function printDivider(width = 60): void {
-  console.log(`  ${UI.Style.TEXT_DIM}${"─".repeat(width)}${UI.Style.TEXT_NORMAL}`)
+  console.log(`  ${paint(UI.Style.TEXT_DIM, "─".repeat(width))}`)
 }
 
 export function printKV(key: string, value: unknown): void {

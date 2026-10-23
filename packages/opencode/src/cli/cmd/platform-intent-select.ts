@@ -1,8 +1,8 @@
 import { spawnSync } from "child_process"
 import { UI } from "../ui"
 import { irisFetch, IRIS_API, dim, bold, highlight, printDivider } from "./iris-api"
-import { loadIndex, searchCapabilities } from "./platform-find"
-import { loadAgents, rankAgents, type AgentCandidate } from "./platform-intent-agents"
+import { loadIndex, loadMergedIndex, searchCapabilities, type Index } from "./platform-find"
+import { loadAgents, NO_DESCRIPTION, rankAgents, type AgentCandidate } from "./platform-intent-agents"
 
 /**
  * `iris intent "<what you want to do>"` — TOOL SELECTION, by the Decide engine.
@@ -94,15 +94,51 @@ const GENERAL = ["web-search", "atlas search"]
  */
 export function leafOnly(cands: Candidate[], allNames: string[]): Candidate[] {
   const leaves = cands.filter(
-    (c) => c.name.includes("playbook run ") || !allNames.some((n) => n.startsWith(c.name + " ")),
+    (c) => c.name.includes("playbook run ") || actsItself(c.run) || !allNames.some((n) => n.startsWith(c.name + " ")),
   )
   return leaves.length ? leaves : cands
 }
 
+/**
+ * Some groups ARE the action: `iris home living blue` sets a light, and `home run`/`home devices`
+ * are its subcommands. Dropped as a "group", bare `home` was never a candidate, and 16 of 16
+ * light requests routed elsewhere — most to `home devices pair-hue`, the SETUP command (measured).
+ * A group acts itself when its run line takes a real argument; `<subcommand>`, `<command>`,
+ * `<action>` and `<cmd>` are menu placeholders, not arguments.
+ */
+export function actsItself(run: string): boolean {
+  return [...run.matchAll(/[<\[]([a-z][\w-]*)(?:\.\.)?[>\]]/gi)].some(
+    (m) => !["subcommand", "command", "action", "cmd"].includes(m[1].toLowerCase()),
+  )
+}
+
+/** True when a playbook has no client, or the request names it ("branding-champions" matches
+ *  "branding champions"; "xart" matches "x-art"). */
+export function namesClient(q: string, client?: string): boolean {
+  if (!client) return true
+  const flat = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "")
+  return flat(q).includes(flat(client))
+}
+
 /** The index and its command names, read ONCE per process — `intent` used to re-parse per step. */
-let _index: ReturnType<typeof loadIndex> | undefined
+let _index: Index | undefined
 let _names: string[] | undefined
 const index = () => (_index ??= loadIndex())
+
+/**
+ * Swap in the MERGED index — embedded commands/how-tos plus the signed-in user's workspace
+ * playbooks and skills (IP-07 #189850; they are no longer embedded). selectTool awaits this once
+ * before ranking; without it `intent` sees the embedded index only, i.e. no guided projects.
+ */
+export async function primeIndex(): Promise<void> {
+  useIndex((await loadMergedIndex()).index)
+}
+
+/** Test seam (and primeIndex's setter): rank against this index from now on. */
+export function useIndex(next: Index | undefined) {
+  _index = next
+  _names = undefined
+}
 const commandNames = () =>
   (_names ??= index()
     .entries.filter((e) => e.kind === "command")
@@ -118,13 +154,17 @@ export function candidatePools(
   poolLimit = 40,
 ): { pick: Candidate[]; pool: Candidate[] } {
   const q = text.toLowerCase()
+  // Never offered: `find` (intent IS find — it recommended itself under "reconcile my books"), and a
+  // command whose own description says it is a stub (`atlas:ledger ledger reconcile`, #187829).
   const leaves = leafOnly(
-    searchCapabilities(index(), q, "command", Math.max(pickLimit, poolLimit) + 6).map(({ e, s }) => ({
-      name: e.name,
-      describe: e.describe,
-      run: e.run || `iris ${e.name}`,
-      score: s,
-    })),
+    searchCapabilities(index(), q, "command", Math.max(pickLimit, poolLimit) + 6)
+      .filter(({ e }) => e.name !== "find" && !/\bstub\b/i.test(e.describe))
+      .map(({ e, s }) => ({
+        name: e.name,
+        describe: e.describe,
+        run: e.run || `iris ${e.name}`,
+        score: s,
+      })),
     commandNames(),
   )
   // PLAYBOOKS are answers too: "build a website" is best served by a playbook, not a raw command.
@@ -132,12 +172,18 @@ export function candidatePools(
   // unlabelled, playbooks won 3 of 20 simple requests from the right command (measured).
   // Top 5 playbooks (#186666 A5): the first 2 are offered for the PICK (more let playbooks steal
   // single-action requests — 3 of 20, measured), all 5 go to the ranked list, where Jev scores them.
-  const playbooks = searchCapabilities(index(), q, "playbook", 5).map(({ e, s }) => ({
-    name: `playbook run ${e.name}`,
-    describe: `GUIDED PROJECT, not a single action — choose only when the request is a whole multi-step job: ${e.describe}`,
-    run: `iris playbook run ${e.name}`,
-    score: s,
-  }))
+  // Rename redirects ("bespoke" → genesis-bespoke) are stubs too, and compete with what they point at.
+  // A playbook written for one client answers that client's requests only: "reconcile my books"
+  // picked the Pathways case reconcile at 33% over bills-to-books (#187829).
+  const playbooks = searchCapabilities(index(), q, "playbook", 8)
+    .filter(({ e }) => !/\bstub\b/i.test(e.describe) && namesClient(q, e.client))
+    .slice(0, 5)
+    .map(({ e, s }) => ({
+      name: `playbook run ${e.name}`,
+      describe: `GUIDED PROJECT, not a single action — choose only when the request is a whole multi-step job: ${e.describe}`,
+      run: `iris playbook run ${e.name}`,
+      score: s,
+    }))
   const general = (have: Candidate[]) =>
     GENERAL.flatMap((name) => {
       if (have.some((h) => h.name === name)) return []
@@ -460,6 +506,29 @@ const filledScore = (lines: string[] = []) => lines.filter((l) => !/<[^>]+>/.tes
  * otherwise, at the 12s limit, each command takes the best line either call produced. A command
  * neither covered gets heuristicFill — the request's topic, never the whole sentence.
  */
+/**
+ * Commands that can carry a destination project (#188392). "transcribe this IG for IRIS ORBIT"
+ * routed to `iris transcribe <url>` and the "for IRIS ORBIT" half — the reason for asking — was
+ * dropped. Only commands listed here get `--for`, so "search for coffee" is never touched.
+ */
+export const TAKES_FOR = new Set(["transcribe", "copycat transcribe"])
+
+/** "… for IRIS ORBIT https://…" → "IRIS ORBIT". The last "for <words>", URLs and trailing punctuation removed. */
+export function destinationOf(text: string): string | undefined {
+  const t = text.replace(/https?:\/\/\S+/g, " ").replace(/\s+/g, " ").trim()
+  const m = /\bfor\s+(?:the\s+|my\s+|our\s+)?([^,;:]+?)\s*(?:project|bloq|board)?[?.!]*$/i.exec(t)
+  const dest = m?.[1]?.trim()
+  // "for me", "for later", "for now" are not projects.
+  if (!dest || /^(me|us|later|now|today|tomorrow|this|that|it)$/i.test(dest)) return undefined
+  return dest
+}
+
+export function withDestination(line: string, c: Candidate, text: string): string {
+  if (!TAKES_FOR.has(c.name) || /\s--for\b/.test(line)) return line
+  const dest = destinationOf(text)
+  return dest ? `${line} --for "${dest.replace(/"/g, "'")}"` : line
+}
+
 export async function fillArguments(text: string, chosen: Candidate[]): Promise<{ lines: string[]; filled: boolean }> {
   const needs = chosen.filter((c) => !prebuilt(c))
   const results: Map<string, string[]>[] = []
@@ -516,6 +585,22 @@ export function commandLines(content: string): string[] {
   return out
 }
 
+/**
+ * Sure enough to ACT on (#188613). A pick is advice either way; `--run` turns it into an action, and
+ * on 2026-10-08 three of five onboarding phrasings came back at 28–47% and one sent "reply to … in
+ * my email" to `sites reply`. A keyword-order pick (no model answered) is a guess, never confident.
+ */
+// Measured 2026-10-08 on 152 cases (#188613): share of picks that were RIGHT at each bar —
+// 0.5: 79% · 0.6: 82% · 0.7: 85% · 0.8: 86% · 0.9: 88%. Precision plateaus; wrong picks reach 0.99.
+// 0.7 is the knee. Even there about 1 in 7 confident picks is wrong, so a caller that acts on a
+// pick should still show the alternatives — `confident` narrows the risk, it does not remove it.
+export const RUN_MIN = 0.7
+export function confidentPick(by: string, confidence?: number | null): boolean {
+  if (by === "only candidate") return true
+  if (by === "keyword" || confidence == null) return false
+  return confidence >= RUN_MIN
+}
+
 /** A command still carrying a <required> placeholder cannot be run as-is. */
 export const needsArgument = (run: string) => /<[^>]+>/.test(run)
 
@@ -532,6 +617,8 @@ export const PROMOTE_MARGIN = 0.15
  *  bare `connect` at 80% before this guard (measured). */
 export const PROMOTE_UNSURE = 0.6
 export const RELATED_FLOOR = 5
+/** A local candidate this sure keeps the general fallbacks out of the related list. */
+export const GENERAL_UNTIL = 0.6
 
 export type Related = Candidate & { p: number }
 
@@ -541,13 +628,33 @@ export function rankRelated(
   top: number,
   exclude: Set<string>,
 ): Related[] {
-  const ranked = pool
-    .map((c, i) => ({ ...c, p: probs[i] ?? 0 }))
-    .filter((c) => !exclude.has(c.name))
+  const scored = pool.map((c, i) => ({ ...c, p: probs[i] ?? 0 }))
+  // The general fallbacks (web-search, atlas search) are for when nothing here fits. Beside a
+  // confident local answer they are a row of noise — `web-search "i want to build a website"` (#187829).
+  const sure = scored.some((c) => !GENERAL.includes(c.name) && c.p >= GENERAL_UNTIL)
+  // An agent with no description stays in what Decide weighs — dropping it there flipped "check
+  // platform health" from monitor overview (45%) to doctor (47%), measured — but it is not shown:
+  // a row reading "(no description)" cannot be chosen on purpose (same rule as the MCP roster).
+  const ranked = scored
+    .filter((c) => !exclude.has(c.name) && !(sure && GENERAL.includes(c.name)) && !c.describe.endsWith(NO_DESCRIPTION))
     .sort((a, b) => b.p - a.p)
   const keep = ranked.filter((c) => c.p >= RELATED_MIN)
   const out = keep.length >= RELATED_FLOOR ? keep : ranked.slice(0, RELATED_FLOOR)
   return out.slice(0, top)
+}
+
+/**
+ * The hosted Decide validates `questions` at max 64 (JevDecide::MAX_QUESTIONS). The pool here is
+ * the union of every step's candidates plus agents, and an ordinary two-step ask overran it —
+ * "log bugs and build an atlas epic of the gaps" was refused before any model saw it (#188391).
+ * Chunk under the limit and ask the chunks in parallel: same one round trip of latency.
+ */
+export const DECIDE_MAX_QUESTIONS = 64
+
+export function chunk<T>(items: T[], size: number): T[][] {
+  const out: T[][] = []
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
+  return out
 }
 
 async function viaRelevance(
@@ -555,23 +662,33 @@ async function viaRelevance(
   pool: Candidate[],
   timeoutMs: number,
 ): Promise<(number | undefined)[] | string> {
-  const questions = Object.fromEntries(
-    pool.map((c, i) => [
-      `c${i}`,
-      {
-        type: "boolean",
-        instructions: `Would running \`${c.run}\` (${c.describe.slice(0, 140)}) help with this request?`,
-      },
-    ]),
-  )
-  try {
+  const ask = async (part: Candidate[], offset: number): Promise<(number | undefined)[] | string> => {
+    const questions = Object.fromEntries(
+      part.map((c, i) => [
+        `c${offset + i}`,
+        {
+          type: "boolean",
+          instructions: `Would running \`${c.run}\` (${c.describe.slice(0, 140)}) help with this request?`,
+        },
+      ]),
+    )
     const sent = await postDecide({ state: `User request: "${text}"`, questions }, timeoutMs)
     if (typeof sent === "string") return sent.replace(/^Decide:/, "Decide relevance:")
     const r = sent.json as any
-    return pool.map((_, i) => {
-      const p = r?.answers?.[`c${i}`]?.probabilities?.true
+    return part.map((_, i) => {
+      const p = r?.answers?.[`c${offset + i}`]?.probabilities?.true
       return typeof p === "number" ? p : undefined
     })
+  }
+  try {
+    const parts = await Promise.all(
+      chunk(pool, DECIDE_MAX_QUESTIONS).map((part, n) => ask(part, n * DECIDE_MAX_QUESTIONS)),
+    )
+    // One failed chunk fails the ranking: a list scored on half the pool would rank the
+    // unscored half as p=0 and read as a confident answer.
+    const failed = parts.find((p): p is string => typeof p === "string")
+    if (failed) return failed
+    return (parts as (number | undefined)[][]).flat()
   } catch (e) {
     return `Decide relevance: ${e instanceof Error ? e.message : String(e)}`
   }
@@ -588,11 +705,13 @@ export async function selectTool(a: {
   timeout?: number
   top?: number
   agents?: boolean
+  force?: boolean
 }) {
   const text = a.text.trim()
   // Agents load (cache or API) while the index is searched — never on the critical path twice.
   const agentsLoad = a.agents === false ? Promise.resolve({ agents: [], source: "off" }) : loadAgents()
   const steps = splitSteps(text)
+  await primeIndex()
   const pools = steps.map((step) => candidatePools(step, a.limit || 12))
   const perStep = pools.map((p) => p.pick)
   const candidates = [...new Map(perStep.flat().map((c) => [c.name, c])).values()]
@@ -701,7 +820,11 @@ export async function selectTool(a: {
     : { lines: picked.map((c) => heuristicFill(c, text)), filled: false }
   timing.fill_ms = Date.now() - tf
   timing.total_ms = Date.now() - t0
-  const commands = filled.lines
+  // Both fill paths, instant and --fill, then carry the destination (#188392).
+  const commands = filled.lines.map((l) => {
+    const c = [...picked].sort((x, y) => y.name.length - x.name.length).find((x) => l.startsWith(`iris ${x.name}`))
+    return c ? withDestination(l, c, text) : l
+  })
 
   const exclude = new Set(picked.map((c) => c.name))
   const related =
@@ -737,6 +860,8 @@ export async function selectTool(a: {
           agents_source: loaded.source,
           timing,
           confidence: chosen.confidence ?? null,
+          // Callers that act on the pick (onboarding, agents) should check this, not re-derive it.
+          confident: confidentPick(chosen.by, chosen.confidence),
           ms: chosen.ms ?? null,
           fell_back: misses,
           related_by: relatedBy,
@@ -785,6 +910,13 @@ export async function selectTool(a: {
 
   if (a.run) {
     const line = commands[0]
+    if (!a.force && !confidentPick(chosen.by, chosen.confidence)) {
+      const why = chosen.by === "keyword" ? "no model decided it (keyword order)" : `only ${Math.round((chosen.confidence ?? 0) * 100)}% sure`
+      console.log(`  ${dim(`not running — ${why}. Pick one, or re-run with --force:`)}`)
+      for (const l of [line, ...related.slice(0, 3).map((r) => r.run)]) console.log(`    ${highlight(l)}`)
+      process.exitCode = 3
+      return
+    }
     if (needsArgument(line)) {
       console.log(`  ${dim("needs an argument — run it yourself:")} ${highlight(line)}`)
       return

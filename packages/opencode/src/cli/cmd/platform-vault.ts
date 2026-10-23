@@ -29,6 +29,7 @@
  */
 
 import { cmd } from "./cmd"
+import { NodeVaultCommands } from "./platform-hive-vaults"
 import { requireAuth, requireUserId, dim, bold, success, writeJson } from "./iris-api"
 import { fetchNodes } from "./platform-hive-nodes"
 import { resolveSshTarget, ensureSshUser, sshRun, pushFile, pullFile, shq, detectLocalNodeId, type SshTarget } from "./hive-tailscale"
@@ -138,12 +139,22 @@ async function remoteBlobIds(t: SshTarget, vaultId: string): Promise<Set<string>
 
 const CreateCommand = cmd({
   command: "create <name>",
-  describe: "create a vault (generates a key that never leaves this machine)",
+  describe: "create a vault — replicated across your machines, or with --encrypted a PHI vault on THIS node",
   builder: (y) => y
     .positional("name", { describe: "vault name", type: "string", demandOption: true })
-    .option("replicas", { describe: "target replica count per file", type: "number", default: 2 })
+    .option("replicas", { describe: "target replica count per file (replicated vaults)", type: "number", default: 2 })
+    .option("encrypted", { type: "boolean", default: false, describe: "an encrypted PHI vault on this node: per-bloq, key in the OS keychain (or --passphrase)" })
+    .option("bloq", { type: "string", describe: "(--encrypted) bind to this bloq: only its tasks can open the vault" })
+    .option("node", { type: "string", describe: "(--encrypted) must be this machine — keys never travel" })
+    .option("passphrase", { type: "boolean", default: false, describe: "(--encrypted) key from a passphrase; stays locked after restarts until unlocked" })
+    .option("passphrase-stdin", { type: "boolean", default: false, describe: "(--encrypted) read the passphrase from stdin" })
     .option("json", { type: "boolean", default: false }),
   async handler(argv) {
+    // One noun, two kinds. --encrypted (or any PHI-vault option) means a node-local, per-bloq
+    // encrypted vault for patient-data task output; otherwise the replicated sovereign store.
+    if (argv.encrypted || argv.bloq || argv.passphrase || argv["passphrase-stdin"] || argv.node) {
+      return (NodeVaultCommands.create as any).handler({ ...argv, encrypted: true })
+    }
     const id = randomUUID()
     const meta: VaultMeta = { id, name: String(argv.name), created_at: new Date().toISOString(), replicas: Number(argv.replicas) || 2 }
     await mkdir(join(vaultDir(id), "blobs"), { recursive: true })
@@ -162,9 +173,26 @@ const CreateCommand = cmd({
 
 const ListCommand = cmd({
   command: "list",
-  describe: "list vaults on this machine",
-  builder: (y) => y.option("json", { type: "boolean", default: false }),
+  describe: "list vaults: replicated and encrypted PHI vaults on this machine (--all: every node)",
+  builder: (y) => y
+    .option("all", { type: "boolean", default: false, describe: "encrypted vaults on every node you own, as last reported" })
+    .option("node", { type: "string", describe: "encrypted vaults on this node (implies --all)" })
+    .option("json", { type: "boolean", default: false }),
   async handler(argv) {
+    if (argv.all || argv.node) return (NodeVaultCommands.list as any).handler(argv)
+    await listReplicated(argv)
+    // Encrypted PHI vaults live in the local daemon. If it isn't running there is nothing to
+    // show for that kind; the replicated listing above still stands.
+    if (!argv.json) {
+      console.log(`  ${bold("Encrypted PHI vaults (this node)")}`)
+      await (NodeVaultCommands.list as any).handler({ ...argv, _embedded: true })
+      console.log()
+    }
+  },
+})
+
+async function listReplicated(argv: any) {
+  {
     let ids: string[] = []
     try { ids = await readdir(VAULT_ROOT) } catch { /* none */ }
     const keys = await loadKeys()
@@ -178,14 +206,14 @@ const ListCommand = cmd({
     }
     if (argv.json) { await writeJson({ ok: true, vaults: out }); return }
     console.log()
-    if (out.length === 0) console.log(`  ${dim("No vaults. Create one: iris vault create <name>")}`)
+    if (out.length === 0) console.log(`  ${dim("No replicated vaults. Create one: iris vault create <name>  (or --encrypted for a PHI vault)")}`)
     for (const v of out) {
       console.log(`  ${bold(v.name)}  ${dim(v.id)}`)
       console.log(`     ${dim(`${v.files} file(s) · manifest seq ${v.seq} · target ${v.replicas} replicas`)}${v.has_key ? "" : bold("  · NO KEY ON THIS MACHINE")}`)
     }
     console.log()
-  },
-})
+  }
+}
 
 const PutCommand = cmd({
   command: "put <vault> <path..>",
@@ -460,12 +488,17 @@ const StatusCommand = cmd({
 
 const VaultCommand = cmd({
   command: "vault",
-  describe: "sovereign device-owned storage — encrypted, replicated across YOUR nodes, no third party",
+  aliases: ["vaults"],
+  describe: "your vaults — replicated storage across YOUR nodes, and encrypted per-bloq PHI vaults (iris vaults = list)",
   builder: (y) => y
     .command(CreateCommand).command(ListCommand).command(PutCommand)
     .command(GetCommand).command(LsCommand).command(StatusCommand)
-    .demandCommand(1, "Specify: create, list, put, get, ls, status"),
-  async handler() {},
+    .command(NodeVaultCommands.lock).command(NodeVaultCommands.unlock).command(NodeVaultCommands.destroy)
+    .option("json", { type: "boolean", default: false }),
+  // `iris vault` / `iris vaults` with no subcommand lists them.
+  async handler(argv) {
+    return (ListCommand as any).handler(argv)
+  },
 })
 
 export const VaultCommandExport = VaultCommand

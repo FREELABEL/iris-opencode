@@ -16,7 +16,28 @@ permissions:
   packages: write
 
 jobs:
+  # A release lower than the highest CLI release already out is refused (#188596). The v2
+  # engine ships as 1.5.x from iris2/channel; without this, the next 1.3.x cut from main would
+  # publish fine and `iris update` would carry every user off v2. Version order, not dates.
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse a version below the newest CLI release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          V="${INPUT_VERSION:-${GITHUB_REF#refs/tags/v}}"
+          HIGHEST=$(gh api "repos/${{ github.repository }}/releases?per_page=100" --paginate -q '.[] | select(.draft | not) | .tag_name' \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' | sort -V | tail -1)
+          echo "releasing $V; highest CLI release is ${HIGHEST:-none}"
+          if [ -n "$HIGHEST" ] && [ "$V" != "$HIGHEST" ] && [ "$(printf '%s\n%s\n' "$V" "$HIGHEST" | sort -V | tail -1)" = "$HIGHEST" ]; then
+            echo "::error::v$V is below v$HIGHEST, the newest CLI release. Users update to the highest version, so this would never reach them — or, before #188596, would have pulled them off it. Release a version above v$HIGHEST."
+            exit 1
+          fi
+
   build:
+    needs: [guard]
     strategy:
       fail-fast: false
       matrix:
@@ -166,6 +187,7 @@ jobs:
             packages/opencode/dist/*.zip
 
   build-desktop:
+    needs: [guard]
     strategy:
       fail-fast: false
       matrix:
@@ -293,6 +315,7 @@ jobs:
   # Windows remains UNSIGNED (no Windows code-signing cert yet; SmartScreen warns). This job is
   # optional and non-blocking, same as build-desktop.
   build-desktop-tauri:
+    needs: [guard]
     strategy:
       fail-fast: false
       matrix:
@@ -444,6 +467,7 @@ jobs:
   # Unsigned: no Windows code-signing cert exists for this repo (Alex's call — acceptable for
   # now, see bloq #503 item #182113). Windows SmartScreen will warn on first run.
   build-desktop-tauri-windows:
+    needs: [guard]
     runs-on: windows-latest
     continue-on-error: true
     timeout-minutes: 40
@@ -649,6 +673,32 @@ jobs:
             fi
           done
 
+      # Audit every asset before anything is uploaded (#189852). v1.3.349 and earlier shipped
+      # index.js.map with full sourcesContent — the original TypeScript and system prompts — in
+      # every public archive (#189593). This fails the release on any *.map, any sourcesContent
+      # beyond what the Bun runtime itself carries, and any private-prompt sentinel. The denylist
+      # is private and arrives as a secret; without it the step exits 2 and nothing publishes.
+      - name: Setup Bun (for the release-asset audit)
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Audit release assets before upload
+        env:
+          DENYLIST_B64: ${{ secrets.PUBLIC_AUDIT_DENYLIST_B64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DENYLIST_B64}" ]; then
+            echo "::error::PUBLIC_AUDIT_DENYLIST_B64 is not set — refusing to publish unaudited assets."
+            exit 2
+          fi
+          f="$RUNNER_TEMP/public-audit-denylist.txt"
+          printf '%s' "$DENYLIST_B64" | base64 -d > "$f"
+          trap 'rm -f "$f"' EXIT
+          # --runtime: the bun the binaries were compiled with (same package.json pin as build).
+          PUBLIC_AUDIT_DENYLIST_FILE="$f" bun packages/opencode/script/public-audit.ts \
+            --artifact artifacts --runtime "$(command -v bun)"
+
       # Publish a checksum next to every asset.
       #
       # Until now NOTHING published was checksummed or signed (#185158), so between the
@@ -724,6 +774,10 @@ jobs:
           # partial one stays fetchable by tag. Re-run the workflow to complete it and it is
           # promoted automatically on the next full build.
           prerelease: ${{ steps.assets.outputs.missing != '' }}
+          # Flipping prerelease back to false on a re-run does NOT make a release "latest" —
+          # GitHub only moves latest when told to. v1.3.348 completed on re-run (#189475) and
+          # releases/latest stayed on v1.3.347 until promoted by hand. Say it explicitly.
+          make_latest: ${{ steps.assets.outputs.missing == '' && 'true' || 'false' }}
           generate_release_notes: true
           # Empty when everything built, so a complete release looks untouched.
           body: ${{ steps.assets.outputs.missing }}
@@ -759,6 +813,45 @@ jobs:
           pattern: IRIS-app-*
           merge-multiple: true
 
+      # Same audit as the release job, over what THIS job uploads (#189852).
+      - name: Checkout the audit script
+        uses: actions/checkout@v4
+        with:
+          path: src
+          sparse-checkout: |
+            packages/opencode/script/public-audit.ts
+            package.json
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Bun (for the release-asset audit)
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: src/package.json
+
+      - name: Audit desktop assets before upload
+        # ADVISORY for now. Measured on v1.3.350's IRIS-app-darwin-arm64.zip: 4 findings —
+        # 3 in Electron Framework (Chromium's own devtools strings; needs an Electron baseline
+        # the way --runtime is a Bun one) and app.asar, which carries ~1,179 *.map entries and
+        # 109 sourcesContent blobs. Blocking today would stop every desktop upload. Flip this to
+        # false once the asar ships without maps (#189852 follow-up).
+        continue-on-error: true
+        env:
+          DENYLIST_B64: ${{ secrets.PUBLIC_AUDIT_DENYLIST_B64 }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          assets=(desktop/IRIS-app-*.zip)
+          if [ ${#assets[@]} -eq 0 ]; then echo "nothing to audit"; exit 0; fi
+          if [ -z "${DENYLIST_B64}" ]; then
+            echo "::error::PUBLIC_AUDIT_DENYLIST_B64 is not set — refusing to publish unaudited assets."
+            exit 2
+          fi
+          f="$RUNNER_TEMP/public-audit-denylist.txt"
+          printf '%s' "$DENYLIST_B64" | base64 -d > "$f"
+          trap 'rm -f "$f"' EXIT
+          PUBLIC_AUDIT_DENYLIST_FILE="$f" bun src/packages/opencode/script/public-audit.ts \
+            --artifact desktop --runtime "$(command -v bun)"
+
       - name: Upload desktop assets to release
         run: |
           shopt -s nullglob
@@ -767,9 +860,23 @@ jobs:
             echo "::warning::No desktop assets to upload (desktop build skipped or failed)"
             exit 0
           fi
+          # Checksum HERE, in the job that uploads these files. The release job checksums only
+          # what exists when it runs, and it waits for the CLI build alone — so whenever the
+          # desktop build finished after it (v1.3.308, v1.3.309), the desktop zip shipped with
+          # no .sha256 and the installer silently skipped verification. Same rule as the release
+          # job: the digest describes the exact bytes being uploaded, basename only.
+          set -euo pipefail
+          cd desktop
+          sums=()
+          for f in IRIS-app-*.zip; do
+            sha256sum "$f" > "$f.sha256"
+            sha256sum -c "$f.sha256" >/dev/null
+            sums+=("desktop/$f.sha256")
+          done
+          cd ..
           # --repo is required: this job has no checkout, so gh can't infer the
           # repo from a local .git ("fatal: not a git repository" otherwise).
-          gh release upload "${{ steps.version.outputs.tag }}" "${assets[@]}" --clobber --repo "${{ github.repository }}"
+          gh release upload "${{ steps.version.outputs.tag }}" "${assets[@]}" "${sums[@]}" --clobber --repo "${{ github.repository }}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

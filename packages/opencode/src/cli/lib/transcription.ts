@@ -1,7 +1,7 @@
 import { firstArray } from "../../util/array"
 import { spawnSync } from "child_process"
 import { existsSync, mkdirSync, readFileSync } from "fs"
-import { homedir } from "os"
+import { homedir, cpus } from "os"
 import { join, basename, resolve, dirname } from "path"
 import { irisFetch, FL_API } from "../cmd/iris-api"
 import {
@@ -12,6 +12,7 @@ import {
   sha256File,
   secureTempDir,
 } from "./stt-policy"
+import { resolvePlatformConfig, transcribePlatformChain, PlatformTranscribeError } from "./platform-transcribe"
 
 // ============================================================================
 // Transcription lib — the single client-side seam (Layer 2).
@@ -40,6 +41,86 @@ export function which(bin: string): string | null {
   const r = spawnSync("which", [bin], { encoding: "utf8" })
   const p = r.stdout.trim()
   return p && r.status === 0 ? p : null
+}
+
+/**
+ * Where `iris transcribe --install-local` puts whisper-cli. Not on PATH by default, so it is
+ * looked up explicitly: an engine that installed fine and then "could not be found" is the same
+ * dead end as one that never installed (#188318).
+ */
+export const LOCAL_WHISPER_DIR = join(homedir(), ".iris", "bin")
+
+/** whisper-cli (Homebrew's name), whisper-cpp (the older name), or the one we built. */
+export function resolveWhisper(): string | null {
+  const own = join(LOCAL_WHISPER_DIR, "whisper-cli")
+  return which("whisper-cli") || which("whisper-cpp") || (existsSync(own) ? own : null)
+}
+
+/**
+ * The install line for THIS machine. It used to say "brew install whisper-cpp" everywhere,
+ * including Linux Hive nodes that have no brew — so a sovereign-policy node could neither
+ * upload nor install, and the advice was the dead end (#188318).
+ */
+export function localWhisperInstallHint(platform: NodeJS.Platform = process.platform): string {
+  if (platform === "darwin") return "brew install whisper-cpp"
+  if (platform === "linux") return "iris transcribe --install-local   (builds whisper-cli into ~/.iris/bin — about a minute, no sudo)"
+  return "download whisper-cli from github.com/ggml-org/whisper.cpp/releases and put it on your PATH"
+}
+
+/** Pinned so every node builds the same engine. Bump deliberately. */
+const WHISPER_CPP_TAG = "v1.9.5"
+const CMAKE_VERSION = "3.30.5"
+
+/**
+ * Build whisper-cli on Linux into ~/.iris/bin, with no root: a portable CMake from Kitware into
+ * ~/.iris/tools, whisper.cpp at a pinned tag, a static Release build of the one target we use.
+ * Proven 2026-10-07 on a 4-core Linux Hive node: 70 s to build, then a 32 s clip transcribed in
+ * 10 s under the sovereign policy. macOS uses Homebrew. Runs only when asked (--install-local).
+ */
+export function installLocalWhisper(say: (msg: string) => void = () => {}): { ok: boolean; path?: string; detail: string } {
+  if (process.platform === "darwin") {
+    if (!which("brew")) return { ok: false, detail: "Homebrew is not installed. Install it from brew.sh, then: brew install whisper-cpp" }
+    say("brew install whisper-cpp")
+    const r = spawnSync("brew", ["install", "whisper-cpp"], { encoding: "utf8", timeout: 15 * 60 * 1000 })
+    const path = resolveWhisper()
+    return path ? { ok: true, path, detail: "installed with Homebrew" } : { ok: false, detail: (r.stderr || "brew install failed").slice(-500) }
+  }
+  if (process.platform !== "linux") return { ok: false, detail: localWhisperInstallHint() }
+
+  const missing = ["git", "curl", "tar", "make", "cc", "c++"].filter((b) => !which(b))
+  if (missing.length) return { ok: false, detail: `Missing build tools: ${missing.join(", ")} (e.g. sudo apt install build-essential git curl)` }
+  if (process.arch !== "x64" && process.arch !== "arm64") return { ok: false, detail: `No portable CMake for ${process.arch}` }
+
+  const tools = join(homedir(), ".iris", "tools")
+  mkdirSync(tools, { recursive: true })
+  mkdirSync(LOCAL_WHISPER_DIR, { recursive: true })
+  const cmakeArch = process.arch === "x64" ? "x86_64" : "aarch64"
+  const cmakeDir = join(tools, `cmake-${CMAKE_VERSION}-linux-${cmakeArch}`)
+  const cmake = join(cmakeDir, "bin", "cmake")
+  const run = (label: string, cmd: string, args: string[], cwd?: string) => {
+    say(label)
+    const r = spawnSync(cmd, args, { cwd, encoding: "utf8", timeout: 20 * 60 * 1000 })
+    if (r.status !== 0) throw new Error(`${label} failed: ${(r.stderr || r.stdout || "").slice(-400)}`)
+  }
+  try {
+    if (!existsSync(cmake)) {
+      const url = `https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-${cmakeArch}.tar.gz`
+      run("Fetching CMake", "sh", ["-c", `curl -fsSL "${url}" | tar xz -C "${tools}"`])
+    }
+    const src = join(tools, `whisper.cpp-${WHISPER_CPP_TAG}`)
+    if (!existsSync(src)) run(`Fetching whisper.cpp ${WHISPER_CPP_TAG}`, "git", ["clone", "-q", "--depth", "1", "--branch", WHISPER_CPP_TAG, "https://github.com/ggml-org/whisper.cpp.git", src])
+    run("Configuring", cmake, ["-B", "build", "-DCMAKE_BUILD_TYPE=Release", "-DBUILD_SHARED_LIBS=OFF", "-DWHISPER_BUILD_TESTS=OFF"], src)
+    const jobs = String(Math.max(1, (cpus()?.length ?? 2)))
+    run("Building whisper-cli (about a minute)", cmake, ["--build", "build", "-j", jobs, "--target", "whisper-cli"], src)
+    const built = join(src, "build", "bin", "whisper-cli")
+    const dest = join(LOCAL_WHISPER_DIR, "whisper-cli")
+    run("Installing", "install", ["-m", "0755", built, dest])
+    const v = spawnSync(dest, ["--help"], { encoding: "utf8", timeout: 30_000 })
+    if (v.status !== 0 && !/usage/i.test((v.stdout || "") + (v.stderr || ""))) return { ok: false, detail: "built, but whisper-cli does not run" }
+    return { ok: true, path: dest, detail: `built whisper.cpp ${WHISPER_CPP_TAG}` }
+  } catch (e) {
+    return { ok: false, detail: e instanceof Error ? e.message : String(e) }
+  }
 }
 
 export interface TranscribeOptions {
@@ -78,6 +159,42 @@ export interface FfmpegResolution {
   env?: NodeJS.ProcessEnv
   /** When bin is null: what was actually wrong, in the words the fix needs. */
   diagnosis?: string
+}
+
+/**
+ * A video with no audio track is not a broken ffmpeg (#188550).
+ *
+ * Measured 2026-10-08 on a silent launch clip (ffprobe: one video stream, nothing else): ffmpeg
+ * exited with "Error opening output file …/audio.wav. Error opening output files: Invalid argument",
+ * and that is what the user saw — a sentence that reads like a disk or permissions fault. ffmpeg's
+ * own stderr already lists the input's streams, so read them: video present, no audio stream,
+ * means there is nothing to transcribe, and the person should read the frames instead.
+ */
+export function explainNoAudio(stderr: string): string | null {
+  const streams = String(stderr ?? "").split("\n").filter((l) => /Stream #\d+:\d+/.test(l))
+  if (streams.length === 0) return null
+  const hasAudio = streams.some((l) => /:\s*Audio:/.test(l))
+  const hasVideo = streams.some((l) => /:\s*Video:/.test(l))
+  if (hasAudio || !hasVideo) return null
+  return "This video has no audio track — there is nothing to transcribe. Read what is on screen instead: extract frames (ffmpeg -i <file> -vf fps=1/3 frame_%02d.jpg) or run `iris look --image <frame>`."
+}
+
+/**
+ * Probe a file BEFORE choosing an engine: the no-audio verdict, or null. Asked once, up front,
+ * because every engine fails differently on a silent file — local ffmpeg says "Invalid argument",
+ * the server says "xAI … Failed to decode audio" — and the local→server fallback turned the first
+ * misleading error into a second one (measured 2026-10-08). Null when ffmpeg is unavailable: then
+ * the engines report as before.
+ */
+export function noAudioVerdict(file: string): string | null {
+  const ff = resolveFfmpeg()
+  if (!ff.bin) return null
+  const r = spawnSync(ff.bin, ["-hide_banner", "-i", file], {
+    encoding: "utf8",
+    timeout: 20_000,
+    env: ff.env ? { ...process.env, ...ff.env } : process.env,
+  })
+  return explainNoAudio(r.stderr || "")
 }
 
 function ffmpegRuns(bin: string, env?: NodeJS.ProcessEnv): { ok: boolean; err: string } {
@@ -184,9 +301,9 @@ export async function transcribeLocal(
   const ff = resolveFfmpeg()
   // whisper-cli is what Homebrew's whisper-cpp formula actually installs; whisper-cpp is the
   // older name. Both accepted — this one was already right.
-  const whisper = which("whisper-cli") || which("whisper-cpp")
+  const whisper = resolveWhisper()
   if (!ff.bin) throw new Error(ff.diagnosis || "ffmpeg unavailable")
-  if (!whisper) throw new Error("Local transcription requires whisper-cpp. Install: brew install whisper-cpp")
+  if (!whisper) throw new Error(`Local transcription requires whisper.cpp. Install: ${localWhisperInstallHint()}`)
   const ffmpeg = ff.bin
 
   // Ensure model
@@ -218,6 +335,7 @@ export async function transcribeLocal(
       const detail = (conv.stderr || "").trim()
       throw new Error(
         explainLoadFailure(detail) ||
+          explainNoAudio(detail) ||
           `ffmpeg could not convert this audio${detail ? `: ${detail.slice(-400)}` : ""}`,
       )
     }
@@ -291,10 +409,30 @@ export async function transcribeLocal(
 }
 
 /**
+ * On-device whisper is usable RIGHT NOW: ffmpeg, a whisper binary and the model all present.
+ * The fallback after the platform only runs when this is true — a 150 MB model download in the
+ * middle of a dictation is not a fallback, it is a second failure (Desktop's localWhisperReady).
+ */
+export function localWhisperReady(): boolean {
+  return (
+    Boolean(resolveFfmpeg().bin) &&
+    // resolveWhisper, not `which`: it also finds the engine `iris transcribe --install-local`
+    // builds into ~/.iris/bin, which is not on PATH (#188318).
+    Boolean(resolveWhisper()) &&
+    existsSync(join(homedir(), ".whisper", "ggml-base.en.bin"))
+  )
+}
+
+/**
  * Provider-agnostic transcription. Selection: opts.provider → env
- * IRIS_TRANSCRIPTION_PROVIDER → default "whisper-local".
+ * IRIS_TRANSCRIPTION_PROVIDER → the DEFAULT, which is IRIS Desktop's order (#187808):
+ * the IRIS platform (Grok first, board-scoped, PHI-gated) → on-device whisper if installed.
+ * Under `IRIS_TRANSCRIPTION_POLICY=sovereign` the default is whisper-local, as before.
  */
 export async function transcribeAudio(audioPath: string, opts: TranscribeOptions = {}): Promise<TranscriptionResult> {
+  if (!opts.provider && !process.env.IRIS_TRANSCRIPTION_PROVIDER && resolveSttPolicy() === "standard") {
+    return transcribeDefault(audioPath, opts)
+  }
   // `explicit` distinguishes a flag the user typed from an env var they inherited.
   // The first is refused loudly; the second is clamped with a warning. Silently
   // ignoring a typed flag would leave `provider: whisper-local` in the output as
@@ -347,4 +485,41 @@ export async function transcribeAudio(audioPath: string, opts: TranscribeOptions
     }
     throw err
   }
+}
+
+/**
+ * The default path, the same as IRIS Desktop's chain: the platform first, on-device whisper only
+ * when it is already installed. Each attempt is audited, cloud or local.
+ */
+async function transcribeDefault(audioPath: string, opts: TranscribeOptions): Promise<TranscriptionResult> {
+  const abs = resolve(audioPath)
+  if (!existsSync(abs)) throw new Error(`File not found: ${abs}`)
+  const platform = await resolvePlatformConfig()
+  let cloudError = "reason" in platform ? platform.reason : ""
+
+  if ("config" in platform) {
+    const started = Date.now()
+    const { sha256: digest, bytes } = await sha256File(abs)
+    try {
+      const r = await transcribePlatformChain(new Uint8Array(readFileSync(abs)), platform.config, {
+        filename: basename(abs),
+        language: opts.language,
+      })
+      auditTranscription({ provider: r.provider, policy: "standard", bytes, sha256: digest, ms: Date.now() - started, ok: true })
+      return { text: r.text, provider: r.provider, meta: { on_device: false } }
+    } catch (e) {
+      cloudError = e instanceof Error ? e.message : String(e)
+      const status = e instanceof PlatformTranscribeError ? e.status : 0
+      auditTranscription({ provider: "iris-platform", policy: "standard", bytes, sha256: digest, ms: Date.now() - started, ok: false, error: status ? `HTTP ${status}` : cloudError.slice(0, 120) })
+      // A refusal the platform made on purpose (a PHI board, a bad scope) is not routed around by
+      // falling back — on-device whisper never leaves the machine, so it is allowed, but only
+      // because it is local, and only when it is already installed.
+    }
+  }
+
+  if (localWhisperReady()) {
+    const text = await transcribeLocal(audioPath, { language: opts.language })
+    return { text, provider: "whisper-local", meta: { on_device: true, cloud_error: cloudError || null } }
+  }
+  throw new Error(cloudError || "No transcription engine is available.")
 }

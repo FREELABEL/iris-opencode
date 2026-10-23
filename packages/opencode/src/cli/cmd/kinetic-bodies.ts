@@ -44,6 +44,16 @@ export const BODY_CLASSES: BodyClass[] = [
   // open_link, ...), collapsed to the sub-commands `iris phone` exposes. Read out of their source,
   // not invented — the `device` row above records what inventing verbs costs.
   { name: "android", describe: "an Android device over ADB — a real phone, with real sessions on it", verbs: ["run", "tap", "type", "swipe", "key", "app", "open"] },
+  // A drone is flown by a Hive SCRIPT (freelabel hardware/parrot-mambo/mambo.py), not by an `iris`
+  // sub-command, so there is no head word for `routeFor` and no route row below. The script asks
+  // `iris kinetic check` for every verb in its plan, then records the flight with `iris kinetic act`.
+  //
+  // Verbs are mambo.py's flight-plan grammar (parse_plan: up, down, turn, hover, flip) plus the
+  // takeoff every plan implies. Read out of the script, not invented — #189857's first draft
+  // proposed hop/spin/move, which are PRESET names and a direction the grammar has no word for.
+  // `land` is deliberately absent: every plan ends with a landing, including on error, and a couple
+  // that could refuse a landing could strand a drone in the air.
+  { name: "drone", describe: "a drone flown by a Hive script — every plan takes off and always lands", verbs: ["takeoff", "up", "down", "turn", "hover", "flip"] },
 ]
 
 export const bodyClass = (name: string): BodyClass | null =>
@@ -124,8 +134,32 @@ export function routeFor(argv: string[], parsed?: string[]): Route | null {
     return verb ? { class: "obs", verb, instance: "studio" } : null
   }
   if (cls === "node") {
+    // `iris hive tasks create --node <n>` dispatches work exactly as `hive task` does. It was missing
+    // from this table, so a LOCKED machine still let an agent send any task through it. Only create
+    // and new act; a bare `hive tasks`, `get` and `logs` read. The node is a FLAG here, not the next
+    // word, so read it from parts (`--node x` or `--node=x`); absent means "any capable node", which
+    // is a class-level ask — never a free pass.
+    if (sub === "tasks") {
+      if (third !== "create" && third !== "new") return null
+      const i = parts.indexOf("--node")
+      const eq = parts.find((p) => p.startsWith("--node="))
+      const node = i >= 0 && parts[i + 1] && !parts[i + 1].startsWith("-") ? parts[i + 1] : eq ? eq.slice("--node=".length) : null
+      return { class: "node", verb: "task", instance: node || null }
+    }
+    // `iris hive send <content> --to <node>` names its node with a FLAG; the word after `send` is
+    // the PAYLOAD — a file path, a URL, a sentence. Reading that word as the instance asked for a
+    // couple on `node:/tmp/handoff.md` or `node:hello there`, a body that cannot exist, so every
+    // send was refused with advice to couple an agent to the message text (#189372). Same shape
+    // as the android row below. `--to` wins whenever it is present; only the positional form
+    // `iris hive send <node> <message>` (no --to) has the node in the third slot.
+    if (sub === "send") {
+      const to = flagValue(parts, ["--to"])
+      if (to === "all") return { class: "node", verb: "send", instance: null } // fan-out: class-level ask, never a free pass
+      const positional = words.length > (at >= 0 ? at + 2 : 3) ? third : null // <node> <message>: two words after `send`
+      return { class: "node", verb: "send", instance: nodeInstance(to ?? positional) }
+    }
     // `iris hive run <node> <cmd>` — arbitrary shell on another machine, the epic's named danger.
-    const verb = sub === "run" || sub === "exec" ? "run" : sub === "task" ? "task" : sub === "script" ? "script" : sub === "send" ? "send" : null
+    const verb = sub === "run" || sub === "exec" ? "run" : sub === "task" ? "task" : sub === "script" ? "script" : null
     return verb ? { class: "node", verb, instance: third && !third.startsWith("-") ? third : null } : null
   }
   if (cls === "android") {
@@ -155,6 +189,32 @@ export function routeFor(argv: string[], parsed?: string[]): Route | null {
   // Guarding the dry run would train people to couple for a command that changes nothing.
   if (sub === "clean") return parts.includes("--apply") ? { class: "device", verb: "clean", instance: null } : null // --apply is a FLAG, so read it from parts
   return null
+}
+
+/** `--to x` or `--to=x` (or any alias) from lower-cased argv; null when absent or flag-shaped. */
+function flagValue(parts: string[], names: string[]): string | null {
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i]
+    for (const n of names) {
+      if (p === n) return parts[i + 1] && !parts[i + 1].startsWith("-") ? parts[i + 1] : null
+      if (p.startsWith(n + "=")) return p.slice(n.length + 1) || null
+    }
+  }
+  return null
+}
+
+/**
+ * A node name as the instance half of a body. Node names are what a person typed (`Alex's MacBook
+ * Pro`), and a name that is not a legal instance would be refused as "not a body name" — the
+ * wrong refusal, for the wrong reason. Legal names pass through untouched, so existing couples
+ * keep matching; anything else gets the same slug `bodyForDevice` gives a device.
+ */
+function nodeInstance(raw: string | null | undefined): string | null {
+  const s = String(raw ?? "").trim().toLowerCase()
+  if (!s || s.startsWith("-")) return null
+  if (/^[a-z0-9._*-]+$/.test(s)) return s
+  const slug = s.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
+  return slug || null
 }
 
 /** Verbs a couple may bless for a class — used to refuse a typo at coupling time, not at act time. */

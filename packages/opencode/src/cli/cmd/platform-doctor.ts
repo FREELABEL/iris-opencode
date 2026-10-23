@@ -452,26 +452,63 @@ export const PlatformDoctorCommand = cmd({
         const denied = channelChecks
           .filter((c) => c.status === "no_permission" && /permission|not permitted|authorization denied/i.test(c.error ?? ""))
           .map((c) => c.name)
-        if (denied.length > 0) {
+
+        // Ask the daemon itself first (`/daemon/permissions`, iris-daemon PR #10): it knows which binary it
+        // runs as and whether a fresh process of it would be granted — the one fact a channel
+        // probe cannot tell you ("granted, restart pending" looks exactly like "denied").
+        const { fetchDaemonPermissions, fdaFixLines, operatorMode, GRANT_COMMAND, RESTART_COMMAND } = await import("./daemon-permissions")
+        const perms = await fetchDaemonPermissions({ waitForStartMs: 10_000 })
+        const NAME = "Full Disk Access — iris-daemon"
+        const notGranted = perms.state !== "granted" && (perms.state === "denied" || perms.state === "restart_needed" || denied.length > 0)
+        if (!operatorMode() && notGranted) {
+          // Clients: optional, nothing to do, no program names. The only fix today is approving
+          // a stock `node` binary, an operator decision (see operatorMode).
           allResults.push({
-            name: "Full Disk Access — iris-daemon",
+            name: "Mail & Messages access",
+            ok: true,
+            detail: "not connected on this Mac (optional) — IRIS skips Mail and Messages",
+            category: "permission",
+          })
+        } else if (perms.state === "granted") {
+          allResults.push({
+            name: NAME,
+            ok: true,
+            detail: `granted${perms.binary ? ` to ${perms.binary}` : ""}`,
+            category: "permission",
+          })
+        } else if (perms.state === "restart_needed") {
+          allResults.push({
+            name: NAME,
             ok: false,
-            detail: `denied for ${denied.join(", ")} — the daemon has its own grant, separate from your terminal`,
-            // "grant Full Disk Access to iris-daemon" named nothing you can drag into the
-            // panel, so it was read as "add your terminal" — which cannot work: launchd
-            // starts the daemon (io.heyiris.daemon → iris-daemon-wrapper.sh → exec node) and
-            // TCC grants are per-executable, so Terminal's grant covers what Terminal
-            // started (#184935). Name the binary, and say how to find it on this machine.
-            hint:
-              "add the daemon's own binary — `ps -o comm= -p \"$(pgrep -f 'bridge/daemon.js' | head -1)\"` — " +
-              "to System Settings → Privacy & Security → Full Disk Access (⇧⌘G to paste the path). " +
-              "Adding your terminal does NOT work: launchd starts the daemon, not your terminal. " +
-              "Then `iris-daemon restart` — TCC is resolved at process start, so a running daemon keeps the old answer.",
+            detail: `granted to ${perms.binary ?? "the daemon's binary"}, but the running daemon started before the grant`,
+            hint: RESTART_COMMAND,
+            category: "permission",
+          })
+        } else if (perms.state === "denied") {
+          allResults.push({
+            name: NAME,
+            ok: false,
+            detail: `denied — macOS must approve ${perms.binary ?? "the daemon's own binary"} (your terminal's grant does not cover it)`,
+            hint: GRANT_COMMAND,
+            category: "permission",
+          })
+        } else if (denied.length > 0) {
+          // Older daemon (no /daemon/permissions) or it could not tell: fall back to the
+          // channels' own answer, but still name the file to approve.
+          allResults.push({
+            name: NAME,
+            ok: false,
+            detail:
+              `denied for ${denied.join(", ")} — the daemon has its own grant, separate from your terminal` +
+              (perms.binary ? `; it runs as ${perms.binary}` : ""),
+            // TCC grants are per-executable and launchd starts the daemon, so adding the
+            // terminal cannot work (#184935). Name the binary and the command.
+            hint: fdaFixLines({ ...perms, state: "old_daemon" }).join(" "),
             category: "permission",
           })
         } else if (terminalOk) {
           allResults.push({
-            name: "Full Disk Access — iris-daemon",
+            name: NAME,
             ok: true,
             detail: "no channel reported a permission denial",
             category: "permission",

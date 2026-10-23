@@ -3,6 +3,7 @@ import { unlinkSync, existsSync } from "fs"
 import { homedir } from "os"
 import { join } from "path"
 import {
+  isDangerousCommand,
   parseSteps,
   interpolate,
   interpolateInput,
@@ -2033,7 +2034,7 @@ echo ok
     expect(steps[0].mode).toBe("manual")
   })
 
-  test("step heading with no title is skipped (regex requires same-line title)", () => {
+  test("step heading with no title is a step titled by its id (#190875)", () => {
     const md = `
 ### step:nospace
 
@@ -2046,8 +2047,12 @@ echo ok
 \`\`\`
 `
     const steps = parseSteps(md)
-    // Fixed: regex uses ` +` (space only) instead of `\s+` (which ate newlines)
-    expect(steps).toHaveLength(0)
+    // It used to be dropped silently: `test` said valid, `run` said completed, nothing ran.
+    // Still horizontal-whitespace only, so the next line is never swallowed as the title.
+    expect(steps).toHaveLength(1)
+    expect(steps[0].id).toBe("nospace")
+    expect(steps[0].title).toBe("nospace")
+    expect(steps[0].code).toBe("echo ok")
   })
 
   test("YAML mode with leading/trailing spaces doesn't match switch cases", () => {
@@ -2662,5 +2667,26 @@ describe("a playbook with shell steps and no bash refuses WHOLE", () => {
     const r = await executeSkill(plan, {}, { bash: () => null, dryRun: true })
     cleanupRun(r.run_id)
     expect(Object.keys(r.steps).sort()).toEqual(["draft", "publish"])
+  })
+})
+
+describe("isDangerousCommand — 'format' means disk formatting, not the word", () => {
+  test.each([
+    "ffprobe -v error -show_entries format=duration x.mp4",
+    "iris brands dt export iris --format css",
+    "date +%Y --format=iso",
+    "prettier --check . # format later",
+  ])("not dangerous: %s", (cmd) => {
+    expect(isDangerousCommand(cmd)).toBe(false)
+  })
+
+  test.each([
+    "format c:",
+    "FORMAT D: /q",
+    "mkfs.ext4 /dev/sda1",
+    "diskutil eraseDisk APFS Blank disk2",
+    "rm -rf /tmp/x",
+  ])("dangerous: %s", (cmd) => {
+    expect(isDangerousCommand(cmd)).toBe(true)
   })
 })

@@ -3,7 +3,7 @@ import { resolve } from "path"
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { dim, requireAuth, writeJson } from "./iris-api"
-import { cleanOcrText, ocrMessages, sizeRefusal } from "./ocr-core"
+import { askVision, ocrMessages, sizeRefusal } from "./ocr-core"
 
 /**
  * `iris ocr <file>` — the text in a local image, on stdout (#186355).
@@ -59,37 +59,17 @@ export const PlatformOcrCommand = cmd({
     const token = await requireAuth()
     if (!token) return fail("Not signed in — run `iris login`. The image is read by a model on your IRIS account.")
 
-    // The model id may be given either way round; the gateway wants it without the provider.
     const model = String(args.model || DEFAULT_MODEL).replace(/^iris\//, "")
     const base = process.env.IRIS_API_URL ?? "https://freelabel.net"
     const spinner = isJson ? null : prompts.spinner()
     spinner?.start(`Reading ${bytes > 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)}MB` : `${Math.round(bytes / 1024)}KB`} with ${model}…`)
-
-    let res: Response
-    try {
-      res = await fetch(`${base}/api/v6/openai/chat/completions`, {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-        body: JSON.stringify({ model, messages, max_tokens: Number(args["max-tokens"]) || 1500 }),
-      })
-    } catch (e: any) {
-      spinner?.stop("Could not reach the model", 1)
-      return fail(`Could not reach ${base}: ${e?.message ?? e}`)
+    const r = await askVision({ base, token, model, messages, maxTokens: Number(args["max-tokens"]) || 1500 })
+    if (!r.ok) {
+      spinner?.stop("No reading", 1)
+      return fail(r.error)
     }
-
-    if (!res.ok) {
-      spinner?.stop("The model refused", 1)
-      const said = (await res.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 300)
-      return fail(`HTTP ${res.status} from the model gateway${said ? `: ${said}` : ""}`)
-    }
-
-    const body = (await res.json().catch(() => null)) as any
-    const text = cleanOcrText(body?.choices?.[0]?.message?.content ?? "")
-    // An image with no text in it is an ANSWER; a model that said nothing at all is not.
-    if (!body?.choices?.length) {
-      spinner?.stop("No reply", 1)
-      return fail("The model returned no reply.")
-    }
+    const text = r.text
+    const body = { usage: r.usage }
     spinner?.stop(text ? `Read ${text.length} characters` : "No text found in that image")
 
     if (isJson) {

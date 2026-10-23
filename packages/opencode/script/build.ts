@@ -97,7 +97,8 @@ const targets = singleFlag
 /**
  * Refuse to start a build that cannot finish.
  *
- * Each target writes ~175 MB (a ~115 MB compiled binary plus ~36 MB of external source maps),
+ * Each target wrote ~175 MB (a ~115 MB compiled binary plus ~36 MB of external source maps,
+ * which are no longer emitted — #189593),
  * so the default all-targets build is ~1.9 GB — and `bun run build` is what a developer
  * naturally types when they only wanted to test one change locally.
  *
@@ -167,9 +168,44 @@ const PER_TARGET_BYTES = 200 * 1024 * 1024 // measured ~175 MB; round up rather 
 await $`rm -rf dist`
 
 const binaries: Record<string, string> = {}
+/**
+ * Install every platform's native packages, bounded and retried (#189475).
+ *
+ * v1.3.348's macos-15-intel CLI job failed twice here: `bun add` printed "Integrity check failed
+ * for tarball" for a dozen packages within five seconds, then HUNG for the rest of the 30-minute
+ * job timeout. The lockfile hashes matched npm, the ~/.bun cache was a miss (nothing to poison),
+ * and the desktop job on the same runner label ran this exact command in the same minute and
+ * passed — so it is a transient bad download, and the failure that cost us was the hang, not
+ * the error. Each attempt is killed after INSTALL_TIMEOUT_MS and retried, with fewer parallel
+ * downloads, so a flake costs minutes and a real failure exits non-zero instead of idling.
+ */
+const INSTALL_TIMEOUT_MS = 3 * 60 * 1000 // a healthy run takes ~40s
+const INSTALL_ATTEMPTS = 3
+async function installAllPlatforms(spec: string) {
+  for (let attempt = 1; attempt <= INSTALL_ATTEMPTS; attempt++) {
+    const proc = Bun.spawn(["bun", "install", "--os=*", "--cpu=*", spec], {
+      stdout: "inherit",
+      stderr: "inherit",
+      env: attempt === 1 ? process.env : { ...process.env, BUN_CONFIG_MAX_HTTP_REQUESTS: "16" },
+    })
+    let timedOut = false
+    const timer = setTimeout(() => {
+      timedOut = true
+      proc.kill("SIGKILL")
+    }, INSTALL_TIMEOUT_MS)
+    const code = await proc.exited
+    clearTimeout(timer)
+    if (code === 0) return
+    console.error(
+      `bun install ${spec} ${timedOut ? `timed out after ${INSTALL_TIMEOUT_MS / 60000} min` : `exited ${code}`} (attempt ${attempt}/${INSTALL_ATTEMPTS})`,
+    )
+  }
+  throw new Error(`bun install --os=* --cpu=* ${spec} failed ${INSTALL_ATTEMPTS} times`)
+}
+
 if (!skipInstall) {
-  await $`bun install --os="*" --cpu="*" @opentui/core@${pkg.dependencies["@opentui/core"]}`
-  await $`bun install --os="*" --cpu="*" @parcel/watcher@${pkg.dependencies["@parcel/watcher"]}`
+  await installAllPlatforms(`@opentui/core@${pkg.dependencies["@opentui/core"]}`)
+  await installAllPlatforms(`@parcel/watcher@${pkg.dependencies["@parcel/watcher"]}`)
 }
 for (const item of targets) {
   const name = [
@@ -196,7 +232,13 @@ for (const item of targets) {
     conditions: ["browser"],
     tsconfig: "./tsconfig.json",
     plugins: [solidPlugin],
-    sourcemap: "external",
+    // No source maps and minified output (#189593). This used to be `sourcemap: "external"`,
+    // which wrote index.js.map next to the binary, and the release archive picked it up: every
+    // public release shipped the full TypeScript source, comments and system prompts as
+    // `sourcesContent`. Unminified, the binary itself carried the same comments in clear text.
+    // `keepNames` preserves function/class `.name`, which error formatting relies on.
+    sourcemap: "none",
+    minify: { whitespace: true, syntax: true, identifiers: true, keepNames: true },
     external: ["playwright", "electron"],
     compile: {
       autoloadBunfig: false,
