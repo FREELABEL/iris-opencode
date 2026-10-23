@@ -30,7 +30,7 @@ import { firstArray } from "../../util/array"
 import { runScript, scriptFor } from "../../pulse/core"
 import { desktopAccounts, openDesktopDb, pickAccount, searchPassages } from "../lib/desktop-sessions"
 
-export const TOPIC_SOURCES = ["git", "diary", "files", "claude_code", "opencode", "iris_desktop", "imessage", "email", "gmail", "bloq"] as const
+export const TOPIC_SOURCES = ["git", "diary", "files", "claude_code", "opencode", "iris_desktop", "imessage", "email", "gmail", "calendar", "bloq"] as const
 export type TopicSource = typeof TOPIC_SOURCES[number]
 /**
  * A built-in source, or the id of one defined in ~/.iris/pulse/sources (#190626). Built-in ids keep
@@ -1662,6 +1662,58 @@ export async function sweepGmail(opts: SweepOptions): Promise<SourceSweep> {
 
   items.sort((a, b) => (b.when ?? "").localeCompare(a.when ?? ""))
   return finish("gmail", items, previous === null ? undefined : previous.length, matched, opts.limit)
+}
+
+/**
+ * Meetings that mention the topic (#190968) — every calendar `iris calendar search` reads: each
+ * connected Google account once, and this computer's calendar app. Counts MEETINGS that have
+ * happened, by start time: this window, and the window before it. A meeting still to come is not
+ * evidence the thread is warm — it is a plan — so it is left out of the count rather than read as
+ * recency from the future.
+ *
+ * One calendar failing does not shut the stop; every calendar failing does, with the reason. A
+ * partial search says which calendars it could not read, because "no meetings" from half your
+ * calendars is not "no meetings". `search` is for tests.
+ */
+export async function sweepCalendar(
+  opts: SweepOptions,
+  search?: (q: string, from: Date, to: Date) => Promise<{ result: import("./calendar-search").SearchResult }>,
+): Promise<SourceSweep> {
+  if (keywordPattern(opts.keyword) === null) return unavailable("calendar", `"${opts.keyword}" has no searchable characters`)
+  const now = Date.now()
+  const cutoff = now - opts.windowDays * 864e5
+  const priorCutoff = now - opts.windowDays * 2 * 864e5
+  let result: import("./calendar-search").SearchResult
+  try {
+    const run = search ?? (await import("./platform-calendar")).searchCalendars
+    result = (await run(opts.keyword.trim(), new Date(priorCutoff), new Date(now))).result
+  } catch (e: any) {
+    return unavailable("calendar", `calendar search failed: ${String(e?.message ?? e).slice(0, 120)}`)
+  }
+
+  const read = result.sources.filter((src) => src.status === "ok")
+  const failed = result.sources.filter((src) => src.status !== "ok")
+  if (read.length === 0) {
+    const why = failed.map((f) => `${f.name}: ${f.reason ?? f.status}`).join("; ")
+    return unavailable("calendar", why ? `no calendar could be read — ${why}`.slice(0, 200) : "no calendar connected")
+  }
+
+  const items: Hit[] = []
+  let prior = 0
+  for (const ev of result.events) {
+    const at = Date.parse(ev.start)
+    if (Number.isNaN(at) || at > now || at < priorCutoff) continue
+    if (at < cutoff) {
+      prior++
+      continue
+    }
+    items.push({ when: new Date(at).toISOString(), where: `${ev.seenIn[0] ?? "calendar"} · ${ev.title}`.slice(0, 110) })
+  }
+  items.sort((a, b) => (b.when ?? "").localeCompare(a.when ?? ""))
+  const sweep = finish("calendar", items, prior, new Set([canonicalKeyword(opts.keyword)]), opts.limit)
+  if (failed.length)
+    sweep.unavailableReason = `searched ${read.length} of ${result.sources.length} calendars — not read: ${failed.map((f) => f.name).join(", ")}`.slice(0, 200)
+  return sweep
 }
 
 // ── orchestration ───────────────────────────────────────────────────────────
