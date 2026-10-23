@@ -32,7 +32,7 @@ import { HiveFilesCommandExport } from "./platform-hive-files"
 import { HiveBrowserCommand } from "./platform-hive-browser"
 import { runRemoteDoctor } from "./platform-hive-doctor"
 import { HiveSelftestCommandExport } from "./platform-hive-selftest"
-import { HiveSessionsCommand, HiveSendInputCommand } from "./platform-hive-sessions"
+import { HiveSessionsCommand, HiveSendInputCommand, HiveAskCommand } from "./platform-hive-sessions"
 import { HiveTunnelCommand } from "./platform-hive-tunnel"
 import { HiveDriveCommand } from "./platform-hive-drive"
 import { HiveAnswerCommand, HiveAnswerHookCommand, HiveAnswersCommand, HiveAwayCommand } from "./platform-hive-answer"
@@ -5158,6 +5158,7 @@ export const PlatformHiveCommand = productCommand({
       .command(HiveSelftestCommandExport)
       .command(HiveSessionsCommand)
       .command(HiveSendInputCommand)
+      .command(HiveAskCommand)
       .command(HiveTunnelCommand)
       .command(HiveDriveCommand)
       .command(HiveAnswerCommand)
