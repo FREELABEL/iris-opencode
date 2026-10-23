@@ -529,10 +529,6 @@ const InboxResponse = Schema.Struct({
         label: Schema.String,
         id: Schema.optional(Schema.String),
         preview: Schema.optional(Schema.String),
-        done: Schema.optional(described(Schema.Boolean, "Handled. Separate from read: opening is not finishing.")),
-        doneAt: Schema.optional(Schema.String),
-        item: Schema.optional(described(Schema.String, "A handoff/job's work item, e.g. bloq:item:1234.")),
-        status: Schema.optional(Schema.String),
       }).annotate({ identifier: "IrisInboxItem" }),
     ),
     "Unread first, then newest first.",
@@ -561,8 +557,6 @@ const InboxMessageResponse = Schema.Struct({
       originalName: Schema.optional(Schema.String),
       sizeBytes: Schema.optional(Schema.Finite),
       burn: Schema.Boolean,
-      done: Schema.optional(Schema.Boolean),
-      doneAt: Schema.optional(Schema.String),
     }).annotate({ identifier: "IrisInboxMessage" }),
   ),
 }).annotate({ identifier: "IrisInboxMessageResponse" })
@@ -572,48 +566,6 @@ const InboxReadResponse = Schema.Struct({
   read: Schema.Boolean,
   burned: described(Schema.Boolean, "It was a burn-after-read message, and it is now deleted."),
 }).annotate({ identifier: "IrisInboxReadResponse" })
-
-const InboxStateResponse = Schema.Struct({
-  ...Measured,
-  read: Schema.Boolean,
-  done: Schema.Boolean,
-  card: Schema.optional(
-    described(
-      Schema.Struct({ item: Schema.String, ok: Schema.Boolean, reason: Schema.optional(Schema.String) }),
-      "When asked to close the handoff's Atlas card: whether that worked. The local write succeeding says nothing about the card.",
-    ),
-  ),
-}).annotate({ identifier: "IrisInboxStateResponse" })
-
-const OutboxRowSchema = Schema.Struct({
-  id: Schema.String,
-  to: Schema.String,
-  text: Schema.String,
-  sentAt: Schema.String,
-  taskId: Schema.optional(described(Schema.String, "The server's task id: it ACCEPTED the message. Not proof of delivery or reading.")),
-  replyTo: Schema.optional(Schema.String),
-  via: Schema.optional(Schema.String),
-  delivery: Schema.optional(
-    described(
-      Schema.Literals(["delivered", "waiting", "failed"]),
-      "From the task: in their inbox / not yet / refused. Absent = not known. Never means read.",
-    ),
-  ),
-  deliveryReason: Schema.optional(Schema.String),
-  deliveredAt: Schema.optional(Schema.String),
-}).annotate({ identifier: "IrisOutboxRow" })
-
-const InboxSendResponse = Schema.Struct({
-  ...Measured,
-  ok: Schema.Boolean,
-  sent: Schema.optional(OutboxRowSchema),
-  offline: Schema.optional(Schema.Boolean),
-}).annotate({ identifier: "IrisInboxSendResponse" })
-
-const InboxSentResponse = Schema.Struct({
-  ...Measured,
-  items: described(Schema.Array(OutboxRowSchema), "What this computer sent from the panel, newest last."),
-}).annotate({ identifier: "IrisInboxSentResponse" })
 
 const AgentsResponse = Schema.Struct({
   ...Measured,
@@ -1461,10 +1413,6 @@ export const IrisPaths = {
   inbox: `${root}/inbox`,
   inboxMessage: `${root}/inbox/:index`,
   inboxRead: `${root}/inbox/:index/read`,
-  inboxState: `${root}/inbox/:index/state`,
-  // Not under /inbox/: — `/inbox/:index` would claim "send" and "sent" as an index.
-  inboxSend: `${root}/inbox-send`,
-  inboxSent: `${root}/inbox-sent`,
   atlas: `${root}/atlas/:bloqID`,
   atlasLive: `${root}/atlas/:bloqID/live`,
   atlasItemCreate: `${root}/atlas/:bloqID/lists/:listID/items`,
@@ -1837,47 +1785,6 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Mark a Hive inbox message read",
           description:
             "The same write `iris hive inbox read <n>` makes: read=true in the manifest, the sender's read receipt (best-effort), and burn-after-read deletes a burn message and its body.",
-        }),
-      ),
-      HttpApiEndpoint.post("inboxState", IrisPaths.inboxState, {
-        params: { index: Schema.NumberFromString },
-        payload: Schema.Struct({
-          id: Schema.optional(Schema.String),
-          read: Schema.optional(Schema.Boolean),
-          done: Schema.optional(Schema.Boolean),
-          resolveCard: Schema.optional(Schema.Boolean),
-        }),
-        success: described(InboxStateResponse, "The row's read and done state now"),
-      }).annotateMerge(
-        OpenApi.annotations({
-          identifier: "iris.inboxState",
-          summary: "Mark a Hive inbox message unread, done, or not done",
-          description:
-            "read=false marks it unread again; done=true marks it handled (and read). Done is NOT read: opening a message never finishes it. resolveCard also moves a handoff's Atlas card to done through the CLI, and reports that result separately.",
-        }),
-      ),
-      HttpApiEndpoint.post("inboxSend", IrisPaths.inboxSend, {
-        payload: Schema.Struct({
-          to: described(Schema.String, "The computer to send to — yours or a peer's, as `iris hive inbox send --target` takes it."),
-          text: Schema.String,
-          replyTo: Schema.optional(described(Schema.String, "The inbox row id this answers.")),
-        }),
-        success: described(InboxSendResponse, "Whether the server accepted it"),
-      }).annotateMerge(
-        OpenApi.annotations({
-          identifier: "iris.inboxSend",
-          summary: "Send or reply from the Hive inbox",
-          description:
-            "Runs `iris hive inbox send` — the CLI's own path, own node or a peer's via the relay. ok means the server accepted it and returned a task id; it never means delivered or read. Recorded in ~/.iris/hive/outbox.jsonl so the thread shows both sides.",
-        }),
-      ),
-      HttpApiEndpoint.get("inboxSent", IrisPaths.inboxSent, {
-        success: described(InboxSentResponse, "Messages sent from this computer's panel"),
-      }).annotateMerge(
-        OpenApi.annotations({
-          identifier: "iris.inboxSent",
-          summary: "Hive inbox: sent",
-          description: "The local outbox. Only what was sent from this computer's panel — the CLI's own sends are not recorded here.",
         }),
       ),
       HttpApiEndpoint.get("atlas", IrisPaths.atlas, {

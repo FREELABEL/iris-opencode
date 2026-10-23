@@ -179,14 +179,47 @@ if [ -z "$PORT" ]; then
   info "$(head -5 "$WORK/serve.log" 2>/dev/null)"
 fi
 
+# THE ENGINE HAS A PASSWORD (#190647, desktop-v1.18.150). The app spawns it with a per-launch
+# password and publishes it for the person's own local clients in ~/.iris/desktop-engine.json
+# (0600). An unauthenticated probe gets 401 with an EMPTY body — and this check, which sent no
+# credentials, reported that as "the SPA fallback, the API is not serving". It refused to promote
+# 1.18.150 and 1.18.151, two working builds, while naming the wrong cause (#191021). So read the
+# record the app published — it is exactly what a local client of the shipped app would do — and
+# authenticate. A build from before the password publishes no record and is probed as before.
+ENGINE_REC="$HOME/.iris/desktop-engine.json"
+for _ in $(seq 1 20); do [ -s "$ENGINE_REC" ] && break; sleep 0.5; done
+AUTH=()
+if [ -s "$ENGINE_REC" ]; then
+  ENGINE_CRED="$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(d.get("username","opencode")+":"+d["password"])' "$ENGINE_REC" 2>/dev/null)"
+  if [ -n "$ENGINE_CRED" ]; then
+    AUTH=(-u "$ENGINE_CRED")
+    pass "engine credential published for local clients ($(stat -c '%a' "$ENGINE_REC" 2>/dev/null || stat -f '%Lp' "$ENGINE_REC") ~/.iris/desktop-engine.json)"
+  else
+    fail "~/.iris/desktop-engine.json exists but carries no password"
+  fi
+else
+  info "no ~/.iris/desktop-engine.json — probing without credentials (a build from before #190647)"
+fi
+
 # EVERY unknown path on this server returns the SPA's index.html with HTTP 200. Asserting on
 # status codes would be green against a build whose API is entirely unreachable. So parse.
-probe() { curl -s -m 10 "http://127.0.0.1:$PORT$1"; }
+probe() { curl -s -m 10 ${AUTH[@]+"${AUTH[@]}"} "http://127.0.0.1:$PORT$1"; }
+status_of() { curl -s -m 10 -o /dev/null -w '%{http_code}' ${AUTH[@]+"${AUTH[@]}"} "http://127.0.0.1:$PORT$1"; }
 is_json() { case "$1" in '{'*|'['*) return 0;; *) return 1;; esac; }
+# Say what actually came back. "SPA fallback" was a guess, and the wrong one cost two releases.
+not_json_reason() {
+  local code; code="$(status_of "$1")"
+  case "$code" in
+    401|403) echo "HTTP $code — the engine refused the credential (or none was sent)" ;;
+    200) echo "HTTP 200 but not JSON — the SPA fallback, the API is not serving" ;;
+    000) echo "no answer — the engine is not listening" ;;
+    *) echo "HTTP $code" ;;
+  esac
+}
 
 H="$(probe /global/health)"
 if ! is_json "$H"; then
-  fail "/global/health returned the SPA fallback, not JSON — the API is not serving"
+  fail "/global/health did not return JSON: $(not_json_reason /global/health)"
   info "$(echo "$H" | head -c 60)"
 else
   ENGINE_V="$(echo "$H" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("version",""))' 2>/dev/null)"
@@ -201,7 +234,7 @@ step "6. Are there models a NEW USER can actually use?"
 # assert models exist under the provider we ship — the smallest claim that implies a usable app.
 P="$(probe /config/providers)"
 if ! is_json "$P"; then
-  fail "/config/providers did not return JSON"
+  fail "/config/providers did not return JSON: $(not_json_reason /config/providers)"
 else
   echo "$P" | python3 -c '
 import json,sys
