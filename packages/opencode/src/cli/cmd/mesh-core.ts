@@ -189,6 +189,44 @@ export function phiRefusal(env: Record<string, string | undefined>, irisConfig: 
 }
 
 /**
+ * `iris mesh use` only takes effect on the v1 engine. From 1.4 the CLI ships from iris2/channel,
+ * which copies this file in as src/iris-v1 but runs sessions on the v2 engine: v2 reads
+ * ~/.config/iris/ (not the file `use` writes), its launcher injects `enabled_providers: ["iris"]`
+ * that REPLACES the file's list (v1 concatenates), and v2 core has no general openai-compatible
+ * provider. On v2 `use` would report success and change nothing, so it refuses (#190958).
+ * Returns the refusal, or null. "local" (a source run) is v1.
+ */
+export function meshUseEngineRefusal(version: string): string | null {
+  const m = /^(\d+)\.(\d+)\./.exec(version)
+  if (!m) return null
+  const [major, minor] = [Number(m[1]), Number(m[2])]
+  if (major < 1 || (major === 1 && minor < 4)) return null
+  return (
+    `Refusing: IRIS ${version} runs sessions on an engine that cannot use a mesh provider yet — ` +
+    "this command would report success and change nothing (#190958). " +
+    "`iris mesh status`, `up` and `down` work; the mesh itself is reachable at its OpenAI-compatible API."
+  )
+}
+
+/**
+ * Rotate the mesh-llm log before a start once it passes `maxBytes`: keeps one previous file
+ * (`.1`), so a mesh left running for weeks cannot fill the disk. The log carries the mesh's
+ * invite, so callers open it 0600.
+ */
+export function rotateLog(
+  file: string,
+  maxBytes: number,
+  io: { size: (p: string) => number | null; rename: (from: string, to: string) => void },
+): boolean {
+  const size = io.size(file)
+  if (size === null || size < maxBytes) return false
+  io.rename(file, file + ".1")
+  return true
+}
+
+export const MESH_LOG_MAX_BYTES = 20 * 1024 * 1024
+
+/**
  * Flags/values that would make a mesh discoverable, join a public one, bind the API beyond
  * loopback, or weaken admission below an owner allowlist (`require-owned` "is not an owner
  * allowlist" — MESHES.md).
@@ -219,6 +257,12 @@ export function buildServeArgv(input: {
   ctxSize?: number
   /** --parallel lanes. Each lane holds a full context, so lanes multiply memory. */
   parallel?: number
+  /**
+   * Find peers by mDNS on this LAN only. Without it, even an unpublished node holds a connection
+   * to Mesh LLM's hosted relay (measured 2026-10-23: use1-1.relay…iroh.link:443), which sees its
+   * node id and IP. The cost: only same-LAN machines can join — Tailscale does not carry mDNS.
+   */
+  lanOnly?: boolean
 }): string[] {
   const owners = Array.from(new Set(input.trustOwners.map((o) => o.trim()).filter(Boolean)))
   if (!input.ownerKey) throw new Error("an owner key is required — an IRIS mesh is never unrestricted")
@@ -227,8 +271,12 @@ export function buildServeArgv(input: {
   for (const [name, v] of [["context size", input.ctxSize], ["parallel lanes", input.parallel]] as const) {
     if (v !== undefined && !(Number.isInteger(v) && v > 0)) throw new Error(`${name} must be a positive whole number`)
   }
+  // --log-format json: headless mesh-llm otherwise rewrites its status screen into stdout, which
+  // grew the log ~6 MB/min (440 MB in 73 min on hive-001); JSON is ~20 KB/min (#190959).
   const argv = [
     input.bin,
+    "--log-format",
+    "json",
     "serve",
     "--model",
     input.model,
@@ -244,6 +292,7 @@ export function buildServeArgv(input: {
   if (input.nodeLabel) argv.push("--node-label", input.nodeLabel)
   if (input.ctxSize !== undefined) argv.push("--ctx-size", String(input.ctxSize))
   if (input.parallel !== undefined) argv.push("--parallel", String(input.parallel))
+  if (input.lanOnly) argv.push("--mesh-discovery-mode", "mdns")
   // Belt and braces: a model name or label must never smuggle a forbidden flag in.
   for (const a of argv) {
     if ((FORBIDDEN_SERVE_FLAGS as readonly string[]).includes(a)) throw new Error(`refusing to pass ${a} to mesh-llm`)

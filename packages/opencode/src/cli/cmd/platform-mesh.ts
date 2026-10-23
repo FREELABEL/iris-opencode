@@ -5,6 +5,7 @@ import path from "path"
 import { spawn } from "child_process"
 import { parse as parseJsonc } from "jsonc-parser"
 import { Global } from "../../global"
+import { Installation } from "../../installation"
 import {
   MESH_CONSOLE_PORT,
   MESH_DEFAULT_MODEL,
@@ -20,6 +21,9 @@ import {
   probeMesh,
   removeMeshProvider,
   acpMeshDecision,
+  meshUseEngineRefusal,
+  rotateLog,
+  MESH_LOG_MAX_BYTES,
 } from "./mesh-core"
 
 /**
@@ -126,9 +130,11 @@ const MeshStatusCommand = cmd({
       : cfg.present
         ? `present but filtered out by enabled_providers/disabled_providers`
         : "no"
-    console.log(`${cfg.offered ? "✓" : "✗"} IRIS uses it  ${cfgLine}  (${report.configured.file})`)
+    const engine = meshUseEngineRefusal(Installation.VERSION)
+    if (engine) console.log(`✗ IRIS uses it  not on this version (${Installation.VERSION}) — #190958`)
+    else console.log(`${cfg.offered ? "✓" : "✗"} IRIS uses it  ${cfgLine}  (${report.configured.file})`)
     if (!probe.serving) console.log("  Start one here with: iris mesh up   (or open Buzz desktop, which embeds one)")
-    else if (!cfg.offered) console.log("  Point IRIS at it with: iris mesh use")
+    else if (!cfg.offered && !engine) console.log("  Point IRIS at it with: iris mesh use")
   },
 })
 
@@ -138,6 +144,12 @@ const MeshUseCommand = cmd({
   builder: (y) =>
     y.option("dry-run", { type: "boolean", default: false, describe: "print the result, write nothing" }),
   handler: async (args) => {
+    const engine = meshUseEngineRefusal(Installation.VERSION)
+    if (engine) {
+      console.error(engine)
+      process.exitCode = 1
+      return
+    }
     const phi = phiRefusal(process.env, irisConfig())
     if (phi) {
       console.error(phi)
@@ -254,6 +266,11 @@ const MeshUpCommand = cmd({
         describe: "context size in tokens (an IRIS agent's first request is ~25k+; default: mesh-llm sizes it)",
       })
       .option("parallel", { type: "number", describe: "requests served at once; each holds a full context" })
+      .option("lan-only", {
+        type: "boolean",
+        default: false,
+        describe: "find peers on this network only (no hosted relay); machines elsewhere cannot join",
+      })
       .option("dry-run", { type: "boolean", default: false, describe: "print the command, start nothing" }),
   handler: async (args) => {
     const phi = phiRefusal(process.env, irisConfig())
@@ -309,6 +326,7 @@ const MeshUpCommand = cmd({
         nodeLabel: args["node-label"] as string | undefined,
         ctxSize: args.ctx as number | undefined,
         parallel: args.parallel as number | undefined,
+        lanOnly: Boolean(args["lan-only"]),
       })
     } catch (e) {
       console.error(`Refusing: ${(e as Error).message}`)
@@ -333,7 +351,13 @@ const MeshUpCommand = cmd({
       }
     }
     fs.mkdirSync(path.dirname(logFile()), { recursive: true })
-    const out = fs.openSync(logFile(), "a")
+    rotateLog(logFile(), MESH_LOG_MAX_BYTES, {
+      size: (p) => (fs.existsSync(p) ? fs.statSync(p).size : null),
+      rename: (from, to) => fs.renameSync(from, to),
+    })
+    // 0600: the log carries the mesh's invite. `mode` only applies on create, so chmod too.
+    const out = fs.openSync(logFile(), "a", 0o600)
+    fs.chmodSync(logFile(), 0o600)
     const child = spawn(argv[0], argv.slice(1), { detached: true, stdio: ["ignore", out, out] })
     child.unref()
     if (!child.pid) {
@@ -362,7 +386,13 @@ const MeshUpCommand = cmd({
 const MeshDownCommand = cmd({
   command: "down",
   describe: "stop the mesh that `iris mesh up` started (never touches Buzz's)",
-  handler: async () => {
+  builder: (y) =>
+    y.option("force", {
+      type: "boolean",
+      default: false,
+      describe: "if it has not exited after 30s, kill it (still only the mesh-llm iris mesh up started)",
+    }),
+  handler: async (args) => {
     const pid = readPid()
     if (!pid) {
       console.log("nothing to stop — iris mesh up has not started one")
@@ -381,9 +411,15 @@ const MeshDownCommand = cmd({
       return
     }
     process.kill(pid, "SIGTERM")
-    for (let i = 0; i < 20 && alive(pid); i++) await Bun.sleep(250)
+    // Mid model-load, mesh-llm took ~18 s to exit on SIGTERM (hive-001, 2026-10-23); 5 s reported
+    // a healthy shutdown as a failure. Wait up to 30 s.
+    for (let i = 0; i < 120 && alive(pid); i++) await Bun.sleep(250)
+    if (alive(pid) && args.force) {
+      process.kill(pid, "SIGKILL")
+      for (let i = 0; i < 20 && alive(pid); i++) await Bun.sleep(250)
+    }
     if (alive(pid)) {
-      console.error(`mesh-llm (pid ${pid}) did not stop after SIGTERM`)
+      console.error(`mesh-llm (pid ${pid}) is still running 30s after SIGTERM. To kill it: iris mesh down --force`)
       process.exitCode = 1
       return
     }

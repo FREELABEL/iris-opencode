@@ -9,7 +9,10 @@ import {
   meshConfigState,
   meshPort,
   meshProviderEntry,
+  meshUseEngineRefusal,
   ownerIdFromKeystore,
+  rotateLog,
+  MESH_LOG_MAX_BYTES,
   parseModelsResponse,
   phiRefusal,
   probeMesh,
@@ -161,6 +164,8 @@ describe("buildServeArgv — owner-restricted, unpublished, loopback", () => {
     const argv = buildServeArgv({ ...base, trustOwners: ["own1", "own2", "own1"] })
     expect(argv).toEqual([
       "/opt/homebrew/bin/mesh-llm",
+      "--log-format",
+      "json",
       "serve",
       "--model",
       "Qwen3-8B-Q4_K_M",
@@ -207,6 +212,21 @@ describe("buildServeArgv — owner-restricted, unpublished, loopback", () => {
       expect(() => buildServeArgv({ ...base, trustOwners: ["o"], parallel: bad })).toThrow(/parallel lanes/)
     }
   })
+  test("LAN-only adds mDNS discovery and nothing else", () => {
+    const plain = buildServeArgv({ ...base, trustOwners: ["o"] })
+    expect(plain).not.toContain("--mesh-discovery-mode")
+    const lan = buildServeArgv({ ...base, trustOwners: ["o"], lanOnly: true })
+    expect(lan.slice(lan.indexOf("--mesh-discovery-mode"), lan.indexOf("--mesh-discovery-mode") + 2)).toEqual([
+      "--mesh-discovery-mode",
+      "mdns",
+    ])
+    expect(lan.filter((a) => !plain.includes(a))).toEqual(["--mesh-discovery-mode", "mdns"])
+  })
+  test("logs as JSON — the headless status screen grew the log ~6 MB/min (#190959)", () => {
+    const argv = buildServeArgv({ ...base, trustOwners: ["o"] })
+    // a global flag: it must come before the subcommand
+    expect(argv.slice(1, 4)).toEqual(["--log-format", "json", "serve"])
+  })
   test("refuses to build an unrestricted mesh", () => {
     expect(() => buildServeArgv({ ...base, trustOwners: [] })).toThrow(/trusted owner/)
     expect(() => buildServeArgv({ ...base, trustOwners: [" "] })).toThrow(/trusted owner/)
@@ -244,5 +264,37 @@ describe("acpMeshDecision — M4: Buzz gets the mesh only when it is really ther
   test("user already configured mesh → their entry wins", () => {
     const config = { provider: { mesh: meshProviderEntry(1234, []) } }
     expect(acpMeshDecision({ probe: serving, phi: null, config }).apply).toBe(false)
+  })
+})
+
+describe("meshUseEngineRefusal — `use` only takes effect on the v1 engine (#190958)", () => {
+  test("v1 versions and source runs are allowed", () => {
+    for (const v of ["local", "1.3.290", "1.3.0", "0.9.1"]) expect(meshUseEngineRefusal(v)).toBeNull()
+  })
+  test("1.4 and later run sessions on v2, so use refuses and says why", () => {
+    for (const v of ["1.4.0", "1.5.11", "2.0.0"]) {
+      const r = meshUseEngineRefusal(v)
+      expect(r).toContain("#190958")
+      expect(r).toContain(v)
+    }
+  })
+})
+
+describe("rotateLog — a mesh left running cannot fill the disk (#190959)", () => {
+  const io = (size: number | null) => {
+    const renames: [string, string][] = []
+    return { renames, size: () => size, rename: (a: string, b: string) => void renames.push([a, b]) }
+  }
+  test("under the limit, or no file yet: untouched", () => {
+    for (const size of [null, 0, MESH_LOG_MAX_BYTES - 1]) {
+      const fs = io(size)
+      expect(rotateLog("/l/mesh-llm.log", MESH_LOG_MAX_BYTES, fs)).toBe(false)
+      expect(fs.renames).toEqual([])
+    }
+  })
+  test("at or over the limit: kept as .1, a fresh log starts", () => {
+    const fs = io(MESH_LOG_MAX_BYTES)
+    expect(rotateLog("/l/mesh-llm.log", MESH_LOG_MAX_BYTES, fs)).toBe(true)
+    expect(fs.renames).toEqual([["/l/mesh-llm.log", "/l/mesh-llm.log.1"]])
   })
 })

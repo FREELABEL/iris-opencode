@@ -9873,7 +9873,7 @@
       "describe": "stop the mesh that `iris mesh up` started (never touches Buzz's)",
       "aliases": [],
       "run": "iris mesh down",
-      "haystack": "mesh down stop the mesh that `iris mesh up` started (never touches buzz's)"
+      "haystack": "mesh down stop the mesh that `iris mesh up` started (never touches buzz's) force if it has not exited after 30s, kill it (still only the mesh-llm iris mesh up started)"
     },
     {
       "kind": "command",
@@ -9897,7 +9897,7 @@
       "describe": "start an owner-restricted, unpublished mesh on this machine (loopback API)",
       "aliases": [],
       "run": "iris mesh up",
-      "haystack": "mesh up start an owner-restricted, unpublished mesh on this machine (loopback api) model model to serve trust-owner additional owner id allowed to join (your own owner id is always trusted) owner-key owner keystore (default ~/.mesh-llm/owner-keystore.json) node-label label for this node in the mesh ctx context size in tokens (an iris agent parallel requests served at once; each holds a full context dry-run print the command, start nothing"
+      "haystack": "mesh up start an owner-restricted, unpublished mesh on this machine (loopback api) model model to serve trust-owner additional owner id allowed to join (your own owner id is always trusted) owner-key owner keystore (default ~/.mesh-llm/owner-keystore.json) node-label label for this node in the mesh ctx context size in tokens (an iris agent parallel requests served at once; each holds a full context lan-only find peers on this network only (no hosted relay); machines elsewhere cannot join dry-run print the command, start nothing"
     },
     {
       "kind": "command",
