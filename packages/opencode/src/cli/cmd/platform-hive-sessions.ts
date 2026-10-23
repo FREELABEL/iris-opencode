@@ -53,6 +53,43 @@ export function waitingLines(w: Waiting | null | undefined): string[] {
   return out
 }
 
+/** A node report older than this lists nothing — the server's SessionRows::REPORT_WINDOW_S (#190653). */
+export const REPORT_WINDOW_MS = 7 * 86400 * 1000
+
+/**
+ * The sessions the fleet currently reports, one per provider + id (#190653).
+ *
+ * A machine that re-registered keeps its OLD node record, and that record keeps its last list
+ * forever: the Mac had a live record plus two dead ones from 2026-09-13 with 50 frozen rows each,
+ * all shown beside its real sessions — and any session in both made `send-input <full id>` refuse
+ * as "matches 2 sessions". So: a report older than REPORT_WINDOW_MS contributes no rows (it is
+ * returned in `retired`, never silently dropped), and a session reported by several records is
+ * taken from the newest report. A node with no report time at all is kept: unknown is not old.
+ */
+export function reportedSessions(
+  nodes: any[],
+  now = Date.now(),
+): { entries: Array<{ node: any; s: Session; at: number }>; retired: Array<{ node: any; name: string; rows: number; at: string }> } {
+  const best = new Map<string, { node: any; s: Session; at: number }>()
+  const retired: Array<{ node: any; name: string; rows: number; at: string }> = []
+  for (const n of nodes || []) {
+    const list = (n?.active_sessions || []) as Session[]
+    const at = Date.parse(n?.sessions_updated_at ?? n?.last_heartbeat_at ?? "")
+    if (!Number.isNaN(at) && now - at > REPORT_WINDOW_MS) {
+      if (list.length) retired.push({ node: n, name: String(n.name), rows: list.length, at: n.sessions_updated_at ?? n.last_heartbeat_at })
+      continue
+    }
+    const t = Number.isNaN(at) ? 0 : at
+    for (const s of list) {
+      if (!s || !s.session_id) continue
+      const key = `${(s as any).provider ?? ""}|${s.session_id}`
+      const prev = best.get(key)
+      if (!prev || t > prev.at) best.set(key, { node: n, s, at: t })
+    }
+  }
+  return { entries: [...best.values()], retired }
+}
+
 function age(iso: string | null): string {
   if (!iso) return "—"
   const ms = Date.now() - Date.parse(iso)
@@ -124,18 +161,17 @@ const SessionsCommand = cmd({
     // still ten missed heartbeats, so it does not fire on a brief hiccup.
     const QUIET_MS = 5 * 60 * 1000
 
-    for (const n of nodes) {
-      if (argv.node && String(n.name).toLowerCase() !== String(argv.node).toLowerCase()) continue
-
+    const wantNode = (n: any) => !argv.node || String(n.name).toLowerCase() === String(argv.node).toLowerCase()
+    const { entries, retired } = reportedSessions(nodes.filter(wantNode))
+    const old = new Set(retired.map((r) => r.node))
+    for (const n of nodes.filter(wantNode)) {
+      if (old.has(n)) continue // named below as an older record, not as a quiet machine
       const reported = n.sessions_updated_at ? Date.parse(n.sessions_updated_at) : NaN
       if (Number.isNaN(reported) || Date.now() - reported > QUIET_MS) {
         quiet.push({ name: n.name, ago: n.sessions_updated_at ? age(n.sessions_updated_at) : "never" })
       }
-
-      for (const s of (n.active_sessions || []) as Session[]) {
-        rows.push({ ...s, node: n.name })
-      }
     }
+    for (const { node, s } of entries) rows.push({ ...s, node: node.name })
 
     // Stale is hidden by default but COUNTED and reported, never silently dropped — a list
     // quietly filtered cannot be told from one that is complete.
@@ -163,6 +199,12 @@ const SessionsCommand = cmd({
       console.log(dim(`  ⚠ ${q.name} last reported its sessions ${q.ago} ago — what follows for it may be out of date.`))
     }
     if (quiet.length) console.log()
+    // Old node records (a machine that re-registered) — named, with how much they hold, so a
+    // reader knows rows are left out and why. `iris hive nodes` can remove them.
+    for (const r of retired) {
+      console.log(dim(`  ${r.name}: an older record last reported ${age(r.at)} ago — its ${r.rows} sessions are not shown.`))
+    }
+    if (retired.length) console.log()
 
     if (shown.length === 0) {
       console.log(dim("  No sessions." + (staleCount ? `  ${staleCount} stale hidden — see with --all` : "")))
@@ -241,14 +283,11 @@ const SendInputCommand = cmd({
     // Match the FULL id, or an unambiguous suffix. Never a prefix: session ids share leading
     // characters, and a truncated match is how a wrong diagnosis got filed on this project
     // once already (#182312).
-    const hits: Array<{ node: any; s: Session }> = []
-    for (const n of nodes) {
-      for (const s of (n.active_sessions || []) as Session[]) {
-        if (s.session_id === wanted || (wanted.length >= 6 && s.session_id.endsWith(wanted))) {
-          hits.push({ node: n, s })
-        }
-      }
-    }
+    // From the current reports only, one per session (#190653): a session also listed by an old
+    // record of the same machine used to count twice and refuse even a full id.
+    const hits: Array<{ node: any; s: Session }> = reportedSessions(nodes).entries.filter(
+      ({ s }) => s.session_id === wanted || (wanted.length >= 6 && s.session_id.endsWith(wanted)),
+    )
 
     if (hits.length === 0) {
       console.error(`No session matching "${wanted}".`)
