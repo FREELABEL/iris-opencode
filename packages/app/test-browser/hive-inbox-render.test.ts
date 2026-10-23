@@ -47,12 +47,14 @@ const wait = async (ok: () => boolean, ms = 2000) => {
   }
 }
 
-function mount(opts: { empty?: boolean; unmeasured?: boolean } = {}) {
+function mount(opts: { empty?: boolean; unmeasured?: boolean; refused?: boolean } = {}) {
   try {
     localStorage.removeItem("iris.hive-inbox.v2")
   } catch {}
   const items: any[] = opts.empty ? [] : fx.items.map(({ minutesAgo, ...r }) => ({ ...r, receivedAt: iso(minutesAgo) }))
   const sent: any[] = opts.empty ? [] : fx.sent.map(({ minutesAgo, ...s }) => ({ ...s, sentAt: iso(minutesAgo) }))
+  if (opts.refused)
+    sent.push({ id: "o9", to: "iris-hive-001", text: "Same branch, please.", sentAt: iso(10), taskId: "t-9", replyTo: "m6", delivery: "failed", deliveryReason: "their computer was busy (CPU at 309%)" })
   const reads: string[] = []
   const states: any[] = []
   const sends: any[] = []
@@ -264,5 +266,22 @@ test("an empty inbox says it is empty and how messages arrive", async () => {
   await wait(() => !!host.querySelector(".hib-empty b"))
   expect(host.querySelector(".hib-empty b")?.textContent).toBe("Your Hive inbox is empty")
   expect(host.querySelector(".hib-empty")?.textContent).toContain("iris hive inbox send")
+  done()
+})
+
+test("a reply the other computer refused says so, with the reason, and Retry resends it (#190982)", async () => {
+  const { host, done, sends } = mount({ refused: true })
+  await wait(() => host.querySelectorAll(".hib-row").length > 0)
+  ;([...host.querySelectorAll(".hib-row")][1] as HTMLButtonElement).click()
+  await wait(() => host.querySelectorAll(".hib-msg--out").length === 2)
+  const refused = [...host.querySelectorAll(".hib-msg--out")].find((m) => m.textContent?.includes("Same branch"))!
+  expect(refused.querySelector(".hib-state")?.textContent?.trim()).toBe("not delivered — their computer was busy (CPU at 309%)")
+  expect(refused.querySelector(".hib-state")?.getAttribute("data-tone")).toBe("fail")
+  // the reply that WAS accepted keeps its honest wording
+  const accepted = [...host.querySelectorAll(".hib-msg--out")].find((m) => m.textContent?.includes("Gate it"))!
+  expect(accepted.querySelector(".hib-retry")).toBeNull()
+  ;(refused.querySelector(".hib-retry") as HTMLButtonElement).click()
+  await wait(() => sends.length === 1)
+  expect(sends[0]).toEqual({ to: "iris-hive-001", text: "Same branch, please.", replyTo: "m6" })
   done()
 })

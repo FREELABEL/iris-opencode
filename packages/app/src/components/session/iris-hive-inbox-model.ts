@@ -35,6 +35,10 @@ export interface SentRow {
   taskId?: string
   replyTo?: string
   via?: string
+  /** From the task (#190982): in their inbox / not yet / refused. Never "read". */
+  delivery?: "delivered" | "waiting" | "failed"
+  deliveryReason?: string
+  deliveredAt?: string
 }
 
 /** One message as /iris/inbox/:index returns it. */
@@ -297,10 +301,21 @@ export function cardLabel(item: string | undefined): string | undefined {
   return m ? `#${m[1]}` : item
 }
 
-/** What a sent message can honestly claim. "accepted" is the server's word; nothing says delivered. */
+/**
+ * What a sent message can honestly claim. "accepted" is the server's word; "delivered" is the
+ * task's, and means it is in THEIR inbox. Nothing here ever says read (#190982).
+ */
 export function sentState(s: SentRow): string {
-  if (s.taskId) return s.via === "relay" ? "accepted by IRIS · via relay" : "accepted by IRIS"
+  const via = s.via === "relay" ? " · via relay" : ""
+  if (s.delivery === "delivered") return `delivered to their inbox${via}`
+  if (s.delivery === "failed") return `not delivered — ${s.deliveryReason ?? "refused"}`
+  if (s.delivery === "waiting") return `waiting for their computer${via}`
+  if (s.taskId) return `accepted by IRIS${via}`
   return "sent"
+}
+export type SentTone = "ok" | "wait" | "fail" | "plain"
+export function sentTone(s: SentRow): SentTone {
+  return s.delivery === "delivered" ? "ok" : s.delivery === "failed" ? "fail" : s.delivery === "waiting" ? "wait" : "plain"
 }
 
 /** Remembered per viewer: lens, filter and the selected item — reopen the tab where you left it. */

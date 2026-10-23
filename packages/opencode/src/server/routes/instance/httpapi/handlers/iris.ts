@@ -79,7 +79,7 @@ import {
   createCheckout,
 } from "@/iris/platform"
 import { parseExpandedListIds } from "@/iris/relationship-graph"
-import { readOutbox, sendInboxMessage, setInboxState } from "@/iris/inbox-actions"
+import { resolveDelivery, sendInboxMessage, setInboxState } from "@/iris/inbox-actions"
 import {
   accountRef,
   agentCredential,
@@ -229,9 +229,10 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
     const inboxSend = Effect.fn("IrisHttpApi.inboxSend")((ctx: { payload: { to: string; text: string; replyTo?: string } }) =>
       Effect.promise(() => sendInboxMessage(ctx.payload)),
     )
+    // Each unresolved sent row asks the platform what became of its task (#190982).
     const inboxSent = Effect.fn("IrisHttpApi.inboxSent")(() =>
-      Effect.sync(() => {
-        const r = readOutbox()
+      Effect.promise(async () => {
+        const r = await resolveDelivery()
         return {
           measured: true,
           ...(r.unparsed ? { reason: `${r.unparsed} sent ${r.unparsed === 1 ? "line" : "lines"} could not be read` } : {}),

@@ -593,6 +593,14 @@ const OutboxRowSchema = Schema.Struct({
   taskId: Schema.optional(described(Schema.String, "The server's task id: it ACCEPTED the message. Not proof of delivery or reading.")),
   replyTo: Schema.optional(Schema.String),
   via: Schema.optional(Schema.String),
+  delivery: Schema.optional(
+    described(
+      Schema.Literals(["delivered", "waiting", "failed"]),
+      "From the task: in their inbox / not yet / refused. Absent = not known. Never means read.",
+    ),
+  ),
+  deliveryReason: Schema.optional(Schema.String),
+  deliveredAt: Schema.optional(Schema.String),
 }).annotate({ identifier: "IrisOutboxRow" })
 
 const InboxSendResponse = Schema.Struct({

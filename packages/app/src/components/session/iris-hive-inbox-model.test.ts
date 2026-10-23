@@ -20,6 +20,7 @@ import {
   rankInbox,
   replyCount,
   sentState,
+  sentTone,
   shortAge,
   subjectOf,
   threadOf,
@@ -216,13 +217,23 @@ describe("words on screen", () => {
     expect(cardLabel("bloq:item:190875")).toBe("#190875")
     expect(cardLabel(undefined)).toBeUndefined()
   })
-  test("a sent message never claims to be delivered or read", () => {
-    for (const s of [
-      { id: "1", to: "a", text: "x", sentAt: "", taskId: "t" },
-      { id: "1", to: "a", text: "x", sentAt: "", taskId: "t", via: "relay" },
-      { id: "1", to: "a", text: "x", sentAt: "" },
-    ])
+  test("accepted is not delivered; nothing ever claims read", () => {
+    const base = { id: "1", to: "a", text: "x", sentAt: "", taskId: "t" }
+    expect(sentState(base)).toBe("accepted by IRIS")
+    expect(sentState({ ...base, via: "relay" })).toBe("accepted by IRIS · via relay")
+    for (const s of [base, { ...base, via: "relay" }, { id: "1", to: "a", text: "x", sentAt: "" }])
       expect(sentState(s)).not.toMatch(/deliver|read|seen/i)
+  })
+  test("delivery from the task: delivered, waiting, refused with the reason (#190982)", () => {
+    const base = { id: "1", to: "a", text: "x", sentAt: "", taskId: "t" }
+    const d = { ...base, delivery: "delivered" as const }
+    const f = { ...base, delivery: "failed" as const, deliveryReason: "their computer was busy (CPU at 137%)" }
+    const w = { ...base, delivery: "waiting" as const }
+    expect(sentState(d)).toBe("delivered to their inbox")
+    expect(sentState(f)).toBe("not delivered — their computer was busy (CPU at 137%)")
+    expect(sentState(w)).toBe("waiting for their computer")
+    expect([sentTone(d), sentTone(f), sentTone(w), sentTone(base)]).toEqual(["ok", "fail", "wait", "plain"])
+    for (const s of [d, f, w]) expect(sentState(s)).not.toMatch(/\bread\b|seen/i)
   })
   test("matchesQuery looks at sender, subject and label", () => {
     expect(matchesQuery({ from: "studio-mac", label: "x", preview: "Deploy" }, "deploy")).toBe(true)

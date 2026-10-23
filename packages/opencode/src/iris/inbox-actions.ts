@@ -14,9 +14,9 @@
  *    read; the transport cannot prove either, and the panel must not claim it.
  */
 import { execFile } from "child_process"
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "fs"
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs"
 import path from "path"
-import { inboxDir, locateInboxRow, readManifestLines, writeManifestLines, type ManifestRow } from "./platform"
+import { inboxDir, IRIS_API, irisFetch, locateInboxRow, readManifestLines, writeManifestLines, type ManifestRow } from "./platform"
 import { irisCliPath } from "./playbook-install"
 
 export type Exec = (file: string, args: string[], opts: { timeoutMs: number }) => Promise<{ code: number; stdout: string; stderr: string }>
@@ -113,6 +113,13 @@ export interface OutboxRow {
   replyTo?: string
   /** "relay" when it went to a peer's node. */
   via?: string
+  /**
+   * What became of it, from the task (#190982). Absent = not known yet, and the panel says only
+   * "accepted by IRIS". "delivered" means it is in THEIR inbox — never that they read it.
+   */
+  delivery?: "delivered" | "waiting" | "failed"
+  deliveryReason?: string
+  deliveredAt?: string
 }
 
 export interface SendResult {
@@ -225,6 +232,93 @@ export function readOutbox(dir = inboxDir()): { rows: OutboxRow[]; unparsed: num
     }
   } catch {
     return { rows: [], unparsed: 0 }
+  }
+  return { rows, unparsed }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Delivery (#190982)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** What the task endpoint says, reduced to what a sender needs. */
+export interface TaskView {
+  status?: string
+  error?: string | null
+  arrived_at?: string | null
+  completed_at?: string | null
+}
+
+/**
+ * A sent row's fate from its task. "accepted" was all the panel could say; a reply the recipient's
+ * node then refused kept saying it forever (#190982: two replies failed 'node busy' and the thread
+ * still read "accepted by IRIS"). Null = cannot tell — leave the row as it was.
+ */
+export function deliveryOf(t: TaskView | null): Pick<OutboxRow, "delivery" | "deliveryReason" | "deliveredAt"> | null {
+  if (!t?.status) return null
+  const st = t.status.toLowerCase()
+  if (st === "completed" || t.arrived_at) return { delivery: "delivered", deliveredAt: t.arrived_at ?? t.completed_at ?? undefined }
+  if (st === "failed" || st === "cancelled" || st === "expired" || st === "timeout")
+    return { delivery: "failed", deliveryReason: shortReason(t.error) ?? st }
+  if (st === "pending" || st === "queued" || st === "dispatched" || st === "running") return { delivery: "waiting" }
+  return null
+}
+
+/** The server's refusal, cut to what a person reads in a thread. */
+export function shortReason(error: string | null | undefined): string | undefined {
+  if (!error) return undefined
+  const busy = error.match(/busy \(([^)]+)\)/)
+  if (busy) return `their computer was busy (${busy[1]})`
+  if (/offline|not online/i.test(error)) return "their computer is offline"
+  const first = error.split(/(?<=\.)\s/)[0].trim()
+  return first.length > 140 ? first.slice(0, 137) + "…" : first
+}
+
+/** The platform's view of one task. A short timeout: a slow API must not hold the panel's list. */
+export async function platformTask(id: string): Promise<TaskView | null> {
+  const res = await irisFetch(`/api/v6/nodes/tasks/${encodeURIComponent(id)}`, IRIS_API, { signal: AbortSignal.timeout(4000) })
+  if (!res.ok) return null
+  const j = (await res.json()) as { task?: TaskView }
+  return j.task ?? null
+}
+
+const TERMINAL = new Set(["delivered", "failed"])
+/** Only the newest rows are looked up, and never one whose fate is already final. */
+export const DELIVERY_LOOKUPS = 20
+
+/**
+ * Resolve the newest unresolved rows' delivery, write FINAL answers back (so a row is looked up
+ * until it is delivered or failed, then never again), and return every row. A lookup that fails —
+ * no network, a peer's task this account cannot see — changes nothing: "accepted" stays true.
+ */
+export async function resolveDelivery(
+  deps: { dir?: string; fetchTask?: ((id: string) => Promise<TaskView | null>) | null } = {},
+): Promise<{ rows: OutboxRow[]; unparsed: number }> {
+  const dir = deps.dir ?? inboxDir()
+  const { rows, unparsed } = readOutbox(dir)
+  const fetchTask = deps.fetchTask === undefined ? platformTask : deps.fetchTask
+  if (!fetchTask) return { rows, unparsed }
+  const todo = rows
+    .map((r, i) => ({ r, i }))
+    .filter(({ r }) => r.taskId && !TERMINAL.has(r.delivery ?? ""))
+    .slice(-DELIVERY_LOOKUPS)
+  if (!todo.length) return { rows, unparsed }
+
+  const results = await Promise.all(todo.map(({ r }) => fetchTask(r.taskId!).catch(() => null)))
+  let changedFinal = false
+  todo.forEach(({ i }, k) => {
+    const d = deliveryOf(results[k])
+    if (!d) return
+    rows[i] = { ...rows[i], ...d }
+    if (TERMINAL.has(d.delivery ?? "")) changedFinal = true
+  })
+  // Rewrite only when something became FINAL, and only if no line was unreadable — rewriting
+  // would drop those lines, and a read must never destroy what it could not parse.
+  if (changedFinal && unparsed === 0) {
+    try {
+      const file = outboxPath(dir)
+      writeFileSync(`${file}.tmp`, rows.map((r) => JSON.stringify(r)).join("\n") + "\n")
+      renameSync(`${file}.tmp`, file)
+    } catch {}
   }
   return { rows, unparsed }
 }

@@ -27,6 +27,7 @@ import {
   sentMatches,
   sentNewestFirst,
   sentState,
+  sentTone,
   shortAge,
   subjectOf,
   threadOf,
@@ -472,7 +473,9 @@ export function IrisHiveInbox(props: {
                       <span class="hsc-num hib-age">{shortAge(s().sentAt, now())}</span>
                     </span>
                     <span class="hib-subj">{s().text.split("\n")[0]}</span>
-                    <span class="hib-sub">{sentState(s())}</span>
+                    <span class="hib-sub" data-tone={sentTone(s())}>
+                      {sentState(s())}
+                    </span>
                   </span>
                 </button>
               )
@@ -794,9 +797,25 @@ export function IrisHiveInbox(props: {
                                         <span class="hsc-num hib-faint">{fullTime(s().sentAt)}</span>
                                       </div>
                                       <div class="hib-body hib-body--plain">{s().text}</div>
-                                      <span class="hib-state" title="The server accepted it. Whether their computer has it yet, IRIS cannot see.">
-                                        {sentState(s())}
-                                      </span>
+                                      <div class="hib-state-row">
+                                        <Show when={s().delivery === "failed"}>
+                                          <button
+                                            type="button"
+                                            class="hib-chipbtn hib-retry"
+                                            disabled={sending()}
+                                            onClick={() => void send(s().to, s().text, s().replyTo)}
+                                          >
+                                            Retry
+                                          </button>
+                                        </Show>
+                                        <span
+                                          class="hib-state"
+                                          data-tone={sentTone(s())}
+                                          title="Delivered means it is in their inbox. Whether they have read it, IRIS does not claim."
+                                        >
+                                          {sentState(s())}
+                                        </span>
+                                      </div>
                                     </li>
                                   )
                                 }}

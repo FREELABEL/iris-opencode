@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "fs"
 import { tmpdir } from "os"
 import path from "path"
-import { cardIdOf, parseSendJson, readOutbox, sendInboxMessage, setInboxState, validTarget, type Exec } from "./inbox-actions"
+import { cardIdOf, deliveryOf, parseSendJson, readOutbox, resolveDelivery, sendInboxMessage, setInboxState, shortReason, validTarget, type Exec, type TaskView } from "./inbox-actions"
 
 // Fictional rows only — this repo is public.
 const row = (o: Record<string, unknown>) => JSON.stringify(o)
@@ -170,5 +170,73 @@ describe("helpers", () => {
     writeFileSync(path.join(path.dirname(dir), "outbox.jsonl"), 'junk\n{"to":"a","text":"b","id":"1","sentAt":"x"}\n')
     expect(readOutbox(dir)).toEqual({ rows: [{ to: "a", text: "b", id: "1", sentAt: "x" }], unparsed: 1 })
     expect(existsSync(path.join(path.dirname(dir), "outbox.jsonl"))).toBe(true)
+  })
+})
+
+describe("delivery (#190982)", () => {
+  const outbox = (dir: string, rows: object[], extra = "") =>
+    writeFileSync(path.join(path.dirname(dir), "outbox.jsonl"), rows.map((r) => JSON.stringify(r)).join("\n") + "\n" + extra)
+  const row = (id: string, o: object = {}) => ({ id, to: "iris-hive-001", text: "hi", sentAt: "2026-10-23T18:25:00Z", taskId: `t-${id}`, ...o })
+
+  test("deliveryOf reads the task the way a sender needs it", () => {
+    expect(deliveryOf({ status: "completed", arrived_at: "2026-10-23T18:25:02Z" })).toEqual({ delivery: "delivered", deliveredAt: "2026-10-23T18:25:02Z" })
+    expect(deliveryOf({ status: "failed", error: "Pinned to node 01a1, which is busy (CPU at 137%). Refusing to run it on a different machine." })).toEqual({
+      delivery: "failed",
+      deliveryReason: "their computer was busy (CPU at 137%)",
+    })
+    expect(deliveryOf({ status: "pending" })).toEqual({ delivery: "waiting" })
+    expect(deliveryOf(null)).toBeNull()
+    expect(deliveryOf({})).toBeNull()
+  })
+
+  test("shortReason keeps the first sentence and names the common causes plainly", () => {
+    expect(shortReason("Node is offline.")).toBe("their computer is offline")
+    expect(shortReason("Something else broke. More detail here.")).toBe("Something else broke.")
+    expect(shortReason(undefined)).toBeUndefined()
+  })
+
+  test("resolves the unresolved rows, writes FINAL answers back, and never looks a final row up again", async () => {
+    const { dir } = inbox([])
+    outbox(dir, [row("a"), row("b"), row("c", { delivery: "delivered" })])
+    const asked: string[] = []
+    const tasks: Record<string, TaskView> = { "t-a": { status: "failed", error: "which is busy (CPU at 309%)" }, "t-b": { status: "pending" } }
+    const r = await resolveDelivery({ dir, fetchTask: async (id) => (asked.push(id), tasks[id] ?? null) })
+    expect(asked).toEqual(["t-a", "t-b"])
+    expect(r.rows.map((x) => x.delivery)).toEqual(["failed", "waiting", "delivered"])
+    // failed is final and persisted; waiting is not final, so it is looked up again next time
+    const again: string[] = []
+    await resolveDelivery({ dir, fetchTask: async (id) => (again.push(id), null) })
+    expect(again).toEqual(["t-b"])
+    expect(readOutbox(dir).rows[0]).toMatchObject({ delivery: "failed", deliveryReason: "their computer was busy (CPU at 309%)" })
+  })
+
+  test("a lookup that fails changes nothing — 'accepted' stays the truth", async () => {
+    const { dir } = inbox([])
+    outbox(dir, [row("a")])
+    const r = await resolveDelivery({ dir, fetchTask: async () => { throw new Error("offline") } })
+    expect(r.rows[0].delivery).toBeUndefined()
+  })
+
+  test("never rewrites an outbox that has a line it could not read", async () => {
+    const { dir } = inbox([])
+    outbox(dir, [row("a")], "not json\n")
+    await resolveDelivery({ dir, fetchTask: async () => ({ status: "completed" }) })
+    const raw = readFileSync(path.join(path.dirname(dir), "outbox.jsonl"), "utf-8")
+    expect(raw).toContain("not json")
+  })
+
+  test("only the newest 20 unresolved rows are looked up", async () => {
+    const { dir } = inbox([])
+    outbox(dir, Array.from({ length: 30 }, (_, i) => row(String(i))))
+    const asked: string[] = []
+    await resolveDelivery({ dir, fetchTask: async (id) => (asked.push(id), null) })
+    expect(asked.length).toBe(20)
+    expect(asked[0]).toBe("t-10")
+  })
+
+  test("with no fetcher, the outbox is returned as it is", async () => {
+    const { dir } = inbox([])
+    outbox(dir, [row("a")])
+    expect((await resolveDelivery({ dir, fetchTask: null })).rows).toHaveLength(1)
   })
 })

@@ -295,3 +295,10 @@
   .hib-peek { animation: hib-in 140ms ease-out; }
   @keyframes hib-in { from { opacity: 0; transform: translateY(-2px); } }
 }
+
+/* delivery (#190982): the state a sent reply actually reached */
+.hib-state-row { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.hib-state[data-tone="ok"], .hib-sub[data-tone="ok"] { color: var(--hsc-sage); }
+.hib-state[data-tone="wait"], .hib-sub[data-tone="wait"] { color: var(--hsc-amber); }
+.hib-state[data-tone="fail"], .hib-sub[data-tone="fail"] { color: var(--hsc-coral); }
+.hib-retry { color: var(--hsc-coral); border-color: color-mix(in srgb, var(--hsc-coral) 40%, var(--hsc-rule)); }
