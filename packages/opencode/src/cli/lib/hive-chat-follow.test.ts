@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { anchorIndex, followStep, newFollowState } from "./hive-chat-follow"
+import { anchorIndex, followStep, newFollowState, refusedAtCreate } from "./hive-chat-follow"
 
 const sent = "what changed today?"
 const mine = { role: "user", type: "text", text: `[via iris · iris-hive-001] ${sent}` }
@@ -37,5 +37,16 @@ describe("hive chat follow (#190671)", () => {
     followStep(s, [mine, { role: "assistant", type: "tool_use", tool: "read", file_path: "a.ts" }], sent)
     expect(s.anchored).toBe(true)
     expect(s.answered).toBe(false)
+  })
+})
+
+describe("refusedAtCreate (#190945 — a refused send is not 'sent')", () => {
+  test("a task created already failed names the reason", () => {
+    expect(refusedAtCreate({ task: { status: "failed", result: { metadata: { reason: "is busy (CPU at 168%)" } } } })).toBe("is busy (CPU at 168%)")
+  })
+  test("a dispatched or pending task is not a refusal", () => {
+    expect(refusedAtCreate({ task: { status: "dispatched" } })).toBeNull()
+    expect(refusedAtCreate({ task: { status: "pending" } })).toBeNull()
+    expect(refusedAtCreate(null)).toBeNull()
   })
 })

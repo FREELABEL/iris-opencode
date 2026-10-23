@@ -3,7 +3,7 @@ import { cmd } from "./cmd"
 import { requireAuth, requireUserId, writeJson, dim, bold, success, warn } from "./iris-api"
 import { hiveFetch } from "./platform-hive-nodes"
 import os from "os"
-import { followStep, newFollowState, type TranscriptMessage } from "../lib/hive-chat-follow"
+import { followStep, newFollowState, refusedAtCreate, type TranscriptMessage } from "../lib/hive-chat-follow"
 
 /**
  * `iris hive sessions` — what AI sessions are running across your fleet.
@@ -345,6 +345,11 @@ const SendInputCommand = cmd({
 
     const created = (await create.json()) as any
     if (argv.json) return void (await writeJson(created))
+    const refused = refusedAtCreate(created)
+    if (refused) {
+      console.error(`Not sent: ${node.name} ${refused}.`)
+      process.exit(1)
+    }
 
     console.log()
     console.log(success(`✓ sent to ${bold(label(s))}`) + dim(`  on ${node.name} · ${s.provider}`))
@@ -402,6 +407,11 @@ const AskCommand = cmd({
     if (!create.ok) {
       const t = await create.text()
       console.error(`Could not send: HTTP ${create.status} ${t.slice(0, 200)}`)
+      process.exit(1)
+    }
+    const refused = refusedAtCreate(await create.json().catch(() => null))
+    if (refused) {
+      console.error(`Not sent: ${node.name} ${refused}.`)
       process.exit(1)
     }
 
