@@ -42,7 +42,18 @@ export const McpInstallCommand = cmd({
         describe: "folder to trust for Gemini instead of the current directory",
       }),
   async handler(args) {
-    const bin = McpClients.irisBinary()
+    // Never write a path that will disappear (#190590): a binary run from a temporary folder with
+    // no stable install behind it gets a refusal, not a config entry that breaks every session.
+    const bin = McpClients.stableIrisBinary()
+    if (!bin) {
+      const why =
+        "The running iris is in a temporary folder and no installed iris was found (~/.iris/bin/iris). " +
+        "Nothing was written. Install iris, then run `iris mcp install` from the installed copy."
+      if (args.json) process.stdout.write(JSON.stringify({ error: why, running: process.execPath }) + "\n")
+      else UI.error(why)
+      process.exitCode = 1
+      return
+    }
     const registry = McpClients.all()
 
     // Pick targets: explicit --client, else all known with --all, else detected.
