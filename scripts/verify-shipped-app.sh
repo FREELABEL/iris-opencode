@@ -179,15 +179,39 @@ if [ -z "$PORT" ]; then
   info "$(head -5 "$WORK/serve.log" 2>/dev/null)"
 fi
 
+# Since #190647 the app starts its engine with a per-launch password (Basic auth) and publishes it,
+# owner-only, to ~/.iris/desktop-engine.json — here, the throwaway HOME above. Probing without it
+# got an empty 401 body and was reported as "the API is not serving", which kept 1.18.150 and
+# 1.18.151 from ever reaching users (#191022). Read the record, prove the engine REFUSES a caller
+# without it, then probe as the app's own clients do.
+ENGINE_REC="$HOME/.iris/desktop-engine.json"
+ENGINE_USER=""; ENGINE_PW=""
+for _ in $(seq 1 20); do [ -s "$ENGINE_REC" ] && break; sleep 0.5; done
+if [ -s "$ENGINE_REC" ]; then
+  ENGINE_USER="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("username",""))' "$ENGINE_REC" 2>/dev/null)"
+  ENGINE_PW="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("password",""))' "$ENGINE_REC" 2>/dev/null)"
+fi
+if [ -n "$ENGINE_PW" ]; then
+  pass "the engine password is published to $(basename "$ENGINE_REC") for local clients"
+  ANON="$(curl -s -m 10 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/global/health")"
+  [ "$ANON" = "401" ] && pass "the engine refuses a caller without the password (HTTP 401)" \
+    || fail "the engine answered a caller WITHOUT the password (HTTP $ANON) — #190647 is not in this build"
+else
+  info "no $(basename "$ENGINE_REC") — this build predates the engine password; probing without one"
+fi
+
 # EVERY unknown path on this server returns the SPA's index.html with HTTP 200. Asserting on
 # status codes would be green against a build whose API is entirely unreachable. So parse.
-probe() { curl -s -m 10 "http://127.0.0.1:$PORT$1"; }
+probe() {
+  if [ -n "$ENGINE_PW" ]; then curl -s -m 10 -u "${ENGINE_USER:-opencode}:$ENGINE_PW" "http://127.0.0.1:$PORT$1"
+  else curl -s -m 10 "http://127.0.0.1:$PORT$1"; fi
+}
 is_json() { case "$1" in '{'*|'['*) return 0;; *) return 1;; esac; }
 
 H="$(probe /global/health)"
 if ! is_json "$H"; then
   fail "/global/health returned the SPA fallback, not JSON — the API is not serving"
-  info "$(echo "$H" | head -c 60)"
+  info "body: $(echo "$H" | head -c 60)"
 else
   ENGINE_V="$(echo "$H" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("version",""))' 2>/dev/null)"
   echo "$H" | grep -q '"healthy":true' && pass "engine reports healthy" || fail "engine reports unhealthy: $H"
