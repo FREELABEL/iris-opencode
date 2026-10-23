@@ -517,10 +517,11 @@ const FIELD_NAMES: Record<string, string> = {
 /** fl-api's sentence says who changed the card; this says which of your fields it touched. */
 function heldMessage(j: any, conflicts: string[]): string {
   const by = j?.data?.changed_by
-  const who = by?.is_you ? "You changed" : by?.name ? `${by.name} changed` : "Someone changed"
   const names = conflicts.map((k) => FIELD_NAMES[k] ?? k)
   const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`
-  return `${who} the ${list} on this card while you were offline. Choose which to keep.`
+  // "You" is the same account somewhere else — another device, the web, an agent acting as you.
+  if (by?.is_you) return `The ${list} on this card was also changed from another device while this one was offline. Choose which to keep.`
+  return `${by?.name ?? "Someone"} changed the ${list} on this card while you were offline. Choose which to keep.`
 }
 
 // ── a person decides ────────────────────────────────────────────────────────

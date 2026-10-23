@@ -1730,6 +1730,10 @@ export function SessionIrisTab() {
     const d = current() as any
     return d?.__pane === "atlas" ? (d.outbox?.heldItems ?? []) : []
   })
+  createEffect(() => {
+    const d = current() as any
+    if (d?.__pane === "atlas" && !d.outbox && moveNote() === QUEUED_NOTE) setMoveNote(null)
+  })
   async function resolveHeld(opId: string, choice: "mine" | "theirs"): Promise<string | undefined> {
     try {
       const res = await doFetch(`/iris/atlas-outbox/${encodeURIComponent(opId)}/resolve`, {
@@ -1778,7 +1782,7 @@ export function SessionIrisTab() {
     if (SELF_PANES.has(pane())) return null
     const s = surfaceSync(surface())
     const label = syncLabel(s, now())
-    return label && s ? { ...label, state: s.state } : null
+    return label && s ? { ...label, state: s.state, attention: !!s.held } : null
   })
   /*
    * Who "Assigned: Me" means (#189798). A signal, not a resource: atlasRows reads it, and a
@@ -2097,6 +2101,7 @@ export function SessionIrisTab() {
 
   const [copiedId, setCopiedId] = createSignal<number | undefined>()
   const copyItemId = (id: number) => {
+    if (id < 0) return // made offline: no id IRIS knows yet
     void navigator.clipboard?.writeText(`#${id}`).catch(() => {})
     setCopiedId(id)
     setTimeout(() => setCopiedId((c) => (c === id ? undefined : c)), 1200)
@@ -2870,6 +2875,11 @@ export function SessionIrisTab() {
   function openCard(itemId: number, fromGraph?: { id: number; name: string }[]) {
     const b = activeBloq()
     if (b == null) return
+    // A card made offline exists only on this computer until it is sent: IRIS has nothing to open yet (#190537 W3).
+    if (itemId < 0) {
+      setMoveNote("This card was made offline — it opens once it has been sent to IRIS.")
+      return
+    }
     // The Graph pane never loads the Atlas payload, so reading lists from `data` there gives the
     // List picker nothing. The graph already holds every list as a `list-<id>` node.
     const lists =
@@ -3101,6 +3111,7 @@ export function SessionIrisTab() {
                   type="button"
                   class="iris-sync"
                   data-state={c().state}
+                  data-attention={c().attention ? "" : undefined}
                   title={c().title}
                   aria-live="polite"
                   onClick={() => void refetchSurface()}
@@ -4288,7 +4299,7 @@ export function SessionIrisTab() {
                                         </span>
                                       )}
                                     </Show>
-                                    <span class="font-mono tabular-nums text-text-weaker ml-auto">#{item.id}</span>
+                                    <span class="font-mono tabular-nums text-text-weaker ml-auto">{item.id < 0 ? "new" : `#${item.id}`}</span>
                                   </span>
                                 </div>
                                 </>
@@ -4471,7 +4482,7 @@ export function SessionIrisTab() {
                                     copyItemId(item.id)
                                   }}
                                 >
-                                  {copiedId() === item.id ? "copied" : `#${item.id}`}
+                                  {copiedId() === item.id ? "copied" : item.id < 0 ? "new" : `#${item.id}`}
                                 </button>
                               </div>
                             )

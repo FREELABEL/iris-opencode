@@ -18,7 +18,7 @@
  * Not a store library: Solid's createStore is the reactive part, and a plain Map holds payloads
  * (nothing renders from it directly, so it needs no reactivity). Bounded, oldest first out.
  */
-import { createStore } from "solid-js/store"
+import { createStore, reconcile } from "solid-js/store"
 
 export type SyncState = "checking" | "synced" | "offline" | "error"
 export interface SurfaceSync {
@@ -54,7 +54,9 @@ export function heldPayload<T = unknown>(key: string): T | undefined {
 }
 
 export function setSurfaceSync(surface: string, s: SurfaceSync) {
-  setSync(surface, s)
+  // Replace, never merge: a store set MERGES objects, so a count the new state no longer carries
+  // (the queue emptied) stayed behind — "1 needs you" after the edit was settled (#190537 W3).
+  setSync(surface, reconcile(s))
 }
 
 export function surfaceSync(surface: string): SurfaceSync | undefined {

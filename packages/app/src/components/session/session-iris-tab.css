@@ -2792,6 +2792,13 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 }
 .iris-sync[data-state="offline"] .iris-sync__dot,
 .iris-sync[data-state="error"] .iris-sync__dot { background: var(--icon-warning-base, var(--text-strong)); }
+/* An offline edit held for a person (#190537 W3): the chip asks for attention whatever the state. */
+.iris-sync[data-attention] {
+  color: var(--text-strong);
+  background: var(--background-weak);
+  box-shadow: inset 0 0 0 1px var(--border-warning-base, var(--border-base));
+}
+.iris-sync[data-attention] .iris-sync__dot { background: var(--icon-warning-base, var(--text-strong)); animation: none; }
 @keyframes iris-sync-pulse { 50% { opacity: .3; } }
 @media (prefers-reduced-motion: reduce) { .iris-sync[data-state="checking"] .iris-sync__dot { animation: none; } }
 /* A product tab showing something that is not current (offline, or the server refused). */

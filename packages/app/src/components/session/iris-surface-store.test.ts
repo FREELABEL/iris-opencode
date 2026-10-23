@@ -96,3 +96,11 @@ describe("edits waiting to be sent", () => {
     expect(needsAttention({ state: "synced", at: now, waiting: 4 })).toBe(false)
   })
 })
+
+test("a new sync state REPLACES the old one: once the queue empties, '1 needs you' does not stick (found in the preview)", () => {
+  const now = Date.parse("2026-10-22T12:00:00Z")
+  setSurfaceSync("atlas", syncOfPayload({ measured: true, __at: now, outbox: { waiting: 0, held: 1, heldItems: [] } }))
+  expect(syncLabel(surfaceSync("atlas"), now)!.text).toBe("1 needs you")
+  setSurfaceSync("atlas", syncOfPayload({ measured: true, __at: now }))
+  expect(syncLabel(surfaceSync("atlas"), now)!.text).toBe("Synced · just now")
+})
