@@ -100,7 +100,7 @@ async function consoleUp(): Promise<boolean> {
   }
 }
 
-const StatusCommand = cmd({
+const MeshStatusCommand = cmd({
   command: "status",
   describe: "is a mesh serving on this machine, which models, and is IRIS set to use it",
   builder: (y) => y.option("json", { type: "boolean", default: false, describe: "machine-readable output" }),
@@ -132,7 +132,7 @@ const StatusCommand = cmd({
   },
 })
 
-const UseCommand = cmd({
+const MeshUseCommand = cmd({
   command: "use",
   describe: "add the loopback mesh as model provider `mesh` in your global IRIS config",
   builder: (y) =>
@@ -188,7 +188,7 @@ const UseCommand = cmd({
   },
 })
 
-const OffCommand = cmd({
+const MeshOffCommand = cmd({
   command: "off",
   describe: "remove the `mesh` provider from your global IRIS config (nothing else changes)",
   handler: async () => {
@@ -236,7 +236,7 @@ function readPid(): number | null {
   }
 }
 
-const UpCommand = cmd({
+const MeshUpCommand = cmd({
   command: "up",
   describe: "start an owner-restricted, unpublished mesh on this machine (loopback API)",
   builder: (y) =>
@@ -359,7 +359,7 @@ const UpCommand = cmd({
   },
 })
 
-const DownCommand = cmd({
+const MeshDownCommand = cmd({
   command: "down",
   describe: "stop the mesh that `iris mesh up` started (never touches Buzz's)",
   handler: async () => {
@@ -397,11 +397,11 @@ export const MeshCommand = cmd({
   describe: "shared compute — use a local Mesh LLM as a model provider, or start one here",
   builder: (y) =>
     y
-      .command(StatusCommand)
-      .command(UseCommand)
-      .command(OffCommand)
-      .command(UpCommand)
-      .command(DownCommand)
+      .command(MeshStatusCommand)
+      .command(MeshUseCommand)
+      .command(MeshOffCommand)
+      .command(MeshUpCommand)
+      .command(MeshDownCommand)
       .demandCommand(1),
   handler: () => {},
 })
