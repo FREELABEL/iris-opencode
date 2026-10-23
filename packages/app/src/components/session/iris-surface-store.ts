@@ -18,7 +18,7 @@
  * Not a store library: Solid's createStore is the reactive part, and a plain Map holds payloads
  * (nothing renders from it directly, so it needs no reactivity). Bounded, oldest first out.
  */
-import { createStore } from "solid-js/store"
+import { createStore, reconcile } from "solid-js/store"
 
 export type SyncState = "checking" | "synced" | "offline" | "error"
 export interface SurfaceSync {
@@ -28,6 +28,10 @@ export interface SurfaceSync {
   /** When the copy on screen was taken (ISO) — offline or checking from a copy. */
   copiedAt?: string
   reason?: string
+  /** Edits made on this computer with no connection, not sent yet (#190537 W3). */
+  waiting?: number
+  /** Edits held for a person: the card changed elsewhere in a field they also changed. */
+  held?: number
 }
 
 export const MAX_HELD = 40
@@ -50,7 +54,9 @@ export function heldPayload<T = unknown>(key: string): T | undefined {
 }
 
 export function setSurfaceSync(surface: string, s: SurfaceSync) {
-  setSync(surface, s)
+  // Replace, never merge: a store set MERGES objects, so a count the new state no longer carries
+  // (the queue emptied) stayed behind — "1 needs you" after the edit was settled (#190537 W3).
+  setSync(surface, reconcile(s))
 }
 
 export function surfaceSync(surface: string): SurfaceSync | undefined {
@@ -69,6 +75,11 @@ export function resetSurfaceStore() {
  * from this store rather than fetched.
  */
 export function syncOfPayload(p: any, loading = false): SurfaceSync {
+  const edits = p?.outbox ? { waiting: Number(p.outbox.waiting) || 0, held: Number(p.outbox.held) || 0 } : {}
+  return { ...syncState(p, loading), ...edits }
+}
+
+function syncState(p: any, loading: boolean): SurfaceSync {
   if (!p) return { state: "checking" }
   if (p.offline) return { state: "offline", copiedAt: p.copiedAt, reason: p.reason }
   if (p.measured === false) return loading ? { state: "checking" } : { state: "error", reason: p.reason }
@@ -84,6 +95,21 @@ function ago(ms: number): string {
 /** The chip's words. */
 export function syncLabel(s: SurfaceSync | undefined, now: number): { text: string; title: string } | null {
   if (!s) return null
+  if (s.held)
+    return {
+      text: `${s.held} ${s.held === 1 ? "needs" : "need"} you`,
+      title: "A card changed while you were offline, in a field you also changed. Open it to choose which to keep.",
+    }
+  if (s.waiting && s.state === "offline")
+    return {
+      text: `Offline · ${s.waiting} waiting`,
+      title: `${s.waiting} ${s.waiting === 1 ? "change is" : "changes are"} saved on this computer and will be sent when IRIS can be reached. Click to try now.`,
+    }
+  if (s.waiting)
+    return {
+      text: `${s.waiting} waiting · sending…`,
+      title: "Sending the changes you made while offline. Click to send now.",
+    }
   if (s.state === "checking") return { text: "Checking…", title: "Showing what this panel last had while it asks IRIS for what is current." }
   if (s.state === "synced")
     return {
@@ -102,5 +128,5 @@ export function syncLabel(s: SurfaceSync | undefined, now: number): { text: stri
 
 /** Whether a surface's tab should carry a dot: it is showing something that is not current. */
 export function needsAttention(s: SurfaceSync | undefined): boolean {
-  return s?.state === "offline" || s?.state === "error"
+  return s?.state === "offline" || s?.state === "error" || !!s?.held
 }

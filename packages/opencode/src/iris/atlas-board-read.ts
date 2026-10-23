@@ -1,5 +1,6 @@
 import { deleteBoardCopy, readBoardCopy, readBoardListCopy, writeBoardCopy, writeBoardListCopy } from "./atlas-local-copy"
 import { fetchAtlas, fetchAtlasChanges, fetchBloqs, resolveUserId, type AtlasList, type Bloq } from "./platform"
+import { counts, heldOn, overlay, replay, type HeldView } from "./atlas-outbox"
 
 type Read = Awaited<ReturnType<typeof fetchAtlas>>
 
@@ -98,4 +99,28 @@ export async function readBoardList(): Promise<{ r: Awaited<ReturnType<typeof fe
   const c = readBoardListCopy<Bloq>(userId)
   if (!c) return { r }
   return { r: { measured: true, reason: r.reason, data: { bloqs: c.bloqs } }, offline: true, copiedAt: c.copiedAt }
+}
+
+/**
+ * The board read with this machine's waiting edits on it (#190537 W3): what the panel shows.
+ * Cards with edits waiting are drawn as edited and marked; the reply says how many wait and which
+ * are held for a person. A read that reached fl-api means it is reachable again, so the queue is
+ * sent — the live channel then sees the board change and the panel reads it once more.
+ */
+export async function readAtlasBoardWithEdits(
+  bloqId: number,
+  q: { q?: string; fresh?: string } = {},
+): Promise<BoardRead & { outbox?: { waiting: number; held: number; heldItems: HeldView[] } }> {
+  const read = await readAtlasBoard(bloqId, q)
+  const userId = await resolveUserId()
+  if (!userId || !read.r.measured) return { ...read }
+  const c = counts(userId, bloqId)
+  if (c.waiting === 0 && c.held === 0) return { ...read }
+  if (read.source === "live" && c.waiting > 0) void replay(userId).catch(() => {})
+  const lists = overlay(userId, bloqId, read.r.data.lists)
+  return {
+    ...read,
+    r: { ...read.r, data: { ...read.r.data, lists } },
+    outbox: { waiting: c.waiting, held: c.held, heldItems: heldOn(userId, bloqId) },
+  }
 }

@@ -101,6 +101,7 @@ import { IrisQuickEdit } from "./iris-quick-edit"
 import type { CardSchema } from "./iris-card-editor"
 import { liveLabel, readSse, type LiveState } from "./iris-atlas-live"
 import { CardBadges, type CardFace } from "./iris-card-badges"
+import { IrisOutboxHeld, type HeldItem } from "./iris-outbox-held"
 import { IrisBoardMembers, readMembers } from "./iris-board-members"
 import { IrisNotifySettings } from "./iris-notify-settings"
 import { IrisLocalCopySettings } from "./iris-local-copy-settings"
@@ -128,6 +129,8 @@ export { itemCommands, renderMarkdown }
  * "nothing here" for "the network is down" — the reassuring reading, and the wrong one. The
  * server sends `measured` for this reason; throwing it away here would put the bug back.
  */
+
+const QUEUED_NOTE = "Saved on this computer — it will be sent when IRIS can be reached."
 
 interface AtlasItem extends CardFace {
   id: number
@@ -1721,6 +1724,33 @@ export function SessionIrisTab() {
         await dirSdk().api.session.prompt({ sessionID, text, delivery: "queue" })
       }
     : undefined
+  /*
+   * EDITS MADE OFFLINE (#190537 W3). The sidecar keeps a write it could not send and answers
+   * `queued`; the board draws it at once (marked "Waiting to send") and the chip counts it. One
+   * changed in a field someone else also changed is held here for a person to choose.
+   */
+  const heldItems = createMemo<HeldItem[]>(() => {
+    const d = current() as any
+    return d?.__pane === "atlas" ? (d.outbox?.heldItems ?? []) : []
+  })
+  createEffect(() => {
+    const d = current() as any
+    if (d?.__pane === "atlas" && !d.outbox && moveNote() === QUEUED_NOTE) setMoveNote(null)
+  })
+  async function resolveHeld(opId: string, choice: "mine" | "theirs"): Promise<string | undefined> {
+    try {
+      const res = await doFetch(`/iris/atlas-outbox/${encodeURIComponent(opId)}/resolve`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ choice }),
+      })
+      const r = (await res.json().catch(() => null)) as { ok?: boolean; reason?: string } | null
+      void refetchSurface()
+      return res.ok && r?.ok ? undefined : (r?.reason ?? `HTTP ${res.status}`)
+    } catch (e: any) {
+      return e?.message ?? String(e)
+    }
+  }
   async function dropCard(drop: AtlasDrop) {
     const full = atlasBoard()
     const from = full.find((l) => l.items.some((i) => i.id === drop.itemId))
@@ -1736,8 +1766,9 @@ export function SessionIrisTab() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ listId: drop.toListId, position }),
       })
-      const r = (await res.json().catch(() => null)) as { ok?: boolean; reason?: string } | null
+      const r = (await res.json().catch(() => null)) as { ok?: boolean; reason?: string; queued?: boolean } | null
       if (!res.ok || !r?.ok) throw new Error(r?.reason || `HTTP ${res.status}`)
+      if (r.queued) setMoveNote(QUEUED_NOTE)
       void refetchSurface()
     } catch (e: any) {
       setAtlasMoved(previous)
@@ -1754,7 +1785,7 @@ export function SessionIrisTab() {
     if (SELF_PANES.has(pane())) return null
     const s = surfaceSync(surface())
     const label = syncLabel(s, now())
-    return label && s ? { ...label, state: s.state } : null
+    return label && s ? { ...label, state: s.state, attention: !!s.held } : null
   })
   /*
    * Who "Assigned: Me" means (#189798). A signal, not a resource: atlasRows reads it, and a
@@ -1859,13 +1890,14 @@ export function SessionIrisTab() {
           position: (list?.items.length ?? 0) + pendingCards().filter((x) => x.listId === target).length - 1,
         }),
       })
-      const j = (await res.json().catch(() => ({}))) as { ok?: boolean; reason?: string }
+      const j = (await res.json().catch(() => ({}))) as { ok?: boolean; reason?: string; queued?: boolean }
       if (!res.ok || !j.ok) {
         drop()
         if (composer() === target && !composerText()) setComposerText(text)
         setComposerError(j.reason ?? `HTTP ${res.status}`)
         return
       }
+      if (j.queued) setMoveNote(QUEUED_NOTE)
       await refetchSurface()
     } catch (e) {
       setComposerError(e instanceof Error ? e.message : String(e))
@@ -1893,11 +1925,15 @@ export function SessionIrisTab() {
   async function toggleDone(itemId: number) {
     const item = (rows() as AtlasList[]).flatMap((l) => l.items).find((i) => i.id === itemId)
     if (!item) return
-    await doFetch(`/iris/item/${itemId}/save`, {
+    const res = await doFetch(`/iris/item/${itemId}/save`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status: isDone(item.status) ? "active" : "done" }),
-    }).catch(() => {})
+    }).catch(() => undefined)
+    const j = (await res?.json().catch(() => null)) as { ok?: boolean; reason?: string; queued?: boolean } | null
+    // Was swallowed entirely: a toggle that did not land looked exactly like one that did.
+    if (!res?.ok || j?.ok === false) setMoveNote(`Not saved — ${j?.reason ?? "IRIS could not be reached"}`)
+    else if (j?.queued) setMoveNote(QUEUED_NOTE)
     liveRefresh(false)
   }
   /** The face editor (#189806): which card, where it is on screen, and the field a key named. */
@@ -1962,8 +1998,9 @@ export function SessionIrisTab() {
           }),
         )
       for (const res of await Promise.all(writes)) {
-        const j = (await res.json().catch(() => ({}))) as { ok?: boolean; reason?: string; message?: string }
+        const j = (await res.json().catch(() => ({}))) as { ok?: boolean; reason?: string; message?: string; queued?: boolean }
         if (!res.ok || j.ok === false) reason ??= j.reason ?? j.message ?? `request failed (${res.status})`
+        else if (j.queued) setMoveNote(QUEUED_NOTE)
       }
     } catch (e) {
       reason = e instanceof Error ? e.message : String(e)
@@ -2067,6 +2104,7 @@ export function SessionIrisTab() {
 
   const [copiedId, setCopiedId] = createSignal<number | undefined>()
   const copyItemId = (id: number) => {
+    if (id < 0) return // made offline: no id IRIS knows yet
     void navigator.clipboard?.writeText(`#${id}`).catch(() => {})
     setCopiedId(id)
     setTimeout(() => setCopiedId((c) => (c === id ? undefined : c)), 1200)
@@ -2840,6 +2878,11 @@ export function SessionIrisTab() {
   function openCard(itemId: number, fromGraph?: { id: number; name: string }[]) {
     const b = activeBloq()
     if (b == null) return
+    // A card made offline exists only on this computer until it is sent: IRIS has nothing to open yet (#190537 W3).
+    if (itemId < 0) {
+      setMoveNote("This card was made offline — it opens once it has been sent to IRIS.")
+      return
+    }
     // The Graph pane never loads the Atlas payload, so reading lists from `data` there gives the
     // List picker nothing. The graph already holds every list as a `list-<id>` node.
     const lists =
@@ -3071,6 +3114,7 @@ export function SessionIrisTab() {
                   type="button"
                   class="iris-sync"
                   data-state={c().state}
+                  data-attention={c().attention ? "" : undefined}
                   title={c().title}
                   aria-live="polite"
                   onClick={() => void refetchSurface()}
@@ -4075,6 +4119,12 @@ export function SessionIrisTab() {
                     </button>
                   </p>
                 </Show>
+                <IrisOutboxHeld
+                  items={heldItems()}
+                  cardTitle={(id) => (rows() as AtlasList[]).flatMap((l) => l.items).find((i) => i.id === id)?.title}
+                  listName={(id) => (rows() as AtlasList[]).find((l) => l.id === id)?.name}
+                  resolve={resolveHeld}
+                />
                 <Show when={moveNote()}>
                   {(note) => (
                     <p class="px-2 pb-2 text-12-regular text-text-weak" role="status">
@@ -4255,7 +4305,7 @@ export function SessionIrisTab() {
                                         </span>
                                       )}
                                     </Show>
-                                    <span class="font-mono tabular-nums text-text-weaker ml-auto">#{item.id}</span>
+                                    <span class="font-mono tabular-nums text-text-weaker ml-auto">{item.id < 0 ? "new" : `#${item.id}`}</span>
                                   </span>
                                 </div>
                                 </>
@@ -4438,7 +4488,7 @@ export function SessionIrisTab() {
                                     copyItemId(item.id)
                                   }}
                                 >
-                                  {copiedId() === item.id ? "copied" : `#${item.id}`}
+                                  {copiedId() === item.id ? "copied" : item.id < 0 ? "new" : `#${item.id}`}
                                 </button>
                               </div>
                             )

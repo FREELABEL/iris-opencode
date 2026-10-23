@@ -104,7 +104,10 @@ import { Panel } from "@/iris/panel"
 import { atlasNoteUrl, probeAtlasNote, type NoteProbe } from "@/iris/atlas-note"
 import { frameTarget, probeFrame } from "@/iris/frame-check"
 import { startIntegrationConnect } from "@/iris/platform"
-import { readAtlasBoard, readBoardList } from "@/iris/atlas-board-read"
+import { readAtlasBoardWithEdits, readBoardList } from "@/iris/atlas-board-read"
+import { createCard, moveCard, saveCard } from "@/iris/atlas-write"
+import { resolveUserId } from "@/iris/platform"
+import { counts as outboxCounts, replay as replayOutbox, resolve as resolveOutbox } from "@/iris/atlas-outbox"
 import { readLocalCopySettings, writeLocalCopySettings } from "@/iris/atlas-local-copy"
 import { buildCommandReport, submitCommandReport } from "@/iris/bug-report"
 import * as Onboarding from "@/iris/onboarding"
@@ -221,8 +224,8 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
 
     const atlas = Effect.fn("IrisHttpApi.atlas")(
       (ctx: { params: { bloqID: number }; query: { page?: number; perPage?: number; q?: string; fresh?: string } }) =>
-        Effect.promise(() => readAtlasBoard(ctx.params.bloqID, ctx.query)).pipe(
-          Effect.map(({ r, source, copiedAt, offline, sync }) => {
+        Effect.promise(() => readAtlasBoardWithEdits(ctx.params.bloqID, ctx.query)).pipe(
+          Effect.map(({ r, source, copiedAt, offline, sync, outbox }) => {
             // Filter BEFORE paging — see filterAtlas. Filtering after would count a page.
             const lists = ctx.query.q ? filterAtlas(r.data.lists, ctx.query.q) : r.data.lists
             const { items, meta } = pageOf(r, lists, ctx.query)
@@ -233,6 +236,7 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
               ...(copiedAt ? { copiedAt } : {}),
               ...(offline ? { offline } : {}),
               ...(sync ? { sync } : {}),
+              ...(outbox ? { outbox } : {}),
             }
           }),
         ),
@@ -456,12 +460,12 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
           dueDate?: string | null
           listId?: number
         }
-      }) => Effect.promise(() => saveItem(ctx.params.itemID, ctx.payload)),
+      }) => Effect.promise(() => saveCard(ctx.params.itemID, ctx.payload)),
     )
 
     const atlasItemCreate = Effect.fn("IrisHttpApi.atlasItemCreate")(
       (ctx: { params: { bloqID: number; listID: number }; payload: { title: string; body?: string; position?: number } }) =>
-        Effect.promise(() => createItem(ctx.params.bloqID, ctx.params.listID, ctx.payload)),
+        Effect.promise(() => createCard(ctx.params.bloqID, ctx.params.listID, ctx.payload)),
     )
     const atlasListCreate = Effect.fn("IrisHttpApi.atlasListCreate")(
       (ctx: { params: { bloqID: number }; payload: { name: string; position?: number } }) =>
@@ -471,7 +475,26 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
     /** The Board view's drag: list AND position, so the saved order is the one on screen. */
     const itemMove = Effect.fn("IrisHttpApi.itemMove")(
       (ctx: { params: { itemID: number }; payload: { listId: number; position: number } }) =>
-        Effect.promise(() => moveItem(ctx.params.itemID, ctx.payload.listId, ctx.payload.position)),
+        Effect.promise(() => moveCard(ctx.params.itemID, ctx.payload.listId, ctx.payload.position)),
+    )
+
+    /** A held offline edit, settled by a person (#190537 W3): keep mine, or keep theirs. */
+    const atlasOutboxResolve = Effect.fn("IrisHttpApi.atlasOutboxResolve")(
+      (ctx: { params: { opID: string }; payload: { choice: "mine" | "theirs" } }) =>
+        Effect.promise(async () => {
+          const userId = await resolveUserId()
+          if (!userId) return { ok: false, reason: "not signed in", waiting: 0, held: 0 }
+          const r = await resolveOutbox(userId, ctx.params.opID, ctx.payload.choice)
+          return { ok: r.ok, ...(r.reason ? { reason: r.reason } : {}), ...outboxCounts(userId) }
+        }),
+    )
+    /** Send what is waiting now — the sync chip's click. */
+    const atlasOutboxSend = Effect.fn("IrisHttpApi.atlasOutboxSend")(() =>
+      Effect.promise(async () => {
+        const userId = await resolveUserId()
+        if (!userId) return { sent: 0, held: 0, waiting: 0, offline: false }
+        return replayOutbox(userId)
+      }),
     )
 
     // Board members (#189795) and card assignees (#189796).
@@ -1346,6 +1369,6 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
       ),
     )
 
-    return handlers.handle("frameCheck", frameCheck).handle("atlasNote", atlasNote).handle("panel", panel).handle("panelState", panelState).handle("panelCommand", panelCommand).handle("allowance", allowance).handle("plan", plan).handle("me", me).handle("security", security).handle("securityGateReport", securityGateReport).handle("signOut", signOut).handle("accounts", accounts).handle("accountSwitch", accountSwitch).handle("accountRemove", accountRemove).handle("plans", plans).handle("checkout", checkout).handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("inboxMessage", inboxMessage).handle("inboxRead", inboxRead).handle("atlas", atlas).handle("atlasLive", atlasLive).handle("atlasItemCreate", atlasItemCreate).handle("atlasListCreate", atlasListCreate).handle("atlasMembers", atlasMembers).handle("atlasMemberInvite", atlasMemberInvite).handle("atlasMemberSave", atlasMemberSave).handle("atlasMemberRemove", atlasMemberRemove).handle("itemComment", itemComment).handle("notifySettings", notifySettingsRead).handle("notifySettingsSave", notifySettingsSave).handle("atlasLocalCopy", atlasLocalCopyRead).handle("atlasLocalCopySave", atlasLocalCopySave).handle("meLive", meLive).handle("agentsMine", agentsMine).handle("itemActivity", itemActivity).handle("itemAssignees", itemAssignees).handle("itemAssign", itemAssign).handle("itemUnassign", itemUnassign).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("graph", graph).handle("graphBoard", graphBoard).handle("catalog", catalog).handle("integrationConnect", integrationConnect).handle("onboardingState", onboardingState).handle("onboardingMail", onboardingMail).handle("onboardingGround", onboardingGround).handle("onboardingCapabilities", onboardingCapabilities).handle("onboardingWorkspace", onboardingWorkspace).handle("onboardingTrack", onboardingTrack).handle("cliCommands", cliCommands).handle("hivePeers", hivePeers).handle("pageDoc", pageDoc).handle("pageSave", pageSave).handle("item", item).handle("itemSave", itemSave).handle("itemMove", itemMove).handle("itemTaskAdd", itemTaskAdd).handle("itemTaskSave", itemTaskSave).handle("itemTaskDelete", itemTaskDelete).handle("cardSchema", cardSchema).handle("itemShare", itemShare).handle("itemShareVisibility", itemShareVisibility).handle("itemShareAllowlist", itemShareAllowlist).handle("itemShareInvite", itemShareInvite).handle("itemSharePermission", itemSharePermission).handle("itemShareRevoke", itemShareRevoke).handle("itemShareLink", itemShareLink).handle("itemShareLinkRevoke", itemShareLinkRevoke).handle("itemLabels", itemLabels).handle("itemAttachments", itemAttachments).handle("itemAttachmentUpload", itemAttachmentUpload).handle("itemAttachmentDelete", itemAttachmentDelete).handle("itemEvents", itemEvents).handle("itemEventAdd", itemEventAdd).handle("itemAsks", itemAsks).handle("itemAskAdd", itemAskAdd).handle("itemAskAnswer", itemAskAnswer).handle("itemChat", itemChat).handle("itemChatSend", itemChatSend).handle("rooms", rooms).handle("roomCreate", roomCreate).handle("room", room).handle("roomSend", roomSend).handle("playbookDoc", playbookDoc).handle("artifacts", artifacts).handle("artifactDoc", artifactDoc).handle("artifactPublish", artifactPublish).handle("playbookInstall", playbookInstall).handle("bugReport", bugReport).handle("agentTasks", agentTasks).handle("heartbeats", heartbeats).handle("heartbeatRun", heartbeatRun).handle("heartbeatPause", heartbeatPause).handle("pulseTopic", pulseTopic).handle("pulseTopicStream", pulseTopicStream).handle("pulseContacts", pulseContacts).handle("pulseContact", pulseContact).handle("agentLive", agentLive).handle("runTakeOver", runTakeOver).handle("runHandBack", runHandBack).handle("sites", sites).handle("brands", brands).handle("brandKit", brandKit).handle("brandSave", brandSave).handle("records", records).handle("integrations", integrations).handle("hive", hive).handle("hiveSessions", hiveSessions).handle("hiveSessionTranscript", hiveSessionTranscript).handle("hiveSessionReply", hiveSessionReply).handle("hiveScripts", hiveScripts).handle("hiveScript", hiveScript).handle("hiveScriptDoctor", hiveScriptDoctor).handle("hiveScriptSave", hiveScriptSave).handle("hiveScriptRun", hiveScriptRun).handle("hiveTask", hiveTask).handle("hiveTaskDecide", hiveTaskDecide).handle("hiveScriptTags", hiveScriptTags).handle("hiveMarket", hiveMarket).handle("hiveMarketScript", hiveMarketScript).handle("hiveMarketInstall", hiveMarketInstall)
+    return handlers.handle("frameCheck", frameCheck).handle("atlasNote", atlasNote).handle("panel", panel).handle("panelState", panelState).handle("panelCommand", panelCommand).handle("allowance", allowance).handle("plan", plan).handle("me", me).handle("security", security).handle("securityGateReport", securityGateReport).handle("signOut", signOut).handle("accounts", accounts).handle("accountSwitch", accountSwitch).handle("accountRemove", accountRemove).handle("plans", plans).handle("checkout", checkout).handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("inboxMessage", inboxMessage).handle("inboxRead", inboxRead).handle("atlas", atlas).handle("atlasLive", atlasLive).handle("atlasItemCreate", atlasItemCreate).handle("atlasListCreate", atlasListCreate).handle("atlasMembers", atlasMembers).handle("atlasMemberInvite", atlasMemberInvite).handle("atlasMemberSave", atlasMemberSave).handle("atlasMemberRemove", atlasMemberRemove).handle("itemComment", itemComment).handle("notifySettings", notifySettingsRead).handle("notifySettingsSave", notifySettingsSave).handle("atlasLocalCopy", atlasLocalCopyRead).handle("atlasLocalCopySave", atlasLocalCopySave).handle("atlasOutboxResolve", atlasOutboxResolve).handle("atlasOutboxSend", atlasOutboxSend).handle("meLive", meLive).handle("agentsMine", agentsMine).handle("itemActivity", itemActivity).handle("itemAssignees", itemAssignees).handle("itemAssign", itemAssign).handle("itemUnassign", itemUnassign).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("graph", graph).handle("graphBoard", graphBoard).handle("catalog", catalog).handle("integrationConnect", integrationConnect).handle("onboardingState", onboardingState).handle("onboardingMail", onboardingMail).handle("onboardingGround", onboardingGround).handle("onboardingCapabilities", onboardingCapabilities).handle("onboardingWorkspace", onboardingWorkspace).handle("onboardingTrack", onboardingTrack).handle("cliCommands", cliCommands).handle("hivePeers", hivePeers).handle("pageDoc", pageDoc).handle("pageSave", pageSave).handle("item", item).handle("itemSave", itemSave).handle("itemMove", itemMove).handle("itemTaskAdd", itemTaskAdd).handle("itemTaskSave", itemTaskSave).handle("itemTaskDelete", itemTaskDelete).handle("cardSchema", cardSchema).handle("itemShare", itemShare).handle("itemShareVisibility", itemShareVisibility).handle("itemShareAllowlist", itemShareAllowlist).handle("itemShareInvite", itemShareInvite).handle("itemSharePermission", itemSharePermission).handle("itemShareRevoke", itemShareRevoke).handle("itemShareLink", itemShareLink).handle("itemShareLinkRevoke", itemShareLinkRevoke).handle("itemLabels", itemLabels).handle("itemAttachments", itemAttachments).handle("itemAttachmentUpload", itemAttachmentUpload).handle("itemAttachmentDelete", itemAttachmentDelete).handle("itemEvents", itemEvents).handle("itemEventAdd", itemEventAdd).handle("itemAsks", itemAsks).handle("itemAskAdd", itemAskAdd).handle("itemAskAnswer", itemAskAnswer).handle("itemChat", itemChat).handle("itemChatSend", itemChatSend).handle("rooms", rooms).handle("roomCreate", roomCreate).handle("room", room).handle("roomSend", roomSend).handle("playbookDoc", playbookDoc).handle("artifacts", artifacts).handle("artifactDoc", artifactDoc).handle("artifactPublish", artifactPublish).handle("playbookInstall", playbookInstall).handle("bugReport", bugReport).handle("agentTasks", agentTasks).handle("heartbeats", heartbeats).handle("heartbeatRun", heartbeatRun).handle("heartbeatPause", heartbeatPause).handle("pulseTopic", pulseTopic).handle("pulseTopicStream", pulseTopicStream).handle("pulseContacts", pulseContacts).handle("pulseContact", pulseContact).handle("agentLive", agentLive).handle("runTakeOver", runTakeOver).handle("runHandBack", runHandBack).handle("sites", sites).handle("brands", brands).handle("brandKit", brandKit).handle("brandSave", brandSave).handle("records", records).handle("integrations", integrations).handle("hive", hive).handle("hiveSessions", hiveSessions).handle("hiveSessionTranscript", hiveSessionTranscript).handle("hiveSessionReply", hiveSessionReply).handle("hiveScripts", hiveScripts).handle("hiveScript", hiveScript).handle("hiveScriptDoctor", hiveScriptDoctor).handle("hiveScriptSave", hiveScriptSave).handle("hiveScriptRun", hiveScriptRun).handle("hiveTask", hiveTask).handle("hiveTaskDecide", hiveTaskDecide).handle("hiveScriptTags", hiveScriptTags).handle("hiveMarket", hiveMarket).handle("hiveMarketScript", hiveMarketScript).handle("hiveMarketInstall", hiveMarketInstall)
   }),
 )
