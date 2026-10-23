@@ -6,6 +6,8 @@ import { ACP } from "@/acp/agent"
 import { Server } from "@/server/server"
 import { createOpencodeClient } from "@opencode-ai/sdk/v2"
 import { withNetworkOptions, resolveNetworkOptions } from "../network"
+import { Config } from "@/config/config"
+import { meshAcpOverlay } from "./platform-mesh"
 
 const log = Log.create({ service: "acp-command" })
 
@@ -20,6 +22,12 @@ export const AcpCommand = cmd({
     })
   },
   handler: async (args) => {
+    // Buzz bridge (#187246 M4): a Buzz desktop (or `iris mesh up`) mesh on loopback becomes provider
+    // `mesh` for this session only — in memory, never written. Not serving → nothing changes.
+    const mesh = await meshAcpOverlay().catch((e) => ({ overlay: null, reason: String(e) }))
+    if (mesh.overlay) Config.addOverlay(mesh.overlay)
+    log.info("mesh overlay", { applied: !!mesh.overlay, reason: mesh.reason })
+
     await bootstrap(process.cwd(), async () => {
       const opts = await resolveNetworkOptions(args)
       const server = Server.listen(opts)

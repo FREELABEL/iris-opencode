@@ -114,6 +114,7 @@ import { PlatformFeatureCommand } from "./cli/cmd/platform-feature"
 import { DeviceCommand } from "./cli/cmd/platform-device"
 import { HomeCommand } from "./cli/cmd/platform-home"
 import { BuzzCommand } from "./cli/cmd/platform-buzz"
+import { MeshCommand } from "./cli/cmd/platform-mesh"
 import { PlatformCameraCommand } from "./cli/cmd/platform-camera"
 import { PlatformAndroidCommand } from "./cli/cmd/platform-android"
 import { PlatformIntentCommand } from "./cli/cmd/platform-intent"
@@ -380,6 +381,7 @@ const cli = yargs(rawArgs)
   // Core CLI commands
   .command(reg(AcpCommand))
   .command(reg(BuzzCommand))
+  .command(reg(MeshCommand))
   .command(reg(McpCommand))
   .command(reg(A2aCommand))
   .command(reg(MarketplaceCommand))
