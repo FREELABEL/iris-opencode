@@ -26,7 +26,7 @@ export type DesktopSession = {
   messages: number
 }
 
-export type DesktopTurn = { role: string; time: number; text: string }
+export type DesktopTurn = { messageId: string; role: string; time: number; text: string }
 
 export class DesktopSessionsError extends Error {}
 
@@ -131,18 +131,39 @@ export function openDesktopDb(path: string, uid = process.getuid?.()): Database 
   return db
 }
 
-export type ListOptions = { limit?: number; offset?: number; archived?: boolean; since?: number; query?: string }
+export type ListOptions = {
+  limit?: number
+  offset?: number
+  archived?: boolean
+  since?: number
+  query?: string
+  /** Only sessions in this folder or below it (a project). */
+  directory?: string
+}
 
-/** Sessions, newest activity first. `query` matches the title or any text said in the session. */
-export function listSessions(db: Database, o: ListOptions = {}): DesktopSession[] {
+const likeEscape = (v: string) => v.replace(/[\\%_]/g, (c) => "\\" + c)
+
+/** The shared WHERE for session-scoped filters. */
+function sessionFilters(o: ListOptions): { where: string[]; params: (string | number)[] } {
   const where = [o.archived ? "1=1" : "s.time_archived IS NULL"]
   const params: (string | number)[] = []
   if (o.since) {
     where.push("s.time_updated >= ?")
     params.push(o.since)
   }
+  if (o.directory) {
+    const dir = o.directory.replace(/[\\/]+$/, "")
+    where.push("(s.directory = ? OR s.directory LIKE ? ESCAPE '\\')")
+    params.push(dir, `${likeEscape(dir)}/%`)
+  }
+  return { where, params }
+}
+
+/** Sessions, newest activity first. `query` matches the title or any text said in the session. */
+export function listSessions(db: Database, o: ListOptions = {}): DesktopSession[] {
+  const { where, params } = sessionFilters(o)
   if (o.query) {
-    const like = `%${o.query.replace(/[\\%_]/g, (c) => "\\" + c)}%`
+    const like = `%${likeEscape(o.query)}%`
     where.push(
       "(s.title LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM part p WHERE p.session_id = s.id " +
         "AND json_extract(p.data, '$.type') = 'text' AND json_extract(p.data, '$.text') LIKE ? ESCAPE '\\'))",
@@ -170,6 +191,56 @@ export function listSessions(db: Database, o: ListOptions = {}): DesktopSession[
   }))
 }
 
+export type DesktopPassage = {
+  sessionId: string
+  sessionTitle: string
+  directory: string
+  messageId: string
+  role: string
+  time: number
+  /** The text around the match, redacted. */
+  excerpt: string
+}
+
+/**
+ * The passages that mention `query` — each with the session and message it came from, so what is
+ * handed to an agent can be traced back (`show <session> --around <message>`). Newest first.
+ */
+export function searchPassages(db: Database, query: string, o: ListOptions & { width?: number } = {}): DesktopPassage[] {
+  const { where, params } = sessionFilters(o)
+  const like = `%${likeEscape(query)}%`
+  params.push(like, Math.max(1, Math.min(o.limit ?? 20, 200)), Math.max(0, o.offset ?? 0))
+  const rows = db
+    .query(
+      `SELECT s.id AS sid, s.title, s.directory, m.id AS mid, json_extract(m.data, '$.role') AS role,
+              m.time_created AS time, json_extract(p.data, '$.text') AS text
+         FROM part p JOIN message m ON m.id = p.message_id JOIN session s ON s.id = p.session_id
+        WHERE ${where.join(" AND ")} AND json_extract(p.data, '$.type') = 'text'
+          AND COALESCE(json_extract(p.data, '$.synthetic'), 0) = 0
+          AND json_extract(p.data, '$.text') LIKE ? ESCAPE '\\'
+        ORDER BY m.time_created DESC, p.id DESC LIMIT ? OFFSET ?`,
+    )
+    .all(...params) as Record<string, any>[]
+  return rows.map((r) => ({
+    sessionId: r.sid,
+    sessionTitle: redact(r.title),
+    directory: r.directory,
+    messageId: r.mid,
+    role: r.role,
+    time: r.time,
+    excerpt: excerpt(redact(r.text), query, o.width ?? 240),
+  }))
+}
+
+/** `width` characters of `text` centred on the first match of `query` (case-insensitive). */
+export function excerpt(text: string, query: string, width = 240): string {
+  const flat = text.replace(/\s+/g, " ").trim()
+  if (flat.length <= width) return flat
+  const at = Math.max(0, flat.toLowerCase().indexOf(query.toLowerCase()))
+  const start = Math.max(0, Math.min(at - Math.floor((width - query.length) / 2), flat.length - width))
+  return (start > 0 ? "…" : "") + flat.slice(start, start + width).trim() + (start + width < flat.length ? "…" : "")
+}
+
 /** One session's header, or null. */
 export function getSession(db: Database, id: string): Pick<DesktopSession, "id" | "title" | "directory"> | null {
   const r = db.query("SELECT id, title, directory FROM session WHERE id = ?").get(id) as Record<string, string> | null
@@ -177,20 +248,32 @@ export function getSession(db: Database, id: string): Pick<DesktopSession, "id" 
 }
 
 /** What was said in a session: user and assistant text, oldest first, redacted. Tool output is left out. */
-export function readTranscript(db: Database, sessionId: string, o: { limit?: number } = {}): DesktopTurn[] {
+export function readTranscript(
+  db: Database,
+  sessionId: string,
+  o: { limit?: number; around?: string; context?: number } = {},
+): DesktopTurn[] {
   const exists = db.query("SELECT 1 FROM session WHERE id = ?").get(sessionId)
   if (!exists) throw new DesktopSessionsError(`No Desktop session ${sessionId} in this account's history.`)
   const rows = db
     .query(
-      `SELECT json_extract(m.data, '$.role') AS role, m.time_created AS time,
+      `SELECT m.id AS messageId, json_extract(m.data, '$.role') AS role, m.time_created AS time,
               group_concat(json_extract(p.data, '$.text'), char(10)) AS text
          FROM message m JOIN part p ON p.message_id = m.id
         WHERE m.session_id = ? AND json_extract(p.data, '$.type') = 'text'
           AND COALESCE(json_extract(p.data, '$.synthetic'), 0) = 0
         GROUP BY m.id ORDER BY m.time_created, m.id`,
     )
-    .all(sessionId) as { role: string; time: number; text: string | null }[]
-  const turns = rows.filter((r) => r.text && r.text.trim()).map((r) => ({ role: r.role, time: r.time, text: redact(r.text!) }))
+    .all(sessionId) as { messageId: string; role: string; time: number; text: string | null }[]
+  const turns = rows
+    .filter((r) => r.text && r.text.trim())
+    .map((r) => ({ messageId: r.messageId, role: r.role, time: r.time, text: redact(r.text!) }))
+  if (o.around) {
+    const i = turns.findIndex((t) => t.messageId === o.around)
+    if (i < 0) throw new DesktopSessionsError(`Message ${o.around} is not a text turn of session ${sessionId}.`)
+    const n = o.context ?? 2
+    return turns.slice(Math.max(0, i - n), i + n + 1)
+  }
   return o.limit ? turns.slice(-o.limit) : turns
 }
 
