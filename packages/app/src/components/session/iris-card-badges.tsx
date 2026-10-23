@@ -18,6 +18,8 @@ export interface CardFace {
   /** First image attachment, drawn above the title in Board view (#189797). Never on a PHI board. */
   cover?: string
   assignees?: { id: number; type: "user" | "agent"; name?: string }[]
+  /** An edit made here with no connection (#190537 W3): waiting to be sent, or held for a person. */
+  pending?: "waiting" | "held"
 }
 
 const LOUD = new Set(["urgent", "critical", "high", "p0", "p1"])
@@ -28,6 +30,7 @@ export function CardBadges(props: { item: CardFace; now: number; max?: number })
   const shown = () => people().slice(0, props.max ?? 3)
   const any = () =>
     !!(
+      props.item.pending ||
       props.item.dueDate ||
       props.item.priority ||
       props.item.labels?.length ||
@@ -38,6 +41,21 @@ export function CardBadges(props: { item: CardFace; now: number; max?: number })
   return (
     <Show when={any()}>
       <span class="iris-badges">
+        <Show when={props.item.pending}>
+          {(p) => (
+            <span
+              class="iris-badge iris-badge--pending"
+              data-pending={p()}
+              title={
+                p() === "held"
+                  ? "This card changed while you were offline, in a field you also changed. Choose which to keep at the top of the board."
+                  : "Changed on this computer while offline — it will be sent when IRIS can be reached."
+              }
+            >
+              {p() === "held" ? "Needs you" : "Waiting to send"}
+            </span>
+          )}
+        </Show>
         <For each={props.item.labels ?? []}>{(l) => <span class="iris-badge iris-badge--label">{l}</span>}</For>
         <Show when={props.item.priority}>
           {(p) => (

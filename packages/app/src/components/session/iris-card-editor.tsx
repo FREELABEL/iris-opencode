@@ -403,6 +403,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
       return { measured: false, reason: e instanceof Error ? e.message : String(e), ...empty }
     }
   }
+  const OFFLINE_SAVED = "Saved on this computer — it will be sent when IRIS can be reached"
   async function post(path: string, body?: unknown, init?: RequestInit): Promise<{ ok: boolean; reason?: string } & Record<string, any>> {
     try {
       const res = await props.doFetch(path, {
@@ -574,7 +575,12 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
           : cur,
       )
       setDraft(null)
-      setNote({ ok: true, text: `Saved ${Object.keys(p).length} field${Object.keys(p).length === 1 ? "" : "s"}` })
+      setNote({
+        ok: true,
+        text: out.queued
+          ? OFFLINE_SAVED // #190537 W3: kept here, sent when IRIS can be reached
+          : `Saved ${Object.keys(p).length} field${Object.keys(p).length === 1 ? "" : "s"}`,
+      })
       props.onChanged?.()
     } else {
       setNote({ ok: false, text: out.reason ?? "save failed" })
@@ -642,12 +648,15 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
     const out = await post(`/iris/item/${d.id}/save`, {
       body: b,
       bodyMode: d.contentKind === "structured" ? "merge" : "replace",
+      // The body this edit started from. If the save has to wait offline and the card changes
+      // meanwhile, an untouched body merges instead of being held for a person (#190537 W3).
+      base: { body: d.content },
     })
     if (out.ok) {
       mutateDoc((cur) => (cur ? { ...cur, content: b } : cur))
       setBodyDraft(null)
       setEditingBody(false)
-      setBodyNote({ ok: true, text: "Saved" })
+      setBodyNote({ ok: true, text: out.queued ? OFFLINE_SAVED : "Saved" })
       props.onChanged?.()
     } else {
       setBodyNote({ ok: false, text: out.reason ?? "save failed" })

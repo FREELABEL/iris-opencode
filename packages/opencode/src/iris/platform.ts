@@ -3200,7 +3200,7 @@ export function readItemDoc(raw: any): Omit<ItemDoc, "tasks" | "tasksMeasured" |
 }
 
 /** fl-api's 422 names the fields; say those rather than the status code. */
-function apiFailure(j: any, status: number): string {
+export function apiFailure(j: any, status: number): string {
   const errs = j?.errors && typeof j.errors === "object" ? Object.values(j.errors).flat().join("; ") : ""
   return String(errs || j?.message || `fl-api ${status}`)
 }
@@ -3272,6 +3272,15 @@ export interface ItemPatch {
 }
 
 /**
+ * fl-api could not be reached, as opposed to refusing (#190537 W3). Only this kind of failure may
+ * be queued and retried: a refusal is an answer, and replaying it later would only be refused again.
+ * A thrown fetch is the network; 502/503/504 are a proxy saying fl-api is not answering.
+ */
+export function unreachable(status?: number): boolean {
+  return status === undefined || status === 0 || status === 502 || status === 503 || status === 504
+}
+
+/**
  * Build the fl-api body from the editor's patch. Exported so the mapping is testable without
  * the network: a field the editor sets that never reaches the wire is a save that reports
  * success and changes nothing — and `cardType` → `card_type` (not `type`) is exactly the kind
@@ -3292,7 +3301,7 @@ export function itemPatchBody(patch: ItemPatch): Record<string, unknown> {
   return body
 }
 
-export async function saveItem(id: number, patch: ItemPatch): Promise<{ ok: boolean; reason?: string }> {
+export async function saveItem(id: number, patch: ItemPatch): Promise<{ ok: boolean; reason?: string; offline?: boolean }> {
   const userId = await resolveUserId()
   if (!userId) return { ok: false, reason: `not signed in (token: ${tokenSource()})` }
 
@@ -3308,10 +3317,10 @@ export async function saveItem(id: number, patch: ItemPatch): Promise<{ ok: bool
       body: JSON.stringify(body),
     })
     const j = (await res.json().catch(() => ({}))) as any
-    if (!res.ok) return { ok: false, reason: apiFailure(j, res.status) }
+    if (!res.ok) return { ok: false, reason: apiFailure(j, res.status), ...(unreachable(res.status) ? { offline: true } : {}) }
     return { ok: true }
   } catch (e) {
-    return { ok: false, reason: e instanceof Error ? e.message : String(e) }
+    return { ok: false, reason: e instanceof Error ? e.message : String(e), offline: true }
   }
 }
 
@@ -3326,7 +3335,7 @@ export async function createItem(
   bloqId: number,
   listId: number,
   input: { title: string; body?: string },
-): Promise<{ ok: boolean; id?: number; reason?: string }> {
+): Promise<{ ok: boolean; id?: number; reason?: string; offline?: boolean }> {
   const userId = await resolveUserId()
   if (!userId) return { ok: false, reason: `not signed in (token: ${tokenSource()})` }
   const title = input.title.trim()
@@ -3345,11 +3354,11 @@ export async function createItem(
       body: JSON.stringify({ title, content: input.body?.trim() || title, type: "default", list_id: listId }),
     })
     const j = (await res.json().catch(() => ({}))) as any
-    if (!res.ok) return { ok: false, reason: apiFailure(j, res.status) }
+    if (!res.ok) return { ok: false, reason: apiFailure(j, res.status), ...(unreachable(res.status) ? { offline: true } : {}) }
     const id = Number(j?.data?.id ?? j?.data?.data?.id ?? j?.id)
     return Number.isFinite(id) ? { ok: true, id } : { ok: true }
   } catch (e) {
-    return { ok: false, reason: e instanceof Error ? e.message : String(e) }
+    return { ok: false, reason: e instanceof Error ? e.message : String(e), offline: true }
   }
 }
 
@@ -3386,7 +3395,7 @@ export async function createList(
  * The route answers 404 for a card on a board you do not own — including one shared WITH you —
  * so that is said in words: "item not found" about a card on screen reads as a broken app.
  */
-export async function moveItem(id: number, listId: number, position: number): Promise<{ ok: boolean; reason?: string }> {
+export async function moveItem(id: number, listId: number, position: number): Promise<{ ok: boolean; reason?: string; offline?: boolean }> {
   const userId = await resolveUserId()
   if (!userId) return { ok: false, reason: `not signed in (token: ${tokenSource()})` }
   if (!Number.isInteger(position) || position < 0) return { ok: false, reason: "position must be a whole number, 0 or more" }
@@ -3399,10 +3408,10 @@ export async function moveItem(id: number, listId: number, position: number): Pr
     if (res.status === 404) {
       return { ok: false, reason: "Atlas would not move this card — only the board's owner can rearrange it" }
     }
-    if (!res.ok) return { ok: false, reason: apiFailure(j, res.status) }
+    if (!res.ok) return { ok: false, reason: apiFailure(j, res.status), ...(unreachable(res.status) ? { offline: true } : {}) }
     return { ok: true }
   } catch (e) {
-    return { ok: false, reason: e instanceof Error ? e.message : String(e) }
+    return { ok: false, reason: e instanceof Error ? e.message : String(e), offline: true }
   }
 }
 

@@ -75,3 +75,24 @@ describe("what the chip and the tab strip say", () => {
     expect(needsAttention(surfaceSync("hive"))).toBe(false)
   })
 })
+
+// #190537 W3: edits made offline wait on this computer; the chip counts them.
+describe("edits waiting to be sent", () => {
+  const now = Date.parse("2026-10-22T12:00:00Z")
+  test("a payload carries the board's waiting and held counts into the sync state", () => {
+    const s = syncOfPayload({ measured: true, offline: true, copiedAt: "2026-10-22T11:48:00Z", outbox: { waiting: 3, held: 0, heldItems: [] } })
+    expect(s).toMatchObject({ state: "offline", waiting: 3, held: 0 })
+    expect(syncOfPayload({ measured: true, __at: now }).waiting).toBeUndefined()
+  })
+  test("the chip says how many wait, offline or sending", () => {
+    expect(syncLabel({ state: "offline", copiedAt: "2026-10-22T11:48:00Z", waiting: 3 }, now)!.text).toBe("Offline · 3 waiting")
+    expect(syncLabel({ state: "synced", at: now, waiting: 1 }, now)!.text).toBe("1 waiting · sending…")
+    expect(syncLabel({ state: "synced", at: now, waiting: 0 }, now)!.text).toBe("Synced · just now")
+  })
+  test("an edit held for a person outranks everything, and dots the tab", () => {
+    expect(syncLabel({ state: "synced", at: now, waiting: 2, held: 1 }, now)!.text).toBe("1 needs you")
+    expect(syncLabel({ state: "offline", held: 2 }, now)!.text).toBe("2 need you")
+    expect(needsAttention({ state: "synced", at: now, held: 1 })).toBe(true)
+    expect(needsAttention({ state: "synced", at: now, waiting: 4 })).toBe(false)
+  })
+})

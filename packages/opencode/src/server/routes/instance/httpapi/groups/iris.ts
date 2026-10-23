@@ -96,7 +96,28 @@ export const AtlasItem = Schema.Struct({
       }),
     ),
   ),
+  pending: Schema.optional(
+    described(
+      Schema.Literals(["waiting", "held"]),
+      "An edit made on this computer with no connection (#190537 W3): waiting = not sent yet, held = needs a person (see `outbox.heldItems`). A card created offline has a negative id until it is sent.",
+    ),
+  ),
 }).annotate({ identifier: "IrisAtlasItem" })
+
+const OutboxHeldItem = Schema.Struct({
+  opId: Schema.String,
+  itemId: Schema.Finite,
+  kind: described(Schema.Literals(["conflict", "refused"]), "conflict = the card changed elsewhere in a field you also changed; refused = fl-api said no."),
+  message: described(Schema.String, "A sentence to show as it is."),
+  fields: Schema.Array(
+    Schema.Struct({
+      field: described(Schema.String, "fl-api's field name: title, content, status, priority, card_type, due_date, bloq_list_id."),
+      base: Schema.optional(Schema.Unknown),
+      mine: Schema.Unknown,
+      theirs: Schema.Unknown,
+    }),
+  ),
+}).annotate({ identifier: "IrisAtlasOutboxHeld" })
 
 const LocalCopySettingsSchema = Schema.Struct({
   enabled: described(Schema.Boolean, "Keep a copy of each opened board on this machine. Off deletes every copy."),
@@ -119,6 +140,12 @@ export const AtlasResponse = Schema.Struct({
     described(
       Schema.Literals(["unchanged", "delta", "full"]),
       "How a refresh reached fl-api (#190231 phase 3): unchanged = nothing moved, no board sent; delta = only changed cards fetched; full = the whole board.",
+    ),
+  ),
+  outbox: Schema.optional(
+    described(
+      Schema.Struct({ waiting: Schema.Finite, held: Schema.Finite, heldItems: Schema.Array(OutboxHeldItem) }),
+      "Edits to this board made on this computer with no connection (#190537 W3). Absent when there are none.",
     ),
   ),
   lists: Schema.Array(
@@ -1354,6 +1381,8 @@ export const IrisPaths = {
   itemComments: `${root}/item/:itemID/comments`,
   notifySettings: `${root}/notifications/settings`,
   atlasLocalCopy: `${root}/atlas-local-copy`,
+  atlasOutboxSend: `${root}/atlas-outbox/send`,
+  atlasOutboxResolve: `${root}/atlas-outbox/:opID/resolve`,
   meLive: `${root}/me/live`,
   agents: `${root}/agents/:bloqID`,
   agentsMine: `${root}/agents-mine`,
@@ -1740,7 +1769,13 @@ export const IrisApi = HttpApi.make("iris").add(
           position: described(Schema.optional(Schema.Finite), "Ignored since #189791: fl-api appends to the end of the list itself"),
         }),
         success: described(
-          Schema.Struct({ ok: Schema.Boolean, id: Schema.optional(Schema.Finite), reason: Schema.optional(Schema.String) }).annotate({
+          Schema.Struct({
+            ok: Schema.Boolean,
+            id: described(Schema.optional(Schema.Finite), "Negative while the card waits to be sent (#190537 W3)."),
+            reason: Schema.optional(Schema.String),
+          queued: described(Schema.optional(Schema.Boolean), "fl-api could not be reached: kept on this computer and sent when it can be (#190537 W3)."),
+          offline: described(Schema.optional(Schema.Boolean), "fl-api could not be reached and the change could NOT be kept here (a board this computer does not keep). `reason` says so."),
+          }).annotate({
             identifier: "IrisAtlasCreateResult",
           }),
           "Whether the card was created, and its id",
@@ -1826,6 +1861,39 @@ export const IrisApi = HttpApi.make("iris").add(
       HttpApiEndpoint.get("atlasLocalCopy", IrisPaths.atlasLocalCopy, {
         success: described(LocalCopySettingsSchema, "Whether this machine keeps a copy of each Atlas board, and on what terms (#190231 phase 1)"),
       }).annotateMerge(OpenApi.annotations({ identifier: "iris.atlasLocalCopy", summary: "Local copy of Atlas: settings" })),
+      HttpApiEndpoint.post("atlasOutboxSend", IrisPaths.atlasOutboxSend, {
+        success: described(
+          Schema.Struct({ sent: Schema.Finite, held: Schema.Finite, waiting: Schema.Finite, offline: Schema.Boolean }).annotate({
+            identifier: "IrisAtlasOutboxSendResult",
+          }),
+          "What was sent, what is held for a person, what still waits, and whether fl-api is still unreachable",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.atlasOutboxSend",
+          summary: "Send edits made offline",
+          description: "#190537 W3. Sends this computer's waiting Atlas edits now, in order. It also happens on its own every 20 s while any wait, and on any board read that reaches fl-api.",
+        }),
+      ),
+      HttpApiEndpoint.post("atlasOutboxResolve", IrisPaths.atlasOutboxResolve, {
+        params: { opID: Schema.String },
+        payload: Schema.Struct({
+          choice: described(Schema.Literals(["mine", "theirs"]), "mine = send your values; theirs = drop your edit and keep the card as it is"),
+        }),
+        success: described(
+          Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String), waiting: Schema.Finite, held: Schema.Finite }).annotate({
+            identifier: "IrisAtlasOutboxResolveResult",
+          }),
+          "Whether it was settled, and what is left",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.atlasOutboxResolve",
+          summary: "Settle a held offline edit",
+          description:
+            "#190537 W3. A held edit is one the card changed under while you were offline, in a field you also changed. 'mine' sends yours against the card as it was when the conflict was found — if it changed AGAIN since, it comes back held with the new values rather than overwriting a change nobody here has seen.",
+        }),
+      ),
       HttpApiEndpoint.post("atlasLocalCopySave", IrisPaths.atlasLocalCopy, {
         payload: Schema.Struct({
           enabled: Schema.optional(Schema.Boolean),
@@ -2302,11 +2370,17 @@ export const IrisApi = HttpApi.make("iris").add(
           cardType: Schema.optional(Schema.NullOr(Schema.String)),
           dueDate: described(Schema.optional(Schema.NullOr(Schema.String)), "YYYY-MM-DD, or null to clear"),
           listId: described(Schema.optional(Schema.Finite), "Move the item to this list on the same board"),
+          base: described(
+            Schema.optional(Schema.Struct({ body: Schema.optional(Schema.String) })),
+            "What the editor showed before this edit, for fields a board copy does not hold (the body). If the save has to wait offline, this is what it is merged against (#190537 W3).",
+          ),
         }),
         success: described(
           Schema.Struct({
             ok: Schema.Boolean,
             reason: Schema.optional(Schema.String),
+          queued: described(Schema.optional(Schema.Boolean), "fl-api could not be reached: kept on this computer and sent when it can be (#190537 W3)."),
+          offline: described(Schema.optional(Schema.Boolean), "fl-api could not be reached and the change could NOT be kept here (a board this computer does not keep). `reason` says so."),
           }).annotate({ identifier: "IrisItemSaveResult" }),
           "Whether the save landed",
         ),
@@ -2328,6 +2402,8 @@ export const IrisApi = HttpApi.make("iris").add(
           Schema.Struct({
             ok: Schema.Boolean,
             reason: Schema.optional(Schema.String),
+          queued: described(Schema.optional(Schema.Boolean), "fl-api could not be reached: kept on this computer and sent when it can be (#190537 W3)."),
+          offline: described(Schema.optional(Schema.Boolean), "fl-api could not be reached and the change could NOT be kept here (a board this computer does not keep). `reason` says so."),
           }).annotate({ identifier: "IrisItemMoveResult" }),
           "Whether the move landed",
         ),

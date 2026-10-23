@@ -53,6 +53,8 @@ export function atlasHome(): string {
 const settingsFile = () => path.join(atlasHome(), "local-copy.json")
 const accountDir = (userId: number) => path.join(atlasHome(), "cache", String(userId))
 const boardFile = (userId: number, bloqId: number) => path.join(accountDir(userId), `${bloqId}.json`)
+/** Edits made with fl-api unreachable, waiting to be sent (#190537 W3, atlas-outbox.ts). */
+export const outboxFile = (userId: number) => path.join(atlasHome(), "outbox", `${userId}.json`)
 
 function mkdirPrivate(dir: string) {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
@@ -157,7 +159,7 @@ export function writeBoardCopy<L>(userId: number, bloqId: number, containsPhi: b
   const tmp = `${p}.${process.pid}.tmp`
   fs.writeFileSync(tmp, JSON.stringify(copy), { mode: 0o600 })
   fs.renameSync(tmp, p)
-  evict(userId, s)
+  evict(userId, s, p)
   return true
 }
 
@@ -190,10 +192,28 @@ export function deleteBoardCopy(userId: number, bloqId: number) {
   fs.rmSync(boardFile(userId, bloqId), { force: true })
 }
 
-/** Keep the most recently opened boards within maxBoards and maxMB for this account. */
-export function evict(userId: number, s: LocalCopySettings = readLocalCopySettings()) {
+/** Boards with edits still waiting in the outbox: their copy is what those edits are drawn on. */
+function boardsWithWaitingEdits(userId: number): Set<string> {
+  try {
+    const o = JSON.parse(fs.readFileSync(outboxFile(userId), "utf8"))
+    return new Set((o?.ops ?? []).map((op: { bloqId?: number }) => `${op.bloqId}.json`))
+  } catch {
+    return new Set()
+  }
+}
+
+/**
+ * Keep the most recently opened boards within maxBoards and maxMB for this account.
+ *
+ * Two copies are never evicted (#190537 S8, W3): `keep`, the board just written — a board larger
+ * than the whole budget used to be deleted the moment it was saved, so the one board on screen was
+ * the one with no copy — and any board with edits waiting to be sent.
+ */
+export function evict(userId: number, s: LocalCopySettings = readLocalCopySettings(), keep?: string) {
   const dir = accountDir(userId)
+  const pinned = boardsWithWaitingEdits(userId)
   const files = safeList(dir)
+    .filter((f) => !pinned.has(f))
     .map((f) => {
       const p = path.join(dir, f)
       try {
@@ -204,11 +224,37 @@ export function evict(userId: number, s: LocalCopySettings = readLocalCopySettin
       }
     })
     .filter((x): x is { p: string; at: number; size: number } => !!x)
-    .sort((a, b) => b.at - a.at)
+    // The board just written is the newest, even when another was written in the same millisecond.
+    .sort((a, b) => Number(b.p === keep) - Number(a.p === keep) || b.at - a.at)
   const budget = s.maxMB * 1024 * 1024
   let used = 0
   files.forEach((f, i) => {
     used += f.size
+    if (f.p === keep) return
     if (i >= s.maxBoards || used > budget) fs.rmSync(f.p, { force: true })
   })
+}
+
+/**
+ * Which kept board holds this card, and the card as last read (#190537 W3). Read without touching
+ * the file's time: looking a card up is not opening its board. A copy that may not be kept is not
+ * an answer — the same rule readBoardCopy applies.
+ */
+export function findCardInCopies<I extends { id: number }>(
+  userId: number,
+  itemId: number,
+): { bloqId: number; containsPhi: boolean; listId: number; item: I } | undefined {
+  const s = readLocalCopySettings()
+  if (!s.enabled) return undefined
+  for (const f of safeList(accountDir(userId))) {
+    try {
+      const c = JSON.parse(fs.readFileSync(path.join(accountDir(userId), f), "utf8")) as BoardCopy<{ id: number; items?: I[] }>
+      if (c.userId !== userId || !mayKeep(!!c.containsPhi, s)) continue
+      for (const l of c.lists ?? []) {
+        const item = (l.items ?? []).find((i) => i.id === itemId)
+        if (item) return { bloqId: c.bloqId, containsPhi: !!c.containsPhi, listId: l.id, item }
+      }
+    } catch {}
+  }
+  return undefined
 }

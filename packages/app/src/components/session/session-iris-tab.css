@@ -3859,3 +3859,47 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
   line-height: 1.65;
   background: transparent;
 }
+/* Edits made offline (#190537 W3): a card waiting to be sent, and one held for a person. */
+.iris-badge--pending[data-pending="waiting"] {
+  color: var(--text-base);
+  border-style: dashed;
+}
+.iris-badge--pending[data-pending="held"] {
+  color: var(--text-on-warning-weak);
+  background: var(--surface-warning-weak);
+  border-color: var(--border-warning-base);
+  font-weight: 600;
+}
+.iris-held {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 8px 10px;
+}
+.iris-held__item {
+  border: 1px solid var(--border-warning-base, var(--border-base));
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--background-weak);
+}
+.iris-held__card { font-size: 12px; font-weight: 600; color: var(--text-strong); margin: 0 0 2px; }
+.iris-held__msg { font-size: 12px; color: var(--text-base); margin: 0 0 8px; }
+.iris-held__table { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
+.iris-held__table th,
+.iris-held__table td { text-align: left; padding: 4px 6px; border-top: 1px solid var(--border-weaker-base); vertical-align: top; overflow-wrap: anywhere; }
+.iris-held__table thead th { border-top: 0; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--text-weak); }
+.iris-held__table tbody th { width: 22%; color: var(--text-weak); font-weight: 500; }
+.iris-held__actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.iris-held__btn {
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-strong);
+  background: var(--background-element);
+  border: 1px solid var(--border-weak-base);
+  cursor: pointer;
+}
+.iris-held__btn--primary { background: var(--surface-strong, var(--background-element)); font-weight: 600; }
+.iris-held__btn:disabled { opacity: .5; cursor: default; }
+.iris-held__error { font-size: 12px; color: var(--text-on-critical-weak); margin: 0; }
