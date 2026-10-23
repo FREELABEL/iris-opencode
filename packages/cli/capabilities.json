@@ -7518,7 +7518,7 @@
     {
       "kind": "command",
       "name": "hive tasks",
-      "describe": "list, inspect or CREATE tasks on your nodes (create dispatches any task type)",
+      "describe": "list, inspect, rerun or CREATE tasks on your nodes (create dispatches any task type)",
       "aliases": [],
       "run": "iris hive tasks [subcommand] [task-id]",
       "haystack": "hive tasks list, inspect or create tasks on your nodes (create dispatches any task type) status filter by status type task type — filters the list, or names what to dispatch with  history include completed tasks (last 48h) since time window (e.g. 24h, 7d) limit max tasks to show tail lines of output to show (for logs) node (create) node name or id to run it on — pinned unless --allow-fallback config (create) the task prompt (create) the task title (create) title shown in the dashboard timeout (create) timeout in seconds (30–3600) priority (create) priority 1-10 (higher = sooner) queue (create) queue it and exit instead of waiting for the result allow-fallback (create) let another node take it if the named one cannot requires (create) only run on a node advertising this capability (repeatable) not-after (create) never run it after this — a duration from now (30s, 5m) or an iso time. late tasks expire instead of running key (create) idempotency key: the same key returns the same task, and a node never runs it twice retries (create) retry a failure up to n more times — needs --key, never past --not-after json (create) json output (the full task object) user-id user id"
