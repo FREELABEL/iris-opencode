@@ -794,13 +794,18 @@ const SetCmd = cmd({
   },
 })
 
-const PullCmd = cmd({
+export const PullCmd = cmd({
   command: "pull <slug>",
   describe: "download page JSON to ./pages/<slug>.json (overwrites local edits — run `pages diff` first)",
   builder: (y) =>
     y
       .positional("slug", { describe: "page slug — e.g. `my-page`, not `pages/my-page.json`", type: "string", demandOption: true })
-      .option("dir", { describe: "output directory", type: "string", default: "./pages" }),
+      .option("dir", { describe: "output directory", type: "string", default: "./pages" })
+      // #190838. Pull always overwrites, so this changes nothing — but push and duplicate take
+      // --force, and without it here yargs rejected the flag and exited 1 BEFORE writing. A
+      // file left by an earlier pull made that look like success, so `pull --force && edit`
+      // skipped the edit and the next push republished the old page.
+      .option("force", { describe: "overwrite the local file (pull always does; accepted for scripts)", type: "boolean", default: false }),
   async handler(args) {
     const { slug, corrected } = normalizeSlugArg(args.slug)
     UI.empty()
@@ -811,7 +816,9 @@ const PullCmd = cmd({
     sp.start("Fetching…")
     try {
       const page = await getBySlug(slug, true)
-      if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+      // Exit non-zero on every failure: `pull && edit && push` must stop here, not edit a
+      // stale file and push it (#190838).
+      if (!page) { sp.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
       const dir = pagesDir(args.dir)
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
       const filePath = join(dir, `${slug}.json`)
@@ -860,6 +867,7 @@ const PullCmd = cmd({
     } catch (err) {
       sp.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
+      process.exitCode = 1
       prompts.outro("Done")
     }
   },
