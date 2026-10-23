@@ -3,6 +3,7 @@ import { cmd } from "./cmd"
 import { requireAuth, requireUserId, writeJson, dim, bold, success, warn } from "./iris-api"
 import { hiveFetch } from "./platform-hive-nodes"
 import os from "os"
+import { followStep, newFollowState, type TranscriptMessage } from "../lib/hive-chat-follow"
 
 /**
  * `iris hive sessions` — what AI sessions are running across your fleet.
@@ -248,6 +249,45 @@ const SessionsCommand = cmd({
 })
 
 /**
+ * The one session `wanted` names, and the node holding it — or exit with the reason. Shared by
+ * send-input and ask so "which session did you mean" is answered one way.
+ */
+async function resolveSession(userId: number, wanted: string): Promise<{ node: any; s: Session }> {
+  const res = await hiveFetch(`/api/v6/nodes/?user_id=${userId}&detailed=1`)
+  const body = (await res.json().catch(() => ({}))) as any
+  const nodes = (body.nodes || body.data || []) as any[]
+
+  // Match the FULL id, or an unambiguous suffix. Never a prefix: session ids share leading
+  // characters, and a truncated match is how a wrong diagnosis got filed on this project
+  // once already (#182312).
+  // From the current reports only, one per session (#190653): a session also listed by an old
+  // record of the same machine used to count twice and refuse even a full id.
+  const hits: Array<{ node: any; s: Session }> = reportedSessions(nodes).entries.filter(
+    ({ s }) => s.session_id === wanted || (wanted.length >= 6 && s.session_id.endsWith(wanted)),
+  )
+
+  if (hits.length === 0) {
+    console.error(`No session matching "${wanted}".`)
+    console.error(dim("  List them:  iris hive sessions --all"))
+    process.exit(1)
+  }
+  if (hits.length > 1) {
+    // Refuse rather than guess which machine to type into.
+    console.error(`"${wanted}" matches ${hits.length} sessions — use the full id:`)
+    for (const h of hits) console.error(dim(`  ${h.s.session_id}  on ${h.node.name}`))
+    process.exit(1)
+  }
+
+  const { node, s } = hits[0]
+  if (s.status === "stale") {
+    console.error(`That session is stale (last active ${age(s.updated_at)} ago) — it is unlikely to answer.`)
+    console.error(dim("  Check with:  iris hive sessions --all"))
+    process.exit(1)
+  }
+  return { node, s }
+}
+
+/**
  * `iris hive send-input` — put a message into a session that is already running, on whichever
  * machine holds it.
  *
@@ -274,39 +314,7 @@ const SendInputCommand = cmd({
     const userId = await requireUserId(argv["user-id"] as number | undefined)
     if (!userId) process.exit(1)
 
-    const wanted = String(argv["session-id"])
-
-    const res = await hiveFetch(`/api/v6/nodes/?user_id=${userId}&detailed=1`)
-    const body = (await res.json().catch(() => ({}))) as any
-    const nodes = (body.nodes || body.data || []) as any[]
-
-    // Match the FULL id, or an unambiguous suffix. Never a prefix: session ids share leading
-    // characters, and a truncated match is how a wrong diagnosis got filed on this project
-    // once already (#182312).
-    // From the current reports only, one per session (#190653): a session also listed by an old
-    // record of the same machine used to count twice and refuse even a full id.
-    const hits: Array<{ node: any; s: Session }> = reportedSessions(nodes).entries.filter(
-      ({ s }) => s.session_id === wanted || (wanted.length >= 6 && s.session_id.endsWith(wanted)),
-    )
-
-    if (hits.length === 0) {
-      console.error(`No session matching "${wanted}".`)
-      console.error(dim("  List them:  iris hive sessions --all"))
-      process.exit(1)
-    }
-    if (hits.length > 1) {
-      // Refuse rather than guess which machine to type into.
-      console.error(`"${wanted}" matches ${hits.length} sessions — use the full id:`)
-      for (const h of hits) console.error(dim(`  ${h.s.session_id}  on ${h.node.name}`))
-      process.exit(1)
-    }
-
-    const { node, s } = hits[0]
-    if (s.status === "stale") {
-      console.error(`That session is stale (last active ${age(s.updated_at)} ago) — it is unlikely to answer.`)
-      console.error(dim("  Check with:  iris hive sessions --all"))
-      process.exit(1)
-    }
+    const { node, s } = await resolveSession(userId, String(argv["session-id"]))
 
     const create = await hiveFetch(`/api/v6/nodes/tasks`, {
       method: "POST",
@@ -346,5 +354,94 @@ const SendInputCommand = cmd({
   },
 })
 
+/**
+ * `iris hive ask` — say something to a session on any machine and read its answer here (#190671).
+ *
+ * send-input delivers and walks away: the reply happens in a window on another machine. This sends
+ * with `submit` (the session takes a turn — it spends THAT session's tokens, which is why send-input
+ * does not) and then follows the transcript through the cloud until the reply settles. Polling, not a
+ * stream: the transcript read is the one door to a session on another machine today, and a reply
+ * that is still being written grows between polls, so it prints as it is written, a poll at a time.
+ */
+const AskCommand = cmd({
+  command: "ask <session-id> <message>",
+  describe: "talk to a session on any node in your Hive and print its reply as it is written",
+  builder: (yargs) =>
+    yargs
+      .positional("session-id", { describe: "from `iris hive sessions`", type: "string", demandOption: true })
+      .positional("message", { describe: "what to say", type: "string", demandOption: true })
+      .option("timeout", { describe: "seconds to follow the reply", type: "number", default: 300 })
+      .option("interval", { describe: "seconds between transcript reads", type: "number", default: 2 })
+      .option("user-id", { describe: "user ID", type: "number" }),
+  async handler(argv) {
+    await requireAuth()
+    const userId = await requireUserId(argv["user-id"] as number | undefined)
+    if (!userId) process.exit(1)
+
+    const { node, s } = await resolveSession(userId, String(argv["session-id"]))
+    const message = String(argv.message)
+
+    const create = await hiveFetch(`/api/v6/nodes/tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        user_id: userId,
+        node_id: node.id,
+        type: "session_message",
+        title: `ask ${label(s)}`,
+        prompt: message,
+        config: {
+          session_id: s.session_id,
+          provider: s.provider,
+          message,
+          from: os.hostname().replace(/\.local$/, ""),
+          submit: true,
+        },
+      }),
+    })
+    if (!create.ok) {
+      const t = await create.text()
+      console.error(`Could not send: HTTP ${create.status} ${t.slice(0, 200)}`)
+      process.exit(1)
+    }
+
+    console.error(dim(`→ ${label(s)} on ${node.name} · ${s.provider}`))
+    const state = newFollowState()
+    const interval = Math.max(1, Number(argv.interval) || 2) * 1000
+    const deadline = Date.now() + Math.max(10, Number(argv.timeout) || 300) * 1000
+    // A reply that has not changed for this long is done. A model waiting on a slow tool looks the
+    // same, so it is generous; --timeout bounds the whole thing either way.
+    const QUIET_POLLS = 4
+    let quiet = 0
+    let lastError = ""
+    const q = new URLSearchParams({ machine: String(node.name), provider: String(s.provider || ""), limit: "40" })
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, interval))
+      const r = await hiveFetch(`/api/v6/nodes/sessions/${encodeURIComponent(s.session_id)}/transcript?${q}`)
+      const body = (await r.json().catch(() => ({}))) as any
+      if (!r.ok || !body.success) {
+        lastError = body.error || `HTTP ${r.status}`
+        continue
+      }
+      lastError = ""
+      const { out, changed } = followStep(state, (body.messages || []) as TranscriptMessage[], message)
+      if (out) process.stdout.write(out)
+      quiet = changed ? 0 : quiet + 1
+      if (state.answered && quiet >= QUIET_POLLS) {
+        process.stdout.write("\n")
+        return
+      }
+    }
+    process.stdout.write("\n")
+    if (!state.anchored) {
+      console.error(warn(`The message did not show up in ${label(s)}'s transcript within the timeout.`))
+      if (lastError) console.error(dim(`  last read: ${lastError}`))
+      process.exit(1)
+    }
+    console.error(dim(`  Still going after ${argv.timeout}s — read it with: iris hive ask again, or open it on ${node.name}.`))
+  },
+})
+
 export const HiveSessionsCommand = SessionsCommand
 export const HiveSendInputCommand = SendInputCommand
+export const HiveAskCommand = AskCommand
