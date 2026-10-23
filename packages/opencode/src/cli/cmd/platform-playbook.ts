@@ -693,17 +693,23 @@ const SkillRunCommand = cmd({
       // exiting 0. Narrowing to an explicitly-requested single step keeps automation intact and
       // fixes the case where the exit code is load-bearing.
       //
-      // Widened by #190875: a run with NO step results at all (its steps did not parse) is also
-      // ran-nothing, with or without --step. The exit code comes from runOutcome for BOTH output
-      // modes — the --json branch used to return before it was set, so a failed run exited 0
-      // (#182759).
+      // A playbook with no steps at all is also reported as ran-nothing (exit 0 — it is a
+      // document, not a failure). The exit code comes from runOutcome for BOTH output modes — the
+      // --json branch used to return before it was set, so a failed run exited 0 (#182759).
       const outcome = runOutcome(result, { stepFilter: args.step as string | undefined })
       const ranNothing = outcome.ranNothing
 
       if (args.json) {
         // Additive fields — the existing shape is untouched, so anything already parsing this
         // keeps working, and anything that wants the truth can now read it.
-        await writeJson({ ...result, ran_nothing: ranNothing, warnings })
+        await writeJson({
+          ...result,
+          ran_nothing: ranNothing,
+          ...(ranNothing && Object.keys(result.steps).length === 0
+            ? { ran_nothing_reason: "this playbook has no steps" }
+            : {}),
+          warnings,
+        })
         process.exitCode = outcome.exitCode
         return
       }
@@ -719,10 +725,11 @@ const SkillRunCommand = cmd({
       if (ranNothing) {
         console.log(`  ⚠  ${bold(result.skill)} — ${bold("NOTHING RAN")}`)
         if (Object.keys(result.steps).length === 0) {
-          console.log(dim(`  This playbook has no runnable steps. Check it:  iris playbook test ${plan.name}`))
+          // Not a failure: a documentation-style playbook has nothing to execute.
+          console.log(dim(`  This playbook has no steps — it is a document. Read it:  iris playbook show ${plan.name}`))
           printDivider()
           prompts.outro("Nothing ran")
-          process.exitCode = 1
+          process.exitCode = outcome.exitCode
           return
         }
         for (const [id, sr] of Object.entries(result.steps)) {

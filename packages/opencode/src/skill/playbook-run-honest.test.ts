@@ -126,8 +126,11 @@ describe("#190875 title-less step headings", () => {
     expect(validatePlan(p).filter((i) => i.level === "error")).toEqual([])
   })
 
-  test("a run with zero step results is ran_nothing and exits 1", () => {
-    expect(runOutcome(result({ status: "completed", steps: {} }))).toEqual({ exitCode: 1, ranNothing: true })
+  test("a playbook with no steps at all (documentation-style) is ran_nothing, NOT a failure: exit 0", () => {
+    // desktop-release and ~8 other installed playbooks are prose with no `### step:` lines. The
+    // daemon runs them with --yes --json; exit 1 would mark each one as a warning. Unparseable
+    // headings are refused before the run (see below), so this case is only a genuinely stepless plan.
+    expect(runOutcome(result({ status: "completed", steps: {} }))).toEqual({ exitCode: 0, ranNothing: true })
   })
 
   test("--step whose only step was skipped is ran_nothing (unchanged)", () => {
@@ -217,7 +220,7 @@ describe("#182759 run handler wiring", async () => {
   const handler = src.slice(start, src.indexOf("const SkillTestCommand = cmd({", start))
 
   test("the --json branch sets process.exitCode from runOutcome before returning", () => {
-    const json = handler.slice(handler.indexOf("await writeJson({ ...result, ran_nothing"))
+    const json = handler.slice(handler.indexOf("ran_nothing: ranNothing,"))
     const block = json.slice(0, json.indexOf("return"))
     expect(block).toContain("process.exitCode = outcome.exitCode")
   })

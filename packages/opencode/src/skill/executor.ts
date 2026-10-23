@@ -1082,20 +1082,24 @@ export function planHeaderProblems(plan: Pick<SkillPlan, "onError" | "timeout">)
  * paths, because they disagreed: the --json branch returned before the exit code was set, so a
  * failed run printed `"status": "failed"` and exited 0 (#182759).
  *
- *   0 = completed and something ran · 2 = paused on a human · 1 = anything else.
+ *   0 = completed · 2 = paused on a human · 1 = failed, interrupted, or --step ran nothing.
  *
- * `ranNothing`: no step executed at all (#190875 — a playbook whose steps did not parse reported
- * completed), or `--step` ran only skips (#183406 defect 5). A full run whose steps were all
- * `if:`-gated off is NOT ranNothing: it did its job.
+ * `ranNothing` is reported honestly in two cases, with different exit codes:
+ *   - the playbook has NO steps at all — documentation-style playbooks (desktop-release and
+ *     others) that the daemon runs with --yes --json. Nothing was expected to run, so this is
+ *     not a failure: ranNothing true, exit 0. (Unparseable `### step:` headings never get here —
+ *     executeSkill refuses them up front, #190875.)
+ *   - `--step` ran only skips (#183406 defect 5): the step asked for did not execute, exit 1.
+ * A full run whose steps were all `if:`-gated off is NOT ranNothing: it did its job, exit 0.
  */
 export function runOutcome(result: SkillResult, opts: { stepFilter?: string } = {}): { exitCode: number; ranNothing: boolean } {
   const all = Object.values(result.steps)
   const passed = all.filter((r) => r.status === "success").length
   const failed = all.filter((r) => r.status === "failed").length
   const skipped = all.filter((r) => r.status === "skipped").length
+  if (result.status === "completed" && all.length === 0) return { exitCode: 0, ranNothing: true }
   const ranNothing =
-    result.status === "completed" &&
-    (all.length === 0 || (Boolean(opts.stepFilter) && passed === 0 && failed === 0 && skipped > 0))
+    result.status === "completed" && Boolean(opts.stepFilter) && passed === 0 && failed === 0 && skipped > 0
   if (ranNothing) return { exitCode: 1, ranNothing }
   if (result.status === "paused") return { exitCode: 2, ranNothing }
   if (result.status !== "completed" || failed > 0) return { exitCode: 1, ranNothing }
