@@ -59,6 +59,7 @@ import { IrisAgentLive } from "./iris-agent-live"
 import { IrisHiveScripts } from "./iris-hive-scripts"
 import { IrisHiveMachines } from "./iris-hive-machines"
 import { IrisHiveInbox } from "./iris-hive-inbox"
+import { IrisHiveSessions } from "./iris-hive-sessions"
 import { IrisHeartbeats } from "./iris-heartbeats"
 import { IrisPulseContact, IrisPulseTopic } from "./iris-pulse"
 import { itemCommands, renderMarkdown } from "./iris-item"
@@ -655,7 +656,7 @@ type SurfaceId = (typeof SURFACES)[number]["id"]
 
 /** Panes that draw and fetch for themselves; the generic row list has nothing to show for them. */
 // "inbox" draws itself since #189279 — the generic record list showed everything but the message.
-const SELF_PANES = new Set(["rooms", "artifacts", "atlas-artifacts", "agent-live", "brands", "hive", "hive-scripts", "heartbeats", "pulse-topic", "pulse-contact", "inbox"])
+const SELF_PANES = new Set(["rooms", "artifacts", "atlas-artifacts", "agent-live", "brands", "hive", "hive-sessions", "hive-scripts", "heartbeats", "pulse-topic", "pulse-contact", "inbox"])
 
 interface SubView {
   id: string
@@ -781,6 +782,8 @@ export const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
   ],
   hive: [
     { id: "machines", label: "Machines", pane: "hive", path: () => `/iris/hive` },
+    // #189446: every AI session on every machine — read one, reply to it. Owns its pane.
+    { id: "sessions", label: "Sessions", pane: "hive-sessions", path: () => `/iris/hive/sessions` },
     // #188817: write a script, send it to one of your computers, watch it run. Owns its pane.
     { id: "scripts", label: "Scripts", pane: "hive-scripts", path: () => `/iris/hive/scripts` },
     // The inbox was the original ask — "I want to see the inbox and all of the other machines
@@ -4015,6 +4018,9 @@ export function SessionIrisTab() {
           </Match>
           <Match when={pane() === "inbox"}>
             <IrisHiveInbox doFetch={doFetch} openExternal={(url) => platform.openExternal(url)} />
+          </Match>
+          <Match when={pane() === "hive-sessions"}>
+            <IrisHiveSessions doFetch={doFetch} openExternal={(url) => platform.openExternal(url)} />
           </Match>
           <Match when={pane() === "heartbeats"}>
             <IrisHeartbeats doFetch={doFetch} />

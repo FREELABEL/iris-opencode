@@ -1,6 +1,7 @@
 mod accounts;
 mod cli;
 mod deep_link;
+mod engine_auth;
 mod engine_supervisor;
 mod google_signin;
 mod history_home;
@@ -64,9 +65,30 @@ fn stop_engine_child(app: &AppHandle) {
         return;
     };
 
+    let pid = server_state.pid();
     let _ = server_state.kill();
+    // Withdraw its record now rather than on the exit event: a respawn writes the new one next,
+    // and the old engine's late exit must not be what local clients last saw (#190647).
+    engine_auth::note_stopped(dirs_next_home().as_deref(), pid);
 
     println!("Killed server");
+}
+
+/// The window's credential for the engine this app runs (#190647). An IPC command rather than a
+/// value in the window's initialization script, so only the app's own pages can read it. None
+/// when the app attached to an engine it did not start, which is the old, unauthenticated case.
+#[derive(serde::Serialize)]
+struct EngineCredentials {
+    username: &'static str,
+    password: String,
+}
+
+#[tauri::command]
+fn engine_credentials() -> Option<EngineCredentials> {
+    engine_auth::current_password().map(|password| EngineCredentials {
+        username: engine_auth::USERNAME,
+        password,
+    })
 }
 
 fn set_engine_child(app: &AppHandle, child: CommandChild) {
@@ -655,6 +677,10 @@ fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
     #[cfg(not(target_os = "windows"))]
     let cmd = app.shell().sidecar("iris-cli").expect("Failed to resolve iris-cli sidecar");
 
+    // #190647: the engine answered any local process with no credentials. A per-launch password
+    // (engine_auth.rs) and a Host allowlist close it; the window gets the password over IPC.
+    let password = engine_auth::password();
+
     let mut cmd = cmd
         .env("OPENCODE_EXPERIMENTAL_ICON_DISCOVERY", "true")
         .env("OPENCODE_CLIENT", "desktop")
@@ -662,6 +688,14 @@ fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
         .env("IRIS_API_KEY", &iris_api_key)
         .current_dir(&engine_cwd)
         .args(["serve", &format!("--port={port}")]);
+    if let Some(password) = password {
+        cmd = cmd
+            .env("OPENCODE_SERVER_PASSWORD", password)
+            // Explicit: a username inherited from the parent's environment would not match the
+            // one the window and the published record use.
+            .env("OPENCODE_SERVER_USERNAME", engine_auth::USERNAME)
+            .env("OPENCODE_SERVER_ALLOWED_HOSTS", engine_auth::allowed_hosts(port));
+    }
 
     // #189321: an account other than the first keeps its chat history, provider sign-ins and
     // MCP auth in its own data dir — sessions carry no account id, so a shared dir shows one
@@ -701,6 +735,14 @@ fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
             }
         }
     });
+    // The XDG_DATA_HOME this engine runs with, for the published record: the one set below, else
+    // the inherited one, else the default the engine falls back to (xdg-basedir).
+    let engine_data_home = data_home.clone().or_else(|| {
+        std::env::var_os("XDG_DATA_HOME")
+            .filter(|v| !v.is_empty())
+            .map(std::path::PathBuf::from)
+            .or_else(|| home.as_deref().map(|h| h.join(".local").join("share")))
+    });
     if let Some(data_home) = data_home {
         let _ = std::fs::create_dir_all(&data_home);
         println!("Engine data for this account: {}", data_home.display());
@@ -711,6 +753,18 @@ fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
     let (mut rx, child) = cmd.spawn().expect("Failed to spawn opencode");
     let generation = engine_supervisor::note_spawn(port);
     let app_for_events = app.clone();
+    let pid = child.pid();
+    if let Some(password) = password {
+        engine_auth::note_started(
+            home.as_deref(),
+            engine_auth::Engine {
+                port: port as u16,
+                pid,
+                password: password.to_string(),
+                data_home: engine_data_home.unwrap_or_default(),
+            },
+        );
+    }
 
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.recv().await {
@@ -746,6 +800,8 @@ fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
                 // This arm used to be `_ => {}` — an engine that died after launch was never
                 // noticed, and the window retried a dead process forever (#190516).
                 CommandEvent::Terminated(payload) => {
+                    // Before the supervisor respawns: a record naming a dead engine is withdrawn.
+                    engine_auth::note_stopped(dirs_next_home().as_deref(), pid);
                     engine_supervisor::on_exit(&app_for_events, generation, payload.code, payload.signal);
                 }
                 CommandEvent::Error(err) => {
@@ -896,6 +952,7 @@ pub fn run() {
         .plugin(LinuxMicrophonePlugin)
         .invoke_handler(tauri::generate_handler![
             kill_sidecar,
+            engine_credentials,
             copy_logs_to_clipboard,
             get_logs,
             install_cli,

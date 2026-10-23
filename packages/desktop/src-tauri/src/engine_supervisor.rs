@@ -127,7 +127,12 @@ pub async fn healthy(port: u32) -> bool {
     else {
         return false;
     };
-    match client.get(format!("http://127.0.0.1:{port}/global/health")).send().await {
+    // /global/health is behind the engine's password like every other route (#190647).
+    let mut req = client.get(format!("http://127.0.0.1:{port}/global/health"));
+    if let Some(auth) = crate::engine_auth::current_header() {
+        req = req.header("Authorization", auth);
+    }
+    match req.send().await {
         Ok(res) if res.status().is_success() => res
             .text()
             .await
