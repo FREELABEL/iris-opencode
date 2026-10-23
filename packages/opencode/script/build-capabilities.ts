@@ -199,6 +199,16 @@ function collectBlocks(dir: string): BlockIndex {
   return { byName, imports }
 }
 
+const declarationCache = new Map<string, string>()
+function declaresLocally(file: string, name: string): boolean {
+  let src = declarationCache.get(file)
+  if (src === undefined) {
+    src = readFileSync(file, "utf-8")
+    declarationCache.set(file, src)
+  }
+  return new RegExp(`\\b(?:const|let|var|function)\\s+${name}\\b`).test(src)
+}
+
 /**
  * Which of the same-named blocks did THIS parent mean?
  *
@@ -209,7 +219,18 @@ function collectBlocks(dir: string): BlockIndex {
 function resolveBlock(index: BlockIndex, constName: string, fromFile: string | null): Block | undefined {
   const candidates = index.byName.get(constName)
   if (!candidates || candidates.length === 0) return undefined
-  if (candidates.length === 1) return candidates[0]
+  if (candidates.length === 1) {
+    // "Globally unique" is only unique among cmd({...}) BLOCKS. A parent that declares the name
+    // itself without one (platform-camera.ts: `const DownCommand = directionCommand(...)`) or
+    // imports it from elsewhere means a different command, and borrowing the lone block indexed
+    // `iris camera down` as "stop the mesh that `iris mesh up` started" (#190961).
+    const only = candidates[0]
+    if (!fromFile || only.file === fromFile) return only
+    const imported = index.imports.get(fromFile)?.get(constName)
+    if (imported) return imported === only.file ? only : undefined
+    if (declaresLocally(fromFile, constName)) return undefined
+    return only
+  }
 
   if (fromFile) {
     const here = candidates.find((c) => c.file === fromFile)
