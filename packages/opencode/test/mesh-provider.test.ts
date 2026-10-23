@@ -191,6 +191,22 @@ describe("buildServeArgv — owner-restricted, unpublished, loopback", () => {
     expect(() => buildServeArgv({ ...base, model: "--publish", trustOwners: ["o"] })).toThrow(/--publish/)
     expect(() => buildServeArgv({ ...base, trustOwners: ["o"], nodeLabel: "--auto" })).toThrow(/--auto/)
   })
+  test("context size and lanes are passed only when asked for", () => {
+    const plain = buildServeArgv({ ...base, trustOwners: ["o"] })
+    expect(plain).not.toContain("--ctx-size")
+    expect(plain).not.toContain("--parallel")
+    const sized = buildServeArgv({ ...base, trustOwners: ["o"], ctxSize: 32768, parallel: 1 })
+    expect(sized.slice(sized.indexOf("--ctx-size"), sized.indexOf("--ctx-size") + 2)).toEqual(["--ctx-size", "32768"])
+    expect(sized.slice(sized.indexOf("--parallel"), sized.indexOf("--parallel") + 2)).toEqual(["--parallel", "1"])
+    // sizing never weakens admission
+    expect(sized[sized.indexOf("--trust-policy") + 1]).toBe("allowlist")
+  })
+  test("a context size or lane count that is not a positive whole number is refused", () => {
+    for (const bad of [0, -1, 1.5, Number.NaN]) {
+      expect(() => buildServeArgv({ ...base, trustOwners: ["o"], ctxSize: bad })).toThrow(/context size/)
+      expect(() => buildServeArgv({ ...base, trustOwners: ["o"], parallel: bad })).toThrow(/parallel lanes/)
+    }
+  })
   test("refuses to build an unrestricted mesh", () => {
     expect(() => buildServeArgv({ ...base, trustOwners: [] })).toThrow(/trusted owner/)
     expect(() => buildServeArgv({ ...base, trustOwners: [" "] })).toThrow(/trusted owner/)

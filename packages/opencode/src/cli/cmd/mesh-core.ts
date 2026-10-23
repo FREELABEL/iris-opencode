@@ -215,11 +215,18 @@ export function buildServeArgv(input: {
   ownerKey: string
   trustOwners: string[]
   nodeLabel?: string
+  /** --ctx-size. Unset, mesh-llm sizes it to free memory — 131,072 tokens x 4 lanes on hive-001. */
+  ctxSize?: number
+  /** --parallel lanes. Each lane holds a full context, so lanes multiply memory. */
+  parallel?: number
 }): string[] {
   const owners = Array.from(new Set(input.trustOwners.map((o) => o.trim()).filter(Boolean)))
   if (!input.ownerKey) throw new Error("an owner key is required — an IRIS mesh is never unrestricted")
   if (owners.length === 0) throw new Error("at least one trusted owner id is required for an allowlisted mesh")
   if (!input.model.trim()) throw new Error("a model is required")
+  for (const [name, v] of [["context size", input.ctxSize], ["parallel lanes", input.parallel]] as const) {
+    if (v !== undefined && !(Number.isInteger(v) && v > 0)) throw new Error(`${name} must be a positive whole number`)
+  }
   const argv = [
     input.bin,
     "serve",
@@ -235,6 +242,8 @@ export function buildServeArgv(input: {
   ]
   for (const o of owners) argv.push("--trust-owner", o)
   if (input.nodeLabel) argv.push("--node-label", input.nodeLabel)
+  if (input.ctxSize !== undefined) argv.push("--ctx-size", String(input.ctxSize))
+  if (input.parallel !== undefined) argv.push("--parallel", String(input.parallel))
   // Belt and braces: a model name or label must never smuggle a forbidden flag in.
   for (const a of argv) {
     if ((FORBIDDEN_SERVE_FLAGS as readonly string[]).includes(a)) throw new Error(`refusing to pass ${a} to mesh-llm`)

@@ -249,6 +249,11 @@ const UpCommand = cmd({
       })
       .option("owner-key", { type: "string", describe: "owner keystore (default ~/.mesh-llm/owner-keystore.json)" })
       .option("node-label", { type: "string", describe: "label for this node in the mesh" })
+      .option("ctx", {
+        type: "number",
+        describe: "context size in tokens (an IRIS agent's first request is ~25k+; default: mesh-llm sizes it)",
+      })
+      .option("parallel", { type: "number", describe: "requests served at once; each holds a full context" })
       .option("dry-run", { type: "boolean", default: false, describe: "print the command, start nothing" }),
   handler: async (args) => {
     const phi = phiRefusal(process.env, irisConfig())
@@ -302,6 +307,8 @@ const UpCommand = cmd({
         ownerKey,
         trustOwners: [self, ...((args["trust-owner"] as string[] | undefined) ?? [])],
         nodeLabel: args["node-label"] as string | undefined,
+        ctxSize: args.ctx as number | undefined,
+        parallel: args.parallel as number | undefined,
       })
     } catch (e) {
       console.error(`Refusing: ${(e as Error).message}`)
