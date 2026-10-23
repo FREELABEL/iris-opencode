@@ -63,6 +63,7 @@ import { TerminalProvider, useTerminal } from "@/context/terminal"
 import { PromptInput } from "@/components/prompt-input"
 import { PromptInputV2Composer, usePromptInputV2Controller } from "@/components/prompt-input-v2"
 import { irisFilesPinned, irisOpensOnAtlas, requestIrisSurface } from "@/components/session/session-iris-tab"
+import { clearIrisPanelOpen, irisPanelOpenRequest } from "@/components/session/iris-nav"
 import { useSettingsCommand } from "@/components/settings-dialog"
 import { setCursorPosition } from "@/components/prompt-input/editor-dom"
 import { promptLength } from "@/components/prompt-input/history"
@@ -378,6 +379,7 @@ export default function Page() {
   const reviewMode = () => view().review.mode() ?? "git"
   const reviewFile = () => view().review.file()
   const sessionOwnership = createSessionOwnership(sessionKey)
+
   const newSessionDesign = createMemo(() => settings.general.newLayoutDesigns())
 
   createEffect(() => {
@@ -472,6 +474,29 @@ export default function Page() {
   const desktopSidePanelOpen = createMemo(() => desktopSessionResizeOpen() || desktopFileTreeOpen())
   // The agent sees and steers the side panel through this (#190093) — see use-panel-control.ts.
   usePanelControl({ open: desktopSidePanelOpen })
+
+  /*
+   * The titlebar's Hive and Inbox pills (#189279) ask for the IRIS panel from outside any session
+   * layout. This page owns the panel, so it opens it — the surface/sub-view itself travels through
+   * requestIrisNav and the tab applies it. Same two rules as use-panel-control's showTab: open the
+   * tab only when it is absent (open() re-orders the strip, which then falls back to its first tab),
+   * and when the panel was closed, select again after the strip has remounted.
+   */
+  createEffect(() => {
+    if (!irisPanelOpenRequest()) return
+    untrack(() => {
+      const wasOpen = desktopSidePanelOpen()
+      view().reviewPanel.open("other")
+      if (layout.fileTree.opened() && layout.fileTree.tab() !== "all") layout.fileTree.setTab("all")
+      const select = () => {
+        if (!tabs().all().includes("iris")) void tabs().open("iris")
+        tabs().setActive("iris")
+      }
+      select()
+      if (!wasOpen) requestAnimationFrame(() => requestAnimationFrame(select))
+    })
+    clearIrisPanelOpen()
+  })
   let panelRow: HTMLDivElement | undefined
   const [panelRowWidth, setPanelRowWidth] = createSignal<number>()
   createResizeObserver(

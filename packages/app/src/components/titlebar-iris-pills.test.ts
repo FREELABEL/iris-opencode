@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { fleetDotClass, fleetLabel, inboxLabel, planBadge } from "./titlebar-iris-pills"
+import { fleetDotClass, fleetLabel, inboxHint, inboxLabel, planBadge } from "./titlebar-iris-pills"
 
 describe("fleetDotClass", () => {
   // The dot is a verdict, so its colours must obey the same three-fact rule as the label:
@@ -78,6 +78,23 @@ describe("inboxLabel", () => {
 
   test("unread shows the count", () => {
     expect(inboxLabel({ unread: 4, unreadable: false })).toBe("4")
+  })
+
+  test("a large count is capped so the pill keeps its width", () => {
+    expect(inboxLabel({ unread: 140, unreadable: false })).toBe("99+")
+  })
+})
+
+describe("inboxHint", () => {
+  // The pill is always there now (#189279), so the tooltip must say what a click does in every
+  // state — including nothing unread, which used to have no pill to hover at all.
+  test("every state says it opens the inbox", () => {
+    expect(inboxHint({ unread: 0, unreadable: false }, null)).toContain("nothing unread")
+    expect(inboxHint({ unread: null, unreadable: true }, "—")).toContain("could not be read")
+    expect(inboxHint({ unread: 2, unreadable: false, from: "studio-mac" }, "2")).toBe(
+      "2 unread Hive messages · latest from studio-mac — click to read",
+    )
+    expect(inboxHint({ unread: 1, unreadable: false }, "1")).toContain("1 unread Hive message —")
   })
 })
 

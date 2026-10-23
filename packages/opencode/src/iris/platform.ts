@@ -26,7 +26,7 @@
  * reader has to change with it. Noted here rather than discovered later.
  */
 
-import { existsSync, readFileSync } from "fs"
+import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync, openSync, readSync, closeSync, fstatSync } from "fs"
 // Aliased: this file already exports GraphNode/GraphEdge for the BOARD-TO-BOARD graph (numeric ids).
 // Same names, different graphs — importing them bare silently retyped graphRows.
 import {
@@ -1357,11 +1357,15 @@ async function loadBloqs(userId: number): Promise<PlatformResult<{ bloqs: Bloq[]
 export interface InboxItem {
   /** 1-based manifest position — the number `iris hive inbox read <n>` takes. */
   index: number
+  /** The daemon's id for the row. Lets a reader confirm the row at `index` is still the same one. */
+  id?: string
   read: boolean
   type: string
   from: string
   receivedAt?: string
   label: string
+  /** The first line of the message text, when there is one — what a list row leads with. */
+  preview?: string
 }
 
 export interface InboxState {
@@ -1385,6 +1389,7 @@ export interface InboxState {
 }
 
 interface ManifestRow {
+  id?: string
   read?: boolean
   from_user?: string
   from_node?: string
@@ -1395,6 +1400,21 @@ interface ManifestRow {
   file?: string
   item?: string | null
   status?: string | null
+  url?: string | null
+  result?: string | null
+  size_bytes?: number
+  burn?: boolean
+  task_id?: string | null
+}
+
+/** The first non-empty line of a text, trimmed and capped — a list row's subject. */
+export function firstLine(text: string | null | undefined, max = 140): string | undefined {
+  const line = (text ?? "")
+    .split("\n")
+    .map((l) => l.trim())
+    .find(Boolean)
+  if (!line) return undefined
+  return line.length > max ? line.slice(0, max - 1) + "…" : line
 }
 
 /**
@@ -1435,11 +1455,13 @@ export function countInbox(raw: string): InboxState {
     // that opens a different message.
     items.push({
       index: i + 1,
+      id: row.id,
       read: Boolean(row.read),
       type: row.type ?? "file",
       from: row.from_node ?? row.from_user ?? "a peer",
       receivedAt: row.received_at,
       label: describeInbox(row),
+      preview: firstLine(row.message),
     })
     if (row.read) continue
     unread++
@@ -1471,6 +1493,202 @@ export function fetchInbox(): InboxState {
     // failure this codebase keeps paying for.
     return { unread: null, total: 0, unreadable: true, items: [], unparsed: 0 }
   }
+}
+
+/**
+ * ONE MESSAGE, WITH ITS BODY (#189279).
+ *
+ * The list carries only the manifest row, and the row's `message` is capped at 500 characters by
+ * the daemon — so the panel's detail showed who/when/where and never the message itself. The body
+ * is the backing file the daemon wrote next to the manifest (`<stamp>_message.txt` for text,
+ * messages, handoffs and jobs; the received file for `file`), which is exactly what
+ * `iris hive inbox read <n>` prints.
+ */
+export interface InboxMessage extends InboxItem {
+  /** The full text. Null when there is no readable text body (binary file, missing file). */
+  body: string | null
+  /** Why `body` is null, or that it was cut. */
+  bodyState: "ok" | "truncated" | "binary" | "missing" | "none"
+  url?: string
+  /** Handoff/job work item, e.g. bloq:item:1234. */
+  item?: string
+  status?: string
+  /** An executed job's output (truncated by the daemon). */
+  result?: string
+  file?: string
+  originalName?: string
+  sizeBytes?: number
+  /** Burn-after-read: marking it read deletes it. */
+  burn: boolean
+}
+
+export interface InboxMessageResult {
+  measured: boolean
+  reason?: string
+  message: InboxMessage | null
+}
+
+/** A text body larger than this is cut — the panel is for reading a message, not a log. */
+export const INBOX_BODY_CAP = 256 * 1024
+
+export const inboxDir = () => path.join(homedir(), ".iris", "hive", "inbox")
+
+interface ManifestLine {
+  raw: string
+  row: ManifestRow | null
+}
+function readManifestLines(dir: string): ManifestLine[] | null {
+  const manifest = path.join(dir, ".manifest.jsonl")
+  if (!existsSync(manifest)) return []
+  try {
+    return readFileSync(manifest, "utf-8")
+      .split("\n")
+      .filter((l) => l.trim())
+      .map((raw) => {
+        try {
+          return { raw, row: JSON.parse(raw) as ManifestRow }
+        } catch {
+          return { raw, row: null }
+        }
+      })
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Find the row the reader means. `index` is the manifest position the list handed out; `id`, when
+ * given, is checked against it — a burn or a `clear` between listing and opening shifts every
+ * position, and opening the row that slid into place would show (and mark read) a different
+ * message. When the id no longer sits at `index`, it is looked up by id instead.
+ */
+export function locateInboxRow(lines: ManifestLine[], index: number, id?: string): number {
+  const at = index - 1
+  if (!id) return lines[at]?.row ? at : -1
+  if (lines[at]?.row?.id === id) return at
+  return lines.findIndex((l) => l.row?.id === id)
+}
+
+/** Text if it looks like text; null for binary. NUL bytes are the cheap, reliable tell. */
+export function decodeInboxBody(buf: Uint8Array): string | null {
+  if (buf.includes(0)) return null
+  return new TextDecoder("utf-8", { fatal: false }).decode(buf)
+}
+
+function readBody(file: string): { body: string | null; state: InboxMessage["bodyState"] } {
+  let fd: number | undefined
+  try {
+    fd = openSync(file, "r")
+    const size = fstatSync(fd).size
+    const n = Math.min(size, INBOX_BODY_CAP)
+    const buf = new Uint8Array(n)
+    readSync(fd, buf, 0, n, 0)
+    const text = decodeInboxBody(buf)
+    if (text === null) return { body: null, state: "binary" }
+    return { body: text.replace(/\s+$/, ""), state: size > INBOX_BODY_CAP ? "truncated" : "ok" }
+  } catch {
+    return { body: null, state: "missing" }
+  } finally {
+    if (fd !== undefined) closeSync(fd)
+  }
+}
+
+/** Pure: a manifest row (+ its body) as the panel's message. */
+export function inboxMessageOf(
+  row: ManifestRow,
+  index: number,
+  body: { body: string | null; state: InboxMessage["bodyState"] },
+): InboxMessage {
+  const type = row.type ?? "file"
+  // A row whose file could not be read still has its 500-char `message` — show that rather than
+  // nothing, and say it may be cut.
+  const fallback = body.body === null && body.state === "missing" && row.message ? row.message : null
+  return {
+    index,
+    id: row.id,
+    read: Boolean(row.read),
+    type,
+    from: row.from_node ?? row.from_user ?? "a peer",
+    receivedAt: row.received_at,
+    label: describeInbox(row),
+    preview: firstLine(body.body ?? row.message),
+    body: body.body ?? fallback,
+    bodyState: fallback ? "truncated" : body.state,
+    url: row.url ?? undefined,
+    item: row.item ?? undefined,
+    status: row.status ?? undefined,
+    result: row.result ?? undefined,
+    file: row.file || undefined,
+    originalName: row.original_name ?? undefined,
+    sizeBytes: typeof row.size_bytes === "number" ? row.size_bytes : undefined,
+    burn: row.burn === true,
+  }
+}
+
+export function readInboxMessage(index: number, id?: string, dir = inboxDir()): InboxMessageResult {
+  const lines = readManifestLines(dir)
+  if (lines === null) return { measured: false, reason: "the inbox manifest could not be read", message: null }
+  const at = locateInboxRow(lines, index, id)
+  const row = at >= 0 ? lines[at].row : null
+  if (!row) return { measured: false, reason: "that message is no longer in the inbox", message: null }
+  // Never follow a manifest path out of the inbox directory.
+  const file = row.file ? path.join(dir, path.basename(row.file)) : undefined
+  const body = file && existsSync(file) ? readBody(file) : { body: null, state: (row.file ? "missing" : "none") as InboxMessage["bodyState"] }
+  return { measured: true, message: inboxMessageOf(row, at + 1, body) }
+}
+
+/** Write the manifest the way the daemon does: temp file, then rename — never a half-written file. */
+function writeManifestLines(dir: string, lines: string[]) {
+  const manifest = path.join(dir, ".manifest.jsonl")
+  const tmp = `${manifest}.tmp`
+  writeFileSync(tmp, lines.join("\n") + (lines.length ? "\n" : ""))
+  renameSync(tmp, manifest)
+}
+
+/**
+ * Mark one message read — the same write `iris hive inbox read <n>` makes, including burn-after-
+ * read (a `burn` row and its body are deleted) and the sender's read receipt. Lines this reader
+ * could not parse are written back byte-for-byte: marking one message read must not drop rows.
+ */
+export async function markInboxRead(
+  index: number,
+  id?: string,
+  dir = inboxDir(),
+): Promise<{ measured: boolean; reason?: string; read: boolean; burned: boolean }> {
+  const lines = readManifestLines(dir)
+  if (lines === null) return { measured: false, reason: "the inbox manifest could not be read", read: false, burned: false }
+  const at = locateInboxRow(lines, index, id)
+  const row = at >= 0 ? lines[at].row : null
+  if (!row) return { measured: false, reason: "that message is no longer in the inbox", read: false, burned: false }
+  const wasRead = Boolean(row.read)
+  try {
+    if (row.burn === true) {
+      if (row.file) {
+        try {
+          unlinkSync(path.join(dir, path.basename(row.file)))
+        } catch {}
+      }
+      writeManifestLines(
+        dir,
+        lines.filter((_, i) => i !== at).map((l) => l.raw),
+      )
+    } else if (!wasRead) {
+      writeManifestLines(
+        dir,
+        lines.map((l, i) => (i === at ? JSON.stringify({ ...row, read: true }) : l.raw)),
+      )
+    }
+  } catch (e) {
+    return { measured: false, reason: `could not update the inbox: ${e instanceof Error ? e.message : String(e)}`, read: wasRead, burned: false }
+  }
+  // Best-effort, like the CLI: the sender learns it was read; failing to tell them changes nothing here.
+  if (!wasRead && row.task_id) {
+    void irisFetch(`/api/v6/nodes/tasks/${encodeURIComponent(row.task_id)}/read`, IRIS_API, {
+      method: "PATCH",
+      body: JSON.stringify({ read_at: new Date().toISOString() }),
+    }).catch(() => {})
+  }
+  return { measured: true, read: true, burned: row.burn === true }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

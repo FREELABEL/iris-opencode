@@ -21,6 +21,8 @@ import { DialogUpgrade } from "./dialog-upgrade"
 import { parseIrisLink } from "@/utils/iris-deep-link"
 import { showToast } from "@/utils/toast"
 import { trackPromptedOnce } from "@/utils/upgrade-funnel"
+import { irisInboxVersion, openIrisPanel } from "./session/iris-nav"
+import { hivePillTarget } from "./session/iris-hive-inbox-model"
 
 /**
  * Two pills in the titlebar: how many machines are up, and whether anything is waiting for you.
@@ -103,13 +105,28 @@ export function fleetDotClass(hive: HiveState | undefined, loading = false): str
   return hive.nodes.some((n) => n.online) ? "text-v2-state-fg-success" : "text-v2-text-text-weak"
 }
 
-/** How the inbox pill reads. Null unread is not zero; zero is simply not shown. */
+/**
+ * The inbox pill's BADGE. Null unread is not zero; zero shows no badge.
+ *
+ * Since #189279 the pill itself is always there — "the Hive messages icon is so small" and it
+ * vanished at zero, so there was nowhere to click to read old messages. Only the badge comes and
+ * goes, and it is its own colour, never the fleet dot's.
+ */
 export function inboxLabel(inbox: InboxState | undefined, loading = false): string | null {
-  // Nothing at all while loading: the inbox pill's resting state is already absent, so there is
-  // no placeholder to get wrong. Only a resolved unreadable manifest earns a dash.
+  // Nothing while loading: no placeholder to get wrong. Only a resolved unreadable manifest
+  // earns a dash.
   if (loading || !inbox) return null
   if (inbox.unreadable || inbox.unread === null) return "—"
-  return inbox.unread > 0 ? String(inbox.unread) : null
+  if (inbox.unread <= 0) return null
+  return inbox.unread > 99 ? "99+" : String(inbox.unread)
+}
+
+/** The inbox pill's tooltip — says what clicking does, and what is waiting. */
+export function inboxHint(inbox: InboxState | undefined, label: string | null): string {
+  if (label === "—") return "Hive inbox — could not be read. Click to open it."
+  if (!label) return "Hive inbox — nothing unread. Click to open it."
+  const n = inbox?.unread ?? 0
+  return `${label} unread Hive ${n === 1 ? "message" : "messages"}${inbox?.from ? ` · latest from ${inbox.from}` : ""} — click to read`
 }
 
 interface PlanState {
@@ -231,7 +248,13 @@ export function TitlebarIrisPills() {
     }
 
   const [hive] = createResource<HiveState | undefined, Key>(key, poll<HiveState>("/iris/hive"))
-  const [inbox] = createResource<InboxState | undefined, Key>(key, poll<InboxState>("/iris/inbox"))
+  // The inbox also re-reads the moment a message is opened in the panel (irisInboxVersion), so
+  // the badge never disagrees with the list you are looking at for up to 30s.
+  const inboxKey = createMemo(() => {
+    const b = base()
+    return b ? ([b, tick() * 1000 + irisInboxVersion()] as const) : undefined
+  })
+  const [inbox] = createResource<InboxState | undefined, Key>(inboxKey, poll<InboxState>("/iris/inbox?perPage=1"))
   const [auth] = createResource<AuthState | undefined, Key>(key, poll<AuthState>("/iris/auth"))
 
   // Every 2 minutes (4 ticks): the pill now shows when the allowance runs OUT (#190087), which
@@ -270,32 +293,37 @@ export function TitlebarIrisPills() {
       <Portal mount={mount()!}>
         <div
           data-slot="iris-pills"
-          class="flex shrink-0 items-center gap-2 mr-3 text-[11px] tabular-nums text-v2-text-text-weak"
+          class="flex shrink-0 items-center gap-1 mr-3 text-[12px] text-v2-text-text-weak"
         >
           {/* Real tooltips, not the `title` attribute. A native tooltip takes about a second to
               appear, cannot be styled, and is the reason these pills read as decoration: there
               was no way to find out what "3/4" counted without asking someone. */}
           <div data-slot="iris-fleet-wrap" class="relative">
-            <span
+            {/* Click opens the side panel on Hive › Machines (#189279) — it used to toggle this
+                hover panel, which is what hovering already did, so the click went nowhere. */}
+            <button
+              type="button"
               data-slot="iris-fleet-pill"
-              class="cursor-pointer"
-              tabIndex={0}
-              role="button"
+              class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 cursor-pointer hover:bg-v2-overlay-simple-overlay-hover hover:text-v2-text-text-base"
+              aria-label="Hive machines — open the Hive tab"
               onMouseEnter={() => setFleetOpen(true)}
               onMouseLeave={() => setFleetOpen(false)}
               onFocus={() => setFleetOpen(true)}
               onBlur={() => setFleetOpen(false)}
-              onClick={() => setFleetOpen((v) => !v)}
+              onClick={() => {
+                setFleetOpen(false)
+                openIrisPanel(hivePillTarget("machines"))
+              }}
             >
               <span
-                class="mr-1"
                 data-slot="iris-fleet-dot"
                 classList={{ [fleetDotClass(hive(), hive.loading)]: true, "animate-pulse": hive()?.measured === false }}
               >
                 ●
               </span>
-              {fleetLabel(hive(), hive.loading)}
-            </span>
+              <span>Hive</span>
+              <span class="tabular-nums">{fleetLabel(hive(), hive.loading)}</span>
+            </button>
             <Show when={fleetOpen()}>
               <div
                 data-slot="iris-fleet-panel"
@@ -387,21 +415,47 @@ export function TitlebarIrisPills() {
             </TooltipV2>
           </Show>
 
-          <Show when={unread()}>
-            <TooltipV2
-              placement="bottom"
-              value={
-                <>
-                  {unread()} unread Hive {unread() === "1" ? "message" : "messages"}
-                  {inbox()?.from ? ` · latest from ${inbox()!.from}` : ""} · read them with: iris hive inbox read
-                </>
-              }
+          {/* Always present (#189279): the inbox is a place, not only an alert. The badge is the
+              alert — its own accent, never the fleet dot's green/red. */}
+          <TooltipV2 placement="bottom" value={<>{inboxHint(inbox(), unread())}</>}>
+            <button
+              type="button"
+              data-slot="iris-inbox-pill"
+              class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 cursor-pointer hover:bg-v2-overlay-simple-overlay-hover hover:text-v2-text-text-base"
+              classList={{ "text-v2-text-text-base": !!unread() && unread() !== "—" }}
+              aria-label={inboxHint(inbox(), unread())}
+              onClick={() => openIrisPanel(hivePillTarget("inbox"))}
             >
-              <span data-slot="iris-inbox-pill" class="cursor-default">
-                ✉ {unread()}
-              </span>
-            </TooltipV2>
-          </Show>
+              <svg
+                viewBox="0 0 16 16"
+                width="14"
+                height="14"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.4"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M2 9h3l1 1.75h4L11 9h3M3.5 3.5h9L14 9v3.5H2V9l1.5-5.5Z" />
+              </svg>
+              <span>Inbox</span>
+              <Show when={unread()}>
+                {/* Inline vars, not utilities: the theme tokens are always defined, a utility class
+                    only exists if Tailwind generated it (bg-v2-icon-icon-accent was not). */}
+                <span
+                  data-slot="iris-inbox-badge"
+                  class="min-w-4 rounded-full px-1 text-center text-[10px] font-semibold leading-4 tabular-nums"
+                  style={
+                    unread() === "—"
+                      ? { border: "1px solid var(--v2-border-border-base)", color: "var(--v2-text-text-weak)" }
+                      : { background: "var(--v2-icon-icon-accent)", color: "#fff" }
+                  }
+                >
+                  {unread()}
+                </span>
+              </Show>
+            </button>
+          </TooltipV2>
         </div>
       </Portal>
     </Show>

@@ -58,6 +58,7 @@ import { IrisRooms } from "./iris-rooms"
 import { IrisAgentLive } from "./iris-agent-live"
 import { IrisHiveScripts } from "./iris-hive-scripts"
 import { IrisHiveMachines } from "./iris-hive-machines"
+import { IrisHiveInbox } from "./iris-hive-inbox"
 import { IrisHeartbeats } from "./iris-heartbeats"
 import { IrisPulseContact, IrisPulseTopic } from "./iris-pulse"
 import { itemCommands, renderMarkdown } from "./iris-item"
@@ -424,21 +425,6 @@ function describeFields(
       command: r.command,
     }
   }
-  if (surface === "inbox")
-    return {
-      title: r.label,
-      fields: fieldsOf([
-        ["from", r.from],
-        ["type", r.type],
-        ["read", r.read],
-        ["received", r.receivedAt ? relativeAge(r.receivedAt) : undefined],
-        ["manifest position", r.index],
-      ]),
-      // `index` is the MANIFEST position, not the position in the list above — the list is
-      // sorted unread-first, so the two differ the moment anything has been read. This command
-      // takes the manifest number, so printing the row's position would open a different message.
-      command: `iris hive inbox read ${r.index}`,
-    }
   if (surface === "mcp")
     return {
       title: r.name,
@@ -665,7 +651,8 @@ const SURFACES = [
 type SurfaceId = (typeof SURFACES)[number]["id"]
 
 /** Panes that draw and fetch for themselves; the generic row list has nothing to show for them. */
-const SELF_PANES = new Set(["rooms", "artifacts", "atlas-artifacts", "agent-live", "brands", "hive", "hive-scripts", "heartbeats", "pulse-topic", "pulse-contact"])
+// "inbox" draws itself since #189279 — the generic record list showed everything but the message.
+const SELF_PANES = new Set(["rooms", "artifacts", "atlas-artifacts", "agent-live", "brands", "hive", "hive-scripts", "heartbeats", "pulse-topic", "pulse-contact", "inbox"])
 
 interface SubView {
   id: string
@@ -1066,7 +1053,7 @@ const PANEL_HINTS: Record<string, string> = {
   hive: "The user's computers (Hive) and tasks that run on them",
   "hive/machines": "Computers connected to the account; send one a task",
   "hive/scripts": "Saved scripts to run on a machine",
-  "hive/inbox": "Tasks waiting for a decision",
+  "hive/inbox": "Messages sent to this computer — job results, files, links, handoffs; open one to read it",
   "hive/peers": "Other machines on the mesh",
   pulse: "What people are saying about a topic or a contact",
   "pulse/topic": "Recent conversation about a topic",
@@ -3982,6 +3969,9 @@ export function SessionIrisTab() {
           <Match when={pane() === "hive"}>
             <IrisHiveMachines doFetch={doFetch} />
           </Match>
+          <Match when={pane() === "inbox"}>
+            <IrisHiveInbox doFetch={doFetch} openExternal={(url) => platform.openExternal(url)} />
+          </Match>
           <Match when={pane() === "heartbeats"}>
             <IrisHeartbeats doFetch={doFetch} />
           </Match>
@@ -4846,39 +4836,6 @@ export function SessionIrisTab() {
                         title={`${healthRead(c.health?.state).label} — ${healthRead(c.health?.state).basis}`}
                         aria-label={healthRead(c.health?.state).label}
                       />
-                    </button>
-                  )}
-                </For>
-              </Match>
-
-              <Match when={pane() === "inbox"}>
-                <For each={rows()}>
-                  {(m) => (
-                    <button
-                      type="button"
-                      class="w-full text-start px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
-                      onClick={() => setOpenRow(describeRow("inbox", m))}
-                    >
-                      <div class="flex items-baseline gap-2">
-                        {/* Filled means UNREAD — the one thing you are scanning this list for. */}
-                        <span class="shrink-0" classList={{ "text-text-base": !m.read, "text-text-weaker": m.read }}>
-                          {m.read ? "○" : "●"}
-                        </span>
-                        <span
-                          class="text-12-regular min-w-0 flex-1 truncate"
-                          classList={{ "text-text-strong": !m.read, "text-text-weak": m.read }}
-                        >
-                          {m.label}
-                        </span>
-                        {/* The manifest number, shown because it is the argument you need to
-                            read the thing — and because it is NOT the row's position here. */}
-                        <span class="shrink-0 font-mono tabular-nums text-11-regular text-text-weaker">{m.index}</span>
-                      </div>
-                      <p class="text-11-regular text-text-weaker ps-4 pt-0.5 truncate">
-                        {m.from}
-                        {m.receivedAt ? ` · ${relativeAge(m.receivedAt)}` : ""}
-                        {m.type && m.type !== "file" ? ` · ${m.type}` : ""}
-                      </p>
                     </button>
                   )}
                 </For>

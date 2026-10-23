@@ -455,11 +455,45 @@ const InboxResponse = Schema.Struct({
         from: Schema.String,
         receivedAt: Schema.optional(Schema.String),
         label: Schema.String,
+        id: Schema.optional(Schema.String),
+        preview: Schema.optional(Schema.String),
       }).annotate({ identifier: "IrisInboxItem" }),
     ),
     "Unread first, then newest first.",
   ),
 }).annotate({ identifier: "IrisInboxResponse" })
+
+const InboxMessageResponse = Schema.Struct({
+  ...Measured,
+  message: Schema.NullOr(
+    Schema.Struct({
+      index: described(Schema.Finite, "1-based MANIFEST position, as found NOW (it may have moved since the list)."),
+      id: Schema.optional(Schema.String),
+      read: Schema.Boolean,
+      type: Schema.String,
+      from: Schema.String,
+      receivedAt: Schema.optional(Schema.String),
+      label: Schema.String,
+      preview: Schema.optional(Schema.String),
+      body: described(Schema.NullOr(Schema.String), "The full text body. Null when there is none to show — see bodyState."),
+      bodyState: Schema.Literals(["ok", "truncated", "binary", "missing", "none"]),
+      url: Schema.optional(Schema.String),
+      item: Schema.optional(Schema.String),
+      status: Schema.optional(Schema.String),
+      result: Schema.optional(Schema.String),
+      file: Schema.optional(Schema.String),
+      originalName: Schema.optional(Schema.String),
+      sizeBytes: Schema.optional(Schema.Finite),
+      burn: Schema.Boolean,
+    }).annotate({ identifier: "IrisInboxMessage" }),
+  ),
+}).annotate({ identifier: "IrisInboxMessageResponse" })
+
+const InboxReadResponse = Schema.Struct({
+  ...Measured,
+  read: Schema.Boolean,
+  burned: described(Schema.Boolean, "It was a burn-after-read message, and it is now deleted."),
+}).annotate({ identifier: "IrisInboxReadResponse" })
 
 const AgentsResponse = Schema.Struct({
   ...Measured,
@@ -1305,6 +1339,8 @@ export const IrisPaths = {
   auth: `${root}/auth`,
   bloqs: `${root}/bloqs`,
   inbox: `${root}/inbox`,
+  inboxMessage: `${root}/inbox/:index`,
+  inboxRead: `${root}/inbox/:index/read`,
   atlas: `${root}/atlas/:bloqID`,
   atlasLive: `${root}/atlas/:bloqID/live`,
   atlasItemCreate: `${root}/atlas/:bloqID/lists/:listID/items`,
@@ -1648,6 +1684,30 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Hive inbox state",
           description:
             "Unread count AND the messages, from the local inbox manifest. A file read, not a request — which is why it must come through the sidecar: the webview cannot read the user's home directory. `total` counts the items returned; `reason` says so when some manifest lines could not be parsed and are therefore missing from the list.",
+        }),
+      ),
+      HttpApiEndpoint.get("inboxMessage", IrisPaths.inboxMessage, {
+        params: { index: Schema.NumberFromString },
+        query: Schema.Struct({ id: Schema.optional(Schema.String) }),
+        success: described(InboxMessageResponse, "One Hive inbox message with its full body"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.inboxMessage",
+          summary: "Read one Hive inbox message",
+          description:
+            "The message AND its body — the backing file `iris hive inbox read <n>` prints. Does not mark it read; POST …/read does. Pass the list's `id` so a manifest that shifted since the list (a burn, a clear) still opens the same message.",
+        }),
+      ),
+      HttpApiEndpoint.post("inboxRead", IrisPaths.inboxRead, {
+        params: { index: Schema.NumberFromString },
+        payload: Schema.Struct({ id: Schema.optional(Schema.String) }),
+        success: described(InboxReadResponse, "Whether it is now read"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.inboxRead",
+          summary: "Mark a Hive inbox message read",
+          description:
+            "The same write `iris hive inbox read <n>` makes: read=true in the manifest, the sender's read receipt (best-effort), and burn-after-read deletes a burn message and its body.",
         }),
       ),
       HttpApiEndpoint.get("atlas", IrisPaths.atlas, {
