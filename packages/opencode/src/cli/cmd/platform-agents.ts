@@ -3,7 +3,7 @@ import { AgentsProveCommand } from "./agent-prove"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { buildListEnvelope, projectFields, LIST_FIELDS } from "./list-envelope"
-import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, IRIS_API, writeJson, failNoOp} from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, IRIS_API, PUBLIC_SITE, writeJson, failNoOp} from "./iris-api"
 import { matchesSearchQuery } from "./bloq-item-format"
 import { executeChat } from "./platform-chat"
 import { AgentsBenchCommand } from "./platform-agents-bench"
@@ -20,6 +20,7 @@ import { DEFAULT_MAX_DESKTOP_AGENTS, planDesktopSync, selectRoster } from "../li
 import { installHome } from "../../skill/install-location"
 import { bulkDeleteRefusal, fieldIsEvaluable, filterByOwnership, ownershipQueryParams, resolveOwnerBloq, serverIgnoredOwnership, unevaluableWarning } from "./agent-ownership"
 import { AUTONOMY_CHOICES, AUTONOMY_LEVELS, CLI_DEFAULT_AUTONOMY, describeAutonomy, parseAutonomy } from "./agent-autonomy"
+import { describeShape, parseShape, SHAPE_CHOICES, shapeOf, shapeUrl, withShapeUrl } from "./agent-shape"
 
 /**
  * Resolve a mission argument to its text.
@@ -97,7 +98,9 @@ function printAgent(a: Record<string, unknown>): void {
   const wsBadge = a.workspace_id
     ? `  ${dim("· ws#" + a.workspace_id)}${a.google_workspace_match_state === "matched" ? dim(" · google-synced") : ""}`
     : `  ${dim("· no workspace")}`
-  console.log(`  ${name}  ${id}${model}${wsBadge}`)
+  // Shape (#190378): which of its generated Shapes the agent shows. "shape 0*" = never chosen.
+  const shapeBadge = `  ${dim(`· shape ${shapeOf(a)}${a.shape === undefined || a.shape === null ? "*" : ""}`)}`
+  console.log(`  ${name}  ${id}${model}${wsBadge}${shapeBadge}`)
   if (a.description) {
     console.log(`    ${dim(String(a.description).slice(0, 100))}`)
   }
@@ -363,7 +366,7 @@ const AgentsGetCommand = cmd({
       if (!a || !a.id) { if (spinner) spinner.stop("Agent not found", 1); process.exitCode = 1; return }
 
       if (args.json) {
-        await writeJson(a)
+        await writeJson(withShapeUrl(a, PUBLIC_SITE))
         return
       }
 
@@ -380,6 +383,8 @@ const AgentsGetCommand = cmd({
       // holds a call by the tool's declared effect at this level. "not set" is spelled out
       // because it means "as before", not "full trust" and not "no trust".
       printKV("Autonomy", describeAutonomy(a.config).label)
+      printKV("Shape", describeShape(a))
+      printKV("Shape URL", shapeUrl(a.id, shapeOf(a), PUBLIC_SITE))
       printKV("Active", a.active)
       printKV("Created", a.created_at)
 
@@ -639,6 +644,7 @@ const AgentsUpdateCommand = cmd({
       .option("add-tools", { describe: "comma-separated tool names to ADD to the agent's allowlist (config.tools)", type: "string" })
       .option("remove-tools", { describe: "comma-separated tool names to REMOVE from the allowlist (config.tools)", type: "string" })
       .option("autonomy", { describe: `trust level (config.autonomy): ${AUTONOMY_LEVELS.join(", ")}, or none to clear it (back to the pre-level behaviour)`, type: "string", choices: [...AUTONOMY_CHOICES] })
+      .option("shape", { describe: "which of the agent's generated Shapes it shows: 0-9, or none to clear (back to the default, 0)", type: "string", choices: [...SHAPE_CHOICES] })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
     UI.empty()
@@ -662,6 +668,11 @@ const AgentsUpdateCommand = cmd({
       payload.health_status = "healthy"
       payload.consecutive_failures = 0
     }
+    // The Shape choice (#190378): its own top-level column, bloq_agents.shape — never `icon`
+    // (the web UI's Font Awesome class) and never settings.* (the web UI round-trips settings
+    // whole). Validated here as well as by yargs `choices`; null clears it.
+    const wantsShape = args.shape !== undefined
+    if (wantsShape) payload.shape = parseShape(args.shape)
 
     // model / system_prompt / heartbeat_tools live under settings.* — a top-level
     // `model` is silently ignored (#146506). The API replaces the whole settings
@@ -678,7 +689,7 @@ const AgentsUpdateCommand = cmd({
     const needsCurrent = wantsSettings || wantsIntegration || wantsTools || wantsAutonomy
 
     if (Object.keys(payload).length === 0 && !needsCurrent) {
-      failNoOp("update", "Use --name, --description, --bloq, --model, --system-prompt, --initial-prompt/--mission, --heartbeat-tools, --heartbeat-mode, --enable-integration, --disable-integration, --add-tools, --remove-tools, --autonomy, or --reset-health")
+      failNoOp("update", "Use --name, --description, --bloq, --model, --system-prompt, --initial-prompt/--mission, --heartbeat-tools, --heartbeat-mode, --enable-integration, --disable-integration, --add-tools, --remove-tools, --autonomy, --shape, or --reset-health")
     }
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
@@ -837,6 +848,25 @@ const AgentsUpdateCommand = cmd({
         }
       }
 
+      // Same rule again: an old fl-api ignores `shape` and still answers 200, so only a re-read
+      // proves the choice persisted.
+      if (wantsShape) {
+        try {
+          const check = await irisFetch(`/api/v1/users/${userId}/bloqs/agents/${args.id}`)
+          const body = (await check.json()) as any
+          const fresh = body?.data ?? body
+          if (fresh?.id) a = fresh
+        } catch {}
+        const landed = a.shape === undefined || a.shape === null ? null : Number(a.shape)
+        if (landed !== payload.shape) {
+          spinner.stop("Not applied", 1)
+          prompts.log.error(`The API accepted the request but the agent's shape is '${landed ?? "not set"}', not '${payload.shape ?? "not set"}'. Check: iris agents get ${args.id}`)
+          process.exitCode = 1
+          prompts.outro("Done")
+          return
+        }
+      }
+
       spinner.stop(`${success("✓")} Updated: ${bold(String(a.name ?? a.id))}`)
 
       printDivider()
@@ -854,6 +884,10 @@ const AgentsUpdateCommand = cmd({
         printKV("Allowlist", tools.length ? `${tools.length} tools` : "(none)")
       }
       if (wantsAutonomy) printKV("Autonomy", describeAutonomy(a.config).label)
+      if (wantsShape) {
+        printKV("Shape", describeShape(a))
+        printKV("Shape URL", shapeUrl(a.id, shapeOf(a), PUBLIC_SITE))
+      }
       printDivider()
 
       prompts.outro(dim(`iris agents get ${args.id}`))
