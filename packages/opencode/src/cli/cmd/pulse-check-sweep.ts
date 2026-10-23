@@ -31,6 +31,11 @@ import { runScript, scriptFor } from "../../pulse/core"
 
 export const TOPIC_SOURCES = ["git", "diary", "files", "claude_code", "opencode", "imessage", "email", "gmail", "bloq"] as const
 export type TopicSource = typeof TOPIC_SOURCES[number]
+/**
+ * A built-in source, or the id of one defined in ~/.iris/pulse/sources (#190626). Built-in ids keep
+ * their autocompletion; any other string is a custom source's.
+ */
+export type SourceId = TopicSource | (string & {})
 
 /**
  * ASCII unit separator. Used as the field delimiter for git's --format and for
@@ -51,7 +56,7 @@ export interface Hit {
 }
 
 export interface SourceSweep {
-  source: TopicSource
+  source: SourceId
   /** False means the collector could not look. See rule 1 above. */
   searched: boolean
   /** Why it could not look, or a caveat about how it did. */
@@ -86,7 +91,7 @@ export interface SweepOptions {
   windowDays: number
   /** Max items kept per source for the brief. Counts are never capped. */
   limit: number
-  sources: TopicSource[]
+  sources: SourceId[]
   bridgeUrl?: string
   /** Bridge auth token (~/.iris/bridge-token). Without it the bridge 401s. */
   bridgeKey?: string
@@ -1546,12 +1551,12 @@ export async function sweepGmail(opts: SweepOptions): Promise<SourceSweep> {
  * because it imports this module's sweeps. A source that throws is isolated by the runner and
  * reported as not searched, with why, instead of failing the whole check.
  */
-export async function sweepAll(opts: SweepOptions, onStart?: (s: TopicSource) => void): Promise<SourceSweep[]> {
+export async function sweepAll(opts: SweepOptions, onStart?: (s: SourceId) => void): Promise<SourceSweep[]> {
   await import("./pulse-topic-script")
   const wanted = new Set<string>(opts.sources)
   const outcomes = await runScript(scriptFor<SweepOptions, SourceSweep>("topic"), opts, {
     only: (stop) => wanted.has(stop.id),
-    onStart: (stop) => onStart?.(stop.id as TopicSource),
+    onStart: (stop) => onStart?.(stop.id),
   })
   return outcomes.map((o) => o.output)
 }
