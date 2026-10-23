@@ -432,6 +432,25 @@ export async function searchRemoteNodes(
   return { rows, reports, roster: nextRoster, fromRoster }
 }
 
+/**
+ * What a finished cloud search task yields. A FAILED task is not "0 hits": the cloud refuses to
+ * send work to a node it thinks is busy ("is busy (CPU at 168%)", measured 2026-10-23 on a Mac
+ * running three agent sessions), and both lanes used to print that as a clean 0. Say why instead.
+ */
+export function rowsFromCloudTask(task: { status?: string; result?: any; error?: any }): MeshRow[] {
+  if (task.status === "failed") {
+    const why = task.result?.metadata?.reason ?? task.result?.error ?? task.error ?? "the task failed"
+    return [{ source: "files", match: "(not searched)", preview: `refused: ${String(why).slice(0, 160)}`, date: null }]
+  }
+  try {
+    const parsed = JSON.parse(task.result?.output ?? "")
+    if (Array.isArray(parsed)) return parsed
+  } catch {
+    /* output wasn't JSON */
+  }
+  return []
+}
+
 /** Real file hits — not the "(no file results)" / "(file search disabled)" marker rows. */
 export function countHits(rows: MeshRow[]): number {
   return rows.filter((r) => r && typeof r.match === "string" && !r.match.startsWith("(")).length

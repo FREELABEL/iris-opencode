@@ -18,6 +18,7 @@ import {
   type ListedNode,
   type MeshRow,
   type NodeReport,
+  rowsFromCloudTask,
 } from "../lib/hive-search-mesh"
 
 // ============================================================================
@@ -224,13 +225,7 @@ async function cloudSearchNode(
       const pollRes = await hiveFetch(`/api/v6/nodes/tasks/${taskId}?user_id=${userId}`)
       if (!pollRes.ok) continue
       const task = ((await pollRes.json()) as { task: any }).task
-      if (task.status === "completed" || task.status === "failed") {
-        try {
-          const parsed = JSON.parse(task.result?.output ?? "")
-          if (Array.isArray(parsed)) return parsed
-        } catch { /* output wasn't JSON */ }
-        return []
-      }
+      if (task.status === "completed" || task.status === "failed") return rowsFromCloudTask(task)
     }
     return null
   } catch {

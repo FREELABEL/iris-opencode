@@ -11,6 +11,7 @@ import {
   readRoster,
   writeRoster,
   countHits,
+  rowsFromCloudTask,
   fileSearchOff,
   ROSTER_TTL_MS,
   type ListedNode,
@@ -299,4 +300,18 @@ test("--deadline: a node still searching is reported missed (not dropped), the r
   expect(mac2.reason).toContain("50 ms")
   expect(stopped).toBe(true)
   expect(r.roster?.nodes.find((e) => e.id === "mac2")).toBeTruthy() // still known next time
+})
+
+describe("rowsFromCloudTask (a refused task is not 0 hits)", () => {
+  test("failed: one marker row naming the reason, counted as no hits", () => {
+    const rows = rowsFromCloudTask({ status: "failed", result: { metadata: { reason: "is busy (CPU at 168%)" } } })
+    expect(rows).toHaveLength(1)
+    expect(rows[0].match).toBe("(not searched)")
+    expect(rows[0].preview).toBe("refused: is busy (CPU at 168%)")
+    expect(countHits(rows)).toBe(0)
+  })
+  test("completed: the node's rows; unparseable output: none", () => {
+    expect(rowsFromCloudTask({ status: "completed", result: { output: JSON.stringify([{ source: "files", match: "/a", preview: "" }]) } })).toHaveLength(1)
+    expect(rowsFromCloudTask({ status: "completed", result: { output: "not json" } })).toEqual([])
+  })
 })
