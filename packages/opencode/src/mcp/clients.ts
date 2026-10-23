@@ -1,7 +1,8 @@
 import path from "path"
 import os from "os"
 import fs from "fs/promises"
-import { realpathSync } from "fs"
+import { readFileSync, realpathSync } from "fs"
+import { spawnSync } from "child_process"
 
 /**
  * Registry of known MCP clients and how to wire the IRIS MCP server into each.
@@ -147,7 +148,16 @@ export namespace McpClients {
    * to start the server once that folder was gone. The stable install is checked under $HOME and
    * under the account's real home, because a throwaway HOME is exactly the case being refused.
    */
-  export function irisBinary(opts: { execPath?: string; tmpRoots?: string[] } = {}): string {
+  export function irisBinary(opts: { execPath?: string; tmpRoots?: string[]; accountHome?: string } = {}): string {
+    return stableIrisBinary(opts) ?? path.join(homeDir(), ".iris", "bin", "iris")
+  }
+
+  /**
+   * The iris binary to WRITE into a config: never one in a temporary folder, or undefined when
+   * nothing stable exists. `iris mcp install` refuses on undefined rather than saving a path that
+   * will disappear (#190590).
+   */
+  export function stableIrisBinary(opts: { execPath?: string; tmpRoots?: string[]; accountHome?: string } = {}): string | undefined {
     const tmpRoots = opts.tmpRoots ?? temporaryRoots()
     try {
       const real = realpathSync(opts.execPath ?? process.execPath)
@@ -160,10 +170,10 @@ export namespace McpClients {
       // A path that no longer resolves is used as given, if it is not temporary.
       if (opts.execPath && !isTemporaryPath(opts.execPath, tmpRoots)) return opts.execPath
     }
-    const stable = [homeDir(), accountHome()]
+    const stable = [homeDir(), opts.accountHome ?? accountHome()]
       .map((home) => path.join(home, ".iris", "bin", "iris"))
       .filter((p) => !isTemporaryPath(p, tmpRoots))
-    return stable.find(exists) ?? stable[0] ?? path.join(homeDir(), ".iris", "bin", "iris")
+    return stable.find(exists)
   }
 
   /** True when `p` is inside one of the temp roots (the folder itself counts; a sibling named alike does not). */
@@ -187,12 +197,48 @@ export namespace McpClients {
     return [...roots]
   }
 
-  /** The account's home from the user database — unlike $HOME, a throwaway shell cannot point it elsewhere. */
-  function accountHome(): string {
+  /**
+   * The account's home from the system's user database — not $HOME, which a throwaway shell can
+   * point anywhere. Under Bun, os.userInfo().homedir FOLLOWS $HOME (Node reads getpwuid), which is
+   * how v1.5.9 still saved a temp path (#190590). So: getent/passwd on Linux, the directory
+   * service on macOS; $HOME-based answers only as a last resort.
+   */
+  export function accountHome(): string {
+    const uid = typeof process.getuid === "function" ? process.getuid() : undefined
+    if (uid !== undefined) {
+      if (process.platform === "darwin") {
+        const out = runQuiet("dscacheutil", ["-q", "user", "-a", "uid", String(uid)])
+        const dir = out?.match(/^dir:\s*(.+)$/m)?.[1]?.trim()
+        if (dir) return dir
+      } else {
+        const line =
+          runQuiet("getent", ["passwd", String(uid)])?.trim() ||
+          readPasswd().find((l) => l.split(":")[2] === String(uid))
+        const dir = line?.split(":")[5]
+        if (dir) return dir
+      }
+    }
     try {
       return os.userInfo().homedir
     } catch {
       return homeDir()
+    }
+  }
+
+  function runQuiet(cmd: string, args: string[]): string | undefined {
+    try {
+      const r = spawnSync(cmd, args, { encoding: "utf8", timeout: 2000 })
+      return r.status === 0 ? r.stdout : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  function readPasswd(): string[] {
+    try {
+      return readFileSync("/etc/passwd", "utf8").split("\n")
+    } catch {
+      return []
     }
   }
 

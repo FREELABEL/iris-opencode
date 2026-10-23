@@ -67,6 +67,32 @@ describe("McpClients registration", () => {
       expect(bin.endsWith(path.join(".iris", "bin", "iris"))).toBe(true)
     })
 
+    // v1.5.9 shipped the fix above and still saved /tmp/tmp.y3zXyWHlyO/.iris/bin/iris: under Bun,
+    // os.userInfo().homedir follows $HOME (Node reads the user database). These change the REAL
+    // $HOME, which is what the incident did and what the cases above never exercised.
+    test("the account home does not follow a throwaway $HOME", () => {
+      // A fresh process, started with HOME pointing into /tmp — the incident. Changing
+      // process.env.HOME inside this one is not the same thing: Bun reads HOME at start-up.
+      const src = path.resolve(import.meta.dir, "../../src/mcp/clients.ts")
+      const r = Bun.spawnSync(
+        [process.execPath, "-e", `import { McpClients } from ${JSON.stringify(src)}; console.log(McpClients.accountHome())`],
+        { env: { ...process.env, HOME: "/tmp/iris-throwaway-home" } },
+      )
+      const got = r.stdout.toString().trim()
+      expect(got).not.toBe("")
+      expect(got).not.toBe("/tmp/iris-throwaway-home")
+      expect(McpClients.isTemporaryPath(got)).toBe(false)
+    })
+
+    test("with nothing stable to point at, there is no stable binary — install must refuse", () => {
+      const bin = McpClients.stableIrisBinary({
+        execPath: "/fake-tmp/tmp.X/.iris/bin/iris",
+        tmpRoots: ["/fake-tmp", home],
+        accountHome: "/fake-tmp/also-throwaway",
+      })
+      expect(bin).toBeUndefined()
+    })
+
     test("a running binary outside the temp folder is used as is", () => {
       expect(McpClients.irisBinary({ execPath: "/opt/iris/bin/iris", tmpRoots })).toBe("/opt/iris/bin/iris")
     })
