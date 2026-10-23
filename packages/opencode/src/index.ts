@@ -13,6 +13,7 @@ import { UI } from "./cli/ui"
 import { Installation } from "./installation"
 import { NamedError } from "@opencode-ai/util/error"
 import { FormatError } from "./cli/error"
+import { CliUsageError, wantsJson, writeErrorJson } from "./cli/json-error"
 import { ServeCommand } from "./cli/cmd/serve"
 import { DebugCommand } from "./cli/cmd/debug"
 import { StatsCommand } from "./cli/cmd/stats"
@@ -607,6 +608,9 @@ const cli = yargs(rawArgs)
   .fail((msg, err) => {
     // A thrown error from inside a command handler — let the outer catch format it.
     if (err) throw err
+    // --json callers get the failure as JSON, not a help dump (#190878). Thrown so the top-level
+    // catch renders it, which also drains stdout before the process exits.
+    if (wantsJson(rawArgs)) throw new CliUsageError(msg || "Invalid arguments")
     // Validation failures (missing required args, unknown flags, bad values, etc.):
     // always surface the message and the command usage so the user knows what went
     // wrong. Previously only three message prefixes triggered help, so failures like
@@ -782,7 +786,13 @@ try {
   // cli_command_error would make a machine doing exactly what it was configured to do look
   // like the least healthy one in the fleet.
   if (e instanceof Error && e.name === "SealedError") {
-    UI.error(e.message + EOL)
+    if (wantsJson(rawArgs)) await writeErrorJson(e.message, e)
+    else UI.error(e.message + EOL)
+    process.exitCode = 1
+  } else if (e instanceof CliUsageError) {
+    // How the command was called, not a crash: no fatal log, no cli_command_error beacon (#190878).
+    if (wantsJson(rawArgs)) await writeErrorJson(e.message, e)
+    else UI.error(e.message + EOL)
     process.exitCode = 1
   } else {
   let data: Record<string, any> = {}
@@ -836,8 +846,12 @@ try {
     context: { name: e instanceof Error ? e.name : undefined },
   })
   const formatted = FormatError(e)
-  if (formatted) UI.error(formatted)
-  if (formatted === undefined) {
+  if (wantsJson(rawArgs)) {
+    // #190878: one JSON object on stdout, whatever went wrong. A playbook whose header does not
+    // parse carries its file as `path` (#190274).
+    await writeErrorJson(formatted || (e instanceof Error ? e.message : String(e)), e)
+  } else if (formatted) UI.error(formatted)
+  if (formatted === undefined && !wantsJson(rawArgs)) {
     UI.error("Unexpected error, check log file at " + Log.file() + " for more details" + EOL)
     console.error(e)
   }

@@ -48,6 +48,7 @@ import { runE2ESuite, probeServices, type E2ESuiteResult, type Tier, type ModeCo
 import { PlaybookDraftCommand } from "./playbook-draft"
 import { PlaybookSopDraftCommand } from "./sop-draft"
 import { firstArray } from "../../util/array"
+import { CliUsageError } from "../json-error"
 
 // Wrap callback in Instance.provide so Skill.all()/get() can find .claude/skills/
 async function withInstance<T>(fn: () => Promise<T>): Promise<T> {
@@ -93,9 +94,8 @@ const SkillSearchCommand = cmd({
       const need = ((args.tag as string[]) ?? []).map((t) => String(t).trim().toLowerCase()).filter(Boolean)
 
       if (!q && !need.length) {
-        console.log("Give a query or at least one --tag. `iris playbook list` shows everything.")
-        process.exitCode = 1
-        return
+        // Thrown, so --json callers get it as JSON (#190878).
+        throw new CliUsageError("Give a query or at least one --tag. `iris playbook list` shows everything.")
       }
 
       const skills = await Skill.all()
@@ -259,7 +259,17 @@ const SkillListCommand = cmd({
       const scopeOf = (name: string): string | null =>
         scopes === null ? null : (scopes.get(name) ?? "unpublished")
 
+      // #190274: a file whose header does not parse is not in `plans` — say so instead of
+      // dropping it. A playbook someone just wrote must not simply be absent from the list.
+      const unparseable = await Skill.invalid()
+      const unparseableLines = unparseable.flatMap((u) => [`  ✗ ${u.name}  ${u.path}`, `      ${u.message}`])
+
       if (args.json) {
+        // stdout stays the array every caller iterates; the broken files go to stderr.
+        if (unparseable.length) {
+          console.error(`${unparseable.length} playbook file(s) could not be read (iris playbook doctor):`)
+          for (const line of unparseableLines) console.error(line)
+        }
         await writeJson(plans.map((p) => ({
           name: p.plan.name,
           version: p.plan.version,
@@ -274,8 +284,15 @@ const SkillListCommand = cmd({
       UI.empty()
       prompts.intro("◈  Skills")
 
+      const printUnparseable = () => {
+        if (!unparseable.length) return
+        console.log(`  ${unparseable.length} file(s) could not be read — fix the header (a value containing ': ' must be quoted):`)
+        for (const line of unparseableLines) console.log(line)
+      }
+
       if (plans.length === 0) {
         console.log(dim("  No skills found."))
+        printUnparseable()
         prompts.outro("Done")
         return
       }
@@ -295,6 +312,7 @@ const SkillListCommand = cmd({
       }
       printDivider()
       console.log(dim(`  ${plans.length} skill(s) found`))
+      printUnparseable()
       if (!args.scope) {
         console.log(dim(`  Published or local? ${"iris playbook list --scope"}`))
       } else if (scopes === null) {
@@ -331,6 +349,7 @@ const SkillShowCommand = cmd({
     await withInstance(async () => {
       const info = await Skill.get(args.name as string)
       if (!info) {
+        if (args.json) throw new CliUsageError(await notInstalledMessage(String(args.name)))
         await reportNotInstalled(String(args.name))
         process.exit(1)
       }
@@ -507,6 +526,7 @@ const SkillRunCommand = cmd({
     await withInstance(async () => {
       const info = await Skill.get(args.name as string)
       if (!info) {
+        if (args.json) throw new CliUsageError(await notInstalledMessage(String(args.name)))
         await reportNotInstalled(String(args.name))
         process.exit(1)
       }
@@ -534,22 +554,24 @@ const SkillRunCommand = cmd({
       const unknown = unknownPlaybookFlags(flagArgs, plan.args)
       if (unknown.length > 0) {
         const declared = Object.keys(plan.args)
-        console.error(`Unknown argument${unknown.length > 1 ? "s" : ""}: ${unknown.join(", ")}`)
-        console.error(
-          declared.length
-            ? `"${plan.name}" declares: ${declared.map((k) => `--${k}`).join(", ")}`
-            : `"${plan.name}" declares no arguments.`,
+        // Thrown, so --json callers get it as JSON (#190878).
+        throw new CliUsageError(
+          [
+            `Unknown argument${unknown.length > 1 ? "s" : ""}: ${unknown.join(", ")}`,
+            declared.length
+              ? `"${plan.name}" declares: ${declared.map((k) => `--${k}`).join(", ")}`
+              : `"${plan.name}" declares no arguments.`,
+            `  iris playbook show ${plan.name}`,
+          ].join("\n"),
         )
-        console.error(`  iris playbook show ${plan.name}`)
-        process.exit(1)
       }
 
       let resolvedArgs: Record<string, unknown>
       try {
         resolvedArgs = resolveArgs(plan.args, cleanPositional, flagArgs)
       } catch (e: any) {
-        console.error(e.message)
-        process.exit(1)
+        // Thrown, so --json callers get it as JSON (#190878).
+        throw new CliUsageError(e.message)
       }
       resolvedArgs._raw = cleanPositional.join(" ")
 
@@ -785,6 +807,7 @@ const SkillTestCommand = cmd({
     await withInstance(async () => {
       const info = await Skill.get(args.name as string)
       if (!info) {
+        if (args.json) throw new CliUsageError(await notInstalledMessage(String(args.name)))
         await reportNotInstalled(String(args.name))
         process.exit(1)
       }
@@ -2243,19 +2266,34 @@ async function fetchRegistryRows(): Promise<any[] | null> {
  * execute them without the user ever choosing to install them.
  */
 export async function reportNotInstalled(name: string): Promise<void> {
+  const [first, hint] = await notInstalledLines(name)
+  console.error(first)
+  console.error(hint.startsWith("  iris playbook install") ? hint : dim(hint))
+}
+
+/** The same answer as reportNotInstalled, as one string — for --json callers (#190878). */
+export async function notInstalledMessage(name: string): Promise<string> {
+  return (await notInstalledLines(name)).map((l) => l.trim()).join(" ")
+}
+
+async function notInstalledLines(name: string): Promise<[string, string]> {
   const state = await fetchPublishState(name)
   if (state.state === "published") {
-    console.error(`Playbook "${name}" is not installed on this machine. It is published (${state.scope}) — install it, then run it again:`)
-    console.error(`  iris playbook install ${name}`)
-    return
+    return [
+      `Playbook "${name}" is not installed on this machine. It is published (${state.scope}) — install it, then run it again:`,
+      `  iris playbook install ${name}`,
+    ]
   }
   if (state.state === "unpublished") {
-    console.error(`Playbook "${name}" not found — it is not installed here, and nothing by that name is published that you can see.`)
-    console.error(dim("  What you can install: iris playbook available"))
-    return
+    return [
+      `Playbook "${name}" not found — it is not installed here, and nothing by that name is published that you can see.`,
+      "  What you can install: iris playbook available",
+    ]
   }
-  console.error(`Playbook "${name}" is not installed on this machine, and the marketplace could not be checked (${state.reason}).`)
-  console.error(dim(`  If it is published: iris playbook install ${name}`))
+  return [
+    `Playbook "${name}" is not installed on this machine, and the marketplace could not be checked (${state.reason}).`,
+    `  If it is published: iris playbook install ${name}`,
+  ]
 }
 
 async function fetchPublishState(name: string): Promise<PublishState> {
@@ -2738,10 +2776,7 @@ const PlaybookDoctorCommand = cmd({
 
       if (name) {
         const info = await Skill.get(name)
-        if (!info) {
-          console.error(`Skill "${name}" not found`)
-          process.exit(1)
-        }
+        if (!info) throw new CliUsageError(`Skill "${name}" not found`)
       }
 
       const targets = name ? [(await Skill.get(name))!] : await Skill.all()
@@ -2787,10 +2822,30 @@ const PlaybookDoctorCommand = cmd({
         reports.push({ name: info.name, location: info.location, problems })
       }
 
+      // #190274: files whose header does not parse never reach `targets` — they are not playbooks
+      // as far as discovery is concerned — so report them here. An error when the broken file
+      // would have been the one used (its name is refused); a warning for a stray copy below a
+      // working one.
+      for (const u of await Skill.invalid()) {
+        if (name && u.name !== name) continue
+        reports.push({
+          name: u.name,
+          location: u.path,
+          problems: [{
+            level: u.blocks ? "error" : "warning",
+            message: `Header does not parse: ${u.message}${u.blocks ? "" : " (a working copy is used instead)"}`,
+          }],
+        })
+      }
+
+      // #190877: copies under .trash and other hidden folders are deleted, not candidates. Name
+      // them so nobody wonders where they went.
+      const hiddenCopies = (await Skill.ignored()).filter((i) => !name || i.path.split(/[\\/]/).includes(name))
+
       const unhealthy = reports.filter((r) => r.problems.length > 0)
 
       if (args.json) {
-        await writeJson({ checked: reports.length, unhealthy: unhealthy.length, reports: unhealthy })
+        await writeJson({ checked: reports.length, unhealthy: unhealthy.length, reports: unhealthy, ignored: hiddenCopies })
         if (unhealthy.some((r) => r.problems.some((p) => p.level === "error"))) process.exitCode = 1
         return
       }
@@ -2810,6 +2865,11 @@ const PlaybookDoctorCommand = cmd({
           }
           console.log()
         }
+      }
+
+      if (hiddenCopies.length) {
+        console.log(dim(`  Ignored ${hiddenCopies.length} file(s) in hidden folders (.trash and similar) — treated as deleted:`))
+        for (const i of hiddenCopies) console.log(dim(`    · ${i.path}`))
       }
 
       printDivider()
