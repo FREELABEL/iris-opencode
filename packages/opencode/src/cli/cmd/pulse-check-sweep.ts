@@ -28,8 +28,9 @@ import { join, basename, relative, dirname } from "path"
 import { homedir } from "os"
 import { firstArray } from "../../util/array"
 import { runScript, scriptFor } from "../../pulse/core"
+import { desktopAccounts, openDesktopDb, pickAccount, searchPassages } from "../lib/desktop-sessions"
 
-export const TOPIC_SOURCES = ["git", "diary", "files", "claude_code", "opencode", "imessage", "email", "gmail", "bloq"] as const
+export const TOPIC_SOURCES = ["git", "diary", "files", "claude_code", "opencode", "iris_desktop", "imessage", "email", "gmail", "bloq"] as const
 export type TopicSource = typeof TOPIC_SOURCES[number]
 /**
  * A built-in source, or the id of one defined in ~/.iris/pulse/sources (#190626). Built-in ids keep
@@ -865,6 +866,66 @@ export function sweepOpencode(opts: SweepOptions): SourceSweep {
 
   items.sort((a, b) => (b.when ?? "").localeCompare(a.when ?? ""))
   return limitToStore(finish("opencode", items, prior, matched, opts.limit), storeEarliest(join(storage, "session"), ".json", 2), opts)
+}
+
+/**
+ * IRIS Desktop's chats (#190661). Desktop keeps them in SQLite under ~/.iris/accounts/<id> — the
+ * opencode source above reads only the older file store and has never seen them. Read-only, the
+ * same rules as `iris desktop sessions` (owner-only file, released opencode.db first, secrets
+ * redacted). Counts SESSIONS that mention the subject in the window, like the opencode source, each
+ * item carrying the passage and the command that opens it. `home` is for tests.
+ */
+export function sweepDesktop(opts: SweepOptions, home?: string): SourceSweep {
+  if (keywordPattern(opts.keyword) === null) return unavailable("iris_desktop", `"${opts.keyword}" has no searchable characters`)
+  let db: ReturnType<typeof openDesktopDb>
+  try {
+    const acct = pickAccount(desktopAccounts(home))
+    if (!acct.db) return unavailable("iris_desktop", "no IRIS Desktop history on this machine")
+    db = openDesktopDb(acct.db)
+  } catch (e) {
+    return unavailable("iris_desktop", String((e as Error)?.message ?? e))
+  }
+  try {
+    const now = Date.now()
+    const cutoff = now - opts.windowDays * 864e5
+    const priorCutoff = now - opts.windowDays * 2 * 864e5
+    const exclude = opts.excludeSessions ?? []
+    const matched = new Set<string>([canonicalKeyword(opts.keyword)])
+    const PAGE = 200
+    let capped = false
+    // Newest matching passage per session — the spelling variants converge on one session.
+    const latest = new Map<string, ReturnType<typeof searchPassages>[number]>()
+    for (const variant of keywordVariants(opts.keyword)) {
+      const hits = searchPassages(db, variant, { archived: true, since: priorCutoff, limit: PAGE })
+      if (hits.length === PAGE) capped = true
+      for (const h of hits) {
+        if (exclude.includes(h.sessionId) || h.time < priorCutoff) continue
+        const prev = latest.get(h.sessionId)
+        if (!prev || h.time > prev.time) latest.set(h.sessionId, h)
+      }
+    }
+    const items: Hit[] = []
+    let prior = 0
+    for (const h of latest.values()) {
+      if (h.time < cutoff) {
+        prior++
+        continue
+      }
+      items.push({
+        when: new Date(h.time).toISOString(),
+        where: `${basename(h.directory || "") || "desktop"} · ${h.sessionTitle || h.sessionId.slice(0, 12)}`,
+        text: `${h.excerpt}  (iris desktop sessions show ${h.sessionId} --around ${h.messageId})`,
+      })
+    }
+    items.sort((a, b) => (b.when ?? "").localeCompare(a.when ?? ""))
+    const sweep = finish("iris_desktop", items, prior, matched, opts.limit)
+    if (capped) sweep.capped = true
+    return sweep
+  } catch (e) {
+    return unavailable("iris_desktop", `could not read IRIS Desktop history: ${String((e as Error)?.message ?? e)}`)
+  } finally {
+    db.close()
+  }
 }
 
 function opencodeSessionIndex(sessionRoot: string): Map<string, { title?: string; directory?: string }> {
