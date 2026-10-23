@@ -179,9 +179,36 @@ if [ -z "$PORT" ]; then
   info "$(head -5 "$WORK/serve.log" 2>/dev/null)"
 fi
 
+# Since #190647 the app gives its engine a password per launch (Basic auth, user `opencode`)
+# and publishes it, owner-only, to ~/.iris/desktop-engine.json for the person's own local
+# clients. Read it exactly as they do. Without it every call is a 401 with an empty body, which
+# desktop-v1.18.150 reported as "the SPA fallback — API not serving" and was held back for.
+ENGINE_FILE="$HOME/.iris/desktop-engine.json"
+PW=""
+for _ in $(seq 1 20); do
+  PW="$(python3 -c '
+import json,sys
+try: d=json.load(open(sys.argv[1]))
+except Exception: sys.exit(0)
+if str(d.get("port"))==sys.argv[2]: print(d.get("password",""))' "$ENGINE_FILE" "$PORT" 2>/dev/null)"
+  [ -n "$PW" ] && break
+  sleep 0.5
+done
+if [ -z "$PW" ]; then
+  fail "the app did not publish its engine password to ~/.iris/desktop-engine.json for port $PORT"
+else
+  if [ "$(uname)" = Darwin ]; then MODE="$(stat -f '%Lp' "$ENGINE_FILE")"; else MODE="$(stat -c '%a' "$ENGINE_FILE")"; fi
+  [ "$MODE" = "600" ] && pass "engine password published, owner-only (0600)" || fail "desktop-engine.json is mode $MODE, not 600 — other users can read the password"
+  # The point of the password: a caller without it is refused.
+  NOAUTH="$(curl -s -m 10 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/session")"
+  [ "$NOAUTH" = "401" ] \
+    && pass "a caller without the password is refused (401)" \
+    || fail "/session answered $NOAUTH with no password — any process on the machine can read every chat"
+fi
+
 # EVERY unknown path on this server returns the SPA's index.html with HTTP 200. Asserting on
 # status codes would be green against a build whose API is entirely unreachable. So parse.
-probe() { curl -s -m 10 "http://127.0.0.1:$PORT$1"; }
+probe() { curl -s -m 10 ${PW:+-u "opencode:$PW"} "http://127.0.0.1:$PORT$1"; }
 is_json() { case "$1" in '{'*|'['*) return 0;; *) return 1;; esac; }
 
 H="$(probe /global/health)"
