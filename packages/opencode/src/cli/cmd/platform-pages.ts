@@ -180,6 +180,29 @@ export function isWritableTopKey(path: string, jsonContent: unknown): boolean {
   return !!jsonContent && typeof jsonContent === "object" && Object.prototype.hasOwnProperty.call(jsonContent, path)
 }
 
+/**
+ * Why `pages set` must refuse this path, or null when it may write it (#190870).
+ *
+ * `set <slug> totally.nonexistent.path x` printed "Updated totally.nonexistent.path" and stored
+ * nothing: a dotted path skipped the top-key check entirely, so a typo in the FIRST segment
+ * invented a whole new branch that the server then dropped. The first segment is where a typo
+ * becomes a dead key, so it must be a key the page has or one the renderer reads. Prototype
+ * names are refused by name: nothing is stored today, but a write that reports success on
+ * `__proto__` reads as if it reached the object model.
+ */
+export const FORBIDDEN_PATH_SEGMENTS = new Set(["__proto__", "constructor", "prototype"])
+export function setPathProblem(path: string, jsonContent: unknown): string | null {
+  const segments = String(path).replace(/\[(\d+)\]/g, ".$1").split(".")
+  const bad = segments.find((seg) => FORBIDDEN_PATH_SEGMENTS.has(seg))
+  if (bad) return `'${bad}' is not allowed in a path.`
+  if (segments.some((seg) => seg === "")) return `'${path}' has an empty segment.`
+  if (segments.length < 2) return null
+  const top = segments[0]
+  const has = !!jsonContent && typeof jsonContent === "object" && Object.prototype.hasOwnProperty.call(jsonContent, top)
+  if (!has && !JSON_TOP_KEYS.has(top)) return `Path not found: '${top}' is not a key on this page.`
+  return null
+}
+
 export function normaliseSetPath(path: string): { path: string; stripped: boolean } {
   const PREFIX = "json_content."
   if (path.startsWith(PREFIX) && path.length > PREFIX.length) {
@@ -601,7 +624,7 @@ const GetCmd = cmd({
   },
 })
 
-const SetCmd = cmd({
+export const SetCmd = cmd({
   command: "set <slug> <path> <value>",
   describe: "set value at dot-notation path (auto-detects JSON values)",
   builder: (y) =>
@@ -733,6 +756,14 @@ const SetCmd = cmd({
       }
 
       const json = page.json_content ?? {}
+      const problem = setPathProblem(String(args.path), json)
+      if (problem) {
+        sp.stop("Refused", 1)
+        prompts.log.error(`${problem}\nSee what is there: iris pages get ${args.slug}`)
+        process.exitCode = 1
+        prompts.outro("Nothing changed")
+        return
+      }
       const parsed = parseValue(args.value)
       setNestedValue(json, args.path, parsed)
 
@@ -858,7 +889,7 @@ export const PullCmd = cmd({
       writeFileSync(filePath, JSON.stringify(exp, null, 2) + "\n")
       const cnt = exp.json_content?.components?.length ?? 0
       sp.stop(success(`Pulled → ${filePath} (${cnt} components)`))
-      if (base) prompts.log.info(dim(`based on v${base.version} — push will refuse if the live page moves past it`))
+      if (base) prompts.log.info(dim(`based on v${base.version} — if the live page moves past it, push merges the two and refuses only edits that collide`))
       else prompts.log.warn(`This page reports no version, so push cannot detect a concurrent edit. Run ${highlight(`iris pages diff ${slug}`)} before pushing.`)
       // Say it now, not after the edits: a push from this account will be refused.
       const access = editAccess(page)
@@ -873,7 +904,7 @@ export const PullCmd = cmd({
   },
 })
 
-const PushCmd = cmd({
+export const PushCmd = cmd({
   command: "push <slug>",
   // A push on an already-live page DEMOTES it to draft unless --publish is passed,
   // and a drafted page 404s at its public url. Say that here — it is the single
@@ -896,7 +927,7 @@ const PushCmd = cmd({
     UI.empty()
     prompts.intro(`◈  Push ${slug}`)
     if (corrected) noteSlugCorrection(args.slug, slug)
-    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    if (!(await requireAuth())) { process.exitCode = 1; prompts.outro("Done"); return }
     const sp = prompts.spinner()
     try {
       const dirUsed = pagesDir(args.dir)
@@ -904,6 +935,7 @@ const PushCmd = cmd({
       if (!existsSync(filePath)) {
         prompts.log.error(`Local file not found: ${filePath}`)
         prompts.log.info(dim(`Pull first: iris pages pull ${slug}`))
+        process.exitCode = 1
         prompts.outro("Done")
         return
       }
@@ -978,6 +1010,7 @@ const PushCmd = cmd({
       else {
         sp.stop("Failed", 1)
         prompts.log.error("No 'json_content' or 'components' in file")
+        process.exitCode = 1
         prompts.outro("Done")
         return
       }
@@ -994,6 +1027,7 @@ const PushCmd = cmd({
           if (err === "") console.log()
           else prompts.log.error(err)
         }
+        process.exitCode = 1
         prompts.outro("Done")
         return
       }
@@ -1089,7 +1123,7 @@ const PushCmd = cmd({
         return
       }
 
-      if (!(await handleApiError(res, "Push page"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!(await handleApiError(res, "Push page"))) { sp.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
       const cnt = jsonContent?.components?.length ?? 0
 
       // Re-stamp the file's provenance from what the server now holds, so the NEXT push
@@ -1098,6 +1132,17 @@ const PushCmd = cmd({
       let putBody: any = null
       try { putBody = await res.json() } catch {}
       nextBase = baseFromPage(putBody?.data ?? putBody)
+      // The live page moved since the pull and the server MERGED the two (fl-api #187528) rather
+      // than refusing. Say so: "Pushed" alone read as "my file is now the page", and a stale
+      // file whose fields were superseded by newer live edits looked like a lost edit (#190867).
+      const merge = (putBody?.data ?? putBody)?.merge
+      if (merge?.merged) {
+        prompts.log.warn(
+          `The live page had moved to v${merge.merged_with_version} since your pull (v${merge.base_version}). ` +
+            `Your changes were MERGED with it — fields you did not change keep the newer live values.\n` +
+            `  Check the result: ${highlight(`iris pages pull ${slug}`)}`,
+        )
+      }
       // The PUT response may not echo the page. Ask for it rather than guessing — and do it
       // only when it can matter, i.e. this file is (or is about to become) guarded.
       if (!nextBase && (localBase || baseFromPage(page))) nextBase = baseFromPage(await getBySlug(slug, false))
@@ -1125,7 +1170,7 @@ const PushCmd = cmd({
       // --publish: push + publish in one step
       if (args.publish) {
         const pubRes = await pagesFetch(`/api/v1/pages/${page.id}/publish`, { method: "POST" })
-        if (!(await handleApiError(pubRes, "Publish"))) { sp.stop("Pushed but publish failed", 1); prompts.outro("Done"); return }
+        if (!(await handleApiError(pubRes, "Publish"))) { sp.stop("Pushed but publish failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
         // Explicitly purge iris-api cache
         await pagesFetch("/api/internal/cache/purge-page", {
           method: "POST",
@@ -1157,6 +1202,7 @@ const PushCmd = cmd({
     } catch (err) {
       sp.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
+      process.exitCode = 1
       prompts.outro("Done")
     }
   },
@@ -2541,9 +2587,48 @@ export function assignComponentIds(jsonContent: any): number {
 }
 
 async function validateComponents(jsonContent: any): Promise<{ valid: boolean; errors: string[] }> {
-  const validTypes = await getValidComponentTypes()
+  return componentErrors(jsonContent, await getValidComponentTypes())
+}
+
+/** Edit distance, for "did you mean" (#190872). */
+function editDistance(a: string, b: string): number {
+  const x = a.toLowerCase(), y = b.toLowerCase()
+  let prev = Array.from({ length: y.length + 1 }, (_, j) => j)
+  for (let i = 1; i <= x.length; i++) {
+    const cur = [i]
+    for (let j = 1; j <= y.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (x[i - 1] === y[j - 1] ? 0 : 1))
+    }
+    prev = cur
+  }
+  return prev[y.length]
+}
+
+/** Up to `n` known types closest to `name` — a substring match first, then by edit distance. */
+export function closestComponentTypes(name: string, validTypes: Iterable<string>, n = 5): string[] {
+  const lower = name.toLowerCase()
+  return [...validTypes]
+    .map((t) => ({ t, score: t.toLowerCase().includes(lower) || lower.includes(t.toLowerCase()) ? -1 : editDistance(name, t) }))
+    .sort((a, b) => a.score - b.score || a.t.localeCompare(b.t))
+    .slice(0, n)
+    .map((r) => r.t)
+}
+
+/**
+ * Every reason a page's components cannot be pushed. Pure, so it is testable without the API.
+ *
+ * Two additions:
+ * - #190869: two components with the same `id` were stored. The id is the address `pages set`
+ *   and the renderer use, so a duplicate makes every later edit ambiguous — refused like an
+ *   unknown type.
+ * - #190872: an unknown type printed all ~247 valid names on one line, and the line that
+ *   mattered scrolled away. Now: the closest matches, and the registry command for the rest.
+ */
+export function componentErrors(jsonContent: any, validTypes: Set<string>): { valid: boolean; errors: string[] } {
   const components = jsonContent?.components ?? []
   const errors: string[] = []
+  const seen = new Map<string, number>()
+  let unknownType = false
 
   for (let i = 0; i < components.length; i++) {
     const c = components[i]
@@ -2552,17 +2637,22 @@ async function validateComponents(jsonContent: any): Promise<{ valid: boolean; e
       continue
     }
     if (!validTypes.has(c.type)) {
-      errors.push(`components[${i}]: "${c.type}" is not a valid component type`)
+      unknownType = true
+      const near = closestComponentTypes(String(c.type), validTypes)
+      errors.push(`components[${i}]: "${c.type}" is not a valid component type` + (near.length ? ` — did you mean ${near.join(", ")}?` : ""))
     }
     if (!c.id) {
       errors.push(`components[${i}] (${c.type}): missing "id" field`)
+    } else if (seen.has(String(c.id))) {
+      errors.push(`components[${i}] (${c.type}): id "${c.id}" is already used by components[${seen.get(String(c.id))}] — every component id must be unique`)
+    } else {
+      seen.set(String(c.id), i)
     }
   }
 
-  if (errors.length > 0) {
+  if (unknownType) {
     errors.push("")
-    errors.push(`Valid types: ${[...validTypes].join(", ")}`)
-    errors.push(`Run: iris pages component-registry`)
+    errors.push(`All ${validTypes.size} types: iris pages component-registry`)
   }
 
   return { valid: errors.length === 0, errors }
@@ -3056,7 +3146,7 @@ const ComponentRegistryCmd = cmd({
 // QR Code — generate short URL + QR for any page
 // ============================================================================
 
-const QrCmd = cmd({
+export const QrCmd = cmd({
   command: "qr <slug>",
   describe: "get short URL + QR code for a page",
   builder: (y) =>
@@ -3067,11 +3157,21 @@ const QrCmd = cmd({
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  QR Code: ${args.slug}`)
-    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    if (!(await requireAuth())) { process.exitCode = 1; prompts.outro("Done"); return }
 
     const sp = prompts.spinner()
     sp.start("Generating short URL + QR…")
     try {
+      // A QR for a page that does not exist is a printed link to nothing, and the short-url
+      // endpoint would mint a record for it. Check first (#190871).
+      const page = await getBySlug(String(args.slug), false, { quiet404: true })
+      if (!page) {
+        sp.stop("Not found", 1)
+        prompts.log.error(`No page "${args.slug}" — no QR made. Find it: iris pages search ${args.slug}`)
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
       const { FL_API } = await import("./iris-api")
       const res = await irisFetch(`/api/v1/pages/${encodeURIComponent(String(args.slug))}/short-url`, {
         method: "POST",
@@ -3082,6 +3182,7 @@ const QrCmd = cmd({
         const err = await res.text().catch(() => "")
         sp.stop("Failed")
         prompts.log.error(`Failed: ${err || `HTTP ${res.status}`}`)
+        process.exitCode = 1
         prompts.outro("Done")
         return
       }
@@ -3108,6 +3209,7 @@ const QrCmd = cmd({
     } catch (e: any) {
       sp.stop("Error")
       prompts.log.error(e.message ?? String(e))
+      process.exitCode = 1
       prompts.outro("Done")
     }
   },
