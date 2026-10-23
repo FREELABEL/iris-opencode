@@ -15,6 +15,7 @@ import {
   matchesQuery,
   needsMe,
   parsePrefs,
+  plainPeek,
   peersOf,
   rankInbox,
   replyCount,
@@ -77,6 +78,10 @@ describe("subjectOf", () => {
     expect(subjectOf({ type: "file", label: "report.pdf", preview: "see attached" })).toBe("report.pdf")
   })
   test("never blank", () => expect(subjectOf({ type: "message", label: "" })).toBe("(no text)"))
+  test("a handoff with a note leads with the note, not the card id", () => {
+    expect(subjectOf({ type: "handoff", label: "bloq:item:9 [blocked]", preview: "Ready for review" })).toBe("Ready for review")
+    expect(subjectOf({ type: "handoff", label: "bloq:item:9 [blocked]" })).toBe("bloq:item:9 [blocked]")
+  })
 })
 
 describe("presentation helpers", () => {
@@ -233,4 +238,14 @@ describe("parsePrefs — remembered lens, filter, selection", () => {
     expect(parsePrefs(JSON.stringify({ lens: "x", filter: "y" }))).toEqual({ lens: "inbox", filter: "all", selected: undefined })
     expect(parsePrefs(null)).toEqual({ lens: "inbox", filter: "all" })
   })
+})
+
+describe("plainPeek", () => {
+  test("drops markdown markup, keeps the words", () => {
+    expect(plainPeek("I rewrote the **welcome screen**.\n\n- Shorter headline\n- [Plans](https://x.y) link")).toBe(
+      "I rewrote the welcome screen.\n\n• Shorter headline\n• Plans link",
+    )
+    expect(plainPeek("## Title\nUse `iris hive` and _this_")).toBe("Title\nUse iris hive and this")
+  })
+  test("snake_case and a * b survive", () => expect(plainPeek("set max_retries to 3 * 2")).toBe("set max_retries to 3 * 2"))
 })

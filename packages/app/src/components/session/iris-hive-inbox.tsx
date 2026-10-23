@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createResource, createSignal, For, Match, onCleanup, Show, Switch, untrack } from "solid-js"
+import { createEffect, createMemo, createResource, createSignal, For, Match, onCleanup, onMount, Show, Switch, untrack } from "solid-js"
 import { Icon, type IconProps } from "@opencode-ai/ui/icon"
 import "./iris-hive-scripts.css"
 import "./iris-hive-inbox.css"
@@ -20,6 +20,7 @@ import {
   needsMe,
   parsePrefs,
   peersOf,
+  plainPeek,
   rankInbox,
   replyCount,
   samePeer,
@@ -258,6 +259,12 @@ export function IrisHiveInbox(props: {
   let searchEl: HTMLInputElement | undefined
   let replyEl: HTMLTextAreaElement | undefined
   let rootEl: HTMLDivElement | undefined
+  // Opening the tab puts the keys here — j/k work without a click first. Nothing is stolen from a
+  // field the person is typing in.
+  onMount(() => {
+    const active = document.activeElement as HTMLElement | null
+    if (!active?.closest?.("input, textarea, [contenteditable]")) rootEl?.focus({ preventScroll: true })
+  })
   const move = (d: 1 | -1) => {
     const list = entries()
     if (!list.length) return
@@ -482,7 +489,7 @@ export function IrisHiveInbox(props: {
     const lastOut = () => [...sent()].reverse().find((s) => samePeer(s.to, p.row.from))
     const text = () => {
       const m = bodyOf(p.row)
-      return m?.body ? bodyAfterTitle(m.body, subjectOf(p.row)) : (p.row.preview ?? "")
+      return m?.body ? plainPeek(bodyAfterTitle(m.body, subjectOf(p.row))) : (p.row.preview ?? "")
     }
     return (
       <div class="hib-peek">
@@ -805,7 +812,7 @@ export function IrisHiveInbox(props: {
                 <div class="hib-compose-dock">
                   <Composer to={p()} replyTo={lastIncomingId()} />
                   <p class="hib-faint hib-compose-note">
-                    ⌘↩ sends · “accepted by IRIS” means the server has it — not that {p()} has read it.
+                    ⌘↩ sends · “accepted” means IRIS has it, not that they have read it.
                   </p>
                 </div>
               </article>

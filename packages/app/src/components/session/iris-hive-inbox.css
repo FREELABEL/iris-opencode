@@ -15,6 +15,7 @@
   font-size: 12.5px;
 }
 .hib *, .hib *::before, .hib *::after { box-sizing: border-box; }
+.hib:focus { outline: none; }
 .hib button:focus-visible { outline: 2px solid var(--border-interactive-focus, var(--hsc-jade)); outline-offset: 1px; }
 .hib-faint { color: var(--hsc-faint); }
 .hib-list { padding: 0 14px 18px; max-width: 760px; width: 100%; }

@@ -88,7 +88,9 @@ export function kindLabel(type: string | undefined): string {
  * its name; a handoff is its work item.
  */
 export function subjectOf(r: Pick<InboxRow, "type" | "label" | "preview">): string {
-  if ((r.type === "message" || r.type === "text") && r.preview) return r.preview
+  // A handoff with a note leads with the note: "bloq:item:190875 [blocked]" is an id, not a subject.
+  // The card id and status still show, on the row's second line.
+  if ((r.type === "message" || r.type === "text" || r.type === "handoff" || r.type === "job") && r.preview) return r.preview
   return r.label || r.preview || "(no text)"
 }
 
@@ -320,4 +322,21 @@ export function parsePrefs(raw: string | null | undefined): InboxPrefs {
   } catch {
     return d
   }
+}
+
+/**
+ * A message body as plain text for the peek: two lines of a list do not need list markup, and
+ * "**welcome screen**" with its asterisks reads like a bug. Links keep their words.
+ */
+export function plainPeek(md: string): string {
+  return md
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/^[ \t]*[-*+][ \t]+/gm, "• ")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/(\*\*|__)(.+?)\1/g, "$2")
+    .replace(/(^|[^*\w])[*_]([^*_\n]+)[*_](?=[^*\w]|$)/g, "$1$2")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
 }

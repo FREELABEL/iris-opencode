@@ -230,10 +230,14 @@ test("keyboard: j moves, e marks done (separate from read), u marks unread", asy
   await wait(() => chip(host, "Done").textContent === "Done1")
   chip(host, "All").click()
   await wait(() => host.querySelectorAll(".hib-row").length === 5)
-  // studio-mac's read link: u marks it unread again
-  key(host, "j")
-  const sel = () => host.querySelector(".hib-row--sel")
-  await wait(() => !!sel())
+  // the oldest message is read: focusing it selects it, and u marks it unread — a write, not a filter
+  const rows = [...host.querySelectorAll<HTMLButtonElement>(".hib-row")]
+  rows[rows.length - 1].focus()
+  await wait(() => !!host.querySelector(".hib-row--sel"))
+  key(host, "u")
+  await wait(() => states.length === 2)
+  expect(states[1]).toMatchObject({ id: "m1", read: false })
+  expect(states[1].done).toBeUndefined()
   done()
 })
 
