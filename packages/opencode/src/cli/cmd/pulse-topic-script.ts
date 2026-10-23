@@ -22,6 +22,7 @@ import {
   sweepEmail,
   sweepGmail,
   sweepCalendar,
+  sweepDrive,
   sweepBloq,
 } from "./pulse-check-sweep"
 
@@ -40,6 +41,7 @@ export const TOPIC_LABEL: Record<TopicSource, string> = {
   email: "Apple Mail",
   gmail: "Gmail",
   calendar: "Calendar",
+  drive: "Google Drive",
   bloq: "Atlas",
 }
 
@@ -99,6 +101,7 @@ export const topicSources: Record<TopicSource, Source<SweepOptions, TopicReading
   email: topicSource("email", (q) => [`${q.bridgeUrl ?? "http://127.0.0.1:3200"}/api/mail/search`], (q) => sweepEmail(q)),
   gmail: topicSource("gmail", () => ["Gmail via IRIS integrations"], (q) => sweepGmail(q)),
   calendar: topicSource("calendar", () => ["every connected Google calendar", "this computer's calendar app"], (q) => sweepCalendar(q)),
+  drive: topicSource("drive", () => ["every connected Google Drive — counts and file kinds only leave this machine"], (q) => sweepDrive(q)),
   bloq: topicSource("bloq", (q) => [`Atlas boards of user ${q.userId ?? "?"}`], (q) => sweepBloq(q)),
 }
 
@@ -111,7 +114,7 @@ export const defaultTopicScript: PulseScript<SweepOptions, SourceSweep> = {
   route: "topic",
   readOnly: true,
   mode: "sequential",
-  stops: (["git", "diary", "files", "claude_code", "opencode", "iris_desktop", "imessage", "email", "gmail", "calendar", "bloq"] as const).map((id) =>
+  stops: (["git", "diary", "files", "claude_code", "opencode", "iris_desktop", "imessage", "email", "gmail", "calendar", "drive", "bloq"] as const).map((id) =>
     topicStop(topicSources[id]),
   ),
 }

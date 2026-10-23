@@ -30,7 +30,7 @@ import { firstArray } from "../../util/array"
 import { runScript, scriptFor } from "../../pulse/core"
 import { desktopAccounts, openDesktopDb, pickAccount, searchPassages } from "../lib/desktop-sessions"
 
-export const TOPIC_SOURCES = ["git", "diary", "files", "claude_code", "opencode", "iris_desktop", "imessage", "email", "gmail", "calendar", "bloq"] as const
+export const TOPIC_SOURCES = ["git", "diary", "files", "claude_code", "opencode", "iris_desktop", "imessage", "email", "gmail", "calendar", "drive", "bloq"] as const
 export type TopicSource = typeof TOPIC_SOURCES[number]
 /**
  * A built-in source, or the id of one defined in ~/.iris/pulse/sources (#190626). Built-in ids keep
@@ -1716,6 +1716,84 @@ export async function sweepCalendar(
   return sweep
 }
 
+/**
+ * Files in Google Drive that mention the topic (#190969), by when they were last changed — this
+ * window and the one before. Every connected Drive account is searched once (duplicate connection
+ * records reach the same files, which are counted once by id).
+ *
+ * FILE NAMES NEVER LEAVE THIS MACHINE. A Drive can hold client and patient documents, and their
+ * names alone are identifying — measured 2026-10-23: a search for "pulse" on a connected Drive
+ * returned patient records by name. So an item's `where` (uploaded as a locator) is only the file
+ * KIND; the name rides in `text`, which the brief shows locally and toObservations never uploads
+ * for this source, even with --include-context. `exec` is for tests.
+ */
+export async function sweepDrive(
+  opts: SweepOptions,
+  exec?: (params: Record<string, unknown>, sel: { integrationId?: number }) => Promise<any>,
+): Promise<SourceSweep> {
+  if (keywordPattern(opts.keyword) === null) return unavailable("drive", `"${opts.keyword}" has no searchable characters`)
+  const PAGE = 50
+  const call =
+    exec ??
+    (async (params: Record<string, unknown>, sel: { integrationId?: number }) =>
+      (await import("./platform-run")).executeIntegrationCall("google-drive", "search_files", params, sel))
+  const params = { query: opts.keyword.trim(), limit: PAGE }
+
+  let first: any
+  try {
+    first = await call(params, {})
+  } catch (e: any) {
+    return unavailable("drive", `Drive search failed: ${String(e?.message ?? e).slice(0, 120)}`)
+  }
+  const answers: any[] = []
+  const failures: string[] = []
+  if (first?.success === false && first?.code === "account_ambiguous") {
+    for (const a of firstArray<any>(first.accounts)) {
+      try {
+        const r = await call(params, { integrationId: Number(a.integration_id) })
+        if (r?.success === false) failures.push(`#${a.integration_id}: ${String(r.error ?? "failed").slice(0, 60)}`)
+        else answers.push(r)
+      } catch (e: any) {
+        failures.push(`#${a.integration_id}: ${String(e?.message ?? e).slice(0, 60)}`)
+      }
+    }
+    if (!answers.length) return unavailable("drive", `no Drive account could be searched — ${failures.join("; ")}`.slice(0, 200))
+  } else if (first?.success === false) {
+    return unavailable("drive", String(first.error ?? "no Google Drive connected").slice(0, 160))
+  } else {
+    answers.push(first)
+  }
+
+  const files = new Map<string, any>()
+  let capped = false
+  for (const r of answers) {
+    const list = firstArray<any>(r?.data?.files, r?.files, r?.data?.response_data?.files)
+    if (list.length >= PAGE) capped = true
+    for (const f of list) if (f?.id && !files.has(f.id)) files.set(f.id, f)
+  }
+
+  const now = Date.now()
+  const cutoff = now - opts.windowDays * 864e5
+  const priorCutoff = now - opts.windowDays * 2 * 864e5
+  const items: Hit[] = []
+  let prior = 0
+  for (const f of files.values()) {
+    const at = Date.parse(String(f.modifiedTime ?? ""))
+    if (Number.isNaN(at) || at < priorCutoff || at > now) continue
+    if (at < cutoff) {
+      prior++
+      continue
+    }
+    const kind = String(f.mimeType ?? "file").replace("application/vnd.google-apps.", "").replace(/^application\//, "")
+    items.push({ when: new Date(at).toISOString(), where: `Drive · ${kind}`, text: String(f.name ?? "") || undefined })
+  }
+  items.sort((a, b) => (b.when ?? "").localeCompare(a.when ?? ""))
+  const sweep = finish("drive", items, prior, new Set([canonicalKeyword(opts.keyword)]), opts.limit)
+  if (capped) sweep.capped = true
+  if (failures.length) sweep.unavailableReason = `some Drive accounts could not be searched — ${failures.join("; ")}`.slice(0, 200)
+  return sweep
+}
+
 // ── orchestration ───────────────────────────────────────────────────────────
 
 /**
@@ -1772,7 +1850,8 @@ export function toObservations(
     }
 
     const repoBorn = s.source === "git" || s.source === "diary" || s.source === "files"
-    const share = opts.includeContext || repoBorn
+    // Drive file names identify the people in them (#190969): never uploaded, even when asked.
+    const share = s.source !== "drive" && (opts.includeContext || repoBorn)
 
     return {
       entity_type: "topic",
