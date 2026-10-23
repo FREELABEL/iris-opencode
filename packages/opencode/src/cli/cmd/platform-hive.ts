@@ -1103,7 +1103,7 @@ function timeAgo(iso: string | null | undefined): string {
 
 const HiveTasksCommand = cmd({
   command: "tasks [subcommand] [task-id]",
-  describe: "list, inspect or CREATE tasks on your nodes (create dispatches any task type)",
+  describe: "list, inspect, rerun or CREATE tasks on your nodes (create dispatches any task type)",
   builder: (yargs) =>
     yargs
       .positional("subcommand", { describe: "create, get, logs or rerun", type: "string" })
