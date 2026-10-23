@@ -94,7 +94,7 @@ describe("runner", () => {
 describe("registry", () => {
   test("the built-in routes are registered with their stops", () => {
     expect(scriptFor("topic").stops.map((s) => s.id)).toEqual(defaultTopicScript.stops.map((s) => s.id))
-    expect(defaultTopicScript.stops.map((s) => s.id)).toEqual(["git", "diary", "files", "claude_code", "opencode", "iris_desktop", "imessage", "email", "gmail", "bloq"])
+    expect(defaultTopicScript.stops.map((s) => s.id)).toEqual(["git", "diary", "files", "claude_code", "opencode", "iris_desktop", "imessage", "email", "gmail", "calendar", "bloq"])
     expect(scriptFor("contact")).toBe(defaultContactScript as any)
     expect(scriptFor("contact").stops.map((s) => s.id)).toEqual(["gmail", "imessage", "imessage_groups", "whatsapp_groups", "apple_mail", "calendar", "iris_desktop"])
     expect(scriptFor("contact").mode).toBe("parallel")
