@@ -253,6 +253,9 @@ const AwayCommand = cmd({
 
 const TERMINAL = new Set(["succeeded", "completed", "failed", "cancelled", "timeout", "errored"])
 
+/** Providers whose waiting question `iris hive answer` can reach (#190649). */
+export const ANSWERABLE_PROVIDERS = ["claude_code", "opencode"]
+
 const AnswerCommand = cmd({
   command: "answer <session-id> <choice..>",
   describe: "answer the question a session is waiting on — by option number or label, one per question",
@@ -279,8 +282,10 @@ const AnswerCommand = cmd({
       process.exit(1)
     }
     const { node, s } = hits[0]
-    if (s.provider !== "claude_code") {
-      console.error(`Answering is supported for Claude Code sessions; this one is ${s.provider}.`)
+    // Claude Code (answer hook / tmux) and opencode / IRIS Desktop (the engine's own permission and
+    // question replies — iris-daemon #38, #190649). A permission takes 1 Allow once · 2 Always allow · 3 Reject.
+    if (!ANSWERABLE_PROVIDERS.includes(s.provider)) {
+      console.error(`Answering is supported for Claude Code and IRIS Desktop / opencode sessions; this one is ${s.provider}.`)
       process.exit(1)
     }
     const choices = (argv.choice as string[]).map(String)
