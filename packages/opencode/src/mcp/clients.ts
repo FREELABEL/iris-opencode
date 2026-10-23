@@ -141,19 +141,59 @@ export namespace McpClients {
    * path (not the bare `iris`) is what makes GUI-launched clients — which spawn
    * the command WITHOUT a login shell, so `~/.zshrc` PATH edits don't apply —
    * able to start the server. Falls back to the canonical install location.
+   *
+   * Never a path in a temporary folder (#190590): run once from a throwaway HOME, this saved
+   * /tmp/tmp.CN1nv3EnPW/.iris/bin/iris into a project .mcp.json, and every later session failed
+   * to start the server once that folder was gone. The stable install is checked under $HOME and
+   * under the account's real home, because a throwaway HOME is exactly the case being refused.
    */
-  export function irisBinary(): string {
+  export function irisBinary(opts: { execPath?: string; tmpRoots?: string[] } = {}): string {
+    const tmpRoots = opts.tmpRoots ?? temporaryRoots()
     try {
-      const real = realpathSync(process.execPath)
+      const real = realpathSync(opts.execPath ?? process.execPath)
       // When running the shipped binary, execPath IS iris. When running from
       // source (bun dev), it's the bun runtime — fall back to the install path.
-      if (/[\\/](iris|opencode)$/i.test(real) || real.includes(`${path.sep}.iris${path.sep}`)) {
+      if ((/[\\/](iris|opencode)$/i.test(real) || real.includes(`${path.sep}.iris${path.sep}`)) && !isTemporaryPath(real, tmpRoots)) {
         return real
       }
     } catch {
-      // ignore — fall through to the default location
+      // A path that no longer resolves is used as given, if it is not temporary.
+      if (opts.execPath && !isTemporaryPath(opts.execPath, tmpRoots)) return opts.execPath
     }
-    return path.join(homeDir(), ".iris", "bin", "iris")
+    const stable = [homeDir(), accountHome()]
+      .map((home) => path.join(home, ".iris", "bin", "iris"))
+      .filter((p) => !isTemporaryPath(p, tmpRoots))
+    return stable.find(exists) ?? stable[0] ?? path.join(homeDir(), ".iris", "bin", "iris")
+  }
+
+  /** True when `p` is inside one of the temp roots (the folder itself counts; a sibling named alike does not). */
+  export function isTemporaryPath(p: string, tmpRoots: string[] = temporaryRoots()): boolean {
+    const target = path.resolve(p)
+    return tmpRoots.some((root) => {
+      const r = path.resolve(root)
+      return target === r || target.startsWith(r.endsWith(path.sep) ? r : r + path.sep)
+    })
+  }
+
+  function temporaryRoots(): string[] {
+    const roots = new Set([os.tmpdir(), "/tmp", "/var/tmp", "/var/folders", "/private/tmp", "/private/var/folders"])
+    for (const r of [...roots]) {
+      try {
+        roots.add(realpathSync(r))
+      } catch {
+        // not on this platform
+      }
+    }
+    return [...roots]
+  }
+
+  /** The account's home from the user database — unlike $HOME, a throwaway shell cannot point it elsewhere. */
+  function accountHome(): string {
+    try {
+      return os.userInfo().homedir
+    } catch {
+      return homeDir()
+    }
   }
 
   /**
