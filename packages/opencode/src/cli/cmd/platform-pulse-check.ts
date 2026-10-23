@@ -41,6 +41,7 @@ import {
 } from "./pulse-check-sweep"
 import { TOPIC_LABEL } from "./pulse-topic-script"
 import { CUSTOM_SOURCES_DIR, registerCustomSources, type CustomSourceLoad } from "./pulse-custom-sources"
+import { firstArray } from "../../util/array"
 import {
   type DaemonPermissions,
   fetchDaemonPermissions,
@@ -384,6 +385,13 @@ export async function runPulseCheck(args: any, allowFix: boolean): Promise<void>
             const entity = (body?.entities ?? [])[0] ?? null
             if (entity?.score_error) {
               pushError = `filed, but scoring failed: ${String(entity.score_error).slice(0, 160)}`
+            }
+            // A 207 files what it accepted and drops the rest. Read as success, gmail and every custom
+            // source went missing from the score without a word (#190967) — so name what was refused.
+            const refused = firstArray(body?.errors)
+            if (refused.length) {
+              const which = refused.map((e: any) => observations[e?.index]?.source ?? `#${e?.index}`).join(", ")
+              pushError = `filed, but the corpus refused ${refused.length} source(s): ${which} — ${String(refused[0]?.error ?? "").slice(0, 120)}`
             }
             scored = entity
           }
