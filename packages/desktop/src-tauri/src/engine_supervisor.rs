@@ -54,6 +54,11 @@ static EXITING: AtomicBool = AtomicBool::new(false);
 static RESPAWNING: AtomicBool = AtomicBool::new(false);
 /// The ceiling was hit. Cleared by "Try again".
 static GAVE_UP: AtomicBool = AtomicBool::new(false);
+/// The generation of the most recent engine that exited. A freshly spawned engine whose
+/// generation shows up here died on arrival — no point waiting out the health budget for it.
+static LAST_EXITED: AtomicU64 = AtomicU64::new(0);
+/// The engine is (or is about to be) running in safe mode (#190980). Read by `spawn_sidecar`.
+static SAFE_MODE: AtomicBool = AtomicBool::new(false);
 static PAUSED_UNTIL: Mutex<Option<Instant>> = Mutex::new(None);
 static RESTARTS: Mutex<VecDeque<Instant>> = Mutex::new(VecDeque::new());
 
@@ -142,10 +147,19 @@ pub async fn healthy(port: u32) -> bool {
     }
 }
 
-/// Poll health until it answers or the budget runs out.
+/// Poll health until the newest engine answers, it exits, or the budget runs out.
 pub async fn wait_until_healthy(port: u32, budget: Duration) -> bool {
+    wait_until_healthy_for(port, budget, GENERATION.load(Ordering::SeqCst)).await
+}
+
+/// An engine that crashes on start used to cost the full 30s budget per attempt, so a crash loop
+/// took minutes to reach safe mode. Its exit is known the moment it happens; stop waiting then.
+async fn wait_until_healthy_for(port: u32, budget: Duration, generation: u64) -> bool {
     let started = Instant::now();
     while started.elapsed() < budget {
+        if LAST_EXITED.load(Ordering::SeqCst) == generation {
+            return false;
+        }
         if healthy(port).await {
             return true;
         }
@@ -154,11 +168,77 @@ pub async fn wait_until_healthy(port: u32, budget: Duration) -> bool {
     false
 }
 
+// ── safe mode (#190980) ──────────────────────────────────────────────────────
+
+/// Restarting an engine that crashes because of something on THIS machine — a broken MCP server,
+/// a plugin, a project's config — only crashes it again, five times, and then the person is
+/// stuck. Safe mode starts it once without those, so they can keep working while we find out
+/// which piece it was.
+pub fn safe_mode() -> bool {
+    SAFE_MODE.load(Ordering::SeqCst)
+}
+
+/// The variables a safe-mode engine is started with. Each one maps to a switch the engine already
+/// honours: no MCP servers, no external plugins, no project config.
+pub const SAFE_MODE_ENV: [(&str, &str); 3] = [
+    ("OPENCODE_SAFE_MODE", "1"),
+    ("OPENCODE_PURE", "1"),
+    ("OPENCODE_DISABLE_PROJECT_CONFIG", "1"),
+];
+
+#[derive(Debug, PartialEq)]
+enum Next {
+    Respawn(Duration),
+    SafeMode,
+    GiveUp,
+}
+
+/// What to do after `restarts` respawns inside the window. Pure, so the ladder is tested
+/// directly: backoff, then ONE safe-mode attempt, then stop and say so.
+fn next_step(restarts: usize, safe_mode_tried: bool) -> Next {
+    if restarts < MAX_RESTARTS {
+        Next::Respawn(Duration::from_secs(BACKOFF_SECS[restarts]))
+    } else if !safe_mode_tried {
+        Next::SafeMode
+    } else {
+        Next::GiveUp
+    }
+}
+
+fn entered_safe_mode(app: &AppHandle) {
+    log(app, "engine is answering in safe mode — MCP servers, plugins and project config are off");
+    crate::onboarding::track(app, "engine.safe_mode", Some(format!("last={}", last_error_line(app))));
+
+    let app_for_choice = app.clone();
+    app.dialog()
+        .message(
+            "IRIS kept stopping, so it restarted in safe mode. You can keep working.\n\n\
+             Your MCP servers, plugins and project settings are switched off for now — one of them \
+             is the likely cause. Restart normally to turn them back on, or copy the logs for the IRIS team.",
+        )
+        .title("IRIS is in safe mode")
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Keep working".to_string(),
+            "Restart normally".to_string(),
+        ))
+        .show(move |keep_working| {
+            if !keep_working {
+                SAFE_MODE.store(false, Ordering::SeqCst);
+                if let Ok(mut r) = RESTARTS.lock() {
+                    r.clear();
+                }
+                crate::stop_engine_child(&app_for_choice);
+                respawn(app_for_choice, "restart normally");
+            }
+        });
+}
+
 // ── exit → respawn ───────────────────────────────────────────────────────────
 
 /// `spawn_sidecar`'s event loop calls this on `CommandEvent::Terminated`.
 pub fn on_exit(app: &AppHandle, generation: u64, code: Option<i32>, signal: Option<i32>) {
     let what = format!("engine exited (code {code:?}, signal {signal:?})");
+    LAST_EXITED.store(generation, Ordering::SeqCst);
     if generation != GENERATION.load(Ordering::SeqCst) {
         log(app, &format!("{what} — an engine already replaced; ignoring"));
         return;
@@ -167,9 +247,10 @@ pub fn on_exit(app: &AppHandle, generation: u64, code: Option<i32>, signal: Opti
         log(app, &format!("{what} — expected (quitting, restarting, updating, or not yet started)"));
         return;
     }
-    // The supervisor itself just killed it (hung engine) and a respawn is already under way.
+    // A respawn is already under way: either it killed this engine (hung), or this is a fresh
+    // engine that died on start. The respawn loop sees it through LAST_EXITED and decides.
     if RESPAWNING.load(Ordering::SeqCst) {
-        log(app, &format!("{what} — the respawn in progress stopped it"));
+        log(app, &format!("{what} — during a respawn; the respawn loop handles it"));
         return;
     }
     log(app, &format!("{what} — respawning"));
@@ -197,12 +278,19 @@ fn respawn(app: AppHandle, reason: &'static str) {
                 }
                 r.len()
             };
-            if attempt >= MAX_RESTARTS {
-                give_up(&app);
-                break;
+            match next_step(attempt, SAFE_MODE.load(Ordering::SeqCst)) {
+                Next::Respawn(delay) => tokio::time::sleep(delay).await,
+                Next::SafeMode => {
+                    log(&app, &format!("{attempt} respawns in {} minutes — trying safe mode", RESTART_WINDOW.as_secs() / 60));
+                    SAFE_MODE.store(true, Ordering::SeqCst);
+                    reason = "safe mode";
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+                Next::GiveUp => {
+                    give_up(&app);
+                    break;
+                }
             }
-
-            tokio::time::sleep(Duration::from_secs(BACKOFF_SECS[attempt])).await;
             if EXITING.load(Ordering::SeqCst) || standing_back() {
                 log(&app, "respawn cancelled — something deliberate took over");
                 break;
@@ -219,12 +307,18 @@ fn respawn(app: AppHandle, reason: &'static str) {
             crate::set_engine_child(&app, child);
 
             if wait_until_healthy(port, READY_BUDGET).await {
-                log(&app, "engine is answering again");
-                crate::onboarding::track(&app, "engine.restarted", Some(format!("{reason}; attempt {}", attempt + 1)));
+                if SAFE_MODE.load(Ordering::SeqCst) && reason == "safe mode" {
+                    entered_safe_mode(&app);
+                } else {
+                    log(&app, "engine is answering again");
+                    crate::onboarding::track(&app, "engine.restarted", Some(format!("{reason}; attempt {}", attempt + 1)));
+                }
                 break;
             }
-            log(&app, "respawned engine did not answer health in time");
-            reason = "did not come up";
+            log(&app, "respawned engine did not come up (exited, or no health answer in time)");
+            if reason != "safe mode" {
+                reason = "did not come up";
+            }
         }
         RESPAWNING.store(false, Ordering::SeqCst);
     });
@@ -232,13 +326,26 @@ fn respawn(app: AppHandle, reason: &'static str) {
 
 fn give_up(app: &AppHandle) {
     GAVE_UP.store(true, Ordering::SeqCst);
-    log(app, &format!("engine stopped {MAX_RESTARTS} times in {} minutes — giving up", RESTART_WINDOW.as_secs() / 60));
-    crate::onboarding::track(app, "engine.gave_up", Some(format!("last={}", last_error_line(app))));
+    let safe = SAFE_MODE.swap(false, Ordering::SeqCst);
+    log(
+        app,
+        &format!(
+            "engine stopped {MAX_RESTARTS} times in {} minutes{} — giving up",
+            RESTART_WINDOW.as_secs() / 60,
+            if safe { " and safe mode did not help" } else { "" },
+        ),
+    );
+    crate::onboarding::track(
+        app,
+        "engine.gave_up",
+        Some(format!("safe_mode={} last={}", if safe { "failed" } else { "untried" }, last_error_line(app))),
+    );
 
     let app_for_choice = app.clone();
     app.dialog()
         .message(
-            "IRIS's local engine keeps stopping, so it cannot load your chats or models right now.\n\n\
+            "IRIS's local engine keeps stopping, even in safe mode, so it cannot load your chats or \
+             models right now.\n\n\
              Your work is saved. Try again, or copy the logs and send them to the IRIS team.",
         )
         .title("IRIS needs a moment")
@@ -416,6 +523,38 @@ mod tests {
     fn backoff_covers_every_attempt_below_the_ceiling() {
         assert_eq!(BACKOFF_SECS.len(), MAX_RESTARTS);
         assert!(BACKOFF_SECS.windows(2).all(|w| w[0] <= w[1]));
+    }
+
+    #[test]
+    fn the_ladder_is_backoff_then_one_safe_mode_then_stop() {
+        for (n, secs) in BACKOFF_SECS.iter().enumerate() {
+            assert_eq!(next_step(n, false), Next::Respawn(Duration::from_secs(*secs)), "restart {n}");
+        }
+        assert_eq!(next_step(MAX_RESTARTS, false), Next::SafeMode);
+        // Safe mode is tried once. If it did not come up, the next decision is to stop and say so —
+        // never a sixth, seventh, eighth respawn.
+        assert_eq!(next_step(MAX_RESTARTS, true), Next::GiveUp);
+        assert_eq!(next_step(MAX_RESTARTS + 3, true), Next::GiveUp);
+    }
+
+    #[test]
+    fn safe_mode_turns_off_mcp_plugins_and_project_config() {
+        let keys: Vec<&str> = SAFE_MODE_ENV.iter().map(|(k, _)| *k).collect();
+        // Each name must be one the engine reads (packages/core/src/flag/flag.ts), or safe mode
+        // starts the same engine that kept crashing.
+        assert_eq!(keys, ["OPENCODE_SAFE_MODE", "OPENCODE_PURE", "OPENCODE_DISABLE_PROJECT_CONFIG"]);
+        assert!(SAFE_MODE_ENV.iter().all(|(_, v)| *v == "1"));
+    }
+
+    #[test]
+    fn an_engine_that_died_on_arrival_fails_fast_instead_of_waiting_the_budget() {
+        // Port 1 never answers; without the exit check this would sit out the whole 30s.
+        let generation = u64::MAX - 7;
+        LAST_EXITED.store(generation, Ordering::SeqCst);
+        let started = Instant::now();
+        let ok = tauri::async_runtime::block_on(wait_until_healthy_for(1, READY_BUDGET, generation));
+        assert!(!ok);
+        assert!(started.elapsed() < Duration::from_secs(2), "took {:?}", started.elapsed());
     }
 
     #[test]

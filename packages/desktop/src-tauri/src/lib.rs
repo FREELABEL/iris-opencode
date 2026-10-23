@@ -696,6 +696,14 @@ fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
             .env("OPENCODE_SERVER_USERNAME", engine_auth::USERNAME)
             .env("OPENCODE_SERVER_ALLOWED_HOSTS", engine_auth::allowed_hosts(port));
     }
+    // #190980: after a crash loop the supervisor starts the engine once without MCP servers,
+    // external plugins or project config — the things on this machine most likely to crash it.
+    if engine_supervisor::safe_mode() {
+        println!("Starting the engine in safe mode");
+        for (key, value) in engine_supervisor::SAFE_MODE_ENV {
+            cmd = cmd.env(key, value);
+        }
+    }
 
     // #189321: an account other than the first keeps its chat history, provider sign-ins and
     // MCP auth in its own data dir — sessions carry no account id, so a shared dir shows one
