@@ -12,6 +12,9 @@ export const ServeCommand = effectCmd({
   instance: false,
   handler: Effect.fn("Cli.serve")(function* (args) {
     const { Server } = yield* Effect.promise(() => import("../../server/server"))
+    // #190647: take the Host allowlist out of the environment children inherit (see host-guard.ts).
+    const { pinAllowedHostsFromEnv } = yield* Effect.promise(() => import("../../server/shared/host-guard"))
+    pinAllowedHostsFromEnv()
     if (!Flag.OPENCODE_SERVER_PASSWORD) {
       console.log("Warning: OPENCODE_SERVER_PASSWORD is not set; server is unsecured.")
     }

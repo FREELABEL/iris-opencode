@@ -10,6 +10,7 @@ import { Store } from "@tauri-apps/plugin-store"
 
 import { UPDATER_ENABLED, createUpdaterPlatform, onUpdateModeChanged, runUpdater } from "./updater"
 import { opencodeGlobal } from "./opencode-global"
+import { basicAuthorization, engineOrigins, withEngineAuth, type EngineCredentials } from "./engine-auth"
 import { createMenu } from "./menu"
 import { check, Update } from "@tauri-apps/plugin-updater"
 import { invoke } from "@tauri-apps/api/core"
@@ -323,21 +324,44 @@ root?.addEventListener("mousewheel", (e) => {
 //                     right and silently matches nothing.
 // Derived with ServerConnection.key() rather than hardcoded so the two cannot drift.
 const serverPort = opencodeGlobal().port
-const sidecarConnection: ServerConnection.Any = {
-  displayName: "Local",
-  type: "sidecar",
-  variant: "base",
-  http: { url: `http://127.0.0.1:${serverPort}` },
-}
-const servers = [sidecarConnection]
-const defaultServer = ServerConnection.key(sidecarConnection)
 
-render(() => {
-  return (
-    <PlatformProvider value={platform}>
-      <AppBaseProviders>
-        <AppInterface defaultServer={defaultServer} servers={servers} />
-      </AppBaseProviders>
-    </PlatformProvider>
-  )
-}, root!)
+// The engine's per-launch password (#190647), over IPC. None when this app attached to an engine
+// it did not start, or on a build whose engine has no password — then the window connects as it
+// always has. Asked for before the first render so no request goes out without it.
+const engineCredentials = invoke<EngineCredentials | null>("engine_credentials").catch((err) => {
+  console.error("[desktop] could not read the engine credentials", err)
+  return null
+})
+
+void engineCredentials.then((credentials) => {
+  if (credentials && serverPort) {
+    // Every bare fetch to this engine (the IRIS panels) — see engine-auth.ts.
+    globalThis.fetch = withEngineAuth(
+      globalThis.fetch.bind(globalThis),
+      engineOrigins(serverPort),
+      basicAuthorization(credentials),
+    )
+  }
+
+  const sidecarConnection: ServerConnection.Any = {
+    displayName: "Local",
+    type: "sidecar",
+    variant: "base",
+    http: {
+      url: `http://127.0.0.1:${serverPort}`,
+      ...(credentials ? { username: credentials.username, password: credentials.password } : {}),
+    },
+  }
+  const servers = [sidecarConnection]
+  const defaultServer = ServerConnection.key(sidecarConnection)
+
+  render(() => {
+    return (
+      <PlatformProvider value={platform}>
+        <AppBaseProviders>
+          <AppInterface defaultServer={defaultServer} servers={servers} />
+        </AppBaseProviders>
+      </PlatformProvider>
+    )
+  }, root!)
+})
