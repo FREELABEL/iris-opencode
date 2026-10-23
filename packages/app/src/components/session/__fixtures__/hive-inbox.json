@@ -1,17 +1,83 @@
 {
-  "_note": "Fictional sample messages for Hive > Inbox (#189279). Times are minutes before the test's NOW.",
+  "_note": "Fictional sample messages for Hive > Inbox (#189279, v2 #190917). Times are minutes before the test's NOW.",
   "items": [
-    { "index": 1, "id": "m1", "read": true, "type": "link", "from": "studio-mac", "minutesAgo": 4320, "label": "https://example.com/brief", "preview": "Brief for the spring launch" },
-    { "index": 2, "id": "m2", "read": true, "type": "file", "from": "render-box", "minutesAgo": 1500, "label": "storyboard-v3.pdf" },
-    { "index": 3, "id": "m3", "read": false, "type": "message", "from": "studio-mac", "minutesAgo": 190, "label": "Deploy finished — 3 pages republished", "preview": "Deploy finished — 3 pages republished" },
-    { "index": 4, "id": "m4", "read": false, "type": "job", "from": "build-runner", "minutesAgo": 42, "label": "atlas:item:5501 [completed]" },
-    { "index": 5, "id": "m5", "read": false, "type": "message", "from": "Riley (agent)", "minutesAgo": 6, "label": "Can you review the onboarding copy before 3pm?", "preview": "Can you review the onboarding copy before 3pm?" }
+    {
+      "index": 1,
+      "id": "m1",
+      "read": true,
+      "type": "link",
+      "from": "studio-mac",
+      "minutesAgo": 4320,
+      "label": "https://example.com/brief",
+      "preview": "Brief for the spring launch"
+    },
+    {
+      "index": 2,
+      "id": "m2",
+      "read": true,
+      "type": "file",
+      "from": "render-box",
+      "minutesAgo": 1500,
+      "label": "storyboard-v3.pdf"
+    },
+    {
+      "index": 3,
+      "id": "m3",
+      "read": false,
+      "type": "message",
+      "from": "studio-mac",
+      "minutesAgo": 190,
+      "label": "Deploy finished — 3 pages republished",
+      "preview": "Deploy finished — 3 pages republished"
+    },
+    {
+      "index": 4,
+      "id": "m4",
+      "read": false,
+      "type": "job",
+      "from": "build-runner",
+      "minutesAgo": 42,
+      "label": "atlas:item:5501 [completed]"
+    },
+    {
+      "index": 5,
+      "id": "m5",
+      "read": false,
+      "type": "message",
+      "from": "Riley (agent)",
+      "minutesAgo": 6,
+      "label": "Can you review the onboarding copy before 3pm?",
+      "preview": "Can you review the onboarding copy before 3pm?"
+    },
+    {
+      "index": 6,
+      "id": "m6",
+      "read": false,
+      "type": "handoff",
+      "from": "iris-hive-001",
+      "minutesAgo": 20,
+      "label": "bloq:item:190875 [blocked]",
+      "preview": "Playbook epic ready for review — step heading bug",
+      "item": "bloq:item:190875",
+      "status": "blocked"
+    }
   ],
   "bodies": {
     "m5": "Can you review the onboarding copy before 3pm?\n\nI rewrote the **welcome screen** and the first two emails. The main changes:\n\n- Shorter headline — one line on mobile\n- The pricing link now goes to the plans page\n- Removed the second CTA\n\nDraft is in the shared folder. Reply here or ping me on the Hive if anything reads wrong.",
     "m4": "Ran the handoff on build-runner.",
     "m3": "Deploy finished — 3 pages republished\n\nAll three passed the render check.",
     "m2": null,
-    "m1": "https://example.com/brief\n\nBrief for the spring launch"
-  }
+    "m1": "https://example.com/brief\n\nBrief for the spring launch",
+    "m6": "Playbook epic ready for review — step heading bug\n\nThe step heading without a title reports completed with nothing run. I would gate it."
+  },
+  "sent": [
+    {
+      "id": "o1",
+      "to": "iris-hive-001",
+      "text": "Gate it. Add a validation error and make zero steps non-zero.",
+      "minutesAgo": 15,
+      "taskId": "t-1",
+      "replyTo": "m6"
+    }
+  ]
 }
