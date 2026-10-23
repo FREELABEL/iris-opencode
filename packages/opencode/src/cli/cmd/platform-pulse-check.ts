@@ -42,6 +42,10 @@ import {
 import { TOPIC_LABEL } from "./pulse-topic-script"
 import { CUSTOM_SOURCES_DIR, registerCustomSources, type CustomSourceLoad } from "./pulse-custom-sources"
 import { firstArray } from "../../util/array"
+import { FLEET_SOURCES, countsDocument, sweepFleet, type FleetDeps } from "./pulse-fleet"
+import { readFileSync } from "fs"
+import { homedir } from "os"
+import { join } from "path"
 import {
   type DaemonPermissions,
   fetchDaemonPermissions,
@@ -107,6 +111,16 @@ export function pulseCheckOptions(yargs: any): any {
         type: "boolean",
         default: false,
       })
+      .option("fleet", {
+        describe: "also sweep agent sessions on every other online Hive node (counts only leave each machine)",
+        type: "boolean",
+        default: false,
+      })
+      .option("counts-only", {
+        describe: "print per-source counts as JSON and nothing else — no excerpts, never pushed (what --fleet asks each node for)",
+        type: "boolean",
+        default: false,
+      })
 }
 
 export const PulseCheckCommand = cmd({
@@ -143,6 +157,16 @@ export const PulseCheckCommand = cmd({
       // has to be a literal flag rather than the negation of `--push`.
       .option("no-push", {
         describe: "sweep and print, but do not file the result in the Signal Corpus",
+        type: "boolean",
+        default: false,
+      })
+      .option("fleet", {
+        describe: "also sweep agent sessions on every other online Hive node (counts only leave each machine)",
+        type: "boolean",
+        default: false,
+      })
+      .option("counts-only", {
+        describe: "print per-source counts as JSON and nothing else — no excerpts, never pushed (what --fleet asks each node for)",
         type: "boolean",
         default: false,
       })
@@ -347,6 +371,24 @@ export async function runPulseCheck(args: any, allowFix: boolean): Promise<void>
 
     spinner?.stop(dim("swept"))
 
+    // A node answering --fleet: numbers only, never pushed — the machine that asked files them.
+    if (args["counts-only"] || args.countsOnly) {
+      await writeJson(countsDocument(keyword, days, sweeps))
+      return
+    }
+
+    // #190970: the same sweep on every other machine in the Hive, filed per machine.
+    let fleet: Awaited<ReturnType<typeof sweepFleet>> | null = null
+    if (args.fleet) {
+      const asked = sources.filter((s) => (FLEET_SOURCES as readonly string[]).includes(s))
+      if (asked.length) {
+        spinner?.start("asking your Hive nodes")
+        fleet = await sweepFleet(keyword, days, asked, fleetDeps(userId))
+        spinner?.stop(dim(`Hive: ${fleet.nodes.filter((n) => n.state === "ok").length} of ${fleet.nodes.length} nodes answered`))
+        sweeps.push(...fleet.sweeps)
+      }
+    }
+
     // A refused Mail search names its fix. Only asked when it matters, and bounded to 1.5s.
     const tcc = tccBlindSpots(sweeps)
     const perms = tcc.some((t) => t.via === "daemon")
@@ -416,6 +458,7 @@ export async function runPulseCheck(args: any, allowFix: boolean): Promise<void>
         warnings: quality.warn ? [quality.warn] : [],
         custom_sources: custom.sources.map((c) => ({ id: c.id, label: c.label, file: c.file, replaces: c.replaces })),
         custom_source_errors: custom.errors,
+        fleet: fleet?.nodes ?? null,
       })
       return
     }
@@ -445,6 +488,10 @@ export async function runPulseCheck(args: any, allowFix: boolean): Promise<void>
     console.log(dim(`  ${keywordVariants(keyword).join(" · ")}   ·   ${args.days}d window`))
     if (quality.warn) console.log(highlight(`  ⚠ ${quality.warn}`))
     for (const e of custom.errors) console.log(highlight(`  ⚠ custom source not loaded: ${e.file} — ${e.error}`))
+    for (const n of fleet?.nodes ?? []) {
+      if (n.state === "ok") console.log(dim(`  Hive  ${n.node} answered (${n.sources} sources)`))
+      else console.log(highlight(`  Hive  ${n.node} ${n.state} — ${n.reason ?? ""}`) + dim("  · not measured, not zero"))
+    }
     console.log()
 
     for (const s of sweeps) {
@@ -586,5 +633,39 @@ export async function runPulseCheck(args: any, allowFix: boolean): Promise<void>
     const again = await prompts.confirm({ message: `Run the pulse check for "${keyword}" again?` })
     if (prompts.isCancel(again) || !again) return
     await runPulseCheck(args, false)
+  }
+}
+
+/** The Hive wiring for --fleet: list nodes, skip this machine, run the counts-only sweep on each. */
+function fleetDeps(userId: number | null): FleetDeps {
+  return {
+    nodes: async () => {
+      if (!userId) throw new Error("not signed in — run `iris auth login`")
+      const { fetchNodes } = await import("./platform-hive-nodes")
+      return fetchNodes(userId)
+    },
+    selfNodeId: (() => {
+      try {
+        return JSON.parse(readFileSync(join(homedir(), ".iris", "config.json"), "utf8"))?.node_id ?? null
+      } catch {
+        return null
+      }
+    })(),
+    run: async (node, script) => {
+      if (!userId) throw new Error("not signed in")
+      const [{ dispatchTaskAndWait }, { buildHiveRunBody }, { fromHiveTask }] = await Promise.all([
+        import("./platform-hive-nodes"),
+        import("./hive-run-body"),
+        import("./hive-script-result"),
+      ])
+      const { final } = await dispatchTaskAndWait(
+        userId,
+        buildHiveRunBody({ userId, nodeId: node.id, title: "iris pulse check --fleet (counts only)", script, timeoutSec: 240 }),
+      )
+      if (!final) throw new Error("still running after 270s — not waited for")
+      const r = fromHiveTask(final as any)
+      if (r.exit_code && r.exit_code !== 0) throw new Error(`exited ${r.exit_code}: ${String(r.stderr ?? r.stdout ?? "").trim().slice(-140)}`)
+      return String(r.stdout ?? "")
+    },
   }
 }
