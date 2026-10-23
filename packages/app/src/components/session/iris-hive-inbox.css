@@ -1,7 +1,6 @@
 /*
- * Hive › Inbox (#189279; v2 #190917). Same tokens and roles as Machines and Scripts
- * (iris-hive-scripts.css): jade = unread / the action, amber = needs you, sage = done,
- * faint = metadata. Numbers are mono. Built for the side panel's real width (~460px).
+ * Hive › Inbox (#189279). Same tokens and roles as Machines and Scripts (iris-hive-scripts.css):
+ * jade = unread / the action, amber = needs you, faint = metadata. Numbers are mono.
  */
 .hib {
   display: flex;
@@ -15,25 +14,13 @@
   font-size: 12.5px;
 }
 .hib *, .hib *::before, .hib *::after { box-sizing: border-box; }
-.hib:focus { outline: none; }
 .hib button:focus-visible { outline: 2px solid var(--border-interactive-focus, var(--hsc-jade)); outline-offset: 1px; }
 .hib-faint { color: var(--hsc-faint); }
-.hib-list { padding: 0 14px 18px; max-width: 760px; width: 100%; }
-.hib-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.hib kbd {
-  font-family: var(--hsc-mono-font); font-size: 10px; padding: 0 4px; border-radius: 4px;
-  border: 1px solid var(--hsc-rule); color: var(--hsc-faint); background: var(--hsc-card);
-}
+.hib-list, .hib-read { padding: 12px 14px 18px; max-width: 760px; width: 100%; }
 
 /* header */
-.hib-top {
-  display: flex; align-items: center; gap: 10px; padding: 12px 14px 10px; position: sticky; top: 0; z-index: 3;
-  background: var(--hsc-surface); border-bottom: 1px solid var(--hsc-rule);
-}
-.hib-sum { flex: 1; min-width: 0; color: var(--hsc-ink2); display: flex; align-items: baseline; gap: 8px; white-space: nowrap; }
-.hib-scope {
-  font-size: 10.5px; padding: 1px 6px; border-radius: 5px; color: var(--hsc-faint); border: 1px solid var(--hsc-rule);
-}
+.hib-top { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.hib-sum { flex: 1; min-width: 0; color: var(--hsc-ink2); }
 .hib-sum b { color: var(--hsc-ink); font-weight: 600; }
 .hib-sum b.hib-hot { color: var(--hsc-jade); }
 .hib-seg { display: inline-flex; border: 1px solid var(--hsc-rule); border-radius: 8px; padding: 2px; gap: 2px; }
@@ -145,160 +132,3 @@
 .hib-body pre { padding: 10px 12px; border-radius: 9px; background: var(--hsc-term); overflow-x: auto; }
 .hib-body pre code { padding: 0; background: none; }
 .hib-body blockquote { padding-left: 10px; border-left: 2px solid var(--hsc-rule); color: var(--hsc-ink2); }
-
-/* ── v2 (#190917) ─────────────────────────────────────────────────────── */
-.hib-notice { margin: 8px 14px 0; font-size: 12px; padding: 6px 9px; border-radius: 7px; }
-.hib-notice[data-tone="ok"] { color: var(--hsc-sage); background: color-mix(in srgb, var(--hsc-sage) 10%, transparent); }
-.hib-notice[data-tone="warn"] { color: var(--hsc-amber); background: color-mix(in srgb, var(--hsc-amber) 10%, transparent); }
-.hib > .hsc-warn { margin: 8px 14px 0; }
-
-/* search + chips */
-.hib-search {
-  display: flex; align-items: center; gap: 8px; margin: 12px 0 8px; padding: 0 8px 0 10px; height: 32px;
-  border: 1px solid var(--hsc-rule); border-radius: 9px; background: var(--hsc-card); color: var(--hsc-faint);
-}
-.hib-search:focus-within { border-color: color-mix(in srgb, var(--hsc-jade) 60%, var(--hsc-rule)); }
-.hib-search input {
-  all: unset; flex: 1; min-width: 0; font-size: 12.5px; color: var(--hsc-ink);
-}
-.hib-search input::placeholder { color: var(--hsc-faint); }
-.hib-search input::-webkit-search-cancel-button { display: none; }
-.hib-chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; margin-bottom: 10px; scrollbar-width: none; }
-.hib-chips::-webkit-scrollbar { display: none; }
-.hib-chip {
-  all: unset; box-sizing: border-box; cursor: pointer; flex: none; display: inline-flex; align-items: center; gap: 6px;
-  padding: 3px 9px; border-radius: 999px; font-size: 11.5px; color: var(--hsc-ink2); border: 1px solid var(--hsc-rule);
-}
-.hib-chip .hsc-num { font-size: 10.5px; color: var(--hsc-faint); }
-.hib-chip:hover { color: var(--hsc-ink); }
-.hib-chip[aria-selected="true"] { color: var(--hsc-ink); background: var(--hsc-elev); border-color: transparent; }
-.hib-chip[aria-selected="true"] .hsc-num { color: var(--hsc-ink2); }
-
-/* day groups (Activity) */
-.hib-day {
-  margin: 14px 2px 6px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
-  color: var(--hsc-faint); list-style: none;
-}
-.hib-list > .hib-day:first-of-type { margin-top: 2px; }
-.hib-rows + .hib-day { margin-top: 16px; }
-
-/* rows: selection, needs-you, done, sent */
-.hib-li--sel { background: var(--hsc-card); }
-.hib-row--sel { box-shadow: inset 2px 0 0 var(--hsc-jade); }
-.hib-row--done .hib-subj, .hib-row--done .hib-from { color: var(--hsc-faint); }
-.hib-need {
-  flex: none; font-size: 10px; padding: 1px 6px; border-radius: 5px; color: var(--hsc-amber);
-  background: color-mix(in srgb, var(--hsc-amber) 12%, transparent);
-}
-.hib-kind[data-kind="handoff"] { color: var(--hsc-amber); }
-.hib-kind[data-kind="file"] { color: var(--hsc-ink); }
-.hib-sub { display: flex; gap: 10px; font-size: 11px; color: var(--hsc-faint); }
-.hib-sub [data-status="failed"] { color: var(--hsc-coral); }
-.hib-sub [data-status="completed"], .hib-sub [data-status="done"] { color: var(--hsc-sage); }
-.hib-av { width: 28px; height: 28px; font-size: 10.5px; letter-spacing: 0.02em; }
-.hib-av--you { background: color-mix(in srgb, var(--hsc-jade) 18%, var(--hsc-elev)); color: var(--hsc-jade); font-size: 9.5px; }
-.hib-row--out .hib-from { color: var(--hsc-ink2); }
-
-/* peek: the selected row opens in place */
-.hib-peek { display: flex; flex-direction: column; gap: 8px; padding: 0 12px 12px 53px; }
-.hib-peek-text {
-  margin: 0; color: var(--hsc-ink2); font-size: 12.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
-  display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
-}
-.hib-peek-you { margin: 0; font-size: 12px; color: var(--hsc-ink2); padding-left: 8px; border-left: 2px solid var(--hsc-rule); }
-.hib-peek-you b { color: var(--hsc-jade); font-weight: 600; }
-.hib-peek-acts, .hib-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.hib-chipbtn {
-  all: unset; box-sizing: border-box; cursor: pointer; font-size: 11.5px; padding: 3px 9px; border-radius: 7px;
-  color: var(--hsc-ink2); border: 1px solid var(--hsc-rule); background: var(--hsc-surface);
-}
-.hib-chipbtn:hover { color: var(--hsc-ink); border-color: color-mix(in srgb, var(--hsc-ink) 25%, var(--hsc-rule)); }
-.hib-chipbtn:first-child { color: var(--hsc-jade); }
-.hib-keys { margin: 10px 2px 0; font-size: 10.5px; }
-
-/* composer */
-.hib-compose {
-  display: flex; align-items: flex-end; gap: 6px; padding: 5px 5px 5px 10px; border: 1px solid var(--hsc-rule);
-  border-radius: 10px; background: var(--hsc-surface);
-}
-.hib-compose:focus-within { border-color: color-mix(in srgb, var(--hsc-jade) 60%, var(--hsc-rule)); }
-.hib-compose-input {
-  all: unset; flex: 1; min-width: 0; resize: none; font-size: 12.5px; line-height: 1.45; padding: 4px 0;
-  color: var(--hsc-ink); max-height: 140px; overflow-y: auto; white-space: pre-wrap; word-break: break-word;
-}
-.hib-compose-input::placeholder { color: var(--hsc-faint); }
-.hib-send {
-  all: unset; box-sizing: border-box; cursor: pointer; display: grid; place-items: center; width: 26px; height: 26px; flex: none;
-  border-radius: 7px; background: var(--hsc-jade); color: var(--hsc-surface);
-}
-.hib-send:disabled { cursor: default; background: var(--hsc-elev); color: var(--hsc-faint); }
-
-/* thread: avatar rail + conversation */
-.hib-thread-wrap { display: grid; grid-template-columns: 48px minmax(0, 1fr); flex: 1 1 auto; min-height: 0; }
-.hib-rail {
-  display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 0; border-right: 1px solid var(--hsc-rule);
-  overflow-y: auto;
-}
-.hib-rail-btn { all: unset; position: relative; cursor: pointer; border-radius: 50%; padding: 2px; }
-.hib-rail-btn--on { box-shadow: 0 0 0 2px var(--hsc-jade); }
-.hib-rail-btn:focus-visible { outline: 2px solid var(--hsc-jade); outline-offset: 1px; }
-.hib-rail-dot {
-  position: absolute; top: 0; right: 0; width: 8px; height: 8px; border-radius: 50%; background: var(--hsc-jade);
-  box-shadow: 0 0 0 2px var(--hsc-surface);
-}
-.hib-read { display: flex; flex-direction: column; gap: 0; min-width: 0; min-height: 0; padding: 0; }
-.hib-thead {
-  display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--hsc-rule);
-}
-.hib-thead .hib-back { padding: 4px 6px; }
-.hib-thead-main { display: flex; flex-direction: column; min-width: 0; font-size: 11px; }
-.hib-thead .hib-title { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.hib-msgs { list-style: none; margin: 0; padding: 8px 14px 12px; display: flex; flex-direction: column; gap: 10px; flex: 1 1 auto; overflow-y: auto; }
-.hib-day--thread { text-align: center; margin: 8px 0 0; }
-.hib-msg {
-  display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--hsc-rule);
-  background: var(--hsc-card); max-width: 100%;
-}
-.hib-msg--sel { border-color: color-mix(in srgb, var(--hsc-jade) 45%, var(--hsc-rule)); }
-.hib-msg--done { opacity: 0.72; }
-.hib-msg--out {
-  align-self: flex-end; max-width: 88%; background: color-mix(in srgb, var(--hsc-jade) 8%, var(--hsc-card));
-  border-color: color-mix(in srgb, var(--hsc-jade) 22%, var(--hsc-rule));
-}
-.hib-msg .hib-subj { -webkit-line-clamp: unset; }
-.hib-state { font-size: 10.5px; color: var(--hsc-faint); align-self: flex-end; }
-.hib-card {
-  display: inline-flex; align-items: center; gap: 8px; align-self: flex-start; padding: 5px 9px; border-radius: 8px;
-  border: 1px solid var(--hsc-rule); background: var(--hsc-surface); font-size: 12px;
-}
-.hib-card-tag { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--hsc-faint); }
-.hib-card-status { font-size: 11px; color: var(--hsc-ink2); }
-.hib-card-status[data-status="blocked"], .hib-card-status[data-status="failed"] { color: var(--hsc-coral); }
-.hib-card-status[data-status="done"], .hib-card-status[data-status="completed"] { color: var(--hsc-sage); }
-.hib-card-status[data-status="pending"], .hib-card-status[data-status="todo"] { color: var(--hsc-amber); }
-.hib-file {
-  display: flex; align-items: center; gap: 9px; padding: 7px 9px; border-radius: 8px; background: var(--hsc-surface);
-  border: 1px solid var(--hsc-rule); min-width: 0;
-}
-.hib-file-ext {
-  flex: none; font-size: 9.5px; padding: 3px 5px; border-radius: 5px; background: var(--hsc-elev); color: var(--hsc-ink2);
-}
-.hib-file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
-.hib-compose-dock {
-  position: sticky; bottom: 0; padding: 10px 14px 12px; border-top: 1px solid var(--hsc-rule); background: var(--hsc-surface);
-  display: flex; flex-direction: column; gap: 6px;
-}
-.hib-compose-note { margin: 0; font-size: 10.5px; }
-.hib-msg .hib-dev { margin-top: 0; padding-top: 6px; }
-
-@media (prefers-reduced-motion: no-preference) {
-  .hib-peek { animation: hib-in 140ms ease-out; }
-  @keyframes hib-in { from { opacity: 0; transform: translateY(-2px); } }
-}
-
-/* delivery (#190982): the state a sent reply actually reached */
-.hib-state-row { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
-.hib-state[data-tone="ok"], .hib-sub[data-tone="ok"] { color: var(--hsc-sage); }
-.hib-state[data-tone="wait"], .hib-sub[data-tone="wait"] { color: var(--hsc-amber); }
-.hib-state[data-tone="fail"], .hib-sub[data-tone="fail"] { color: var(--hsc-coral); }
-.hib-retry { color: var(--hsc-coral); border-color: color-mix(in srgb, var(--hsc-coral) 40%, var(--hsc-rule)); }

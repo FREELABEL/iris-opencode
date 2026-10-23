@@ -1366,12 +1366,6 @@ export interface InboxItem {
   label: string
   /** The first line of the message text, when there is one — what a list row leads with. */
   preview?: string
-  /** Handled. Read is "I opened it"; done is "nothing more is needed from me" (#190924). */
-  done?: boolean
-  doneAt?: string
-  /** A handoff/job's work item (bloq:item:N) and its status, so a row can say which card it is. */
-  item?: string
-  status?: string
 }
 
 export interface InboxState {
@@ -1394,7 +1388,7 @@ export interface InboxState {
   unparsed: number
 }
 
-export interface ManifestRow {
+interface ManifestRow {
   id?: string
   read?: boolean
   from_user?: string
@@ -1411,9 +1405,6 @@ export interface ManifestRow {
   size_bytes?: number
   burn?: boolean
   task_id?: string | null
-  /** Handled — set from the Desktop inbox (#190924). Separate from read: opening is not finishing. */
-  done?: boolean
-  done_at?: string | null
 }
 
 /** The first non-empty line of a text, trimmed and capped — a list row's subject. */
@@ -1471,10 +1462,6 @@ export function countInbox(raw: string): InboxState {
       receivedAt: row.received_at,
       label: describeInbox(row),
       preview: firstLine(row.message),
-      done: row.done === true,
-      doneAt: row.done_at ?? undefined,
-      item: row.item ?? undefined,
-      status: row.status ?? undefined,
     })
     if (row.read) continue
     unread++
@@ -1546,11 +1533,11 @@ export const INBOX_BODY_CAP = 256 * 1024
 
 export const inboxDir = () => path.join(homedir(), ".iris", "hive", "inbox")
 
-export interface ManifestLine {
+interface ManifestLine {
   raw: string
   row: ManifestRow | null
 }
-export function readManifestLines(dir: string): ManifestLine[] | null {
+function readManifestLines(dir: string): ManifestLine[] | null {
   const manifest = path.join(dir, ".manifest.jsonl")
   if (!existsSync(manifest)) return []
   try {
@@ -1635,8 +1622,6 @@ export function inboxMessageOf(
     originalName: row.original_name ?? undefined,
     sizeBytes: typeof row.size_bytes === "number" ? row.size_bytes : undefined,
     burn: row.burn === true,
-    done: row.done === true,
-    doneAt: row.done_at ?? undefined,
   }
 }
 
@@ -1653,7 +1638,7 @@ export function readInboxMessage(index: number, id?: string, dir = inboxDir()): 
 }
 
 /** Write the manifest the way the daemon does: temp file, then rename — never a half-written file. */
-export function writeManifestLines(dir: string, lines: string[]) {
+function writeManifestLines(dir: string, lines: string[]) {
   const manifest = path.join(dir, ".manifest.jsonl")
   const tmp = `${manifest}.tmp`
   writeFileSync(tmp, lines.join("\n") + (lines.length ? "\n" : ""))
