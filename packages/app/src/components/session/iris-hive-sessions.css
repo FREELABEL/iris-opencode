@@ -1,0 +1,102 @@
+/*
+ * Hive › Sessions (#189446). Tokens and roles from .hsc: sage = online / fresh, jade = working
+ * (the only thing that pulses), amber = needs you or not current, coral = could not read.
+ * A machine whose report is old is DASHED — its list is a memory, not a reading. Numbers are mono.
+ */
+.hss {
+  display: grid; grid-template-columns: minmax(0, 1fr); flex: 1 1 auto; min-height: 0; height: 100%;
+  color: var(--hsc-ink); background: var(--hsc-surface); font-size: 12.5px;
+}
+.hss[data-open] { grid-template-columns: minmax(0, 1fr) minmax(280px, 44%); }
+@container (max-width: 640px) { .hss[data-open] { grid-template-columns: minmax(0, 1fr); } .hss[data-open] .hss-main { display: none; } }
+.hss *, .hss *::before, .hss *::after { box-sizing: border-box; }
+.hss button { font: inherit; color: inherit; }
+.hss button:focus-visible, .hss textarea:focus-visible { outline: 2px solid var(--border-interactive-focus, var(--hsc-jade)); outline-offset: 1px; }
+
+.hss-main { min-width: 0; min-height: 0; overflow-y: auto; padding: 12px 14px 16px; }
+.hss-top { margin-bottom: 10px; }
+.hss-sum { margin: 0; font-size: 13px; color: var(--hsc-ink2); }
+.hss-sum b { color: var(--hsc-ink); }
+.hss-sep { margin: 0 6px; color: var(--hsc-faint); }
+.hss-note { margin: 4px 0 0; font-size: 12px; color: var(--hsc-amber); }
+.hss-empty { padding: 16px 2px; }
+
+.hss-nodes, .hss-sessions, .hss-transcript { list-style: none; margin: 0; padding: 0; }
+.hss-node { border: 1px solid var(--hsc-rule); border-radius: 10px; background: var(--hsc-card); margin-bottom: 8px; overflow: hidden; }
+.hss-node[data-report="stale"], .hss-node[data-report="unknown"] { border-style: dashed; border-color: var(--hsc-amber); background: transparent; }
+.hss-node[data-report="never"] { border-style: dashed; background: transparent; }
+.hss-nodehead {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 10px;
+  background: none; border: 0; cursor: pointer; text-align: left;
+}
+.hss-nodehead:hover { background: var(--hsc-elev); }
+.hss-nodename { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%; }
+.hss-report { font-size: 11.5px; color: var(--hsc-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hss-report[data-tone="stale"] { color: var(--hsc-amber); }
+.hss-count { min-width: 2ch; text-align: right; color: var(--hsc-ink2); }
+.hss-pill { font-size: 11px; padding: 1px 7px; border-radius: 99px; white-space: nowrap; }
+.hss-pill--needs { color: var(--hsc-amber); border: 1px solid var(--hsc-amber); }
+
+/* presence: filled sage = online and fresh; amber ring = report not current; grey ring = offline */
+.hss-dot { position: relative; width: 8px; height: 8px; border-radius: 50%; flex: none; border: 1.5px solid var(--hsc-faint); }
+.hss-dot--on { background: var(--hsc-sage); border-color: var(--hsc-sage); }
+.hss-dot--stale { background: none; border-color: var(--hsc-amber); }
+/* The one motion on this pane: a machine pulses only while a session on it is MEASURED working. */
+.hss-dot--work { background: var(--hsc-jade); border-color: var(--hsc-jade); }
+.hss-dot--work::after {
+  content: ""; position: absolute; inset: -4px; border-radius: 50%; border: 1.5px solid var(--hsc-jade);
+  opacity: 0; animation: hss-pulse 2.4s ease-out infinite;
+}
+@keyframes hss-pulse { 0% { opacity: .7; transform: scale(.6); } 100% { opacity: 0; transform: scale(1.7); } }
+@media (prefers-reduced-motion: reduce) { .hss-dot--work::after { animation: none; } }
+
+.hss-sessions { border-top: 1px solid var(--hsc-rule); padding: 4px; }
+.hss-none { padding: 6px 8px; }
+.hss-row {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 8px;
+  width: 100%; padding: 6px 8px; border: 0; border-radius: 7px; background: none; cursor: pointer; text-align: left;
+}
+.hss-row:hover { background: var(--hsc-elev); }
+.hss-row[aria-pressed="true"] { background: var(--hsc-elev); box-shadow: inset 2px 0 0 var(--hsc-jade); }
+.hss-sdot { width: 6px; height: 6px; border-radius: 50%; background: var(--hsc-faint); }
+.hss-sdot[data-status="active"] { background: var(--hsc-sage); }
+.hss-sdot[data-status="needs_you"] { background: var(--hsc-amber); }
+.hss-sdot[data-status="unknown"], .hss-sdot[data-status="stale"] { background: none; border: 1px solid var(--hsc-faint); }
+.hss-sdot--work { background: var(--hsc-jade) !important; border: 0 !important; }
+.hss-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hss-node[data-report="stale"] .hss-label, .hss-node[data-report="unknown"] .hss-label { color: var(--hsc-ink2); }
+.hss-prov { font-size: 11px; color: var(--hsc-faint); white-space: nowrap; }
+.hss-age { font-size: 11px; color: var(--hsc-faint); white-space: nowrap; }
+
+/* detail */
+.hss-detail { display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--hsc-rule); background: var(--hsc-card); }
+.hss-dhead { display: flex; align-items: flex-start; gap: 8px; padding: 12px 12px 8px; border-bottom: 1px solid var(--hsc-rule); }
+.hss-dtitle { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.hss-dtitle b { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hss-dmeta { font-size: 11.5px; color: var(--hsc-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hss-x { border: 0; background: none; cursor: pointer; padding: 2px; border-radius: 6px; }
+.hss-x:hover { background: var(--hsc-elev); }
+.hss-question { margin: 0; padding: 8px 12px; color: var(--hsc-amber); border-bottom: 1px solid var(--hsc-rule); display: flex; gap: 6px; }
+.hss-transcript { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.hss-msg { max-width: 92%; line-height: 1.45; }
+.hss-msg[data-role="user"] { align-self: flex-end; }
+.hss-msg[data-role="user"] .hss-text { background: var(--hsc-elev); }
+.hss-text { display: inline-block; padding: 6px 9px; border-radius: 9px; white-space: pre-wrap; word-break: break-word; }
+.hss-tool { font-size: 11px; color: var(--hsc-faint); padding-left: 2px; }
+.hss-tool::before { content: "⚙ "; }
+.hss-follow { padding: 4px 12px; font-size: 11px; }
+.hss-reply { padding: 10px 12px 12px; border-top: 1px solid var(--hsc-rule); }
+.hss-input {
+  width: 100%; resize: vertical; min-height: 44px; padding: 7px 9px; border-radius: 8px;
+  border: 1px solid var(--hsc-rule); background: var(--hsc-surface); color: var(--hsc-ink); font: inherit;
+}
+.hss-replybar { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 11px; }
+.hss-send {
+  padding: 5px 12px; border-radius: 7px; border: 0; cursor: pointer;
+  background: var(--hsc-jade); color: var(--hsc-surface); font-weight: 600;
+}
+.hss-send:disabled { opacity: .45; cursor: default; }
+.hss-hint { margin: 0; font-size: 12px; color: var(--hsc-ink2); line-height: 1.5; }
+.hss-link { border: 0; background: none; padding: 0; color: var(--hsc-jade); cursor: pointer; text-decoration: underline; }
+.hss-sent { margin: 6px 0 0; font-size: 11.5px; color: var(--hsc-sage); }
+.hss-older { border: 0; background: none; padding: 6px 8px; font-size: 11.5px; color: var(--hsc-ink2); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }

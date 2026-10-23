@@ -163,6 +163,51 @@ const HiveResponse = Schema.Struct({
   ),
 }).annotate({ identifier: "IrisHiveResponse" })
 
+// ── Hive › Sessions (#189446) ────────────────────────────────────────────────────────────────────
+const HiveSessionSchema = Schema.Struct({
+  sessionId: Schema.String,
+  provider: Schema.String,
+  label: Schema.String,
+  status: described(Schema.String, "needs_you | active | idle | stale | unknown. `unknown` when the machine's report is not fresh."),
+  activity: described(Schema.NullOr(Schema.String), "working | retrying | null — null is NOT MEASURED, never 'waiting'."),
+  model: Schema.NullOr(Schema.String),
+  branch: Schema.NullOr(Schema.String),
+  updatedAt: Schema.NullOr(Schema.String),
+  question: Schema.NullOr(Schema.String),
+}).annotate({ identifier: "IrisHiveSession" })
+
+const HiveSessionsResponse = Schema.Struct({
+  ...Measured,
+  nodes: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      name: Schema.String,
+      online: Schema.Boolean,
+      lastHeartbeat: Schema.NullOr(Schema.String),
+      report: described(Schema.String, "fresh | stale | unknown | never — how current this machine's session list is."),
+      reportedAt: Schema.NullOr(Schema.String),
+      incomplete: described(Schema.Array(Schema.String), "Providers cut at the cap or not reachable: the list is a floor."),
+      sessions: Schema.Array(HiveSessionSchema),
+    }).annotate({ identifier: "IrisHiveSessionNode" }),
+  ),
+}).annotate({ identifier: "IrisHiveSessionsResponse" })
+
+const HiveTranscriptResponse = Schema.Struct({
+  ...Measured,
+  ranOn: Schema.NullOr(Schema.String),
+  offset: described(Schema.NullOr(Schema.Finite), "Pass back as `since` to get only what was appended."),
+  incremental: described(Schema.Boolean, "true: append these rows. false: replace what you have."),
+  messages: Schema.Array(
+    Schema.Struct({
+      role: Schema.String,
+      type: Schema.String,
+      text: Schema.NullOr(Schema.String),
+      tool: Schema.NullOr(Schema.String),
+      at: Schema.NullOr(Schema.String),
+    }),
+  ),
+}).annotate({ identifier: "IrisHiveTranscript" })
+
 // ── Hive › Scripts (#188817) ─────────────────────────────────────────────────────────────────────
 const DoctorRowSchema = Schema.Struct({
   node: described(Schema.String, "A node NAME — names repeat across duplicate registrations of one computer."),
@@ -1424,6 +1469,9 @@ export const IrisPaths = {
   room: `${root}/rooms/:roomID`,
   roomMessages: `${root}/rooms/:roomID/messages`,
   hive: `${root}/hive`,
+  hiveSessions: `${root}/hive/sessions`,
+  hiveSessionTranscript: `${root}/hive/sessions/:sessionID/transcript`,
+  hiveSessionReply: `${root}/hive/sessions/:sessionID/reply`,
   hiveScripts: `${root}/hive/scripts`,
   hiveScript: `${root}/hive/scripts/:slug`,
   hiveScriptDoctor: `${root}/hive/scripts/:slug/doctor`,
@@ -3298,6 +3346,53 @@ export const IrisApi = HttpApi.make("iris").add(
         params: { taskID: Schema.String },
         success: described(HiveTaskResponse, "A Hive task's stage timestamps, output and exit"),
       }).annotateMerge(OpenApi.annotations({ identifier: "iris.hiveTask", summary: "Read a Hive task" })),
+      HttpApiEndpoint.get("hiveSessions", IrisPaths.hiveSessions, {
+        success: described(HiveSessionsResponse, "Every AI session on every machine you can reach"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.hiveSessions",
+          summary: "List AI sessions across your machines",
+          description:
+            "What each machine's daemon last reported, with the server's freshness applied: a machine whose report is old shows its sessions as `unknown`, never `active`.",
+        }),
+      ),
+      HttpApiEndpoint.get("hiveSessionTranscript", IrisPaths.hiveSessionTranscript, {
+        params: { sessionID: Schema.String },
+        query: Schema.Struct({
+          machine: Schema.optional(Schema.String),
+          provider: Schema.optional(Schema.String),
+          since: Schema.optional(Schema.NumberFromString),
+          limit: Schema.optional(Schema.NumberFromString),
+        }),
+        success: described(HiveTranscriptResponse, "A session's transcript, read off the machine that holds it"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.hiveSessionTranscript",
+          summary: "Read a session on another machine",
+          description:
+            "measured=false with a reason when the machine could not answer — an unreachable machine must never render as an empty session.",
+        }),
+      ),
+      HttpApiEndpoint.post("hiveSessionReply", IrisPaths.hiveSessionReply, {
+        params: { sessionID: Schema.String },
+        payload: Schema.Struct({
+          nodeId: Schema.String,
+          provider: Schema.String,
+          label: Schema.optional(Schema.String),
+          message: Schema.String,
+        }),
+        success: described(
+          Schema.Struct({ ...Measured, taskId: Schema.NullOr(Schema.String) }),
+          "The delivery task — the reply appears in the session's own window",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.hiveSessionReply",
+          summary: "Reply into a session on another machine",
+          description:
+            "The same `session_message` task as `iris hive send-input`. opencode only: a Claude Code reply from here would start a separate run rather than type into the open one.",
+        }),
+      ),
       HttpApiEndpoint.get("hive", IrisPaths.hive, {
         query: PageQuery,
         success: described(HiveResponse, "Registered Hive machines"),
