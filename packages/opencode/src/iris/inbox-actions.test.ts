@@ -102,12 +102,14 @@ describe("cardIdOf", () => {
 describe("sendInboxMessage", () => {
   const ok = (j: object): Exec => async (_f, args) => ({ code: 0, stdout: "◈ noise\n" + JSON.stringify(j) + "\n", stderr: "", args } as any)
 
-  test("argv only, with -- before the text — a message starting with '-' is text, not a flag", async () => {
+  test("argv only, text as the positional — a message starting with '-' stays text, not a flag", async () => {
     const { dir } = inbox([])
     const seen: string[][] = []
     const exec: Exec = async (_f, args) => (seen.push(args), { code: 0, stdout: JSON.stringify({ ok: true, task_id: "t1", node: "studio-mac", via: "own" }), stderr: "" })
     const r = await sendInboxMessage({ to: "studio-mac", text: "--burn everything" }, { dir, cli: "/bin/iris", exec, now: NOW, newId: () => "o1" })
-    expect(seen[0]).toEqual(["hive", "inbox", "send", "--target", "studio-mac", "--json", "--", "--burn everything"])
+    expect(seen[0]).toEqual(["hive", "inbox", "send", "--target", "studio-mac", "--json", "\u200b--burn everything"])
+    // Never `--`: the CLI does not read the message from after it (#190940).
+    expect(seen[0]).not.toContain("--")
     expect(r).toEqual({
       measured: true,
       ok: true,

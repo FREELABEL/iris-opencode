@@ -145,6 +145,16 @@ function lastLine(s: string): string {
   )
 }
 
+/**
+ * The text as the CLI's positional argument. NOT after `--`: the CLI's parser does not fill
+ * `[message..]` from what follows `--`, so every send failed with "No message given". Found by the
+ * first real round trip, which no mocked test could see (#190940). A text that starts with "-"
+ * would be read as a flag, so it gets a zero-width space in front: invisible, and it stays text.
+ */
+export function argText(text: string): string {
+  return text.startsWith("-") ? `\u200b${text}` : text
+}
+
 /** Parse `iris hive inbox send --json`. The CLI prints its JSON last; anything before it is noise. */
 export function parseSendJson(stdout: string): { ok: boolean; task_id?: string; node?: string; via?: string } | null {
   const lines = stdout.trim().split("\n")
@@ -171,8 +181,7 @@ export async function sendInboxMessage(
   const cli = deps.cli === undefined ? irisCliPath() : deps.cli
   if (!cli) return { measured: false, ok: false, reason: "the iris CLI is not installed on this computer, so it cannot send" }
 
-  // `--` ends the options: a message that starts with "-" is text, not a flag.
-  const r = await (deps.exec ?? realExec)(cli, ["hive", "inbox", "send", "--target", to, "--json", "--", text], { timeoutMs: 30_000 })
+  const r = await (deps.exec ?? realExec)(cli, ["hive", "inbox", "send", "--target", to, "--json", argText(text)], { timeoutMs: 30_000 })
   const j = parseSendJson(r.stdout)
   if (r.code !== 0 || !j?.ok) {
     return { measured: true, ok: false, reason: lastLine(r.stderr) || lastLine(r.stdout) || "the send failed" }
