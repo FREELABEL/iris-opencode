@@ -87,9 +87,24 @@ fn new_uuid_v4() -> String {
     )
 }
 
+/// Set by our own release checks (scripts/verify-shipped-app.sh) so a CI launch is not counted
+/// as an install (#190488). The checker boots the real app under a throwaway HOME, which mints
+/// a fresh install id every time: over 2026-10-08..22 that was 48 of 71 macOS "installs", each
+/// doing launch + sign-in shown in the same second and nothing else, which made macOS sign-in
+/// look like a 4% step when the real one was not measurable under the noise.
+pub const NO_TELEMETRY_ENV: &str = "IRIS_NO_TELEMETRY";
+
+/// Any value but empty or "0" turns the funnel events off.
+fn telemetry_disabled(value: Option<&str>) -> bool {
+    matches!(value.map(str::trim), Some(v) if !v.is_empty() && v != "0")
+}
+
 /// Fire-and-forget. Attaches the saved IRIS token when there is one, so the server binds the
 /// event to the user (that is how `onboarding.signed_in` joins an install to a person).
 pub fn track(app: &AppHandle, event: &'static str, label: Option<String>) {
+    if telemetry_disabled(std::env::var(NO_TELEMETRY_ENV).ok().as_deref()) {
+        return;
+    }
     let Some(visitor_id) = install_id() else { return };
     let version = app.package_info().version.to_string();
     let token = crate::iris_env_value("IRIS_API_KEY");
@@ -146,6 +161,16 @@ mod tests {
     #[test]
     fn two_ids_differ() {
         assert_ne!(new_uuid_v4(), new_uuid_v4());
+    }
+
+    #[test]
+    fn release_checks_can_turn_the_funnel_off() {
+        assert!(!telemetry_disabled(None));
+        assert!(!telemetry_disabled(Some("")));
+        assert!(!telemetry_disabled(Some("0")));
+        assert!(!telemetry_disabled(Some(" 0 ")));
+        assert!(telemetry_disabled(Some("1")));
+        assert!(telemetry_disabled(Some("true")));
     }
 
     #[test]

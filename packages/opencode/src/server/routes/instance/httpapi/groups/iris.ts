@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
+import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import { described } from "./metadata"
 
 /**
@@ -61,20 +61,66 @@ const Measured = {
   ),
 }
 
-const AtlasItem = Schema.Struct({
+export const AtlasItem = Schema.Struct({
   id: Schema.Finite,
   title: Schema.String,
   type: Schema.optional(Schema.String),
   status: Schema.optional(Schema.String),
   description: Schema.optional(Schema.String),
-  content: Schema.optional(described(Schema.String, "The item body, as markdown.")),
+  content: Schema.optional(described(Schema.String, "The item body, as markdown. Only on a search: boards are read without bodies (#190231 0d).")),
+  preview: Schema.optional(
+    described(Schema.String, "The start of the body (fl-api summary.preview, up to 400 chars of prose) — a list row's second line (#190231 0d)."),
+  ),
   createdAt: Schema.optional(described(Schema.String, "ISO timestamp the item was created.")),
   updatedAt: Schema.optional(described(Schema.String, "ISO timestamp the item was last edited.")),
+  dueDate: Schema.optional(described(Schema.String, "Due date as fl-api stores it (#189806).")),
+  priority: Schema.optional(Schema.String),
+  cardType: Schema.optional(Schema.String),
+  labels: Schema.optional(Schema.Array(Schema.String)),
+  tasks: Schema.optional(
+    described(
+      Schema.Struct({ open: Schema.Finite, done: Schema.Finite, total: Schema.Finite }),
+      "Checklist progress from fl-api's card summary (#189793). Absent = not measured.",
+    ),
+  ),
+  attachments: Schema.optional(described(Schema.Finite, "Attachment count. Absent = not measured.")),
+  cover: Schema.optional(described(Schema.String, "The card's first image attachment, for the board face (#189797). Never sent for a contains_phi board.")),
+  assignees: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        id: Schema.Finite,
+        type: Schema.Literals(["user", "agent"]),
+        userId: Schema.optional(Schema.Finite),
+        agentId: Schema.optional(Schema.Finite),
+        name: Schema.optional(Schema.String),
+      }),
+    ),
+  ),
 }).annotate({ identifier: "IrisAtlasItem" })
 
-const AtlasResponse = Schema.Struct({
+const LocalCopySettingsSchema = Schema.Struct({
+  enabled: described(Schema.Boolean, "Keep a copy of each opened board on this machine. Off deletes every copy."),
+  includePhi: described(Schema.Boolean, "Also keep boards fl-api marks contains_phi. Off by default: a copy on disk is unencrypted."),
+  maxBoards: described(Schema.Finite, "Most recently opened boards kept, per account."),
+  maxMB: described(Schema.Finite, "Total size kept, per account, in MB."),
+}).annotate({ identifier: "IrisAtlasLocalCopySettings" })
+
+export const AtlasResponse = Schema.Struct({
   ...Measured,
   ...Paged,
+  source: Schema.optional(
+    described(Schema.Literals(["live", "copy"]), "live = read from fl-api now; copy = this machine's saved copy of the board (#190231 phase 1)."),
+  ),
+  copiedAt: Schema.optional(described(Schema.String, "When the saved copy was taken (ISO). Only with source = copy.")),
+  offline: Schema.optional(
+    described(Schema.Boolean, "True when fl-api could not be reached and the saved copy is shown instead. `reason` says why."),
+  ),
+  sync: Schema.optional(
+    described(
+      Schema.Literals(["unchanged", "delta", "full"]),
+      "How a refresh reached fl-api (#190231 phase 3): unchanged = nothing moved, no board sent; delta = only changed cards fetched; full = the whole board.",
+    ),
+  ),
   lists: Schema.Array(
     Schema.Struct({
       id: Schema.Finite,
@@ -279,6 +325,74 @@ const HeartbeatActionResponse = Schema.Struct({
   reason: Schema.optional(Schema.String),
   status: Schema.optional(described(Schema.String, "The status fl-api saved, read back.")),
 }).annotate({ identifier: "IrisHeartbeatActionResponse" })
+// Pulse (#189286) — heyiris.io/p/pulse-panel-directions, pick 01 "the route". Every endpoint is a READ.
+const PulseStopRow = Schema.Struct({
+  id: Schema.String,
+  label: Schema.String,
+  from: Schema.optional(described(Schema.String, "The CLI command or endpoint the stop was read from.")),
+  shut: described(Schema.Boolean, "True = NOT MEASURED. The count is null then — never render it as 0."),
+  reason: Schema.NullOr(Schema.String),
+  provenance: Schema.Literals(["measured", "partial", "not-kept", "not-measured"]),
+  count: Schema.NullOr(Schema.Finite),
+  floor: described(Schema.Boolean, "A capped count: at least `count`."),
+  delta: Schema.NullOr(Schema.Finite),
+  text: Schema.String,
+  owed: Schema.Finite,
+  fix: Schema.optional(Schema.Struct({ label: Schema.String, command: Schema.optional(Schema.String) })),
+  items: Schema.Array(Schema.Struct({ when: Schema.optional(Schema.String), where: Schema.String, text: Schema.optional(Schema.String) })),
+}).annotate({ identifier: "IrisPulseStop" })
+const PulseTopicResponse = Schema.Struct({
+  ...Measured,
+  data: Schema.NullOr(
+    Schema.Struct({
+      keyword: Schema.String,
+      days: Schema.Finite,
+      repo: Schema.String,
+      ms: Schema.Finite,
+      summary: Schema.Struct({
+        hits: Schema.Finite,
+        floor: Schema.Boolean,
+        withHits: Schema.Finite,
+        reachable: Schema.Finite,
+        total: Schema.Finite,
+        shut: Schema.Finite,
+        prior: described(Schema.NullOr(Schema.Finite), "NULL when any read stop cannot reconstruct the window before."),
+        lastTouched: Schema.NullOr(Schema.Finite),
+      }),
+      stops: Schema.Array(PulseStopRow),
+    }),
+  ),
+}).annotate({ identifier: "IrisPulseTopicResponse" })
+const PulseContactRow = Schema.Struct({
+  id: Schema.Finite,
+  name: Schema.String,
+  company: Schema.NullOr(Schema.String),
+  status: Schema.NullOr(Schema.String),
+  email: Schema.NullOr(Schema.String),
+}).annotate({ identifier: "IrisPulseContact" })
+const PulseContactsResponse = Schema.Struct({ ...Measured, data: Schema.Array(PulseContactRow) }).annotate({
+  identifier: "IrisPulseContactsResponse",
+})
+const PulseContactResponse = Schema.Struct({
+  ...Measured,
+  data: Schema.NullOr(
+    Schema.Struct({
+      lead: PulseContactRow,
+      days: Schema.Finite,
+      ms: Schema.Finite,
+      score: Schema.Struct({
+        score: Schema.NullOr(Schema.Finite),
+        band: Schema.NullOr(Schema.String),
+        previous: Schema.NullOr(Schema.Finite),
+        history: Schema.Array(Schema.Struct({ at: Schema.String, score: Schema.Finite })),
+        coverage: Schema.NullOr(Schema.Finite),
+      }),
+      stops: Schema.Array(PulseStopRow),
+      owed: Schema.Array(Schema.Struct({ what: Schema.String, amount: Schema.optional(Schema.String), since: Schema.optional(Schema.String) })),
+      channels: Schema.Struct({ read: Schema.Finite, total: Schema.Finite }),
+    }),
+  ),
+}).annotate({ identifier: "IrisPulseContactResponse" })
 const HiveTaskResponse = Schema.Struct({
   ...Measured,
   task: Schema.NullOr(
@@ -301,14 +415,26 @@ const HiveTaskResponse = Schema.Struct({
       error: Schema.NullOr(Schema.String),
       nodeName: Schema.NullOr(Schema.String),
       durationMs: Schema.NullOr(Schema.Finite),
+      held: described(Schema.Boolean, "Constellation Gate held this run for its owner's approval. It has NOT been sent."),
+      gate: Schema.NullOr(
+        Schema.Struct({
+          explanation: Schema.String,
+          reasons: Schema.Array(Schema.String),
+          action: Schema.NullOr(Schema.String),
+          score: Schema.NullOr(Schema.Finite),
+          hardware: Schema.Array(Schema.String),
+        }),
+      ),
     }).annotate({ identifier: "IrisHiveTask" }),
   ),
 }).annotate({ identifier: "IrisHiveTaskResponse" })
 
-const BloqsResponse = Schema.Struct({
+export const BloqsResponse = Schema.Struct({
   ...Measured,
   ...Paged,
   bloqs: Schema.Array(Schema.Struct({ id: Schema.Finite, name: Schema.String }).annotate({ identifier: "IrisBloq" })),
+  offline: Schema.optional(described(Schema.Boolean, "fl-api could not be reached; this is the machine's saved board list (#190231 phase 1).")),
+  copiedAt: Schema.optional(described(Schema.String, "When that saved list was taken (ISO).")),
 }).annotate({ identifier: "IrisBloqsResponse" })
 
 const InboxResponse = Schema.Struct({
@@ -990,6 +1116,7 @@ const AllowanceResponse = Schema.Struct({
   spendUsd: Schema.NullOr(Schema.Finite),
   fraction: described(Schema.NullOr(Schema.Finite), "NULL means uncapped or unmeasured. Not 0."),
   resetsAt: Schema.NullOr(Schema.String),
+  tokensUsed: Schema.optional(described(Schema.NullOr(Schema.Finite), "Tokens used this window. NULL = not reported.")),
   thresholds: described(Schema.Array(Schema.Finite), "POLICY. Read it, never hold it."),
   surface: Schema.String,
   upgradeUrl: Schema.NullOr(Schema.String),
@@ -1019,7 +1146,15 @@ const PlanResponse = Schema.Struct({
   measured: described(Schema.Boolean, "FALSE means we could not ask. Never render that as the Free plan."),
   reason: Schema.optional(Schema.String),
   plan: described(Schema.NullOr(Schema.String), "free | pro | business; NULL for staff."),
-  paid: described(Schema.NullOr(Schema.Boolean), "Has this person paid. NULL = unknown; only false shows Upgrade."),
+  paid: described(Schema.NullOr(Schema.Boolean), "Has this person paid. NULL = unknown."),
+  label: described(
+    Schema.NullOr(Schema.String),
+    "What to call the plan on screen (Free, IRIS Solo, Staff). NULL = the server did not say.",
+  ),
+  trialEndsAt: described(Schema.NullOr(Schema.String), "When a trial ends, ISO-8601. NULL = not on a trial."),
+  fraction: described(Schema.NullOr(Schema.Finite), "Share of the allowance used; 1 = used up. NULL = uncapped or unknown."),
+  tokensUsed: Schema.optional(described(Schema.NullOr(Schema.Finite), "Tokens used this window. NULL = not reported.")),
+  resetsAt: Schema.optional(described(Schema.NullOr(Schema.String), "When the allowance window resets, ISO-8601.")),
   uncapped: Schema.Boolean,
   upgradeUrl: Schema.NullOr(Schema.String),
 })
@@ -1048,6 +1183,100 @@ const MeResponse = Schema.Struct({
   plan: PlanResponse,
   allowance: AllowanceResponse,
 })
+
+/**
+ * Settings › Security (#189589). Whether Constellation Gate screens this account's model traffic,
+ * WHY (the reason is the rollout policy's own), and what it has done. The policy is the server's;
+ * the panel renders it and never decides it, so it cannot drift from what the proxy does.
+ */
+const GateEventSchema = Schema.Struct({
+  id: Schema.Finite,
+  at: Schema.NullOr(Schema.String),
+  segment: Schema.String,
+  action: described(Schema.String, "clean | flagged | held | error"),
+  mode: Schema.String,
+  verdict: Schema.NullOr(Schema.String),
+  score: Schema.NullOr(Schema.Finite),
+  reasonCode: Schema.NullOr(Schema.String),
+  detected: Schema.Array(Schema.String),
+  sensitivity: Schema.NullOr(Schema.String),
+  latencyMs: Schema.NullOr(Schema.Finite),
+  cached: Schema.Boolean,
+  errorCode: Schema.NullOr(Schema.String),
+  reportedFalse: Schema.Boolean,
+}).annotate({ identifier: "IrisGateEvent" })
+
+const SecurityResponse = Schema.Struct({
+  measured: described(Schema.Boolean, "FALSE means we could not ask. Never render that as Gate off."),
+  reason: Schema.optional(Schema.String),
+  gate: Schema.Struct({
+    enabled: Schema.Boolean,
+    reason: described(Schema.String, "The rollout policy's reason: allowlisted, new_user, phi_no_baa, not_in_rollout, …"),
+    explanation: Schema.String,
+    mode: described(Schema.String, "shadow = scan and record only · enforce = hold flagged tool results"),
+    org: Schema.NullOr(Schema.String),
+    sensitivity: Schema.NullOr(Schema.String),
+    categories: Schema.Array(Schema.String),
+    segments: Schema.Array(Schema.String),
+    failOpen: Schema.Boolean,
+    availableChecks: Schema.Array(Schema.String),
+    sensitivities: Schema.Array(Schema.String),
+    stats: Schema.Struct({
+      windowDays: Schema.Finite,
+      scanned: Schema.Finite,
+      clean: Schema.Finite,
+      flagged: Schema.Finite,
+      held: Schema.Finite,
+      errors: Schema.Finite,
+      reportedFalse: Schema.Finite,
+      reportedFalsePct: Schema.NullOr(Schema.Finite),
+      p50LatencyMs: Schema.NullOr(Schema.Finite),
+      billableTokens: Schema.Finite,
+    }),
+    recent: Schema.Array(GateEventSchema),
+  }),
+  phiGuard: Schema.Struct({ active: Schema.Boolean, mode: Schema.String, explanation: Schema.String }),
+  platform: described(
+    Schema.NullOr(
+      Schema.Struct({
+        rollout: Schema.NullOr(
+          Schema.Struct({
+            enabled: Schema.Boolean,
+            mode: Schema.String,
+            percent: Schema.Finite,
+            newUserDays: Schema.Finite,
+            tiers: Schema.Array(Schema.String),
+            allowUsers: Schema.Finite,
+          }),
+        ),
+        keySource: Schema.String,
+        last24h: Schema.Struct({
+          scanned: Schema.Finite,
+          clean: Schema.Finite,
+          flagged: Schema.Finite,
+          held: Schema.Finite,
+          errors: Schema.Finite,
+          accounts: Schema.Finite,
+          cached: Schema.Finite,
+          p50Ms: Schema.NullOr(Schema.Finite),
+          p95Ms: Schema.NullOr(Schema.Finite),
+          billableTokens: Schema.Finite,
+          reportedFalsePct: Schema.NullOr(Schema.Finite),
+        }),
+        recent: Schema.Array(
+          Schema.Struct({ ...GateEventSchema.fields, userId: Schema.NullOr(Schema.Finite), smoke: Schema.Boolean }),
+        ),
+      }),
+    ),
+    "Platform admins only: the rollout across all of IRIS. Null for everyone else.",
+  ),
+}).annotate({ identifier: "IrisSecurityResponse" })
+
+const GateReportResponse = Schema.Struct({
+  measured: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  event: Schema.NullOr(GateEventSchema),
+}).annotate({ identifier: "IrisGateReportResponse" })
 
 /**
  * ARTIFACTS (epic #186508). What the agent made in this session, from the store in
@@ -1113,7 +1342,21 @@ export const IrisPaths = {
   inboxMessage: `${root}/inbox/:index`,
   inboxRead: `${root}/inbox/:index/read`,
   atlas: `${root}/atlas/:bloqID`,
+  atlasLive: `${root}/atlas/:bloqID/live`,
+  atlasItemCreate: `${root}/atlas/:bloqID/lists/:listID/items`,
+  atlasListCreate: `${root}/atlas/:bloqID/lists`,
+  atlasMembers: `${root}/atlas/:bloqID/members`,
+  atlasMemberInvite: `${root}/atlas/:bloqID/members/invite`,
+  atlasMember: `${root}/atlas/:bloqID/members/:memberID`,
+  itemAssignees: `${root}/item/:itemID/assignees`,
+  itemAssignee: `${root}/item/:itemID/assignees/:assigneeID`,
+  itemActivity: `${root}/item/:itemID/activity`,
+  itemComments: `${root}/item/:itemID/comments`,
+  notifySettings: `${root}/notifications/settings`,
+  atlasLocalCopy: `${root}/atlas-local-copy`,
+  meLive: `${root}/me/live`,
   agents: `${root}/agents/:bloqID`,
+  agentsMine: `${root}/agents-mine`,
   leads: `${root}/leads/:bloqID`,
   pages: `${root}/pages/:bloqID`,
   schemas: `${root}/schemas/:bloqID`,
@@ -1129,6 +1372,10 @@ export const IrisPaths = {
   heartbeats: `${root}/heartbeats`,
   heartbeatRun: `${root}/heartbeats/:jobID/run`,
   heartbeatPause: `${root}/heartbeats/:jobID/pause`,
+  pulseTopic: `${root}/pulse/topic`,
+  pulseTopicStream: `${root}/pulse/topic/stream`,
+  pulseContacts: `${root}/pulse/contacts`,
+  pulseContact: `${root}/pulse/contacts/:leadID`,
   runTakeOver: `${root}/runs/:runID/take-over`,
   runHandBack: `${root}/runs/:runID/hand-back`,
   playbookDoc: `${root}/playbooks/doc/:name`,
@@ -1136,6 +1383,7 @@ export const IrisPaths = {
   artifactDoc: `${root}/artifacts/:artifactID`,
   artifactPublish: `${root}/artifacts/:artifactID/publish`,
   playbookInstall: `${root}/playbooks/install`,
+  bugReport: `${root}/bug-report`,
   catalog: `${root}/catalog`,
   integrationConnect: `${root}/integrations/connect`,
   onboardingState: `${root}/onboarding/state`,
@@ -1152,6 +1400,7 @@ export const IrisPaths = {
   pageSave: `${root}/page/:pageID/save`,
   item: `${root}/item/:itemID`,
   itemSave: `${root}/item/:itemID/save`,
+  itemMove: `${root}/item/:itemID/move`,
   itemTaskAdd: `${root}/item/:itemID/tasks`,
   itemTaskSave: `${root}/item/:itemID/tasks/:taskID/save`,
   itemTaskDelete: `${root}/item/:itemID/tasks/:taskID/delete`,
@@ -1185,14 +1434,75 @@ export const IrisPaths = {
   hiveMarketScript: `${root}/hive/market/:slug`,
   hiveMarketInstall: `${root}/hive/market/:slug/install`,
   hiveTask: `${root}/hive/tasks/:taskID`,
+  hiveTaskDecide: `${root}/hive/tasks/:taskID/:decision`,
   allowance: `${root}/allowance`,
   plan: `${root}/plan`,
   me: `${root}/me`,
+  security: `${root}/security`,
+  securityGateReport: `${root}/security/gate/events/:id/report`,
   signOut: `${root}/sign-out`,
+  accounts: `${root}/accounts`,
+  accountSwitch: `${root}/accounts/switch`,
+  accountRemove: `${root}/accounts/remove`,
   plans: `${root}/plans`,
+  checkout: `${root}/checkout`,
   atlasNote: `${root}/atlas-note`,
   frameCheck: `${root}/frame-check`,
+  panel: `${root}/panel`,
+  panelState: `${root}/panel/state`,
+  panelCommand: `${root}/panel/command`,
 } as const
+
+/**
+ * THE SIDE PANEL (#190093) — see src/iris/panel.ts. The desktop reports what its panel shows; the
+ * agent (side_panel tool) and any local caller read it and steer it. Loose on purpose: an older
+ * desktop sends fewer fields, and the report is a description, not a contract the engine enforces.
+ */
+const PanelCatalog = Schema.Array(
+  Schema.Struct({
+    id: Schema.String,
+    label: Schema.String,
+    hint: Schema.optional(Schema.String),
+    subs: Schema.Array(Schema.Struct({ id: Schema.String, label: Schema.String, hint: Schema.optional(Schema.String) })),
+  }),
+)
+export const PanelStatePayload = Schema.Struct({
+  session: described(Schema.String, "The session on screen. One path segment: letters, digits, _ and -."),
+  open: Schema.Boolean,
+  tab: Schema.optional(Schema.String),
+  tabs: Schema.optional(Schema.Array(Schema.String)),
+  surface: Schema.optional(Schema.String),
+  sub: Schema.optional(Schema.String),
+  bloq: Schema.optional(Schema.Struct({ id: Schema.Finite, name: Schema.optional(Schema.String) })),
+  artifact: Schema.optional(Schema.String),
+  url: Schema.optional(Schema.String),
+  catalog: Schema.optional(PanelCatalog),
+  ack: Schema.optional(described(Schema.String, "The id of the iris.panel.command this report answers.")),
+  error: Schema.optional(Schema.String),
+}).annotate({ identifier: "IrisPanelState" })
+const PanelReport = Schema.Struct({
+  ...PanelStatePayload.fields,
+  received: described(Schema.Finite, "When the engine received this report (ms since epoch)."),
+}).annotate({ identifier: "IrisPanelReport" })
+const PanelReadResponse = Schema.Struct({
+  reported: described(Schema.Boolean, "false: no desktop has reported for this session since the engine started."),
+  state: Schema.optional(PanelReport),
+}).annotate({ identifier: "IrisPanelRead" })
+export const PanelCommandPayload = Schema.Struct({
+  session: Schema.String,
+  action: Schema.Literals(["open", "close", "show", "artifact", "tab", "browse"]),
+  surface: Schema.optional(Schema.String),
+  sub: Schema.optional(Schema.String),
+  bloq: Schema.optional(Schema.Finite),
+  id: Schema.optional(Schema.String),
+  tab: Schema.optional(Schema.String),
+  url: Schema.optional(Schema.String),
+}).annotate({ identifier: "IrisPanelCommand" })
+const PanelCommandResponse = Schema.Struct({
+  answered: described(Schema.Boolean, "false: no desktop answered within 6 s — the session is not on screen in IRIS Desktop."),
+  refused: Schema.optional(described(Schema.String, "Why the command was not sent.")),
+  state: Schema.optional(PanelReport),
+}).annotate({ identifier: "IrisPanelCommandResult" })
 
 export const IrisApi = HttpApi.make("iris").add(
   HttpApiGroup.make("iris")
@@ -1237,6 +1547,26 @@ export const IrisApi = HttpApi.make("iris").add(
             "Identity from fl-api, plan and allowance from fl-iris-api. The allowance is peeked, so this never consumes the weekly notice and is safe to call whenever Settings opens.",
         }),
       ),
+      HttpApiEndpoint.get("security", IrisPaths.security, {
+        success: described(SecurityResponse, "What protects this account's model traffic, and why"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.security",
+          summary: "Security settings",
+          description:
+            "Constellation Gate's state for the account chat uses — on or off and the rollout policy's reason, mode, checks, 30-day stats and recent scans — plus the health-data guard. Decided by fl-iris-api from a remote flag; read-only here.",
+        }),
+      ),
+      HttpApiEndpoint.post("securityGateReport", IrisPaths.securityGateReport, {
+        params: { id: Schema.String },
+        success: described(GateReportResponse, "The event, marked as reported"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.securityGateReport",
+          summary: "Report a Gate mistake",
+          description: "Marks one of your own scan events as wrong. It feeds the false-positive rate; it does not change the verdict.",
+        }),
+      ),
       HttpApiEndpoint.post("signOut", IrisPaths.signOut, {
         success: described(
           Schema.Struct({ ok: Schema.Boolean, removed: Schema.Array(Schema.String) }).annotate({
@@ -1252,6 +1582,63 @@ export const IrisApi = HttpApi.make("iris").add(
             "Removes the personal sign-in shared by the desktop and the CLI: IRIS_API_KEY and IRIS_USER_ID from ~/.iris/sdk/.env and the `iris` auth-store entry. Leaves ~/.iris/config.json (the Hive node key) alone. The engine still holds the old key until it restarts; the desktop restarts the app afterwards.",
         }),
       ),
+      HttpApiEndpoint.get("accounts", IrisPaths.accounts, {
+        success: described(
+          Schema.Struct({
+            readable: Schema.Boolean,
+            accounts: Schema.Array(
+              Schema.Struct({
+                ref: Schema.String,
+                id: Schema.NullOr(Schema.Finite),
+                email: Schema.NullOr(Schema.String),
+                name: Schema.NullOr(Schema.String),
+                active: Schema.Boolean,
+                separateData: Schema.Boolean,
+              }),
+            ),
+          }).annotate({ identifier: "IrisAccountsResult" }),
+          "Every account this machine is signed in as. Keys are never returned.",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.accounts",
+          summary: "Saved accounts",
+          description:
+            "The accounts in ~/.iris/accounts.json, with the one chat uses marked active. `ref` names an account to switch to or remove: its user id, or a key fingerprint for a sign-in saved before its identity was known.",
+        }),
+      ),
+      HttpApiEndpoint.post("accountSwitch", IrisPaths.accountSwitch, {
+        payload: Schema.Struct({ ref: Schema.String }),
+        success: described(
+          Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String) }).annotate({
+            identifier: "IrisAccountSwitchResult",
+          }),
+          "Whether the saved key was made the active one",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.accountSwitch",
+          summary: "Switch account",
+          description:
+            "Writes the saved account's key to ~/.iris/sdk/.env and to the CLI's auth store, so the app and the iris command both act as it. The engine keeps the old key until it restarts; the desktop restarts the app afterwards.",
+        }),
+      ),
+      HttpApiEndpoint.post("accountRemove", IrisPaths.accountRemove, {
+        payload: Schema.Struct({ ref: Schema.String }),
+        success: described(
+          Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String) }).annotate({
+            identifier: "IrisAccountRemoveResult",
+          }),
+          "Whether the saved sign-in was forgotten",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.accountRemove",
+          summary: "Remove a saved account",
+          description:
+            "Forgets a saved sign-in that is not the active one. Its chat history stays on disk and comes back if it signs in again. The active account is signed out with sign-out instead.",
+        }),
+      ),
       HttpApiEndpoint.get("plans", IrisPaths.plans, {
         success: described(PlansResponse, "The IRIS plans on sale"),
       }).annotateMerge(
@@ -1259,6 +1646,22 @@ export const IrisApi = HttpApi.make("iris").add(
           identifier: "iris.plans",
           summary: "Plans",
           description: "Self-serve IRIS plans with live prices, for the desktop Upgrade dialog.",
+        }),
+      ),
+      HttpApiEndpoint.post("checkout", IrisPaths.checkout, {
+        payload: Schema.Struct({ slug: Schema.String }),
+        success: described(
+          Schema.Struct({ ok: Schema.Boolean, url: Schema.optional(Schema.String), reason: Schema.optional(Schema.String) }).annotate({
+            identifier: "IrisCheckoutResult",
+          }),
+          "Stripe's checkout URL for the plan, or why there is none",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.checkout",
+          summary: "Start checkout",
+          description:
+            "Creates a Stripe Checkout session for one plan, for the signed-in account, and returns its URL. The desktop opens it directly — checkout never goes through a web app sign-in.",
         }),
       ),
       HttpApiEndpoint.get("bloqs", IrisPaths.bloqs, {
@@ -1314,6 +1717,10 @@ export const IrisApi = HttpApi.make("iris").add(
             Schema.optional(Schema.String),
             "Filter this board's lists and items by title, description or BODY. Applied to the whole board before paging, so the count describes the matches and not a page. NOT the platform's global search, which is account-wide and would put another board's items under this board's heading.",
           ),
+          fresh: described(
+            Schema.optional(Schema.String),
+            "Any value: skip the saved copy and read fl-api now (then update the copy). Without it, a saved copy is answered first (#190231 phase 1).",
+          ),
         }),
         params: { bloqID: Schema.NumberFromString },
         success: described(AtlasResponse, "Atlas lists and items for one bloq"),
@@ -1323,6 +1730,179 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Get Atlas for a bloq",
           description:
             "Lists and items for one bloq, fetched from fl-api with the signed-in user's token. Check `measured` before rendering: false means the fetch failed, not that the bloq is empty.",
+        }),
+      ),
+      HttpApiEndpoint.post("atlasItemCreate", IrisPaths.atlasItemCreate, {
+        params: { bloqID: Schema.NumberFromString, listID: Schema.NumberFromString },
+        payload: Schema.Struct({
+          title: Schema.String,
+          body: Schema.optional(Schema.String),
+          position: described(Schema.optional(Schema.Finite), "Ignored since #189791: fl-api appends to the end of the list itself"),
+        }),
+        success: described(
+          Schema.Struct({ ok: Schema.Boolean, id: Schema.optional(Schema.Finite), reason: Schema.optional(Schema.String) }).annotate({
+            identifier: "IrisAtlasCreateResult",
+          }),
+          "Whether the card was created, and its id",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.atlasItemCreate",
+          summary: "Add a card to a list (quick add)",
+          description: "#189768. fl-api checks the caller may write to that list; a refusal comes back as `reason`.",
+        }),
+      ),
+      HttpApiEndpoint.post("atlasListCreate", IrisPaths.atlasListCreate, {
+        params: { bloqID: Schema.NumberFromString },
+        payload: Schema.Struct({ name: Schema.String, position: Schema.optional(Schema.Finite) }),
+        success: described(
+          Schema.Struct({ ok: Schema.Boolean, id: Schema.optional(Schema.Finite), reason: Schema.optional(Schema.String) }).annotate({
+            identifier: "IrisAtlasListCreateResult",
+          }),
+          "Whether the list was created, and its id",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({ identifier: "iris.atlasListCreate", summary: "Add a list to a board", description: "#189768." }),
+      ),
+      HttpApiEndpoint.get("atlasMembers", IrisPaths.atlasMembers, {
+        params: { bloqID: Schema.NumberFromString },
+        success: described(
+          Schema.Struct({
+            ...Measured,
+            ownerId: Schema.NullOr(Schema.Finite),
+            youAreOwner: Schema.Boolean,
+            members: Schema.Array(
+              Schema.Struct({
+                userId: Schema.Finite,
+                name: Schema.String,
+                email: Schema.String,
+                permission: Schema.String,
+                scope: Schema.optional(described(Schema.String, "'assigned' = only the cards assigned to them")),
+              }),
+            ),
+          }).annotate({ identifier: "IrisAtlasMembers" }),
+          "Who is on the board (#189795)",
+        ),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.atlasMembers", summary: "List a board's members" })),
+      HttpApiEndpoint.post("atlasMemberInvite", IrisPaths.atlasMemberInvite, {
+        params: { bloqID: Schema.NumberFromString },
+        payload: Schema.Struct({ email: Schema.String, permission: Schema.Literals(["viewer", "editor"]) }),
+        success: described(Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String) }).annotate({ identifier: "IrisAtlasMemberResult" }), "Whether it landed"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.atlasMemberInvite", summary: "Invite someone to a board by email" })),
+      HttpApiEndpoint.post("atlasMemberSave", IrisPaths.atlasMember, {
+        params: { bloqID: Schema.NumberFromString, memberID: Schema.NumberFromString },
+        payload: Schema.Struct({ permission: Schema.Literals(["viewer", "editor"]) }),
+        success: described(Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String) }), "Whether it landed"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.atlasMemberSave", summary: "Change a member's permission" })),
+      HttpApiEndpoint.delete("atlasMemberRemove", IrisPaths.atlasMember, {
+        params: { bloqID: Schema.NumberFromString, memberID: Schema.NumberFromString },
+        success: described(Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String) }), "Whether it landed"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.atlasMemberRemove", summary: "Remove a member from a board" })),
+      HttpApiEndpoint.post("itemComment", IrisPaths.itemComments, {
+        params: { itemID: Schema.NumberFromString },
+        payload: Schema.Struct({ body: Schema.String, mentions: Schema.optional(Schema.Array(Schema.Finite)) }),
+        success: described(
+          Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String), mentioned: Schema.optional(Schema.Array(Schema.Finite)) }).annotate({ identifier: "IrisItemCommentResult" }),
+          "Whether it landed, and who it told",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.itemComment",
+          summary: "Comment on a card; @mentioned board members are told (#189799)",
+        }),
+      ),
+      HttpApiEndpoint.get("notifySettings", IrisPaths.notifySettings, {
+        success: described(Schema.Struct({ ...Measured, settings: Schema.Struct({ emailAssign: Schema.Boolean, emailMention: Schema.Boolean, emailDue: Schema.Boolean, push: Schema.Boolean }) }).annotate({ identifier: "IrisNotifySettings" }), "What you hear about from Atlas"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.notifySettings", summary: "Your Atlas notification settings (#189799)" })),
+      HttpApiEndpoint.post("notifySettingsSave", IrisPaths.notifySettings, {
+        payload: Schema.Struct({
+          emailAssign: Schema.optional(Schema.Boolean),
+          emailMention: Schema.optional(Schema.Boolean),
+          emailDue: Schema.optional(Schema.Boolean),
+          push: Schema.optional(Schema.Boolean),
+        }),
+        success: described(Schema.Struct({ ...Measured, settings: Schema.Struct({ emailAssign: Schema.Boolean, emailMention: Schema.Boolean, emailDue: Schema.Boolean, push: Schema.Boolean }) }), "Your settings after the change"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.notifySettingsSave", summary: "Change your Atlas notification settings" })),
+      HttpApiEndpoint.get("atlasLocalCopy", IrisPaths.atlasLocalCopy, {
+        success: described(LocalCopySettingsSchema, "Whether this machine keeps a copy of each Atlas board, and on what terms (#190231 phase 1)"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.atlasLocalCopy", summary: "Local copy of Atlas: settings" })),
+      HttpApiEndpoint.post("atlasLocalCopySave", IrisPaths.atlasLocalCopy, {
+        payload: Schema.Struct({
+          enabled: Schema.optional(Schema.Boolean),
+          includePhi: Schema.optional(Schema.Boolean),
+          maxBoards: Schema.optional(Schema.Finite),
+          maxMB: Schema.optional(Schema.Finite),
+        }),
+        success: described(LocalCopySettingsSchema, "The settings after the change. Turning it off deletes every copy; turning includePhi off deletes the copies of contains_phi boards."),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.atlasLocalCopySave", summary: "Local copy of Atlas: change settings" })),
+      HttpApiEndpoint.get("meLive", IrisPaths.meLive, {
+        success: Schema.String.pipe(HttpApiSchema.asText({ contentType: "text/event-stream" })),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.meLive",
+          summary: "Hear about your own Atlas cards (server-sent events)",
+          description:
+            "#189799. `ready` once connected, `notice` {kind, text, excerpt?, bloqId, itemId, title?, by?} when a card is assigned to you, mentions you or is due tomorrow, `status` {pusher}, and `ping` every 25 s. A contains_phi board's notice carries no title and no excerpt.",
+        }),
+      ),
+      HttpApiEndpoint.get("agentsMine", IrisPaths.agentsMine, {
+        success: described(
+          Schema.Struct({ ...Measured, agents: Schema.Array(Schema.Struct({ id: Schema.Finite, name: Schema.String })) }).annotate({ identifier: "IrisAgentsMine" }),
+          "Every agent you own, on any board",
+        ),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.agentsMine", summary: "Your agents across all boards (#190269)" })),
+      HttpApiEndpoint.get("itemActivity", IrisPaths.itemActivity, {
+        params: { itemID: Schema.NumberFromString },
+        success: described(
+          Schema.Struct({
+            ...Measured,
+            activity: Schema.Array(
+              Schema.Struct({
+                id: Schema.Finite,
+                type: Schema.String,
+                text: Schema.String,
+                icon: Schema.optional(Schema.String),
+                actor: Schema.optional(Schema.String),
+                actorId: Schema.optional(Schema.Finite),
+                at: Schema.optional(Schema.String),
+              }),
+            ),
+          }).annotate({ identifier: "IrisItemActivity" }),
+          "A card's trail, newest first (#189799)",
+        ),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.itemActivity", summary: "What happened to a card, and who did it" })),
+      HttpApiEndpoint.get("itemAssignees", IrisPaths.itemAssignees, {
+        params: { itemID: Schema.NumberFromString },
+        success: described(Schema.Struct({ ...Measured, assignees: Schema.Array(Schema.Struct({ id: Schema.Finite, type: Schema.Literals(["user", "agent"]), userId: Schema.optional(Schema.Finite), agentId: Schema.optional(Schema.Finite), name: Schema.optional(Schema.String) })) }).annotate({ identifier: "IrisItemAssignees" }), "A card's assignees (#189796)"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.itemAssignees", summary: "List a card's assignees" })),
+      HttpApiEndpoint.post("itemAssign", IrisPaths.itemAssignees, {
+        params: { itemID: Schema.NumberFromString },
+        payload: Schema.Struct({
+          userId: Schema.optional(Schema.Finite),
+          agentId: Schema.optional(Schema.Finite),
+          email: described(Schema.optional(Schema.String), "Assign by email — someone not on the board gets access to their assigned cards"),
+        }),
+        success: described(Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String), accessGranted: Schema.optional(Schema.Boolean), assignees: Schema.optional(Schema.Array(Schema.Struct({ id: Schema.Finite, type: Schema.Literals(["user", "agent"]), userId: Schema.optional(Schema.Finite), agentId: Schema.optional(Schema.Finite), name: Schema.optional(Schema.String) }))) }).annotate({ identifier: "IrisItemAssignResult" }), "The card's assignees after"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.itemAssign",
+          summary: "Assign a board member or agent to a card",
+          description: "Assigning someone not on the board gives them access to the cards assigned to them (#189801 ADR-02); only the board owner can grant that.",
+        }),
+      ),
+      HttpApiEndpoint.delete("itemUnassign", IrisPaths.itemAssignee, {
+        params: { itemID: Schema.NumberFromString, assigneeID: Schema.NumberFromString },
+        success: described(Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String), accessRemoved: Schema.optional(Schema.Boolean), assignees: Schema.optional(Schema.Array(Schema.Struct({ id: Schema.Finite, type: Schema.Literals(["user", "agent"]), userId: Schema.optional(Schema.Finite), agentId: Schema.optional(Schema.Finite), name: Schema.optional(Schema.String) }))) }), "The card's assignees after"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.itemUnassign", summary: "Unassign someone from a card" })),
+      HttpApiEndpoint.get("atlasLive", IrisPaths.atlasLive, {
+        params: { bloqID: Schema.NumberFromString },
+        success: Schema.String.pipe(HttpApiSchema.asText({ contentType: "text/event-stream" })),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.atlasLive",
+          summary: "Watch an Atlas board for changes (server-sent events)",
+          description:
+            "#189767. `ready` once connected, `change` {at} when the board's fingerprint (lists, and each card's list, position, status, title, edit time) differs from the last check, `status` {pusher} when the instant channel connects or is refused, and `ping` every 25 s. Carries no board data — on `change`, re-read /atlas/:bloqID.",
         }),
       ),
       HttpApiEndpoint.get("agents", IrisPaths.agents, {
@@ -1613,6 +2193,33 @@ export const IrisApi = HttpApi.make("iris").add(
             "Runs the real `iris playbook install <name> --json` (no shell; name must be a slug) — into the session's project when `project` is sent, otherwise the home folder. `force` replaces the local copy (Update). The failure message is the CLI's own words (#186274).",
         }),
       ),
+      HttpApiEndpoint.post("bugReport", IrisPaths.bugReport, {
+        payload: Schema.Struct({
+          tool: Schema.String,
+          command: Schema.String,
+          error: Schema.String,
+          output: Schema.optional(Schema.String),
+          note: Schema.optional(Schema.String),
+          preview: described(Schema.optional(Schema.Boolean), "Build the report and return it without sending"),
+        }),
+        success: described(
+          Schema.Struct({
+            ok: Schema.Boolean,
+            itemId: Schema.optional(Schema.Finite),
+            reason: Schema.optional(Schema.String),
+            title: Schema.optional(Schema.String),
+            description: Schema.optional(Schema.String),
+          }).annotate({ identifier: "IrisBugReportResult" }),
+          "Whether the report was filed, and its ticket number",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.bugReport",
+          summary: "Report a failed command",
+          description:
+            "The Report button on a failed command (#189435). Files it on the IRIS bug board like `iris bug report` does (fl-api, then the IRIS API host on a 5xx). Secrets are scrubbed and only the last 40 lines of output are sent. Only ever called from a user's press.",
+        }),
+      ),
       HttpApiEndpoint.post("pageSave", IrisPaths.pageSave, {
         params: { pageID: Schema.NumberFromString },
         payload: Schema.Struct({
@@ -1711,10 +2318,32 @@ export const IrisApi = HttpApi.make("iris").add(
             "A PATCH in spirit: only the fields present are sent to fl-api's PUT /user/bloqs/list/item/{id}, so saving a title cannot blank the body. Status is checked against the set fl-api accepts before the request is made, and a 422 comes back as the field errors it named, not as a status code.",
         }),
       ),
+      HttpApiEndpoint.post("itemMove", IrisPaths.itemMove, {
+        params: { itemID: Schema.NumberFromString },
+        payload: Schema.Struct({
+          listId: described(Schema.Finite, "The list (column) to put the card in, on the same board"),
+          position: described(Schema.Finite, "0-based index in that list's full order, with the card itself taken out"),
+        }),
+        success: described(
+          Schema.Struct({
+            ok: Schema.Boolean,
+            reason: Schema.optional(Schema.String),
+          }).annotate({ identifier: "IrisItemMoveResult" }),
+          "Whether the move landed",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.itemMove",
+          summary: "Move a card to a list and position",
+          description:
+            "The Board view's drag. Sends fl-api's PATCH /user/{uid}/bloqs/list/item/{id}/position, which renumbers the target column and the one the card left — so the order the board shows is the order saved.",
+        }),
+      ),
       HttpApiEndpoint.post("itemTaskAdd", IrisPaths.itemTaskAdd, {
         params: { itemID: Schema.NumberFromString },
         payload: Schema.Struct({
           title: Schema.String,
+          parentId: described(Schema.optional(Schema.Finite), "Make it a subtask of this task (#189794)."),
           agentId: described(
             Schema.optional(Schema.Finite),
             "Assign the task to this agent. This is how an agent is put on a card.",
@@ -2043,6 +2672,38 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Can a page be framed",
           description:
             "A refused cross-origin frame fires load like a working one, and the deciding headers are invisible to the page — so the side panel's Browser tab asks the sidecar (#187864).",
+        }),
+      ),
+      HttpApiEndpoint.get("panel", IrisPaths.panel, {
+        query: Schema.Struct({ session: Schema.optional(Schema.String) }),
+        success: described(PanelReadResponse, "What the desktop last said its side panel shows"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.panel",
+          summary: "Read the side panel",
+          description:
+            "#190093. The desktop's own report of its side panel: open or closed, active tab, IRIS product and view, board, selected artifact, Browser address, and the catalogue of products and views. Without `session`, the most recent report from any session. In memory only; `received` says how old it is.",
+        }),
+      ),
+      HttpApiEndpoint.post("panelState", IrisPaths.panelState, {
+        payload: PanelStatePayload,
+        success: described(Schema.Struct({ ok: Schema.Boolean }), "Stored"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.panelState",
+          summary: "Report the side panel (desktop → engine)",
+          description: "Sent by the desktop whenever its panel changes, and in answer to an iris.panel.command (with `ack`).",
+        }),
+      ),
+      HttpApiEndpoint.post("panelCommand", IrisPaths.panelCommand, {
+        payload: PanelCommandPayload,
+        success: described(PanelCommandResponse, "What the desktop reported after applying it"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.panelCommand",
+          summary: "Steer the side panel",
+          description:
+            "#190093. Emits iris.panel.command and waits up to 6 s for the desktop showing `session` to apply it and report back. The same path the side_panel tool takes; for agents outside the engine (MCP, scripts).",
         }),
       ),
       HttpApiEndpoint.get("atlasNote", IrisPaths.atlasNote, {
@@ -2404,6 +3065,43 @@ export const IrisApi = HttpApi.make("iris").add(
             "#189110. fl-api scheduled jobs whose task is `heartbeat`, with up to 50 executions of each (a week for every cadence slower than 4-hourly). A `scheduled` status alone is not evidence a heartbeat is beating — the runs and next_run_at are.",
         }),
       ),
+      HttpApiEndpoint.get("pulseTopic", IrisPaths.pulseTopic, {
+        query: Schema.Struct({ q: Schema.String, days: Schema.optional(Schema.String), project: Schema.optional(Schema.String) }),
+        success: described(PulseTopicResponse, "The topic route: one stop per source, in the order Pulse visits them"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.pulseTopic",
+          summary: "Pulse a topic (iris pulse check, read-only)",
+          description:
+            "#189286. The same PulseScript `iris pulse check` walks, run on this machine. Unlike the CLI it never files the result: opening a route only reads.",
+        }),
+      ),
+      HttpApiEndpoint.get("pulseTopicStream", IrisPaths.pulseTopicStream, {
+        query: Schema.Struct({ q: Schema.String, days: Schema.optional(Schema.String), project: Schema.optional(Schema.String) }),
+        success: Schema.String.pipe(HttpApiSchema.asText({ contentType: "text/event-stream" })),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.pulseTopicStream",
+          summary: "Pulse a topic, streamed stop by stop (read-only)",
+          description:
+            "#189319. Server-sent events: `start` {source,label} as Pulse reaches a stop (the route is sequential), `stop` {stop} as that stop's result lands, then `done` {data} with the same body /pulse/topic returns, or `error` {reason}.",
+        }),
+      ),
+      HttpApiEndpoint.get("pulseContacts", IrisPaths.pulseContacts, {
+        query: Schema.Struct({ q: Schema.optional(Schema.String) }),
+        success: described(PulseContactsResponse, "Contacts (leads) matching the search"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.pulseContacts", summary: "Find a contact to pulse" })),
+      HttpApiEndpoint.get("pulseContact", IrisPaths.pulseContact, {
+        params: { leadID: Schema.NumberFromString },
+        query: Schema.Struct({ days: Schema.optional(Schema.String) }),
+        success: described(PulseContactResponse, "The contact route: record, deal, tasks, checks, email log, then the channels"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.pulseContact",
+          summary: "Pulse a contact (iris leads pulse, read-only)",
+          description: "#189286. GETs only — the score is read without `?record=1` (#189218) and is never saved.",
+        }),
+      ),
       HttpApiEndpoint.post("heartbeatRun", IrisPaths.heartbeatRun, {
         params: { jobID: Schema.NumberFromString },
         success: described(HeartbeatActionResponse, "Dispatched — one beat now, outside the schedule"),
@@ -2578,6 +3276,7 @@ export const IrisApi = HttpApi.make("iris").add(
         payload: Schema.Struct({
           node: described(Schema.String, "Node id or name, resolved as the CLI does."),
           timeout: Schema.optional(Schema.Finite),
+          args: Schema.optional(described(Schema.Record(Schema.String, Schema.String), "Values for the script's declared settings (# iris: arg=). The hub checks them; the node passes them as IRIS_ARG_<NAME>.")),
         }),
         success: described(ScriptRunResponse, "The dispatched task — poll /iris/hive/tasks/:taskID"),
       }).annotateMerge(
@@ -2588,6 +3287,13 @@ export const IrisApi = HttpApi.make("iris").add(
             "Pins the content hash like the CLI. Takes no arguments: the daemon does not pass a header's `arg=` values to a user script today, and sending them under an invented key would change nothing.",
         }),
       ),
+      HttpApiEndpoint.post("hiveTaskDecide", IrisPaths.hiveTaskDecide, {
+        params: { taskID: Schema.String, decision: Schema.Literals(["approve", "reject", "cancel"]) },
+        success: described(
+          Schema.Struct({ ...Measured, taskId: Schema.NullOr(Schema.String) }).annotate({ identifier: "IrisHiveTaskDecision" }),
+          "Approve or reject a run Constellation Gate held (approve answers with the NEW task to follow), or cancel/stop any run of yours.",
+        ),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.hiveTaskDecide", summary: "Approve or reject a held Hive run" })),
       HttpApiEndpoint.get("hiveTask", IrisPaths.hiveTask, {
         params: { taskID: Schema.String },
         success: described(HiveTaskResponse, "A Hive task's stage timestamps, output and exit"),

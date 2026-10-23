@@ -15,6 +15,8 @@ export type IrisNavRequest = {
   artifactId?: string
   /** Switch the panel to this board first — an Atlas Epic card opening the board it saved to. */
   bloqId?: number
+  /** Atlas: open this card once the board is on screen — a notification about it, clicked (#189799). */
+  itemId?: number
   nonce: number
 }
 
@@ -97,3 +99,19 @@ export const irisInboxVersion = inboxVersion
 export function bumpIrisInbox() {
   setInboxVersion((v) => v + 1)
 }
+
+/**
+ * WHAT THE PANEL IS SHOWING (#190093) — the other direction. The requests above steer the panel;
+ * these say where it ended up, so the agent can be told (use-panel-control.ts reports them to the
+ * engine). Written by the component that knows: SessionIrisTab for product, view and board,
+ * IrisArtifacts for the selected artifact. Module-level for the same reason as the requests — the
+ * reporter lives in the page, the knowledge lives in lazily mounted panes.
+ */
+export type IrisPanelView = { surface?: string; sub?: string; bloq?: { id: number; name?: string } }
+const [panelView, setPanelView] = createSignal<IrisPanelView>({})
+export const irisPanelView = panelView
+export const setIrisPanelView = setPanelView
+
+const [openArtifact, setOpenArtifact] = createSignal<string | undefined>()
+export const irisOpenArtifact = openArtifact
+export const setIrisOpenArtifact = setOpenArtifact

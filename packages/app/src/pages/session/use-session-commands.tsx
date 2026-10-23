@@ -21,6 +21,7 @@ import { useSessionLayout } from "@/pages/session/session-layout"
 import { useSessionArchive } from "@/pages/session/session-archive"
 import { createSessionOwnership } from "./session-ownership"
 import { useLocal } from "@/context/local"
+import { requestIrisSurface } from "@/components/session/session-iris-tab"
 
 export type SessionCommandContext = {
   navigateMessageByOffset: (offset: number) => void
@@ -557,6 +558,22 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
         }
         terminal.requestFocus(terminal.active())
         view().terminal.open()
+      },
+    }),
+    // Pulse lived behind the side panel's + menu, where nobody finds it (#189286, client-ready
+    // gate 2026-10-14). The same three steps as the composer's Integrations button: ask for the
+    // surface first, because opening the panel is what mounts the tab that reads the request.
+    viewCommand({
+      id: "pulse.open",
+      title: language.t("command.pulse.open"),
+      description: language.t("command.pulse.open.description"),
+      slash: "pulse",
+      onSelect: () => {
+        requestIrisSurface("pulse")
+        view().reviewPanel.open("other")
+        if (layout.fileTree.opened() && layout.fileTree.tab() !== "all") layout.fileTree.setTab("all")
+        void tabs().open("iris")
+        tabs().setActive("iris")
       },
     }),
     viewCommand({

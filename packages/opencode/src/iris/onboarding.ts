@@ -352,7 +352,7 @@ export function workspace(name: string, root = path.join(homedir(), "IRIS")): Pl
  * The steps after sign-in, onto the same funnel the desktop shell writes (D7 #188247). Sent from
  * here, not from the webview: the webview's origin is not in iris-api's CORS list. Uses the same
  * install id the shell created (~/.iris/install-id), so one install is one row of the funnel.
- * Only names on fl-iris-api's GenesisEvent::DESKTOP_ONBOARDING are accepted there.
+ * Only names on fl-iris-api's GenesisEvent::DESKTOP_ONBOARDING / DESKTOP_UPGRADE are accepted there.
  */
 const APP_STEPS = new Set([
   "onboarding.mail_read",
@@ -360,10 +360,19 @@ const APP_STEPS = new Set([
   "onboarding.question_answered",
   "onboarding.workspace_created",
   "onboarding.working",
+  // The ask to pay (#190373): fl-iris-api GenesisEvent::DESKTOP_UPGRADE. Never a "paid" event —
+  // the server reads that from billing.
+  "upgrade.prompted",
+  "upgrade.opened",
+  "upgrade.checkout_started",
 ])
 
 export async function track(event: string, label?: string): Promise<void> {
   if (!APP_STEPS.has(event)) return
+  // Our own release checks launch the real app; they must not count as installs (#190488).
+  // Same switch, and the same reading of it, as the desktop shell's onboarding.rs.
+  const off = process.env.IRIS_NO_TELEMETRY?.trim()
+  if (off && off !== "0") return
   let visitor: string | undefined
   try {
     visitor = readFileSync(path.join(homedir(), ".iris", "install-id"), "utf8").trim()

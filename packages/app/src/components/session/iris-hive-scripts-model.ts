@@ -59,6 +59,8 @@ export type HiveNodeRow = {
   recentRestarts?: number
   /** When the hardware snapshot (disk, memory) was taken — not the heartbeat. */
   hardwareDetectedAt?: string
+  /** Physical cameras by product name, from the node's device report. */
+  cameras?: readonly string[]
 }
 
 export type TaskView = {
@@ -78,6 +80,9 @@ export type TaskView = {
   error: string | null
   nodeName: string | null
   durationMs: number | null
+  /** Constellation Gate held this run for approval (#189589). Optional: older engines omit it. */
+  held?: boolean
+  gate?: { explanation: string; reasons: string[]; action: string | null; score: number | null; hardware: string[] } | null
 }
 
 // ── test fixtures ────────────────────────────────────────────────────────────────────────────────
@@ -131,7 +136,7 @@ export function isTestScript(slug: string): boolean {
 
 // ── the `# iris:` header ─────────────────────────────────────────────────────────────────────────
 
-export type HeaderArg = { name: string; default?: string; required: boolean; line: number }
+export type HeaderArg = { name: string; default?: string; required: boolean; line: number; choices?: string[] }
 export type ScriptHeader = {
   args: HeaderArg[]
   timeout: number | null
@@ -169,7 +174,8 @@ export function parseHeader(source: string): ScriptHeader {
           return at < 0 ? [w, "true"] : [w.slice(0, at), w.slice(at + 1)]
         }),
       )
-      out.args.push({ name: value, default: kv["default"], required: kv["required"] === "true", line: i + 1 })
+      const choices = kv["choices"] ? kv["choices"].split("|").filter(Boolean) : undefined
+      out.args.push({ name: value, default: kv["default"], required: kv["required"] === "true", line: i + 1, ...(choices && choices.length > 1 ? { choices } : {}) })
     } else if (key === "timeout") {
       const n = Number(value)
       if (Number.isFinite(n) && n > 0) out.timeout = n
@@ -301,6 +307,16 @@ export const SKILLS: Record<string, { icon: string; word: string }> = {
   bluetooth: { icon: "bluetooth", word: "Bluetooth" },
   disk_encrypted: { icon: "lock", word: "Encrypted disk" },
   instagram: { icon: "at", word: "Instagram" },
+}
+
+/**
+ * The cameras worth naming on a computer's card: plugged-in ones. A laptop's own camera is
+ * always there, so it is named only when it is the only one.
+ */
+export function plugged(c: HiveNodeRow): string[] {
+  const all = [...(c.cameras ?? [])]
+  const external = all.filter((n) => !/facetime|built-?in|macbook|imac/i.test(n))
+  return external.length ? external : []
 }
 
 export function skillsOf(c: HiveNodeRow, limit = 3): { icon: string; word: string }[] {
@@ -462,6 +478,8 @@ export function taskSucceeded(task: TaskView | null | undefined): boolean {
 
 export function taskStatusWord(task: TaskView | null | undefined): string {
   if (!task) return "Ready"
+  // #189589: held by Constellation Gate — not sent, and not "Queued", which would read as on its way.
+  if (task.held) return "Waiting for your approval"
   if (task.terminal) {
     if (taskSucceeded(task)) return task.exitCode != null ? `Done · exit ${task.exitCode}` : "Done"
     if (task.status === "timeout") return "Timed out"
@@ -559,4 +577,113 @@ export function ago(iso: string | null | undefined, now: number): string {
   if (s < 86400) return `${Math.floor(s / 3600)} h ago`
   const d = Math.floor(s / 86400)
   return d === 1 ? "yesterday" : d < 14 ? `${d} days ago` : `${Math.floor(d / 7)} weeks ago`
+}
+
+/**
+ * Syntax colour for the script view — small, dependency-free, line by line (#189589 follow-up:
+ * "flat and ugly and not really scannable"). Not a parser: it colours what makes a script
+ * scannable — comments, strings, keywords, numbers, calls — and the `# iris:` header that decides
+ * where the script may run. A string or comment that spans lines is coloured per line, which is
+ * the right trade for a reading view.
+ */
+export type Tok = { t: string; k?: "com" | "str" | "kw" | "num" | "fn" | "dir" | "var" }
+
+const KEYWORDS: Record<string, string[]> = {
+  python: ["def", "class", "return", "if", "elif", "else", "for", "while", "in", "not", "and", "or", "import", "from", "as", "try", "except", "finally", "raise", "with", "async", "await", "lambda", "pass", "break", "continue", "yield", "global", "is", "None", "True", "False", "self"],
+  bash: ["if", "then", "else", "elif", "fi", "for", "do", "done", "while", "case", "esac", "function", "return", "in", "local", "export", "set", "exit", "echo", "source"],
+  js: ["const", "let", "var", "function", "return", "if", "else", "for", "while", "of", "in", "async", "await", "import", "from", "export", "new", "try", "catch", "finally", "throw", "class", "true", "false", "null", "undefined", "typeof"],
+}
+
+export function langOf(runtime: string | null | undefined): "python" | "bash" | "js" {
+  if (runtime === "python") return "python"
+  if (runtime === "node" || runtime === "playwright") return "js"
+  return "bash"
+}
+
+export function highlightLine(line: string, lang: "python" | "bash" | "js"): Tok[] {
+  if (/^\s*(#|\/\/)\s*iris:/.test(line)) return [{ t: line, k: "dir" }]
+  const kw = new Set(KEYWORDS[lang])
+  const comment = lang === "js" ? "//" : "#"
+  const out: Tok[] = []
+  let i = 0
+  let plain = ""
+  const flush = () => {
+    if (plain) out.push({ t: plain })
+    plain = ""
+  }
+  while (i < line.length) {
+    const rest = line.slice(i)
+    if (rest.startsWith(comment) && !(lang === "bash" && i > 0 && /[\w$]/.test(line[i - 1]))) {
+      flush()
+      out.push({ t: rest, k: "com" })
+      break
+    }
+    const q = line[i]
+    if (q === '"' || q === "'" || (q === "`" && lang === "js")) {
+      const triple = lang === "python" && rest.startsWith(q.repeat(3))
+      const close = triple ? q.repeat(3) : q
+      let j = i + close.length
+      while (j < line.length && !line.startsWith(close, j)) j += line[j] === "\\" ? 2 : 1
+      j = Math.min(line.length, j + close.length)
+      flush()
+      out.push({ t: line.slice(i, j), k: "str" })
+      i = j
+      continue
+    }
+    if (lang === "bash" && q === "$") {
+      const m = /^\$(\{[^}]*\}|[A-Za-z_][\w]*|\d|[@#?*!$])/.exec(rest)
+      if (m) {
+        flush()
+        out.push({ t: m[0], k: "var" })
+        i += m[0].length
+        continue
+      }
+    }
+    const word = /^[A-Za-z_][\w]*/.exec(rest)
+    if (word && (i === 0 || !/[\w.]/.test(line[i - 1]) || lang !== "bash")) {
+      const w = word[0]
+      const prev = line[i - 1]
+      if (kw.has(w) && !(prev && /[\w]/.test(prev))) {
+        flush()
+        out.push({ t: w, k: "kw" })
+      } else if (line[i + w.length] === "(") {
+        flush()
+        out.push({ t: w, k: "fn" })
+      } else plain += w
+      i += w.length
+      continue
+    }
+    const num = /^\d+(\.\d+)?/.exec(rest)
+    if (num && !(i > 0 && /[\w]/.test(line[i - 1]))) {
+      flush()
+      out.push({ t: num[0], k: "num" })
+      i += num[0].length
+      continue
+    }
+    plain += q
+    i++
+  }
+  flush()
+  return out
+}
+
+/**
+ * The values a run sends for a script's declared settings (#189589): what the person typed or
+ * picked, else the declared default; empty optional settings are left out so the script's own
+ * fallback applies. Unknown names are passed through so the hub can refuse them with a sentence.
+ */
+export function runArgs(declared: ScriptHeader["args"], values: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const a of declared) {
+    const v = (values[a.name] ?? "").trim()
+    if (v !== "") out[a.name] = v
+    else if (a.default !== undefined && a.default !== "") out[a.name] = a.default
+  }
+  for (const [k, v] of Object.entries(values)) if (!(k in out) && !declared.some((a) => a.name === k) && v.trim() !== "") out[k] = v.trim()
+  return out
+}
+
+/** Required settings with no value — Run says which, instead of sending a run the hub will refuse. */
+export function missingRequired(declared: ScriptHeader["args"], values: Record<string, string>): string[] {
+  return declared.filter((a) => a.required && !(values[a.name] ?? "").trim() && !a.default).map((a) => a.name)
 }

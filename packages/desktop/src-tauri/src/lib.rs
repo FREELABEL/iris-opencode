@@ -1,5 +1,9 @@
+mod accounts;
 mod cli;
+mod deep_link;
+mod engine_supervisor;
 mod google_signin;
+mod history_home;
 mod login;
 mod onboarding;
 mod window_customizer;
@@ -35,6 +39,16 @@ const MAX_LOG_ENTRIES: usize = 200;
 
 #[tauri::command]
 fn kill_sidecar(app: AppHandle) {
+    // Every caller is deliberate — quitting, restarting, or the updater stopping the engine before
+    // it swaps the bundle — so the supervisor must not read the exit as a crash (#190516). The
+    // pause expires: an update that fails to install should not leave the app with no engine.
+    engine_supervisor::pause(Duration::from_secs(120));
+    stop_engine_child(&app);
+}
+
+/// Kill the engine this app started, if any, without touching supervision. The supervisor uses
+/// this before a respawn; `kill_sidecar` uses it after pausing.
+fn stop_engine_child(app: &AppHandle) {
     let Some(server_state) = app.try_state::<ServerState>() else {
         println!("Server not running");
         return;
@@ -53,6 +67,14 @@ fn kill_sidecar(app: AppHandle) {
     let _ = server_state.kill();
 
     println!("Killed server");
+}
+
+fn set_engine_child(app: &AppHandle, child: CommandChild) {
+    if let Some(state) = app.try_state::<ServerState>() {
+        if let Ok(mut slot) = state.0.lock() {
+            *slot = Some(child);
+        }
+    }
 }
 
 #[tauri::command]
@@ -629,32 +651,66 @@ fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
     let engine_cwd = dirs_next_home().unwrap_or_else(|| std::path::PathBuf::from("/"));
 
     #[cfg(target_os = "windows")]
-    let (mut rx, child) = app
-        .shell()
-        .sidecar("iris-cli")
-        .unwrap()
-        .env("OPENCODE_EXPERIMENTAL_ICON_DISCOVERY", "true")
-        .env("OPENCODE_CLIENT", "desktop")
-        .env("XDG_STATE_HOME", &state_dir)
-        .env("IRIS_API_KEY", &iris_api_key)
-        .current_dir(&engine_cwd)
-        .args(["serve", &format!("--port={port}")])
-        .spawn()
-        .expect("Failed to spawn opencode");
-
+    let cmd = app.shell().sidecar("iris-cli").unwrap();
     #[cfg(not(target_os = "windows"))]
-    let (mut rx, child) = app
-        .shell()
-        .sidecar("iris-cli")
-        .expect("Failed to resolve iris-cli sidecar")
+    let cmd = app.shell().sidecar("iris-cli").expect("Failed to resolve iris-cli sidecar");
+
+    let mut cmd = cmd
         .env("OPENCODE_EXPERIMENTAL_ICON_DISCOVERY", "true")
         .env("OPENCODE_CLIENT", "desktop")
         .env("XDG_STATE_HOME", &state_dir)
         .env("IRIS_API_KEY", &iris_api_key)
         .current_dir(&engine_cwd)
-        .args(["serve", &format!("--port={port}")])
-        .spawn()
-        .expect("Failed to spawn opencode");
+        .args(["serve", &format!("--port={port}")]);
+
+    // #189321: an account other than the first keeps its chat history, provider sign-ins and
+    // MCP auth in its own data dir — sessions carry no account id, so a shared dir shows one
+    // account's history under another. The parent's value travels too, so the engine can still
+    // find the CLI's (default) auth store when it switches or signs out.
+    //
+    // #189477: the first account gets its own dir too. Its data used to live in the default XDG
+    // dir — the same directory and database stock OpenCode uses, which OpenCode 2.x rewrites in
+    // place on first run. history_home copies it (never moves it) to ~/.iris/accounts/default
+    // once, here, before the engine exists and so before the 7-second listen clock starts. Any
+    // doubt — disk space, a failed or disturbed copy — and the engine starts in the old dir as
+    // it always has.
+    let home = dirs_next_home();
+    let account_home = home.as_deref().and_then(|h| accounts::data_home_for_key(h, &iris_api_key));
+    let data_home = account_home.or_else(|| {
+        let h = home.as_deref()?;
+        if std::env::var_os(history_home::OPT_OUT_ENV).is_some() {
+            println!("{} is set: engine data stays in the shared dir", history_home::OPT_OUT_ENV);
+            return None;
+        }
+        let parent = std::env::var_os("XDG_DATA_HOME");
+        match history_home::choose(h, parent.as_deref(), &history_home::free_bytes) {
+            history_home::Choice::Isolated { data_home, copied_now } => {
+                if copied_now {
+                    println!("Copied engine history into {} (the original is untouched)", data_home.display());
+                }
+                // A CLI sign-in or sign-out writes the shared auth store; the panels read this one.
+                let legacy = history_home::legacy_data_dir(h, parent.as_deref());
+                if let Err(e) = history_home::mirror_iris_auth(&legacy.join("auth.json"), &data_home.join("opencode").join("auth.json")) {
+                    eprintln!("Could not mirror the iris sign-in: {e}");
+                }
+                Some(data_home)
+            }
+            history_home::Choice::Legacy(why) => {
+                eprintln!("Engine data stays in the shared dir: {why}");
+                None
+            }
+        }
+    });
+    if let Some(data_home) = data_home {
+        let _ = std::fs::create_dir_all(&data_home);
+        println!("Engine data for this account: {}", data_home.display());
+        let parent = std::env::var("XDG_DATA_HOME").unwrap_or_default();
+        cmd = cmd.env("XDG_DATA_HOME", &data_home).env("IRIS_PARENT_XDG_DATA_HOME", parent);
+    }
+
+    let (mut rx, child) = cmd.spawn().expect("Failed to spawn opencode");
+    let generation = engine_supervisor::note_spawn(port);
+    let app_for_events = app.clone();
 
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.recv().await {
@@ -662,6 +718,7 @@ fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
                 CommandEvent::Stdout(line_bytes) => {
                     let line = String::from_utf8_lossy(&line_bytes);
                     print!("{line}");
+                    engine_supervisor::log_line(&app_for_events, &format!("[STDOUT] {line}"));
 
                     // Store log in shared state
                     if let Ok(mut logs) = log_state_clone.0.lock() {
@@ -675,6 +732,7 @@ fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
                 CommandEvent::Stderr(line_bytes) => {
                     let line = String::from_utf8_lossy(&line_bytes);
                     eprint!("{line}");
+                    engine_supervisor::log_line(&app_for_events, &format!("[STDERR] {line}"));
 
                     // Store log in shared state
                     if let Ok(mut logs) = log_state_clone.0.lock() {
@@ -684,6 +742,14 @@ fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
                             logs.pop_front();
                         }
                     }
+                }
+                // This arm used to be `_ => {}` — an engine that died after launch was never
+                // noticed, and the window retried a dead process forever (#190516).
+                CommandEvent::Terminated(payload) => {
+                    engine_supervisor::on_exit(&app_for_events, generation, payload.code, payload.signal);
+                }
+                CommandEvent::Error(err) => {
+                    engine_supervisor::log_line(&app_for_events, &format!("[ERROR] {err}"));
                 }
                 _ => {}
             }
@@ -808,6 +874,14 @@ pub fn run() {
     let updater_enabled = option_env!("TAURI_SIGNING_PRIVATE_KEY").is_some();
 
     let mut builder = tauri::Builder::default()
+        // FIRST, per the plugin: a second launch (opening an iris:// link while IRIS is running,
+        // on Windows and Linux) must focus this instance, not start another. With the
+        // `deep-link` feature it also forwards that launch's URL to on_open_url below (#190233).
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            deep_link::focus_main(app);
+        }))
+        .plugin(tauri_plugin_deep_link::init())
+        .manage(deep_link::PendingDeepLinks::default())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_window_state::Builder::new().build())
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -832,10 +906,32 @@ pub fn run() {
             login::open_login_window,
             onboarding::track_onboarding,
             google_signin::google_sign_in,
-            signin_in_app
+            signin_in_app,
+            deep_link::take_deep_links
         ])
         .setup(move |app| {
             let app = app.handle().clone();
+
+            // iris:// links (#190233). Registered before anything can return early, so a link
+            // that launched the app is never lost to a startup branch.
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                // An installer registers the scheme (macOS Info.plist, the NSIS registry entry,
+                // the .deb desktop file). An AppImage or a dev run has no installer, so register
+                // at runtime too; an already-registered scheme makes this a no-op.
+                #[cfg(any(windows, target_os = "linux"))]
+                if let Err(e) = app.deep_link().register_all() {
+                    eprintln!("deep link: could not register iris:// ({e})");
+                }
+                let handle = app.clone();
+                app.deep_link().on_open_url(move |event| {
+                    deep_link::queue(&handle, event.urls().into_iter().map(|u| u.to_string()));
+                });
+                // The link that launched the app, where the platform reports it this way.
+                if let Ok(Some(urls)) = app.deep_link().get_current() {
+                    deep_link::queue(&app, urls.into_iter().map(|u| u.to_string()));
+                }
+            }
 
             // FIRST, before anything tries to start: a translocated app cannot spawn its
             // sidecar, so every later step would fail in a way that looks like a bug in IRIS.
@@ -875,48 +971,55 @@ pub fn run() {
 
                   let port = get_sidecar_port();
 
+                  // Managed before the first spawn so the supervisor can swap the child later.
+                  app.manage(ServerState(Arc::new(Mutex::new(None))));
+
                   let should_spawn_sidecar = !is_server_running(port).await;
 
-                  let child = if should_spawn_sidecar {
-                      let child = spawn_sidecar(&app, port);
-
+                  if should_spawn_sidecar {
+                      // Ready means /global/health answers, not that the port accepts a
+                      // connection — a hung engine does that too. 30s, then one fresh spawn,
+                      // then the dialog. The old seven-second hard exit tripped on slow
+                      // machines and first launches that copy history (#190516).
                       let timestamp = Instant::now();
-                      loop {
-                          if timestamp.elapsed() > Duration::from_secs(7) {
-                              let res = app.dialog()
-                                .message("Failed to spawn IRIS Server. Copy logs using the button below and send them to the team for assistance.")
-                                .title("Startup Failed")
-                                .buttons(MessageDialogButtons::OkCancelCustom("Copy Logs And Exit".to_string(), "Exit".to_string()))
-                                .blocking_show_with_result();
+                      set_engine_child(&app, spawn_sidecar(&app, port));
+                      let mut ready = engine_supervisor::wait_until_healthy(port, engine_supervisor::READY_BUDGET).await;
+                      if !ready {
+                          eprintln!("Engine did not answer health in {:?} — starting it once more", engine_supervisor::READY_BUDGET);
+                          stop_engine_child(&app);
+                          set_engine_child(&app, spawn_sidecar(&app, port));
+                          ready = engine_supervisor::wait_until_healthy(port, engine_supervisor::READY_BUDGET).await;
+                      }
 
-                              if matches!(&res, MessageDialogResult::Custom(name) if name == "Copy Logs And Exit") {
-                                  match copy_logs_to_clipboard(app.clone()).await {
-                                      Ok(()) => println!("Logs copied to clipboard successfully"),
-                                      Err(e) => println!("Failed to copy logs to clipboard: {}", e),
-                                  }
+                      if !ready {
+                          crate::onboarding::track(&app, "engine.start_failed", None);
+                          let res = app.dialog()
+                            .message("Failed to spawn IRIS Server. Copy logs using the button below and send them to the team for assistance.")
+                            .title("Startup Failed")
+                            .buttons(MessageDialogButtons::OkCancelCustom("Copy Logs And Exit".to_string(), "Exit".to_string()))
+                            .blocking_show_with_result();
+
+                          if matches!(&res, MessageDialogResult::Custom(name) if name == "Copy Logs And Exit") {
+                              match copy_logs_to_clipboard(app.clone()).await {
+                                  Ok(()) => println!("Logs copied to clipboard successfully"),
+                                  Err(e) => println!("Failed to copy logs to clipboard: {}", e),
                               }
-
-                              app.exit(1);
-
-                              return;
                           }
 
-                          tokio::time::sleep(Duration::from_millis(10)).await;
+                          app.exit(1);
 
-                          if is_server_running(port).await {
-                              // give the server a little bit more time to warm up
-                              tokio::time::sleep(Duration::from_millis(10)).await;
-
-                              break;
-                          }
+                          return;
                       }
 
                       println!("Server ready after {:?}", timestamp.elapsed());
-
-                      Some(child)
                   } else {
-                      None
-                  };
+                      engine_supervisor::note_attached(port);
+                  }
+
+                  // From here on an exit or a hung engine is respawned, not left for the
+                  // person to discover.
+                  engine_supervisor::arm();
+                  engine_supervisor::start_watchdog(app.clone());
 
                   let primary_monitor = app.primary_monitor().ok().flatten();
                   let size = primary_monitor
@@ -942,12 +1045,14 @@ pub fn run() {
                   {
                       window_builder = window_builder
                           .title_bar_style(tauri::TitleBarStyle::Overlay)
-                          .hidden_title(true);
+                          .hidden_title(true)
+                          // Centre the lights in the app's 36px title bar, which now sits
+                          // flush at the top of the window (#190245). tao keeps each button
+                          // centred `y` points below the top edge.
+                          .traffic_light_position(tauri::LogicalPosition::new(14.0, 18.0));
                   }
 
                   window_builder.build().expect("Failed to create window");
-
-                  app.manage(ServerState(Arc::new(Mutex::new(child))));
               });
             }
 
@@ -974,6 +1079,7 @@ pub fn run() {
         .run(|app, event| {
             if let RunEvent::Exit = event {
                 println!("Received Exit");
+                engine_supervisor::app_exiting();
 
                 kill_sidecar(app.clone());
             }

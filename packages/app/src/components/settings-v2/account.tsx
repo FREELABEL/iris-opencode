@@ -1,9 +1,10 @@
-import { Component, Show, createResource, createSignal } from "solid-js"
+import { Component, For, Show, createResource, createSignal } from "solid-js"
 import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { usePlatform } from "@/context/platform"
 import { useServer } from "@/context/server"
 import { SettingsListV2 } from "./parts/list"
 import { SettingsRowV2 } from "./parts/row"
+import { PlanCards } from "../dialog-upgrade"
 import "./settings-v2.css"
 
 /**
@@ -24,7 +25,17 @@ export interface AccountState {
   id: number | null
   name: string | null
   email: string | null
-  plan: { measured: boolean; plan: string | null; paid: boolean | null; uncapped: boolean; upgradeUrl: string | null }
+  plan: {
+    measured: boolean
+    plan: string | null
+    paid: boolean | null
+    /** The server's own name for the plan ("Free", "IRIS Solo"). Absent from older servers. */
+    label?: string | null
+    /** When a trial ends, ISO-8601 (#189988). Absent from older servers. */
+    trialEndsAt?: string | null
+    uncapped: boolean
+    upgradeUrl: string | null
+  }
   allowance: {
     measured: boolean
     window: string
@@ -33,6 +44,7 @@ export interface AccountState {
     spendUsd: number | null
     fraction: number | null
     resetsAt: string | null
+    tokensUsed?: number | null
     thresholds: number[]
     upgradeUrl: string | null
   }
@@ -101,6 +113,9 @@ function resetsText(iso: string | null, now: Date): string | null {
  */
 export function planLabel(p: AccountState["plan"] | undefined): string {
   if (!p?.measured) return "Unknown"
+  // The server reads billing and licences to name the plan; `plan` is the entitlement tier, which
+  // calls every paid package "free". Prefer the name when the server sends one.
+  if (typeof p.label === "string" && p.label.trim()) return p.label.trim()
   if (p.plan === null) return "Staff"
   if (typeof p.plan !== "string" || !p.plan.trim()) return "Unknown"
   return p.plan
@@ -110,6 +125,15 @@ export function planLabel(p: AccountState["plan"] | undefined): string {
     .filter(Boolean)
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ")
+}
+
+/**
+ * The line under Plan. Paid plans are not unlimited — every tier has a cap (config/allowance.php in
+ * fl-iris-api) — so the pitch says "much higher", never "unlimited".
+ */
+export function planPitch(p: AccountState["plan"] | undefined): string {
+  if (p?.measured && p.paid === true) return "Need more? Move up a plan for a higher allowance."
+  return "Paid plans get a much higher allowance, every product and every model."
 }
 
 /**
@@ -160,6 +184,34 @@ export function sourceNote(source: string): string | null {
   return `Credential from ${source}.`
 }
 
+/** One row of /iris/accounts (#189321). The engine never sends the key. */
+export interface SavedAccount {
+  ref: string
+  id: number | null
+  email: string | null
+  name: string | null
+  active: boolean
+  separateData: boolean
+}
+
+/** A saved sign-in by the best name we have. One saved before anyone asked who it is still gets words. */
+export function savedAccountLabel(a: Pick<SavedAccount, "id" | "email" | "name">): string {
+  return a.name?.trim() || a.email?.trim() || (a.id !== null ? `Account #${a.id}` : "An account signed in earlier")
+}
+
+/** The accounts you could switch to: every saved one except the one in use. */
+export function otherAccounts(list: SavedAccount[] | undefined): SavedAccount[] {
+  return (list ?? []).filter((a) => !a.active)
+}
+
+/** What "Sign out" will do, which depends on whether there is another account to fall back to. */
+export function signOutDescription(others: SavedAccount[]): string {
+  if (others.length === 0) {
+    return "Signs this computer out of IRIS, in the app and in the iris command. Hive keeps running on this machine."
+  }
+  return `Signs out of this account and switches to ${savedAccountLabel(others[0])}. Hive keeps running on this machine.`
+}
+
 export const SettingsAccountV2: Component = () => {
   const platform = usePlatform()
   const server = useServer()
@@ -192,10 +244,70 @@ export const SettingsAccountV2: Component = () => {
     }
   }
 
+  const [saved, { refetch: refetchSaved }] = createResource(
+    () => server.current?.http?.url?.replace(/\/$/, ""),
+    async (base): Promise<SavedAccount[] | undefined> => {
+      try {
+        const res = await (platform.fetch ?? globalThis.fetch)(`${base}/iris/accounts`)
+        return res.ok ? (((await res.json()) as { accounts: SavedAccount[] }).accounts ?? []) : undefined
+      } catch {
+        return undefined
+      }
+    },
+  )
+  const others = () => otherAccounts(saved())
+
+  // One action at a time, named by the account it is for, so two clicks cannot race a restart.
+  const [accountAction, setAccountAction] = createSignal<{ ref: string; kind: "switch" | "remove" } | null>(null)
+  const [accountError, setAccountError] = createSignal<string | null>(null)
+  // Outside the desktop nothing can restart the engine, and it reads its key once, at start. So a
+  // switch there is saved, not finished — and the page says so rather than pretending.
+  const [switchedTo, setSwitchedTo] = createSignal<string | null>(null)
+  const accountPost = async (path: "switch" | "remove", ref: string) => {
+    const base = server.current?.http?.url?.replace(/\/$/, "")
+    const res = await (platform.fetch ?? globalThis.fetch)(`${base}/iris/accounts/${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ref }),
+    })
+    const body = res.ok
+      ? ((await res.json()) as { ok: boolean; reason?: string })
+      : { ok: false, reason: `${res.status}` }
+    if (!body.ok) throw new Error(body.reason ?? "refused")
+  }
+  const switchTo = async (a: SavedAccount) => {
+    setAccountError(null)
+    setAccountAction({ ref: a.ref, kind: "switch" })
+    try {
+      await accountPost("switch", a.ref)
+      // The engine reads its key once, at start; the restart is what makes chat act as this account.
+      if (canSignOut()) return await platform.restart()
+      setSwitchedTo(savedAccountLabel(a))
+      setAccountAction(null)
+      await refetchSaved()
+    } catch (e) {
+      setAccountError(`Couldn't switch to ${savedAccountLabel(a)}: ${e instanceof Error ? e.message : String(e)}`)
+      setAccountAction(null)
+    }
+  }
+  const forget = async (a: SavedAccount) => {
+    setAccountError(null)
+    setAccountAction({ ref: a.ref, kind: "remove" })
+    try {
+      await accountPost("remove", a.ref)
+      await refetchSaved()
+    } catch (e) {
+      setAccountError(`Couldn't remove ${savedAccountLabel(a)}: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setAccountAction(null)
+    }
+  }
+
   const meter = () => meterView(me()?.allowance)
-  const upgradeUrl = () => {
-    const p = me()?.plan
-    return p?.measured && p.paid === false ? (p.upgradeUrl ?? me()?.allowance.upgradeUrl ?? null) : null
+  let plansSection: HTMLDivElement | undefined
+  const fetchJson = async <T,>(path: string, init?: RequestInit) => {
+    const base = server.current?.http?.url?.replace(/\/$/, "")
+    return (await (await (platform.fetch ?? globalThis.fetch)(`${base}${path}`, init)).json()) as T
   }
 
   return (
@@ -257,16 +369,16 @@ export const SettingsAccountV2: Component = () => {
                   #{me()?.id}
                 </span>
               </SettingsRowV2>
-              <SettingsRowV2 title="Plan" description={upgradeUrl() ? "Upgrade for a higher weekly allowance." : ""}>
+              <SettingsRowV2 title="Plan" description={planPitch(me()?.plan)}>
                 <div class="flex items-center gap-2">
                   <span data-action="account-plan">{planLabel(me()?.plan)}</span>
-                  <Show when={upgradeUrl()}>
-                    {(url) => (
-                      <ButtonV2 size="normal" variant="neutral" onClick={() => platform.openExternal(url())}>
-                        Upgrade
-                      </ButtonV2>
-                    )}
-                  </Show>
+                  <ButtonV2
+                    size="normal"
+                    variant="neutral"
+                    onClick={() => plansSection?.scrollIntoView({ behavior: "smooth", block: "start" })}
+                  >
+                    Upgrade
+                  </ButtonV2>
                 </div>
               </SettingsRowV2>
               <Show when={canSignOut()}>
@@ -275,7 +387,7 @@ export const SettingsAccountV2: Component = () => {
                   description={
                     signOutStep() === "failed"
                       ? "Sign-out failed. Nothing was restarted. Try again."
-                      : "Signs this computer out of IRIS, in the app and in the iris command. Hive keeps running on this machine."
+                      : signOutDescription(others())
                   }
                 >
                   <span data-action="account-sign-out">
@@ -312,6 +424,82 @@ export const SettingsAccountV2: Component = () => {
             </Show>
           </SettingsListV2>
         </div>
+
+        {/* The saved accounts live on this computer. A slow or failed IRIS call must not hide them:
+            "Can't reach IRIS" is exactly when switching to another account is the useful move. */}
+        <Show when={me()?.signedIn || (saved()?.length ?? 0) > 0}>
+          <div class="settings-v2-section" data-action="account-saved">
+            <h3 class="settings-v2-section-title">Other accounts on this computer</h3>
+            <SettingsListV2>
+              <For each={others()}>
+                {(a) => (
+                  <SettingsRowV2
+                    title={savedAccountLabel(a)}
+                    description={
+                      a.email && a.email !== savedAccountLabel(a)
+                        ? a.email
+                        : canSignOut()
+                          ? "Switching restarts IRIS. Each account keeps its own chats."
+                          : "Switching changes the saved sign-in; restart the IRIS server to finish."
+                    }
+                  >
+                    <div class="flex items-center gap-2" data-action="account-saved-row">
+                      <ButtonV2
+                        size="normal"
+                        variant="neutral"
+                        disabled={accountAction() !== null}
+                        onClick={() => void forget(a)}
+                      >
+                        {accountAction()?.ref === a.ref && accountAction()?.kind === "remove" ? "Removing…" : "Remove"}
+                      </ButtonV2>
+                      <ButtonV2
+                        size="normal"
+                        variant="neutral"
+                        disabled={accountAction() !== null}
+                        onClick={() => void switchTo(a)}
+                      >
+                        {accountAction()?.ref === a.ref && accountAction()?.kind === "switch"
+                          ? "Switching…"
+                          : canSignOut()
+                            ? "Switch and restart"
+                            : "Switch"}
+                      </ButtonV2>
+                    </div>
+                  </SettingsRowV2>
+                )}
+              </For>
+              <Show when={switchedTo()}>
+                {(name) => (
+                  <SettingsRowV2
+                    title={`Switched to ${name()}`}
+                    description="Saved for the app and the iris command. Restart the IRIS server to finish: chat keeps using the account it started with until then."
+                  >
+                    <span data-action="account-switched" />
+                  </SettingsRowV2>
+                )}
+              </Show>
+              <SettingsRowV2
+                title="Add another account"
+                description={
+                  accountError() ??
+                  (!platform.openSignIn
+                    ? "Run iris auth login in a terminal as the other account, then reopen Settings. The account you are in now is kept."
+                    : others().length === 0
+                      ? "Sign in as a second account without signing out of this one. Each account keeps its own chats."
+                      : "Sign in as another account. The ones above stay signed in.")
+                }
+              >
+                <Show when={platform.openSignIn}>
+                  <span data-action="account-add">
+                    <ButtonV2 size="normal" variant="neutral" onClick={() => platform.openSignIn?.()}>
+                      Add account
+                    </ButtonV2>
+                  </span>
+                </Show>
+              </SettingsRowV2>
+            </SettingsListV2>
+          </div>
+        </Show>
 
         <Show when={me()?.signedIn}>
           <div class="settings-v2-section">
@@ -374,6 +562,11 @@ export const SettingsAccountV2: Component = () => {
                 </div>
               </div>
             </SettingsListV2>
+          </div>
+
+          <div class="settings-v2-section" ref={plansSection} data-action="account-plans">
+            <h3 class="settings-v2-section-title">Plans</h3>
+            <PlanCards fetchJson={fetchJson} me={() => me()} layout="rows" source="settings" />
           </div>
         </Show>
       </div>

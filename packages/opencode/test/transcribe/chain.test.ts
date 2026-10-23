@@ -84,4 +84,26 @@ describe("transcribeWithFallback", () => {
     }).catch((e) => e)
     expect(err.attempts.map((a: { status: number }) => a.status)).toEqual([0, 0, 0])
   })
+
+  test("a platform that hangs is given up on at the deadline, not retried on every engine (#189522)", async () => {
+    // Accepts the request and never answers.
+    const hung = Bun.serve({ port: 0, fetch: () => new Promise<Response>(() => {}) })
+    try {
+      const started = Date.now()
+      const err = await transcribeWithFallback(audio, {
+        filename: "d.wav",
+        remote: { apiUrl: `http://127.0.0.1:${hung.port}`, bloqId: "42" },
+        providers: ["xai", "openrouter", "openai"],
+        local: false,
+        backoffMs: [1, 1],
+        deadlineMs: 400,
+      }).catch((e) => e)
+      expect(err).toBeInstanceOf(ChainError)
+      expect(Date.now() - started).toBeLessThan(1500)
+      expect(err.attempts).toHaveLength(1)
+    } finally {
+      hung.stop(true)
+    }
+  })
 })
+

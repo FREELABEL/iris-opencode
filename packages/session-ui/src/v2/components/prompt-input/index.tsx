@@ -1,5 +1,5 @@
 import { createEffect, createMemo, createSignal, For, Show, type Accessor, type JSX } from "solid-js"
-import { isLiveDictation, showLiveText } from "./live-text"
+import { isLiveDictation, showLiveTextFollowing } from "./live-text"
 import { FileIcon } from "@opencode-ai/ui/file-icon"
 import { Icon } from "@opencode-ai/ui/icon"
 import { IconButton } from "@opencode-ai/ui/icon-button"
@@ -13,6 +13,7 @@ import { MenuV2 } from "@opencode-ai/ui/v2/menu-v2"
 import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 import type { DictationControls } from "./dictation"
 import { PromptInputV2Dictate, type DictateDevices } from "./dictate"
+import { accepted } from "./attachments"
 import { AttachmentCardV2 } from "../attachment-card-v2"
 import { CommentCardV2 } from "../comment-card-v2"
 import { typeLabel } from "../../../components/message-file"
@@ -70,6 +71,7 @@ export function PromptInputV2(props: PromptInputV2Props) {
   let editor: HTMLDivElement | undefined
   /** Live dictation words, while a quick take is being spoken (see the Dictate `live` prop). */
   let liveSpan: HTMLElement | undefined
+  const [liveShown, setLiveShown] = createSignal(false)
   let localInput = false
   // Where dictation draws while a take runs. Signals, so its portals mount once the nodes exist.
   const [dictateLayer, setDictateLayer] = createSignal<HTMLElement>()
@@ -101,7 +103,7 @@ export function PromptInputV2(props: PromptInputV2Props) {
         ref={props.controller.setFileInput}
         type="file"
         multiple
-        accept="image/png,image/jpeg,image/gif,image/webp,application/pdf,text/*,application/json,application/ld+json,application/toml,application/x-toml,application/x-yaml,application/xml,application/yaml,.c,.cc,.cjs,.conf,.cpp,.css,.csv,.cts,.env,.go,.gql,.graphql,.h,.hh,.hpp,.htm,.html,.ini,.java,.js,.json,.jsx,.log,.md,.mdx,.mjs,.mts,.py,.rb,.rs,.sass,.scss,.sh,.sql,.toml,.ts,.tsx,.txt,.xml,.yaml,.yml,.zsh"
+        accept={accepted.join(",")}
         class="hidden"
         onChange={(event) => {
           const list = event.currentTarget.files
@@ -214,7 +216,8 @@ export function PromptInputV2(props: PromptInputV2Props) {
             onPaste={props.controller.onPaste}
             onFocus={() => props.controller.dispatch({ type: "focus.editor" })}
           />
-          <Show when={!props.controller.value()}>
+          {/* Hidden while live words are typed in: they are on screen but not in the value (#189546). */}
+          <Show when={!props.controller.value() && !liveShown()}>
             <div
               class="pointer-events-none absolute inset-x-0 top-0 px-4 pt-4 text-[13px] font-[440] leading-5 text-v2-text-text-faint"
               classList={{ "font-mono!": state.mode === "shell" }}
@@ -264,7 +267,8 @@ export function PromptInputV2(props: PromptInputV2Props) {
                   live={(text) => {
                     // The take, typed into the chat box while it is spoken (live-text.ts). Kept out
                     // of prompt state — no input event — so the final transcript is what is sent.
-                    if (editor) liveSpan = showLiveText(editor, liveSpan, text)
+                    if (editor) liveSpan = showLiveTextFollowing(editor, liveSpan, text)
+                    setLiveShown(!!text)
                   }}
                   insert={(text) => {
                     // Append into the editor and let the component's own onInput re-parse it.
@@ -284,6 +288,8 @@ export function PromptInputV2(props: PromptInputV2Props) {
                     const sel = window.getSelection()
                     sel?.removeAllRanges()
                     sel?.addRange(range)
+                    // The caret is at the end of the transcript; so is the view (#189977).
+                    editor.scrollTop = editor.scrollHeight
                   }}
                 />
               )}

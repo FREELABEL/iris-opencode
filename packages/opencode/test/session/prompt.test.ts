@@ -8,6 +8,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { expect } from "bun:test"
 import { Cause, Deferred, Duration, Effect, Exit, Fiber, Layer } from "effect"
 import path from "path"
+import { readFileSync } from "fs"
 import { fileURLToPath } from "url"
 import { NamedError } from "@opencode-ai/core/util/error"
 import { Agent as AgentSvc } from "../../src/agent/agent"
@@ -2467,4 +2468,56 @@ noLLMServer.instance(
       }
     }),
   30_000,
+)
+
+// The CSV/Excel path the Desktop composer takes: attachments arrive as data: URLs. A spreadsheet
+// used to reach the OpenAI-compatible SDK as a file part it cannot encode (the turn threw), and a
+// large CSV was inlined whole (the upstream 400'd, and so did every later turn).
+it.instance("spreadsheet and oversized CSV attachments reach the model as bounded, readable text", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({
+      title: "Attachments",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    const xlsx = readFileSync(path.join(import.meta.dir, "../fixture/attachments/one-sheet.xlsx")).toString("base64")
+    const rows = ["id,amount", ...Array.from({ length: 120_000 }, (_, i) => `${i},${i % 997}`)].join("\n")
+
+    yield* prompt.prompt({
+      sessionID: session.id,
+      agent: "build",
+      noReply: true,
+      parts: [
+        { type: "text", text: "What did Jose pay?" },
+        {
+          type: "file",
+          mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          filename: "claims.xlsx",
+          url: `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${xlsx}`,
+        },
+        {
+          type: "file",
+          mime: "text/plain",
+          filename: "big.csv",
+          url: `data:text/plain;base64,${Buffer.from(rows).toString("base64")}`,
+        },
+      ],
+    })
+
+    yield* llm.text("ok")
+    const result = yield* prompt.loop({ sessionID: session.id })
+    expect(result.info.role).toBe("assistant")
+    if (result.info.role === "assistant") expect(result.info.error).toBeUndefined()
+
+    const hits = yield* llm.hits
+    expect(hits).toHaveLength(1)
+    const body = JSON.stringify(hits[0]?.body)
+    expect(body).toContain("José Núñez,99213,125.5,80")
+    expect(body).not.toContain("spreadsheetml")
+    expect(body).toContain("were NOT sent to you")
+    expect(body).not.toContain("\\n119999,")
+    expect(body.length).toBeLessThan(400_000)
+  }),
 )

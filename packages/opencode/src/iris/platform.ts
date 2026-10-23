@@ -252,21 +252,89 @@ export function unknownBloqReason(bloqId: number, list: PlatformResult<{ bloqs: 
   return list.data.bloqs.some((b) => b.id === bloqId) ? null : `unknown bloq ${bloqId}`
 }
 
-async function unknownBloq(bloqId: number): Promise<string | null> {
+/**
+ * ONE BOARD-LIST REQUEST, NOT ONE PER SURFACE (#190231 phase 0b).
+ *
+ * This guard ran fetchBloqs() — a full /bloqs call to fl-api — in front of every bloq-scoped
+ * request, one after the other. Opening a board asked for the list twice: once for the picker
+ * (/iris/bloqs) and again inside /iris/atlas before the board itself could start. Now the guard
+ * reuses the list the picker just fetched (or is still fetching) for the same account.
+ *
+ * It only reuses a YES. A reused list can predate a board made a moment ago, so "not one of
+ * yours" is always asked again, fresh, before it refuses. A failed list is never reused, so an
+ * outage still fails open exactly as before.
+ */
+export async function unknownBloq(bloqId: number): Promise<string | null> {
+  if (!unknownBloqReason(bloqId, await recentBloqs())) return null
   return unknownBloqReason(bloqId, await fetchBloqs())
+}
+
+const BLOQ_LIST_REUSE_MS = 30_000
+type BloqList = PlatformResult<{ bloqs: Bloq[] }>
+/** The request most recently started, finished or not. */
+let lastBloqs: { userId: number; at: number; result: Promise<BloqList> } | undefined
+/** The most recent list that actually ARRIVED and was measured. */
+let lastGoodBloqs: { userId: number; at: number; result: BloqList } | undefined
+
+async function recentBloqs(): Promise<BloqList> {
+  const userId = await resolveUserId()
+  const fresh = (x?: { userId: number; at: number }) => !!userId && !!x && x.userId === userId && Date.now() - x.at < BLOQ_LIST_REUSE_MS
+  // A list already in hand beats waiting for a newer one. The picker re-fetches on every panel
+  // open, so preferring "newest" made this guard wait a full round trip each time anyway.
+  if (fresh(lastGoodBloqs)) return lastGoodBloqs!.result
+  if (fresh(lastBloqs)) {
+    const r = await lastBloqs!.result
+    if (r.measured) return r
+  }
+  return fetchBloqs()
+}
+
+/** Tests only: forget the shared board list. */
+export function resetRecentBloqs() {
+  lastBloqs = undefined
+  lastGoodBloqs = undefined
 }
 
 export interface AtlasItem {
   id: number
   title: string
+  /**
+   * fl-api's hash of everything this card's face depends on (#190231 phase 3) — what lets a
+   * refresh fetch only the cards that moved. Absent on an fl-api that predates it.
+   */
+  rev?: string
   type?: string
   status?: string
   description?: string
   /** The item's body. This is the thing a person actually opens an item to read. */
   content?: string
+  /**
+   * The start of the body (fl-api's summary.preview, up to 400 chars of raw prose) — what a list
+   * row shows under the title. Present when the board was read without bodies (#190231 0d).
+   */
+  preview?: string
   /** ISO timestamps from fl-api — what the panel's "last edited", sort and filter read. */
   createdAt?: string
   updatedAt?: string
+  /** What a card FACE shows (#189806). Columns on every item, so present even on an older fl-api. */
+  dueDate?: string
+  priority?: string
+  cardType?: string
+  /** Label ids — from fl-api's card summary when it has one, else read from the body. */
+  labels?: string[]
+  /** From fl-api's `?summary=1` (#189793); absent on an fl-api that predates it. */
+  tasks?: { open: number; done: number; total: number }
+  attachments?: number
+  /** First image attachment's URL, for the Board face (#189797). Never set on a PHI board. */
+  cover?: string
+  assignees?: AtlasAssignee[]
+}
+export interface AtlasAssignee {
+  id: number
+  type: "user" | "agent"
+  userId?: number
+  agentId?: number
+  name?: string
 }
 export interface AtlasList {
   id: number
@@ -309,7 +377,92 @@ export function filterAtlas(lists: AtlasList[], query: string): AtlasList[] {
   return out
 }
 
-export async function fetchAtlas(bloqId: number): Promise<PlatformResult<{ lists: AtlasList[] }>> {
+/**
+ * The card-face fields of one fl-api item (#189806). Summary fields only when fl-api sent them —
+ * an absent count is "not measured", never 0.
+ */
+/** One fl-api card as the panel reads it — shared by the whole-board read and the changed-cards read. */
+export function atlasItemOf(i: any): AtlasItem {
+  return {
+    id: i.id,
+    title: i.title ?? "Untitled",
+    type: i.type ?? undefined,
+    status: i.status ?? undefined,
+    description: i.description || undefined,
+    content: i.content || undefined,
+    createdAt: typeof i.created_at === "string" ? i.created_at : undefined,
+    updatedAt: typeof i.updated_at === "string" ? i.updated_at : undefined,
+    ...(typeof i.rev === "string" ? { rev: i.rev } : {}),
+    ...cardFace(i),
+  }
+}
+
+export function cardFace(i: any): Partial<AtlasItem> {
+  const out: Partial<AtlasItem> = {}
+  if (typeof i?.due_date === "string" && i.due_date) out.dueDate = i.due_date
+  if (typeof i?.priority === "string" && i.priority) out.priority = i.priority
+  if (typeof i?.card_type === "string" && i.card_type) out.cardType = i.card_type
+  const s = i?.summary
+  if (s && typeof s === "object") {
+    if (Array.isArray(s.labels)) out.labels = s.labels.map(String)
+    if (s.tasks && typeof s.tasks.total === "number")
+      out.tasks = { open: Number(s.tasks.open) || 0, done: Number(s.tasks.done) || 0, total: Number(s.tasks.total) || 0 }
+    if (typeof s.attachments === "number") out.attachments = s.attachments
+    if (typeof s.cover === "string" && /^https?:\/\//.test(s.cover)) out.cover = s.cover
+    if (typeof s.preview === "string") out.preview = s.preview
+    if (Array.isArray(s.assignees))
+      out.assignees = s.assignees
+        .filter((a: any) => a && (a.type === "user" || a.type === "agent"))
+        .map((a: any) => ({
+          id: Number(a.id),
+          type: a.type,
+          ...(a.user_id != null ? { userId: Number(a.user_id) } : {}),
+          ...(a.agent_id != null ? { agentId: Number(a.agent_id) } : {}),
+          ...(a.name ? { name: String(a.name) } : {}),
+        }))
+  }
+  if (!out.labels) {
+    // Older fl-api: labels still live in the body.
+    try {
+      const body = typeof i?.content === "string" && i.content.startsWith("{") ? JSON.parse(i.content) : i?.content
+      if (Array.isArray(body?.labels)) out.labels = [...new Set(body.labels.map(String))] as string[]
+    } catch {}
+  }
+  return out
+}
+
+/**
+ * WITHOUT BODIES BY DEFAULT (#190231 phase 0d).
+ *
+ * The board read is downloaded over the user's own connection on every open and on every live
+ * change. Measured on board 174: 2,139,422 bytes with bodies, 625,237 without. Nothing on the
+ * board needs a whole body any more — the card editor fetches its own item, and a list row's
+ * second line comes from fl-api's `summary.preview` — so only SEARCH asks for bodies, because
+ * "the card that mentions Servis" is a body match.
+ *
+ * An fl-api that predates `summary.preview` would leave every row's second line blank, so a
+ * light read that comes back without it is thrown away and the board is read again with bodies.
+ * That makes the desktop release safe to ship before or after the fl-api one.
+ */
+// Set when fl-api answered a light read without previews: skip the light read for a while rather
+// than paying for both reads on every open until fl-api is updated.
+let previewsUnsupportedUntil = 0
+const PREVIEW_RECHECK_MS = 10 * 60_000
+
+/** Tests only. */
+export function resetPreviewSupport() {
+  previewsUnsupportedUntil = 0
+}
+
+export function lightReadUsable(raw: any): boolean {
+  for (const l of raw?.lists ?? []) for (const i of l?.items ?? []) if (typeof i?.summary?.preview !== "string") return false
+  return true
+}
+
+export async function fetchAtlas(
+  bloqId: number,
+  opts: { bodies?: boolean } = {},
+): Promise<PlatformResult<{ lists: AtlasList[]; containsPhi?: boolean; version?: string }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { lists: [] } }
 
@@ -318,43 +471,135 @@ export async function fetchAtlas(bloqId: number): Promise<PlatformResult<{ lists
 
   try {
     /*
-     * ?no_searchable_content=1 — drop the duplicate, keep the bodies.
-     *
-     * `searchable_content` is an $appends accessor that ships a near-copy of `content` on every
-     * item. Measured on board 174: 3.42 MB total, of which content is 1,468 KB and its
-     * duplicate 1,397 KB. Nothing here reads the duplicate.
-     *
-     * NOT `?light=1`, which also drops `content` and would be 0.60 MB — 83% off — because two
-     * things in this panel read the body: the reader renders it, and the search filters on it.
-     * Taking the cheaper number would break search into a title-only match and call it a
-     * performance win. That version needs a per-item fetch on open first.
+     * Which read (see lightReadUsable above for why):
      *
      *   default                     3,590,030 bytes
-     *   no_searchable_content=1     2,139,422 bytes   <- here
-     *   light=1                       625,237 bytes   <- once the reader fetches bodies
+     *   no_searchable_content=1     2,139,422 bytes   <- search, and the fallback for an older fl-api
+     *   light=1                       625,237 bytes   <- everything else
+     *
+     * `searchable_content` is an $appends near-copy of `content`; nothing here reads it.
      */
-    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}?no_searchable_content=1`)
-    if (!res.ok) return { measured: false, reason: `fl-api ${res.status}`, data: { lists: [] } }
-    const json = (await res.json()) as any
-    const raw = json?.data ?? json
-    const lists: AtlasList[] = (raw?.lists ?? []).map((l: any) => ({
-      id: l.id,
-      name: l.name,
-      items: (l.items ?? []).map((i: any) => ({
-        id: i.id,
-        title: i.title ?? "Untitled",
-        type: i.type ?? undefined,
-        status: i.status ?? undefined,
-        description: i.description || undefined,
-        content: i.content || undefined,
-        createdAt: typeof i.created_at === "string" ? i.created_at : undefined,
-        updatedAt: typeof i.updated_at === "string" ? i.updated_at : undefined,
-      })),
-    }))
-    return { measured: true, data: { lists } }
+    // summary=1 (#189793): labels, assignees, task progress and attachment count per card, in
+    // one grouped query server-side. An fl-api that predates it ignores the flag.
+    const read = async (q: string) => {
+      const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}?${q}`)
+      if (!res.ok) return { error: `fl-api ${res.status}` }
+      const json = (await res.json()) as any
+      return { raw: json?.data ?? json }
+    }
+    const light = !opts.bodies && Date.now() >= previewsUnsupportedUntil
+    // version=1 (#190231 phase 3): the board's version and each card's rev. Ignored by an older fl-api.
+    let got = await read(light ? "light=1&summary=1&version=1" : "no_searchable_content=1&summary=1&version=1")
+    if (light && "raw" in got && !lightReadUsable(got.raw)) {
+      previewsUnsupportedUntil = Date.now() + PREVIEW_RECHECK_MS
+      got = await read("no_searchable_content=1&summary=1&version=1")
+    }
+    if (!("raw" in got)) return { measured: false, reason: got.error, data: { lists: [] } }
+    const raw = got.raw
+    const lists: AtlasList[] = (raw?.lists ?? []).map((l: any) => ({ id: l.id, name: l.name, items: (l.items ?? []).map(atlasItemOf) }))
+    // fl-api says per board whether it holds patient data; the local copy needs to know (#190231 phase 1).
+    // `version` (phase 3) is what the next refresh asks "changed since?" with.
+    return {
+      measured: true,
+      data: { lists, containsPhi: raw?.contains_phi === true, ...(typeof raw?.version === "string" ? { version: raw.version } : {}) },
+    }
   } catch (e) {
     return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { lists: [] } }
   }
+}
+
+/**
+ * WHAT CHANGED ON A BOARD, NOT THE WHOLE BOARD AGAIN (#190231 phase 3).
+ *
+ * Given the copy we hold (its fl-api `version` and the lists with each card's `rev`), ask fl-api
+ * `if_version`: it answers `unchanged` (a few bytes), or the board's SKELETON — every list and,
+ * per card, only its id and rev. Cards whose rev differs from ours are fetched by id; the rest
+ * come from the copy, placed where the skeleton says. A one-card edit on a 90-card board costs
+ * the skeleton plus that card, not 0.8 MB.
+ *
+ * `full` means "do the whole read instead": an fl-api without versions, a copy without revs, a
+ * skeleton our copy cannot fill, or so many changed cards that one read is cheaper.
+ */
+export type AtlasChanges =
+  | { kind: "unchanged"; version: string }
+  | { kind: "merged"; version: string; lists: AtlasList[]; containsPhi: boolean; fetched: number }
+  | { kind: "full" }
+  | { kind: "error"; reason: string }
+
+/** Past this share of the board changed, one whole read is cheaper than skeleton + ids. */
+const CHANGED_SHARE_FOR_FULL = 0.5
+const MAX_IDS = 500
+
+export async function fetchAtlasChanges(bloqId: number, have: { version: string; lists: AtlasList[] }): Promise<AtlasChanges> {
+  const userId = await resolveUserId()
+  if (!userId) return { kind: "error", reason: `not signed in (token: ${tokenSource()})` }
+  try {
+    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}?if_version=${encodeURIComponent(have.version)}`)
+    if (!res.ok) return { kind: "error", reason: `fl-api ${res.status}` }
+    const json = (await res.json()) as any
+    const skel = json?.data ?? json
+    if (typeof skel?.version !== "string") return { kind: "full" } // an fl-api without versions
+    if (skel.unchanged === true) return { kind: "unchanged", version: skel.version }
+    if (!Array.isArray(skel.lists)) return { kind: "full" }
+
+    const held = new Map<number, AtlasItem>()
+    for (const l of have.lists) for (const i of l.items) held.set(i.id, i)
+    const wanted: number[] = []
+    let total = 0
+    for (const l of skel.lists)
+      for (const i of l?.items ?? []) {
+        total++
+        const mine = held.get(i.id)
+        if (!mine || !mine.rev || mine.rev !== i.rev) wanted.push(i.id)
+      }
+    if (wanted.length > MAX_IDS || (total > 0 && wanted.length / total > CHANGED_SHARE_FOR_FULL)) return { kind: "full" }
+
+    const fetched = new Map<number, AtlasItem>()
+    if (wanted.length) {
+      const q = Date.now() >= previewsUnsupportedUntil ? "light=1&summary=1" : "no_searchable_content=1&summary=1"
+      const r = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}?ids=${wanted.join(",")}&${q}`)
+      if (!r.ok) return { kind: "error", reason: `fl-api ${r.status}` }
+      const j = (await r.json()) as any
+      for (const l of (j?.data ?? j)?.lists ?? []) for (const i of l?.items ?? []) fetched.set(i.id, atlasItemOf(i))
+    }
+    const lists = mergeSkeleton(skel.lists, held, fetched)
+    if (!lists) return { kind: "full" }
+    return { kind: "merged", version: skel.version, lists, containsPhi: skel.contains_phi === true, fetched: wanted.length }
+  } catch (e) {
+    return { kind: "error", reason: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+/**
+ * The board as the skeleton lays it out: each card from `fetched` when it moved, else from what we
+ * held — only when the held rev still matches. `undefined` when any card can be filled from
+ * neither (a card changed between the two requests): the caller does a whole read instead of
+ * guessing.
+ */
+export function mergeSkeleton(
+  skeleton: { id: number; name?: string; items?: { id: number; rev?: string | null }[] }[],
+  held: Map<number, AtlasItem>,
+  fetched: Map<number, AtlasItem>,
+): AtlasList[] | undefined {
+  const out: AtlasList[] = []
+  for (const l of skeleton) {
+    const items: AtlasItem[] = []
+    for (const s of l.items ?? []) {
+      const f = fetched.get(s.id)
+      if (f && f.rev === s.rev) {
+        items.push(f)
+        continue
+      }
+      const h = held.get(s.id)
+      if (h && h.rev && h.rev === s.rev) {
+        items.push(h)
+        continue
+      }
+      return undefined
+    }
+    out.push({ id: l.id, name: l.name ?? "", items })
+  }
+  return out
 }
 
 export interface HiveNode {
@@ -381,6 +626,8 @@ export interface HiveNode {
   tasksCompleted?: number
   /** Which things this node can actually do — bash, docker, browser, python3, bridge_call. */
   capabilities?: string[]
+  /** Physical cameras by factory product name ("OBSBOT Tiny Camera"); never a personal name. */
+  cameras?: string[]
   /** A machine that heartbeats once per restart looks healthy while crash-looping (#182434). */
   recentRestarts?: number
   transport?: string
@@ -484,6 +731,9 @@ export async function fetchHiveNodes(): Promise<PlatformResult<{ nodes: HiveNode
         .filter(([, v]) => v)
         .map(([k]) => k),
       recentRestarts: Array.isArray(n.recent_restarts) ? n.recent_restarts.length : undefined,
+      cameras: Array.isArray(n.devices?.camera?.names)
+        ? n.devices.camera.names.filter((x: unknown) => typeof x === "string").slice(0, 8)
+        : undefined,
       transport: n.transport?.default_rail ?? undefined,
       tailscaleIp: n.tailscale_ip ?? undefined,
       hardwareDetectedAt: n.hardware_profile?.detected_at ?? undefined,
@@ -516,6 +766,8 @@ export interface Allowance {
   spendUsd: number | null
   fraction: number | null
   resetsAt: string | null
+  /** Tokens used this window, same sources as the meter (#190087). Null = not reported. */
+  tokensUsed: number | null
   thresholds: number[]
   surface: string
   upgradeUrl: string | null
@@ -539,6 +791,7 @@ const EMPTY_ALLOWANCE: Allowance = {
   spendUsd: null,
   fraction: null,
   resetsAt: null,
+  tokensUsed: null,
   thresholds: [],
   surface: "chat",
   upgradeUrl: null,
@@ -590,6 +843,7 @@ export async function fetchAllowance(
         spendUsd: num(j?.spend_usd),
         fraction: num(j?.fraction),
         resetsAt: j?.resets_at ?? null,
+        tokensUsed: num(j?.tokens_used),
         thresholds: Array.isArray(j?.thresholds) ? j.thresholds.map(Number).filter(Number.isFinite) : [],
         surface: String(j?.surface ?? "chat"),
         upgradeUrl: j?.upgrade_url ?? null,
@@ -652,6 +906,15 @@ export interface Plan {
    * older than dd9d0dfa. Only `false` may show an Upgrade button.
    */
   paid: boolean | null
+  /** What to call the plan on screen ("Free", "IRIS Solo", "Staff"), from the server. Display only. */
+  label: string | null
+  /** When a licence or Stripe trial ends, ISO-8601; null when not on one (#189988). */
+  trialEndsAt: string | null
+  /** Share of the allowance used (1 = used up); null when uncapped or unknown (#190087). */
+  fraction: number | null
+  /** Tokens used this window, and when it resets — for the composer's allowance bar (#190087). */
+  tokensUsed: number | null
+  resetsAt: string | null
   uncapped: boolean
   upgradeUrl: string | null
 }
@@ -701,6 +964,299 @@ export async function fetchPlans(): Promise<PlatformResult<PlanOffer[]>> {
   }
 }
 
+/** Where Stripe sends the buyer once they have paid: a heyiris.io page, never Elon (#190191). */
+export const CHECKOUT_RETURN_URL = "https://heyiris.io/p/upgraded"
+
+export type CheckoutResult = { ok: true; url: string } | { ok: false; reason: string }
+
+/**
+ * A Stripe Checkout session for one plan, created for the signed-in account (#190190).
+ *
+ * Choosing a plan used to open Elon's pricing page with the plan pre-picked, and Elon finished
+ * the checkout. That is a second sign-in on a second app that is being retired, and it is where a
+ * paying customer got stuck on 2026-10-20: her Elon session was dead, the checkout behind it was
+ * refused, and the button did nothing. The account's own key is already here — fl-api resolves
+ * the buyer from it (`resolveCaller`), so no user id is sent — and the answer is Stripe's URL.
+ *
+ * The price is the catalogue's, read the same way the cards that showed it were, so the number on
+ * the button and the number on Stripe come from one place. Trial days are always 0: the weekly
+ * allowance is the trial.
+ */
+export async function createCheckout(slug: string): Promise<CheckoutResult> {
+  try {
+    const plans = await fetchPlans()
+    const plan = plans.data.find((p) => p.slug === slug)
+    if (!plan) {
+      return { ok: false, reason: plans.measured ? `No plan called ${slug} is on sale.` : "Couldn't load the plans." }
+    }
+    const res = await irisFetch("/api/v1/users/upgrade/checkout", FL_API, {
+      method: "POST",
+      body: JSON.stringify({
+        package_slug: plan.slug,
+        price: plan.price,
+        billing_interval: plan.period === "year" ? "year" : "month",
+        product: "desktop-upgrade",
+        trial_days: 0,
+        redirect_url: CHECKOUT_RETURN_URL,
+      }),
+    })
+    const body = (await res.json().catch(() => null)) as {
+      data?: { url?: string }
+      url?: string
+      message?: string
+      error?: string
+    } | null
+    const url = body?.data?.url ?? body?.url
+    if (res.ok && url) return { ok: true, url }
+    if (res.status === 401) return { ok: false, reason: "Your sign-in has expired. Sign in again, then choose the plan." }
+    return { ok: false, reason: `Checkout refused (${res.status})${body?.message ? `: ${body.message}` : ""}` }
+  } catch (e) {
+    return { ok: false, reason: `Couldn't reach checkout: ${e instanceof Error ? e.message : String(e)}` }
+  }
+}
+
+/**
+ * Settings › Security (#189589): what protects this account's model traffic, and why.
+ *
+ * Every judgement here is the server's. Whether Gate is on, why, which mode, which checks —
+ * GateRolloutPolicy on fl-iris-api decides it from a remote flag, and the same policy runs in
+ * the model proxy, so the panel cannot say "on" while the proxy says "off". This only reshapes
+ * snake_case into the app's casing.
+ */
+export interface GateEvent {
+  id: number
+  at: string | null
+  segment: string
+  action: string
+  mode: string
+  verdict: string | null
+  score: number | null
+  reasonCode: string | null
+  detected: string[]
+  sensitivity: string | null
+  latencyMs: number | null
+  cached: boolean
+  errorCode: string | null
+  reportedFalse: boolean
+}
+
+export interface SecurityState {
+  gate: {
+    enabled: boolean
+    reason: string
+    explanation: string
+    mode: string
+    org: string | null
+    sensitivity: string | null
+    categories: string[]
+    segments: string[]
+    failOpen: boolean
+    availableChecks: string[]
+    sensitivities: string[]
+    stats: {
+      windowDays: number
+      scanned: number
+      clean: number
+      flagged: number
+      held: number
+      errors: number
+      reportedFalse: number
+      reportedFalsePct: number | null
+      p50LatencyMs: number | null
+      billableTokens: number
+    }
+    recent: GateEvent[]
+  }
+  phiGuard: { active: boolean; mode: string; explanation: string }
+  /** Platform admins only: the rollout across all of IRIS. Null for everyone else. */
+  platform: SecurityPlatform | null
+}
+
+export interface SecurityPlatform {
+  rollout: { enabled: boolean; mode: string; percent: number; newUserDays: number; tiers: string[]; allowUsers: number } | null
+  keySource: string
+  last24h: {
+    scanned: number
+    clean: number
+    flagged: number
+    held: number
+    errors: number
+    accounts: number
+    cached: number
+    p50Ms: number | null
+    p95Ms: number | null
+    billableTokens: number
+    reportedFalsePct: number | null
+  }
+  recent: (GateEvent & { userId: number | null; smoke: boolean })[]
+}
+
+export const EMPTY_SECURITY: SecurityState = {
+  gate: {
+    enabled: false,
+    reason: "unknown",
+    explanation: "",
+    mode: "shadow",
+    org: null,
+    sensitivity: null,
+    categories: [],
+    segments: [],
+    failOpen: true,
+    availableChecks: [],
+    sensitivities: [],
+    stats: {
+      windowDays: 30,
+      scanned: 0,
+      clean: 0,
+      flagged: 0,
+      held: 0,
+      errors: 0,
+      reportedFalse: 0,
+      reportedFalsePct: null,
+      p50LatencyMs: null,
+      billableTokens: 0,
+    },
+    recent: [],
+  },
+  phiGuard: { active: false, mode: "report", explanation: "" },
+  platform: null,
+}
+
+const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null)
+const strs = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [])
+
+export function gateEventFrom(e: any): GateEvent {
+  return {
+    id: Number(e?.id ?? 0),
+    at: e?.at ?? null,
+    segment: String(e?.segment ?? ""),
+    action: String(e?.action ?? ""),
+    mode: String(e?.mode ?? ""),
+    verdict: e?.verdict ?? null,
+    score: num(e?.score),
+    reasonCode: e?.reason_code ?? null,
+    detected: strs(e?.detected),
+    sensitivity: e?.sensitivity ?? null,
+    latencyMs: num(e?.latency_ms),
+    cached: Boolean(e?.cached),
+    errorCode: e?.error_code ?? null,
+    reportedFalse: Boolean(e?.reported_false),
+  }
+}
+
+/** Reshape GET /api/v6/security. Exported so the mapping is tested without a network. */
+export function securityFrom(j: any): SecurityState {
+  const g = j?.data?.gate ?? {}
+  const st = g.stats ?? {}
+  const p = j?.data?.phi_guard ?? {}
+  return {
+    gate: {
+      enabled: Boolean(g.enabled),
+      reason: String(g.reason ?? "unknown"),
+      explanation: String(g.explanation ?? ""),
+      mode: String(g.mode ?? "shadow"),
+      org: g.org ?? null,
+      sensitivity: g.sensitivity ?? null,
+      categories: strs(g.categories),
+      segments: strs(g.segments),
+      failOpen: g.fail_open !== false,
+      availableChecks: strs(g.available_checks),
+      sensitivities: strs(g.sensitivities),
+      stats: {
+        windowDays: num(st.window_days) ?? 30,
+        scanned: num(st.scanned) ?? 0,
+        clean: num(st.clean) ?? 0,
+        flagged: num(st.flagged) ?? 0,
+        held: num(st.held) ?? 0,
+        errors: num(st.errors) ?? 0,
+        reportedFalse: num(st.reported_false) ?? 0,
+        reportedFalsePct: num(st.reported_false_pct),
+        p50LatencyMs: num(st.p50_latency_ms),
+        billableTokens: num(st.billable_tokens) ?? 0,
+      },
+      recent: Array.isArray(g.recent) ? g.recent.map(gateEventFrom) : [],
+    },
+    phiGuard: {
+      active: Boolean(p.active),
+      mode: String(p.mode ?? "report"),
+      explanation: String(p.explanation ?? ""),
+    },
+    platform: platformFrom(j?.data?.platform),
+  }
+}
+
+function platformFrom(x: any): SecurityPlatform | null {
+  if (!x || typeof x !== "object" || x.unavailable) return null
+  const r = x.rollout
+  const d = x.last_24h ?? {}
+  return {
+    rollout: r
+      ? {
+          enabled: Boolean(r.enabled),
+          mode: String(r.mode ?? "shadow"),
+          percent: num(r.percent) ?? 0,
+          newUserDays: num(r.new_user_days) ?? 0,
+          tiers: strs(r.tiers),
+          allowUsers: num(r.allow_users) ?? 0,
+        }
+      : null,
+    keySource: String(x.key_source ?? "none"),
+    last24h: {
+      scanned: num(d.scanned) ?? 0,
+      clean: num(d.clean) ?? 0,
+      flagged: num(d.flagged) ?? 0,
+      held: num(d.held) ?? 0,
+      errors: num(d.errors) ?? 0,
+      accounts: num(d.accounts) ?? 0,
+      cached: num(d.cached) ?? 0,
+      p50Ms: num(d.p50_ms),
+      p95Ms: num(d.p95_ms),
+      billableTokens: num(d.billable_tokens) ?? 0,
+      reportedFalsePct: num(d.reported_false_pct),
+    },
+    recent: Array.isArray(x.recent)
+      ? x.recent.map((e: any) => ({ ...gateEventFrom(e), userId: num(e?.user_id), smoke: Boolean(e?.smoke) }))
+      : [],
+  }
+}
+
+export async function fetchSecurity(
+  opts: { token?: string | null; signal?: AbortSignal } = {},
+): Promise<PlatformResult<SecurityState>> {
+  try {
+    const res = await irisFetch(
+      "/api/v6/security",
+      IRIS_API,
+      { signal: opts.signal },
+      opts.token === undefined ? resolveToken() : opts.token,
+    )
+    if (!res.ok) return { measured: false, reason: `iris-api ${res.status}`, data: EMPTY_SECURITY }
+    return { measured: true, data: securityFrom(await res.json()) }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: EMPTY_SECURITY }
+  }
+}
+
+/** "Gate got this one wrong." Only the caller's own events can be reported — the server scopes it. */
+export async function reportGateEvent(
+  id: number,
+  opts: { token?: string | null; signal?: AbortSignal } = {},
+): Promise<PlatformResult<GateEvent | null>> {
+  try {
+    const res = await irisFetch(
+      `/api/v6/security/gate/events/${encodeURIComponent(String(id))}/report`,
+      IRIS_API,
+      { method: "POST", signal: opts.signal },
+      opts.token === undefined ? resolveToken() : opts.token,
+    )
+    if (!res.ok) return { measured: false, reason: `iris-api ${res.status}`, data: null }
+    const j = (await res.json()) as any
+    return { measured: true, data: gateEventFrom(j?.data) }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: null }
+  }
+}
+
 /**
  * The caller's plan, WITHOUT consuming a notice (`?peek=1`, fl-iris-api 4eda580d). Unlike
  * fetchAllowance this is safe to poll: the title bar asks every few minutes to decide between
@@ -712,7 +1268,7 @@ export async function fetchPlans(): Promise<PlatformResult<PlanOffer[]>> {
 export async function fetchPlan(
   opts: { token?: string | null; signal?: AbortSignal } = {},
 ): Promise<PlatformResult<Plan>> {
-  const empty: Plan = { plan: null, paid: null, uncapped: false, upgradeUrl: null }
+  const empty: Plan = { plan: null, paid: null, label: null, trialEndsAt: null, fraction: null, tokensUsed: null, resetsAt: null, uncapped: false, upgradeUrl: null }
   try {
     const res = await irisFetch(
       "/api/v6/allowance/me?peek=1",
@@ -728,6 +1284,11 @@ export async function fetchPlan(
       data: {
         plan: typeof j.plan === "string" ? j.plan : null,
         paid: typeof j.paid === "boolean" ? j.paid : null,
+        label: typeof j.plan_label === "string" && j.plan_label.trim() ? j.plan_label.trim() : null,
+        trialEndsAt: typeof j.trial_ends_at === "string" && j.trial_ends_at ? j.trial_ends_at : null,
+        fraction: typeof j.fraction === "number" && Number.isFinite(j.fraction) ? j.fraction : null,
+        tokensUsed: typeof j.tokens_used === "number" && Number.isFinite(j.tokens_used) ? j.tokens_used : null,
+        resetsAt: typeof j.resets_at === "string" && j.resets_at ? j.resets_at : null,
         uncapped: Boolean(j.uncapped),
         upgradeUrl: typeof j.upgrade_url === "string" ? j.upgrade_url : null,
       },
@@ -752,7 +1313,17 @@ export interface Bloq {
 export async function fetchBloqs(): Promise<PlatformResult<{ bloqs: Bloq[] }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { bloqs: [] } }
+  // Remembered while in flight, so a guard asking a moment later waits for THIS request.
+  const at = Date.now()
+  const result = loadBloqs(userId).then((r) => {
+    if (r.measured) lastGoodBloqs = { userId, at, result: r }
+    return r
+  })
+  lastBloqs = { userId, at, result }
+  return result
+}
 
+async function loadBloqs(userId: number): Promise<PlatformResult<{ bloqs: Bloq[] }>> {
   try {
     const res = await irisFetch(`/api/v1/user/${userId}/bloqs?simplified=true`)
     if (!res.ok) return { measured: false, reason: `fl-api ${res.status}`, data: { bloqs: [] } }
@@ -1146,6 +1717,32 @@ export interface Agent {
  * built from `/agents` alone can tell you a heartbeat agent exists and never that it has not
  * run in four days. That distinction is the whole reason anyone opens this list.
  */
+/**
+ * Every agent you own, on any board (#190269) — the members picker offers them, because fl-api
+ * lets a card be assigned any agent that belongs to the board OR to the board's owner. A board
+ * with no agents of its own otherwise offered none, which read as "you cannot add agents".
+ */
+export async function fetchMyAgents(): Promise<PlatformResult<{ agents: { id: number; name: string }[] }>> {
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: notSignedIn(), data: { agents: [] } }
+  try {
+    const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents?per_page=200`)
+    const j = (await res.json().catch(() => ({}))) as any
+    if (!res.ok) return { measured: false, reason: apiFailure(j, res.status), data: { agents: [] } }
+    const list = Array.isArray(j?.data?.data) ? j.data.data : Array.isArray(j?.data) ? j.data : []
+    return {
+      measured: true,
+      data: {
+        agents: list
+          .filter((a: any) => Number.isFinite(Number(a?.id)) && typeof a?.name === "string")
+          .map((a: any) => ({ id: Number(a.id), name: a.name as string })),
+      },
+    }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { agents: [] } }
+  }
+}
+
 export async function fetchAgents(bloqId: number): Promise<PlatformResult<{ agents: Agent[] }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { agents: [] } }
@@ -1591,7 +2188,14 @@ export async function fetchRecords(
      *
      * Resolved from the same schema list the columns come from, so the check and the column
      * definitions cannot disagree about which dataset this is.
+     *
+     * The check and the records are fetched TOGETHER, not one after the other (#190231 phase
+     * 0c) — opening a dataset waited a whole schema-list round trip before asking for a row. The
+     * records are only RETURNED once the check passes; a refusal throws them away. Not reused
+     * from a cached schema list: this is the board boundary, and a cached answer could be stale.
      */
+    const recordsReq = irisFetch(`/api/v1/atlas/datasets/${encodeURIComponent(slug)}?page=${page}&per_page=${perPage}`)
+    recordsReq.catch(() => {}) // a refusal below never awaits it; do not let it reject unobserved
     const defn = await schemaRow(slug)
     if (!defn) return { measured: false, reason: `no dataset "${slug}"`, data: { ...empty, page, perPage } }
     if (opts.bloqId != null && Number(defn.bloq_id) !== opts.bloqId) {
@@ -1603,7 +2207,7 @@ export async function fetchRecords(
       }
     }
 
-    const res = await irisFetch(`/api/v1/atlas/datasets/${encodeURIComponent(slug)}?page=${page}&per_page=${perPage}`)
+    const res = await recordsReq
     if (!res.ok) return { measured: false, reason: `fl-api ${res.status}`, data: { ...empty, page, perPage } }
     const json = (await res.json()) as any
     const d = json?.data ?? json
@@ -2712,13 +3316,104 @@ export async function saveItem(id: number, patch: ItemPatch): Promise<{ ok: bool
 }
 
 /**
+ * QUICK ADD (#189768) — a card at the END of a list, on the board on screen.
+ *
+ * fl-api's create route puts a card at sort_order 0 unless told otherwise — the TOP, tied with
+ * whatever was already first — so the caller passes the list's length. It checks the caller may
+ * write to that list (#183652-b); the refusal comes back in its words.
+ */
+export async function createItem(
+  bloqId: number,
+  listId: number,
+  input: { title: string; body?: string },
+): Promise<{ ok: boolean; id?: number; reason?: string }> {
+  const userId = await resolveUserId()
+  if (!userId) return { ok: false, reason: `not signed in (token: ${tokenSource()})` }
+  const title = input.title.trim()
+  if (!title) return { ok: false, reason: "a card needs a title" }
+  try {
+    /*
+     * storeForBloq, with the list in the BODY — the route the CLI uses. The per-list route
+     * (/{bloq}/lists/{list}/items) is a closure in fl-api's routes: closures are serialised into
+     * the route cache and signed with APP_KEY, and when that signature stopped verifying every
+     * call through it was a bare 500. storeForBloq also puts the card at the END of its list
+     * itself, so `position` is no longer sent; and its `content` is required, so a title-only
+     * card carries its title (the row preview drops a body that only repeats the title).
+     */
+    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}/items`, FL_API, {
+      method: "POST",
+      body: JSON.stringify({ title, content: input.body?.trim() || title, type: "default", list_id: listId }),
+    })
+    const j = (await res.json().catch(() => ({}))) as any
+    if (!res.ok) return { ok: false, reason: apiFailure(j, res.status) }
+    const id = Number(j?.data?.id ?? j?.data?.data?.id ?? j?.id)
+    return Number.isFinite(id) ? { ok: true, id } : { ok: true }
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+/** A new list at the end of the board (#189768). */
+export async function createList(
+  bloqId: number,
+  input: { name: string; position?: number },
+): Promise<{ ok: boolean; id?: number; reason?: string }> {
+  const userId = await resolveUserId()
+  if (!userId) return { ok: false, reason: `not signed in (token: ${tokenSource()})` }
+  const name = input.name.trim()
+  if (!name) return { ok: false, reason: "a list needs a name" }
+  try {
+    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}/lists`, FL_API, {
+      method: "POST",
+      body: JSON.stringify({ name, ...(input.position !== undefined ? { sort_order: input.position } : {}) }),
+    })
+    const j = (await res.json().catch(() => ({}))) as any
+    if (!res.ok) return { ok: false, reason: apiFailure(j, res.status) }
+    const id = Number(j?.data?.id ?? j?.id)
+    return Number.isFinite(id) ? { ok: true, id } : { ok: true }
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+/**
+ * Move a card to a list and a position on it — the Board view's drag (#189723).
+ *
+ * fl-api's /position renumbers the whole column (and the one the card left), which `saveItem`
+ * with `listId` cannot do: that changes the list and leaves the card wherever its old
+ * sort_order happens to fall. `position` is 0-based in the target list's full order.
+ *
+ * The route answers 404 for a card on a board you do not own — including one shared WITH you —
+ * so that is said in words: "item not found" about a card on screen reads as a broken app.
+ */
+export async function moveItem(id: number, listId: number, position: number): Promise<{ ok: boolean; reason?: string }> {
+  const userId = await resolveUserId()
+  if (!userId) return { ok: false, reason: `not signed in (token: ${tokenSource()})` }
+  if (!Number.isInteger(position) || position < 0) return { ok: false, reason: "position must be a whole number, 0 or more" }
+  try {
+    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/list/item/${id}/position`, FL_API, {
+      method: "PATCH",
+      body: JSON.stringify({ list_id: listId, position }),
+    })
+    const j = (await res.json().catch(() => ({}))) as any
+    if (res.status === 404) {
+      return { ok: false, reason: "Atlas would not move this card — only the board's owner can rearrange it" }
+    }
+    if (!res.ok) return { ok: false, reason: apiFailure(j, res.status) }
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+/**
  * Add a task to an item. With `agentId` this IS "assign an agent to this card" — there is
  * deliberately no agent column on items; assignment is a task carrying the agent, which is
  * what `iris agents tasks` and the Tasks tab both read back.
  */
 export async function addItemTask(
   itemId: number,
-  input: { title: string; agentId?: number; dueDate?: string },
+  input: { title: string; agentId?: number; dueDate?: string; parentId?: number },
 ): Promise<{ ok: boolean; reason?: string; task?: ItemTask }> {
   const userId = await resolveUserId()
   if (!userId) return { ok: false, reason: `not signed in (token: ${tokenSource()})` }
@@ -2729,6 +3424,8 @@ export async function addItemTask(
     const body: Record<string, unknown> = { title, status: "todo" }
     if (input.agentId != null) body.agent_id = input.agentId
     if (input.dueDate) body.due_date = input.dueDate
+    // A subtask (#189794): fl-api nests by parent_id and rolls completion up the chain.
+    if (input.parentId != null) body.parent_id = input.parentId
     const res = await irisFetch(`/api/v1/user/bloqs/list/item/${itemId}/tasks`, FL_API, {
       method: "POST",
       body: JSON.stringify(body),
@@ -2823,6 +3520,8 @@ export interface ShareMember {
   name: string
   email: string
   permission: string
+  /** A narrowed membership — "assigned" means only the cards assigned to them. */
+  scope?: string
 }
 export interface ShareLink {
   id: string
@@ -2870,11 +3569,14 @@ export function readEmailList(v: unknown): string[] {
 
 /** BloqUserController@index rows: {id, name, email, username, permission: viewer|editor|owner, status, …}. */
 export function readShareMember(r: any): ShareMember {
+  const scope = r?.scope_type ?? r?.pivot?.scope_type
   return {
     userId: Number(r?.id ?? r?.user_id),
     name: String(r?.name ?? r?.username ?? ""),
     email: String(r?.email ?? ""),
     permission: String(r?.permission ?? "viewer"),
+    // 'assigned' = sees only the cards assigned to them (#189801 ADR-02). Absent = whole board.
+    ...(scope && scope !== "bloq" ? { scope: String(scope) } : {}),
   }
 }
 
@@ -3071,6 +3773,198 @@ export async function revokeMember(bloqId: number, memberUserId: number): Promis
   const r = await postJson(`/api/v1/user/bloqs/${bloqId}/share/${memberUserId}`, undefined, "DELETE")
   return { ok: r.ok, reason: r.reason }
 }
+/**
+ * Who is on a board (#189795): the owner first, then members with their permission. The same
+ * fl-api reads the card editor's Share tab uses, at board level.
+ */
+export async function fetchBoardMembers(
+  bloqId: number,
+): Promise<PlatformResult<{ ownerId: number | null; youAreOwner: boolean; members: ShareMember[] }>> {
+  const empty = { ownerId: null, youAreOwner: false, members: [] as ShareMember[] }
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: notSignedIn(), data: empty }
+  try {
+    const [boardRes, usersRes] = await Promise.all([
+      irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}?light=1`),
+      irisFetch(`/api/v1/user/bloqs/${bloqId}/shared-users`),
+    ])
+    if (!boardRes.ok) return { measured: false, reason: `fl-api ${boardRes.status}`, data: empty }
+    const board = ((await boardRes.json()) as any)?.data ?? {}
+    const ownerId = typeof board.user_id === "number" ? board.user_id : null
+    let rows: any[] = []
+    if (usersRes.ok) {
+      const d = ((await usersRes.json()) as any)?.data
+      rows = Array.isArray(d) ? d : (d?.shared_users ?? [])
+    } else if (Array.isArray(board.shared_users)) rows = board.shared_users
+    const members = rows.map((r) => readShareMember({ ...r, permission: r?.permission ?? r?.pivot?.permission })).filter((m) => m.userId)
+    return { measured: true, data: { ownerId, youAreOwner: ownerId === userId, members } }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: empty }
+  }
+}
+
+/** A card's assignees (#189796), through fl-api's /assignees routes (#189792). */
+/** One row of a card's trail (#189799): who did what to it, in words. */
+export interface CardActivity {
+  id: number
+  type: string
+  text: string
+  icon?: string
+  actor?: string
+  /** Who did it, by id — how a client knows a comment is its own (#card-elon). */
+  actorId?: number
+  at?: string
+}
+
+export function readActivity(raw: unknown): CardActivity[] {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter((r: any) => r && Number.isFinite(Number(r.id)) && typeof r.content === "string")
+    .map((r: any) => ({
+      id: Number(r.id),
+      type: String(r.type ?? "note"),
+      text: r.content,
+      icon: typeof r.icon === "string" ? r.icon : undefined,
+      actor: typeof r.actor === "string" && r.actor ? r.actor : undefined,
+      actorId: Number.isFinite(Number(r.actor_id)) && r.actor_id != null ? Number(r.actor_id) : undefined,
+      at: typeof r.created_at === "string" ? r.created_at : undefined,
+    }))
+}
+
+/** A card's trail, newest first: assignments, finished subtasks, moves, field changes (#189799). */
+export async function fetchActivity(itemId: number): Promise<PlatformResult<{ activity: CardActivity[] }>> {
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: notSignedIn(), data: { activity: [] } }
+  try {
+    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/activity`)
+    const j = (await res.json().catch(() => ({}))) as any
+    if (res.status === 404 && !j?.message)
+      return { measured: false, reason: "this IRIS server does not keep card activity yet", data: { activity: [] } }
+    if (!res.ok) return { measured: false, reason: apiFailure(j, res.status), data: { activity: [] } }
+    return { measured: true, data: { activity: readActivity(j?.data?.activity) } }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { activity: [] } }
+  }
+}
+
+/**
+ * A comment on a card (#189799). `mentions` are the board people picked in the composer; fl-api
+ * also reads "@email" and "@user_name" in the text, and tells only people on the board.
+ */
+export async function addComment(
+  itemId: number,
+  input: { body: string; mentions?: number[] },
+): Promise<Ok & { mentioned?: number[] }> {
+  const userId = await resolveUserId()
+  if (!userId) return { ok: false, reason: notSignedIn() }
+  const body = input.body.trim()
+  if (!body) return { ok: false, reason: "a comment needs words" }
+  try {
+    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/comments`, FL_API, {
+      method: "POST",
+      body: JSON.stringify({ body, mentions: input.mentions ?? [] }),
+    })
+    const j = (await res.json().catch(() => ({}))) as any
+    if (res.status === 404 && !j?.message) return { ok: false, reason: "this IRIS server does not take comments yet" }
+    if (!res.ok) return { ok: false, reason: apiFailure(j, res.status) }
+    return { ok: true, mentioned: Array.isArray(j?.data?.mentioned) ? j.data.mentioned.map(Number) : [] }
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+/** What you hear about from Atlas (#189799). Everything is on until you turn it off. */
+export interface NotifySettings {
+  emailAssign: boolean
+  emailMention: boolean
+  emailDue: boolean
+  push: boolean
+}
+const NOTIFY_WIRE: Record<keyof NotifySettings, string> = {
+  emailAssign: "email_assign",
+  emailMention: "email_mention",
+  emailDue: "email_due",
+  push: "push",
+}
+export function readNotifySettings(raw: any): NotifySettings {
+  const on = (k: string) => raw?.[k] !== false
+  return { emailAssign: on("email_assign"), emailMention: on("email_mention"), emailDue: on("email_due"), push: on("push") }
+}
+
+export async function notifySettings(
+  change?: Partial<NotifySettings>,
+): Promise<PlatformResult<{ settings: NotifySettings }>> {
+  const fallback = { settings: readNotifySettings({}) }
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: notSignedIn(), data: fallback }
+  try {
+    const body: Record<string, boolean> = {}
+    for (const [k, v] of Object.entries(change ?? {})) if (typeof v === "boolean") body[NOTIFY_WIRE[k as keyof NotifySettings]] = v
+    const res = await irisFetch(
+      `/api/v1/user/${userId}/bloqs/notification-settings`,
+      FL_API,
+      change ? { method: "PUT", body: JSON.stringify(body) } : undefined,
+    )
+    const j = (await res.json().catch(() => ({}))) as any
+    if (res.status === 404 && !j?.data)
+      return { measured: false, reason: "this IRIS server does not have notification settings yet", data: fallback }
+    if (!res.ok) return { measured: false, reason: apiFailure(j, res.status), data: fallback }
+    return { measured: true, data: { settings: readNotifySettings(j?.data?.settings) } }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: fallback }
+  }
+}
+
+export async function fetchAssignees(itemId: number): Promise<PlatformResult<{ assignees: AtlasAssignee[] }>> {
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: notSignedIn(), data: { assignees: [] } }
+  try {
+    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/assignees`)
+    const j = (await res.json().catch(() => ({}))) as any
+    // A route fl-api does not have answers 404 with an EMPTY message; the route's own refusal
+    // says "Item not found". The first means this IRIS server predates assignees (#189792).
+    if (res.status === 404 && !j?.message)
+      return { measured: false, reason: "this IRIS server does not support assigning yet", data: { assignees: [] } }
+    if (!res.ok) return { measured: false, reason: apiFailure(j, res.status), data: { assignees: [] } }
+    return { measured: true, data: { assignees: readAssignees(j?.data?.assignees) } }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { assignees: [] } }
+  }
+}
+
+/**
+ * Assign a person (by id or email) or an agent. Assigning someone who is not on the board gives
+ * them access to the cards assigned to them (#189801 ADR-02) — `accessGranted` says when it did.
+ */
+export async function assign(
+  itemId: number,
+  who: { userId?: number; agentId?: number; email?: string },
+): Promise<Ok & { assignees?: AtlasAssignee[]; accessGranted?: boolean }> {
+  const userId = await resolveUserId()
+  if (!userId) return { ok: false, reason: notSignedIn() }
+  const given = [who.userId, who.agentId, who.email?.trim()].filter(Boolean)
+  if (given.length !== 1) return { ok: false, reason: "assign one person, email or agent" }
+  const r = await postJson(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/assignees`, {
+    ...(who.userId ? { user_id: who.userId } : who.agentId ? { agent_id: who.agentId } : { email: who.email!.trim() }),
+  })
+  if (!r.ok) return { ok: false, reason: r.reason }
+  const d = r.data?.data ?? r.data
+  return { ok: true, assignees: readAssignees(d?.assignees), accessGranted: d?.access_granted === true }
+}
+
+export async function unassign(itemId: number, assigneeId: number): Promise<Ok & { assignees?: AtlasAssignee[]; accessRemoved?: boolean }> {
+  const userId = await resolveUserId()
+  if (!userId) return { ok: false, reason: notSignedIn() }
+  const r = await postJson(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/assignees/${assigneeId}`, undefined, "DELETE")
+  if (!r.ok) return { ok: false, reason: r.reason }
+  const d = r.data?.data ?? r.data
+  return { ok: true, assignees: readAssignees(d?.assignees), accessRemoved: d?.access_removed === true }
+}
+
+function readAssignees(rows: any): AtlasAssignee[] {
+  return (cardFace({ summary: { assignees: Array.isArray(rows) ? rows : [] } }).assignees ?? []) as AtlasAssignee[]
+}
+
 export async function createShareLink(bloqId: number, expiresInDays?: number): Promise<Ok & { link?: ShareLink }> {
   const userId = await resolveUserId()
   if (!userId) return { ok: false, reason: notSignedIn() }
@@ -3173,6 +4067,17 @@ export async function deleteAttachment(itemId: number, fileId: string): Promise<
     if (!del.ok && !/not found|404|no query results/i.test(del.reason ?? ""))
       return { ok: false, reason: `cloud file: ${del.reason}` }
   }
+  // ONE attachment, removed server-side under a row lock (fl-api #121, #189791) — by the id fl-api
+  // matches on. Only a legacy entry with neither id falls back to rewriting the whole array.
+  const key = gone.cloud_file_id ?? gone.id
+  if (key != null) {
+    const r = await postJson(
+      `/api/v1/user/${userId}/bloqs/list/item/${itemId}/attachments/${encodeURIComponent(String(key))}`,
+      undefined,
+      "DELETE",
+    )
+    return { ok: r.ok, reason: r.reason }
+  }
   // Whole object: content_merge cannot remove an array element (array_replace_recursive).
   const r = await postJson(
     `/api/v1/user/bloqs/list/item/${itemId}`,
@@ -3240,21 +4145,20 @@ export async function uploadAttachment(
     upload_date: new Date().toISOString(),
     created_at: new Date().toISOString(),
   }
-  const item = await rawItem(itemId)
-  if (!item.ok) return { ok: false, reason: `uploaded, but the card could not be read to attach it: ${item.reason}` }
-  const c = parseContent(item.raw.content)
-  const list: any[] = Array.isArray(c.obj?.attachments) ? c.obj!.attachments : []
-  const body: Record<string, unknown> =
-    c.kind === "structured"
-      ? { content_merge: { attachments: [...list, ref] } }
-      : { content: JSON.stringify({ text: c.text, body: c.text, attachments: [ref] }) }
-  const saved = await postJson(`/api/v1/user/bloqs/list/item/${itemId}`, body, "PUT")
+  /*
+   * ONE attachment, appended server-side under a row lock (fl-api #121, #189791). This used to
+   * read the card, append, and write the whole attachments array back — so an agent editing the
+   * body between that read and write lost its edit, or this upload lost the file. fl-api turns a
+   * prose card into a structured one itself, keeping the text.
+   */
+  const saved = await postJson(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/attachments`, { attachment: ref })
   if (!saved.ok)
     return {
       ok: false,
       reason: `uploaded (cloud file ${ref.cloud_file_id}) but not attached to the card: ${saved.reason}`,
     }
-  return { ok: true, file: readAttachment(ref, list.length) }
+  const now: unknown[] = Array.isArray(saved.data?.attachments) ? saved.data.attachments : [ref]
+  return { ok: true, file: readAttachment(ref, Math.max(0, now.length - 1)) }
 }
 
 // ── Events ──────────────────────────────────────────────────────────────────

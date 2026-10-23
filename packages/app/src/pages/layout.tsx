@@ -59,6 +59,7 @@ import { Titlebar, type TitlebarUpdate } from "@/components/titlebar"
 import { useDirectoryPicker } from "@/components/directory-picker"
 import { ServerConnection, useServer } from "@/context/server"
 import { useLanguage, type Locale } from "@/context/language"
+import { UpdateAvailableToast } from "@/components/update-available-toast"
 import { pathKey } from "@/utils/path-key"
 import {
   displayName,
@@ -90,7 +91,6 @@ import { SidebarContent } from "./layout/sidebar-shell"
  * and a px literal would not. See #184875.
  */
 const COLLAPSED_RAIL = "4rem"
-
 
 export default function LegacyLayout(props: ParentProps) {
   const serverSDK = useServerSDK()
@@ -2271,7 +2271,12 @@ export default function LegacyLayout(props: ParentProps) {
         }
       />
       <Show when={updateVersion() !== undefined}>
-        <UpdateAvailableToast version={updateVersion() ?? ""} install={installUpdate} language={language} />
+        <UpdateAvailableToast
+          version={updateVersion() ?? ""}
+          install={installUpdate}
+          decline={() => void platform.updater?.decline?.()}
+          language={language}
+        />
       </Show>
       <div class="flex-1 min-h-0 min-w-0 flex">
         <div class="flex-1 min-h-0 relative">
@@ -2421,38 +2426,4 @@ export default function LegacyLayout(props: ParentProps) {
       <ToastRegion v2={false} />
     </div>
   )
-}
-
-function UpdateAvailableToast(props: {
-  version: string
-  install: () => void
-  language: ReturnType<typeof useLanguage>
-}) {
-  let toastId: number | undefined
-
-  onMount(() => {
-    toastId = showToast({
-      persistent: true,
-      icon: "download",
-      title: props.language.t("toast.update.title"),
-      description: props.language.t("toast.update.description", { version: props.version }),
-      actions: [
-        {
-          label: props.language.t("toast.update.action.installRestart"),
-          onClick: props.install,
-        },
-        {
-          label: props.language.t("toast.update.action.notYet"),
-          onClick: "dismiss",
-        },
-      ],
-    })
-  })
-
-  onCleanup(() => {
-    if (toastId === undefined) return
-    dismissToast(toastId)
-  })
-
-  return null
 }

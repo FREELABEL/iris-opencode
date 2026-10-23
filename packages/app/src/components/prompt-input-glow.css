@@ -91,23 +91,27 @@
   opacity: 1;
 }
 
+/* The underglow must end inside the dock's 12px bottom padding: below that, the session panel
+   (rounded, overflow hidden) cuts it off in a straight line (Alex, 2026-10-14: "the glow around the
+   chat is kinda weird and getting cut off"). It was 52px tall at -14px with a 24px blur, which
+   reached ~38px below the card. Now it sits behind the card's lower edge and fades out ~10px below it. */
 .iris-glow__under {
   position: absolute;
-  left: 4%;
-  right: 4%;
-  bottom: -14px;
-  height: 52px;
+  left: 6%;
+  right: 6%;
+  bottom: -2px;
+  height: 16px;
   z-index: -2;
   pointer-events: none;
   opacity: 0;
   transition: opacity 0.6s ease;
-  filter: blur(24px);
+  filter: blur(5px);
   border-radius: 50%;
   background: conic-gradient(from var(--iris-glow-a) at 50% 50%, var(--g1), var(--g2), var(--g3), var(--g1));
   animation: iris-glow-spin var(--iris-glow-under, 6s) linear infinite;
 }
 .iris-glow[data-bg] .iris-glow__under {
-  opacity: 0.7;
+  opacity: 1;
 }
 
 .iris-glow__chip {
@@ -171,4 +175,139 @@
   .iris-glow[data-bg] .iris-glow__under {
     animation: iris-glow-breathe 2.6s ease-in-out infinite;
   }
+}
+
+/* The glow spreads past the dock's top edge. The message timeline above was painted over it, which
+   cut the light into a hard horizontal line (1.18.104). Lift the dock above the timeline so the light
+   fades out over the last lines of the conversation instead. Pointer events are unaffected: the dock
+   is pointer-events:none outside the composer, and the glow layers are pointer-events:none. */
+[data-component="session-prompt-dock"] {
+  position: relative;
+  z-index: 2;
+}
+
+/* The chip is a button now (#189437): it opens the list of what is running. */
+button.iris-glow__chip {
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+button.iris-glow__chip:hover,
+button.iris-glow__chip[data-expanded] {
+  color: var(--v2-text-text-base, inherit);
+  background: var(--v2-overlay-simple-overlay-hover, rgba(128, 128, 128, 0.12));
+}
+button.iris-glow__chip:focus-visible {
+  outline: 2px solid var(--v2-border-border-focus, #3b82f6);
+  outline-offset: 2px;
+}
+
+/* Inside the allowance tab's header row (#190391): in the row beside Upgrade, not floating over it. */
+button.iris-glow__chip[data-inline] {
+  position: static;
+  min-width: 0;
+  max-width: 100%;
+  white-space: nowrap;
+}
+.iris-glow__chip[data-inline] > i {
+  flex-shrink: 0;
+}
+.iris-glow__chip[data-inline] .iris-glow__chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The list (#189437). Rows after upstream 2.0's running menu: dot, name, a muted line, ✕ on hover. */
+.iris-bg-menu {
+  width: 280px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.iris-bg-menu__head {
+  padding: 6px 10px 4px;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--v2-text-text-faint, #8a8394);
+}
+.iris-bg-menu__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.iris-bg-menu__dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #3b82f6;
+  animation: iris-glow-breathe 2.4s ease-in-out infinite;
+}
+.iris-bg-menu__dot[data-retry] {
+  background: #f59e0b;
+}
+.iris-bg-menu__text {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+}
+.iris-bg-menu__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 530;
+}
+.iris-bg-menu__sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--v2-text-text-muted, #8a8394);
+}
+.iris-bg-menu__stop {
+  display: none;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  color: var(--v2-icon-icon-muted, currentColor);
+}
+.iris-bg-menu__stop:hover {
+  background: var(--v2-overlay-simple-overlay-hover, rgba(128, 128, 128, 0.12));
+  color: var(--v2-text-text-base, inherit);
+}
+.iris-bg-menu__row:hover .iris-bg-menu__stop,
+.iris-bg-menu__row[data-highlighted] .iris-bg-menu__stop {
+  display: inline-flex;
+}
+@media (hover: none) {
+  .iris-bg-menu__stop {
+    display: inline-flex;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .iris-bg-menu__dot {
+    animation: none;
+  }
+}
+
+/* THIN — a 1px ring with a short halo, for small surfaces that sit beside the composer (the
+   allowance bar, #190087). The composer's 2px ring read as "too fat" on a 42px bar (Alex, 2026-10-20). */
+.iris-glow[data-thin]::before {
+  inset: -1px;
+  border-radius: 13px;
+}
+.iris-glow[data-thin]::after {
+  inset: -1px;
+  border-width: 2px;
+  filter: blur(2px);
+}
+/* A TAB tucked behind the composer: square bottom, so the ring traces only the visible tab. */
+.iris-glow[data-tab]::before,
+.iris-glow[data-tab]::after {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
 }

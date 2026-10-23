@@ -25,6 +25,8 @@ export interface RemoteConfig {
   bloqId?: string
 }
 
+const DEFAULT_API_URL = "https://heyiris.io"
+
 /** Read ~/.iris/config.json, the same file the CLI authenticates with. Env wins. */
 export function readRemoteConfig(): RemoteConfig | null {
   return describeRemoteConfig().config
@@ -52,11 +54,10 @@ export function describeRemoteConfig(
     /* an unreadable config is the same as no config */
   }
 
-  if (!apiUrl)
-    return {
-      config: null,
-      reason: "You are not signed in to IRIS. Run iris auth login in a terminal, then try dictation again.",
-    }
+  // Same default as the rest of the server (iris/platform.ts IRIS_API). Signing in inside the
+  // desktop app gives the engine IRIS_API_KEY but no URL and writes no config.json, so requiring
+  // one told signed-in people to go and use a terminal (#189521).
+  apiUrl = apiUrl || DEFAULT_API_URL
   // The platform refuses anonymous transcription, so a person's credential is REQUIRED. The
   // node_api_key in ~/.iris/config.json is not one — the platform rejects it as a caller — so
   // only shapes the platform's guard accepts are sent; anything else is reported, not tried.
@@ -107,7 +108,7 @@ const TIMEOUT_MS = 90_000
 export async function transcribeRemote(
   audio: Uint8Array,
   cfg: RemoteConfig,
-  opts: { filename?: string; provider?: string; language?: string } = {},
+  opts: { filename?: string; provider?: string; language?: string; timeoutMs?: number } = {},
 ): Promise<{ text: string; provider: string; ms: number }> {
   const started = Date.now()
   const form = new FormData()
@@ -123,7 +124,7 @@ export async function transcribeRemote(
       method: "POST",
       headers: cfg.token ? { Authorization: `Bearer ${cfg.token}` } : {},
       body: form,
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(Math.min(opts.timeoutMs ?? TIMEOUT_MS, TIMEOUT_MS)),
     })
   } catch (e) {
     throw new RemoteTranscribeError(`Could not reach ${cfg.apiUrl} for remote transcription: ${String(e)}`, 0)

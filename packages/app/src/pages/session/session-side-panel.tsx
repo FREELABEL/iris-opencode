@@ -1,4 +1,4 @@
-import { For, Match, Show, Switch, createEffect, createMemo, onCleanup, type JSX } from "solid-js"
+import { For, Match, Show, Switch, createEffect, createMemo, on, onCleanup, type JSX } from "solid-js"
 import { IrisPanelBoundary } from "@/components/iris-panel-boundary"
 import { createStore } from "solid-js/store"
 import { createMediaQuery } from "@solid-primitives/media"
@@ -43,6 +43,8 @@ import {
   irisPinned,
   toggleIrisPin,
   irisFilesPinned,
+  irisSurfaceChangedAt,
+  irisOpensOnAtlas,
   toggleIrisFilesPin,
   irisScopeChip,
 } from "@/components/session/session-iris-tab"
@@ -75,6 +77,7 @@ import {
 import { setSessionHandoff } from "@/pages/session/handoff"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { IrisProductIcon } from "@/components/session/iris-product-icon"
+import { needsAttention, surfaceSync, syncLabel } from "@/components/session/iris-surface-store"
 import { SessionFileBrowserTab, type SessionFileBrowserState } from "@/pages/session/v2/session-file-browser-tab"
 
 type ReviewDiff = FileDiffInfo | SnapshotFileDiff | VcsFileDiff
@@ -207,6 +210,7 @@ export function SessionSidePanel(props: {
     hasReview: props.canReview,
     reviewFirst: props.reviewFirst,
     filesPinned,
+    preferIris: irisOpensOnAtlas,
     fileBrowser: () => !!props.fileBrowserState,
   })
   const contextOpen = tabState.contextOpen
@@ -319,6 +323,10 @@ export function SessionSidePanel(props: {
           <div class="flex items-center gap-1.5">
             <IrisProductIcon id={id} />
             <div>{irisStripTabs().find((t) => t.id === id)?.label ?? id}</div>
+            {/* Showing something that is not current — offline, or the server refused (#190231 phase 2). */}
+            <Show when={needsAttention(surfaceSync(id))}>
+              <span class="iris-tabdot" title={syncLabel(surfaceSync(id), Date.now())?.text} />
+            </Show>
           </div>
         </Tabs.Trigger>
       )}
@@ -388,7 +396,32 @@ export function SessionSidePanel(props: {
     previewTab(SESSION_OPEN_FILE_TAB)
     queueMicrotask(() => fileFilter?.focus())
   }
+  /**
+   * KOBALTE'S FALLBACK IS NOT A CHOICE (#190093). When the strip changes under the value we hold
+   * — a product added because it is shown but not pinned, the strip remounting as the panel
+   * reopens, a product switch committing from its transition — Kobalte can momentarily lose the
+   * selected trigger, select the FIRST trigger and report it through onChange. Taken as a click,
+   * it moved the panel: showing Integrations from a closed panel landed on Files & changes
+   * (traced: onSelectionChange → activateTab("review"), with the Integrations trigger present).
+   *
+   * Its signature, all three: the reported value is the FIRST trigger, it is not the value we hold,
+   * and the selection or the product changed moments ago. A person clicking the first tab within
+   * that moment is the only thing this can swallow. The product's timestamp is written with its
+   * signal (irisSurfaceChangedAt), not by an effect here — effects downstream of a transition wait
+   * for the commit, and the fallback arrives before it.
+   */
+  let heldSince = performance.now() // the strip mounting counts: it remounts as the panel reopens
+  createEffect(on(stripValue, () => (heldSince = performance.now()), { defer: true }))
+  const FALLBACK_WINDOW_MS = 400
+  const looksLikeFallback = (value: string) => {
+    if (value === stripValue()) return false
+    const since = Math.max(heldSince, irisSurfaceChangedAt())
+    if (performance.now() - since > FALLBACK_WINDOW_MS) return false
+    const first = typeof document === "undefined" ? null : document.querySelector('[data-slot="tabs-trigger"]')
+    return first?.getAttribute("data-value") === value
+  }
   const activateTab = (value: string) => {
+    if (looksLikeFallback(value)) return
     // A product tab: the IRIS panel, on that product. "iris" itself is never shown as a tab.
     if (value.startsWith("iris:")) return openIrisSurface(value.slice(5))
     const next = normalizeTab(value)

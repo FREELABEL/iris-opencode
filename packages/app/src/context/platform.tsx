@@ -124,6 +124,9 @@ type PlatformBase = {
 
   /** Record a fatal renderer error in platform logs (desktop only) */
   recordFatalRendererError?(error: FatalRendererErrorLog): Promise<void>
+
+  /** iris:// links that opened or focused the app (#190233). Returns an unsubscribe. Desktop only. */
+  onDeepLink?(handler: (url: string) => void): () => void
 }
 
 export type Platform = PlatformBase &

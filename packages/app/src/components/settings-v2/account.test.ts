@@ -1,5 +1,16 @@
 import { describe, expect, test } from "bun:test"
-import { accountStatus, meterView, planLabel, sourceNote, type AccountState } from "./account"
+import {
+  accountStatus,
+  meterView,
+  otherAccounts,
+  planLabel,
+  planPitch,
+  savedAccountLabel,
+  signOutDescription,
+  sourceNote,
+  type AccountState,
+  type SavedAccount,
+} from "./account"
 
 const allowance = (over: Partial<AccountState["allowance"]> = {}): AccountState["allowance"] => ({
   measured: true,
@@ -111,5 +122,54 @@ describe("Settings > Account (#187966)", () => {
     expect(plan("PRO")).toBe("Pro")
     expect(plan("")).toBe("Unknown")
     expect(plan(42)).toBe("Unknown")
+  })
+})
+
+describe("Settings > Account, more than one account (#189321)", () => {
+  const acct = (over: Partial<SavedAccount> = {}): SavedAccount => ({
+    ref: "193",
+    id: 193,
+    email: "a@example.com",
+    name: null,
+    active: false,
+    separateData: false,
+    ...over,
+  })
+
+  test("an account is named by its name, then email, then id, and never left blank", () => {
+    expect(savedAccountLabel(acct({ name: "Kristen" }))).toBe("Kristen")
+    expect(savedAccountLabel(acct({ name: "  " }))).toBe("a@example.com")
+    expect(savedAccountLabel(acct({ email: null }))).toBe("Account #193")
+    expect(savedAccountLabel(acct({ email: null, id: null }))).toBe("An account signed in earlier")
+  })
+
+  test("the account in use is not offered as one to switch to", () => {
+    const list = [acct({ active: true }), acct({ ref: "5498", id: 5498, email: "b@example.com" })]
+    expect(otherAccounts(list).map((a) => a.ref)).toEqual(["5498"])
+    expect(otherAccounts(undefined)).toEqual([])
+  })
+
+  test("sign-out says where it will land", () => {
+    expect(signOutDescription([])).toContain("Signs this computer out of IRIS")
+    expect(signOutDescription([acct({ email: "b@example.com" })])).toBe(
+      "Signs out of this account and switches to b@example.com. Hive keeps running on this machine.",
+    )
+  })
+})
+
+describe("plan name from the server", () => {
+  const base = { measured: true, plan: "free", paid: true, uncapped: false, upgradeUrl: null }
+  test("the server's label wins over the tier, which calls every paid package free", () => {
+    expect(planLabel({ ...base, label: "IRIS Solo" })).toBe("IRIS Solo")
+    expect(planLabel({ ...base, label: "  " })).toBe("Free")
+    expect(planLabel({ ...base, label: null })).toBe("Free")
+  })
+  test("unmeasured stays Unknown even with a label", () => {
+    expect(planLabel({ ...base, measured: false, label: "Free" })).toBe("Unknown")
+  })
+  test("the pitch never promises unlimited", () => {
+    for (const p of [undefined, base, { ...base, paid: false }, { ...base, paid: null }]) {
+      expect(planPitch(p).toLowerCase()).not.toContain("unlimited")
+    }
   })
 })

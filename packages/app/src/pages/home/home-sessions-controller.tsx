@@ -31,7 +31,8 @@ export type HomeSessionRecord = {
 }
 
 export type HomeSessionGroup = {
-  id: "today" | "yesterday" | "older"
+  // "open": the sessions drawer's Open tabs section (#190273). Home itself never makes one.
+  id: "open" | "today" | "yesterday" | "older"
   title: string
   sessions: HomeSessionRecord[]
 }

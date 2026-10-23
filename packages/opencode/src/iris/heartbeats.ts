@@ -34,7 +34,20 @@ export type HeartbeatRun = {
   deliverableId: number | null
   publicUrl: string | null
   emailSent: boolean | null
+  /**
+   * The beat's tool calls as iris-api recorded them (#189238) — null on beats from before that,
+   * where the only account is the agent's own prose ("- ✓ **tool**: …").
+   */
+  toolCalls: { tool: string; ok: boolean; durationMs: number | null; args: string | null; error: string | null }[] | null
+  /**
+   * Did this beat read what the agent wrote last shift (#189239)? `referenced` = its report used
+   * anchors (names, numbers) from that entry. Null on beats from before it was measured.
+   */
+  continuity: { loaded: boolean; referenced: boolean; matched: number; total: number; previousAt: string | null } | null
 }
+
+/** One wake from the fl-api ledger (#189237): held for its hours, or skipped and why. */
+export type HeartbeatWake = { at: string | null; dueAt: string | null; outcome: string; kind: string | null; reason: string | null; heldUntil: string | null }
 
 export type HeartbeatRow = {
   jobId: number
@@ -76,6 +89,10 @@ export type HeartbeatRow = {
   /** Newest first. Empty with `runsMeasured: false` means NOT READ, not "never ran". */
   runs: HeartbeatRun[]
   runsMeasured: boolean
+  /** Held and skipped wakes, measured. Null = ledger not read; see `ledgerSince` for from when. */
+  wakes: HeartbeatWake[] | null
+  /** From when the ledger records every held/skipped wake — before it, those are inferred. */
+  ledgerSince: string | null
 }
 
 /** Statuses a heartbeat can be in and still be yours to look at. Cancelled/completed are gone. */
@@ -115,6 +132,52 @@ export function readRun(e: any, keepResponse = true): HeartbeatRun {
     deliverableId: num(e?.deliverable_id),
     publicUrl: str(e?.public_url),
     emailSent: typeof e?.email_sent === "boolean" ? e.email_sent : null,
+    toolCalls: readToolCalls(e?.functions_executed),
+    continuity: readContinuity(e?.continuity),
+  }
+}
+
+/** functions_executed → tool calls. An empty array is "none recorded", same as absent. */
+export function readToolCalls(v: unknown): HeartbeatRun["toolCalls"] {
+  if (!Array.isArray(v) || !v.length) return null
+  const out = v
+    .filter((c: any) => c && typeof c === "object" && str(c.tool ?? c.name))
+    .map((c: any) => ({
+      tool: String(c.tool ?? c.name),
+      ok: c.ok === false || c.status === "error" || c.status === "failed" ? false : true,
+      durationMs: num(c.duration_ms),
+      args: str(c.args_summary),
+      error: str(c.error),
+    }))
+  return out.length ? out : null
+}
+
+export function readContinuity(c: any): HeartbeatRun["continuity"] {
+  if (!c || typeof c !== "object" || typeof c.loaded !== "boolean") return null
+  return {
+    loaded: c.loaded,
+    referenced: c.referenced === true,
+    matched: num(c.anchors_matched) ?? 0,
+    total: num(c.anchors_total) ?? 0,
+    previousAt: str(c.previous_entry_at),
+  }
+}
+
+/** The /wakes answer → the ledger's own rows only; the execution rows are already in `runs`. */
+export function readWakes(j: any): { wakes: HeartbeatWake[]; ledgerSince: string | null } | null {
+  if (!j || !Array.isArray(j.data)) return null
+  return {
+    wakes: j.data
+      .filter((w: any) => w && w.source !== "execution" && (w.outcome === "held" || w.outcome === "skipped"))
+      .map((w: any) => ({
+        at: str(w.at),
+        dueAt: str(w.due_at),
+        outcome: String(w.outcome),
+        kind: str(w.kind),
+        reason: str(w.reason),
+        heldUntil: str(w.held_until),
+      })),
+    ledgerSince: str(j.ledger_since),
   }
 }
 
@@ -128,7 +191,7 @@ export function readSchedule(sc: any): HeartbeatRow["schedule"] {
   return { timezone: str(sc.timezone) ?? "America/New_York", days, hours }
 }
 
-export function readHeartbeat(j: any, runs: any[] | null): HeartbeatRow {
+export function readHeartbeat(j: any, runs: any[] | null, ledger: ReturnType<typeof readWakes> = null): HeartbeatRow {
   const agent = j?.agent ?? {}
   const last = j?.last_result && typeof j.last_result === "object" ? j.last_result : null
   const lastOk = last ? (last.success === false ? false : last.success === true ? true : null) : null
@@ -163,6 +226,8 @@ export function readHeartbeat(j: any, runs: any[] | null): HeartbeatRow {
     // Full reports for the beats the timeline shows; the rest feed the week chart only.
     runs: (runs ?? []).map((e, i) => readRun(e, i < TIMELINE)),
     runsMeasured: runs !== null,
+    wakes: ledger?.wakes ?? null,
+    ledgerSince: ledger?.ledgerSince ?? null,
   }
 }
 
@@ -189,8 +254,14 @@ export async function fetchHeartbeats(): Promise<Result<{ heartbeats: HeartbeatR
     const heartbeats = await Promise.all(
       jobs.map(async (j) => {
         try {
-          const r = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs/${j.id}/executions?limit=${RUNS_PER_ROW}`)
-          return readHeartbeat(j, r.ok ? unwrap(await r.json()) : null)
+          const base = `/api/v1/users/${userId}/bloqs/scheduled-jobs/${j.id}`
+          const [r, w] = await Promise.all([
+            irisFetch(`${base}/executions?limit=${RUNS_PER_ROW}`),
+            // older fl-api has no /wakes — the panel then infers holds and skips, as before
+            irisFetch(`${base}/wakes?days=8`).catch(() => null),
+          ])
+          const ledger = w?.ok ? readWakes(await w.json().catch(() => null)) : null
+          return readHeartbeat(j, r.ok ? unwrap(await r.json()) : null, ledger)
         } catch {
           return readHeartbeat(j, null)
         }

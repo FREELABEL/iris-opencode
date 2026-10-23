@@ -25,7 +25,8 @@
     "./v2/prompt-input/live-text": "./src/v2/components/prompt-input/live-text.ts",
   "./v2/prompt-input/interaction": "./src/v2/components/prompt-input/interaction.ts",
     "./v2/prompt-input/store": "./src/v2/components/prompt-input/store.ts",
-    "./v2/prompt-input/types": "./src/v2/components/prompt-input/types.ts"
+    "./v2/prompt-input/types": "./src/v2/components/prompt-input/types.ts",
+    "./v2/prompt-input/attachment-check": "./src/v2/components/prompt-input/attachment-check.ts"
   },
   "scripts": {
     "typecheck": "tsgo --noEmit",

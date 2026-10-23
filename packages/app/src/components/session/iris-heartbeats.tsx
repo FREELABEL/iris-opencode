@@ -74,7 +74,7 @@ function Week(props: { row: HeartbeatRow; now: number; picked?: number; onPick: 
         <span class="hsc-num">
           {roll().beats} worked
           {roll().failed ? ` · ${roll().failed} failed` : ""}
-          {roll().missed ? ` · ${roll().missed} skipped` : ""}
+          {roll().missed + roll().skips ? ` · ${roll().missed + roll().skips} skipped` : ""}
           {roll().expected ? ` · of ${roll().expected} due` : ""}
           {roll().outside ? ` · ${roll().outside} held for its hours` : ""}
         </span>
@@ -93,6 +93,13 @@ function Week(props: { row: HeartbeatRow; now: number; picked?: number; onPick: 
         <line class="hbt-wbase" x1={0} x2={W} y1={BASE} y2={BASE} />
         <For each={w().expected}>{(e) => <line class="hbt-wdue" x1={x(e)} x2={x(e)} y1={BASE - 5} y2={BASE + 5} />}</For>
         <For each={w().missed}>{(e) => <circle class="hbt-wmiss" cx={x(e)} cy={BASE} r={2.6} />}</For>
+        <For each={w().skips.filter((k) => !k.byDesign)}>
+          {(k) => (
+            <circle class="hbt-wmiss" data-rec="1" cx={x(k.at)} cy={BASE} r={3}>
+              <title>{`${new Date(k.at).toLocaleString()} — skipped${k.reason ? `: ${k.reason}` : ""}`}</title>
+            </circle>
+          )}
+        </For>
         <For each={w().beats}>
           {(b) => (
             <line
@@ -126,6 +133,13 @@ function Week(props: { row: HeartbeatRow; now: number; picked?: number; onPick: 
           {roll().unknown} wake{roll().unknown === 1 ? "" : "s"} from before 13 Oct not shown: the platform overwrote
           each beat with the next until then (#189132).
         </p>
+      </Show>
+      <Show when={roll().remembered}>
+        {(m) => (
+          <p class="hbt-wtools hsc-num">
+            Read last shift's diary on {m().read} of {m().measured} beat{m().measured === 1 ? "" : "s"} · built on it in {m().used}
+          </p>
+        )}
       </Show>
       <Show when={roll().tools.length}>
         <p class="hbt-wtools">
@@ -177,17 +191,34 @@ function BeatDetail(props: { run: HeartbeatRun }) {
       <For each={s().rest}>{(r) => <Part title={r.title} body={r.body} />}</For>
       <Show when={s().tools.length}>
         <div class="hbt-part">
-          <h5>Tools it called</h5>
+          <h5>Tools it called{s().tools[0]?.measured ? "" : " (from its report)"}</h5>
           <ul class="hbt-tools">
             <For each={s().tools}>
               {(t) => (
                 <li data-ok={t.ok ? "1" : undefined}>
                   <span class="hsc-mono">{t.name}</span> {t.did}
+                  <Show when={t.ms != null}>
+                    <span class="hsc-num hsc-muted"> · {durationOf(t.ms)}</span>
+                  </Show>
                 </li>
               )}
             </For>
           </ul>
         </div>
+      </Show>
+      <Show when={s().continuity}>
+        {(c) => (
+          <div class="hbt-part">
+            <h5>Last shift</h5>
+            <p>
+              {!c().loaded
+                ? "Did not read its diary from the last shift."
+                : c().referenced
+                  ? `Read its diary from the last shift and built on it — ${c().matched} of ${c().total} details carried over.`
+                  : "Read its diary from the last shift, but the report does not build on it."}
+            </p>
+          </div>
+        )}
       </Show>
       <div class="hbt-part">
         <h5>Result</h5>

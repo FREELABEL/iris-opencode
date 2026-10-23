@@ -30,7 +30,11 @@ export type HeartbeatRun = {
   deliverableId?: number | null
   publicUrl?: string | null
   emailSent?: boolean | null
+  toolCalls?: { tool: string; ok: boolean; durationMs: number | null; args: string | null; error: string | null }[] | null
+  continuity?: { loaded: boolean; referenced: boolean; matched: number; total: number; previousAt: string | null } | null
 }
+
+export type HeartbeatWake = { at: string | null; dueAt: string | null; outcome: string; kind: string | null; reason: string | null; heldUntil: string | null }
 
 export type HeartbeatRow = {
   jobId: number
@@ -57,6 +61,9 @@ export type HeartbeatRow = {
   lastSkip?: { at: string | null; reason: string | null; kind: string | null } | null
   runs: HeartbeatRun[]
   runsMeasured: boolean
+  /** fl-api's wake ledger (#189237): held and skipped wakes, MEASURED. Null = not read. */
+  wakes?: HeartbeatWake[] | null
+  ledgerSince?: string | null
 }
 
 export type BeatState = "late" | "silent" | "failing" | "running" | "ok" | "paused"
@@ -257,6 +264,14 @@ export function silentSince(r: HeartbeatRow, now: number = Date.now()): string |
   if (skip && Number.isFinite(t(skip.at)) && !(t(skip.at) <= beat)) {
     return byDesign(skip.reason) ? null : (beatIso ?? "never")
   }
+  // Once the wake ledger covers the time since its last beat (#189237), every skipped wake is
+  // RECORDED — so silence is a recorded skip, never an empty gap. Measured 13 Oct: two hourly
+  // agents beat at 04:05 and the scheduler set their next wake for 13:00; inferring a wake every
+  // hour from the cadence called them silent at 05:20 though nothing had been skipped.
+  if (ledgerCovers(r, beat)) {
+    const k = (r.wakes ?? []).find((w) => w.outcome === "skipped" && t(w.at) > beat && !byDesign(w.reason))
+    return k ? beatIso : null
+  }
   const period = periodOf(r.frequency) ?? 86_400_000
   // AFTER the fix a skip no longer moves last_run_at, so the clock rule below stops seeing it.
   // Absence is evidence now: if the next beat it owed after its last one (or after the fix) has
@@ -270,6 +285,12 @@ export function silentSince(r: HeartbeatRow, now: number = Date.now()): string |
   // walk the wakes the scheduler made in (beat, woke] — anchored on the last one it made
   for (let k = woke, n = 0; k > from + LATE_AFTER_MS && n < 2000; k -= period, n++) if (mayAct(r, k)) return beatIso ?? "never"
   return null
+}
+
+/** The ledger was read and was already recording at `ms` — from then on, absence is not evidence. */
+export function ledgerCovers(r: HeartbeatRow, ms: number): boolean {
+  const since = t(r.ledgerSince ?? null)
+  return !!r.wakes && Number.isFinite(since) && Number.isFinite(ms) && ms >= since
 }
 
 /** The cadence the editors show disagrees with the one that fires (#189170). */
@@ -508,6 +529,8 @@ export type WeekView = {
   outside: number
   next: number | null
   period: number | null
+  /** Skipped wakes the platform RECORDED, with its reason (#189237) — not inferred. */
+  skips: { at: number; reason: string | null; kind: string | null; byDesign: boolean }[]
 }
 
 /**
@@ -559,16 +582,49 @@ export function weekOf(r: HeartbeatRow, now: number): WeekView {
   const late = Number.isFinite(next) && r.status === "scheduled" && now - firesAt(r, next) > LATE_AFTER_MS
   const upTo = Math.max(Number.isFinite(woke) ? woke + LATE_AFTER_MS : -Infinity, late ? now - LATE_AFTER_MS : -Infinity)
   const noBeat = (e: number) => !beats.some((b) => Math.abs(b.at - e) <= near)
+  // The ledger, where it exists: a skip it recorded is a measured skip with its reason, and a
+  // due tick it covers needs no inferred "missed" dot on top.
+  const skips = (r.wakes ?? [])
+    .filter((k) => k.outcome === "skipped")
+    .map((k) => ({ at: t(k.at), reason: k.reason, kind: k.kind, byDesign: byDesign(k.reason) }))
+    .filter((k) => Number.isFinite(k.at) && k.at >= start && k.at <= end)
+    .reverse()
+  const recorded = (e: number) => skips.some((k) => Math.abs(k.at - e) <= near)
   // A due wake with no row is a SKIP when the records could show one: after its newest kept run
   // up to when it last woke, or anywhere after the fix (every beat has kept its row since).
+  // Runs NOT READ (the history call failed) is not "no runs": nothing is judged missed (#189277).
   const missed = expected.filter(
     (e) =>
+      r.runsMeasured &&
       noBeat(e) &&
+      !recorded(e) &&
+      // inside the ledger only a RECORDED skip is a skip (drawn from `skips`), never a gap
+      !ledgerCovers(r, e) &&
       ((e > newest + near && e <= upTo) || (e > HISTORY_KEPT_SINCE && e < now - LATE_AFTER_MS && e > newest + near)),
   )
   // Before the fix, a wake with no row may have run and been overwritten — not judged.
   const unknown = expected.filter((e) => noBeat(e) && e < newest - near && e <= HISTORY_KEPT_SINCE).length
-  return { start, end, days, expected, beats, missed, unknown, outside, next: Number.isFinite(next) ? next : null, period }
+  // Held wakes: counted from the ledger once it is recording, replayed before that.
+  const ledger = t(r.ledgerSince ?? null)
+  const heldRecorded = (r.wakes ?? []).filter((k) => k.outcome === "held" && t(k.dueAt ?? k.at) >= Math.max(start, ledger)).length
+  const held = Number.isFinite(ledger) && r.wakes ? replayedHeldBefore(r, start, ledger, end) + heldRecorded : outside
+  return { start, end, days, expected, beats, missed, unknown, outside: held, next: Number.isFinite(next) ? next : null, period, skips }
+}
+
+/** Replayed held wakes due in [start, before) — the part of the week the ledger did not cover. */
+function replayedHeldBefore(r: HeartbeatRow, start: number, before: number, end: number): number {
+  const period = periodOf(r.frequency)
+  const next = t(r.nextRunAt)
+  if (!period || !Number.isFinite(next) || r.status === "paused" || before <= start) return 0
+  let n = 0
+  let k = next - Math.ceil((next - (start - 7 * DAY)) / period) * period
+  for (let i = 0; k <= Math.min(end, before) && i < 2000; i++) {
+    const f = firesAt(r, k)
+    if (k > start && k < before && f !== k) n++
+    if (f > end) break
+    k = f + period
+  }
+  return n
 }
 
 /** What this agent got done this week, in one line's worth of numbers. */
@@ -576,7 +632,9 @@ export function rollupOf(r: HeartbeatRow, now: number) {
   const w = weekOf(r, now)
   const runs = r.runs.filter((x) => Number.isFinite(runAt(x)) && runAt(x) >= w.start)
   const tools = new Map<string, number>()
-  for (const x of runs) for (const tool of toolsOf(x.response)) tools.set(tool.name, (tools.get(tool.name) ?? 0) + 1)
+  for (const x of runs) for (const tool of toolsOfRun(x)) tools.set(tool.name, (tools.get(tool.name) ?? 0) + 1)
+  // "Remembers what it did last shift" (#189239), only over beats where it was measured
+  const cont = runs.map((x) => x.continuity).filter((c): c is NonNullable<HeartbeatRun["continuity"]> => !!c)
   return {
     expected: w.expected.length,
     beats: runs.filter((x) => kindOf(x) === "ok").length,
@@ -587,6 +645,8 @@ export function rollupOf(r: HeartbeatRow, now: number) {
     outputs: runs.filter((x) => x.itemId || x.deliverableId || x.publicUrl).length,
     tokens: runs.reduce((n, x) => n + (x.tokens ?? 0), 0),
     tools: [...tools.entries()].sort((a, b) => b[1] - a[1]),
+    skips: w.skips.filter((k) => !k.byDesign).length,
+    remembered: cont.length ? { measured: cont.length, read: cont.filter((c) => c.loaded).length, used: cont.filter((c) => c.referenced).length } : null,
   }
 }
 
@@ -628,6 +688,18 @@ export function toolsOf(report: string | null | undefined): { name: string; did:
   return out
 }
 
+export type BeatTool = { name: string; did: string; ok: boolean; ms: number | null }
+
+/**
+ * The tools a beat called: the platform's own record when it kept one (#189238), else what the
+ * agent's report says it called. `measured` tells the two apart on screen.
+ */
+export function toolsOfRun(x: HeartbeatRun): (BeatTool & { measured: boolean })[] {
+  if (x.toolCalls?.length)
+    return x.toolCalls.map((c) => ({ name: c.tool, did: c.error ? oneLine(c.error) : (c.args ?? ""), ok: c.ok, ms: c.durationMs, measured: true }))
+  return toolsOf(x.response).map((c) => ({ ...c, ms: null, measured: false }))
+}
+
 /** The four questions a person asks of a beat, answered from its sections where the agent wrote them. */
 export function beatStory(x: HeartbeatRun) {
   const secs = sectionsOf(x.response)
@@ -644,5 +716,5 @@ export function beatStory(x: HeartbeatRun) {
   const numbers = take("Key Numbers", "Numbers", "Metrics")
   take("Tools Used")
   const rest = secs.filter((s) => !used.has(s) && s.title !== "Workflow Complete")
-  return { happened, changed, did, numbers, tools: toolsOf(x.response), rest, error: errorOf(x), laundered: laundered(x) }
+  return { happened, changed, did, numbers, tools: toolsOfRun(x), rest, error: errorOf(x), laundered: laundered(x), continuity: x.continuity ?? null }
 }

@@ -11,6 +11,19 @@ export const ACCEPTED_FILE_TYPES = [
   "application/x-yaml",
   "application/xml",
   "application/yaml",
+  // Spreadsheets and Word documents: the engine reads .xlsx/.docx into text. The formats it cannot
+  // read (.xls, .ods, .doc) are still pickable so the person is told what to do with them, rather
+  // than finding them greyed out in the dialog with no reason given.
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  ".xlsx",
+  ".xlsm",
+  ".xls",
+  ".ods",
+  ".docx",
+  ".doc",
+  ".tsv",
   ".c",
   ".cc",
   ".cjs",

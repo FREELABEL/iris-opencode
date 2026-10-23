@@ -1,4 +1,5 @@
 import type { FilePart, Project, UserMessage, VcsFileDiff } from "@opencode-ai/sdk/v2"
+import { IrisCardNotices } from "@/components/session/iris-card-notices"
 import { getFilename } from "@opencode-ai/core/util/path"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { createQuery, skipToken, useMutation, useQueryClient } from "@tanstack/solid-query"
@@ -37,7 +38,7 @@ import { createAutoScroll } from "@opencode-ai/ui/hooks"
 import { previewSelectedLines } from "@opencode-ai/session-ui/pierre/selection-bridge"
 import { Button } from "@opencode-ai/ui/button"
 import { showToast } from "@/utils/toast"
-import { useSpokenReplies } from "@/context/spoken-replies"
+import { isSpeaking, stopSpokenReply, useSpokenReplies } from "@/context/spoken-replies"
 import { base64Encode, checksum } from "@opencode-ai/core/util/encode"
 import { useLocation, useNavigate, useParams, useSearchParams } from "@solidjs/router"
 import { NewSessionView, SessionHeader } from "@/components/session"
@@ -61,7 +62,7 @@ import { useTabs } from "@/context/tabs"
 import { TerminalProvider, useTerminal } from "@/context/terminal"
 import { PromptInput } from "@/components/prompt-input"
 import { PromptInputV2Composer, usePromptInputV2Controller } from "@/components/prompt-input-v2"
-import { irisFilesPinned, requestIrisSurface } from "@/components/session/session-iris-tab"
+import { irisFilesPinned, irisOpensOnAtlas, requestIrisSurface } from "@/components/session/session-iris-tab"
 import { clearIrisPanelOpen, irisPanelOpenRequest } from "@/components/session/iris-nav"
 import { useSettingsCommand } from "@/components/settings-dialog"
 import { setCursorPosition } from "@/components/prompt-input/editor-dom"
@@ -106,6 +107,7 @@ import { useUsageExceededDialogs } from "./session/usage-exceeded-dialogs"
 import { useAllowanceNotice } from "./session/allowance-toast"
 import { createSessionOwnership } from "./session/session-ownership"
 import { createSessionLineage } from "./session/session-lineage"
+import { usePanelControl } from "@/components/session/use-panel-control"
 
 type FollowupItem = FollowupDraft & { id: string }
 type FollowupEdit = Pick<FollowupItem, "id" | "prompt" | "context">
@@ -378,21 +380,6 @@ export default function Page() {
   const reviewFile = () => view().review.file()
   const sessionOwnership = createSessionOwnership(sessionKey)
 
-  /*
-   * The titlebar's Hive and Inbox pills (#189279) ask for the IRIS panel from outside any session
-   * layout. This page owns the panel, so it opens it — the same three steps as onIntegrations
-   * below; the surface/sub-view itself travels through requestIrisNav and the tab applies it.
-   */
-  createEffect(() => {
-    if (!irisPanelOpenRequest()) return
-    untrack(() => {
-      view().reviewPanel.open("other")
-      if (layout.fileTree.opened() && layout.fileTree.tab() !== "all") layout.fileTree.setTab("all")
-      void tabs().open("iris")
-      tabs().setActive("iris")
-    })
-    clearIrisPanelOpen()
-  })
   const newSessionDesign = createMemo(() => settings.general.newLayoutDesigns())
 
   createEffect(() => {
@@ -485,6 +472,31 @@ export default function Page() {
     newSessionDesign() ? desktopV2ReviewOpen() || desktopTerminalOpen() : desktopReviewOpen(),
   )
   const desktopSidePanelOpen = createMemo(() => desktopSessionResizeOpen() || desktopFileTreeOpen())
+  // The agent sees and steers the side panel through this (#190093) — see use-panel-control.ts.
+  usePanelControl({ open: desktopSidePanelOpen })
+
+  /*
+   * The titlebar's Hive and Inbox pills (#189279) ask for the IRIS panel from outside any session
+   * layout. This page owns the panel, so it opens it — the surface/sub-view itself travels through
+   * requestIrisNav and the tab applies it. Same two rules as use-panel-control's showTab: open the
+   * tab only when it is absent (open() re-orders the strip, which then falls back to its first tab),
+   * and when the panel was closed, select again after the strip has remounted.
+   */
+  createEffect(() => {
+    if (!irisPanelOpenRequest()) return
+    untrack(() => {
+      const wasOpen = desktopSidePanelOpen()
+      view().reviewPanel.open("other")
+      if (layout.fileTree.opened() && layout.fileTree.tab() !== "all") layout.fileTree.setTab("all")
+      const select = () => {
+        if (!tabs().all().includes("iris")) void tabs().open("iris")
+        tabs().setActive("iris")
+      }
+      select()
+      if (!wasOpen) requestAnimationFrame(() => requestAnimationFrame(select))
+    })
+    clearIrisPanelOpen()
+  })
   let panelRow: HTMLDivElement | undefined
   const [panelRowWidth, setPanelRowWidth] = createSignal<number>()
   createResizeObserver(
@@ -564,6 +576,7 @@ export default function Page() {
     hasReview: canReview,
     reviewFirst,
     filesPinned: () => irisFilesPinned(reviewFirst()),
+    preferIris: irisOpensOnAtlas,
   })
   const activeTab = tabState.activeTab
   const activeFileTab = tabState.activeFileTab
@@ -1117,6 +1130,17 @@ export default function Page() {
     view().review.setMode(next)
   })
 
+  // Registered here, not in a composer, so the old and new layouts both get it (#189527).
+  command.register("voice-stop-speaking", () => [
+    {
+      id: "voice.stopSpeaking",
+      title: language.t("command.voice.stopSpeaking"),
+      category: language.t("command.category.session"),
+      keybind: "mod+shift+m",
+      disabled: !isSpeaking(),
+      onSelect: stopSpokenReply,
+    },
+  ])
   useSpokenReplies({
     enabled: () => settings.voice.speakReplies(),
     sessionID: () => params.id,
@@ -2313,6 +2337,18 @@ export default function Page() {
   return (
     <SessionRouteFrame>
       <SessionHeader />
+      {/* Your own Atlas cards — assigned, mentioned, due tomorrow — as OS notifications (#189799). */}
+      <IrisCardNotices
+        url={() => serverSDK().url}
+        fetch={platform.fetch}
+        notify={(title, body, onClick) => platform.notify(title, body, onClick)}
+        open={() => {
+          view().reviewPanel.open("other")
+          if (layout.fileTree.opened() && layout.fileTree.tab() !== "all") layout.fileTree.setTab("all")
+          void tabs().open("iris")
+          tabs().setActive("iris")
+        }}
+      />
       <div
         ref={panelRow}
         class="flex-1 min-h-0 flex flex-col md:flex-row"

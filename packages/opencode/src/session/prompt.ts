@@ -40,9 +40,10 @@ import { ShellID } from "@/tool/shell/id"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Truncate } from "@/tool/truncate"
 import { Image } from "@/image/image"
-import { decodeDataUrl } from "@/util/data-url"
+import * as AttachmentText from "./attachment-text"
 import { Process } from "@/util/process"
-import { Cause, Effect, Exit, Latch, Layer, Option, Scope, Context, Schema, Types } from "effect"
+import { Cause, Effect, Exit, Fiber, Latch, Layer, Option, Scope, Context, Schema, Types } from "effect"
+import { TerminalRun } from "./terminal-run"
 import { InstanceState } from "@/effect/instance-state"
 import { TaskTool, type TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
@@ -104,6 +105,9 @@ export interface Interface {
   readonly prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
   readonly loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts>
   readonly shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
+  /** Terminal mode (#190530): run a command like `shell` does, but record nothing in the session. */
+  readonly terminalStart: (input: TerminalStartInput) => Effect.Effect<{ id: string }, TerminalBusyError>
+  readonly terminalCancel: (sessionID: SessionID, id: string) => Effect.Effect<boolean>
   readonly command: (input: CommandInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
   readonly resolvePromptParts: (template: string) => Effect.Effect<PromptInput["parts"]>
 }
@@ -524,6 +528,10 @@ const layer = Layer.effect(
           const args = Shell.args(sh, input.command, cwd)
           let output = ""
           let aborted = false
+          // The exit code, kept like the agent's shell tool keeps it (tool/shell.ts metadata.exit). Without
+          // it a command the user ran that failed rendered as a success: the timeline reads
+          // metadata.exit to mark a failed row and to offer Report on it (#189435).
+          let exitCode: number | undefined
 
           const finish = Effect.uninterruptible(
             Effect.gen(function* () {
@@ -541,7 +549,7 @@ const layer = Layer.effect(
                   time: { ...part.state.time, end: completed },
                   input: part.state.input,
                   title: "",
-                  metadata: { output },
+                  metadata: exitCode === undefined ? { output } : { output, exit: exitCode },
                   output,
                 }
                 yield* sessions.updatePart(part)
@@ -573,7 +581,7 @@ const layer = Layer.effect(
                   }
                 }),
               )
-              yield* handle.exitCode
+              exitCode = Number(yield* handle.exitCode)
             }).pipe(Effect.scoped, Effect.orDie),
           ).pipe(Effect.exit)
 
@@ -589,6 +597,56 @@ const layer = Layer.effect(
           return { info: msg, parts: [part] }
         }),
       )
+    })
+
+    // Terminal mode (#190530). Same shell, arguments, shell.env plugin hook and TERM as
+    // shellImpl above, so a command behaves the same in both; the difference is only where the
+    // output goes — TerminalRun, not a user turn and a tool part.
+    const terminalStart = Effect.fn("SessionPrompt.terminalStart")(function* (input: TerminalStartInput) {
+      if (TerminalRun.running(input.sessionID) >= TerminalRun.RUNNING_LIMIT) {
+        return yield* new TerminalBusyError({ limit: TerminalRun.RUNNING_LIMIT })
+      }
+      const ctx = yield* InstanceState.context
+      const cwd = ctx.directory
+      const cfg = yield* config.get()
+      const sh = Shell.preferred(cfg.shell)
+      const args = Shell.args(sh, input.command, cwd)
+      const run = TerminalRun.create(input.sessionID, input.command)
+      const shellEnv = yield* plugin.trigger("shell.env", { cwd, sessionID: input.sessionID, callID: run.id }, { env: {} })
+
+      const fiber = yield* Effect.gen(function* () {
+        const cmd = ChildProcess.make(sh, args, {
+          cwd,
+          extendEnv: true,
+          env: { ...shellEnv.env, TERM: "dumb" },
+          stdin: "ignore",
+          forceKillAfter: "3 seconds",
+        })
+        const handle = yield* spawner.spawn(cmd)
+        yield* Stream.runForEach(Stream.decodeText(handle.all), (chunk) => Effect.sync(() => TerminalRun.append(run, chunk)))
+        const exitCode = Number(yield* handle.exitCode)
+        TerminalRun.finish(run, { status: "exited", exitCode })
+      }).pipe(
+        Effect.scoped,
+        Effect.onExit((exit) =>
+          Effect.sync(() => {
+            if (Exit.isSuccess(exit)) return
+            if (Cause.hasInterruptsOnly(exit.cause)) return TerminalRun.finish(run, { status: "cancelled" })
+            TerminalRun.finish(run, { status: "error", error: String(Cause.squash(exit.cause)) })
+          }),
+        ),
+        Effect.ignore,
+        Effect.forkIn(scope),
+      )
+      if (run.status === "running") run.cancel = () => Effect.runFork(Fiber.interrupt(fiber))
+      return { id: run.id }
+    })
+
+    const terminalCancel = Effect.fn("SessionPrompt.terminalCancel")(function* (sessionID: SessionID, id: string) {
+      const run = TerminalRun.get(sessionID, id)
+      if (!run || run.status !== "running" || !run.cancel) return false
+      run.cancel()
+      return true
     })
 
     const getModel = Effect.fn("SessionPrompt.getModel")(function* (
@@ -696,6 +754,45 @@ const layer = Layer.effect(
         id: part.id ? PartID.make(part.id) : PartID.ascending(),
       })
 
+      const inlineAttachment = Effect.fn("SessionPrompt.inlineAttachment")(function* (
+        part: Extract<PromptInput["parts"][number], { type: "file" }>,
+        bytes: Uint8Array,
+        path: string | undefined = part.filename,
+      ) {
+        const text = (value: string): Draft<SessionV1.Part> => ({
+          messageID: info.id,
+          sessionID: input.sessionID,
+          type: "text",
+          synthetic: true,
+          text: value,
+        })
+        const result = AttachmentText.attachmentToText({ bytes, mime: part.mime, filename: path })
+        if (result.kind === "unreadable") {
+          // The person sees why; the model is told it did not see the file. Nothing is forwarded.
+          yield* events.publish(Session.Event.Error, {
+            sessionID: input.sessionID,
+            error: new NamedError.Unknown({ message: AttachmentText.unreadableMessage(path, result) }).toObject(),
+          })
+          return [text(AttachmentText.unreadableNote(path, result))]
+        }
+        const context = yield* provider.getModel(info.model.providerID, info.model.modelID).pipe(
+          Effect.map((mdl) => mdl.limit.context),
+          Effect.catch(() => Effect.succeed(undefined)),
+        )
+        const limited = AttachmentText.limitInlineText({
+          text: result.text,
+          filename: path,
+          budget: AttachmentText.inlineBudget(context),
+        })
+        const body = limited.text.trim() === "" ? `[IRIS: "${path ?? "file"}" is empty.]` : limited.text
+        return [
+          text(`Called the Read tool with the following input: ${JSON.stringify({ filePath: path })}`),
+          text(body),
+          // Kept for the transcript as text/plain, which toModelMessages never forwards as a file part.
+          { ...part, mime: "text/plain", messageID: info.id, sessionID: input.sessionID },
+        ]
+      })
+
       const resolvePart: (part: PromptInput["parts"][number]) => Effect.Effect<Draft<SessionV1.Part>[]> = Effect.fn(
         "SessionPrompt.resolveUserPart",
       )(function* (part) {
@@ -785,30 +882,29 @@ const layer = Layer.effect(
           const url = new URL(part.url)
           switch (url.protocol) {
             case "data:":
-              if (part.mime === "text/plain") {
-                return [
-                  {
-                    messageID: info.id,
-                    sessionID: input.sessionID,
-                    type: "text",
-                    synthetic: true,
-                    text: `Called the Read tool with the following input: ${JSON.stringify({ filePath: part.filename })}`,
-                  },
-                  {
-                    messageID: info.id,
-                    sessionID: input.sessionID,
-                    type: "text",
-                    synthetic: true,
-                    text: decodeDataUrl(part.url),
-                  },
-                  { ...part, messageID: info.id, sessionID: input.sessionID },
-                ]
+              // Anything that is not an image, PDF or media is read HERE into text — or replaced by
+              // a note saying it could not be. Forwarding it raw either inlined megabytes (HTTP 400,
+              // and every later turn in the session with it) or handed the SDK a mime it cannot
+              // encode (the turn threw). See attachment-text.ts.
+              if (AttachmentText.needsTextResolution(part.mime)) {
+                return yield* inlineAttachment(part, AttachmentText.dataUrlBytes(part.url))
               }
               break
             case "file:": {
               yield* Effect.logInfo("file", { mime: part.mime })
               const filepath = fileURLToPath(part.url)
               const mime = (yield* fsys.isDir(filepath)) ? "application/x-directory" : part.mime
+
+              // A workbook or Word file referenced by path (the CLI's -f, an @-mention) used to go to
+              // the Read tool as "text/plain" — which refuses binary — or to the SDK raw, which throws.
+              if (
+                mime !== "application/x-directory" &&
+                (AttachmentText.isOfficeFile(mime, filepath) ||
+                  (mime !== "text/plain" && AttachmentText.needsTextResolution(mime)))
+              ) {
+                const bytes = yield* fsys.readFile(filepath).pipe(Effect.catch(() => Effect.succeed(undefined)))
+                if (bytes) return yield* inlineAttachment(part, bytes, filepath)
+              }
 
               const { read } = yield* registry.named()
               const execRead = (args: Parameters<typeof read.execute>[0], extra?: Tool.Context["extra"]) => {
@@ -1485,6 +1581,8 @@ const layer = Layer.effect(
       prompt,
       loop,
       shell,
+      terminalStart,
+      terminalCancel,
       command,
       resolvePromptParts,
     })
@@ -1532,6 +1630,16 @@ export const ShellInput = Schema.Struct({
   command: Schema.String,
 })
 export type ShellInput = Schema.Schema.Type<typeof ShellInput>
+
+export const TerminalStartInput = Schema.Struct({
+  sessionID: SessionID,
+  command: Schema.String.check(Schema.isMinLength(1)),
+})
+export type TerminalStartInput = Schema.Schema.Type<typeof TerminalStartInput>
+
+export class TerminalBusyError extends Schema.TaggedErrorClass<TerminalBusyError>()("SessionPrompt.TerminalBusyError", {
+  limit: Schema.Number,
+}) {}
 
 export const CommandInput = Schema.Struct({
   messageID: Schema.optional(MessageID),

@@ -21,6 +21,8 @@ import { Button } from "@opencode-ai/ui/button"
 import { Card } from "@opencode-ai/ui/card"
 import {
   ContextToolGroup,
+  failedCall,
+  gateSummary,
   Message,
   MessageDivider,
   Part as MessagePart,
@@ -991,13 +993,25 @@ export function MessageTimeline(props: {
           .filter((part): part is ToolPart => part?.type === "tool")
       })
       const contextOpenKey = () => `context:${row().group.key}`
+      // Gate's verdict on this turn (#189589): the step-finish parts of the messages in this group.
+      const gate = createMemo(() => {
+        const group = row().group
+        if (group.type !== "context") return undefined
+        const ids = [...new Set(group.refs.map((ref) => ref.messageID))]
+        return gateSummary(ids.flatMap((id) => getMsgParts(id)))
+      })
+      // A group holding a failed call opens on its own (#189316) — folding a failure out of sight
+      // is how it gets missed. Once the person opens or closes it, their choice wins.
       const open = createMemo(() => {
-        return toolOpen[contextOpenKey()] === true
+        const chosen = toolOpen[contextOpenKey()]
+        if (chosen !== undefined) return chosen === true
+        return parts().some(failedCall) || (gate()?.held ?? 0) > 0
       })
 
       return (
         <ContextToolGroup
           parts={parts()}
+          gate={gate()}
           open={open()}
           onOpenChange={(value) => setToolOpen(contextOpenKey(), value)}
           busy={

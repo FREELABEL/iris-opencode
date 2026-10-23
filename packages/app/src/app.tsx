@@ -51,6 +51,7 @@ import { ModelsProvider } from "@/context/models"
 import { NotificationProvider } from "@/context/notification"
 import { PermissionProvider } from "@/context/permission"
 import { usePlatform } from "@/context/platform"
+import { resolveAccountScope } from "@/utils/account-scope"
 import { PromptProvider } from "@/context/prompt"
 import { ServerConnection, ServerProvider, serverName, useServer } from "@/context/server"
 import { SettingsProvider, useSettings } from "@/context/settings"
@@ -466,7 +467,15 @@ function ConnectionGate(props: ParentProps<{ disableHealthCheck?: boolean; start
   const startupChecking = createMemo(
     () => startupHealthCheck.latest === true && ["unresolved", "pending"].includes(startup.state),
   )
-  const loading = createMemo(() => checking() || startupChecking())
+  // Tabs and prompt history are stored per IRIS account (#189336). Learn which account is signed in
+  // before anything that persists mounts; it never fails, the last known account stands in.
+  const platform = usePlatform()
+  const [scope] = createResource(
+    () => startupHealthCheck.latest === true,
+    () => resolveAccountScope(server.current?.http?.url, platform.fetch ?? globalThis.fetch),
+  )
+  const scopeChecking = createMemo(() => startupHealthCheck.latest === true && scope.state !== "ready")
+  const loading = createMemo(() => checking() || startupChecking() || scopeChecking())
 
   return (
     <>
@@ -486,7 +495,7 @@ function ConnectionGate(props: ParentProps<{ disableHealthCheck?: boolean; start
             />
           }
         >
-          {props.children}
+          <Show when={!scopeChecking()}>{props.children}</Show>
         </Show>
       </Show>
       <Show when={loading()}>

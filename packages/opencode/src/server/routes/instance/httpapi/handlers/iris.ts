@@ -1,5 +1,8 @@
 import { fetchBrandKit, fetchBrands, saveBrandSection } from "@/iris/brand-kits"
-import { Effect } from "effect"
+import { Effect, Queue } from "effect"
+import * as Stream from "effect/Stream"
+import { HttpServerResponse } from "effect/unstable/http"
+import * as Sse from "effect/unstable/encoding/Sse"
 import { filterRows, paginate } from "@/iris/pagination"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import {
@@ -25,6 +28,17 @@ import {
   savePageDoc,
   fetchItem,
   saveItem,
+  createItem,
+  createList,
+  fetchBoardMembers,
+  fetchActivity,
+  fetchMyAgents,
+  addComment,
+  notifySettings,
+  fetchAssignees,
+  assign,
+  unassign,
+  moveItem,
   addItemTask,
   saveItemTask,
   deleteItemTask,
@@ -53,6 +67,8 @@ import {
   fetchBloqInterior,
   graphRows,
   fetchAllowance,
+  fetchSecurity,
+  reportGateEvent,
   fetchPlan,
   fetchMe,
   tokenSource,
@@ -60,26 +76,47 @@ import {
   dataDir,
   resetCredentialCache,
   fetchPlans,
+  createCheckout,
 } from "@/iris/platform"
 import { parseExpandedListIds } from "@/iris/relationship-graph"
-import { agentCredential, credentialKind, readNodeKey, signOutPersonal, type CredentialKind } from "@/iris/account"
+import {
+  accountRef,
+  agentCredential,
+  cliDataDir,
+  credentialKind,
+  forgetActiveAccount,
+  readAccountStore,
+  readNodeKey,
+  registerAccount,
+  removeAccount,
+  signOutPersonal,
+  switchAccount,
+  type CredentialKind,
+} from "@/iris/account"
 import { homedir } from "os"
 import { createRoom, fetchRoom, fetchRooms, sendRoomMessage } from "@/iris/rooms"
 import { fetchAgentLive, handBackRun, takeOverRun } from "@/iris/agent-live"
 import { RootHttpApi } from "../api"
+import { PanelCommandPayload, PanelStatePayload } from "../groups/iris"
 import { markLocal, playbookRows, projectRoot } from "@/iris/playbook-local"
 import { Artifacts } from "@/iris/artifacts"
+import { Panel } from "@/iris/panel"
 import { atlasNoteUrl, probeAtlasNote, type NoteProbe } from "@/iris/atlas-note"
 import { frameTarget, probeFrame } from "@/iris/frame-check"
 import { startIntegrationConnect } from "@/iris/platform"
+import { readAtlasBoard, readBoardList } from "@/iris/atlas-board-read"
+import { readLocalCopySettings, writeLocalCopySettings } from "@/iris/atlas-local-copy"
+import { buildCommandReport, submitCommandReport } from "@/iris/bug-report"
 import * as Onboarding from "@/iris/onboarding"
 import * as Capabilities from "@/iris/onboarding-capabilities"
 import { searchCliCommands } from "@/iris/cli-commands"
 import { fetchHivePeers } from "@/iris/platform"
+import { watchAtlas, watchMe, type AtlasLiveEvent, type MeLiveEvent } from "@/iris/atlas-live"
 import { publishArtifact } from "@/iris/artifact-publish"
 import { runPlaybookInstall, ttlCache } from "@/iris/playbook-install"
 import * as HiveScripts from "@/iris/hive-scripts"
 import { fetchHeartbeats, runHeartbeat, setHeartbeatPaused } from "@/iris/heartbeats"
+import { fetchPulseContact, fetchPulseContacts, fetchPulseTopic } from "@/iris/pulse"
 
 /**
  * The board + account playbook list, cached for a minute per board/view (#186279). The handler
@@ -135,10 +172,10 @@ const pageOf = <T>(r: { measured: boolean; reason?: string }, all: T[], q: { pag
 export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers) =>
   Effect.gen(function* () {
     const bloqs = Effect.fn("IrisHttpApi.bloqs")((ctx: { query: { page?: number; perPage?: number } }) =>
-      Effect.promise(() => fetchBloqs()).pipe(
-        Effect.map((r) => {
+      Effect.promise(() => readBoardList()).pipe(
+        Effect.map(({ r, offline, copiedAt }) => {
           const { items, meta } = pageOf(r, r.data.bloqs, ctx.query)
-          return { ...meta, bloqs: items }
+          return { ...meta, bloqs: items, ...(offline ? { offline, copiedAt } : {}) }
         }),
       ),
     )
@@ -182,15 +219,61 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
     )
 
     const atlas = Effect.fn("IrisHttpApi.atlas")(
-      (ctx: { params: { bloqID: number }; query: { page?: number; perPage?: number; q?: string } }) =>
-        Effect.promise(() => fetchAtlas(ctx.params.bloqID)).pipe(
-          Effect.map((r) => {
+      (ctx: { params: { bloqID: number }; query: { page?: number; perPage?: number; q?: string; fresh?: string } }) =>
+        Effect.promise(() => readAtlasBoard(ctx.params.bloqID, ctx.query)).pipe(
+          Effect.map(({ r, source, copiedAt, offline, sync }) => {
             // Filter BEFORE paging — see filterAtlas. Filtering after would count a page.
             const lists = ctx.query.q ? filterAtlas(r.data.lists, ctx.query.q) : r.data.lists
             const { items, meta } = pageOf(r, lists, ctx.query)
-            return { ...meta, lists: items }
+            return {
+              ...meta,
+              lists: items,
+              source,
+              ...(copiedAt ? { copiedAt } : {}),
+              ...(offline ? { offline } : {}),
+              ...(sync ? { sync } : {}),
+            }
           }),
         ),
+    )
+
+    /**
+     * Atlas, live (#189767). Carries no board data, only "it changed" — the panel re-reads the
+     * board through the route above, so there is one path that turns fl-api into rows.
+     */
+    const atlasLive = Effect.fn("IrisHttpApi.atlasLive")((ctx: { params: { bloqID: number } }) =>
+      Effect.sync(() => {
+        const events = Stream.callback<AtlasLiveEvent>((queue) =>
+          Effect.acquireRelease(
+            Effect.sync(() => watchAtlas(ctx.params.bloqID, (e) => Queue.offerUnsafe(queue, e))),
+            (stop) => Effect.sync(stop),
+          ),
+        )
+        const ping = Stream.tick("25 seconds").pipe(
+          Stream.drop(1),
+          Stream.map((): Sse.Event => ({ _tag: "Event", event: "ping", id: undefined, data: "{}" })),
+        )
+        const ready: Sse.Event = { _tag: "Event", event: "ready", id: undefined, data: "{}" }
+        return HttpServerResponse.stream(
+          Stream.make(ready).pipe(
+            Stream.concat(
+              events.pipe(
+                Stream.map((e): Sse.Event => {
+                  const { type, ...data } = e
+                  return { _tag: "Event", event: type, id: undefined, data: JSON.stringify(data) }
+                }),
+                Stream.merge(ping, { haltStrategy: "left" }),
+              ),
+            ),
+            Stream.pipeThroughChannel(Sse.encode()),
+            Stream.encodeText,
+          ),
+          {
+            contentType: "text/event-stream",
+            headers: { "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no", "X-Content-Type-Options": "nosniff" },
+          },
+        )
+      }),
     )
 
     /**
@@ -375,8 +458,112 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
       }) => Effect.promise(() => saveItem(ctx.params.itemID, ctx.payload)),
     )
 
+    const atlasItemCreate = Effect.fn("IrisHttpApi.atlasItemCreate")(
+      (ctx: { params: { bloqID: number; listID: number }; payload: { title: string; body?: string; position?: number } }) =>
+        Effect.promise(() => createItem(ctx.params.bloqID, ctx.params.listID, ctx.payload)),
+    )
+    const atlasListCreate = Effect.fn("IrisHttpApi.atlasListCreate")(
+      (ctx: { params: { bloqID: number }; payload: { name: string; position?: number } }) =>
+        Effect.promise(() => createList(ctx.params.bloqID, ctx.payload)),
+    )
+
+    /** The Board view's drag: list AND position, so the saved order is the one on screen. */
+    const itemMove = Effect.fn("IrisHttpApi.itemMove")(
+      (ctx: { params: { itemID: number }; payload: { listId: number; position: number } }) =>
+        Effect.promise(() => moveItem(ctx.params.itemID, ctx.payload.listId, ctx.payload.position)),
+    )
+
+    // Board members (#189795) and card assignees (#189796).
+    const atlasMembers = Effect.fn("IrisHttpApi.atlasMembers")((ctx: { params: { bloqID: number } }) =>
+      Effect.promise(() => fetchBoardMembers(ctx.params.bloqID)).pipe(
+        Effect.map((r) => ({ measured: r.measured, reason: r.reason, ...r.data })),
+      ),
+    )
+    const atlasMemberInvite = Effect.fn("IrisHttpApi.atlasMemberInvite")(
+      (ctx: { params: { bloqID: number }; payload: { email: string; permission: "viewer" | "editor" } }) =>
+        Effect.promise(() => inviteMember(ctx.params.bloqID, ctx.payload.email.trim(), ctx.payload.permission)),
+    )
+    const atlasMemberSave = Effect.fn("IrisHttpApi.atlasMemberSave")(
+      (ctx: { params: { bloqID: number; memberID: number }; payload: { permission: "viewer" | "editor" } }) =>
+        Effect.promise(() => setMemberPermission(ctx.params.bloqID, ctx.params.memberID, ctx.payload.permission)),
+    )
+    const atlasMemberRemove = Effect.fn("IrisHttpApi.atlasMemberRemove")((ctx: { params: { bloqID: number; memberID: number } }) =>
+      Effect.promise(() => revokeMember(ctx.params.bloqID, ctx.params.memberID)),
+    )
+    const itemComment = Effect.fn("IrisHttpApi.itemComment")(
+      (ctx: { params: { itemID: number }; payload: { body: string; mentions?: readonly number[] } }) =>
+        Effect.promise(() => addComment(ctx.params.itemID, { body: ctx.payload.body, mentions: [...(ctx.payload.mentions ?? [])] })),
+    )
+    const atlasLocalCopyRead = Effect.fn("IrisHttpApi.atlasLocalCopy")(() => Effect.sync(() => readLocalCopySettings()))
+    const atlasLocalCopySave = Effect.fn("IrisHttpApi.atlasLocalCopySave")(
+      (ctx: { payload: { enabled?: boolean; includePhi?: boolean; maxBoards?: number; maxMB?: number } }) =>
+        Effect.sync(() => writeLocalCopySettings(ctx.payload)),
+    )
+    const notifySettingsRead = Effect.fn("IrisHttpApi.notifySettings")(() =>
+      Effect.promise(() => notifySettings()).pipe(Effect.map((r) => ({ measured: r.measured, reason: r.reason, settings: r.data.settings }))),
+    )
+    const notifySettingsSave = Effect.fn("IrisHttpApi.notifySettingsSave")(
+      (ctx: { payload: { emailAssign?: boolean; emailMention?: boolean; emailDue?: boolean; push?: boolean } }) =>
+        Effect.promise(() => notifySettings(ctx.payload)).pipe(Effect.map((r) => ({ measured: r.measured, reason: r.reason, settings: r.data.settings }))),
+    )
+    const meLive = Effect.fn("IrisHttpApi.meLive")(() =>
+      Effect.sync(() => {
+        const events = Stream.callback<MeLiveEvent>((queue) =>
+          Effect.acquireRelease(
+            Effect.sync(() => watchMe((e) => Queue.offerUnsafe(queue, e))),
+            (stop) => Effect.sync(stop),
+          ),
+        )
+        const ping = Stream.tick("25 seconds").pipe(
+          Stream.drop(1),
+          Stream.map((): Sse.Event => ({ _tag: "Event", event: "ping", id: undefined, data: "{}" })),
+        )
+        const ready: Sse.Event = { _tag: "Event", event: "ready", id: undefined, data: "{}" }
+        return HttpServerResponse.stream(
+          Stream.make(ready).pipe(
+            Stream.concat(
+              events.pipe(
+                Stream.map((e): Sse.Event =>
+                  e.type === "notice"
+                    ? { _tag: "Event", event: "notice", id: undefined, data: JSON.stringify(e.notice) }
+                    : { _tag: "Event", event: "status", id: undefined, data: JSON.stringify({ pusher: e.pusher }) },
+                ),
+                Stream.merge(ping, { haltStrategy: "left" }),
+              ),
+            ),
+            Stream.pipeThroughChannel(Sse.encode()),
+            Stream.encodeText,
+          ),
+          {
+            contentType: "text/event-stream",
+            headers: { "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no", "X-Content-Type-Options": "nosniff" },
+          },
+        )
+      }),
+    )
+    const agentsMine = Effect.fn("IrisHttpApi.agentsMine")(() =>
+      Effect.promise(() => fetchMyAgents()).pipe(Effect.map((r) => ({ measured: r.measured, reason: r.reason, agents: r.data.agents }))),
+    )
+    const itemActivity = Effect.fn("IrisHttpApi.itemActivity")((ctx: { params: { itemID: number } }) =>
+      Effect.promise(() => fetchActivity(ctx.params.itemID)).pipe(
+        Effect.map((r) => ({ measured: r.measured, reason: r.reason, activity: r.data.activity })),
+      ),
+    )
+    const itemAssignees = Effect.fn("IrisHttpApi.itemAssignees")((ctx: { params: { itemID: number } }) =>
+      Effect.promise(() => fetchAssignees(ctx.params.itemID)).pipe(
+        Effect.map((r) => ({ measured: r.measured, reason: r.reason, assignees: r.data.assignees })),
+      ),
+    )
+    const itemAssign = Effect.fn("IrisHttpApi.itemAssign")(
+      (ctx: { params: { itemID: number }; payload: { userId?: number; agentId?: number; email?: string } }) =>
+        Effect.promise(() => assign(ctx.params.itemID, ctx.payload)),
+    )
+    const itemUnassign = Effect.fn("IrisHttpApi.itemUnassign")((ctx: { params: { itemID: number; assigneeID: number } }) =>
+      Effect.promise(() => unassign(ctx.params.itemID, ctx.params.assigneeID)),
+    )
+
     const itemTaskAdd = Effect.fn("IrisHttpApi.itemTaskAdd")(
-      (ctx: { params: { itemID: number }; payload: { title: string; agentId?: number; dueDate?: string } }) =>
+      (ctx: { params: { itemID: number }; payload: { title: string; agentId?: number; dueDate?: string; parentId?: number } }) =>
         Effect.promise(() => addItemTask(ctx.params.itemID, ctx.payload)),
     )
 
@@ -591,6 +778,15 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
         ),
     )
 
+    const bugReport = Effect.fn("IrisHttpApi.bugReport")(
+      (ctx: { payload: { tool: string; command: string; error: string; output?: string; note?: string; preview?: boolean } }) =>
+        Effect.promise(async () => {
+          if (!ctx.payload.preview) return submitCommandReport(ctx.payload)
+          const r = buildCommandReport(ctx.payload)
+          return { ok: true, title: r.title, description: r.description }
+        }),
+    )
+
     const playbookInstall = Effect.fn("IrisHttpApi.playbookInstall")(
       (ctx: { payload: { name: string; project?: string; force?: boolean } }) =>
         Effect.promise(async () => {
@@ -706,6 +902,99 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
         Effect.promise(() => setHeartbeatPaused(ctx.params.jobID, ctx.payload.paused)),
     )
 
+    // The side panel (#190093) — see src/iris/panel.ts.
+    const panel = Effect.fn("IrisHttpApi.panel")((ctx: { query: { session?: string } }) =>
+      Effect.sync(() => {
+        const state = Panel.get(ctx.query.session || undefined)
+        return { reported: !!state, state }
+      }),
+    )
+    const panelState = Effect.fn("IrisHttpApi.panelState")((ctx: { payload: typeof PanelStatePayload.Type }) =>
+      Effect.sync(() => {
+        if (!Panel.validSession(ctx.payload.session)) return { ok: false }
+        Panel.report(ctx.payload as unknown as Panel.State)
+        return { ok: true }
+      }),
+    )
+    const panelCommand = Effect.fn("IrisHttpApi.panelCommand")((ctx: { payload: typeof PanelCommandPayload.Type }) =>
+      Effect.gen(function* () {
+        const p = ctx.payload
+        if (!Panel.validSession(p.session)) return { answered: false, refused: "invalid session id" }
+        const command: Panel.Command | string =
+          p.action === "open" || p.action === "close"
+            ? { action: p.action }
+            : p.action === "show"
+              ? p.surface
+                ? { action: "show", surface: p.surface, sub: p.sub, bloq: p.bloq }
+                : "show needs a surface"
+              : p.action === "artifact"
+                ? p.id
+                  ? { action: "artifact", id: p.id }
+                  : "artifact needs an id"
+                : p.action === "tab"
+                  ? p.tab
+                    ? { action: "tab", tab: p.tab }
+                    : "tab needs tab"
+                  : p.url
+                    ? { action: "browse", url: p.url }
+                    : "browse needs a url"
+        if (typeof command === "string") return { answered: false, refused: command }
+        const known = Panel.get(p.session)
+        const refused = Panel.refuse(command, known?.catalog)
+        if (refused) return { answered: false, refused }
+        // No directory: /iris routes have no instance. The desktop matches commands by SESSION.
+        const state = yield* Effect.promise(() =>
+          Panel.send({ session: p.session, command: Panel.canonical(command, known?.catalog) }),
+        )
+        return { answered: !!state, state }
+      }),
+    )
+
+    // Pulse (#189286) — reads only.
+    const pulseTopic = Effect.fn("IrisHttpApi.pulseTopic")((ctx: { query: { q: string; days?: string; project?: string } }) =>
+      Effect.promise(() =>
+        fetchPulseTopic({ keyword: ctx.query.q, days: ctx.query.days ? Number(ctx.query.days) : undefined, repo: projectRoot(ctx.query.project) }),
+      ),
+    )
+    // #189319 — the same route, streamed: one event as Pulse reaches each stop, one as it lands.
+    const pulseTopicStream = Effect.fn("IrisHttpApi.pulseTopicStream")((ctx: { query: { q: string; days?: string; project?: string } }) =>
+      Effect.sync(() => {
+        type Ev = { event: "start" | "stop" | "done" | "error"; data: unknown }
+        const events = Stream.callback<Ev>((queue) =>
+          Effect.sync(() => {
+            const push = (e: Ev) => Queue.offerUnsafe(queue, e)
+            void fetchPulseTopic(
+              { keyword: ctx.query.q, days: ctx.query.days ? Number(ctx.query.days) : undefined, repo: projectRoot(ctx.query.project) },
+              {
+                onStart: (source, label) => push({ event: "start", data: { source, label } }),
+                onStop: (stop) => push({ event: "stop", data: { stop } }),
+              },
+            )
+              .then((r) => push(r.measured ? { event: "done", data: r } : { event: "error", data: { reason: r.reason ?? "the route did not finish" } }))
+              .catch((e) => push({ event: "error", data: { reason: String(e?.message ?? e).slice(0, 300) } }))
+              .finally(() => Queue.endUnsafe(queue))
+          }),
+        )
+        return HttpServerResponse.stream(
+          events.pipe(
+            Stream.map((e): Sse.Event => ({ _tag: "Event", event: e.event, id: undefined, data: JSON.stringify(e.data) })),
+            Stream.pipeThroughChannel(Sse.encode()),
+            Stream.encodeText,
+          ),
+          {
+            contentType: "text/event-stream",
+            headers: { "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no", "X-Content-Type-Options": "nosniff" },
+          },
+        )
+      }),
+    )
+    const pulseContacts = Effect.fn("IrisHttpApi.pulseContacts")((ctx: { query: { q?: string } }) =>
+      Effect.promise(() => fetchPulseContacts(ctx.query.q ?? "")),
+    )
+    const pulseContact = Effect.fn("IrisHttpApi.pulseContact")((ctx: { params: { leadID: number }; query: { days?: string } }) =>
+      Effect.promise(() => fetchPulseContact(ctx.params.leadID, ctx.query.days ? Number(ctx.query.days) : 30)),
+    )
+
     // Genesis › Brand kits (#188816)
     const brands = Effect.fn("IrisHttpApi.brands")(() =>
       Effect.promise(() => fetchBrands()).pipe(
@@ -812,8 +1101,14 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
         Effect.promise(() => HiveScripts.installScript(ctx.params.slug, [...(ctx.payload.tags ?? [])])),
     )
     const hiveScriptRun = Effect.fn("IrisHttpApi.hiveScriptRun")(
-      (ctx: { params: { slug: string }; payload: { node: string; timeout?: number } }) =>
-        Effect.promise(() => HiveScripts.runScript(ctx.params.slug, ctx.payload.node, ctx.payload.timeout)),
+      (ctx: { params: { slug: string }; payload: { node: string; timeout?: number; args?: Record<string, string> } }) =>
+        Effect.promise(() => HiveScripts.runScript(ctx.params.slug, ctx.payload.node, ctx.payload.timeout, ctx.payload.args)),
+    )
+    const hiveTaskDecide = Effect.fn("IrisHttpApi.hiveTaskDecide")(
+      (ctx: { params: { taskID: string; decision: "approve" | "reject" | "cancel" } }) =>
+        Effect.promise(() => HiveScripts.decideHeldTask(ctx.params.taskID, ctx.params.decision)).pipe(
+          Effect.map((r) => ({ measured: r.measured, reason: r.reason, taskId: r.data.taskId })),
+        ),
     )
     const hiveTask = Effect.fn("IrisHttpApi.hiveTask")((ctx: { params: { taskID: string } }) =>
       Effect.promise(() => HiveScripts.fetchTask(ctx.params.taskID)).pipe(
@@ -868,6 +1163,12 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
       ),
     )
 
+    const checkout = Effect.fn("IrisHttpApi.checkout")((ctx: { payload: { slug: string } }) =>
+      Effect.promise(() => createCheckout(ctx.payload.slug)).pipe(
+        Effect.map((r) => (r.ok ? { ok: true, url: r.url } : { ok: false, reason: r.reason })),
+      ),
+    )
+
     const plan = Effect.fn("IrisHttpApi.plan")(() =>
       Effect.promise(() => fetchPlan()).pipe(
         Effect.map((r) => ({
@@ -875,9 +1176,28 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
           ...(r.reason ? { reason: r.reason } : {}),
           plan: r.data.plan,
           paid: r.data.paid,
+          label: r.data.label,
+          trialEndsAt: r.data.trialEndsAt,
+          fraction: r.data.fraction,
+          tokensUsed: r.data.tokensUsed,
+          resetsAt: r.data.resetsAt,
           uncapped: r.data.uncapped,
           upgradeUrl: r.data.upgradeUrl,
         })),
+      ),
+    )
+
+    // Settings › Security (#189589). The key CHAT uses (#188506), because that is the account the
+    // model proxy screens — the panel must describe the same account the proxy sees.
+    const chatToken = () => agentCredential(process.env, () => ({ token: resolveToken(), source: tokenSource() })).token
+    const security = Effect.fn("IrisHttpApi.security")(() =>
+      Effect.promise(() => fetchSecurity({ token: chatToken(), signal: AbortSignal.timeout(8000) })).pipe(
+        Effect.map((r) => ({ measured: r.measured, ...(r.reason ? { reason: r.reason } : {}), ...r.data })),
+      ),
+    )
+    const securityGateReport = Effect.fn("IrisHttpApi.securityGateReport")((ctx: { params: { id: string } }) =>
+      Effect.promise(() => reportGateEvent(Number(ctx.params.id), { token: chatToken(), signal: AbortSignal.timeout(8000) })).pipe(
+        Effect.map((r) => ({ measured: r.measured, ...(r.reason ? { reason: r.reason } : {}), event: r.data })),
       ),
     )
 
@@ -895,6 +1215,13 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
           fetchAllowance({ ...opts, peek: true }),
         ])
         const credential: CredentialKind | "rejected" = kind === "personal" && who.data.rejected ? "rejected" : kind
+        // Remember who this key is (#189321), so signing in as a second account does not throw
+        // this one away and a switch back has a key and a name to show. Never the node key.
+        if (credential === "personal" && who.measured && who.data.id !== null && cred.token) {
+          try {
+            registerAccount(homedir(), cred.token, who.data)
+          } catch {}
+        }
         return {
           measured: who.measured,
           ...(who.reason ? { reason: who.reason } : {}),
@@ -910,6 +1237,9 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
             ...(plan.reason ? { reason: plan.reason } : {}),
             plan: plan.data.plan,
             paid: plan.data.paid,
+            label: plan.data.label,
+            trialEndsAt: plan.data.trialEndsAt,
+            fraction: plan.data.fraction,
             uncapped: plan.data.uncapped,
             upgradeUrl: plan.data.upgradeUrl,
           },
@@ -925,9 +1255,56 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
 
     const signOut = Effect.fn("IrisHttpApi.signOut")(() =>
       Effect.sync(() => {
-        const r = signOutPersonal({ home: homedir(), dataDir: dataDir() })
+        const home = homedir()
+        const active = agentCredential(process.env, () => ({ token: resolveToken(), source: tokenSource() })).token
+        const r = signOutPersonal({ home, dataDir: dataDir() })
+        // An engine started for a second account has its own data dir; the CLI's auth store is
+        // the default one, and it must not keep acting as the account just signed out of.
+        const cli = cliDataDir(process.env, home)
+        if (cli !== dataDir()) r.removed.push(...signOutPersonal({ home, dataDir: cli }).removed)
+        // Another saved account? Fall back to it rather than to the sign-in screen (#189321).
+        const { next } = forgetActiveAccount(home, active)
+        if (next) {
+          const s = switchAccount({ home, cliDataDir: cli }, accountRef(next))
+          if (s.ok) r.removed.push(`now signed in as ${next.email ?? accountRef(next)}`)
+        }
         resetCredentialCache()
         return { ok: true, removed: r.removed }
+      }),
+    )
+
+    const accounts = Effect.fn("IrisHttpApi.accounts")(() =>
+      Effect.sync(() => {
+        const active = agentCredential(process.env, () => ({ token: resolveToken(), source: tokenSource() })).token
+        const { store, readable } = readAccountStore(homedir())
+        return {
+          readable,
+          accounts: store.accounts.map((a) => ({
+            ref: accountRef(a),
+            id: a.user_id,
+            email: a.email,
+            name: a.name,
+            active: Boolean(active) && a.key === active,
+            separateData: a.data_dir !== null,
+          })),
+        }
+      }),
+    )
+
+    const accountSwitch = Effect.fn("IrisHttpApi.accountSwitch")((ctx: { payload: { ref: string } }) =>
+      Effect.sync(() => {
+        const home = homedir()
+        const r = switchAccount({ home, cliDataDir: cliDataDir(process.env, home) }, ctx.payload.ref)
+        resetCredentialCache()
+        return r.ok ? { ok: true } : { ok: false, reason: r.reason }
+      }),
+    )
+
+    const accountRemove = Effect.fn("IrisHttpApi.accountRemove")((ctx: { payload: { ref: string } }) =>
+      Effect.sync(() => {
+        const active = agentCredential(process.env, () => ({ token: resolveToken(), source: tokenSource() })).token
+        const r = removeAccount(homedir(), ctx.payload.ref, active)
+        return r.ok ? { ok: true } : { ok: false, reason: r.reason }
       }),
     )
 
@@ -950,6 +1327,6 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
       ),
     )
 
-    return handlers.handle("frameCheck", frameCheck).handle("atlasNote", atlasNote).handle("allowance", allowance).handle("plan", plan).handle("me", me).handle("signOut", signOut).handle("plans", plans).handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("inboxMessage", inboxMessage).handle("inboxRead", inboxRead).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("graph", graph).handle("graphBoard", graphBoard).handle("catalog", catalog).handle("integrationConnect", integrationConnect).handle("onboardingState", onboardingState).handle("onboardingMail", onboardingMail).handle("onboardingGround", onboardingGround).handle("onboardingCapabilities", onboardingCapabilities).handle("onboardingWorkspace", onboardingWorkspace).handle("onboardingTrack", onboardingTrack).handle("cliCommands", cliCommands).handle("hivePeers", hivePeers).handle("pageDoc", pageDoc).handle("pageSave", pageSave).handle("item", item).handle("itemSave", itemSave).handle("itemTaskAdd", itemTaskAdd).handle("itemTaskSave", itemTaskSave).handle("itemTaskDelete", itemTaskDelete).handle("cardSchema", cardSchema).handle("itemShare", itemShare).handle("itemShareVisibility", itemShareVisibility).handle("itemShareAllowlist", itemShareAllowlist).handle("itemShareInvite", itemShareInvite).handle("itemSharePermission", itemSharePermission).handle("itemShareRevoke", itemShareRevoke).handle("itemShareLink", itemShareLink).handle("itemShareLinkRevoke", itemShareLinkRevoke).handle("itemLabels", itemLabels).handle("itemAttachments", itemAttachments).handle("itemAttachmentUpload", itemAttachmentUpload).handle("itemAttachmentDelete", itemAttachmentDelete).handle("itemEvents", itemEvents).handle("itemEventAdd", itemEventAdd).handle("itemAsks", itemAsks).handle("itemAskAdd", itemAskAdd).handle("itemAskAnswer", itemAskAnswer).handle("itemChat", itemChat).handle("itemChatSend", itemChatSend).handle("rooms", rooms).handle("roomCreate", roomCreate).handle("room", room).handle("roomSend", roomSend).handle("playbookDoc", playbookDoc).handle("artifacts", artifacts).handle("artifactDoc", artifactDoc).handle("artifactPublish", artifactPublish).handle("playbookInstall", playbookInstall).handle("agentTasks", agentTasks).handle("heartbeats", heartbeats).handle("heartbeatRun", heartbeatRun).handle("heartbeatPause", heartbeatPause).handle("agentLive", agentLive).handle("runTakeOver", runTakeOver).handle("runHandBack", runHandBack).handle("sites", sites).handle("brands", brands).handle("brandKit", brandKit).handle("brandSave", brandSave).handle("records", records).handle("integrations", integrations).handle("hive", hive).handle("hiveScripts", hiveScripts).handle("hiveScript", hiveScript).handle("hiveScriptDoctor", hiveScriptDoctor).handle("hiveScriptSave", hiveScriptSave).handle("hiveScriptRun", hiveScriptRun).handle("hiveTask", hiveTask).handle("hiveScriptTags", hiveScriptTags).handle("hiveMarket", hiveMarket).handle("hiveMarketScript", hiveMarketScript).handle("hiveMarketInstall", hiveMarketInstall)
+    return handlers.handle("frameCheck", frameCheck).handle("atlasNote", atlasNote).handle("panel", panel).handle("panelState", panelState).handle("panelCommand", panelCommand).handle("allowance", allowance).handle("plan", plan).handle("me", me).handle("security", security).handle("securityGateReport", securityGateReport).handle("signOut", signOut).handle("accounts", accounts).handle("accountSwitch", accountSwitch).handle("accountRemove", accountRemove).handle("plans", plans).handle("checkout", checkout).handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("inboxMessage", inboxMessage).handle("inboxRead", inboxRead).handle("atlas", atlas).handle("atlasLive", atlasLive).handle("atlasItemCreate", atlasItemCreate).handle("atlasListCreate", atlasListCreate).handle("atlasMembers", atlasMembers).handle("atlasMemberInvite", atlasMemberInvite).handle("atlasMemberSave", atlasMemberSave).handle("atlasMemberRemove", atlasMemberRemove).handle("itemComment", itemComment).handle("notifySettings", notifySettingsRead).handle("notifySettingsSave", notifySettingsSave).handle("atlasLocalCopy", atlasLocalCopyRead).handle("atlasLocalCopySave", atlasLocalCopySave).handle("meLive", meLive).handle("agentsMine", agentsMine).handle("itemActivity", itemActivity).handle("itemAssignees", itemAssignees).handle("itemAssign", itemAssign).handle("itemUnassign", itemUnassign).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("graph", graph).handle("graphBoard", graphBoard).handle("catalog", catalog).handle("integrationConnect", integrationConnect).handle("onboardingState", onboardingState).handle("onboardingMail", onboardingMail).handle("onboardingGround", onboardingGround).handle("onboardingCapabilities", onboardingCapabilities).handle("onboardingWorkspace", onboardingWorkspace).handle("onboardingTrack", onboardingTrack).handle("cliCommands", cliCommands).handle("hivePeers", hivePeers).handle("pageDoc", pageDoc).handle("pageSave", pageSave).handle("item", item).handle("itemSave", itemSave).handle("itemMove", itemMove).handle("itemTaskAdd", itemTaskAdd).handle("itemTaskSave", itemTaskSave).handle("itemTaskDelete", itemTaskDelete).handle("cardSchema", cardSchema).handle("itemShare", itemShare).handle("itemShareVisibility", itemShareVisibility).handle("itemShareAllowlist", itemShareAllowlist).handle("itemShareInvite", itemShareInvite).handle("itemSharePermission", itemSharePermission).handle("itemShareRevoke", itemShareRevoke).handle("itemShareLink", itemShareLink).handle("itemShareLinkRevoke", itemShareLinkRevoke).handle("itemLabels", itemLabels).handle("itemAttachments", itemAttachments).handle("itemAttachmentUpload", itemAttachmentUpload).handle("itemAttachmentDelete", itemAttachmentDelete).handle("itemEvents", itemEvents).handle("itemEventAdd", itemEventAdd).handle("itemAsks", itemAsks).handle("itemAskAdd", itemAskAdd).handle("itemAskAnswer", itemAskAnswer).handle("itemChat", itemChat).handle("itemChatSend", itemChatSend).handle("rooms", rooms).handle("roomCreate", roomCreate).handle("room", room).handle("roomSend", roomSend).handle("playbookDoc", playbookDoc).handle("artifacts", artifacts).handle("artifactDoc", artifactDoc).handle("artifactPublish", artifactPublish).handle("playbookInstall", playbookInstall).handle("bugReport", bugReport).handle("agentTasks", agentTasks).handle("heartbeats", heartbeats).handle("heartbeatRun", heartbeatRun).handle("heartbeatPause", heartbeatPause).handle("pulseTopic", pulseTopic).handle("pulseTopicStream", pulseTopicStream).handle("pulseContacts", pulseContacts).handle("pulseContact", pulseContact).handle("agentLive", agentLive).handle("runTakeOver", runTakeOver).handle("runHandBack", runHandBack).handle("sites", sites).handle("brands", brands).handle("brandKit", brandKit).handle("brandSave", brandSave).handle("records", records).handle("integrations", integrations).handle("hive", hive).handle("hiveScripts", hiveScripts).handle("hiveScript", hiveScript).handle("hiveScriptDoctor", hiveScriptDoctor).handle("hiveScriptSave", hiveScriptSave).handle("hiveScriptRun", hiveScriptRun).handle("hiveTask", hiveTask).handle("hiveTaskDecide", hiveTaskDecide).handle("hiveScriptTags", hiveScriptTags).handle("hiveMarket", hiveMarket).handle("hiveMarketScript", hiveMarketScript).handle("hiveMarketInstall", hiveMarketInstall)
   }),
 )

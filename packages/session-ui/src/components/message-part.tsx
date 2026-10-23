@@ -59,6 +59,43 @@ import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 import { Spinner } from "@opencode-ai/ui/spinner"
 import { TextShimmer } from "@opencode-ai/ui/text-shimmer"
 import { AnimatedCountList } from "./tool-count-summary"
+import {
+  commandsSummary,
+  commandTrigger,
+  durationOf,
+  exitOf,
+  failed as failedCall,
+  commandReportOf,
+  formatDuration,
+  gateMarkText,
+  gateSummary,
+  groupParts,
+  irisCallTrigger,
+  irisGroupSummary,
+  isCommandTool,
+  isContextGroupTool,
+  isIrisGroupTool,
+  isShellTool,
+  outputOf,
+  sameGroups,
+} from "./part-group"
+export {
+  gateMarkText,
+  gateSummary,
+  commandsSummary,
+  commandTrigger,
+  failedCall,
+  groupParts,
+  irisCallTrigger,
+  irisGroupSummary,
+  isCommandTool,
+  isContextGroupTool,
+  isIrisGroupTool,
+  isShellTool,
+  sameGroups,
+}
+import type { GateSummary, PartGroup } from "./part-group"
+export type { ContextKind, GateSummary, PartGroup, PartRef } from "./part-group"
 import { ToolStatusTitle } from "./tool-status-title"
 import { patchFiles } from "./apply-patch-file"
 import { partDefaultOpen } from "./part-default-open"
@@ -604,7 +641,6 @@ function taskSession(
     .sort((a, b) => (b.time.created ?? 0) - (a.time.created ?? 0))[0]?.id
 }
 
-const CONTEXT_GROUP_TOOLS = new Set(["read", "glob", "grep", "list"])
 const HIDDEN_TOOLS = new Set(["todowrite"])
 
 function list<T>(value: T[] | undefined | null, fallback: T[]) {
@@ -619,90 +655,6 @@ function same<T>(a: readonly T[] | undefined, b: readonly T[] | undefined) {
   return a.every((x, i) => x === b[i])
 }
 
-export type PartRef = {
-  messageID: string
-  partID: string
-}
-
-export type PartGroup =
-  | {
-      key: string
-      type: "part"
-      ref: PartRef
-    }
-  | {
-      key: string
-      type: "context"
-      refs: PartRef[]
-    }
-
-function sameRef(a: PartRef, b: PartRef) {
-  return a.messageID === b.messageID && a.partID === b.partID
-}
-
-function sameGroup(a: PartGroup, b: PartGroup) {
-  if (a === b) return true
-  if (a.key !== b.key) return false
-  if (a.type !== b.type) return false
-  if (a.type === "part") {
-    if (b.type !== "part") return false
-    return sameRef(a.ref, b.ref)
-  }
-  if (b.type !== "context") return false
-  if (a.refs.length !== b.refs.length) return false
-  return a.refs.every((ref, i) => sameRef(ref, b.refs[i]!))
-}
-
-export function sameGroups(a: readonly PartGroup[] | undefined, b: readonly PartGroup[] | undefined) {
-  if (a === b) return true
-  if (!a || !b) return false
-  if (a.length !== b.length) return false
-  return a.every((item, i) => sameGroup(item, b[i]!))
-}
-
-export function groupParts(parts: { messageID: string; part: PartType }[]) {
-  const result: PartGroup[] = []
-  let start = -1
-
-  const flush = (end: number) => {
-    if (start < 0) return
-    const first = parts[start]
-    const last = parts[end]
-    if (!first || !last) {
-      start = -1
-      return
-    }
-    result.push({
-      key: `context:${first.part.id}`,
-      type: "context",
-      refs: parts.slice(start, end + 1).map((item) => ({
-        messageID: item.messageID,
-        partID: item.part.id,
-      })),
-    })
-    start = -1
-  }
-
-  parts.forEach((item, index) => {
-    if (isContextGroupTool(item.part)) {
-      if (start < 0) start = index
-      return
-    }
-
-    flush(index - 1)
-    result.push({
-      key: `part:${item.messageID}:${item.part.id}`,
-      type: "part",
-      ref: {
-        messageID: item.messageID,
-        partID: item.part.id,
-      },
-    })
-  })
-
-  flush(parts.length - 1)
-  return result
-}
 
 function index<T extends { id: string }>(items: readonly T[]) {
   return new Map(items.map((item) => [item.id, item] as const))
@@ -825,9 +777,6 @@ export function AssistantParts(props: {
   )
 }
 
-function isContextGroupTool(part: PartType): part is ToolPart {
-  return part.type === "tool" && CONTEXT_GROUP_TOOLS.has(part.tool)
-}
 
 function contextToolDetail(part: ToolPart): string | undefined {
   const info = getToolInfo(
@@ -1040,26 +989,63 @@ export function AssistantMessageDisplay(props: {
   )
 }
 
+/**
+ * The IRIS working mark (#188457): a dot orbiting a ring in the IRIS gradient. It means "a command
+ * is running right now" — shown only while one is, still under reduced motion.
+ */
+function IrisWorkingMark() {
+  return (
+    <svg data-component="iris-working-mark" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+      <defs>
+        <linearGradient id="iris-wm-grad" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#a855f7" />
+          <stop offset="0.55" stop-color="#3b82f6" />
+          <stop offset="1" stop-color="#06b6d4" />
+        </linearGradient>
+      </defs>
+      <circle cx="8" cy="8" r="5.5" fill="none" stroke="url(#iris-wm-grad)" stroke-width="1.4" opacity="0.45" />
+      <g data-slot="iris-working-orbit">
+        <circle cx="8" cy="2.5" r="1.9" fill="url(#iris-wm-grad)" />
+      </g>
+      <circle data-slot="iris-working-core" cx="8" cy="8" r="1.8" fill="url(#iris-wm-grad)" />
+    </svg>
+  )
+}
+
 export function ContextToolGroup(props: {
   parts: ToolPart[]
+  /** Constellation Gate's verdict on this turn (#189589); absent when Gate did not screen it. */
+  gate?: GateSummary
   busy?: boolean
   open?: boolean
   onOpenChange?: (open: boolean) => void
   onSizeChange?: () => void
 }) {
   const i18n = useI18n()
-  const [localOpen, setLocalOpen] = createSignal(false)
-  const open = () => props.open ?? localOpen()
+  const data = useData()
+  const [localOpen, setLocalOpen] = createSignal<boolean | undefined>(undefined)
+  // Uncontrolled, a group holding a failed call starts open (#189316); a click then decides.
+  // A held tool result opens the group too (#189589): something was withheld from the model, and
+  // the person is told, never left to notice.
+  const open = () => props.open ?? localOpen() ?? (props.parts.some(failedCall) || (props.gate?.held ?? 0) > 0)
   const pending = createMemo(
     () =>
       !!props.busy || props.parts.some((part) => part.state.status === "pending" || part.state.status === "running"),
   )
   const summary = createMemo(() => contextToolSummary(props.parts))
+  // A commands row: every call in it is a shell command or an IRIS call (#188457, #189316).
+  const commands = createMemo(() => props.parts.length > 0 && props.parts.every(isCommandTool))
+  const cmd = createMemo(() => commandsSummary(props.parts))
+  const [shown, setShown] = createSignal<Record<string, boolean>>({})
   const handleOpenChange = (value: boolean) => {
     if (props.open === undefined) setLocalOpen(value)
     props.onOpenChange?.(value)
     props.onSizeChange?.()
   }
+  const ranText = () =>
+    cmd().allIris
+      ? i18n.t(cmd().ran === 1 ? "ui.messagePart.iris.ran.one" : "ui.messagePart.iris.ran.other", { count: cmd().ran })
+      : i18n.t(cmd().ran === 1 ? "ui.messagePart.commands.one" : "ui.messagePart.commands.other", { count: cmd().ran })
 
   return (
     <Collapsible
@@ -1070,16 +1056,19 @@ export function ContextToolGroup(props: {
       data-timeline-part-ids={props.parts.map((part) => part.id).join(",")}
     >
       <Collapsible.Trigger>
-        <div data-component="context-tool-group-trigger">
+        <div data-component="context-tool-group-trigger" data-kind={commands() ? "commands" : "files"} data-running={commands() && pending() ? "" : undefined}>
           <span
             data-slot="context-tool-group-title"
             class="min-w-0 flex items-center gap-2 text-14-medium text-text-strong"
           >
+            <Show when={commands() && pending()}>
+              <IrisWorkingMark />
+            </Show>
             <span data-slot="context-tool-group-label" class="shrink-0">
               <ToolStatusTitle
                 active={pending()}
-                activeText={i18n.t("ui.sessionTurn.status.gatheringContext")}
-                doneText={i18n.t("ui.sessionTurn.status.gatheredContext")}
+                activeText={i18n.t(commands() ? "ui.sessionTurn.status.runningIris" : "ui.sessionTurn.status.gatheringContext")}
+                doneText={i18n.t(commands() ? "ui.sessionTurn.status.ranIris" : "ui.sessionTurn.status.gatheredContext")}
                 split={false}
               />
             </span>
@@ -1087,59 +1076,148 @@ export function ContextToolGroup(props: {
               data-slot="context-tool-group-summary"
               class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-normal text-text-base"
             >
-              <AnimatedCountList
-                items={[
-                  {
-                    key: "ui.messagePart.context.read",
-                    count: summary().read,
-                  },
-                  {
-                    key: "ui.messagePart.context.search",
-                    count: summary().search,
-                  },
-                  {
-                    key: "ui.messagePart.context.list",
-                    count: summary().list,
-                  },
-                ]}
-                fallback=""
-              />
+              <Show
+                when={commands()}
+                fallback={
+                  <AnimatedCountList
+                    items={[
+                      {
+                        key: "ui.messagePart.context.read",
+                        count: summary().read,
+                      },
+                      {
+                        key: "ui.messagePart.context.search",
+                        count: summary().search,
+                      },
+                      {
+                        key: "ui.messagePart.context.list",
+                        count: summary().list,
+                      },
+                    ]}
+                    fallback=""
+                  />
+                }
+              >
+                {/* Running: only the command executing now, then the count. Done: count · time. */}
+                <Show when={cmd().live}>
+                  {(live) => (
+                    <span data-slot="context-tool-group-live">
+                      {live().title} {live().subtitle}
+                    </span>
+                  )}
+                </Show>
+                <Show when={cmd().live}>{" · "}</Show>
+                <span>{ranText()}</span>
+                <Show when={cmd().ms !== undefined}>
+                  <span data-slot="context-tool-group-time">{" · "}{formatDuration(cmd().ms!)}</span>
+                </Show>
+                {/* No failed count up here (#190220): agents run probe commands that exit non-zero on
+                    purpose, and a red tally at the top reads as "something broke". The reason
+                    stays on the command itself, inside the fold. */}
+              </Show>
+              <Show when={!pending() && props.gate}>
+                {(g) => (
+                  <span data-slot="context-tool-group-gate" data-tone={gateMarkText(g()).tone}>
+                    {" · "}
+                    <Icon name="shield" size="small" />
+                    {gateMarkText(g()).text}
+                  </span>
+                )}
+              </Show>
             </span>
           </span>
           <Collapsible.Arrow />
         </div>
       </Collapsible.Trigger>
       <Collapsible.Content>
+        <Show when={(props.gate?.held ?? 0) > 0}>
+          <div data-component="gate-held-card">
+            <Icon name="shield" size="small" />
+            <div data-slot="gate-held-copy">
+              <span data-slot="gate-held-title">
+                Gate held {props.gate!.held} tool result{props.gate!.held === 1 ? "" : "s"} before the model read {props.gate!.held === 1 ? "it" : "them"}
+              </span>
+              <span data-slot="gate-held-description">
+                It read as an attempt to take over the assistant. The model was told it was withheld. Settings › Security lists it, and you can report a mistake there.
+              </span>
+            </div>
+          </div>
+        </Show>
         <div data-component="context-tool-group-list">
           <Index each={props.parts}>
             {(partAccessor) => {
-              const trigger = createMemo(() => contextToolTrigger(partAccessor(), i18n))
+              const trigger = createMemo(() =>
+                isCommandTool(partAccessor()) ? commandTrigger(partAccessor()) : contextToolTrigger(partAccessor(), i18n),
+              )
+              const error = createMemo(() => {
+                const st = partAccessor().state
+                if (st.status === "error") return st.error
+                const e = exitOf(partAccessor())
+                return failedCall(partAccessor()) && e !== undefined ? `exit ${e}` : undefined
+              })
               const running = createMemo(
                 () => partAccessor().state.status === "pending" || partAccessor().state.status === "running",
               )
-              return (
-                <div data-slot="context-tool-group-item">
-                  <div data-component="tool-trigger">
-                    <div data-slot="basic-tool-tool-trigger-content">
-                      <div data-slot="basic-tool-tool-info">
-                        <div data-slot="basic-tool-tool-info-structured">
-                          <div data-slot="basic-tool-tool-info-main">
-                            <span data-slot="basic-tool-tool-title">
-                              <TextShimmer text={trigger().title} active={running()} />
-                            </span>
-                            <Show when={trigger().subtitle}>
-                              <span data-slot="basic-tool-tool-subtitle">{trigger().subtitle}</span>
-                            </Show>
-                            <Show when={trigger().args?.length}>
-                              <For each={trigger().args}>
-                                {(arg) => <span data-slot="basic-tool-tool-arg">{arg}</span>}
-                              </For>
-                            </Show>
-                          </div>
+              const ms = createMemo(() => durationOf(partAccessor()))
+              const output = createMemo(() => (isShellTool(partAccessor()) ? outputOf(partAccessor()) : undefined))
+              const isShown = () => !!shown()[partAccessor().id]
+              const toggle = () => {
+                setShown((m) => ({ ...m, [partAccessor().id]: !m[partAccessor().id] }))
+                props.onSizeChange?.()
+              }
+              const body = () => (
+                <div data-component="tool-trigger">
+                  <div data-slot="basic-tool-tool-trigger-content">
+                    <div data-slot="basic-tool-tool-info">
+                      <div data-slot="basic-tool-tool-info-structured">
+                        <div data-slot="basic-tool-tool-info-main">
+                          <span data-slot="basic-tool-tool-title">
+                            <TextShimmer text={trigger().title} active={running()} />
+                          </span>
+                          <Show when={trigger().subtitle}>
+                            <span data-slot="basic-tool-tool-subtitle">{trigger().subtitle}</span>
+                          </Show>
+                          <Show when={"args" in trigger() && (trigger() as { args?: string[] }).args?.length}>
+                            <For each={(trigger() as { args?: string[] }).args}>
+                              {(arg) => <span data-slot="basic-tool-tool-arg">{arg}</span>}
+                            </For>
+                          </Show>
                         </div>
                       </div>
                     </div>
+                    <Show when={ms() !== undefined}>
+                      <span data-slot="context-tool-group-ms">{formatDuration(ms()!)}</span>
+                    </Show>
                   </div>
+                </div>
+              )
+              return (
+                <div data-slot="context-tool-group-item" data-error={error() ? "" : undefined}>
+                  {/* A command opens on a second click: its output, and for a failed one the Report link. */}
+                  <Show when={output() || (error() && data.reportCommand)} fallback={body()}>
+                    <button type="button" data-slot="context-tool-group-toggle" aria-expanded={isShown()} onClick={toggle}>
+                      {body()}
+                    </button>
+                  </Show>
+                  <Show when={error()}>{(e) => <span data-slot="context-tool-group-error">{e()}</span>}</Show>
+                  <Show when={isShown()}>
+                    <Show when={output()}>{(o) => <pre data-slot="context-tool-group-output">{o()}</pre>}</Show>
+                    {/* #189435: only once the person has opened the command, so the row itself stays quiet. */}
+                    <Show when={error() ? data.reportCommand : undefined}>
+                      {(report) => (
+                        <button
+                          type="button"
+                          data-slot="context-tool-group-report"
+                          onClick={() => {
+                            const r = commandReportOf(partAccessor())
+                            if (r) report()(r)
+                          }}
+                        >
+                          Report this
+                        </button>
+                      )}
+                    </Show>
+                  </Show>
                 </div>
               )
             }}
