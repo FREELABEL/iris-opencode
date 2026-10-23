@@ -27,6 +27,9 @@ import {
   type StepResult,
   type ExecuteOptions,
   NoPosixShellError,
+  InvalidPlaybookError,
+  StepNotFoundError,
+  runOutcome,
 } from "../../skill/executor"
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "fs"
 import {
@@ -661,6 +664,13 @@ const SkillRunCommand = cmd({
           else console.error(`\n${e.message}\n`)
           process.exit(1)
         }
+        // An invalid header (#190876) or an unknown --step (#190879) is the same kind of
+        // answer: nothing ran, say why in one line, exit 1 — never the crash reporter.
+        if (e instanceof InvalidPlaybookError || e instanceof StepNotFoundError) {
+          if (args.json) await writeJson({ status: "refused", reason: e.message })
+          else console.error(`\n${e.message}\n`)
+          process.exit(1)
+        }
         throw e
       }
 
@@ -682,14 +692,19 @@ const SkillRunCommand = cmd({
       // legitimately done its job, and 94 playbooks plus whatever CI calls them depend on that
       // exiting 0. Narrowing to an explicitly-requested single step keeps automation intact and
       // fixes the case where the exit code is load-bearing.
-      const ranNothing =
-        Boolean(args.step) && result.status === "completed" && passedN === 0 && failedN === 0 && skippedN > 0
+      //
+      // Widened by #190875: a run with NO step results at all (its steps did not parse) is also
+      // ran-nothing, with or without --step. The exit code comes from runOutcome for BOTH output
+      // modes — the --json branch used to return before it was set, so a failed run exited 0
+      // (#182759).
+      const outcome = runOutcome(result, { stepFilter: args.step as string | undefined })
+      const ranNothing = outcome.ranNothing
 
       if (args.json) {
         // Additive fields — the existing shape is untouched, so anything already parsing this
         // keeps working, and anything that wants the truth can now read it.
         await writeJson({ ...result, ran_nothing: ranNothing, warnings })
-        if (ranNothing) process.exitCode = 1
+        process.exitCode = outcome.exitCode
         return
       }
 
@@ -703,6 +718,13 @@ const SkillRunCommand = cmd({
 
       if (ranNothing) {
         console.log(`  ⚠  ${bold(result.skill)} — ${bold("NOTHING RAN")}`)
+        if (Object.keys(result.steps).length === 0) {
+          console.log(dim(`  This playbook has no runnable steps. Check it:  iris playbook test ${plan.name}`))
+          printDivider()
+          prompts.outro("Nothing ran")
+          process.exitCode = 1
+          return
+        }
         for (const [id, sr] of Object.entries(result.steps)) {
           if (sr.status === "skipped") console.log(`    ○ ${id}: ${sr.output}`)
         }
@@ -764,8 +786,7 @@ const SkillRunCommand = cmd({
       )
       // 0 = done, 2 = paused on a human step, 1 = failed. Paused is not a failure,
       // but it is not success either — callers must be able to tell the difference.
-      if (result.status === "paused") process.exitCode = 2
-      else if (result.status !== "completed") process.exitCode = 1
+      process.exitCode = outcome.exitCode
     })
   },
 })
@@ -815,13 +836,16 @@ const SkillTestCommand = cmd({
       const issues = validatePlan(plan)
 
       if (args.json) {
+        const valid = !issues.some((i) => i.level === "error")
         await writeJson({
-          valid: !issues.some((i) => i.level === "error"),
+          valid,
           version: plan.version,
           steps: plan.steps.length,
           args: Object.keys(plan.args).length,
           issues,
         })
+        // Same exit code as the human path: an invalid playbook is not a 0.
+        if (!valid) process.exitCode = 1
         return
       }
 
