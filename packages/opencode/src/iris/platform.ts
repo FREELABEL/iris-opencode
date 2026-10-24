@@ -1045,6 +1045,10 @@ export interface SecurityState {
     enabled: boolean
     reason: string
     explanation: string
+    /** The person's own switch (#191083): "on", "off", or null = following the rollout. */
+    choice: "on" | "off" | null
+    /** False when a rule above the switch decided — health data, kill switch, an operator. */
+    canChange: boolean
     mode: string
     org: string | null
     sensitivity: string | null
@@ -1096,6 +1100,8 @@ export const EMPTY_SECURITY: SecurityState = {
     enabled: false,
     reason: "unknown",
     explanation: "",
+    choice: null,
+    canChange: false,
     mode: "shadow",
     org: null,
     sensitivity: null,
@@ -1154,6 +1160,8 @@ export function securityFrom(j: any): SecurityState {
       enabled: Boolean(g.enabled),
       reason: String(g.reason ?? "unknown"),
       explanation: String(g.explanation ?? ""),
+      choice: g.choice === "on" || g.choice === "off" ? g.choice : null,
+      canChange: g.can_change === true,
       mode: String(g.mode ?? "shadow"),
       org: g.org ?? null,
       sensitivity: g.sensitivity ?? null,
@@ -1231,6 +1239,39 @@ export async function fetchSecurity(
       opts.token === undefined ? resolveToken() : opts.token,
     )
     if (!res.ok) return { measured: false, reason: `iris-api ${res.status}`, data: EMPTY_SECURITY }
+    return { measured: true, data: securityFrom(await res.json()) }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: EMPTY_SECURITY }
+  }
+}
+
+/**
+ * The person's own Gate switch (#191083): true = on, false = off, null = follow the rollout.
+ * Answers with the state the server re-decided after the write, never an assumed one. A 409 is
+ * the server refusing because a rule above the switch decided; its explanation is the reason.
+ */
+export async function setGateChoice(
+  enabled: boolean | null,
+  opts: { token?: string | null; signal?: AbortSignal } = {},
+): Promise<PlatformResult<SecurityState>> {
+  try {
+    const res = await irisFetch(
+      "/api/v6/security/gate",
+      IRIS_API,
+      enabled === null
+        ? { method: "DELETE", signal: opts.signal }
+        : {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled }),
+            signal: opts.signal,
+          },
+      opts.token === undefined ? resolveToken() : opts.token,
+    )
+    if (!res.ok) {
+      const j = (await res.json().catch(() => null)) as any
+      return { measured: false, reason: typeof j?.explanation === "string" ? j.explanation : `iris-api ${res.status}`, data: EMPTY_SECURITY }
+    }
     return { measured: true, data: securityFrom(await res.json()) }
   } catch (e) {
     return { measured: false, reason: e instanceof Error ? e.message : String(e), data: EMPTY_SECURITY }

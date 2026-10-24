@@ -1,5 +1,6 @@
 import { Component, For, Show, createResource, createSignal } from "solid-js"
 import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
+import { Switch } from "@opencode-ai/ui/v2/switch-v2"
 import { usePlatform } from "@/context/platform"
 import { useServer } from "@/context/server"
 import { SettingsListV2 } from "./parts/list"
@@ -14,9 +15,11 @@ import "./settings-v2.css"
  * "that one was wrong". The health-data guard sits beside it, and the tab has room for the next
  * control without being redesigned.
  *
- * READ-ONLY ON PURPOSE. Whether Gate screens an account is decided on the server from a remote
- * rollout flag, by the same policy the model proxy runs. The panel renders that decision; a
- * toggle here would be a second source of truth that could disagree with what the proxy does.
+ * The server decides. Whether Gate screens an account comes from the same policy the model proxy
+ * runs. The one thing a person sets is their own switch (#191083), and even that is a request:
+ * the panel shows the state the server re-decided after the write, never the one it asked for,
+ * and the switch is disabled when a rule above it (health data, the kill switch, an operator)
+ * decided — so the panel can never say "on" while the proxy says "off".
  *
  * English copy, like the other IRIS-only surfaces: the locale files carry the upstream app's
  * strings and the parity test requires every key in all 61 of them.
@@ -46,6 +49,10 @@ export interface SecurityState {
     enabled: boolean
     reason: string
     explanation: string
+    /** The person's own switch: "on", "off", or null = following the rollout. */
+    choice?: "on" | "off" | null
+    /** False when a rule above the switch decided. Missing (an older engine) is false. */
+    canChange?: boolean
     mode: string
     org: string | null
     sensitivity: string | null
@@ -139,6 +146,22 @@ export function gateStatusView(s: SecurityState | undefined, loading: boolean): 
     return { label: "Off", tone: s.gate.reason === "phi_no_baa" ? "warn" : "off", description: s.gate.explanation }
   }
   return { label: s.gate.mode === "enforce" ? "On" : "On · watching", tone: "on", description: s.gate.explanation }
+}
+
+/** The person's own switch. Locked whenever we could not ask, or a rule above it decided. */
+export function gateSwitchView(s: SecurityState | undefined): { checked: boolean; disabled: boolean; description: string } {
+  if (!s?.measured) {
+    return { checked: false, disabled: true, description: "Available once IRIS answers." }
+  }
+  if (s.gate.canChange !== true) {
+    return { checked: s.gate.enabled, disabled: true, description: "You can't change this for your account right now — see above for why." }
+  }
+  const following = s.gate.choice == null ? " You haven't chosen yet, so this follows IRIS's rollout." : ""
+  return {
+    checked: s.gate.enabled,
+    disabled: false,
+    description: `Checks each message you send, and what tools bring back, before the model reads it.${following}`,
+  }
 }
 
 export function modeView(mode: string): { title: string; description: string } {
@@ -272,7 +295,30 @@ export const SettingsSecurityV2: Component = () => {
     }
   }
 
+  const [switching, setSwitching] = createSignal(false)
+  const [switchError, setSwitchError] = createSignal<string | null>(null)
+  const setGate = async (enabled: boolean) => {
+    setSwitchError(null)
+    setSwitching(true)
+    try {
+      const res = await (platform.fetch ?? globalThis.fetch)(`${base()}/iris/security/gate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      })
+      const next = res.ok ? ((await res.json()) as SecurityState) : undefined
+      if (!next?.measured) throw new Error(next?.reason ?? `${res.status}`)
+      mutate(next)
+    } catch (err) {
+      setSwitchError(`Couldn't change it: ${err instanceof Error ? err.message : String(err)}`)
+      void refetch()
+    } finally {
+      setSwitching(false)
+    }
+  }
+
   const status = () => gateStatusView(state(), state.loading)
+  const toggle = () => gateSwitchView(state())
   const gate = () => state()?.gate
   const ready = () => state()?.measured === true
 
@@ -306,6 +352,19 @@ export const SettingsSecurityV2: Component = () => {
                 </Show>
               </span>
             </SettingsRowV2>
+
+            <SettingsRowV2 title="Scan my messages with Gate" description={toggle().description}>
+              <div data-action="gate-switch">
+                <Switch
+                  checked={toggle().checked}
+                  disabled={toggle().disabled || switching()}
+                  onChange={(checked: boolean) => void setGate(checked)}
+                />
+              </div>
+            </SettingsRowV2>
+            <Show when={switchError()}>
+              <p class="settings-v2-security-error">{switchError()}</p>
+            </Show>
 
             <Show when={ready() && gate()}>
               {(g) => (

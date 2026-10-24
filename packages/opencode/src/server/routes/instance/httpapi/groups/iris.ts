@@ -1333,6 +1333,8 @@ const SecurityResponse = Schema.Struct({
     enabled: Schema.Boolean,
     reason: described(Schema.String, "The rollout policy's reason: allowlisted, new_user, phi_no_baa, not_in_rollout, …"),
     explanation: Schema.String,
+    choice: described(Schema.NullOr(Schema.String), "The person's own switch: on | off | null (following the rollout)"),
+    canChange: described(Schema.Boolean, "False when a rule above the switch decided: health data, the kill switch, an operator"),
     mode: described(Schema.String, "shadow = scan and record only · enforce = hold flagged tool results"),
     org: Schema.NullOr(Schema.String),
     sensitivity: Schema.NullOr(Schema.String),
@@ -1569,6 +1571,7 @@ export const IrisPaths = {
   me: `${root}/me`,
   security: `${root}/security`,
   securityGateReport: `${root}/security/gate/events/:id/report`,
+  securityGate: `${root}/security/gate`,
   signOut: `${root}/sign-out`,
   accounts: `${root}/accounts`,
   accountSwitch: `${root}/accounts/switch`,
@@ -1684,6 +1687,19 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Security settings",
           description:
             "Constellation Gate's state for the account chat uses — on or off and the rollout policy's reason, mode, checks, 30-day stats and recent scans — plus the health-data guard. Decided by fl-iris-api from a remote flag; read-only here.",
+        }),
+      ),
+      HttpApiEndpoint.post("securityGate", IrisPaths.securityGate, {
+        payload: Schema.Struct({
+          enabled: described(Schema.NullOr(Schema.Boolean), "true = on, false = off, null = follow the rollout"),
+        }),
+        success: described(SecurityResponse, "The Security state as the server re-decided it after the change"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.securityGate",
+          summary: "Switch Gate on or off for your account",
+          description:
+            "The person's own switch (#191083). Refused (measured: false, with the reason) when a rule above it decided — health data, the kill switch, an operator.",
         }),
       ),
       HttpApiEndpoint.post("securityGateReport", IrisPaths.securityGateReport, {
