@@ -7,6 +7,7 @@ import { makeGlobalNode } from "./effect/app-node"
 import { AppProcess, collectStream, waitForAbort } from "./process"
 import { NonNegativeInt, PositiveInt, RelativePath } from "./schema"
 import { RipgrepBinary } from "./ripgrep/binary"
+import * as WalkPolicy from "./ripgrep/walk-policy"
 
 /**
  * Small core-owned ripgrep execution adapter. It deliberately exposes raw
@@ -16,6 +17,13 @@ import { RipgrepBinary } from "./ripgrep/binary"
  */
 
 const ERROR_BYTES = 8 * 1024
+/**
+ * Wall-clock budgets (#191073). A result cap alone never stops a walk whose pattern matches
+ * little: `**\/.git` from `/` ran 9+ minutes. When the budget runs out the walk is killed and
+ * what it found so far is returned, with onCutoff telling the caller it was cut short.
+ */
+export const LIST_BUDGET_MS = 20_000
+export const GREP_BUDGET_MS = 30_000
 const MAX_RECORD_BYTES = 64 * 1024
 const MAX_SUBMATCHES = 100
 
@@ -55,6 +63,10 @@ export interface FindInput {
   readonly hidden?: boolean
   readonly follow?: boolean
   readonly signal?: AbortSignal
+  /** Wall-clock budget in ms. Defaults to LIST_BUDGET_MS / GREP_BUDGET_MS. */
+  readonly budgetMs?: number
+  /** Called when the walk was stopped by its budget; the results returned are partial. */
+  readonly onCutoff?: (info: Cutoff) => void
   readonly onEntry?: (entry: Entry) => Effect.Effect<void>
 }
 
@@ -65,6 +77,10 @@ export interface GlobInput {
   readonly hidden?: boolean
   readonly follow?: boolean
   readonly signal?: AbortSignal
+  /** Wall-clock budget in ms. Defaults to LIST_BUDGET_MS / GREP_BUDGET_MS. */
+  readonly budgetMs?: number
+  /** Called when the walk was stopped by its budget; the results returned are partial. */
+  readonly onCutoff?: (info: Cutoff) => void
 }
 
 export interface GrepInput {
@@ -74,6 +90,16 @@ export interface GrepInput {
   readonly include?: string
   readonly limit: number
   readonly signal?: AbortSignal
+  /** Wall-clock budget in ms. Defaults to LIST_BUDGET_MS / GREP_BUDGET_MS. */
+  readonly budgetMs?: number
+  /** Called when the walk was stopped by its budget; the results returned are partial. */
+  readonly onCutoff?: (info: Cutoff) => void
+}
+
+export interface Cutoff {
+  readonly reason: "time"
+  readonly elapsedMs: number
+  readonly found: number
 }
 
 export interface Interface {
@@ -85,6 +111,9 @@ export interface Interface {
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/Ripgrep") {}
 
 const failure = (message: string, cause?: unknown) => new Error({ message, cause })
+
+/** Does a glob pattern name a `.git` directory or something inside one? */
+export const targetsGit = (pattern: string) => /(^|\/)\.git(\/|$)/u.test(pattern)
 
 const isInvalidPattern = (stderr: string) =>
   stderr.includes("regex parse error") || stderr.includes("error parsing regex")
@@ -103,30 +132,41 @@ const layer = Layer.effect(
       readonly parse: (line: string) => Effect.Effect<A | undefined, Error>
       readonly pattern?: string
       readonly onItem?: (item: A) => Effect.Effect<void>
+      readonly budgetMs: number
+      readonly onCutoff?: (info: Cutoff) => void
+      /** false for a single named file: nothing is walked, so there is nothing to bound. */
+      readonly walks: boolean
     }) => {
+      const walk = WalkPolicy.scope(input.cwd)
+      if (input.walks && walk.refuse) return Effect.fail(failure(walk.refuse))
+      // Prune protected folders before anything else ripgrep reads (args[0] is --no-config).
+      const args = input.walks ? [input.args[0], ...walk.excludes, ...input.args.slice(1)] : input.args
+      const collected: A[] = []
       const program = Effect.scoped(
         Effect.gen(function* () {
           const handle = yield* process.spawn(
-            ChildProcess.make(yield* binary.filepath, input.args, { cwd: input.cwd, extendEnv: true, stdin: "ignore" }),
+            ChildProcess.make(yield* binary.filepath, args, { cwd: input.cwd, extendEnv: true, stdin: "ignore" }),
           )
           const stderrFiber = yield* collectStream(handle.stderr, ERROR_BYTES).pipe(
             Effect.map((output) => output.buffer.toString("utf8")),
             Effect.forkScoped,
           )
           let observed = 0
-          const rows = yield* Stream.decodeText(handle.stdout).pipe(
+          yield* Stream.decodeText(handle.stdout).pipe(
             Stream.splitLines,
             Stream.filter((line) => line.length > 0),
             Stream.mapEffect(input.parse),
             Stream.filter((row): row is A => row !== undefined),
             Stream.tap((row) => {
+              // Kept outside the scope so a walk stopped by its budget still returns what it found.
+              collected.push(row)
               if (!input.onItem || observed++ >= input.limit) return Effect.void
               return input.onItem(row)
             }),
             Stream.take(input.limit + 1),
-            Stream.runCollect,
-            Effect.map((chunk) => [...chunk]),
+            Stream.runDrain,
           )
+          const rows = collected
           const truncated = rows.length > input.limit
           if (truncated) return { items: rows.slice(0, input.limit), truncated, partial: false }
 
@@ -141,7 +181,17 @@ const layer = Layer.effect(
           return { items: code === 1 ? [] : rows, truncated: false, partial: code === 2 }
         }),
       )
-      const abortable = input.signal ? program.pipe(Effect.raceFirst(waitForAbort(input.signal))) : program
+      const started = Date.now()
+      const budgeted = Effect.timeoutOrElse(program, {
+        duration: input.budgetMs,
+        orElse: () =>
+          Effect.sync(() => {
+            const items = collected.slice(0, input.limit)
+            input.onCutoff?.({ reason: "time", elapsedMs: Date.now() - started, found: items.length })
+            return { items, truncated: false, partial: true }
+          }),
+      })
+      const abortable = input.signal ? budgeted.pipe(Effect.raceFirst(waitForAbort(input.signal))) : budgeted
       return abortable.pipe(
         Effect.mapError((cause) =>
           cause instanceof Error || cause instanceof InvalidPatternError
@@ -157,13 +207,18 @@ const layer = Layer.effect(
           cwd: input.cwd,
           limit: input.limit,
           signal: input.signal,
+          budgetMs: input.budgetMs ?? LIST_BUDGET_MS,
+          onCutoff: input.onCutoff,
+          walks: true,
           args: [
             "--no-config",
             "--files",
-            ...(input.hidden ? ["--hidden"] : []),
+            // A pattern that names .git (e.g. **/.git/HEAD, how to find repositories) must be
+            // able to see it: .git is hidden, and `!**/.git/**` hid even its top-level files.
+            ...(input.hidden || targetsGit(input.pattern) ? ["--hidden"] : []),
             ...(input.follow ? ["--follow"] : []),
             `--glob=${input.pattern}`,
-            "--glob=!**/.git/**",
+            targetsGit(input.pattern) ? "--glob=!**/.git/*/**" : "--glob=!**/.git/**",
             ".",
           ],
           parse: (line) =>
@@ -189,6 +244,9 @@ const layer = Layer.effect(
           cwd: input.cwd,
           limit: input.limit,
           signal: input.signal,
+          budgetMs: input.budgetMs ?? LIST_BUDGET_MS,
+          onCutoff: input.onCutoff,
+          walks: true,
           args: [
             "--no-config",
             "--files",
@@ -218,6 +276,8 @@ const layer = Layer.effect(
       grep: (input) =>
         run<RawMatchData>({
           ...input,
+          budgetMs: input.budgetMs ?? GREP_BUDGET_MS,
+          walks: input.file === undefined,
           args: [
             "--no-config",
             "--json",
