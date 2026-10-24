@@ -1,6 +1,16 @@
-import { deleteBoardCopy, readBoardCopy, readBoardListCopy, writeBoardCopy, writeBoardListCopy } from "./atlas-local-copy"
-import { fetchAtlas, fetchAtlasChanges, fetchBloqs, resolveUserId, type AtlasList, type Bloq } from "./platform"
-import { counts, heldOn, overlay, replay, type HeldView } from "./atlas-outbox"
+import {
+  deleteBoardCopy,
+  deleteCardCopy,
+  findCardInCopies,
+  readBoardCopy,
+  readBoardListCopy,
+  readCardCopy,
+  writeBoardCopy,
+  writeBoardListCopy,
+  writeCardCopy,
+} from "./atlas-local-copy"
+import { fetchAtlas, fetchAtlasChanges, fetchBloqs, fetchItem, resolveUserId, type AtlasItem, type AtlasList, type Bloq, type ItemDoc } from "./platform"
+import { counts, heldOn, overlay, overlayCard, readOutbox, replay, type HeldView } from "./atlas-outbox"
 
 type Read = Awaited<ReturnType<typeof fetchAtlas>>
 
@@ -122,5 +132,67 @@ export async function readAtlasBoardWithEdits(
     ...read,
     r: { ...read.r, data: { ...read.r.data, lists } },
     outbox: { waiting: c.waiting, held: c.held, heldItems: heldOn(userId, bloqId) },
+  }
+}
+
+/** What a card says offline (#191003): when it was read, and whether its notes are here at all. */
+export interface CardOffline {
+  copiedAt: string
+  /** false: never opened here online, so the body is not on this computer — not that it is empty. */
+  body: boolean
+  /** The start of the body, from the board, when the body itself is not here. */
+  preview?: string
+}
+
+/** fl-api said no about this card (gone, not yours, signed out) — as opposed to not answering. */
+export function isCardRefusal(reason: string | undefined): boolean {
+  return /not signed in|no item \d+ visible|fl-api 4\d\d/.test(reason ?? "")
+}
+
+/**
+ * One card for the editor (#191003). Online it is fl-api's, and kept here whole when its board is
+ * kept. When fl-api cannot be reached it is the kept card — or, for a card never opened here, its
+ * face from the board copy, with the body marked as not here — with this machine's waiting edits
+ * on it. Offline, before this, a card could only be edited if it was already open.
+ */
+export async function readCard(itemId: number): Promise<Awaited<ReturnType<typeof fetchItem>> & { offline?: CardOffline }> {
+  const r = await fetchItem(itemId)
+  const userId = await resolveUserId()
+  if (!userId) return r
+  if (r.measured) {
+    writeCardCopy(userId, itemId, r.data)
+    return r
+  }
+  if (isCardRefusal(r.reason)) {
+    deleteCardCopy(userId, itemId)
+    return r
+  }
+  const found = findCardInCopies<AtlasItem>(userId, itemId)
+  if (!found) return r
+  const kept = readCardCopy<ItemDoc>(userId, found.bloqId, itemId)
+  const face = found.item
+  // The board copy is refreshed on every board read, the card only when opened: its face wins.
+  const base: ItemDoc = {
+    ...(kept?.doc ?? { id: itemId, content: "", contentKind: "markdown", labels: [], isPublic: false, tasks: [], tasksMeasured: false }),
+    title: face.title,
+    status: face.status,
+    priority: face.priority,
+    cardType: face.cardType,
+    dueDate: face.dueDate ? String(face.dueDate).slice(0, 10) : undefined,
+    listId: found.listId,
+    listName: found.listName,
+  }
+  const doc = overlayCard(userId, itemId, base)
+  const { pending: _pending, ...data } = doc
+  // A body saved offline is the whole body, so it is here even when the card never was.
+  const body = !!kept || readOutbox(userId).ops.some((op) => op.kind === "save" && op.itemId === itemId && typeof op.patch.content === "string")
+  return {
+    measured: true,
+    data: { ...data, ...(kept ? {} : { tasksReason: "not on this computer" }) },
+    offline: {
+      copiedAt: kept?.copiedAt ?? found.copiedAt,
+      body,
+      ...(!body && face.preview ? { preview: face.preview } : {}),
+    },
   }
 }

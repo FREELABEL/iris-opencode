@@ -333,6 +333,36 @@ export function overlay(userId: number, bloqId: number, lists: readonly AtlasLis
   return out
 }
 
+/**
+ * One card with this machine's waiting edits on it (#191003) — what the card editor shows offline,
+ * so a card reopened after an offline edit shows the edit, not the copy from before it.
+ * `content` is the whole body: a waiting save carries the whole body, never a part of it.
+ */
+export function overlayCard<C extends { title: string; content?: string; status?: string; priority?: string; cardType?: string; dueDate?: string; listId?: number }>(
+  userId: number,
+  itemId: number,
+  card: C,
+): C & { pending?: OutboxState } {
+  const out: C & { pending?: OutboxState } = { ...card }
+  for (const op of readOutbox(userId).ops) {
+    if (op.kind === "create" || op.itemId !== itemId) continue
+    out.pending = out.pending === "held" ? "held" : op.state
+    if (op.kind === "move") {
+      out.listId = op.listId
+      continue
+    }
+    const p = op.patch
+    if (typeof p.title === "string") out.title = p.title
+    if (typeof p.content === "string") out.content = p.content
+    if (typeof p.status === "string") out.status = p.status
+    if (p.priority !== undefined) out.priority = (p.priority as string | null) ?? undefined
+    if (p.card_type !== undefined) out.cardType = (p.card_type as string | null) ?? undefined
+    if (p.due_date !== undefined) out.dueDate = (p.due_date as string | null) ?? undefined
+    if (p.bloq_list_id !== undefined) out.listId = Number(p.bloq_list_id)
+  }
+  return out
+}
+
 // ── sending ─────────────────────────────────────────────────────────────────
 
 export interface ReplayResult {

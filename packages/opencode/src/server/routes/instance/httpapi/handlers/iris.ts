@@ -26,7 +26,6 @@ import {
   fetchPlaybookDoc,
   fetchPageDoc,
   savePageDoc,
-  fetchItem,
   saveItem,
   createItem,
   createList,
@@ -105,7 +104,7 @@ import { Panel } from "@/iris/panel"
 import { atlasNoteUrl, probeAtlasNote, type NoteProbe } from "@/iris/atlas-note"
 import { frameTarget, probeFrame } from "@/iris/frame-check"
 import { startIntegrationConnect } from "@/iris/platform"
-import { readAtlasBoardWithEdits, readBoardList } from "@/iris/atlas-board-read"
+import { readAtlasBoardWithEdits, readBoardList, readCard } from "@/iris/atlas-board-read"
 import { createCard, moveCard, saveCard } from "@/iris/atlas-write"
 import { resolveUserId } from "@/iris/platform"
 import { counts as outboxCounts, replay as replayOutbox, resolve as resolveOutbox } from "@/iris/atlas-outbox"
@@ -460,8 +459,8 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
     )
 
     const item = Effect.fn("IrisHttpApi.item")((ctx: { params: { itemID: number } }) =>
-      Effect.promise(() => fetchItem(ctx.params.itemID)).pipe(
-        Effect.map((r) => ({ measured: r.measured, reason: r.reason, ...r.data })),
+      Effect.promise(() => readCard(ctx.params.itemID)).pipe(
+        Effect.map((r) => ({ measured: r.measured, reason: r.reason, ...r.data, ...(r.offline ? { offline: r.offline } : {}) })),
       ),
     )
 
