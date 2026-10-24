@@ -33,7 +33,10 @@ export const GrepTool = Tool.define("grep", {
     const searchPath = params.path || Instance.directory
 
     const rgPath = await Ripgrep.filepath()
-    const args = ["-nH", "--field-match-separator=|", "--regexp", params.pattern]
+    // A directory is walked: refuse / and prune protected folders (#191073). A single file is not.
+    const isDir = (await Bun.file(searchPath).stat().catch(() => null))?.isDirectory() ?? true
+    const walk = isDir ? Ripgrep.walkArgs(searchPath) : []
+    const args = [...walk, "-nH", "--field-match-separator=|", "--regexp", params.pattern]
     if (params.include) {
       args.push("--glob", params.include)
     }
@@ -43,10 +46,27 @@ export const GrepTool = Tool.define("grep", {
       stdout: "pipe",
       stderr: "pipe",
     })
+    let cutoff: Ripgrep.Cutoff | undefined
+    const unbound = Ripgrep.bound(proc, {
+      budgetMs: Ripgrep.GREP_BUDGET_MS,
+      signal: ctx.abort,
+      onCutoff: (c) => (cutoff = c),
+    })
 
-    const output = await new Response(proc.stdout).text()
-    const errorOutput = await new Response(proc.stderr).text()
+    const [output, errorOutput] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ])
     const exitCode = await proc.exited
+    unbound()
+
+    if (cutoff && !output.trim()) {
+      return {
+        title: params.pattern,
+        metadata: { matches: 0, truncated: true },
+        output: `No matches found before the search stopped at ${Math.round(cutoff.elapsedMs / 1000)}s — the directory is too large to search. Search a narrower path.`,
+      }
+    }
 
     if (exitCode === 1) {
       return {
@@ -56,7 +76,8 @@ export const GrepTool = Tool.define("grep", {
       }
     }
 
-    if (exitCode !== 0) {
+    // Killed by the budget is not a failure: keep what it found. Exit 2 = some paths unreadable.
+    if (exitCode !== 0 && exitCode !== 2 && !cutoff) {
       throw new Error(`ripgrep failed: ${errorOutput}`)
     }
 
@@ -119,12 +140,18 @@ export const GrepTool = Tool.define("grep", {
       outputLines.push("")
       outputLines.push("(Results are truncated. Consider using a more specific path or pattern.)")
     }
+    if (cutoff) {
+      outputLines.push("")
+      outputLines.push(
+        `(Search stopped after ${Math.round(cutoff.elapsedMs / 1000)}s — results are partial. Search a narrower path.)`,
+      )
+    }
 
     return {
       title: params.pattern,
       metadata: {
         matches: finalMatches.length,
-        truncated,
+        truncated: truncated || cutoff !== undefined,
       },
       output: outputLines.join("\n"),
     }
