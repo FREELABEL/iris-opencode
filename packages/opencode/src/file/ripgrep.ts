@@ -5,7 +5,7 @@ import fs from "fs/promises"
 import z from "zod"
 import { NamedError } from "@opencode-ai/util/error"
 import { lazy } from "../util/lazy"
-import { $ } from "bun"
+import * as WalkPolicy from "./walk-policy"
 
 import { ZipReader, BlobReader, BlobWriter } from "@zip.js/zip.js"
 import { Log } from "@/util/log"
@@ -205,14 +205,58 @@ export namespace Ripgrep {
     return filepath
   }
 
+  /**
+   * Wall-clock budgets (#191073). A result cap alone never stops a walk whose pattern matches
+   * little — Glob `**\/.git` from `/` ran 9+ minutes. Past the budget ripgrep is killed and the
+   * caller keeps what it has, told via onCutoff.
+   */
+  export const LIST_BUDGET_MS = 20_000
+  export const GREP_BUDGET_MS = 30_000
+
+  export interface Cutoff {
+    reason: "time"
+    elapsedMs: number
+  }
+
+  /** Throws the walk policy's refusal, or returns the --glob excludes for this root (#191073). */
+  export function walkArgs(cwd: string, refuseBroad = true): string[] {
+    const scope = WalkPolicy.scope(cwd)
+    if (refuseBroad && scope.refuse) throw new Error(scope.refuse)
+    return [...scope.excludes]
+  }
+
+  /** Kill `proc` when the budget runs out or `signal` aborts. Returns a disposer and the cutoff, if any. */
+  export function bound(
+    proc: { kill: () => void },
+    opts: { budgetMs: number; signal?: AbortSignal; onCutoff?: (c: Cutoff) => void },
+  ) {
+    const started = Date.now()
+    const timer = setTimeout(() => {
+      opts.onCutoff?.({ reason: "time", elapsedMs: Date.now() - started })
+      proc.kill()
+    }, opts.budgetMs)
+    const onAbort = () => proc.kill()
+    opts.signal?.addEventListener("abort", onAbort, { once: true })
+    if (opts.signal?.aborted) proc.kill()
+    return () => {
+      clearTimeout(timer)
+      opts.signal?.removeEventListener("abort", onAbort)
+    }
+  }
+
   export async function* files(input: {
     cwd: string
     glob?: string[]
     hidden?: boolean
     follow?: boolean
     maxDepth?: number
+    /** false for listings that may legitimately start at / (ls, the file index); they are still pruned and budgeted. */
+    refuseBroad?: boolean
+    budgetMs?: number
+    signal?: AbortSignal
+    onCutoff?: (c: Cutoff) => void
   }) {
-    const args = [await filepath(), "--files", "--glob=!.git/*"]
+    const args = [await filepath(), ...walkArgs(input.cwd, input.refuseBroad ?? true), "--files", "--glob=!.git/*"]
     if (input.follow !== false) args.push("--follow")
     if (input.hidden !== false) args.push("--hidden")
     if (input.maxDepth !== undefined) args.push(`--max-depth=${input.maxDepth}`)
@@ -238,6 +282,11 @@ export namespace Ripgrep {
       stderr: "ignore",
       maxBuffer: 1024 * 1024 * 20,
     })
+    const unbound = bound(proc, {
+      budgetMs: input.budgetMs ?? LIST_BUDGET_MS,
+      signal: input.signal,
+      onCutoff: input.onCutoff,
+    })
 
     const reader = proc.stdout.getReader()
     const decoder = new TextDecoder()
@@ -260,7 +309,11 @@ export namespace Ripgrep {
 
       if (buffer) yield buffer
     } finally {
+      unbound()
       reader.releaseLock()
+      // A caller that stops early (`break` at its limit) used to wait here for ripgrep to finish
+      // the WHOLE walk — from / that is the entire disk. Stop it instead.
+      if (proc.exitCode === null) proc.kill()
       await proc.exited
     }
   }
@@ -367,8 +420,9 @@ export namespace Ripgrep {
     return lines.join("\n")
   }
 
-  export async function search(input: { cwd: string; pattern: string; glob?: string[]; limit?: number }) {
-    const args = [`${await filepath()}`, "--json", "--hidden", "--glob='!.git/*'"]
+  export async function search(input: { cwd: string; pattern: string; glob?: string[]; limit?: number; signal?: AbortSignal }) {
+    // Spawned with an argv, not a shell string: the walk excludes contain spaces ("Group Containers").
+    const args = [`${await filepath()}`, ...walkArgs(input.cwd), "--json", "--hidden", "--glob=!.git/*"]
 
     if (input.glob) {
       for (const g of input.glob) {
@@ -383,19 +437,29 @@ export namespace Ripgrep {
     args.push("--")
     args.push(input.pattern)
 
-    const command = args.join(" ")
-    const result = await $`${{ raw: command }}`.cwd(input.cwd).quiet().nothrow()
-    if (result.exitCode !== 0) {
+    const proc = Bun.spawn(args, { cwd: input.cwd, stdout: "pipe", stderr: "ignore" })
+    const unbound = bound(proc, { budgetMs: GREP_BUDGET_MS, signal: input.signal })
+    const text = await new Response(proc.stdout).text()
+    const exitCode = await proc.exited
+    unbound()
+    // Killed by the budget: keep the complete JSON lines it produced.
+    if (exitCode !== 0 && !text) {
       return []
     }
 
     // Handle both Unix (\n) and Windows (\r\n) line endings
-    const lines = result.text().trim().split(/\r?\n/).filter(Boolean)
+    const lines = text.trim().split(/\r?\n/).filter(Boolean)
     // Parse JSON lines from ripgrep output
 
     return lines
-      .map((line) => JSON.parse(line))
-      .map((parsed) => Result.parse(parsed))
+      .flatMap((line) => {
+        // The last line of a walk cut off by its budget can be half-written.
+        try {
+          return [Result.parse(JSON.parse(line))]
+        } catch {
+          return []
+        }
+      })
       .filter((r) => r.type === "match")
       .map((r) => r.data)
   }
