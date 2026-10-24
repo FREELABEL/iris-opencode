@@ -71,6 +71,11 @@ export interface CardDoc {
   tasks: CardTask[]
   tasksMeasured: boolean
   tasksReason?: string
+  /**
+   * fl-api could not be reached: this is the card as this computer last read it, with its waiting
+   * edits on it (#191003). `body: false` — never opened here online, so its notes are not here.
+   */
+  offline?: { copiedAt: string; body: boolean; preview?: string }
 }
 
 export { WRITABLE_STATUSES, type SchemaOption }
@@ -633,7 +638,10 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
   const now = () => Date.now()
 
   // ── Body ────────────────────────────────────────────────────────────────
-  const [editingBody, setEditingBody] = createSignal(false)
+  const [editingBody, setEditingBodyRaw] = createSignal(false)
+  /** Notes that are not on this computer cannot be edited offline: there is nothing to edit FROM (#191003). */
+  const bodyHere = () => doc.latest?.offline?.body !== false
+  const setEditingBody = (on: boolean) => setEditingBodyRaw(on && bodyHere())
   const [bodyDraft, setBodyDraft] = createSignal<string | null>(null)
   const bodyDirty = createMemo(() => bodyDraft() != null && bodyDraft() !== (doc.latest?.content ?? ""))
   const [savingBody, setSavingBody] = createSignal(false)
@@ -1463,6 +1471,15 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                     </Show>
                   </div>
                 </Show>
+                <Show when={doc.latest?.offline}>
+                  {(o) => (
+                    <p class="iris-card__bodynote text-11-regular text-text-weak" role="status" data-offline-card>
+                      {o().body
+                        ? `Offline — this card as this computer last read it (${new Date(o().copiedAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}). Changes are saved here and sent when IRIS can be reached.`
+                        : "Offline — this card's notes aren't on this computer yet: it hasn't been opened here while online. You can still change its title, status and list."}
+                    </p>
+                  )}
+                </Show>
                 <Show when={bodyNote()}>
                   {(n) => (
                     <p class="iris-card__bodynote text-11-regular" classList={{ "text-text-base": n().ok, "text-text-weak": !n().ok }}>
@@ -1474,6 +1491,19 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                   when={editingBody()}
                   fallback={
                     <div class="iris-card__doc">
+                      <Show
+                        when={bodyHere()}
+                        fallback={
+                          <Show when={doc.latest!.offline?.preview}>
+                            {(pv) => (
+                              <div class="iris-markdown iris-card__read text-text-weak" data-offline-preview>
+                                <p class="text-11-regular">The start of it, from the board:</p>
+                                <p>{pv()}</p>
+                              </div>
+                            )}
+                          </Show>
+                        }
+                      >
                       <button
                         type="button"
                         class="iris-card__fab"
@@ -1512,6 +1542,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                             }
                           }}
                         />
+                      </Show>
                       </Show>
                     </div>
                   }

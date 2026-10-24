@@ -1735,7 +1735,9 @@ export function SessionIrisTab() {
   })
   createEffect(() => {
     const d = current() as any
-    if (d?.__pane === "atlas" && !d.outbox && moveNote() === QUEUED_NOTE) setMoveNote(null)
+    // Nothing left WAITING means it was sent. A card held for a choice has its own panel below —
+    // the note used to stay up until that was settled, saying "will be sent" about sent work (#191003).
+    if (d?.__pane === "atlas" && !(d.outbox?.waiting > 0) && moveNote() === QUEUED_NOTE) setMoveNote(null)
   })
   async function resolveHeld(opId: string, choice: "mine" | "theirs"): Promise<string | undefined> {
     try {
@@ -4101,7 +4103,9 @@ export function SessionIrisTab() {
           </Match>
 
           <Match when={view() === "rows"}>
-            <Show when={current()?.measured && current()?.reason}>
+            {/* Offline, the reason is "fl-api 503" — our word, not the reader's. The sync chip already
+                says Offline and what is waiting (#191003). */}
+            <Show when={current()?.measured && current()?.reason && !(current() as any)?.offline}>
               <p class="px-2 pb-2 text-12-regular text-text-weak">{current()!.reason}</p>
             </Show>
 

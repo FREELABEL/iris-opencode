@@ -2486,6 +2486,16 @@ export const IrisApi = HttpApi.make("iris").add(
               "False means the tasks could NOT be read. An empty list with this false is not an item with no tasks.",
             ),
             tasksReason: Schema.optional(Schema.String),
+            offline: described(
+              Schema.optional(
+                Schema.Struct({
+                  copiedAt: Schema.String,
+                  body: Schema.Boolean,
+                  preview: Schema.optional(Schema.String),
+                }),
+              ),
+              "Present when fl-api could not be reached and this is the card as this computer last read it, with its waiting edits on it (#191003). `body: false` means the card was never opened here online, so its notes are not on this computer: `content` is empty and must not be edited; `preview` is the start of it from the board.",
+            ),
           }).annotate({ identifier: "IrisItemDoc" }),
           "One board item with its tasks, for editing",
         ),

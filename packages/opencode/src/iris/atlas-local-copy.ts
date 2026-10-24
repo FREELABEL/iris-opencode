@@ -11,7 +11,9 @@ import path from "node:path"
  * goes to fl-api and replaces the copy. Offline, the copy is what you see, and the panel says so.
  *
  * What is kept is the LIGHT read (titles, statuses, card faces, previews — no bodies, #190231 0d):
- * enough to draw the board, ~1 MB on the largest board measured.
+ * enough to draw the board, ~1 MB on the largest board measured. A card you OPEN is kept too, whole,
+ * beside its board (#191003): offline, a card you had never opened could not be opened at all, so
+ * its notes could not be changed. Card copies follow their board: same rules, removed with it.
  *
  * SETTINGS live in ~/.iris/atlas/local-copy.json so the desktop Settings switch, the CLI and an
  * admin can all change them, and every field can be overridden later without a release:
@@ -53,6 +55,16 @@ export function atlasHome(): string {
 const settingsFile = () => path.join(atlasHome(), "local-copy.json")
 const accountDir = (userId: number) => path.join(atlasHome(), "cache", String(userId))
 const boardFile = (userId: number, bloqId: number) => path.join(accountDir(userId), `${bloqId}.json`)
+/** Cards opened on this board, whole (#191003). Not a .json file, so never read as a board. */
+const cardsDir = (userId: number, bloqId: number) => path.join(accountDir(userId), "cards", String(bloqId))
+const cardFile = (userId: number, bloqId: number, itemId: number) => path.join(cardsDir(userId, bloqId), `${itemId}.json`)
+
+/** A board copy and the cards kept with it go together. */
+function removeBoard(userId: number, bloqId: number) {
+  fs.rmSync(boardFile(userId, bloqId), { force: true })
+  fs.rmSync(cardsDir(userId, bloqId), { recursive: true, force: true })
+}
+const bloqOf = (file: string) => Number(path.basename(file, ".json"))
 /** Edits made with fl-api unreachable, waiting to be sent (#190537 W3, atlas-outbox.ts). */
 export const outboxFile = (userId: number) => path.join(atlasHome(), "outbox", `${userId}.json`)
 
@@ -104,7 +116,7 @@ function dropPhiCopies() {
     for (const f of safeList(accountDir(u))) {
       const p = path.join(accountDir(u), f)
       try {
-        if (JSON.parse(fs.readFileSync(p, "utf8"))?.containsPhi) fs.rmSync(p, { force: true })
+        if (JSON.parse(fs.readFileSync(p, "utf8"))?.containsPhi) removeBoard(u, bloqOf(f))
       } catch {}
     }
   }
@@ -134,7 +146,7 @@ export function readBoardCopy<L>(userId: number, bloqId: number): BoardCopy<L> |
     // A copy written before the board was marked contains_phi, or before includePhi was turned
     // off, is never served — and is removed.
     if (c.userId !== userId || c.bloqId !== bloqId || !mayKeep(!!c.containsPhi, s)) {
-      fs.rmSync(p, { force: true })
+      removeBoard(userId, bloqId)
       return undefined
     }
     const now = new Date()
@@ -150,7 +162,7 @@ export function writeBoardCopy<L>(userId: number, bloqId: number, containsPhi: b
   const s = readLocalCopySettings()
   const p = boardFile(userId, bloqId)
   if (!mayKeep(containsPhi, s)) {
-    fs.rmSync(p, { force: true })
+    removeBoard(userId, bloqId)
     return false
   }
   mkdirPrivate(accountDir(userId))
@@ -189,7 +201,7 @@ export function readBoardListCopy<B>(userId: number): { copiedAt: string; bloqs:
 
 /** Remove this board's copy (fl-api refused it: access revoked, board deleted). */
 export function deleteBoardCopy(userId: number, bloqId: number) {
-  fs.rmSync(boardFile(userId, bloqId), { force: true })
+  removeBoard(userId, bloqId)
 }
 
 /** Boards with edits still waiting in the outbox: their copy is what those edits are drawn on. */
@@ -218,7 +230,7 @@ export function evict(userId: number, s: LocalCopySettings = readLocalCopySettin
       const p = path.join(dir, f)
       try {
         const st = fs.statSync(p)
-        return { p, at: st.mtimeMs, size: st.size }
+        return { p, at: st.mtimeMs, size: st.size + cardsSize(userId, bloqOf(f)) }
       } catch {
         return undefined
       }
@@ -231,7 +243,7 @@ export function evict(userId: number, s: LocalCopySettings = readLocalCopySettin
   files.forEach((f, i) => {
     used += f.size
     if (f.p === keep) return
-    if (i >= s.maxBoards || used > budget) fs.rmSync(f.p, { force: true })
+    if (i >= s.maxBoards || used > budget) removeBoard(userId, bloqOf(f.p))
   })
 }
 
@@ -243,18 +255,70 @@ export function evict(userId: number, s: LocalCopySettings = readLocalCopySettin
 export function findCardInCopies<I extends { id: number }>(
   userId: number,
   itemId: number,
-): { bloqId: number; containsPhi: boolean; listId: number; item: I } | undefined {
+): { bloqId: number; containsPhi: boolean; copiedAt: string; listId: number; listName?: string; item: I } | undefined {
   const s = readLocalCopySettings()
   if (!s.enabled) return undefined
   for (const f of safeList(accountDir(userId))) {
     try {
-      const c = JSON.parse(fs.readFileSync(path.join(accountDir(userId), f), "utf8")) as BoardCopy<{ id: number; items?: I[] }>
+      const c = JSON.parse(fs.readFileSync(path.join(accountDir(userId), f), "utf8")) as BoardCopy<{ id: number; name?: string; items?: I[] }>
       if (c.userId !== userId || !mayKeep(!!c.containsPhi, s)) continue
       for (const l of c.lists ?? []) {
         const item = (l.items ?? []).find((i) => i.id === itemId)
-        if (item) return { bloqId: c.bloqId, containsPhi: !!c.containsPhi, listId: l.id, item }
+        if (item) return { bloqId: c.bloqId, containsPhi: !!c.containsPhi, copiedAt: c.copiedAt, listId: l.id, listName: l.name, item }
       }
     } catch {}
   }
   return undefined
+}
+
+function cardsSize(userId: number, bloqId: number): number {
+  let n = 0
+  try {
+    for (const f of fs.readdirSync(cardsDir(userId, bloqId))) n += fs.statSync(path.join(cardsDir(userId, bloqId), f)).size
+  } catch {}
+  return n
+}
+
+export interface CardCopy<D> {
+  itemId: number
+  bloqId: number
+  userId: number
+  copiedAt: string
+  doc: D
+}
+
+/**
+ * Keep a card as it was just read (#191003). Only a card whose board is kept here: the board copy
+ * is what says the board may be on disk at all (patient data, settings), and what removes it.
+ */
+export function writeCardCopy<D>(userId: number, itemId: number, doc: D): boolean {
+  const found = findCardInCopies(userId, itemId)
+  if (!found) return false
+  const dir = cardsDir(userId, found.bloqId)
+  mkdirPrivate(dir)
+  const p = cardFile(userId, found.bloqId, itemId)
+  const copy: CardCopy<D> = { itemId, bloqId: found.bloqId, userId, copiedAt: new Date().toISOString(), doc }
+  const tmp = `${p}.${process.pid}.tmp`
+  fs.writeFileSync(tmp, JSON.stringify(copy), { mode: 0o600 })
+  fs.renameSync(tmp, p)
+  return true
+}
+
+/** The card as last read whole, if its board is still kept here. */
+export function readCardCopy<D>(userId: number, bloqId: number, itemId: number): CardCopy<D> | undefined {
+  try {
+    const c = JSON.parse(fs.readFileSync(cardFile(userId, bloqId, itemId), "utf8")) as CardCopy<D>
+    return c.userId === userId && c.itemId === itemId && c.bloqId === bloqId ? c : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** fl-api refused this card (deleted, access gone): it is not kept, on any board. */
+export function deleteCardCopy(userId: number, itemId: number) {
+  let boards: string[] = []
+  try {
+    boards = fs.readdirSync(path.join(accountDir(userId), "cards"))
+  } catch {}
+  for (const b of boards) fs.rmSync(path.join(accountDir(userId), "cards", b, `${itemId}.json`), { force: true })
 }
