@@ -733,7 +733,7 @@ const BloqsCreateCommand = cmd({
       })
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "Create bloq"); return }
         await handleApiError(res, "Create bloq")
         prompts.outro("Done")
         return
@@ -846,7 +846,7 @@ const BloqsUpdateCommand = cmd({
       })
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "Update bloq"); return }
         await handleApiError(res, "Update bloq")
         prompts.outro("Done")
         return
@@ -1553,7 +1553,7 @@ const BloqsAddItemCommand = cmd({
       )
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "Add item"); return }
         await handleApiError(res, "Add item")
         prompts.outro("Done")
         return
@@ -1747,7 +1747,7 @@ const BloqsDeleteItemCommand = cmd({
       )
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "Delete item"); return }
         await handleApiError(res, "Delete item")
         prompts.outro("Done")
         return
@@ -1794,7 +1794,7 @@ const BloqsRestoreItemCommand = cmd({
       )
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "Restore item"); return }
         await handleApiError(res, "Restore item")
         prompts.outro("Done")
         return
@@ -1856,7 +1856,7 @@ const BloqsDeleteCommand = cmd({
       )
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "Delete bloq"); return }
         await handleApiError(res, "Delete bloq")
         prompts.outro("Done")
         return
@@ -1981,7 +1981,7 @@ const BloqsMakePublicCommand = cmd({
       )
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "Make public"); return }
         await handleApiError(res, "Make public")
         prompts.outro("Done")
         return
@@ -2046,7 +2046,7 @@ const BloqsMakePrivateCommand = cmd({
       )
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "Make private"); return }
         await handleApiError(res, "Make private")
         prompts.outro("Done")
         return
@@ -2206,7 +2206,9 @@ const BloqsCreateListCommand = cmd({
       )
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        // --json used to answer a bare `HTTP 403` here, dropping the server's reason ("Only this
+        // board's owner can add lists…"), so a policy refusal read as a broken route (#191045).
+        if (args.json) { await handleApiError(res, "Create list"); return }
         await handleApiError(res, "Create list")
         prompts.outro("Done")
         return
@@ -2262,7 +2264,7 @@ const BloqsRenameListCommand = cmd({
       })
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "Rename list"); return }
         await handleApiError(res, "Rename list")
         prompts.outro("Done")
         return
@@ -2419,7 +2421,7 @@ const BloqsMoveItemCommand = cmd({
       )
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "Move item"); return }
         await handleApiError(res, "Move item")
         prompts.outro("Done")
         return
@@ -3062,7 +3064,7 @@ const BloqsRenameCommand = cmd({
 
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, `Rename ${args.type}`); return }
         await handleApiError(res, `Rename ${args.type}`)
         prompts.outro("Done")
         return
@@ -3109,7 +3111,7 @@ const BloqsAttachLeadCommand = cmd({
       })
       if (!res.ok) {
         if (spinner) spinner.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "Attach lead"); return }
         await handleApiError(res, "Attach lead")
         prompts.outro("Done")
         return
@@ -3154,7 +3156,7 @@ const BloqsDetachLeadCommand = cmd({
       })
       if (!res.ok) {
         if (spinner) spinner.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "Detach lead"); return }
         await handleApiError(res, "Detach lead")
         prompts.outro("Done")
         return
@@ -3204,7 +3206,7 @@ const BloqsAttachPlaybookCommand = cmd({
       })
       if (!res.ok) {
         if (spinner) spinner.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "Attach playbook"); return }
         await handleApiError(res, "Attach playbook")
         prompts.outro("Done")
         return
@@ -3250,7 +3252,7 @@ const BloqsDetachPlaybookCommand = cmd({
       })
       if (!res.ok) {
         if (spinner) spinner.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "Detach playbook"); return }
         await handleApiError(res, "Detach playbook")
         prompts.outro("Done")
         return
@@ -3311,7 +3313,7 @@ const BloqsRelateCommand = cmd({
       })
       if (!res.ok) {
         if (spinner) spinner.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "Relate bloqs"); return }
         await handleApiError(res, "Relate bloqs")
         prompts.outro("Done")
         return
@@ -3368,7 +3370,7 @@ const BloqsUnrelateCommand = cmd({
       })
       if (!res.ok) {
         if (spinner) spinner.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "Unrelate bloqs"); return }
         await handleApiError(res, "Unrelate bloqs")
         prompts.outro("Done")
         return
@@ -3411,7 +3413,7 @@ const BloqsRelationsCommand = cmd({
       const qs = params.toString()
       const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/relations${qs ? `?${qs}` : ""}`)
       if (!res.ok) {
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "List bloq relations"); return }
         await handleApiError(res, "List bloq relations")
         return
       }
@@ -3450,7 +3452,7 @@ const BloqsPlaybooksCommand = cmd({
     try {
       const res = await irisFetch(`/api/v1/bloqs/${args["bloq-id"]}/playbooks`, { method: "GET" })
       if (!res.ok) {
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "List bloq playbooks"); return }
         await handleApiError(res, "List bloq playbooks")
         return
       }
@@ -3505,7 +3507,7 @@ const BloqsContributorsCommand = cmd({
       const res = await irisFetch(`/api/v1/users/${userId}/leads?bloq_id=${args["bloq-id"]}&per_page=100`)
       if (!res.ok) {
         if (spinner) spinner.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "List contributors"); return }
         await handleApiError(res, "List contributors")
         prompts.outro("Done")
         return
@@ -4024,7 +4026,7 @@ const BloqsUpdateItemCommand = cmd({
       if (!res.ok) {
         spinner?.stop("Failed", 1)
         // #188294: --json reported success:false and exited 0, so `iris ... --json && next` ran next.
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); process.exitCode = 1; return }
+        if (args.json) { await handleApiError(res, "Update item"); return }
         await handleApiError(res, "Update item")
         process.exitCode = 1
         prompts.outro("Done")
@@ -4641,7 +4643,7 @@ const BloqsPublishPagesCommand = cmd({
       const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args["bloq-id"]}`)
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "Load bloq"); return }
         await handleApiError(res, "Load bloq"); prompts.outro("Done"); return
       }
       const bloq = (await res.json()) as Record<string, any>
