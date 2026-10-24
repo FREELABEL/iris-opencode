@@ -6,7 +6,7 @@ import { dim, bold, success } from "./iris-api"
 function warning(s: string): string {
   return `${UI.Style.TEXT_WARNING}${s}${UI.Style.TEXT_NORMAL}`
 }
-import { existsSync, mkdirSync, rmSync, readdirSync, renameSync, writeFileSync } from "fs"
+import { existsSync, mkdirSync, rmSync, readdirSync, readFileSync, renameSync, writeFileSync } from "fs"
 import { homedir, tmpdir, platform } from "os"
 import { join } from "path"
 import { execFileSync, spawnSync } from "child_process"
@@ -47,6 +47,72 @@ const ARCHIVE_URL =
 /** Machine state that an update must not eat. Measured on a real install. */
 export const PRESERVE = ["node_modules", "daemon.log", "bridge.log", "test-results", ".git", ".env"]
 
+/**
+ * One .gitignore → one predicate over install-relative paths ("som/instagram-auth-x.json").
+ *
+ * PRESERVE is top-level only, and som/ holds both daemon source that must update and this
+ * machine's Instagram logins and campaign cache, which must not. An update deleted all of
+ * them (found 2026-10-24 before it ran on a node with six saved sessions). The daemon's own
+ * .gitignore already names every file that belongs to the machine and not the repo — logins,
+ * caches, device registries, runtime state — so an update keeps whatever it ignores.
+ *
+ * Covers the .gitignore features the daemon uses: comments, blank lines, `dir/`, `*`, `**`,
+ * `?`, and patterns anchored by a `/`. Negations (`!`) are skipped — keeping too much is the
+ * safe direction here.
+ */
+export function gitignoreMatcher(gitignore: string): (rel: string) => boolean {
+  const rules = gitignore
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith("#") && !l.startsWith("!"))
+    .map((l) => {
+      const dirOnly = l.endsWith("/")
+      const body = l.replace(/\/+$/, "").replace(/^\//, "")
+      const anchored = body.includes("/") || l.startsWith("/")
+      const src = body
+        .split("**")
+        .map((part) =>
+          part
+            .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+            .replace(/\*/g, "[^/]*")
+            .replace(/\?/g, "[^/]"),
+        )
+        .join(".*")
+      return { re: new RegExp(`^${src}$`), dirOnly, anchored }
+    })
+  return (rel: string) => {
+    const segs = rel.split("/").filter(Boolean)
+    return rules.some((r) =>
+      segs.some((seg, i) => {
+        const isDir = i < segs.length - 1
+        if (r.dirOnly && !isDir) return false
+        return r.re.test(r.anchored ? segs.slice(0, i + 1).join("/") : seg)
+      }),
+    )
+  }
+}
+
+function readText(file: string): string {
+  try {
+    return readFileSync(file, "utf8")
+  } catch {
+    return ""
+  }
+}
+
+/** Delete what the old version shipped, depth-first; keep anything `keep` claims. */
+function clearInstall(dir: string, keep: (rel: string) => boolean, rel = ""): void {
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const r = rel ? `${rel}/${e.name}` : e.name
+    if (keep(r)) continue
+    const full = join(dir, e.name)
+    if (e.isDirectory() && !e.isSymbolicLink()) {
+      clearInstall(full, keep, r)
+      if (readdirSync(full).length === 0) rmSync(full, { recursive: true, force: true })
+    } else rmSync(full, { force: true })
+  }
+}
+
 export type StepResult = { ok: boolean; detail?: string }
 
 /**
@@ -77,10 +143,9 @@ export function fetchDaemon(dest: string, url = ARCHIVE_URL): StepResult {
       return { ok: false, detail: "that archive has no daemon.js — refusing to overwrite the install" }
 
     mkdirSync(dest, { recursive: true })
-    for (const entry of existsSync(dest) ? readdirSync(dest) : []) {
-      if (PRESERVE.includes(entry)) continue
-      rmSync(join(dest, entry), { recursive: true, force: true })
-    }
+    // Both versions' .gitignore: the new one may name state the old one wrote, and the reverse.
+    const ignored = gitignoreMatcher(readText(join(src, ".gitignore")) + "\n" + readText(join(dest, ".gitignore")))
+    clearInstall(dest, (rel) => PRESERVE.includes(rel.split("/")[0]) || ignored(rel))
     // cp -R rather than rename: dest may be on a different filesystem, and rename
     // across devices fails with EXDEV.
     const cp = spawnSync("cp", ["-R", `${src}/.`, `${dest}/`], { env: process.env, stdio: "pipe" })
