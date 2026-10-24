@@ -1591,12 +1591,15 @@ const MergeCmd = cmd({
   },
 })
 
-const PublishCmd = cmd({
+export const PublishCmd = cmd({
   command: "publish <slug>",
   describe:
     "publish a page — WORLD-READABLE and indexable. For a private read use `genesis get`, " +
     "for a private share use `genesis preview` or `genesis share`",
-  builder: (y) => y.positional("slug", { describe: "page slug", type: "string", demandOption: true }),
+  builder: (y) =>
+    y
+      .positional("slug", { describe: "page slug", type: "string", demandOption: true })
+      .option("include-others", { describe: "publish drafts written by other users too", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Publish ${args.slug}`)
@@ -1606,6 +1609,41 @@ const PublishCmd = cmd({
     try {
       const page = await getBySlug(args.slug, false)
       if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+      const versionsRes = await pagesFetch(`/api/v1/pages/${page.id}/versions`)
+      if (!(await handleApiError(versionsRes, "Versions"))) { sp.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
+      const versionsBody = (await versionsRes.json()) as { data?: any }
+      const versions = extractVersions(versionsBody?.data)
+      const currentVersion = Number(page.current_version)
+      const publishedAt = page.status === "published" && page.published_at ? Date.parse(page.published_at) : 0
+      const pending = versions
+        .filter((version) => {
+          const createdAt = Date.parse(version.created_at ?? "")
+          return !Number.isFinite(createdAt) || !Number.isFinite(publishedAt) || createdAt > publishedAt
+        })
+        .sort((a, b) => Number(a.version_number ?? a.version) - Number(b.version_number ?? b.version))
+      if (pending.length && !args.includeOthers) {
+        sp.stop("Publish refused — unpublished versions need explicit review", 1)
+        for (const version of pending) {
+          const number = version.version_number ?? version.version
+          console.log(`  v${number} by user ${version.changed_by ?? version.created_by ?? "unknown"} — not yet published`)
+        }
+        prompts.log.info(`Review those changes, then publish explicitly: iris pages publish ${args.slug} --include-others`)
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
+      if (pending.length && args.includeOthers && !isNonInteractive()) {
+        const summary = pending.map((version) => `v${version.version_number ?? version.version} (user ${version.changed_by ?? version.created_by ?? "unknown"})`).join(", ")
+        const ok = await prompts.confirm({ message: `Publish ${args.slug} through v${currentVersion}? This includes unpublished versions: ${summary}` })
+        if (!ok || prompts.isCancel(ok)) {
+          sp.stop("Cancelled")
+          prompts.outro("Done")
+          return
+        }
+      }
+      if (pending.length && args.includeOthers && isNonInteractive()) {
+        prompts.log.info(`Publishing with unpublished versions included: ${pending.map((version) => `v${version.version_number ?? version.version}`).join(", ")}`)
+      }
       const res = await pagesFetch(`/api/v1/pages/${page.id}/publish`, { method: "POST" })
       if (!(await handleApiError(res, "Publish"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
       // Explicitly purge iris-api cache — fl-api's fire-and-forget purge may silently fail
