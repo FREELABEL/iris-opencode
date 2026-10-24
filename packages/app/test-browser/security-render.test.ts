@@ -1,6 +1,7 @@
 import { plugin } from "bun"
 import { expect, mock, test } from "bun:test"
 import { createRequire } from "node:module"
+import { createRenderEffect } from "solid-js"
 import { createComponent, render } from "solid-js/web"
 
 // Settings › Security (#189589), rendered from the body fl-iris-api's SecurityController returns,
@@ -25,15 +26,17 @@ plugin({
   },
 })
 
-const calls: { path: string; method: string }[] = []
+const calls: { path: string; method: string; body?: unknown }[] = []
 let body: any
+let gateAnswer: (sent: { enabled: boolean }) => any = () => ({ measured: false, reason: "not set" })
 mock.module("@/context/platform", () => ({
   usePlatform: () => ({
     fetch: async (url: string, init?: RequestInit) => {
       const path = url.replace("http://engine", "")
-      calls.push({ path, method: init?.method ?? "GET" })
+      calls.push({ path, method: init?.method ?? "GET", ...(init?.body ? { body: JSON.parse(String(init.body)) } : {}) })
       const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { "Content-Type": "application/json" } })
       if (path === "/iris/security") return json(body)
+      if (path === "/iris/security/gate") return json(gateAnswer(JSON.parse(String(init?.body))))
       if (path.startsWith("/iris/security/gate/events/")) return json({ measured: true, event: null })
       return json({}, 404)
     },
@@ -48,6 +51,18 @@ mock.module("@opencode-ai/ui/v2/button-v2", () => ({
     return el
   },
 }))
+mock.module("@opencode-ai/ui/v2/switch-v2", () => ({
+  Switch: (props: any) => {
+    const el = document.createElement("input")
+    el.type = "checkbox"
+    createRenderEffect(() => {
+      el.checked = Boolean(props.checked)
+      el.disabled = Boolean(props.disabled)
+    })
+    el.addEventListener("change", () => props.onChange?.(el.checked))
+    return el
+  },
+}))
 const { SettingsSecurityV2 } = await import("../src/components/settings-v2/security")
 
 const ON = {
@@ -55,6 +70,8 @@ const ON = {
   gate: {
     enabled: true,
     reason: "allowlisted",
+    choice: null,
+    canChange: true,
     explanation: "Gate screens what reaches the model on your account and records what it finds. It does not change your conversations yet.",
     mode: "shadow",
     org: "iris",
@@ -142,5 +159,60 @@ test("an unreachable server reads Unknown with Retry — never Off", async () =>
   expect(root.querySelector('[data-action="gate-status"]')!.textContent).not.toContain("Off")
   expect(root.textContent).toContain("not the same as Gate being off")
   expect([...root.querySelectorAll("button")].some((b) => b.textContent === "Retry")).toBe(true)
+  dispose()
+})
+
+// #191083 — the person's own switch.
+const gateSwitch = (root: HTMLElement) => root.querySelector('[data-action="gate-switch"] input') as HTMLInputElement
+
+test("switching Gate off sends the choice and shows what the SERVER decided", async () => {
+  gateAnswer = (sent) => ({
+    ...ON,
+    gate: { ...ON.gate, enabled: sent.enabled, reason: "user_off", choice: "off", explanation: "You turned Gate off. Your messages are not scanned." },
+  })
+  const { root, dispose } = mount(ON)
+  await wait(() => !!gateSwitch(root) && !gateSwitch(root).disabled && gateSwitch(root).checked)
+  expect(root.textContent).toContain("follows IRIS's rollout")
+
+  gateSwitch(root).checked = false
+  gateSwitch(root).dispatchEvent(new Event("change"))
+  await wait(() => root.textContent!.includes("You turned Gate off"))
+
+  expect(calls).toContainEqual({ path: "/iris/security/gate", method: "POST", body: { enabled: false } })
+  expect(root.querySelector('[data-action="gate-status"]')!.textContent).toContain("Off")
+  dispose()
+})
+
+test("a health-data account sees the switch locked", async () => {
+  const { root, dispose } = mount({
+    ...ON,
+    gate: { ...ON.gate, enabled: false, reason: "phi_no_baa", canChange: false, explanation: "Gate is off for your account because you work with health data.", recent: [] },
+  })
+  await wait(() => !!gateSwitch(root) && root.textContent!.includes("can't change this"))
+
+  expect(gateSwitch(root).disabled).toBe(true)
+  dispose()
+})
+
+test("a refused switch says why and re-reads the server instead of trusting the click", async () => {
+  gateAnswer = () => ({ measured: false, reason: "Gate is switched off for everyone right now." })
+  const { root, dispose } = mount(ON)
+  await wait(() => !!gateSwitch(root) && !gateSwitch(root).disabled)
+  const before = calls.filter((c) => c.path === "/iris/security").length
+
+  gateSwitch(root).checked = false
+  gateSwitch(root).dispatchEvent(new Event("change"))
+  await wait(() => root.textContent!.includes("Couldn't change it"))
+
+  expect(root.textContent).toContain("switched off for everyone")
+  await wait(() => calls.filter((c) => c.path === "/iris/security").length > before)
+  dispose()
+})
+
+test("an unreachable server leaves the switch locked", async () => {
+  const { root, dispose } = mount({ ...ON, measured: false, reason: "iris-api 502" })
+  await wait(() => !!gateSwitch(root) && root.textContent!.includes("Available once IRIS answers"))
+
+  expect(gateSwitch(root).disabled).toBe(true)
   dispose()
 })

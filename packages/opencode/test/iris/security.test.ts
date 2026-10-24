@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { EMPTY_SECURITY, securityFrom } from "../../src/iris/platform"
+import { afterEach, mock } from "bun:test"
+import { EMPTY_SECURITY, securityFrom, setGateChoice } from "../../src/iris/platform"
 
 /**
  * #189589 — Settings › Security reads fl-iris-api's GET /api/v6/security. The body below is
@@ -20,6 +21,8 @@ const BODY = {
       fail_open: true,
       provider: "Constellation Gate",
       explanation: "Gate screens what reaches the model on your account and records what it finds.",
+      choice: null,
+      can_change: true,
       available_checks: ["prompt_injection", "pii", "phi", "credential"],
       sensitivities: ["strict", "balanced", "permissive"],
       stats: {
@@ -79,5 +82,62 @@ describe("securityFrom", () => {
     const body = structuredClone(BODY)
     ;(body.data.gate.stats as any).reported_false_pct = null
     expect(securityFrom(body).gate.stats.reportedFalsePct).toBeNull()
+  })
+})
+
+describe("the person's own switch (#191083)", () => {
+  const realFetch = globalThis.fetch
+  afterEach(() => {
+    globalThis.fetch = realFetch
+  })
+
+  test("maps choice and can_change; anything else is no choice and locked", () => {
+    expect(securityFrom(BODY).gate).toMatchObject({ choice: null, canChange: true })
+    const on = structuredClone(BODY) as any
+    on.data.gate.choice = "on"
+    expect(securityFrom(on).gate.choice).toBe("on")
+    on.data.gate.choice = "yes"
+    delete on.data.gate.can_change
+    expect(securityFrom(on).gate).toMatchObject({ choice: null, canChange: false })
+  })
+
+  test("PUT on/off, DELETE to follow the rollout — and the answer is the server's re-decided state", async () => {
+    const calls: { method: string; body: unknown; url: string }[] = []
+    globalThis.fetch = mock(async (url: string, init: RequestInit) => {
+      calls.push({ url, method: init.method ?? "GET", body: init.body ? JSON.parse(String(init.body)) : null })
+      const after = structuredClone(BODY) as any
+      after.data.gate.choice = "off"
+      after.data.gate.enabled = false
+      after.data.gate.reason = "user_off"
+      return new Response(JSON.stringify(after), { status: 200 })
+    }) as any
+
+    const r = await setGateChoice(false, { token: "t" })
+    await setGateChoice(true, { token: "t" })
+    await setGateChoice(null, { token: "t" })
+
+    expect(calls.map((c) => [c.method, c.body])).toEqual([
+      ["PUT", { enabled: false }],
+      ["PUT", { enabled: true }],
+      ["DELETE", null],
+    ])
+    expect(calls[0].url).toEndWith("/api/v6/security/gate")
+    expect(r.measured).toBe(true)
+    expect(r.data.gate).toMatchObject({ enabled: false, reason: "user_off", choice: "off" })
+  })
+
+  test("a refusal is unmeasured and carries the server's explanation, never a guessed state", async () => {
+    globalThis.fetch = mock(
+      async () =>
+        new Response(JSON.stringify({ error: "locked", reason: "phi_no_baa", explanation: "Gate is off for your account because you work with health data." }), {
+          status: 409,
+        }),
+    ) as any
+
+    const r = await setGateChoice(true, { token: "t" })
+
+    expect(r.measured).toBe(false)
+    expect(r.reason).toContain("health data")
+    expect(r.data).toEqual(EMPTY_SECURITY)
   })
 })
