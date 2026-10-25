@@ -16,7 +16,16 @@ export type HiveSession = {
   branch: string | null
   updatedAt: string | null
   question: string | null
+  /** Every waiting question with its options, numbered as the agent shows them (#191171). */
+  questions?: WaitingQuestion[]
+  /** Why this row cannot be messaged or answered from here; null when it can. */
+  readOnly?: string | null
 }
+
+export type WaitingQuestion = { question: string; header: string | null; options: { n: number; label: string }[] }
+
+/** An old record of a re-registered machine whose rows are not shown (`iris hive sessions` says the same). */
+export type RetiredRecord = { name: string; rows: number; at: string }
 
 export type HiveSessionNode = {
   id: string
@@ -120,6 +129,7 @@ const PROVIDER_WORD: Record<string, string> = {
   opencode: "IRIS / opencode",
   codex: "Codex",
   ollama: "Ollama",
+  acp: "ACP",
 }
 export const providerWord = (p: string) => PROVIDER_WORD[p] ?? p
 
@@ -132,16 +142,59 @@ export const STATUS_WORD: Record<string, string> = {
 }
 
 /**
- * What the reply area offers for this session.
- *  - reply: types into the window that is already open on that machine (opencode).
- *  - claude: Claude Code's own Remote Control already does this, in Claude.
- *  - none: nothing would land where the person expects.
+ * What the talk area offers for this session (#191171).
+ *  - talk: a message goes in (`iris hive ask`), and its waiting question can be answered.
+ *  - readonly: the provider cannot take input from here; `readOnly` says why.
+ *  - stale: this machine's report is not current, so a message may reach nobody.
  */
-export function replyMode(s: HiveSession, n: HiveSessionNode): "reply" | "claude" | "none" | "stale" {
+export function replyMode(s: HiveSession, n: HiveSessionNode): "talk" | "readonly" | "stale" {
+  if (s.readOnly) return "readonly"
   if (n.report !== "fresh" || s.status === "stale" || s.status === "unknown") return "stale"
-  if (s.provider === "opencode") return "reply"
-  if (s.provider === "claude_code") return "claude"
-  return "none"
+  return "talk"
+}
+
+/** `iris hive sessions`' age column: 15m, 21h, 2d. */
+export function shortAge(iso: string | null | undefined, now: number): string {
+  if (!iso) return "—"
+  const ms = now - Date.parse(iso)
+  if (Number.isNaN(ms)) return "—"
+  const m = Math.round(ms / 60000)
+  if (m < 60) return `${m}m`
+  const h = Math.round(m / 60)
+  if (h < 48) return `${h}h`
+  return `${Math.round(h / 24)}d`
+}
+
+/**
+ * The reply to a message we sent, read off the transcript the way `iris hive ask` follows it
+ * (CLI hive-chat-follow): anchor on the LAST user text containing what we sent (the bridge
+ * prefixes `[via iris · host]`, hence contains), then everything after it. `answered` is true once
+ * an assistant text has appeared; until the anchor is seen the message has not landed yet.
+ */
+export function replyAfter(
+  messages: readonly TranscriptMessage[],
+  sent: string,
+): { anchored: boolean; answered: boolean; parts: { kind: "text" | "tool"; text: string }[] } {
+  const needle = sent.trim().slice(0, 200)
+  let a = -1
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (m.role === "user" && m.type === "text" && typeof m.text === "string" && m.text.includes(needle)) {
+      a = i
+      break
+    }
+  }
+  if (!needle || a < 0) return { anchored: false, answered: false, parts: [] }
+  const parts: { kind: "text" | "tool"; text: string }[] = []
+  let answered = false
+  for (const m of messages.slice(a + 1)) {
+    if (m.type === "tool_use") parts.push({ kind: "tool", text: m.tool ?? "tool" })
+    else if (m.type === "text" && m.role === "assistant" && m.text?.trim()) {
+      answered = true
+      parts.push({ kind: "text", text: m.text })
+    }
+  }
+  return { anchored: true, answered, parts }
 }
 
 /** Merge a transcript read: append when the server says the rows are new, replace otherwise. Capped. */
