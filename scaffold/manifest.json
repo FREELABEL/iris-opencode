@@ -261,6 +261,12 @@
       "purpose": "See which agents are waiting on you — the question and its options — and answer them from any machine or your phone."
     },
     {
+      "src": "how-to/run-other-coding-agents.md",
+      "dest": "how-to/run-other-coding-agents.md",
+      "managed": true,
+      "purpose": "Run Claude Code, Codex or Gemini from IRIS over ACP — diffs and permission prompts in one command — and keep the session open to steer from Hive or Desktop."
+    },
+    {
       "src": "how-to/public-url-for-a-local-port.md",
       "dest": "how-to/public-url-for-a-local-port.md",
       "managed": true,

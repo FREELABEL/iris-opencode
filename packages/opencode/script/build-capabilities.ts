@@ -534,6 +534,18 @@ const TERMS: Record<string, string[]> = {
   leads: ["crm", "contacts", "prospects", "pipeline", "find people", "find customers", "customers", "outreach", "cold email", "email them", "book calls", "book a call", "sales", "lead generation"],
   agents: ["ai agent", "assistant", "bot"],
   hive: ["compute node", "distributed", "remote machine", "fleet", "daemon"],
+  // #191163 — IRIS as the ACP client: run another coding agent from IRIS, and keep it steerable.
+  "acp run": ["run claude code", "use codex", "gemini cli", "switch agents", "other coding agents", "agent client protocol"],
+  "run-other-coding-agents": [
+    "run claude code",
+    "use codex",
+    "gemini cli",
+    "switch agents",
+    "other coding agents",
+    "agent client protocol",
+    "keep a session open",
+    "steer an agent",
+  ],
   "data-sources": ["obsidian", "imessage", "apple mail", "calendar", "local data", "bridge"],
   integrations: ["oauth", "connect", "composio", "third party", "api key"],
   // "sync team skills into claude code and cursor" found production-deploy (#186212).
