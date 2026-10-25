@@ -8,7 +8,9 @@ import {
   mergeTranscript,
   needsYou,
   providerWord,
+  replyAfter,
   replyMode,
+  shortAge,
   reportLine,
   sortNodes,
   visibleSessions,
@@ -16,20 +18,32 @@ import {
   summaryOf,
   type HiveSession,
   type HiveSessionNode,
+  type RetiredRecord,
   type TranscriptMessage,
+  type WaitingQuestion,
 } from "./iris-hive-sessions-model"
 
 /**
- * Hive › Sessions (epic #189446): every AI session on every machine you can reach — Claude Code,
- * opencode and IRIS Desktop's own chats — with a status that is true, a transcript you can open,
- * and a reply that lands in the window already open on that machine.
+ * Hive › Sessions (epic #189446, #191171): every AI session on every machine you can reach — the
+ * same rows `iris hive sessions` prints — with a status that is true, a transcript you can open, a
+ * message box that gets the session's reply back here (`iris hive ask`), and the question a session
+ * is waiting on with its choices (`iris hive answer`). Providers that cannot take input say why.
  *
  * Nothing here decides freshness. The sidecar hands over the server's verdict; a machine whose
  * report is old arrives with its sessions `unknown` and is drawn dashed, because that is what its
  * list is: a memory, not a reading.
  */
 type IconName = IconProps["name"]
-type SessionsPayload = { measured: boolean; reason?: string | null; nodes: HiveSessionNode[] }
+type SessionsPayload = { measured: boolean; reason?: string | null; nodes: HiveSessionNode[]; retired?: RetiredRecord[] }
+type AnswerPayload = {
+  measured: boolean
+  reason?: string | null
+  taskId: string | null
+  status: string
+  via: string | null
+  answers: { question: string; answer: string }[]
+  error: string | null
+}
 type TranscriptPayload = {
   measured: boolean
   reason?: string | null
@@ -68,6 +82,16 @@ export function IrisHiveSessions(props: {
   const [data, { refetch }] = createResource(() => getJson<SessionsPayload>("/iris/hive/sessions", { measured: false, nodes: [] }))
   const timer = setInterval(() => void refetch(), 30_000)
   onCleanup(() => clearInterval(timer))
+  const [refreshing, setRefreshing] = createSignal(false)
+  const refresh = async () => {
+    if (refreshing()) return
+    setRefreshing(true)
+    try {
+      await refetch()
+    } finally {
+      setRefreshing(false)
+    }
+  }
 
   const nodes = createMemo(() => sortNodes(data.latest?.nodes ?? []))
   const summary = createMemo(() => summaryOf(nodes()))
@@ -92,33 +116,58 @@ export function IrisHiveSessions(props: {
       <div class="hss" data-open={selected() ? "1" : undefined}>
         <section class="hss-main" aria-label="Sessions on your machines">
           <header class="hss-top">
-            <Show
-              when={data.latest?.measured}
-              fallback={
-                <Show when={data.latest}>
-                  <p class="hsc-warn">Could not read your sessions{data.latest!.reason ? ` — ${data.latest!.reason}` : ""}</p>
-                </Show>
-              }
-            >
-              <p class="hss-sum">
-                <b class="hsc-num">{summary().sessions}</b> sessions on <b class="hsc-num">{summary().machines}</b> machines
-                <Show when={summary().working}>
-                  <span class="hss-sep">·</span>
-                  <b class="hsc-num">{summary().working}</b> working
-                </Show>
-                <Show when={summary().needs}>
-                  <span class="hss-sep">·</span>
-                  <span class="hsc-amber">
-                    <b class="hsc-num">{summary().needs}</b> need{summary().needs === 1 ? "s" : ""} you
-                  </span>
-                </Show>
-              </p>
+            <div class="hss-topbar">
+              <Show
+                when={data.latest?.measured}
+                fallback={
+                  <Show when={data.latest}>
+                    <p class="hsc-warn">Could not read your sessions{data.latest!.reason ? ` — ${data.latest!.reason}` : ""}</p>
+                  </Show>
+                }
+              >
+                <p class="hss-sum">
+                  <b class="hsc-num">{summary().sessions}</b> sessions on <b class="hsc-num">{summary().machines}</b> machines
+                  <Show when={summary().working}>
+                    <span class="hss-sep">·</span>
+                    <b class="hsc-num">{summary().working}</b> working
+                  </Show>
+                  <Show when={summary().needs}>
+                    <span class="hss-sep">·</span>
+                    <span class="hsc-amber">
+                      <b class="hsc-num">{summary().needs}</b> need{summary().needs === 1 ? "s" : ""} you
+                    </span>
+                  </Show>
+                </p>
+              </Show>
+              <span class="hsc-spacer" />
+              <button
+                class="hsc-ib hsc-ib--bare hss-refresh"
+                type="button"
+                title="Reload sessions"
+                aria-label="Reload sessions"
+                aria-busy={refreshing()}
+                disabled={refreshing()}
+                onClick={() => void refresh()}
+              >
+                <span class="hsc-ic" classList={{ "hsc-spin": refreshing() }} aria-hidden="true">
+                  ↻
+                </span>
+              </button>
+            </div>
+            <Show when={data.latest?.measured}>
               <Show when={summary().staleMachines}>
                 <p class="hss-note">
                   <b class="hsc-num">{summary().staleMachines}</b> machine{summary().staleMachines === 1 ? " has" : "s have"} not
                   reported recently — their sessions show as unknown.
                 </p>
               </Show>
+              <For each={data.latest?.retired ?? []}>
+                {(r) => (
+                  <p class="hss-note hss-retired">
+                    {r.name}: an older record last reported {shortAge(r.at, now())} ago — its <b class="hsc-num">{r.rows}</b> sessions are not shown.
+                  </p>
+                )}
+              </For>
             </Show>
           </header>
 
@@ -186,9 +235,22 @@ export function IrisHiveSessions(props: {
                                 />
                                 <span class="hss-label" title={s.label}>
                                   {s.label}
+                                  <Show when={s.branch}>
+                                    <span class="hss-branch"> ({s.branch})</span>
+                                  </Show>
                                 </span>
-                                <span class="hss-prov">{providerWord(s.provider)}</span>
-                                <span class="hsc-num hss-age">{ago(s.updatedAt, now())}</span>
+                                <span class="hss-status" data-status={s.status}>
+                                  {STATUS_WORD[s.status] ?? s.status}
+                                </span>
+                                <span class="hss-prov" data-provider={s.provider}>
+                                  {providerWord(s.provider)}
+                                </span>
+                                <span class="hsc-mono hss-model" title={s.model ?? "model not reported"}>
+                                  {s.model ?? "—"}
+                                </span>
+                                <span class="hsc-num hss-age" title={s.updatedAt ? ago(s.updatedAt, now()) : undefined}>
+                                  {shortAge(s.updatedAt, now())}
+                                </span>
                               </button>
                             </li>
                           )}
@@ -288,6 +350,14 @@ function SessionDetail(props: {
   const [draft, setDraft] = createSignal("")
   const [sending, setSending] = createSignal(false)
   const [sent, setSent] = createSignal<{ ok: boolean; text: string } | null>(null)
+  // What we asked, and when — the reply is read off the transcript the way `iris hive ask` reads it.
+  const [asked, setAsked] = createSignal<{ text: string; at: number } | null>(null)
+  const reply = createMemo(() => {
+    const a = asked()
+    return a ? replyAfter(messages(), a.text) : null
+  })
+  createEffect(on(() => `${props.node.id}|${props.session.sessionId}`, () => (setAsked(null), setSent(null), setDraft(""))))
+
   const send = async () => {
     const message = draft().trim()
     if (!message || sending()) return
@@ -310,10 +380,46 @@ function SessionDetail(props: {
     setSending(false)
     if (r.measured) {
       setDraft("")
-      setSent({ ok: true, text: `Sent to ${props.node.name}. It appears in that window when it arrives.` })
+      setAsked({ text: message, at: props.now() })
+      setSent({ ok: true, text: `Sent to ${props.node.name}. Its reply appears below as it is written.` })
     } else {
       setSent({ ok: false, text: `Not sent — ${r.reason ?? "unknown error"}` })
     }
+  }
+
+  // One choice per question: an option label, or free text typed under it.
+  const questions = () => props.session.questions ?? []
+  const [choices, setChoices] = createSignal<Record<number, string>>({})
+  const [answering, setAnswering] = createSignal(false)
+  const [answered, setAnswered] = createSignal<{ ok: boolean; text: string } | null>(null)
+  createEffect(on(() => `${props.session.sessionId}|${props.session.question ?? ""}`, () => (setChoices({}), setAnswered(null))))
+  const ready = () => questions().length > 0 && questions().every((_, i) => (choices()[i] ?? "").trim() !== "")
+  const answer = async () => {
+    if (!ready() || answering()) return
+    setAnswering(true)
+    setAnswered(null)
+    const r = await props.getJson<AnswerPayload>(
+      `/iris/hive/sessions/${encodeURIComponent(props.session.sessionId)}/answer`,
+      { measured: false, taskId: null, status: "pending", via: null, answers: [], error: null },
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          nodeId: props.node.id,
+          provider: props.session.provider,
+          choices: questions().map((_, i) => choices()[i]!.trim()),
+        }),
+      },
+    )
+    setAnswering(false)
+    if (!r.measured) setAnswered({ ok: false, text: `Not sent — ${r.reason ?? "unknown error"}` })
+    else if (r.status === "answered")
+      setAnswered({
+        ok: true,
+        text: `Answered ${r.via === "hook" ? "through the waiting hook" : "with a keystroke in its terminal"} on ${props.node.name}.`,
+      })
+    else if (r.status === "refused") setAnswered({ ok: false, text: `Not answered — ${r.error ?? "the machine gave no reason"}` })
+    else setAnswered({ ok: false, text: `No result from ${props.node.name} after 45 s (task ${r.taskId ?? "?"}).` })
   }
 
   return (
@@ -332,7 +438,36 @@ function SessionDetail(props: {
         </button>
       </header>
 
-      <Show when={props.session.question}>
+      <Show when={questions().length > 0}>
+        <section class="hss-ask" aria-label="Waiting on you">
+          <For each={questions()}>
+            {(q, i) => (
+              <QuestionBlock
+                q={q}
+                choice={choices()[i()] ?? ""}
+                disabled={mode() !== "talk" || answering()}
+                onChoose={(v) => setChoices({ ...choices(), [i()]: v })}
+              />
+            )}
+          </For>
+          <Show
+            when={mode() === "talk"}
+            fallback={<p class="hss-hint">{props.session.readOnly ?? "This machine's report is not current, so an answer may reach nobody."}</p>}
+          >
+            <div class="hss-replybar">
+              <span class="hsc-muted">One answer per question</span>
+              <span class="hsc-spacer" />
+              <button type="button" class="hss-send hss-answerbtn" disabled={!ready() || answering()} onClick={() => void answer()}>
+                {answering() ? "Answering…" : "Answer"}
+              </button>
+            </div>
+          </Show>
+          <Show when={answered()}>
+            <p classList={{ "hss-sent": true, "hsc-warn": !answered()!.ok }}>{answered()!.text}</p>
+          </Show>
+        </section>
+      </Show>
+      <Show when={questions().length === 0 && props.session.question}>
         <p class="hss-question">
           <Ic name="warning" /> Waiting on you: {props.session.question}
         </p>
@@ -363,11 +498,36 @@ function SessionDetail(props: {
       </Show>
 
       <footer class="hss-reply">
-        <Show when={mode() === "reply"}>
+        <Show when={asked()}>
+          <div class="hss-answer" aria-live="polite">
+            <p class="hss-answerhead hsc-muted">
+              Reply to “{asked()!.text.length > 60 ? asked()!.text.slice(0, 59) + "…" : asked()!.text}”
+            </p>
+            <Show
+              when={reply()?.answered}
+              fallback={
+                <p class="hsc-muted hss-answerwait">
+                  {reply()?.anchored
+                    ? `${props.session.label} is working on it…`
+                    : props.now() - asked()!.at > 300_000
+                      ? `The message has not shown up in this session's transcript after 5 min.`
+                      : `Waiting for the message to land on ${props.node.name}…`}
+                </p>
+              }
+            >
+              <For each={reply()!.parts}>
+                {(p) =>
+                  p.kind === "tool" ? <span class="hss-tool hsc-mono">{p.text}</span> : <p class="hss-text hss-answertext">{p.text}</p>
+                }
+              </For>
+            </Show>
+          </div>
+        </Show>
+        <Show when={mode() === "talk"}>
           <textarea
             class="hss-input"
             rows={2}
-            placeholder={`Reply into this session on ${props.node.name}`}
+            placeholder={`Message this session on ${props.node.name} — it takes a turn and answers here`}
             value={draft()}
             onInput={(e) => setDraft(e.currentTarget.value)}
             onKeyDown={(e) => {
@@ -382,28 +542,58 @@ function SessionDetail(props: {
             </button>
           </div>
         </Show>
-        <Show when={mode() === "claude"}>
-          <p class="hss-hint">
-            Claude Code sessions are answered in Claude: turn on Remote Control in that session (<code class="hsc-mono">/remote-control</code>) and it
-            appears at claude.ai/code.
-            <Show when={props.openExternal}>
-              {" "}
-              <button type="button" class="hss-link" onClick={() => props.openExternal!("https://claude.ai/code")}>
-                Open Claude
-              </button>
-            </Show>
-          </p>
-        </Show>
         <Show when={mode() === "stale"}>
-          <p class="hss-hint">This machine's report is not current, so a reply may reach nobody. Check the machine first.</p>
+          <p class="hss-hint">This machine's report is not current, so a message may reach nobody. Check the machine first.</p>
         </Show>
-        <Show when={mode() === "none"}>
-          <p class="hss-hint">Replying to {providerWord(props.session.provider)} sessions from here is not supported yet.</p>
+        <Show when={mode() === "readonly"}>
+          <p class="hss-hint hss-readonly">Read-only — {props.session.readOnly}.</p>
         </Show>
         <Show when={sent()}>
           <p classList={{ "hss-sent": true, "hsc-warn": !sent()!.ok }}>{sent()!.text}</p>
         </Show>
       </footer>
     </aside>
+  )
+}
+
+function QuestionBlock(props: { q: WaitingQuestion; choice: string; disabled: boolean; onChoose: (v: string) => void }) {
+  const picked = (label: string) => props.choice === label
+  const typed = () => (props.q.options.some((o) => o.label === props.choice) ? "" : props.choice)
+  return (
+    <div class="hss-q">
+      <p class="hss-question">
+        <Ic name="warning" />
+        <span>
+          <Show when={props.q.header}>
+            <b>{props.q.header}: </b>
+          </Show>
+          {props.q.question}
+        </span>
+      </p>
+      <div class="hss-opts" role="radiogroup" aria-label={props.q.question}>
+        <For each={props.q.options}>
+          {(o) => (
+            <button
+              type="button"
+              role="radio"
+              class="hss-opt"
+              aria-checked={picked(o.label)}
+              disabled={props.disabled}
+              onClick={() => props.onChoose(o.label)}
+            >
+              <span class="hsc-num hss-optn">{o.n}</span>
+              {o.label}
+            </button>
+          )}
+        </For>
+      </div>
+      <input
+        class="hss-input hss-other"
+        placeholder={props.q.options.length ? "…or type another answer" : "Type your answer"}
+        value={typed()}
+        disabled={props.disabled}
+        onInput={(e) => props.onChoose(e.currentTarget.value)}
+      />
+    </div>
   )
 }
