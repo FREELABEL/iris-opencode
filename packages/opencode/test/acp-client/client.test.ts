@@ -35,7 +35,7 @@ async function tmp() {
 describe("acp client — the pure parts", () => {
   test("a known agent resolves through the registry; a missing adapter is named", () => {
     const none = () => null
-    expect(resolveAgentCommand("claude", none)).toMatchObject({ argv: ["claude-code-acp"], missing: "claude-code-acp" })
+    expect(resolveAgentCommand("claude", none)).toMatchObject({ argv: ["claude-agent-acp"], missing: "claude-agent-acp" })
     expect(resolveAgentCommand("gemini", (b) => `/bin/${b}`).argv).toEqual(["gemini", "--experimental-acp"])
     expect(resolveAgentCommand("my-agent --acp", (b) => `/bin/${b}`)).toEqual({ argv: ["my-agent", "--acp"], missing: undefined })
   })

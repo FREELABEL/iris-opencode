@@ -46,9 +46,9 @@ export const ACP_AGENTS: AcpAgentSpec[] = [
   {
     id: "claude",
     name: "Claude Code",
-    command: ["claude-code-acp"],
-    requires: ["claude-code-acp"],
-    install: "npm install -g @zed-industries/claude-code-acp",
+    command: ["claude-agent-acp"],
+    requires: ["claude-agent-acp"],
+    install: "npm install -g @agentclientprotocol/claude-agent-acp",
     note: "adapter; uses your Claude Code login and settings",
   },
   {
@@ -56,7 +56,7 @@ export const ACP_AGENTS: AcpAgentSpec[] = [
     name: "Codex",
     command: ["codex-acp"],
     requires: ["codex-acp"],
-    install: "npm install -g @zed-industries/codex-acp",
+    install: "npm install -g @agentclientprotocol/codex-acp",
     note: "adapter; uses your Codex / ChatGPT login",
   },
   {

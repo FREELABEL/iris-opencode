@@ -153,7 +153,7 @@ iris acp run --agent gemini --json "…"            # raw ACP updates, one JSON 
 
 The agent's answer streams as it is written, every file change it proposes is shown as a diff, and it stops for your answer before anything risky. `--yes` allows each request once (never "always"). When stdin is not a terminal, requests are denied unless you pass `--yes`. The agent can only read and write files inside `--cwd`.
 
-Claude Code and Codex need an adapter (`npm install -g @zed-industries/claude-code-acp` or `@zed-industries/codex-acp`). IRIS never installs one for you; `iris acp agents` prints the command. Any other agent that speaks ACP works too: `--agent "my-agent --acp"`.
+Claude Code and Codex need an adapter (`npm install -g @agentclientprotocol/claude-agent-acp` or `@agentclientprotocol/codex-acp`). IRIS never installs one for you; `iris acp agents` prints the command. Any other agent that speaks ACP works too: `--agent "my-agent --acp"`.
 
 ## Support
 
