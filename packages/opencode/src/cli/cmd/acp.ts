@@ -106,6 +106,7 @@ export const AcpRunCommand = cmd({
       .example('$0 acp run --agent claude "add a test for the parser"', "Claude Code under your own login; asks before each edit")
       .example('$0 acp run --agent codex --no "explain src/server.ts"', "read-only: every permission request is denied")
       .example('$0 acp run --agent gemini --json "…"', "raw ACP updates as JSON lines, for scripts")
+      .example('$0 acp run --keep --agent claude "fix the flaky test"', "stays open: type follow-ups, or steer it from any machine with iris hive ask / answer")
       .example("$0 acp agents", "which agents are installed, and how to install the rest"),
   handler: async (args) => {
     const prompt = ((args.prompt as string[] | undefined) ?? []).join(" ").trim()
@@ -234,7 +235,10 @@ export const AcpRunCommand = cmd({
 export const AcpSessionsCommand = cmd({
   command: "sessions",
   describe: "list ACP sessions kept open on this machine (iris acp run --keep)",
-  builder: (yargs) => yargs.option("json", { type: "boolean", default: false }),
+  builder: (yargs) =>
+    yargs
+      .option("json", { type: "boolean", default: false })
+      .example("$0 acp sessions", "what is open here; across all your machines: iris hive sessions"),
   handler: async (args) => {
     const rows = listHolders().map(({ token: _t, port: _p, ...r }) => r)
     if (args.json) return void console.log(JSON.stringify(rows))

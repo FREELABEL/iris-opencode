@@ -9,6 +9,7 @@ This directory contains step-by-step recipes for common IRIS workflows. Each fil
 | "I just installed iris", "how do I sign in", "auth not working", "where's my .env" | `iris-login.md` |
 | "send a campaign", "outreach", "find leads on linkedin/twitter/instagram", "DM people", "discover prospects" | `outreach-campaign.md` |
 | "connect my machine", "hive", "distributed", "run on multiple machines", "node not registering" | `hive-dispatch.md` |
+| "run claude code from iris", "codex", "gemini cli", "switch agents", "ACP", "agent client protocol", "keep a session open", "steer an agent from my phone", "message a running agent" | `run-other-coding-agents.md` |
 | "send a proposal", "create a deal", "invoice a client", "contract", "payment gate" | `lead-to-proposal.md` |
 | "NDA", "BAA", "agreement", "sign this", "e-signature", "counter-sign", "who hasn't signed", "revoke access", "gate on an agreement", "audit trail for a signature" | `agreements-and-signing.md` |
 | "manage deals", "deal pipeline", "deal status", "payment reminder", "stale deals", "win-back", "recover deal" | `deals.md` |
