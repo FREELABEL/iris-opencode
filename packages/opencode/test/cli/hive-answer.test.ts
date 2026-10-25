@@ -153,6 +153,6 @@ test("parseDuration", () => {
 
 // #190649 — IRIS Desktop / opencode sessions can be answered too (iris-daemon #38 routes the answer
 // to the engine's own permission and question replies). Anything else is still refused by name.
-test("answer reaches Claude Code and IRIS Desktop / opencode sessions, and nothing else", () => {
-  expect(ANSWERABLE_PROVIDERS).toEqual(["claude_code", "opencode"])
+test("answer reaches Claude Code, IRIS Desktop / opencode and kept ACP sessions (#191170), and nothing else", () => {
+  expect(ANSWERABLE_PROVIDERS).toEqual(["claude_code", "opencode", "acp"])
 })

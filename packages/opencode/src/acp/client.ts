@@ -251,6 +251,310 @@ export function unknownUpdateKind(msg: unknown): string | undefined {
   return typeof kind === "string" && !KNOWN_UPDATES.has(kind) ? kind : undefined
 }
 
+/** One line of a session's transcript, in the shape the Hive bridge serves for every provider. */
+export interface TranscriptEntry {
+  role: "user" | "assistant"
+  type: "text" | "tool_use"
+  text: string
+  tool?: string
+  at: string
+}
+
+/**
+ * What a session is blocked on, in the bridge's `waiting` shape (iris-daemon lib/session-waiting.js),
+ * so `iris hive sessions --status needs_you`, `iris hive answer` and Desktop read it unchanged.
+ */
+export function waitingFromPermission(req: RequestPermissionRequest, askedAt: string) {
+  return {
+    kind: "question" as const,
+    held: true,
+    asked_at: askedAt,
+    questions: [
+      {
+        header: "Permission",
+        question: `Allow ${req.toolCall.title ?? "this tool call"}${req.toolCall.kind ? ` [${req.toolCall.kind}]` : ""}?`,
+        options: req.options.map((o) => ({ label: o.name, description: null })),
+      },
+    ],
+  }
+}
+
+export interface SessionOptions {
+  argv: string[]
+  cwd: string
+  policy: PermissionPolicy
+  write: (text: string) => void
+  /**
+   * Asks a person on this terminal. Optional: a session with no terminal waits for answer()
+   * (from Hive). The signal aborts the question when the answer arrives from elsewhere first.
+   */
+  ask?: (question: string, signal: AbortSignal) => Promise<string>
+  json?: boolean
+  thoughts?: boolean
+  /** called whenever status, waiting or the transcript changes */
+  onChange?: () => void
+}
+
+interface Pending {
+  request: RequestPermissionRequest
+  askedAt: string
+  resolve: (r: RequestPermissionResponse) => void
+  abort: AbortController
+}
+
+/**
+ * One ACP agent process and one session in it. Outlives a single prompt: `iris acp run --keep`
+ * feeds it turns from the terminal and from Hive, and answers its permission requests from either.
+ */
+export class AcpSession {
+  readonly transcript: TranscriptEntry[] = []
+  sessionId = ""
+  agentName?: string
+  startedAt = new Date().toISOString()
+  lastMessageAt: string | null = null
+  busy = false
+  private pending?: Pending
+  private child?: ChildProcess
+  private conn?: ClientSideConnection
+  private exited?: Promise<number | null>
+  private idleWaiters: Array<() => void> = []
+  private turnListeners: Array<() => void> = []
+  private changeListeners: Array<() => void> = []
+
+  constructor(private opts: SessionOptions) {}
+
+  get waiting() {
+    return this.pending ? waitingFromPermission(this.pending.request, this.pending.askedAt) : null
+  }
+
+  get status(): "waiting" | "working" | "idle" {
+    return this.pending ? "waiting" : this.busy ? "working" : "idle"
+  }
+
+  /** Called when a turn starts, from any source — the terminal uses it to drop its idle prompt. */
+  onTurnStart(fn: () => void) {
+    this.turnListeners.push(fn)
+  }
+
+  idle(): Promise<void> {
+    return this.busy ? new Promise((r) => this.idleWaiters.push(r)) : Promise.resolve()
+  }
+
+  /** Called whenever status, waiting or the transcript changes. */
+  onChanged(fn: () => void) {
+    this.changeListeners.push(fn)
+  }
+
+  private changed() {
+    this.opts.onChange?.()
+    for (const fn of this.changeListeners) fn()
+  }
+
+  private emit(obj: unknown) {
+    this.opts.write(JSON.stringify(obj) + "\n")
+  }
+
+  private record(update: Update) {
+    const at = new Date().toISOString()
+    const last = this.transcript.at(-1)
+    if (update.sessionUpdate === "agent_message_chunk" && update.content.type === "text") {
+      if (last?.role === "assistant" && last.type === "text") last.text += update.content.text
+      else this.transcript.push({ role: "assistant", type: "text", text: update.content.text, at })
+      this.lastMessageAt = at
+    } else if (update.sessionUpdate === "tool_call") {
+      this.transcript.push({ role: "assistant", type: "tool_use", text: update.title, tool: update.kind ?? "tool", at })
+      this.lastMessageAt = at
+    } else return
+    this.changed()
+  }
+
+  async start(): Promise<void> {
+    const child = spawn(this.opts.argv[0], this.opts.argv.slice(1), {
+      cwd: this.opts.cwd,
+      stdio: ["pipe", "pipe", "inherit"],
+      env: process.env,
+    })
+    this.child = child
+    this.exited = new Promise<number | null>((resolve) => child.on("exit", (code) => resolve(code)))
+    const spawnError = new Promise<never>((_, reject) => child.on("error", reject))
+
+    const raw = ndJsonStream(
+      Writable.toWeb(child.stdin!) as WritableStream<Uint8Array>,
+      Readable.toWeb(child.stdout!) as unknown as ReadableStream<Uint8Array>,
+    )
+    const opts = this.opts
+    // Agents are newer than the SDK: they send update kinds it rejects (usage_update,
+    // config_option_update), one stderr error each. Let them by; --json still sees them.
+    const stream = {
+      writable: raw.writable,
+      readable: raw.readable.pipeThrough(
+        new TransformStream({
+          transform: (msg, controller) => {
+            if (unknownUpdateKind(msg) === undefined) return controller.enqueue(msg)
+            if (opts.json) this.emit({ type: "update", ...(msg as { params: object }).params })
+          },
+        }),
+      ),
+    }
+
+    const client: Client = {
+      sessionUpdate: async (params) => {
+        this.record(params.update)
+        if (opts.json) return this.emit({ type: "update", ...params })
+        const text = renderUpdate(params.update, { thoughts: opts.thoughts })
+        if (text) opts.write(text)
+      },
+      requestPermission: (params) => this.requestPermission(params),
+      readTextFile: async (params) => {
+        const content = await fs.readFile(insideCwd(opts.cwd, params.path), "utf8")
+        if (params.line == null && params.limit == null) return { content }
+        const lines = content.split("\n")
+        const start = Math.max(0, (params.line ?? 1) - 1)
+        return { content: lines.slice(start, params.limit == null ? undefined : start + params.limit).join("\n") }
+      },
+      writeTextFile: async (params) => {
+        // The agent asked (requestPermission) before it got here; the write itself is not re-asked.
+        const file = insideCwd(opts.cwd, params.path)
+        await fs.mkdir(path.dirname(file), { recursive: true })
+        await fs.writeFile(file, params.content)
+        return {}
+      },
+    }
+
+    this.conn = new ClientSideConnection(() => client, stream)
+    try {
+      const init = await Promise.race([
+        this.conn.initialize({
+          protocolVersion: PROTOCOL_VERSION,
+          clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: false },
+        }),
+        spawnError,
+      ])
+      this.agentName = (init as { agentInfo?: { name?: string } }).agentInfo?.name
+      const session = await this.conn.newSession({ cwd: opts.cwd, mcpServers: [] })
+      this.sessionId = session.sessionId
+      if (opts.json) this.emit({ type: "session", agent: this.agentName, sessionId: this.sessionId })
+    } catch (err) {
+      child.kill("SIGTERM")
+      throw err
+    }
+  }
+
+  private requestPermission(req: RequestPermissionRequest): Promise<RequestPermissionResponse> {
+    const opts = this.opts
+    if (opts.policy !== "ask") {
+      const res = decidePermission(req, opts.policy)
+      if (opts.json) this.emit({ type: "permission", request: req, response: res })
+      else
+        opts.write(
+          `${describePermission(req)}\n  → ${opts.policy === "allow" ? "allowed once" : "denied"} (--${opts.policy === "allow" ? "yes" : "no"})\n`,
+        )
+      return Promise.resolve(res)
+    }
+    // A second request while one is open is not something ACP agents do; cancel the stale one.
+    this.pending?.resolve({ outcome: { outcome: "cancelled" } })
+    return new Promise((resolve) => {
+      const abort = new AbortController()
+      const pending: Pending = {
+        request: req,
+        askedAt: new Date().toISOString(),
+        abort,
+        resolve: (r) => {
+          if (this.pending !== pending) return
+          this.pending = undefined
+          abort.abort()
+          this.changed()
+          resolve(r)
+        },
+      }
+      this.pending = pending
+      this.changed()
+      if (opts.json) this.emit({ type: "waiting", waiting: this.waiting })
+      if (!opts.ask) {
+        opts.write(`${describePermission(req)}\n  … waiting for an answer (iris hive answer ${this.sessionId} <choice>)\n`)
+        return
+      }
+      const question = describePermission(req) + "\n  choose [1-" + req.options.length + ", y, n]: "
+      void (async () => {
+        while (this.pending === pending) {
+          let a: string
+          try {
+            a = await opts.ask!(question, abort.signal)
+          } catch {
+            return // answered elsewhere, or the terminal went away
+          }
+          const r = parsePermissionAnswer(req, a)
+          if (r) pending.resolve(r)
+        }
+      })()
+    })
+  }
+
+  /**
+   * Answer the open permission request from somewhere other than this terminal (Hive). Takes the
+   * bridge's `answers` — an array, first entry used — as a number, y/n, or an option name. Anything
+   * unrecognised is refused, never read as allow.
+   */
+  answer(choices: unknown): { ok: true; chose: string } | { ok: false; status: number; error: string } {
+    const p = this.pending
+    if (!p) return { ok: false, status: 409, error: "This session is not waiting on a person right now — nothing to answer." }
+    const first = Array.isArray(choices)
+      ? choices[0]
+      : choices && typeof choices === "object"
+        ? Object.values(choices as object)[0]
+        : choices
+    const r = parsePermissionAnswer(p.request, String(first ?? ""))
+    if (!r) {
+      const opts = p.request.options.map((o, i) => `${i + 1} (${o.name})`).join(", ")
+      return { ok: false, status: 400, error: `answer with ${opts}, y or n — got "${first ?? ""}"` }
+    }
+    const chosen = r.outcome.outcome === "selected" ? r.outcome.optionId : ""
+    const name = p.request.options.find((o) => o.optionId === chosen)?.name ?? "cancelled"
+    if (!this.opts.json) this.opts.write(`  → ${name} (answered remotely)\n`)
+    p.resolve(r)
+    return { ok: true, chose: name }
+  }
+
+  /** Run one turn. Refuses (throws) while another turn is running: ACP sessions take one at a time. */
+  async prompt(text: string, from?: string): Promise<string> {
+    if (!this.conn) throw new Error("session not started")
+    if (this.busy) throw new Error("busy: the agent is still on the last turn")
+    this.busy = true
+    const shown = from ? `[via iris · ${from.slice(0, 64)}] ${text}` : text
+    const at = new Date().toISOString()
+    this.transcript.push({ role: "user", type: "text", text: shown, at })
+    this.lastMessageAt = at
+    this.changed()
+    for (const fn of this.turnListeners) fn()
+    if (from && !this.opts.json) this.opts.write(`\n› ${shown}\n`)
+    try {
+      const res = await this.conn.prompt({ sessionId: this.sessionId, prompt: [{ type: "text", text: shown }] })
+      if (this.opts.json) this.emit({ type: "done", stopReason: res.stopReason })
+      else this.opts.write("\n")
+      return res.stopReason
+    } finally {
+      this.busy = false
+      this.changed()
+      for (const r of this.idleWaiters.splice(0)) r()
+    }
+  }
+
+  cancel() {
+    this.pending?.resolve({ outcome: { outcome: "cancelled" } })
+    if (this.conn && this.sessionId) void this.conn.cancel({ sessionId: this.sessionId }).catch(() => {})
+  }
+
+  async close(): Promise<number | null> {
+    this.pending?.resolve({ outcome: { outcome: "cancelled" } })
+    if (!this.child) return null
+    this.child.stdin?.end()
+    const timer = setTimeout(() => this.child?.kill("SIGTERM"), 2000)
+    const code = await this.exited!
+    clearTimeout(timer)
+    return code
+  }
+}
+
 export interface RunOptions {
   argv: string[]
   prompt: string
@@ -272,98 +576,28 @@ export interface RunResult {
   exitCode: number | null
 }
 
+/** One prompt, then exit. */
 export async function runAcpAgent(opts: RunOptions): Promise<RunResult> {
-  const child: ChildProcess = spawn(opts.argv[0], opts.argv.slice(1), {
+  const session = new AcpSession({
+    argv: opts.argv,
     cwd: opts.cwd,
-    stdio: ["pipe", "pipe", "inherit"],
-    env: process.env,
+    policy: opts.policy,
+    write: opts.write,
+    ask: (q) => opts.ask(q),
+    json: opts.json,
+    thoughts: opts.thoughts,
   })
-  const exited = new Promise<number | null>((resolve) => child.on("exit", (code) => resolve(code)))
-  const spawnError = new Promise<never>((_, reject) => child.on("error", reject))
-
-  const raw = ndJsonStream(
-    Writable.toWeb(child.stdin!) as WritableStream<Uint8Array>,
-    Readable.toWeb(child.stdout!) as unknown as ReadableStream<Uint8Array>,
-  )
-  const emit = (obj: unknown) => opts.write(JSON.stringify(obj) + "\n")
-  // Agents are newer than the SDK: they send update kinds it rejects (usage_update,
-  // config_option_update), one stderr error each. Let them by; --json still sees them.
-  const stream = {
-    writable: raw.writable,
-    readable: raw.readable.pipeThrough(
-      new TransformStream({
-        transform(msg, controller) {
-          const kind = unknownUpdateKind(msg)
-          if (kind === undefined) return controller.enqueue(msg)
-          if (opts.json) emit({ type: "update", ...(msg as { params: object }).params })
-        },
-      }),
-    ),
-  }
-
-  const client: Client = {
-    async sessionUpdate(params) {
-      if (opts.json) return emit({ type: "update", ...params })
-      const text = renderUpdate(params.update, { thoughts: opts.thoughts })
-      if (text) opts.write(text)
-    },
-    async requestPermission(params) {
-      if (opts.policy !== "ask") {
-        const res = decidePermission(params, opts.policy)
-        if (opts.json) emit({ type: "permission", request: params, response: res })
-        else opts.write(`${describePermission(params)}\n  → ${opts.policy === "allow" ? "allowed once" : "denied"} (--${opts.policy === "allow" ? "yes" : "no"})\n`)
-        return res
-      }
-      const question = describePermission(params) + "\n  choose [1-" + params.options.length + ", y, n]: "
-      for (;;) {
-        if (opts.signal?.aborted) return { outcome: { outcome: "cancelled" } }
-        const res = parsePermissionAnswer(params, await opts.ask(question))
-        if (res) return res
-      }
-    },
-    async readTextFile(params) {
-      const content = await fs.readFile(insideCwd(opts.cwd, params.path), "utf8")
-      if (params.line == null && params.limit == null) return { content }
-      const lines = content.split("\n")
-      const start = Math.max(0, (params.line ?? 1) - 1)
-      return { content: lines.slice(start, params.limit == null ? undefined : start + params.limit).join("\n") }
-    },
-    async writeTextFile(params) {
-      // The agent asked (requestPermission) before it got here; the write itself is not re-asked.
-      const file = insideCwd(opts.cwd, params.path)
-      await fs.mkdir(path.dirname(file), { recursive: true })
-      await fs.writeFile(file, params.content)
-      return {}
-    },
-  }
-
-  const conn = new ClientSideConnection(() => client, stream)
+  await session.start()
+  const onAbort = () => session.cancel()
+  opts.signal?.addEventListener("abort", onAbort, { once: true })
   try {
-    const init = await Promise.race([
-      conn.initialize({
-        protocolVersion: PROTOCOL_VERSION,
-        clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: false },
-      }),
-      spawnError,
-    ])
-    const agentName = (init as { agentInfo?: { name?: string } }).agentInfo?.name
-    const session = await conn.newSession({ cwd: opts.cwd, mcpServers: [] })
-    if (opts.json) emit({ type: "session", agent: agentName, sessionId: session.sessionId })
-
-    const onAbort = () => void conn.cancel({ sessionId: session.sessionId }).catch(() => {})
-    opts.signal?.addEventListener("abort", onAbort, { once: true })
-    const res = await conn.prompt({ sessionId: session.sessionId, prompt: [{ type: "text", text: opts.prompt }] })
-    opts.signal?.removeEventListener("abort", onAbort)
-    if (opts.json) emit({ type: "done", stopReason: res.stopReason })
-    else opts.write("\n")
-
-    child.stdin?.end()
-    const timer = setTimeout(() => child.kill("SIGTERM"), 2000)
-    const exitCode = await exited
-    clearTimeout(timer)
-    return { agent: agentName, stopReason: res.stopReason, sessionId: session.sessionId, exitCode }
+    const stopReason = await session.prompt(opts.prompt)
+    const exitCode = await session.close()
+    return { agent: session.agentName, stopReason, sessionId: session.sessionId, exitCode }
   } catch (err) {
-    child.kill("SIGTERM")
+    await session.close()
     throw err
+  } finally {
+    opts.signal?.removeEventListener("abort", onAbort)
   }
 }
