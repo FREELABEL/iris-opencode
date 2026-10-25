@@ -102,7 +102,11 @@ export const AcpRunCommand = cmd({
       .option("yes", { alias: "y", type: "boolean", default: false, describe: "allow each permission request once, without asking" })
       .option("no", { type: "boolean", default: false, describe: "deny every permission request (read-only run)" })
       .option("json", { type: "boolean", default: false, describe: "print raw ACP updates as JSON lines" })
-      .option("thoughts", { type: "boolean", default: false, describe: "also print the agent's thinking" }),
+      .option("thoughts", { type: "boolean", default: false, describe: "also print the agent's thinking" })
+      .example('$0 acp run --agent claude "add a test for the parser"', "Claude Code under your own login; asks before each edit")
+      .example('$0 acp run --agent codex --no "explain src/server.ts"', "read-only: every permission request is denied")
+      .example('$0 acp run --agent gemini --json "…"', "raw ACP updates as JSON lines, for scripts")
+      .example("$0 acp agents", "which agents are installed, and how to install the rest"),
   handler: async (args) => {
     const prompt = ((args.prompt as string[] | undefined) ?? []).join(" ").trim()
     const keep = Boolean(args.keep)
