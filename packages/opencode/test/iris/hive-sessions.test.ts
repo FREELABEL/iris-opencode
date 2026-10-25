@@ -150,6 +150,13 @@ describe("parity with iris hive sessions", () => {
     expect(retired).toEqual([{ name: "MacBook", rows: 2, at: iso(REPORT_WINDOW_MS + 60_000) }])
   })
 
+  test("an old record with no rows hides nothing, so the machine is still listed", () => {
+    const quiet = node({ id: "q", name: "qb-host", sessions_updated_at: null, last_heartbeat_at: iso(REPORT_WINDOW_MS + 60_000), active_sessions: [] })
+    const { nodes, retired } = fleetFromNodes({ nodes: [quiet] }, NOW)
+    expect(nodes.map((n) => [n.name, n.report, n.sessions.length])).toEqual([["qb-host", "never", 0]])
+    expect(retired).toEqual([])
+  })
+
   test("a session reported by two records is shown once, from the newest report", () => {
     const a = node({ id: "a", sessions_updated_at: iso(5 * 60_000), active_sessions: [session("dup"), session("only-a")] })
     const b = node({ id: "b", sessions_updated_at: iso(30_000), active_sessions: [session("dup")] })

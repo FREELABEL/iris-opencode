@@ -150,10 +150,12 @@ export function fleetFromNodes(json: any, now: number): { nodes: HiveSessionNode
   for (const n of all) {
     const list: any[] = Array.isArray(n?.active_sessions) ? n.active_sessions : []
     const at = Date.parse(n?.sessions_updated_at ?? n?.last_heartbeat_at ?? "")
-    if (!Number.isNaN(at) && now - at > REPORT_WINDOW_MS) {
-      if (list.length) retired.push({ name: String(n?.name), rows: list.length, at: n.sessions_updated_at ?? n.last_heartbeat_at })
+    if (!Number.isNaN(at) && now - at > REPORT_WINDOW_MS && list.length) {
+      retired.push({ name: String(n?.name), rows: list.length, at: n.sessions_updated_at ?? n.last_heartbeat_at })
       continue
     }
+    // An old record with NO rows hides nothing, so it stays on the list: the CLI names it as a
+    // machine that has not reported, and absent must not look like empty.
     live.push(n)
     const t = Number.isNaN(at) ? 0 : at
     for (const s of list) {
