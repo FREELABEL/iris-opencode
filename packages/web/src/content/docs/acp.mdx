@@ -140,6 +140,21 @@ This config sets up CodeCompanion to use OpenCode as the ACP agent for chat.
 
 If you need to pass environment variables (like `OPENCODE_API_KEY`), refer to [Configuring Adapters: Environment Variables](https://codecompanion.olimorris.dev/configuration/adapters#environment-variables-setting-an-api-key) in the CodeCompanion.nvim documentation for full details.
 
+## Drive other agents
+
+ACP also works the other way round: `iris acp run` makes IRIS the client, so you can run Claude Code, Codex, Gemini CLI, opencode or IRIS itself from the same command and switch between them with one flag. Each agent runs under its own login, settings and billing.
+
+```bash
+iris acp agents                                   # which agents this machine can drive
+iris acp run --agent claude "add a test for the parser"
+iris acp run --agent codex --no "explain src/server.ts"   # read-only: every permission request is denied
+iris acp run --agent gemini --json "…"            # raw ACP updates, one JSON object per line
+```
+
+The agent's answer streams as it is written, every file change it proposes is shown as a diff, and it stops for your answer before anything risky. `--yes` allows each request once (never "always"). When stdin is not a terminal, requests are denied unless you pass `--yes`. The agent can only read and write files inside `--cwd`.
+
+Claude Code and Codex need an adapter (`npm install -g @zed-industries/claude-code-acp` or `@zed-industries/codex-acp`). IRIS never installs one for you; `iris acp agents` prints the command. Any other agent that speaks ACP works too: `--agent "my-agent --acp"`.
+
 ## Support
 
 OpenCode works the same via ACP as it does in the terminal. All features are supported:
