@@ -201,6 +201,17 @@ const HiveSessionSchema = Schema.Struct({
   branch: Schema.NullOr(Schema.String),
   updatedAt: Schema.NullOr(Schema.String),
   question: Schema.NullOr(Schema.String),
+  questions: described(
+    Schema.Array(
+      Schema.Struct({
+        question: Schema.String,
+        header: Schema.NullOr(Schema.String),
+        options: Schema.Array(Schema.Struct({ n: Schema.Finite, label: Schema.String })),
+      }),
+    ),
+    "Every question a needs_you session is waiting on, with its options by the number the agent shows.",
+  ),
+  readOnly: described(Schema.NullOr(Schema.String), "Why this row cannot be messaged or answered from here; null when it can."),
 }).annotate({ identifier: "IrisHiveSession" })
 
 const HiveSessionsResponse = Schema.Struct({
@@ -216,6 +227,10 @@ const HiveSessionsResponse = Schema.Struct({
       incomplete: described(Schema.Array(Schema.String), "Providers cut at the cap or not reachable: the list is a floor."),
       sessions: Schema.Array(HiveSessionSchema),
     }).annotate({ identifier: "IrisHiveSessionNode" }),
+  ),
+  retired: described(
+    Schema.Array(Schema.Struct({ name: Schema.String, rows: Schema.Finite, at: Schema.String })),
+    "Old records of re-registered machines (report older than 7 days): their rows are not shown — said, not silently dropped.",
   ),
 }).annotate({ identifier: "IrisHiveSessionsResponse" })
 
@@ -1555,6 +1570,7 @@ export const IrisPaths = {
   hiveSessions: `${root}/hive/sessions`,
   hiveSessionTranscript: `${root}/hive/sessions/:sessionID/transcript`,
   hiveSessionReply: `${root}/hive/sessions/:sessionID/reply`,
+  hiveSessionAnswer: `${root}/hive/sessions/:sessionID/answer`,
   hiveScripts: `${root}/hive/scripts`,
   hiveScript: `${root}/hive/scripts/:slug`,
   hiveScriptDoctor: `${root}/hive/scripts/:slug/doctor`,
@@ -3578,14 +3594,39 @@ export const IrisApi = HttpApi.make("iris").add(
         }),
         success: described(
           Schema.Struct({ ...Measured, taskId: Schema.NullOr(Schema.String) }),
-          "The delivery task — the reply appears in the session's own window",
+          "The delivery task — the session takes a turn; follow its transcript for the reply",
         ),
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "iris.hiveSessionReply",
-          summary: "Reply into a session on another machine",
+          summary: "Talk to a session on another machine",
           description:
-            "The same `session_message` task as `iris hive send-input`. opencode only: a Claude Code reply from here would start a separate run rather than type into the open one.",
+            "The same `session_message` task (with `submit`) as `iris hive ask`. Claude Code, opencode and ACP sessions; any other provider answers measured=false with the reason.",
+        }),
+      ),
+      HttpApiEndpoint.post("hiveSessionAnswer", IrisPaths.hiveSessionAnswer, {
+        params: { sessionID: Schema.String },
+        payload: Schema.Struct({
+          nodeId: Schema.String,
+          provider: Schema.String,
+          choices: described(Schema.Array(Schema.String), "One per question: an option number or label, or free text."),
+        }),
+        success: described(
+          Schema.Struct({
+            ...Measured,
+            taskId: Schema.NullOr(Schema.String),
+            status: described(Schema.String, "answered | refused | pending — pending = no result from the node within 45 s."),
+            via: Schema.NullOr(Schema.String),
+            answers: Schema.Array(Schema.Struct({ question: Schema.String, answer: Schema.String })),
+            error: Schema.NullOr(Schema.String),
+          }).annotate({ identifier: "IrisHiveSessionAnswer" }),
+          "What the node did with the answer",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.hiveSessionAnswer",
+          summary: "Answer the question a session is waiting on",
+          description: "The same `session_message` task as `iris hive answer`, then waits up to 45 s for the node to say whether it was delivered.",
         }),
       ),
       HttpApiEndpoint.get("hive", IrisPaths.hive, {
