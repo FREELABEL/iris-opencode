@@ -1,0 +1,68 @@
+/* The send button (#190993 follow-up). It used to look the same empty or ready, with no hover and
+   no pointer, so it never read as something to press. Now: quiet when there is nothing to send,
+   bright and pressable when there is. */
+
+[data-action="prompt-submit"] {
+  background-image: linear-gradient(180deg, var(--v2-alpha-light-20) 0%, var(--v2-alpha-light-0) 100%),
+    linear-gradient(90deg, var(--v2-background-bg-contrast) 0%, var(--v2-background-bg-contrast) 100%);
+  transition:
+    transform 0.16s cubic-bezier(0.2, 0.9, 0.25, 1.2),
+    box-shadow 0.16s ease,
+    background-color 0.16s ease,
+    color 0.16s ease,
+    opacity 0.16s ease;
+}
+[data-action="prompt-submit"] svg {
+  transition: transform 0.16s cubic-bezier(0.2, 0.9, 0.25, 1.2);
+}
+
+[data-action="prompt-submit"][data-state="idle"] {
+  cursor: default;
+}
+
+[data-action="prompt-submit"][data-state="ready"],
+[data-action="prompt-submit"][data-state="stop"] {
+  cursor: pointer;
+  opacity: 1;
+  color: var(--v2-background-bg-base);
+  background-image: none;
+  background-color: var(--v2-text-text-base);
+  animation: prompt-submit-ready 0.22s cubic-bezier(0.2, 0.9, 0.25, 1.3);
+}
+[data-action="prompt-submit"][data-state="ready"]:hover,
+[data-action="prompt-submit"][data-state="stop"]:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--v2-text-text-base) 14%, transparent),
+    0 6px 14px -6px rgb(0 0 0 / 0.45);
+}
+[data-action="prompt-submit"][data-state="ready"]:hover svg {
+  transform: translateY(-1.5px);
+}
+[data-action="prompt-submit"][data-state="ready"]:active,
+[data-action="prompt-submit"][data-state="stop"]:active {
+  transform: scale(0.92);
+  box-shadow: none;
+}
+[data-action="prompt-submit"]:focus-visible {
+  outline: 2px solid var(--v2-border-border-focus, #3b82f6);
+  outline-offset: 2px;
+}
+
+/* Becoming ready: one small pop, so the button says "now you can send". */
+@keyframes prompt-submit-ready {
+  from {
+    transform: scale(0.85);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-action="prompt-submit"],
+  [data-action="prompt-submit"] svg {
+    transition: none;
+    animation: none !important;
+  }
+  [data-action="prompt-submit"]:hover,
+  [data-action="prompt-submit"]:hover svg {
+    transform: none !important;
+  }
+}

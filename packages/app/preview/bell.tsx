@@ -14,7 +14,9 @@ import { bellRows } from "@/components/notification-bell-model"
  * Renders the REAL message box (session-ui PromptInputV2) with the REAL bell (NotificationBellView)
  * and fixture rows (#190993). `?step=` picks: rest | open | rise | working | quiet. Data is fictional.
  */
-const step = new URLSearchParams(location.search).get("step") ?? "rest"
+const q = new URLSearchParams(location.search)
+const step = q.get("step") ?? "rest"
+const typed = q.get("text") ?? ""
 
 const ago = (h: number) => new Date(Date.now() - h * 3600_000).toISOString()
 const waiting = [
@@ -35,7 +37,7 @@ const rowsFor = (s: string, extra = 0) =>
       : bellRows({ waiting: waiting.slice(0, 3 + extra), work, hiveUnread: 2, hiveFrom: "Kristen" })
 
 function Composer() {
-  const state = createStore({ prompt: [{ type: "text", content: "", start: 0, end: 0 }], cursor: 0, model: { providerID: "iris", modelID: "iris-ai", variant: null }, context: { items: [] } })
+  const state = createStore({ prompt: [{ type: "text", content: typed, start: 0, end: typed.length }], cursor: typed.length, model: { providerID: "iris", modelID: "iris-ai", variant: null }, context: { items: [] } })
   const store = createPromptInputV2Store(state)
   const controller = createPromptInputV2Controller({
     store: state,
