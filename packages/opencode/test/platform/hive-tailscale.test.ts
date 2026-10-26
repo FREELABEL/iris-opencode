@@ -260,6 +260,10 @@ describe("judge — hive doctor verdicts", () => {
     disk_avail: "300Gi",
     ssh_fda: "granted",
     daemon_denials: "0",
+    // A running daemon writes a log. Without one, "0 denials" means "not measured", which
+    // judge() reports as a problem (#184929) — so a healthy fixture must carry a log.
+    daemon_log_bytes: "4096",
+    daemon_log_scanned: "~/.iris/bridge/daemon.log",
   }
 
   test("a healthy node is not degraded", () => {
@@ -317,6 +321,16 @@ describe("judge — hive doctor verdicts", () => {
   test("an uncommitted daemon checkout is flagged — the SHA does not describe what runs", () => {
     const v = judge("n", {}, { ...healthy, daemon_dirty: "8" })
     expect(v.notes.join(" ")).toContain("uncommitted")
+  })
+
+  test("no daemon log is UNKNOWN, not clean — a problem while the daemon runs, a note when it is down (#184929)", () => {
+    const up = judge("n", {}, { ...healthy, daemon_log_bytes: "" })
+    expect(up.degraded).toBe(true)
+    expect(up.problems.join(" ")).toContain("UNKNOWN, not clean")
+    expect(up.problems.join(" ")).toContain("~/.iris/bridge/daemon.log")
+
+    const down = judge("n", {}, { ...healthy, daemon_pid: "", daemon_log_bytes: "" })
+    expect(down.notes.join(" ")).toContain("UNKNOWN, not clean")
   })
 
   test("empty readings do not throw and do not silently pass", () => {

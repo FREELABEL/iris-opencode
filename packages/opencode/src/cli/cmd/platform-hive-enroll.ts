@@ -361,9 +361,13 @@ const HiveDiscoverCommand = cmd({
   describe: "SSH-probe a host to see if iris is installed, current, and registered",
   builder: (yargs) =>
     yargs
-      .positional("target", { describe: "user@ip (or just ip with default user)", type: "string", demandOption: true })
-      .option("user", { describe: "ssh user if target is bare ip", type: "string" })
-      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+      .positional("target", { describe: "tailnet ip, or user@ip", type: "string", demandOption: true })
+      .option("user", {
+        describe: "login name ON the node, usually not your IRIS account. Omitted: a user remembered for this address, then the ssh default",
+        type: "string",
+      })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .epilog("Read-only. Needs SSH key login to the node — see: iris how-to hive-tailscale (Step 6b)."),
   async handler(argv) {
     const target = String(argv.target)
     const d = discover(target, {
@@ -393,13 +397,17 @@ const HiveEnrollCommand = cmd({
   describe: "SSH to a host, install iris if needed, register as a Hive node",
   builder: (yargs) =>
     yargs
-      .positional("target", { describe: "user@ip (or just ip with default user)", type: "string", demandOption: true })
-      .option("user", { describe: "ssh user if target is bare ip", type: "string" })
+      .positional("target", { describe: "tailnet ip, or user@ip", type: "string", demandOption: true })
+      .option("user", { describe: "login name ON the node, usually not your IRIS account", type: "string" })
       .option("force", { describe: "reinstall even if already healthy", type: "boolean", default: false })
       .option("dry-run", { describe: "show what would happen without doing it", type: "boolean", default: false })
       .option("user-id", { describe: "iris user id (defaults to your logged-in id)", type: "number" })
       .option("install-version", { describe: "specific iris version to install", type: "string" })
-      .option("auto-key", { describe: "auto-run ssh-setup if key auth is missing", type: "boolean", default: true }),
+      .option("auto-key", {
+        describe: "run ssh-setup when key login is refused — only for a known username (--user, user@ip, or remembered)",
+        type: "boolean",
+        default: true,
+      }),
   async handler(argv) {
     await requireAuth()
     const userId = await requireUserId(argv["user-id"] as number | undefined)
@@ -554,8 +562,9 @@ const HiveSshSetupCommand = cmd({
   describe: "set up passwordless SSH key auth to a host (wraps ssh-copy-id)",
   builder: (yargs) =>
     yargs
-      .positional("target", { describe: "user@ip", type: "string", demandOption: true })
-      .option("user", { describe: "ssh user if target is bare ip", type: "string" }),
+      .positional("target", { describe: "user@ip — the node's own login name, usually not your IRIS account", type: "string", demandOption: true })
+      .option("user", { describe: "ssh user if target is a bare ip", type: "string" })
+      .epilog("Creates ~/.ssh/id_ed25519 if this machine has no key, then asks for that account's password once."),
   async handler(argv) {
     let target = String(argv.target)
     if (!target.includes("@") && argv.user) target = `${argv.user}@${target}`

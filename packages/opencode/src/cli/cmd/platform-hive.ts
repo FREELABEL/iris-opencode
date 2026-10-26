@@ -2062,7 +2062,7 @@ const HiveDoctorCommand = cmd({
       .option("all", { describe: "check every node you own", type: "boolean", default: false })
       .option("expect-sha", { describe: "commit the remote daemon SHOULD be running; a mismatch is a failure", type: "string" })
       .option("host", { describe: "override the address, skipping Tailscale resolution", type: "string" })
-      .option("user", { describe: "ssh user on the node (remembered after the first success)", type: "string" })
+      .option("user", { describe: "ssh user on the node — its own login name, usually not your IRIS account (remembered after the first success)", type: "string" })
       .option("user-id", { describe: "user ID", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(argv) {
