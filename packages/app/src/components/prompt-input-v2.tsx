@@ -37,6 +37,7 @@ import { dictationAuthFor } from "@/utils/dictation-auth"
 import { useSync } from "@/context/sync"
 import "./prompt-input-glow.css"
 import { BackgroundWorkMenu } from "./background-work-menu"
+import { NotificationBell } from "./notification-bell"
 import { allowanceDockShown } from "@/pages/session/composer/allowance-events"
 import { createSessionTabs } from "@/pages/session/helpers"
 import { showToast } from "@/utils/toast"
@@ -95,6 +96,13 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
     return { "--iris-glow-ring": `${ring}s`, "--iris-glow-under": `${under}s` }
   })
 
+  // The bell's "people need a reply" row: put the request in the box and send it, as if typed.
+  const prompt = usePrompt()
+  const ask = (text: string) => {
+    prompt.set([{ type: "text", content: text, start: 0, end: text.length }], text.length)
+    props.controller.submit()
+  }
+
   command.register("prompt-dictate", () => [
     dictateCommand({
       controls: dictate,
@@ -126,7 +134,8 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
         data-still={dictationSettings.glow.reduceMotion() ? "" : undefined}
         data-busy={busy() ? "" : undefined} data-bg={background() > 0 ? "" : undefined}>
       <span class="iris-glow__under" aria-hidden="true" />
-      <Show when={background() > 0 && !allowanceDockShown()}>
+      {/* With the bell on, running work is listed there instead of in a chip of its own (#190993). */}
+      <Show when={background() > 0 && !allowanceDockShown() && !dictationSettings.notifications.bell()}>
         <BackgroundWorkMenu />
       </Show>
       <PromptInputV2
@@ -143,6 +152,11 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
           current: () => dictationSettings.voice.inputDevice(),
           select: (name) => dictationSettings.voice.setInputDevice(name),
         }}
+        notifications={
+          <Show when={dictationSettings.notifications.bell()}>
+            <NotificationBell onAsk={ask} />
+          </Show>
+        }
         attachKeybind={command.keybindParts("file.attach")}
         attachShortcut={command.keybind("file.attach")}
         modelControl={

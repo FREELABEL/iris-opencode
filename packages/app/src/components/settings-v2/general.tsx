@@ -607,6 +607,15 @@ export const SettingsGeneralV2: Component<{
             />
           </div>
         </SettingsRowV2>
+
+        <SettingsRowV2
+          title={language.t("settings.general.notifications.bell.title")}
+          description={language.t("settings.general.notifications.bell.description")}
+        >
+          <div data-action="settings-notifications-bell">
+            <Switch checked={settings.notifications.bell()} onChange={(checked) => settings.notifications.setBell(checked)} />
+          </div>
+        </SettingsRowV2>
       </SettingsListV2>
     </div>
   )

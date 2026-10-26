@@ -45,6 +45,8 @@ export type PromptInputV2Props = {
   borderUnderlay?: boolean
   class?: string
   modelControl?: JSX.Element
+  /** The notification bell (#190993), rendered in the toolbar after the microphone. */
+  notifications?: JSX.Element
   /** Connect an integration (#186527). Absent on surfaces with no panel to open. */
   onIntegrations?: () => void
   /** Dictation control, rendered beside the attach menu. */
@@ -294,6 +296,7 @@ export function PromptInputV2(props: PromptInputV2Props) {
                 />
               )}
             </Show>
+            {props.notifications}
             <Show when={view.agent} keyed>
               {(control) => (
                 <PromptInputV2ConfiguredSelect

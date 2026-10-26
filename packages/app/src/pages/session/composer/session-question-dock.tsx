@@ -459,7 +459,9 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
         onKeyDown={nav}
         header={
           <>
-            <div data-slot="question-header-title">{summary()}</div>
+            {/* The question's own label when it has one ("Maria Lopez · Email · 40 min ago"); the dashes
+                on the right still show how far along you are (#190993). */}
+            <div data-slot="question-header-title">{question()?.header?.trim() || summary()}</div>
             <div data-slot="question-header-actions">
               <Show when={total() > 1}>
                 <div data-slot="question-progress">

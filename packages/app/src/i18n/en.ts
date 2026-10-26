@@ -1081,6 +1081,8 @@ export const dict = {
   "settings.general.notifications.permissions.description": "Show system notification when a permission is required",
   "settings.general.notifications.errors.title": "Errors",
   "settings.general.notifications.errors.description": "Show system notification when an error occurs",
+  "settings.general.notifications.bell.title": "Bell in the message box",
+  "settings.general.notifications.bell.description": "Show who's waiting on a reply, what's working and new Hive messages",
 
   "settings.general.sounds.agent.title": "Agent",
   "settings.general.sounds.agent.description": "Play sound when the agent is complete or needs attention",

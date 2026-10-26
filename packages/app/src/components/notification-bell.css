@@ -1,0 +1,200 @@
+/* The bell in the message box's toolbar (#190993). Only what needs the person is amber. */
+
+.iris-bell {
+  --bell-need: #e0a53a;
+  --bell-work: #4f8ff7;
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  color: var(--v2-icon-icon-muted, currentColor);
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.iris-bell:hover,
+.iris-bell[data-expanded] {
+  color: var(--v2-text-text-base);
+  background: var(--v2-overlay-simple-overlay-hover, rgba(128, 128, 128, 0.12));
+}
+.iris-bell:focus-visible {
+  outline: 2px solid var(--v2-border-border-focus, #3b82f6);
+  outline-offset: 2px;
+}
+.iris-bell__glyph {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transform-origin: 50% 2px;
+}
+.iris-bell__glyph[data-swing] {
+  animation: iris-bell-swing 0.9s ease-in-out both;
+}
+/* Work is running: a small blue dot at the bell's foot — shown, never counted. */
+.iris-bell[data-working]::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 2px;
+  width: 4px;
+  height: 4px;
+  margin-left: -2px;
+  border-radius: 999px;
+  background: var(--bell-work);
+  animation: iris-bell-breathe 2.4s ease-in-out infinite;
+}
+.iris-bell__n {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  font: 650 9.5px/15px ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  color: #1a1408;
+  background: var(--bell-need);
+  box-shadow: 0 0 0 2px var(--v2-background-bg-base);
+  animation: iris-bell-pop 0.4s cubic-bezier(0.2, 0.9, 0.25, 1.15) both;
+}
+
+/* The list. */
+.iris-bell-panel {
+  --bell-need: #e0a53a;
+  --bell-work: #4f8ff7;
+  width: 340px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding: 6px;
+}
+.iris-bell-panel__empty {
+  padding: 14px 10px;
+  font-size: 13px;
+  color: var(--v2-text-text-muted);
+}
+/* MenuV2.Item wraps its children in [data-slot="menu-v2-item-content"]; the row's layout lives there. */
+.iris-bell-panel__row {
+  height: auto !important;
+  padding: 7px 8px !important;
+  border-radius: 10px;
+}
+.iris-bell-panel__row > [data-slot="menu-v2-item-content"] {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+.iris-bell-panel__row[data-kind="reply"] { --tone: var(--bell-need); }
+.iris-bell-panel__row[data-kind="work"] { --tone: var(--bell-work); }
+.iris-bell-panel__row[data-kind="hive"] { --tone: var(--v2-text-text-muted, #8a8394); }
+.iris-bell-panel__glyph {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  overflow: hidden;
+  border-radius: 9px;
+  color: var(--tone);
+  background: color-mix(in srgb, var(--tone) 14%, transparent);
+}
+.iris-bell-panel__glyph svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+/* The one continuous motion: an arc around work that is actually running. */
+.iris-bell-panel__arc {
+  position: absolute;
+  inset: 0;
+  border-radius: 9px;
+  background: conic-gradient(from 0deg, transparent 0 62%, var(--bell-work) 92%, transparent 100%);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 1.5px), #000 calc(100% - 1.5px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 1.5px), #000 calc(100% - 1.5px));
+  animation: iris-bell-spin 1.6s linear infinite;
+}
+.iris-bell-panel__text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+.iris-bell-panel__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.35;
+  color: var(--v2-text-text-base);
+}
+.iris-bell-panel__sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--v2-text-text-muted, #8a8394);
+}
+.iris-bell-panel__faces {
+  display: flex;
+}
+.iris-bell-panel__faces span {
+  display: block;
+  width: 22px;
+  height: 22px;
+  margin-left: -3px;
+  border-radius: 999px;
+  font: 650 10px/22px ui-sans-serif, system-ui, -apple-system, sans-serif;
+  text-align: center;
+  color: var(--v2-text-text-base);
+  background: color-mix(in srgb, var(--v2-text-text-base) 16%, var(--v2-background-bg-base));
+  box-shadow: 0 0 0 2px var(--v2-background-bg-base);
+}
+.iris-bell-panel__faces span:first-child {
+  margin-left: 0;
+}
+
+@keyframes iris-bell-swing {
+  20% { transform: rotate(14deg); }
+  40% { transform: rotate(-11deg); }
+  60% { transform: rotate(6deg); }
+  80% { transform: rotate(-3deg); }
+}
+@keyframes iris-bell-pop {
+  from { transform: scale(0.4); opacity: 0; }
+}
+@keyframes iris-bell-breathe {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+@keyframes iris-bell-spin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .iris-bell__glyph[data-swing],
+  .iris-bell__n,
+  .iris-bell[data-working]::after {
+    animation: none;
+  }
+  .iris-bell-panel__arc {
+    animation-duration: 6s;
+  }
+}
+/* Settings > Working glow > Reduce motion stills the bell too. */
+.iris-glow[data-still] .iris-bell__glyph[data-swing],
+.iris-glow[data-still] .iris-bell__n,
+.iris-glow[data-still] .iris-bell[data-working]::after {
+  animation: none;
+}
