@@ -26,6 +26,8 @@ import {
   sshRun,
   pullFile,
   pushFile,
+  pushStream,
+  streamNameError,
   shqPath,
   classifyRemoteError,
   type SshTarget,
@@ -118,7 +120,7 @@ const FilesLsCommand = cmd({
 
 const FilesPullCommand = cmd({
   command: "pull <node> <remote-path..>",
-  describe: "copy file(s) OFF a node, sha256-verified at both ends",
+  describe: "copy, fetch or download file(s) OFF one of your machines, sha256-verified at both ends",
   builder: (yargs) =>
     commonOpts(
       yargs
@@ -145,7 +147,7 @@ const FilesPullCommand = cmd({
     for (const r of results) {
       if (r.ok) {
         console.log(`  ${success("✓")} ${bold(r.localPath)}  ${dim(`${r.bytes} bytes`)}`)
-        console.log(`     ${dim("sha256 " + r.sha256 + " — matched on the node")}`)
+        console.log(`     ${dim("sha256 " + r.sha256 + " — this copy matches the file on the node")}`)
       } else {
         console.log(`  ${dim("✗")} ${bold(r.remotePath)}`)
         console.log(`     ${r.error}`)
@@ -162,22 +164,54 @@ const FilesPullCommand = cmd({
 
 const FilesPushCommand = cmd({
   command: "push <node> <local-path..>",
-  describe: "copy local file(s) ON to a node, sha256-verified at both ends",
+  describe: "copy, send or upload file(s) ON to one of your machines — or stream stdin with '-' — sha256-verified",
   builder: (yargs) =>
     commonOpts(
       yargs
         .positional("node", { describe: "node name or id", type: "string", demandOption: true })
-        .positional("local-path", { describe: "local file(s)", type: "string", demandOption: true })
-        .option("to", { describe: "remote directory", type: "string", demandOption: true }),
+        .positional("local-path", { describe: "local file(s), or - to read stdin", type: "string", demandOption: true })
+        .option("to", { describe: "remote directory", type: "string", demandOption: true })
+        .option("name", { describe: "file name on the node — required with -", type: "string" })
+        .option("size", { describe: "with -: expected bytes, so free space is checked for the whole stream", type: "number" })
+        .example("$0 hive fs push mac ./report.pdf --to ~/Downloads", "copy a file")
+        .example("mysqldump db | gzip | $0 hive fs push backup-box - --to ~/backups --name db.sql.gz", "stream — nothing is stored on this machine"),
     ),
   async handler(argv) {
-    const resolved = await target(argv)
-    if (!resolved) return
-    const paths = ([] as string[]).concat(argv["local-path"] as any)
+    const paths = ([] as string[]).concat(argv["local-path"] as any).map(String)
     const to = String(argv.to)
 
+    // Check the stream's arguments BEFORE resolving the node: a mistake here should not cost an
+    // ssh round-trip, and must never leave a producer piping into a command that will refuse.
+    const streaming = paths.includes("-")
+    if (streaming) {
+      if (paths.length > 1) {
+        console.error("'-' (stdin) must be the only source — push files and a stream in separate runs.")
+        process.exit(1)
+      }
+      const bad = streamNameError(argv.name as string | undefined)
+      if (bad) {
+        console.error(bad)
+        process.exit(1)
+      }
+      if (process.stdin.isTTY) {
+        console.error("Nothing is piped in. Use: <command> | iris hive fs push <node> - --to <dir> --name <file>")
+        process.exit(1)
+      }
+    }
+
+    const resolved = await target(argv)
+    if (!resolved) return
+
     const results = []
-    for (const p of paths) results.push(await pushFile(resolved.t, p, to))
+    if (streaming) {
+      results.push(
+        await pushStream(resolved.t, process.stdin, to, String(argv.name), {
+          expectBytes: argv.size === undefined ? undefined : Number(argv.size),
+        }),
+      )
+    } else {
+      for (const p of paths) results.push(await pushFile(resolved.t, p, to))
+    }
 
     if (argv.json) {
       await writeJson({ ok: results.every((r) => r.ok), results })
@@ -206,7 +240,7 @@ const FilesPushCommand = cmd({
 
 const HiveFilesCommand = cmd({
   command: "fs",
-  describe: "move files to and from YOUR OWN Hive nodes over Tailscale, sha256-verified both ends",
+  describe: "move, copy, send or back up files between your own machines and computers (Hive nodes) over Tailscale, sha256-verified",
   builder: (yargs) =>
     yargs
       .epilog(

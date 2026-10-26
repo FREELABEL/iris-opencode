@@ -1,5 +1,5 @@
 ---
-category: Hive
+category: Infrastructure
 level: beginner
 tags: [hive, files, search, locate, fsearch, spotlight, plocate, windows-search]
 duration_min: 5
