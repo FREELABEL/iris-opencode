@@ -140,7 +140,7 @@ function collectBlocks(dir: string): BlockIndex {
   // parent's own import statement is the only answer that is right by construction; a
   // child genuinely does live in another file (PlaybookDraftCommand does).
   const imports = new Map<string, Map<string, string>>()
-  const aliasPairs: Array<[string, string]> = []
+  const aliasPairs: Array<[string, string, string]> = []
 
   for (const file of readdirSync(dir)) {
     if (!file.endsWith(".ts") || file.endsWith(".test.ts")) continue
@@ -186,14 +186,19 @@ function collectBlocks(dir: string): BlockIndex {
     // original — so the walker looked up a name it had never collected and silently
     // skipped the command. `iris heartbeat` is a top-level product and was missing from
     // the index entirely because of this one line, with nothing anywhere reporting a gap.
-    aliasPairs.push(...[...src.matchAll(/export\s+const\s+([A-Za-z0-9_]+(?:Command|Group|Cmd))\s*=\s*([A-Za-z0-9_]+(?:Command|Group|Cmd))\s*$/gm)].map((m) => [m[1], m[2]] as [string, string]))
+    aliasPairs.push(...[...src.matchAll(/export\s+const\s+([A-Za-z0-9_]+(?:Command|Group|Cmd)(?:Export)?)\s*=\s*([A-Za-z0-9_]+(?:Command|Group|Cmd))\s*$/gm)].map((m) => [m[1], m[2], abs] as [string, string, string]))
   }
 
   // Resolve after every file is scanned — an alias may point at a block defined later.
-  for (const [alias, target] of aliasPairs) {
+  // An alias names the block in ITS OWN file. Two files can each define a `HiveFilesCommand`
+  // (the peer `hive files` and the own-node `hive fs`); handing the alias both let the parent's
+  // file win and indexed the wrong command.
+  for (const [alias, target, file] of aliasPairs) {
     if (byName.has(alias)) continue
     const blocks = byName.get(target)
-    if (blocks) byName.set(alias, blocks)
+    if (!blocks) continue
+    const own = blocks.filter((b) => b.file === file)
+    byName.set(alias, own.length ? own : blocks)
   }
 
   return { byName, imports }
@@ -237,7 +242,7 @@ function collectCommands(): Entry[] {
   // exist.
   const indexFile = join(ROOT, "src/index.ts")
   const indexSrc = readFileSync(indexFile, "utf-8")
-  const registered = [...indexSrc.matchAll(/\.command\((?:reg\(|withAccessFooter\()?([A-Za-z0-9_]+Command)/g)].map((m) => m[1])
+  const registered = [...indexSrc.matchAll(/\.command\((?:reg\(|withAccessFooter\()?([A-Za-z0-9_]+Command(?:Export)?)\b/g)].map((m) => m[1])
 
   // index.ts lives outside src/cli/cmd, so its imports are not in the map yet — and it is
   // the parent of every top-level verb, i.e. the one file whose resolution matters most.
@@ -342,7 +347,10 @@ function collectCommands(): Entry[] {
     // Direct children only — those named in THIS block's builder.
     // `withAccessFooter(X)` (#190012) only appends a help footer — read through it like `reg(X)`,
     // or every command it wraps silently drops out of the capability index.
-    const childNames = [...b.body.matchAll(/\.command\((?:reg\(|withAccessFooter\()?([A-Za-z0-9_]+(?:Command|Group|Cmd))/g)].map((m) => m[1])
+    // `\b` + optional `Export`: without them `.command(HiveFilesCommandExport)` was read as
+    // `HiveFilesCommand`, which resolved to a DIFFERENT command of that name in the parent's own
+    // file — so `iris hive fs` and its subcommands were missing and `hive files` indexed twice.
+    const childNames = [...b.body.matchAll(/\.command\((?:reg\(|withAccessFooter\()?([A-Za-z0-9_]+(?:Command|Group|Cmd)(?:Export)?)\b/g)].map((m) => m[1])
     const childTokens: string[] = []
     for (const child of childNames) {
       childTokens.push(...walk(child, path, nextSeen, depth + 1, b.file))

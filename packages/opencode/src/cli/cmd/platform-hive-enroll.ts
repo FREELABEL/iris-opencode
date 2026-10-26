@@ -363,7 +363,7 @@ const HiveDiscoverCommand = cmd({
     yargs
       .positional("target", { describe: "tailnet ip, or user@ip", type: "string", demandOption: true })
       .option("user", {
-        describe: "the node's own login name (usually not your IRIS account). Omitted: a user remembered for this address, then the ssh default",
+        describe: "login name ON the node, usually not your IRIS account. Omitted: a user remembered for this address, then the ssh default",
         type: "string",
       })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
@@ -398,7 +398,7 @@ const HiveEnrollCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("target", { describe: "tailnet ip, or user@ip", type: "string", demandOption: true })
-      .option("user", { describe: "the node's own login name (usually not your IRIS account)", type: "string" })
+      .option("user", { describe: "login name ON the node, usually not your IRIS account", type: "string" })
       .option("force", { describe: "reinstall even if already healthy", type: "boolean", default: false })
       .option("dry-run", { describe: "show what would happen without doing it", type: "boolean", default: false })
       .option("user-id", { describe: "iris user id (defaults to your logged-in id)", type: "number" })
