@@ -20,11 +20,17 @@ export type SessionHit = {
   updated_at?: string | null
 }
 
-/** A session hit as two lines: its title, then where it lives — machine · folder · app · id. */
-export function sessionHitLines(s: SessionHit): [string, string] {
+/**
+ * A session hit as three lines: its title, where it lives (machine · folder · app · id), and the
+ * command that opens it from here — `iris sessions read` fetches it from that machine (#191230).
+ */
+export function sessionHitLines(s: SessionHit): [string, string, string | null] {
   const app = s.provider === "claude_code" ? "Claude Code" : s.provider === "opencode" ? "IRIS" : s.provider
   const where = [s.node ?? "unknown machine", s.project, app, s.session_id].filter(Boolean).join(" · ")
-  return [(s.title ?? "Session").replace(/\s+/g, " ").trim(), `    ${where}`]
+  const open = s.session_id
+    ? `    read: iris sessions read ${s.session_id}${s.node ? ` --machine "${s.node}"` : ""}`
+    : null
+  return [(s.title ?? "Session").replace(/\s+/g, " ").trim(), `    ${where}`, open]
 }
 
 export const PlatformRecallCommand = cmd({
@@ -100,9 +106,10 @@ export const PlatformRecallCommand = cmd({
       printDivider()
       console.log(`  ${bold("Sessions")}  ${dim(`(${sessions.length}) · Desktop + CLI, on every machine you own`)}`)
       for (const s of sessions) {
-        const [title, where] = sessionHitLines(s)
+        const [title, where, open] = sessionHitLines(s)
         console.log(`  ${dim(s.updated_at ?? "")}  ${title}`)
         console.log(`  ${dim(where)}`)
+        if (open) console.log(`  ${dim(open)}`)
       }
     }
 
