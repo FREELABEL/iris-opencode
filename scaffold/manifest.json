@@ -261,6 +261,12 @@
       "purpose": "See which agents are waiting on you — the question and its options — and answer them from any machine or your phone."
     },
     {
+      "src": "how-to/iris-model-gateway.md",
+      "dest": "how-to/iris-model-gateway.md",
+      "managed": true,
+      "purpose": "The IRIS model gateway: one endpoint, failover, spend and caps — and hive/<model> to use the models on your own machines for free."
+    },
+    {
       "src": "how-to/run-other-coding-agents.md",
       "dest": "how-to/run-other-coding-agents.md",
       "managed": true,
