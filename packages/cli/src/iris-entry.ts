@@ -254,27 +254,10 @@ if (first === "uninstall" && PREVIEW) {
   process.exit(0)
 }
 
-// ── Command ownership (§7.4 C1) ───────────────────────────────────────────────
-// v2 owns its own command names; everything else (210+ platform names, upgrades,
-// `mcp`, `auth`, `help`, namespaced `x:y`, typos) routes to the vendored v1 layer.
-const V2_OWNED = new Set([
-  "run", "serve", "acp", "api", "debug", "models", "mini", "session",
-  "service", "plugin", "pair", "reload",
-])
+// ── Command ownership (§7.4 C1) — see iris-route.ts ───────────────────────────
+const { routesToV2 } = await import("./iris-route")
 const head = first?.split(":")[0]
-
-// v2's ROOT flags (-c/--continue, -s/--session, --prompt, --standalone, --server, --auto, …) and
-// its [directory] positional open the TUI too. They used to fall through to the v1 layer, which
-// hung silently: `iris --continue` drew nothing. Same rule v1's thread.ts used for a directory —
-// it contains "/" or ".", so a plain word is still read as a command. Help/version are claimed above.
-const toV2 =
-  !help &&
-  first !== "uninstall" &&
-  (first === undefined ||
-  V2_OWNED.has(head!) ||
-  first.startsWith("-") ||
-  first.includes("/") ||
-  first.includes("."))
+const toV2 = routesToV2(argv)
 
 if (toV2) {
   // ── Isolation from the user's own opencode data (I4) is NOT done here ───────
