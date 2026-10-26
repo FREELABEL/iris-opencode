@@ -601,7 +601,7 @@ export const McpServeCommand = cmd({
           "  iris_memory   read/write the Atlas — boards, lists, items",
           "                search | boards | get | items | add | update",
           "  hive_*        inspect and drive Hive tmux sessions (needs the local daemon)",
-          "  playbook_*    one typed tool per executable playbook (--no-playbooks to omit)",
+          "  playbook_*    one typed tool per playbook (≤ 8), else playbook_find + playbook_run (--no-playbooks to omit; IRIS_MCP_PLAYBOOK_TOOLS=all|search)",
           "",
           "RESOURCES:  iris://guide  iris://commands  iris://recipes",
           "",

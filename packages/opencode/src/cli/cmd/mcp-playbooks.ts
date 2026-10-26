@@ -142,14 +142,115 @@ export async function loadPlaybooks(): Promise<PlaybookEntry[]> {
   })
 }
 
-export function toolsFor(entries: PlaybookEntry[]) {
-  return entries
-    .filter((e) => e.callable)
-    .map((e) => ({
+/**
+ * PLAYBOOKS BEHIND SEARCH (#191216, epic #190539 E6).
+ *
+ * One typed tool per playbook made every client pay for every playbook's manual before doing
+ * anything. Measured 2026-10-26: 39 playbook tools ≈ 19,500 of the server's 24,000 tools/list
+ * tokens (81%), growing with every playbook published. Past a handful, the same playbooks are
+ * offered as two tools — `playbook_find` (search) and `playbook_run` (execute) — the Code Mode
+ * shape the core tools already have (iris_help + iris_run).
+ *
+ * At or under TYPED_TOOL_LIMIT the typed tools stay: a small set is cheap and its schemas help.
+ * `playbook_<name>` keeps working as a CALL in either mode, so a saved prompt or agent that names
+ * one is not broken — it is just no longer advertised. IRIS_MCP_PLAYBOOK_TOOLS=all|search|auto.
+ */
+export const TYPED_TOOL_LIMIT = 8
+export const FIND_TOOL = "playbook_find"
+export const RUN_TOOL = "playbook_run"
+
+export type PlaybookToolMode = "all" | "search" | "auto"
+
+export function playbookToolMode(env: Record<string, string | undefined> = process.env): PlaybookToolMode {
+  const v = (env.IRIS_MCP_PLAYBOOK_TOOLS ?? "").toLowerCase()
+  return v === "all" || v === "search" ? v : "auto"
+}
+
+/** Whether these playbooks are advertised as search + run rather than one tool each. */
+export function useSearchTools(entries: PlaybookEntry[], mode: PlaybookToolMode = playbookToolMode()): boolean {
+  const n = entries.filter((e) => e.callable).length
+  return mode === "search" || (mode === "auto" && n > TYPED_TOOL_LIMIT)
+}
+
+export function toolsFor(entries: PlaybookEntry[], mode: PlaybookToolMode = playbookToolMode()) {
+  const callable = entries.filter((e) => e.callable)
+  if (!useSearchTools(entries, mode))
+    return callable.map((e) => ({
       name: toolNameFor(e.plan.name),
       description: descriptionFor(e.plan),
       inputSchema: inputSchemaFor(e.plan) as any,
     }))
+  const names = callable.map((e) => e.plan.name)
+  return [
+    {
+      name: FIND_TOOL,
+      description:
+        `Find an IRIS playbook — a written, runnable procedure — by what you want done. ` +
+        `Returns each match's name, purpose and arguments; then run it with ${RUN_TOOL}. ` +
+        `${names.length} available: ${names.join(", ")}.`,
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "what you want done, in plain words; empty lists them all" },
+          limit: { type: "number", description: "max matches (default 5)" },
+        },
+      } as any,
+    },
+    {
+      name: RUN_TOOL,
+      description:
+        `Run an IRIS playbook by name with its arguments (find them with ${FIND_TOOL}). ` +
+        `A gated playbook needs confirm=true, passed only after the operator agreed.`,
+      inputSchema: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "the playbook name, e.g. opportunity-posts" },
+          args: { type: "object", description: "the playbook's arguments, as listed by playbook_find" },
+          confirm: { type: "boolean", description: "required for gated playbooks; true only if the operator agreed" },
+        },
+        required: ["name"],
+      } as any,
+    },
+  ]
+}
+
+const words = (s: string) => s.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2)
+
+/** Rank playbooks against a plain-words request. Name hits outweigh description hits. */
+export function findPlaybooks(entries: PlaybookEntry[], query: string, limit = 5): PlaybookEntry[] {
+  const callable = entries.filter((e) => e.callable)
+  const q = words(query)
+  if (!q.length) return callable.slice(0, Math.max(limit, callable.length))
+  const scored = callable
+    .map((e) => {
+      const name = e.plan.name.toLowerCase()
+      const nameWords = new Set(words(name.replace(/-/g, " ")))
+      const desc = new Set(words(e.plan.description))
+      let score = 0
+      for (const w of q) {
+        if (name === w) score += 20
+        if (nameWords.has(w)) score += 8
+        else if (name.includes(w)) score += 4
+        if (desc.has(w)) score += 2
+        else if ([...desc].some((d) => d.startsWith(w) || w.startsWith(d))) score += 1
+      }
+      return { e, score }
+    })
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score || a.e.plan.name.localeCompare(b.e.plan.name))
+  return scored.slice(0, limit).map((x) => x.e)
+}
+
+/** One match, compactly: what a model needs to call it, and nothing it does not. */
+export function describeMatch(e: PlaybookEntry): string {
+  const { plan } = e
+  const args = Object.entries(plan.args).map(([k, d]) => {
+    const enumPart = d.enum ? `=${d.enum.join("|")}` : ""
+    const def = d.default !== undefined ? ` (default ${JSON.stringify(d.default)})` : ""
+    return `  - ${k}${d.required ? " (required)" : ""}: ${d.type}${enumPart}${def}${d.description ? ` — ${d.description}` : ""}`
+  })
+  const flags = [needsApproval(plan) ? "gated: pass confirm=true after the operator agrees" : "", plan.steps.some((s) => s.mode === "human") ? "pauses for a person" : ""].filter(Boolean)
+  return [`## ${plan.name}`, plan.description.split("\n")[0], ...(flags.length ? [`(${flags.join("; ")})`] : []), ...(args.length ? ["args:", ...args] : ["args: none"])].join("\n")
 }
 
 export function resourcesFor(entries: PlaybookEntry[]) {
@@ -184,7 +285,7 @@ export async function readPlaybookResource(name: string): Promise<string> {
   }
   header.push(
     entry.callable
-      ? `- Runnable: yes, as the \`${toolNameFor(entry.plan.name)}\` tool (or \`iris playbook run ${entry.plan.name}\`)`
+      ? `- Runnable: yes, as ${useSearchTools(entries) ? `\`${RUN_TOOL}\` {name: "${entry.plan.name}"}` : `the \`${toolNameFor(entry.plan.name)}\` tool`} (or \`iris playbook run ${entry.plan.name}\`)`
       : "- Runnable: no — this playbook is a written procedure, not executable steps",
     "",
     "---",
@@ -200,11 +301,40 @@ export interface CallResult {
   isError: boolean
 }
 
-/** Execute a playbook by tool name and render the run as text for the model. */
+/**
+ * Execute a playbook tool call and render it as text for the model. Handles the search pair
+ * (`playbook_find`, `playbook_run`) and every `playbook_<name>` — advertised or not.
+ */
 export async function callPlaybookTool(toolName: string, args: Record<string, unknown>): Promise<CallResult> {
   const entries = await loadPlaybooks()
-  const entry = entries.find((e) => e.callable && toolNameFor(e.plan.name) === toolName)
-  if (!entry) return { text: `Unknown playbook tool: ${toolName}`, isError: true }
+  // A playbook literally named "find" or "run" keeps its typed name when typed tools are on.
+  const typedHit = entries.find((e) => e.callable && toolNameFor(e.plan.name) === toolName)
+  const searchMode = useSearchTools(entries)
+
+  if (toolName === FIND_TOOL && (searchMode || !typedHit)) {
+    const limit = Math.max(1, Math.min(50, Number(args.limit) || 5))
+    const hits = findPlaybooks(entries, String(args.query ?? ""), limit)
+    if (!hits.length)
+      return {
+        text: `No playbook matches "${args.query ?? ""}". Call ${FIND_TOOL} with no query to list them all, or use iris_help for CLI commands.`,
+        isError: false,
+      }
+    return { text: hits.map(describeMatch).join("\n\n") + `\n\nRun one: ${RUN_TOOL} {name, args}`, isError: false }
+  }
+
+  if (toolName === RUN_TOOL && (searchMode || !typedHit)) {
+    const name = String(args.name ?? "")
+    const target = entries.find((e) => e.callable && e.plan.name === name)
+    if (!target) return { text: `Unknown playbook: "${name}". Find one with ${FIND_TOOL}.`, isError: true }
+    const inner = (args.args && typeof args.args === "object" ? args.args : {}) as Record<string, unknown>
+    return runEntry(target, { ...inner, ...(args.confirm !== undefined ? { confirm: args.confirm } : {}) })
+  }
+
+  if (!typedHit) return { text: `Unknown playbook tool: ${toolName}`, isError: true }
+  return runEntry(typedHit, args)
+}
+
+async function runEntry(entry: PlaybookEntry, args: Record<string, unknown>): Promise<CallResult> {
 
   const { plan } = entry
 
