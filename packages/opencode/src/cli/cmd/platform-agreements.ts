@@ -448,7 +448,7 @@ const RevokeCommand = cmd({
 
 export const PlatformAgreementsCommand = cmd({
   command: "agreements",
-  aliases: ["nda", "contracts"],
+  aliases: ["nda"],
   describe: "[Agreements] NDAs, BAAs — what is outstanding, executed, or expiring",
   builder: (yargs) =>
     yargs
