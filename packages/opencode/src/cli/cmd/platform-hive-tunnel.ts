@@ -14,6 +14,7 @@ import {
   parseRunnerLine,
   findRunner,
   findNode,
+  RELAY_MIN_NODE,
   runningPid,
   explainTunnelApiError,
 } from "./platform-hive-relay"
@@ -239,7 +240,7 @@ export async function startRelayTunnelBg(name: string, port: number): Promise<{ 
   const runner = findRunner(home)
   if (!runner) return { ok: false, error: "This machine's Hive bridge predates Hive tunnels. Update it: iris bridge install" }
   const node = findNode(home)
-  if (!node) return { ok: false, error: "Hive tunnels need Node.js 18 or newer on this machine: https://nodejs.org" }
+  if (!node) return { ok: false, error: `Hive tunnels need Node.js ${RELAY_MIN_NODE} or newer on this machine (Node 18 crashes the tunnel): https://nodejs.org — or point IRIS_NODE at one` }
   const zones: string[] = Array.isArray(json?.data?.zones) ? json.data.zones.filter((z: unknown) => typeof z === "string") : []
   const env = {
     ...process.env,
@@ -329,7 +330,7 @@ async function runHive(argv: any) {
   const runner = findRunner(home)
   if (!runner) return fail("This machine's Hive bridge predates Hive tunnels. Update it: iris bridge install")
   const node = findNode(home)
-  if (!node) return fail("Hive tunnels need Node.js 18 or newer on this machine (the Hive bridge uses it too): https://nodejs.org")
+  if (!node) return fail(`Hive tunnels need Node.js ${RELAY_MIN_NODE} or newer on this machine (Node 18 crashes the tunnel): https://nodejs.org — or point IRIS_NODE at one`)
 
   // Reserve the name BEFORE asking for a yes, so "taken" or "reserved" is said now, not after.
   const claim = await api("POST", "", { name })

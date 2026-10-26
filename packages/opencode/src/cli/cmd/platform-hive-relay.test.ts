@@ -76,3 +76,34 @@ describe("runningPid", () => {
     expect(runningPid(home, "x")).toBe(process.pid)
   })
 })
+
+// #191176 — Node 18 crashed the relay runner on its first real request; the floor is now 20.
+import { findNode, RELAY_MIN_NODE } from "./platform-hive-relay"
+import { join as pjoin } from "path"
+
+describe("findNode — the relay runner never runs on Node 18", () => {
+  const versions: Record<string, number> = { node: 18, "/usr/bin/node": 18, "/usr/local/bin/node": 22 }
+  const probe = (bin: string) => versions[bin] ?? null
+
+  test("skips an old node on PATH and takes a newer one", () => {
+    expect(RELAY_MIN_NODE).toBeGreaterThanOrEqual(20)
+    expect(findNode("/nonexistent", {}, probe)).toBe("/usr/local/bin/node")
+  })
+
+  test("IRIS_NODE wins when it is new enough, and is skipped when it is not", () => {
+    expect(findNode("/nonexistent", { IRIS_NODE: "/opt/n22" }, (b) => (b === "/opt/n22" ? 22 : probe(b)))).toBe("/opt/n22")
+    expect(findNode("/nonexistent", { IRIS_NODE: "/opt/n18" }, (b) => (b === "/opt/n18" ? 18 : probe(b)))).toBe("/usr/local/bin/node")
+  })
+
+  test("prefers the installer's ~/.iris/runtime node, newest first, over PATH", () => {
+    const home = mkdtempSync(pjoin(tmpdir(), "relay-node-"))
+    for (const v of ["node-v20.11.0", "node-v22.12.0"]) mkdirSync(pjoin(home, ".iris", "runtime", v, "bin"), { recursive: true })
+    const want = pjoin(home, ".iris", "runtime", "node-v22.12.0", "bin", "node")
+    const p = (b: string) => (b.includes(".iris/runtime/node-v22") ? 22 : b.includes(".iris/runtime/node-v20") ? 20 : probe(b))
+    expect(findNode(home, {}, p)).toBe(want)
+  })
+
+  test("only Node 18 anywhere → null, so the tunnel refuses instead of crashing later", () => {
+    expect(findNode("/nonexistent", {}, (b) => (b in versions ? 18 : null))).toBeNull()
+  })
+})
