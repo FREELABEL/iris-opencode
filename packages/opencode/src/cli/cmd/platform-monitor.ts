@@ -427,7 +427,6 @@ const BriefingCmd = cmd({
 
 export const PlatformMonitorCommand = cmd({
   command: "monitor",
-  aliases: ["health"],
   describe: "platform health monitoring and heartbeat diagnostics",
   builder: (yargs) =>
     yargs
