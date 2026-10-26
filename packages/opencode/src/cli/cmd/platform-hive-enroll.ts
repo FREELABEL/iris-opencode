@@ -41,7 +41,7 @@ function readLocalSdkEnv(): { token: string | null; userId: string | null } {
   return { token, userId }
 }
 
-interface DiscoverResult {
+export interface DiscoverResult {
   reachable: boolean
   auth_failed: boolean
   ssh_user: string | null
@@ -188,11 +188,21 @@ async function runSshSetup(target: string): Promise<boolean> {
   return false
 }
 
-function discover(target: string): DiscoverResult {
+export function discover(
+  target: string,
+  opts: {
+    user?: string
+    rememberedUser?: string
+    exec?: (target: string, remoteCmd: string, timeoutSec?: number) => { ok: boolean; stdout: string; stderr: string }
+  } = {},
+): DiscoverResult {
+  const sshTarget = target.includes("@")
+    ? target
+    : `${opts.user ?? opts.rememberedUser ?? ""}${opts.user || opts.rememberedUser ? "@" : ""}${target}`
   const result: DiscoverResult = {
     reachable: false,
     auth_failed: false,
-    ssh_user: target.includes("@") ? target.split("@")[0] : null,
+    ssh_user: sshTarget.includes("@") ? sshTarget.split("@")[0] : null,
     os_uname: null,
     iris_path: null,
     iris_version: null,
@@ -226,12 +236,12 @@ if [ -f "$HOME/.iris/sdk/.env" ]; then
   echo "USER_ID=$UID_VAL";
 fi;
 `
-  const r = sshExec(target, probe, 15)
+  const r = (opts.exec ?? sshExec)(sshTarget, probe, 15)
   if (!r.ok) {
     if (isAuthError(r.stderr)) {
       result.auth_failed = true
       result.recommendation = "needs-key"
-      result.reason = "SSH reachable but no key auth — run: iris hive ssh-setup " + target
+      result.reason = `SSH authentication was refused for ${sshTarget}; this does not prove that no usable key exists for another username. Try: iris hive discover ${target} --user <remote-user>. If key auth is confirmed missing, run: iris hive ssh-setup ${sshTarget}`
     } else if (isUnreachable(r.stderr)) {
       result.reason = "SSH not reachable: " + r.stderr.trim().split("\n")[0].slice(0, 160)
     } else {
@@ -324,9 +334,7 @@ const HiveDiscoverCommand = cmd({
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(argv) {
     let target = String(argv.target)
-    if (!target.includes("@") && argv.user) target = `${argv.user}@${target}`
-
-    const d = discover(target)
+    const d = discover(target, { user: argv.user as string | undefined })
 
     if (argv.json) {
       await writeJson(d)
@@ -334,7 +342,7 @@ const HiveDiscoverCommand = cmd({
     }
 
     if (!d.reachable) {
-      console.log(`${dim("✗")} could not reach ${target}: ${d.reason}`)
+      console.log(`${dim("✗")} could not reach ${target}${d.ssh_user ? ` as ${d.ssh_user}` : ""}: ${d.reason}`)
       process.exit(1)
     }
     printDiscover(d)

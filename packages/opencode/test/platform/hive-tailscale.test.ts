@@ -18,7 +18,10 @@
  */
 
 import { describe, test, expect } from "bun:test"
-import { shq, shqPath, nameMatches, classifyRemoteError } from "../../src/cli/cmd/hive-tailscale"
+import { shq, shqPath, nameMatches, classifyRemoteError, parseAvailableBytes, destinationSpaceError, localRegularFileSize } from "../../src/cli/cmd/hive-tailscale"
+import { mkdtempSync, rmSync, writeFileSync } from "fs"
+import { tmpdir } from "os"
+import { join } from "path"
 import { judge } from "../../src/cli/cmd/platform-hive-doctor"
 
 describe("shq / shqPath", () => {
@@ -87,6 +90,41 @@ describe("classifyRemoteError — a permission refusal is not a missing file", (
     const c = classifyRemoteError("kex_exchange_identification: read: Connection reset")
     expect(c.kind).toBe("other")
     expect(c.hint).toContain("Connection reset")
+  })
+})
+
+describe("parseAvailableBytes — destination free-space preflight", () => {
+  test("parses POSIX df blocks as bytes", () => {
+    expect(parseAvailableBytes("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/disk1 1000000 200000 800000 20% /tmp")).toBe(819_200_000)
+  })
+
+  test("uses the final row and refuses malformed or unsafe values", () => {
+    expect(parseAvailableBytes("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/a 100 50 50 50% /\n/dev/b 200 20 180 10% /tmp")).toBe(184_320)
+    expect(parseAvailableBytes("Filesystem Used Available\n/dev/a x")).toBeNull()
+    expect(parseAvailableBytes("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/a 100 50 9007199254740992 1% /")).toBeNull()
+  })
+
+  test("allows a push that fits and refuses low or unknown space", () => {
+    const adequate = "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/disk1 1000000 200000 800000 20% /tmp"
+    const low = "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/disk1 1000000 200000 2 99% /tmp"
+    expect(destinationSpaceError(1024, adequate)).toBeNull()
+    expect(destinationSpaceError(4096, low)).toContain("not enough free space")
+    expect(destinationSpaceError(1, null)).toContain("refusing to push")
+  })
+})
+
+describe("localRegularFileSize — reject unsupported directory pushes", () => {
+  test("accepts files and rejects directories and missing paths cleanly", () => {
+    const root = mkdtempSync(join(tmpdir(), "hive-fs-test-"))
+    try {
+      const file = join(root, "file.txt")
+      writeFileSync(file, "hello")
+      expect(localRegularFileSize(file)).toEqual({ size: 5 })
+      expect(localRegularFileSize(root)).toEqual({ error: `not a regular file: ${root} (directory pushes are not supported)` })
+      expect(localRegularFileSize(join(root, "missing"))).toEqual({ error: `cannot inspect local path: ENOENT: no such file or directory, stat '${join(root, "missing")}'` })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })
 

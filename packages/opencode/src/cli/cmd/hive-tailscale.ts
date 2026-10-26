@@ -24,7 +24,7 @@ import { promisify } from "util"
 import { createHash } from "crypto"
 import { randomUUID } from "crypto"
 import { readFile, writeFile, mkdir } from "fs/promises"
-import { existsSync } from "fs"
+import { existsSync, statSync } from "fs"
 import { homedir, userInfo } from "os"
 import { join, basename, dirname } from "path"
 
@@ -382,8 +382,10 @@ export async function ensureSshUser(
   }
   return {
     error:
-      `Could not open an ssh session to ${t.host}. Tried: ${tried.join(", ")}. ` +
-      `Pass --user <name> once and it will be remembered in ~/.iris/hive-ssh.json.`,
+      `Could not open an SSH session to ${t.host}. Tried user(s): ${tried.join(", ")}. ` +
+      `This does not prove an SSH key is missing: check that the remote username is correct, ` +
+      `that this machine has a usable SSH key, and that its public key is authorized on the node. ` +
+      `Set the username with --user <name>; successful usernames are remembered in ~/.iris/hive-ssh.json.`,
   }
 }
 
@@ -436,6 +438,38 @@ export interface TransferOutcome {
   remoteSha256: string | null
   verified: boolean
   error?: string
+}
+
+/** Parse the available 1K blocks from POSIX `df -Pk` output. */
+export function parseAvailableBytes(output: string): number | null {
+  const lines = output.trim().split(/\r?\n/)
+  const fields = lines.at(-1)?.trim().split(/\s+/)
+  if (!fields || fields.length < 4 || !/^\d+$/.test(fields[3])) return null
+  const blocks = Number(fields[3])
+  return Number.isSafeInteger(blocks) ? blocks * 1024 : null
+}
+
+export function destinationSpaceError(bytes: number, dfOutput: string | null): string | null {
+  const availableBytes = dfOutput === null ? null : parseAvailableBytes(dfOutput)
+  if (availableBytes === null) return "could not verify free space on destination; refusing to push"
+  if (availableBytes < bytes) return `not enough free space on destination: ${availableBytes} bytes available, ${bytes} bytes required`
+  return null
+}
+
+export async function checkRemoteFreeSpace(t: SshTarget, remoteDir: string, bytes: number): Promise<string | null> {
+  const space = await sshRun(t, `df -Pk ${shqPath(remoteDir)}`)
+  const error = destinationSpaceError(bytes, space.ok ? space.stdout : null)
+  return error ? `${error} (${remoteDir})` : null
+}
+
+export function localRegularFileSize(localPath: string): { size: number } | { error: string } {
+  try {
+    const stat = statSync(localPath)
+    if (!stat.isFile()) return { error: `not a regular file: ${localPath} (directory pushes are not supported)` }
+    return { size: stat.size }
+  } catch (e: any) {
+    return { error: `cannot inspect local path: ${String(e?.message ?? e)}` }
+  }
 }
 
 /**
@@ -500,13 +534,23 @@ export async function pushFile(t: SshTarget, localPath: string, remoteDir: strin
     return { ok: false, localPath, remotePath, bytes: 0, sha256: null, remoteSha256: null, verified: false, error: `no such local file: ${localPath}` }
   }
 
+  const localFile = localRegularFileSize(localPath)
+  if ("error" in localFile) {
+    return { ok: false, localPath, remotePath, bytes: 0, sha256: null, remoteSha256: null, verified: false, error: localFile.error }
+  }
+
+  const bytes = localFile.size
   const localSha = await sha256Local(localPath)
-  const bytes = (await readFile(localPath)).length
 
   const mk = await sshRun(t, `mkdir -p ${shqPath(remoteDir)}`)
   if (!mk.ok) {
     const c = classifyRemoteError(mk.stderr)
     return { ok: false, localPath, remotePath, bytes, sha256: localSha, remoteSha256: null, verified: false, error: `could not create ${remoteDir}: ${c.hint}` }
+  }
+
+  const spaceError = await checkRemoteFreeSpace(t, remoteDir, bytes)
+  if (spaceError) {
+    return { ok: false, localPath, remotePath, bytes, sha256: localSha, remoteSha256: null, verified: false, error: spaceError }
   }
 
   try {
