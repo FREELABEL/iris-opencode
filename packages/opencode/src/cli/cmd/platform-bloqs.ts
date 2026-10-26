@@ -4743,7 +4743,7 @@ export const PlatformSearchCommand = cmd({
 // `iris bloqs ...` invocations keep working unchanged.
 export const PlatformBloqsCommand = productCommand({
   name: "atlas",
-  aliases: ["bloqs", "kb", "knowledge", "memory", "projects"],
+  aliases: ["bloqs", "kb", "knowledge", "projects"],
   purpose: "Atlas — your records: knowledge bases, boards, items, and the context agents read",
   keywords: ["atlas", "bloq", "board", "item", "knowledge", "records", "memory", "context", "notes"],
   howtos: ["bloq-access-control", "bloq-relations", "atlas-datasets", "expose-dataset-api"],

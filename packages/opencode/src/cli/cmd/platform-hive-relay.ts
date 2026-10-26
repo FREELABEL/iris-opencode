@@ -61,18 +61,44 @@ export function findRunner(home: string, env: Record<string, string | undefined>
 }
 
 /** Node ≥ 18 (global fetch, X509Certificate.checkHost). Newest nvm install wins over older PATH ones. */
-export function findNode(home: string, env: Record<string, string | undefined> = process.env): string | null {
+/**
+ * The oldest Node a relay tunnel may run on (#191176). Node 18 crashes the runner: TLS layered
+ * over a JS stream (relay/tunnel.js) throws ERR_INTERNAL_ASSERTION in JSStreamSocket.doWrite on
+ * the first real request. Measured 2026-10-26 on iris-hive-001 (Node 18.19.1): GET /healthz
+ * worked, the first POST killed the tunnel, and the machine's models went unreachable. The
+ * same runner on Node 22 served streamed answers with no crash.
+ */
+export const RELAY_MIN_NODE = 20
+
+const probeNode = (bin: string): number | null => {
+  const r = spawnSync(bin, ["-p", "process.versions.node"], { encoding: "utf8", timeout: 5000 })
+  return r.status === 0 ? Number(String(r.stdout).split(".")[0]) : null
+}
+
+/**
+ * A Node that can run the relay runner: IRIS_NODE, then the installer's own runtime
+ * (~/.iris/runtime/node-*, the same place daemonctl looks), then nvm's newest, then PATH and the
+ * usual locations. The first at RELAY_MIN_NODE or newer wins; an older one is skipped, not used.
+ */
+export function findNode(
+  home: string,
+  env: Record<string, string | undefined> = process.env,
+  probe: (bin: string) => number | null = probeNode,
+): string | null {
   const candidates: string[] = []
   if (env.IRIS_NODE) candidates.push(env.IRIS_NODE)
-  const nvm = join(home, ".nvm", "versions", "node")
-  try {
-    const vs = readdirSync(nvm).filter((v) => /^v\d+/.test(v)).sort((a, b) => cmpVersion(b, a))
-    for (const v of vs) candidates.push(join(nvm, v, "bin", "node"))
-  } catch {}
+  const newestFirst = (dir: string, re: RegExp, bin: (v: string) => string) => {
+    try {
+      const vs = readdirSync(dir).filter((v) => re.test(v)).sort((a, b) => cmpVersion(b.replace(/^node-/, ""), a.replace(/^node-/, "")))
+      for (const v of vs) candidates.push(bin(v))
+    } catch {}
+  }
+  newestFirst(join(home, ".iris", "runtime"), /^node-v?\d+/, (v) => join(home, ".iris", "runtime", v, "bin", "node"))
+  newestFirst(join(home, ".nvm", "versions", "node"), /^v\d+/, (v) => join(home, ".nvm", "versions", "node", v, "bin", "node"))
   candidates.push("node", "/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node")
   for (const c of candidates) {
-    const r = spawnSync(c, ["-p", "process.versions.node"], { encoding: "utf8", timeout: 5000 })
-    if (r.status === 0 && Number(String(r.stdout).split(".")[0]) >= 18) return c
+    const major = probe(c)
+    if (major !== null && major >= RELAY_MIN_NODE) return c
   }
   return null
 }
