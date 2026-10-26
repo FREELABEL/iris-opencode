@@ -4,6 +4,14 @@ import { spawnSync } from "child_process"
 import { join } from "path"
 import { homedir } from "os"
 import { readFileSync, existsSync } from "fs"
+import {
+  describeSshFailure,
+  isSshUnreachable as isUnreachable,
+  rememberedUserForHost,
+  sshConfigFor,
+  sshKeyFound,
+  type SshAttempt,
+} from "./hive-tailscale"
 
 // ============================================================================
 // iris hive enroll <ip>
@@ -45,6 +53,8 @@ export interface DiscoverResult {
   reachable: boolean
   auth_failed: boolean
   ssh_user: string | null
+  /** Every user an attempt was made as, in order — so a failure names what was and wasn't tried. */
+  ssh_users_tried: string[]
   os_uname: string | null
   iris_path: string | null
   iris_version: string | null
@@ -105,12 +115,6 @@ function sshExec(target: string, remoteCmd: string, timeoutSec = 15): { ok: bool
 
 function isAuthError(stderr: string): boolean {
   return /permission denied|no supported authentication|publickey|keyboard-interactive/i.test(
-    stderr,
-  )
-}
-
-function isUnreachable(stderr: string): boolean {
-  return /connection refused|no route|network is unreachable|operation timed out|host is down/i.test(
     stderr,
   )
 }
@@ -188,21 +192,33 @@ async function runSshSetup(target: string): Promise<boolean> {
   return false
 }
 
+function bareHost(target: string): string {
+  return target.includes("@") ? target.slice(target.indexOf("@") + 1) : target
+}
+
 export function discover(
   target: string,
   opts: {
+    /** --user: when given, the ONLY user tried — a probe must not report success as someone else. */
     user?: string
-    rememberedUser?: string
+    /** From ~/.iris/hive-ssh.json: the user an earlier fs/doctor run logged in as at this address. */
+    rememberedUser?: string | null
     exec?: (target: string, remoteCmd: string, timeoutSec?: number) => { ok: boolean; stdout: string; stderr: string }
+    sshContext?: (host: string) => { defaultUser: string | null; keyFound: boolean }
   } = {},
 ): DiscoverResult {
-  const sshTarget = target.includes("@")
-    ? target
-    : `${opts.user ?? opts.rememberedUser ?? ""}${opts.user || opts.rememberedUser ? "@" : ""}${target}`
+  const explicit = target.includes("@") ? target.slice(0, target.indexOf("@")) : opts.user || null
+  const host = bareHost(target)
+  // Without a user, try the remembered one first, then whatever ssh defaults to (ssh_config User,
+  // else the local login). The old single attempt as the ssh default is what reported "no key
+  // auth" against a host whose key worked fine for a different account (#187954).
+  const candidates: (string | null)[] = explicit ? [explicit] : [...new Set([opts.rememberedUser || null, null])]
+
   const result: DiscoverResult = {
     reachable: false,
     auth_failed: false,
-    ssh_user: sshTarget.includes("@") ? sshTarget.split("@")[0] : null,
+    ssh_user: explicit,
+    ssh_users_tried: [],
     os_uname: null,
     iris_path: null,
     iris_version: null,
@@ -215,6 +231,7 @@ export function discover(
 
   // Single SSH session that emits a parseable report.
   const probe = `
+echo "WHOAMI=$(id -un 2>/dev/null)";
 echo "UNAME=$(uname -srm 2>/dev/null)";
 IRIS_BIN=$(command -v iris 2>/dev/null || ls -1 "$HOME/.iris/bin/iris" 2>/dev/null);
 echo "IRIS_PATH=$IRIS_BIN";
@@ -236,17 +253,31 @@ if [ -f "$HOME/.iris/sdk/.env" ]; then
   echo "USER_ID=$UID_VAL";
 fi;
 `
-  const r = (opts.exec ?? sshExec)(sshTarget, probe, 15)
-  if (!r.ok) {
-    if (isAuthError(r.stderr)) {
+  const attempts: SshAttempt[] = []
+  let r: { ok: boolean; stdout: string; stderr: string } | null = null
+  for (const user of candidates) {
+    r = (opts.exec ?? sshExec)(user ? `${user}@${host}` : host, probe, 15)
+    if (r.ok) {
+      result.ssh_user = user
+      break
+    }
+    attempts.push({ user, stderr: r.stderr })
+    if (!isAuthError(r.stderr)) break // a route or other failure will not change with the username
+  }
+  const sshContext =
+    opts.sshContext ??
+    ((h: string) => {
+      const config = sshConfigFor(h)
+      return { defaultUser: config.user, keyFound: sshKeyFound(config) }
+    })
+  const ctx = attempts.length ? sshContext(host) : null
+  result.ssh_users_tried = attempts.map((a) => a.user ?? (ctx?.defaultUser ? `${ctx.defaultUser} (ssh default)` : "(ssh default)"))
+  if (!r?.ok) {
+    if (attempts.some((a) => isAuthError(a.stderr)) && !attempts.some((a) => isUnreachable(a.stderr))) {
       result.auth_failed = true
       result.recommendation = "needs-key"
-      result.reason = `SSH authentication was refused for ${sshTarget}; this does not prove that no usable key exists for another username. Try: iris hive discover ${target} --user <remote-user>. If key auth is confirmed missing, run: iris hive ssh-setup ${sshTarget}`
-    } else if (isUnreachable(r.stderr)) {
-      result.reason = "SSH not reachable: " + r.stderr.trim().split("\n")[0].slice(0, 160)
-    } else {
-      result.reason = r.stderr.trim().slice(0, 200) || "ssh failed"
     }
+    result.reason = describeSshFailure(host, attempts, ctx!)
     return result
   }
   result.reachable = true
@@ -261,6 +292,7 @@ fi;
     else if (k === "DAEMON") result.daemon_running = v === "running"
     else if (k === "NODE_KEY") result.has_node_key = !!v
     else if (k === "USER_ID") result.registered_user_id = v || null
+    else if (k === "WHOAMI" && v) result.ssh_user = v
   }
 
   // Decide recommendation
@@ -333,8 +365,11 @@ const HiveDiscoverCommand = cmd({
       .option("user", { describe: "ssh user if target is bare ip", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(argv) {
-    let target = String(argv.target)
-    const d = discover(target, { user: argv.user as string | undefined })
+    const target = String(argv.target)
+    const d = discover(target, {
+      user: argv.user as string | undefined,
+      rememberedUser: await rememberedUserForHost(bareHost(target)),
+    })
 
     if (argv.json) {
       await writeJson(d)
@@ -342,7 +377,7 @@ const HiveDiscoverCommand = cmd({
     }
 
     if (!d.reachable) {
-      console.log(`${dim("✗")} could not reach ${target}${d.ssh_user ? ` as ${d.ssh_user}` : ""}: ${d.reason}`)
+      console.log(`${dim("✗")} could not reach ${target}: ${d.reason}`)
       process.exit(1)
     }
     printDiscover(d)
@@ -372,30 +407,44 @@ const HiveEnrollCommand = cmd({
 
     let target = String(argv.target)
     if (!target.includes("@") && argv.user) target = `${argv.user}@${target}`
+    const host = bareHost(target)
+    const remembered = await rememberedUserForHost(host)
 
     console.log(`${dim("→")} probing ${bold(target)}...`)
-    let d = discover(target)
+    let d = discover(target, { rememberedUser: remembered })
 
-    // Auto-run ssh-setup if key auth is the only blocker
+    // Auto-run ssh-setup only for an account someone actually named (or one that has worked here
+    // before). ssh-setup wraps ssh-copy-id: against a GUESSED username it asks for a password the
+    // person may not have, to install a key that may already be installed for the right user (#187954).
     if (d.auth_failed && argv["auto-key"]) {
+      const setupUser = target.includes("@") ? target.slice(0, target.indexOf("@")) : remembered
+      if (!setupUser) {
+        console.error(`${dim("✗")} ${d.reason}`)
+        console.error(
+          dim(`  Not running ssh-setup: no remote username was given. Re-run with --user <remote-user> (or user@${host}).`),
+        )
+        process.exit(1)
+      }
+      const setupTarget = `${setupUser}@${host}`
       console.log()
-      console.log(`${highlight("!")} no SSH key auth — setting up now...`)
-      const ok = await runSshSetup(target)
+      console.log(`${highlight("!")} ${setupTarget} refused key login — setting up key auth now...`)
+      const ok = await runSshSetup(setupTarget)
       if (!ok) {
         console.error(`${dim("✗")} could not establish key auth — aborting`)
         process.exit(1)
       }
       // Re-probe with key auth in place
-      console.log(`${dim("→")} re-probing ${bold(target)}...`)
-      d = discover(target)
+      console.log(`${dim("→")} re-probing ${bold(setupTarget)}...`)
+      d = discover(setupTarget)
     }
 
     if (!d.reachable) {
       console.log(`${dim("✗")} cannot reach ${target}: ${d.reason}`)
-      console.log(dim("  Tip: ensure SSH is enabled on the target."))
-      console.log(dim("  If key auth fails: iris hive ssh-setup " + target))
       process.exit(1)
     }
+
+    // Install as the account the probe actually got in as, not the one that was typed or guessed.
+    if (d.ssh_user) target = `${d.ssh_user}@${host}`
 
     printDiscover(d)
 

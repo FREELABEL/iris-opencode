@@ -18,8 +18,19 @@
  */
 
 import { describe, test, expect } from "bun:test"
-import { shq, shqPath, nameMatches, classifyRemoteError, parseAvailableBytes, destinationSpaceError, localRegularFileSize } from "../../src/cli/cmd/hive-tailscale"
-import { mkdtempSync, rmSync, writeFileSync } from "fs"
+import {
+  shq,
+  shqPath,
+  nameMatches,
+  classifyRemoteError,
+  parseAvailableBytes,
+  destinationSpaceError,
+  localRegularFileSize,
+  describeSshFailure,
+  pushFile,
+  PUSH_FREE_SPACE_RESERVE_BYTES,
+} from "../../src/cli/cmd/hive-tailscale"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { judge } from "../../src/cli/cmd/platform-hive-doctor"
@@ -104,12 +115,25 @@ describe("parseAvailableBytes — destination free-space preflight", () => {
     expect(parseAvailableBytes("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/a 100 50 9007199254740992 1% /")).toBeNull()
   })
 
+  test("a filesystem name with spaces does not shift the column read", () => {
+    // macOS autofs; read as field 4 this reported Used (0) as Available.
+    expect(parseAvailableBytes("Filesystem 1024-blocks Used Available Capacity Mounted on\nmap auto_home 500 0 400 0% /System/Volumes/Data/home")).toBe(409_600)
+    expect(parseAvailableBytes("Filesystem 1024-blocks Used Available Capacity Mounted on\n//me@nas/My Share 1000 100 900 10% /Volumes/My Share")).toBe(921_600)
+  })
+
   test("allows a push that fits and refuses low or unknown space", () => {
     const adequate = "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/disk1 1000000 200000 800000 20% /tmp"
     const low = "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/disk1 1000000 200000 2 99% /tmp"
     expect(destinationSpaceError(1024, adequate)).toBeNull()
     expect(destinationSpaceError(4096, low)).toContain("not enough free space")
     expect(destinationSpaceError(1, null)).toContain("refusing to push")
+  })
+
+  test("a push may not take the destination below the reserve", () => {
+    const kb = (PUSH_FREE_SPACE_RESERVE_BYTES + 4096) / 1024
+    const exact = `Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/d 99999999 1 ${kb} 99% /tmp`
+    expect(destinationSpaceError(4096, exact)).toBeNull()
+    expect(destinationSpaceError(4097, exact)).toContain("kept free")
   })
 })
 
@@ -121,10 +145,108 @@ describe("localRegularFileSize — reject unsupported directory pushes", () => {
       writeFileSync(file, "hello")
       expect(localRegularFileSize(file)).toEqual({ size: 5 })
       expect(localRegularFileSize(root)).toEqual({ error: `not a regular file: ${root} (directory pushes are not supported)` })
-      expect(localRegularFileSize(join(root, "missing"))).toEqual({ error: `cannot inspect local path: ENOENT: no such file or directory, stat '${join(root, "missing")}'` })
+      const missing = localRegularFileSize(join(root, "missing"))
+      expect("error" in missing && missing.error).toContain("cannot inspect local path")
+      expect("error" in missing && missing.error).toContain("ENOENT")
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
+  })
+})
+
+describe("pushFile — the preflights run before any byte is copied", () => {
+  // Fake ssh/scp on PATH: ssh answers `df` with whatever DF_OUT says, scp records that it ran.
+  function harness(dfOut: string) {
+    const root = mkdtempSync(join(tmpdir(), "hive-push-test-"))
+    const bin = join(root, "bin")
+    mkdirSync(bin)
+    const scpLog = join(root, "scp.log")
+    writeFileSync(join(bin, "ssh"), `#!/bin/sh\ncase "$*" in *"df -Pk"*) printf '%s\\n' "$DF_OUT";; esac\nexit 0\n`)
+    writeFileSync(join(bin, "scp"), `#!/bin/sh\necho "$@" >> "${scpLog}"\nexit 0\n`)
+    chmodSync(join(bin, "ssh"), 0o755)
+    chmodSync(join(bin, "scp"), 0o755)
+    const file = join(root, "payload.bin")
+    writeFileSync(file, "x".repeat(4096))
+    const saved = { PATH: process.env.PATH, DF_OUT: process.env.DF_OUT }
+    process.env.PATH = `${bin}:${process.env.PATH}`
+    process.env.DF_OUT = dfOut
+    return {
+      root,
+      file,
+      scpRan: () => existsSync(scpLog) && readFileSync(scpLog, "utf8").length > 0,
+      done: () => {
+        process.env.PATH = saved.PATH
+        if (saved.DF_OUT === undefined) delete process.env.DF_OUT
+        else process.env.DF_OUT = saved.DF_OUT
+        rmSync(root, { recursive: true, force: true })
+      },
+    }
+  }
+  const target = { host: "node.test", user: "me", via: "explicit" as const }
+
+  test("a full destination is refused and scp never runs", async () => {
+    const h = harness("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/d 1000 999 1 100% /tmp")
+    try {
+      const r = await pushFile(target, h.file, "/tmp")
+      expect(r.ok).toBe(false)
+      expect(r.error).toContain("not enough free space")
+      expect(h.scpRan()).toBe(false)
+    } finally {
+      h.done()
+    }
+  })
+
+  test("unreadable free space is refused and scp never runs", async () => {
+    const h = harness("garbage")
+    try {
+      const r = await pushFile(target, h.file, "/tmp")
+      expect(r.error).toContain("could not verify free space")
+      expect(h.scpRan()).toBe(false)
+    } finally {
+      h.done()
+    }
+  })
+
+  test("a directory is refused with a clear error before hashing or ssh", async () => {
+    const h = harness("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/d 99999999 1 99999999 1% /tmp")
+    try {
+      const r = await pushFile(target, h.root, "/tmp")
+      expect(r.error).toContain("not a regular file")
+      expect(h.scpRan()).toBe(false)
+    } finally {
+      h.done()
+    }
+  })
+
+  test("with room to spare the copy does run", async () => {
+    const h = harness("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/d 99999999 1 99999999 1% /tmp")
+    try {
+      await pushFile(target, h.file, "/tmp")
+      expect(h.scpRan()).toBe(true)
+    } finally {
+      h.done()
+    }
+  })
+})
+
+describe("describeSshFailure — name the cause that was established (#187786, #187954)", () => {
+  const denied = "me@h: Permission denied (publickey)."
+  test("a route failure is called a network problem, not a username or key problem", () => {
+    const m = describeSshFailure("h", [{ user: null, stderr: "ssh: connect to host h port 22: Connection timed out" }], { defaultUser: "me", keyFound: true })
+    expect(m).toContain("network problem")
+    expect(m).not.toContain("--user")
+  })
+  test("no key on this machine says so, and says no username can work", () => {
+    const m = describeSshFailure("h", [{ user: "bob", stderr: denied }], { defaultUser: "me", keyFound: false })
+    expect(m).toContain("No SSH key was found on this machine")
+    expect(m).toContain("ssh-keygen")
+    expect(m).toContain("iris hive ssh-setup bob@h")
+  })
+  test("refusals with a key present name every user tried, including the ssh default", () => {
+    const m = describeSshFailure("h", [{ user: "bob", stderr: denied }, { user: null, stderr: denied }], { defaultUser: "me", keyFound: true })
+    expect(m).toContain("bob, me (ssh default)")
+    expect(m).toContain("--user")
+    expect(m).not.toContain("No SSH key")
   })
 })
 

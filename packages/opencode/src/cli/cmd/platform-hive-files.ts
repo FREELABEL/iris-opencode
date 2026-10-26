@@ -74,7 +74,7 @@ async function target(argv: any): Promise<{ t: SshTarget; nodeName: string } | n
 const commonOpts = (yargs: any) =>
   yargs
     .option("host", { describe: "override the address (skip Tailscale resolution)", type: "string" })
-    .option("user", { describe: "ssh user on the node (remembered after the first success)", type: "string" })
+    .option("user", { describe: "ssh user on the node — its own login name, usually not your IRIS account (remembered after the first success)", type: "string" })
     .option("user-id", { describe: "user ID", type: "number" })
     .option("json", { describe: "JSON output", type: "boolean", default: false })
 
@@ -209,6 +209,12 @@ const HiveFilesCommand = cmd({
   describe: "move files to and from YOUR OWN Hive nodes over Tailscale, sha256-verified both ends",
   builder: (yargs) =>
     yargs
+      .epilog(
+        "Needs: Tailscale up on both machines, SSH enabled on the node (macOS: Remote Login), and SSH key " +
+          "login already working from this machine to it. The SSH user is the node's own login name, which " +
+          "is usually NOT your IRIS account name — pass it with --user once and it is remembered. No key yet? " +
+          "ssh-keygen -t ed25519, then: iris hive ssh-setup <user>@<node-address>.",
+      )
       .command(FilesLsCommand)
       .command(FilesPullCommand)
       .command(FilesPushCommand)
