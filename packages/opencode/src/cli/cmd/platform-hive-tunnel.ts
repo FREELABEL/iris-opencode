@@ -210,6 +210,59 @@ export const HiveTunnelCommand = cmd({
 
 // ─── provider: hive ─────────────────────────────────────────────────────────────────────────────
 
+/** Start the relay runner detached and record its pid — `--bg`, and `iris hive models serve on`. */
+function spawnRelayBg(o: { home: string; node: string; runner: string; args: string[]; env: NodeJS.ProcessEnv; dir: string; name: string }) {
+  mkdirSync(o.dir, { recursive: true, mode: 0o700 })
+  const log = openSync(join(o.dir, "tunnel.log"), "a", 0o600)
+  const child = spawn(o.node, o.args, { env: o.env, detached: true, stdio: ["ignore", log, log] })
+  child.unref()
+  writeFileSync(join(o.home, ".iris", "tunnels", o.name, "tunnel.pid"), String(child.pid), { mode: 0o600 })
+  return child.pid
+}
+
+/**
+ * Open a relay tunnel in the background for a port on this machine, with no prompt — the caller
+ * has already asked (#191176: `iris hive models serve on` publishes an endpoint that refuses
+ * every request IRIS did not sign, which is a different promise from "anyone can reach it").
+ * Claims the name for this account first. Returns the URL, or why not.
+ */
+export async function startRelayTunnelBg(name: string, port: number): Promise<{ ok: true; url: string; already: boolean } | { ok: false; error: string }> {
+  const home = homedir()
+  if (!validTunnelName(name)) return { ok: false, error: `"${name}" is not a valid tunnel name` }
+  const refused = refusedPort(port)
+  if (refused) return { ok: false, error: refused }
+  const res = await hiveFetch(`/api/v6/nodes/tunnels`, { method: "POST", body: JSON.stringify({ name }) })
+  const json: any = await res.json().catch(() => ({}))
+  if (!res.ok) return { ok: false, error: explainTunnelApiError(res.status, json) }
+  const url = String(json?.data?.url || `https://${name}.${RELAY_ZONE}`).replace(/\/+$/, "")
+  if (runningPid(home, name)) return { ok: true, url, already: true }
+  const runner = findRunner(home)
+  if (!runner) return { ok: false, error: "This machine's Hive bridge predates Hive tunnels. Update it: iris bridge install" }
+  const node = findNode(home)
+  if (!node) return { ok: false, error: "Hive tunnels need Node.js 18 or newer on this machine: https://nodejs.org" }
+  const zones: string[] = Array.isArray(json?.data?.zones) ? json.data.zones.filter((z: unknown) => typeof z === "string") : []
+  const env = {
+    ...process.env,
+    IRIS_API_BASE: process.env.IRIS_API_URL ?? "https://freelabel.net",
+    IRIS_API_KEY: await resolveToken(),
+    ...(zones.length && !process.env.HIVE_RELAY_ZONES ? { HIVE_RELAY_ZONES: zones.join(",") } : {}),
+  }
+  spawnRelayBg({ home, node, runner, args: [runner, "--name", name, "--port", String(port)], env, dir: join(home, ".iris", "tunnels", name), name })
+  return { ok: true, url, already: false }
+}
+
+/** Close a background relay tunnel by name. True when one was running. */
+export function stopRelayTunnelBg(name: string): boolean {
+  const home = homedir()
+  const pid = runningPid(home, name)
+  if (!pid) return false
+  try {
+    process.kill(pid, "SIGTERM")
+  } catch {}
+  rmSync(join(home, ".iris", "tunnels", name, "tunnel.pid"), { force: true })
+  return true
+}
+
 async function runHive(argv: any) {
   const home = homedir()
   const fail = (m: string) => {
@@ -304,11 +357,7 @@ async function runHive(argv: any) {
   const dir = join(home, ".iris", "tunnels", name + (argv.staging ? ".staging" : ""))
 
   if (argv.bg) {
-    mkdirSync(dir, { recursive: true, mode: 0o700 })
-    const log = openSync(join(dir, "tunnel.log"), "a", 0o600)
-    const child = spawn(node, args, { env, detached: true, stdio: ["ignore", log, log] })
-    child.unref()
-    writeFileSync(join(home, ".iris", "tunnels", name, "tunnel.pid"), String(child.pid), { mode: 0o600 })
+    spawnRelayBg({ home, node, runner, args, env, dir, name })
     console.log(`\n${success("●")} ${bold(url)} → localhost:${port}`)
     console.log(dim(`  OPEN until you close it:  iris hive tunnel --off --name ${name}`))
     console.log(dim(`  first time for this name? its certificate takes ~30 s — log: ${join(dir, "tunnel.log")}`))

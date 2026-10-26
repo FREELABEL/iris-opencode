@@ -534,6 +534,8 @@ const TERMS: Record<string, string[]> = {
   leads: ["crm", "contacts", "prospects", "pipeline", "find people", "find customers", "customers", "outreach", "cold email", "email them", "book calls", "book a call", "sales", "lead generation"],
   agents: ["ai agent", "assistant", "bot"],
   hive: ["compute node", "distributed", "remote machine", "fleet", "daemon"],
+  // #191176 — your own machines' models, served to your gateway (hive/<model>).
+  "hive models": ["serve my models", "local models", "ollama", "my gpu", "my own gpu", "self-hosted model", "run models on my machine", "gpu marketplace"],
   // #191163 — IRIS as the ACP client: run another coding agent from IRIS, and keep it steerable.
   "acp run": ["run claude code", "use codex", "gemini cli", "switch agents", "other coding agents", "agent client protocol"],
   "run-other-coding-agents": [
