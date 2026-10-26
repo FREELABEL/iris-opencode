@@ -56,7 +56,7 @@ describe("iris hive models", () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "hm-"))
     expect(readSettings(home).enabled).toBe(false)
     writeSettings({ ...readSettings(home), enabled: true, url: "https://x-ai.t.heyiris.io" }, home)
-    expect(readSettings(home)).toMatchObject({ enabled: true, port: 3290, url: "https://x-ai.t.heyiris.io" })
+    expect(readSettings(home)).toMatchObject({ enabled: true, port: 3290, url: "https://x-ai.t.heyiris.io", default_model: null })
     expect(fs.statSync(settingsPath(home)).mode & 0o777).toBe(0o600)
   })
 })

@@ -1,7 +1,7 @@
 ---
 category: Agents & Automation
 level: intermediate
-tags: [models, gateway, openrouter, failover, usage, spend, ollama, gpu, hive, local-models]
+tags: [models, gateway, openrouter, failover, usage, spend, ollama, gpu, hive, local-models, phi, hipaa, clinic]
 duration_min: 8
 prerequisites: [iris-login]
 ---
@@ -104,13 +104,32 @@ from first, and fails over to the next one if it is busy or asleep.
 | 429 "your machine is busy" | It is already running `max_concurrent` requests | Wait, or raise `--max-concurrent` |
 | 401 from your machine | Its daemon predates serving, or its node key changed | Update the Hive daemon on it |
 | Very slow answers | A large model on a CPU | Use a smaller model (e.g. 7-8B), or a machine with a GPU |
+| 451 `phi_local_only` | phi-local is on and none of your machines is serving a default | `iris hive models serve on --default <model>` on a machine |
+
+## Patient data: keep it on your own machines
+
+Clinics often must keep patient data (PHI) on their own hardware. Two things make that work:
+
+- **Your own machine is not a third party.** A `hive/<model>` request carrying PHI is allowed
+  and recorded in the PHI audit as *processed on the caller's own machine*. It never goes to a
+  cloud model.
+- **`phi-local` keeps it there automatically.** Turn it on once, and choose the model to use:
+
+```bash
+iris hive models serve on --default qwen3:14b   # on the clinic's machine
+iris hive models phi-local on                    # for the account
+```
+
+From then on, any request that carries PHI, whatever model it asked for, runs on your
+machines: the model it named if one of them serves it, otherwise the `--default`. If none of
+your machines is serving, the request is **refused**, not sent to the cloud. Requests without
+PHI are unaffected. `iris hive models phi-local status` shows the setting.
 
 ## What this is not (yet)
 
 - **Sharing your machines with other people.** Coming in a later phase: whoever runs the machine
-  can read the prompts, so it will always be opt-in, on both sides.
-- **Patient data.** Routing PHI to a `hive/` model is off until your workspace records that
-  your own machines may receive it.
+  can read the prompts, so it will always be opt-in, on both sides. PHI will never be routed to
+  someone else's machine.
 
 ## Related
 

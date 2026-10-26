@@ -1,6 +1,6 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
-import { requireAuth, requireUserId, writeJson, dim, bold, success, warn, highlight } from "./iris-api"
+import { requireAuth, requireUserId, writeJson, dim, bold, success, warn, highlight, irisFetch } from "./iris-api"
 import { hiveFetch } from "./platform-hive-nodes"
 import { startRelayTunnelBg, stopRelayTunnelBg } from "./platform-hive-tunnel"
 import { validTunnelName } from "./platform-hive-relay"
@@ -30,12 +30,14 @@ export interface InferenceSettings {
   max_concurrent: number
   max_tokens: number
   models: string[] | null
+  /** The model to use when a request must stay on your machines (PHI with phi-local on). */
+  default_model: string | null
 }
 
 export const settingsPath = (home = homedir()) => join(home, ".iris", "inference.json")
 
 export function readSettings(home = homedir()): InferenceSettings {
-  const d: InferenceSettings = { enabled: false, port: DEFAULT_INFERENCE_PORT, url: null, max_concurrent: 2, max_tokens: 8192, models: null }
+  const d: InferenceSettings = { enabled: false, port: DEFAULT_INFERENCE_PORT, url: null, max_concurrent: 2, max_tokens: 8192, models: null, default_model: null }
   try {
     return { ...d, ...JSON.parse(readFileSync(settingsPath(home), "utf8")) }
   } catch {
@@ -147,6 +149,7 @@ const ServeCommand = cmd({
       .option("name", { type: "string", describe: "tunnel name (default: <this machine>-ai)" })
       .option("max-concurrent", { type: "number", describe: "requests at once before answering busy", default: 2 })
       .option("models", { type: "string", describe: "only these models, comma-separated (default: all)" })
+      .option("default", { type: "string", describe: "the model to use when patient data must stay on your machines (see: iris hive models phi-local)" })
       .option("yes", { type: "boolean", default: false }),
   async handler(argv) {
     const s = readSettings()
@@ -183,7 +186,8 @@ const ServeCommand = cmd({
     const port = Number(argv.port)
     const models = argv.models ? String(argv.models).split(",").map((m) => m.trim()).filter(Boolean) : null
     // The endpoint first, so the tunnel's own reachability check finds something listening.
-    writeSettings({ ...s, enabled: true, port, max_concurrent: Number(argv["max-concurrent"]) || 2, models, url: s.url })
+    const default_model = argv.default ? String(argv.default) : s.default_model
+    writeSettings({ ...s, enabled: true, port, max_concurrent: Number(argv["max-concurrent"]) || 2, models, url: s.url, default_model })
     const t = await startRelayTunnelBg(name, port)
     if (!t.ok) {
       console.log(`\n${highlight("✗")} the endpoint is on, but the tunnel did not open: ${t.error}`)
@@ -198,9 +202,57 @@ const ServeCommand = cmd({
   },
 })
 
+/**
+ * `iris hive models phi-local on|off|status` — patient data never leaves your machines.
+ *
+ * Sets your account's `phi_local_only` flag. With it on, a request that carries PHI runs on one
+ * of your machines (the model you asked for if a machine serves it, else that machine's
+ * --default), and is refused — never sent to a cloud model — when none is serving. Requests
+ * without PHI are unaffected. For clinics that must keep patient data on their own hardware.
+ */
+const PhiLocalCommand = cmd({
+  command: "phi-local <state>",
+  describe: "keep patient data on your own machines: PHI requests run locally, or are refused — never sent to a cloud model",
+  builder: (yargs) =>
+    yargs
+      .positional("state", { type: "string", choices: ["on", "off", "status"], demandOption: true })
+      .option("user-id", { type: "number" }),
+  async handler(argv) {
+    await requireAuth()
+    const userId = await requireUserId(argv["user-id"] as number | undefined)
+    if (!userId) process.exit(1)
+    const path = `/api/v1/feature-configurations/flags/user/${userId}`
+    if (argv.state === "status") {
+      const r = await irisFetch(path)
+      const body: any = await r.json().catch(() => ({}))
+      // fl-api answers {data: {<flag>: <decoded value>}} — FeatureFlag::getFlagsForScope.
+      const v = body?.data?.phi_local_only
+      const on = v === true || v === "enabled"
+      console.log(`\n  ${on ? success("● on") : dim("○ off")}  patient data ${on ? "stays on your machines" : "may go to cloud models (subject to the PHI provider registry)"}`)
+      return
+    }
+    const r = await irisFetch(path, { method: "PUT", body: JSON.stringify({ flags: { phi_local_only: argv.state === "on" ? "enabled" : "disabled" } }) })
+    const body: any = await r.json().catch(() => ({}))
+    if (!r.ok || body?.success === false) {
+      console.log(`\n${highlight("✗")} could not change it: ${body?.error || `HTTP ${r.status}`}`)
+      process.exitCode = 1
+      return
+    }
+    if (argv.state === "off") {
+      console.log(`\n${success("✓")} off — patient data may go to cloud models again, subject to the PHI provider registry`)
+      return
+    }
+    console.log(`\n${success("●")} on — requests carrying patient data now run on your own machines, or are refused`)
+    const local = readSettings()
+    if (!local.enabled || !local.default_model)
+      console.log(warn("  ! set a default model on a serving machine, or PHI requests will be refused: ") + bold("iris hive models serve on --default <model>"))
+    console.log(dim("  Takes effect within a minute."))
+  },
+})
+
 export const HiveModelsCommand = cmd({
   command: "models",
-  describe: "models your machines serve to your IRIS gateway (hive/<model>) — list, serve on, serve off",
-  builder: (yargs) => yargs.command(ListCommand).command(ServeCommand),
+  describe: "models your machines serve to your IRIS gateway (hive/<model>) — list, serve on|off, phi-local on|off",
+  builder: (yargs) => yargs.command(ListCommand).command(ServeCommand).command(PhiLocalCommand),
   handler: () => {},
 })
