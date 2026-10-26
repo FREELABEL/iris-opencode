@@ -131,8 +131,12 @@ const FilesPullCommand = cmd({
   async handler(argv) {
     const resolved = await target(argv)
     if (!resolved) return
-    const paths = ([] as string[]).concat(argv["remote-path"] as any)
+    const paths = ([] as string[]).concat((argv["remote-path"] as any) ?? []).map(String).filter((p) => p && p !== "-")
     const outDir = String(argv.out)
+    if (paths.length === 0) {
+      console.error("Nothing to pull: name a file on the node.")
+      process.exit(1)
+    }
 
     const results = []
     for (const p of paths) results.push(await pullFile(resolved.t, p, outDir))
@@ -163,13 +167,14 @@ const FilesPullCommand = cmd({
 })
 
 const FilesPushCommand = cmd({
-  command: "push <node> <local-path..>",
+  command: "push <node> [local-path..]",
   describe: "copy, send or upload file(s) ON to one of your machines — or stream stdin with '-' — sha256-verified",
   builder: (yargs) =>
     commonOpts(
       yargs
         .positional("node", { describe: "node name or id", type: "string", demandOption: true })
-        .positional("local-path", { describe: "local file(s), or - to read stdin", type: "string", demandOption: true })
+        .positional("local-path", { describe: "local file(s), or - to read stdin", type: "string" })
+        .option("stdin", { describe: "read the file from stdin (same as -)", type: "boolean", default: false })
         .option("to", { describe: "remote directory", type: "string", demandOption: true })
         .option("name", { describe: "file name on the node — required with -", type: "string" })
         .option("size", { describe: "with -: expected bytes, so free space is checked for the whole stream", type: "number" })
@@ -177,14 +182,22 @@ const FilesPushCommand = cmd({
         .example("mysqldump db | gzip | $0 hive fs push backup-box - --to ~/backups --name db.sql.gz", "stream — nothing is stored on this machine"),
     ),
   async handler(argv) {
-    const paths = ([] as string[]).concat(argv["local-path"] as any).map(String)
+    const paths = ([] as string[]).concat((argv["local-path"] as any) ?? []).map(String).filter((p) => p !== "-")
     const to = String(argv.to)
+
+    // yargs DROPS a lone "-" from a variadic positional — the command saw zero files and reported
+    // {"ok": true, "results": []}: success, with nothing moved. So "-" is read from the raw
+    // arguments, and --stdin says the same thing explicitly.
+    const streaming = Boolean(argv.stdin) || process.argv.slice(2).includes("-")
+    if (!streaming && paths.length === 0) {
+      console.error("Nothing to push: name a file, or pipe data in with - (or --stdin).")
+      process.exit(1)
+    }
 
     // Check the stream's arguments BEFORE resolving the node: a mistake here should not cost an
     // ssh round-trip, and must never leave a producer piping into a command that will refuse.
-    const streaming = paths.includes("-")
     if (streaming) {
-      if (paths.length > 1) {
+      if (paths.length > 0) {
         console.error("'-' (stdin) must be the only source — push files and a stream in separate runs.")
         process.exit(1)
       }

@@ -7199,8 +7199,8 @@
       "name": "hive fs push",
       "describe": "copy, send or upload file(s) ON to one of your machines — or stream stdin with '-' — sha256-verified",
       "aliases": [],
-      "run": "iris hive fs push <node> <local-path..>",
-      "haystack": "hive fs push copy, send or upload file(s) on to one of your machines — or stream stdin with '-' — sha256-verified to remote directory name file name on the node — required with - size with -: expected bytes, so free space is checked for the whole stream"
+      "run": "iris hive fs push <node> [local-path..]",
+      "haystack": "hive fs push copy, send or upload file(s) on to one of your machines — or stream stdin with '-' — sha256-verified stdin read the file from stdin (same as -) to remote directory name file name on the node — required with - size with -: expected bytes, so free space is checked for the whole stream"
     },
     {
       "kind": "command",

@@ -211,7 +211,7 @@ $ mysqldump mydb | gzip | iris hive fs push backup-box - --to ~/backups --name m
 $ curl -sL https://example.com/big.iso | iris hive fs push nas - --to ~/isos --name big.iso --size 4700000000
 ```
 
-`--name` is required (stdin has no file name). `--size` is optional; give it when you know the
+`--stdin` works in place of `-`. `--name` is required (stdin has no file name). `--size` is optional; give it when you know the
 size, so free space is checked for the whole stream up front.
 
 **What these need, once per pair of machines:**
