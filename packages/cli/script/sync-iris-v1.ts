@@ -13,8 +13,9 @@
 //   packages/util/src/<x>.ts         -> iris-v1/vendor/<x>.ts              (for each <x> imported)
 //
 // The ONE deliberate edit: iris-v1/index.ts drops the commands v2 owns (run, models, serve,
-// debug, acp, session) — the front door routes those to v2, and registering both would make
-// `iris run` ambiguous. Each removal must match exactly once; if main reshapes index.ts the
+// debug, session) — the front door routes those to v2, and registering both would make
+// `iris run` ambiguous. `acp` is kept (#191163): the front door sends `acp run|agents|sessions`
+// (the ACP client, ours) here and bare `acp` (the server) to v2 — see src/iris-route.ts. Each removal must match exactly once; if main reshapes index.ts the
 // script fails loudly rather than shipping a half-patched registry.
 //
 // Usage: bun script/sync-iris-v1.ts [--ref=origin/main] [--check]
@@ -39,7 +40,6 @@ const V2_OWNED_COMMANDS: [exportName: string, file: string][] = [
   ["ModelsCommand", "./cli/cmd/models"],
   ["ServeCommand", "./cli/cmd/serve"],
   ["DebugCommand", "./cli/cmd/debug"],
-  ["AcpCommand", "./cli/cmd/acp"],
   ["SessionCommand", "./cli/cmd/session"],
 ]
 
