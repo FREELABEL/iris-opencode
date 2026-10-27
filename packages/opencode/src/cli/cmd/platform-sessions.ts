@@ -2,7 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { bridgeFetch, dim, bold, highlight, success, writeJson, irisFetch, requireAuth, handleApiError, IRIS_API } from "./iris-api"
-import { transcriptPath, messageLine, advance, fromPage, FOLLOW_PAGE, SESSION_ID, type FollowState, type TranscriptMessage } from "../lib/remote-transcript"
+import { transcriptPath, messageLine, advance, fromPage, readFailure, FOLLOW_PAGE, SESSION_ID, type FollowState, type TranscriptMessage } from "../lib/remote-transcript"
 import { probeBridge, assessBridge, printDegradations } from "./subsystem-health"
 import { firstArray } from "../../util/array"
 import { candidateServers, deliverLive, shouldFallBackToBridge, deliveryTimeoutMs, findSessionAcrossServers } from "./session-live-delivery"
@@ -442,7 +442,8 @@ const ReadCommand = cmd({
     if (args.json) { await writeJson(data); if (!data.success) process.exitCode = 1; return }
     if (!data.success) {
       // The server says WHICH failure it was — no such session vs. machine offline vs. no answer.
-      prompts.log.error(String(data.error ?? "The machine did not return the session."))
+      prompts.log.error(readFailure(data.error, args.machine))
+      if (args.verbose || process.argv.includes("--print-logs")) console.log(dim(`  ${data.error ?? ""}`))
       if (Array.isArray(data.machines_tried) && data.machines_tried.length)
         console.log(dim(`  asked: ${data.machines_tried.join(", ")}`))
       prompts.outro("Done")

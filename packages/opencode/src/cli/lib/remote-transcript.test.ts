@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { advance, appendedSince, FOLLOW_PAGE, fromPage, messageLine, transcriptPath } from "./remote-transcript"
+import { advance, appendedSince, FOLLOW_PAGE, fromPage, messageLine, readFailure, transcriptPath } from "./remote-transcript"
 
 // #191230 — read a session's transcript from another machine.
 describe("transcriptPath", () => {
@@ -91,5 +91,21 @@ describe("follow (#191302)", () => {
 
   test("polls ask for the server's cap, not the first screen's size", () => {
     expect(FOLLOW_PAGE).toBe(100)
+  })
+})
+
+describe("readFailure", () => {
+  test("a sleeping machine is named in plain words, never with an internal flag", () => {
+    const server = "Could not read session ses_x on Alexs-MacBook-Pro-11711: Pinned to node 01a09d2c, which is offline or cannot accept work right now. Refusing to run it on a different machine — pass allow_node_fallback to opt into rerouting to any capable node.. This is a MACHINE or BRIDGE problem"
+    const msg = readFailure(server, "Alexs-MacBook-Pro-11711")
+    expect(msg).toBe("Alexs-MacBook-Pro-11711 is offline or asleep, and the session is only on it. Try again once it is awake.")
+    expect(msg).not.toContain("allow_node_fallback")
+  })
+  test("not found and an unknown machine say what to do", () => {
+    expect(readFailure("Session ses_x was not found on Mac, hive. It may live on a machine that is offline")).toContain("Check the id")
+    expect(readFailure('No machine named "x" is reachable from this account.', "x")).toContain("Leave out --machine")
+  })
+  test("anything else passes through", () => {
+    expect(readFailure("something new")).toBe("something new")
   })
 })

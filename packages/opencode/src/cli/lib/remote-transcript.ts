@@ -101,3 +101,18 @@ export function fromPage(
   const gap = state.page.length > 0 && rows.length > 0 && print.length === rows.length
   return { print, state: { page: rows, offset }, gap }
 }
+
+/**
+ * The server's reason, in words for the person reading (#191302). Measured: a read of a MacBook
+ * session while the Mac slept said "pass allow_node_fallback to opt into rerouting to any capable
+ * node" — an internal flag, and the wrong advice: the session exists only on that machine.
+ */
+export function readFailure(error: string | undefined, machine?: string): string {
+  const e = error ?? ""
+  const where = machine ? machine : "That machine"
+  if (/offline or cannot accept work|has not checked in|did not answer within/i.test(e))
+    return `${where} is offline or asleep, and the session is only on it. Try again once it is awake.`
+  if (/not found on/i.test(e)) return "No machine you own has that session. Check the id from iris recall."
+  if (/No machine named/i.test(e)) return `No machine named "${machine}" is yours. Leave out --machine to ask them all.`
+  return e || "The machine did not return the session."
+}
