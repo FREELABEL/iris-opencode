@@ -36,10 +36,13 @@ export const GrepTool = Tool.define("grep", {
     // A directory is walked: refuse / and prune protected folders (#191073). A single file is not.
     const isDir = (await Bun.file(searchPath).stat().catch(() => null))?.isDirectory() ?? true
     const walk = isDir ? Ripgrep.walkArgs(searchPath) : []
-    const args = [...walk, "-nH", "--field-match-separator=|", "--regexp", params.pattern]
+    const args = ["-nH", "--field-match-separator=|", "--regexp", params.pattern]
     if (params.include) {
       args.push("--glob", params.include)
     }
+    // Last among the globs: ripgrep's last matching glob wins, so an include like `**` placed
+    // after them would re-open Library/Containers.
+    args.push(...walk)
     args.push(searchPath)
 
     const proc = Bun.spawn([rgPath, ...args], {
