@@ -130,6 +130,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   "pages:batch": "pages",
   partials: "pages",
   copycat: "pages",
+  reel: "pages",
   "editorial": "pages",
   remotion: "pages",
   release: "pages",
