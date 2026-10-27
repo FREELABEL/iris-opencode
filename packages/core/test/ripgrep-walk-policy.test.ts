@@ -76,6 +76,23 @@ describe("WalkPolicy.scope — prunes macOS protected folders the walk would pas
   })
 })
 
+describe("WalkPolicy.withExcludes — excludes must be the LAST globs (ripgrep: last match wins)", () => {
+  const ex = ["--glob=!**/Library/Containers"]
+  test("list walks: after the pattern glob, before the path", () => {
+    expect(WalkPolicy.withExcludes(["--no-config", "--files", "--glob=**/*", "--glob=!**/.git/**", "."], ex)).toEqual([
+      "--no-config", "--files", "--glob=**/*", "--glob=!**/.git/**", ...ex, ".",
+    ])
+  })
+  test("grep: before --, so the pattern and path stay positional", () => {
+    expect(WalkPolicy.withExcludes(["--json", "--glob=*.ts", "--", "needle", "."], ex)).toEqual([
+      "--json", "--glob=*.ts", ...ex, "--", "needle", ".",
+    ])
+  })
+  test("nothing to add leaves the args alone", () => {
+    expect(WalkPolicy.withExcludes(["--files", "."], [])).toEqual(["--files", "."])
+  })
+})
+
 describe("Ripgrep — the policy is enforced where every walk starts", () => {
   it.live("a walk rooted at / fails fast with the reason, before ripgrep runs", () =>
     Effect.gen(function* () {
@@ -169,7 +186,8 @@ describe("Ripgrep — the policy is enforced where every walk starts", () => {
             yield* Effect.promise(() => fs.mkdir(box, { recursive: true }))
             yield* Effect.promise(() => fs.writeFile(path.join(box, "secret.txt"), "x"))
             yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "visible.txt"), "x"))
-            const files = yield* (yield* Ripgrep.Service).glob({ cwd: tmp.path, pattern: "**/*.txt", limit: 100 })
+            // `**/*` matches the Containers folder itself: the case that defeated excludes placed first.
+            const files = yield* (yield* Ripgrep.Service).glob({ cwd: tmp.path, pattern: "**/*", limit: 100 })
             expect(files.map((e) => e.path)).toEqual([RelativePath.make("visible.txt")])
           }),
         (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),

@@ -139,8 +139,8 @@ const layer = Layer.effect(
     }) => {
       const walk = WalkPolicy.scope(input.cwd)
       if (input.walks && walk.refuse) return Effect.fail(failure(walk.refuse))
-      // Prune protected folders before anything else ripgrep reads (args[0] is --no-config).
-      const args = input.walks ? [input.args[0], ...walk.excludes, ...input.args.slice(1)] : input.args
+      // Prune protected folders. They must come LAST among the globs (see withExcludes).
+      const args = input.walks ? WalkPolicy.withExcludes(input.args, walk.excludes) : input.args
       const collected: A[] = []
       const program = Effect.scoped(
         Effect.gen(function* () {
