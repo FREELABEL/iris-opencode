@@ -187,6 +187,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   phone: "communication",
   voice: "communication",
   download: "communication",
+  peers: "communication",
   transcribe: "communication",
   mail: "communication",
   mailing: "communication",
