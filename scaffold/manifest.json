@@ -231,6 +231,12 @@
       "purpose": "Connect a machine to the IRIS Hive and dispatch a distributed task."
     },
     {
+      "src": "how-to/schedule-a-playbook.md",
+      "dest": "how-to/schedule-a-playbook.md",
+      "managed": true,
+      "purpose": "Run a playbook on a schedule on a machine you choose, and email the result from IRIS."
+    },
+    {
       "src": "how-to/hive-tailscale.md",
       "dest": "how-to/hive-tailscale.md",
       "managed": true,
