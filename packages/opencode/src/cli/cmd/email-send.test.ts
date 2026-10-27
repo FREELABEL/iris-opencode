@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   buildRecipientList,
+  textToHtml,
   checkMode,
   effectiveStatus,
   flattenToArgs,
@@ -175,5 +176,32 @@ describe("status — labels and 'unknown'", () => {
   test("a complaint or block fails the run like a bounce does", () => {
     expect(statusVerdict([m({ delivery_status: "complained" })], { refreshed: true }).exitCode).toBe(1)
     expect(statusVerdict([m({ delivery_status: "blocked" })], { refreshed: true }).exitCode).toBe(1)
+  })
+})
+
+describe("textToHtml (#191368)", () => {
+  test("escapes — the text is never markup", () => {
+    const h = textToHtml("a <b>bold</b> & \"q\"")
+    expect(h).toContain("a &lt;b&gt;bold&lt;/b&gt; &amp; &quot;q&quot;")
+    expect(h).not.toContain("<b>")
+  })
+  test("blank lines split paragraphs, single newlines stay breaks", () => {
+    const h = textToHtml("one\ntwo\n\nthree")
+    expect(h).toContain("<p style=\"margin:0 0 12px\">one<br>two</p>")
+    expect(h).toContain(">three</p>")
+  })
+  test("a capitals line opening a block is a heading", () => {
+    const h = textToHtml("LUNCH\nChicken Tikka Masala\n1. Thaw")
+    expect(h).toMatch(/<h3[^>]*>LUNCH<\/h3>/)
+    expect(h).toContain("Chicken Tikka Masala<br>1. Thaw")
+  })
+  test("a sentence is not mistaken for a heading", () => {
+    expect(textToHtml("Good morning, Alex. Here is what you are cooking today.")).not.toContain("<h3")
+  })
+  test("a whole document with a phone viewport", () => {
+    const h = textToHtml("hi", "Today")
+    expect(h.startsWith("<!doctype html>")).toBe(true)
+    expect(h).toContain('name="viewport"')
+    expect(h).toContain("<title>Today</title>")
   })
 })

@@ -253,3 +253,41 @@ export function statusVerdict(messages: StatusMessage[], opts: { refreshed: bool
     reasons.push("every message is still only 'accepted' — the provider has not confirmed delivery")
   return { exitCode: reasons.length ? 1 : 0, reasons }
 }
+
+// ── one message to one person (#191368) ────────────────────────────────────
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
+}
+
+/**
+ * Plain text → an HTML body that reads the same in every client, phone included.
+ *
+ * A message composed as text (a daily plan, a receipt) still needs an HTML part: without one
+ * some clients pick their own font and wrap, and Apple Mail drew the 2026-10-26 meal email as a
+ * coloured quote. Blank lines split paragraphs, single newlines stay line breaks, and a short
+ * line in capitals on its own is a section heading. Everything is escaped — the text is never
+ * markup.
+ */
+export function textToHtml(text: string, title?: string): string {
+  const blocks = text.replace(/\r\n/g, "\n").trim().split(/\n{2,}/)
+  const parts = blocks.map((b) => {
+    const lines = b.split("\n")
+    const first = lines[0].trim()
+    const isHeading = /^[A-Z0-9][A-Z0-9 &'’:\-—–,./()]{1,60}$/.test(first) && /[A-Z]/.test(first)
+    const head = isHeading
+      ? `<h3 style="margin:22px 0 6px;font-size:13px;letter-spacing:.06em;color:#5b5348">${escapeHtml(first)}</h3>`
+      : ""
+    const rest = (isHeading ? lines.slice(1) : lines).map((l) => escapeHtml(l)).join("<br>")
+    return head + (rest ? `<p style="margin:0 0 12px">${rest}</p>` : "")
+  })
+  return [
+    `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">`,
+    title ? `<title>${escapeHtml(title)}</title>` : "",
+    `</head><body style="margin:0;padding:24px 16px;background:#faf8f5;color:#1f1b16;`,
+    `font:16px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">`,
+    `<div style="max-width:560px;margin:0 auto">`,
+    ...parts,
+    `</div></body></html>`,
+  ].join("")
+}

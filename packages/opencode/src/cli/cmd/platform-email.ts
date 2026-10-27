@@ -14,6 +14,8 @@ import {
   testSubject,
   DELIVERY_BAD,
   sendLabel,
+  textToHtml,
+  EMAIL_RE,
   type Skipped,
   type StatusMessage,
 } from "./email-send"
@@ -360,6 +362,126 @@ const SendCommand = cmd({
   },
 })
 
+// ── message: one ready-made message to one person (#191368) ───────────────
+
+const MessageCommand = cmd({
+  command: "message",
+  aliases: ["msg"],
+  describe:
+    "send one message to one person, from the server (no Mac needed) — a daily digest they asked for, a receipt. For lists use `iris email send`",
+  builder: (y) =>
+    y
+      .option("to", { type: "string", describe: "the one recipient", demandOption: true })
+      .option("subject", { type: "string", describe: "subject line", demandOption: true })
+      .option("text-file", { type: "string", describe: "the message as plain text (an HTML version is made from it)" })
+      .option("text", { type: "string", describe: "the message as plain text, inline" })
+      .option("html-file", { type: "string", describe: "your own HTML version (optional)" })
+      .option("bloq", { type: "number", describe: "board the message is filed on", demandOption: true })
+      .option("provider", { type: "string", choices: [...PROVIDERS], describe: "email provider connection", demandOption: true })
+      .option("from", { type: "string", describe: "From address (verified at the provider)", demandOption: true })
+      .option("from-name", { type: "string", describe: "From display name" })
+      .option("slug", { type: "string", default: "direct-message", describe: "template slug the message is filed under (one per kind of message)" })
+      .option("test", { type: "boolean", default: false, describe: "send as a test: subject prefixed [TEST]" })
+      .option("json", { type: "boolean", default: false, describe: "JSON output" })
+      .example("iris email message --to jordan@example.com --subject \"Today's meals\" --text-file plan.txt --bloq 544 --provider resend --from team@heyiris.io --slug daily-meals", ""),
+  async handler(args) {
+    const json = !!args.json
+    const fail = async (error: string) => {
+      if (json) await writeJson({ success: false, error })
+      else prompts.log.error(error)
+      process.exitCode = 1
+    }
+    const to = String(args.to).trim()
+    if (!EMAIL_RE.test(to)) return fail(`"${to}" is not an email address.`)
+    const slug = String(args.slug)
+    if (!/^[a-z0-9][a-z0-9-]{0,119}$/.test(slug)) return fail(`"${slug}" is not a valid slug — lowercase letters, digits and dashes.`)
+
+    let text = args.text as string | undefined
+    const textFile = args["text-file"] as string | undefined
+    if (textFile) {
+      if (!existsSync(textFile)) return fail(`No such file: ${textFile}`)
+      text = readFileSync(textFile, "utf8")
+    }
+    const htmlFile = args["html-file"] as string | undefined
+    if (htmlFile && !existsSync(htmlFile)) return fail(`No such file: ${htmlFile}`)
+    if (!text?.trim() && !htmlFile) return fail("Nothing to send — pass --text-file, --text or --html-file.")
+    const subject = String(args.subject)
+    const html = htmlFile ? readFileSync(htmlFile, "utf8") : textToHtml(text!, subject)
+
+    if (!(await requireAuth())) return
+    const bloq = bloqOf(args)
+
+    // 1. File this message as the newest version of its template, so the send is one row in the
+    //    same ledger as every other email and `iris email status` can follow it.
+    const tpl = await irisFetch(
+      `/api/v1/email/bloqs/${bloq}/templates`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          slug, subject, html,
+          ...(text ? { text } : {}),
+          from_email: args.from,
+          ...(args["from-name"] ? { from_name: args["from-name"] } : {}),
+        }),
+      },
+      IRIS_API,
+    )
+    if (!tpl.ok) {
+      if (await reportRefusal(tpl, json)) return
+      await handleApiError(tpl, "file the message")
+      process.exitCode = 1
+      return
+    }
+
+    // 2. Send it to the one person.
+    const mode = args.test ? "test" : "live"
+    const res = await irisFetch(
+      `/api/v1/email/bloqs/${bloq}/sends`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          template: slug,
+          mode,
+          recipients: [to],
+          provider: args.provider,
+          from_email: args.from,
+          ...(args["from-name"] ? { from_name: args["from-name"] } : {}),
+          subject: mode === "test" ? testSubject(subject) : subject,
+          ...(mode === "live" ? { confirm_count: 1 } : {}),
+        }),
+      },
+      IRIS_API,
+    )
+    if (!res.ok) {
+      if (await reportRefusal(res, json)) return
+      await handleApiError(res, "send the message")
+      process.exitCode = 1
+      return
+    }
+    let run = (await body(res))?.data ?? {}
+    const deadline = Date.now() + 5 * 60_000
+    while ((run.status === "queued" || run.status === "running") && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 3000))
+      const p = await irisFetch(`/api/v1/email/sends/${run.id}`, {}, IRIS_API)
+      if (p.ok) run = (await body(p))?.data ?? run
+    }
+    const messages: StatusMessage[] = run.messages ?? []
+    const accepted = Number(run.sent_count ?? messages.filter((m) => m.status === "sent").length)
+    const failedMsg = messages.find((m) => m.status === "failed")
+    const ok = accepted > 0 && !failedMsg && run.status !== "queued" && run.status !== "running"
+
+    if (json) {
+      await writeJson({ success: ok, run_id: run.id, status: run.status, mode, to, subject, accepted, error: failedMsg?.error ?? run.error ?? null })
+    } else if (ok) {
+      prompts.log.success(`Sent to ${to} ${dim(`· run #${run.id} · ${mode}`)}`)
+      console.log(dim(`  Delivery: iris email status ${run.id} --refresh`))
+    } else {
+      prompts.log.error(`Not sent to ${to}: ${failedMsg?.error ?? run.error ?? run.status ?? "unknown"}  ${dim(`(run #${run.id})`)}`)
+    }
+    if (!ok) process.exitCode = 1
+  },
+})
+
 // ── status ────────────────────────────────────────────────────────────────
 
 const StatusCommand = cmd({
@@ -454,6 +576,6 @@ export const PlatformEmailCommand = cmd({
   command: "email",
   describe:
     "email — send a newsletter or announcement to a list from a board: versioned templates, one message per recipient via Mailjet or Resend, delivery status per recipient",
-  builder: (y) => y.command(TemplatesCommand).command(SendCommand).command(StatusCommand).demandCommand(),
+  builder: (y) => y.command(TemplatesCommand).command(SendCommand).command(MessageCommand).command(StatusCommand).demandCommand(),
   async handler() {},
 })
