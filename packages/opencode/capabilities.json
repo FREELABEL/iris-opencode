@@ -62,6 +62,18 @@
       "fleet",
       "daemon"
     ],
+    "hive host run": [
+      "run a command on",
+      "remote command",
+      "on a remote host",
+      "on my server",
+      "azure vm",
+      "check a service"
+    ],
+    "hive vpn connect": [
+      "remote desktop",
+      "rdp"
+    ],
     "hive models": [
       "serve my models",
       "local models",
@@ -7274,7 +7286,7 @@
       "describe": "run one command on a managed host (Azure VM or tailnet machine) — under that host's approval policy",
       "aliases": [],
       "run": "iris hive host run <vm> [command..]",
-      "haystack": "hive host run run one command on a managed host (azure vm or tailnet machine) — under that host's approval policy resource-group azure resource group (remembered after the first run) via az (azure vm agent, no open port) or ssh (tailnet) os windows or linux — detected for azure vms when omitted timeout seconds to wait for the command json json output"
+      "haystack": "hive host run run one command on a managed host (azure vm or tailnet machine) — under that host's approval policy resource-group azure resource group (remembered after the first run) via az (azure vm agent, no open port) or ssh (tailnet) os windows or linux — detected for azure vms when omitted timeout seconds to wait for the command json json output run a command on remote command on a remote host on my server azure vm check a service"
     },
     {
       "kind": "command",
@@ -7954,7 +7966,7 @@
       "describe": "launch a remote-desktop session to a host on the tailnet (one command)",
       "aliases": [],
       "run": "iris hive vpn connect [name]",
-      "haystack": "hive vpn connect launch a remote-desktop session to a host on the tailnet (one command) user windows username to prefill (remembered per host) forget forget the remembered username for this host phone print connection details + an rdp:// link for a phone on the tailnet"
+      "haystack": "hive vpn connect launch a remote-desktop session to a host on the tailnet (one command) user windows username to prefill (remembered per host) forget forget the remembered username for this host phone print connection details + an rdp:// link for a phone on the tailnet remote desktop rdp"
     },
     {
       "kind": "command",

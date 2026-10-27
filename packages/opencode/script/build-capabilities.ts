@@ -544,6 +544,9 @@ const TERMS: Record<string, string[]> = {
   leads: ["crm", "contacts", "prospects", "pipeline", "find people", "find customers", "customers", "outreach", "cold email", "email them", "book calls", "book a call", "sales", "lead generation"],
   agents: ["ai agent", "assistant", "bot"],
   hive: ["compute node", "distributed", "remote machine", "fleet", "daemon"],
+  // `hive host run` / `hive vpn connect` (#179098): plain asks reached neither.
+  "hive host run": ["run a command on", "remote command", "on a remote host", "on my server", "azure vm", "check a service"],
+  "hive vpn connect": ["remote desktop", "rdp"],
   // #191176 — your own machines' models, served to your gateway (hive/<model>).
   "hive models": ["serve my models", "local models", "ollama", "my gpu", "my own gpu", "self-hosted model", "run models on my machine", "gpu marketplace"],
   // #191163 — IRIS as the ACP client: run another coding agent from IRIS, and keep it steerable.
