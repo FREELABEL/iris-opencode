@@ -466,7 +466,7 @@ export const NOISE_TAGS = new Set(
 /**
  * Words and two-word phrases a post is about, from its title, caption and transcript.
  * Lowercased; URLs, @mentions, numbers and stopwords dropped; hashtags kept as words unless
- * they're reach-bait (#fyp). A phrase is two kept words that sat next to each other in the
+ * they're reach-bait (#fyp); a hashtag stands alone, never half of a phrase. A phrase is two kept words that sat next to each other in the
  * text, so "iphone duo" survives and "duo the review" never forms. No LLM, same answer every run.
  */
 export function extractKeywords(text: string): string[] {
@@ -475,7 +475,7 @@ export function extractKeywords(text: string): string[] {
     .replace(/https?:\/\/\S+/g, " ")
     .replace(/www\.\S+/g, " ")
     .replace(/@[\p{L}\p{N}._]+/gu, " ")
-    .replace(/#([\p{L}\p{N}_]+)/gu, (_m, tag: string) => (NOISE_TAGS.has(tag) ? " | " : ` ${tag} | `))
+    .replace(/#([\p{L}\p{N}_]+)/gu, (_m, tag: string) => (NOISE_TAGS.has(tag) ? " | " : ` | ${tag} | `))
     .replace(/[’`]/g, "'")
   // Split into runs; a run boundary (punctuation, line break, removed token) breaks phrases.
   const runs = t.split(/[^\p{L}\p{N}'\s]+|\n+/u)
@@ -553,6 +553,26 @@ export function metricOf(p: Pick<PeerPost, "views" | "likes">): { value: number;
   return null
 }
 
+/** The hashtags in a text, lowercased, without the #. */
+export function hashtagsOf(text: string): string[] {
+  return [...new Set([...(text || "").toLowerCase().matchAll(/#([\p{L}\p{N}_]+)/gu)].map((m) => m[1]))]
+}
+
+/**
+ * Hashtags an account puts on nearly everything (#learnfromkhaby). They say who posted, not what
+ * the post is about, so they'd crowd every topic label. A tag is a signature when it's on at
+ * least `share` of the account's posts (needs 3+ posts). Fed hashtags only, never caption words:
+ * an account that posts about the iPhone five times running is on topic, not signing off.
+ */
+export function signatureKeywords(perPost: string[][], share = 0.6): Set<string> {
+  const out = new Set<string>()
+  if (perPost.length < 3) return out
+  const df = new Map<string, number>()
+  for (const ks of perPost) for (const k of new Set(ks)) df.set(k, (df.get(k) ?? 0) + 1)
+  for (const [k, n] of df) if (n / perPost.length >= share) out.add(k)
+  return out
+}
+
 export interface GapRow {
   account: string
   label?: string
@@ -604,10 +624,11 @@ export function rankGaps(
     const basis = win.length >= 3 ? win : posts
     const metricKind = win.some((p) => p.views != null) ? "views" : "likes"
     const med = median(basis.map((p) => (metricKind === "views" ? p.views : p.likes)).filter((x): x is number => x != null))
+    const sig = signatureKeywords(posts.map((p) => hashtagsOf(postText(p))))
     for (const p of win) {
       const value = metricKind === "views" ? p.views : p.likes
       if (value == null) continue
-      const keywords = extractKeywords(postText(p))
+      const keywords = extractKeywords(postText(p)).filter((k) => !sig.has(k))
       const overlap = coverageScore(keywords, mine)
       rows.push({
         account: entry.id,
@@ -723,7 +744,7 @@ const PeersListCommand = cmd({
     const rows = peers.map((p) => {
       const posts = loadPosts(p.id)
       const last = posts.reduce((m, x) => (x.seen_at > m ? x.seen_at : m), "")
-      return { ...p, posts: posts.length, transcribed: posts.filter((x) => x.transcript).length, last_pulled: last || null }
+      return { ...p, posts: posts.length, transcribed: posts.filter((x) => x.transcribed_at).length, last_pulled: last || null }
     })
     if (args.json) {
       await writeJson({ dir: peersDir(), peers: rows })
@@ -817,7 +838,7 @@ const PeersPullCommand = cmd({
       if (i > 0 && delayMs) await sleep(delayMs)
       const now = new Date().toISOString()
       const sp = json ? null : prompts.spinner()
-      sp?.start(`@${entry.id} (${entry.platform}) — listing latest ${latest}…`)
+      sp?.start(urls.length ? `@${entry.id} — reading ${urls.length} post URL${urls.length > 1 ? "s" : ""}…` : `@${entry.id} (${entry.platform}) — listing latest ${latest}…`)
 
       let fresh: PeerPost[]
       let failMsg: string | null = null
@@ -853,7 +874,7 @@ const PeersPullCommand = cmd({
         } else {
           const ids = new Set(fresh.map((f) => f.id))
           let posts = merged.posts
-          for (const p of posts.filter((x) => ids.has(x.id) && !x.transcript)) {
+          for (const p of posts.filter((x) => ids.has(x.id) && !x.transcribed_at)) {
             const tsp = json ? null : prompts.spinner()
             tsp?.start(`  transcribing ${p.url}`)
             const audio = join(tmpdir(), `iris-peer-${safeId(entry.id)}-${safeId(p.id)}.m4a`)

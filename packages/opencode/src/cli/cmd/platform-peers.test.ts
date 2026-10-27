@@ -25,6 +25,8 @@ import {
   rankGaps,
   savePeers,
   savePosts,
+  signatureKeywords,
+  hashtagsOf,
   topicLabel,
   type PeerEntry,
   type PeerPost,
@@ -296,6 +298,15 @@ describe("topics", () => {
     expect(extractKeywords("studio session, beat making")).toEqual(["studio", "session", "studio session", "beat", "making", "beat making"])
     expect(extractKeywords("vinyl in the city")).toEqual(["vinyl", "city"])
   })
+  test("a hashtag is its own keyword, never glued into a phrase", () => {
+    expect(extractKeywords("time to retire #learnfromkhaby #comedy")).toEqual(["retire", "learnfromkhaby", "comedy"])
+  })
+  test("signatureKeywords: what an account puts on nearly every post", () => {
+    const sig = signatureKeywords([["comedy", "ball"], ["comedy", "retire"], ["comedy", "esim"], ["mind"]])
+    expect([...sig]).toEqual(["comedy"])
+    expect(signatureKeywords([["a"], ["a"]]).size).toBe(0)
+    expect(hashtagsOf("Retire #LearnFromKhaby #comedy #comedy")).toEqual(["learnfromkhaby", "comedy"])
+  })
   test("Instagram's 'Video by <handle>' title is not a topic", () => {
     expect(postText({ title: "Video by mauroisruiz", caption: "fans", transcript: undefined })).not.toContain("mauroisruiz")
   })
@@ -366,6 +377,31 @@ describe("rankGaps — what worked that you haven't covered", () => {
     }
     const { rows } = rankGaps([ig], [], opts)
     expect(rows[0]).toMatchObject({ metric: "likes", relative: 5 })
+  })
+  test("an account's signature hashtag doesn't become every post's topic", () => {
+    const k = {
+      entry: entry("k"),
+      posts: [
+        post({ id: "k1", views: 10, caption: "ball out #learnfromkhaby" }),
+        post({ id: "k2", views: 10, caption: "retire now #learnfromkhaby" }),
+        post({ id: "k3", views: 50, caption: "esim travel #learnfromkhaby" }),
+      ],
+    }
+    const { rows } = rankGaps([k], [], opts)
+    expect(rows.flatMap((r) => r.keywords)).not.toContain("learnfromkhaby")
+    expect(rows[0].topic).toEqual(["esim travel"])
+  })
+  test("an account that keeps posting one topic is on topic — caption words are never signatures", () => {
+    const yt = {
+      entry: entry("yt"),
+      posts: [
+        post({ id: "y1", views: 10, title: "iPhone Duo is here" }),
+        post({ id: "y2", views: 10, title: "iPhone Duo animation" }),
+        post({ id: "y3", views: 10, title: "iPhone Duo unboxing" }),
+      ],
+    }
+    const { rows } = rankGaps([yt], [post({ id: "m", title: "iPhone Duo is messier than you think" })], opts)
+    expect(rows.find((r) => r.url.endsWith("/y1"))).toMatchObject({ covered: true, topic: ["iphone duo"] })
   })
   test("deterministic: same input, same output", () => {
     expect(rankGaps([big, small], mine, opts)).toEqual(rankGaps([big, small], mine, opts))
