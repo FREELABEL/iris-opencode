@@ -52,6 +52,7 @@ import { PlaybookDraftCommand } from "./playbook-draft"
 import { PlaybookSopDraftCommand } from "./sop-draft"
 import { firstArray } from "../../util/array"
 import { CliUsageError } from "../json-error"
+import { PlaybookScheduleCommand, PlaybookSchedulesCommand } from "./platform-playbook-schedule"
 
 // Wrap callback in Instance.provide so Skill.all()/get() can find .claude/skills/
 async function withInstance<T>(fn: () => Promise<T>): Promise<T> {
@@ -3360,6 +3361,8 @@ export const PlatformPlaybookCommand = cmd({
       .command(SkillSearchCommand)
       .command(SkillShowCommand)
       .command(SkillRunCommand)
+      .command(PlaybookScheduleCommand)
+      .command(PlaybookSchedulesCommand)
       .command(SkillResumeCommand)
       .command(SkillTestCommand)
       .command(SkillHistoryCommand)
