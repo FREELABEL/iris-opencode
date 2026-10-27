@@ -18,6 +18,8 @@ function push(args: string[], stdin = "hi") {
   })
   return { code: r.status, out: `${r.stdout}${r.stderr}` }
 }
+// Each case boots the whole CLI; a cold start passes bun's 5 s default on a warm laptop and not in CI.
+const BOOT = 60_000
 
 describe("hive fs push — a stream or nothing is never silently 'ok'", () => {
   test("'-' reaches the command (it asks for --name instead of reporting success)", () => {
@@ -25,23 +27,23 @@ describe("hive fs push — a stream or nothing is never silently 'ok'", () => {
     expect(r.code).toBe(1)
     expect(r.out).toContain("needs --name")
     expect(r.out).not.toContain('"ok": true')
-  })
+  }, BOOT)
 
   test("--stdin is the same as '-'", () => {
     expect(push(["--stdin", "--to", "/tmp/x"]).out).toContain("needs --name")
-  })
+  }, BOOT)
 
   test("no source at all is an error, not an empty success", () => {
     const r = push(["--to", "/tmp/x", "--json"])
     expect(r.code).toBe(1)
     expect(r.out).toContain("Nothing to push")
-  })
+  }, BOOT)
 
   test("a file and '-' together are refused", () => {
     expect(push(["./a.txt", "-", "--to", "/tmp/x", "--name", "a"]).out).toContain("must be the only source")
-  })
+  }, BOOT)
 
   test("a path as --name is refused before anything connects", () => {
     expect(push(["-", "--to", "/tmp/x", "--name", "../evil"]).out).toContain("plain file name")
-  })
+  }, BOOT)
 })
