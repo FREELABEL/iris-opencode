@@ -2,7 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { bridgeFetch, dim, bold, highlight, success, writeJson, irisFetch, requireAuth, handleApiError, IRIS_API } from "./iris-api"
-import { transcriptPath, messageLine, appendedSince, SESSION_ID, type TranscriptMessage } from "../lib/remote-transcript"
+import { transcriptPath, messageLine, advance, fromPage, FOLLOW_PAGE, SESSION_ID, type FollowState, type TranscriptMessage } from "../lib/remote-transcript"
 import { probeBridge, assessBridge, printDegradations } from "./subsystem-health"
 import { firstArray } from "../../util/array"
 import { candidateServers, deliverLive, shouldFallBackToBridge, deliveryTimeoutMs, findSessionAcrossServers } from "./session-live-delivery"
@@ -472,25 +472,39 @@ const ReadCommand = cmd({
     }
 
     // Follow by polling the byte cursor: the machine reads only what was appended (#189446).
-    // Pin to the machine that answered so a later poll cannot land on a different one.
+    // Pin to the machine that answered so a later poll cannot land on a different one, and poll at
+    // the server's cap: --limit sizes the first screen only. Polling at --limit lost entries — more
+    // than that between polls and the machine answers with an empty reset (#191302).
     query.machine = data.node_id ?? data.ran_on
-    // Sessions without a cursor (IRIS/opencode keeps them in SQLite, so offset is null) return the
-    // latest page every time; print only what that page adds to the last one.
-    let offset: number | null = data.offset ?? null
-    let page: TranscriptMessage[] = data.messages ?? []
+    query.limit = FOLLOW_PAGE
+    const latest = async () => {
+      const r = await fetchOnce(null)
+      return r?.success ? r : null
+    }
+    // The overlap baseline is the latest full page, not the (possibly 1-row) first screen —
+    // otherwise the first poll would reprint everything the first screen left out.
+    const base = await latest()
+    let state: FollowState = { page: base?.messages ?? data.messages ?? [], offset: base?.offset ?? data.offset ?? null }
     console.log(dim("  following — Ctrl-C to stop"))
     while (true) {
       await Bun.sleep(3000)
-      const next = await fetchOnce(offset)
+      const next = await fetchOnce(state.offset)
       if (!next?.success) {
         console.log(dim(`  (${next?.error ?? "no answer"} — retrying)`))
         continue
       }
-      if (next.reset) { printDivider(); console.log(dim("  transcript rewritten — showing the latest")) }
-      const rows: TranscriptMessage[] = next.messages ?? []
-      if (offset != null && next.offset != null && !next.reset) print(rows)
-      else { print(next.reset ? rows : appendedSince(page, rows)); page = rows }
-      offset = next.offset ?? null
+      const step = advance(state, next)
+      if ("refetch" in step) {
+        const fresh = await latest()
+        if (!fresh) continue
+        const r = fromPage(state, fresh.messages ?? [], fresh.offset ?? null)
+        if (r.gap) { printDivider(); console.log(dim("  more arrived than one page holds — showing the latest")) }
+        print(r.print)
+        state = r.state
+        continue
+      }
+      print(step.print)
+      state = step.state
     }
   },
 })

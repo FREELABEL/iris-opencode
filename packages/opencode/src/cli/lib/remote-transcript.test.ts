@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { appendedSince, messageLine, transcriptPath } from "./remote-transcript"
+import { advance, appendedSince, FOLLOW_PAGE, fromPage, messageLine, transcriptPath } from "./remote-transcript"
 
 // #191230 — read a session's transcript from another machine.
 describe("transcriptPath", () => {
@@ -55,5 +55,41 @@ describe("appendedSince (follow without a cursor)", () => {
 
   test("no overlap means a whole page of new entries", () => {
     expect(appendedSince([m("a")], [m("x"), m("y")])).toEqual([m("x"), m("y")])
+  })
+})
+
+describe("follow (#191302)", () => {
+  const m = (t: string) => ({ role: "assistant", content: t })
+
+  test("a reset is never printed as-is — it asks for the latest page", () => {
+    // The daemon answers an overflow with NO rows and reset:true; printing that lost ALPHA on 2026-10-27.
+    expect(advance({ page: [m("a")], offset: 10 }, { messages: [], offset: 99, reset: true })).toEqual({ refetch: true })
+  })
+
+  test("after a reset, only entries past the overlap print — nothing between polls is lost", () => {
+    const shown = { page: [m("a"), m("b")], offset: 10 }
+    const r = fromPage(shown, [m("a"), m("b"), m("ALPHA"), m("BRAVO")], 200)
+    expect(r.print).toEqual([m("ALPHA"), m("BRAVO")])
+    expect(r.gap).toBe(false)
+    expect(r.state).toEqual({ page: [m("a"), m("b"), m("ALPHA"), m("BRAVO")], offset: 200 })
+  })
+
+  test("a page with no overlap is flagged as a gap", () => {
+    expect(fromPage({ page: [m("a")], offset: 1 }, [m("x"), m("y")], 2).gap).toBe(true)
+  })
+
+  test("with a cursor, appended rows print and extend the baseline", () => {
+    const r = advance({ page: [m("a")], offset: 10 }, { messages: [m("b")], offset: 20 })
+    expect("print" in r && r.print).toEqual([m("b")])
+    expect("state" in r && r.state).toEqual({ page: [m("a"), m("b")], offset: 20 })
+  })
+
+  test("without a cursor, the latest page prints only what it adds", () => {
+    const r = advance({ page: [m("a"), m("b")], offset: null }, { messages: [m("b"), m("c")], offset: null })
+    expect("print" in r && r.print).toEqual([m("c")])
+  })
+
+  test("polls ask for the server's cap, not the first screen's size", () => {
+    expect(FOLLOW_PAGE).toBe(100)
   })
 })

@@ -64,3 +64,40 @@ export function messageLine(m: TranscriptMessage, max = 160): [string, string] {
   }
   return [String(m.role ?? m.type ?? "?"), oneLine(m.content ?? m.text ?? "", max)]
 }
+
+/** What a follow has shown so far: the latest page (the overlap baseline) and the machine's cursor. */
+export type FollowState = { page: TranscriptMessage[]; offset: number | null }
+
+/** The most a poll asks for — the server's cap. Polls never use --limit, which only sizes the first screen. */
+export const FOLLOW_PAGE = 100
+
+/**
+ * One poll's answer → what to print and the new state, or `refetch` when the answer cannot be
+ * used as-is (#191302). A reset comes back EMPTY: the daemon sends no rows when more arrived than a
+ * page holds (session-tail readSince: truncated → reset), so printing it as "the latest" lost every
+ * entry in between. The caller then asks again without a cursor and passes the page to fromPage().
+ */
+export function advance(
+  state: FollowState,
+  res: { messages?: TranscriptMessage[]; offset?: number | null; reset?: boolean },
+): { print: TranscriptMessage[]; state: FollowState } | { refetch: true } {
+  if (res.reset) return { refetch: true }
+  const rows = res.messages ?? []
+  if (state.offset != null && res.offset != null) {
+    // A cursor: these rows are exactly what was appended.
+    return { print: rows, state: { page: [...state.page, ...rows].slice(-FOLLOW_PAGE), offset: res.offset } }
+  }
+  // No cursor (IRIS sessions live in SQLite): the latest page again; print what it adds.
+  return { print: appendedSince(state.page, rows), state: { page: rows, offset: res.offset ?? null } }
+}
+
+/** A freshly fetched latest page after a reset: print what it adds; `gap` when nothing overlaps. */
+export function fromPage(
+  state: FollowState,
+  rows: TranscriptMessage[],
+  offset: number | null,
+): { print: TranscriptMessage[]; state: FollowState; gap: boolean } {
+  const print = appendedSince(state.page, rows)
+  const gap = state.page.length > 0 && rows.length > 0 && print.length === rows.length
+  return { print, state: { page: rows, offset }, gap }
+}
