@@ -199,7 +199,20 @@ $ iris hive doctor  <node>                                 # daemon, commit, dis
 $ iris hive discover <tailnet-ip>                          # is iris installed / current there?
 ```
 
-Every copy is sha256-checked at both ends; a mismatch is a failure, not a warning.
+Every copy is sha256-checked at both ends, and it lands under a hidden temporary name first:
+only a copy whose checksums match is renamed into place. A failed or corrupted transfer leaves
+nothing behind — and never replaces a good copy that was already there.
+
+**Stream straight to a node** — a database dump, a download, anything that writes to stdout —
+without storing it on this machine first. It is hashed as it passes, so it is verified the same way:
+
+```bash
+$ mysqldump mydb | gzip | iris hive fs push backup-box - --to ~/backups --name mydb.sql.gz
+$ curl -sL https://example.com/big.iso | iris hive fs push nas - --to ~/isos --name big.iso --size 4700000000
+```
+
+`--stdin` works in place of `-`. `--name` is required (stdin has no file name). `--size` is optional; give it when you know the
+size, so free space is checked for the whole stream up front.
 
 **What these need, once per pair of machines:**
 
@@ -222,9 +235,13 @@ Every copy is sha256-checked at both ends; a mismatch is a failure, not a warnin
 | "refused SSH for every user tried: …" | key exists; wrong user, or key not authorized for it | `--user <node-user>`; if right, `ssh-setup` |
 | "REFUSED BY macOS PRIVACY (TCC)" | the file exists; the SSH session lacks Full Disk Access | grant it to `sshd-keygen-wrapper`, or use another path |
 
-**Limits today:** one file per argument (folders are refused — zip them first); a push must
-leave 100 MiB free on the node, and refuses if it can't read the node's free space (so Windows
-nodes, which have no `df`, are refused); the file is read fully on the sending side.
+**Free space is checked before anything moves.** A push must leave 100 MiB free on the node. A
+pull checks two places: the node's `/tmp` (it stages a copy there first) and the folder you are
+pulling into. Large transfers have no time limit — they fail only if the connection drops.
+
+**Limits today:** one file per argument (folders are refused — zip them, or stream a `tar`:
+`tar cz ./site | iris hive fs push box - --to ~/ --name site.tgz`); a node whose free space can't be
+read is refused (so Windows nodes, which have no `df`, are refused).
 
 `iris hive enroll` will only run `ssh-setup` for itself when it knows the username (from
 `--user`, `user@host`, or memory) — it no longer asks for a password for a guessed account.

@@ -21,7 +21,7 @@ describe("capability index resolves a re-exported command to its own file", () =
 
   test("the peer `hive files` is indexed once, as the peer command — not shadowing `hive fs`", () => {
     expect(names.filter((n) => n === "hive files")).toHaveLength(1)
-    expect(entries.find((e) => e.name === "hive fs")!.haystack).toContain("your own hive nodes")
+    expect(entries.find((e) => e.name === "hive fs")!.haystack).toContain("between your own machines")
   })
 })
 

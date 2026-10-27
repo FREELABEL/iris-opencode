@@ -547,6 +547,13 @@ const TERMS: Record<string, string[]> = {
   // `hive host run` / `hive vpn connect` (#179098): plain asks reached neither.
   "hive host run": ["run a command on", "remote command", "on a remote host", "on my server", "azure vm", "check a service"],
   "hive vpn connect": ["remote desktop", "rdp"],
+  // How people ask for `hive fs` (#187956). Its name holds no word they type, so "move files" ranked
+  // the PEER `hive files` 2nd and `hive fs` 10th, and "copy file to another machine" missed it.
+  "hive fs": [
+    "move files", "move a file", "copy files", "copy a file", "copy file", "send a file", "send files", "send file",
+    "transfer files", "transfer a file", "file transfer", "upload a file", "another machine", "other machine",
+    "other computer", "my computers", "between machines", "stream a backup", "database backup", "dump to",
+  ],
   // #191176 — your own machines' models, served to your gateway (hive/<model>).
   "hive models": ["serve my models", "local models", "ollama", "my gpu", "my own gpu", "self-hosted model", "run models on my machine", "gpu marketplace"],
   // #191163 — IRIS as the ACP client: run another coding agent from IRIS, and keep it steerable.
