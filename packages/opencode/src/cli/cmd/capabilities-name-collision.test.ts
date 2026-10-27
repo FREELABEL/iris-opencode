@@ -24,3 +24,14 @@ describe("capability index resolves a re-exported command to its own file", () =
     expect(entries.find((e) => e.name === "hive fs")!.haystack).toContain("between your own machines")
   })
 })
+
+describe("capability index collects a group DEFINED with an Export-suffixed name", () => {
+  // `export const HiveHostCommandExport = cmd({...})` was never collected (the definition pattern
+  // required the name to END in Command), so `iris hive host` and all of `iris hive vpn` were
+  // invisible to agents and `iris find` while working fine for a person.
+  test("hive host and hive vpn, with their subcommands, are indexed", () => {
+    for (const n of ["hive host", "hive host run", "hive host policy allow", "hive host lockdown", "hive vpn", "hive vpn connect"])
+      expect(names).toContain(n)
+  })
+})
+

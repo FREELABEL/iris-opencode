@@ -162,7 +162,9 @@ function collectBlocks(dir: string): BlockIndex {
     // only `cmd(` silently dropped the first product built on the new helper from the
     // index — the command resolved for a human typing `iris lexicon` and did not exist
     // for any agent reading capabilities.json, which is the worse of the two failures.
-    for (const m of src.matchAll(/(?:export\s+)?const ([A-Za-z0-9_]+(?:Command|Group|Cmd))\s*=\s*(?:cmd|productCommand)\(\s*\{/g)) {
+    // `(?:Export)?`: a group DEFINED as `export const HiveHostCommandExport = cmd({…})` was never
+    // collected, so `iris hive host` and every subcommand were missing from the index.
+    for (const m of src.matchAll(/(?:export\s+)?const ([A-Za-z0-9_]+(?:Command|Group|Cmd)(?:Export)?)\s*=\s*(?:cmd|productCommand)\(\s*\{/g)) {
       const openIdx = m.index! + m[0].length - 1
       const body = readBlock(src, openIdx)
       if (!body) continue
@@ -542,6 +544,9 @@ const TERMS: Record<string, string[]> = {
   leads: ["crm", "contacts", "prospects", "pipeline", "find people", "find customers", "customers", "outreach", "cold email", "email them", "book calls", "book a call", "sales", "lead generation"],
   agents: ["ai agent", "assistant", "bot"],
   hive: ["compute node", "distributed", "remote machine", "fleet", "daemon"],
+  // `hive host run` / `hive vpn connect` (#179098): plain asks reached neither.
+  "hive host run": ["run a command on", "remote command", "on a remote host", "on my server", "azure vm", "check a service"],
+  "hive vpn connect": ["remote desktop", "rdp"],
   // How people ask for `hive fs` (#187956). Its name holds no word they type, so "move files" ranked
   // the PEER `hive files` 2nd and `hive fs` 10th, and "copy file to another machine" missed it.
   "hive fs": [
