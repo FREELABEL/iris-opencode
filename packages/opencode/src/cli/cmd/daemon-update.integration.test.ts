@@ -66,6 +66,7 @@ beforeAll(async () => {
   put(repo, "daemon/index.js", "require('../lib/a')\n")
   put(repo, "lib/a.js", "module.exports = 'old'\n")
   put(repo, "som/som.js", "module.exports = 1\n")
+  put(repo, "lib/version-manifest.js", "module.exports = {}\n")
   put(repo, "daemonctl", "#!/usr/bin/env bash\necho real daemonctl must never run in tests; exit 99\n")
   OLD = commit("old")
   put(repo, "lib/a.js", "module.exports = 'new'\n")
@@ -244,6 +245,18 @@ describe("iris daemon update — against a fake home", () => {
     expect(existsSync(p.next)).toBe(false)
     expect(ctlCalls()).toEqual([])
     expect(await health()).toBe(OLD)
+  }, 60000)
+
+  test("a commit whose daemon cannot report its commit is refused in pre-flight (it could never verify)", async () => {
+    fakeHome()
+    git("checkout", "-q", NEW)
+    git("rm", "-q", "lib/version-manifest.js")
+    const PRE = commit("no version reporter")
+    git("checkout", "-q", "main")
+    const r = await run({ ref: PRE })
+    expect(r.status).toBe("preflight-failed")
+    expect(r.detail).toContain("predates lib/version-manifest.js")
+    expect(ctlCalls()).toEqual([])
   }, 60000)
 
   test("--dry-run prints the plan and changes nothing", async () => {

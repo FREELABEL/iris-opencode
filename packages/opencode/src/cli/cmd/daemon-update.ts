@@ -354,6 +354,10 @@ export const ENTRY_FILES = ["daemon.js", "index.js", "daemon/index.js"]
 export function preflight(dir: string, node: string): string[] {
   const errors: string[] = []
   if (!existsSync(join(dir, "daemon.js"))) errors.push("no daemon.js in the new tree")
+  // A commit from before #191614 cannot report its commit on /health, so the post-restart check
+  // could never pass and every update to it would roll back. Refuse it up front instead.
+  if (!existsSync(join(dir, "lib", "version-manifest.js")))
+    errors.push("this commit predates lib/version-manifest.js (#191614): its daemon cannot report which commit it runs, so the update could not be verified")
   for (const f of ENTRY_FILES) {
     if (!existsSync(join(dir, f))) continue
     const r = spawnSync(node, ["--check", join(dir, f)], { env: process.env, stdio: "pipe" })
