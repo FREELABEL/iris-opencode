@@ -17,6 +17,8 @@ export interface HiveRunBodyInput {
   timeoutSec: number
   priority?: number
   origin?: DelegationOrigin | null
+  /** --force (#191603): run on this node even though it reports CPU/memory pressure. */
+  force?: boolean
 }
 
 export function buildHiveRunBody(input: HiveRunBodyInput): Record<string, unknown> {
@@ -29,6 +31,7 @@ export function buildHiveRunBody(input: HiveRunBodyInput): Record<string, unknow
     config: { timeout_seconds: input.timeoutSec },
     timeout_seconds: input.timeoutSec,
     ...(input.priority ? { priority: input.priority } : {}),
+    ...(input.force ? { force: true } : {}),
     ...(input.origin ? { metadata: { origin: input.origin } } : {}),
   }
 }
