@@ -12,7 +12,7 @@ import type { FleetNode, RolloutDeps, TaskOutcome } from "./hive-rollout"
 export const OLD = "ccd10f8" + "0".repeat(33)
 export const TARGET = "fbbfe22" + "1".repeat(33)
 
-export type Behavior = "updated" | "rolled-back" | "helper-dies" | "start-fails"
+export type Behavior = "updated" | "updated-but-old-running" | "rolled-back" | "helper-dies" | "start-fails"
 
 export type FakeSpec = {
   name: string
@@ -33,6 +33,7 @@ export type FakeSpec = {
   kept?: string[]
   unreachable?: boolean //      tasks never come back
   dropsDuringUpdate?: boolean //the update task is never answered (machine fell off the network)
+  dispatchFailsDuringUpdate?: boolean // the hub refuses to dispatch the update (node went offline)
 }
 
 export function dryPlan(o: { from?: string | null; upToDate?: boolean; modified?: string[]; missing?: string[]; untracked?: string[]; kept?: string[]; conflicts?: string[]; deps?: boolean; oldCli?: boolean; kind?: string; blocked?: string | null } = {}): any {
@@ -85,6 +86,7 @@ case "$1" in
     echo "✓ restart-scheduled  ccd10f8 → \${REF:0:7}"
     case "$B" in
       updated) ( sleep 0.3; echo "$REF" > "$F/health"; echo "{\\"ok\\":true,\\"status\\":\\"updated\\",\\"to\\":\\"$REF\\",$(cat "$F/kept_json" 2>/dev/null)\\"at\\":\\"$NOW\\"}" > "$L" ) >/dev/null 2>&1 & ;;
+      updated-but-old-running) ( sleep 0.3; echo "{\\"ok\\":true,\\"status\\":\\"updated\\",\\"to\\":\\"$REF\\",\\"at\\":\\"$NOW\\"}" > "$L" ) >/dev/null 2>&1 & ;;
       rolled-back) ( sleep 0.3; echo "{\\"ok\\":false,\\"status\\":\\"rolled-back\\",\\"to\\":\\"$REF\\",\\"detail\\":\\"it never answered /health; the previous version is running again\\",\\"at\\":\\"$NOW\\"}" > "$L" ) >/dev/null 2>&1 & ;;
     esac
     exit 0 ;;
@@ -164,6 +166,9 @@ export function fakeFleet(specs: FakeSpec[], o: { localName?: string; localCli?:
       const taskId = `task-${++taskN}`
       if (s.online === false) return { finished: false, exit_code: null, stdout: "", stderr: "", error: "HTTP 409 node offline", taskId }
       if (s.unreachable) return { finished: false, exit_code: null, stdout: "", stderr: "", taskId }
+      if (s.dispatchFailsDuringUpdate && script.includes("--detach-restart --restart-delay")) {
+        return { finished: false, exit_code: null, stdout: "", stderr: "", error: "HTTP 409 node went offline", taskId }
+      }
       if (s.dropsDuringUpdate && script.includes("--detach-restart --restart-delay")) {
         return { finished: false, exit_code: null, stdout: "", stderr: "", taskId }
       }

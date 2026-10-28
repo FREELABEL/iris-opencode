@@ -145,6 +145,22 @@ describe("iris hive rollout — against fake nodes", () => {
     expect(r.next[0]).toBe(`iris hive rollout --ref ${TARGET} --nodes bisnow`)
   }, 60000)
 
+  test("the hub refusing to dispatch the update (node just went offline) is pending, not a failure", async () => {
+    const f = mk([{ name: "a" }, { name: "gone", dispatchFailsDuringUpdate: true }, { name: "c" }])
+    const r = await runRollout(f.deps, { ref: "main", pollSec: 0.1, waitSec: 20 })
+    expect(statusOf(r, "gone")).toBe("offline")
+    expect(r.results.find((x) => x.name === "gone")!.detail).toContain("could not dispatch")
+    expect(statusOf(r, "c")).toBe("updated")
+  }, 60000)
+
+  test("the helper saying 'updated' is not enough: if the node's /health still reports the old commit, it fails", async () => {
+    const f = mk([{ name: "a", behavior: "updated-but-old-running" }, { name: "b" }])
+    const r = await runRollout(f.deps, { ref: "main", pollSec: 0.1, waitSec: 3 })
+    expect(statusOf(r, "a")).toBe("failed")
+    expect(r.results[0].detail).toContain("/health reports ccd10f8")
+    expect(statusOf(r, "b")).toBe("not-attempted")
+  }, 60000)
+
   test("an online node that never answers the plan is pending: unreachable", async () => {
     const f = mk([{ name: "a" }, { name: "ghost", unreachable: true }])
     const r = await runRollout(f.deps, { ref: "main", dryRun: true })
