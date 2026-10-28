@@ -1084,6 +1084,8 @@ export default function Page() {
   }
 
   const handleKeyDown = (event: KeyboardEvent) => {
+    // Every column listens on the window; only the focused one may pull keys into its composer.
+    if (!paneFocused()) return
     const path = event.composedPath()
     const target = path.find((item): item is HTMLElement => item instanceof HTMLElement)
     const activeElement = deepActiveElement()

@@ -3,7 +3,7 @@ import { useNavigate, useParams } from "@solidjs/router"
 import { createResizeObserver } from "@solid-primitives/resize-observer"
 import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
 import { Icon as IconV2 } from "@opencode-ai/ui/v2/icon"
-import { createEffect, createMemo, createSignal, For, on, Show, Suspense, untrack, type Component, type ParentProps } from "solid-js"
+import { batch, createEffect, createMemo, createSignal, For, on, Show, Suspense, untrack, type Component, type ParentProps } from "solid-js"
 import { useCommand } from "@/context/command"
 import { useLanguage } from "@/context/language"
 import { SessionPaneProvider, type SessionPane } from "@/context/session-pane"
@@ -11,7 +11,7 @@ import { useSplit } from "@/context/split"
 import { useTabs } from "@/context/tabs"
 import { requireServerKey, sessionHref } from "@/utils/session-route"
 import { showToast } from "@/utils/toast"
-import { closeColumn, maxColumns, paneKey, PANE_GAP, prune, reconcile, samePane, visible, type PaneRef } from "./split-model"
+import { closeColumn, maxColumns, open, paneKey, PANE_GAP, prune, reconcile, samePane, visible, type PaneRef } from "./split-model"
 
 type ServerRoute = Component<ParentProps<{ serverKey?: () => string }>>
 
@@ -44,7 +44,12 @@ export function SessionSplitRoute(props: { server: ServerRoute; content: Compone
   let row: HTMLDivElement | undefined
   createResizeObserver(
     () => row,
-    ({ width }) => setWidth(width),
+    // A hidden row measures 0 (the route's Suspense hides it while a column loads). Taken
+    // literally, 0 fits one column: the split fell back to one, that page's loading kept the
+    // row hidden, and the window stayed on one column. Only a real width changes the layout.
+    ({ width }) => {
+      if (width > 0) setWidth(width)
+    },
   )
 
   // A tab picked from the strip while in a split lands in the column you were last in. Also runs
@@ -72,28 +77,44 @@ export function SessionSplitRoute(props: { server: ServerRoute; content: Compone
     if (kept !== panes) split.set(kept)
   })
 
-  const shown = createMemo(() => visible(split.panes(), route(), maxColumns(width())))
-  const keys = createMemo(() => shown().map(paneKey))
-  const multi = createMemo(() => keys().length >= 2 && keys().includes(paneKey(route())))
-  // Where focus is going. Navigation lands a moment after it is asked for; a split or close in
-  // that gap (fast keys) acted on the column just left, and the split drifted down to nothing.
+  // Where focus is going. A navigation is a router transition: the URL moves at once, but the
+  // route's params only when the transition commits. Layout reads this, not the route — reading
+  // the route, a close showed the split without the (lagging) route in it, fell back to one
+  // column, mounted a fresh session page that suspended, which held the transition open, which
+  // kept the route stale: the window stuck on one column for good. Actions read it too.
   const [moving, setMoving] = createSignal<PaneRef>()
   // Cleared by any route change, so a navigation that lands elsewhere cannot leave it stale.
   createEffect(on(route, () => setMoving(undefined), { defer: true }))
-  const focused = () => moving() ?? route()
+  const focused = createMemo(() => moving() ?? route(), undefined, { equals: samePane })
+
+  // What is drawn: the stored split with the focused session already placed. Derived, not written
+  // by an effect first — an effect runs after the render, so for one render after a tab click the
+  // focused session was missing, the view fell back to one column, and that mount stuck the
+  // window blank. The effect above only saves this so it survives a restart.
+  const drawn = createMemo(() => (split.ready() ? reconcile(split.panes(), focused(), split.last()) : split.panes()))
+  const shown = createMemo(() => visible(drawn(), focused(), maxColumns(width())))
+  const keys = createMemo(() => shown().map(paneKey))
+  const multi = createMemo(() => keys().length >= 2 && keys().includes(paneKey(focused())))
   const focusPane = (p: PaneRef) => {
     setMoving(p)
     navigate(sessionHref(p.server as never, p.sessionId))
   }
+  // One update: written one after the other, the split briefly held [Y, Z] while focus was still
+  // the closed X — "not in the split" — so the view swapped to one column, began mounting a
+  // session page, swapped straight back, and the half-mounted page left the route's Suspense
+  // waiting on a load nobody would finish: a blank window.
   const closePane = (p: PaneRef) => {
-    const next = closeColumn(split.panes(), p, focused())
-    split.set(next.panes)
-    if (next.focus) focusPane(next.focus)
+    const next = closeColumn(drawn(), p, focused())
+    batch(() => {
+      split.set(next.panes)
+      if (next.focus) setMoving(next.focus)
+    })
+    if (next.focus) navigate(sessionHref(next.focus.server as never, next.focus.sessionId))
   }
 
   const splitRight = () => {
     const current = focused()
-    const onScreen = split.panes()
+    const onScreen = drawn()
     const candidate = tabs.store.find(
       (t) =>
         t.type === "session" &&
@@ -108,7 +129,7 @@ export function SessionSplitRoute(props: { server: ServerRoute; content: Compone
       showToast({ title: language.t("split.narrow.title"), description: language.t("split.narrow.description") })
       return
     }
-    split.open(current, { server: candidate.server, sessionId: candidate.sessionId })
+    split.set(open(onScreen, current, { server: candidate.server, sessionId: candidate.sessionId }))
   }
   const step = (by: number) => {
     const list = shown()
@@ -166,10 +187,10 @@ export function SessionSplitRoute(props: { server: ServerRoute; content: Compone
                 return (
                   <SplitColumn
                     pane={pane}
-                    focused={() => samePane(pane, route())}
+                    focused={() => samePane(pane, focused())}
                     focus={() => focusPane(pane)}
                     close={() => closePane(pane)}
-                    sameServer={() => pane.server === route().server}
+                    sameServer={() => pane.server === focused().server}
                     server={Server}
                     content={Content}
                   />

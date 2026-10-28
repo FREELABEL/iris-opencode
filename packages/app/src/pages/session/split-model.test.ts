@@ -9,6 +9,8 @@ describe("split model (#191484)", () => {
     expect(maxColumns(1000)).toBe(2)
     expect(maxColumns(1460)).toBe(3)
     expect(maxColumns(4000)).toBe(3)
+    // a hidden row measures 0 — that is not a narrow window
+    expect(maxColumns(0)).toBe(3)
   })
 
   test("opening seeds the split with the focused session and puts the new one to its right", () => {

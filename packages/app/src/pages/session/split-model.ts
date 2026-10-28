@@ -17,7 +17,8 @@ export const samePane = (a: PaneRef, b: PaneRef) => a.server === b.server && a.s
 
 /** How many columns fit: derived from width, never a fixed 3 (a 1440 laptop with the sidebar open fits 2). */
 export function maxColumns(width: number | undefined) {
-  if (width === undefined) return PANE_MAX
+  // Unknown or unmeasurable (hidden): never the reason a split collapses.
+  if (width === undefined || width <= 0) return PANE_MAX
   return Math.max(1, Math.min(PANE_MAX, Math.floor((width + PANE_GAP) / (PANE_MIN_WIDTH + PANE_GAP))))
 }
 
