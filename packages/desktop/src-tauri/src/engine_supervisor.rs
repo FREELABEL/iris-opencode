@@ -73,6 +73,15 @@ static PAUSED_UNTIL: Mutex<Option<Instant>> = Mutex::new(None);
 /// the window has not asked yet — it will ask when it loads, and get whatever is current then.
 static WINDOW_CREDENTIAL: Mutex<Option<Option<String>>> = Mutex::new(None);
 static RESTARTS: Mutex<VecDeque<Instant>> = Mutex::new(VecDeque::new());
+/// The engine (port + spawn generation) that was running when the window was handed its
+/// credential (#191508). A reload decision compares against this, not against "a respawn happened".
+static WINDOW_ENGINE: Mutex<Option<EngineId>> = Mutex::new(None);
+/// When the watchdog last missed a health probe, and how many in a row it had then. Logged with
+/// every reload decision and every document load, so a reload can be tied to a probe blip.
+static LAST_MISS: Mutex<Option<(Instant, u32)>> = Mutex::new(None);
+/// How many times the main window's document has started loading. 1 is the launch; anything
+/// above it is a reload, whoever asked for it.
+static PAGE_LOADS: AtomicU64 = AtomicU64::new(0);
 
 const RESTART_WINDOW: Duration = Duration::from_secs(5 * 60);
 const MAX_RESTARTS: usize = 5;
@@ -121,6 +130,106 @@ pub fn note_window_credential(credential: Option<String>) {
     if let Ok(mut c) = WINDOW_CREDENTIAL.lock() {
         *c = Some(credential);
     }
+    if let Ok(mut e) = WINDOW_ENGINE.lock() {
+        *e = Some(current_engine());
+    }
+}
+
+/// Which engine is running: the port the window was built against and the spawn generation,
+/// which changes exactly when a new engine process is started.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EngineId {
+    pub port: u32,
+    pub generation: u64,
+}
+
+fn current_engine() -> EngineId {
+    EngineId {
+        port: PORT.load(Ordering::SeqCst),
+        generation: GENERATION.load(Ordering::SeqCst),
+    }
+}
+
+/// What the health probe says about the engine the window would reconnect to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Probe {
+    Answering,
+    NotAnswering,
+}
+
+/// Whether to reload the window, and why — the one place that decides it (#191508).
+///
+/// A reload throws away everything the person has on screen (scroll, open panels, a half-typed
+/// prompt) and paints the window black while it loads. It is only worth that when the window
+/// CANNOT reach the engine any other way: the engine moved to another port, or a new engine
+/// process holds a credential the window was not handed. Same port and same process, or a probe
+/// that missed and then recovered, is not a new engine — the window's own retry reconnects it.
+pub fn should_reload(prev: Option<EngineId>, next: EngineId, probe: Probe, locked_out: bool) -> (bool, &'static str) {
+    let Some(prev) = prev else {
+        return (false, "the window has not loaded yet; it will be handed the current engine");
+    };
+    if probe == Probe::NotAnswering {
+        return (false, "the engine is not answering health; a reload would only load an error");
+    }
+    if prev == next {
+        return (false, "same engine (same port, same process)");
+    }
+    if prev.port != next.port {
+        return (true, "the engine moved to another port");
+    }
+    if locked_out {
+        return (true, "a new engine process holds a credential the window was not handed");
+    }
+    (false, "a new engine process on the same port with the same credential; the window reconnects by itself")
+}
+
+fn last_miss_text() -> String {
+    match LAST_MISS.lock().ok().and_then(|m| *m) {
+        Some((at, n)) => format!("last missed probe {}s ago ({n}/{MISSES_BEFORE_RESPAWN})", at.elapsed().as_secs()),
+        None => "no missed probe".to_string(),
+    }
+}
+
+fn window_url(app: &AppHandle) -> String {
+    app.get_webview_window("main")
+        .and_then(|w| w.url().ok())
+        .map(|u| u.to_string())
+        .unwrap_or_else(|| "?".to_string())
+}
+
+/// The main window's document started loading (tauri's on_page_load). The first is the launch;
+/// every later one is a reload, and is written to engine.log with what the engine looked like.
+pub fn note_page_load(app: &AppHandle, url: &str) {
+    let n = PAGE_LOADS.fetch_add(1, Ordering::SeqCst) + 1;
+    let engine = current_engine();
+    let window = WINDOW_ENGINE.lock().ok().and_then(|e| *e);
+    let what = if n == 1 { "window loading" } else { "window RELOADING" };
+    log(
+        app,
+        &format!(
+            "{what} (load #{n}) {url} — engine port {} generation {}, window was handed port {} generation {}, {}",
+            engine.port,
+            engine.generation,
+            window.map(|w| w.port.to_string()).unwrap_or_else(|| "-".into()),
+            window.map(|w| w.generation.to_string()).unwrap_or_else(|| "-".into()),
+            last_miss_text(),
+        ),
+    );
+}
+
+/// A line from the window (`window.onerror`, `unhandledrejection`, a document load), for
+/// engine.log. Bounded and on one line; an unknown kind is labelled as such rather than trusted.
+pub fn renderer_line(kind: &str, message: &str) -> String {
+    let kind = match kind {
+        "load" | "error" | "rejection" => kind,
+        _ => "other",
+    };
+    let flat: String = message.chars().map(|c| if c == '\n' || c == '\r' { ' ' } else { c }).collect();
+    let mut clipped: String = flat.chars().take(2000).collect();
+    if flat.chars().count() > 2000 {
+        clipped.push('…');
+    }
+    format!("[RENDERER] {kind}: {}", redact(&clipped))
 }
 
 /// Whether the window holds a credential the running engine will refuse. False until the window
@@ -132,21 +241,36 @@ fn window_is_locked_out(handed: Option<&Option<String>>, current: Option<&str>) 
     }
 }
 
-/// A respawned engine is answering. If the window was handed a different credential than this
-/// engine has, reload it so it asks again — otherwise it retries with the wrong one forever.
-fn reconnect_window(app: &AppHandle) {
+/// A respawned engine is answering. Decide (and always log) whether the window must reload to
+/// reach it — see `should_reload`.
+fn reconnect_window(app: &AppHandle, reason: &str) {
     let current = crate::engine_auth::current_password();
     let locked_out = WINDOW_CREDENTIAL
         .lock()
         .map(|handed| window_is_locked_out(handed.as_ref(), current.as_deref()))
         .unwrap_or(false);
-    if !locked_out {
+    let prev = WINDOW_ENGINE.lock().ok().and_then(|e| *e);
+    let next = current_engine();
+    let (reload, why) = should_reload(prev, next, Probe::Answering, locked_out);
+    log(
+        app,
+        &format!(
+            "after respawn ({reason}): {} — {why}. old port {} generation {}, new port {} generation {}, probe answering, {}, url {}",
+            if reload { "RELOADING the window" } else { "not reloading the window" },
+            prev.map(|p| p.port.to_string()).unwrap_or_else(|| "-".into()),
+            prev.map(|p| p.generation.to_string()).unwrap_or_else(|| "-".into()),
+            next.port,
+            next.generation,
+            last_miss_text(),
+            window_url(app),
+        ),
+    );
+    if !reload {
         return;
     }
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
-    log(app, "the window holds a different engine credential than the respawned engine — reloading it");
     if let Ok(mut c) = WINDOW_CREDENTIAL.lock() {
         *c = None;
     }
@@ -369,7 +493,7 @@ fn respawn(app: AppHandle, reason: &'static str) {
             crate::set_engine_child(&app, child);
 
             if wait_until_healthy(port, READY_BUDGET).await {
-                reconnect_window(&app);
+                reconnect_window(&app, reason);
                 if SAFE_MODE.load(Ordering::SeqCst) && reason == "safe mode" {
                     entered_safe_mode(&app);
                 } else {
@@ -446,10 +570,16 @@ pub fn start_watchdog(app: AppHandle) {
                 continue;
             }
             if healthy(port).await {
+                if misses > 0 {
+                    log(&app, &format!("health probe answered again after {misses} miss(es) — same engine, nothing to do"));
+                }
                 misses = 0;
                 continue;
             }
             misses += 1;
+            if let Ok(mut m) = LAST_MISS.lock() {
+                *m = Some((Instant::now(), misses));
+            }
             log(&app, &format!("health probe missed ({misses}/{MISSES_BEFORE_RESPAWN})"));
             if misses >= MISSES_BEFORE_RESPAWN {
                 misses = 0;
@@ -657,6 +787,51 @@ mod tests {
         // OPENCODE_PORT: a developer's engine is already running there — use it.
         assert!(should_attach(true, true));
         assert!(!should_attach(true, false));
+    }
+
+    // #191508: the reload decision. A reload costs the person everything on screen; it must only
+    // happen when the window cannot reach the engine any other way.
+    const A: EngineId = EngineId { port: 52562, generation: 1 };
+
+    #[test]
+    fn the_same_engine_is_never_a_reason_to_reload() {
+        // Same port, same process — even if something thinks the credential differs.
+        assert!(!should_reload(Some(A), A, Probe::Answering, false).0);
+        assert!(!should_reload(Some(A), A, Probe::Answering, true).0);
+    }
+
+    #[test]
+    fn a_new_process_on_the_same_port_with_the_same_credential_is_left_to_reconnect() {
+        let respawned = EngineId { generation: 2, ..A };
+        assert!(!should_reload(Some(A), respawned, Probe::Answering, false).0);
+    }
+
+    #[test]
+    fn a_new_process_with_a_credential_the_window_lacks_reloads() {
+        let respawned = EngineId { generation: 2, ..A };
+        assert!(should_reload(Some(A), respawned, Probe::Answering, true).0);
+    }
+
+    #[test]
+    fn an_engine_on_another_port_reloads() {
+        let moved = EngineId { port: 52600, generation: 2 };
+        assert!(should_reload(Some(A), moved, Probe::Answering, false).0);
+    }
+
+    #[test]
+    fn an_engine_that_is_not_answering_or_a_window_that_has_not_loaded_is_never_reloaded() {
+        let moved = EngineId { port: 52600, generation: 2 };
+        assert!(!should_reload(Some(A), moved, Probe::NotAnswering, true).0);
+        assert!(!should_reload(None, moved, Probe::Answering, true).0);
+    }
+
+    #[test]
+    fn renderer_lines_are_one_bounded_redacted_line() {
+        let line = renderer_line("error", "TypeError: x\n at f (index.js:1:2)");
+        assert_eq!(line, "[RENDERER] error: TypeError: x  at f (index.js:1:2)");
+        assert!(renderer_line("rejection", &"y".repeat(5000)).chars().count() < 2100);
+        assert!(renderer_line("<script>", "hi").starts_with("[RENDERER] other: "));
+        assert!(!renderer_line("error", "token 3f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c").contains("3f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c"));
     }
 
     #[test]
