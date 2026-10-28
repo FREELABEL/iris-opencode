@@ -24,7 +24,7 @@ export interface MsgSender {
 }
 
 export function resolveMsgSender(
-  nodes: Array<{ id: unknown; name?: unknown }>,
+  nodes: Array<Record<string, unknown>>,
   local: LocalNodeResolution,
 ): MsgSender {
   // A hostname match is "uncertain" by contract — a guess, which is exactly the defect.
