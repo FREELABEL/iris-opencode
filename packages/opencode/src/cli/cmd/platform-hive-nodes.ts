@@ -189,8 +189,13 @@ const HiveNodesListCommand = cmd({
       nodes = nodes.filter((n) => n.connection_status === argv.status)
     }
 
+    // WHICH COMMIT each node runs, and whether it is behind main (#191614). Best effort: offline,
+    // rate-limited or a GitHub outage leaves "behind" unknown rather than failing the list.
+    const { commitViews } = await import("./daemon-update-fleet")
+    const views = await commitViews(nodes.map((n) => (n as any).daemon_version))
+
     if (argv.json) {
-      await writeJson(nodes)
+      await writeJson(nodes.map((n, i) => ({ ...n, daemon_commit: views.byIndex[i].commit, daemon_drift: views.byIndex[i].drift, behind_main: views.byIndex[i].behind, main_commit: views.main })))
       return
     }
 
@@ -280,6 +285,9 @@ const HiveNodesListCommand = cmd({
         console.log(`    ${dim(`uptime: unknown — ${up.reason}`)}`)
       }
 
+      const cv = views.byIndex[nodes.indexOf(n)]
+      const cvText = cv.text.replace("<name>", n.name)
+      console.log(`    ${dim("daemon commit:")} ${cv.behind || cv.drift ? `${UI.Style.TEXT_WARNING}${cvText}${UI.Style.TEXT_NORMAL}` : cvText}`)
       const ver = (n as any).daemon_version
       const caps = (n as any).bridge_capabilities
       if (ver || caps) {
