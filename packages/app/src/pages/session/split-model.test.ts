@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { close, closeColumn, dropSlot, previewBox, openAt, maxColumns, open, paneKey, prune, reconcile, visible, type PaneRef } from "./split-model"
+import { close, closeColumn, dropSlot, finalSlot, insertIndex, previewBox, openAt, maxColumns, open, paneKey, prune, reconcile, visible, type PaneRef } from "./split-model"
 
 const p = (id: string, server = "local"): PaneRef => ({ server, sessionId: id })
 
@@ -86,5 +86,27 @@ describe("split model (#191484)", () => {
     expect(previewBox(1016, 3, 0)).toEqual({ left: 0, width: third })
     expect(previewBox(1016, 3, 1)).toEqual({ left: third + 8, width: third })
     expect(previewBox(1016, 3, 2)).toEqual({ left: 2 * (third + 8), width: third })
+  })
+
+  test("make room: the slot is read against the final layout, so it does not move while columns slide", () => {
+    // one chat, dragging a second in: halves
+    expect(finalSlot(1000, 2, 200)).toBe(0)
+    expect(finalSlot(1000, 2, 700)).toBe(1)
+    // two chats, dragging a third in: thirds
+    expect(finalSlot(900, 3, 100)).toBe(0)
+    expect(finalSlot(900, 3, 450)).toBe(1)
+    expect(finalSlot(900, 3, 899)).toBe(2)
+    expect(finalSlot(900, 3, 5000)).toBe(2)
+    expect(finalSlot(0, 3, 100)).toBe(0)
+  })
+
+  test("make room: a visible slot maps to the stored split around it", () => {
+    const split = [p("a"), p("b")]
+    expect(insertIndex(split, split, 0)).toBe(0) // before a
+    expect(insertIndex(split, split, 1)).toBe(1) // between a and b
+    expect(insertIndex(split, split, 2)).toBe(2) // after b
+    expect(insertIndex([p("a")], [p("a")], 1)).toBe(1) // from one column: to its right
+    // when not every column is drawn, the slot is relative to what is
+    expect(insertIndex([p("a"), p("b"), p("c")], [p("b"), p("c")], 0)).toBe(1)
   })
 })

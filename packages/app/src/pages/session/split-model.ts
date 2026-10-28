@@ -76,6 +76,29 @@ export function previewBox(width: number, count: number, index: number, gap = PA
   return { left: at * (column + gap), width: column }
 }
 
+/**
+ * MAKE ROOM (#191484): while a tab is dragged in, the row is drawn as it will be after the drop.
+ * The slot comes from the pointer against that FINAL layout — `count` equal columns over `width` —
+ * never from the columns on screen, which are sliding to make room and would move the target
+ * under the pointer.
+ */
+export function finalSlot(width: number, count: number, x: number) {
+  const n = Math.max(1, count)
+  if (width <= 0) return 0
+  return Math.max(0, Math.min(n - 1, Math.floor((x / width) * n)))
+}
+
+/**
+ * Where in the stored split a drop at visible `slot` goes. `visible` are the columns on screen,
+ * the dragged session excluded; `base` the stored split, also without it. The slot before the
+ * first visible column, between two, or after the last.
+ */
+export function insertIndex(base: PaneRef[], visible: PaneRef[], slot: number) {
+  if (visible.length === 0) return 0
+  if (slot < visible.length) return Math.max(0, base.findIndex((p) => samePane(p, visible[slot])))
+  return base.findIndex((p) => samePane(p, visible[visible.length - 1])) + 1
+}
+
 /** Remove a column. One left means no split at all. */
 export function close(panes: PaneRef[], target: PaneRef): PaneRef[] {
   const next = panes.filter((p) => !samePane(p, target))

@@ -64,6 +64,7 @@ export const dict = {
   "split.full.description": "Close a column first, or widen the window.",
   "split.drop.here": "Open “{{title}}” here",
   "split.drop.untitled": "this session",
+  "split.drop.opens": "opens here",
   "split.drop.self": "Drag another tab here to see both side by side",
   "split.drop.narrow": "Widen the window to split",
   "split.drop.full": "No room for another column — close one first",
