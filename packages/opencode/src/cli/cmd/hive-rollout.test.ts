@@ -124,10 +124,54 @@ describe("what the node said", () => {
     expect(p.plan.status).toBe("dry-run")
     expect(parseProbe("@@health_commit=unknown\n").healthCommit).toBeNull()
   })
-  test("planCounts: compacted counts win; an old CLI's untracked files count as changes", () => {
-    expect(planCounts({ plan: { current: { modified: ["a"], missing: [], untracked: ["u"] }, keptYours: ["u"], untrackedConflicts: [] } })).toEqual({ localMods: 1, kept: 1, keptKnown: true })
-    expect(planCounts({ plan: { current: { modified: [], missing: [], untracked: ["u"] } } })).toEqual({ localMods: 1, kept: 0, keptKnown: false })
-    expect(planCounts({ plan: { current: { modified: ["a"] }, keptYours: [], _counts: { modified: 300, missing: 0, untrackedConflicts: 2, keptYours: 4 } } })).toEqual({ localMods: 302, kept: 4, keptKnown: true })
+  test("planCounts splits shipped edits from added files; the capability flag (or keptYours) marks a current CLI", () => {
+    expect(planCounts({ features: ["keeps-added-files"], plan: { current: { modified: ["a"], missing: [], untracked: ["u"] }, keptYours: ["u"], untrackedConflicts: [] } })).toEqual({ shipped: 1, conflicts: 0, added: 1, kept: 1, keepsAdded: true })
+    expect(planCounts({ plan: { current: { modified: [], missing: [], untracked: ["u"] } } })).toEqual({ shipped: 0, conflicts: 0, added: 1, kept: 0, keepsAdded: false })
+    expect(planCounts({ plan: { current: { modified: ["a"] }, keptYours: [], _counts: { modified: 300, missing: 0, untracked: 6, untrackedConflicts: 2, keptYours: 4 } } })).toEqual({ shipped: 300, conflicts: 2, added: 6, kept: 4, keepsAdded: true })
+  })
+
+  // Real fleet, 2026-10-28 (CLI 1.5.21 nodes already at the target, carrying files people added).
+  const at = (dry: any, cli = "1.5.21") => ({
+    finished: true,
+    exit_code: 0,
+    stderr: "",
+    stdout: `@@cli=${cli}\n@@health_ok=1\n@@health_commit=${dry.from}\n@@has_update=1\n@@dry_rc=0\n@@plan_begin\n${JSON.stringify(dry)}\n@@plan_end\n`,
+  })
+  const oldDry = (from: string, untracked: string[], modified: string[] = []) => ({
+    ok: true,
+    status: "dry-run",
+    from,
+    to: T,
+    plan: { target: T, upToDate: false, blocked: "the current install has local changes (listed above)", depsChanged: false, current: { kind: "manifest", commit: from, modified, missing: [], untracked } },
+  })
+  const pb = { target: T, cliRequired: "1.5.21", local: false, nowMs: 0 }
+  test("a node ALREADY at the target is up to date — local files are info, never 'needs --force', never scheduled", () => {
+    const r = planRow(node("iris-hive-001"), { ...pb, probe: at(oldDry(T, ["som/send-approved-replies.spec.ts", "som/atlas/note.md"])) })
+    expect(r.status).toBe("up-to-date")
+    expect(r.detail).toContain("2 added file(s)")
+    expect(r.detail).not.toContain("shipped")
+    expect(orderRollout([r]).canary).toBeNull()
+  })
+  test("an old CLI (no keep-added-files) with only added files is 'CLI update first', and says they are added, not shipped edits", () => {
+    const r = planRow(node("mac"), { ...pb, probe: at(oldDry(O, ["som/save-instagram-session.spec.ts"])) })
+    expect(r.status).toBe("ready-cli")
+    expect(r.cliOk).toBe(false)
+    expect(r.localMods).toBe(0)
+    expect(r.detail).toContain("1 added file(s) — old CLI would block; updating CLI first")
+    expect(r.detail).not.toContain("shipped")
+  })
+  test("an old CLI with real edits to shipped files still needs --force, and names both kinds", () => {
+    const r = planRow(node("mac"), { ...pb, probe: at(oldDry(O, ["mine.md"], ["lib/a.js"])) })
+    expect(r.status).toBe("needs-force")
+    expect(r.detail).toContain("1 edit(s) to shipped files")
+    expect(r.detail).toContain("1 added file(s)")
+  })
+  test("a current CLI: added files read 'kept on update' and do not block", () => {
+    const d = { ...oldDry(O, ["mine.md"]), features: ["keeps-added-files"] }
+    d.plan = { ...d.plan, blocked: null, keptYours: ["mine.md"], untrackedConflicts: [] } as any
+    const r = planRow(node("mac"), { ...pb, probe: at(d, "1.5.22") })
+    expect(r.status).toBe("ready")
+    expect(r.detail).toBe("1 added file(s) (kept on update)")
   })
   test("probeScript only ever dry-runs, and refuses a ref that is not a commit", () => {
     const s = probeScript(T)

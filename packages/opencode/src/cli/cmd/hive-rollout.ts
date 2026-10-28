@@ -98,6 +98,8 @@ export type PlanRow = {
   localMods: number | null
   /** Files a person added that will be kept. */
   kept: number | null
+  /** Every untracked file a person added (kept by a current CLI, blocking for an old one). */
+  added?: number | null
   deps: boolean | null
   status: RowStatus
   detail?: string
@@ -252,7 +254,7 @@ const FIND_NODE = [
 const COMPACT_JS =
   "const j=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));const p=j.plan||{};const c=p.current||{};" +
   "const cut=(a)=>Array.isArray(a)?a.slice(0,20):[];const n=(a)=>Array.isArray(a)?a.length:0;" +
-  "console.log(JSON.stringify({ok:j.ok,status:j.status,from:j.from,to:j.to,detail:j.detail,plan:p.target?{upToDate:p.upToDate,blocked:p.blocked,depsChanged:p.depsChanged,depsReason:p.depsReason," +
+  "console.log(JSON.stringify({ok:j.ok,status:j.status,from:j.from,to:j.to,detail:j.detail,features:j.features,plan:p.target?{upToDate:p.upToDate,blocked:p.blocked,depsChanged:p.depsChanged,depsReason:p.depsReason," +
   "current:{kind:c.kind,commit:c.commit,note:c.note,modified:cut(c.modified),missing:cut(c.missing),untracked:cut(c.untracked)}," +
   "keptYours:p.keptYours===undefined?undefined:cut(p.keptYours),untrackedConflicts:p.untrackedConflicts===undefined?undefined:cut(p.untrackedConflicts)," +
   "_counts:{modified:n(c.modified),missing:n(c.missing),untracked:n(c.untracked),keptYours:n(p.keptYours),untrackedConflicts:n(p.untrackedConflicts)}}:undefined}))"
@@ -360,16 +362,32 @@ export function parseVerify(stdout: string): { last: any; healthOk: boolean; hea
 }
 
 /** Counts from a dry-run result, full or compacted. */
-export function planCounts(dry: any): { localMods: number; kept: number; keptKnown: boolean } | null {
+/** The capability a node's `daemon update` must have before the rollout trusts its plan. */
+export const KEEPS_ADDED_FILES = "keeps-added-files"
+
+/**
+ * Counts from a dry-run result, full or compacted, split by what they ARE:
+ *   shipped  — modified/missing files the install shipped (real edits; need --force)
+ *   conflicts — added files at a path the target ships with different bytes (need --force)
+ *   added    — every untracked file a person added
+ *   kept     — added files the update keeps (only known to a CLI that keeps them)
+ * keepsAdded: the node's CLI has the keep-added-files fix. Its absence means an OLD CLI, whose
+ * dry run calls every added file a "local change" and whose real update would block on them.
+ */
+export function planCounts(dry: any): { shipped: number; conflicts: number; added: number; kept: number; keepsAdded: boolean } | null {
   const p = dry?.plan
   if (!p || !p.current) return null
   const c = p.current
   const cnt = p._counts
   const len = (k: string, arr: unknown) => (cnt && typeof cnt[k] === "number" ? cnt[k] : Array.isArray(arr) ? arr.length : 0)
-  const keptKnown = p.keptYours !== undefined
-  // An older CLI has no keptYours/untrackedConflicts: every untracked file counted as a change.
-  const conflicts = keptKnown ? len("untrackedConflicts", p.untrackedConflicts) : len("untracked", c.untracked)
-  return { localMods: len("modified", c.modified) + len("missing", c.missing) + conflicts, kept: keptKnown ? len("keptYours", p.keptYours) : 0, keptKnown }
+  const keepsAdded = (Array.isArray(dry.features) && dry.features.includes(KEEPS_ADDED_FILES)) || p.keptYours !== undefined
+  return {
+    shipped: len("modified", c.modified) + len("missing", c.missing),
+    conflicts: keepsAdded ? len("untrackedConflicts", p.untrackedConflicts) : 0,
+    added: len("untracked", c.untracked),
+    kept: keepsAdded ? len("keptYours", p.keptYours) : 0,
+    keepsAdded,
+  }
 }
 
 /** One node's row, from the hub record and (when online) what the node itself answered. */
@@ -419,29 +437,50 @@ export function planRow(n: FleetNode, o: { target: string; cliRequired: string; 
     const why = dry?.detail ?? (t.stderr || "").trim().split("\n").slice(-2).join(" / ") ?? ""
     return { ...row, status: "error", detail: `dry run failed${dry?.status ? ` (${dry.status})` : ""}${why ? `: ${why}` : ""}` }
   }
-  row.localMods = counts.localMods
-  row.kept = counts.keptKnown ? counts.kept : null
+  row.localMods = counts.shipped + counts.conflicts
+  row.added = counts.added
+  row.kept = counts.keepsAdded ? counts.kept : null
   row.deps = Boolean(dry.plan.depsChanged)
+  // A CLI without the keep-added-files fix would block on (or, with --force, drop) files a
+  // person added. Its version number alone cannot say that, so the capability gates too.
+  row.cliOk = row.cliOk && counts.keepsAdded
   if (!row.current && isSha(dry.from)) {
     row.current = dry.from
     row.currentSource = "node"
   }
-  if (dry.plan.upToDate) return { ...row, status: "up-to-date" }
-  if (dry.plan.blocked && !o.force) {
-    // An older CLI blocks on files a person added; the current one keeps them. Re-plan after
-    // the CLI update before calling it "needs --force".
-    if (!row.cliOk && !counts.keptKnown && counts.localMods > 0 && (dry.plan.current.modified?.length ?? 0) + (dry.plan.current.missing?.length ?? 0) === 0 && dry.plan.current.kind !== "unknown")
-      return { ...row, status: "ready-cli", detail: "only added files — the updated CLI keeps them; re-planned after iris update" }
-    const kind = dry.plan.current.kind
-    const why =
-      kind === "unknown"
-        ? "a plain copy with no install manifest — local edits cannot be told apart from the version"
-        : counts.localMods > 0
-          ? `${counts.localMods} local edit(s) to files the update ships`
-          : String(dry.plan.blocked)
-    return { ...row, status: "needs-force", detail: `${why}. --force replaces them; the current copy stays in ~/.iris/bridge.prev` }
+  const kind = dry.plan.current.kind
+  const addedText = counts.added
+    ? counts.keepsAdded
+      ? `${counts.added} added file(s) (kept on update)`
+      : `${counts.added} added file(s) — old CLI would block; updating CLI first`
+    : ""
+  const shippedText = counts.shipped ? `${counts.shipped} edit(s) to shipped files` : ""
+  const conflictText = counts.conflicts ? `${counts.conflicts} added file(s) at paths the update ships` : ""
+  const info = (...xs: string[]) => xs.filter(Boolean).join("; ") || undefined
+
+  // ALREADY AT THE TARGET: nothing to install, whatever else is on the disk. Local files are
+  // information, never a reason to run --force on a node that needs nothing.
+  if (dry.plan.upToDate || (isSha(row.current) && row.current === o.target)) {
+    const local = info(shippedText.replace("edit(s) to shipped files", "local edit(s) to shipped files"), counts.added ? `${counts.added} added file(s)` : "")
+    return { ...row, status: "up-to-date", detail: local ? `already at the target; on disk: ${local}` : undefined }
   }
-  return { ...row, status: row.cliOk ? "ready" : "ready-cli", detail: row.cliOk ? undefined : `CLI ${pr.cli ?? "unknown"} < ${o.cliRequired} — runs iris update first` }
+  const forceText = ". --force replaces them; the current copy stays in ~/.iris/bridge.prev"
+  if (kind === "unknown" && !o.force)
+    return { ...row, status: "needs-force", detail: `a plain copy with no install manifest — local edits cannot be told apart from the version${forceText}` }
+  if (!counts.keepsAdded) {
+    // An OLD CLI: its "blocked" counts added files too, so decide from the shipped edits alone.
+    if (counts.shipped > 0 && !o.force) return { ...row, status: "needs-force", detail: `${info(shippedText, addedText)}${forceText}` }
+    return { ...row, status: "ready-cli", detail: info(addedText, `CLI ${pr.cli ?? "unknown"} cannot keep added files — runs iris update first, then re-plans`) }
+  }
+  if (dry.plan.blocked && !o.force) {
+    const why = info(shippedText, conflictText) ?? String(dry.plan.blocked)
+    return { ...row, status: "needs-force", detail: `${why}${forceText}${addedText ? `; ${addedText}` : ""}` }
+  }
+  return {
+    ...row,
+    status: row.cliOk ? "ready" : "ready-cli",
+    detail: row.cliOk ? info(addedText) : info(`CLI ${pr.cli ?? "unknown"} < ${o.cliRequired} — runs iris update first`, addedText),
+  }
 }
 
 export const isReady = (r: PlanRow) => r.status === "ready" || r.status === "ready-cli"
@@ -487,7 +526,7 @@ export function formatPlanTable(plan: { rows: PlanRow[]; target: string; canary?
     const daemon = r.status === "up-to-date" ? `${cur} = target` : `${cur} → ${short(r.target)}`
     const hubNote = r.currentSource === "node" && r.hubCommit && r.hubCommit !== r.current ? ` (hub: ${short(r.hubCommit)})` : ""
     const cli = r.cli ? `${r.cli}${r.cliOk ? "" : ` (<${r.cliRequired})`}` : "—"
-    const mods = r.localMods === null ? "—" : `${r.localMods}${r.kept ? ` (+${r.kept} kept)` : ""}`
+    const mods = r.localMods === null ? "—" : `${r.localMods}${r.added ? ` (+${r.added} added${r.kept === null ? "" : ", kept"})` : ""}`
     const deps = r.deps === null ? "—" : r.deps ? "yes" : "no"
     const name = `${r.name}${r.local ? " (you)" : ""}${plan.canary && plan.canary.id === r.id ? " [canary]" : ""}`
     return [name, r.os, daemon + hubNote, cli, mods, deps, STATUS_TEXT[r.status]]
@@ -498,7 +537,7 @@ export function formatPlanTable(plan: { rows: PlanRow[]; target: string; canary?
   for (let i = 0; i < body.length; i++) {
     out.push(line(body[i]))
     const r = plan.rows[i]
-    if (r.detail && r.status !== "ready") out.push(`      ${r.detail}`)
+    if (r.detail) out.push(`      ${r.detail}`)
   }
   return out
 }
@@ -581,7 +620,7 @@ export async function updateOneNode(deps: RolloutDeps, node: FleetNode, row: Pla
     current = planRow(node, { target: row.target, cliRequired: row.cliRequired, local: row.local, probe: p, force: o.force, nowMs: deps.now() })
     cliUpdated = { from: row.cli, to: current.cli }
     if (!current.cliOk)
-      return { ...base, status: "failed", cliUpdated, detail: `iris update left the CLI at ${current.cli ?? "unknown"}; the rollout needs ≥ ${row.cliRequired}. Output: ${tail(t.stdout)}` }
+      return { ...base, status: "failed", cliUpdated, detail: `iris update left the CLI at ${current.cli ?? "unknown"}; the rollout needs ≥ ${row.cliRequired} with ${KEEPS_ADDED_FILES}. Output: ${tail(t.stdout)}` }
     say(`CLI ${row.cli ?? "unknown"} → ${current.cli}`)
   }
   if (current.status === "up-to-date") return { ...base, status: "current", cliUpdated }

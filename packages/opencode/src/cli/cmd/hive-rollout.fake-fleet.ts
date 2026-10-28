@@ -58,7 +58,7 @@ export function dryPlan(o: { from?: string | null; upToDate?: boolean; modified?
     plan.keptYours = kept
     plan.untrackedConflicts = conflicts
   }
-  return { ok: true, status: "dry-run", from: plan.current.commit, to: TARGET, plan }
+  return { ok: true, status: "dry-run", from: plan.current.commit, to: TARGET, ...(o.oldCli ? {} : { features: ["keeps-added-files"] }), plan }
 }
 
 const FAKE_IRIS = `#!/bin/bash

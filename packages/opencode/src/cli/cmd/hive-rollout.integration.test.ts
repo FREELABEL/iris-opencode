@@ -161,6 +161,18 @@ describe("iris hive rollout — against fake nodes", () => {
     expect(statusOf(r, "b")).toBe("not-attempted")
   }, 60000)
 
+  test("a node already at the target with added files (old CLI) is up to date and never updated", async () => {
+    const f = mk([
+      { name: "hive-001", cli: "1.5.21", health: TARGET, plan: dryPlan({ from: TARGET, untracked: ["som/send-approved-replies.spec.ts", "som/atlas/note.md"], oldCli: true }) },
+      { name: "b" },
+    ])
+    const r = await runRollout(f.deps, { ref: "main", pollSec: 0.1, waitSec: 20 })
+    expect(rowOf(r, "hive-001").status).toBe("up-to-date")
+    expect(statusOf(r, "hive-001")).toBe("current")
+    expect(f.calls("hive-001").some((c) => c.includes("--detach-restart") || c === "update")).toBe(false)
+    expect(statusOf(r, "b")).toBe("updated")
+  }, 60000)
+
   test("an online node that never answers the plan is pending: unreachable", async () => {
     const f = mk([{ name: "a" }, { name: "ghost", unreachable: true }])
     const r = await runRollout(f.deps, { ref: "main", dryRun: true })

@@ -415,7 +415,9 @@ const DaemonUpdateCommand = cmd({
     }
     if (args.json) {
       const { plan, ...rest } = r as any
-      console.log(JSON.stringify({ ...rest, plan: plan ? { ...plan, current: plan.current } : undefined }, null, 2))
+      // `features` lets `iris hive rollout` tell this CLI from one that predates a fix — a release
+      // number cannot, since a node may run a build the rollout has never heard of.
+      console.log(JSON.stringify({ ...rest, features: ["keeps-added-files"], plan: plan ? { ...plan, current: plan.current } : undefined }, null, 2))
     } else {
       const line = `${r.status}${r.from || r.to ? `  ${du.short(r.from)} → ${du.short(r.to)}` : ""}`
       if (r.ok) prompts.log.info(`${success("✓")} ${line}${r.detail ? `\n  ${r.detail}` : ""}`)
