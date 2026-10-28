@@ -7,11 +7,14 @@ import { batch, createEffect, createMemo, createSignal, For, on, Show, Suspense,
 import { useCommand } from "@/context/command"
 import { useLanguage } from "@/context/language"
 import { SessionPaneProvider, type SessionPane } from "@/context/session-pane"
+import { SplitActionsProvider } from "@/context/split-actions"
+import { useServerSDK } from "@/context/server-sdk"
+import { useServerSync } from "@/context/server-sync"
 import { useSplit } from "@/context/split"
 import { useTabs } from "@/context/tabs"
 import { requireServerKey, sessionHref } from "@/utils/session-route"
 import { showToast } from "@/utils/toast"
-import { closeColumn, maxColumns, open, paneKey, PANE_GAP, prune, reconcile, samePane, visible, type PaneRef } from "./split-model"
+import { closeColumn, maxColumns, open, paneKey, PANE_GAP, PANE_MAX, prune, reconcile, samePane, visible, type PaneRef } from "./split-model"
 
 type ServerRoute = Component<ParentProps<{ serverKey?: () => string }>>
 
@@ -66,17 +69,6 @@ export function SessionSplitRoute(props: { server: ServerRoute; content: Compone
     }),
   )
 
-  // A column outlives nothing: close a session's tab (or the session is deleted and its tab
-  // closed) and its column goes too. The route's own session is exempt — it becomes a tab a
-  // moment after the route moves to it.
-  createEffect(() => {
-    if (!tabs.ready() || !split.ready()) return
-    const open = new Set(tabs.store.flatMap((t) => (t.type === "session" ? [paneKey({ server: t.server, sessionId: t.sessionId })] : [])))
-    const panes = split.panes()
-    const kept = prune(panes, untrack(route), open)
-    if (kept !== panes) split.set(kept)
-  })
-
   // Where focus is going. A navigation is a router transition: the URL moves at once, but the
   // route's params only when the transition commits. Layout reads this, not the route — reading
   // the route, a close showed the split without the (lagging) route in it, fell back to one
@@ -86,6 +78,19 @@ export function SessionSplitRoute(props: { server: ServerRoute; content: Compone
   // Cleared by any route change, so a navigation that lands elsewhere cannot leave it stale.
   createEffect(on(route, () => setMoving(undefined), { defer: true }))
   const focused = createMemo(() => moving() ?? route(), undefined, { equals: samePane })
+
+  // A column outlives nothing: close a session's tab (or the session is deleted and its tab
+  // closed) and its column goes too. The route's own session is exempt — it becomes a tab a
+  // moment after the route moves to it.
+  createEffect(() => {
+    if (!tabs.ready() || !split.ready()) return
+    const open = new Set(tabs.store.flatMap((t) => (t.type === "session" ? [paneKey({ server: t.server, sessionId: t.sessionId })] : [])))
+    const panes = split.panes()
+    // Spare where focus is going, not only the route: a new chat's tab is added in a transition,
+    // so for a moment its column has no tab yet — pruned on the route alone, it vanished.
+    const kept = prune(panes, untrack(focused), open)
+    if (kept !== panes) split.set(kept)
+  })
 
   // What is drawn: the stored split with the focused session already placed. Derived, not written
   // by an effect first — an effect runs after the render, so for one render after a tab click the
@@ -112,24 +117,45 @@ export function SessionSplitRoute(props: { server: ServerRoute; content: Compone
     if (next.focus) navigate(sessionHref(next.focus.server as never, next.focus.sessionId))
   }
 
-  const splitRight = () => {
-    const current = focused()
+  // A new chat for the column, when no other tab is waiting: splitting is never a dead end. Set
+  // by SplitNewSession, which lives under the server providers this component sits above.
+  let createSession: ((besideSessionID: string) => Promise<string | undefined>) | undefined
+  const columnsFree = () => drawn().length < Math.min(PANE_MAX, maxColumns(width()))
+  const canSplit = createMemo(() => maxColumns(width()) >= 2 && (drawn().length < 2 || columnsFree()))
+
+  const splitRight = async (fromSessionID?: string) => {
     const onScreen = drawn()
-    const candidate = tabs.store.find(
+    const current = onScreen.find((p) => p.sessionId === fromSessionID) ?? focused()
+    if (maxColumns(width()) < 2) {
+      showToast({ title: language.t("split.narrow.title"), description: language.t("split.narrow.description") })
+      return
+    }
+    if (onScreen.length >= 2 && !columnsFree()) {
+      showToast({ title: language.t("split.full.title"), description: language.t("split.full.description") })
+      return
+    }
+    const waiting = tabs.store.find(
       (t) =>
         t.type === "session" &&
         !samePane({ server: t.server, sessionId: t.sessionId }, current) &&
         !onScreen.some((p) => samePane(p, { server: t.server, sessionId: t.sessionId })),
     )
-    if (!candidate || candidate.type !== "session") {
+    if (waiting && waiting.type === "session") {
+      split.set(open(onScreen, current, { server: waiting.server, sessionId: waiting.sessionId }))
+      return
+    }
+    const id = await createSession?.(current.sessionId)
+    if (!id) {
       showToast({ title: language.t("split.none.title"), description: language.t("split.none.description") })
       return
     }
-    if (maxColumns(width()) < 2) {
-      showToast({ title: language.t("split.narrow.title"), description: language.t("split.narrow.description") })
-      return
-    }
-    split.set(open(onScreen, current, { server: candidate.server, sessionId: candidate.sessionId }))
+    const next = { server: current.server, sessionId: id }
+    tabs.addSessionTab({ server: current.server as never, sessionId: id })
+    batch(() => {
+      split.set(open(drawn(), current, next))
+      setMoving(next)
+    })
+    navigate(sessionHref(next.server as never, next.sessionId))
   }
   const step = (by: number) => {
     const list = shown()
@@ -144,7 +170,8 @@ export function SessionSplitRoute(props: { server: ServerRoute; content: Compone
       title: language.t("split.right"),
       category: language.t("command.category.view"),
       keybind: "mod+alt+\\",
-      onSelect: splitRight,
+      description: language.t("split.right.description"),
+      onSelect: () => void splitRight(),
     },
     {
       id: "split.close",
@@ -179,6 +206,8 @@ export function SessionSplitRoute(props: { server: ServerRoute; content: Compone
       {/* Mounted once, outside the split switch: these providers are gated on ready, and a second
           copy mounted when a split starts never came ready — the window went blank. */}
       <Server>
+        <SplitNewSession register={(fn) => (createSession = fn)} />
+        <SplitActionsProvider actions={{ splitRight: (id) => void splitRight(id), canSplit }}>
         <Show when={multi()} fallback={<Content />}>
           <div class="size-full min-h-0 min-w-0 flex" style={{ gap: `${PANE_GAP}px` }} data-component="session-split">
             <For each={keys()}>
@@ -199,9 +228,25 @@ export function SessionSplitRoute(props: { server: ServerRoute; content: Compone
             </For>
           </div>
         </Show>
+        </SplitActionsProvider>
       </Server>
     </div>
   )
+}
+
+/** Creates the chat a new column opens on, in the same project as the session it opens beside. */
+function SplitNewSession(props: { register: (create: (besideSessionID: string) => Promise<string | undefined>) => void }) {
+  const serverSDK = useServerSDK()
+  const sync = useServerSync()
+  props.register(async (besideSessionID) => {
+    const directory = sync().session.lineage.peek(besideSessionID)?.session.directory
+    if (!directory) return
+    const created = await serverSDK()
+      .client.session.create({ directory })
+      .catch(() => undefined)
+    return created?.data?.id
+  })
+  return null
 }
 
 function SplitColumn(props: {
