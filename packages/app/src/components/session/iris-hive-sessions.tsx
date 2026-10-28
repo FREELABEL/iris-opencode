@@ -3,6 +3,7 @@ import { Icon, type IconProps } from "@opencode-ai/ui/icon"
 import "./iris-hive-scripts.css"
 import "./iris-hive-sessions.css"
 import {
+  continueText,
   ago,
   isWorking,
   mergeTranscript,
@@ -68,6 +69,8 @@ export function IrisHiveSessions(props: {
   doFetch: (path: string, init?: RequestInit) => Promise<Response>
   openExternal?: (url: string) => void
   now?: () => number
+  /** "Continue here" (#191492): start a chat on THIS machine from a session on another. Absent: no button. */
+  onContinue?: (c: { text: string }) => Promise<void>
 }) {
   const now = () => props.now?.() ?? Date.now()
   const getJson = async <T,>(path: string, fallback: T, init?: RequestInit): Promise<T> => {
@@ -281,6 +284,7 @@ export function IrisHiveSessions(props: {
               openExternal={props.openExternal}
               now={now}
               onClose={() => setPicked(undefined)}
+              onContinue={props.onContinue}
             />
           )}
         </Show>
@@ -297,6 +301,7 @@ function SessionDetail(props: {
   openExternal?: (url: string) => void
   now: () => number
   onClose: () => void
+  onContinue?: (c: { text: string }) => Promise<void>
 }) {
   const [messages, setMessages] = createSignal<TranscriptMessage[]>([])
   const [reason, setReason] = createSignal<string | null>(null)
@@ -422,6 +427,31 @@ function SessionDetail(props: {
     else setAnswered({ ok: false, text: `No result from ${props.node.name} after 45 s (task ${r.taskId ?? "?"}).` })
   }
 
+  // "Continue here" (#191492): read as much of the conversation as the machine will give (100), then
+  // hand it to this machine's engine as a new chat. The original keeps running where it is.
+  const [continuing, setContinuing] = createSignal<string | null>(null)
+  const continueHere = async () => {
+    if (!props.onContinue) return
+    setContinuing("Reading the conversation…")
+    const q = new URLSearchParams({ machine: props.node.name, provider: props.session.provider, limit: "100" })
+    const r = await props.getJson<TranscriptPayload>(
+      `/iris/hive/sessions/${encodeURIComponent(props.session.sessionId)}/transcript?${q}`,
+      { measured: false, ranOn: null, offset: null, incremental: false, messages: [] },
+    )
+    const rows = r.measured && r.messages.length ? r.messages : messages()
+    if (!rows.length) {
+      setContinuing(`Could not read it — ${r.reason ?? "the machine did not answer"}`)
+      return
+    }
+    setContinuing("Opening it here…")
+    try {
+      await props.onContinue({ text: continueText(props.session, props.node.name, rows) })
+      setContinuing(null)
+    } catch (e) {
+      setContinuing(`Could not start it here — ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
   return (
     <aside class="hss-detail" aria-label="Session">
       <header class="hss-dhead">
@@ -433,10 +463,24 @@ function SessionDetail(props: {
             <Show when={props.session.branch}> · {props.session.branch}</Show>
           </span>
         </div>
+        <Show when={props.onContinue}>
+          <button
+            type="button"
+            class="hss-send hss-continue"
+            title="Start a chat on this machine with this conversation. The original keeps running where it is."
+            disabled={continuing() !== null && !continuing()!.startsWith("Could not")}
+            onClick={() => void continueHere()}
+          >
+            Continue here
+          </button>
+        </Show>
         <button type="button" class="hss-x" title="Close" onClick={() => props.onClose()}>
           <Ic name="close" />
         </button>
       </header>
+      <Show when={continuing()}>
+        <div class="hss-dmeta hss-continuing" role="status">{continuing()}</div>
+      </Show>
 
       <Show when={questions().length > 0}>
         <section class="hss-ask" aria-label="Waiting on you">

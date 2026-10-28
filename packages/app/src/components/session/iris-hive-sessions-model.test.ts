@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mergeTranscript, replyAfter, replyMode, reportLine, shortAge, summaryOf, type HiveSessionNode } from "./iris-hive-sessions-model"
+import { continueText, mergeTranscript, replyAfter, replyMode, reportLine, shortAge, summaryOf, type HiveSessionNode } from "./iris-hive-sessions-model"
 
 const NOW = Date.parse("2026-10-14T22:00:00Z")
 const m = (text: string) => ({ role: "user", type: "text", text, tool: null, at: null })
@@ -90,5 +90,39 @@ describe("summary and report line", () => {
   })
   test("a stale list says it is not current", () => {
     expect(reportLine(node("stale"), NOW)).toEqual({ tone: "stale", text: "last report 31 days ago — not current" })
+  })
+})
+
+// #191492 — "Continue here": a chat from another machine, picked up as a new chat on this one.
+describe("continueText", () => {
+  const msg = (role: string, type: string, text: string | null, tool: string | null = null) => ({ role, type, text, tool, at: null })
+  const from = { label: "Hive chat fixes verified under load", provider: "opencode", sessionId: "ses_e86c" }
+
+  test("names where it came from, keeps the conversation in order, and says where it runs now", () => {
+    const t = continueText(from, "Alexs-MacBook-Pro", [
+      msg("user", "text", "fix the hive chat"),
+      msg("assistant", "tool_use", "git status", "bash"),
+      msg("assistant", "text", "Done: 23 tests pass."),
+    ])
+    expect(t).toContain('Continued from "Hive chat fixes verified under load" on Alexs-MacBook-Pro')
+    expect(t).toContain("this chat runs here")
+    expect(t.indexOf("User: fix the hive chat")).toBeLessThan(t.indexOf("· bash: git status"))
+    expect(t.indexOf("· bash: git status")).toBeLessThan(t.indexOf("Assistant: Done: 23 tests pass."))
+    expect(t.endsWith("Pick up where it left off.")).toBe(true)
+  })
+
+  test("drops the oldest entries to fit, and says so", () => {
+    const many = Array.from({ length: 200 }, (_, i) => msg("user", "text", `entry ${i} ` + "x".repeat(100)))
+    const t = continueText(from, "Mac", many, 3000)
+    expect(t.length).toBeLessThanOrEqual(3000)
+    expect(t).toMatch(/\(\d+ earlier entries not shown\)/)
+    expect(t).toContain("entry 199")
+    expect(t).not.toContain("entry 0 ")
+  })
+
+  test("skips empty entries", () => {
+    const t = continueText(from, "Mac", [msg("assistant", "text", "  "), msg("user", "text", "hi")])
+    expect(t).toContain("User: hi")
+    expect(t).not.toContain("Assistant: \n")
   })
 })
