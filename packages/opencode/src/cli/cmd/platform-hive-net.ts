@@ -3,9 +3,10 @@ import { dim, bold, success, writeJson } from "./iris-api"
 import { execSync, spawnSync, spawn } from "child_process"
 import { networkInterfaces } from "os"
 import { requireAuth, requireUserId } from "./iris-api"
-import { resolveNode } from "./platform-hive-nodes"
+import { fetchNodes, pickNode } from "./platform-hive-nodes"
 import { resolveSshTarget, ensureSshUser, detectLocalNodeId } from "./hive-tailscale"
 import { askNodeUser, isIpTarget, sshArgs } from "./hive-ssh"
+import { tcpProbe } from "./hive-port"
 
 // ============================================================================
 // iris hive scan / probe / ssh
@@ -146,25 +147,13 @@ function reverseDns(ip: string): string | null {
   }
 }
 
-function checkPort(ip: string, port: number, timeoutSec = 1): boolean {
-  const r = spawnSync("nc", ["-z", "-G", String(timeoutSec), ip, String(port)], {
-    stdio: "ignore",
-    timeout: (timeoutSec + 1) * 1000,
-  })
-  return r.status === 0
+// #191565: these shelled out to netcat with its macOS-only -G flag — on Linux every port read "closed".
+async function checkPort(ip: string, port: number, timeoutSec = 1): Promise<boolean> {
+  return (await tcpProbe(ip, port, { timeoutMs: timeoutSec * 1000 })).open
 }
 
-function sshBanner(ip: string): string | null {
-  try {
-    const out = execSync(`echo "" | nc -G 2 ${ip} 22 2>/dev/null | head -1`, {
-      encoding: "utf8",
-      timeout: 4000,
-      shell: "/bin/sh",
-    }).trim()
-    return out || null
-  } catch {
-    return null
-  }
+async function sshBanner(ip: string): Promise<string | null> {
+  return (await tcpProbe(ip, 22, { timeoutMs: 3000, banner: true })).banner
 }
 
 // ============================================================================
@@ -279,13 +268,14 @@ const HiveProbeCommand = cmd({
       [22, "SSH"], [80, "HTTP"], [443, "HTTPS"], [445, "SMB"],
       [3389, "RDP"], [5900, "VNC"], [8006, "Proxmox"], [9090, "Cockpit"],
     ]
-    for (const [port, service] of portList) {
-      ports[String(port)] = { open: checkPort(ip, port), service }
-    }
+    const open = await Promise.all(portList.map(([port]) => checkPort(ip, port)))
+    portList.forEach(([port, service], i) => {
+      ports[String(port)] = { open: open[i], service }
+    })
     result.ports = ports
 
     if (ports["22"].open) {
-      const banner = sshBanner(ip)
+      const banner = await sshBanner(ip)
       result.ssh_banner = banner
       if (banner) {
         if (/ubuntu/i.test(banner)) result.os_guess = "Ubuntu"
@@ -348,7 +338,7 @@ const HiveSshCommand = cmd({
       ? [String(argv.user)]
       : ["ubuntu", "debian", "admin", "root", "alex", "dell", "pi", "user"]
 
-    if (!checkPort(ip, 22)) {
+    if (!(await checkPort(ip, 22, 2))) {
       console.log(`${dim("✗")} port 22 is closed on ${ip}`)
       console.log(dim("  Enable SSH on the target first: sudo systemctl enable --now ssh"))
       return
@@ -392,12 +382,16 @@ async function sshToNode(argv: Record<string, unknown>, target: string) {
   const userId = await requireUserId(argv["user-id"] as number | undefined)
   if (!userId) process.exit(1)
 
-  const node = await resolveNode(userId, target)
+  const all = await fetchNodes(userId)
+  const { node } = pickNode(all, target)
   if (!node) {
     console.error(`No node matching "${target}". Run: iris hive nodes list`)
     process.exit(1)
   }
-  if ((await detectLocalNodeId([node]).catch(() => null)) === node.id) {
+  // Ask "which node is this machine?" over the WHOLE list (#191564). Given only the target, the
+  // daemon's own id was not in the list, was discarded as stale, and a hostname stem match made
+  // iris-hive-001 believe it was iris-hive-002.
+  if ((await detectLocalNodeId(all).catch(() => null)) === node.id) {
     console.log(`You are on ${bold(node.name)} already.`)
     return
   }

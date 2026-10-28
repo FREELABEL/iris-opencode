@@ -73,6 +73,22 @@ export function resolveLocalNode(inputs: LocalNodeInputs): LocalNodeResolution {
   const fromConfig = known(inputs.configNodeId)
   if (fromConfig) return { nodeId: fromConfig, source: "config", uncertain: false }
 
+  // An authoritative source DID answer — just with a node that is not in this list. That is an
+  // answer ("none of these is me"), not an absence of one, so the hostname guess is not asked
+  // (#191564). Callers often pass a partial list (`hive ssh` passed only its target), and a guess
+  // over a partial list is how iris-hive-001 decided it was iris-hive-002.
+  if (inputs.daemonNodeId || inputs.configNodeId) return { nodeId: null, source: "none", uncertain: false }
+
+  // An EXACT hostname match is the strongest guess there is, and it outranks every stem match:
+  // iris-hive-001 and iris-hive-002 share the stem "iris-hive", but only one of them is named
+  // iris-hive-001. If the exact name is in the list and it is not this node, no stem may claim it.
+  const bare = String(inputs.hostname ?? "").trim().replace(/\.local$/i, "").toLowerCase()
+  if (bare) {
+    const exact = nodes.filter((n) => n.name.trim().replace(/\.local$/i, "").toLowerCase() === bare)
+    if (exact.length === 1) return { nodeId: exact[0].id, source: "hostname", uncertain: true }
+    if (exact.length > 1) return { nodeId: null, source: "none", uncertain: false }
+  }
+
   // Last resort. Compare on the STABLE stem of the hostname, because the trailing counter is
   // exactly the part macOS rewrites: Alexs-MacBook-Pro-8436.local -> Alexs-MacBook-Pro.
   const stem = hostnameStem(inputs.hostname)
