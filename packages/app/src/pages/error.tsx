@@ -8,6 +8,7 @@ import { usePlatform } from "@/context/platform"
 import { useLanguage } from "@/context/language"
 import { Icon } from "@opencode-ai/ui/icon"
 import { errorDescriptionKey } from "./error-description"
+import { reportCrashOnce } from "@/utils/crash-report"
 
 export type InitError = {
   name: string
@@ -217,6 +218,8 @@ function formatError(error: unknown, t: Translator): string {
 
 interface ErrorPageProps {
   error: unknown
+  /** The app-wide crash screen (top-level boundary): report it once through the engine (#191430). */
+  reportCrash?: boolean
 }
 
 export const ErrorPage: Component<ErrorPageProps> = (props) => {
@@ -242,6 +245,22 @@ export const ErrorPage: Component<ErrorPageProps> = (props) => {
 
   onMount(() => {
     void ensureFatalErrorRecorded().catch(() => undefined)
+    if (props.reportCrash) {
+      let storage: Storage | undefined
+      try {
+        storage = localStorage
+      } catch {}
+      // Fire and forget: reportCrashOnce never rejects, and nothing here waits on it.
+      void reportCrashOnce(props.error, {
+        engineUrl: platform.engineUrl,
+        fetch: platform.fetch,
+        storage,
+        version: platform.version,
+        os: platform.os,
+        userAgent: typeof navigator === "undefined" ? undefined : navigator.userAgent,
+        pathname: typeof location === "undefined" ? undefined : location.pathname,
+      })
+    }
   })
 
   async function checkForUpdates() {

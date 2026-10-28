@@ -3195,13 +3195,19 @@ export const IrisApi = HttpApi.make("iris").add(
         }),
       ),
       HttpApiEndpoint.post("onboardingTrack", IrisPaths.onboardingTrack, {
-        payload: Schema.Struct({ event: Schema.String, label: Schema.optional(Schema.String) }),
+        payload: Schema.Struct({
+          event: Schema.String,
+          label: Schema.optional(Schema.String),
+          // Per-event facts (#191430 app.crash_screen). The engine keeps only the keys that event
+          // allows and clips/scrubs every value; anything else is dropped, never forwarded.
+          props: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+        }),
         success: described(Schema.Struct({ ok: Schema.Boolean }), "Always ok — measurement never fails a step"),
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "iris.onboardingTrack",
           summary: "Record an onboarding step",
-          description: "Posts one of the app-side onboarding steps to the desktop funnel with this machine's install id. Unknown names are ignored.",
+          description: "Posts one of the app-side onboarding steps (or the crash screen, app.crash_screen) to the desktop funnel with this machine's install id. Unknown names are ignored.",
         }),
       ),
       HttpApiEndpoint.post("artifactPublish", IrisPaths.artifactPublish, {
