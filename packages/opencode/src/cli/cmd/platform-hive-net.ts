@@ -329,6 +329,7 @@ const HiveSshCommand = cmd({
       .option("user-id", { describe: "user ID", type: "number" })
       .example("iris hive ssh iris-hive-001", "a shell on that node")
       .example('iris hive ssh iris-hive-001 -c "uptime"', "one command, then back")
+      .example("iris hive ssh iris-hive-001 -- uptime", "the same, ssh-style")
       .example("iris hive ssh 192.168.4.24", "test which users can log in at an IP"),
   async handler(argv) {
     const target = String(argv.target)
@@ -374,6 +375,13 @@ const HiveSshCommand = cmd({
   },
 })
 
+/** The one command to run: --cmd, or everything after `--` (`iris hive ssh B -- uname -a`). */
+export function remoteCommand(argv: Record<string, unknown>): string | undefined {
+  if (typeof argv.cmd === "string" && argv.cmd) return argv.cmd
+  const rest = argv["--"]
+  return Array.isArray(rest) && rest.length ? rest.map(String).join(" ") : undefined
+}
+
 // A shell on a Hive node, by name (#187797). Resolution is the same one `hive fs` uses, plus
 // asking the node itself for its login user. Not gated on the daemon being online: ssh does
 // not go through the daemon, and a node whose daemon is down is exactly when you want a shell.
@@ -416,7 +424,7 @@ async function sshToNode(argv: Record<string, unknown>, target: string) {
   }
 
   const dest = withUser.user ? `${withUser.user}@${withUser.host}` : withUser.host
-  const args = sshArgs(dest, argv.cmd as string | undefined)
+  const args = sshArgs(dest, remoteCommand(argv))
   if (argv.print) {
     console.log(["ssh", ...args].map((a) => (/[\s"'$]/.test(a) ? JSON.stringify(a) : a)).join(" "))
     return
