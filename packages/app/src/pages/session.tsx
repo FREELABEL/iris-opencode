@@ -575,7 +575,7 @@ export default function Page() {
     review: reviewTab,
     hasReview: canReview,
     reviewFirst,
-    filesPinned: () => irisFilesPinned(reviewFirst()),
+    filesPinned: () => irisFilesPinned(),
     preferIris: irisOpensOnAtlas,
   })
   const activeTab = tabState.activeTab
