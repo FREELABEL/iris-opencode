@@ -974,22 +974,28 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
                 ? p.id
                   ? { action: "artifact", id: p.id }
                   : "artifact needs an id"
-                : p.action === "tab"
-                  ? p.tab
-                    ? { action: "tab", tab: p.tab }
-                    : "tab needs tab"
-                  : p.url
-                    ? { action: "browse", url: p.url }
-                    : "browse needs a url"
+                : p.action === "card"
+                  ? p.bloq && p.item
+                    ? { action: "card", bloq: p.bloq, item: p.item, ...(p.list ? { list: p.list } : {}) }
+                    : "card needs bloq and item"
+                  : p.action === "tab"
+                    ? p.tab
+                      ? { action: "tab", tab: p.tab }
+                      : "tab needs tab"
+                    : p.url
+                      ? { action: "browse", url: p.url }
+                      : "browse needs a url"
         if (typeof command === "string") return { answered: false, refused: command }
         const known = Panel.get(p.session)
         const refused = Panel.refuse(command, known?.catalog)
         if (refused) return { answered: false, refused }
         // No directory: /iris routes have no instance. The desktop matches commands by SESSION.
-        const state = yield* Effect.promise(() =>
+        const sent = yield* Effect.promise(() =>
           Panel.send({ session: p.session, command: Panel.canonical(command, known?.catalog) }),
         )
-        return { answered: !!state, state }
+        return sent.state
+          ? { answered: true, state: sent.state }
+          : { answered: false, state: sent.heard, error: Panel.explainSilence(sent, p.session) }
       }),
     )
 

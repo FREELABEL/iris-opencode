@@ -1624,6 +1624,7 @@ export const PanelStatePayload = Schema.Struct({
   bloq: Schema.optional(Schema.Struct({ id: Schema.Finite, name: Schema.optional(Schema.String) })),
   artifact: Schema.optional(Schema.String),
   url: Schema.optional(Schema.String),
+  card: Schema.optional(Schema.Struct({ id: Schema.Finite, bloq: Schema.optional(Schema.Finite) })),
   catalog: Schema.optional(PanelCatalog),
   ack: Schema.optional(described(Schema.String, "The id of the iris.panel.command this report answers.")),
   error: Schema.optional(Schema.String),
@@ -1638,16 +1639,19 @@ const PanelReadResponse = Schema.Struct({
 }).annotate({ identifier: "IrisPanelRead" })
 export const PanelCommandPayload = Schema.Struct({
   session: Schema.String,
-  action: Schema.Literals(["open", "close", "show", "artifact", "tab", "browse"]),
+  action: Schema.Literals(["open", "close", "show", "artifact", "card", "tab", "browse"]),
   surface: Schema.optional(Schema.String),
   sub: Schema.optional(Schema.String),
   bloq: Schema.optional(Schema.Finite),
   id: Schema.optional(Schema.String),
   tab: Schema.optional(Schema.String),
   url: Schema.optional(Schema.String),
+  item: Schema.optional(described(Schema.Finite, "card: the Atlas card id (?card=).")),
+  list: Schema.optional(described(Schema.Finite, "card: the list the card is in (?row=), optional.")),
 }).annotate({ identifier: "IrisPanelCommand" })
 const PanelCommandResponse = Schema.Struct({
-  answered: described(Schema.Boolean, "false: no desktop answered within 6 s — the session is not on screen in IRIS Desktop."),
+  answered: described(Schema.Boolean, "false: no desktop confirmed the command in time; `error` says what is known."),
+  error: Schema.optional(described(Schema.String, "Why there was no answer: no desktop connected, or a failed round trip.")),
   refused: Schema.optional(described(Schema.String, "Why the command was not sent.")),
   state: Schema.optional(PanelReport),
 }).annotate({ identifier: "IrisPanelCommandResult" })
@@ -2962,7 +2966,7 @@ export const IrisApi = HttpApi.make("iris").add(
           identifier: "iris.panelCommand",
           summary: "Steer the side panel",
           description:
-            "#190093. Emits iris.panel.command and waits up to 6 s for the desktop showing `session` to apply it and report back. The same path the side_panel tool takes; for agents outside the engine (MCP, scripts).",
+            "#190093. Emits iris.panel.command (re-sent every 3 s) and waits up to 12 s for the desktop showing `session` to apply it and report back. The same path the side_panel tool takes; for agents outside the engine (MCP, scripts).",
         }),
       ),
       HttpApiEndpoint.get("atlasNote", IrisPaths.atlasNote, {

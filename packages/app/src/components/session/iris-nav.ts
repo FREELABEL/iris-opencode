@@ -112,6 +112,11 @@ const [panelView, setPanelView] = createSignal<IrisPanelView>({})
 export const irisPanelView = panelView
 export const setIrisPanelView = setPanelView
 
+/** Atlas: the card open in the card editor, and its board (#191507). Written by SessionIrisTab's openCard. */
+const [openCard, setOpenCard] = createSignal<{ id: number; bloq?: number } | undefined>()
+export const irisOpenCard = openCard
+export const setIrisOpenCard = setOpenCard
+
 const [openArtifact, setOpenArtifact] = createSignal<string | undefined>()
 export const irisOpenArtifact = openArtifact
 export const setIrisOpenArtifact = setOpenArtifact

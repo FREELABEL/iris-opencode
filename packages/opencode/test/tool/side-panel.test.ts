@@ -79,6 +79,9 @@ function fakeDesktop(session: string) {
     const s: Panel.State = { session, open: true, tab: "iris", catalog, ack: id }
     if (command.action === "show") Object.assign(s, { surface: command.surface, sub: command.sub })
     if (command.action === "artifact") Object.assign(s, { surface: "pages", sub: "artifacts", artifact: command.id })
+    if (command.action === "card")
+      Object.assign(s, { surface: "atlas", sub: "lists", bloq: { id: command.bloq }, card: { id: command.item, bloq: command.bloq } })
+    if (command.action === "report") Object.assign(s, { tab: "context" })
     queueMicrotask(() => Panel.report(s))
   }
   GlobalBus.on("event", on)
@@ -160,6 +163,91 @@ describe("side_panel tool", () => {
       } finally {
         desk.stop()
       }
+    }),
+  )
+})
+
+// #191506 / #191507
+describe("side_panel tool — live state, honest timeouts, cards", () => {
+  const saved = { ...Panel.timing }
+  afterEach(() => Object.assign(Panel.timing, saved))
+  const fast = () => Object.assign(Panel.timing, { sendMs: 150, resendMs: 40, liveReadMs: 120, liveResendMs: 40 })
+
+  it.instance("state asks the desktop live when one is connected, instead of replaying the last report", () =>
+    Effect.gen(function* () {
+      fast()
+      const sessions = yield* Session.Service
+      const s = yield* sessions.create({ title: "desk" })
+      Panel.report({ session: String(s.id), open: true, tab: "iris", surface: "atlas", catalog })
+      Panel.streamOpened()
+      const desk = fakeDesktop(String(s.id))
+      try {
+        const r = yield* run({ action: "state" }, ctxFor(s.id))
+        expect(desk.seen.map((e) => e.payload.properties.command.action)).toEqual(["report"])
+        expect(r.metadata.live).toBe(true)
+        expect(r.output).toContain("live: the desktop answered just now")
+        // What the desktop says NOW, not the cached Atlas report.
+        expect(r.output).toContain("active tab: context")
+      } finally {
+        desk.stop()
+      }
+    }),
+  )
+
+  it.instance("state that cannot get a live answer says CACHED and how old, in the text and in a field", () =>
+    Effect.gen(function* () {
+      fast()
+      const sessions = yield* Session.Service
+      const s = yield* sessions.create({ title: "desk" })
+      Panel.report({ session: String(s.id), open: true, tab: "iris", catalog })
+      Panel.streamOpened()
+      const r = yield* run({ action: "state" }, ctxFor(s.id))
+      expect(r.metadata.live).toBe(false)
+      expect(typeof r.metadata.ageSeconds).toBe("number")
+      expect(r.output).toContain("CACHED")
+      expect(r.output).toContain("did not answer a live read")
+    }),
+  )
+
+  it.instance("a timed-out change says the desktop did not answer — it does not claim the user is away", () =>
+    Effect.gen(function* () {
+      fast()
+      const sessions = yield* Session.Service
+      const s = yield* sessions.create({ title: "desk" })
+      Panel.report({ session: String(s.id), open: true, tab: "iris", catalog })
+      Panel.streamOpened()
+      const r = yield* run({ action: "tab", tab: "context" }, ctxFor(s.id))
+      expect(r.metadata.answered).toBe(false)
+      expect(r.metadata.attempts).toBeGreaterThanOrEqual(2)
+      expect(r.output).toContain("The desktop did not answer within")
+      expect(r.output).not.toContain("not looking")
+    }),
+  )
+
+  it.instance("card opens Atlas on the board with the card open, and gives the web link", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const s = yield* sessions.create({ title: "desk" })
+      Panel.report({ session: String(s.id), open: true, catalog })
+      const desk = fakeDesktop(String(s.id))
+      try {
+        const r = yield* run({ action: "card", bloq: 628, item: 191504, list: 2180 }, ctxFor(s.id))
+        expect(desk.seen[0].payload.properties.command).toEqual({ action: "card", bloq: 628, item: 191504, list: 2180 })
+        expect(r.metadata.answered).toBe(true)
+        expect(r.output).toContain("card open: #191504 on board #628")
+        expect(r.output).toContain("https://heyiris.io/atlas?project=628&row=2180&card=191504")
+      } finally {
+        desk.stop()
+      }
+    }),
+  )
+
+  it.instance("card without an item is an error, not a guess", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const s = yield* sessions.create({ title: "desk" })
+      const exit = yield* run({ action: "card", bloq: 628 }, ctxFor(s.id)).pipe(Effect.exit)
+      expect(exit._tag).toBe("Failure")
     }),
   )
 })
