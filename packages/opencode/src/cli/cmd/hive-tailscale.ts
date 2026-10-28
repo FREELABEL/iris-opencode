@@ -234,6 +234,16 @@ export async function rememberSshHost(nodeId: string, host: string, user?: strin
 }
 
 /**
+ * Hive without Tailscale (epic #191642): IRIS_HIVE_NO_TAILSCALE=1 makes every Hive transport
+ * behave as if Tailscale were not installed. It exists so the exit check
+ * (scripts/hive-without-tailscale-check.sh) can run between two machines whose Tailscale must
+ * stay up, and so a person can force the relay path.
+ */
+export function tailscaleDisabled(env: Record<string, string | undefined> = process.env): boolean {
+  return /^(1|true|yes)$/i.test(String(env.IRIS_HIVE_NO_TAILSCALE ?? "").trim())
+}
+
+/**
  * Resolve a Hive node to something ssh can address.
  *
  * Order: an explicit --host, then the cache, then Tailscale. Never guesses an IP.
@@ -250,6 +260,12 @@ export async function resolveSshTarget(
     // Remember it, so this is the LAST time --host has to be typed for this node.
     await rememberSshHost(nodeId, opts.host, opts.user ?? cached.user ?? null)
     return { host: opts.host, user: opts.user ?? cached.user ?? null, via: "explicit" }
+  }
+  // Hive without Tailscale (epic #191642): with the tailnet switched off, no tailnet address is
+  // used — not a cached one, not the one the node advertised, not a peer lookup. An explicit
+  // --host above is still honoured: a person named the address.
+  if (tailscaleDisabled()) {
+    return { error: "Tailscale is switched off for this command (IRIS_HIVE_NO_TAILSCALE=1), and no --host was given." }
   }
   if (cached.host) return { host: cached.host, user: opts.user ?? cached.user ?? null, via: "cached" }
 

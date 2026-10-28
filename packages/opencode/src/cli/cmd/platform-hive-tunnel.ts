@@ -229,14 +229,30 @@ function spawnRelayBg(o: { home: string; node: string; runner: string; args: str
  */
 export async function startRelayTunnelBg(name: string, port: number): Promise<{ ok: true; url: string; already: boolean } | { ok: false; error: string }> {
   const home = homedir()
-  if (!validTunnelName(name)) return { ok: false, error: `"${name}" is not a valid tunnel name` }
   const refused = refusedPort(port)
   if (refused) return { ok: false, error: refused }
+  const prep = await prepareRelayRunner(name, port)
+  if (!prep.ok) return prep
+  if (runningPid(home, name)) return { ok: true, url: prep.url, already: true }
+  spawnRelayBg({ home, node: prep.node, runner: prep.runner, args: prep.args, env: prep.env, dir: join(home, ".iris", "tunnels", name), name })
+  return { ok: true, url: prep.url, already: false }
+}
+
+/**
+ * Claim `name` for this account and work out how to run the relay runner for a local port —
+ * everything short of starting it. Shared by `startRelayTunnelBg` and the ssh gate
+ * (hive-relay-ssh.ts), which runs the runner as its own child so the two live and die together.
+ */
+export async function prepareRelayRunner(
+  name: string,
+  port: number,
+): Promise<{ ok: true; url: string; node: string; runner: string; args: string[]; env: NodeJS.ProcessEnv } | { ok: false; error: string }> {
+  const home = homedir()
+  if (!validTunnelName(name)) return { ok: false, error: `"${name}" is not a valid tunnel name` }
   const res = await hiveFetch(`/api/v6/nodes/tunnels`, { method: "POST", body: JSON.stringify({ name }) })
   const json: any = await res.json().catch(() => ({}))
   if (!res.ok) return { ok: false, error: explainTunnelApiError(res.status, json) }
   const url = String(json?.data?.url || `https://${name}.${RELAY_ZONE}`).replace(/\/+$/, "")
-  if (runningPid(home, name)) return { ok: true, url, already: true }
   const runner = findRunner(home)
   if (!runner) return { ok: false, error: "This machine's Hive bridge predates Hive tunnels. Update it: iris bridge install" }
   const node = findNode(home)
@@ -248,8 +264,7 @@ export async function startRelayTunnelBg(name: string, port: number): Promise<{ 
     IRIS_API_KEY: await resolveToken(),
     ...(zones.length && !process.env.HIVE_RELAY_ZONES ? { HIVE_RELAY_ZONES: zones.join(",") } : {}),
   }
-  spawnRelayBg({ home, node, runner, args: [runner, "--name", name, "--port", String(port)], env, dir: join(home, ".iris", "tunnels", name), name })
-  return { ok: true, url, already: false }
+  return { ok: true, url, node, runner, args: [runner, "--name", name, "--port", String(port)], env }
 }
 
 /** Close a background relay tunnel by name. True when one was running. */
