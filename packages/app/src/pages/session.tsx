@@ -41,7 +41,7 @@ import { showToast } from "@/utils/toast"
 import { isSpeaking, stopSpokenReply, useSpokenReplies } from "@/context/spoken-replies"
 import { base64Encode, checksum } from "@opencode-ai/core/util/encode"
 import { useLocation, useNavigate, useSearchParams } from "@solidjs/router"
-import { useSessionParams } from "@/context/session-pane"
+import { usePaneFocused, useSessionParams } from "@/context/session-pane"
 import { NewSessionView, SessionHeader } from "@/components/session"
 import { ErrorPage } from "@/pages/error"
 import { CommentsProvider, useComments } from "@/context/comments"
@@ -453,6 +453,8 @@ export default function Page() {
   )
 
   const isDesktop = createMediaQuery("(min-width: 768px)")
+  // In a split (#191484) the file tree's open state is window-wide; only the focused column shows it.
+  const paneFocused = usePaneFocused()
   const size = createSizing()
   const desktopReviewOpen = createMemo(() => isDesktop() && view().reviewPanel.opened())
   const desktopV2ReviewOpen = createMemo(() => newSessionDesign() && desktopReviewOpen() && !!params.id)
@@ -464,6 +466,7 @@ export default function Page() {
   const desktopFileTreeOpen = createMemo(
     () =>
       isDesktop() &&
+      paneFocused() &&
       shouldShowFileTree({
         visible: settings.visibility.fileTree(),
         opened: layout.fileTree.opened(),
@@ -484,7 +487,7 @@ export default function Page() {
    * and when the panel was closed, select again after the strip has remounted.
    */
   createEffect(() => {
-    if (!irisPanelOpenRequest()) return
+    if (!irisPanelOpenRequest() || !paneFocused()) return
     untrack(() => {
       const wasOpen = desktopSidePanelOpen()
       view().reviewPanel.open("other")

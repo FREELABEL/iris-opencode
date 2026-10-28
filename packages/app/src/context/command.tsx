@@ -4,6 +4,7 @@ import { type Accessor, createEffect, createMemo, onCleanup, onMount } from "sol
 import { createStore } from "solid-js/store"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import { useLanguage } from "@/context/language"
+import { useSessionPane } from "@/context/session-pane"
 import { useSettings } from "@/context/settings"
 import { dict as en } from "@/i18n/en"
 import { Persist, persisted } from "@/utils/persist"
@@ -500,14 +501,24 @@ export const { use: useCommand, provider: CommandProvider } = createSimpleContex
       const id = typeof key === "string" ? key : undefined
       const next = typeof key === "function" ? key : cb
       if (!next) return
-      const options = createMemo(next)
-      const entry: CommandRegistration = {
-        key: id,
-        options,
+      const add = () => {
+        const options = createMemo(next)
+        const entry: CommandRegistration = {
+          key: id,
+          options,
+        }
+        setStore("registrations", (arr) => addCommandRegistration(arr, entry))
+        onCleanup(() => {
+          setStore("registrations", (arr) => arr.filter((x) => x !== entry))
+        })
       }
-      setStore("registrations", (arr) => addCommandRegistration(arr, entry))
-      onCleanup(() => {
-        setStore("registrations", (arr) => arr.filter((x) => x !== entry))
+      // In a split (#191484) every column registers the same screen commands, and the newest
+      // keyed registration wins — so a column that mounted last would own the shortcuts. A
+      // column's commands exist only while it is focused; registering on focus puts it in front.
+      const pane = useSessionPane()
+      if (!pane) return add()
+      createEffect(() => {
+        if (pane.focused()) add()
       })
     }
 
