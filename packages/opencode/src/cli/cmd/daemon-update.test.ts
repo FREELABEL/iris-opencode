@@ -5,6 +5,8 @@ import { join } from "path"
 import {
   blockReason,
   carryOverList,
+  classifyUntracked,
+  formatPlan,
   computePlan,
   detectLocalState,
   guardedRequire,
@@ -206,6 +208,50 @@ describe("plan", () => {
   })
   test("same commit, same files, no local changes = up to date", () => {
     expect(computePlan({ ...base, target: A, targetFiles: base.currentFiles }).upToDate).toBe(true)
+  })
+
+  // 2026-10-28: three hand rollouts each dropped a person's own files (a som spec on the MacBook,
+  // a spec + an Atlas note on iris-hive-001). Files the target does not ship are kept, not blocking.
+  const withYours = {
+    ...base,
+    current: { ...clean("git"), untracked: ["som/save-instagram-session.spec.ts", "notes/atlas.md"] },
+    currentFiles: { ...base.currentFiles, "som/save-instagram-session.spec.ts": "S", "notes/atlas.md": "N" },
+    currentAll: [...base.currentAll, "som/save-instagram-session.spec.ts", "notes/atlas.md"],
+  }
+  test("untracked files the target does not ship are kept (yours) and do NOT need --force", () => {
+    const p = computePlan(withYours)
+    expect(p.keptYours).toEqual(["notes/atlas.md", "som/save-instagram-session.spec.ts"])
+    expect(p.untrackedConflicts).toEqual([])
+    expect(p.blocked).toBeNull()
+    // kept files are not "removed" by the update
+    expect(p.filesChanged.removed).toEqual([])
+    const text = formatPlan(p).join("\n")
+    expect(text).toContain("+ som/save-instagram-session.spec.ts  (kept — yours)")
+    expect(text).toContain("yours:    2 file(s) you added, kept")
+  })
+  test("same commit plus only your own added files is still up to date", () => {
+    const p = computePlan({ ...withYours, target: A, targetFiles: base.currentFiles })
+    expect(p.upToDate).toBe(true)
+  })
+  test("an untracked file at a path the target ships with different bytes is a conflict: --force", () => {
+    const p = computePlan({ ...withYours, targetFiles: { ...base.targetFiles, "notes/atlas.md": "UPSTREAM" } })
+    expect(p.untrackedConflicts).toEqual(["notes/atlas.md"])
+    expect(p.keptYours).toEqual(["som/save-instagram-session.spec.ts"])
+    expect(p.blocked).toContain("--force")
+    expect(computePlan({ ...withYours, force: true, targetFiles: { ...base.targetFiles, "notes/atlas.md": "UPSTREAM" } }).blocked).toBeNull()
+  })
+  test("modifications to shipped files still need --force, even alongside kept files", () => {
+    const p = computePlan({ ...withYours, current: { ...withYours.current, modified: ["lib/a.js"] } })
+    expect(p.blocked).toContain("--force")
+    expect(p.keptYours.length).toBe(2)
+  })
+  test("classifyUntracked: absent = kept, same bytes = neither, different bytes = conflict", () => {
+    const h: Record<string, string> = { a: "1", b: "2", c: "3" }
+    expect(classifyUntracked(["a", "b", "c"], { b: "2", c: "X" }, (f) => h[f] ?? null)).toEqual({ kept: ["a"], conflicts: ["c"] })
+  })
+  test("blockReason without a classification stays conservative: every untracked file counts", () => {
+    expect(blockReason({ ...clean("git"), untracked: ["x.js"] }, false)).toContain("--force")
+    expect(blockReason({ ...clean("git"), untracked: ["x.js"] }, false, [])).toBeNull()
   })
 })
 

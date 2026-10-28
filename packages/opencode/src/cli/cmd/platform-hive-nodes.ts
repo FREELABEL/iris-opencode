@@ -320,6 +320,8 @@ const HiveNodesListCommand = cmd({
     const stale = nodes.filter((n) => n.connection_status === "online" && !(n as any).bridge_capabilities).length
     console.log()
     console.log(dim(`  ${nodes.length} node(s).  Run on one: iris hive run <name|id> "<command>"`))
+    const behind = views.byIndex.filter((v) => v.behind).length
+    if (behind > 0) console.log(`  ${UI.Style.TEXT_WARNING}${behind} node(s) behind main.${UI.Style.TEXT_NORMAL} ${dim("Update every machine: iris hive rollout --dry-run, then iris hive rollout")}`)
     if (stale > 0) {
       console.log(`  ${UI.Style.TEXT_WARNING}${stale} online node(s) run an outdated daemon and are excluded from local data-source routing.${UI.Style.TEXT_NORMAL}`)
     }
