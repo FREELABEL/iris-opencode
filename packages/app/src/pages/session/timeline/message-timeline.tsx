@@ -71,6 +71,8 @@ import { shouldMarkBoundaryGesture, normalizeWheelDelta } from "@/pages/session/
 import { SessionContextUsage } from "@/components/session-context-usage"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useLanguage } from "@/context/language"
+import { useSplitActions } from "@/context/split-actions"
+import { useCommand } from "@/context/command"
 import { useSessionKey } from "@/pages/session/session-layout"
 import { useSessionArchive } from "@/pages/session/session-archive"
 import { useServerSDK } from "@/context/server-sdk"
@@ -275,6 +277,8 @@ export function MessageTimeline(props: {
   const dialog = useDialog()
   const sessionArchive = useSessionArchive()
   const language = useLanguage()
+  const command = useCommand()
+  const splitActions = useSplitActions()
   const { params, sessionKey } = useSessionKey()
   const ownerSessionKey = sessionKey()
   const cached = timelineCache.get(ownerSessionKey)
@@ -1622,6 +1626,20 @@ export function MessageTimeline(props: {
                                 }
                               }}
                             >
+                              <Show when={splitActions}>
+                                {(actions) => (
+                                  <>
+                                    <MenuV2.Item
+                                      disabled={!actions().canSplit()}
+                                      shortcut={command.keybind("split.right")}
+                                      onSelect={() => actions().splitRight(id)}
+                                    >
+                                      {language.t("split.right")}
+                                    </MenuV2.Item>
+                                    <MenuV2.Separator />
+                                  </>
+                                )}
+                              </Show>
                               <MenuV2.Item
                                 onSelect={() => {
                                   setTitle("pendingRename", true)
