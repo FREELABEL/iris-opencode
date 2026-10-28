@@ -636,7 +636,13 @@ export async function updateOneNode(deps: RolloutDeps, node: FleetNode, row: Pla
   const out = up.stdout ?? ""
   if (up.exit_code !== 0) return { ...base, status: "failed", cliUpdated, detail: `the update did not start (exit ${up.exit_code ?? "?"}) — nothing was swapped: ${tail(out + "\n" + up.stderr)}` }
   if (/\bup-to-date\b/.test(out) && !/restart-scheduled/.test(out)) return { ...base, status: "current", cliUpdated }
-  if (!/restart-scheduled/.test(out)) return { ...base, status: "failed", cliUpdated, detail: `the node did not schedule the swap: ${tail(out)}` }
+  // A refusal the node printed is final. A MISSING success marker is not: the hub can hand back the
+  // task's stdout cut off before its last line (AlexMaysnow1063, 2026-10-28 — the swap had run and the
+  // daemon reported the target, but the marker never arrived and the rollout called it a failure).
+  // So fall through to the step that asks the node itself; it decides.
+  if (/(^|\n)\s*✗|\brefus(ed|es|ing)\b/i.test(out) && !/restart-scheduled/.test(out))
+    return { ...base, status: "failed", cliUpdated, detail: `the node refused the update: ${tail(out)}` }
+  if (!/restart-scheduled/.test(out)) say("no 'restart-scheduled' in the task output (it may be cut off) — asking the node what happened")
 
   // VERIFY BY ASKING THE NODE (#191641: the hub's list can lag or be wrong). The helper's
   // last.json says what happened; /health says what runs. Both must name the target.

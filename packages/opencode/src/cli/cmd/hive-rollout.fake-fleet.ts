@@ -34,6 +34,7 @@ export type FakeSpec = {
   unreachable?: boolean //      tasks never come back
   dropsDuringUpdate?: boolean //the update task is never answered (machine fell off the network)
   dispatchFailsDuringUpdate?: boolean // the hub refuses to dispatch the update (node went offline)
+  truncateUpdateStdout?: boolean // the hub returns the update task's stdout cut off before its last line (seen on AlexMaysnow1063, 2026-10-28)
 }
 
 export function dryPlan(o: { from?: string | null; upToDate?: boolean; modified?: string[]; missing?: string[]; untracked?: string[]; kept?: string[]; conflicts?: string[]; deps?: boolean; oldCli?: boolean; kind?: string; blocked?: string | null } = {}): any {
@@ -176,6 +177,10 @@ export function fakeFleet(specs: FakeSpec[], o: { localName?: string; localCli?:
       const p = Bun.spawn(["bash", "-c", script], { env: { ...process.env, HOME: home, IRIS_HOME: "", PATH: `${join(home, "fakebin")}:${process.env.PATH}` }, stdout: "pipe", stderr: "pipe" })
       const [stdout, stderr] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()])
       const code = await p.exited
+      if (s.truncateUpdateStdout && script.includes("--detach-restart --restart-delay")) {
+        const cut = stdout.split("\n").filter((l) => !/restart-scheduled|swap \+ restart/.test(l)).join("\n")
+        return { finished: true, exit_code: code, stdout: cut, stderr, taskId }
+      }
       return { finished: true, exit_code: code, stdout, stderr, taskId }
     },
     cancel: async () => {},
