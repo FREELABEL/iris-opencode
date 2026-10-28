@@ -75,15 +75,24 @@ export function SessionSplitRoute(props: { server: ServerRoute; content: Compone
   const shown = createMemo(() => visible(split.panes(), route(), maxColumns(width())))
   const keys = createMemo(() => shown().map(paneKey))
   const multi = createMemo(() => keys().length >= 2 && keys().includes(paneKey(route())))
-  const focusPane = (p: PaneRef) => navigate(sessionHref(p.server as never, p.sessionId))
+  // Where focus is going. Navigation lands a moment after it is asked for; a split or close in
+  // that gap (fast keys) acted on the column just left, and the split drifted down to nothing.
+  const [moving, setMoving] = createSignal<PaneRef>()
+  // Cleared by any route change, so a navigation that lands elsewhere cannot leave it stale.
+  createEffect(on(route, () => setMoving(undefined), { defer: true }))
+  const focused = () => moving() ?? route()
+  const focusPane = (p: PaneRef) => {
+    setMoving(p)
+    navigate(sessionHref(p.server as never, p.sessionId))
+  }
   const closePane = (p: PaneRef) => {
-    const next = closeColumn(split.panes(), p, route())
+    const next = closeColumn(split.panes(), p, focused())
     split.set(next.panes)
     if (next.focus) focusPane(next.focus)
   }
 
   const splitRight = () => {
-    const current = route()
+    const current = focused()
     const onScreen = split.panes()
     const candidate = tabs.store.find(
       (t) =>
@@ -103,7 +112,7 @@ export function SessionSplitRoute(props: { server: ServerRoute; content: Compone
   }
   const step = (by: number) => {
     const list = shown()
-    const at = list.findIndex((p) => samePane(p, route()))
+    const at = list.findIndex((p) => samePane(p, focused()))
     const next = list[at + by]
     if (next) focusPane(next)
   }
@@ -122,7 +131,7 @@ export function SessionSplitRoute(props: { server: ServerRoute; content: Compone
       category: language.t("command.category.view"),
       keybind: "mod+alt+w",
       disabled: !multi(),
-      onSelect: () => closePane(route()),
+      onSelect: () => closePane(focused()),
     },
     {
       id: "split.focus.left",

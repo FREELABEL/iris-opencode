@@ -16,7 +16,11 @@ export const { use: useSplit, provider: SplitProvider } = createSimpleContext({
       Persist.window(accountKey("split")),
       createStore<{ panes: PaneRef[]; last: number }>({ panes: [], last: 0 }),
     )
-    const set = (panes: PaneRef[]) => setStore("panes", reconcileStore(panes))
+    // Plain copies, never the store's own objects: reconcile writes slot by slot, so inserting a
+    // column ([X, Y] -> [X, Z, Y]) overwrote Y's object with Z before Y was copied to the next
+    // slot — the same session ended up in two columns, and a close then collapsed the split.
+    const set = (panes: PaneRef[]) =>
+      setStore("panes", reconcileStore(panes.map((p) => ({ server: p.server, sessionId: p.sessionId }))))
     return {
       ready,
       panes: () => store.panes,
