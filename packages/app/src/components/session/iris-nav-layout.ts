@@ -112,6 +112,6 @@ export function legacyNavLayout(pinsRaw: string | null, filesRaw: string | null,
   const order = [...(pins ?? [])]
   const hidden = pins ? def.order.filter((id) => id !== FILES_ITEM && !pins.includes(id)) : []
   if (filesRaw === "0") hidden.push(FILES_ITEM)
-  else if (filesChoice || pins) order.unshift(FILES_ITEM)
+  else if (filesChoice || pins) order.push(FILES_ITEM)
   return { version: 1, order, hidden }
 }

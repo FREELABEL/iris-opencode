@@ -1158,8 +1158,9 @@ const irisPinnedSig = () =>
  * there, and the separate "IRIS" tab is gone. Module-level so the strip can read them before (and
  * without) this component mounting; the component keeps them current.
  */
+// Nothing used yet → the layout's first shown product, so a new person opens where the layout starts.
 const [irisSurfaceSig, setIrisSurfaceSig] = createSignal<SurfaceId>(
-  normalizeSurface(openingSurface(normalizeSurface(storage(LAST_SURFACE_KEY)), pinsRawSig())),
+  normalizeSurface(openingSurface(normalizeSurface(storage(LAST_SURFACE_KEY) ?? irisPinnedSig()[0]), pinsRawSig())),
 )
 /** Whether the person pinned Atlas themselves — the side panel then opens on IRIS (#189766). */
 export const irisOpensOnAtlas = () => pinnedByChoice(pinsRawSig(), "atlas")

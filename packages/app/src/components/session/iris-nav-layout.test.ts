@@ -118,6 +118,7 @@ describe("carrying over the pre-#191509 pins", () => {
     expect(visibleNavItems(l).filter((x) => x !== FILES_ITEM)).toEqual(["pages", "atlas", "agents", "pulse"])
     expect(isNavItemVisible(l, "hive")).toBe(false)
     expect(isNavItemVisible(l, FILES_ITEM)).toBe(true)
+    expect(l.order.slice(0, 4)).toEqual(["pages", "atlas", "agents", "pulse"])
   })
   test("a stored file-tree choice is kept either way", () => {
     expect(isNavItemVisible(merged(legacyNavLayout(null, "1", DEF)), FILES_ITEM)).toBe(true)
