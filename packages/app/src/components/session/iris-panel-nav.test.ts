@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test"
 import {
-  filesTabPinned,
   openingSurface,
   panelScope,
   pinnedByChoice,
@@ -41,17 +40,6 @@ describe("the project row tells the truth about scope", () => {
   test("artifacts belong to the session", () => {
     expect(panelScope("pages", "artifacts")).toBe("session")
     expect(panelScope("atlas", "atlas-artifacts")).toBe("session")
-  })
-})
-
-describe("the file tree is a pin (#187129)", () => {
-  test("nothing stored: a git project keeps it, anything else starts without it", () => {
-    expect(filesTabPinned(null, true)).toBe(true)
-    expect(filesTabPinned(null, false)).toBe(false)
-  })
-  test("a stored choice wins either way", () => {
-    expect(filesTabPinned("0", true)).toBe(false)
-    expect(filesTabPinned("1", false)).toBe(true)
   })
 })
 

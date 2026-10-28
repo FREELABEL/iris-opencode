@@ -113,3 +113,17 @@ export function scope(cwd: string, env: WalkEnv = { home: os.homedir(), platform
   for (const pattern of MAC_PROTECTED_ANYWHERE) excludes.push(`--glob=!${pattern}`)
   return { excludes: [...new Set(excludes)] }
 }
+
+/**
+ * Place the excludes where they win. ripgrep resolves overlapping --glob rules by ORDER: the
+ * LAST matching glob decides. Put first, a later `--glob=**\/*` (or `**`) re-includes
+ * Library/Containers and the walk opens it anyway — found on the Mac, 2026-10-27; Linux never
+ * sees it because nothing is pruned there. So they go after every other flag: before `--` when
+ * there is one (grep), otherwise before the final path argument.
+ */
+export function withExcludes(args: readonly string[], excludes: readonly string[]): string[] {
+  if (excludes.length === 0) return [...args]
+  const dashdash = args.indexOf("--")
+  const at = dashdash >= 0 ? dashdash : args.length - 1
+  return [...args.slice(0, at), ...excludes, ...args.slice(at)]
+}
