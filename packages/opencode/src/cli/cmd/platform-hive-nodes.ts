@@ -10,7 +10,7 @@ import { describeIsolation } from "./hive-isolation"
 import { exitCodeForResult, verdictForResult, renderOutput, fromHiveTask, TIMEOUT_EXIT } from "./hive-script-result"
 import { CliUsageError } from "../json-error"
 import { currentDelegationOrigin } from "./hive-delegation-origin"
-import { buildHiveRunBody } from "./hive-run-body"
+import { buildHiveRunBody, ENDED_STATUSES, dispatchableConnection, queuedReport, statusLine, stoppedWaitingNote, type CreatedTask } from "./hive-run-body"
 import { busyOverrideHint } from "./hive-task-create"
 
 // ============================================================================
@@ -578,7 +578,9 @@ const HiveNodesCommand = cmd({
 // run — execute a shell command on a specific node and wait for output
 // ============================================================================
 
-export const TERMINAL_TASK_STATUSES = new Set(["succeeded", "completed", "failed", "cancelled", "timeout", "errored"])
+// `expired` ends a task too (#187568) — one that never started in time. Without it a task that
+// expired while queued kept `hive run` waiting to its own timeout (#191559).
+export const TERMINAL_TASK_STATUSES = ENDED_STATUSES
 
 /**
  * Poll ONE task — the one a dispatch created — until it reaches a terminal status.
@@ -659,6 +661,10 @@ const HiveRunCommand = cmd({
       .option("priority", { describe: "task priority 1-10 (higher = sooner)", type: "number" })
       .option("queue", { alias: "fire-and-forget", describe: "queue the task and exit immediately (don't wait for completion)", type: "boolean", default: false })
       .option("force", { describe: "run it on this node even though it reports high CPU/memory (a full or offline node still refuses)", type: "boolean", default: false })
+      // #191559 — a full node is a normal, transient state: wait for a slot (up to --timeout) instead
+      // of failing. A literal --no-wait-for-slot flag, same reason as --no-fail-fast below.
+      .option("wait-for-slot", { describe: "if the node is full or busy, wait in its queue for a free slot (up to --timeout) instead of failing", type: "boolean", default: true })
+      .option("no-wait-for-slot", { describe: "fail at once if the node is full or busy", type: "boolean", default: false })
       .option("user-id", { describe: "user ID", type: "number" })
       // boolean-negation is disabled globally (src/index.ts), so `--no-fail-fast` is NOT the
       // negation of `--fail-fast` — it must be its own literal flag or the parser rejects the
@@ -681,7 +687,7 @@ const HiveRunCommand = cmd({
       process.exit(1)
     }
 
-    if (node.connection_status !== "online") {
+    if (!dispatchableConnection(node.connection_status)) {
       console.error(
         `Node "${node.name}" is ${node.connection_status}. ` +
           `Last heartbeat ${timeAgo(node.last_heartbeat_at)}. Cannot dispatch.`,
@@ -715,11 +721,15 @@ const HiveRunCommand = cmd({
     // From inside an `iris` session, the session that sent this hears it start and gets its report
     // — even with --queue, or when this process is killed mid-wait (#188667).
     const origin = await currentDelegationOrigin()
+    // #191559 — wait for a slot unless told not to. A waiting run must START within --timeout
+    // (not_after); --queue leaves the deadline to the platform's own bound.
+    const waitForSlot = argv["wait-for-slot"] !== false && !argv["no-wait-for-slot"]
+    const notAfter = waitForSlot && !argv.queue ? new Date(Date.now() + timeoutSec * 1000).toISOString() : undefined
     const createRes = await hiveFetch(`/api/v6/nodes/tasks`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(
-        buildHiveRunBody({ userId, nodeId: node.id, title, script, timeoutSec, priority: clampedPriority, origin, force: Boolean(argv.force) }),
+        buildHiveRunBody({ userId, nodeId: node.id, title, script, timeoutSec, priority: clampedPriority, origin, force: Boolean(argv.force), waitForSlot, notAfter }),
       ),
     })
 
@@ -729,20 +739,30 @@ const HiveRunCommand = cmd({
     }
 
     const created = (await createRes.json()) as {
-      task: { id: string; status: string; error?: string | null }
+      task: CreatedTask
       dispatched: boolean
     }
     const taskId = created.task.id
 
     // Fire-and-forget mode: print task id and exit
     if (argv.queue) {
+      // #191575 — the created task's STATUS decides what is printed and the exit code: a task the
+      // platform refused at creation is not "dispatched", and a fire-and-forget caller must know.
+      const q = queuedReport(created.task, node.name)
       if (argv.json) {
-        await writeJson({ task_id: taskId, status: created.task.status, dispatched: created.dispatched })
+        await writeJson({ task_id: taskId, status: created.task.status, dispatched: created.dispatched, error: created.task.error ?? null })
+        if (!q.ok) process.exit(q.exitCode)
         return
       }
-      console.log(`${success("✓")} dispatched task ${bold(taskId)}  status=${created.task.status}`)
-      const hint = busyOverrideHint(created.task.error)
-      if (hint) console.log(dim(`  ${created.task.error}\n  ${hint}`))
+      if (!q.ok) {
+        console.error(q.headline)
+        if (q.detail) console.error(`  ${q.detail}`)
+        const hint = busyOverrideHint(created.task.error)
+        if (hint) console.error(dim(`  ${hint}`))
+        process.exit(q.exitCode)
+      }
+      console.log(success(q.headline))
+      if (q.detail) console.log(dim(`  ${q.detail}`))
       if (origin) console.log(dim("  status and report will appear in this session"))
       console.log(dim(`  Check later:  iris hive tasks get ${taskId}`))
       return
@@ -753,28 +773,34 @@ const HiveRunCommand = cmd({
       // their first 8 characters, and a shortened id here pointed people at the wrong task
       // when they went to look it up or cancel it (#187990).
       console.log(`${dim("→")} task ${taskId}  status=${created.task.status}`)
+      if (created.task.status === "pending") console.log(`${dim("→")} ${statusLine(undefined, created.task)}`)
       console.log(dim("waiting for completion..."))
     }
 
     // Poll EXACTLY the task this dispatch created, by its full id (#187990). See waitForTask.
     let final: any = null
+    let lastStatus: string | undefined = created.task.status
+    // A run that may wait for a slot first gets that wait on top of its own timeout (#191559).
+    const waitedSec = (notAfter ? 2 * timeoutSec : timeoutSec) + 30
     try {
       final = await waitForTask(taskId, {
         initialStatus: created.task.status,
-        deadlineMs: (timeoutSec + 30) * 1000,
+        deadlineMs: waitedSec * 1000,
         fetchTask: async (id) => {
           const r = await hiveFetch(`/api/v6/nodes/tasks/${encodeURIComponent(id)}?user_id=${userId}`)
           if (!r.ok) throw new Error(`Poll failed: ${r.status} ${await r.text()}`)
           return ((await r.json()) as { task: any }).task
         },
-        onStatus: argv.json
-          ? undefined
-          : (t) => {
-              // #190219: a terminal status is NOT printed here. The final line below is the one
-              // verdict; printing the raw server word too put "status=failed" above "✓ completed".
-              if (!TERMINAL_TASK_STATUSES.has(t.status))
-                console.log(`${dim("→")} status=${t.status}${t.progress ? `  progress=${t.progress}%` : ""}`)
-            },
+        onStatus: (t) => {
+          const prev = lastStatus
+          lastStatus = t.status
+          if (argv.json) return
+          // #190219: a terminal status is NOT printed here. The final line below is the one
+          // verdict; printing the raw server word too put "status=failed" above "✓ completed".
+          // #191560: a task sent back to the queue says so, instead of a bare "status=pending".
+          const line = statusLine(prev, t)
+          if (line) console.log(`${dim("→")} ${line}`)
+        },
       })
     } catch (e) {
       console.error(e instanceof Error ? e.message : String(e))
@@ -783,7 +809,6 @@ const HiveRunCommand = cmd({
 
     // #190219: the CLI's own wait ran out. Ask once more before giving up — the task may have
     // finished in the gap — and never call that a task failure: the task is not cancelled.
-    const waitedSec = timeoutSec + 30
     let stoppedWaiting = false
     if (!final) {
       stoppedWaiting = true
@@ -803,7 +828,7 @@ const HiveRunCommand = cmd({
       return
     }
 
-    const report = hiveRunReport(final, taskId, stoppedWaiting ? waitedSec : undefined)
+    const report = hiveRunReport(final, taskId, stoppedWaiting ? waitedSec : undefined, lastStatus)
     for (const line of report.lines) console.log(line)
 
     // Exit with the command's own code, so `iris hive run <node> "..." && next` means what
@@ -831,12 +856,15 @@ export function hiveRunReport(
   final: any | null,
   taskId: string,
   stoppedWaitingAfterSec?: number,
+  lastStatus?: string,
 ): { lines: string[]; exitCode: number } {
   const lines: string[] = []
   const footer = dim(`  task ${taskId}  ·  iris hive tasks get ${taskId}`)
   if (!final) {
+    // #191560 — say what the platform last said, not "still running": a task its machine had
+    // already killed sat "pending" while this line claimed it was running on the node.
     lines.push(
-      `  ${dim("…")} stopped waiting after ${stoppedWaitingAfterSec ?? "?"}s  ${dim("— the task is still running on the node; it was not cancelled")}`,
+      `  ${dim("…")} stopped waiting after ${stoppedWaitingAfterSec ?? "?"}s  ${dim(`— ${stoppedWaitingNote(lastStatus ?? "running")}`)}`,
     )
     lines.push(footer)
     return { lines, exitCode: TIMEOUT_EXIT }

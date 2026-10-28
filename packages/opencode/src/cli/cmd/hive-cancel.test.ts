@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { cancelTaskWith } from "./platform-hive"
+import { cancelTaskWith, cancelledLine } from "./platform-hive"
 
 /**
  * #190292 — cancelling a task running on another machine failed with "No query results for model
@@ -28,5 +28,18 @@ describe("cancelTaskWith", () => {
   test("an unknown id is named, not a model-lookup error", async () => {
     const r = await cancelTaskWith(async () => new Response("{}", { status: 404 }), "nope")
     expect(r.message).toBe("No task nope on your account")
+  })
+})
+
+describe("#184886 — cancel says whether the machine was told", () => {
+  test("a server that pushed the stop to the node says so", async () => {
+    const r = await cancelTaskWith(async () => new Response(JSON.stringify({ message: "Task cancelled", node_notified: true }), { status: 200 }), "t")
+    expect(r.nodeNotified).toBe(true)
+    expect(cancelledLine(r.nodeNotified)).toContain("told to stop it")
+  })
+
+  test("an older server that does not say is not credited with it", async () => {
+    const r = await cancelTaskWith(async () => new Response(JSON.stringify({ message: "Task cancelled" }), { status: 200 }), "t")
+    expect(cancelledLine(r.nodeNotified)).toBe("Task cancelled")
   })
 })
