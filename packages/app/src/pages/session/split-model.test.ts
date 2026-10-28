@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { close, closeColumn, maxColumns, open, paneKey, prune, reconcile, visible, type PaneRef } from "./split-model"
+import { close, closeColumn, dropSlot, openAt, maxColumns, open, paneKey, prune, reconcile, visible, type PaneRef } from "./split-model"
 
 const p = (id: string, server = "local"): PaneRef => ({ server, sessionId: id })
 
@@ -59,5 +59,24 @@ describe("split model (#191484)", () => {
     expect(closeColumn(split, p("c"), p("c"))).toEqual({ panes: [p("a"), p("b")], focus: p("b") })
     expect(closeColumn(split, p("a"), p("b"))).toEqual({ panes: [p("b"), p("c")] })
     expect(closeColumn([p("a"), p("b")], p("a"), p("a"))).toEqual({ panes: [], focus: p("b") })
+  })
+
+  test("a dropped tab lands at the slot it was dropped on, seeding a split from one column", () => {
+    expect(openAt([], p("a"), p("b"), 0)).toEqual([p("b"), p("a")])
+    expect(openAt([], p("a"), p("b"), 1)).toEqual([p("a"), p("b")])
+    expect(openAt([p("a"), p("c")], p("a"), p("b"), 1)).toEqual([p("a"), p("b"), p("c")])
+    expect(openAt([p("a"), p("c")], p("a"), p("b"), 9)).toEqual([p("a"), p("c"), p("b")])
+    // dropping a session already in the split moves it there instead of duplicating it
+    expect(openAt([p("a"), p("b"), p("c")], p("a"), p("c"), 0)).toEqual([p("c"), p("a"), p("b")])
+  })
+
+  test("the drop slot is the half of the column under the pointer", () => {
+    const cols = [{ left: 0, right: 500 }, { left: 508, right: 1000 }]
+    expect(dropSlot(cols, 100)).toEqual({ column: 0, side: "left", index: 0 })
+    expect(dropSlot(cols, 400)).toEqual({ column: 0, side: "right", index: 1 })
+    expect(dropSlot(cols, 600)).toEqual({ column: 1, side: "left", index: 1 })
+    expect(dropSlot(cols, 990)).toEqual({ column: 1, side: "right", index: 2 })
+    expect(dropSlot(cols, 5000)).toEqual({ column: 1, side: "right", index: 2 })
+    expect(dropSlot([], 10)).toBeUndefined()
   })
 })

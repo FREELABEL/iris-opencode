@@ -3,7 +3,7 @@ import { useNavigate, useParams } from "@solidjs/router"
 import { createResizeObserver } from "@solid-primitives/resize-observer"
 import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
 import { Icon as IconV2 } from "@opencode-ai/ui/v2/icon"
-import { batch, createEffect, createMemo, createSignal, For, on, Show, Suspense, untrack, type Component, type ParentProps } from "solid-js"
+import { batch, createEffect, createMemo, createSignal, For, on, onCleanup, Show, Suspense, untrack, type Component, type ParentProps } from "solid-js"
 import { useCommand } from "@/context/command"
 import { useLanguage } from "@/context/language"
 import { SessionPaneProvider, type SessionPane } from "@/context/session-pane"
@@ -11,10 +11,11 @@ import { SplitActionsProvider } from "@/context/split-actions"
 import { useServerSDK } from "@/context/server-sdk"
 import { useServerSync } from "@/context/server-sync"
 import { useSplit } from "@/context/split"
+import { handleTabDrop, tabDrag, type TabDrag } from "@/context/split-drag"
 import { useTabs } from "@/context/tabs"
 import { requireServerKey, sessionHref } from "@/utils/session-route"
 import { showToast } from "@/utils/toast"
-import { closeColumn, maxColumns, open, paneKey, PANE_GAP, PANE_MAX, prune, reconcile, samePane, visible, type PaneRef } from "./split-model"
+import { closeColumn, dropSlot, maxColumns, open, openAt, paneKey, PANE_GAP, PANE_MAX, prune, reconcile, samePane, visible, type PaneRef } from "./split-model"
 
 type ServerRoute = Component<ParentProps<{ serverKey?: () => string }>>
 
@@ -157,6 +158,49 @@ export function SessionSplitRoute(props: { server: ServerRoute; content: Compone
     })
     navigate(sessionHref(next.server as never, next.sessionId))
   }
+  // DRAG A TAB IN (#191484). The tab strip reports a session tab being dragged; once the pointer
+  // is over the chat area, the half of the column under it is where the tab would open.
+  const dropAt = (d: TabDrag): DropState | undefined => {
+    if (!row) return
+    const area = row.getBoundingClientRect()
+    if (d.y < area.top + 8 || d.y > area.bottom || d.x < area.left || d.x > area.right) return
+    const next = { server: d.server, sessionId: d.sessionId }
+    const onScreen = drawn()
+    if (samePane(next, focused()) && !multi()) return { kind: "self" }
+    if (maxColumns(width()) < 2) return { kind: "narrow" }
+    if (!onScreen.some((p) => samePane(p, next)) && onScreen.length >= 2 && !columnsFree()) return { kind: "full" }
+    const columns = multi() ? [...row.querySelectorAll<HTMLElement>(COLUMN)].map((el) => el.getBoundingClientRect()) : [area]
+    const slot = dropSlot(columns, d.x)
+    if (!slot) return
+    const target = multi() ? shown()[slot.column] : focused()
+    const at = Math.max(0, onScreen.findIndex((p) => samePane(p, target)))
+    const index = onScreen.length < 2 ? slot.index : slot.side === "left" ? at : at + 1
+    const box = columns[slot.column]
+    const half = box.width / 2
+    return {
+      kind: "drop",
+      next,
+      index,
+      box: { left: box.left - area.left + (slot.side === "right" ? half : 0), width: half },
+    }
+  }
+  const dropState = createMemo(() => {
+    const d = tabDrag()
+    return d ? dropAt(d) : undefined
+  })
+  onCleanup(
+    handleTabDrop((d) => {
+      const state = dropAt(d)
+      if (state?.kind !== "drop") return false
+      batch(() => {
+        split.set(openAt(drawn(), focused(), state.next, state.index))
+        setMoving(state.next)
+      })
+      navigate(sessionHref(state.next.server as never, state.next.sessionId))
+      return true
+    }),
+  )
+
   const step = (by: number) => {
     const list = shown()
     const at = list.findIndex((p) => samePane(p, focused()))
@@ -202,11 +246,12 @@ export function SessionSplitRoute(props: { server: ServerRoute; content: Compone
   const Server = props.server
   const Content = props.content
   return (
-    <div ref={row} class="size-full min-h-0 min-w-0 flex">
+    <div ref={row} class="relative size-full min-h-0 min-w-0 flex">
       {/* Mounted once, outside the split switch: these providers are gated on ready, and a second
           copy mounted when a split starts never came ready — the window went blank. */}
       <Server>
         <SplitNewSession register={(fn) => (createSession = fn)} />
+        <SplitDropZone state={dropState} />
         <SplitActionsProvider actions={{ splitRight: (id) => void splitRight(id), canSplit }}>
         <Show when={multi()} fallback={<Content />}>
           <div class="size-full min-h-0 min-w-0 flex" style={{ gap: `${PANE_GAP}px` }} data-component="session-split">
@@ -217,7 +262,12 @@ export function SessionSplitRoute(props: { server: ServerRoute; content: Compone
                   <SplitColumn
                     pane={pane}
                     focused={() => samePane(pane, focused())}
-                    focus={() => focusPane(pane)}
+                    // A column whose tab was just closed (its "Close tab", a deleted session) must
+                    // not take focus from that same click: it navigated back to the closed session.
+                    focus={() => {
+                      if (tabs.store.some((t) => t.type === "session" && samePane({ server: t.server, sessionId: t.sessionId }, pane)))
+                        focusPane(pane)
+                    }}
                     close={() => closePane(pane)}
                     sameServer={() => pane.server === focused().server}
                     server={Server}
@@ -231,6 +281,58 @@ export function SessionSplitRoute(props: { server: ServerRoute; content: Compone
         </SplitActionsProvider>
       </Server>
     </div>
+  )
+}
+
+type DropState =
+  | { kind: "drop"; next: PaneRef; index: number; box: { left: number; width: number } }
+  | { kind: "self" | "narrow" | "full" }
+
+const COLUMN = '[data-component="session-split-column"]'
+
+/**
+ * The drop zone: a column-shaped placeholder where the dragged tab would open, named — or, when
+ * it cannot open, the reason, where the pointer is looking. Never takes the pointer itself.
+ */
+function SplitDropZone(props: { state: () => DropState | undefined }) {
+  const sync = useServerSync()
+  const language = useLanguage()
+  const title = (id: string) => sync().session.lineage.peek(id)?.session.title || language.t("split.drop.untitled")
+  const accent = "var(--v2-border-border-focus,var(--border-interactive-base))"
+  return (
+    <Show when={props.state()}>
+      {(state) => (
+        <div class="pointer-events-none absolute inset-0 z-30" data-component="session-split-dropzone">
+          <Show
+            when={state().kind === "drop" ? (state() as Extract<DropState, { kind: "drop" }>) : undefined}
+            fallback={
+              <div class="absolute inset-x-0 top-4 flex justify-center">
+                <div class="rounded-full px-3 py-1.5 text-12-medium text-text-strong bg-v2-background-bg-layer-01 shadow-[var(--v2-elevation-floating)]">
+                  {language.t(`split.drop.${state().kind}` as "split.drop.full")}
+                </div>
+              </div>
+            }
+          >
+            {(drop) => (
+              <div
+                class="absolute top-1 bottom-1 flex items-center justify-center rounded-[10px] border-2 border-dashed transition-[left,width] duration-150 ease-out motion-reduce:transition-none"
+                style={{
+                  left: `${drop().box.left + 4}px`,
+                  width: `${drop().box.width - 8}px`,
+                  "border-color": accent,
+                  background: `color-mix(in oklch, ${accent} 10%, transparent)`,
+                }}
+                data-slot="session-split-drop"
+              >
+                <div class="max-w-[80%] truncate rounded-full px-3 py-1.5 text-12-medium text-text-strong bg-v2-background-bg-layer-01 shadow-[var(--v2-elevation-floating)]">
+                  {language.t("split.drop.here", { title: title(drop().next.sessionId) })}
+                </div>
+              </div>
+            )}
+          </Show>
+        </div>
+      )}
+    </Show>
   )
 }
 

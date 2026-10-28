@@ -43,6 +43,27 @@ export function open(panes: PaneRef[], focused: PaneRef, next: PaneRef): PaneRef
   return [...base.slice(0, at + 1), next, ...base.slice(at + 1)].slice(0, PANE_MAX)
 }
 
+/**
+ * Add `next` at `index` (0 = far left) of the split as drawn — where a dragged tab was dropped.
+ * Starting a split seeds it with the focused session, as open() does.
+ */
+export function openAt(panes: PaneRef[], focused: PaneRef, next: PaneRef, index: number): PaneRef[] {
+  const base = (panes.some((p) => samePane(p, focused)) ? panes : [focused]).filter((p) => !samePane(p, next))
+  const at = Math.max(0, Math.min(index, base.length))
+  return [...base.slice(0, at), next, ...base.slice(at)].slice(0, PANE_MAX)
+}
+
+/** Where a drop at `x` lands among columns spanning these horizontal ranges: which column, which half. */
+export type DropSlot = { column: number; side: "left" | "right"; index: number }
+export function dropSlot(columns: { left: number; right: number }[], x: number): DropSlot | undefined {
+  if (columns.length === 0) return
+  const at = columns.findIndex((c) => x < c.right)
+  const column = at === -1 ? columns.length - 1 : at
+  const c = columns[column]
+  const side = x < (c.left + c.right) / 2 ? "left" : "right"
+  return { column, side, index: side === "left" ? column : column + 1 }
+}
+
 /** Remove a column. One left means no split at all. */
 export function close(panes: PaneRef[], target: PaneRef): PaneRef[] {
   const next = panes.filter((p) => !samePane(p, target))

@@ -215,7 +215,9 @@ function SessionErrorFallback(props: { error: unknown; sessionID?: string; serve
     const conn = server.list.find((item) => ServerConnection.key(item) === key)
     return conn ? serverName(conn) : key
   })
-  const closeTab = () => {
+  const closeTab = (event?: MouseEvent) => {
+    // Closing, not choosing: in a split the click must not go on to focus this column (#191484).
+    event?.stopPropagation()
     if (!props.sessionID) return
     tabs.removeSessionTab({ server: props.serverKey ?? server.key, sessionId: props.sessionID })
   }
