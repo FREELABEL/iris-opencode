@@ -981,14 +981,23 @@ function readNodeKey(): string | null {
 export async function cancelTaskWith(
   fetcher: (path: string, init: RequestInit) => Promise<Response>,
   taskId: string,
-): Promise<{ ok: boolean; message: string }> {
+): Promise<{ ok: boolean; message: string; nodeNotified?: boolean }> {
   const res = await fetcher(`/api/v6/nodes/tasks/${encodeURIComponent(taskId)}/cancel`, { method: "POST" })
-  if (res.ok) return { ok: true, message: "cancelled" }
+  if (res.ok) {
+    // #184886 — whether a machine was told to stop it. Older servers do not say; claim nothing then.
+    const body = (await res.json().catch(() => ({}))) as Record<string, unknown>
+    return { ok: true, message: "cancelled", nodeNotified: body.node_notified === true }
+  }
   const body = (await res.json().catch(() => ({}))) as Record<string, unknown>
   if (res.status === 404) return { ok: false, message: `No task ${taskId} on your account` }
   return { ok: false, message: String(body.message ?? body.error ?? `HTTP ${res.status}`) }
 }
 const cancelTask = (taskId: string) => cancelTaskWith(hiveFetch, taskId)
+
+/** #184886 — "cancelled" used to be bookkeeping only; say when its machine was told to stop it. */
+export function cancelledLine(nodeNotified?: boolean): string {
+  return nodeNotified ? "Task cancelled — its machine was told to stop it now" : "Task cancelled"
+}
 
 async function nodeFetch(path: string, options: RequestInit = {}) {
   const nodeKey = readNodeKey()
@@ -1880,7 +1889,7 @@ const HiveCancelCommand = cmd({
         spinner.start(`Cancelling ${cancelId}…`)
         const r = await cancelTask(cancelId)
         if (r.ok) {
-          spinner.stop(success("Task cancelled"))
+          spinner.stop(success(cancelledLine(r.nodeNotified)))
         } else {
           spinner.stop("Failed", 1)
           prompts.log.error(r.message)
@@ -1910,7 +1919,7 @@ const HiveCancelCommand = cmd({
         if (prompts.isCancel(selected)) { prompts.outro("Cancelled"); return }
 
         const r = await cancelTask(String(selected))
-        if (r.ok) prompts.log.success("Task cancelled")
+        if (r.ok) prompts.log.success(cancelledLine(r.nodeNotified))
         else { prompts.log.error(r.message); process.exitCode = 1 }
       }
     } catch (err) {
