@@ -1,4 +1,6 @@
 // @refresh reload
+// Must stay first: fills in APIs older Safari is missing (#191428).
+import "./polyfills"
 
 import * as Sentry from "@sentry/solid"
 import { render } from "solid-js/web"
