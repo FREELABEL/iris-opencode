@@ -2,7 +2,7 @@ import { batch, createEffect, createMemo, onCleanup } from "solid-js"
 import { createStore, produce, reconcile } from "solid-js/store"
 import { createSimpleContext } from "@opencode-ai/ui/context"
 import { showToast } from "@/utils/toast"
-import { useParams } from "@solidjs/router"
+import { useSessionParams } from "@/context/session-pane"
 import { base64Encode } from "@opencode-ai/core/util/encode"
 import { getFilename } from "@opencode-ai/core/util/path"
 import { useSDK } from "./sdk"
@@ -58,7 +58,7 @@ export const { use: useFile, provider: FileProvider } = createSimpleContext({
   init: () => {
     const sdk = useSDK()
     useSync()
-    const params = useParams()
+    const params = useSessionParams()
     const serverSDK = useServerSDK()
     const language = useLanguage()
     const layout = useLayout()

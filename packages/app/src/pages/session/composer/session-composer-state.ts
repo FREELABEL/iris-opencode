@@ -1,7 +1,7 @@
 import { createEffect, createMemo, on, onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
 import type { PermissionRequest, QuestionRequest, Todo } from "@opencode-ai/sdk/v2"
-import { useParams } from "@solidjs/router"
+import { useSessionParams } from "@/context/session-pane"
 import { showToast } from "@/utils/toast"
 import { useServerSync } from "@/context/server-sync"
 import { useLanguage } from "@/context/language"
@@ -26,7 +26,7 @@ export const todoDockAtBoundary = (state: ReturnType<typeof todoState>) => state
 const idle = { type: "idle" as const }
 
 export function createSessionComposerController(options?: { closeMs?: number | (() => number) }) {
-  const params = useParams()
+  const params = useSessionParams()
   const sdk = useSDK()
   const sync = useSync()
   const serverSync = useServerSync()
