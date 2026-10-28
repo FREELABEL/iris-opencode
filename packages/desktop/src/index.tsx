@@ -1,4 +1,6 @@
 // @refresh reload
+// Must stay first: fills in APIs the macOS system webview may be too old to have (#191428).
+import "@opencode-ai/app/polyfills"
 import { render } from "solid-js/web"
 import { createSignal } from "solid-js"
 import { AppBaseProviders, AppInterface, PlatformProvider, Platform, ServerConnection } from "@opencode-ai/app"
