@@ -20,6 +20,7 @@ import {
   checkContract,
   parseDeadline,
   checkTaskRequest,
+  busyOverrideHint,
   describeApiError,
   describeTask,
   exitCodeForStatus,
@@ -1124,6 +1125,7 @@ const HiveTasksCommand = cmd({
       .option("priority", { describe: "(create) priority 1-10 (higher = sooner)", type: "number" })
       .option("queue", { alias: "fire-and-forget", describe: "(create) queue it and exit instead of waiting for the result", type: "boolean", default: false })
       .option("allow-fallback", { describe: "(create) let another node take it if the named one cannot", type: "boolean", default: false })
+      .option("force", { describe: "(create, rerun) send it to --node even though that node reports high CPU/memory — a full or offline node still refuses", type: "boolean", default: false })
       .option("requires", { describe: "(create) only run on a node advertising this capability (repeatable)", type: "string", array: true })
       .option("not-after", { describe: "(create) never run it after this — a duration from now (30s, 5m) or an ISO time. Late tasks EXPIRE instead of running", type: "string" })
       .option("key", { describe: "(create) idempotency key: the same key returns the same task, and a node never runs it twice", type: "string" })
@@ -1133,7 +1135,8 @@ const HiveTasksCommand = cmd({
       .example("iris hive tasks create --type mcp_call --node studio --config '{\"server\":\"argent\"}'", "ask a node's MCP server what tools it has")
       .example("iris hive tasks create --type mcp_call --node studio --config '{\"server\":\"argent\",\"tool\":\"list_devices\"}'", "call one tool and print the result")
       .example("iris hive tasks create --type sandbox_execute --node drone-01 --prompt 'dronectl goto ring --at 8' --not-after 8s --key ring-8-01 --retries 2 --queue", "deliver by T or not at all; safe to retry, never runs twice")
-      .example("iris hive tasks rerun 01a0bab8 --node studio", "re-run a finished task on another machine; keeps the same task and idempotency key"),
+      .example("iris hive tasks rerun 01a0bab8 --node studio", "re-run a finished task on another machine; keeps the same task and idempotency key")
+      .example("iris hive tasks rerun 01a0bab8 --node macbook --force", "re-run it on a node the server calls busy from CPU/memory pressure"),
   async handler(args) {
     UI.empty()
     let sub = args.subcommand as string | undefined
@@ -1163,6 +1166,10 @@ const HiveTasksCommand = cmd({
         process.exit(1)
       }
       const config = parsedConfig.config
+      if (args.force && !args.node) {
+        prompts.log.error("--force needs --node: it overrides the CPU/memory busy check on the node you name.")
+        process.exit(1)
+      }
 
       const check = checkTaskRequest({ type, prompt: args.prompt as string | undefined, config })
       if (!check.ok) {
@@ -1223,6 +1230,7 @@ const HiveTasksCommand = cmd({
         timeoutSec: args.timeout as number | undefined,
         priority: args.priority as number | undefined,
         allowFallback: Boolean(args["allow-fallback"]),
+        force: Boolean(args.force),
         requiredCapabilities: firstArray(args.requires as string[] | undefined),
         notAfter,
         idempotencyKey: args.key as string | undefined,
@@ -1245,7 +1253,7 @@ const HiveTasksCommand = cmd({
         process.exit(1)
       }
 
-      const created = (await createRes.json()) as { task: { id: string; status: string }; dispatched?: boolean; duplicate?: boolean }
+      const created = (await createRes.json()) as { task: { id: string; status: string; error?: string | null }; dispatched?: boolean; duplicate?: boolean }
       const taskId = created.task.id
 
       // A key that already existed returns the ORIGINAL task — say so, or a re-run of a script
@@ -1269,6 +1277,8 @@ const HiveTasksCommand = cmd({
           return
         }
         console.log(`${success("✓")} queued ${bold(taskId)}  status=${created.task.status}`)
+        const hint = busyOverrideHint(created.task.error)
+        if (hint) console.log(dim(`  ${created.task.error}\n  ${hint}`))
         console.log(dim(`  Result later:  iris hive tasks get ${taskId}`))
         return
       }
@@ -1330,6 +1340,8 @@ const HiveTasksCommand = cmd({
       if (final.error) {
         console.log(bold("─── error ───"))
         console.log(`\x1b[31m${String(final.error).slice(0, 2000)}\x1b[0m`)
+        const hint = busyOverrideHint(final.error)
+        if (hint) console.log(dim(`  ${hint}`))
       }
       console.log()
       const st = String(final.status ?? "unknown")
@@ -1369,6 +1381,10 @@ const HiveTasksCommand = cmd({
 
       let nodeId: string | undefined
       const target = args.node as string | undefined
+      if (args.force && !target) {
+        prompts.log.error("--force needs --node: it overrides the CPU/memory busy check on the node you name.")
+        process.exit(1)
+      }
       if (target) {
         const node = await resolveNode(userId, String(target))
         if (!node) {
@@ -1381,10 +1397,13 @@ const HiveTasksCommand = cmd({
       const res = await hiveFetch(`/api/v6/nodes/tasks/${taskId}/rerun`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(nodeId ? { node_id: nodeId } : {}),
+        body: JSON.stringify(nodeId ? { node_id: nodeId, ...(args.force ? { force: true } : {}) } : {}),
       })
       if (!res.ok) {
-        prompts.log.error(describeApiError(res.status, await res.text().catch(() => "")))
+        const bodyText = await res.text().catch(() => "")
+        prompts.log.error(describeApiError(res.status, bodyText))
+        const hint = busyOverrideHint(bodyText)
+        if (hint) console.log(dim(`  ${hint}`))
         process.exit(1)
       }
       const data = (await res.json()) as { task?: Record<string, unknown> }

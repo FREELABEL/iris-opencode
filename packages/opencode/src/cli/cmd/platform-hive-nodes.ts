@@ -11,6 +11,7 @@ import { exitCodeForResult, verdictForResult, renderOutput, fromHiveTask, TIMEOU
 import { CliUsageError } from "../json-error"
 import { currentDelegationOrigin } from "./hive-delegation-origin"
 import { buildHiveRunBody } from "./hive-run-body"
+import { busyOverrideHint } from "./hive-task-create"
 
 // ============================================================================
 // iris hive nodes / run
@@ -647,6 +648,7 @@ const HiveRunCommand = cmd({
       .option("title", { describe: "task title shown in the dashboard", type: "string" })
       .option("priority", { describe: "task priority 1-10 (higher = sooner)", type: "number" })
       .option("queue", { alias: "fire-and-forget", describe: "queue the task and exit immediately (don't wait for completion)", type: "boolean", default: false })
+      .option("force", { describe: "run it on this node even though it reports high CPU/memory (a full or offline node still refuses)", type: "boolean", default: false })
       .option("user-id", { describe: "user ID", type: "number" })
       // boolean-negation is disabled globally (src/index.ts), so `--no-fail-fast` is NOT the
       // negation of `--fail-fast` — it must be its own literal flag or the parser rejects the
@@ -707,7 +709,7 @@ const HiveRunCommand = cmd({
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(
-        buildHiveRunBody({ userId, nodeId: node.id, title, script, timeoutSec, priority: clampedPriority, origin }),
+        buildHiveRunBody({ userId, nodeId: node.id, title, script, timeoutSec, priority: clampedPriority, origin, force: Boolean(argv.force) }),
       ),
     })
 
@@ -717,7 +719,7 @@ const HiveRunCommand = cmd({
     }
 
     const created = (await createRes.json()) as {
-      task: { id: string; status: string }
+      task: { id: string; status: string; error?: string | null }
       dispatched: boolean
     }
     const taskId = created.task.id
@@ -729,6 +731,8 @@ const HiveRunCommand = cmd({
         return
       }
       console.log(`${success("✓")} dispatched task ${bold(taskId)}  status=${created.task.status}`)
+      const hint = busyOverrideHint(created.task.error)
+      if (hint) console.log(dim(`  ${created.task.error}\n  ${hint}`))
       if (origin) console.log(dim("  status and report will appear in this session"))
       console.log(dim(`  Check later:  iris hive tasks get ${taskId}`))
       return
@@ -856,6 +860,8 @@ export function hiveRunReport(
     } else {
       lines.push(bold("─── error ───"))
       lines.push(String(final.error))
+      const hint = busyOverrideHint(final.error)
+      if (hint) lines.push(dim(`  ${hint}`))
     }
   }
   lines.push("")
