@@ -129,3 +129,6 @@
 .hss-answerhead { font-size: 11px; }
 .hss-answertext { margin: 0; padding: 0; }
 .hss-readonly { color: var(--hsc-faint); }
+/* "Continue here" (#191492): sits in the detail header beside Close */
+.hss-dhead .hss-continue { margin-left: auto; margin-right: 6px; white-space: nowrap; }
+.hss-continuing { padding: 6px 12px 0; }
