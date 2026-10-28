@@ -35,6 +35,7 @@ import { runRemoteDoctor } from "./platform-hive-doctor"
 import { HiveSelftestCommandExport } from "./platform-hive-selftest"
 import { HiveSessionsCommand, HiveSendInputCommand, HiveAskCommand } from "./platform-hive-sessions"
 import { HiveTunnelCommand } from "./platform-hive-tunnel"
+import { HiveSshGateCommand } from "./platform-hive-ssh-gate"
 import { HiveRolloutCommand } from "./platform-hive-rollout"
 import { HiveModelsCommand } from "./platform-hive-models"
 import { HiveDriveCommand } from "./platform-hive-drive"
@@ -5172,6 +5173,7 @@ export const PlatformHiveCommand = productCommand({
       .command(HiveScanCommandExport)
       .command(HiveProbeCommandExport)
       .command(HiveSshCommandExport)
+      .command(HiveSshGateCommand)
       // Node management + remote exec
       .command(HiveNodesCommandExport)
       // Update the daemon + CLI on every node (#191614)

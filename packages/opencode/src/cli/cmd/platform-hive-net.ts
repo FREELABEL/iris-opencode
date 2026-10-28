@@ -4,9 +4,11 @@ import { execSync, spawnSync, spawn } from "child_process"
 import { networkInterfaces } from "os"
 import { requireAuth, requireUserId } from "./iris-api"
 import { fetchNodes, pickNode } from "./platform-hive-nodes"
-import { resolveSshTarget, ensureSshUser, detectLocalNodeId } from "./hive-tailscale"
+import { resolveSshTarget, ensureSshUser, detectLocalNodeId, tailscaleDisabled } from "./hive-tailscale"
 import { askNodeUser, isIpTarget, sshArgs } from "./hive-ssh"
 import { tcpProbe } from "./hive-port"
+import { requestGateOffer } from "./platform-hive-ssh-gate"
+import { selfCommand } from "./hive-relay-ssh"
 
 // ============================================================================
 // iris hive scan / probe / ssh
@@ -318,7 +320,7 @@ const HiveProbeCommand = cmd({
 
 const HiveSshCommand = cmd({
   command: "ssh <target> [user]",
-  describe: "open a shell on one of your Hive nodes by name (over your tailnet) — or, given an IP, test which users can log in",
+  describe: "open a shell on one of your Hive nodes by name (your tailnet, or the Hive relay without one) — or, given an IP, test which users can log in",
   builder: (yargs) =>
     yargs
       .positional("target", { describe: "node name or id (e.g. iris-hive-001) — or an IP address to test", type: "string", demandOption: true })
@@ -326,6 +328,7 @@ const HiveSshCommand = cmd({
       .option("cmd", { alias: "c", describe: "run this one command instead of opening a shell", type: "string" })
       .option("host", { describe: "address to use instead of resolving the node (remembered)", type: "string" })
       .option("print", { describe: "print the ssh command and exit, without connecting", type: "boolean", default: false })
+      .option("via", { describe: "auto: your tailnet when it answers, else the Hive relay · tailscale · relay", type: "string", choices: ["auto", "tailscale", "relay"], default: "auto" })
       .option("user-id", { describe: "user ID", type: "number" })
       .example("iris hive ssh iris-hive-001", "a shell on that node")
       .example('iris hive ssh iris-hive-001 -c "uptime"', "one command, then back")
@@ -404,18 +407,33 @@ async function sshToNode(argv: Record<string, unknown>, target: string) {
     return
   }
 
-  const resolved = await resolveSshTarget(node.id, node.name, {
-    host: argv.host as string | undefined,
-    user: argv.user as string | undefined,
-    advertised: (node as any).tailscale_ip ?? null,
-  })
-  if ("error" in resolved) {
-    console.error(resolved.error)
-    console.error(dim(`  Not on a tailnet? Commands still run over the Hive: iris hive run ${node.name} "<command>"`))
+  const via = String(argv.via ?? "auto")
+  if (via === "tailscale" && tailscaleDisabled()) {
+    console.error("--via tailscale, but Tailscale is switched off for this command (IRIS_HIVE_NO_TAILSCALE=1).")
     process.exit(1)
   }
+  const resolved =
+    via === "relay"
+      ? ({ error: "relay requested" } as const)
+      : await resolveSshTarget(node.id, node.name, {
+          host: argv.host as string | undefined,
+          user: argv.user as string | undefined,
+          advertised: (node as any).tailscale_ip ?? null,
+        })
+  // Prefer the tailnet when it is there AND answers; an address that no longer answers (Tailscale
+  // stopped on either end) falls through to the relay instead of hanging in ssh's connect timeout.
+  const open = "error" in resolved ? false : (await tcpProbe(resolved.host, 22, { timeoutMs: 2500 })).open
+  const path = sshPath(via, !("error" in resolved), open)
+  const direct = path === "direct" && !("error" in resolved) ? resolved : null
+  if (!direct) {
+    if (path === "fail") {
+      console.error("error" in resolved ? resolved.error : `${resolved.host}:22 does not answer over your tailnet.`)
+      process.exit(1)
+    }
+    return sshViaRelay(argv, userId, node, "error" in resolved ? resolved.error : `${resolved.host}:22 did not answer`)
+  }
   const online = node.connection_status === "online"
-  const withUser = await ensureSshUser(node.id, resolved, {
+  const withUser = await ensureSshUser(node.id, direct, {
     askNode: online ? () => askNodeUser(userId, node.id) : undefined,
   })
   if ("error" in withUser) {
@@ -429,9 +447,55 @@ async function sshToNode(argv: Record<string, unknown>, target: string) {
     console.log(["ssh", ...args].map((a) => (/[\s"'$]/.test(a) ? JSON.stringify(a) : a)).join(" "))
     return
   }
-  const via = resolved.via === "tailscale" ? "tailnet" : resolved.via
-  console.error(dim(`→ ${node.name} via ${via} → ${dest}`))
+  const label = direct.via === "tailscale" ? "tailnet" : direct.via
+  console.error(dim(`→ ${node.name} via ${label} → ${dest}`))
   const r = spawnSync("ssh", args, { stdio: "inherit" })
+  process.exit(r.status ?? 1)
+}
+
+/**
+ * Which way to go (#191650): the tailnet when we have an address for the node AND its port 22
+ * answers; otherwise the Hive relay — unless the person pinned --via tailscale.
+ */
+export function sshPath(via: string, haveAddress: boolean, answers: boolean): "direct" | "relay" | "fail" {
+  if (via === "relay") return "relay"
+  if (haveAddress && answers) return "direct"
+  return via === "tailscale" ? "fail" : "relay"
+}
+
+/** The ssh argv for the relay path: ProxyCommand into this CLI, host key pinned per node. */
+export function relaySshArgs(o: { self: string[]; gateHost: string; nodeId: string; nodeName: string; user: string | null; remote?: string }): string[] {
+  const q = (a: string) => (/^[A-Za-z0-9_./:@=+-]+$/.test(a) ? a : `'${a.replace(/'/g, "'\\''")}'`)
+  const proxy = [...o.self, "hive", "ssh-gate", "connect", o.gateHost].map(q).join(" ")
+  const dest = o.user ? `${o.user}@${o.nodeName}` : o.nodeName
+  return [
+    "-o", `ProxyCommand=${proxy}`,
+    // The relay hostname is the same for every session to this node, but the key must be the
+    // NODE's: pin it under the node id, so a different machine behind that name is refused.
+    "-o", `HostKeyAlias=hive-${o.nodeId}`,
+    ...sshArgs(dest, o.remote),
+  ]
+}
+
+async function sshViaRelay(argv: Record<string, unknown>, userId: number, node: { id: string; name: string; connection_status: string }, why: string) {
+  if (node.connection_status !== "online") {
+    console.error(`${node.name} is ${node.connection_status}: no tailnet path (${why}), and the Hive relay needs the node online to open its gate.`)
+    process.exit(1)
+  }
+  console.error(dim(`  no tailnet path (${why}) — asking ${node.name} to open its gate on the Hive relay…`))
+  const offer = await requestGateOffer(userId, node.id).catch((e) => ({ error: String(e?.message ?? e) }))
+  if ("error" in offer) {
+    console.error(`Could not open ${node.name}'s relay gate: ${offer.error}`)
+    process.exit(1)
+  }
+  const user = (argv.user as string | undefined) ?? offer.user
+  const args = relaySshArgs({ self: selfCommand(), gateHost: offer.host, nodeId: node.id, nodeName: node.name, user, remote: remoteCommand(argv) })
+  if (argv.print) {
+    console.log(`IRIS_HIVE_GATE_TICKET=<single-use> ` + ["ssh", ...args].map((a) => (/[\s"'$]/.test(a) ? JSON.stringify(a) : a)).join(" "))
+    return
+  }
+  console.error(dim(`→ ${node.name} via relay (${offer.host}) → ${user ?? "(ssh default user)"}`))
+  const r = spawnSync("ssh", args, { stdio: "inherit", env: { ...process.env, IRIS_HIVE_GATE_TICKET: offer.ticket } })
   process.exit(r.status ?? 1)
 }
 
