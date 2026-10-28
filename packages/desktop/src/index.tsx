@@ -21,6 +21,11 @@ import { getCurrentWindow } from "@tauri-apps/api/window"
 import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification"
 import { relaunch } from "@tauri-apps/plugin-process"
 import pkg from "../package.json"
+import { installRendererLog } from "./renderer-log"
+
+// First, before anything can throw: this window's errors and every load of it go to engine.log,
+// which survives a reload — the console does not (#191508).
+installRendererLog((line) => invoke("log_renderer", line))
 
 const root = document.getElementById("root")
 if (import.meta.env.DEV && !(root instanceof HTMLElement)) {

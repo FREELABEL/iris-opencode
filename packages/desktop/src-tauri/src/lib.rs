@@ -94,6 +94,13 @@ fn engine_credentials() -> Option<EngineCredentials> {
     })
 }
 
+/// A line from the window — an uncaught error, an unhandled rejection, or a document load — for
+/// engine.log, which outlives a reload (#191508).
+#[tauri::command]
+fn log_renderer(app: AppHandle, kind: String, message: String) {
+    engine_supervisor::log_line(&app, &engine_supervisor::renderer_line(&kind, &message));
+}
+
 fn set_engine_child(app: &AppHandle, child: CommandChild) {
     if let Some(state) = app.try_state::<ServerState>() {
         if let Ok(mut slot) = state.0.lock() {
@@ -964,9 +971,18 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(PinchZoomDisablePlugin)
         .plugin(LinuxMicrophonePlugin)
+        // Every document load of the main window, written to engine.log with the engine's port
+        // and the last missed health probe (#191508). The first is the launch; any later one is a
+        // reload, whatever asked for it (the supervisor, the menu, the page itself, WebKit).
+        .on_page_load(|webview, payload| {
+            if webview.label() == "main" && matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
+                engine_supervisor::note_page_load(webview.app_handle(), payload.url().as_str());
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             kill_sidecar,
             engine_credentials,
+            log_renderer,
             copy_logs_to_clipboard,
             get_logs,
             install_cli,
