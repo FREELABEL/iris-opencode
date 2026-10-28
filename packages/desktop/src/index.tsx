@@ -326,6 +326,8 @@ root?.addEventListener("mousewheel", (e) => {
 //                     right and silently matches nothing.
 // Derived with ServerConnection.key() rather than hardcoded so the two cannot drift.
 const serverPort = opencodeGlobal().port
+// The crash screen reports through the engine (#191430); it sits above the server providers.
+if (serverPort) platform.engineUrl = `http://127.0.0.1:${serverPort}`
 
 // The engine's per-launch password (#190647), over IPC. None when this app attached to an engine
 // it did not start, or on a build whose engine has no password — then the window connects as it

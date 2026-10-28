@@ -27,6 +27,8 @@ import { IrisForceGraph, type ForceEdge, type ForceNode } from "./iris-force-gra
 import { graphBoardIsIsolated, scopeGraphRows, type GraphScope } from "./iris-graph-scope"
 import { Button } from "@opencode-ai/ui/button"
 import { useServerSDK } from "@/context/server-sdk"
+import { useNavigate } from "@solidjs/router"
+import { base64Encode } from "@opencode-ai/core/util/encode"
 import { useSDK } from "@/context/sdk"
 import { usePlatform } from "@/context/platform"
 import { useSync } from "@/context/sync"
@@ -1218,6 +1220,18 @@ export function SessionIrisTab() {
       return undefined
     }
   })()
+  const navigate = useNavigate()
+  /**
+   * "Continue here" (#191492, epic #191485): a session from another machine becomes a NEW chat in
+   * this project, seeded with its conversation without a reply (the model reads it on the next
+   * turn), then opened. The original is untouched and keeps running where its files are (ADR-01).
+   */
+  const continueSessionHere = async (c: { text: string }) => {
+    const sdk = dirSdk!()
+    const created = await sdk.api.session.create({ location: { directory: sdk.directory } })
+    await sdk.client.session.promptAsync({ sessionID: created.id, noReply: true, parts: [{ type: "text", text: c.text }] })
+    navigate(`/${base64Encode(sdk.directory)}/session/${created.id}`)
+  }
   const projectDir = (): string | undefined => {
     try {
       return dirSdk?.().directory || undefined
@@ -4022,7 +4036,11 @@ export function SessionIrisTab() {
             <IrisHiveInbox doFetch={doFetch} openExternal={(url) => platform.openExternal(url)} />
           </Match>
           <Match when={pane() === "hive-sessions"}>
-            <IrisHiveSessions doFetch={doFetch} openExternal={(url) => platform.openExternal(url)} />
+            <IrisHiveSessions
+              doFetch={doFetch}
+              openExternal={(url) => platform.openExternal(url)}
+              onContinue={dirSdk ? continueSessionHere : undefined}
+            />
           </Match>
           <Match when={pane() === "heartbeats"}>
             <IrisHeartbeats doFetch={doFetch} />

@@ -888,9 +888,9 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
     )
 
     const onboardingTrack = Effect.fn("IrisHttpApi.onboardingTrack")(
-      (ctx: { payload: { event: string; label?: string } }) =>
+      (ctx: { payload: { event: string; label?: string; props?: Record<string, unknown> } }) =>
         Effect.sync(() => {
-          void Onboarding.track(ctx.payload.event, ctx.payload.label) // fire and forget
+          void Onboarding.track(ctx.payload.event, ctx.payload.label, ctx.payload.props) // fire and forget
           return { ok: true }
         }),
     )

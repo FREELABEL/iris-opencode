@@ -207,3 +207,37 @@ export function mergeTranscript(
   const out = incremental ? [...prev, ...next] : [...next]
   return out.length > cap ? out.slice(out.length - cap) : out
 }
+
+/**
+ * The first entry of a chat continued here from another machine (epic #191485, #191492).
+ *
+ * Picking a chat up on this machine starts a NEW chat, linked by name: the original keeps running
+ * where its files are (ADR-01). This text is added without a reply, so the model reads it as the
+ * conversation so far. Oldest entries are dropped first to fit, and the drop is said, not hidden.
+ */
+export function continueText(
+  from: { label: string; provider: string; sessionId: string },
+  machine: string,
+  messages: readonly TranscriptMessage[],
+  maxChars = 24_000,
+): string {
+  const line = (m: TranscriptMessage) => {
+    if (m.type === "tool_use" || (m.tool && !m.text)) return `  · ${m.tool ?? "tool"}${m.text ? `: ${m.text}` : ""}`
+    const who = m.role === "user" ? "User" : m.role === "assistant" ? "Assistant" : m.role
+    return `${who}: ${(m.text ?? "").trim()}`
+  }
+  const head =
+    `Continued from "${from.label}" on ${machine} (${from.provider}, ${from.sessionId}). ` +
+    `The original stays on ${machine}; this chat runs here, so its files and tools are this machine's.\n\n` +
+    `The conversation so far:\n`
+  const tail = `\n\nPick up where it left off.`
+  const lines = messages.filter((m) => (m.text ?? "").trim() || m.tool).map(line)
+  let kept = lines
+  let dropped = 0
+  while (kept.length && head.length + tail.length + kept.join("\n").length > maxChars) {
+    kept = kept.slice(1)
+    dropped++
+  }
+  const note = dropped ? `(${dropped} earlier ${dropped === 1 ? "entry" : "entries"} not shown)\n` : ""
+  return head + note + kept.join("\n") + tail
+}

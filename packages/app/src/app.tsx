@@ -410,7 +410,7 @@ export function AppBaseProviders(
             <ErrorBoundary
               fallback={(error) => {
                 Sentry.captureException(error)
-                return <ErrorPage error={error} />
+                return <ErrorPage error={error} reportCrash />
               }}
             >
               <QueryProvider>
