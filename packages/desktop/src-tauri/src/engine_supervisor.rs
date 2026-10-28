@@ -24,6 +24,15 @@
 //! funnel event, because the other half of that night was that nobody could say what had
 //! happened on her machine: the logs lived in memory and died with the app.
 //!
+//! A respawn must also leave the WINDOW able to talk to the new engine (#191482). The window reads
+//! the engine's port and password once, when it loads. A respawn keeps both — same port, same
+//! per-launch password — EXCEPT when the app had attached at startup to something it did not
+//! start: then the window was handed no password at all, and the engine the supervisor starts in
+//! its place has one. Every request from that window got a 401 and it sat on "Could not reach
+//! Local — Retrying automatically…" until the person quit the app (an Intel iMac, 2026-10-28).
+//! So the supervisor remembers what the window was handed, and when a respawned engine answers
+//! with a different credential it reloads the window, which then asks again.
+//!
 //! What is deliberately NOT a crash: the app quitting, a restart the app asked for (sign-in,
 //! re-key), and the updater stopping the engine before it swaps the bundle. Those go through
 //! `kill_sidecar`, which pauses supervision. The pause expires, so an update that fails to
@@ -60,6 +69,9 @@ static LAST_EXITED: AtomicU64 = AtomicU64::new(0);
 /// The engine is (or is about to be) running in safe mode (#190980). Read by `spawn_sidecar`.
 static SAFE_MODE: AtomicBool = AtomicBool::new(false);
 static PAUSED_UNTIL: Mutex<Option<Instant>> = Mutex::new(None);
+/// The credential the window was handed by `engine_credentials` (#191482). The outer None means
+/// the window has not asked yet — it will ask when it loads, and get whatever is current then.
+static WINDOW_CREDENTIAL: Mutex<Option<Option<String>>> = Mutex::new(None);
 static RESTARTS: Mutex<VecDeque<Instant>> = Mutex::new(VecDeque::new());
 
 const RESTART_WINDOW: Duration = Duration::from_secs(5 * 60);
@@ -91,6 +103,56 @@ pub fn note_spawn(port: u32) -> u64 {
 /// goes away, spawning our own on the same port is strictly better than a dead window.
 pub fn note_attached(port: u32) {
     PORT.store(port, Ordering::SeqCst);
+}
+
+/// Whether startup should use an engine that is already answering on `port` instead of starting
+/// its own (#191482). Only when the port was given explicitly (`OPENCODE_PORT`, a developer
+/// running the engine by hand): then whatever is there is what was asked for. A port the app
+/// picked itself a moment ago was free; if something answers on it now, it is not our engine —
+/// and attaching to it left the window with no password and the supervisor "watching" a port
+/// nothing healthy was on. Observed twice on 2026-10-28: on an Intel iMac, and in the release
+/// check of 1.18.153 ("the app never reported a listening port").
+pub fn should_attach(port_was_configured: bool, something_answers: bool) -> bool {
+    port_was_configured && something_answers
+}
+
+/// The window just asked for the engine credential and was given `credential`.
+pub fn note_window_credential(credential: Option<String>) {
+    if let Ok(mut c) = WINDOW_CREDENTIAL.lock() {
+        *c = Some(credential);
+    }
+}
+
+/// Whether the window holds a credential the running engine will refuse. False until the window
+/// has asked: a window that has not loaded yet will be handed the current one.
+fn window_is_locked_out(handed: Option<&Option<String>>, current: Option<&str>) -> bool {
+    match handed {
+        None => false,
+        Some(handed) => handed.as_deref() != current,
+    }
+}
+
+/// A respawned engine is answering. If the window was handed a different credential than this
+/// engine has, reload it so it asks again — otherwise it retries with the wrong one forever.
+fn reconnect_window(app: &AppHandle) {
+    let current = crate::engine_auth::current_password();
+    let locked_out = WINDOW_CREDENTIAL
+        .lock()
+        .map(|handed| window_is_locked_out(handed.as_ref(), current.as_deref()))
+        .unwrap_or(false);
+    if !locked_out {
+        return;
+    }
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    log(app, "the window holds a different engine credential than the respawned engine — reloading it");
+    if let Ok(mut c) = WINDOW_CREDENTIAL.lock() {
+        *c = None;
+    }
+    if let Err(e) = window.reload() {
+        log(app, &format!("could not reload the window ({e})"));
+    }
 }
 
 /// Startup is done; from here on, exits and missed probes are acted on.
@@ -307,6 +369,7 @@ fn respawn(app: AppHandle, reason: &'static str) {
             crate::set_engine_child(&app, child);
 
             if wait_until_healthy(port, READY_BUDGET).await {
+                reconnect_window(&app);
                 if SAFE_MODE.load(Ordering::SeqCst) && reason == "safe mode" {
                     entered_safe_mode(&app);
                 } else {
@@ -438,7 +501,7 @@ pub fn log_line(app: &AppHandle, line: &str) {
 
 /// A supervisor decision: to stdout, to the in-memory log the "Copy logs" button reads, and to
 /// engine.log.
-fn log(app: &AppHandle, msg: &str) {
+pub fn log(app: &AppHandle, msg: &str) {
     let line = format!("[SUPERVISOR] {msg}");
     println!("{line}");
     if let Some(state) = app.try_state::<crate::LogState>() {
@@ -555,6 +618,45 @@ mod tests {
         let ok = tauri::async_runtime::block_on(wait_until_healthy_for(1, READY_BUDGET, generation));
         assert!(!ok);
         assert!(started.elapsed() < Duration::from_secs(2), "took {:?}", started.elapsed());
+    }
+
+    // #191482: a startup that attached to something it did not start handed the window NO
+    // password; the engine the supervisor then spawned on that port has one. Same port — the
+    // window can only recover if it is told to ask again.
+    #[test]
+    fn a_window_handed_no_password_is_locked_out_of_a_respawned_engine_that_has_one() {
+        assert!(window_is_locked_out(Some(&None), Some("pw-of-the-respawned-engine")));
+    }
+
+    #[test]
+    fn a_window_holding_the_engines_password_is_left_alone_after_a_respawn() {
+        // The ordinary respawn: same port, same per-launch password. Reloading here would throw
+        // away whatever the person had on screen for nothing.
+        assert!(!window_is_locked_out(Some(&Some("pw".to_string())), Some("pw")));
+        // An attached engine with no password, respawned as one with none (no randomness).
+        assert!(!window_is_locked_out(Some(&None), None));
+    }
+
+    #[test]
+    fn a_window_that_has_not_asked_yet_is_never_reloaded() {
+        assert!(!window_is_locked_out(None, Some("pw")));
+        assert!(!window_is_locked_out(None, None));
+    }
+
+    #[test]
+    fn a_window_holding_a_stale_password_is_locked_out() {
+        assert!(window_is_locked_out(Some(&Some("old".to_string())), Some("new")));
+        assert!(window_is_locked_out(Some(&Some("old".to_string())), None));
+    }
+
+    #[test]
+    fn startup_attaches_only_to_a_port_it_was_told_to_use() {
+        // A port the app picked itself: whatever answers there is not our engine. Spawn ours.
+        assert!(!should_attach(false, true));
+        assert!(!should_attach(false, false));
+        // OPENCODE_PORT: a developer's engine is already running there — use it.
+        assert!(should_attach(true, true));
+        assert!(!should_attach(true, false));
     }
 
     #[test]
