@@ -11,7 +11,7 @@ import { useSplit } from "@/context/split"
 import { useTabs } from "@/context/tabs"
 import { requireServerKey, sessionHref } from "@/utils/session-route"
 import { showToast } from "@/utils/toast"
-import { maxColumns, paneKey, PANE_GAP, reconcile, samePane, visible, type PaneRef } from "./split-model"
+import { closeColumn, maxColumns, paneKey, PANE_GAP, prune, reconcile, samePane, visible, type PaneRef } from "./split-model"
 
 type ServerRoute = Component<ParentProps<{ serverKey?: () => string }>>
 
@@ -47,10 +47,12 @@ export function SessionSplitRoute(props: { server: ServerRoute; content: Compone
     ({ width }) => setWidth(width),
   )
 
-  // A tab picked from the strip while in a split lands in the column you were last in.
+  // A tab picked from the strip while in a split lands in the column you were last in. Also runs
+  // when the stored split arrives: on a reload or deep link the route is known first, and a check
+  // that ran only on route changes left the split stuck off screen.
   createEffect(
-    on(route, (r) => {
-      if (!split.ready()) return
+    on([route, split.ready] as const, ([r, ready]) => {
+      if (!ready) return
       const panes = untrack(split.panes)
       const next = reconcile(panes, r, untrack(split.last))
       if (next !== panes) split.set(next)
@@ -59,10 +61,26 @@ export function SessionSplitRoute(props: { server: ServerRoute; content: Compone
     }),
   )
 
+  // A column outlives nothing: close a session's tab (or the session is deleted and its tab
+  // closed) and its column goes too. The route's own session is exempt — it becomes a tab a
+  // moment after the route moves to it.
+  createEffect(() => {
+    if (!tabs.ready() || !split.ready()) return
+    const open = new Set(tabs.store.flatMap((t) => (t.type === "session" ? [paneKey({ server: t.server, sessionId: t.sessionId })] : [])))
+    const panes = split.panes()
+    const kept = prune(panes, untrack(route), open)
+    if (kept !== panes) split.set(kept)
+  })
+
   const shown = createMemo(() => visible(split.panes(), route(), maxColumns(width())))
   const keys = createMemo(() => shown().map(paneKey))
   const multi = createMemo(() => keys().length >= 2 && keys().includes(paneKey(route())))
   const focusPane = (p: PaneRef) => navigate(sessionHref(p.server as never, p.sessionId))
+  const closePane = (p: PaneRef) => {
+    const next = closeColumn(split.panes(), p, route())
+    split.set(next.panes)
+    if (next.focus) focusPane(next.focus)
+  }
 
   const splitRight = () => {
     const current = route()
@@ -104,7 +122,7 @@ export function SessionSplitRoute(props: { server: ServerRoute; content: Compone
       category: language.t("command.category.view"),
       keybind: "mod+alt+w",
       disabled: !multi(),
-      onSelect: () => split.close(route()),
+      onSelect: () => closePane(route()),
     },
     {
       id: "split.focus.left",
@@ -141,7 +159,7 @@ export function SessionSplitRoute(props: { server: ServerRoute; content: Compone
                     pane={pane}
                     focused={() => samePane(pane, route())}
                     focus={() => focusPane(pane)}
-                    close={() => split.close(pane)}
+                    close={() => closePane(pane)}
                     sameServer={() => pane.server === route().server}
                     server={Server}
                     content={Content}
@@ -179,8 +197,15 @@ function SplitColumn(props: {
       classList={{ "opacity-80 hover:opacity-100": !props.focused() }}
       data-component="session-split-column"
       data-focused={props.focused() ? "" : undefined}
-      onPointerDown={() => {
+      // Focus on click, after the column's own controls have handled it — focusing on pointerdown
+      // navigated first, re-rendered the column, and the click landed on a button that was gone
+      // (a deleted session's "Close tab" did nothing). Typing into a composer focuses too.
+      onClick={() => {
         if (!props.focused()) props.focus()
+      }}
+      onFocusIn={(e) => {
+        const t = e.target as HTMLElement
+        if (!props.focused() && (t.isContentEditable || t.tagName === "TEXTAREA" || t.tagName === "INPUT")) props.focus()
       }}
     >
       <SessionPaneProvider pane={pane}>
@@ -227,8 +252,11 @@ function ColumnBar(props: { focused: () => boolean; close: () => void }) {
         icon={<IconV2 name="xmark-small" class="text-v2-icon-icon-muted" />}
         aria-label={language.t("split.close")}
         title={language.t("split.close")}
-        onPointerDown={(e: PointerEvent) => e.stopPropagation()}
-        onClick={props.close}
+        onClick={(e: MouseEvent) => {
+          // the column's own click would focus the column being closed
+          e.stopPropagation()
+          props.close()
+        }}
       />
     </div>
   )

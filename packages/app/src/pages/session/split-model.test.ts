@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { close, maxColumns, open, reconcile, visible, type PaneRef } from "./split-model"
+import { close, closeColumn, maxColumns, open, paneKey, prune, reconcile, visible, type PaneRef } from "./split-model"
 
 const p = (id: string, server = "local"): PaneRef => ({ server, sessionId: id })
 
@@ -40,5 +40,22 @@ describe("split model (#191484)", () => {
     expect(visible(split, p("b"), 2)).toEqual([p("a"), p("b")])
     expect(visible(split, p("c"), 2)).toEqual([p("b"), p("c")])
     expect(visible(split, p("c"), 1)).toEqual([p("c")])
+  })
+
+  test("a column whose tab closed goes; the route's own session stays even before its tab exists", () => {
+    const split = [p("a"), p("b"), p("c")]
+    const tabs = (...ids: string[]) => new Set(ids.map((id) => paneKey(p(id))))
+    expect(prune(split, p("a"), tabs("a", "b", "c"))).toBe(split)
+    expect(prune(split, p("a"), tabs("a", "c"))).toEqual([p("a"), p("c")])
+    expect(prune(split, p("a"), tabs("b"))).toEqual([p("a"), p("b")])
+    expect(prune(split, p("a"), tabs())).toEqual([])
+  })
+
+  test("closing the focused column hands focus to its neighbour, even when that ends the split", () => {
+    const split = [p("a"), p("b"), p("c")]
+    expect(closeColumn(split, p("b"), p("b"))).toEqual({ panes: [p("a"), p("c")], focus: p("c") })
+    expect(closeColumn(split, p("c"), p("c"))).toEqual({ panes: [p("a"), p("b")], focus: p("b") })
+    expect(closeColumn(split, p("a"), p("b"))).toEqual({ panes: [p("b"), p("c")] })
+    expect(closeColumn([p("a"), p("b")], p("a"), p("a"))).toEqual({ panes: [], focus: p("b") })
   })
 })

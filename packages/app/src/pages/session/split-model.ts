@@ -49,6 +49,26 @@ export function close(panes: PaneRef[], target: PaneRef): PaneRef[] {
 }
 
 /**
+ * Close a column and say where focus goes. Closing the focused one hands focus to the column that
+ * slides into its place (or the one before, at the right edge) — including the last one left,
+ * when the split ends. Closing any other column leaves focus where it is.
+ */
+export function closeColumn(panes: PaneRef[], target: PaneRef, route: PaneRef): { panes: PaneRef[]; focus?: PaneRef } {
+  const next = close(panes, target)
+  if (!samePane(target, route)) return { panes: next }
+  const rest = panes.filter((p) => !samePane(p, target))
+  const at = panes.findIndex((p) => samePane(p, target))
+  return { panes: next, focus: rest[Math.min(at, rest.length - 1)] }
+}
+
+/** Drop columns whose session no longer has a tab. The route's own session is exempt (it gets its tab just after). */
+export function prune(panes: PaneRef[], route: PaneRef, open: Set<string>): PaneRef[] {
+  const kept = panes.filter((p) => samePane(p, route) || open.has(paneKey(p)))
+  if (kept.length === panes.length) return panes
+  return kept.length < 2 ? [] : kept
+}
+
+/**
  * The columns drawn when not all fit: a run of `max` that always includes the focused one, kept
  * as far left as it can be so columns do not shuffle as focus moves among the visible ones.
  */
