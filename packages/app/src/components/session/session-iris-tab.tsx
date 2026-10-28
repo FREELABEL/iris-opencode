@@ -53,7 +53,7 @@ import {
   scopeChipLabel,
   visibleTabs,
 } from "./iris-panel-nav"
-import { irisNavRequest, clearIrisNav, setIrisPanelView } from "./iris-nav"
+import { irisNavRequest, clearIrisNav, setIrisPanelView, setIrisOpenCard } from "./iris-nav"
 import { heldPayload, holdPayload, setSurfaceSync, surfaceSync, syncLabel, syncOfPayload } from "./iris-surface-store"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { IrisRooms } from "./iris-rooms"
@@ -2906,16 +2906,21 @@ export function SessionIrisTab() {
       ((settled(data)?.lists as AtlasList[] | undefined) ?? []).map((l) => ({ id: l.id, name: l.name }))
     // The card's microphone records through this same server, with the SDK's credentials (#190041).
     setDictationAuth((url) => dictationAuthFor(serverSDK().server.http, url))
-    dialog.show(() => (
-      <IrisCardEditor
-        itemId={itemId}
-        bloqId={Number(b)}
-        lists={lists}
-        doFetch={doFetch}
-        onChanged={() => liveRefresh(false)}
-        recorderUrl={base()}
-      />
-    ))
+    dialog.show(() => {
+      // What the side panel reports as the open card (#191507), for as long as the editor is up.
+      setIrisOpenCard({ id: itemId, bloq: Number(b) })
+      onCleanup(() => setIrisOpenCard((c) => (c?.id === itemId ? undefined : c)))
+      return (
+        <IrisCardEditor
+          itemId={itemId}
+          bloqId={Number(b)}
+          lists={lists}
+          doFetch={doFetch}
+          onChanged={() => liveRefresh(false)}
+          recorderUrl={base()}
+        />
+      )
+    })
   }
 
   // FOCUS: fold the product and sub-view rows away so the content (an artifact) runs nearly full
