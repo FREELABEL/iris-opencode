@@ -256,7 +256,10 @@ export namespace Ripgrep {
     signal?: AbortSignal
     onCutoff?: (c: Cutoff) => void
   }) {
-    const args = [await filepath(), ...walkArgs(input.cwd, input.refuseBroad ?? true), "--files", "--glob=!.git/*"]
+    // Refuse first; the excludes themselves go LAST — ripgrep's last matching glob wins, and a
+    // later `--glob=**/*` would re-include Library/Containers (found on the Mac, 2026-10-27).
+    const excludes = walkArgs(input.cwd, input.refuseBroad ?? true)
+    const args = [await filepath(), "--files", "--glob=!.git/*"]
     if (input.follow !== false) args.push("--follow")
     if (input.hidden !== false) args.push("--hidden")
     if (input.maxDepth !== undefined) args.push(`--max-depth=${input.maxDepth}`)
@@ -265,6 +268,7 @@ export namespace Ripgrep {
         args.push(`--glob=${g}`)
       }
     }
+    args.push(...excludes)
 
     // Bun.spawn should throw this, but it incorrectly reports that the executable does not exist.
     // See https://github.com/oven-sh/bun/issues/24012
@@ -422,7 +426,8 @@ export namespace Ripgrep {
 
   export async function search(input: { cwd: string; pattern: string; glob?: string[]; limit?: number; signal?: AbortSignal }) {
     // Spawned with an argv, not a shell string: the walk excludes contain spaces ("Group Containers").
-    const args = [`${await filepath()}`, ...walkArgs(input.cwd), "--json", "--hidden", "--glob=!.git/*"]
+    const excludes = walkArgs(input.cwd)
+    const args = [`${await filepath()}`, "--json", "--hidden", "--glob=!.git/*"]
 
     if (input.glob) {
       for (const g of input.glob) {
@@ -434,6 +439,7 @@ export namespace Ripgrep {
       args.push(`--max-count=${input.limit}`)
     }
 
+    args.push(...excludes) // last among the globs: the last matching glob wins
     args.push("--")
     args.push(input.pattern)
 
