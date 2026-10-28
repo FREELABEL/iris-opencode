@@ -209,15 +209,51 @@ describe("iris daemon update — against a fake home", () => {
     expect(r.status).toBe("blocked")
     expect(r.plan!.current.modified).toEqual(["lib/a.js"])
     expect(r.plan!.current.untracked).toEqual(["lib/hand-copied-fix.js"])
+    expect(r.plan!.keptYours).toEqual(["lib/hand-copied-fix.js"])
     expect(logs.join("\n")).toContain("lib/hand-copied-fix.js")
     expect(readFileSync(join(p.bridge, "lib/a.js"), "utf8")).toContain("hand edit")
     expect(existsSync(p.next)).toBe(false)
     expect(existsSync(p.prev)).toBe(false)
     expect(ctlCalls()).toEqual([])
-    // --force replaces it and keeps the edits in bridge.prev
+    // --force replaces the edited shipped file (the edit stays in bridge.prev) — and still keeps
+    // the file the person added: --force is about modifications, never a licence to drop files.
     const f = await run({ force: true })
     expect(f.status).toBe("updated")
-    expect(readFileSync(join(p.prev, "lib/hand-copied-fix.js"), "utf8")).toBe("x\n")
+    expect(readFileSync(join(p.bridge, "lib/a.js"), "utf8")).toContain("new")
+    expect(readFileSync(join(p.prev, "lib/a.js"), "utf8")).toContain("hand edit")
+    expect(readFileSync(join(p.bridge, "lib/hand-copied-fix.js"), "utf8")).toBe("x\n")
+    expect(f.kept).toEqual(["lib/hand-copied-fix.js"])
+  }, 60000)
+
+  test("files a person added are carried over WITHOUT --force and reported as kept (yours)", async () => {
+    fakeHome()
+    put(p.bridge, "som/save-instagram-session.spec.ts", "my spec\n")
+    put(p.bridge, "atlas/notes/my-note.md", "my note\n")
+    const r = await run({})
+    expect(r.status).toBe("updated")
+    expect(r.plan!.keptYours).toEqual(["atlas/notes/my-note.md", "som/save-instagram-session.spec.ts"])
+    expect(r.kept).toEqual(["atlas/notes/my-note.md", "som/save-instagram-session.spec.ts"])
+    expect(readFileSync(join(p.bridge, "som/save-instagram-session.spec.ts"), "utf8")).toBe("my spec\n")
+    expect(readFileSync(join(p.bridge, "atlas/notes/my-note.md"), "utf8")).toBe("my note\n")
+    expect(logs.join("\n")).toContain("(kept — yours)")
+    expect(logs.join("\n")).toContain("kept 2 file(s) of yours")
+    // the kept files are not part of the new manifest, so they are not drift and are kept again next time
+    expect(Object.keys(readManifest(p.bridge)!.files)).not.toContain("som/save-instagram-session.spec.ts")
+    expect(JSON.parse(readFileSync(join(p.stateDir, "last.json"), "utf8")).kept).toEqual(r.kept)
+    const again = await run({})
+    expect(again.status).toBe("up-to-date")
+  }, 60000)
+
+  test("an added file at a path the target ships (different content) still needs --force; yours stays in bridge.prev", async () => {
+    fakeHome()
+    put(p.bridge, "lib/b.js", "my own b\n") // NEW ships lib/b.js
+    const r = await run({})
+    expect(r.status).toBe("blocked")
+    expect(r.plan!.untrackedConflicts).toEqual(["lib/b.js"])
+    const f = await run({ force: true })
+    expect(f.status).toBe("updated")
+    expect(readFileSync(join(p.bridge, "lib/b.js"), "utf8")).toContain("'b'")
+    expect(readFileSync(join(p.prev, "lib/b.js"), "utf8")).toBe("my own b\n")
   }, 60000)
 
   test("a plain copy with no manifest (iris-hive-001 today) needs --force", async () => {

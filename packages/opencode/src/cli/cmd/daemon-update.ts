@@ -276,12 +276,44 @@ export function detectLocalState(bridge: string, git: GitRunner = runGit): Local
   }
 }
 
-/** Does this state stop an update? --force overrides every reason (the old tree is kept as bridge.prev). */
-export function blockReason(s: LocalState, force: boolean): string | null {
+/**
+ * Files a PERSON added (untracked, not runtime) — which of them the update can simply keep.
+ *
+ * WHY (2026-10-28): rolling the daemon out by hand to three machines dropped a person's own
+ * files every time — som/save-instagram-session.spec.ts on the MacBook, a send-approved-replies
+ * spec and an Atlas note on iris-hive-001 — and each had to be restored from bridge.prev by hand.
+ * A file the target commit does not ship cannot conflict with anything: it is carried into the
+ * new tree and reported as "kept (yours)". Only an untracked file at a path the target DOES ship,
+ * with different content, is a real conflict (the commit's version would replace it); that still
+ * needs --force, and the person's copy stays in bridge.prev.
+ */
+export function classifyUntracked(
+  untracked: string[],
+  targetFiles: Record<string, string>,
+  hashOf: (rel: string) => string | null,
+): { kept: string[]; conflicts: string[] } {
+  const kept: string[] = []
+  const conflicts: string[] = []
+  for (const f of untracked) {
+    if (!(f in targetFiles)) kept.push(f)
+    else if (hashOf(f) !== targetFiles[f]) conflicts.push(f)
+    // same path, same bytes: the commit ships exactly this file — nothing to keep, nothing lost
+  }
+  return { kept: kept.sort(), conflicts: conflicts.sort() }
+}
+
+/**
+ * Does this state stop an update? --force overrides every reason (the old tree is kept as
+ * bridge.prev). `untrackedConflicts` is the subset of untracked files the target would replace
+ * (classifyUntracked); untracked files it does not ship are kept, so they never block. Without it
+ * every untracked file counts — the conservative answer when the target is not known.
+ */
+export function blockReason(s: LocalState, force: boolean, untrackedConflicts: string[] = s.untracked): string | null {
   if (force) return null
   if (s.kind === "unknown") return `${s.note}. Re-run with --force to replace it (the current copy is kept in bridge.prev).`
   if (s.kind === "git" && !s.commit) return `${s.note}. Re-run with --force to replace it.`
-  if (hasLocalChanges(s)) return "the current install has local changes (listed above). Re-run with --force to replace it — they are kept in bridge.prev."
+  if (s.modified.length + s.missing.length + untrackedConflicts.length > 0)
+    return "the current install has local changes to files the update ships (listed above). Re-run with --force to replace them — your versions are kept in bridge.prev."
   return null
 }
 
@@ -381,6 +413,10 @@ export type Plan = {
   depsChanged: boolean
   depsReason: string
   carryOver: string[]
+  /** Untracked files a person added that the target does not ship — carried into the new tree. */
+  keptYours: string[]
+  /** Untracked files at a path the target ships, with different content — these need --force. */
+  untrackedConflicts: string[]
   blocked: string | null
 }
 
@@ -395,8 +431,15 @@ export function computePlan(input: {
   force: boolean
 }): Plan {
   const { current, target, currentFiles, targetFiles } = input
+  const untracked = classifyUntracked(
+    current.untracked.filter((f) => !input.isRuntime(f)),
+    targetFiles,
+    (f) => currentFiles[f] ?? null,
+  )
+  const kept = new Set(untracked.kept)
   const added = Object.keys(targetFiles).filter((f) => !(f in currentFiles)).sort()
-  const removed = Object.keys(currentFiles).filter((f) => !(f in targetFiles)).sort()
+  // A kept file is not "removed": it comes along into the new tree.
+  const removed = Object.keys(currentFiles).filter((f) => !(f in targetFiles) && !kept.has(f)).sort()
   const modified = Object.keys(targetFiles).filter((f) => f in currentFiles && currentFiles[f] !== targetFiles[f]).sort()
   const lockNow = currentFiles["package-lock.json"]
   const lockNext = targetFiles["package-lock.json"]
@@ -409,7 +452,10 @@ export function computePlan(input: {
     depsChanged = true
     depsReason = "package-lock.json changed"
   }
-  const upToDate = current.commit === target && !hasLocalChanges(current) && added.length + removed.length + modified.length === 0
+  const upToDate =
+    current.commit === target &&
+    current.modified.length + current.missing.length + untracked.conflicts.length === 0 &&
+    added.length + removed.length + modified.length === 0
   return {
     current,
     target,
@@ -418,7 +464,9 @@ export function computePlan(input: {
     depsChanged,
     depsReason,
     carryOver: carryOverList(input.currentAll, new Set(Object.keys(targetFiles)), input.isRuntime),
-    blocked: blockReason(current, input.force),
+    keptYours: untracked.kept,
+    untrackedConflicts: untracked.conflicts,
+    blocked: blockReason(current, input.force, untracked.conflicts),
   }
 }
 
@@ -437,9 +485,19 @@ export function formatPlan(p: Plan): string[] {
   if (more > 0) L.push(`              … and ${more} more`)
   L.push(`  deps:     ${p.depsChanged ? "YES — npm ci --omit=dev" : "no"}  (${p.depsReason})`)
   L.push(`  carry:    ${p.carryOver.length} runtime file(s) kept from this machine${p.carryOver.length ? ": " + p.carryOver.slice(0, 12).join(", ") + (p.carryOver.length > 12 ? ", …" : "") : ""}`)
+  const kept = p.keptYours ?? []
+  L.push(`  yours:    ${kept.length} file(s) you added, kept (untracked, not in the target)${kept.length ? ": " + kept.slice(0, 12).join(", ") + (kept.length > 12 ? ", …" : "") : ""}`)
   if (cur.note) L.push(`  note:     ${cur.note}`)
-  const lc = [...cur.modified.map((f) => `M ${f}`), ...cur.missing.map((f) => `D ${f}`), ...cur.untracked.map((f) => `? ${f}`)]
-  L.push(`  local changes: ${lc.length ? lc.length : cur.kind === "unknown" ? "unknown" : "none"}`)
+  const keptSet = new Set(kept)
+  const conflicts = new Set(p.untrackedConflicts ?? cur.untracked)
+  const lc = [
+    ...cur.modified.map((f) => `M ${f}`),
+    ...cur.missing.map((f) => `D ${f}`),
+    ...cur.untracked.filter((f) => conflicts.has(f)).map((f) => `? ${f}  (the target ships a different file here — needs --force)`),
+    ...cur.untracked.filter((f) => keptSet.has(f)).map((f) => `+ ${f}  (kept — yours)`),
+  ]
+  const blocking = cur.modified.length + cur.missing.length + cur.untracked.filter((f) => conflicts.has(f)).length
+  L.push(`  local changes: ${lc.length ? `${blocking} that need --force, ${keptSet.size} kept` : cur.kind === "unknown" ? "unknown" : "none"}`)
   lc.slice(0, 60).forEach((x) => L.push(`              ${x}`))
   if (lc.length > 60) L.push(`              … and ${lc.length - 60} more`)
   return L
@@ -623,6 +681,8 @@ export type UpdateResult = {
   to: string | null
   detail?: string
   plan?: Plan
+  /** Files a person added that were carried into the new tree ("kept (yours)"). */
+  kept?: string[]
 }
 
 type Pending = {
@@ -911,16 +971,33 @@ export async function finishUpdate(pendingFile: string, log: (s: string) => void
   // The install may have changed since phase 1 (a person editing, another update). Re-check.
   const now = detectLocalState(p.bridge)
   if (now.commit !== pending.previous) return done({ ok: false, status: "error", from: now.commit, to: pending.target, detail: "the install changed between preparing and swapping — not touching it" })
-  const why = blockReason(now, pending.force)
-  if (why) return done({ ok: false, status: "blocked", from: now.commit, to: pending.target, detail: why })
-
   // Carry over at the last moment, so the freshest tokens/logs/caches go with it.
   const next = p.next
-  const targetFiles = new Set(Object.keys(readManifest(next)?.files ?? {}))
+  const targetHashes = readManifest(next)?.files ?? {}
+  const targetFiles = new Set(Object.keys(targetHashes))
   const isRuntime = runtimeMatcher(readText(join(p.bridge, ".gitignore")), readText(join(next, ".gitignore")))
+  const yours = classifyUntracked(
+    now.untracked.filter((f) => !isRuntime(f)),
+    targetHashes,
+    (f) => {
+      try {
+        return sha256(readFileSync(join(p.bridge, f)))
+      } catch {
+        return null
+      }
+    },
+  )
+  const why = blockReason(now, pending.force, yours.conflicts)
+  if (why) return done({ ok: false, status: "blocked", from: now.commit, to: pending.target, detail: why })
+
   const carry = carryOverList(listFiles(p.bridge), targetFiles, isRuntime)
   copyInto(p.bridge, next, carry)
   log(`  carried over ${carry.length} runtime file(s)`)
+  // A person's own files: carried, never dropped. They stay untracked in the new tree (not in its
+  // manifest), so they never count as drift and the next update keeps them again.
+  copyInto(p.bridge, next, yours.kept)
+  if (yours.kept.length) log(`  kept ${yours.kept.length} file(s) of yours: ${yours.kept.join(", ")}`)
+  const kept = yours.kept.length ? { kept: yours.kept } : {}
 
   phase("swapping", 60)
   swapIn(p)
@@ -932,7 +1009,7 @@ export async function finishUpdate(pendingFile: string, log: (s: string) => void
   const obs = await waitHealth((o) => updateSucceeded(o, pending.target), pending.healthTimeoutSec * 1000)
   if (updateSucceeded(obs, pending.target)) {
     log(`  ✓ the running daemon reports ${short(pending.target)}`)
-    return done({ ok: true, status: "updated", from: pending.previous, to: pending.target })
+    return done({ ok: true, status: "updated", from: pending.previous, to: pending.target, ...kept })
   }
 
   const saw = obs.answered ? `it reported ${obs.commit ? short(obs.commit) : "no commit"}` : "it never answered /health"
@@ -943,7 +1020,7 @@ export async function finishUpdate(pendingFile: string, log: (s: string) => void
   log(`  daemonctl restart (rollback) → ${rs2.ok ? "exit 0" : "non-zero"}`)
   const back = await waitHealth((o) => rollbackVerified(o, pending.previous, pending.target), pending.healthTimeoutSec * 1000)
   if (rollbackVerified(back, pending.previous, pending.target)) {
-    return done({ ok: false, status: "rolled-back", from: pending.previous, to: pending.target, detail: `${saw}; the previous version is running again (failed tree kept in ${p.failed})` })
+    return done({ ok: false, status: "rolled-back", from: pending.previous, to: pending.target, detail: `${saw}; the previous version is running again (failed tree kept in ${p.failed})`, ...kept })
   }
   return done({
     ok: false,
