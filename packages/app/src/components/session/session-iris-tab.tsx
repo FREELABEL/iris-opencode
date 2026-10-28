@@ -14,6 +14,8 @@ import {
   Switch,
   untrack,
 } from "solid-js"
+import { useIrisPanelScope, windowIrisPanelScope } from "@/context/iris-panel-scope"
+import { usePaneFocused, useSessionParams } from "@/context/session-pane"
 import "./session-iris-tab.css"
 import { connectsBy, healthRead, metaLine, usageBars } from "./iris-catalog"
 import { IrisIntegrationDetail } from "./iris-integration-detail"
@@ -1159,26 +1161,21 @@ const irisPinnedSig = () =>
  * without) this component mounting; the component keeps them current.
  */
 // Nothing used yet → the layout's first shown product, so a new person opens where the layout starts.
-const [irisSurfaceSig, setIrisSurfaceSig] = createSignal<SurfaceId>(
+// The window's panel opens here; a split column's panel starts from it (context/iris-panel-scope).
+windowIrisPanelScope.setSurface(
   normalizeSurface(openingSurface(normalizeSurface(storage(LAST_SURFACE_KEY) ?? irisPinnedSig()[0]), pinsRawSig())),
 )
 /** Whether the person pinned Atlas themselves — the side panel then opens on IRIS (#189766). */
 export const irisOpensOnAtlas = () => pinnedByChoice(pinsRawSig(), "atlas")
 export const irisPinned = irisPinnedSig
-export const irisActiveSurface = irisSurfaceSig
 /**
  * When the product on screen last changed, written WITH the signal (#190093). The strip's
  * fallback guard needs this moment; an effect watching the signal fires too late — product
  * switches run in a transition, and effects downstream of it wait for the commit.
  */
-let surfaceChangedAt = 0
-export const irisSurfaceChangedAt = () => surfaceChangedAt
-const setIrisSurface = (id: SurfaceId) => {
-  if (id !== irisSurfaceSig()) surfaceChangedAt = performance.now()
-  setIrisSurfaceSig(id)
-}
-export function irisStripTabs(): { id: SurfaceId; label: string; pinned: boolean }[] {
-  return visibleTabs(irisPinnedSig(), irisSurfaceSig()).map((id) => ({
+/** The product tabs to draw for a panel showing `active`. */
+export function irisStripTabs(active: SurfaceId): { id: SurfaceId; label: string; pinned: boolean }[] {
+  return visibleTabs(irisPinnedSig(), active).map((id) => ({
     id,
     label: SURFACES.find((x) => x.id === id)?.label ?? id,
     pinned: irisPinnedSig().includes(id),
@@ -1213,14 +1210,12 @@ export function toggleIrisFilesPin(): boolean {
 /**
  * THE SCOPE CHIP (#187130, option C). The panel's own "This session" / board row is gone; what it
  * said now rides the side panel's product row as a chip OUTSIDE the scrolling tab list, so it
- * never scrolls away. Module-level for the same reason as the pins: the strip draws it, this
- * component knows what it says. `pick` is present only where there is something to choose.
+ * never scrolls away. The strip draws it, this component knows what it says; they meet in
+ * context/iris-panel-scope.ts, one per panel. `pick` is present only where there is something
+ * to choose.
  */
-export type IrisScopeChip = { scope: "project" | "session" | "account"; label: string; pick?: () => void }
-const [scopeChipSig, setScopeChip] = createSignal<IrisScopeChip | undefined>()
-export const irisScopeChip = scopeChipSig
+export type { IrisScopeChip } from "@/context/iris-panel-scope"
 
-const [requestedSurface,setRequestedSurface] = createSignal<{ surface: SurfaceId; sub?: string } | undefined>()
 
 /**
  * Open the panel on a surface, and optionally on one of its SUB-VIEWS.
@@ -1230,11 +1225,22 @@ const [requestedSurface,setRequestedSurface] = createSignal<{ surface: SurfaceId
  * for a person who asked to connect something. The catalogue lives under the `add` sub-view,
  * so the caller says which one it wants and this puts them there.
  */
-export function requestIrisSurface(surface: string, sub?: string) {
-  setRequestedSurface({ surface: normalizeSurface(surface), sub })
+export function useRequestIrisSurface() {
+  // Bound to the panel it is called under: the request goes to THIS column's IRIS tab (#191484).
+  const scope = useIrisPanelScope()
+  return (surface: string, sub?: string) => scope.request({ surface: normalizeSurface(surface), sub })
+}
+
+/** The product a panel shows, for the code around it (the strip, the agent's panel report). */
+export function useIrisActiveSurface() {
+  const scope = useIrisPanelScope()
+  return () => normalizeSurface(scope.surface() ?? windowIrisPanelScope.surface() ?? "atlas")
 }
 
 export function SessionIrisTab() {
+  const scope = useIrisPanelScope()
+  const navParams = useSessionParams()
+  const navFocused = usePaneFocused()
   const dialog = useDialog()
   const language = useLanguage()
   const serverSDK = useServerSDK()
@@ -1381,7 +1387,7 @@ export function SessionIrisTab() {
 
   // A surface asked for from outside (the chat bar's Integrations entry). Consumed once.
   createEffect(() => {
-    const wanted = requestedSurface()
+    const wanted = scope.requested() as { surface: SurfaceId; sub?: string } | undefined
     if (!wanted) return
     // NOT in a transition — see chooseSurface. This is the path every product-tab click takes.
     batch(() => {
@@ -1396,15 +1402,15 @@ export function SessionIrisTab() {
         } catch {}
       }
     })
-    setRequestedSurface(undefined)
+    scope.consumeRequest()
   })
 
   // From the shared signal, not storage: it already holds this launch's opening product
   // (#189766), and it survives the panel closing and reopening, so a product picked earlier in
   // this launch is still the one on screen.
-  const [surface, setSurface] = createSignal<SurfaceId>(irisSurfaceSig())
-  // The side panel's strip highlights the product on screen — keep the shared signal current.
-  createEffect(() => setIrisSurface(surface()))
+  const [surface, setSurface] = createSignal<SurfaceId>(normalizeSurface(scope.surface() ?? "atlas"))
+  // The side panel's strip highlights the product on screen — keep this panel's scope current.
+  createEffect(() => scope.setSurface(surface()))
 
   // Remembered PER SURFACE — see LAST_SUBVIEW_KEY. A malformed or missing entry is not an
   // error worth surfacing; resolvePane falls back to the first sub-view of whatever you open.
@@ -3001,6 +3007,9 @@ export function SessionIrisTab() {
   createEffect(() => {
     const req = irisNavRequest()
     if (!req) return
+    // Only this chat's panel takes it: the one it names, or — unnamed — the chat you are in.
+    // Left for its own panel otherwise, not cleared.
+    if (req.session ? req.session !== navParams.id : !navFocused()) return
     untrack(() => {
       if (req.bloqId && req.bloqId > 0) choose(req.bloqId)
       const known = SURFACES.some((x) => x.id === req.surface)
@@ -3094,17 +3103,18 @@ export function SessionIrisTab() {
 
   // What the scope chip in the product row says (#187130 C). Project views NAME the project and
   // open the picker; session and account views state the scope and have nothing to pick.
+  const chipScope = useIrisPanelScope()
   createEffect(() => {
     const scope = rowScope()
     const hasBoards = (settled(bloqs)?.bloqs?.length ?? 0) > 0
     const project = scope === "project"
-    setScopeChip({
+    chipScope.setChip({
       scope,
       label: scopeChipLabel(scope, project && hasBoards && activeBloq() ? activeBloqName() : undefined),
       pick: project && hasBoards ? openBoardPicker : undefined,
     })
   })
-  onCleanup(() => setScopeChip(undefined))
+  onCleanup(() => chipScope.setChip(undefined))
 
   return (
     <div class="relative flex flex-col h-full min-h-0 gap-2 px-2 pb-2" onKeyDown={atlasKeys}>
@@ -3128,23 +3138,10 @@ export function SessionIrisTab() {
         <div class="iris-activity" aria-hidden="true" />
       </Show>
       {/* TWO ROWS, NOT THREE (#187130). The scope/board row that sat here moved onto the side
-          panel's product row as a chip (irisScopeChip). What is left is the product's own views,
-          with the focus toggle at the end of that row. With no views — or in focus mode, where
-          the row is folded away — the toggle floats in the corner so there is always a way back. */}
-      <Show
-        when={!focus() && SUBVIEWS[surface()]}
-        fallback={
-          <button
-            type="button"
-            class="iris-focusbtn iris-focusbtn--float"
-            classList={{ "iris-focusbtn--on": focus() }}
-            title={focus() ? "Show tabs (Esc)" : "Focus — hide the tab rows"}
-            aria-pressed={focus()}
-            onClick={() => setFocus((v) => !v)}
-          >
-            ⤢
-          </button>
-        }
+          panel's product row as a chip (context/iris-panel-scope). What is left is the product's own views.
+          The ⤢ focus toggle that ended this row is gone (#191484): it cluttered every product's
+          row, and nothing else enters focus mode, so no one can be left in it. */}
+      <Show when={!focus() && SUBVIEWS[surface()]}
       >
         {(list) => (
           <div class="iris-subrow shrink-0">
@@ -3180,15 +3177,6 @@ export function SessionIrisTab() {
                 </button>
               )}
             </Show>
-            <button
-              type="button"
-              class="iris-focusbtn"
-              title="Focus — hide the tab rows"
-              aria-pressed={false}
-              onClick={() => setFocus(true)}
-            >
-              ⤢
-            </button>
           </div>
         )}
       </Show>

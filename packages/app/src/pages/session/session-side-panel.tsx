@@ -1,4 +1,5 @@
 import { For, Match, Show, Switch, createEffect, createMemo, on, onCleanup, type JSX } from "solid-js"
+import { useIrisPanelScope } from "@/context/iris-panel-scope"
 import { IrisPanelBoundary } from "@/components/iris-panel-boundary"
 import { createStore } from "solid-js/store"
 import { createMediaQuery } from "@solid-primitives/media"
@@ -37,16 +38,14 @@ import { SessionContextUsage } from "@/components/session-context-usage"
 import {
   SessionIrisTab,
   IRIS_SURFACE_CHOICES,
-  requestIrisSurface,
+  useRequestIrisSurface,
   irisStripTabs,
-  irisActiveSurface,
+  useIrisActiveSurface,
   irisPinned,
   toggleIrisPin,
   irisFilesPinned,
-  irisSurfaceChangedAt,
   irisOpensOnAtlas,
   toggleIrisFilesPin,
-  irisScopeChip,
 } from "@/components/session/session-iris-tab"
 
 const reviewTabID = "session-side-panel-review-tab"
@@ -108,6 +107,11 @@ export function SessionSidePanel(props: {
   size: Sizing
   stacked?: boolean
 }) {
+  // This column's panel (#191484): its product, its project chip, its "show this product".
+  const panelScope = useIrisPanelScope()
+  const requestIrisSurface = useRequestIrisSurface()
+  const irisActiveSurface = useIrisActiveSurface()
+  const irisSurfaceChangedAt = panelScope.surfaceChangedAt
   const layout = useLayout()
   const settings = useSettings()
   const file = useFile()
@@ -278,7 +282,7 @@ export function SessionSidePanel(props: {
   // Keyed by PRODUCT ID (strings), not by fresh objects. Rebuilding the triggers on every product
   // switch made the Tabs component lose its selected trigger for a frame, fall back to the first
   // tab and report it as a choice — measured: Agents → Genesis landed on Review.
-  const productIds = createMemo(() => irisStripTabs().map((t) => t.id as string), undefined, {
+  const productIds = createMemo(() => irisStripTabs(irisActiveSurface()).map((t) => t.id as string), undefined, {
     equals: (a, b) => a.length === b.length && a.every((x, i) => x === b[i]),
   })
   /** The Browser tab (#187864) — only once a link has been opened in it; closable. */
@@ -321,7 +325,7 @@ export function SessionSidePanel(props: {
           {/* The heyiris.io nav's icon for the product, so it reads the same in both places. */}
           <div class="flex items-center gap-1.5">
             <IrisProductIcon id={id} />
-            <div>{irisStripTabs().find((t) => t.id === id)?.label ?? id}</div>
+            <div>{irisStripTabs(irisActiveSurface()).find((t) => t.id === id)?.label ?? id}</div>
             {/* Showing something that is not current — offline, or the server refused (#190231 phase 2). */}
             <Show when={needsAttention(surfaceSync(id))}>
               <span class="iris-tabdot" title={syncLabel(surfaceSync(id), Date.now())?.text} />
@@ -338,7 +342,7 @@ export function SessionSidePanel(props: {
    * pinned, and a chip inside it would scroll away exactly when the panel is busiest.
    */
   const ScopeChip = () => (
-    <Show when={activeTab() === "iris" && irisScopeChip()}>
+    <Show when={activeTab() === "iris" && panelScope.chip()}>
       {(chip) => (
         <div class="iris-scopechip" data-testid="iris-scope-chip" data-scope={chip().scope}>
           <Show

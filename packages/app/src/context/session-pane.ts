@@ -1,5 +1,6 @@
 import { useParams, type Params } from "@solidjs/router"
-import { createComponent, createContext, useContext, type Accessor, type ParentProps } from "solid-js"
+import { createComponent, createContext, createSignal, useContext, type Accessor, type ParentProps } from "solid-js"
+import type { ReviewPanelSource } from "@/context/layout"
 
 /**
  * WHICH SESSION AM I (#191484). Session code used to read its session from the URL, which can
@@ -17,12 +18,44 @@ export type SessionPaneParams = {
   dir?: string
 }
 
+/** A column's own side panel (#191484) — the same shape as layout.view().reviewPanel. */
+export type PanePanel = {
+  opened: Accessor<boolean>
+  source: Accessor<ReviewPanelSource>
+  open: (source?: ReviewPanelSource) => void
+  close: () => void
+  toggle: () => void
+}
+
+export function createPanePanel(initial = false): PanePanel {
+  const [opened, setOpened] = createSignal(initial)
+  const [source, setSource] = createSignal<ReviewPanelSource>("other")
+  return {
+    opened,
+    source: () => (opened() ? source() : "other"),
+    open: (from = "other") => {
+      setSource(from)
+      setOpened(true)
+    },
+    close: () => setOpened(false),
+    toggle: () => {
+      setSource("other")
+      setOpened((v) => !v)
+    },
+  }
+}
+
 export type SessionPane = {
   params: Accessor<SessionPaneParams>
   /** True for the pane the window's route points at — the one the user is working in. */
   focused: Accessor<boolean>
   /** Make this pane the focused one. */
   focus: () => void
+  /**
+   * This column's side panel. The window keeps one panel state for the single-column app; in a
+   * split each column opens and closes its own, starting closed.
+   */
+  panel?: PanePanel
 }
 
 const PaneContext = createContext<SessionPane>()

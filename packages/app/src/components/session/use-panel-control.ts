@@ -5,7 +5,7 @@ import { useServerSDK } from "@/context/server-sdk"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { focusArtifact, irisOpenArtifact, irisOpenCard, irisPanelView, requestIrisNav } from "./iris-nav"
 import { deliverReport } from "./panel-report"
-import { IRIS_PANEL_CATALOG, irisActiveSurface } from "./session-iris-tab"
+import { IRIS_PANEL_CATALOG, useIrisActiveSurface } from "./session-iris-tab"
 import { navigateWeb, WEB_TAB, webUrl } from "./web-nav"
 
 /**
@@ -69,6 +69,7 @@ export function usePanelControl(input: { open: () => boolean }) {
   const platform = usePlatform()
   const layout = useLayout()
   const { params, tabs, view } = useSessionLayout()
+  const irisActiveSurface = useIrisActiveSurface()
 
   const snapshot = () => {
     const v = irisPanelView()
@@ -135,11 +136,11 @@ export function usePanelControl(input: { open: () => boolean }) {
         return
       case "show":
         // The request FIRST: opening the tab is what mounts the component that reads it.
-        requestIrisNav({ surface: cmd.surface, sub: cmd.sub, bloqId: cmd.bloq })
+        requestIrisNav({ surface: cmd.surface, sub: cmd.sub, bloqId: cmd.bloq, session: params.id })
         showTab("iris")
         return
       case "artifact":
-        requestIrisNav({ surface: "pages", sub: "artifacts", artifactId: cmd.id })
+        requestIrisNav({ surface: "pages", sub: "artifacts", artifactId: cmd.id, session: params.id })
         focusArtifact(cmd.id)
         showTab("iris")
         return
@@ -152,7 +153,7 @@ export function usePanelControl(input: { open: () => boolean }) {
         return
       case "card":
         // The board, then the card — the same request a notification about a card makes (#189799).
-        requestIrisNav({ surface: "atlas", sub: "lists", bloqId: cmd.bloq, itemId: cmd.item })
+        requestIrisNav({ surface: "atlas", sub: "lists", bloqId: cmd.bloq, itemId: cmd.item, session: params.id })
         showTab("iris")
         return
       case "report":
