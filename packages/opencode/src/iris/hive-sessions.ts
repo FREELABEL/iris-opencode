@@ -81,6 +81,8 @@ export interface HiveSessionNode {
   /** Providers the daemon could not ask, or cut at its cap — the list is a floor, not a count. */
   incomplete: string[]
   sessions: HiveSession[]
+  /** This machine (#191497): its id is the node_id in ~/.iris/config.json. */
+  self?: boolean
 }
 
 /** An old record of a machine that re-registered: named, with how many rows it holds that are NOT shown. */
@@ -224,7 +226,8 @@ export async function fetchHiveSessions(
     // detailed=1: the same request `iris hive sessions` makes.
     const res = await irisFetch(`/api/v6/nodes/?user_id=${userId}&detailed=1`, IRIS_API)
     if (!res.ok) return { measured: false, reason: `iris-api ${res.status}`, data: empty }
-    return { measured: true, data: fleetFromNodes(await res.json(), now) }
+    const fleet = fleetFromNodes(await res.json(), now)
+    return { measured: true, data: { ...fleet, nodes: markSelf(fleet.nodes, localNodeId(), hostname()) } }
   } catch (e) {
     return { measured: false, reason: e instanceof Error ? e.message : String(e), data: empty }
   }
@@ -425,5 +428,113 @@ export async function answerHiveSession(
     return { measured: true, data: { ...none, taskId } }
   } catch (e) {
     return { measured: false, reason: e instanceof Error ? e.message : String(e), data: none }
+  }
+}
+
+
+/**
+ * This machine's Hive node id: `node_id` in ~/.iris/config.json, written when the machine joined Hive.
+ * Null when it never joined, or the file is unreadable — then nothing is marked as this machine.
+ */
+export function localNodeId(file = `${process.env["HOME"] ?? ""}/.iris/config.json`): string | null {
+  try {
+    const id = JSON.parse(require("fs").readFileSync(file, "utf8"))?.node_id
+    return typeof id === "string" && id ? id : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Mark the node that IS this machine (#191497), so the Sessions view can say "This machine" vs "Other
+ * machines". By id when this machine joined Hive; otherwise by hostname, and only if exactly one
+ * node has that name (a re-registered machine can appear twice — guessing between them is worse
+ * than not marking either).
+ */
+export function markSelf(nodes: HiveSessionNode[], nodeId: string | null, host: string): HiveSessionNode[] {
+  if (nodeId && nodes.some((n) => n.id === nodeId)) return nodes.map((n) => ({ ...n, self: n.id === nodeId }))
+  const bare = (x: string) => x.toLowerCase().replace(/\.local$/, "")
+  const byName = nodes.filter((n) => bare(n.name) === bare(host))
+  return nodes.map((n) => ({ ...n, self: byName.length === 1 && byName[0] === n }))
+}
+
+/** One cloud copy of a chat (#191498): a share on IRIS's own share server. */
+export interface CloudCopy {
+  id: string
+  url: string
+  sessionId: string
+  title: string | null
+  machine: string | null
+  messages: number
+  updatedAt: string | null
+}
+
+export function cloudCopiesOf(json: any): CloudCopy[] {
+  const rows: any[] = Array.isArray(json?.data) ? json.data : []
+  return rows
+    .filter((r) => typeof r?.id === "string")
+    .map((r) => ({
+      id: r.id,
+      url: String(r.url ?? ""),
+      sessionId: String(r.session_id ?? ""),
+      title: typeof r.title === "string" ? r.title : null,
+      machine: typeof r.machine === "string" ? r.machine : null,
+      messages: Number(r.messages ?? 0) || 0,
+      updatedAt: typeof r.updated_at === "string" ? r.updated_at : null,
+    }))
+}
+
+/** The signed-in person's cloud copies — GET /api/v6/shares on IRIS (owner-only). */
+export async function fetchCloudCopies(): Promise<PlatformResult<{ copies: CloudCopy[] }>> {
+  try {
+    const res = await irisFetch(`/api/v6/shares?limit=200`, IRIS_API)
+    if (res.status === 404) return { measured: false, reason: "this IRIS server has no cloud copies yet", data: { copies: [] } }
+    if (!res.ok) return { measured: false, reason: `iris-api ${res.status}`, data: { copies: [] } }
+    return { measured: true, data: { copies: cloudCopiesOf(await res.json()) } }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { copies: [] } }
+  }
+}
+
+/** One chat from IRIS's session index: every session a machine ever reported, not just its newest 25. */
+export interface IndexedSession {
+  sessionId: string
+  provider: string
+  title: string | null
+  nodeId: string
+  machine: string | null
+  /** This machine, by node id. */
+  self: boolean
+  branch: string | null
+  model: string | null
+  updatedAt: string | null
+}
+
+export function indexedSessionsOf(json: any, nodeId: string | null): IndexedSession[] {
+  const rows: any[] = Array.isArray(json?.data) ? json.data : []
+  return rows
+    .filter((r) => typeof r?.session_id === "string" && typeof r?.node_id === "string")
+    .map((r) => ({
+      sessionId: r.session_id,
+      provider: String(r.provider ?? "opencode"),
+      title: typeof r.title === "string" ? r.title : null,
+      nodeId: r.node_id,
+      machine: typeof r.node === "string" ? r.node : null,
+      self: !!nodeId && r.node_id === nodeId,
+      branch: typeof r.git_branch === "string" ? r.git_branch : null,
+      model: typeof r.model === "string" ? r.model : null,
+      updatedAt: typeof r.created_at === "string" ? r.created_at : null,
+    }))
+}
+
+/** Every indexed chat on the signed-in person's machines — GET /api/v6/sessions/index (#191497, owner-only). */
+export async function fetchSessionIndex(limit = 500): Promise<PlatformResult<{ sessions: IndexedSession[] }>> {
+  try {
+    const res = await irisFetch(`/api/v6/sessions/index?limit=${limit}`, IRIS_API)
+    if (res.status === 404) return { measured: false, reason: "this IRIS server has no session history yet", data: { sessions: [] } }
+    if (!res.ok) return { measured: false, reason: `iris-api ${res.status}`, data: { sessions: [] } }
+    return { measured: true, data: { sessions: indexedSessionsOf(await res.json(), localNodeId()) } }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { sessions: [] } }
   }
 }

@@ -1,0 +1,54 @@
+/*
+ * Sessions page (#191497). Tokens from .hsc (shared with Hive's panels): jade = working, sage = on
+ * this machine, amber = needs you or not current. Where a chat lives is the main thing a row says,
+ * so it is a tag; everything else is quiet. Numbers are mono.
+ */
+.ssv {
+  min-height: 100%; overflow-y: auto; background: var(--hsc-surface); color: var(--hsc-ink);
+  padding-block: 28px 48px; padding-left: max(24px, env(safe-area-inset-left, 0px)); padding-right: max(24px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 14px; align-content: start; font-size: 13.5px;
+}
+.ssv *, .ssv *::before, .ssv *::after { box-sizing: border-box; }
+.ssv button, .ssv select, .ssv input { font: inherit; color: inherit; }
+.ssv :focus-visible { outline: 2px solid var(--hsc-jade); outline-offset: 2px; }
+.ssv-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; max-width: 1100px; }
+.ssv h1 { margin: 0; font-size: 22px; font-weight: 650; letter-spacing: -0.01em; }
+.ssv-sub { margin: 4px 0 0; color: var(--hsc-ink2); max-width: 70ch; }
+.ssv-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.ssv-chip { border: 1px solid var(--hsc-rule); background: var(--hsc-card); border-radius: 999px; padding: 5px 12px; cursor: pointer; display: inline-flex; gap: 8px; align-items: center; }
+.ssv-chip[aria-selected="true"] { background: var(--hsc-elev); border-color: var(--hsc-ink2); font-weight: 600; }
+.ssv-num { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric: tabular-nums; color: var(--hsc-ink2); font-size: 12px; }
+.ssv-filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; max-width: 1100px; }
+.ssv-search { flex: 1 1 260px; min-width: 0; border: 1px solid var(--hsc-rule); background: var(--hsc-card); border-radius: 8px; padding: 7px 10px; }
+.ssv-sort { display: inline-flex; gap: 6px; align-items: center; color: var(--hsc-ink2); font-size: 12.5px; }
+.ssv-sort select { border: 1px solid var(--hsc-rule); background: var(--hsc-card); border-radius: 6px; padding: 5px 6px; color: var(--hsc-ink); }
+.ssv-warn { margin: 0; color: var(--hsc-amber); font-size: 12.5px; }
+.ssv-empty { color: var(--hsc-ink2); padding: 24px 0; }
+.ssv-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; background: var(--hsc-rule); border: 1px solid var(--hsc-rule); border-radius: 10px; overflow: hidden; max-width: 1100px; }
+.ssv-row { background: var(--hsc-card); display: grid; grid-template-columns: minmax(0, 1fr) 96px 48px auto; gap: 12px; align-items: center; padding: 10px 14px; }
+.ssv-row[data-open] { background: var(--hsc-elev); }
+.ssv-main { min-width: 0; display: grid; gap: 4px; }
+.ssv-title { all: unset; cursor: pointer; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ssv-title:hover { text-decoration: underline; text-underline-offset: 3px; }
+.ssv-where { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.ssv-tag { border-radius: 999px; padding: 1px 8px; font-size: 11.5px; border: 1px solid var(--hsc-rule); }
+.ssv-tag[data-kind="this"] { color: var(--hsc-sage); border-color: var(--hsc-sage); }
+.ssv-tag[data-kind="other"] { color: var(--hsc-ink); }
+.ssv-tag[data-kind="cloud"] { color: var(--hsc-jade); border-style: dashed; border-color: var(--hsc-jade); }
+.ssv-meta { color: var(--hsc-ink2); font-size: 12px; margin: 0; }
+.ssv-status { font-size: 12px; color: var(--hsc-ink2); }
+.ssv-status[data-status="working"] { color: var(--hsc-jade); font-weight: 600; }
+.ssv-status[data-status="needs_you"] { color: var(--hsc-amber); font-weight: 600; }
+.ssv-status[data-status="active"] { color: var(--hsc-ink); }
+.ssv-age { text-align: right; }
+.ssv-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.ssv-btn { border: 1px solid var(--hsc-rule); background: var(--hsc-elev); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+.ssv-quiet { background: transparent; }
+.ssv-peek { grid-column: 1 / -1; border-top: 1px solid var(--hsc-rule); padding-top: 10px; display: grid; gap: 8px; }
+.ssv-lines { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 320px; overflow-y: auto; }
+.ssv-lines li { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 10px; font-size: 12.5px; }
+.ssv-who { color: var(--hsc-ink2); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; }
+@media (max-width: 720px) {
+  .ssv-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .ssv-status, .ssv-age { display: none; }
+}

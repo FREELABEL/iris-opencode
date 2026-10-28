@@ -1,3 +1,4 @@
+import { hostname } from "os"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
 import type * as SDK from "@opencode-ai/sdk/v2"
@@ -295,7 +296,8 @@ const layer = Layer.effect(
       const req = yield* request()
       const result = yield* HttpClientRequest.post(`${req.baseUrl}${req.api.create}`).pipe(
         HttpClientRequest.setHeaders(req.headers),
-        HttpClientRequest.bodyJson({ sessionID }),
+        // The machine this copy comes from (#191498): shown beside it in the Sessions view.
+        HttpClientRequest.bodyJson({ sessionID, machine: hostname() }),
         Effect.flatMap((r) => httpOk.execute(r)),
         Effect.flatMap(HttpClientResponse.schemaBodyJson(ShareSchema)),
       )

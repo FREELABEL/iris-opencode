@@ -69,6 +69,7 @@ import { createSessionLineage } from "@/pages/session/session-lineage"
 import { SessionPage, SessionRouteErrorBoundary, TargetSessionRouteContent } from "@/pages/session"
 import { NewHome } from "@/pages/home"
 import { LegacyHome } from "@/pages/home/legacy-home"
+import SessionsPage from "@/pages/sessions"
 
 const NewSession = lazy(() => import("@/pages/new-session"))
 
@@ -650,6 +651,8 @@ function Routes(props: { serverScoped?: JSX.Element }) {
         <Route path="/server/:serverKey/session/:id" component={TargetSessionRoute} />
       </Show>
       <Route path="/new-session" component={DraftRoute} />
+      {/* Every chat, wherever it lives — this machine, other machines, cloud copies (#191497). */}
+      <Route path="/sessions" component={SessionsPage} />
     </>
   )
 }

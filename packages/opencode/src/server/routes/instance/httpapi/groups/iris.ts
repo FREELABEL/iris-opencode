@@ -226,6 +226,7 @@ const HiveSessionsResponse = Schema.Struct({
       reportedAt: Schema.NullOr(Schema.String),
       incomplete: described(Schema.Array(Schema.String), "Providers cut at the cap or not reachable: the list is a floor."),
       sessions: Schema.Array(HiveSessionSchema),
+      self: described(Schema.optional(Schema.Boolean), "true for this machine (its node_id is in ~/.iris/config.json)."),
     }).annotate({ identifier: "IrisHiveSessionNode" }),
   ),
   retired: described(
@@ -233,6 +234,38 @@ const HiveSessionsResponse = Schema.Struct({
     "Old records of re-registered machines (report older than 7 days): their rows are not shown — said, not silently dropped.",
   ),
 }).annotate({ identifier: "IrisHiveSessionsResponse" })
+
+const HiveSharesResponse = Schema.Struct({
+  ...Measured,
+  copies: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      url: Schema.String,
+      sessionId: Schema.String,
+      title: Schema.NullOr(Schema.String),
+      machine: Schema.NullOr(Schema.String),
+      messages: Schema.Finite,
+      updatedAt: Schema.NullOr(Schema.String),
+    }).annotate({ identifier: "IrisCloudCopy" }),
+  ),
+}).annotate({ identifier: "IrisHiveSharesResponse" })
+
+const HiveSessionIndexResponse = Schema.Struct({
+  ...Measured,
+  sessions: Schema.Array(
+    Schema.Struct({
+      sessionId: Schema.String,
+      provider: Schema.String,
+      title: Schema.NullOr(Schema.String),
+      nodeId: Schema.String,
+      machine: Schema.NullOr(Schema.String),
+      self: Schema.Boolean,
+      branch: Schema.NullOr(Schema.String),
+      model: Schema.NullOr(Schema.String),
+      updatedAt: Schema.NullOr(Schema.String),
+    }).annotate({ identifier: "IrisIndexedSession" }),
+  ),
+}).annotate({ identifier: "IrisHiveSessionIndexResponse" })
 
 const HiveTranscriptResponse = Schema.Struct({
   ...Measured,
@@ -1568,6 +1601,8 @@ export const IrisPaths = {
   roomMessages: `${root}/rooms/:roomID/messages`,
   hive: `${root}/hive`,
   hiveSessions: `${root}/hive/sessions`,
+  hiveShares: `${root}/hive/shares`,
+  hiveSessionIndex: `${root}/hive/session-index`,
   hiveSessionTranscript: `${root}/hive/sessions/:sessionID/transcript`,
   hiveSessionReply: `${root}/hive/sessions/:sessionID/reply`,
   hiveSessionAnswer: `${root}/hive/sessions/:sessionID/answer`,
@@ -3571,6 +3606,24 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "List AI sessions across your machines",
           description:
             "What each machine's daemon last reported, with the server's freshness applied: a machine whose report is old shows its sessions as `unknown`, never `active`.",
+        }),
+      ),
+      HttpApiEndpoint.get("hiveShares", IrisPaths.hiveShares, {
+        success: described(HiveSharesResponse, "Your cloud copies of chats, on IRIS's own share server"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.hiveShares",
+          summary: "List your cloud copies of chats",
+          description: "Chats you shared, as copies on IRIS (#191498). Owner-only; newest first.",
+        }),
+      ),
+      HttpApiEndpoint.get("hiveSessionIndex", IrisPaths.hiveSessionIndex, {
+        success: described(HiveSessionIndexResponse, "Every chat your machines have reported, newest first"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.hiveSessionIndex",
+          summary: "List every chat on your machines",
+          description: "IRIS's session index (#191497): older chats too, not just each machine's newest 25. Owner-only.",
         }),
       ),
       HttpApiEndpoint.get("hiveSessionTranscript", IrisPaths.hiveSessionTranscript, {

@@ -384,6 +384,16 @@ export function Titlebar(props: { update?: TitlebarUpdate; debugTools?: { visibl
                 >
                   <IrisMark />
                 </button>
+                {/* Every chat on every machine, plus cloud copies, in the main area (#191497). */}
+                <button
+                  type="button"
+                  class="flex h-8 shrink-0 items-center justify-center rounded-md px-2 text-12-medium hover:bg-v2-background-bg-hover"
+                  aria-label="Sessions on every machine"
+                  title="Sessions on every machine"
+                  onClick={() => navigate("/sessions")}
+                >
+                  Sessions
+                </button>
                 <ChannelIndicator debugTools={props.debugTools} />
                 <Show when={windows() || linux()}>
                   <WindowsAppMenu command={command} platform={platform} variant="v2" />
