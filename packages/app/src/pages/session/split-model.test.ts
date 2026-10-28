@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { close, closeColumn, dropSlot, openAt, maxColumns, open, paneKey, prune, reconcile, visible, type PaneRef } from "./split-model"
+import { close, closeColumn, dropSlot, previewBox, openAt, maxColumns, open, paneKey, prune, reconcile, visible, type PaneRef } from "./split-model"
 
 const p = (id: string, server = "local"): PaneRef => ({ server, sessionId: id })
 
@@ -78,5 +78,13 @@ describe("split model (#191484)", () => {
     expect(dropSlot(cols, 990)).toEqual({ column: 1, side: "right", index: 2 })
     expect(dropSlot(cols, 5000)).toEqual({ column: 1, side: "right", index: 2 })
     expect(dropSlot([], 10)).toBeUndefined()
+  })
+
+  test("the preview is the column the drop creates: halves from one, thirds from two", () => {
+    expect(previewBox(1008, 2, 1)).toEqual({ left: 508, width: 500 })
+    const third = (1016 - 16) / 3
+    expect(previewBox(1016, 3, 0)).toEqual({ left: 0, width: third })
+    expect(previewBox(1016, 3, 1)).toEqual({ left: third + 8, width: third })
+    expect(previewBox(1016, 3, 2)).toEqual({ left: 2 * (third + 8), width: third })
   })
 })

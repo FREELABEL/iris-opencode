@@ -64,6 +64,18 @@ export function dropSlot(columns: { left: number; right: number }[], x: number):
   return { column, side, index: side === "left" ? column : column + 1 }
 }
 
+/**
+ * The column a drop would create, as it will be drawn: `count` equal columns with `gap` between
+ * them, the new one at `index`. The preview shows the result — dropping a third tab beside two
+ * columns previews a third of the row, not half of the column under the pointer.
+ */
+export function previewBox(width: number, count: number, index: number, gap = PANE_GAP) {
+  const n = Math.max(1, count)
+  const column = (width - gap * (n - 1)) / n
+  const at = Math.max(0, Math.min(index, n - 1))
+  return { left: at * (column + gap), width: column }
+}
+
 /** Remove a column. One left means no split at all. */
 export function close(panes: PaneRef[], target: PaneRef): PaneRef[] {
   const next = panes.filter((p) => !samePane(p, target))

@@ -6,7 +6,7 @@ import { Icon as IconV2 } from "@opencode-ai/ui/v2/icon"
 import { batch, createEffect, createMemo, createSignal, For, on, onCleanup, Show, Suspense, untrack, type Component, type ParentProps } from "solid-js"
 import { useCommand } from "@/context/command"
 import { useLanguage } from "@/context/language"
-import { SessionPaneProvider, type SessionPane } from "@/context/session-pane"
+import { createPanePanel, SessionPaneProvider, type SessionPane } from "@/context/session-pane"
 import { SplitActionsProvider } from "@/context/split-actions"
 import { useServerSDK } from "@/context/server-sdk"
 import { useServerSync } from "@/context/server-sync"
@@ -15,7 +15,7 @@ import { handleTabDrop, tabDrag, type TabDrag } from "@/context/split-drag"
 import { useTabs } from "@/context/tabs"
 import { requireServerKey, sessionHref } from "@/utils/session-route"
 import { showToast } from "@/utils/toast"
-import { closeColumn, dropSlot, maxColumns, open, openAt, paneKey, PANE_GAP, PANE_MAX, prune, reconcile, samePane, visible, type PaneRef } from "./split-model"
+import { closeColumn, dropSlot, previewBox, maxColumns, open, openAt, paneKey, PANE_GAP, PANE_MAX, prune, reconcile, samePane, visible, type PaneRef } from "./split-model"
 
 type ServerRoute = Component<ParentProps<{ serverKey?: () => string }>>
 
@@ -175,14 +175,12 @@ export function SessionSplitRoute(props: { server: ServerRoute; content: Compone
     const target = multi() ? shown()[slot.column] : focused()
     const at = Math.max(0, onScreen.findIndex((p) => samePane(p, target)))
     const index = onScreen.length < 2 ? slot.index : slot.side === "left" ? at : at + 1
-    const box = columns[slot.column]
-    const half = box.width / 2
-    return {
-      kind: "drop",
-      next,
-      index,
-      box: { left: box.left - area.left + (slot.side === "right" ? half : 0), width: half },
-    }
+    // Preview the result: the columns after the drop, at their final width, the new one in the
+    // slot it takes — not half of the column under the pointer.
+    const moving = onScreen.some((p) => samePane(p, next))
+    const count = Math.min(Math.max(onScreen.length, 1) + (moving ? 0 : 1), PANE_MAX)
+    const visibleIndex = slot.side === "left" ? slot.column : slot.column + 1
+    return { kind: "drop", next, index, box: previewBox(area.width, count, visibleIndex) }
   }
   const dropState = createMemo(() => {
     const d = tabDrag()
@@ -361,6 +359,7 @@ function SplitColumn(props: {
   content: Component
 }) {
   const pane: SessionPane = {
+    panel: createPanePanel(),
     // The route's form: session code decodes it with requireServerKey, as it does the URL's.
     params: () => ({ serverKey: base64Encode(props.pane.server), id: props.pane.sessionId }),
     focused: props.focused,
