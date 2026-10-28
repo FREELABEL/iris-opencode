@@ -3128,23 +3128,10 @@ export function SessionIrisTab() {
         <div class="iris-activity" aria-hidden="true" />
       </Show>
       {/* TWO ROWS, NOT THREE (#187130). The scope/board row that sat here moved onto the side
-          panel's product row as a chip (irisScopeChip). What is left is the product's own views,
-          with the focus toggle at the end of that row. With no views — or in focus mode, where
-          the row is folded away — the toggle floats in the corner so there is always a way back. */}
-      <Show
-        when={!focus() && SUBVIEWS[surface()]}
-        fallback={
-          <button
-            type="button"
-            class="iris-focusbtn iris-focusbtn--float"
-            classList={{ "iris-focusbtn--on": focus() }}
-            title={focus() ? "Show tabs (Esc)" : "Focus — hide the tab rows"}
-            aria-pressed={focus()}
-            onClick={() => setFocus((v) => !v)}
-          >
-            ⤢
-          </button>
-        }
+          panel's product row as a chip (irisScopeChip). What is left is the product's own views.
+          The ⤢ focus toggle that ended this row is gone (#191484): it cluttered every product's
+          row, and nothing else enters focus mode, so no one can be left in it. */}
+      <Show when={!focus() && SUBVIEWS[surface()]}
       >
         {(list) => (
           <div class="iris-subrow shrink-0">
@@ -3180,15 +3167,6 @@ export function SessionIrisTab() {
                 </button>
               )}
             </Show>
-            <button
-              type="button"
-              class="iris-focusbtn"
-              title="Focus — hide the tab rows"
-              aria-pressed={false}
-              onClick={() => setFocus(true)}
-            >
-              ⤢
-            </button>
           </div>
         )}
       </Show>
