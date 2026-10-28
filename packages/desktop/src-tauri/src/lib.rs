@@ -85,7 +85,10 @@ struct EngineCredentials {
 
 #[tauri::command]
 fn engine_credentials() -> Option<EngineCredentials> {
-    engine_auth::current_password().map(|password| EngineCredentials {
+    let password = engine_auth::current_password();
+    // Remembered so a respawn can tell whether the window still holds the right one (#191482).
+    engine_supervisor::note_window_credential(password.clone());
+    password.map(|password| EngineCredentials {
         username: engine_auth::USERNAME,
         password,
     })
@@ -129,18 +132,21 @@ async fn get_logs(app: AppHandle) -> Result<String, String> {
     Ok(logs.iter().cloned().collect::<Vec<_>>().join(""))
 }
 
-fn get_sidecar_port() -> u32 {
+/// The port from OPENCODE_PORT, when one was given. Only then is an engine already answering on
+/// it one to attach to (#191482).
+fn configured_sidecar_port() -> Option<u32> {
     option_env!("OPENCODE_PORT")
         .map(|s| s.to_string())
         .or_else(|| std::env::var("OPENCODE_PORT").ok())
         .and_then(|port_str| port_str.parse().ok())
-        .unwrap_or_else(|| {
-            TcpListener::bind("127.0.0.1:0")
-                .expect("Failed to bind to find free port")
-                .local_addr()
-                .expect("Failed to get local address")
-                .port()
-        }) as u32
+}
+
+fn free_sidecar_port() -> u32 {
+    TcpListener::bind("127.0.0.1:0")
+        .expect("Failed to bind to find free port")
+        .local_addr()
+        .expect("Failed to get local address")
+        .port() as u32
 }
 
 /// The baseline instruction that tells the agent it is IRIS.
@@ -1034,12 +1040,26 @@ pub fn run() {
                   // And that the iris provider exists. Never overwrites an existing one.
                   seed_iris_provider();
 
-                  let port = get_sidecar_port();
+                  let configured_port = configured_sidecar_port();
+                  let mut port = configured_port.unwrap_or_else(free_sidecar_port);
 
                   // Managed before the first spawn so the supervisor can swap the child later.
                   app.manage(ServerState(Arc::new(Mutex::new(None))));
 
-                  let should_spawn_sidecar = !is_server_running(port).await;
+                  // #191482: attach only to a port we were told to use. Something answering on a
+                  // port we just picked as free is not our engine — attaching to it handed the
+                  // window no password, and the window could never reach the engine the
+                  // supervisor later started there. Pick another port instead.
+                  let mut answering = is_server_running(port).await;
+                  for _ in 0..5 {
+                      if configured_port.is_some() || !answering {
+                          break;
+                      }
+                      engine_supervisor::log(&app, &format!("port {port} was free a moment ago but something answers on it now — picking another"));
+                      port = free_sidecar_port();
+                      answering = is_server_running(port).await;
+                  }
+                  let should_spawn_sidecar = !engine_supervisor::should_attach(configured_port.is_some(), answering);
 
                   if should_spawn_sidecar {
                       // Ready means /global/health answers, not that the port accepts a
@@ -1047,6 +1067,7 @@ pub fn run() {
                       // then the dialog. The old seven-second hard exit tripped on slow
                       // machines and first launches that copy history (#190516).
                       let timestamp = Instant::now();
+                      engine_supervisor::log(&app, &format!("starting the engine on port {port}"));
                       set_engine_child(&app, spawn_sidecar(&app, port));
                       let mut ready = engine_supervisor::wait_until_healthy(port, engine_supervisor::READY_BUDGET).await;
                       if !ready {
@@ -1078,6 +1099,7 @@ pub fn run() {
 
                       println!("Server ready after {:?}", timestamp.elapsed());
                   } else {
+                      engine_supervisor::log(&app, &format!("attached to the engine already on port {port} (OPENCODE_PORT)"));
                       engine_supervisor::note_attached(port);
                   }
 
