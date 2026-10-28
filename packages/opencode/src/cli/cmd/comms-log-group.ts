@@ -26,6 +26,11 @@ export interface LogInput {
   sentAt: string
   groupId: string
   cc?: string[]
+  /** Every address the message actually went To, when it is known (iris mail send). Defaults to the leads' emails. */
+  toIdentifiers?: string[]
+  /** Extra facts for the record — the full To/CC/BCC, In-Reply-To. Never overrides the group fields. */
+  metadata?: Record<string, unknown>
+  loggedVia?: string
 }
 
 /** A short, url-safe id the server accepts (`^[A-Za-z0-9_-]{1,64}$`). */
@@ -48,7 +53,7 @@ export function uniqueRecipients(rs: Recipient[]): Recipient[] {
  */
 export function buildLogPayloads(recipients: Recipient[], input: LogInput) {
   const all = uniqueRecipients(recipients)
-  const to = all.map((r) => r.email).filter((e): e is string => !!e)
+  const to = input.toIdentifiers?.length ? input.toIdentifiers : all.map((r) => r.email).filter((e): e is string => !!e)
   return all.map((r) => ({
     lead_id: r.lead_id,
     channel: input.channel,
@@ -59,10 +64,11 @@ export function buildLogPayloads(recipients: Recipient[], input: LogInput) {
     message_group_id: input.groupId,
     to_identifiers: to.length ? to : null,
     metadata: {
+      ...(input.metadata ?? {}),
       message_group_id: input.groupId,
       recipients: all,
       ...(input.cc?.length ? { cc: input.cc } : {}),
-      logged_via: "iris comms log",
+      logged_via: input.loggedVia ?? "iris comms log",
     },
   }))
 }

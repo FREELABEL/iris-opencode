@@ -184,7 +184,12 @@ export function lastGmailAccount(): { account?: string; integration_id?: number;
   return lastAccount
 }
 
-async function gmailExec(action: string, params: Record<string, unknown>): Promise<any> {
+/**
+ * One Gmail action on the server (execute-direct). Exported for the mail send/reply route
+ * (#191605): reply_to_email and create_draft run Composio GMAIL_REPLY_TO_THREAD /
+ * GMAIL_CREATE_EMAIL_DRAFT server-side, so a reply does not need the Mac.
+ */
+export async function gmailExec(action: string, params: Record<string, unknown>): Promise<any> {
   const { irisFetch, IRIS_API, resolveUserId } = await import("../cmd/iris-api")
 
   const userId = await resolveUserId()
