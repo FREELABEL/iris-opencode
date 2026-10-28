@@ -9,6 +9,7 @@ function warning(s: string): string {
 import { existsSync, mkdirSync, rmSync, readdirSync, readFileSync, renameSync, writeFileSync } from "fs"
 import { homedir, tmpdir, platform } from "os"
 import { join } from "path"
+import { gunzipSync } from "zlib"
 import { execFileSync, spawnSync } from "child_process"
 import { ensureNodeOnPath } from "../lib/node-path"
 
@@ -142,6 +143,10 @@ export function fetchDaemon(dest: string, url = ARCHIVE_URL): StepResult {
     if (!existsSync(join(src, "daemon.js")))
       return { ok: false, detail: "that archive has no daemon.js — refusing to overwrite the install" }
 
+    // Record the exact commit, so `iris hive doctor` can say what this node runs (#191480).
+    const commit = archiveCommit(readFileSync(tgz))
+    if (commit) writeFileSync(join(src, ".iris-commit"), commit + "\n")
+
     mkdirSync(dest, { recursive: true })
     // Both versions' .gitignore: the new one may name state the old one wrote, and the reverse.
     const ignored = gitignoreMatcher(readText(join(src, ".gitignore")) + "\n" + readText(join(dest, ".gitignore")))
@@ -155,6 +160,21 @@ export function fetchDaemon(dest: string, url = ARCHIVE_URL): StepResult {
     return { ok: false, detail: e?.message ?? String(e) }
   } finally {
     rmSync(stage, { recursive: true, force: true })
+  }
+}
+
+/**
+ * The commit a GitHub archive was made from. GitHub writes it into the tar's pax header as
+ * `comment=<sha>` (and into a zip as its archive comment). Reading it from the bytes that were
+ * actually downloaded means it cannot disagree with them — asking the API for main's head first
+ * would race a push landing in between.
+ */
+export function archiveCommit(tgz: Buffer): string | null {
+  try {
+    const head = gunzipSync(tgz).subarray(0, 4096).toString("latin1")
+    return /comment=([0-9a-f]{40})/.exec(head)?.[1] ?? null
+  } catch {
+    return null
   }
 }
 
@@ -203,6 +223,33 @@ export function planAutostart(agentsDir: string): AutostartPlan {
  * registration mechanism competing with the installer's is worse than one that is
  * honest about its scope.
  */
+const sleepSync = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+
+/**
+ * `launchctl bootout` returns before launchd has finished removing the job, and a `bootstrap`
+ * straight after it fails with "Bootstrap failed: 5: Input/output error" (reproduced on a
+ * re-install, 2026-10-27). Wait until the job is really gone.
+ */
+function bootout(domain: string, label: string): void {
+  spawnSync("launchctl", ["bootout", `${domain}/${label}`], { env: process.env, stdio: "pipe" })
+  for (let i = 0; i < 10; i++) {
+    if (spawnSync("launchctl", ["print", `${domain}/${label}`], { env: process.env, stdio: "pipe" }).status !== 0) return
+    sleepSync(1000)
+  }
+}
+
+/** Load a job, retrying the teardown race; returns launchd's error, or null on success. */
+function bootstrap(domain: string, plist: string): string | null {
+  let err = ""
+  for (let i = 0; i < 3; i++) {
+    const r = spawnSync("launchctl", ["bootstrap", domain, plist], { env: process.env, stdio: "pipe" })
+    if (r.status === 0) return null
+    err = (r.stderr?.toString() || "launchctl bootstrap failed").trim()
+    sleepSync(1000)
+  }
+  return err
+}
+
 export function registerAutostart(bridgeDir: string, agentsDir = join(homedir(), "Library", "LaunchAgents")): StepResult {
   if (platform() !== "darwin")
     return { ok: false, detail: `autostart on ${platform()} is registered by the installer, not by this command` }
@@ -210,7 +257,7 @@ export function registerAutostart(bridgeDir: string, agentsDir = join(homedir(),
     const domain = `gui/${process.getuid?.() ?? 501}`
     const plan = planAutostart(agentsDir)
     if (plan.removeStale) {
-      spawnSync("launchctl", ["bootout", `${domain}/${plan.removeStale}`], { env: process.env, stdio: "pipe" })
+      bootout(domain, plan.removeStale)
       rmSync(join(agentsDir, `${plan.removeStale}.plist`), { force: true })
     }
     const plist = join(agentsDir, `${plan.label}.plist`)
@@ -220,9 +267,8 @@ export function registerAutostart(bridgeDir: string, agentsDir = join(homedir(),
       // add a second one beside it.
       const loaded = spawnSync("launchctl", ["print", `${domain}/${plan.label}`], { env: process.env, stdio: "pipe" })
       if (loaded.status !== 0) {
-        const boot = spawnSync("launchctl", ["bootstrap", domain, plist], { env: process.env, stdio: "pipe" })
-        if (boot.status !== 0)
-          return { ok: false, detail: (boot.stderr?.toString() || "launchctl bootstrap failed").trim() }
+        const err = bootstrap(domain, plist)
+        if (err) return { ok: false, detail: err }
       }
       return {
         ok: true,
@@ -252,10 +298,9 @@ export function registerAutostart(bridgeDir: string, agentsDir = join(homedir(),
       "utf8",
     )
     // bootout first so a re-run replaces rather than duplicating.
-    spawnSync("launchctl", ["bootout", `${domain}/${plan.label}`], { env: process.env, stdio: "pipe" })
-    const boot = spawnSync("launchctl", ["bootstrap", domain, plist], { env: process.env, stdio: "pipe" })
-    if (boot.status !== 0)
-      return { ok: false, detail: (boot.stderr?.toString() || "launchctl bootstrap failed").trim() }
+    bootout(domain, plan.label)
+    const err = bootstrap(domain, plist)
+    if (err) return { ok: false, detail: err }
     return { ok: true, detail: plist }
   } catch (e: any) {
     return { ok: false, detail: e?.message ?? String(e) }

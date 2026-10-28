@@ -8,6 +8,7 @@ import { resolveLocalNode } from "./hive-local-node"
 import { describeUptime } from "./hive-uptime"
 import { describeIsolation } from "./hive-isolation"
 import { exitCodeForResult, verdictForResult, renderOutput, fromHiveTask, TIMEOUT_EXIT } from "./hive-script-result"
+import { CliUsageError } from "../json-error"
 import { currentDelegationOrigin } from "./hive-delegation-origin"
 import { buildHiveRunBody } from "./hive-run-body"
 
@@ -68,7 +69,21 @@ function redactNode(node: HiveNode): HiveNode {
 
 export async function fetchNodes(userId: number): Promise<HiveNode[]> {
   const res = await hiveFetch(`/api/v6/nodes/?user_id=${userId}`)
-  if (!res.ok) throw new Error(`Failed to fetch nodes: ${res.status} ${await res.text()}`)
+  if (!res.ok) {
+    const body = await res.text()
+    // 401/403/404 are answers about the request — most often --user-id naming an account this
+    // login is not — and the API says which, in words. Thrown raw they surfaced as "Unexpected
+    // error" and a screen of minified source (#191479).
+    if ([401, 403, 404].includes(res.status)) {
+      let said = ""
+      try {
+        const j = JSON.parse(body)
+        said = j.error || j.message || ""
+      } catch {}
+      throw new CliUsageError(said || `The Hive API refused to list nodes for user ${userId} (HTTP ${res.status}). Check: iris auth whoami`)
+    }
+    throw new Error(`Failed to fetch nodes: ${res.status} ${body.slice(0, 300)}`)
+  }
   const data = (await res.json()) as { nodes: HiveNode[] }
   return (data.nodes ?? []).map(redactNode)
 }
@@ -180,7 +195,9 @@ const HiveNodesListCommand = cmd({
 
     if (nodes.length === 0) {
       const installHint = process.platform === "win32" ? "irm https://heyiris.io/install-code.ps1 | iex" : "curl heyiris.io/install-code | bash"
-      console.log(dim(`No nodes registered. Install on a machine: ${installHint}`))
+      // One instruction everywhere (#191478): install IRIS on the machine, or — if it already has
+      // it — `iris hive connect` there. The daemon enrolls itself either way.
+      console.log(dim(`No nodes registered. On the machine to add: ${installHint}  (already has IRIS? run: iris hive connect)`))
       return
     }
 
@@ -297,6 +314,90 @@ const HiveNodesListCommand = cmd({
     if (stale > 0) {
       console.log(`  ${UI.Style.TEXT_WARNING}${stale} online node(s) run an outdated daemon and are excluded from local data-source routing.${UI.Style.TEXT_NORMAL}`)
     }
+    for (const d of duplicateNames(nodes)) {
+      console.log(
+        `  ${UI.Style.TEXT_WARNING}${d.count} nodes are named ${d.name}.${UI.Style.TEXT_NORMAL} ` +
+          dim(`Remove the stale one: iris hive nodes remove ${d.staleIds.join(" / ")}`),
+      )
+    }
+  },
+})
+
+/**
+ * Names held by more than one node, with the ids of every copy except the one a name resolves to
+ * (online first, then most recent heartbeat). A re-enrolled machine keeps its name, so the old
+ * registration lingers and every by-name command has to guess (#191481).
+ */
+export function duplicateNames(nodes: HiveNode[]): { name: string; count: number; staleIds: string[] }[] {
+  const byName = new Map<string, HiveNode[]>()
+  for (const n of nodes) byName.set(n.name.toLowerCase(), [...(byName.get(n.name.toLowerCase()) ?? []), n])
+  const out: { name: string; count: number; staleIds: string[] }[] = []
+  for (const group of byName.values()) {
+    if (group.length < 2) continue
+    const keep = pickNode(group, group[0].name).node
+    out.push({ name: group[0].name, count: group.length, staleIds: group.filter((n) => n !== keep).map((n) => n.id) })
+  }
+  return out
+}
+
+/** Online, or a heartbeat in the last 10 minutes: a machine that is probably still there. */
+export function looksAlive(n: HiveNode, now = Date.now()): boolean {
+  if (n.connection_status === "online") return true
+  const t = Date.parse(n.last_heartbeat_at ?? "")
+  return Number.isFinite(t) && now - t < 10 * 60_000
+}
+
+// ============================================================================
+// nodes remove  (#191481)
+// ============================================================================
+
+const HiveNodesRemoveCommand = cmd({
+  command: "remove <id>",
+  aliases: ["rm"],
+  describe: "remove a node registration — e.g. the stale copy left when a machine re-enrolled",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "the node's FULL id (names repeat — that is the problem this solves)", type: "string", demandOption: true })
+      .option("force", { describe: "remove it even though it looks online", type: "boolean", default: false })
+      .option("yes", { describe: "do not ask (required without a terminal)", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(argv) {
+    await requireAuth()
+    const userId = await requireUserId(argv["user-id"] as number | undefined)
+    if (!userId) process.exit(1)
+    const id = String(argv.id)
+
+    // Exact id only: a name or a prefix could match the LIVE machine instead of the stale one.
+    const node = (await fetchNodes(userId)).find((n) => n.id === id)
+    if (!node) {
+      throw new CliUsageError(`No node with id ${id}. Copy the full id from: iris hive nodes list`)
+    }
+    if (looksAlive(node) && !argv.force) {
+      throw new CliUsageError(
+        `${node.name} (${id}) looks online (heartbeat ${timeAgo(node.last_heartbeat_at)}). Removing it would cut off a live machine. Pass --force if you mean it.`,
+      )
+    }
+    if (!argv.yes) {
+      if (!process.stdin.isTTY) {
+        throw new CliUsageError(`Removing a node needs a yes — run it at a terminal, or pass --yes.`)
+      }
+      const { createInterface } = await import("node:readline")
+      const rl = createInterface({ input: process.stdin, output: process.stderr })
+      const answer: string = await new Promise((r) =>
+        rl.question(`Remove ${node.name} (${id}, last heartbeat ${timeAgo(node.last_heartbeat_at)})? [y/N] `, r),
+      )
+      rl.close()
+      if (!/^y(es)?$/i.test(answer.trim())) {
+        console.error("Not removed.")
+        process.exit(1)
+      }
+    }
+
+    const res = await hiveFetch(`/api/v6/nodes/${encodeURIComponent(id)}?user_id=${userId}`, { method: "DELETE" })
+    if (!res.ok) throw new Error(`Could not remove ${id}: HTTP ${res.status} ${(await res.text()).slice(0, 300)}`)
+    if (argv.json) await writeJson({ removed: id, name: node.name })
+    else console.log(`${success("✓")} removed ${bold(node.name)} ${dim(id)}`)
   },
 })
 
@@ -457,7 +558,8 @@ const HiveNodesCommand = cmd({
     yargs
       .command(HiveNodesListCommand)
       .command(HiveNodesShowCommand)
-      .demandCommand(1, "Specify: list, show"),
+      .command(HiveNodesRemoveCommand)
+      .demandCommand(1, "Specify: list, show, remove"),
   async handler() {},
 })
 

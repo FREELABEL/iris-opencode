@@ -1,9 +1,10 @@
 import { cmd } from "./cmd"
-import { irisFetch, requireAuth, requireUserId, dim, bold, success, highlight, writeJson } from "./iris-api"
+import { requireAuth, requireUserId, dim, bold, success, highlight, writeJson } from "./iris-api"
 import { spawnSync } from "child_process"
 import { join } from "path"
 import { homedir } from "os"
 import { readFileSync, existsSync } from "fs"
+import { fetchNodes } from "./platform-hive-nodes"
 import {
   describeSshFailure,
   isSshUnreachable as isUnreachable,
@@ -20,12 +21,7 @@ import {
 // run the install one-liner if needed, then wait for the node to register.
 // ============================================================================
 
-const IRIS_API = process.env.IRIS_API_URL ?? "https://freelabel.net"
 const INSTALL_URL = process.env.IRIS_INSTALL_URL ?? "https://heyiris.io/install-code"
-
-async function hiveFetch(path: string, options: RequestInit = {}) {
-  return irisFetch(path, options, IRIS_API)
-}
 
 // Read SDK env to inject into the remote install for non-interactive auth.
 function readLocalSdkEnv(): { token: string | null; userId: string | null } {
@@ -194,6 +190,23 @@ async function runSshSetup(target: string): Promise<boolean> {
 
 function bareHost(target: string): string {
   return target.includes("@") ? target.slice(target.indexOf("@") + 1) : target
+}
+
+/** Why enrolling would replace the machine's login, or null when it would not. */
+export function accountMismatch(registered: string | null | undefined, enrolling: number): string | null {
+  if (!registered || registered === "0" || String(registered) === String(enrolling)) return null
+  return `this machine is signed in to IRIS account ${registered}; enrolling would replace that login with account ${enrolling}`
+}
+
+/** The node id the daemon reports on /health, or null when it has not enrolled (or is not up). */
+export function healthNodeId(body: string): string | null {
+  try {
+    const j = JSON.parse(body)
+    const id = j?.node_id ?? j?.daemon?.node_id ?? j?.node?.id
+    return typeof id === "string" && id ? id : null
+  } catch {
+    return /"node_id":"([^"]+)"/.exec(body)?.[1] ?? null
+  }
 }
 
 export function discover(
@@ -403,6 +416,11 @@ const HiveEnrollCommand = cmd({
       .option("dry-run", { describe: "show what would happen without doing it", type: "boolean", default: false })
       .option("user-id", { describe: "iris user id (defaults to your logged-in id)", type: "number" })
       .option("install-version", { describe: "specific iris version to install", type: "string" })
+      .option("replace-login", {
+        describe: "the machine is signed in to a DIFFERENT IRIS account: replace that login with yours (it is backed up first)",
+        type: "boolean",
+        default: false,
+      })
       .option("auto-key", {
         describe: "run ssh-setup when key login is refused — only for a known username (--user, user@ip, or remembered)",
         type: "boolean",
@@ -461,6 +479,17 @@ const HiveEnrollCommand = cmd({
       return
     }
 
+    // The install signs the machine in as YOU (your API key is written to its ~/.iris/sdk/.env)
+    // and registers the node under your account. If it is signed in as someone else — another of
+    // your accounts, or a teammate — that login is replaced. It used to happen silently (#191477).
+    const mismatch = accountMismatch(d.registered_user_id, userId)
+    if (mismatch && !argv["replace-login"]) {
+      console.error(`${dim("✗")} ${mismatch}`)
+      console.error(dim(`  Enroll from a machine signed in as ${d.registered_user_id} to keep that account, or pass --replace-login.`))
+      process.exit(1)
+    }
+    console.log(dim(`  The node will belong to account ${userId}${mismatch ? ` (replacing the login for ${d.registered_user_id})` : ""}.`))
+
     // Pull SDK token to seed the remote install
     const { token } = readLocalSdkEnv()
     if (!token) {
@@ -479,8 +508,8 @@ const HiveEnrollCommand = cmd({
       return
     }
 
-    // Snapshot current node IDs so we can detect the new one after registration
-    const before = await fetchNodeIds(userId)
+    // Keep the machine's current login, whatever it is: the install overwrites it.
+    sshExec(target, `[ -f "$HOME/.iris/sdk/.env" ] && cp -p "$HOME/.iris/sdk/.env" "$HOME/.iris/sdk/.env.bak-$(date +%Y%m%d%H%M%S)" || true`, 10)
 
     console.log()
     console.log(`${dim("→")} running install on ${bold(target)} (this can take a minute)...`)
@@ -509,49 +538,42 @@ const HiveEnrollCommand = cmd({
       process.exit(code)
     }
 
-    // Wait for the new node to register + come online
+    // Ask the machine's OWN daemon whether it enrolled, rather than waiting for a new id to show
+    // up in the registry. That wait said "it may show up in another minute" while the daemon was
+    // crash-looping (#191476), and could never succeed for a machine re-enrolled under its old id.
     console.log()
-    console.log(`${dim("→")} waiting for new node to appear (up to 90s)...`)
-    const newNode = await waitForNewNode(userId, before, 90_000)
-    if (!newNode) {
-      console.log(`${dim("!")} install finished but no new node appeared in your registry yet.`)
-      console.log(dim("  Run: iris hive nodes list — it may show up in another minute."))
-      return
+    console.log(`${dim("→")} waiting for the daemon on ${bold(host)} to enroll (up to 90s)...`)
+    let nodeId: string | null = null
+    const deadline = Date.now() + 90_000
+    while (Date.now() < deadline) {
+      const h = sshExec(target, "curl -s --max-time 3 http://127.0.0.1:3200/health", 10)
+      nodeId = healthNodeId(h.stdout)
+      if (nodeId) break
+      await new Promise((r) => setTimeout(r, 5000))
     }
+    if (!nodeId) {
+      const log = sshExec(
+        target,
+        'tail -n 6 "$HOME/.iris/logs/daemon.stderr.log" "$HOME/.iris/bridge/daemon.log" 2>/dev/null | grep -v "^$" | tail -n 8',
+        10,
+      )
+      console.error(`${dim("✗")} the install finished, but the daemon on ${host} has not enrolled — it is not running or not answering.`)
+      if (log.stdout.trim()) {
+        console.error(dim("  Its log ends with:"))
+        for (const line of log.stdout.trim().split("\n")) console.error(dim(`    ${line}`))
+      }
+      console.error(dim(`  On that machine: iris hive connect`))
+      process.exit(1)
+    }
+    const node = (await fetchNodes(userId).catch(() => [])).find((n) => n.id === nodeId)
     console.log()
-    console.log(`${success("✓")} enrolled ${bold(newNode.name)}`)
-    console.log(`  ${dim("id:")}      ${newNode.id}`)
-    console.log(`  ${dim("status:")}  ${newNode.connection_status}`)
+    console.log(`${success("✓")} enrolled ${bold(node?.name ?? host)}`)
+    console.log(`  ${dim("id:")}      ${nodeId}`)
+    console.log(`  ${dim("status:")}  ${node?.connection_status ?? "registering"}`)
     console.log()
-    console.log(dim(`  Try it:  iris hive run "${newNode.name}" "uname -a"`))
+    console.log(dim(`  Try it:  iris hive run ${nodeId} "uname -a"`))
   },
 })
-
-async function fetchNodeIds(userId: number): Promise<Set<string>> {
-  const res = await hiveFetch(`/api/v6/nodes/?user_id=${userId}`)
-  if (!res.ok) return new Set()
-  const data = (await res.json()) as { nodes: Array<{ id: string }> }
-  return new Set(data.nodes.map((n) => n.id))
-}
-
-async function waitForNewNode(
-  userId: number,
-  before: Set<string>,
-  timeoutMs: number,
-): Promise<{ id: string; name: string; connection_status: string } | null> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 3000))
-    const res = await hiveFetch(`/api/v6/nodes/?user_id=${userId}`)
-    if (!res.ok) continue
-    const data = (await res.json()) as {
-      nodes: Array<{ id: string; name: string; connection_status: string }>
-    }
-    const fresh = data.nodes.find((n) => !before.has(n.id))
-    if (fresh) return fresh
-  }
-  return null
-}
 
 // ============================================================================
 // ssh-setup
