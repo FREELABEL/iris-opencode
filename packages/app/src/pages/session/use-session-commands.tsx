@@ -21,7 +21,7 @@ import { useSessionLayout } from "@/pages/session/session-layout"
 import { useSessionArchive } from "@/pages/session/session-archive"
 import { createSessionOwnership } from "./session-ownership"
 import { useLocal } from "@/context/local"
-import { requestIrisSurface } from "@/components/session/session-iris-tab"
+import { useRequestIrisSurface } from "@/components/session/session-iris-tab"
 
 export type SessionCommandContext = {
   navigateMessageByOffset: (offset: number) => void
@@ -40,6 +40,7 @@ const withCategory = (category: string) => {
 
 export const useSessionCommands = (actions: SessionCommandContext) => {
   const command = useCommand()
+  const requestIrisSurface = useRequestIrisSurface()
   const dialog = useDialog()
   const file = useFile()
   const language = useLanguage()

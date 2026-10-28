@@ -8,6 +8,7 @@ import { useCommand } from "@/context/command"
 import { useLanguage } from "@/context/language"
 import { createPanePanel, SessionPaneProvider, type SessionPane } from "@/context/session-pane"
 import { SplitActionsProvider } from "@/context/split-actions"
+import { IrisPanelScopeProvider } from "@/context/iris-panel-scope"
 import { useServerSDK } from "@/context/server-sdk"
 import { useServerSync } from "@/context/server-sync"
 import { useSplit } from "@/context/split"
@@ -442,6 +443,7 @@ function SplitColumn(props: {
       }}
     >
       <SessionPaneProvider pane={pane}>
+        <IrisPanelScopeProvider>
         {/* Its own boundary: a column still loading must not blank the others (the route's
             Suspense would otherwise hide the whole split). */}
         <Suspense fallback={<div class="flex-1" data-slot="session-split-loading" />}>
@@ -458,6 +460,7 @@ function SplitColumn(props: {
           <Content />
         </Show>
         </Suspense>
+        </IrisPanelScopeProvider>
       </SessionPaneProvider>
     </div>
   )

@@ -17,6 +17,12 @@ export type IrisNavRequest = {
   bloqId?: number
   /** Atlas: open this card once the board is on screen — a notification about it, clicked (#189799). */
   itemId?: number
+  /**
+   * The chat whose panel this is for (#191484). With chats side by side, every panel read this
+   * one signal and all of them followed an agent's "show Hive". Unset — a titlebar pill, a card —
+   * means the panel of the chat you are in.
+   */
+  session?: string
   nonce: number
 }
 

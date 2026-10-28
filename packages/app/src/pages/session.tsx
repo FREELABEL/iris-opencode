@@ -63,7 +63,7 @@ import { useTabs } from "@/context/tabs"
 import { TerminalProvider, useTerminal } from "@/context/terminal"
 import { PromptInput } from "@/components/prompt-input"
 import { PromptInputV2Composer, usePromptInputV2Controller } from "@/components/prompt-input-v2"
-import { irisFilesPinned, irisOpensOnAtlas, requestIrisSurface } from "@/components/session/session-iris-tab"
+import { irisFilesPinned, irisOpensOnAtlas, useRequestIrisSurface } from "@/components/session/session-iris-tab"
 import { clearIrisPanelOpen, irisPanelOpenRequest } from "@/components/session/iris-nav"
 import { useSettingsCommand } from "@/components/settings-dialog"
 import { setCursorPosition } from "@/components/prompt-input/editor-dom"
@@ -359,6 +359,7 @@ function SessionPanelFrame(props: ParentProps<{ newLayout: boolean; raised?: boo
 }
 
 export default function Page() {
+  const requestIrisSurface = useRequestIrisSurface()
   const serverSync = useServerSync()
   const layout = useLayout()
   const local = useLocal()
