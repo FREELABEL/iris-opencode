@@ -44,15 +44,26 @@ import { IrisAtlasArtifacts } from "./iris-atlas-artifacts"
 import { atlasNotes } from "./iris-atlas-artifacts-model"
 import {
   ACCOUNT_SURFACES,
-  FILES_PIN_KEY,
-  filesTabPinned,
   openingSurface,
   panelScope,
   pinnedByChoice,
-  readPinnedIds,
   scopeChipLabel,
   visibleTabs,
 } from "./iris-panel-nav"
+import {
+  DEFAULT_NAV_LAYOUT,
+  FILES_ITEM,
+  LEGACY_FILES_KEY,
+  LEGACY_PINS_KEY,
+  NAV_LAYOUT_KEY,
+  isNavItemVisible,
+  legacyNavLayout,
+  mergeNavLayout,
+  parseNavLayout,
+  setNavItemVisible,
+  visibleNavItems,
+  type NavLayout,
+} from "./iris-nav-layout"
 import { irisNavRequest, clearIrisNav, setIrisPanelView } from "./iris-nav"
 import { heldPayload, holdPayload, setSurfaceSync, surfaceSync, syncLabel, syncOfPayload } from "./iris-surface-store"
 import { useSessionLayout } from "@/pages/session/session-layout"
@@ -1098,16 +1109,15 @@ export const IRIS_SURFACE_CHOICES: readonly { id: string; label: string }[] = SU
  * PROJECT FIRST, PRODUCTS AS TABS (#186509 nav). The panel reads top-down: which project, which
  * product, which view. Products are tabs you PIN from the + menu instead of one eight-item bar.
  */
-const PINNED_KEY = "iris.panel.pinned"
-// Pulse is pinned for anyone who has not chosen their own tabs (#189286): behind the + menu it
-// was a product nobody would stumble on. People who already pinned their own keep their choice.
-const DEFAULT_PINNED: SurfaceId[] = ["pages", "atlas", "agents", "pulse"]
-const readPinned = (raw: string | null) =>
-  readPinnedIds<SurfaceId>(
-    raw,
-    SURFACES.map((x) => x.id),
-    DEFAULT_PINNED,
-  )
+// The layout — which products show, in what order, and the file tree — is DATA (#191509): the
+// shipped default merged with what the person saved. See iris-nav-layout.ts for the rules.
+const PRODUCT_IDS = SURFACES.map((x) => x.id as string)
+/** The shipped default, plus any product it does not list yet (hidden, at the end) so none is lost. */
+const NAV_DEFAULT: NavLayout = {
+  ...DEFAULT_NAV_LAYOUT,
+  order: [...DEFAULT_NAV_LAYOUT.order, ...PRODUCT_IDS.filter((id) => !DEFAULT_NAV_LAYOUT.order.includes(id))],
+  hidden: [...DEFAULT_NAV_LAYOUT.hidden, ...PRODUCT_IDS.filter((id) => !DEFAULT_NAV_LAYOUT.order.includes(id))],
+}
 const storage = (key: string) => {
   try {
     return localStorage.getItem(key)
@@ -1115,18 +1125,44 @@ const storage = (key: string) => {
     return null
   }
 }
+const persistLayout = (layout: NavLayout) => {
+  try {
+    localStorage.setItem(NAV_LAYOUT_KEY, JSON.stringify(layout))
+  } catch {}
+}
+/**
+ * What the person saved: their layout, or — once — the pins and file-tree choice they saved before
+ * #191509, carried over and written as a layout. Nothing saved stays nothing saved: a person who
+ * never chose follows the shipped default.
+ */
+function savedNavLayout(): NavLayout | null {
+  const saved = parseNavLayout(storage(NAV_LAYOUT_KEY))
+  if (saved) return saved
+  const legacy = legacyNavLayout(storage(LEGACY_PINS_KEY), storage(LEGACY_FILES_KEY), NAV_DEFAULT)
+  if (legacy) persistLayout(mergeNavLayout(NAV_DEFAULT, legacy))
+  return legacy
+}
+const initialSaved = savedNavLayout()
+const [navLayoutSig, setNavLayoutSig] = createSignal<NavLayout>(mergeNavLayout(NAV_DEFAULT, initialSaved))
+/** The products the person themselves chose to show — the default set is not a choice (#189766). */
+const chosenPins = (saved: NavLayout | null) =>
+  saved ? JSON.stringify(visibleNavItems(mergeNavLayout(NAV_DEFAULT, saved)).filter((id) => PRODUCT_IDS.includes(id))) : null
+const [pinsRawSig, setPinsRawSig] = createSignal<string | null>(chosenPins(initialSaved))
+/** The layout the strip draws, for the strip and the agent-facing panel state alike. */
+export const irisNavLayout = navLayoutSig
+const irisPinnedSig = () =>
+  visibleNavItems(navLayoutSig()).filter((id): id is SurfaceId => PRODUCT_IDS.includes(id))
 
 /**
  * SHARED with the side panel's tab strip (#186509 nav): each pinned product is a top-level tab
  * there, and the separate "IRIS" tab is gone. Module-level so the strip can read them before (and
  * without) this component mounting; the component keeps them current.
  */
-const [irisPinnedSig, setIrisPinnedSig] = createSignal<SurfaceId[]>(readPinned(storage(PINNED_KEY)))
+// Nothing used yet → the layout's first shown product, so a new person opens where the layout starts.
 const [irisSurfaceSig, setIrisSurfaceSig] = createSignal<SurfaceId>(
-  normalizeSurface(openingSurface(normalizeSurface(storage(LAST_SURFACE_KEY)), storage(PINNED_KEY))),
+  normalizeSurface(openingSurface(normalizeSurface(storage(LAST_SURFACE_KEY) ?? irisPinnedSig()[0]), pinsRawSig())),
 )
 /** Whether the person pinned Atlas themselves — the side panel then opens on IRIS (#189766). */
-const [pinsRawSig, setPinsRawSig] = createSignal<string | null>(storage(PINNED_KEY))
 export const irisOpensOnAtlas = () => pinnedByChoice(pinsRawSig(), "atlas")
 export const irisPinned = irisPinnedSig
 export const irisActiveSurface = irisSurfaceSig
@@ -1148,30 +1184,29 @@ export function irisStripTabs(): { id: SurfaceId; label: string; pinned: boolean
     pinned: irisPinnedSig().includes(id),
   }))
 }
+/** Show or hide one layout item and save the result — the person's choice from then on. */
+function setNavItem(id: string, visible: boolean) {
+  const next = setNavItemVisible(navLayoutSig(), id, visible)
+  setNavLayoutSig(next)
+  setPinsRawSig(chosenPins(next))
+  persistLayout(next)
+}
 /** Pin or unpin a product. Never leaves the strip empty. Returns whether it is now pinned. */
 export function toggleIrisPin(id: string): boolean {
   const sid = normalizeSurface(id)
   const cur = irisPinnedSig()
-  const next = cur.includes(sid) ? cur.filter((x) => x !== sid) : [...cur, sid]
-  if (!next.length) return true
-  setIrisPinnedSig(next)
-  setPinsRawSig(JSON.stringify(next))
-  try {
-    localStorage.setItem(PINNED_KEY, JSON.stringify(next))
-  } catch {}
-  return next.includes(sid)
+  const pin = !cur.includes(sid)
+  if (!pin && cur.length === 1) return true
+  setNavItem(sid, pin)
+  return pin
 }
 
-/** The file-tree tab's pin (#187129) — see filesTabPinned for who starts with it. */
-const [filesPinRaw, setFilesPinRaw] = createSignal<string | null>(storage(FILES_PIN_KEY))
-export const irisFilesPinned = (isGitProject: boolean) => filesTabPinned(filesPinRaw(), isGitProject)
+/** The file-tree tab is an item in the same layout (#187129, #191509). */
+export const irisFilesPinned = () => isNavItemVisible(navLayoutSig(), FILES_ITEM)
 /** Pin or unpin the file tree. Returns whether it is now pinned. */
-export function toggleIrisFilesPin(isGitProject: boolean): boolean {
-  const next = !irisFilesPinned(isGitProject)
-  setFilesPinRaw(next ? "1" : "0")
-  try {
-    localStorage.setItem(FILES_PIN_KEY, next ? "1" : "0")
-  } catch {}
+export function toggleIrisFilesPin(): boolean {
+  const next = !irisFilesPinned()
+  setNavItem(FILES_ITEM, next)
   return next
 }
 

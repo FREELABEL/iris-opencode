@@ -54,25 +54,9 @@ export function panelScope(surface: string, pane: string): "project" | "session"
 }
 
 /**
- * THE FILE TREE IS A PIN TOO (#187129). The Review/file-tree tab sat first in the strip for
- * everyone, with no way to remove it — in front of the products a non-technical person came for.
- * It now obeys the same rule as the products: shown when pinned, reachable from "+" when not.
- *
- * Nothing stored is the case that decides who loses what. The tab's default was already "Review
- * first" in a git project and nothing useful elsewhere (`reviewFirst`, helpers.ts), so a git
- * project keeps it — that is where a developer uses it daily — and anything else starts without
- * it. Once someone pins or unpins, that choice is stored and wins everywhere.
- *
- * What stays in the strip no matter what is a short, deliberate list: the "+" menu, because it is
- * the only way back to anything unpinned. Everything else is a pin.
+ * THE FILE TREE IS A PIN TOO (#187129): shown when pinned, reachable from "+" when not. Its
+ * visibility now lives in the panel's layout with the products' (#191509, iris-nav-layout.ts).
  */
-export const FILES_PIN_KEY = "iris.panel.files"
-
-export function filesTabPinned(raw: string | null, isGitProject: boolean): boolean {
-  if (raw === "1") return true
-  if (raw === "0") return false
-  return isGitProject
-}
 
 /**
  * The scope chip's words (#187130, option C). The row it replaces NAMED the project — that is how

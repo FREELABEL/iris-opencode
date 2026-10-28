@@ -133,9 +133,8 @@ export function SessionSidePanel(props: {
   const open = createMemo(() => reviewOpen() || fileOpen())
   const fileTreeWidth = createMemo(() => Math.max(FILE_TREE_WIDTH_MIN, layout.fileTree.width()))
   const reviewTab = createMemo(() => isDesktop())
-  /** The file tree is a pin like the products (#187129); unpinned, it is not in the strip. */
-  const isGitProject = () => props.reviewFirst?.() ?? true
-  const filesPinned = createMemo(() => irisFilesPinned(isGitProject()))
+  /** The file tree is an item in the panel's layout like the products (#187129, #191509). */
+  const filesPinned = createMemo(() => irisFilesPinned())
   const panelWidth = createMemo(() => {
     if (!open()) return "0px"
     if (reviewOpen()) return "auto"
@@ -244,7 +243,7 @@ export function SessionSidePanel(props: {
       {/* The file tree is pinned here like any product (#187129). Pinning it also opens it. */}
       <MenuV2.Item
         onSelect={() => {
-          if (!toggleIrisFilesPin(isGitProject())) return
+          if (!toggleIrisFilesPin()) return
           openReviewPanel()
           tabs().setActive("review")
         }}
