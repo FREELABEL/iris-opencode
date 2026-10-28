@@ -152,3 +152,106 @@ export function withoutLedgerDuplicates(items: any[], existing: any[], windowMs 
   })
   return { keep, dropped: items.length - keep.length }
 }
+
+/**
+ * Every message in ONE account's Sent mailboxes for the last N days — what `iris mail audit --sent`
+ * holds against the ledger (#191605). The spool only knows about sends that went through `iris mail
+ * send`; a raw `osascript` send (2026-10-28, the Vanguard reply-all) never touched it, so the audit
+ * said "clean". Sent Mail is the one record every send leaves, however it was made.
+ *
+ * Same discipline as the thread reader: one named account, the mailbox objects from its own listing,
+ * date-bounded, count before any bulk fetch, inputs as argv. argv: [days, account, "body"?].
+ */
+export const MAIL_SENT_READER_JXA = String.raw`function run(argv) {
+  const days = Number(argv[0] || 2)
+  const acctName = String(argv[1] || "")
+  const withBody = argv[2] === "body"
+  if (!acctName) throw new Error("usage: <days> <account> [body]")
+  const Mail = Application("Mail")
+  const cutoff = new Date(Date.now() - days * 864e5)
+  const acct = Mail.accounts.byName(acctName)
+  const items = []
+  const seen = {}
+  for (const mb of acct.mailboxes()) {
+    const name = mb.name()
+    if (!/(^|\/)sent( mail| messages)?$/i.test(name)) continue
+    const msgs = mb.messages.whose({ dateReceived: { ">": cutoff } })
+    if (msgs.length === 0) continue
+    const ids = msgs.messageId()
+    const subj = msgs.subject()
+    const ds = msgs.dateSent()
+    const dr = msgs.dateReceived()
+    const to = msgs.toRecipients.address()
+    const cc = msgs.ccRecipients.address()
+    const bcc = msgs.bccRecipients.address()
+    for (let i = 0; i < ids.length; i++) {
+      if (!ids[i] || seen[ids[i]]) continue
+      seen[ids[i]] = 1
+      const item = {
+        external_message_id: "rfc822_" + ids[i],
+        direction: "outbound",
+        subject: subj[i],
+        sent_at: (ds[i] || dr[i]).toISOString(),
+        to: to[i] || [],
+        cc: cc[i] || [],
+        bcc: bcc[i] || [],
+        mailbox: name,
+      }
+      if (withBody) {
+        try { item.body = String(msgs[i].content()).slice(0, 20000) } catch (e) { item.body = "" }
+      }
+      items.push(item)
+    }
+  }
+  return JSON.stringify({ account: acctName, days, count: items.length, items })
+}
+`
+
+export function readSentMail(account: string, days: number, withBody: boolean, timeoutMs = 120000): Promise<MailThreadRead> {
+  return new Promise((resolve) => {
+    const args = ["-l", "JavaScript", "-e", MAIL_SENT_READER_JXA, String(days), account]
+    if (withBody) args.push("body")
+    execFile("osascript", args, { timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) {
+        const msg = String(stderr || err.message).replace(/\s+/g, " ").trim().slice(0, 240)
+        return resolve({ ok: false, reason: `Mail.app Sent read failed for "${account}": ${msg}` })
+      }
+      try {
+        const d = JSON.parse(String(stdout))
+        resolve({ ok: true, items: d.items ?? [], scanned: {} })
+      } catch {
+        resolve({ ok: false, reason: `Mail.app returned unreadable output: ${String(stdout).slice(0, 120)}` })
+      }
+    })
+  })
+}
+
+export interface SentItem {
+  external_message_id?: string
+  subject: string
+  sent_at: string
+  to: string[]
+  cc: string[]
+  bcc: string[]
+  body?: string
+}
+
+/**
+ * Which sent messages are missing from which leads' records. A message to nobody's lead is not the
+ * ledger's business and is skipped; a message to three leads that only two have is reported for the
+ * third. Pure: the lead lookup and each lead's ledger rows are given.
+ */
+export function unloggedSent(
+  sent: SentItem[],
+  leadOf: (address: string) => number | null | undefined,
+  ledgerOf: (leadId: number) => any[],
+): Array<{ item: SentItem; missing: number[]; logged: number[] }> {
+  const out: Array<{ item: SentItem; missing: number[]; logged: number[] }> = []
+  for (const item of sent) {
+    const leads = [...new Set([...item.to, ...item.cc, ...item.bcc].map((a) => leadOf(String(a).trim().toLowerCase())).filter((x): x is number => typeof x === "number"))]
+    const row = [{ direction: "outbound", subject: item.subject, sent_at: item.sent_at }]
+    const missing = leads.filter((id) => withoutLedgerDuplicates(row, ledgerOf(id)).keep.length > 0)
+    if (missing.length) out.push({ item, missing, logged: leads.filter((id) => !missing.includes(id)) })
+  }
+  return out
+}
