@@ -155,6 +155,10 @@ echo $! > "${home}/stub.pid"
 `,
   )
   chmodSync(ctl, 0o755)
+  // Not under systemd unless a test says so — never inherit this machine's own session cgroup.
+  writeFileSync(join(home, "cgroup"), "0::/user.slice/user-1000.slice/session-2.scope\n")
+  process.env.IRIS_PROC_CGROUP = join(home, "cgroup")
+  delete process.env.INVOCATION_ID
   process.env.IRIS_DAEMONCTL = ctl
   process.env.IRIS_DAEMON_HEALTH_URL = `http://127.0.0.1:${healthPort}/health`
   process.env.IRIS_DAEMON_API_BASE = `http://127.0.0.1:${server.port}`
@@ -348,4 +352,80 @@ describe("iris daemon update — against a fake home", () => {
     // the delayed helper from run() would find no pending file
     expect(existsSync(join(p.stateDir, "pending.json"))).toBe(false)
   }, 60000)
+
+  describe("under systemd: the helper must outlive the service's cgroup", () => {
+    // Fakes on PATH for systemd-run and sudo, so the real ones never run. Each logs its argv, then
+    // (when it "works") strips its own options and execs the command it was given.
+    function fakes(o: { userScope: boolean; sudoScope: boolean }) {
+      const bin = join(home, "bin")
+      mkdirSync(bin, { recursive: true })
+      const strip = `while [ $# -gt 0 ] && [ "\${1#--}" != "$1" ] || [ "$1" = "-n" ]; do shift; done`
+      writeFileSync(
+        join(bin, "systemd-run"),
+        `#!/usr/bin/env bash\necho "systemd-run $*" >> "${home}/launch.log"\ncase " $* " in *" --user "*) ${o.userScope ? ":" : "exit 1"} ;; *) ${o.sudoScope ? ":" : "exit 1"} ;; esac\n${strip}\nexec "$@"\n`,
+      )
+      writeFileSync(join(bin, "sudo"), `#!/usr/bin/env bash\necho "sudo $*" >> "${home}/launch.log"\n${o.sudoScope ? "" : "exit 1\n"}${strip}\nexec "$@"\n`)
+      chmodSync(join(bin, "systemd-run"), 0o755)
+      chmodSync(join(bin, "sudo"), 0o755)
+      process.env.PATH = `${bin}:${process.env.PATH}`
+      writeFileSync(join(home, "cgroup"), "0::/system.slice/iris-daemon.service\n")
+      const runner = join(home, "runner.ts")
+      writeFileSync(
+        runner,
+        `import { finishUpdate } from ${JSON.stringify(join(import.meta.dir, "daemon-update.ts"))}\nconst a = process.argv.slice(2)\nawait finishUpdate(a[a.indexOf("--finish") + 1], console.log, Number(a[a.indexOf("--finish-delay") + 1]))\n`,
+      )
+      process.env.IRIS_SELF_CMD = JSON.stringify([process.execPath, runner])
+      return bin
+    }
+    const savedPath = process.env.PATH
+    afterEach(() => {
+      process.env.PATH = savedPath
+      delete process.env.IRIS_SELF_CMD
+    })
+    const lastStatus = () => {
+      try {
+        return JSON.parse(readFileSync(join(p.stateDir, "last.json"), "utf8")).status
+      } catch {
+        return null
+      }
+    }
+    async function until(status: string) {
+      const deadline = Date.now() + 30000
+      while (Date.now() < deadline && lastStatus() !== status) await Bun.sleep(250)
+      return lastStatus()
+    }
+
+    test("inside iris-daemon.service the update detaches by itself and the helper is launched through systemd-run --user --scope", async () => {
+      fakeHome()
+      fakes({ userScope: true, sudoScope: false })
+      const r = await run({ restartDelaySec: 1 }) // no --detach-restart: the cgroup alone forces it
+      expect(r.status).toBe("restart-scheduled")
+      expect(await until("updated")).toBe("updated")
+      const launched = readFileSync(join(home, "launch.log"), "utf8")
+      expect(launched).toMatch(/systemd-run --user --scope --collect --quiet --unit=iris-daemon-update-\d+ .*daemon update --finish/)
+      expect(launched).not.toContain("sudo")
+      expect(await health()).toBe(NEW)
+    }, 60000)
+
+    test("no user manager: falls back to sudo -n systemd-run --scope as this uid", async () => {
+      fakeHome()
+      fakes({ userScope: false, sudoScope: true })
+      const r = await run({ restartDelaySec: 1, detachRestart: true })
+      expect(r.status).toBe("restart-scheduled")
+      expect(await until("updated")).toBe("updated")
+      expect(readFileSync(join(home, "launch.log"), "utf8")).toMatch(new RegExp(`sudo -n --preserve-env systemd-run --scope --collect --quiet --unit=iris-daemon-update-\\d+ --uid=${process.getuid!()} .*--finish`))
+    }, 60000)
+
+    test("no scope possible: REFUSED before anything is downloaded, swapped or restarted", async () => {
+      fakeHome()
+      fakes({ userScope: false, sudoScope: false })
+      const r = await run({ restartDelaySec: 1, detachRestart: true })
+      expect(r.status).toBe("refused")
+      expect(r.detail).toContain("nothing to verify or roll back")
+      expect(existsSync(p.next) || existsSync(p.prev)).toBe(false)
+      expect(readManifest(p.bridge)?.commit).toBe(OLD)
+      expect(ctlCalls()).toEqual([])
+      expect(lastStatus()).toBe("refused")
+    }, 60000)
+  })
 })

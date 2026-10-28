@@ -618,7 +618,7 @@ export type UpdateOptions = {
 
 export type UpdateResult = {
   ok: boolean
-  status: "dry-run" | "up-to-date" | "blocked" | "preflight-failed" | "updated" | "rolled-back" | "rollback-failed" | "restart-scheduled" | "error"
+  status: "dry-run" | "up-to-date" | "blocked" | "preflight-failed" | "updated" | "rolled-back" | "rollback-failed" | "restart-scheduled" | "error" | "refused"
   from: string | null
   to: string | null
   detail?: string
@@ -634,11 +634,11 @@ type Pending = {
   created_at: string
 }
 
-function writeResult(p: UpdatePaths, r: UpdateResult): void {
+function writeResult(p: UpdatePaths, r: UpdateResult | Record<string, unknown>, extra: Record<string, unknown> = {}): void {
   try {
     mkdirSync(p.stateDir, { recursive: true })
-    const { plan, ...rest } = r
-    writeFileSync(join(p.stateDir, "last.json"), JSON.stringify({ ...rest, at: new Date().toISOString() }, null, 2))
+    const { plan, ...rest } = r as any
+    writeFileSync(join(p.stateDir, "last.json"), JSON.stringify({ ...rest, ...extra, pid: process.pid, at: new Date().toISOString() }, null, 2))
   } catch {}
 }
 
@@ -649,6 +649,20 @@ export async function runUpdate(o: UpdateOptions): Promise<UpdateResult> {
 
   const current = detectLocalState(p.bridge)
   if (current.kind === "absent") return { ok: false, status: "error", from: null, to: null, detail: `no daemon installed at ${p.bridge} — use: iris node install` }
+
+  // An update started from INSIDE the daemon's own service (a Hive task) must detach, whatever
+  // the flag says: an inline restart would kill this very process mid-swap.
+  const detach = Boolean(o.detachRestart) || insideDaemonService(readCgroup())
+  let launch: LaunchPlan | null = null
+  if (detach && !o.dryRun) {
+    launch = launchPlanHere(`iris-daemon-update-${Date.now()}`)
+    log(`  restart helper: ${launch.kind} — ${launch.reason}`)
+    if (launch.kind === "refuse") {
+      const r: UpdateResult = { ok: false, status: "refused", from: current.commit, to: null, detail: launch.reason }
+      writeResult(p, r)
+      return r
+    }
+  }
 
   const target = await resolveRef(o.ref, o.fetcher)
   log(`  resolved ${o.ref} → ${target}`)
@@ -713,13 +727,16 @@ export async function runUpdate(o: UpdateOptions): Promise<UpdateResult> {
     const pendingFile = join(p.stateDir, "pending.json")
     writeFileSync(pendingFile, JSON.stringify(pending, null, 2))
 
-    if (o.detachRestart) {
+    if (detach && launch) {
       // INSIDE A HIVE TASK the task is a child of the daemon this restarts. Restarting inline
       // would kill the task mid-update. So: hand the swap+restart+verify to a process in its own
       // session, started after a delay long enough for this task to report back.
-      scheduleFinish(pendingFile, o.restartDelaySec ?? 10, p)
-      const r: UpdateResult = { ok: true, status: "restart-scheduled", from: current.commit, to: target, detail: `swap + restart in ${o.restartDelaySec ?? 10}s; outcome → ${join(p.stateDir, "last.json")}`, plan }
-      writeResult(p, r)
+      const delay = o.restartDelaySec ?? 10
+      // Written BEFORE the helper starts, with a deadline: if the helper never writes again, the
+      // record itself says it died rather than looking like a pending success.
+      const r: UpdateResult = { ok: true, status: "restart-scheduled", from: current.commit, to: target, detail: `swap + restart in ${delay}s via ${launch.kind}; outcome → ${join(p.stateDir, "last.json")}`, plan }
+      writeResult(p, r, { deadline_s: delay + 60, launch: launch.kind })
+      scheduleFinish(pendingFile, delay, p, launch)
       return r
     }
     const fin = await finishUpdate(pendingFile, log)
@@ -737,18 +754,135 @@ export function selfCommand(): string[] {
   return [process.execPath]
 }
 
-function scheduleFinish(pendingFile: string, delaySec: number, p: UpdatePaths): void {
+// ─── Where the detached helper runs (it must OUTLIVE the daemon's restart) ─────────────────
+//
+// setsid() is enough under launchd and nohup: the helper leaves the daemon's process group.
+// It is NOT enough under systemd. iris-hive-001 runs the daemon as a system unit
+// (/etc/systemd/system/iris-daemon.service, default KillMode=control-group), and #191615 adds a
+// --user unit: `restart` kills every process in the service's CGROUP, setsid'd or not. The helper
+// would die between the swap and the health check, and a broken new version would stay with no
+// rollback — the outcome this command exists to prevent. So under systemd the helper is started
+// in its own transient scope, outside the service's cgroup; and if no scope can be made, the
+// update is REFUSED before anything is touched.
+
+export type LaunchPlan =
+  | { kind: "setsid"; prefix: string[]; reason: string }
+  | { kind: "systemd-user-scope" | "systemd-sudo-scope"; prefix: string[]; reason: string }
+  | { kind: "refuse"; prefix: []; reason: string }
+
+/** The cgroup segments that say "this process belongs to a systemd service". */
+export function systemdServiceOf(cgroup: string): string | null {
+  for (const line of cgroup.split("\n")) {
+    const path = line.split(":").slice(2).join(":")
+    const segs = path.split("/").filter(Boolean)
+    // user@1000.service is the user MANAGER, not a unit we would be killed with; anything below it is.
+    const svc = [...segs].reverse().find((x) => x.endsWith(".service") && !/^user@\d+\.service$/.test(x))
+    if (svc) return svc
+  }
+  return null
+}
+
+/** Is this process running inside the daemon's own systemd service (i.e. a task of that daemon)? */
+export function insideDaemonService(cgroup: string): boolean {
+  return /(^|\/)iris-daemon[^/]*\.service(\/|$)/m.test(cgroup)
+}
+
+export function decideLaunch(e: {
+  platform: string
+  cgroup: string
+  invocationId?: string
+  unit: string
+  uid: number
+  gid: number
+  userScopeWorks: () => boolean
+  sudoScopeWorks: () => boolean
+}): LaunchPlan {
+  if (e.platform !== "linux") return { kind: "setsid", prefix: [], reason: `${e.platform}: a setsid'd process leaves the daemon's process group` }
+  const svc = systemdServiceOf(e.cgroup)
+  if (!svc && !e.invocationId) return { kind: "setsid", prefix: [], reason: "not under systemd: setsid is enough (nohup daemon)" }
+  const why = svc ? `running inside ${svc}` : "INVOCATION_ID is set (systemd)"
+  if (e.userScopeWorks())
+    return { kind: "systemd-user-scope", prefix: ["systemd-run", "--user", "--scope", "--collect", "--quiet", `--unit=${e.unit}`], reason: `${why}: helper runs in its own user scope, outside the service's cgroup` }
+  if (e.sudoScopeWorks())
+    return {
+      kind: "systemd-sudo-scope",
+      prefix: ["sudo", "-n", "--preserve-env", "systemd-run", "--scope", "--collect", "--quiet", `--unit=${e.unit}`, `--uid=${e.uid}`, `--gid=${e.gid}`],
+      reason: `${why}: no user manager; helper runs in a system scope (sudo -n) as uid ${e.uid}`,
+    }
+  return {
+    kind: "refuse",
+    prefix: [],
+    reason:
+      `${why}, and no transient scope can be created (systemd-run --user --scope failed — no user manager / linger? — and sudo -n systemd-run --scope is not allowed). ` +
+      "A restart would kill the update helper with the service, leaving nothing to verify or roll back. Fix: loginctl enable-linger $USER, or run the update from a shell on the node.",
+  }
+}
+
+/** Environment the helper needs to reach the user manager from inside a system service. */
+function scopeEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env }
+  const uid = typeof process.getuid === "function" ? process.getuid() : 0
+  if (!env.XDG_RUNTIME_DIR && existsSync(`/run/user/${uid}`)) env.XDG_RUNTIME_DIR = `/run/user/${uid}`
+  return env
+}
+
+function probe(argv: string[]): boolean {
+  const r = spawnSync(argv[0], argv.slice(1), { env: scopeEnv(), stdio: "pipe", timeout: 15000 })
+  return r.status === 0
+}
+
+export function launchPlanHere(unit: string): LaunchPlan {
+  let cgroup = ""
+  try {
+    cgroup = readFileSync(process.env.IRIS_PROC_CGROUP || "/proc/self/cgroup", "utf8")
+  } catch {}
+  const uid = typeof process.getuid === "function" ? process.getuid() : 0
+  const gid = typeof process.getgid === "function" ? process.getgid() : 0
+  return decideLaunch({
+    platform: process.env.IRIS_PLATFORM_OVERRIDE || process.platform,
+    cgroup,
+    invocationId: process.env.INVOCATION_ID,
+    unit,
+    uid,
+    gid,
+    userScopeWorks: () => probe(["systemd-run", "--user", "--scope", "--collect", "--quiet", "true"]),
+    sudoScopeWorks: () => probe(["sudo", "-n", "systemd-run", "--scope", "--collect", "--quiet", `--uid=${uid}`, "true"]),
+  })
+}
+
+function readCgroup(): string {
+  try {
+    return readFileSync(process.env.IRIS_PROC_CGROUP || "/proc/self/cgroup", "utf8")
+  } catch {
+    return ""
+  }
+}
+
+/**
+ * What last.json says, in words — so "rolled back" and "the helper died" read differently. A
+ * non-final phase older than its deadline means the helper stopped writing: it died.
+ */
+export function describeLast(last: any, nowMs: number): { final: boolean; text: string } {
+  if (!last || typeof last !== "object" || !last.status) return { final: false, text: "no outcome recorded (the update never got as far as scheduling a restart)" }
+  const FINAL = new Set(["updated", "rolled-back", "rollback-failed", "blocked", "preflight-failed", "up-to-date", "error", "refused"])
+  if (FINAL.has(last.status)) return { final: true, text: `${last.status}${last.detail ? ` — ${last.detail}` : ""}` }
+  const age = Math.round((nowMs - Date.parse(last.at ?? "")) / 1000)
+  const deadline = Number(last.deadline_s ?? 0)
+  if (deadline && age > deadline)
+    return { final: true, text: `HELPER DIED during "${last.status}" (${age}s ago, deadline ${deadline}s) — nothing verified the new code; check the node by hand: iris daemon status` }
+  return { final: false, text: `in progress: ${last.status} (${age}s ago)` }
+}
+
+function scheduleFinish(pendingFile: string, delaySec: number, p: UpdatePaths, plan: LaunchPlan): void {
   const [cmd, ...pre] = selfCommand()
   mkdirSync(p.stateDir, { recursive: true })
   const logFile = join(p.stateDir, "finish.log")
   const out = openSync(logFile, "a")
   // detached → setsid(): the helper leaves the daemon's process group, so launchd's kickstart -k
   // and daemonctl's stop do not take it down with the daemon.
-  const child = spawn(cmd, [...pre, "daemon", "update", "--finish", pendingFile, "--finish-delay", String(delaySec)], {
-    detached: true,
-    stdio: ["ignore", out, out],
-    env: process.env,
-  })
+  const argv = [...plan.prefix, cmd, ...pre, "daemon", "update", "--finish", pendingFile, "--finish-delay", String(delaySec)]
+  // detached (setsid) in every case: the task that starts this must be able to return at once.
+  const child = spawn(argv[0], argv.slice(1), { detached: true, stdio: ["ignore", out, out], env: scopeEnv() })
   child.unref()
 }
 
@@ -767,6 +901,12 @@ export async function finishUpdate(pendingFile: string, log: (s: string) => void
     rmSync(pendingFile, { force: true })
     return r
   }
+  // Progress, each with a deadline: a helper killed mid-way leaves a phase that ages past it, and
+  // describeLast() then says "helper died" — never mistaken for a rollback or a success.
+  const phase = (status: string, deadline_s: number) =>
+    writeResult(p, { ok: false, status, from: pending.previous, to: pending.target }, { deadline_s })
+  const H = pending.healthTimeoutSec
+  phase("helper-started", 60)
 
   // The install may have changed since phase 1 (a person editing, another update). Re-check.
   const now = detectLocalState(p.bridge)
@@ -782,9 +922,11 @@ export async function finishUpdate(pendingFile: string, log: (s: string) => void
   copyInto(p.bridge, next, carry)
   log(`  carried over ${carry.length} runtime file(s)`)
 
+  phase("swapping", 60)
   swapIn(p)
   log(`  swapped: bridge → bridge.prev, bridge.next → bridge`)
 
+  phase("restarting-new", 120 + H + 30)
   const rs = restartDaemon(p.bridge)
   log(`  daemonctl restart → ${rs.ok ? "exit 0" : "non-zero"}${rs.out ? `: ${rs.out.split("\n").slice(-2).join(" / ")}` : ""}`)
   const obs = await waitHealth((o) => updateSucceeded(o, pending.target), pending.healthTimeoutSec * 1000)
@@ -795,6 +937,7 @@ export async function finishUpdate(pendingFile: string, log: (s: string) => void
 
   const saw = obs.answered ? `it reported ${obs.commit ? short(obs.commit) : "no commit"}` : "it never answered /health"
   log(`  ✗ new code is not running after ${pending.healthTimeoutSec}s (${saw}) — rolling back`)
+  phase("rolling-back", 120 + H + 30)
   swapBack(p)
   const rs2 = restartDaemon(p.bridge)
   log(`  daemonctl restart (rollback) → ${rs2.ok ? "exit 0" : "non-zero"}`)

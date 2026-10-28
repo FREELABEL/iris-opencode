@@ -481,6 +481,17 @@ async function updateRemoteNode(args: Record<string, any>): Promise<number> {
     sha,
     { timeoutMs: Number(args.wait) * 1000, onTick: (seen) => console.log(dim(`  heartbeat: ${seen ? du.short(seen) : "no commit yet"}`)) },
   )
+  // Ask the node what its helper recorded — the only way to tell "rolled back" from "helper died".
+  const lastTask = await dispatchTaskAndWait(
+    userId,
+    buildHiveRunBody({ userId, nodeId: node.id, title: "iris daemon update: outcome", script: "#!/bin/bash\ncat \"$HOME/.iris/daemon-update/last.json\"", timeoutSec: 60 }),
+  ).catch(() => null)
+  let last: any = null
+  try {
+    last = JSON.parse(fromHiveTask(lastTask?.final as any).stdout || "")
+  } catch {}
+  const outcome = du.describeLast(last, Date.now())
+  console.log(`  helper on ${node.name}: ${outcome.text}`)
   if (waited.ok) {
     prompts.log.info(`${success("✓")} ${node.name} runs ${du.short(sha)}`)
     return 0

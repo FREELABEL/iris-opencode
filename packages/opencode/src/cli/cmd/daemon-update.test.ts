@@ -18,6 +18,10 @@ import {
   runtimeMatcher,
   unresolvedRequires,
   updateSucceeded,
+  decideLaunch,
+  describeLast,
+  insideDaemonService,
+  systemdServiceOf,
   type LocalState,
 } from "./daemon-update"
 import { describeNodeCommit, remoteUpdateScript, waitForNodeCommit } from "./daemon-update-fleet"
@@ -237,5 +241,45 @@ describe("fleet", () => {
     t = 0
     const r2 = await waitForNodeCommit(async () => `2.0.0+${A}`, B, { timeoutMs: 50, intervalMs: 10, sleep: async (ms) => void (t += ms), now: () => t })
     expect(r2.ok).toBe(false)
+  })
+})
+
+describe("where the detached restart helper runs", () => {
+  const base = { platform: "linux", cgroup: "0::/user.slice/user-1000.slice/session-2.scope", unit: "iris-daemon-update-1", uid: 1000, gid: 1000, userScopeWorks: () => true, sudoScopeWorks: () => true }
+  test("macOS (launchd) and plain Linux (nohup): setsid", () => {
+    expect(decideLaunch({ ...base, platform: "darwin", cgroup: "" }).kind).toBe("setsid")
+    expect(decideLaunch(base).kind).toBe("setsid")
+  })
+  test("system unit (iris-hive-001): its own user scope, outside the service's cgroup", () => {
+    const l = decideLaunch({ ...base, cgroup: "0::/system.slice/iris-daemon.service\n" })
+    expect(l.kind).toBe("systemd-user-scope")
+    expect(l.prefix).toEqual(["systemd-run", "--user", "--scope", "--collect", "--quiet", "--unit=iris-daemon-update-1"])
+  })
+  test("a --user unit (#191615) counts; the user manager alone does not", () => {
+    expect(systemdServiceOf("0::/user.slice/user-1000.slice/user@1000.service/app.slice/iris-daemon.service")).toBe("iris-daemon.service")
+    expect(systemdServiceOf("0::/user.slice/user-1000.slice/user@1000.service/init.scope")).toBeNull()
+    expect(decideLaunch({ ...base, invocationId: "abc" }).kind).toBe("systemd-user-scope")
+  })
+  test("no user manager → sudo -n system scope as this uid; neither → refuse", () => {
+    const svc = { ...base, cgroup: "0::/system.slice/iris-daemon.service", userScopeWorks: () => false }
+    const s = decideLaunch(svc)
+    expect(s.kind).toBe("systemd-sudo-scope")
+    expect(s.prefix).toContain("--uid=1000")
+    expect(s.prefix.slice(0, 2)).toEqual(["sudo", "-n"])
+    const r = decideLaunch({ ...svc, sudoScopeWorks: () => false })
+    expect(r.kind).toBe("refuse")
+    expect(r.reason).toContain("roll back")
+  })
+  test("inside the daemon's own service is recognised (system or user unit), a login session is not", () => {
+    expect(insideDaemonService("0::/system.slice/iris-daemon.service")).toBe(true)
+    expect(insideDaemonService("0::/user.slice/user-1000.slice/user@1000.service/app.slice/iris-daemon.service")).toBe(true)
+    expect(insideDaemonService("0::/user.slice/user-1000.slice/session-2.scope")).toBe(false)
+  })
+  test("last.json tells rolled-back from helper-died", () => {
+    const now = Date.parse("2026-10-28T12:00:00Z")
+    expect(describeLast({ status: "rolled-back", detail: "x" }, now)).toEqual({ final: true, text: "rolled-back — x" })
+    expect(describeLast({ status: "restarting-new", at: "2026-10-28T11:50:00Z", deadline_s: 330 }, now).text).toContain("HELPER DIED during \"restarting-new\"")
+    expect(describeLast({ status: "restart-scheduled", at: "2026-10-28T11:59:50Z", deadline_s: 70 }, now).final).toBe(false)
+    expect(describeLast(null, now).final).toBe(false)
   })
 })
