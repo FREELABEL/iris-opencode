@@ -345,6 +345,9 @@ function SessionRouteFrame(props: ParentProps<{ padded?: boolean }>) {
 function SessionPanelFrame(props: ParentProps<{ newLayout: boolean; raised?: boolean }>) {
   return (
     <div
+      // One chat's own panel (timeline + composer): what its docks search within, so a card in
+      // split view measures and focuses its own column, not the first one (#191780).
+      data-component="session-panel"
       classList={{
         "flex-1 min-h-0 flex flex-col": true,
         "bg-v2-background-bg-base": props.newLayout,
