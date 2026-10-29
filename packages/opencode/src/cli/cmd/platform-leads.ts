@@ -61,6 +61,7 @@ import {
   type CrmMatch,
 } from "./lead-mentions"
 import { firstArray } from "../../util/array"
+import { LeadsTagCommand, LeadsUntagCommand } from "./leads-tag"
 import { ENRICH_DESCRIBE, enrichMany, enrichOne, formatOutcome, type EnrichFetch } from "./leads-enrich"
 import {
   groupChannelBlindness,
@@ -11573,6 +11574,8 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsStatsCommand)
       .command(LeadsQuotaCommand)
       .command(LeadsAnalyzeCommand)
+      .command(LeadsTagCommand)
+      .command(LeadsUntagCommand)
       .demandCommand(),
   async handler() {},
 })
