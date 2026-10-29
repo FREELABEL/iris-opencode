@@ -33,6 +33,7 @@ import { NamedError } from "@opencode-ai/core/util/error"
 import { SessionProcessor } from "./processor"
 import { Tool } from "@/tool/tool"
 import { Permission } from "@/permission"
+import { Question } from "@/question"
 import { SessionStatus } from "./status"
 import { LLM } from "./llm"
 import { Shell } from "@opencode-ai/core/shell"
@@ -127,6 +128,7 @@ const layer = Layer.effect(
     const commands = yield* Command.Service
     const config = yield* Config.Service
     const permission = yield* Permission.Service
+    const question = yield* Question.Service
     const fsys = yield* FSUtil.Service
     const mcp = yield* MCP.Service
     const lsp = yield* LSP.Service
@@ -156,6 +158,12 @@ const layer = Layer.effect(
     const cancel = Effect.fn("SessionPrompt.cancel")(function* (sessionID: SessionID) {
       yield* Effect.logInfo("cancel", { "session.id": sessionID })
       yield* state.cancel(sessionID)
+      // #191779: interrupting the run does not reach a permission/question ask parked inside a
+      // tool (tools execute on a detached promise), so reject them explicitly. Subagent sessions
+      // are cleared too: the cascade in state.cancel interrupts their task, whose onInterrupt
+      // calls this cancel for the child session.
+      yield* permission.rejectSession(sessionID)
+      yield* question.rejectSession(sessionID)
     })
 
     const resolvePromptParts = Effect.fn("SessionPrompt.resolvePromptParts")(function* (template: string) {
@@ -1717,6 +1725,7 @@ export const node = LayerNode.make({
     Command.node,
     Config.node,
     Permission.node,
+    Question.node,
     FSUtil.node,
     MCP.node,
     LSP.node,
