@@ -9,6 +9,11 @@ export type SplitActions = {
   splitRight: (sessionId: string) => void
   /** False when the window cannot fit another column. */
   canSplit: Accessor<boolean>
+  /**
+   * The sessions in the columns on screen, empty with one column (#191772). An approval belongs to
+   * the column showing the session that asked; a parent column must not show it too.
+   */
+  columns?: Accessor<readonly string[]>
 }
 
 const Ctx = createContext<SplitActions>()
