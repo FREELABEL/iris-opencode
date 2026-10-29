@@ -2079,7 +2079,7 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
  * ink), and "Fully automatic" is neutral — only "Needs you" is allowed to shout.
  * Numbers are mono. The strip fills left-to-right once, on the panel's first render only.
  */
-.pbf-list, .pbf-filters, .pbf-detail, .pbf-row, .pbf-legend, .pbf-title {
+.pbf-list, .pbf-filters, .pbf-detail, .pbf-row, .pbf-legend, .pbf-title, .pbf-segctl {
   --pbf-surface: #131312;
   --pbf-surface: light-dark(#f6f5f1, #131312);
   --pbf-card: #1b1b19;
@@ -2112,7 +2112,16 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 .pbf-num { font-family: var(--pbf-mono); font-variant-numeric: tabular-nums; }
 
 /* filters + legend */
-.pbf-filters { display: flex; flex-direction: column; gap: 6px; padding: 6px 8px 4px; }
+.pbf-filters { display: flex; flex-direction: column; gap: 6px; padding: 6px 10px 6px; }
+/* one segmented control for how hands-off (#191697) */
+.pbf-segctl { display: inline-flex; align-self: flex-start; padding: 2px; gap: 2px; border-radius: 8px; background: var(--pbf-card); }
+.pbf-segctl button {
+  appearance: none; font: inherit; font-size: 12px; line-height: 1; cursor: pointer;
+  padding: 6px 10px; border-radius: 6px; border: 0; background: none; color: var(--pbf-ink2);
+}
+.pbf-segctl button:hover { color: var(--pbf-ink); }
+.pbf-segctl button[aria-pressed="true"] { background: var(--pbf-surface); color: var(--pbf-ink); box-shadow: 0 0 0 1px var(--pbf-rule); }
+.pbf-segctl button:focus-visible { outline: 2px solid var(--border-interactive-focus, var(--text-interactive-base)); outline-offset: 1px; }
 .pbf-chips { display: flex; flex-wrap: wrap; gap: 5px; }
 .pbf-chip {
   appearance: none; font: inherit; font-size: 12px; line-height: 1; cursor: pointer;
@@ -2158,26 +2167,30 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   font-size: 11px; font-weight: 500; color: var(--pbf-faint);
 }
 .pbf-row {
-  display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 12px; align-items: center;
-  width: 100%; text-align: start; padding: 10px 8px; cursor: pointer;
+  display: flex; align-items: center; gap: 16px;
+  width: 100%; text-align: start; padding: 11px 10px; cursor: pointer;
   border: 0; border-bottom: 1px solid var(--pbf-rule); background: none; color: inherit; font: inherit;
 }
 .pbf-row:last-child { border-bottom: 0; }
 .pbf-row:hover { background: var(--pbf-card); }
-.pbf-row__main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.pbf-row__title { font-size: 13px; font-weight: 600; line-height: 1.3; color: var(--pbf-ink); }
-.pbf-row--theirs .pbf-row__title { color: var(--pbf-ink); }
-.pbf-row__out {
-  font-size: 11.5px; line-height: 1.45; color: var(--pbf-ink2);
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
-}
-.pbf-row__flow { display: flex; flex-direction: column; align-items: stretch; gap: 6px; min-width: 0; }
-.pbf-row__flow .pbf-row__n { align-self: flex-end; }
-.pbf-row__flow .pbf-strip { flex: none; }
+.pbf-row__main { flex: 1 1 auto; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pbf-row__head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.pbf-row__title { font-size: 13px; font-weight: 500; line-height: 1.35; color: var(--pbf-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* scope and installed: an icon each, the words in the tooltip (#191697) */
+.pbf-row__icon { flex: none; display: inline-flex; align-items: center; color: var(--pbf-faint); cursor: help; }
+.pbf-row__icon:hover { color: var(--pbf-ink); }
+.pbf-row__icon[data-state="installed"] { color: var(--pbf-think); }
+.pbf-row__icon[data-state="update"] { color: var(--pbf-you); }
+.pbf-row__out { font-size: 12px; line-height: 1.4; color: var(--pbf-ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pbf-row__side { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 3px; min-width: 96px; }
 .pbf-row__n { flex: none; font-family: var(--pbf-mono); font-variant-numeric: tabular-nums; font-size: 11px; color: var(--pbf-faint); white-space: nowrap; }
-@container (max-width: 460px) {
-  .pbf-row { grid-template-columns: minmax(0, 1fr); gap: 7px; }
-}
+/* the hands-off indicator: three dots and the word, like a legend */
+.pbf-ind { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--pbf-ink2); white-space: nowrap; }
+.pbf-ind--none { color: var(--pbf-faint); font-size: 11px; }
+.pbf-dots { display: inline-flex; gap: 3px; }
+.pbf-dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--pbf-rule); }
+.pbf-ind[data-tone="auto"] .pbf-dots i.on { background: var(--pbf-think); }
+.pbf-ind[data-tone="you"] .pbf-dots i.on { background: var(--pbf-you); }
 .pbf-none { margin: 0; padding: 14px 8px; font-size: 12px; color: var(--pbf-ink2); }
 .pbf-link { appearance: none; border: 0; background: none; padding: 0; font: inherit; color: var(--text-interactive-base); cursor: pointer; }
 .pbf-link:hover { text-decoration: underline; }
