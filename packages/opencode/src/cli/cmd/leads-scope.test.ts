@@ -6,6 +6,8 @@ import {
   emptyListMessage,
   leadDisplayName,
   LIST_SORTS,
+  leadHasReplied,
+  mergeResponders,
   parseListLimit,
   type ListScope,
 } from "./leads-scope"
@@ -254,5 +256,28 @@ describe("buildSegmentFilters — #191692 the bloq scope is in the saved filters
   })
   test("no bloq, no bloq_id key", () => {
     expect("bloq_id" in buildSegmentFilters({ status: "Won" })).toBe(false)
+  })
+})
+
+describe("mergeResponders — #191702 replied means replied, not a status", () => {
+  const a = { id: 10782, status: "Responded", has_replied: true, updated_at: "2026-10-20T00:00:00Z" }
+  const b = { id: 10673, status: "Follow Up", has_replied: 1, updated_at: "2026-10-25T00:00:00Z" }
+  const c = { id: 5671, status: "Qualified", has_replied: false, tags: [{ name: "DM Replied" }], updated_at: "2026-10-22T00:00:00Z" }
+  const never = { id: 1, status: "Responded", has_replied: false, tags: [] }
+
+  test("has_replied OR the DM Replied tag, any status, de-duplicated, newest first", () => {
+    const out = mergeResponders([[a, b], [c, a]], 10)
+    expect(out.map((l) => l.id)).toEqual([10673, 5671, 10782])
+  })
+  test("a status of Responded alone is not a reply, and a server that ignored the filter cannot leak every lead", () => {
+    expect(mergeResponders([[never], [never]], 10)).toEqual([])
+  })
+  test("respects the limit", () => {
+    expect(mergeResponders([[a, b, c]], 1).map((l) => l.id)).toEqual([10673])
+  })
+  test("leadHasReplied reads the flag or the tag", () => {
+    expect(leadHasReplied({ has_replied: "1" })).toBe(true)
+    expect(leadHasReplied({ tags: ["DM Replied"] })).toBe(true)
+    expect(leadHasReplied({ has_replied: 0, tags: [{ name: "Other" }] })).toBe(false)
   })
 })

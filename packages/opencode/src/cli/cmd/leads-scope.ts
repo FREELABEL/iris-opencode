@@ -197,3 +197,32 @@ export function buildSegmentFilters(o: {
   if (o.tag) filters.tags = [String(o.tag)]
   return filters
 }
+
+// ============================================================================
+// `leads replied` — #191702
+// ============================================================================
+
+export const REPLIED_TAG = "DM Replied"
+
+/** True when the lead itself says it replied: has_replied, or the "DM Replied" tag as fallback. */
+export function leadHasReplied(l: Record<string, any>): boolean {
+  if (l.has_replied === true || l.has_replied === 1 || l.has_replied === "1") return true
+  const tags = Array.isArray(l.tags) ? l.tags : []
+  return tags.some((t: any) => (typeof t === "string" ? t : t?.name) === REPLIED_TAG)
+}
+
+/**
+ * #191702 — "leads that replied" is has_replied (fl-api #185 sets it, and the tag, on every
+ * genuine reply), with the "DM Replied" tag as a fallback for leads tagged before that. It is
+ * NOT a status: status moves on after triage (Follow Up, Qualified…), and the help used to
+ * claim "status Responded" while the filter was the tag alone.
+ *
+ * Merges the two server queries, de-duplicates by id, keeps only rows that really replied (a
+ * server that ignored a filter must not turn this into "every lead"), newest reply first.
+ */
+export function mergeResponders(lists: Array<Array<Record<string, any>>>, limit: number): Array<Record<string, any>> {
+  const byId = new Map<unknown, Record<string, any>>()
+  for (const list of lists) for (const l of list) if (l && !byId.has(l.id) && leadHasReplied(l)) byId.set(l.id, l)
+  const t = (l: Record<string, any>) => new Date(l.replied_at ?? l.updated_at ?? 0).getTime() || 0
+  return [...byId.values()].sort((a, b) => t(b) - t(a)).slice(0, limit)
+}

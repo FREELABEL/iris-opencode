@@ -4,8 +4,11 @@ import {
   describeListScope,
   emptyListMessage,
   leadDisplayName,
+  mergeResponders,
   parseListLimit,
+  REPLIED_TAG,
 } from "./leads-scope"
+import { analyzeJson, inPeriod, messagesHeader, messagesInPeriod, type AnalyzePeriod, type SentMessage } from "./leads-analyze"
 import { cmd } from "./cmd"
 import { PulseCheckCommand, PulseSourcesCommand, pulseCheckOptions, runPulseCheck } from "./platform-pulse-check"
 import { readAtlasDiary } from "./pulse-check-sweep"
@@ -467,7 +470,7 @@ const LeadsListCommand = cmd({
 const LeadsRepliedCommand = cmd({
   command: "replied",
   aliases: ["responders", "replies"],
-  describe: "list leads who replied (status Responded) with their last reply — for prioritized sessions",
+  describe: "list leads that replied (has_replied, or the DM Replied tag) with their current status and last reply",
   builder: (yargs) =>
     yargs
       .option("bloq-id", { alias: "bloq", describe: "filter by bloq/project ID", type: "number" })
@@ -487,25 +490,31 @@ const LeadsRepliedCommand = cmd({
     spinner.start("Loading responders…")
 
     try {
-      // Filter by the "DM Replied" tag — the inbox scan reliably applies it to every responder
-      // (status varies: Follow Up / Interested / Qualified after triage, so tag is the true marker).
-      const params = new URLSearchParams({ tag: "DM Replied", per_page: String(Math.max(args.limit * 2, 60)) })
-      if (args["bloq-id"]) params.set("bloq_id", String(args["bloq-id"]))
-
-      const res = await irisFetch(`/api/v1/leads?${params}`)
-      const ok = await handleApiError(res, "List responders")
-      if (!ok) {
-        spinner.stop("Failed", 1)
-        process.exitCode = 1
-        prompts.outro("Done")
-        return
+      // #191702 — "replied" means the lead replied: has_replied (set with the tag on every
+      // genuine reply since fl-api #185), with the "DM Replied" tag as fallback for older
+      // leads. NOT a status — status moves on after triage, so it is shown per row instead.
+      const perPage = String(Math.min(Math.max(args.limit * 2, 60), 1000))
+      const filters: Record<string, string>[] = [{ has_replied: "1" }, { tag: REPLIED_TAG }]
+      const queries = filters.map((q) => {
+        const params = new URLSearchParams({ ...q, per_page: perPage, sort_by: "updated_at", sort_direction: "desc" })
+        if (args["bloq-id"]) params.set("bloq_id", String(args["bloq-id"]))
+        return params
+      })
+      const lists: any[][] = []
+      for (const params of queries) {
+        const res = await irisFetch(`/api/v1/leads?${params}`)
+        const ok = await handleApiError(res, "List responders")
+        if (!ok) {
+          spinner.stop("Failed", 1)
+          process.exitCode = 1
+          prompts.outro("Done")
+          return
+        }
+        const data = (await res.json()) as { data?: any[] }
+        lists.push(firstArray(data?.data))
       }
-
-      const data = (await res.json()) as { data?: any[] }
-      let leads: any[] = firstArray(data?.data)
       const repliedTime = (l: any) => new Date(l.replied_at ?? l.updated_at ?? 0).getTime()
-      leads.sort((a, b) => repliedTime(b) - repliedTime(a)) // newest reply first
-      leads = leads.slice(0, args.limit)
+      const leads = mergeResponders(lists, args.limit) as any[]
       spinner.stop(`${leads.length} responder(s)`)
 
       if (args.json) {
@@ -546,8 +555,9 @@ const LeadsRepliedCommand = cmd({
         const bloqIds = Array.isArray(l.bloq_ids) ? l.bloq_ids : []
         const bloqLabel = bloqIds.length ? `  ${dim(`bloq:${bloqIds.join(",")}`)}` : ""
         const when = repliedTime(l) ? `  ${dim(rel(repliedTime(l)))}` : ""
-        const name = l.name ?? l.email ?? "Unknown"
-        console.log(`  ${dim("#" + l.id)}  ${name}${bloqLabel}${when}`)
+        const name = l.name || l.nickname || l.email || "Unknown"
+        const status = l.status ? `  ${statusColor(String(l.status))}` : ""
+        console.log(`  ${dim("#" + l.id)}  ${name}${status}${bloqLabel}${when}`)
         if (reply) console.log(`        ${dim("“" + reply.replace(/\s+/g, " ").slice(0, 110) + "”")}`)
         console.log()
       }
@@ -11385,16 +11395,91 @@ const LeadsAnalyzeCommand = cmd({
     const period = (args as any).period as string
     const showMessages = (args as any).messages as boolean
     const limit = (args as any).limit as number
+    const json = !!(args as any).json
 
-    printDivider()
-    console.log(bold(`  Outreach Analysis — Board ${boardId} (${period})`))
-    printDivider()
-
-    // 1. Performance metrics
+    // Gather first, render once: the table and --json are two views of ONE report (#191701).
+    // 1. Performance metrics — also carries the period window every section is scoped to.
     const metricsRes = await irisFetch(`/api/v1/outreach/metrics?bloq_id=${boardId}&period=${period}`)
     if (!(await handleApiError(metricsRes, "Outreach metrics"))) return
     const metrics = ((await metricsRes.json()) as any).data || {}
     const s = metrics.summary || {}
+    const window: AnalyzePeriod | undefined = metrics.period
+
+    // 2. Quota progress
+    let quota: { quotas?: any; progress?: any; percent?: any } | null = null
+    const quotaRes = await irisFetch(`/api/v1/outreach/quota?bloq_id=${boardId}`)
+    if (quotaRes.ok) {
+      const qd = (await quotaRes.json()) as any
+      quota = { quotas: qd.quotas || {}, progress: qd.progress || {}, percent: qd.percent || {} }
+    }
+
+    // 3. Messages sent IN THE PERIOD (#191706) — it used to be the last N ever, beside a
+    // period-scoped "DMs Sent". Sample a wider set of recently-outreached leads, keep each
+    // one's in-window DMs, then take the newest `limit`.
+    let messages: SentMessage[] | null = null
+    if (showMessages) {
+      const found: SentMessage[] = []
+      const sample = Math.min(Math.max(limit * 3, 30), 100)
+      const leadsRes = await irisFetch(
+        `/api/v1/leads?bloq_id=${boardId}&outreach_status=contacted&sort_by=updated_at&sort_direction=desc&per_page=${sample}`,
+      )
+      if (leadsRes.ok) {
+        const leadsData = (await leadsRes.json()) as any
+        const leads = leadsData.data?.data || leadsData.data || []
+        for (const lead of Array.isArray(leads) ? leads : []) {
+          const omRes = await irisFetch(`/api/v1/leads/${lead.id}/outreach/messages?direction=outbound`)
+          if (!omRes.ok) continue
+          const omData = (await omRes.json()) as any
+          for (const m of omData.messages || []) {
+            if (m.type !== "instagram_dm" && m.type !== "linkedin_dm") continue
+            const date = String(m.sent_at || m.created_at || "")
+            if (!inPeriod(date, window)) continue
+            found.push({
+              date,
+              channel: m.type === "instagram_dm" ? "IG" : "LI",
+              lead_id: lead.id ?? null,
+              lead_name: leadDisplayName(lead),
+              text: String(m.message || ""),
+            })
+          }
+        }
+      }
+      messages = messagesInPeriod(found, window, limit)
+      if (messages.length === 0) {
+        // Fallback: local ledger, same window
+        try {
+          const ledgerDir = join(homedir(), ".iris", "som-ledger")
+          if (!existsSync(ledgerDir)) throw new Error("no ledger")
+          const fromLedger: SentMessage[] = []
+          for (const file of readdirSync(ledgerDir).filter((f: string) => f.endsWith(".jsonl"))) {
+            for (const line of readFileSync(join(ledgerDir, file), "utf8").split("\n").filter(Boolean)) {
+              try {
+                const entry = JSON.parse(line)
+                if (entry.result === "dm_sent" && entry.board_id === boardId && !entry.dry_run) {
+                  fromLedger.push({
+                    date: String(entry.ts || ""),
+                    channel: "ledger",
+                    lead_id: entry.lead_id ?? null,
+                    lead_name: entry.lead_name || `#${entry.lead_id}`,
+                    text: String(entry.dm_text || ""),
+                  })
+                }
+              } catch {}
+            }
+          }
+          messages = messagesInPeriod(fromLedger, window, limit)
+        } catch {}
+      }
+    }
+
+    if (json) {
+      await writeJson(analyzeJson({ boardId, periodName: period, metrics, quota, messages }))
+      return
+    }
+
+    printDivider()
+    console.log(bold(`  Outreach Analysis — Board ${boardId} (${period})`))
+    printDivider()
 
     console.log()
     console.log(bold("  Performance:"))
@@ -11406,79 +11491,30 @@ const LeadsAnalyzeCommand = cmd({
     printKV("Pipeline", `$${Number(s.pipeline_value ?? 0).toLocaleString()}`)
     printKV("Outreached", `${s.outreached_lead_count ?? 0} leads`)
 
-    // 2. Quota progress
-    const quotaRes = await irisFetch(`/api/v1/outreach/quota?bloq_id=${boardId}`)
-    if (quotaRes.ok) {
-      const qd = (await quotaRes.json()) as any
-      const q = qd.quotas || {}
-      const p = qd.progress || {}
-      const pct = qd.percent || {}
-      if (Object.keys(q).length > 0) {
-        console.log()
-        console.log(bold("  Quota Progress:"))
-        if (q.dms_per_week) console.log(`    DMs/week:  ${progressBar(pct.dms ?? 0)} ${p.dms_this_week ?? 0}/${q.dms_per_week} (${pct.dms ?? 0}%)`)
-        if (q.replies_per_week) console.log(`    Replies:   ${progressBar(pct.replies ?? 0)} ${p.replies_this_week ?? 0}/${q.replies_per_week} (${pct.replies ?? 0}%)`)
-        if (q.revenue_per_month) console.log(`    Revenue:   ${progressBar(pct.revenue ?? 0)} $${Number(p.revenue_this_month ?? 0).toLocaleString()}/$${Number(q.revenue_per_month).toLocaleString()} (${pct.revenue ?? 0}%)`)
-        if (q.deals_per_month) console.log(`    Deals:     ${progressBar(pct.deals ?? 0)} ${p.deals_this_month ?? 0}/${q.deals_per_month} (${pct.deals ?? 0}%)`)
-      }
-    }
-
-    // 3. Recent messages sent (so you can see what's going out and tweak scripts)
-    if (showMessages) {
+    const q = quota?.quotas || {}
+    if (Object.keys(q).length > 0) {
+      const p = quota?.progress || {}
+      const pct = quota?.percent || {}
       console.log()
-      console.log(bold(`  Recent Messages Sent (last ${limit}):`))
-      // Fetch recent outreach messages by sampling recently-outreached leads
-      const leadsRes = await irisFetch(`/api/v1/leads?bloq_id=${boardId}&outreach_status=contacted&sort=updated_at&order=desc&per_page=${limit}`)
-      let shown = 0
-      if (leadsRes.ok) {
-        const leadsData = (await leadsRes.json()) as any
-        const leads = leadsData.data?.data || leadsData.data || []
-        for (const lead of (Array.isArray(leads) ? leads : []).slice(0, limit)) {
-          const omRes = await irisFetch(`/api/v1/leads/${lead.id}/outreach/messages?direction=outbound`)
-          if (!omRes.ok) continue
-          const omData = (await omRes.json()) as any
-          const msgs = (omData.messages || []).filter((m: any) => m.type === "instagram_dm" || m.type === "linkedin_dm")
-          const latest = msgs[msgs.length - 1]
-          if (latest) {
-            const date = (latest.sent_at || latest.created_at || "").substring(0, 16).replace("T", " ")
-            const ch = latest.type === "instagram_dm" ? "IG" : latest.type === "linkedin_dm" ? "LI" : "?"
-            const text = (latest.message || "").substring(0, 100)
-            const leadName = lead.name || lead.nickname || `#${lead.id}`
-            console.log(`    ${dim(date)} [${ch}] ${leadName}`)
-            console.log(`      "${text}${text.length >= 100 ? "..." : ""}"`)
-            shown++
-          }
-        }
-      }
-      if (shown === 0) {
-        // Fallback: local ledger
-        try {
-          const ledgerDir = join(homedir(), ".iris", "som-ledger")
-          if (!existsSync(ledgerDir)) throw new Error("no ledger")
-          const allFiles = require("fs").readdirSync(ledgerDir).filter((f: string) => f.endsWith(".jsonl")).sort().reverse()
-          for (const file of allFiles) {
-            if (shown >= limit) break
-            const lines = require("fs").readFileSync(join(ledgerDir, file), "utf8").split("\n").filter(Boolean).reverse()
-            for (const line of lines) {
-              if (shown >= limit) break
-              try {
-                const entry = JSON.parse(line)
-                if (entry.result === "dm_sent" && entry.board_id === boardId && !entry.dry_run) {
-                  const date = (entry.ts || "").substring(0, 16).replace("T", " ")
-                  const text = (entry.dm_text || "").substring(0, 100)
-                  console.log(`    ${dim(date)} ${entry.lead_name || "#" + entry.lead_id}`)
-                  console.log(`      "${text}${text.length >= 100 ? "..." : ""}"`)
-                  shown++
-                }
-              } catch {}
-            }
-          }
-        } catch {}
-        if (shown === 0) console.log(dim("    No recent messages found"))
-      }
+      console.log(bold("  Quota Progress:"))
+      if (q.dms_per_week) console.log(`    DMs/week:  ${progressBar(pct.dms ?? 0)} ${p.dms_this_week ?? 0}/${q.dms_per_week} (${pct.dms ?? 0}%)`)
+      if (q.replies_per_week) console.log(`    Replies:   ${progressBar(pct.replies ?? 0)} ${p.replies_this_week ?? 0}/${q.replies_per_week} (${pct.replies ?? 0}%)`)
+      if (q.revenue_per_month) console.log(`    Revenue:   ${progressBar(pct.revenue ?? 0)} $${Number(p.revenue_this_month ?? 0).toLocaleString()}/$${Number(q.revenue_per_month).toLocaleString()} (${pct.revenue ?? 0}%)`)
+      if (q.deals_per_month) console.log(`    Deals:     ${progressBar(pct.deals ?? 0)} ${p.deals_this_month ?? 0}/${q.deals_per_month} (${pct.deals ?? 0}%)`)
     }
 
-    // 4. By channel breakdown
+    if (messages) {
+      console.log()
+      console.log(bold(`  ${messagesHeader(window, limit)}`))
+      for (const m of messages) {
+        const text = m.text.substring(0, 100)
+        const ch = m.channel === "ledger" ? "" : ` [${m.channel}]`
+        console.log(`    ${dim(m.date.substring(0, 16).replace("T", " "))}${ch} ${m.lead_name}`)
+        console.log(`      "${text}${m.text.length > 100 ? "..." : ""}"`)
+      }
+      if (messages.length === 0) console.log(dim("    No messages sent in this period"))
+    }
+
     const byType = metrics.by_type || {}
     const channels = Object.entries(byType).filter(([_, v]: any) => v.count > 0)
     if (channels.length > 0) {
@@ -11492,10 +11528,6 @@ const LeadsAnalyzeCommand = cmd({
 
     console.log()
     printDivider()
-
-    if ((args as any).json) {
-      await writeJson({ metrics: metrics.summary, quota: {}, messages: [] })
-    }
   },
 })
 
