@@ -29,7 +29,8 @@ import {
   getBridgeToken,
   resolveUserId, writeJson, failNoOp, PUBLIC_SITE} from "./iris-api"
 // #137403/#137526 — reuse the venues browser Google-Maps discovery path for leads.
-import { findOnlineHiveNode, dispatchHiveSearch } from "./platform-venues"
+import { findOnlineHiveNode, dispatchHiveSearchDetailed } from "./platform-venues"
+import { discoverBusinesses } from "./hive-maps-search"
 import { executeIntegrationCall } from "./platform-run"
 import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync, readdirSync } from "fs"
 import { homedir } from "os"
@@ -7410,8 +7411,14 @@ const LeadsDiscoverCommand = cmd({
     spinner?.start(`Scraping Google Maps via Hive node ${node.name}…`)
 
     let businesses: any[] = []
+    let emptyReason: string | null = null
     try {
-      businesses = (await dispatchHiveSearch(node, query, limit)) || []
+      // #191700: zero is only ever returned WITH the provider's reason; a missing browser, a
+      // crashed reader or stale selectors throw and land in the catch below, loudly.
+      ;({ businesses, empty_reason: emptyReason } = await discoverBusinesses(
+        () => dispatchHiveSearchDetailed(node, query, limit),
+        { node: node.name, query, limit },
+      ))
     } catch (err) {
       spinner?.stop("Failed", 1)
       const msg = err instanceof Error ? err.message : String(err)
@@ -7420,8 +7427,8 @@ const LeadsDiscoverCommand = cmd({
       process.exitCode = 1
       return
     }
-    businesses = businesses.slice(0, limit)
-    spinner?.stop(`${success("✓")} found ${businesses.length} business(es)`)
+    spinner?.stop(businesses.length ? `${success("✓")} found ${businesses.length} business(es)` : `found 0 business(es)`)
+    if (emptyReason && !isJson) prompts.log.warn(emptyReason)
 
     const create = args["bloq-id"] != null && !args["dry-run"]
     const created: any[] = []
@@ -7474,7 +7481,7 @@ const LeadsDiscoverCommand = cmd({
     }
 
     if (isJson) {
-      await writeJson({ ok: true, query, found: businesses.length, businesses, created })
+      await writeJson({ ok: true, query, node: node.name, found: businesses.length, empty_reason: emptyReason, businesses, created })
       return
     }
 
