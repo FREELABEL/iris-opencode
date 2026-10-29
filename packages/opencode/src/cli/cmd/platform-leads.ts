@@ -50,6 +50,7 @@ import {
   type CrmMatch,
 } from "./lead-mentions"
 import { firstArray } from "../../util/array"
+import { ENRICH_DESCRIBE, enrichMany, enrichOne, formatOutcome, type EnrichFetch } from "./leads-enrich"
 import {
   groupChannelBlindness,
   mergeRefreshIntoChecks,
@@ -6999,21 +7000,25 @@ const LeadsTasksCommand = cmd({
 })
 
 // ============================================================================
-// Enrich — dispatch a Hive `leadgen` task that calls fl-api enrich endpoints
-// for N leads in a bloq. Pure SDK, no Playwright, no IG sessions.
+// Enrich — #191700: one web-research contract for --id and --bloq. Preview by default;
+// --apply saves only results the API's entity guard matched. See ./leads-enrich.ts.
 // ============================================================================
 
 const LeadsEnrichCommand = cmd({
   command: "enrich",
-  // #137537 — per-lead synchronous form + provider documented. Bloq mode stays queued.
-  describe: "enrich one lead (--id, synchronous, reports results) or a whole bloq (--bloq, queued Hive task). Provider: LeadEnrichmentService — AI web research, no Playwright/Serper.",
+  describe: ENRICH_DESCRIBE,
   builder: (yargs) =>
     yargs
-      .option("id", { describe: "lead id to enrich synchronously (reports found contacts + tags)", type: "number" })
-      .option("bloq", { alias: "b", describe: "bloq id to enrich leads from (queued Hive task)", type: "number" })
-      .option("limit", { alias: "n", describe: "max leads to enrich (bloq mode)", type: "number", default: 20 })
+      .option("id", { describe: "lead id to research", type: "number" })
+      .option("bloq", { alias: "b", describe: "bloq id — research each of its leads with the same contract as --id", type: "number" })
+      .option("limit", { alias: "n", describe: "max leads to research (bloq mode)", type: "number", default: 20 })
+      .option("apply", {
+        alias: "confirm",
+        describe: "save results the entity guard matched (field by field, with provenance). Without it nothing is saved.",
+        type: "boolean",
+        default: false,
+      })
       .option("user-id", { describe: "user id (defaults to ~/.iris/sdk/.env)", type: "number" })
-      .option("queue", { describe: "fire and forget — print task id and exit (bloq mode)", type: "boolean", default: true })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(argv) {
     const { requireUserId } = await import("./iris-api")
@@ -7022,32 +7027,22 @@ const LeadsEnrichCommand = cmd({
       process.exitCode = 1
       return
     }
+    const apply = argv.apply === true
+    const post: EnrichFetch = (path, body) => irisFetch(path, { method: "POST", body: JSON.stringify(body) })
 
-    // ── Per-lead SYNCHRONOUS enrich (#137537) — call the endpoint directly and report
-    // what came back. No fire-and-forget task id, no silent-failure pattern. The endpoint
-    // returns researched contacts for review (requires_confirmation) — apply via the UI.
     if (argv.id != null) {
-      const leadId = argv.id as number
-      const res = await irisFetch(`/api/v1/leads/${leadId}/enrich`, { method: "POST", body: JSON.stringify({}) })
-      if (!res.ok) {
-        const body = await res.text()
-        if (argv.json) console.log(JSON.stringify({ ok: false, status: res.status, error: body }))
-        else console.error(`Enrich failed: HTTP ${res.status} ${body.slice(0, 200)}`)
-        process.exitCode = 1
-        return
-      }
-      const out = (await res.json()) as any
-      const data = out?.data ?? {}
-      const contacts: any[] = firstArray(data.found_contacts)
-      const tags: any[] = firstArray(data.generated_tags)
+      const o = await enrichOne(argv.id as number, apply, post)
+      if (argv.json) await writeJson({ ...o, mode: apply ? "apply" : "preview" })
+      else for (const line of formatOutcome(o, apply)) console.log(line)
+      if (!o.ok || (o.integrity_violation && o.persisted)) process.exitCode = 1
+      return
+    }
 
-      if (argv.json) {
-        await writeJson({ ok: true, lead_id: leadId, found_contacts: contacts, generated_tags: tags, note: data.note ?? null, iterations: data.iterations ?? 0, requires_confirmation: out?.requires_confirmation ?? true })
-        return
-      }
-      console.log(`${success("✓")} Enriched lead ${bold(String(leadId))} — ${contacts.length} contact(s) found, ${tags.length} tag(s) (${data.iterations ?? 0} research iterations)`)
-      if (data.note) console.log(dim(`  ${String(data.note).slice(0, 240)}`))
-      if (contacts.length > 0) console.log(dim(`  Review + apply in the CRM (results require confirmation before they're written).`))
+    if (argv.bloq == null) {
+      const msg = "Provide --id <leadId> or --bloq <bloqId>."
+      if (argv.json) console.log(JSON.stringify({ ok: false, error: msg }))
+      else console.error(msg)
+      process.exitCode = 1
       return
     }
 
@@ -7056,91 +7051,35 @@ const LeadsEnrichCommand = cmd({
       process.exitCode = 1
       return
     }
-
-    if (argv.bloq == null) {
-      const msg = "Provide --id <leadId> (one lead, synchronous) or --bloq <bloqId> (queued batch)."
-      if (argv.json) console.log(JSON.stringify({ ok: false, error: msg }))
-      else console.error(msg)
-      process.exitCode = 1
-      return
-    }
-
     const bloqId = argv.bloq as number
     const limit = argv.limit as number
-    const irisApiBase = process.env.IRIS_API_URL ?? "https://freelabel.net"
-
-    // Pre-flight: warn if daemon isn't running (task will be created but won't execute)
-    try {
-      const daemonCheck = await fetch("http://localhost:3200/health", { signal: AbortSignal.timeout(2000) })
-      if (!daemonCheck.ok) {
-        console.log(
-          `⚠ Hive daemon is not healthy (HTTP ${daemonCheck.status}). Task will be queued but may not execute.`,
-        )
-        console.log(dim(`  Start it: iris-daemon start`))
-      }
-    } catch {
-      console.log(
-        `⚠ Hive daemon is not running on localhost:3200. Task will be queued but won't execute until a node connects.`,
-      )
-      console.log(dim(`  Start it: iris-daemon start`))
-      console.log("")
-    }
-
-    // Validate the bloq exists and belongs to the user before dispatching
-    const bloqCheck = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}`)
-    if (!bloqCheck.ok) {
-      const msg = `Bloq ${bloqId} not found or not accessible. Use ${dim("iris bloqs list")} to find your bloq IDs.`
-      if (argv.json) console.log(JSON.stringify({ ok: false, error: msg }))
-      else console.error(msg)
+    const list = await irisFetch(`/api/v1/users/${userId}/leads?bloq_id=${bloqId}&per_page=${limit}`)
+    if (!list.ok) {
+      const body = await list.text().catch(() => "")
+      if (argv.json) console.log(JSON.stringify({ ok: false, status: list.status, error: body.slice(0, 300) }))
+      else console.error(`Could not list leads in bloq ${bloqId}: HTTP ${list.status} ${body.slice(0, 200)}`)
       process.exitCode = 1
       return
     }
+    const listed = (await list.json()) as any
+    const leadIds: number[] = firstArray<any>(listed?.data?.data, listed?.data, listed?.leads, listed)
+      .map((l) => Number(l?.id))
+      .filter((id) => Number.isFinite(id) && id > 0)
+      .slice(0, limit)
 
-    const prompt = `enrich bloq_id=${bloqId} limit=${limit}`
-    const title = `leadgen enrich bloq=${bloqId} limit=${limit}`
-
-    const res = await irisFetch(
-      `/api/v6/nodes/tasks`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          user_id: userId,
-          title,
-          type: "leadgen",
-          prompt,
-        }),
-      },
-      irisApiBase,
-    )
-
-    if (!res.ok) {
-      const body = await res.text()
-      if (argv.json) console.log(JSON.stringify({ ok: false, status: res.status, error: body }))
-      else console.error(`Task creation failed: ${res.status} ${body}`)
-      process.exitCode = 1
-      return
-    }
-
-    const created = (await res.json()) as { task: { id: string; status: string }; dispatched?: boolean }
-    const taskId = created.task?.id
-    const status = created.task?.status
-
+    if (!argv.json) console.log(dim(`${apply ? "Applying" : "Previewing"} web research for ${leadIds.length} lead(s) in bloq ${bloqId}…`))
+    const { outcomes, tally } = await enrichMany(leadIds, apply, post, (o) => {
+      if (!argv.json) for (const line of formatOutcome(o, apply)) console.log(line)
+    })
     if (argv.json) {
-      console.log(
-        JSON.stringify({ ok: true, task_id: taskId, status, dispatched: created.dispatched ?? null }, null, 2),
-      )
-      return
-    }
-
-    if (created.dispatched === false) {
-      console.log(`⚠ Task ${highlight(taskId)} created but no daemon node is connected to execute it.`)
-      console.log(dim(`  Start the daemon: iris daemon start`))
-      console.log(dim(`  Task will execute when a node connects.`))
+      await writeJson({ ok: tally.failed === 0, mode: apply ? "apply" : "preview", bloq_id: bloqId, tally, outcomes })
     } else {
-      console.log(`${success("✓")} dispatched ${bold("leadgen")} task ${highlight(taskId)} (status=${status})`)
+      console.log(
+        `${bold("bloq " + bloqId)}: ${tally.total} lead(s) — matched ${tally.matched}, ambiguous ${tally.ambiguous}, rejected ${tally.rejected}, failed ${tally.failed}` +
+          (apply ? `, applied ${tally.applied}` : " — preview only, nothing saved"),
+      )
     }
-    console.log(dim(`  prompt:  ${prompt}`))
-    console.log(dim(`  monitor: iris hive tasks get ${taskId}`))
+    if (tally.failed > 0 || tally.integrity_violations > 0) process.exitCode = 1
   },
 })
 
