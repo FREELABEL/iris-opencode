@@ -572,6 +572,10 @@ jobs:
             curl -fsSL -o "$RUNNER_TEMP/appimagetool" https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
             chmod +x "$RUNNER_TEMP/appimagetool"
             rm -f "$AI" "$AI.sig"
+            # appimagetool (continuous, from 2026-10-29) refuses an AppDir with 0700 directories, and
+            # --appimage-extract leaves some. They would also be unreadable to other users (#191786).
+            chmod -R a+rX "$W/squashfs-root"
+            chmod a+rx "$W/squashfs-root/AppRun"
             ARCH=x86_64 "$RUNNER_TEMP/appimagetool" --no-appstream "$W/squashfs-root" "$AI"
             ./node_modules/.bin/tauri signer sign "$AI"
             test -f "$AI.sig" || { echo "::error::re-signing the repacked AppImage produced no .sig"; exit 1; }
