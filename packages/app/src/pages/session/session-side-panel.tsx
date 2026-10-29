@@ -386,6 +386,7 @@ export function SessionSidePanel(props: {
 
   let fileFilter: HTMLInputElement | undefined
   let tabList: HTMLDivElement | undefined
+  let strip: HTMLDivElement | undefined
   const temporaryTab = tabs().preview
   const previewTab = (value: string) => {
     const next = normalizeTab(value)
@@ -420,7 +421,8 @@ export function SessionSidePanel(props: {
     if (value === stripValue()) return false
     const since = Math.max(heldSince, irisSurfaceChangedAt())
     if (performance.now() - since > FALLBACK_WINDOW_MS) return false
-    const first = typeof document === "undefined" ? null : document.querySelector('[data-slot="tabs-trigger"]')
+    // This panel's own strip: in split view the document's first trigger is another column's (#191780).
+    const first = strip?.querySelector('[data-slot="tabs-trigger"]') ?? null
     return first?.getAttribute("data-value") === value
   }
   const activateTab = (value: string) => {
@@ -574,6 +576,7 @@ export function SessionSidePanel(props: {
                             <Tabs.List
                               class="min-w-0 flex-1"
                               ref={(el: HTMLDivElement) => {
+                                strip = el
                                 const stop = createFileTabListSync({ el, contextOpen })
                                 onCleanup(stop)
                               }}
@@ -828,6 +831,7 @@ export function SessionSidePanel(props: {
                           <Tabs.List
                             ref={(el: HTMLDivElement) => {
                               tabList = el
+                              strip = el
                               const stop = createFileTabListSync({ el, contextOpen })
                               onCleanup(stop)
                             }}

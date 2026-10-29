@@ -13,6 +13,21 @@ const withCategory = (category: string) => {
   })
 }
 
+const COMPOSER = '[data-component="prompt-input"]'
+
+/** The composer holding the caret or focus, else the focused split column's, else the only one. */
+export const activeComposer = (): HTMLElement | undefined => {
+  const at = (node: Node | null | undefined) =>
+    (node instanceof Element ? node : node?.parentElement)?.closest<HTMLElement>(COMPOSER) ?? undefined
+  return (
+    at(document.activeElement) ??
+    at(window.getSelection()?.anchorNode) ??
+    document.querySelector<HTMLElement>(`[data-component="session-split-column"][data-focused] ${COMPOSER}`) ??
+    document.querySelector<HTMLElement>(COMPOSER) ??
+    undefined
+  )
+}
+
 export const useComposerCommands = (input: { model?: ModelSelection } = {}) => {
   const command = useCommand()
   const dialog = useDialog()
@@ -26,7 +41,9 @@ export const useComposerCommands = (input: { model?: ModelSelection } = {}) => {
 
   const chooseModel = async () => {
     const owner = sessionOwnership.capture()
-    const editor = document.querySelector<HTMLElement>('[data-component="prompt-input"]')
+    // The composer the person is in — with split view open, the first one in the document is
+    // the first column's, which is not necessarily theirs (#191780).
+    const editor = activeComposer()
     const selection = window.getSelection()
     const cursor =
       editor && selection?.rangeCount && editor.contains(selection.anchorNode) ? getCursorPosition(editor) : null
@@ -34,11 +51,17 @@ export const useComposerCommands = (input: { model?: ModelSelection } = {}) => {
       // Kobalte restores focus during its teardown effect; defer past it so the
       // composer keeps focus and the caret returns to where the user left it.
       requestAnimationFrame(() => {
-        const editor = document.querySelector<HTMLElement>('[data-component="prompt-input"]')
+        const editor = composerAgain()
         if (!editor) return
         editor.focus()
         if (cursor !== null) setCursorPosition(editor, cursor)
       })
+    }
+    // The same composer if it is still on screen, else the one now in its column.
+    const column = editor?.closest('[data-component="session-split-column"]')
+    const composerAgain = () => {
+      if (editor?.isConnected) return editor
+      return (column?.isConnected ? column : document).querySelector<HTMLElement>(COMPOSER) ?? undefined
     }
     const { DialogSelectModel } = await import("@/components/dialog-select-model")
     owner.run(() => {
