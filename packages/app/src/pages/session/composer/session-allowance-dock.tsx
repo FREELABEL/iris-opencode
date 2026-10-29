@@ -39,7 +39,14 @@ export function SessionAllowanceDock() {
       }
     },
   )
-  const state = createMemo(() => allowanceDockState(plan.latest))
+  // Never suspend (#191772). This dock remounts every time an approval or question card closes
+  // (the composer is swapped out while IRIS waits on you), and reading a resource that has not
+  // resolved yet — `plan()` or `plan.latest` alike — hands the whole chat to the nearest
+  // <Suspense>, whose fallback is an empty column: the chat went black until /iris/plan answered.
+  // Until the first answer there is simply no bar.
+  const state = createMemo(() =>
+    allowanceDockState(plan.state === "ready" || plan.state === "refreshing" ? plan.latest : undefined),
+  )
   const [open, setOpen] = createSignal(false)
   createEffect(() => setAllowanceDockShown(!!state()))
   onCleanup(() => setAllowanceDockShown(false))

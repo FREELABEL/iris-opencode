@@ -9,6 +9,8 @@ import { showToast } from "@/utils/toast"
 import type { QuestionAnswer, QuestionRequest } from "@opencode-ai/sdk/v2"
 import { useLanguage } from "@/context/language"
 import { useSDK } from "@/context/sdk"
+import { useSync } from "@/context/sync"
+import { settleReply, withoutRequest } from "./request-reply"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import { createResizeObserver } from "@solid-primitives/resize-observer"
 import { useServerSDK } from "@/context/server-sdk"
@@ -63,6 +65,7 @@ function Option(props: {
 
 export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit: () => void }> = (props) => {
   const sdk = useSDK()
+  const sync = useSync()
   const serverSDK = useServerSDK()
   const language = useLanguage()
   const cacheKey = ScopedKey.from(serverSDK().scope, props.request.id)
@@ -222,9 +225,22 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
     showToast({ title: language.t("common.requestFailed"), description: message })
   }
 
+  // Answered, or already answered elsewhere (another column, a double submit): the card goes now,
+  // not when the replied event arrives, and "not found" is not a failure (#191772).
+  const drop = () => {
+    const { sessionID, id } = props.request
+    // Removing the request unmounts this card; mark it answered first so cleanup keeps no draft.
+    replied = true
+    cache.delete(cacheKey)
+    sync().set("question", sessionID, (list) => withoutRequest(list, id) ?? [])
+  }
+
   const replyMutation = useMutation(() => ({
     mutationFn: (answers: QuestionAnswer[]) =>
-      sdk().api.question.reply({ sessionID: props.request.sessionID, requestID: props.request.id, answers }),
+      settleReply(
+        () => sdk().api.question.reply({ sessionID: props.request.sessionID, requestID: props.request.id, answers }),
+        drop,
+      ),
     onMutate: () => {
       props.onSubmit()
     },
@@ -236,7 +252,11 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
   }))
 
   const rejectMutation = useMutation(() => ({
-    mutationFn: () => sdk().api.question.reject({ sessionID: props.request.sessionID, requestID: props.request.id }),
+    mutationFn: () =>
+      settleReply(
+        () => sdk().api.question.reject({ sessionID: props.request.sessionID, requestID: props.request.id }),
+        drop,
+      ),
     onMutate: () => {
       props.onSubmit()
     },

@@ -102,6 +102,8 @@ export function SessionSplitRoute(props: { server: ServerRoute; content: Compone
   const shown = createMemo(() => visible(drawn(), focused(), maxColumns(width())))
   const keys = createMemo(() => shown().map(paneKey))
   const multi = createMemo(() => keys().length >= 2 && keys().includes(paneKey(focused())))
+  // Which sessions have a column of their own right now — none when one chat fills the window.
+  const columnSessions = createMemo(() => (multi() ? shown().map((p) => p.sessionId) : []))
   const focusPane = (p: PaneRef) => {
     setMoving(p)
     navigate(sessionHref(p.server as never, p.sessionId))
@@ -270,7 +272,7 @@ export function SessionSplitRoute(props: { server: ServerRoute; content: Compone
       <Server>
         <SplitNewSession register={(fn) => (createSession = fn)} />
         <SplitDropZone state={dropState} />
-        <SplitActionsProvider actions={{ splitRight: (id) => void splitRight(id), canSplit }}>
+        <SplitActionsProvider actions={{ splitRight: (id) => void splitRight(id), canSplit, columns: columnSessions }}>
         <Show
           when={multi()}
           fallback={
