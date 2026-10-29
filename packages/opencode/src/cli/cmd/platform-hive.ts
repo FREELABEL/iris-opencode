@@ -2532,7 +2532,9 @@ const HiveScriptListCommand = cmd({
           const name = bold(String(entry.name))
           const size = dim(`${entry.size} bytes`)
           const modified = entry.modified ? dim(new Date(String(entry.modified)).toLocaleString()) : ""
-          console.log(`  ${success("■")} ${name}  ${size}  ${modified}`)
+          // `local`: a file on this node, not a registry script (`iris scripts list`) — the two
+          // share a word and nothing else, so the listing says which one you are looking at (#191674).
+          console.log(`  ${success("■")} ${name}  ${dim("local")}  ${size}  ${modified}`)
         }
         console.log()
         console.log(dim(`  ${entries.length} script(s) on node`))
