@@ -1105,6 +1105,18 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
   const [adding, setAdding] = createSignal(false)
   /** The task whose × was pressed once. A second press within the window deletes. */
   const [armed, setArmed] = createSignal<number | null>(null)
+  /** "+ Add task" in the head opens the add form; a card with no tasks shows it open. */
+  const [addOpen, setAddOpen] = createSignal(false)
+  const [addFocused, setAddFocused] = createSignal(false)
+  /** The bar and the word on a task row: what needs you first wins (#191794). */
+  const taskState = (t: CardTask) => {
+    if (t.done) return "done" as const
+    const due = dueState(t.dueDate, now())
+    if (due === "overdue") return "overdue" as const
+    if (due === "soon") return "soon" as const
+    if (t.agentName) return "agent" as const
+    return undefined
+  }
 
   async function addTask() {
     const d = doc.latest
@@ -1213,12 +1225,21 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
       </Show>
     </span>
   )
+  // Says "copied" only once the clipboard took it. Refused (older webviews, no permission), it
+  // selects the text beside the button instead, so ⌘C still works (#191790).
   const copy = (e: MouseEvent & { currentTarget: HTMLButtonElement }, text: string) => {
-    navigator.clipboard?.writeText(text)
     const el = e.currentTarget
     const was = el.textContent
-    el.textContent = "copied"
-    setTimeout(() => (el.textContent = was), 900)
+    const show = (label: string) => {
+      el.textContent = label
+      setTimeout(() => (el.textContent = was), 1500)
+    }
+    const select = () => {
+      if (el.previousElementSibling) window.getSelection()?.selectAllChildren(el.previousElementSibling)
+      show("selected")
+    }
+    if (!navigator.clipboard) return select()
+    navigator.clipboard.writeText(text).then(() => show("copied"), select)
   }
 
   // Elon's card (CardEditor.vue): the title sits in the header row with who is on the card and a
@@ -1995,288 +2016,402 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                     </Match>
 
                     {/* ───────────── TASKS ───────────── */}
+                    {/* One row card per task: a state bar paired with a word, the title, a muted
+                        line of facts, and a Done button where the checkbox was (#191794). */}
                     <Match when={side() === "tasks"}>
-                      <Show
-                        when={doc.latest!.tasksMeasured}
-                        fallback={<p class="text-12-regular text-text-weak">Could not read tasks — {doc.latest!.tasksReason ?? "unknown"}.</p>}
-                      >
-                        <Show
-                          when={doc.latest!.tasks.length > 0}
-                          fallback={<p class="iris-sec__none pb-2">No tasks yet. Add the first step below.</p>}
+                      <div class="iris-sec">
+                        <SideHead
+                          icon="checklist"
+                          count={doc.latest!.tasksMeasured && doc.latest!.tasks.length > 0 ? `${doc.latest!.tasks.filter((t) => t.done).length}/${doc.latest!.tasks.length}` : undefined}
+                          tint="#22c55e"
+                          right={
+                            <button
+                              type="button"
+                              class="iris-sh__add"
+                              disabled={!doc.latest!.tasksMeasured}
+                              onClick={() => {
+                                setAddOpen(true)
+                                queueMicrotask(() => document.querySelector<HTMLInputElement>(".iris-card__addtask input")?.focus())
+                              }}
+                            >
+                              + Add task
+                            </button>
+                          }
                         >
-                          {(() => {
-                            const done = () => doc.latest!.tasks.filter((t) => t.done).length
-                            const total = () => doc.latest!.tasks.length
-                            return (
-                              <div class="iris-card__progress" title={`${done()} of ${total()} done`}>
-                                <span class="tabular-nums text-11-regular text-text-weak">
-                                  {done()}/{total()} done
-                                </span>
-                                <span class="iris-card__progressbar">
-                                  <span style={{ width: `${(done() / total()) * 100}%` }} />
-                                </span>
-                              </div>
-                            )
-                          })()}
-                        </Show>
-                        <ul class="iris-card__tasks">
-                          <For each={doc.latest!.tasks}>
-                            {(t) => (
-                              <li class="iris-card__task" style={{ "padding-inline-start": `${8 + t.depth * 14}px` }}>
+                          Tasks
+                        </SideHead>
+                        <Show
+                          when={doc.latest!.tasksMeasured}
+                          fallback={<p class="text-12-regular text-text-weak">Could not read tasks — {doc.latest!.tasksReason ?? "unknown"}.</p>}
+                        >
+                          <Show when={doc.latest!.tasks.length > 0}>
+                            <div class="iris-card__progressbar iris-tasks__bar" title={`${doc.latest!.tasks.filter((t) => t.done).length} of ${doc.latest!.tasks.length} done`}>
+                              <span style={{ width: `${(doc.latest!.tasks.filter((t) => t.done).length / doc.latest!.tasks.length) * 100}%` }} />
+                            </div>
+                          </Show>
+                          <Show when={addOpen() || addParent() || doc.latest!.tasks.length === 0}>
+                            <form
+                              class="iris-card__addtask"
+                              onSubmit={(e) => {
+                                e.preventDefault()
+                                void addTask()
+                              }}
+                            >
+                              <Show when={addParent()}>
+                                {(p) => (
+                                  <span class="iris-card__chip iris-card__under">
+                                    under “{p().title}”
+                                    <button type="button" class="iris-card__x" title="Add at the top level instead" onClick={() => setAddParent(null)}>
+                                      ×
+                                    </button>
+                                  </span>
+                                )}
+                              </Show>
+                              <div class="iris-card__shell">
                                 <input
-                                  type="checkbox"
-                                  class="iris-card__check"
-                                  checked={t.done}
-                                  disabled={busyTask() === t.id}
-                                  aria-label={`${t.done ? "Reopen" : "Complete"}: ${t.title}`}
-                                  onChange={() => void toggleTask(t)}
-                                />
-                                <span class="iris-card__tasktext" classList={{ "iris-card__tasktext--done": t.done }}>
-                                  {t.title}
-                                  <Show when={t.agentName}>
-                                    <span class="iris-card__chip ms-1">{t.agentName}</span>
-                                  </Show>
-                                  <Show when={t.dueDate}>
-                                    <span class="iris-sec__when ms-1">{t.dueDate}</span>
-                                  </Show>
-                                </span>
-                                <button
-                                  type="button"
-                                  class="iris-card__x"
-                                  title="Add a subtask under this"
-                                  onClick={() => {
-                                    setAddParent(t)
-                                    queueMicrotask(() => document.querySelector<HTMLInputElement>(".iris-card__addtask input")?.focus())
+                                  class="iris-field__input"
+                                  placeholder={addParent() ? "Add a subtask…" : "Add a task…"}
+                                  aria-label="New checklist item"
+                                  value={newTask()}
+                                  onInput={(e) => setNewTask(e.currentTarget.value)}
+                                  // Escape closes an add form you opened, then the card on the next press: the
+                                  // dialog's own Escape (captured on window) waits while [data-dismiss-first] is on screen.
+                                  data-dismiss-first={addFocused() && (addOpen() || !!addParent()) ? "" : undefined}
+                                  onFocus={() => setAddFocused(true)}
+                                  onBlur={() => setAddFocused(false)}
+                                  onKeyDown={(e) => {
+                                    if (e.key !== "Escape") return
+                                    // Kobalte's layer also dismisses on an Escape nobody prevented.
+                                    e.preventDefault()
+                                    setAddOpen(false)
+                                    setAddParent(null)
                                   }}
-                                >
-                                  +
+                                />
+                                <button type="submit" class="iris-card__act" disabled={!newTask().trim() || adding()}>
+                                  {adding() ? "Adding…" : "Add"}
                                 </button>
-                                <button
-                                  type="button"
-                                  class="iris-card__x"
-                                  classList={{ "iris-card__x--armed": armed() === t.id }}
-                                  disabled={busyTask() === t.id}
-                                  title={armed() === t.id ? "Click again to delete" : "Delete task"}
-                                  onClick={() => void deleteTask(t)}
-                                >
-                                  {armed() === t.id ? "sure?" : "×"}
-                                </button>
-                              </li>
-                            )}
-                          </For>
-                        </ul>
-                      </Show>
-                      <form
-                        class="iris-card__addtask"
-                        onSubmit={(e) => {
-                          e.preventDefault()
-                          void addTask()
-                        }}
-                      >
-                        <Show when={addParent()}>
-                          {(p) => (
-                            <span class="iris-card__chip iris-card__under">
-                              under “{p().title}”
-                              <button type="button" class="iris-card__x" title="Add at the top level instead" onClick={() => setAddParent(null)}>
-                                ×
-                              </button>
-                            </span>
-                          )}
+                              </div>
+                              <input
+                                class="iris-field__input iris-card__due"
+                                type="date"
+                                aria-label="Due date"
+                                title="Due date (optional)"
+                                value={newDue()}
+                                onInput={(e) => setNewDue(e.currentTarget.value)}
+                              />
+                              <select class="iris-field__input" aria-label="Assign to agent" value={newAgent()} onChange={(e) => setNewAgent(e.currentTarget.value)}>
+                                <option value="">No agent</option>
+                                <For each={agents.latest?.agents ?? []}>{(a) => <option value={String(a.id)}>{a.name}</option>}</For>
+                              </select>
+                            </form>
+                          </Show>
+                          <Show when={doc.latest!.tasks.length === 0}>
+                            <p class="iris-sec__none pt-2">No tasks yet.</p>
+                          </Show>
+                          <ul class="iris-tasks">
+                            <For each={doc.latest!.tasks}>
+                              {(t) => (
+                                <li class="iris-task" data-state={taskState(t)} data-sub={t.depth > 0 ? "" : undefined} style={{ "margin-inline-start": `${t.depth * 16}px` }}>
+                                  <div class="iris-task__main">
+                                    <span class="iris-task__title">{t.title}</span>
+                                    <div class="iris-task__sub">
+                                      <span class="iris-task__meta">
+                                        <Show when={taskState(t)}>
+                                          {(s) => (
+                                            <span class="iris-task__word">
+                                              {({ done: "Done", overdue: "Overdue", soon: "Due soon", agent: "Agent working" } as const)[s()]}
+                                            </span>
+                                          )}
+                                        </Show>
+                                        <Show when={t.dueDate}>
+                                          <span class="iris-task__due">{dueLabel(t.dueDate!, now())}</span>
+                                        </Show>
+                                        <Show when={t.agentName}>
+                                          <span class="iris-task__who">
+                                            <Avatar name={t.agentName!} kind="agent" size={18} />
+                                            {t.agentName}
+                                          </span>
+                                        </Show>
+                                      </span>
+                                      <span class="iris-task__acts">
+                                    <button
+                                      type="button"
+                                      class="iris-task__icon"
+                                      title="Add a subtask under this"
+                                      aria-label={`Add a subtask under: ${t.title}`}
+                                      onClick={() => {
+                                        setAddParent(t)
+                                        queueMicrotask(() => document.querySelector<HTMLInputElement>(".iris-card__addtask input")?.focus())
+                                      }}
+                                    >
+                                      <Icon name="plus-small" size="small" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      class="iris-task__icon"
+                                      classList={{ "iris-task__icon--armed": armed() === t.id }}
+                                      disabled={busyTask() === t.id}
+                                      title={armed() === t.id ? "Click again to delete" : "Delete task"}
+                                      aria-label={armed() === t.id ? `Delete? ${t.title}` : `Delete task: ${t.title}`}
+                                      onClick={() => void deleteTask(t)}
+                                    >
+                                      <Show when={armed() === t.id} fallback={<Icon name="trash" size="small" />}>
+                                        Delete?
+                                      </Show>
+                                    </button>
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    class="iris-task__state"
+                                    aria-pressed={t.done}
+                                    aria-label={`${t.done ? "Reopen" : "Complete"}: ${t.title}`}
+                                    title={t.done ? "Reopen" : "Mark done"}
+                                    disabled={busyTask() === t.id}
+                                    onClick={() => void toggleTask(t)}
+                                  >
+                                    <Icon name="check-small" size="small" />
+                                    Done
+                                  </button>
+                                </li>
+                              )}
+                            </For>
+                          </ul>
                         </Show>
-                        <input
-                          class="iris-field__input"
-                          placeholder={addParent() ? "Add a subtask…" : "Add a task…"}
-                          aria-label="New checklist item"
-                          value={newTask()}
-                          onInput={(e) => setNewTask(e.currentTarget.value)}
-                        />
-                        <input
-                          class="iris-field__input iris-card__due"
-                          type="date"
-                          aria-label="Due date"
-                          title="Due date (optional)"
-                          value={newDue()}
-                          onInput={(e) => setNewDue(e.currentTarget.value)}
-                        />
-                        <select class="iris-field__input" aria-label="Assign to agent" value={newAgent()} onChange={(e) => setNewAgent(e.currentTarget.value)}>
-                          <option value="">No agent</option>
-                          <For each={agents.latest?.agents ?? []}>{(a) => <option value={String(a.id)}>{a.name}</option>}</For>
-                        </select>
-                        <button type="submit" class="iris-card__linkbtn iris-card__linkbtn--primary" disabled={!newTask().trim() || adding()}>
-                          {adding() ? "Adding…" : "Add"}
-                        </button>
-                      </form>
-                      <Show when={agents.latest && !agents.latest.measured}>
-                        <p class="text-11-regular text-text-weak">Agents unavailable — {agents.latest!.reason}.</p>
-                      </Show>
-                      <NoteLine note={taskNote()} />
+                        <Show when={agents.latest && !agents.latest.measured}>
+                          <p class="text-11-regular text-text-weak">Agents unavailable — {agents.latest!.reason}.</p>
+                        </Show>
+                        <NoteLine note={taskNote()} />
+                      </div>
                     </Match>
 
                     {/* ───────────── SHARING ───────────── */}
+                    {/* Same section heads and the same faint field shell as Details (#191793). */}
                     <Match when={side() === "sharing"}>
                       <NotConnected state={share.latest} />
                       <NoteLine note={shareNote()} />
 
-                      {/* THE LINK. Visibility is a column on the item; the allow-list is the gate. */}
-                      <SectionHead>Link</SectionHead>
-                      <div class="iris-card__seg" role="radiogroup" aria-label="Visibility">
-                        <button
-                          type="button"
-                          role="radio"
-                          aria-checked={!(share.latest?.isPublic ?? doc.latest!.isPublic)}
-                          class="iris-card__segitem"
-                          classList={{ "iris-card__segitem--on": !(share.latest?.isPublic ?? doc.latest!.isPublic) }}
-                          disabled={shareBusy()}
-                          onClick={() => void setVisibility(false)}
-                        >
-                          Private
-                        </button>
-                        <button
-                          type="button"
-                          role="radio"
-                          aria-checked={share.latest?.isPublic ?? doc.latest!.isPublic}
-                          class="iris-card__segitem"
-                          classList={{ "iris-card__segitem--on": share.latest?.isPublic ?? doc.latest!.isPublic }}
-                          disabled={shareBusy()}
-                          onClick={() => void setVisibility(true)}
-                        >
-                          Public link
-                        </button>
+                      {/* THE COMMAND — hand this card to an agent or a terminal (#191790). A public
+                          card is named by its uuid; a private one by its id, for its signed-in owner. */}
+                      <div class="iris-sec">
+                        <SideHead icon="terminal">Use in a terminal or agent</SideHead>
+                        {(() => {
+                          const command = () => {
+                            const uuid = (share.latest?.publicUrl ?? doc.latest!.publicUrl)?.match(/\/n\/([0-9a-f-]{36})/i)?.[1]
+                            return `iris atlas use ${uuid ?? props.itemId}`
+                          }
+                          return (
+                            <div class="iris-card__url iris-card__cmd">
+                              <code class="font-mono truncate" title={command()}>
+                                {command()}
+                              </code>
+                              <button type="button" class="iris-card__act" aria-label={`Copy the command: ${command()}`} onClick={(e) => copy(e, command())}>
+                                copy
+                              </button>
+                            </div>
+                          )
+                        })()}
                       </div>
-                      <p
-                        class="text-11-regular pt-2"
-                        classList={{
-                          "iris-card__warn": (share.latest?.isPublic ?? doc.latest!.isPublic) && share.latest?.allowKnown === true && share.latest.allowedEmails.length === 0,
-                          "text-text-weak": !((share.latest?.isPublic ?? doc.latest!.isPublic) && share.latest?.allowKnown === true && share.latest.allowedEmails.length === 0),
-                        }}
-                      >
-                        {allowListSummary(share.latest?.isPublic ?? doc.latest!.isPublic, share.latest?.allowedEmails ?? [], share.latest?.allowKnown ?? false)}
-                      </p>
-                      <Show when={share.latest?.publicUrl ?? doc.latest!.publicUrl}>
-                        {(url) => (
-                          <div class="iris-card__url">
-                            <span class="font-mono text-11-regular truncate" title={url()}>
-                              {url()}
-                            </span>
-                            <button type="button" class="iris-card__linkbtn" onClick={(e) => copy(e, url())}>
-                              copy
-                            </button>
-                          </div>
-                        )}
-                      </Show>
 
-                      <SectionHead count={share.latest?.allowedEmails.length ?? "—"}>Who can open the link</SectionHead>
-                      <div class="iris-card__chips">
-                        <For each={share.latest?.allowedEmails ?? []}>
-                          {(e) => <Chip text={e} onRemove={() => void writeAllow((share.latest?.allowedEmails ?? []).filter((x) => x !== e))} />}
-                        </For>
-                        <Show when={(share.latest?.boardDefaults.allowedEmails.length ?? 0) > 0}>
-                          <For each={share.latest!.boardDefaults.allowedEmails}>
-                            {(e) => <Chip text={e} title="From the board's share defaults — change it on the board" />}
-                          </For>
+                      {/* THE LINK. Visibility is a column on the item; the allow-list is the gate. */}
+                      <div class="iris-sec">
+                        <SideHead icon={(share.latest?.isPublic ?? doc.latest!.isPublic) ? "globe" : "lock"}>Link</SideHead>
+                        <div class="iris-card__seg" role="radiogroup" aria-label="Visibility">
+                          <button
+                            type="button"
+                            role="radio"
+                            aria-checked={!(share.latest?.isPublic ?? doc.latest!.isPublic)}
+                            class="iris-card__segitem"
+                            classList={{ "iris-card__segitem--on": !(share.latest?.isPublic ?? doc.latest!.isPublic) }}
+                            disabled={shareBusy()}
+                            onClick={() => void setVisibility(false)}
+                          >
+                            Private
+                          </button>
+                          <button
+                            type="button"
+                            role="radio"
+                            aria-checked={share.latest?.isPublic ?? doc.latest!.isPublic}
+                            class="iris-card__segitem"
+                            classList={{ "iris-card__segitem--on": share.latest?.isPublic ?? doc.latest!.isPublic }}
+                            disabled={shareBusy()}
+                            onClick={() => void setVisibility(true)}
+                          >
+                            Public link
+                          </button>
+                        </div>
+                        <p
+                          class="iris-card__help"
+                          classList={{
+                            "iris-card__warn": (share.latest?.isPublic ?? doc.latest!.isPublic) && share.latest?.allowKnown === true && share.latest.allowedEmails.length === 0,
+                          }}
+                        >
+                          {allowListSummary(share.latest?.isPublic ?? doc.latest!.isPublic, share.latest?.allowedEmails ?? [], share.latest?.allowKnown ?? false)}
+                        </p>
+                        <Show when={share.latest?.publicUrl ?? doc.latest!.publicUrl}>
+                          {(url) => (
+                            <div class="iris-card__url">
+                              <span class="font-mono truncate" title={url()}>
+                                {url()}
+                              </span>
+                              <button type="button" class="iris-card__act" onClick={(e) => copy(e, url())}>
+                                copy
+                              </button>
+                            </div>
+                          )}
                         </Show>
                       </div>
-                      <form
-                        class="iris-card__inline"
-                        onSubmit={(e) => {
-                          e.preventDefault()
-                          const add = parseAllowEntries(allowText(), share.latest?.allowedEmails ?? [])
-                          if (add.length) void writeAllow([...(share.latest?.allowedEmails ?? []), ...add])
-                          else setShareNote({ ok: false, text: "Nothing to add — use an email or an @domain" })
-                        }}
-                      >
-                        <input
-                          class="iris-field__input"
-                          placeholder="email or @domain, comma separated…"
-                          aria-label="Allow email or domain"
-                          value={allowText()}
-                          onInput={(e) => setAllowText(e.currentTarget.value)}
-                        />
-                        <button type="submit" class="iris-card__linkbtn iris-card__linkbtn--primary" disabled={!allowText().trim() || shareBusy()}>
-                          Allow
-                        </button>
-                      </form>
+
+                      <div class="iris-sec">
+                        <SideHead icon="lock" count={share.latest?.allowedEmails.length || undefined}>
+                          Who can open the link
+                        </SideHead>
+                        <Show when={(share.latest?.allowedEmails.length ?? 0) + (share.latest?.boardDefaults.allowedEmails.length ?? 0) > 0}>
+                          <div class="iris-card__chips">
+                            <For each={share.latest?.allowedEmails ?? []}>
+                              {(e) => <Chip text={e} onRemove={() => void writeAllow((share.latest?.allowedEmails ?? []).filter((x) => x !== e))} />}
+                            </For>
+                            <Show when={(share.latest?.boardDefaults.allowedEmails.length ?? 0) > 0}>
+                              <For each={share.latest!.boardDefaults.allowedEmails}>
+                                {(e) => <Chip text={e} title="From the board's share defaults — change it on the board" />}
+                              </For>
+                            </Show>
+                          </div>
+                        </Show>
+                        <form
+                          class="iris-card__shell"
+                          onSubmit={(e) => {
+                            e.preventDefault()
+                            const add = parseAllowEntries(allowText(), share.latest?.allowedEmails ?? [])
+                            if (add.length) void writeAllow([...(share.latest?.allowedEmails ?? []), ...add])
+                            else setShareNote({ ok: false, text: "Nothing to add — use an email or an @domain" })
+                          }}
+                        >
+                          <input
+                            class="iris-field__input"
+                            placeholder="email or @domain, comma separated…"
+                            aria-label="Allow email or domain"
+                            value={allowText()}
+                            onInput={(e) => setAllowText(e.currentTarget.value)}
+                          />
+                          <button type="submit" class="iris-card__act" disabled={!allowText().trim() || shareBusy()}>
+                            Allow
+                          </button>
+                        </form>
+                      </div>
 
                       {/* PEOPLE — board membership. Not item membership; the label says so. */}
-                      <SectionHead count={share.latest?.measured ? share.latest.members.length : "—"}>People on this board</SectionHead>
-                      <ul class="iris-card__rows">
-                        <For each={share.latest?.members ?? []}>
-                          {(m) => (
-                            <li class="iris-card__row">
-                              <span class="iris-card__rowtext">
-                                <span class="text-text-strong">{m.name || m.email}</span>
-                                <Show when={m.name}>
-                                  <span class="text-text-weaker ms-1">{m.email}</span>
-                                </Show>
-                              </span>
-                              <select class="iris-field__input iris-card__perm" aria-label={`Permission for ${m.email}`} value={m.permission} onChange={(e) => void setPermission(m, e.currentTarget.value)}>
-                                <option value="viewer">viewer</option>
-                                <option value="editor">editor</option>
-                                <option value="owner">owner</option>
-                              </select>
-                              <button type="button" class="iris-card__x" classList={{ "iris-card__x--armed": armedRevoke() === `m${m.userId}` }} onClick={() => revokeMember(m)}>
-                                {armedRevoke() === `m${m.userId}` ? "sure?" : "×"}
-                              </button>
-                            </li>
-                          )}
-                        </For>
-                      </ul>
-                      <form
-                        class="iris-card__inline iris-card__inline--3"
-                        onSubmit={(e) => {
-                          e.preventDefault()
-                          if (inviteEmail().trim()) void invite()
-                        }}
-                      >
-                        <input class="iris-field__input" type="email" placeholder="Invite by email…" aria-label="Invite email" value={inviteEmail()} onInput={(e) => setInviteEmail(e.currentTarget.value)} />
-                        <select class="iris-field__input iris-card__perm" aria-label="Invite permission" value={invitePerm()} onChange={(e) => setInvitePerm(e.currentTarget.value)}>
-                          <option value="viewer">viewer</option>
-                          <option value="editor">editor</option>
-                          <option value="owner">owner</option>
-                        </select>
-                        <button type="submit" class="iris-card__linkbtn iris-card__linkbtn--primary" disabled={!inviteEmail().trim() || shareBusy()}>
-                          Invite
-                        </button>
-                      </form>
+                      <div class="iris-sec">
+                        <SideHead icon="eye" count={share.latest?.measured ? share.latest.members.length || undefined : undefined}>
+                          People on this board
+                        </SideHead>
+                        <Show when={(share.latest?.members.length ?? 0) > 0}>
+                          <ul class="iris-card__rows">
+                            <For each={share.latest?.members ?? []}>
+                              {(m) => (
+                                <li class="iris-card__row">
+                                  <Avatar name={m.name || m.email} kind="user" size={22} />
+                                  <span class="iris-card__rowtext">
+                                    <span class="text-text-strong">{m.name || m.email}</span>
+                                    <Show when={m.name}>
+                                      <span class="text-text-weaker ms-1">{m.email}</span>
+                                    </Show>
+                                  </span>
+                                  <select class="iris-field__input iris-card__perm" aria-label={`Permission for ${m.email}`} value={m.permission} onChange={(e) => void setPermission(m, e.currentTarget.value)}>
+                                    <option value="viewer">viewer</option>
+                                    <option value="editor">editor</option>
+                                    <option value="owner">owner</option>
+                                  </select>
+                                  <button
+                                    type="button"
+                                    class="iris-task__icon"
+                                    classList={{ "iris-task__icon--armed": armedRevoke() === `m${m.userId}` }}
+                                    aria-label={armedRevoke() === `m${m.userId}` ? `Remove? ${m.email}` : `Remove ${m.email} from this board`}
+                                    title={armedRevoke() === `m${m.userId}` ? "Click again to remove" : "Remove from this board"}
+                                    onClick={() => revokeMember(m)}
+                                  >
+                                    <Show when={armedRevoke() === `m${m.userId}`} fallback={<Icon name="close-small" size="small" />}>
+                                      sure?
+                                    </Show>
+                                  </button>
+                                </li>
+                              )}
+                            </For>
+                          </ul>
+                        </Show>
+                        <form
+                          class="iris-card__shell"
+                          onSubmit={(e) => {
+                            e.preventDefault()
+                            if (inviteEmail().trim()) void invite()
+                          }}
+                        >
+                          <input class="iris-field__input" type="email" placeholder="Invite by email…" aria-label="Invite email" value={inviteEmail()} onInput={(e) => setInviteEmail(e.currentTarget.value)} />
+                          <select class="iris-field__input iris-card__perm" aria-label="Invite permission" value={invitePerm()} onChange={(e) => setInvitePerm(e.currentTarget.value)}>
+                            <option value="viewer">viewer</option>
+                            <option value="editor">editor</option>
+                            <option value="owner">owner</option>
+                          </select>
+                          <button type="submit" class="iris-card__act" disabled={!inviteEmail().trim() || shareBusy()}>
+                            Invite
+                          </button>
+                        </form>
+                      </div>
 
                       {/* SHARE LINKS — bearer links. Said in the row. */}
-                      <SectionHead count={share.latest?.measured ? share.latest.links.filter((l) => !l.revoked).length : "—"}>Share links</SectionHead>
-                      <ul class="iris-card__rows">
-                        <For each={share.latest?.links ?? []}>
-                          {(l) => (
-                            <li class="iris-card__row" classList={{ "iris-card__row--off": l.revoked }}>
-                              <span class="iris-card__rowtext font-mono text-11-regular truncate" title={l.url}>
-                                {l.url}
-                              </span>
-                              <span class="font-mono tabular-nums text-11-regular text-text-weaker shrink-0">
-                                {l.uses} use{l.uses === 1 ? "" : "s"}
-                                {l.expiresAt ? ` · until ${shortDate(l.expiresAt)}` : ""}
-                              </span>
-                              <Show when={!l.revoked} fallback={<span class="text-11-regular text-text-weaker">revoked</span>}>
-                                <button type="button" class="iris-card__linkbtn" onClick={(e) => copy(e, l.url)}>
-                                  copy
-                                </button>
-                                <button type="button" class="iris-card__x" classList={{ "iris-card__x--armed": armedRevoke() === `l${l.id}` }} onClick={() => revokeLink(l)}>
-                                  {armedRevoke() === `l${l.id}` ? "sure?" : "×"}
-                                </button>
-                              </Show>
-                            </li>
-                          )}
-                        </For>
-                      </ul>
-                      <form
-                        class="iris-card__inline"
-                        onSubmit={(e) => {
-                          e.preventDefault()
-                          void createLink()
-                        }}
-                      >
-                        <input class="iris-field__input" type="number" min="1" placeholder="Expires in days (blank = never)" aria-label="Link expiry in days" value={linkDays()} onInput={(e) => setLinkDays(e.currentTarget.value)} />
-                        <button type="submit" class="iris-card__linkbtn iris-card__linkbtn--primary" disabled={shareBusy()}>
-                          New link
-                        </button>
-                      </form>
-                      <p class="text-11-regular text-text-weaker pt-1">A share link is a bearer link: whoever holds it is in. Revoke it here when it has done its job.</p>
+                      <div class="iris-sec">
+                        <SideHead icon="link" count={share.latest?.measured ? share.latest.links.filter((l) => !l.revoked).length || undefined : undefined}>
+                          Share links
+                        </SideHead>
+                        <Show when={(share.latest?.links.length ?? 0) > 0}>
+                          <ul class="iris-card__rows">
+                            <For each={share.latest?.links ?? []}>
+                              {(l) => (
+                                <li class="iris-card__row" classList={{ "iris-card__row--off": l.revoked }}>
+                                  <span class="iris-card__rowtext font-mono text-11-regular truncate" title={l.url}>
+                                    {l.url}
+                                  </span>
+                                  <span class="font-mono tabular-nums text-11-regular text-text-weak shrink-0">
+                                    {l.uses} use{l.uses === 1 ? "" : "s"}
+                                    {l.expiresAt ? ` · until ${shortDate(l.expiresAt)}` : ""}
+                                  </span>
+                                  <Show when={!l.revoked} fallback={<span class="text-11-regular text-text-weaker">revoked</span>}>
+                                    <button type="button" class="iris-card__act" onClick={(e) => copy(e, l.url)}>
+                                      copy
+                                    </button>
+                                    <button
+                                      type="button"
+                                      class="iris-task__icon"
+                                      classList={{ "iris-task__icon--armed": armedRevoke() === `l${l.id}` }}
+                                      aria-label={armedRevoke() === `l${l.id}` ? "Revoke? this share link" : "Revoke this share link"}
+                                      title={armedRevoke() === `l${l.id}` ? "Click again to revoke" : "Revoke"}
+                                      onClick={() => revokeLink(l)}
+                                    >
+                                      <Show when={armedRevoke() === `l${l.id}`} fallback={<Icon name="close-small" size="small" />}>
+                                        sure?
+                                      </Show>
+                                    </button>
+                                  </Show>
+                                </li>
+                              )}
+                            </For>
+                          </ul>
+                        </Show>
+                        <form
+                          class="iris-card__shell"
+                          onSubmit={(e) => {
+                            e.preventDefault()
+                            void createLink()
+                          }}
+                        >
+                          <input class="iris-field__input" type="number" min="1" placeholder="Expires in days (blank = never)" aria-label="Link expiry in days" value={linkDays()} onInput={(e) => setLinkDays(e.currentTarget.value)} />
+                          <button type="submit" class="iris-card__act" disabled={shareBusy()}>
+                            New link
+                          </button>
+                        </form>
+                        <p class="iris-card__help">A share link is a bearer link: whoever holds it is in. Revoke it here when it has done its job.</p>
+                      </div>
                     </Match>
 
                     {/* ───────────── CHAT: Team (people + what happened) | AI ───────────── */}
