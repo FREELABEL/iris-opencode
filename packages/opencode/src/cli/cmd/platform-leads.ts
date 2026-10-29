@@ -1,4 +1,11 @@
-import { describeListScope } from "./leads-scope"
+import {
+  buildListRequest,
+  buildSegmentFilters,
+  describeListScope,
+  emptyListMessage,
+  leadDisplayName,
+  parseListLimit,
+} from "./leads-scope"
 import { cmd } from "./cmd"
 import { PulseCheckCommand, PulseSourcesCommand, pulseCheckOptions, runPulseCheck } from "./platform-pulse-check"
 import { readAtlasDiary } from "./pulse-check-sweep"
@@ -134,7 +141,7 @@ function statusColor(status: string): string {
 
 function printLead(l: Record<string, unknown>): void {
   const id = dim(`#${l.id}`)
-  const name = bold(String(l.name ?? l.first_name ?? `Lead #${l.id}`))
+  const name = bold(leadDisplayName(l))
   const company = l.company ? `  ${dim(String(l.company))}` : ""
   const status = l.status ? `  ${statusColor(String(l.status))}` : ""
   const email = l.email ? `  ${dim(String(l.email))}` : ""
@@ -256,22 +263,8 @@ async function resolveLeadId(idOrQuery: string): Promise<{ leadId: number; lead:
 // Subcommands
 // ============================================================================
 
-/**
- * The orderings `leads list` can ask the SERVER for, with the words used to describe
- * each one back to the reader.
- *
- * `activity` is the default because the question behind `leads list` is almost always
- * "what am I working on", and `created_at` answers "what did a scraper insert last".
- * Every field here is in the API's own sort allow-list (LeadController::index); an
- * unmapped field there silently falls back to created_at, which is exactly the kind of
- * quiet wrong answer this whole change is about, so do not add one without checking.
- */
-const LIST_SORTS: Record<string, { sortBy: string; sortDirection: string; orderingLabel: string }> = {
-  activity: { sortBy: "updated_at", sortDirection: "desc", orderingLabel: "most recently active" },
-  created: { sortBy: "created_at", sortDirection: "desc", orderingLabel: "newest" },
-  name: { sortBy: "name", sortDirection: "asc", orderingLabel: "first alphabetically" },
-  value: { sortBy: "price_bid", sortDirection: "desc", orderingLabel: "highest value" },
-}
+// LIST_SORTS lives in leads-scope.ts with the rest of the list request building (#191688).
+
 
 const LeadsListCommand = cmd({
   command: "list",
@@ -281,11 +274,13 @@ const LeadsListCommand = cmd({
     yargs
       .option("status", { describe: "filter by status", type: "string" })
       .option("search", { alias: "s", describe: "search query", type: "string" })
-      .option("limit", { describe: "max results", type: "number", default: 20 })
+      // string, not number: yargs turns "abc" into NaN, which reached the API as a 500 (#191691)
+      .option("limit", { describe: "max results (1-1000)", type: "string", default: "20" })
       .option("bloq-id", { alias: "bloq", describe: "filter by bloq/project ID", type: "number" })
       .option("all", { describe: "include Prospected leads (hidden by default)", type: "boolean", default: false })
       .option("sort", {
-        describe: "order the WHOLE book before paging — activity is what you almost always want",
+        describe:
+          "order the WHOLE book before paging — activity (default), created (newest), name (display name A-Z), value (deal value, highest first)",
         type: "string",
         choices: ["activity", "created", "name", "value"],
         default: "activity",
@@ -294,6 +289,17 @@ const LeadsListCommand = cmd({
   async handler(args) {
     UI.empty()
     prompts.intro("◈  IRIS Leads")
+
+    // #191691 — refuse a bad --limit before any request, so it can never become a 500.
+    const parsedLimit = parseListLimit(args.limit)
+    if (!parsedLimit.ok) {
+      if (args.json) process.stderr.write(`[leads list] ${parsedLimit.error}\n`)
+      prompts.log.error(parsedLimit.error)
+      process.exitCode = 1
+      prompts.outro("Done")
+      return
+    }
+    const limit = parsedLimit.value
 
     const token = await requireAuth()
     if (!token) {
@@ -305,28 +311,25 @@ const LeadsListCommand = cmd({
     spinner.start("Loading leads…")
 
     try {
-      // Fetch more than requested so we can filter + sort client-side
-      const fetchLimit = args.all || args.status || args.search ? args.limit : Math.max(args.limit * 5, 100)
-      const params = new URLSearchParams({ per_page: String(fetchLimit) })
-      // #184945 — ORDER THE BOOK, NOT THE PAGE.
+      // #184945 — ORDER THE BOOK, NOT THE PAGE: the order is pushed to the server, because a
+      // client-side sort over the wrong page is indistinguishable from a correct answer.
+      // Measured 2026-09-13: `--all --limit 1000` did not contain lead #15743 (In Negotiation,
+      // updated that day) while `--status "In Negotiation"` found it instantly.
       //
-      // The status-priority sort below is client-side, so it can only reorder rows the
-      // server already chose. The server defaulted to `created_at desc`, which on a book
-      // of ~28,500 leads means the page is "whoever was created most recently" — mostly
-      // scraped Prospected junk. Measured 2026-09-13: `--all --limit 1000` returned 1000
-      // rows and did NOT contain lead #15743 (In Negotiation, 115 notes, updated that
-      // same day), while `--status "In Negotiation"` found it instantly, because a status
-      // filter is pushed to the server and therefore queries the whole table.
-      //
-      // A client-side sort over the wrong page is indistinguishable from a correct
-      // answer — it looks sorted. Pushing the order to the server is what makes the
-      // window contain the leads worth seeing.
-      const { sortBy, sortDirection, orderingLabel } = LIST_SORTS[String(args.sort)] ?? LIST_SORTS.activity
-      params.set("sort_by", sortBy)
-      params.set("sort_direction", sortDirection)
-      if (args.status) params.set("status", args.status)
-      if (args.search) params.set("search", args.search)
-      if (args["bloq-id"]) params.set("bloq_id", String(args["bloq-id"]))
+      // #191690 — the Prospected filter has to be in the query too. It ran client-side after
+      // the page was cut, with no backfill, so when the newest leads were all Prospected
+      // `--sort created` returned 0 rows (and `--json` []) over a book of 29k.
+      // buildListRequest sends exclude_statuses=Prospected: the page is full whenever
+      // matches exist.
+      const request = buildListRequest({
+        limit,
+        sort: String(args.sort),
+        all: args.all,
+        status: args.status,
+        search: args.search,
+        bloqId: args["bloq-id"],
+      })
+      const { params, orderingLabel } = request
 
       const res = await irisFetch(`/api/v1/leads?${params}`)
       const ok = await handleApiError(res, "List leads")
@@ -349,17 +352,22 @@ const LeadsListCommand = cmd({
       // per_page=5 returns total 28522, against the 56 rows every published funnel KPI
       // had been computed from.
       const totalFromApi = data?.total ?? data?.meta?.total ?? leads.length
+      // The exclusion ran in the query, so the hidden count is book-wide (#190003 is moot):
+      // ask the server for it — one row, read `total` — rather than counting a window.
+      // Best-effort: a failure here must not fail the list.
       let prospectedCount = 0
-      // The Prospected count is over FETCHED rows, not the book. Keep the window size so
-      // the report can say which population the number describes (#190003).
-      let scanned: number | undefined
-      if (!args.all && !args.status && !args.search) {
-        scanned = leads.length
-        prospectedCount = leads.filter((l: any) => (l.status ?? "").toLowerCase() === "prospected").length
-        leads = leads.filter((l: any) => {
-          const s = (l.status ?? "").toLowerCase()
-          return s !== "prospected"
-        })
+      if (request.hidesProspected) {
+        const countParams = new URLSearchParams({ status: "Prospected", per_page: "1" })
+        if (args["bloq-id"]) countParams.set("bloq_id", String(args["bloq-id"]))
+        try {
+          const cRes = await irisFetch(`/api/v1/leads?${countParams}`)
+          if (cRes.ok) {
+            const c = (await cRes.json()) as { total?: number }
+            prospectedCount = typeof c?.total === "number" ? c.total : 0
+          }
+        } catch {}
+        // A server that ignored exclude_statuses must still not show them.
+        leads = leads.filter((l: any) => (l.status ?? "").toLowerCase() !== "prospected")
       }
 
       // Sort by status priority: active clients first
@@ -377,14 +385,18 @@ const LeadsListCommand = cmd({
         lost: 7,
         unresponsive: 8,
       }
-      leads.sort((a: any, b: any) => {
-        const pa = statusPriority[(a.status ?? "").toLowerCase()] ?? 5
-        const pb = statusPriority[(b.status ?? "").toLowerCase()] ?? 5
-        return pa - pb
-      })
+      // Only the default activity view is banded; an explicit --sort IS the order shown
+      // (#191688, #191689 — the bands made `--sort value` read 50k, 8k, 100k).
+      if (request.reorderByStatus) {
+        leads.sort((a: any, b: any) => {
+          const pa = statusPriority[(a.status ?? "").toLowerCase()] ?? 5
+          const pb = statusPriority[(b.status ?? "").toLowerCase()] ?? 5
+          return pa - pb
+        })
+      }
 
       // Trim to requested limit
-      leads = leads.slice(0, args.limit)
+      leads = leads.slice(0, limit)
       // #182078 — SAY WHEN THE ANSWER IS PARTIAL.
       //
       // This command hides Prospected by default, caps by recency, and reported only the
@@ -398,7 +410,6 @@ const LeadsListCommand = cmd({
         shown: leads.length,
         total: totalFromApi,
         prospectedHidden: prospectedCount,
-        scanned,
         // The report must describe the ordering that actually ran. It used to say
         // "newest … by id" unconditionally, which stops being true the moment --sort
         // does anything.
@@ -429,8 +440,10 @@ const LeadsListCommand = cmd({
           prompts.log.warn(`No active leads — ${prospectedCount} Prospected leads hidden`)
           prompts.outro(`View them: ${dim("iris leads list --all")}`)
         } else {
-          prompts.log.warn("No leads found")
-          prompts.outro(`Create one: ${dim("iris leads create")}`)
+          // #191693 — a filtered empty result is not an empty book.
+          const empty = emptyListMessage({ status: args.status, search: args.search, bloqId: args["bloq-id"] })
+          prompts.log.warn(empty.warn)
+          prompts.outro(dim(empty.hint))
         }
         return
       }
@@ -12331,12 +12344,15 @@ const SegmentCreateCommand = cmd({
   async handler(args) {
     if (!(await requireAuth())) return
 
-    const filters: Record<string, any> = {}
-    if (args.status) filters.status = String(args.status)
-    if (args.search) filters.search = String(args.search)
-    if (args["min-price"]) filters.value_range = { ...(filters.value_range || {}), min: Number(args["min-price"]) }
-    if (args["max-price"]) filters.value_range = { ...(filters.value_range || {}), max: Number(args["max-price"]) }
-    if (args.tag) filters.tags = [String(args.tag)]
+    // #191692 — the bloq scope is stored in filters too (an integer), so it is visible.
+    const filters = buildSegmentFilters({
+      status: args.status,
+      search: args.search,
+      bloqId: args["bloq-id"] as number | undefined,
+      minPrice: args["min-price"] as number | undefined,
+      maxPrice: args["max-price"] as number | undefined,
+      tag: args.tag,
+    })
 
     if (Object.keys(filters).length === 0) {
       prompts.log.error("At least one filter required (--status, --search, --bloq-id, --min-price, --tag)")

@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test"
-import { describeListScope, type ListScope } from "./leads-scope"
+import {
+  buildListRequest,
+  buildSegmentFilters,
+  describeListScope,
+  emptyListMessage,
+  leadDisplayName,
+  LIST_SORTS,
+  parseListLimit,
+  type ListScope,
+} from "./leads-scope"
 
 /**
  * #182078 — a partial answer must say so.
@@ -134,5 +143,116 @@ describe("describeListScope", () => {
     // Defensive: `scanned` is a caller-supplied number. If it is nonsense, say less.
     const r = describeListScope({ shown: 20, total: 20, prospectedHidden: 2, scanned: 3 })
     expect(r.notes.join(" ")).not.toContain("scanned")
+  })
+})
+
+describe("buildListRequest — #191690 filter in the query, not after the page", () => {
+  test("the default list excludes Prospected ON THE SERVER, for every sort", () => {
+    for (const sort of ["activity", "created", "name", "value"]) {
+      const r = buildListRequest({ limit: 2, sort })
+      expect(r.hidesProspected).toBe(true)
+      expect(r.params.get("exclude_statuses")).toBe("Prospected")
+    }
+  })
+
+  test("--sort created asks for exactly the page — no oversized window to filter after", () => {
+    const r = buildListRequest({ limit: 2, sort: "created" })
+    expect(r.params.get("per_page")).toBe("2")
+    expect(r.params.get("sort_by")).toBe("created_at")
+    expect(r.params.get("sort_direction")).toBe("desc")
+  })
+
+  test("--all, --status and --search do not exclude anything", () => {
+    expect(buildListRequest({ limit: 5, all: true }).params.has("exclude_statuses")).toBe(false)
+    const st = buildListRequest({ limit: 5, status: "Prospected" })
+    expect(st.params.has("exclude_statuses")).toBe(false)
+    expect(st.params.get("status")).toBe("Prospected")
+    expect(buildListRequest({ limit: 5, search: "acme" }).params.has("exclude_statuses")).toBe(false)
+  })
+
+  test("the default activity view keeps its wider window, capped at the server max", () => {
+    expect(buildListRequest({ limit: 20 }).params.get("per_page")).toBe("100")
+    expect(buildListRequest({ limit: 900 }).params.get("per_page")).toBe("1000")
+    expect(buildListRequest({ limit: 20, all: true }).params.get("per_page")).toBe("20")
+  })
+
+  test("bloq scope is passed through", () => {
+    expect(buildListRequest({ limit: 5, bloqId: 40 }).params.get("bloq_id")).toBe("40")
+  })
+})
+
+describe("buildListRequest — #191688/#191689 an explicit --sort is the order shown", () => {
+  test("only the default activity view is reordered into status bands", () => {
+    expect(buildListRequest({ limit: 5, sort: "activity" }).reorderByStatus).toBe(true)
+    expect(buildListRequest({ limit: 5 }).reorderByStatus).toBe(true)
+    for (const sort of ["created", "name", "value"]) {
+      expect(buildListRequest({ limit: 5, sort }).reorderByStatus).toBe(false)
+    }
+  })
+
+  test("value is the money (price_bid, highest first) and the footer says so", () => {
+    const r = buildListRequest({ limit: 5, sort: "value" })
+    expect(r.params.get("sort_by")).toBe("price_bid")
+    expect(r.params.get("sort_direction")).toBe("desc")
+    expect(r.orderingLabel).toContain("deal value")
+  })
+
+  test("name asks the server for its display-name order, A-Z", () => {
+    const r = buildListRequest({ limit: 5, sort: "name" })
+    expect(r.params.get("sort_by")).toBe("name")
+    expect(r.params.get("sort_direction")).toBe("asc")
+    expect(LIST_SORTS.name.orderingLabel).toContain("alphabetically")
+  })
+})
+
+describe("leadDisplayName — #191688 name is null on most leads", () => {
+  test("falls back to nickname, then first_name, then the id", () => {
+    expect(leadDisplayName({ id: 1, name: "Robyn Baker", nickname: "x" })).toBe("Robyn Baker")
+    expect(leadDisplayName({ id: 100, name: null, nickname: "Antonio Guevara" })).toBe("Antonio Guevara")
+    expect(leadDisplayName({ id: 7, name: "  ", nickname: "", first_name: "Sam" })).toBe("Sam")
+    expect(leadDisplayName({ id: 87, name: null, nickname: "" })).toBe("Lead #87")
+  })
+})
+
+describe("parseListLimit — #191691", () => {
+  test("accepts whole numbers 1..1000", () => {
+    expect(parseListLimit("20")).toEqual({ ok: true, value: 20 })
+    expect(parseListLimit(1)).toEqual({ ok: true, value: 1 })
+    expect(parseListLimit("1000")).toEqual({ ok: true, value: 1000 })
+  })
+
+  test("rejects negative, zero, fractional, non-numeric and oversized limits with a clear message", () => {
+    for (const bad of ["-1", -1, "0", 0, "abc", Number.NaN, "2.5", "1001", "", undefined]) {
+      const r = parseListLimit(bad)
+      expect(r.ok).toBe(false)
+      if (!r.ok) expect(r.error).toContain("--limit must be a whole number from 1 to 1000")
+    }
+    const nan = parseListLimit(Number.NaN)
+    if (!nan.ok) expect(nan.error).toContain('"NaN"')
+  })
+})
+
+describe("emptyListMessage — #191693 a filtered empty result is not an empty book", () => {
+  test("a filter that matched nothing says so, without the Create hint", () => {
+    const m = emptyListMessage({ status: "Responded", bloqId: 40 })
+    expect(m.warn).toBe('No leads match status "Responded", bloq 40')
+    expect(m.hint).not.toContain("Create one")
+  })
+  test("an unfiltered empty book still offers to create one", () => {
+    expect(emptyListMessage({}).hint).toContain("Create one")
+  })
+})
+
+describe("buildSegmentFilters — #191692 the bloq scope is in the saved filters", () => {
+  test("bloq_id is stored as an integer next to the other filters", () => {
+    const f = buildSegmentFilters({ status: "Responded", bloqId: 40 })
+    expect(f).toEqual({ status: "Responded", bloq_id: 40 })
+    expect(typeof f.bloq_id).toBe("number")
+  })
+  test("a bloq scope alone is a filter", () => {
+    expect(Object.keys(buildSegmentFilters({ bloqId: 40 }))).toEqual(["bloq_id"])
+  })
+  test("no bloq, no bloq_id key", () => {
+    expect("bloq_id" in buildSegmentFilters({ status: "Won" })).toBe(false)
   })
 })
