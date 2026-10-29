@@ -52,6 +52,8 @@ export function SessionAllowanceDock() {
   onCleanup(() => setAllowanceDockShown(false))
   // A FOLDER TAB tucked behind the composer, like the todos bar (Alex, 2026-10-20: "it works as a
   // family rather than a competing object"). The floating card was the alternative.
+  // Inset by the composer's 12px corner radius: at full width the tab's straight sides, and the
+  // gold ring round them, showed in the wedges beside the composer's rounded top corners (#191777).
   const tab = () => true
   // The API refused a message: open the tab with the upgrade, and re-read the allowance now
   // rather than at the next poll (#190087).
@@ -82,7 +84,7 @@ export function SessionAllowanceDock() {
       {(s) => (
         <div
           class="iris-glow relative z-0"
-          classList={{ "mb-3": !tab(), "-mb-[18px]": tab() }}
+          classList={{ "mb-3": !tab(), "-mb-[18px] mx-3": tab() }}
           style={{
             "border-radius": tab() ? "12px 12px 0 0" : "12px",
             "--iris-glow-ring": `${(glowDurations[settings.glow.speed()] ?? glowDurations.normal)[0]}s`,
