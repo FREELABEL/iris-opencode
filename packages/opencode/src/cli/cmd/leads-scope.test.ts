@@ -7,8 +7,14 @@ import {
   leadDisplayName,
   LIST_SORTS,
   leadHasReplied,
+  formatLocalTime,
   mergeResponders,
   parseListLimit,
+  parseListPage,
+  parsePriceBound,
+  parseServerTime,
+  walkCursorPages,
+  type CursorPage,
   type ListScope,
 } from "./leads-scope"
 
@@ -279,5 +285,109 @@ describe("mergeResponders — #191702 replied means replied, not a status", () =
     expect(leadHasReplied({ has_replied: "1" })).toBe(true)
     expect(leadHasReplied({ tags: ["DM Replied"] })).toBe(true)
     expect(leadHasReplied({ has_replied: 0, tags: [{ name: "Other" }] })).toBe(false)
+  })
+})
+
+describe("buildListRequest — #191736 paging and #191737 tag/price filters", () => {
+  test("tags, price bounds and a cursor reach the server as its own parameters", () => {
+    const { params } = buildListRequest({ limit: 50, sort: "created", tags: ["independent", " label "], minPrice: 0, maxPrice: 5000, cursor: "abc" })
+    expect(params.getAll("tag[]")).toEqual(["independent", "label"])
+    expect(params.get("price_bid_min")).toBe("0") // 0 is a bound, not "no bound"
+    expect(params.get("price_bid_max")).toBe("5000")
+    expect(params.get("cursor")).toBe("abc")
+    expect(params.has("pagination")).toBe(false)
+    expect(params.has("page")).toBe(false)
+  })
+  test("a walk starts with pagination=cursor; --page is the server's page", () => {
+    expect(buildListRequest({ limit: 1000, paginate: "cursor" }).params.get("pagination")).toBe("cursor")
+    expect(buildListRequest({ limit: 20, page: 3 }).params.get("page")).toBe("3")
+    expect(buildListRequest({ limit: 20 }).params.has("pagination")).toBe(false)
+  })
+  test("a page of a walk is the server's order: no status bands, no widened window", () => {
+    for (const paging of [{ cursor: "c" }, { paginate: "cursor" as const }, { page: 2 }]) {
+      const r = buildListRequest({ limit: 20, ...paging })
+      expect(r.reorderByStatus).toBe(false)
+      expect(r.params.get("per_page")).toBe("20")
+    }
+    // the plain default view is unchanged
+    const plain = buildListRequest({ limit: 20 })
+    expect(plain.reorderByStatus).toBe(true)
+    expect(plain.params.get("per_page")).toBe("100")
+  })
+})
+
+describe("parsePriceBound / parseListPage", () => {
+  test("numbers pass, anything else is refused before a request", () => {
+    expect(parsePriceBound("min-price", "5000")).toEqual({ ok: true, value: 5000 })
+    expect(parsePriceBound("min-price", "0")).toEqual({ ok: true, value: 0 })
+    expect(parsePriceBound("min-price", "12.50")).toEqual({ ok: true, value: 12.5 })
+    expect(parsePriceBound("min-price", undefined)).toEqual({ ok: true })
+    for (const bad of ["5k", "1,000", "abc", "--5"]) expect(parsePriceBound("min-price", bad).ok).toBe(false)
+    expect(parseListPage("2")).toEqual({ ok: true, value: 2 })
+    for (const bad of ["0", "-1", "two", "1.5"]) expect(parseListPage(bad).ok).toBe(false)
+  })
+})
+
+describe("walkCursorPages — #191736 every page, no gaps, no repeats", () => {
+  // A keyset server over rows that share sort values: order (score desc, id desc).
+  const rows = Array.from({ length: 53 }, (_, i) => ({ id: i + 1, score: [3, 3, 1, 2, 2, 2][i % 6] }))
+  const ordered = [...rows].sort((a, b) => b.score - a.score || b.id - a.id)
+  const after = (c: { score: number; id: number }) => (r: { score: number; id: number }) =>
+    r.score < c.score || (r.score === c.score && r.id < c.id)
+  const server = (per: number) => async (cursor: string | undefined): Promise<CursorPage> => {
+    const from = cursor ? ordered.filter(after(JSON.parse(cursor))) : ordered
+    const page = from.slice(0, per)
+    const more = from.length > per
+    const last = page[page.length - 1]
+    return { data: page, total: cursor ? null : ordered.length, next_cursor: more ? JSON.stringify(last) : null }
+  }
+
+  test("the walk is the whole ordered set, whatever the page size", async () => {
+    for (const per of [1, 5, 6, 7, 52, 53, 1000]) {
+      const progress: number[] = []
+      const walk = await walkCursorPages(server(per), (p) => progress.push(p.fetched))
+      expect(walk.rows.map((r) => r.id)).toEqual(ordered.map((r) => r.id))
+      expect(walk.total).toBe(53)
+      expect(walk.pages).toBe(Math.max(1, Math.ceil(53 / per)))
+      expect(progress[progress.length - 1]).toBe(53)
+    }
+  })
+  test("a server that repeats a row stops the walk instead of double-counting", async () => {
+    let n = 0
+    const repeating = async (): Promise<CursorPage> => ({ data: [{ id: 1 }], next_cursor: `c${++n}` })
+    await expect(walkCursorPages(repeating)).rejects.toThrow("twice")
+  })
+  test("a cursor that does not advance stops the walk", async () => {
+    let id = 0
+    const stuck = async (): Promise<CursorPage> => ({ data: [{ id: ++id }], next_cursor: "same" })
+    await expect(walkCursorPages(stuck)).rejects.toThrow("did not advance")
+  })
+})
+
+describe("server timestamps — #191738", () => {
+  test("ISO with a zone is that instant; a bare legacy string is UTC, not local", () => {
+    expect(parseServerTime("2026-10-29T02:36:49.000000Z")?.toISOString()).toBe("2026-10-29T02:36:49.000Z")
+    expect(parseServerTime("2026-10-29T02:36:49+00:00")?.toISOString()).toBe("2026-10-29T02:36:49.000Z")
+    expect(parseServerTime("2026-10-29 02:36:49")?.toISOString()).toBe("2026-10-29T02:36:49.000Z")
+    expect(parseServerTime(null)).toBeNull()
+    expect(parseServerTime("not a date")).toBeNull()
+  })
+  test("displayed in the reader's zone", () => {
+    expect(formatLocalTime("2026-10-29T02:36:49.000000Z", "America/Chicago")).toBe("2026-10-28 21:36 CDT")
+    expect(formatLocalTime("2026-10-29 02:36:49", "America/Chicago")).toBe("2026-10-28 21:36 CDT")
+    expect(formatLocalTime("2026-10-29T02:36:49Z", "UTC")).toBe("2026-10-29 02:36 UTC")
+    expect(formatLocalTime(undefined)).toBeUndefined()
+  })
+  test("responders sort by instant even when the server mixes formats", () => {
+    // Off UTC on purpose: a bare string read as LOCAL time only goes wrong away from UTC.
+    const tz = process.env.TZ
+    process.env.TZ = "Asia/Tokyo"
+    const iso = { id: 1, has_replied: true, replied_at: "2026-10-29T02:00:00Z" } // 02:00 UTC
+    const bare = { id: 2, has_replied: true, replied_at: "2026-10-29 03:00:00" } // 03:00 UTC — newer
+    try {
+      expect(mergeResponders([[iso, bare]], 10).map((l) => l.id)).toEqual([2, 1])
+    } finally {
+      process.env.TZ = tz
+    }
   })
 })

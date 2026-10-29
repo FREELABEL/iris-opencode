@@ -4,9 +4,15 @@ import {
   describeListScope,
   emptyListMessage,
   leadDisplayName,
+  formatLocalTime,
   mergeResponders,
   parseListLimit,
+  parseListPage,
+  parsePriceBound,
+  parseServerTime,
   REPLIED_TAG,
+  walkCursorPages,
+  type CursorPage,
 } from "./leads-scope"
 import { analyzeJson, inPeriod, messagesHeader, messagesInPeriod, type AnalyzePeriod, type SentMessage } from "./leads-analyze"
 import { cmd } from "./cmd"
@@ -281,9 +287,21 @@ const LeadsListCommand = cmd({
       .option("status", { describe: "filter by status", type: "string" })
       .option("search", { alias: "s", describe: "search query", type: "string" })
       // string, not number: yargs turns "abc" into NaN, which reached the API as a 500 (#191691)
-      .option("limit", { describe: "max results (1-1000)", type: "string", default: "20" })
+      .option("limit", { describe: "max results (1-1000); the page size with --cursor/--page/--all-pages", type: "string" })
       .option("bloq-id", { alias: "bloq", describe: "filter by bloq/project ID", type: "number" })
       .option("all", { describe: "include Prospected leads (hidden by default)", type: "boolean", default: false })
+      // #191737 — the same filters a segment has, applied by the server before paging
+      .option("tag", { describe: "only leads with this tag (repeat for any of several)", type: "string", array: true })
+      .option("min-price", { describe: "only leads with deal value (price_bid) at least this", type: "string" })
+      .option("max-price", { describe: "only leads with deal value (price_bid) at most this", type: "string" })
+      // #191736 — a way past the first page
+      .option("cursor", { describe: "continue from a previous page's next cursor", type: "string" })
+      .option("page", { describe: "page number (offset paging; --cursor is stable while leads change)", type: "string" })
+      .option("all-pages", {
+        describe: "walk EVERY page (1000 per request unless --limit) and return the whole matching book",
+        type: "boolean",
+        default: false,
+      })
       .option("sort", {
         describe:
           "order the WHOLE book before paging — activity (default), created (newest), name (display name A-Z), value (deal value, highest first)",
@@ -297,10 +315,29 @@ const LeadsListCommand = cmd({
     prompts.intro("◈  IRIS Leads")
 
     // #191691 — refuse a bad --limit before any request, so it can never become a 500.
-    const parsedLimit = parseListLimit(args.limit)
-    if (!parsedLimit.ok) {
-      if (args.json) process.stderr.write(`[leads list] ${parsedLimit.error}\n`)
-      prompts.log.error(parsedLimit.error)
+    // A walk defaults to the server's largest page; a single page to 20.
+    const allPages = Boolean(args["all-pages"])
+    const parsedLimit = parseListLimit(args.limit ?? (allPages ? "1000" : "20"))
+    const parsedMin = parsePriceBound("min-price", args["min-price"])
+    const parsedMax = parsePriceBound("max-price", args["max-price"])
+    const parsedPage = parseListPage(args.page)
+    const usageError = !parsedLimit.ok
+      ? parsedLimit.error
+      : !parsedMin.ok
+        ? parsedMin.error
+        : !parsedMax.ok
+          ? parsedMax.error
+          : !parsedPage.ok
+            ? parsedPage.error
+            : args.cursor && parsedPage.value
+              ? "use --cursor or --page, not both"
+              : allPages && (args.cursor || parsedPage.value)
+                ? "--all-pages walks from the first page; drop --cursor/--page"
+                : null
+    if (usageError || !parsedLimit.ok || !parsedMin.ok || !parsedMax.ok || !parsedPage.ok) {
+      const msg = usageError ?? "invalid arguments"
+      if (args.json) process.stderr.write(`[leads list] ${msg}\n`)
+      prompts.log.error(msg)
       process.exitCode = 1
       prompts.outro("Done")
       return
@@ -327,27 +364,62 @@ const LeadsListCommand = cmd({
       // `--sort created` returned 0 rows (and `--json` []) over a book of 29k.
       // buildListRequest sends exclude_statuses=Prospected: the page is full whenever
       // matches exist.
-      const request = buildListRequest({
+      const listOptions = {
         limit,
         sort: String(args.sort),
         all: args.all,
         status: args.status,
         search: args.search,
         bloqId: args["bloq-id"],
-      })
-      const { params, orderingLabel } = request
-
-      const res = await irisFetch(`/api/v1/leads?${params}`)
-      const ok = await handleApiError(res, "List leads")
-      if (!ok) {
-        spinner.stop("Failed", 1)
-        process.exitCode = 1
-        prompts.outro("Done")
-        return
+        tags: (args.tag ?? []).map(String),
+        minPrice: parsedMin.value,
+        maxPrice: parsedMax.value,
       }
+      // A plain run of an explicit --sort is already one order, so ask for it as the first page
+      // of a cursor walk: the footer can then say exactly how to get the next page. The default
+      // activity view re-bands a wider window, which no cursor can continue.
+      const banded = buildListRequest(listOptions).reorderByStatus
+      const request = buildListRequest({
+        ...listOptions,
+        cursor: args.cursor,
+        page: parsedPage.value,
+        paginate: allPages || (!banded && !args.cursor && !parsedPage.value) ? "cursor" : undefined,
+      })
+      const { orderingLabel } = request
 
-      const data = (await res.json()) as { data?: any[]; total?: number; meta?: { total?: number } }
+      let data: { data?: any[]; total?: number | null; meta?: { total?: number }; next_cursor?: string | null; current_page?: number; last_page?: number }
+      if (allPages) {
+        // #191736 — every page, each request cut by the server's keyset cursor.
+        const fetchPage = async (cursor: string | undefined): Promise<CursorPage> => {
+          const { params } = buildListRequest({ ...listOptions, cursor, paginate: "cursor" })
+          const res = await irisFetch(`/api/v1/leads?${params}`)
+          if (!res.ok) {
+            const body = (await res.json().catch(() => ({}))) as { message?: string }
+            throw new Error(`List leads failed (HTTP ${res.status})${body?.message ? `: ${body.message}` : ""}`)
+          }
+          return (await res.json()) as CursorPage
+        }
+        const walk = await walkCursorPages(fetchPage, ({ page, fetched, total }) => {
+          const line = `page ${page} · ${fetched.toLocaleString()}${total !== null ? ` of ${total.toLocaleString()}` : ""} leads`
+          if (args.json) process.stderr.write(`[leads list] ${line}\n`)
+          else spinner.message(line)
+        })
+        data = { data: walk.rows, total: walk.total ?? walk.rows.length }
+      } else {
+        const res = await irisFetch(`/api/v1/leads?${request.params}`)
+        const ok = await handleApiError(res, "List leads")
+        if (!ok) {
+          spinner.stop("Failed", 1)
+          process.exitCode = 1
+          prompts.outro("Done")
+          return
+        }
+        data = (await res.json()) as typeof data
+      }
       let leads: any[] = firstArray(data?.data)
+      const nextCursor = typeof data?.next_cursor === "string" ? data.next_cursor : null
+      const nextPage =
+        parsedPage.value && typeof data?.last_page === "number" && parsedPage.value < data.last_page ? parsedPage.value + 1 : null
 
       // Default: hide Prospected leads (mass-scraped venue/SOM leads)
       // Use --all or --status to see everything
@@ -401,8 +473,8 @@ const LeadsListCommand = cmd({
         })
       }
 
-      // Trim to requested limit
-      leads = leads.slice(0, limit)
+      // Trim to requested limit (a walk is the whole book, not one page)
+      if (!allPages) leads = leads.slice(0, limit)
       // #182078 — SAY WHEN THE ANSWER IS PARTIAL.
       //
       // This command hides Prospected by default, caps by recency, and reported only the
@@ -414,7 +486,8 @@ const LeadsListCommand = cmd({
       // Reporting lives in leads-scope.ts so it can be tested — it is the part that failed.
       const scope = describeListScope({
         shown: leads.length,
-        total: totalFromApi,
+        // A later cursor page carries no total (the server counts once, on the first page).
+        total: typeof totalFromApi === "number" ? totalFromApi : leads.length,
         prospectedHidden: prospectedCount,
         // The report must describe the ordering that actually ran. It used to say
         // "newest … by id" unconditionally, which stops being true the moment --sort
@@ -437,6 +510,8 @@ const LeadsListCommand = cmd({
         if (truncated || prospectedCount > 0) {
           process.stderr.write(scope.warnings.map((w) => `[leads list] ${w}`).join("\n") + "\n")
         }
+        if (nextCursor) process.stderr.write(`[leads list] next page: --cursor ${nextCursor}\n`)
+        else if (nextPage) process.stderr.write(`[leads list] next page: --page ${nextPage}\n`)
         await writeJson(leads)
         return
       }
@@ -461,6 +536,9 @@ const LeadsListCommand = cmd({
       }
       printDivider()
 
+      if (nextCursor) prompts.log.info(`Next page: ${dim(`--cursor ${nextCursor}`)} (same filters and --sort)  ·  every page: ${dim("--all-pages")}`)
+      else if (nextPage) prompts.log.info(`Next page: ${dim(`--page ${nextPage}`)}  ·  every page: ${dim("--all-pages")}`)
+      else if (truncated && request.reorderByStatus) prompts.log.info(`More: ${dim("--all-pages")}, or page by page in server order: ${dim("--page 1")}`)
       prompts.outro(`${dim("iris leads get <id>")}  ·  ${dim("iris leads search <query>")}`)
     } catch (err) {
       spinner.stop("Error", 1)
@@ -516,7 +594,7 @@ const LeadsRepliedCommand = cmd({
         const data = (await res.json()) as { data?: any[] }
         lists.push(firstArray(data?.data))
       }
-      const repliedTime = (l: any) => new Date(l.replied_at ?? l.updated_at ?? 0).getTime()
+      const repliedTime = (l: any) => parseServerTime(l.replied_at ?? l.updated_at)?.getTime() ?? 0
       const leads = mergeResponders(lists, args.limit) as any[]
       spinner.stop(`${leads.length} responder(s)`)
 
@@ -690,7 +768,10 @@ const LeadsGetCommand = cmd({
       printKV("Stage", l.stage)
       printKV("Source", l.source)
       printKV("Bid", l.price_bid ? `$${l.price_bid}` : undefined)
-      printKV("Created", l.created_at)
+      // #191738 — shown in the reader's local time; --json keeps the API's ISO value.
+      printKV("Created", formatLocalTime(l.created_at))
+      printKV("Updated", formatLocalTime(l.updated_at))
+      printKV("Replied", formatLocalTime(l.replied_at))
 
       // #57686: Completeness score in leads get (same logic as pulse)
       {

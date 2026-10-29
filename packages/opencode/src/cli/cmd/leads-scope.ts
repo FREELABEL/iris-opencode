@@ -111,6 +111,17 @@ export type ListRequestOptions = {
   status?: string
   search?: string
   bloqId?: number
+  /** #191737 — any of these tag names (server: tag[]), price_bid bounds. */
+  tags?: string[]
+  minPrice?: number
+  maxPrice?: number
+  /**
+   * #191736 — paging. `cursor` continues a keyset walk (the server's next_cursor);
+   * `paginate: "cursor"` starts one; `page` is the server's OFFSET page (1-based).
+   */
+  cursor?: string
+  paginate?: "cursor"
+  page?: number
 }
 
 export type ListRequest = {
@@ -139,7 +150,11 @@ export function buildListRequest(o: ListRequestOptions): ListRequest {
   const sortKey = o.sort && LIST_SORTS[o.sort] ? o.sort : "activity"
   const { sortBy, sortDirection, orderingLabel } = LIST_SORTS[sortKey]
   const hidesProspected = !o.all && !o.status && !o.search
-  const reorderByStatus = sortKey === "activity"
+  // #191736 — a page of a walk is shown in the server's order. Banding re-sorts a window, and
+  // a window re-sorted per page is not one order across pages: the bands would restart on
+  // every page and the walk would no longer be the book in order.
+  const paging = Boolean(o.cursor || o.paginate || o.page)
+  const reorderByStatus = sortKey === "activity" && !paging
   // The activity view reorders a window into bands, so it needs a window wider than the page.
   const perPage = reorderByStatus && hidesProspected ? Math.min(Math.max(o.limit * 5, 100), LIST_MAX_LIMIT) : o.limit
 
@@ -150,7 +165,110 @@ export function buildListRequest(o: ListRequestOptions): ListRequest {
   if (o.status) params.set("status", o.status)
   if (o.search) params.set("search", o.search)
   if (o.bloqId) params.set("bloq_id", String(o.bloqId))
+  for (const t of o.tags ?? []) if (t.trim()) params.append("tag[]", t.trim())
+  if (o.minPrice !== undefined) params.set("price_bid_min", String(o.minPrice))
+  if (o.maxPrice !== undefined) params.set("price_bid_max", String(o.maxPrice))
+  if (o.cursor) params.set("cursor", o.cursor)
+  else if (o.paginate === "cursor") params.set("pagination", "cursor")
+  else if (o.page) params.set("page", String(o.page))
   return { params, orderingLabel, hidesProspected, reorderByStatus }
+}
+
+/**
+ * #191737 — a price bound is a number or it is refused before any request. The server 422s
+ * a non-number too; refusing here keeps `--min-price 5k` from ever being a silent no-op.
+ */
+export function parsePriceBound(flag: string, raw: unknown): { ok: true; value?: number } | { ok: false; error: string } {
+  if (raw === undefined || raw === null || raw === "") return { ok: true }
+  const text = typeof raw === "number" ? String(raw) : typeof raw === "string" ? raw.trim() : ""
+  if (!/^-?\d+(\.\d+)?$/.test(text)) {
+    return { ok: false, error: `--${flag} must be a number, e.g. 5000 (got ${JSON.stringify(typeof raw === "number" ? String(raw) : raw)})` }
+  }
+  return { ok: true, value: Number(text) }
+}
+
+/** `--page` is a whole number from 1. */
+export function parseListPage(raw: unknown): { ok: true; value?: number } | { ok: false; error: string } {
+  if (raw === undefined || raw === null || raw === "") return { ok: true }
+  const text = typeof raw === "number" ? String(raw) : typeof raw === "string" ? raw.trim() : ""
+  if (!/^\d+$/.test(text) || Number(text) < 1) return { ok: false, error: `--page must be a whole number from 1 (got ${JSON.stringify(raw)})` }
+  return { ok: true, value: Number(text) }
+}
+
+/** One page of GET /api/v1/leads in cursor mode (fl-api LeadController::index, #191736). */
+export type CursorPage = { data?: unknown[]; total?: number | null; next_cursor?: string | null; has_more?: boolean }
+
+/**
+ * #191736 — walk EVERY page of a keyset cursor and return the rows in order.
+ *
+ * The server's cursor is "the rows strictly after this row" with id as the final tie-break, so
+ * a walk has no gaps and no repeats even when thousands of rows share a sort value or rows
+ * are added mid-walk. This loop still refuses to trust that blindly: a row id seen twice, or
+ * a cursor that does not advance, stops the walk with an error instead of looping or quietly
+ * returning a wrong population.
+ */
+export async function walkCursorPages(
+  fetchPage: (cursor: string | undefined) => Promise<CursorPage>,
+  onProgress?: (p: { page: number; fetched: number; total: number | null }) => void,
+  maxPages = 10_000,
+): Promise<{ rows: any[]; total: number | null; pages: number }> {
+  const rows: any[] = []
+  const seen = new Set<unknown>()
+  let cursor: string | undefined
+  let total: number | null = null
+  let pages = 0
+  while (pages < maxPages) {
+    const page = await fetchPage(cursor)
+    pages++
+    if (pages === 1) total = typeof page.total === "number" ? page.total : null
+    for (const r of Array.isArray(page.data) ? (page.data as any[]) : []) {
+      const id = r?.id
+      if (seen.has(id)) throw new Error(`walk returned lead #${id} twice (page ${pages}) — stopping rather than double-count`)
+      seen.add(id)
+      rows.push(r)
+    }
+    onProgress?.({ page: pages, fetched: rows.length, total })
+    const next = page.next_cursor ?? null
+    if (!next) return { rows, total, pages }
+    if (next === cursor) throw new Error(`cursor did not advance on page ${pages} — stopping`)
+    cursor = next
+  }
+  throw new Error(`walk stopped after ${maxPages} pages`)
+}
+
+/**
+ * #191738 — a timestamp from the API as an instant. The API now sends ISO 8601 with a zone
+ * for every lead timestamp; older servers sent some as bare "YYYY-MM-DD HH:MM:SS", which is
+ * UTC on fl-api, but `new Date()` reads a bare string as LOCAL time — so a reply 2h ago read
+ * as 7h ago in Chicago. Bare strings are read as UTC here.
+ */
+export function parseServerTime(v: unknown): Date | null {
+  if (typeof v !== "string" || !v.trim()) return null
+  const s = v.trim()
+  const bare = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(s)
+  const d = new Date(bare ? s.replace(" ", "T") + "Z" : s)
+  return isNaN(d.getTime()) ? null : d
+}
+
+/** A server timestamp in the reader's local time, e.g. "2026-10-28 21:36 CDT". `--json` keeps the ISO value. */
+export function formatLocalTime(v: unknown, timeZone?: string): string | undefined {
+  const d = parseServerTime(v)
+  if (!d) return typeof v === "string" && v.trim() ? v : undefined
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+      timeZoneName: "short",
+    })
+      .formatToParts(d)
+      .map((p) => [p.type, p.value]),
+  )
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute} ${parts.timeZoneName}`
 }
 
 /** The name a lead is shown by — `name` is null on most leads, which carry `nickname` (#191688). */
@@ -223,6 +341,6 @@ export function leadHasReplied(l: Record<string, any>): boolean {
 export function mergeResponders(lists: Array<Array<Record<string, any>>>, limit: number): Array<Record<string, any>> {
   const byId = new Map<unknown, Record<string, any>>()
   for (const list of lists) for (const l of list) if (l && !byId.has(l.id) && leadHasReplied(l)) byId.set(l.id, l)
-  const t = (l: Record<string, any>) => new Date(l.replied_at ?? l.updated_at ?? 0).getTime() || 0
+  const t = (l: Record<string, any>) => parseServerTime(l.replied_at ?? l.updated_at)?.getTime() ?? 0
   return [...byId.values()].sort((a, b) => t(b) - t(a)).slice(0, limit)
 }
