@@ -201,10 +201,17 @@ export function PlaybookTags(props: { row: any; withState?: boolean }) {
 export function PlaybookFlowRow(props: { row: any; onOpen: () => void }) {
   const steps = () => flowSteps(props.row)
   const level = () => handsLevel(props.row)
-  // Who can see it, only when that is not everyone — "Everyone" on every row says nothing.
-  const scope = () => (props.row?.scope && props.row.scope !== "public" ? scopeWords(props.row.scope) : undefined)
+  // Who can see it and whether you have it: an icon each, the words on hover (Alex, 2026-10-29).
+  const scope = () => {
+    const words = scopeWords(props.row?.scope)
+    return words ? { words, icon: scopeIcon(props.row.scope) } : undefined
+  }
   const state = () =>
-    props.row?.hasLocal ? (props.row.action === "update" ? `Update · v${props.row.version}` : "Installed") : undefined
+    props.row?.hasLocal
+      ? props.row.action === "update"
+        ? { words: `Update available · v${props.row.version}`, icon: "arrow-up" as const }
+        : { words: "Installed", icon: "check" as const }
+      : undefined
   return (
     <button
       type="button"
@@ -218,15 +225,25 @@ export function PlaybookFlowRow(props: { row: any; onOpen: () => void }) {
       <span class="pbf-row__main">
         <span class="pbf-row__head">
           <span class="pbf-row__title">{playbookTitle(props.row)}</span>
-          <Show when={state()}>
-            {(st) => (
-              <span class="pbf-row__state" title={props.row.localWhere ? `${st()} — ${props.row.localWhere}` : st()}>
-                <Ic name="check" />
-                {st()}
+          <Show when={scope()}>
+            {(sc) => (
+              <span class="pbf-row__icon" title={`Who can see it: ${sc().words}`} aria-label={`Who can see it: ${sc().words}`}>
+                <Ic name={sc().icon} />
               </span>
             )}
           </Show>
-          <Show when={scope()}>{(sc) => <span class="pbf-row__scope">{sc()}</span>}</Show>
+          <Show when={state()}>
+            {(st) => (
+              <span
+                class="pbf-row__icon"
+                data-state={props.row.action === "update" ? "update" : "installed"}
+                title={props.row.localWhere ? `${st().words} — ${props.row.localWhere}` : st().words}
+                aria-label={st().words}
+              >
+                <Ic name={st().icon} />
+              </span>
+            )}
+          </Show>
         </span>
         <Show when={outcomeLine(props.row?.description)}>{(o) => <span class="pbf-row__out">{o()}</span>}</Show>
       </span>

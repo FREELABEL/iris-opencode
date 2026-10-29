@@ -2176,7 +2176,11 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 .pbf-row__main { flex: 1 1 auto; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .pbf-row__head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .pbf-row__title { font-size: 13px; font-weight: 500; line-height: 1.35; color: var(--pbf-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pbf-row__state, .pbf-row__scope { flex: none; display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: var(--pbf-ink2); }
+/* scope and installed: an icon each, the words in the tooltip (#191697) */
+.pbf-row__icon { flex: none; display: inline-flex; align-items: center; color: var(--pbf-faint); cursor: help; }
+.pbf-row__icon:hover { color: var(--pbf-ink); }
+.pbf-row__icon[data-state="installed"] { color: var(--pbf-think); }
+.pbf-row__icon[data-state="update"] { color: var(--pbf-you); }
 .pbf-row__out { font-size: 12px; line-height: 1.4; color: var(--pbf-ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pbf-row__side { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 3px; min-width: 96px; }
 .pbf-row__n { flex: none; font-family: var(--pbf-mono); font-variant-numeric: tabular-nums; font-size: 11px; color: var(--pbf-faint); white-space: nowrap; }
