@@ -158,12 +158,26 @@ export function handsTag(row: any): { label: string; tone: HandsTone; count: num
 
 export type HandsFilter = "any" | "auto" | "once" | "charge"
 
+// Short, so the four fit one segmented control on a narrow panel (#191697).
 export const HANDS_FILTERS: readonly { id: HandsFilter; label: string }[] = [
-  { id: "any", label: "Anything" },
-  { id: "auto", label: "Fully automatic" },
-  { id: "once", label: "Asks me once" },
-  { id: "charge", label: "I stay in charge" },
+  { id: "any", label: "All" },
+  { id: "auto", label: "Automatic" },
+  { id: "once", label: "Asks once" },
+  { id: "charge", label: "You lead" },
 ]
+
+/**
+ * How hands-off, as three dots and a word — the list row's whole summary (#191697), read like a
+ * legend: ●●● Automatic · ●●○ Asks once · ●○○ Asks 3×. More filled means less of you. Null when no
+ * steps are published: nothing to count, so nothing is claimed.
+ */
+export function handsLevel(row: any): { filled: 1 | 2 | 3; tone: HandsTone; label: string } | null {
+  const tag = handsTag(row)
+  if (!tag) return null
+  if (tag.count === 0) return { filled: 3, tone: "auto", label: "Automatic" }
+  if (tag.count === 1) return { filled: 2, tone: "you", label: "Asks once" }
+  return { filled: 1, tone: "you", label: `Asks ${tag.count}×` }
+}
 
 /**
  * The filter chips. Client-side, over rows already fetched, so it composes with the server-side
