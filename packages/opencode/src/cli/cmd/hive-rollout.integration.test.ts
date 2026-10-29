@@ -145,6 +145,20 @@ describe("iris hive rollout — against fake nodes", () => {
     expect(r.next[0]).toBe(`iris hive rollout --ref ${TARGET} --nodes bisnow`)
   }, 60000)
 
+  test("the update task's output cut off before 'restart-scheduled' is NOT a failure — the node is asked, and it says updated (AlexMaysnow1063, 2026-10-28)", async () => {
+    const f = mk([{ name: "bisnow", truncateUpdateStdout: true }, { name: "b" }])
+    const r = await runRollout(f.deps, { ref: "main", pollSec: 0.1, waitSec: 20 })
+    expect(statusOf(r, "bisnow")).toBe("updated")
+    expect(statusOf(r, "b")).toBe("updated")
+  }, 60000)
+
+  test("output cut off AND the update really did not happen is still a failure (verification decides, it does not assume)", async () => {
+    const f = mk([{ name: "bisnow", truncateUpdateStdout: true, behavior: "helper-dies" }, { name: "b" }])
+    const r = await runRollout(f.deps, { ref: "main", pollSec: 0.1, waitSec: 3 })
+    expect(statusOf(r, "bisnow")).toBe("failed")
+    expect(statusOf(r, "b")).toBe("not-attempted")
+  }, 60000)
+
   test("the hub refusing to dispatch the update (node just went offline) is pending, not a failure", async () => {
     const f = mk([{ name: "a" }, { name: "gone", dispatchFailsDuringUpdate: true }, { name: "c" }])
     const r = await runRollout(f.deps, { ref: "main", pollSec: 0.1, waitSec: 20 })
