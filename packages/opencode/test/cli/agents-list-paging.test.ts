@@ -250,5 +250,7 @@ describe("iris agents list --limit/--page validation (#191862)", () => {
     expect(out.data.length).toBe(5)
     expect(out.meta.total).toBe(TOTAL)
     expect(out.meta.limit).toBe(50)
+    // Page 10 must say it is page 10, not page 1 (#191863 follow-up).
+    expect(out.meta).toMatchObject({ current_page: 10, last_page: 10, from: 451, to: 455, has_more: false })
   }, 60_000)
 })
