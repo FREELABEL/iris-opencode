@@ -12,6 +12,17 @@ import { firstArray } from "../../util/array"
 // ============================================================================
 
 /** Highest execution id in a list (the baseline before we trigger a new run). */
+/**
+ * What `iris schedules toggle` should set. With no flag it FLIPS the current status — it used to always
+ * enable, so "toggle" on a running schedule re-enabled it (2026-10-29, the SOM follow-up batch).
+ */
+export function toggleTarget(current: string | null | undefined, flags: { enable?: boolean; disable?: boolean }): "scheduled" | "paused" {
+  if (flags.disable) return "paused"
+  if (flags.enable) return "scheduled"
+  const running = ["scheduled", "active", "running", "pending"].includes(String(current ?? "").toLowerCase())
+  return running ? "paused" : "scheduled"
+}
+
 export function latestExecId(runs: any[]): number {
   if (!Array.isArray(runs) || runs.length === 0) return 0
   return Math.max(...runs.map((r) => Number(r?.id) || 0))
@@ -857,22 +868,37 @@ const SchedulesInspectCommand = cmd({
 
 const SchedulesToggleCommand = cmd({
   command: "toggle <id>",
-  describe: "enable or disable a schedule",
+  describe: "pause or resume a schedule (no flag flips the current status)",
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "schedule ID", type: "number", demandOption: true })
-      .option("disable", { describe: "disable the schedule", type: "boolean", default: false })
+      .option("disable", { describe: "pause the schedule", type: "boolean", default: false })
+      .option("enable", { describe: "resume the schedule", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
     UI.empty()
-    const action = args.disable ? "Disable" : "Enable"
-    prompts.intro(`◈  ${action} Schedule #${args.id}`)
+    if (args.enable && args.disable) { prompts.log.error("Pass --enable or --disable, not both."); process.exitCode = 1; return }
 
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
 
     const userId = await requireUserId(args["user-id"])
     if (!userId) { prompts.outro("Done"); return }
+
+    // With no flag this used to ENABLE every time, so "toggle" on a live schedule re-enabled it
+    // (2026-10-29). Read the current status and flip it.
+    let current: string | null = null
+    if (!args.enable && !args.disable) {
+      try {
+        const cur = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs/${args.id}`)
+        const cb = (await cur.json()) as any
+        current = cb?.data?.status ?? cb?.status ?? null
+      } catch { current = null }
+      if (current === null) { prompts.log.error(`Could not read schedule #${args.id}'s status. Use --enable or --disable.`); process.exitCode = 1; return }
+    }
+    const target = toggleTarget(current, { enable: !!args.enable, disable: !!args.disable })
+    const action = target === "paused" ? "Disable" : "Enable"
+    prompts.intro(`◈  ${action} Schedule #${args.id}${current ? dim(` (was ${current})`) : ""}`)
 
     const spinner = prompts.spinner()
     spinner.start(`${action === "Enable" ? "Enabling" : "Disabling"}…`)
@@ -884,11 +910,11 @@ const SchedulesToggleCommand = cmd({
       // the schedule kept firing (#179802). The API now accepts is_active as an alias too, so
       // both are sent: `status` is correct, `is_active` keeps older backends working.
       const endpoint = `/api/v1/users/${userId}/bloqs/scheduled-jobs/${args.id}`
-      const wanted = args.disable ? "paused" : "scheduled"
+      const wanted = target
 
       const res = await irisFetch(endpoint, {
         method: "PUT",
-        body: JSON.stringify({ status: wanted, is_active: !args.disable }),
+        body: JSON.stringify({ status: wanted, is_active: wanted !== "paused" }),
       })
       const ok = await handleApiError(res, `${action} schedule`)
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
