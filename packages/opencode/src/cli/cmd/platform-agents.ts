@@ -227,7 +227,10 @@ const AgentsListCommand = cmd({
             total,
             // The page size asked for, not the rows on this page — on the last page those differ.
             limit: args.limit,
+            // Without it page 2+ reports current_page 1 and from/to of page 1 (#191863).
+            page: args.page,
             resource: "agents",
+            command: "agents list",
           }),
         )
         return
