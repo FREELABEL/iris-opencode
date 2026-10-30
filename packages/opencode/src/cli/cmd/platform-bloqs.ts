@@ -18,7 +18,7 @@ import { federatedSearch, resolveSources, formatOutcomes } from "./federated-sea
 import { webSearchHandler } from "./platform-web-search"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, requireUserId, resolveUserId, printDivider, printKV, dim, bold, success, FL_API, PUBLIC_SITE, promptOrFail, MissingFlagError, isNonInteractive, cli, writeJson } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, requireUserId, resolveUserId, printDivider, printKV, dim, bold, success, warn as amber, FL_API, PUBLIC_SITE, promptOrFail, MissingFlagError, isNonInteractive, cli, writeJson } from "./iris-api"
 import { itemTitle, itemContentPreview, matchesSearchQuery, normalizeDueDate } from "./bloq-item-format"
 import { executePublish } from "./bloq-item-shared"
 import { confirmWiden } from "./exposure-gate"
@@ -2718,12 +2718,145 @@ export function splitAtlasResults(rows: any[]): { items: any[]; boards: any[]; p
         updated_at: r.updated_at,
         score: r.score,
         found_by: r.found_by,
+        ...(r.matched_words ? { matched_words: r.matched_words, matched_terms: r.matched_terms } : {}),
       })
-    else if (r?.type === "board") boards.push({ id: r.id, name: r.title, found_by: r.found_by })
+    else if (r?.type === "board")
+      boards.push({
+        id: r.id,
+        name: r.title,
+        found_by: r.found_by,
+        ...(r.matched_words ? { matched_words: r.matched_words, matched_terms: r.matched_terms } : {}),
+      })
     else if (r?.type === "page") pages.push(r)
     else if (r) other.push(r)
   }
   return { items, boards, pages, other }
+}
+
+/**
+ * The server's word-match report (#191251, fl-api #202). /atlas/search answers `match` and
+ * content-items answers `data.search`: {mode, words, relaxed, note?}. When EVERY word found
+ * nothing, the server relaxes to ANY word, ranks by how many matched, and says so — this is the
+ * sentence a person (or an agent reading --json) must see, or "2 of 3 words" reads as exact.
+ */
+export type SearchMatch = { mode?: string; words?: string[]; relaxed?: boolean; note?: string; relaxed_types?: string[] }
+
+export function matchNote(match?: SearchMatch | null, search?: SearchMatch | null, rows: any[] = []): string | null {
+  const m = match?.relaxed ? match : search?.relaxed ? search : null
+  if (!m) return null
+  if (m.note) return m.note
+  const of = m.words?.length ?? 0
+  const best = Math.max(0, ...rows.map((r) => Number(r?.matched_terms) || 0))
+  return best && of ? `No result contains all ${of} words — showing the closest, best matched ${best} of ${of} words.` : `No result contains all ${of} words.`
+}
+
+export type RecordsFetcher = (path: string) => Promise<Response>
+
+export interface RecordsResult {
+  items: any[]
+  boards: any[]
+  pages: any[]
+  other: any[]
+  lanes?: Record<string, string>
+  /** /atlas/search's `match` block, when the server sends one (fl-api #202+). */
+  match: SearchMatch | null
+  /** content-items' `data.search` block, when the item half came from it. */
+  search: SearchMatch | null
+  recordsError?: string
+  usedAtlas: boolean
+  showItems: boolean
+  showBoards: boolean
+  showPages: boolean
+}
+
+/**
+ * The "your records" half of `bloqs search`, with the HTTP layer injectable.
+ *
+ * Boards ALWAYS come from /atlas/search?type=boards when the server has it — including with
+ * --bloq, where the old code filtered `GET /bloqs` client-side requiring every word, so
+ * "trading options portfolio" showed 0 boards even after the server learned to relax (#191251).
+ * The client-side filter survives only as the fallback for a server without /atlas/search.
+ */
+export async function searchRecords(
+  o: { query: string; limit: number; userId: number; types: string[]; bloq?: number; typeFlag?: boolean; wantItems: boolean; wantBoards: boolean },
+  fetcher: RecordsFetcher = (p) => irisFetch(p),
+): Promise<RecordsResult> {
+  const r: RecordsResult = { items: [], boards: [], pages: [], other: [], match: null, search: null, usedAtlas: false, showItems: false, showBoards: false, showPages: false }
+  let boardsViaAtlas = false
+  let atlasMissing = false
+
+  const atlas = async (types: string[]) => {
+    const params = new URLSearchParams({ q: o.query, type: types.join(","), limit: String(o.limit) })
+    const res = await fetcher(`/api/v1/atlas/search?${params}`)
+    if (res.status === 404) { atlasMissing = true; return null }
+    if (!res.ok) { r.recordsError = `atlas search HTTP ${res.status}`; return null }
+    const data = (await res.json()) as any
+    if (data?.match) r.match = data.match
+    if (Array.isArray(data?.failed_types) && data.failed_types.length) r.recordsError = `could not search: ${data.failed_types.join(", ")}`
+    return data
+  }
+
+  if (!o.bloq && o.types.length) {
+    try {
+      const data = await atlas(o.types)
+      if (data) {
+        const split = splitAtlasResults(data?.results)
+        r.items = split.items
+        r.boards = split.boards
+        r.pages = split.pages
+        r.other = split.other
+        r.lanes = data?.lanes
+        r.usedAtlas = true
+        boardsViaAtlas = true
+      }
+    } catch (e: any) {
+      r.recordsError = String(e?.message ?? e).slice(0, 120)
+    }
+  } else if (o.bloq && o.types.includes("boards")) {
+    // --bloq narrows ITEMS to one board; board-name matches still come from the shared engine.
+    try {
+      const data = await atlas(["boards"])
+      if (data) { r.boards = splitAtlasResults(data?.results).boards; boardsViaAtlas = true }
+    } catch (e: any) {
+      r.recordsError = String(e?.message ?? e).slice(0, 120)
+    }
+  }
+
+  // Legacy board filter: only for a server that predates /atlas/search.
+  if (!boardsViaAtlas && atlasMissing && o.wantBoards && !o.typeFlag) {
+    try {
+      const res = await fetcher(`/api/v1/user/${o.userId}/bloqs`)
+      if (res.ok) {
+        const data = (await res.json()) as any
+        const rows: any[] = firstArray(data?.data)
+        r.boards = (Array.isArray(rows) ? rows : [])
+          .filter((b) => matchesSearchQuery(`${b.name ?? ""} ${b.description ?? ""}`, o.query))
+          .slice(0, o.limit)
+        boardsViaAtlas = false
+      }
+    } catch { /* reported as 0 — never silently narrowed */ }
+  }
+
+  if (!r.usedAtlas && o.wantItems && (!o.typeFlag || o.types.includes("items"))) {
+    try {
+      const params = new URLSearchParams({ search: o.query, per_page: String(o.limit) })
+      const url = o.bloq
+        ? `/api/v1/user/${o.userId}/bloqs/${o.bloq}/items?${params}`
+        : `/api/v1/user/${o.userId}/bloqs/content-items?${params}`
+      const res = await fetcher(url)
+      if (res.ok) {
+        const data = (await res.json()) as any
+        const rows = data?.data?.items ?? data?.items ?? data?.data ?? []
+        r.items = Array.isArray(rows) ? rows.slice(0, o.limit) : []
+        if (data?.data?.search) r.search = data.data.search
+      }
+    } catch { /* same */ }
+  }
+
+  r.showItems = r.usedAtlas ? o.types.includes("items") : o.wantItems
+  r.showBoards = r.usedAtlas || boardsViaAtlas ? o.types.includes("boards") : o.wantBoards && !o.typeFlag
+  r.showPages = r.usedAtlas && o.types.includes("pages")
+  return r
 }
 
 export const BloqsSearchCommand = cmd({
@@ -2797,67 +2930,19 @@ export const BloqsSearchCommand = cmd({
       process.exitCode = 1
       return
     }
-    let boards: any[] = []
-    let items: any[] = []
-    let pages: any[] = []
-    let otherTypes: any[] = []
-    let lanes: Record<string, string> | undefined
-    let recordsError: string | undefined
-    let usedAtlas = false
-
-    if (!args.bloq && types.length) {
-      try {
-        const params = new URLSearchParams({ q: query, type: types.join(","), limit: String(limit) })
-        const res = await irisFetch(`/api/v1/atlas/search?${params}`)
-        if (res.ok) {
-          const data = (await res.json()) as any
-          const split = splitAtlasResults(data?.results)
-          items = split.items
-          boards = split.boards
-          pages = split.pages
-          otherTypes = split.other
-          lanes = data?.lanes
-          if (Array.isArray(data?.failed_types) && data.failed_types.length)
-            recordsError = `could not search: ${data.failed_types.join(", ")}`
-          usedAtlas = true
-        } else if (res.status !== 404) {
-          recordsError = `atlas search HTTP ${res.status}`
-        }
-      } catch (e: any) {
-        recordsError = String(e?.message ?? e).slice(0, 120)
-      }
-    }
-
-    // Legacy path: --bloq, or a server that predates /atlas/search.
-    if (!usedAtlas && wantBoards && !args.type) {
-      try {
-        const res = await irisFetch(`/api/v1/user/${userId}/bloqs`)
-        if (res.ok) {
-          const data = (await res.json()) as any
-          const rows: any[] = firstArray(data?.data)
-          boards = (Array.isArray(rows) ? rows : [])
-            .filter((b) => matchesSearchQuery(`${b.name ?? ""} ${b.description ?? ""}`, query))
-            .slice(0, limit)
-        }
-      } catch { /* reported as 0 below — never silently narrowed */ }
-    }
-    if (!usedAtlas && wantItems && (!args.type || types.includes("items"))) {
-      try {
-        const params = new URLSearchParams({ search: query, per_page: String(limit) })
-        const url = args.bloq
-          ? `/api/v1/user/${userId}/bloqs/${args.bloq}/items?${params}`
-          : `/api/v1/user/${userId}/bloqs/content-items?${params}`
-        const res = await irisFetch(url)
-        if (res.ok) {
-          const data = (await res.json()) as any
-          const rows = data?.data?.items ?? data?.items ?? data?.data ?? []
-          items = Array.isArray(rows) ? rows.slice(0, limit) : []
-        }
-      } catch { /* same */ }
-    }
-    const showItems = usedAtlas ? types.includes("items") : wantItems
-    const showBoards = usedAtlas ? types.includes("boards") : wantBoards && !args.type
-    const showPages = usedAtlas && types.includes("pages")
+    const rec = await searchRecords({
+      query,
+      limit,
+      userId,
+      types,
+      bloq: args.bloq as number | undefined,
+      typeFlag: Boolean(args.type),
+      wantItems,
+      wantBoards,
+    })
+    const { items, boards, pages, lanes, recordsError, usedAtlas, showItems, showBoards, showPages } = rec
+    const otherTypes = rec.other
+    const note = matchNote(rec.match, rec.search, [...items, ...boards])
 
     // ── external sources (Obsidian, Drive) ──
     // Only when asked. `bloq` is excluded from the fan-out here because the cross-board item
@@ -2895,6 +2980,11 @@ export const BloqsSearchCommand = cmd({
         external,
         // What actually ran on the server — "meaning: not built yet" is not the same as "no matches".
         lanes: lanes ?? null,
+        // #191251: how the words matched. `match` from /atlas/search, `search` from content-items —
+        // passed through as the server sent them, plus the one sentence to read when it relaxed.
+        match: rec.match,
+        search: rec.search,
+        match_note: note,
         records_error: recordsError ?? null,
         // Report every source's outcome, including failures — a source that errored must not
         // be indistinguishable from a source that found nothing.
@@ -2909,13 +2999,18 @@ export const BloqsSearchCommand = cmd({
       console.log(`  ${bold("Your records")} ${dim(`— ${recordsError}`)}`)
     }
 
+    if (note) {
+      printDivider()
+      console.log(`  ${amber("Not every word matched.")} ${note}`)
+    }
+
     if (showItems) {
       printDivider()
       console.log(`  ${bold("Items")} ${dim(`(${items.length})`)}`)
       if (!items.length) console.log(`  ${dim(`No item matches for "${query}"`)}`)
       for (const i of items) {
         const where = [i.bloq_name, i.list_name].filter(Boolean).join(" › ")
-        console.log(`  ${dim(`#${i.id}`)} ${bold(itemTitle(i))}`)
+        console.log(`  ${dim(`#${i.id}`)} ${bold(itemTitle(i))}${i.matched_words ? dim(`  · ${i.matched_words}`) : ""}`)
         if (where) console.log(`      ${dim(where)}${i.bloq_id ? dim(`  ·  bloq #${i.bloq_id}`) : ""}`)
         const preview = itemContentPreview(i)
         if (preview) console.log(`      ${dim(preview.replace(/\s+/g, " ").slice(0, 110))}`)
@@ -2927,7 +3022,7 @@ export const BloqsSearchCommand = cmd({
       console.log(`  ${bold("Boards")} ${dim(`(${boards.length})`)}`)
       if (!boards.length) console.log(`  ${dim(`No board-name matches for "${query}"`)}`)
       for (const b of boards) {
-        console.log(`  ${dim(`#${b.id}`)} ${bold(b.name ?? "(untitled)")}`)
+        console.log(`  ${dim(`#${b.id}`)} ${bold(b.name ?? "(untitled)")}${b.matched_words ? dim(`  · ${b.matched_words}`) : ""}`)
         if (b.description) console.log(`      ${dim(String(b.description).slice(0, 110))}`)
       }
     }
