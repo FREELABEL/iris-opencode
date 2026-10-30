@@ -47,6 +47,50 @@ export function messagesHeader(period: AnalyzePeriod | undefined, limit: number)
     : `Recent Messages Sent — all time, no period from the server (latest ${limit}):`
 }
 
+/**
+ * #191709 — "DMs Sent" and the messages listed must come from the same rows. The server's
+ * summary.total_completed counts completed outreach STEPS, which record-dm never writes, so the
+ * report said "DMs Sent: 0" above 8 listed DMs. fl-api now returns `dms` (count + newest
+ * messages) from ONE query; this reads it. null = a server without it — the caller must then
+ * not call the step count "DMs Sent".
+ */
+export type DmLedger = { sent: number; previous_period: number | null; avg_per_day: number | null; messages: SentMessage[] }
+
+const DM_CHANNEL: Record<string, string> = { instagram_dm: "IG", linkedin_dm: "LI", linkedin_message: "LI", whatsapp_message: "WA", twitter_dm: "X" }
+
+export function dmLedger(metrics: Record<string, any> | null | undefined, limit: number): DmLedger | null {
+  const d = metrics?.dms
+  if (!d || typeof d.sent !== "number" || !Array.isArray(d.messages)) return null
+  const messages: SentMessage[] = d.messages.slice(0, Math.max(0, limit)).map((m: any) => ({
+    date: String(m.sent_at ?? ""),
+    channel: DM_CHANNEL[m.type] ?? String(m.type ?? ""),
+    lead_id: m.lead_id ?? null,
+    lead_name: String(m.lead_name || (m.lead_id != null ? `#${m.lead_id}` : "Unknown")),
+    text: String(m.message ?? ""),
+  }))
+  return {
+    sent: d.sent,
+    previous_period: typeof d.previous_period === "number" ? d.previous_period : null,
+    avg_per_day: typeof d.avg_per_day === "number" ? d.avg_per_day : null,
+    messages,
+  }
+}
+
+/** The headline row: a DM count only when it is one; otherwise say it is a step count. */
+export function sentHeadline(summary: Record<string, any>, ledger: DmLedger | null): { label: string; value: number } {
+  return ledger
+    ? { label: "DMs Sent", value: ledger.sent }
+    : { label: "Steps Completed", value: Number(summary?.total_completed ?? 0) }
+}
+
+/** Trend of the DM count vs the previous period of the same length (same rule as the server's step trend). */
+export function dmTrend(ledger: DmLedger | null): { trend: "up" | "down" | "stable"; percent: number } | null {
+  if (!ledger || ledger.previous_period === null) return null
+  const prev = ledger.previous_period
+  const percent = prev > 0 ? Math.round(((ledger.sent - prev) / prev) * 1000) / 10 : ledger.sent > 0 ? 100 : 0
+  return { trend: percent > 0 ? "up" : percent < 0 ? "down" : "stable", percent }
+}
+
 /** The --json payload: every section the table renders, from the same values. */
 export function analyzeJson(r: {
   boardId: number
@@ -54,8 +98,11 @@ export function analyzeJson(r: {
   metrics: Record<string, any>
   quota: { quotas?: any; progress?: any; percent?: any } | null
   messages: SentMessage[] | null
+  ledger?: DmLedger | null
 }) {
   return {
+    // Same number the table prints as "DMs Sent"; null when the server cannot say (#191709).
+    dms_sent: r.ledger ? r.ledger.sent : null,
     board_id: r.boardId,
     period: { name: r.periodName, ...(r.metrics.period ?? {}) },
     metrics: r.metrics.summary ?? {},
