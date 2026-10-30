@@ -139,10 +139,13 @@ function ingestImessage(lead: any): ChannelRead {
 
 // ── Gmail ingestion (via Google API) ──
 
-async function ingestGmailApi(lead: any): Promise<ChannelRead> {
+async function ingestGmailApi(lead: any, mailbox?: string): Promise<ChannelRead> {
   if (!lead.email) return nothingToRead("lead has no email address")
   try {
-    const { getToken: getGmailToken, searchMessages: gmailSearch } = await import("../lib/gmail")
+    const { getToken: getGmailToken, searchMessages: gmailSearch, setGmailAccount } = await import("../lib/gmail")
+    // #191879: --mail-account picks WHICH connected Gmail mailbox (e.g. team@heyiris.io), the
+    // server-side path that works with every Mac off.
+    if (mailbox) setGmailAccount({ account: mailbox })
     const token = await getGmailToken()
     if (!token) return unavailable("Gmail API is not connected on this machine")
     const messages = await gmailSearch(token, `from:${lead.email} OR to:${lead.email}`, 50)
@@ -153,7 +156,14 @@ async function ingestGmailApi(lead: any): Promise<ChannelRead> {
       body: m.body_text || m.snippet,
       sent_at: m.date,
       external_message_id: `gmail_${m.id}`,
-      metadata: { gmail_thread_id: m.thread_id, gmail_message_id: m.id },
+      metadata: {
+        gmail_thread_id: m.thread_id,
+        gmail_message_id: m.id,
+        source: "gmail_composio",
+        ...(m.mailbox || mailbox ? { mailbox: m.mailbox || mailbox } : {}),
+        // The cross-channel key (#191879): the same message read in Apple Mail is one row.
+        ...(m.rfc822_message_id ? { rfc822_message_id: m.rfc822_message_id } : {}),
+      },
     })))
   } catch (e: any) {
     return unavailable(`Gmail API read failed: ${String(e?.message ?? e).slice(0, 160)}`)
@@ -381,31 +391,70 @@ async function ingestGmail(lead: any, requested: "gmail" | "apple_mail"): Promis
 }
 
 /**
- * Apple Mail read over AppleEvents from ONE named account (--mail-account). Needs no daemon, no
- * bridge and no Full Disk Access; reads both directions with RFC Message-IDs and bodies. See
+ * Apple Mail read over AppleEvents from ONE account (--mail-account). Needs no bridge and no Full
+ * Disk Access; reads both directions with RFC Message-IDs and bodies. See
  * comms-mail-applescript.ts for why it is opt-in and bounded to one account.
+ *
+ * #191879: the account is named by its email ADDRESS, resolved against every account's addresses —
+ * on this Mac if it has it, otherwise on the Hive node that reports it (comms-mail-route.ts).
  */
-async function ingestAppleMailViaScript(lead: any, account: string, days: number): Promise<ChannelRead> {
+export async function appleMailDeps(): Promise<import("./comms-mail-route").AppleMailReadDeps> {
+  const { listLocalMailAccounts } = await import("./comms-mail-route")
+  const { resolveUserId } = await import("./iris-api")
+  const userId = await resolveUserId().catch(() => null)
+  return {
+    platform: process.platform,
+    listLocal: () => listLocalMailAccounts(),
+    readLocal: async (address, days, selector, own) => {
+      if (!(await mailResponsive())) {
+        return { ok: false, reason: "Mail.app is not answering (not running, or still busy with an earlier request) — not queuing more work behind it; try again in a few minutes" }
+      }
+      return readMailThread(address, days, selector, true, 120000, own)
+    },
+    nodes: async () => {
+      if (!userId) throw new Error("not signed in — run `iris auth login`")
+      const { fetchNodes } = await import("./platform-hive-nodes")
+      return (await fetchNodes(Number(userId))) as any
+    },
+    selfNodeId: (() => {
+      try {
+        const { readFileSync } = require("node:fs")
+        const { join } = require("node:path")
+        const { homedir } = require("node:os")
+        return JSON.parse(readFileSync(join(homedir(), ".iris", "config.json"), "utf8"))?.node_id ?? null
+      } catch {
+        return null
+      }
+    })(),
+    runRemote: async (node, script) => {
+      if (!userId) throw new Error("not signed in")
+      const [{ dispatchTaskAndWait }, { buildHiveRunBody }, { fromHiveTask }] = await Promise.all([
+        import("./platform-hive-nodes"),
+        import("./hive-run-body"),
+        import("./hive-script-result"),
+      ])
+      const { final } = await dispatchTaskAndWait(
+        Number(userId),
+        buildHiveRunBody({ userId: Number(userId), nodeId: node.id, title: "iris comms ingest: read one Mail.app account (read-only)", script, timeoutSec: 180 }),
+      )
+      if (!final) throw new Error("still running after 210s — not waited for")
+      const r = fromHiveTask(final as any)
+      return { stdout: String(r.stdout ?? ""), stderr: String(r.stderr ?? ""), exit_code: r.exit_code ?? null, stdout_truncated: r.stdout_truncated === true }
+    },
+  }
+}
+
+export async function ingestAppleMailViaScript(
+  lead: any,
+  account: string,
+  days: number,
+  deps?: import("./comms-mail-route").AppleMailReadDeps,
+): Promise<ChannelRead> {
   const emails = leadEmails(lead)
   if (emails.length === 0) return nothingToRead("lead has no email address")
-  if (!(await mailResponsive())) {
-    return unavailable("Mail.app is not answering (not running, or still busy with an earlier request) — not queuing more work behind it; try again in a few minutes")
-  }
-  const items: any[] = []
-  const failures: string[] = []
-  let answered = false
-  for (const addr of emails) {
-    const r = await readMailThread(addr, days, account, true)
-    if (r.ok) {
-      answered = true
-      items.push(...r.items)
-    } else {
-      failures.push(r.reason)
-    }
-  }
-  const seen = new Set<string>()
-  const unique = items.filter((i) => (seen.has(i.external_message_id) ? false : (seen.add(i.external_message_id), true)))
-  return { items: unique, unavailable: failures, answered }
+  const { readAppleMailForLead } = await import("./comms-mail-route")
+  const r = await readAppleMailForLead(emails, account, days, deps ?? (await appleMailDeps()), lead?.id)
+  return r
 }
 
 /**
@@ -772,7 +821,18 @@ const CommsIngestCommand = cmd({
       .option("limit", { type: "number", default: 100, describe: "max leads to sweep with --all" })
       .option("dry-run", { type: "boolean", default: false, describe: "read and report what WOULD be ingested, write nothing (single lead or --all)" })
       .option("allow-name-match", { type: "boolean", default: false, describe: "write WhatsApp chats matched by the lead's name alone (checked it is the same person)" })
-      .option("mail-account", { type: "string", describe: "apple_mail: read ONE Mail.app account over AppleEvents (both directions, bodies, no Full Disk Access) — e.g. amayo@mypathwaysai.com" }),
+      .option("mail-account", {
+        type: "string",
+        describe:
+          "the mailbox's email ADDRESS (e.g. team@heyiris.io). apple_mail: read that ONE Mail.app account over AppleEvents — " +
+          "on this Mac if it has it, otherwise on the Hive node that reports it (only while that Mac is ONLINE). " +
+          "gmail_api: read that connected Gmail mailbox server-side — no Mac needed, the path for replies (#191878)",
+      })
+      .epilogue(
+        "Apple Mail reads run on the Mac that has the account and only while it is online — they are not a reply inbox.\n" +
+          "For a mailbox that must always be readable (team@heyiris.io), connect it as Gmail and use --channel gmail_api --mail-account <address>.\n" +
+          "Each message is stored once even when it arrives through both: the server matches email across channels by Message-ID.",
+      ),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Ingest Comms")
@@ -827,7 +887,7 @@ const CommsIngestCommand = cmd({
       } else if (ch === "slack") {
         read = await ingestSlack(lead)
       } else if (ch === "gmail_api") {
-        read = await ingestGmailApi(lead)
+        read = await ingestGmailApi(lead, args["mail-account"] ? String(args["mail-account"]) : undefined)
       } else if (ch === "apple_mail" && args["mail-account"]) {
         read = await ingestAppleMailViaScript(lead, String(args["mail-account"]), Number(args.days))
       } else if (ch === "gmail" || ch === "apple_mail") {

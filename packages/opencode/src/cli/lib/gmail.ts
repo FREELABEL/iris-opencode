@@ -34,6 +34,8 @@ export interface GmailMessage {
   is_unread: boolean
   /** The mailbox this message lives in. Its id is only valid there (see setGmailAccount). */
   mailbox?: string
+  /** RFC 5322 Message-ID header, when the backend returned headers — the cross-channel key (#191879). */
+  rfc822_message_id?: string
   integration_id?: number
   attachments?: { filename: string; type: string; size: number; attachment_id: string | null }[]
 }
@@ -368,6 +370,7 @@ function extractMessages(data: any): GmailMessage[] {
       is_unread: (Array.isArray(labels) ? labels : []).includes("UNREAD"),
       ...(m.mailbox ? { mailbox: String(m.mailbox) } : {}),
       ...(m.integration_id ? { integration_id: Number(m.integration_id) } : {}),
+      ...(hdr("Message-ID") || m.message_id_header ? { rfc822_message_id: str(hdr("Message-ID") || m.message_id_header) } : {}),
     }
   })
 }
