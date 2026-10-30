@@ -1861,11 +1861,13 @@ iris traces          what your agents did</pre>
         async (c) => {
           const params = c.req.valid("param")
           const json = c.req.valid("json")
-          await PermissionNext.reply({
+          const found = await PermissionNext.reply({
             requestID: params.requestID,
             reply: json.reply,
             message: json.message,
           })
+          // Already answered, or cleared when its session was aborted (#191784).
+          if (!found) throw new Storage.NotFoundError({ message: `Permission request not found: ${params.requestID}` })
           return c.json(true)
         },
       )
