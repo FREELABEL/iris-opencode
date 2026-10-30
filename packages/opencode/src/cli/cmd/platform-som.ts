@@ -1,3 +1,4 @@
+import { registryDrift } from "./som-registries"
 import { cmd } from "./cmd"
 import { productCommand } from "./product-command"
 import * as prompts from "./clack"
@@ -863,6 +864,16 @@ const SomSyncCommand = cmd({
       process.exit(1)
     }
 
+    // This cache comes from the campaign TEMPLATES (the registry the hive daemon reads), not from
+    // `iris som campaign` (raichu). When they disagree the batch sends the template's strategy, so say
+    // so loudly instead of silently writing a name the operator thinks they changed (#191686, #191770).
+    let drift: { name: string; som: string; daemon: string }[] = []
+    try {
+      const sr = await irisFetch("/api/v1/som/campaigns", {}, RAICHU)
+      const sb = (await sr.json()) as { data?: { campaigns?: { name: string; strategy_name: string | null }[] } }
+      drift = registryDrift(sb.data?.campaigns ?? [], configs)
+    } catch { /* drift check is advisory */ }
+
     // Write the cache to the bundled bridge som dir (what the daemon spawns), and
     // also to the dev checkout if present, so local runs pick it up too.
     const payload = JSON.stringify({ syncedAt: new Date().toISOString(), campaigns: configs }, null, 2)
@@ -886,10 +897,19 @@ const SomSyncCommand = cmd({
     }
 
     if (args.json) {
-      await writeJson({ synced: count, source: body?.source ?? "database", written })
+      await writeJson({ synced: count, source: body?.source ?? "database", written, drift })
       return
     }
 
+    if (drift.length) {
+      console.log(`\x1b[33m⚠  The two SOM registries disagree. Batches will send the DAEMON strategy:\x1b[0m`)
+      for (const d of drift) {
+        console.log(`  ${bold(d.name)}: daemon/templates "${d.daemon}"  vs  som campaigns "${d.som}"`)
+        console.log(dim(`    align both: iris som campaign update ${d.name} --strategy "${d.som}"`))
+      }
+      console.log("")
+      process.exitCode = 1
+    }
     console.log(success(`Synced ${count} SOM campaign${count === 1 ? "" : "s"} (source: ${body?.source ?? "database"})`))
     for (const [id, c] of Object.entries(configs)) {
       const active = (c as any).active === false ? dim(" (off)") : ""

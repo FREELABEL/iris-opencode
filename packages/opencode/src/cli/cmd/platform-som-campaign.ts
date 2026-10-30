@@ -1,6 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
-import { irisFetch, requireAuth, bold, dim, writeJson, failNoOp} from "./iris-api"
+import { irisFetch, requireAuth, bold, dim, writeJson, failNoOp, IRIS_API, resolveUserId } from "./iris-api"
+import { pickTemplateForCampaign, mergeTemplateStrategy, extractTemplates } from "./som-registries"
 
 // ─── iris som campaign — DB-backed registry CRUD ─────────────────────────────
 //
@@ -179,6 +180,14 @@ const UpdateCmd = cmd({
     if (Object.keys(body).length === 0) { failNoOp("update", "provide at least one flag") }
     await requireAuth()
 
+    // --strategy-id alone used to change the id and leave strategy_name on the OLD strategy, and the
+    // batch picks its script BY NAME (2026-10-29). Resolve the name so both always move together.
+    if (body.strategy_template_id !== undefined && body.strategy_name === undefined) {
+      const name = await resolveStrategyName(ref, Number(body.strategy_template_id))
+      if (!name) { prompts.log.error(`Strategy #${body.strategy_template_id} not found on this campaign's board. Nothing changed.`); process.exitCode = 1; return }
+      body.strategy_name = name
+    }
+
     const res = await irisFetch(`/api/v1/som/campaigns/${encodeURIComponent(ref)}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -187,9 +196,61 @@ const UpdateCmd = cmd({
     if (!res.ok) { prompts.log.error(`API ${res.status}: ${await res.text()}`); return }
     const data = await res.json() as { data?: { campaign?: Campaign } }
     const c = data.data?.campaign
-    prompts.log.success(`Updated ${c?.name} (live=${c?.is_live})`)
+    prompts.log.success(`Updated ${c?.name} (live=${c?.is_live})${c?.strategy_name ? ` · strategy: ${c.strategy_name}` : ""}`)
+
+    // The hive daemon does not read this registry: it reads the freelabel.net campaign template and
+    // rewrites the cache before every batch (#191770). Move that one too, then read it back.
+    if (c && body.strategy_name !== undefined) {
+      await syncDaemonTemplate(c, String(body.strategy_name))
+    }
   },
 })
+
+async function resolveStrategyName(ref: string, strategyId: number): Promise<string | null> {
+  try {
+    const cr = await irisFetch(`/api/v1/som/campaigns/${encodeURIComponent(ref)}`, {}, RAICHU)
+    const cb = await cr.json() as { data?: { campaign?: Campaign } }
+    const board = cb.data?.campaign?.bloq_id
+    if (!board) return null
+    const sr = await irisFetch(`/api/v1/bloqs/${board}/outreach-strategy-templates`, {}, RAICHU)
+    const sb = await sr.json() as any
+    const list: any[] = sb?.data?.templates ?? sb?.data ?? []
+    return list.find((t) => Number(t.id) === strategyId)?.name ?? null
+  } catch {
+    return null
+  }
+}
+
+async function syncDaemonTemplate(c: Campaign, strategy: string) {
+  try {
+    const lr = await irisFetch(`/api/v1/campaign-templates`, {}, IRIS_API)
+    if (!lr.ok) { prompts.log.warn(`Daemon registry not updated (campaign-templates ${lr.status}). The hive will keep sending the old strategy.`); process.exitCode = 1; return }
+    const tpl = pickTemplateForCampaign(extractTemplates(await lr.json()), c)
+    if (!tpl) {
+      prompts.log.warn(`No som campaign template on board ${c.bloq_id} for @${c.ig_account}; the daemon registry was not changed.`)
+      return
+    }
+    const before = tpl.config?.strategy ?? "(none)"
+    if (before === strategy) { prompts.log.info(`Daemon registry already on "${strategy}" (template ${tpl.id}).`); return }
+    const pr = await irisFetch(`/api/v1/campaign-templates/${tpl.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ config: mergeTemplateStrategy(tpl.config, strategy) }),
+    }, IRIS_API)
+    if (!pr.ok) { prompts.log.error(`Daemon registry update failed (${pr.status}). The hive will keep sending "${before}".`); process.exitCode = 1; return }
+
+    // Read back what the daemon itself will read.
+    const userId = await resolveUserId()
+    const vr = await irisFetch(`/api/v1/campaign-templates/daemon-configs?user_id=${userId}`, {}, IRIS_API)
+    const vb = await vr.json() as { configs?: Record<string, { strategy?: string }> }
+    const seen = vb.configs?.[c.name]?.strategy ?? null
+    if (seen === strategy) prompts.log.success(`Daemon registry: "${before}" → "${strategy}" (template ${tpl.id}, verified)`)
+    else { prompts.log.error(`Daemon registry still reads "${seen ?? "?"}" for ${c.name}, not "${strategy}".`); process.exitCode = 1 }
+  } catch (err) {
+    prompts.log.warn(`Daemon registry not updated: ${(err as Error).message}`)
+    process.exitCode = 1
+  }
+}
 
 // ── expire ────────────────────────────────────────────────────────────────────
 const ExpireCmd = cmd({
