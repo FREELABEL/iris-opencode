@@ -87,6 +87,27 @@ describe("card editor — sharing allow-list", () => {
   })
 })
 
+import { SHARE_MODES, shareMode } from "./iris-card-editor"
+
+describe("card editor — who can open a card (#191841)", () => {
+  test("is read from is_public and the allow-list, with nothing new stored", () => {
+    expect(shareMode(false, [])).toBe("private")
+    // Private keeps a stored list (make-private does not clear it): still private.
+    expect(shareMode(false, ["a@b.co"])).toBe("private")
+    expect(shareMode(true, [])).toBe("unlisted")
+    expect(shareMode(true, ["@heyiris.io"])).toBe("restricted")
+  })
+
+  test("unlisted says out loud that anyone with the link is in", () => {
+    // never-empty-a-gate-allowlist: an open link is a choice the words have to name.
+    expect(SHARE_MODES.find((m) => m.id === "unlisted")!.help).toMatch(/Anyone with the link/)
+  })
+
+  test("offers exactly the three modes, private first", () => {
+    expect(SHARE_MODES.map((m) => m.id)).toEqual(["private", "unlisted", "restricted"])
+  })
+})
+
 describe("card editor — attachment sizes", () => {
   test("bytes, KB, MB", () => {
     expect(fileSize(900)).toBe("900 B")

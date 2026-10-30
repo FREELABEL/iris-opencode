@@ -215,6 +215,23 @@ export function allowListSummary(isPublic: boolean, allowed: string[], allowKnow
   return `Only ${allowed.length} allowed ${allowed.length === 1 ? "entry" : "entries"} can open the link.`
 }
 
+/**
+ * Who can open a card, as one choice (#191841). Derived from the columns that already exist —
+ * is_public and the allow-list — so nothing new is stored: unlisted is public with an empty
+ * list, restricted is public with one. An allow-list this fl-api build cannot read is shown as
+ * unlisted, the safe reading of a public card whose gate is unknown.
+ */
+export type ShareMode = "private" | "unlisted" | "restricted"
+export function shareMode(isPublic: boolean, allowed: string[]): ShareMode {
+  if (!isPublic) return "private"
+  return allowed.length > 0 ? "restricted" : "unlisted"
+}
+export const SHARE_MODES: { id: ShareMode; label: string; help: string }[] = [
+  { id: "private", label: "Private", help: "Only people on this board can open it." },
+  { id: "unlisted", label: "Unlisted — anyone with the link", help: "Anyone with the link can open it. It is not listed anywhere." },
+  { id: "restricted", label: "Restricted — only people I choose", help: "Only the emails and @domains below can open the link." },
+]
+
 // ─── Attachments / events / asks / chat ─────────────────────────────────────
 
 export interface CardFile {
@@ -1001,7 +1018,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
     } else setShareNote({ ok: false, text: out.reason ?? "failed" })
     setShareBusy(false)
   }
-  const setVisibility = (pub: boolean) =>
+  const setVisibility = (pub: boolean, okText?: string) =>
     shareCall(
       "visibility",
       { public: pub },
@@ -1010,13 +1027,67 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
         mutateDoc((c) => (c ? { ...c, isPublic: pub } : c))
         void refetchShare()
       },
-      pub ? "Public — anyone allowed below can open the link" : "Private",
+      okText ?? (pub ? "Public — anyone allowed below can open the link" : "Private"),
     )
+  // On a private card a non-empty list publishes it already gated (the engine sends the list
+  // with make-public in one request), so re-read what that made: the link and the card's state.
   const writeAllow = (next: string[]) =>
     shareCall("allowlist", { emails: next }, () => {
-      mutateShare((s) => (s ? { ...s, allowedEmails: next } : s))
+      mutateShare((s) => (s ? { ...s, allowedEmails: next, isPublic: s.isPublic || next.length > 0 } : s))
+      if (next.length) mutateDoc((c) => (c ? { ...c, isPublic: true } : c))
       setAllowText("")
+      setPickRestricted(false)
+      void refetchShare()
     }, next.length ? `Allow-list saved (${next.length})` : "Allow-list EMPTIED — anyone with the link can open it")
+
+  // ── Who can open this card (#191841) ─────────────────────────────────────
+  const mode = () => shareMode(share.latest?.isPublic ?? doc.latest!.isPublic, share.latest?.allowedEmails ?? [])
+  /** Restricted chosen on a card that is not restricted yet: the list shows, nothing is written until the first entry. */
+  const [pickRestricted, setPickRestricted] = createSignal(false)
+  /** Unlisted chosen while a list exists: emptying it opens the link, so it waits for a second yes. */
+  const [confirmOpen, setConfirmOpen] = createSignal(false)
+  const shownMode = () => (pickRestricted() ? "restricted" : mode())
+  const chooseMode = (next: ShareMode) => {
+    setConfirmOpen(false)
+    setShareNote(null)
+    if (next === mode()) return setPickRestricted(false)
+    if (next === "private") {
+      setPickRestricted(false)
+      return void setVisibility(false, "Private — the link stops working. Sharing again brings back the same link.")
+    }
+    if (next === "restricted") {
+      setPickRestricted(true)
+      return queueMicrotask(() => document.querySelector<HTMLInputElement>('input[aria-label="Allow email or domain"]')?.focus())
+    }
+    setPickRestricted(false)
+    if (mode() === "restricted") return setConfirmOpen(true)
+    void getLink()
+  }
+  const removeAllowed = (entry: string) => {
+    const next = (share.latest?.allowedEmails ?? []).filter((x) => x !== entry)
+    if (next.length === 0) return setConfirmOpen(true)
+    void writeAllow(next)
+  }
+  /**
+   * One click from private to a link you can hand out: publish (unlisted), read the new
+   * /n/<uuid> back, and put it on the clipboard. "Copied" only if the clipboard took it;
+   * refused (the click's permission can lapse during the round trip), the URL is selected.
+   */
+  async function getLink() {
+    // A card made private keeps its list, and publishing re-sends it: say which one this is.
+    const kept = share.latest?.allowedEmails.length ?? 0
+    await setVisibility(true, kept ? `Restricted — the ${kept} allowed ${kept === 1 ? "entry is" : "entries are"} back` : "Unlisted — anyone with the link can open it")
+    const url = (await refetchShare())?.publicUrl
+    if (!url) return
+    const select = () => {
+      const el = document.querySelector(".iris-card__url > span")
+      if (el) window.getSelection()?.selectAllChildren(el)
+      setShareNote({ ok: true, text: "Link ready — it is selected, press ⌘C to copy" })
+    }
+    if (!navigator.clipboard) return select()
+    const who = kept ? "only the allowed entries can open it" : "anyone with it can open this card"
+    await navigator.clipboard.writeText(url).then(() => setShareNote({ ok: true, text: `Link copied — ${who}` }), select)
+  }
   const invite = () =>
     shareCall("invite", { email: inviteEmail().trim().toLowerCase(), permission: invitePerm(), bloq: props.bloqId }, () => {
       setInviteEmail("")
@@ -1407,7 +1478,10 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
             />
           </Show>
           <Show when={doc.latest?.isPublic}>
-            <span class="iris-card__pub" title="This card is public — see Sharing">public</span>
+            {/* Unlisted or restricted is known only once Sharing has read the allow-list; until then, "shared". */}
+            <span class="iris-card__pub" title="Who can open this card — see Sharing">
+              {share.latest?.measured && share.latest.allowKnown ? (share.latest.allowedEmails.length > 0 ? "restricted" : "unlisted") : "shared"}
+            </span>
           </Show>
           <Show when={doc.latest?.measured}>
             <MembersRow
@@ -1997,7 +2071,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                             <dt>Sharing</dt>
                             <dd>
                               <button type="button" class="iris-sh__add" onClick={() => setSide("sharing")}>
-                                {doc.latest!.isPublic ? "Public link · manage" : "Private · manage"}
+                                {doc.latest!.isPublic ? "Shared · manage" : "Private · manage"}
                               </button>
                             </dd>
                             <dt>List</dt>
@@ -2214,42 +2288,71 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                         })()}
                       </div>
 
-                      {/* THE LINK. Visibility is a column on the item; the allow-list is the gate. */}
+                      {/* WHO CAN OPEN THIS CARD — one choice (#191841). Derived from is_public and the
+                          allow-list; Private keeps both the uuid and the list, so switching back loses nothing. */}
                       <div class="iris-sec">
-                        <SideHead icon={(share.latest?.isPublic ?? doc.latest!.isPublic) ? "globe" : "lock"}>Link</SideHead>
-                        <div class="iris-card__seg" role="radiogroup" aria-label="Visibility">
-                          <button
-                            type="button"
-                            role="radio"
-                            aria-checked={!(share.latest?.isPublic ?? doc.latest!.isPublic)}
-                            class="iris-card__segitem"
-                            classList={{ "iris-card__segitem--on": !(share.latest?.isPublic ?? doc.latest!.isPublic) }}
-                            disabled={shareBusy()}
-                            onClick={() => void setVisibility(false)}
+                        <SideHead icon={shownMode() === "private" ? "lock" : shownMode() === "restricted" ? "eye" : "globe"}>
+                          Who can open this card
+                        </SideHead>
+                        <label class="iris-dd iris-dd--wide iris-share__mode" title="Who can open this card">
+                          <Icon name={shownMode() === "private" ? "lock" : shownMode() === "restricted" ? "eye" : "globe"} size="small" />
+                          <select
+                            class="iris-dd__select"
+                            aria-label="Who can open this card"
+                            value={shownMode()}
+                            disabled={shareBusy() || share.loading}
+                            onChange={(e) => {
+                              const next = e.currentTarget.value as ShareMode
+                              // The select shows the confirmed state until a change is actually made.
+                              e.currentTarget.value = shownMode()
+                              chooseMode(next)
+                            }}
                           >
-                            Private
-                          </button>
-                          <button
-                            type="button"
-                            role="radio"
-                            aria-checked={share.latest?.isPublic ?? doc.latest!.isPublic}
-                            class="iris-card__segitem"
-                            classList={{ "iris-card__segitem--on": share.latest?.isPublic ?? doc.latest!.isPublic }}
-                            disabled={shareBusy()}
-                            onClick={() => void setVisibility(true)}
-                          >
-                            Public link
-                          </button>
-                        </div>
-                        <p
-                          class="iris-card__help"
-                          classList={{
-                            "iris-card__warn": (share.latest?.isPublic ?? doc.latest!.isPublic) && share.latest?.allowKnown === true && share.latest.allowedEmails.length === 0,
-                          }}
+                            <For each={SHARE_MODES}>{(m) => <option value={m.id}>{m.label}</option>}</For>
+                          </select>
+                          <Icon name="chevron-down" size="small" />
+                        </label>
+                        <Show
+                          when={share.latest?.allowKnown !== false || shownMode() === "private"}
+                          fallback={<p class="iris-card__help">{allowListSummary(true, [], false)}</p>}
                         >
-                          {allowListSummary(share.latest?.isPublic ?? doc.latest!.isPublic, share.latest?.allowedEmails ?? [], share.latest?.allowKnown ?? false)}
-                        </p>
-                        <Show when={share.latest?.publicUrl ?? doc.latest!.publicUrl}>
+                          <p class="iris-card__help">{SHARE_MODES.find((m) => m.id === shownMode())!.help}</p>
+                        </Show>
+
+                        <Show when={confirmOpen()}>
+                          <div class="iris-card__warn iris-share__confirm" role="alert">
+                            <span>
+                              This removes {share.latest?.allowedEmails.length ?? 0} allowed {(share.latest?.allowedEmails.length ?? 0) === 1 ? "entry" : "entries"}, and anyone
+                              with the link can open the card.
+                            </span>
+                            <span class="iris-share__confirmacts">
+                              <button type="button" class="iris-card__act" onClick={() => setConfirmOpen(false)}>
+                                Keep restricted
+                              </button>
+                              <button
+                                type="button"
+                                class="iris-card__act iris-card__act--danger"
+                                disabled={shareBusy()}
+                                onClick={() => {
+                                  setConfirmOpen(false)
+                                  void writeAllow([])
+                                }}
+                              >
+                                Open the link
+                              </button>
+                            </span>
+                          </div>
+                        </Show>
+
+                        {/* Private: the one thing to do is get a link. */}
+                        <Show when={mode() === "private" && !pickRestricted()}>
+                          <button type="button" class="iris-share__get" disabled={shareBusy() || share.loading} onClick={() => void getLink()}>
+                            <Icon name="link" size="small" />
+                            {shareBusy() ? "Creating link…" : "Get shareable link"}
+                          </button>
+                        </Show>
+
+                        <Show when={mode() !== "private" && (share.latest?.publicUrl ?? doc.latest!.publicUrl)}>
                           {(url) => (
                             <div class="iris-card__url">
                               <span class="font-mono truncate" title={url()}>
@@ -2261,44 +2364,44 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                             </div>
                           )}
                         </Show>
-                      </div>
 
-                      <div class="iris-sec">
-                        <SideHead icon="lock" count={share.latest?.allowedEmails.length || undefined}>
-                          Who can open the link
-                        </SideHead>
-                        <Show when={(share.latest?.allowedEmails.length ?? 0) + (share.latest?.boardDefaults.allowedEmails.length ?? 0) > 0}>
-                          <div class="iris-card__chips">
-                            <For each={share.latest?.allowedEmails ?? []}>
-                              {(e) => <Chip text={e} onRemove={() => void writeAllow((share.latest?.allowedEmails ?? []).filter((x) => x !== e))} />}
-                            </For>
-                            <Show when={(share.latest?.boardDefaults.allowedEmails.length ?? 0) > 0}>
-                              <For each={share.latest!.boardDefaults.allowedEmails}>
-                                {(e) => <Chip text={e} title="From the board's share defaults — change it on the board" />}
-                              </For>
-                            </Show>
-                          </div>
+                        {/* Restricted: the list, and the field that adds to it. On a card that is not
+                            public yet, the first entry publishes it already gated. */}
+                        <Show when={shownMode() === "restricted"}>
+                          <Show when={(share.latest?.allowedEmails.length ?? 0) + (share.latest?.boardDefaults.allowedEmails.length ?? 0) > 0}>
+                            <div class="iris-card__chips iris-share__chips">
+                              <For each={share.latest?.allowedEmails ?? []}>{(e) => <Chip text={e} onRemove={() => removeAllowed(e)} />}</For>
+                              <Show when={(share.latest?.boardDefaults.allowedEmails.length ?? 0) > 0}>
+                                <For each={share.latest!.boardDefaults.allowedEmails}>
+                                  {(e) => <Chip text={e} title="From the board's share defaults — change it on the board" />}
+                                </For>
+                              </Show>
+                            </div>
+                          </Show>
+                          <form
+                            class="iris-card__shell iris-share__allow"
+                            onSubmit={(e) => {
+                              e.preventDefault()
+                              const add = parseAllowEntries(allowText(), share.latest?.allowedEmails ?? [])
+                              if (add.length) void writeAllow([...(share.latest?.allowedEmails ?? []), ...add])
+                              else setShareNote({ ok: false, text: "Nothing to add — use an email or an @domain" })
+                            }}
+                          >
+                            <input
+                              class="iris-field__input"
+                              placeholder="email or @domain, comma separated…"
+                              aria-label="Allow email or domain"
+                              value={allowText()}
+                              onInput={(e) => setAllowText(e.currentTarget.value)}
+                            />
+                            <button type="submit" class="iris-card__act" disabled={!allowText().trim() || shareBusy()}>
+                              Allow
+                            </button>
+                          </form>
+                          <Show when={pickRestricted() && mode() === "private"}>
+                            <p class="iris-card__help">Nothing is shared until you add the first email or @domain.</p>
+                          </Show>
                         </Show>
-                        <form
-                          class="iris-card__shell"
-                          onSubmit={(e) => {
-                            e.preventDefault()
-                            const add = parseAllowEntries(allowText(), share.latest?.allowedEmails ?? [])
-                            if (add.length) void writeAllow([...(share.latest?.allowedEmails ?? []), ...add])
-                            else setShareNote({ ok: false, text: "Nothing to add — use an email or an @domain" })
-                          }}
-                        >
-                          <input
-                            class="iris-field__input"
-                            placeholder="email or @domain, comma separated…"
-                            aria-label="Allow email or domain"
-                            value={allowText()}
-                            onInput={(e) => setAllowText(e.currentTarget.value)}
-                          />
-                          <button type="submit" class="iris-card__act" disabled={!allowText().trim() || shareBusy()}>
-                            Allow
-                          </button>
-                        </form>
                       </div>
 
                       {/* PEOPLE — board membership. Not item membership; the label says so. */}
