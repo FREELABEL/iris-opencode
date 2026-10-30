@@ -3,6 +3,7 @@ import { AgentsProveCommand } from "./agent-prove"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { buildListEnvelope, projectFields, LIST_FIELDS } from "./list-envelope"
+import { rejectBadPagination } from "./pagination-args"
 import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, IRIS_API, PUBLIC_SITE, writeJson, failNoOp} from "./iris-api"
 import { matchesSearchQuery } from "./bloq-item-format"
 import { executeChat } from "./platform-chat"
@@ -124,6 +125,9 @@ function printAgent(a: Record<string, unknown>): void {
 // Subcommands
 // ============================================================================
 
+/** Mirrors fl-api AgentController::listSpec max_per_page. */
+export const AGENTS_LIST_MAX_LIMIT = 500
+
 const AgentsListCommand = cmd({
   command: "list",
   aliases: ["ls"],
@@ -142,6 +146,9 @@ const AgentsListCommand = cmd({
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
+    // --limit 0 came back as 25 rows and --page 0 as page 1, each labelled as what was asked
+    // for. The server clamps per_page at 500 (AgentController::listSpec) (#191862).
+    if (rejectBadPagination(args, { maxLimit: AGENTS_LIST_MAX_LIMIT })) return
     if (!args.json) { UI.empty(); prompts.intro("◈  IRIS Agents") }
 
     const token = await requireAuth()
@@ -218,7 +225,8 @@ const AgentsListCommand = cmd({
         await writeJson(
           buildListEnvelope(projectFields(agents, LIST_FIELDS.agents), {
             total,
-            limit: agents.length,
+            // The page size asked for, not the rows on this page — on the last page those differ.
+            limit: args.limit,
             resource: "agents",
           }),
         )
