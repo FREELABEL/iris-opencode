@@ -109,8 +109,9 @@ describe("agent editor sidecar (#191840)", () => {
     answer(201, { data: { id: 10 } }, seen)
     const r = await saveAgent(undefined, { name: "New", config: { tools: ["agent_memory"] } })
     expect(r).toMatchObject({ ok: true, data: { id: 10 } })
-    expect(seen[0].url).toEndWith("/api/v1/users/7/bloqs/agents")
-    expect(JSON.parse(String(seen[0].init!.body)).config).toEqual({ tools: ["agent_memory"] })
+    // the user id is whatever this process resolved first (it is cached across test files)
+    expect(seen.at(-1)!.url).toMatch(/\/api\/v1\/users\/\d+\/bloqs\/agents$/)
+    expect(JSON.parse(String(seen.at(-1)!.init!.body)).config).toEqual({ tools: ["agent_memory"] })
   })
   test("tools go to iris-api /tools; only a 404 falls back to a merged fl-api patch", async () => {
     const seen: { url: string; init?: RequestInit }[] = []
