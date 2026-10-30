@@ -21,6 +21,7 @@ import { generateIssuer, signCouple, verifyCoupleSig, issuerFingerprint } from "
 import { unknownVerbs, knownVerbs, BODY_CLASSES } from "./kinetic-bodies"
 import { spendFor } from "./kinetic-budget"
 import { guardAct, REFUSED } from "./kinetic-guard"
+import { PACKS, realIO, runDoctor, type Row } from "./kinetic-doctor"
 
 const UI = { empty: () => console.log("") }
 
@@ -543,12 +544,55 @@ const SpendCommand = cmd({
   },
 })
 
+const DOCTOR_MARK: Record<Row["status"], string> = { pass: "✓", fail: "✗", unknown: "?", skip: "–" }
+
+const DoctorCommand = cmd({
+  command: "doctor",
+  describe: "is this machine ready for its Kinetic packs? every failing row names its fix",
+  builder: (y) =>
+    y
+      .option("pack", { describe: `comma list of packs: ${PACKS.map((p) => p.id).join(", ")} (default: all)`, type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const io = realIO()
+    if (io.platform !== "darwin") {
+      console.error(`Kinetic packs are macOS-only for now, so this machine (${io.platform}) cannot be checked.`)
+      process.exitCode = 1
+      return
+    }
+    const wanted = args.pack ? String(args.pack).split(",").map((p) => p.trim()) : undefined
+    const unknownPack = wanted?.find((id) => !PACKS.some((p) => p.id === id))
+    if (unknownPack) {
+      console.error(`No pack named ${unknownPack}. Packs: ${PACKS.map((p) => p.id).join(", ")}`)
+      process.exitCode = 1
+      return
+    }
+    const rows = runDoctor(io, wanted)
+    if (rows.some((r) => r.status === "fail")) process.exitCode = 1
+    if (args.json) {
+      console.log(JSON.stringify({ ok: !rows.some((r) => r.status === "fail" || r.status === "unknown"), rows }, null, 2))
+      return
+    }
+    UI.empty()
+    for (const pack of new Set(rows.map((r) => r.pack))) {
+      console.log(`  ${bold(pack)}`)
+      for (const r of rows.filter((x) => x.pack === pack)) {
+        const line = `    ${DOCTOR_MARK[r.status]} ${r.id.padEnd(18)} ${r.detail}`
+        console.log(r.status === "pass" ? line : r.status === "fail" ? bold(line) : dim(line))
+        if (r.fix) console.log(`      ${dim("fix:")} ${r.fix}`)
+      }
+    }
+    UI.empty()
+  },
+})
+
 export const PlatformKineticCommand = cmd({
   command: "kinetic",
   aliases: ["kinetics"],
   describe: "Kinetic — which agent may move which body on this node, and on what terms",
   builder: (y) =>
     y
+      .command(DoctorCommand)
       .command(SealCommand)
       .command(IssuerCommand)
       .command(CoupleCommand)
