@@ -1531,6 +1531,8 @@ export const IrisPaths = {
   agentEditorSave: `${root}/agent-editor/save`,
   agentEditorHeartbeat: `${root}/agent-editor/agent/:agentID/heartbeat`,
   agentEditorPolicy: `${root}/agent-editor/agent/:agentID/policy`,
+  agentEditorTools: `${root}/agent-editor/agent/:agentID/tools`,
+  agentEditorToolsSave: `${root}/agent-editor/agent/:agentID/tools/save`,
   agentEditorPolicySave: `${root}/agent-editor/agent/:agentID/policy/save`,
   agentEditorModels: `${root}/agent-editor/models`,
   agentEditorToolCatalog: `${root}/agent-editor/tool-catalog`,
@@ -3404,7 +3406,13 @@ export const IrisApi = HttpApi.make("iris").add(
       HttpApiEndpoint.post("agentEditorSave", IrisPaths.agentEditorSave, {
         payload: Schema.Struct({
           agentID: Schema.optional(described(Schema.Finite, "Absent = create")),
-          body: described(Schema.Unknown, "fl-api's agent body. `config` is the WHOLE config — fl-api replaces it on update."),
+          body: described(Schema.Unknown, "fl-api's agent body. On update any `config` here is DROPPED — see configPatch."),
+          configPatch: Schema.optional(
+            described(
+              Schema.Record(Schema.String, Schema.Unknown),
+              "Update only: config keys to change. Merged into the config as stored NOW (re-read), because fl-api replaces config wholesale.",
+            ),
+          ),
         }),
         success: described(AgentEditorProxied, "The saved agent, or fl-api's refusal with its status"),
       }).annotateMerge(OpenApi.annotations({ identifier: "iris.agentEditorSave", summary: "Create or update an agent (#191840)" })),
@@ -3422,6 +3430,15 @@ export const IrisApi = HttpApi.make("iris").add(
         payload: Schema.Struct({ policy: described(Schema.Unknown, "The whole policy, or null to clear it") }),
         success: described(AgentEditorProxied, "The policy iris-api saved, or its 422 reason"),
       }).annotateMerge(OpenApi.annotations({ identifier: "iris.agentEditorPolicySave", summary: "Replace an agent's tool policy" })),
+      HttpApiEndpoint.get("agentEditorTools", IrisPaths.agentEditorTools, {
+        params: { agentID: Schema.NumberFromString },
+        success: described(AgentEditorProxied, "{state, tools, resolved, unknown} from iris-api (fl-iris-api #253)"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.agentEditorTools", summary: "Read an agent's tool allowlist" })),
+      HttpApiEndpoint.post("agentEditorToolsSave", IrisPaths.agentEditorToolsSave, {
+        params: { agentID: Schema.NumberFromString },
+        payload: Schema.Struct({ tools: described(Schema.Array(Schema.String), "The whole allowlist. [] = NO tools, not all.") }),
+        success: described(AgentEditorProxied, "iris-api's answer; 422 names the unknown tools"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.agentEditorToolsSave", summary: "Replace an agent's tool allowlist" })),
       HttpApiEndpoint.get("agentEditorModels", IrisPaths.agentEditorModels, {
         success: described(AgentEditorProxied, "{models}: the chat picker's manifest, available models only"),
       }).annotateMerge(OpenApi.annotations({ identifier: "iris.agentEditorModels", summary: "Models an agent may be given" })),
