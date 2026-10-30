@@ -76,6 +76,57 @@ export function failJson(payload: Record<string, unknown>): void {
   if (!process.exitCode) process.exitCode = 1
 }
 
+/**
+ * Validate --limit / --page before they reach the API (#191846).
+ *
+ * `bloqs items --limit 0` used to become 50, `--limit -1` became 1, `--limit 300` became 200
+ * and `--page 0|-1` became 1 — all silently, with exit 0. A script paging that way got
+ * duplicated or skipped records while believing it had paged correctly. A value we would
+ * have to change is refused instead, so what the caller asked for is what was applied.
+ *
+ * Returns field errors keyed by flag name, or null when every value given is usable.
+ * Flags the caller did not pass (undefined) are not checked.
+ */
+export function paginationErrors(
+  args: { limit?: unknown; page?: unknown },
+  opts: { maxLimit?: number } = {},
+): Record<string, string[]> | null {
+  const errors: Record<string, string[]> = {}
+  const isInt = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v)
+  if (args.limit !== undefined) {
+    const max = opts.maxLimit
+    if (!isInt(args.limit) || args.limit < 1 || (max !== undefined && args.limit > max)) {
+      errors.limit = [
+        `--limit must be a whole number from 1${max !== undefined ? ` to ${max}` : " up"}; got ${JSON.stringify(args.limit)}.`,
+      ]
+    }
+  }
+  if (args.page !== undefined) {
+    if (!isInt(args.page) || args.page < 1) {
+      errors.page = [`--page must be a whole number of at least 1 (pages are 1-based); got ${JSON.stringify(args.page)}.`]
+    }
+  }
+  return Object.keys(errors).length ? errors : null
+}
+
+/**
+ * Refuse bad pagination flags: JSON on stdout with exit 2 in --json mode, an error line
+ * otherwise. Returns true when the caller must stop. Call before requireAuth() — the check
+ * needs no network.
+ */
+export function rejectBadPagination(
+  args: { limit?: unknown; page?: unknown; json?: unknown },
+  opts: { maxLimit?: number } = {},
+): boolean {
+  const errors = paginationErrors(args, opts)
+  if (!errors) return false
+  const message = Object.values(errors).flat().join(" ")
+  process.exitCode = 2
+  if (args.json) failJson({ success: false, error: message, errors })
+  else prompts.log.error(message)
+  return true
+}
+
 /** Normalise a board name. Blank is not a name: refuse it instead of letting the API
  *  substitute its "My First Bloq" default (#190633). */
 export function normalizeBloqName(raw: unknown): string | null {
@@ -208,6 +259,7 @@ const BloqsListCommand = cmd({
       .option("type", { describe: "filter by type: user or system", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
+    if (rejectBadPagination(args)) return
     cli.empty()
     cli.intro("◈  IRIS Bloqs")
 
@@ -388,6 +440,7 @@ const BloqsGetCommand = cmd({
       .option("limit", { describe: "max items to show (default 10)", type: "number", default: 10 })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
+    if (rejectBadPagination(args)) return
     if (!args.json) { UI.empty(); prompts.intro(`◈  Bloq ${args.id}`) }
 
     const token = await requireAuth()
@@ -2767,8 +2820,9 @@ export const BloqsSearchCommand = cmd({
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
+    if (rejectBadPagination(args)) return
     const query = String(args.query)
-    const limit = Number(args.limit) || 20
+    const limit = Number(args.limit)
     const wantItems = !args["boards-only"]
     const wantBoards = !args["items-only"]
 
@@ -3616,6 +3670,9 @@ export async function collectListFiltered(
   }
 }
 
+/** The items endpoint's per_page ceiling (BloqItemController). */
+export const ITEMS_MAX_PER_PAGE = 200
+
 const BloqsItemsCommand = cmd({
   command: "items <bloq-id>",
   // There is no `get-item`/`show-item` — every other item verb mutates. This is the only
@@ -3630,7 +3687,7 @@ const BloqsItemsCommand = cmd({
       .option("source", { describe: "also search these sources: obsidian, drive, imessage, gmail (repeatable)", type: "string", array: true })
       .option("include-all", { describe: "search every available source", type: "boolean", default: false })
       .option("status", { describe: "filter by status", type: "string" })
-      .option("limit", { describe: "items per page (max 200)", type: "number", default: 50 })
+      .option("limit", { describe: `items per page (1-${ITEMS_MAX_PER_PAGE})`, type: "number", default: 50 })
       .option("page", { describe: "page number (1-based)", type: "number", default: 1 })
       .option("fields", { describe: "comma-separated fields for --json (default: id,title,status,list_name)", type: "string" })
       .option("compact", { describe: "drop null/empty fields in --json output", type: "boolean", default: false })
@@ -3646,6 +3703,7 @@ const BloqsItemsCommand = cmd({
       process.exitCode = 2
       return
     }
+    if (rejectBadPagination(args, { maxLimit: ITEMS_MAX_PER_PAGE })) return
 
     if (!args.json) { UI.empty(); prompts.intro(`◈  Bloq #${bloqId} Items`) }
 
@@ -3744,8 +3802,9 @@ const BloqsItemsCommand = cmd({
         }
       }
 
-      const perPage = Math.min(Math.max(Number(args.limit) || 50, 1), 200)
-      const page = Math.max(Number(args.page) || 1, 1)
+      // Validated above (rejectBadPagination) — used as given, never clamped (#191846).
+      const perPage = Number(args.limit)
+      const page = Number(args.page)
       const params = new URLSearchParams()
       params.set("per_page", String(perPage))
       params.set("page", String(page))
@@ -3817,7 +3876,8 @@ const BloqsItemsCommand = cmd({
           pagination: {
             total,
             returned: items.length,
-            per_page: pg.per_page ?? perPage,
+            // The server sends per_page as a string ("50"); report the number applied.
+            per_page: pg.per_page !== undefined && pg.per_page !== null ? Number(pg.per_page) : perPage,
             page: currentPage,
             last_page: lastPage,
             has_more: hasMore,
