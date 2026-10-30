@@ -28,7 +28,7 @@ function fakeFlApi() {
   const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } })
   const describe = (bloq?: number) => {
     const project = bloq ? bloqSettings[bloq] ?? {} : undefined
-    const effective = { min_severity: "minor", platform_notices: "affected", ...userSettings, ...(project ?? {}) }
+    const effective: Record<string, any> = { min_severity: "minor", platform_notices: "affected", ...userSettings, ...(project ?? {}) }
     return { ...(bloq ? { bloq_id: bloq, project } : {}), user: userSettings, effective }
   }
   const fetcher = async (path: string, init: RequestInit = {}) => {
