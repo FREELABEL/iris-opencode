@@ -6,7 +6,8 @@ import { productCommand } from "./product-command"
 import { buildListEnvelope, projectFields, LIST_FIELDS } from "./list-envelope"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, resolveUserId, handleApiError, isNonInteractive, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API, writeJson } from "./iris-api"
+import { buildPageComponentsJson, componentPreview } from "./page-components-json"
+import { irisFetch, requireAuth, requireUserId, resolveUserId, handleApiError, isNonInteractive, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API, writeJson, emitJsonError } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, resolve, dirname } from "path"
 import { profileFromBrand, rebrandJsonContent, type BrandProfile } from "./rebrand"
@@ -2387,10 +2388,13 @@ const TemplateCmd = cmd({
   async handler() {},
 })
 
-const ComponentsCmd = cmd({
+export const ComponentsCmd = cmd({
   command: "components <slug>",
   describe: "list components on a page",
-  builder: (y) => y.positional("slug", { describe: "page slug", type: "string", demandOption: true }),
+  builder: (y) =>
+    y
+      .positional("slug", { describe: "page slug", type: "string", demandOption: true })
+      .option("json", { describe: "output as JSON", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Components: ${args.slug}`)
@@ -2399,21 +2403,31 @@ const ComponentsCmd = cmd({
     sp.start("Loading…")
     try {
       const page = await getBySlug(args.slug, true)
-      if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+      // getBySlug -> handleApiError has already said why, as JSON under --json, and set exit 1.
+      if (!page) { sp.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
       const components: any[] = firstArray(page?.json_content?.components)
       sp.stop(`${components.length} component(s)`)
+      if (args.json) {
+        // #191847 — same { data, meta } envelope as `pages list --json`, plus the page.
+        await writeJson(buildPageComponentsJson(page, args.slug))
+        prompts.outro("Done")
+        return
+      }
       if (components.length === 0) { prompts.outro("None"); return }
       printDivider()
       components.forEach((c, i) => {
-        const preview = c?.props?.title ?? c?.props?.text ?? c?.props?.content ?? ""
+        const preview = componentPreview(c) ?? ""
         console.log(`  ${dim(`[${i}]`)} ${bold(c.type ?? "?")}  ${dim(c.id ?? "")}`)
-        if (preview) console.log(`      ${dim(String(preview).slice(0, 80))}`)
+        if (preview) console.log(`      ${dim(preview.slice(0, 80))}`)
       })
       printDivider()
       prompts.outro(dim(`iris pages set ${args.slug} "components.0.props.title" "..."`))
     } catch (err) {
       sp.stop("Error", 1)
-      prompts.log.error(err instanceof Error ? err.message : String(err))
+      const message = err instanceof Error ? err.message : String(err)
+      if (args.json) emitJsonError(message, { action: `Components ${args.slug}` })
+      else prompts.log.error(message)
+      process.exitCode = 1
       prompts.outro("Done")
     }
   },

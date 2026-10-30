@@ -15,13 +15,13 @@ import {
   resourcesFor,
   readPlaybookResource,
   callPlaybookTool,
-  PLAYBOOK_URI_PREFIX,
   TOOL_PREFIX,
 } from "./mcp-playbooks"
 import { homedir } from "os"
 import { join } from "path"
 import { readFileSync, existsSync } from "fs"
 import { spill } from "./mcp-overflow"
+import { listResources, readResource, RECIPE_URI_PREFIX, type ResourceDeps } from "./mcp-resources"
 
 // A bare "{" string literal silently breaks `script/build-capabilities.ts`: its block
 // reader brace-MATCHES `cmd({ ... })` without skipping string literals, so one unmatched
@@ -603,7 +603,7 @@ export const McpServeCommand = cmd({
           "  hive_*        inspect and drive Hive tmux sessions (needs the local daemon)",
           "  playbook_*    one typed tool per playbook (≤ 8), else playbook_find + playbook_run (--no-playbooks to omit; IRIS_MCP_PLAYBOOK_TOOLS=all|search)",
           "",
-          "RESOURCES:  iris://guide  iris://commands  iris://recipes",
+          `RESOURCES:  iris://guide  iris://commands  iris://recipes  ${RECIPE_URI_PREFIX}<name>  iris://playbook/<name>`,
           "",
           "A schema is prompt-enforced, not API-enforced, and an agent given a required shape",
           "will INVENT values to fill it — measured: a required enum produced a confident answer",
@@ -656,33 +656,24 @@ export const McpServeCommand = cmd({
 
     // --- Resources ---
 
+    // List and read share one dispatcher so every advertised URI is one the read serves (#191844).
+    const resourceDeps: ResourceDeps = {
+      howtoDir: HOWTO_DIR,
+      playbooksEnabled,
+      guide: buildGuide,
+      commands: buildCommandCatalog,
+      recipes: loadRecipes,
+      listPlaybooks: async () => resourcesFor(await loadPlaybooks()),
+      readPlaybook: readPlaybookResource,
+    }
+
     server.setRequestHandler(ListResourcesRequestSchema, async () => ({
-      resources: [
-        { uri: "iris://guide", name: "IRIS CLI Guide", description: "Install, authenticate, and use the IRIS CLI", mimeType: "text/markdown" },
-        { uri: "iris://commands", name: "Command Catalog", description: "Full catalog of 120+ IRIS CLI commands grouped by category", mimeType: "text/markdown" },
-        { uri: "iris://recipes", name: "How-To Recipes", description: "User-created workflow recipes from ~/.iris/how-to/", mimeType: "text/markdown" },
-        // Every playbook is readable, whether or not it can be run. Most are
-        // written procedures with no steps at all — that IS the artefact.
-        ...(playbooksEnabled ? resourcesFor(await loadPlaybooks()) : []),
-      ],
+      resources: await listResources(resourceDeps),
     }))
 
     server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
       const { uri } = request.params
-      if (playbooksEnabled && uri.startsWith(PLAYBOOK_URI_PREFIX)) {
-        const name = uri.slice(PLAYBOOK_URI_PREFIX.length)
-        return { contents: [{ uri, mimeType: "text/markdown", text: await readPlaybookResource(name) }] }
-      }
-      switch (uri) {
-        case "iris://guide":
-          return { contents: [{ uri, mimeType: "text/markdown", text: buildGuide() }] }
-        case "iris://commands":
-          return { contents: [{ uri, mimeType: "text/markdown", text: buildCommandCatalog() }] }
-        case "iris://recipes":
-          return { contents: [{ uri, mimeType: "text/markdown", text: await loadRecipes() }] }
-        default:
-          throw new Error(`Unknown resource: ${uri}`)
-      }
+      return { contents: [{ uri, mimeType: "text/markdown", text: await readResource(uri, resourceDeps) }] }
     })
 
     // --- Tools ---

@@ -510,7 +510,7 @@ export function isJsonMode(): boolean {
  * Deliberately NOT pretty-printed: writeJson's multi-line form is for humans eyeballing a
  * success payload; an error is one object a script parses.
  */
-function emitJsonError(message: string, extra?: Record<string, unknown>): void {
+export function emitJsonError(message: string, extra?: Record<string, unknown>): void {
   process.stdout.write(JSON.stringify({ success: false, error: message, ...(extra ?? {}) }) + "\n")
 }
 
