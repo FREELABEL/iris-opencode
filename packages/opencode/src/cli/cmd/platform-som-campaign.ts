@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { irisFetch, requireAuth, bold, dim, writeJson, failNoOp, IRIS_API, resolveUserId } from "./iris-api"
-import { pickTemplateForCampaign, mergeTemplateStrategy, extractTemplates } from "./som-registries"
+import { pickTemplateForCampaign, mergeTemplateCampaign, extractTemplates, confirmSenderStrategy, senderView, type SenderEntry } from "./som-registries"
 
 // ─── iris som campaign — DB-backed registry CRUD ─────────────────────────────
 //
@@ -88,6 +88,17 @@ const ShowCmd = cmd({
     console.log(`  status:    ${c.is_live ? "\x1b[32mlive\x1b[0m" : c.active ? "\x1b[33mactive (out of window)\x1b[0m" : "\x1b[90minactive\x1b[0m"}`)
     console.log(`  bloq:      ${c.bloq_id}`)
     console.log(`  strategy:  ${c.strategy_name ?? "(none)"} ${c.strategy_template_id ? dim(`[#${c.strategy_template_id}]`) : dim("[unresolved]")}`)
+    // What the hive sender will actually use (#191686, #191770) — read from the same endpoint the
+    // daemon writes into its cache before every batch, plus the opener of that strategy.
+    const sender = senderView(c, await readSenderConfigs())
+    if (!sender.known) {
+      console.log(`  sender:    ${dim("not in the hive's campaign registry — batches will not run this campaign")}`)
+    } else {
+      const flag = sender.matches ? "\x1b[32m✓ same\x1b[0m" : "\x1b[31m✗ DIFFERENT — batches send this one\x1b[0m"
+      console.log(`  sender:    ${sender.strategy ?? "(none)"} ${dim(`board ${sender.board ?? "?"} · from ${sender.source}`)} ${flag}`)
+      const opener = await strategyOpener(sender.board, sender.strategy)
+      if (opener) console.log(`  opener:    ${dim(opener)}`)
+    }
     console.log(`  ig:        ${c.ig_account ?? "(none)"}`)
     console.log(`  tw:        ${c.tw_account ?? "(none)"}`)
     if (c.starts_at) console.log(`  starts:    ${c.starts_at}`)
@@ -198,10 +209,20 @@ const UpdateCmd = cmd({
     const c = data.data?.campaign
     prompts.log.success(`Updated ${c?.name} (live=${c?.is_live})${c?.strategy_name ? ` · strategy: ${c.strategy_name}` : ""}`)
 
-    // The hive daemon does not read this registry: it reads the freelabel.net campaign template and
-    // rewrites the cache before every batch (#191770). Move that one too, then read it back.
+    // The hive sender reads daemon-configs (written into its cache before every batch). A current
+    // fl-iris-api builds that from som_campaigns, so this is one write; confirm the sender sees it,
+    // and only on an older API move the template copy as well (#191686, #191770).
     if (c && body.strategy_name !== undefined) {
-      await syncDaemonTemplate(c, String(body.strategy_name))
+      const r = await confirmSenderStrategy(c, {
+        readSender: readSenderConfigs,
+        writeLegacyTemplate: () => writeLegacyTemplate(c),
+      })
+      if (r.how === "served") prompts.log.success(`Sender reads "${r.seen}" (verified against daemon-configs)`)
+      else if (r.how === "template") prompts.log.success(`Sender reads "${r.seen}" (older API: template copy moved too, verified)`)
+      else {
+        prompts.log.error(`The hive sender still reads "${r.seen ?? "?"}" for ${c.name}, not "${c.strategy_name}". Do not run SOM until this matches (iris som campaign show ${c.name}).`)
+        process.exitCode = 1
+      }
     }
   },
 })
@@ -221,34 +242,55 @@ async function resolveStrategyName(ref: string, strategyId: number): Promise<str
   }
 }
 
-async function syncDaemonTemplate(c: Campaign, strategy: string) {
+/** daemon-configs — exactly what the hive daemon fetches before a batch. null when unreadable. */
+async function readSenderConfigs(): Promise<Record<string, SenderEntry> | null> {
+  try {
+    const userId = await resolveUserId()
+    const r = await irisFetch(`/api/v1/campaign-templates/daemon-configs?user_id=${userId}`, {}, IRIS_API)
+    if (!r.ok) return null
+    const b = (await r.json()) as { configs?: Record<string, SenderEntry> }
+    return b.configs ?? null
+  } catch {
+    return null
+  }
+}
+
+/** The first step's script of a strategy on a board, shortened — what a lead actually receives first. */
+async function strategyOpener(board: string | null, strategy: string | null): Promise<string | null> {
+  if (!board || !strategy) return null
+  try {
+    const r = await irisFetch(`/api/v1/bloqs/${board}/outreach-strategy-templates`, {}, RAICHU)
+    if (!r.ok) return null
+    const b = (await r.json()) as any
+    const list: any[] = b?.data?.templates ?? b?.templates ?? b?.data ?? []
+    const t = list.find((x) => x?.name === strategy)
+    if (!t) return `(strategy "${strategy}" not found on board ${board})`
+    const steps = [...(t.steps ?? [])].sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0))
+    const text = String(steps[0]?.instructions ?? "").replace(/\s+/g, " ").trim()
+    return text ? (text.length > 140 ? text.slice(0, 140) + "…" : text) : "(first step has no script)"
+  } catch {
+    return null
+  }
+}
+
+/** Older fl-iris-api only: move the som template's copy (PUT replaces config wholesale, so merge). */
+async function writeLegacyTemplate(c: Campaign): Promise<boolean> {
   try {
     const lr = await irisFetch(`/api/v1/campaign-templates`, {}, IRIS_API)
-    if (!lr.ok) { prompts.log.warn(`Daemon registry not updated (campaign-templates ${lr.status}). The hive will keep sending the old strategy.`); process.exitCode = 1; return }
+    if (!lr.ok) return false
     const tpl = pickTemplateForCampaign(extractTemplates(await lr.json()), c)
     if (!tpl) {
-      prompts.log.warn(`No som campaign template on board ${c.bloq_id} for @${c.ig_account}; the daemon registry was not changed.`)
-      return
+      prompts.log.warn(`No som campaign template for ${c.name} (board ${c.bloq_id}, @${c.ig_account}).`)
+      return false
     }
-    const before = tpl.config?.strategy ?? "(none)"
-    if (before === strategy) { prompts.log.info(`Daemon registry already on "${strategy}" (template ${tpl.id}).`); return }
     const pr = await irisFetch(`/api/v1/campaign-templates/${tpl.id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ config: mergeTemplateStrategy(tpl.config, strategy) }),
+      body: JSON.stringify({ config: mergeTemplateCampaign(tpl.config, { strategy: String(c.strategy_name), bloq_id: c.bloq_id, ig_account: c.ig_account }) }),
     }, IRIS_API)
-    if (!pr.ok) { prompts.log.error(`Daemon registry update failed (${pr.status}). The hive will keep sending "${before}".`); process.exitCode = 1; return }
-
-    // Read back what the daemon itself will read.
-    const userId = await resolveUserId()
-    const vr = await irisFetch(`/api/v1/campaign-templates/daemon-configs?user_id=${userId}`, {}, IRIS_API)
-    const vb = await vr.json() as { configs?: Record<string, { strategy?: string }> }
-    const seen = vb.configs?.[c.name]?.strategy ?? null
-    if (seen === strategy) prompts.log.success(`Daemon registry: "${before}" → "${strategy}" (template ${tpl.id}, verified)`)
-    else { prompts.log.error(`Daemon registry still reads "${seen ?? "?"}" for ${c.name}, not "${strategy}".`); process.exitCode = 1 }
-  } catch (err) {
-    prompts.log.warn(`Daemon registry not updated: ${(err as Error).message}`)
-    process.exitCode = 1
+    return pr.ok
+  } catch {
+    return false
   }
 }
 
