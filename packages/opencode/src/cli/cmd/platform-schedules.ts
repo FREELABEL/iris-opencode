@@ -4,7 +4,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, IRIS_API, writeJson, failNoOp} from "./iris-api"
 import { firstArray } from "../../util/array"
-import { rejectBadPagination, pageInfo, slicePage, type PageInfo } from "./pagination-args"
+import { rejectBadPagination, pageInfo, slicePage, type PageInfo, listEnvelope, listFooter, commandWith } from "./pagination-args"
 
 // ============================================================================
 // Execution-verification helpers (#146511) — `run` reports "dispatched", then
@@ -343,6 +343,14 @@ const SchedulesListCommand = cmd({
         await Promise.all(execPromises)
       }
 
+      // The list contract (#191863): one envelope for --json, one footer for humans.
+      const listCmd = commandWith("schedules list", { active: args.active, overdue: args.overdue, latest: args.latest, "agent-id": args["agent-id"] })
+      const contract = (rows: any[]) =>
+        listEnvelope(
+          { rows, total: pagination.total, page: pagination.page, perPage: pagination.per_page, lastPage: pagination.last_page, hasMore: pagination.has_more },
+          { resource: "schedules", command: listCmd },
+        )
+
       const filterLabel = [args.active && "active", args.overdue && "overdue"].filter(Boolean).join(", ")
       const pageLabel = pagination.last_page > 1 ? ` — page ${pagination.page}/${pagination.last_page} of ${pagination.total}` : ""
       spinner.stop(`${schedules.length} schedule(s)${filterLabel ? ` (${filterLabel})` : ""}${pageLabel}`)
@@ -369,6 +377,9 @@ const SchedulesListCommand = cmd({
         }))
         await writeJson({
           ...(schedulerHealth ? { degraded: [schedulerHealth] } : {}),
+          ...contract(rows),
+          // Deprecated (#191863): the v1.5.25 shape. Same rows as `data`, same facts as `meta`.
+          // Kept so scripts written against 1.5.25 keep working; read data/meta instead.
           schedules: rows,
           pagination,
         })
@@ -379,7 +390,8 @@ const SchedulesListCommand = cmd({
       printDegradations([schedulerHealth])
 
       if (schedules.length === 0) {
-        prompts.log.warn(args.active ? "No active schedules. Use without --active to see all." : "No schedules found")
+        const footer = listFooter(contract(schedules).meta, "schedules")
+        prompts.log.warn(args.active && pagination.total === 0 ? `${footer} Use without --active to see all.` : footer)
         prompts.outro("Done")
         return
       }
@@ -497,13 +509,8 @@ const SchedulesListCommand = cmd({
       }
 
       // Pagination hints
-      const { total, last_page: lastPage, page } = pagination
       console.log()
-      if (lastPage > 1) {
-        console.log(`  ${dim(`Page ${page}/${lastPage} (${total} total)`)}`)
-        if (pagination.has_more) console.log(`  ${dim(`iris schedules list --page=${page + 1} — next page`)}`)
-        if (page > 1) console.log(`  ${dim(`iris schedules list --page=${page - 1} — previous page`)}`)
-      }
+      console.log(`  ${dim(listFooter(contract(schedules).meta, "schedules"))}`)
       prompts.outro(
         `${dim("iris schedules get <id>")}  ·  ${dim("iris schedules history <id>")}`,
       )

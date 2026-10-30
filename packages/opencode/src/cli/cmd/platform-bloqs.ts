@@ -12,7 +12,7 @@ import {
   AtlasSealCommand,
   AtlasUnsealCommand,
 } from "./platform-atlas-pin"
-import { buildListEnvelope } from "./list-envelope"
+import { rejectBadPagination, listEnvelope, listFooter, commandWith, normalizeListResponse } from "./pagination-args"
 import { classifyRef, explainWrongRef } from "./reference-kind"
 import { federatedSearch, resolveSources, formatOutcomes } from "./federated-search"
 import { webSearchHandler } from "./platform-web-search"
@@ -80,52 +80,11 @@ export function failJson(payload: Record<string, unknown>): void {
  * Validate --limit / --page before they reach the API (#191846).
  *
  * `bloqs items --limit 0` used to become 50, `--limit -1` became 1, `--limit 300` became 200
- * and `--page 0|-1` became 1 — all silently, with exit 0. A script paging that way got
- * duplicated or skipped records while believing it had paged correctly. A value we would
- * have to change is refused instead, so what the caller asked for is what was applied.
- *
- * Returns field errors keyed by flag name, or null when every value given is usable.
- * Flags the caller did not pass (undefined) are not checked.
+ * and `--page 0|-1` became 1 — all silently, with exit 0. A value we would have to change is
+ * refused instead. The implementation lives in pagination-args.ts — the one shared module for
+ * list flags and the list contract (#191863); re-exported here for existing importers.
  */
-export function paginationErrors(
-  args: { limit?: unknown; page?: unknown },
-  opts: { maxLimit?: number } = {},
-): Record<string, string[]> | null {
-  const errors: Record<string, string[]> = {}
-  const isInt = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v)
-  if (args.limit !== undefined) {
-    const max = opts.maxLimit
-    if (!isInt(args.limit) || args.limit < 1 || (max !== undefined && args.limit > max)) {
-      errors.limit = [
-        `--limit must be a whole number from 1${max !== undefined ? ` to ${max}` : " up"}; got ${JSON.stringify(args.limit)}.`,
-      ]
-    }
-  }
-  if (args.page !== undefined) {
-    if (!isInt(args.page) || args.page < 1) {
-      errors.page = [`--page must be a whole number of at least 1 (pages are 1-based); got ${JSON.stringify(args.page)}.`]
-    }
-  }
-  return Object.keys(errors).length ? errors : null
-}
-
-/**
- * Refuse bad pagination flags: JSON on stdout with exit 2 in --json mode, an error line
- * otherwise. Returns true when the caller must stop. Call before requireAuth() — the check
- * needs no network.
- */
-export function rejectBadPagination(
-  args: { limit?: unknown; page?: unknown; json?: unknown },
-  opts: { maxLimit?: number } = {},
-): boolean {
-  const errors = paginationErrors(args, opts)
-  if (!errors) return false
-  const message = Object.values(errors).flat().join(" ")
-  process.exitCode = 2
-  if (args.json) failJson({ success: false, error: message, errors })
-  else prompts.log.error(message)
-  return true
-}
+export { paginationErrors, rejectBadPagination } from "./pagination-args"
 
 /** Normalise a board name. Blank is not a name: refuse it instead of letting the API
  *  substitute its "My First Bloq" default (#190633). */
@@ -239,13 +198,17 @@ function printBloq(b: Record<string, unknown>): void {
 // Subcommands
 // ============================================================================
 
+/** The bloqs index's practical page ceiling: one page holds every board (196 on the main account). */
+export const BLOQS_LIST_MAX_LIMIT = 500
+
 const BloqsListCommand = cmd({
   command: "list",
   aliases: ["ls"],
   describe: "list your knowledge bases",
   builder: (yargs) =>
     yargs
-      .option("limit", { describe: "max results", type: "number", default: 20 })
+      .option("limit", { describe: `results per page (1-${BLOQS_LIST_MAX_LIMIT})`, type: "number", default: 20 })
+      .option("page", { alias: "p", describe: "page number (1-based)", type: "number", default: 1 })
       .option("search", { alias: "s", describe: "search bloqs by name", type: "string" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
       // #180633: the default listing excludes system bloqs — agent workspaces and `app:*`
@@ -259,7 +222,7 @@ const BloqsListCommand = cmd({
       .option("type", { describe: "filter by type: user or system", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
-    if (rejectBadPagination(args)) return
+    if (rejectBadPagination(args, { maxLimit: BLOQS_LIST_MAX_LIMIT })) return
     cli.empty()
     cli.intro("◈  IRIS Bloqs")
 
@@ -273,8 +236,14 @@ const BloqsListCommand = cmd({
     spinner.start("Loading bloqs…")
 
     try {
-      const params = new URLSearchParams({ per_page: String(args.limit), simplified: "1" })
-      if (args.search) params.set("search", args.search)
+      // --search is matched here (tokenized, see below), over EVERY board: filtering one
+      // server page found "no match" for boards that sat on page 2 (#191863). The index holds
+      // every board in one 500-row page, so a search fetches that and pages the result here.
+      const params = new URLSearchParams(
+        args.search
+          ? { per_page: String(BLOQS_LIST_MAX_LIMIT), page: "1", simplified: "1" }
+          : { per_page: String(args.limit), page: String(args.page), simplified: "1" },
+      )
       if (args.all) params.set("include_system", "1")
       if (args.type) params.set("type", String(args.type))
       const res = await irisFetch(`/api/v1/user/${userId}/bloqs?${params}`)
@@ -299,20 +268,33 @@ const BloqsListCommand = cmd({
           matchesSearchQuery(`${b.name ?? ""} ${b.description ?? ""}`, args.search as string),
         )
       }
+      // The list contract (#191863). A search result is complete (every board was matched),
+      // so it is counted and paged here; otherwise the server's page facts are used. A search
+      // that hit the 500-row ceiling is NOT complete — its total is unknown, so say so.
+      const searchComplete = !args.search || serverTotal === undefined || Number(serverTotal) <= BLOQS_LIST_MAX_LIMIT
+      const env = listEnvelope<any>(
+        args.search
+          ? bloqs
+          : { ...normalizeListResponse<any>(data), rows: bloqs },
+        {
+          resource: "bloqs",
+          command: commandWith("atlas list", { search: args.search, all: args.all, type: args.type }),
+          page: args.page,
+          limit: Number(args.limit),
+          complete: Boolean(args.search) && searchComplete,
+          ...(args.search && !searchComplete ? { total: null } : {}),
+          search: "iris atlas search <term>",
+        },
+      )
+      // Deprecated v1.5.25 alias (meta.limit) for scripts that read it.
+      env.meta.limit = env.meta.per_page
+      bloqs = env.data
       spinner.stop(`${bloqs.length} bloq(s)${args.search ? ` matching "${args.search}"` : ""}`)
 
       if (args.json) {
         // Envelope, not a bare array: an agent must be able to see that it is
-        // holding a page rather than an inventory. Client-side search filtering
-        // above changes the count, so a filtered result reports its own size and
-        // is never labelled truncated against the server total.
-        await writeJson(
-          buildListEnvelope(bloqs, {
-            total: args.search ? bloqs.length : serverTotal,
-            limit: args.search ? undefined : Number(args.limit),
-            resource: "bloqs",
-          }),
-        )
+        // holding a page rather than an inventory.
+        await writeJson(env)
         return
       }
 
@@ -330,7 +312,7 @@ const BloqsListCommand = cmd({
           cli.log.warn(`No bloqs matched "${args.search}"`)
           cli.outro(`Try fewer words or ${dim("iris bloqs list")}`)
         } else {
-          cli.log.warn("No bloqs found")
+          cli.log.warn(listFooter(env.meta, "bloqs"))
           cli.outro(`Create one: ${dim("iris bloqs create")}`)
         }
         return
@@ -342,6 +324,7 @@ const BloqsListCommand = cmd({
         console.log()
       }
       printDivider()
+      console.log(`  ${dim(listFooter(env.meta, "bloqs"))}`)
 
       cli.outro(
         `${dim("iris bloqs get <id>")}  ·  ${dim("iris bloqs ingest <id> <file>")}`,
@@ -3870,8 +3853,23 @@ const BloqsItemsCommand = cmd({
       const currentPage = pg.current_page ?? page
       const hasMore = currentPage < lastPage
 
+      // The list contract (#191863). A --list scan is filtered client-side: its count is exact
+      // only when the scan reached the end of the bloq; a capped scan's total is unknown.
+      const listCmd = commandWith(`atlas items ${bloqId}`, { list: args.list, search: args.search, status: args.status, fields: args.fields, compact: args.compact })
+      const env = listEnvelope<any>(
+        args.list !== undefined
+          ? { rows: items, total: listScanIncomplete ? null : total, page: 1, perPage: perPage, lastPage: null, hasMore: listScanIncomplete ? true : null }
+          : { rows: items, total, page: currentPage, perPage: pg.per_page != null ? Number(pg.per_page) : perPage, lastPage, hasMore },
+        { resource: "items", command: listCmd, search: `iris atlas items ${bloqId} --search <term>` },
+      )
+
       if (args.json) {
         await writeJson({
+          data: items.map(project),
+          meta: env.meta,
+          ...(env.links ? { links: env.links } : {}),
+          // Deprecated (#191863): the v1.5.25 {items, pagination} shape, kept beside data/meta
+          // so existing scripts keep working. Read data/meta instead.
           items: items.map(project),
           pagination: {
             total,
@@ -3898,7 +3896,7 @@ const BloqsItemsCommand = cmd({
             `No items found in list ${args.list} within the first pages scanned — the bloq is large and the scan was capped, so this is NOT proof the list is empty.`,
           )
         } else {
-          prompts.log.warn(args.search ? `No items matching "${args.search}"` : "No items found")
+          prompts.log.warn(args.search && env.meta.current_page === 1 ? `No items matching "${args.search}".` : listFooter(env.meta, "items"))
         }
         prompts.outro("Done")
         return
@@ -3918,9 +3916,7 @@ const BloqsItemsCommand = cmd({
         }
       }
       console.log()
-      const pageInfo = `Showing ${items.length} of ${total} (page ${currentPage}/${lastPage})`
-      const moreHint = hasMore ? dim(`  —  --page ${currentPage + 1} for more`) : ""
-      console.log(`  ${dim(pageInfo)}${moreHint}`)
+      console.log(`  ${dim(listFooter(env.meta, "items"))}`)
       console.log()
       prompts.outro(dim("iris bloqs share <id>  (publish + shareable link)  |  iris bloqs update-item <id> --status <status>"))
       return

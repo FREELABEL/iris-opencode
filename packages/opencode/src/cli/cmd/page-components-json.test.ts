@@ -33,13 +33,14 @@ describe("buildPageComponentsJson", () => {
       { index: 1, path: "components.1", id: null, type: "CustomHtml", preview: "<p>x</p>" },
       { index: 2, path: "components.2", id: "3", type: "Spacer", preview: null },
     ])
-    expect(out.meta).toEqual({ returned: 3, total: 3, truncated: false })
+    // The full list contract (#191863).
+    expect(out.meta).toEqual({ total: 3, returned: 3, per_page: 3, current_page: 1, last_page: 1, from: 1, to: 3, has_more: false, truncated: false })
   })
 
   test("a page with no components is an empty list, not an error", () => {
     const out = buildPageComponentsJson({ id: 1, slug: "e", json_content: {} }, "e")
     expect(out.data).toEqual([])
-    expect(out.meta).toEqual({ returned: 0, total: 0, truncated: false })
+    expect(out.meta).toEqual({ total: 0, returned: 0, per_page: 1, current_page: 1, last_page: 1, from: null, to: null, has_more: false, truncated: false })
     expect(out.page.title).toBeNull()
   })
 })
