@@ -29,6 +29,11 @@ describe("buildMcpListJson", () => {
     expect(out.meta).toEqual({ servers: 3, clients_registered: 1 })
   })
 
+  test("a status this CLI does not know is reported as failed, never as connected", () => {
+    const out = buildMcpListJson([{ name: "odd", config: { type: "local", command: ["x"] }, status: { status: "weird" } }], [])
+    expect(out.servers[0].status).toBe("failed")
+  })
+
   test("no servers is an empty list, still ok", () => {
     const out = buildMcpListJson([], [])
     expect(out).toEqual({ ok: true, servers: [], clients: [], meta: { servers: 0, clients_registered: 0 } })

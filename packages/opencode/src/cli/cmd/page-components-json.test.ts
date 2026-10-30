@@ -115,4 +115,15 @@ describe("pages components --json", () => {
     expect(out.status).toBe(404)
     expect(process.exitCode).toBe(1)
   })
+
+  test("an unreadable response is JSON on stdout too, and exits 1", async () => {
+    globalThis.fetch = (async () =>
+      new Response("<html>not json</html>", { status: 200, headers: { "content-type": "text/html" } })) as unknown as typeof fetch
+    const err = await run(["components", "demo-page", "--json"])
+    expect(err).toBeNull()
+    const out = JSON.parse(stdout.trim())
+    expect(out.success).toBe(false)
+    expect(out.action).toBe("Components demo-page")
+    expect(process.exitCode).toBe(1)
+  })
 })
