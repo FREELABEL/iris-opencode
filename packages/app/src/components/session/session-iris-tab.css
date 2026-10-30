@@ -3879,6 +3879,36 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
 }
 .iris-card--elon .iris-card__row > select.iris-field__input { height: 28px; width: auto; max-width: 96px; }
 
+/* Who can open this card (#191841): one choice in the Details dropdown shell, and on a private
+   card the one action that matters — a link you can hand out. */
+.iris-share__mode { margin-bottom: 0; }
+.iris-share__get {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  height: 36px;
+  margin-top: 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-strong);
+  background: var(--surface-raised-stronger);
+  box-shadow: 0 0 0 1px var(--border-weak-base);
+  cursor: pointer;
+  transition: background 0.12s, box-shadow 0.12s;
+}
+.iris-share__get:hover:not(:disabled) { box-shadow: 0 0 0 1px var(--text-interactive-base); }
+.iris-share__get:disabled { cursor: default; color: var(--text-weaker); }
+.iris-share__get:focus-visible { outline: 2px solid var(--text-interactive-base); outline-offset: 1px; }
+.iris-share__chips { margin-top: 10px; }
+.iris-share__allow { margin-top: 10px; }
+.iris-share__confirm { display: flex; flex-direction: column; gap: 8px; margin: 10px 0 0; font-size: 12px; }
+.iris-share__confirmacts { display: flex; justify-content: flex-end; gap: 6px; }
+.iris-card__act--danger:not(:disabled) { color: #fff; background: #dc2626; }
+.iris-card__act--danger:hover:not(:disabled) { background: #b91c1c; }
+
 /* ── Task rows (#191794) ─────────────────────────────────────────────────────────────────────────
    A row card per task: a 3px bar for state, always with its word on the second line, so colour is
    never the only signal (kit 03, rule 01); a Done button where the checkbox was. */

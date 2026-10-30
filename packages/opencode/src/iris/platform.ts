@@ -3785,20 +3785,21 @@ export async function setShareVisibility(itemId: number, pub: boolean): Promise<
 }
 
 /**
- * The item's allow-list. Stored ONLY by make-public, so the card must be public — a private
- * card has no link for the list to guard, and the route says so rather than pretending.
- * An empty list is a legal write: it is sent as [] and means "anyone with the link".
+ * The item's allow-list. Stored ONLY by make-public, which is also what publishes the card.
+ * On a PRIVATE card a non-empty list therefore publishes it already gated, in one request,
+ * so "only people I choose" never passes through a moment where anyone with the link is in
+ * (#191841). An empty list on a private card is refused: it would publish an open link.
+ * On a public card an empty list is a legal write: it is sent as [] and means "anyone with the link".
  */
 export async function setShareAllowlist(itemId: number, entries: string[]): Promise<Ok> {
   const userId = await resolveUserId()
   if (!userId) return { ok: false, reason: notSignedIn() }
   const item = await rawItem(itemId)
   if (!item.ok) return { ok: false, reason: item.reason }
-  if (!item.raw.is_public)
+  if (!item.raw.is_public && entries.length === 0)
     return {
       ok: false,
-      reason:
-        "Make the card public first — fl-api stores the allow-list on publish, a private card has no link to guard.",
+      reason: "Nothing to allow — an empty list on a private card would publish a link anyone can open.",
     }
   const { emails, domains } = splitAllowList(entries)
   const r = await postJson(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/make-public`, {
