@@ -82,7 +82,9 @@ const READS: Record<string, string[]> = {
   // ARTEMIS's `mobile_diagnose`, which can launch an emulator and apply fixes. A read that can
   // repair things is not a read, and naming ours `doctor` while calling theirs would smuggle an
   // act through this list.
-  android: ["devices", "list", "ls", "state", "screen", "screenshot", "logcat", "trace", "doctor", "status"],
+  // `health` reads dumpsys; `check` reads the accessibility tree and compares it — the checker
+  // looks, it never taps (the batch does the tap, through the guard, after the check passes).
+  android: ["devices", "list", "ls", "state", "screen", "screenshot", "logcat", "trace", "doctor", "status", "health", "check"],
 }
 
 /** `iris obs record status` is a read; `iris obs record start` is an act. Same sub-command, different argv. */
@@ -163,6 +165,11 @@ export function routeFor(argv: string[], parsed?: string[]): Route | null {
     return verb ? { class: "node", verb, instance: third && !third.startsWith("-") ? third : null } : null
   }
   if (cls === "android") {
+    // `batch run` is a night of acts, so it asks the class question BEFORE adb is contacted —
+    // an agent with no couple is refused at the door, not after the first task has opened an app.
+    // Each task inside still asks the precise question per act. `batch status|retry|drop|report`
+    // only touch the batch's own bookkeeping, never the phone.
+    if (sub === "batch" || sub === "night") return third === "run" ? { class: "android", verb: "run", instance: null } : null
     const verb =
       sub === "run" || sub === "task" ? "run"
       : sub === "tap" || sub === "click" || sub === "press" ? "tap"
