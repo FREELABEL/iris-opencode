@@ -3,7 +3,8 @@ import { withAccessFooter } from "./access-guide"
 import { brandContract, brandContractCss, applyBrandBlock } from "./brand-contract"
 import { TEMPLATE_GALLERY_SLUG, briefQuestions, findTemplate, parseTemplateCatalogue, type TemplateRow } from "./genesis-templates"
 import { productCommand } from "./product-command"
-import { buildListEnvelope, projectFields, LIST_FIELDS } from "./list-envelope"
+import { projectFields, LIST_FIELDS } from "./list-envelope"
+import { rejectBadPagination, listEnvelope, listFooter, normalizeListResponse, commandWith } from "./pagination-args"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { buildPageComponentsJson, componentPreview } from "./page-components-json"
@@ -432,6 +433,9 @@ export async function createPageFromJson(opts: {
 // Subcommands
 // ============================================================================
 
+/** /api/v1/pages clamps per_page at 100 (measured: per_page=500 returns 100 rows, per_page "100"). */
+export const PAGES_LIST_MAX_LIMIT = 100
+
 // Shared list/search renderer. The /api/v1/pages endpoint supports server-side
 // per_page, page and search — previously hardcoded per_page=50 with no way to
 // page or search, so any page past the first 50 was undiscoverable (#147317).
@@ -441,7 +445,10 @@ async function fetchAndRenderPages(args: {
   limit?: number
   page?: number
   json?: boolean
+  /** "pages list" / "pages search <q>" — for links and hints. */
+  command?: string
 }) {
+  if (rejectBadPagination(args, { maxLimit: PAGES_LIST_MAX_LIMIT })) return
   UI.empty()
   prompts.intro(args.search ? `◈  Pages — search "${args.search}"` : "◈  Pages")
   if (!(await requireAuth())) { prompts.outro("Done"); return }
@@ -480,22 +487,29 @@ async function fetchAndRenderPages(args: {
     const lastPage = meta?.last_page ?? 1
     sp.stop(`${pages.length} of ${total} page(s)${lastPage > 1 ? ` — page ${currentPage}/${lastPage}` : ""}`)
 
+    // The list contract (#191863). --page-type filters this page client-side, so the
+    // server's total no longer describes the result: report it as unknown, not as a guess.
+    const env = listEnvelope<any>(
+      { ...normalizeListResponse<any>(json), rows: pages, ...(args["page-type"] ? { total: null, lastPage: null } : {}) },
+      {
+        resource: "pages",
+        command: args.command ?? commandWith("pages list", { search: args.search, "page-type": args["page-type"] }),
+        page: args.page,
+        limit: args.limit,
+        search: "iris pages search <term>",
+      },
+    )
     if (args.json) {
       // Was a back-compat flat array. That back-compat is what hid truncation: a
       // page of results that looks like the whole set produces confident wrong
       // answers. The envelope names what is withheld and how to get the rest.
-      await writeJson(
-        buildListEnvelope(projectFields(pages, LIST_FIELDS.pages), {
-          total,
-          limit: pages.length,
-          resource: "pages",
-        }),
-      )
+      // meta.limit: deprecated v1.5.25 alias of per_page.
+      await writeJson({ ...env, data: projectFields(pages, LIST_FIELDS.pages), meta: { ...env.meta, limit: env.meta.per_page } })
       prompts.outro("Done")
       return
     }
     if (pages.length === 0) {
-      prompts.log.warn(args.search ? `No pages match "${args.search}"` : "No pages found")
+      prompts.log.warn(args.search && env.meta.current_page === 1 ? `No pages match "${args.search}".` : listFooter(env.meta, "pages"))
       prompts.outro("Done")
       return
     }
@@ -510,8 +524,8 @@ async function fetchAndRenderPages(args: {
       console.log()
     }
     printDivider()
+    console.log(`  ${dim(listFooter(env.meta, "pages"))}`)
     const hints: string[] = ["iris pages view <slug>"]
-    if (currentPage < lastPage) hints.push(`iris pages list --page ${currentPage + 1}`)
     if (!args.search) hints.push("iris pages search <query>")
     prompts.outro(dim(hints.join("  ·  ")))
   } catch (err) {
@@ -529,8 +543,8 @@ const ListCmd = cmd({
     y
       .option("page-type", { describe: "filter by template type", type: "string" })
       .option("search", { describe: "filter by title or slug", type: "string" })
-      .option("limit", { describe: "results per page", type: "number", default: 50 })
-      .option("page", { describe: "page number", type: "number", default: 1 })
+      .option("limit", { describe: `results per page (1-${PAGES_LIST_MAX_LIMIT})`, type: "number", default: 50 })
+      .option("page", { describe: "page number (1-based)", type: "number", default: 1 })
       .option("json", { describe: "output as JSON", type: "boolean", default: false }),
   async handler(args) {
     await fetchAndRenderPages(args as any)
@@ -544,11 +558,11 @@ const SearchCmd = cmd({
   builder: (y) =>
     y
       .positional("query", { describe: "search text (title or slug)", type: "string", demandOption: true })
-      .option("limit", { describe: "results per page", type: "number", default: 50 })
-      .option("page", { describe: "page number", type: "number", default: 1 })
+      .option("limit", { describe: `results per page (1-${PAGES_LIST_MAX_LIMIT})`, type: "number", default: 50 })
+      .option("page", { describe: "page number (1-based)", type: "number", default: 1 })
       .option("json", { describe: "output as JSON", type: "boolean", default: false }),
   async handler(args) {
-    await fetchAndRenderPages({ ...(args as any), search: String(args.query) })
+    await fetchAndRenderPages({ ...(args as any), search: String(args.query), command: commandWith(`pages search ${JSON.stringify(String(args.query))}`, {}) })
   },
 })
 

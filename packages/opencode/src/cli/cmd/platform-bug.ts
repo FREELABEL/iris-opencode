@@ -10,6 +10,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs"
 import { randomUUID } from "crypto"
 import { execSync } from "child_process"
 import { itemContentText } from "./bloq-item-format"
+import { rejectBadPagination, listEnvelope, listFooter, commandWith } from "./pagination-args"
 
 // Bug reports go to bloq #297 (under user 193) via PUBLIC endpoint — no auth required
 const BUG_REPORT_ENDPOINT = "/api/v1/public/bug-report"
@@ -872,19 +873,23 @@ const ReportCommand = cmd({
   },
 })
 
+/** The bloq items endpoint's per_page ceiling (same endpoint as `atlas items`). */
+export const BUG_LIST_MAX_LIMIT = 200
+
 const ListCommand = cmd({
   command: "list",
   aliases: ["ls"],
   describe: "list bug reports (with pagination and filtering)",
   builder: (yargs) =>
     yargs
-      .option("limit", { describe: "results per page", type: "number", default: 20 })
-      .option("page", { alias: "p", describe: "page number", type: "number", default: 1 })
+      .option("limit", { describe: `results per page (1-${BUG_LIST_MAX_LIMIT})`, type: "number", default: 20 })
+      .option("page", { alias: "p", describe: "page number (1-based)", type: "number", default: 1 })
       .option("status", { describe: "filter by status (default: open bugs only)", choices: ["todo", "in_progress", "done", "all"] as const, default: "todo" as const })
       .option("severity", { describe: "filter by severity", choices: ["low", "medium", "high", "critical"] as const })
       .option("search", { alias: "q", describe: "search bug titles", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
+    if (rejectBadPagination(args, { maxLimit: BUG_LIST_MAX_LIMIT })) return
     const token = await requireAuth()
     if (!token) return
 
@@ -958,7 +963,9 @@ const ListCommand = cmd({
 
       totalItems = matches.length
       lastPage = Math.max(1, Math.ceil(totalItems / args.limit))
-      currentPage = Math.min(Math.max(1, args.page), lastPage)
+      // The page asked for, not a clamped one: past the end is an empty page that says so
+      // (#191863), not silently the last page.
+      currentPage = args.page
       const start = (currentPage - 1) * args.limit
       items = matches.slice(start, start + args.limit)
     } else {
@@ -971,6 +978,17 @@ const ListCommand = cmd({
       lastPage = pagination?.last_page ?? Math.ceil(totalItems / args.limit)
     }
 
+    // The list contract (#191863). A capped severity scan has no honest total.
+    const listCmd = commandWith("bug list", { status: args.status === "todo" ? undefined : args.status, severity: args.severity, search: args.search })
+    const listSource = {
+      rows: items,
+      total: scanTruncated ? null : totalItems,
+      page: currentPage,
+      perPage: args.limit,
+      lastPage: scanTruncated ? null : lastPage,
+      hasMore: scanTruncated ? true : null,
+    }
+
     if (args.json) {
       // AWAITED write, not console.log. console.log is fire-and-forget: for a
       // large payload Bun hands part of it to the pipe and the process exits
@@ -980,7 +998,15 @@ const ListCommand = cmd({
       // fourth delivered all 142,482. It reads as corrupt data rather than a
       // lost write, and never reproduces in a terminal because TTY writes are
       // synchronous. Awaiting the write removes the race.
-      await writeJson({ items, page: currentPage, total: totalItems, last_page: lastPage, ...(scanTruncated ? { scan_truncated: true } : {}) })
+      await writeJson(
+        listEnvelope(listSource, {
+          resource: "bugs",
+          command: listCmd,
+          // Deprecated (#191863): the v1.5.25 {items, page, total, last_page} shape, kept beside
+          // data/meta so existing scripts keep working. Read data/meta instead.
+          legacy: { items, page: currentPage, total: totalItems, last_page: lastPage, ...(scanTruncated ? { scan_truncated: true } : {}) },
+        }),
+      )
       return
     }
 
@@ -1002,7 +1028,7 @@ const ListCommand = cmd({
     printDivider()
 
     if (items.length === 0) {
-      console.log(`  ${dim("No bug reports found")}`)
+      console.log(`  ${dim(listFooter(listEnvelope(listSource, { resource: "bug reports" }).meta, "bug reports"))}`)
       if (filters.length > 0) {
         console.log(`  ${dim("Try: iris bug list --status=all")}`)
       }
@@ -1030,12 +1056,7 @@ const ListCommand = cmd({
     }
 
     printDivider()
-    if (currentPage < lastPage) {
-      console.log(dim(`  iris bug list --page=${currentPage + 1} — next page`))
-    }
-    if (currentPage > 1) {
-      console.log(dim(`  iris bug list --page=${currentPage - 1} — previous page`))
-    }
+    if (items.length > 0) console.log(dim(`  ${listFooter(listEnvelope(listSource, { resource: "bug reports" }).meta, "bug reports")}`))
     console.log(dim("  iris bug list --status=all — include completed bugs"))
     console.log(dim("  iris bug list --severity=critical — critical bugs only"))
     console.log(dim("  iris bug list --search=\"invoice\" — search titles"))

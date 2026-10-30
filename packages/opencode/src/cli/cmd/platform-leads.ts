@@ -67,6 +67,7 @@ import {
   type CrmMatch,
 } from "./lead-mentions"
 import { firstArray } from "../../util/array"
+import { rejectFieldErrors, listEnvelope, listFooter, commandWith, type FieldErrors } from "./pagination-args"
 import { LeadsTagCommand, LeadsUntagCommand } from "./leads-tag"
 import { ENRICH_DESCRIBE, enrichMany, enrichOne, formatOutcome, type EnrichFetch } from "./leads-enrich"
 import {
@@ -311,8 +312,10 @@ const LeadsListCommand = cmd({
       })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
-    UI.empty()
-    prompts.intro("◈  IRIS Leads")
+    if (!args.json) {
+      UI.empty()
+      prompts.intro("◈  IRIS Leads")
+    }
 
     // #191691 — refuse a bad --limit before any request, so it can never become a 500.
     // A walk defaults to the server's largest page; a single page to 20.
@@ -335,11 +338,13 @@ const LeadsListCommand = cmd({
                 ? "--all-pages walks from the first page; drop --cursor/--page"
                 : null
     if (usageError || !parsedLimit.ok || !parsedMin.ok || !parsedMax.ok || !parsedPage.ok) {
+      // Same as every list command (#191863): a usage error is exit 2, as JSON on stdout in
+      // --json mode, keyed by the flag at fault.
       const msg = usageError ?? "invalid arguments"
-      if (args.json) process.stderr.write(`[leads list] ${msg}\n`)
-      prompts.log.error(msg)
-      process.exitCode = 1
-      prompts.outro("Done")
+      const field = !parsedLimit.ok ? "limit" : !parsedMin.ok ? "min-price" : !parsedMax.ok ? "max-price" : !parsedPage.ok ? "page" : args.cursor ? "cursor" : "all-pages"
+      const errors: FieldErrors = { [field]: [msg] }
+      rejectFieldErrors(errors, args.json)
+      if (!args.json) prompts.outro("Done")
       return
     }
     const limit = parsedLimit.value
@@ -503,16 +508,50 @@ const LeadsListCommand = cmd({
         spinner.stop(`${leads.length} lead(s)${suffix}`)
       }
 
+      // The list contract (#191863). `--all-pages` is the whole matching book; a cursor page
+      // is paged by the server's keyset cursor; otherwise offset pages (the default activity
+      // view re-bands a wider window, then the first `limit` rows are shown).
+      const listCmd = commandWith("leads list", {
+        status: args.status,
+        search: args.search,
+        "bloq-id": args["bloq-id"],
+        all: args.all,
+        "min-price": args["min-price"],
+        "max-price": args["max-price"],
+        sort: args.sort === "activity" ? undefined : args.sort,
+      }) + (args.tag ?? []).map((t) => ` ${commandWith("", { tag: String(t) }).trim()}`).join("")
+      const apiTotal = typeof data?.total === "number" ? data.total : typeof data?.meta?.total === "number" ? data.meta.total : null
+      const usesCursor = !allPages && (Boolean(args.cursor) || nextCursor !== null || (!parsedPage.value && !request.reorderByStatus))
+      const env = allPages
+        ? listEnvelope(leads, { resource: "leads", complete: true, command: listCmd })
+        : listEnvelope(
+            {
+              rows: leads,
+              total: apiTotal,
+              page: parsedPage.value ?? 1,
+              perPage: limit,
+              lastPage: typeof data?.last_page === "number" ? data.last_page : null,
+              hasMore: null,
+            },
+            {
+              resource: "leads",
+              command: listCmd,
+              search: "iris leads search <query>",
+              ...(usesCursor ? { cursor: { next: nextCursor, continued: Boolean(args.cursor) } } : {}),
+            },
+          )
+      if (prospectedCount > 0) {
+        const note = `${prospectedCount} Prospected leads are hidden (not counted in total); --all includes them.`
+        env.meta.hint = env.meta.hint ? `${env.meta.hint} ${note}` : note
+      }
+
       if (args.json) {
-        // The array shape is preserved because callers parse it, so the caveat goes to
-        // STDERR — it reaches a human or an agent without corrupting piped stdout. A
-        // silent truncation in JSON is the exact failure this fix exists for.
+        // An envelope, not a bare array (#191863): the total, the page and how to get the next
+        // one travel with the rows. The scope caveats still go to STDERR as well.
         if (truncated || prospectedCount > 0) {
           process.stderr.write(scope.warnings.map((w) => `[leads list] ${w}`).join("\n") + "\n")
         }
-        if (nextCursor) process.stderr.write(`[leads list] next page: --cursor ${nextCursor}\n`)
-        else if (nextPage) process.stderr.write(`[leads list] next page: --page ${nextPage}\n`)
-        await writeJson(leads)
+        await writeJson(env)
         return
       }
 
@@ -536,6 +575,7 @@ const LeadsListCommand = cmd({
       }
       printDivider()
 
+      console.log(`  ${dim(listFooter(env.meta, "leads"))}`)
       if (nextCursor) prompts.log.info(`Next page: ${dim(`--cursor ${nextCursor}`)} (same filters and --sort)  ·  every page: ${dim("--all-pages")}`)
       else if (nextPage) prompts.log.info(`Next page: ${dim(`--page ${nextPage}`)}  ·  every page: ${dim("--all-pages")}`)
       else if (truncated && request.reorderByStatus) prompts.log.info(`More: ${dim("--all-pages")}, or page by page in server order: ${dim("--page 1")}`)

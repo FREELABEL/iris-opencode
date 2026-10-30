@@ -12,6 +12,7 @@ import { CliUsageError } from "../json-error"
 import { currentDelegationOrigin } from "./hive-delegation-origin"
 import { buildHiveRunBody, ENDED_STATUSES, dispatchableConnection, queuedReport, statusLine, stoppedWaitingNote, type CreatedTask } from "./hive-run-body"
 import { busyOverrideHint } from "./hive-task-create"
+import { listEnvelope, listFooter } from "./pagination-args"
 
 // ============================================================================
 // iris hive nodes / run
@@ -195,7 +196,9 @@ const HiveNodesListCommand = cmd({
     const views = await commitViews(nodes.map((n) => (n as any).daemon_version))
 
     if (argv.json) {
-      await writeJson(nodes.map((n, i) => ({ ...n, daemon_commit: views.byIndex[i].commit, daemon_drift: views.byIndex[i].drift, behind_main: views.byIndex[i].behind, main_commit: views.main })))
+      // The list contract (#191863): the nodes endpoint returns every node, so the total is exact.
+      const rows = nodes.map((n, i) => ({ ...n, daemon_commit: views.byIndex[i].commit, daemon_drift: views.byIndex[i].drift, behind_main: views.byIndex[i].behind, main_commit: views.main }))
+      await writeJson(listEnvelope(rows, { resource: "nodes", complete: true }))
       return
     }
 
@@ -319,7 +322,7 @@ const HiveNodesListCommand = cmd({
 
     const stale = nodes.filter((n) => n.connection_status === "online" && !(n as any).bridge_capabilities).length
     console.log()
-    console.log(dim(`  ${nodes.length} node(s).  Run on one: iris hive run <name|id> "<command>"`))
+    console.log(dim(`  ${listFooter(listEnvelope(nodes, { resource: "nodes", complete: true }).meta, "nodes")}.  Run on one: iris hive run <name|id> "<command>"`))
     const behind = views.byIndex.filter((v) => v.behind).length
     if (behind > 0) console.log(`  ${UI.Style.TEXT_WARNING}${behind} node(s) behind main.${UI.Style.TEXT_NORMAL} ${dim("Update every machine: iris hive rollout --dry-run, then iris hive rollout")}`)
     if (stale > 0) {
