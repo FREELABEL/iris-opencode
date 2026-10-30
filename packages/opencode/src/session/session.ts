@@ -5,6 +5,8 @@ import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { serviceUse } from "@opencode-ai/core/effect/service-use"
 import path from "path"
 import { BackgroundJob } from "@/background/job"
+import { Permission } from "@/permission"
+import { Question } from "@/question"
 import { Decimal } from "decimal.js"
 import type { ProviderMetadata, Usage } from "@opencode-ai/llm"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
@@ -486,7 +488,12 @@ export type Patch = Omit<Partial<Info>, "time" | "share" | "summary" | "revert" 
 const layer: Layer.Layer<
   Service,
   never,
-  BackgroundJob.Service | RuntimeFlags.Service | Database.Service | EventV2Bridge.Service
+  | BackgroundJob.Service
+  | RuntimeFlags.Service
+  | Database.Service
+  | EventV2Bridge.Service
+  | Permission.Service
+  | Question.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -495,6 +502,8 @@ const layer: Layer.Layer<
     const background = yield* BackgroundJob.Service
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
+    const permission = yield* Permission.Service
+    const question = yield* Question.Service
 
     const createNext = Effect.fn("Session.createNext")(function* (input: {
       id?: SessionID
@@ -613,7 +622,15 @@ const layer: Layer.Layer<
           Effect.catchCause(() => Effect.succeed(false)),
         )
 
-        if (hasInstance) yield* cancelBackgroundJobs(background, sessionID)
+        if (hasInstance) {
+          yield* cancelBackgroundJobs(background, sessionID)
+          // #191785: a deleted session's pending permission/question requests would otherwise stay
+          // in the pending maps (listed by GET /permission and /question, accepting replies) and the
+          // tool parked on them would hang. Reject them the way an abort does (#191779); children
+          // are covered by the recursive remove below.
+          yield* permission.rejectSession(sessionID)
+          yield* question.rejectSession(sessionID)
+        }
         const kids = yield* children(sessionID)
         for (const child of kids) {
           yield* remove(child.id)
@@ -1010,7 +1027,7 @@ function listByProject(
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [BackgroundJob.node, RuntimeFlags.node, Database.node, EventV2Bridge.node],
+  deps: [BackgroundJob.node, RuntimeFlags.node, Database.node, EventV2Bridge.node, Permission.node, Question.node],
 })
 
 export * as Session from "./session"
