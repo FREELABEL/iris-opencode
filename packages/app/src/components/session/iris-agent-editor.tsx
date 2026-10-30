@@ -139,6 +139,8 @@ export function IrisAgentEditor(props: IrisAgentEditorProps) {
   const [saved, setSaved] = createSignal<Partial<Record<StepId, string>>>({})
   const snap = (d: Draft) => Object.fromEntries(STEPS.map((s) => [s.id, JSON.stringify(slice(s.id, d))])) as Record<StepId, string>
   const dirty = (step: StepId) => saved()[step] !== JSON.stringify(slice(step, draft))
+  /** The system prompt as stored — a Personality save patches config only when it changed. */
+  const [storedPrompt, setStoredPrompt] = createSignal("")
 
   // CREATE: once the catalogue and models are in, start from the defaults (checked) and the
   // first offered model. EDIT: once the agent is in.
@@ -161,6 +163,7 @@ export function IrisAgentEditor(props: IrisAgentEditorProps) {
       }
       setDraft(reconcile(d))
       setSaved(snap(d))
+      setStoredPrompt(d.systemPrompt)
       setReady(true)
     }),
   )
@@ -212,7 +215,7 @@ export function IrisAgentEditor(props: IrisAgentEditorProps) {
         continue
       }
       let failed: string | null = null
-      for (const call of saveCalls(s, draft, null, agentConfig(raw()))) {
+      for (const call of saveCalls(s, draft, { ...draft, systemPrompt: storedPrompt() }, agentConfig(raw()))) {
         failed = await run(id, call)
         if (failed) break
       }
@@ -220,6 +223,7 @@ export function IrisAgentEditor(props: IrisAgentEditorProps) {
       else {
         done.push(s)
         if (s === "tools") setDraft("toolsLegacy", false)
+        if (s === "basic") setStoredPrompt(draft.systemPrompt)
       }
     }
     if (done.length) {
@@ -574,7 +578,7 @@ export function IrisAgentEditor(props: IrisAgentEditorProps) {
                 <div class="iae-grid">
                   <div class="iae-field">
                     <span>Response style</span>
-                    <div class="iae-seg">
+                    <div class="iae-seg iae-seg--cap">
                       <For each={Object.keys(RESPONSE_MODES) as (keyof typeof RESPONSE_MODES)[]}>
                         {(k) => (
                           <button type="button" aria-pressed={draft.responseMode === k} onClick={() => setDraft("responseMode", k)}>
@@ -587,7 +591,7 @@ export function IrisAgentEditor(props: IrisAgentEditorProps) {
                   </div>
                   <div class="iae-field">
                     <span>Response length</span>
-                    <div class="iae-seg">
+                    <div class="iae-seg iae-seg--cap">
                       <For each={Object.keys(RESPONSE_LENGTHS) as (keyof typeof RESPONSE_LENGTHS)[]}>
                         {(k) => (
                           <button type="button" aria-pressed={draft.responseLength === k} onClick={() => setDraft("responseLength", k)}>
