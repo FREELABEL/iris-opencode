@@ -1,8 +1,9 @@
+import { writeFile } from "node:fs/promises"
 import { firstArray } from "../../util/array"
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, handleApiError, printDivider, printKV, dim, writeJson, isJsonMode, emitJsonError } from "./iris-api"
+import { irisFetch, handleApiError, printDivider, printKV, dim, writeJson, isJsonMode, emitJsonError, resolveUserId } from "./iris-api"
 import { productCommand } from "./product-command"
 
 /**
@@ -644,13 +645,223 @@ export const PayStatusCmd = cmd({
   },
 })
 
+/** One CSV line. Handles quoted fields, which a company name with a comma needs. */
+function csvCells(line: string): string[] {
+  const cells: string[] = []
+  let cell = ""
+  let quoted = false
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+    if (ch === '"' && quoted && line[i + 1] === '"') {
+      cell += '"'
+      i++
+    } else if (ch === '"') quoted = !quoted
+    else if (ch === "," && !quoted) {
+      cells.push(cell.trim())
+      cell = ""
+    } else cell += ch
+  }
+  return [...cells, cell.trim()]
+}
+
+const BULK_COLUMNS = ["email", "lead", "seat_cap", "allow", "organization"]
+
+/**
+ * #191971 — people.csv: email,lead,seat_cap,allow,organization. Only email is needed as a column.
+ * allow is ;-separated. A bad value goes to the server as written, so it is reported on its row.
+ */
+export function parseBulkCsv(text: string): { rows: any[] } | { error: string } {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim())
+  if (lines.length < 2) return { error: "The file needs a header line and at least one person." }
+  const header = csvCells(lines[0].replace(/^\uFEFF/, "")).map((h) => h.toLowerCase())
+  const unknown = header.filter((h) => !BULK_COLUMNS.includes(h))
+  if (unknown.length) return { error: `Unknown column: ${unknown.join(", ")}. Use: ${BULK_COLUMNS.join(", ")}.` }
+  if (!header.includes("email")) return { error: "The file needs an email column." }
+  const rows = lines.slice(1).map((line) => {
+    const cells = csvCells(line)
+    const at = (name: string) => cells[header.indexOf(name)] || undefined
+    const row: Record<string, unknown> = { email: at("email") ?? "" }
+    const number = (v: string) => (/^\d+$/.test(v) ? Number(v) : v)
+    if (at("lead")) row.lead_id = number(at("lead")!)
+    if (at("seat_cap")) row.seat_cap_cents = number(at("seat_cap")!)
+    if (at("allow")) row.allow = at("allow")!.split(";").map((e) => e.trim()).filter(Boolean)
+    if (at("organization")) row.organization = at("organization")
+    return row
+  })
+  return { rows }
+}
+
+/** A lead as a bulk row: its own address and id. No address reaches the server as a row problem. */
+export function leadToBulkRow(lead: any): { email: string; lead_id: number } {
+  return { email: String(lead?.email ?? lead?.contact_info?.email ?? "").trim(), lead_id: lead?.id }
+}
+
+/** Enough to tell keys apart. The key is the credential, so reports and logs never hold it. */
+export function maskKey(key: unknown): string {
+  const parts = String(key ?? "").split("-")
+  return parts.length > 1 ? `${parts[0]}-****-${parts[parts.length - 1]}` : "—"
+}
+
+export function bulkRowLine(r: any): string {
+  const who = `${String(r.row).padStart(3)}  ${String(r.email || "(no email)").padEnd(36)}`
+  const lead = r.lead_id ? `  lead #${r.lead_id}` : ""
+  if (r.status === "problem") return `${who} PROBLEM: ${firstArray(r.problems).join("; ")}`
+  if (r.status === "would_issue") return `${who} would issue${lead}  seat cap ${seatCapLine(r.seat_cap_cents)}`
+  if (r.status === "issued") return `${who} issued ${maskKey(r.key)}${lead}`
+  const differs = firstArray(r.differs).length ? `  differs from the list: ${firstArray(r.differs).join(", ")}, left as it is` : ""
+  return `${who} already has ${maskKey(r.key)}, skipped${differs}`
+}
+
+/** Every page of a lead list, so a list of 60 is not silently a list of 50. */
+async function allPages(url: (page: number) => string, read: (body: any) => { leads: any[]; last: number }): Promise<any[] | undefined> {
+  const leads: any[] = []
+  for (let page = 1; ; page++) {
+    const res = await irisFetch(url(page))
+    if (!res.ok) {
+      await handleApiError(res, "Read the people")
+      process.exitCode = 1
+      return undefined
+    }
+    const got = read(await res.json())
+    leads.push(...got.leads)
+    if (page >= got.last) return leads
+  }
+}
+
+async function bulkRowsFrom(args: any): Promise<any[] | undefined> {
+  const sources = [args.file, args.segment, args.tag].filter((v) => v !== undefined)
+  const refuse = (message: string) => {
+    process.exitCode = 1
+    if (isJsonMode() || args.json) emitJsonError(message)
+    else prompts.log.warn(message)
+    return undefined
+  }
+  if (sources.length !== 1) return refuse("Name the people one way: --file, --segment or --tag.")
+
+  if (args.file !== undefined) {
+    const text = await Bun.file(String(args.file)).text().catch(() => undefined)
+    if (text === undefined) return refuse(`Could not read ${args.file}`)
+    const parsed = parseBulkCsv(text)
+    return "error" in parsed ? refuse(parsed.error) : parsed.rows
+  }
+
+  let leads: any[] | undefined
+  if (args.segment !== undefined) {
+    const userId = await resolveUserId()
+    if (!userId) return refuse("Could not resolve your user id")
+    leads = await allPages(
+      (p) => `/api/v1/users/${userId}/lead-segments/${encodeURIComponent(args.segment)}/leads?per_page=100&page=${p}`,
+      (b) => ({ leads: firstArray(b?.leads), last: Number(b?.pagination?.last_page ?? 1) }),
+    )
+  } else {
+    leads = await allPages(
+      (p) => `/api/v1/leads?per_page=100&page=${p}&tag=${encodeURIComponent(args.tag)}`,
+      (b) => ({ leads: firstArray(b?.data?.data, b?.data), last: Number(b?.data?.last_page ?? 1) }),
+    )
+  }
+  if (leads === undefined) return undefined
+  if (leads.length === 0) return refuse("Nobody matched, so there is nothing to issue.")
+  return leads.map(leadToBulkRow)
+}
+
+// #191971 — one licence per person. Preview by default; --yes issues. Sends nothing.
+export const IssueBulkCmd = cmd({
+  command: "issue-bulk",
+  describe: "issue one named licence per person from a file, segment or tag. Previews unless --yes. Safe to re-run. Sends nothing (operator only)",
+  builder: (y: any) =>
+    y
+      .option("file", { describe: "CSV with columns email,lead,seat_cap,allow,organization (only email is required; allow is ;-separated)", type: "string" })
+      .option("segment", { describe: "lead segment id: everyone in it, using each lead's email", type: "number" })
+      .option("tag", { describe: "lead tag name: everyone carrying it, using each lead's email", type: "string" })
+      .option("seat-cap", { describe: "limit in CENTS PER MONTH for each seat. A seat_cap column overrides it per person. Default: no limit", type: "number" })
+      .option("allow", { describe: "also name these people on every licence (comma-separated). Each person is always named on their own. Needs --seats to fit them", type: "string" })
+      .option("tier", { describe: "starter | pro | business", type: "string", default: "starter" })
+      .option("seats", { describe: "seats on each licence", type: "number", default: 1 })
+      .option("allowance", { describe: "NOT a spending limit. CENTS PER MONTH, one pool per licence", type: "number", default: 0 })
+      .option("days", { describe: "expire this many days from now", type: "number" })
+      .option("note", { describe: "what was actually agreed, in words", type: "string" })
+      .option("organization", { describe: "the company these licences belong to", type: "string" })
+      .option("unlinked", { describe: "allow people with no CRM lead. Without this, a row with no lead is a problem", type: "boolean", default: false })
+      .option("keys-file", { describe: "write email and key here, readable only by you. Must not exist yet. Keys are never printed", type: "string" })
+      .option("yes", { describe: "actually issue. Without this nothing changes", type: "boolean", default: false })
+      .option("json", { describe: "JSON output, with keys masked", type: "boolean", default: false }),
+  async handler(args: any) {
+    const refuse = (message: string) => {
+      process.exitCode = 1
+      if (args.json) emitJsonError(message)
+      else prompts.log.warn(message)
+    }
+    if (args.seatCap !== undefined && Number.isNaN(args.seatCap)) return refuse("--seat-cap must be a number")
+    if (Number.isNaN(args.days)) return refuse("--days must be a number")
+    // Before anything is issued: finding this after would leave keys with nowhere to go.
+    if (args.keysFile && (await Bun.file(String(args.keysFile)).exists())) return refuse(`${args.keysFile} already exists. Nothing was issued.`)
+
+    const rows = await bulkRowsFrom(args)
+    if (!rows) return
+
+    const common: Record<string, unknown> = { rows, tier: args.tier, seats: args.seats, allowance_cents: args.allowance, allow_unlinked: args.unlinked === true }
+    if (args.seatCap !== undefined) common.seat_cap_cents = args.seatCap
+    if (args.days !== undefined) common.days = args.days
+    if (args.note) common.note = args.note
+    if (args.organization) common.organization = args.organization
+    if (args.allow) common.allow = String(args.allow).split(",").map((e) => e.trim()).filter(Boolean)
+
+    const post = (confirm: boolean) => irisFetch(`${BASE}/bulk`, { method: "POST", body: JSON.stringify({ ...common, confirm }) })
+    const report = (body: any) => {
+      const shown = firstArray(body?.rows).map((r: any) => (r.key ? { ...r, key: maskKey(r.key) } : r))
+      if (args.json) return writeJson({ issued: body?.issued === true, counts: body?.counts, rows: shown, ...(body?.reason ? { reason: body.reason } : {}) })
+      for (const r of firstArray(body?.rows)) UI.println(bulkRowLine(r))
+    }
+
+    // Always preview first, so --yes never issues a list that was not checked.
+    const previewRes = await post(false)
+    if (previewRes.status === 404) {
+      process.exitCode = 1
+      return reportError(previewRes, "Issue licences")
+    }
+    const preview = (await previewRes.json().catch(() => ({}))) as any
+    if (!previewRes.ok) {
+      process.exitCode = 1
+      await report(preview)
+      if (!args.json) prompts.log.warn(preview?.reason ?? (firstArray(preview?.rows).length ? "Problems found. Nothing was issued. Fix the rows above and run it again." : (preview?.message ?? `Refused (HTTP ${previewRes.status}). Nothing was issued.`)))
+      return
+    }
+    if (!args.yes) {
+      await report(preview)
+      if (!args.json) prompts.outro(dim(`Preview: ${preview?.counts?.would_issue ?? 0} to issue, ${preview?.counts?.already_issued ?? 0} already have one. Nothing changed. Add --yes to issue.`))
+      return
+    }
+
+    const res = await post(true)
+    if (res.status === 404) {
+      process.exitCode = 1
+      return reportError(res, "Issue licences")
+    }
+    const body = (await res.json().catch(() => ({}))) as any
+    if (args.keysFile && res.ok) {
+      const lines = firstArray(body?.rows).filter((r: any) => r.key).map((r: any) => `${r.email},${r.key},${r.status}`)
+      await writeFile(String(args.keysFile), `email,key,status\n${lines.join("\n")}\n`, { mode: 0o600, flag: "wx" }).catch((e: any) => {
+        process.exitCode = 1
+        prompts.log.error(`The licences were issued but ${args.keysFile} could not be written (${e?.message}). Run this again with a new --keys-file: nobody gets a second key.`)
+      })
+    }
+    await report(body)
+    if (!res.ok) {
+      process.exitCode = 1
+      if (!args.json) prompts.log.warn(body?.reason ?? "Problems found. Nothing was issued.")
+      return
+    }
+    if (!args.json) prompts.outro(dim(`${body?.counts?.issued ?? 0} issued, ${body?.counts?.already_issued ?? 0} already had one. Nothing sent. Safe to re-run.`))
+  },
+})
+
 /** The subcommand group, so `iris reachr licence …` and `iris licence …` are one thing. */
 export const LicenceGroup = cmd({
   command: "licence",
   aliases: ["license", "licences", "licenses"],
   describe: "what a yes produces — issue, claim and check entitlement",
   builder: (y: any) =>
-    y.command(IssueCmd).command(ClaimCmd).command(MeCmd).command(ListCmd).command(ShowCmd).command(LinkCmd).command(RenewCmd).command(AllowCmd).command(InviteCmd).command(SeatsCmd).command(ReleaseCmd).command(OwnerCmd).command(DomainCmd).command(SeatLeadCmd).command(SendCmd).command(PayLinkCmd).command(PayStatusCmd).command(RevokeCmd).demandCommand(),
+    y.command(IssueCmd).command(IssueBulkCmd).command(ClaimCmd).command(MeCmd).command(ListCmd).command(ShowCmd).command(LinkCmd).command(RenewCmd).command(AllowCmd).command(InviteCmd).command(SeatsCmd).command(ReleaseCmd).command(OwnerCmd).command(DomainCmd).command(SeatLeadCmd).command(SendCmd).command(PayLinkCmd).command(PayStatusCmd).command(RevokeCmd).demandCommand(),
   async handler() {},
 })
 
@@ -665,6 +876,7 @@ export const LicenceCommand = productCommand({
   builder: (yargs: any) =>
     yargs
       .command(IssueCmd)
+      .command(IssueBulkCmd)
       .command(ClaimCmd)
       .command(MeCmd)
       .command(ListCmd)
