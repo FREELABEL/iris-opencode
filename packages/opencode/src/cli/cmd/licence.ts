@@ -44,6 +44,41 @@ async function reportError(res: Response, action: string): Promise<void> {
   await handleApiError(res, action)
 }
 
+export function money(cents: unknown): string {
+  return `$${(Number(cents ?? 0) / 100).toFixed(2)}`
+}
+
+export function allowanceLine(cents: unknown, seats: unknown): string {
+  return `${money(cents)} per month, shared by ${seats ?? "all"} seat(s)`
+}
+
+export function seatCapLine(cents: unknown): string {
+  return cents === null || cents === undefined ? "none" : `${money(cents)} per seat per month`
+}
+
+/**
+ * Who claimed, who is active, what each seat spent (#191945). A pure function of the API's `usage`
+ * block so it can be tested without a server. Empty when talking to a server without one.
+ */
+export function usageLines(usage: any): string[] {
+  if (!usage) return []
+  const lines = [
+    `${usage.seats_claimed} of ${usage.seats_total} seats claimed, ${usage.seats_unclaimed} unclaimed, ${usage.seats_active_this_month} active in ${usage.period}`,
+    `pool ${money(usage.allowance_used_cents_this_month)} of ${money(usage.allowance_cents_per_month)} used this month  ·  seat cap ${seatCapLine(usage.seat_cap_cents)}`,
+  ]
+  for (const s of firstArray(usage.seats) as any[]) {
+    const who = String(s.email ?? `user ${s.user_id}`).padEnd(32)
+    const spend = `${money(s.spend_cents_this_month)} this month, ${money(s.spend_cents_total)} total`
+    const when = s.released_at
+      ? `released ${String(s.released_at).slice(0, 10)}`
+      : s.last_active_at
+        ? `last active ${String(s.last_active_at).slice(0, 10)}`
+        : "not active yet"
+    lines.push(`${who} ${spend}  ·  ${when}${s.at_cap ? "  ·  AT CAP" : ""}`)
+  }
+  return lines
+}
+
 export const IssueCmd = cmd({
   command: "issue",
   describe: "mint a licence key (operator only)",
@@ -52,7 +87,15 @@ export const IssueCmd = cmd({
       .option("email", { describe: "who it is issued to", type: "string" })
       .option("tier", { describe: "starter | pro | business", type: "string", default: "starter" })
       .option("seats", { describe: "how many people may hold it", type: "number", default: 1 })
-      .option("allowance", { describe: "spend allowance in CENTS", type: "number", default: 0 })
+      .option("allowance", {
+        describe: "spend allowance in CENTS PER MONTH, one pool shared by every seat (it refills each month, so 2 months is up to 2x; one seat can use all of it unless --seat-cap is set)",
+        type: "number",
+        default: 0,
+      })
+      .option("seat-cap", {
+        describe: "limit in CENTS PER MONTH for each seat; a seat at its limit is refused while the others carry on (default: no limit)",
+        type: "number",
+      })
       .option("days", { describe: "expire this many days from now", type: "number" })
       .option("note", { describe: "what was actually agreed, in words", type: "string" })
       .option("lead", { describe: "CRM lead this licence belongs to (shows on the lead)", type: "number" })
@@ -68,6 +111,7 @@ export const IssueCmd = cmd({
     // #191947: not a truthiness check. 0 dropped here came back as the server's default, a year.
     if (args.days !== undefined) body.days = args.days
     if (args.allow) body.allowed_emails = String(args.allow).split(",").map((e) => e.trim()).filter(Boolean)
+    if (args.seatCap !== undefined) body.seat_cap_cents = args.seatCap
     if (args.note) body.note = args.note
     // #189718: the API has accepted lead_id since #183598; the CLI never sent it.
     if (args.lead) body.lead_id = args.lead
@@ -84,6 +128,8 @@ export const IssueCmd = cmd({
     printKV("key", String(data?.key ?? "—"))
     printKV("tier", String(data?.tier ?? "—"))
     printKV("seats", String(data?.seats ?? "—"))
+    printKV("allowance", allowanceLine(data?.allowance_cents, data?.seats))
+    printKV("seat cap", seatCapLine(data?.seat_cap_cents))
     printKV("expires", data?.expires_at ? String(data.expires_at) : "never")
     printDivider()
     // The key is the credential. Say where it goes rather than leaving someone to guess.
@@ -206,6 +252,38 @@ export const LinkCmd = cmd({
   },
 })
 
+// #191943 — one command to keep a licence going. Seats and the people on them are untouched.
+export const RenewCmd = cmd({
+  command: "renew <key>",
+  describe: "extend a licence's end date, keeping its seats and holders (operator only)",
+  builder: (y: any) =>
+    y
+      .positional("key", { type: "string" })
+      .option("days", { describe: "days to add (counted from today if it has already expired)", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args: any) {
+    const res = await irisFetch(`${BASE}/${encodeURIComponent(args.key)}/renew`, {
+      method: "POST",
+      body: JSON.stringify({ days: args.days }),
+    })
+    if (res.status === 422) {
+      // The server's refusal is the answer: Stripe-backed, revoked, no end date, or bad days.
+      const body = (await res.json().catch(() => ({}))) as any
+      prompts.log.warn(body?.error ?? body?.message ?? "Could not renew (HTTP 422)")
+      process.exitCode = 1
+      return
+    }
+    if (!res.ok) {
+      process.exitCode = 1
+      return reportError(res, "Renew licence")
+    }
+
+    const data = ((await res.json()) as any)?.data
+    if (args.json) return writeJson(data)
+    prompts.log.success(`Renewed ${args.key} to ${String(data?.expires_at ?? "—").slice(0, 10)}. Seats kept.`)
+  },
+})
+
 // #191940 — name who a licence is for. The first call turns an open licence into a named one;
 // anyone already on a seat keeps it.
 export const AllowCmd = cmd({
@@ -268,11 +346,21 @@ const ShowCmd = cmd({
     prompts.intro(`◈  ${data?.key ?? args.key}`)
     printDivider()
     printKV("tier", String(data?.tier ?? "—"))
-    printKV("status", String(data?.status ?? "—"))
+    printKV("status", String(data?.end_state ?? data?.status ?? "—"))
+    printKV("ends", data?.expires_at ? String(data.expires_at).slice(0, 10) : "no end date")
     printKV("seats", `${(data?.seat_rows?.length ?? 0)} of ${data?.seats ?? "—"} held`)
     printKV("issued to", String(data?.issued_to_email ?? "—"))
     printKV("lead", data?.lead_id ? `#${data.lead_id}` : "— (iris licence link <key> --lead <id>)")
     printDivider()
+    if (data?.end_state === "expired") {
+      UI.println(`  Expired: nobody on it has access. Seats are kept. iris licence renew ${data.key} --days <n>`)
+      printDivider()
+    }
+    const usage = usageLines(data?.usage)
+    if (usage.length) {
+      for (const line of usage) UI.println(`  ${line}`)
+      printDivider()
+    }
     for (const e of data?.events ?? []) {
       UI.println(dim(`  ${String(e.created_at ?? "").slice(0, 19)}  ${e.event}`))
     }
@@ -286,7 +374,7 @@ export const LicenceGroup = cmd({
   aliases: ["license", "licences", "licenses"],
   describe: "what a yes produces — issue, claim and check entitlement",
   builder: (y: any) =>
-    y.command(IssueCmd).command(ClaimCmd).command(MeCmd).command(ListCmd).command(ShowCmd).command(LinkCmd).command(AllowCmd).command(ReleaseCmd).command(RevokeCmd).demandCommand(),
+    y.command(IssueCmd).command(ClaimCmd).command(MeCmd).command(ListCmd).command(ShowCmd).command(LinkCmd).command(RenewCmd).command(AllowCmd).command(ReleaseCmd).command(RevokeCmd).demandCommand(),
   async handler() {},
 })
 
@@ -306,6 +394,7 @@ export const LicenceCommand = productCommand({
       .command(ListCmd)
       .command(ShowCmd)
       .command(LinkCmd)
+      .command(RenewCmd)
       .command(AllowCmd)
       .command(ReleaseCmd)
       .command(RevokeCmd)
