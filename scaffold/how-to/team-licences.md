@@ -30,9 +30,11 @@ iris licence issue --email ops@example.com --tier pro --seats 14 --days 90 --not
   key:  IRIS-7XKM-4QPT-9HRW
   tier:  pro
   seats:  14
+  allowance:  $0.00 per month, shared by 14 seat(s)
+  seat cap:  none
   expires:  2027-01-29T12:00:00+00:00
   ────────────────────────────────────────────────────────────
-Give the key to the buyer — they run: iris licence claim <key>
+Name the people: iris licence invite <key> <email...>   ·   then: iris licence send <key> <email...>
 ```
 
 - `--days` is when access ends. Leave it out and the licence lasts one year. It must be at least 1.
@@ -40,13 +42,43 @@ Give the key to the buyer — they run: iris licence claim <key>
 - `--note` records what was agreed, in words.
 - `--lead` must be a lead that exists. To add it later, use `iris licence link <key> --lead <id>`.
 
-## Step 2: Send the key
+## Step 2: Decide what limits spend
+
+An allowance is not a spending limit. `--allowance` sets a monthly pool, in cents, shared by every seat. When the pool runs out, nobody is stopped: each person keeps working and spending up to the caps of the licence's tier.
+
+| Tier | Per person, per day | Per person, per month |
+|---|---|---|
+| `starter` | $5 | $50 |
+| `pro` | $25 | $250 |
+| `business` | $50 | $500 |
+
+Only `--seat-cap` stops a seat sooner. It sets a monthly limit, in cents, for each seat. A seat at its limit is refused while the others carry on.
+
+```bash
+iris licence issue --email ops@example.com --tier pro --seats 14 --days 90 --allowance 10000 --seat-cap 2000
+```
+
+```
+  allowance:  $100.00 per month, shared by 14 seat(s)
+  seat cap:  $20.00 per seat per month
+  pool runs out:  seats keep working and spending, until a seat reaches its $20.00 monthly seat cap or its plan tier's caps
+```
+
+Leave out `--seat-cap` and `issue` warns you. With `--json`, the same text is in a `warning` field:
+
+```
+The $100.00 allowance is not a spending limit. Spend can go past it, up to each seat's plan tier caps. Only a seat cap (--seat-cap) stops a seat sooner.
+```
+
+To work out the most a licence can cost in a month, multiply the seat cap by the seats: here, $20 x 14 = $280, not $100. Allow a little over that. The limit is checked before each model call, so a call already running finishes, and a refusal can lag by up to a minute. `issue` is the only command that sets a seat cap.
+
+## Step 3: Send the key
 
 Send it privately, with a link to `claim-a-licence`. The key is the access: anyone who has it can take a seat until the seats run out, so never put a multi-seat key on a public page.
 
 Whoever claims first becomes the licence's owner. Each person proves their address with an email code when claiming on Desktop, or is already signed in when claiming from the terminal.
 
-## Step 3: See who has claimed it
+## Step 4: See who has claimed it
 
 ```bash
 iris licence show IRIS-7XKM-4QPT-9HRW
@@ -66,9 +98,9 @@ iris licence show IRIS-7XKM-4QPT-9HRW
 iris licence show <key> --json for everything
 ```
 
-Add `--json` for the seat list. To see every licence, run `iris licence list`, which also includes revoked ones. Filter it with `--status active`.
+On a licence with an allowance, `show` also prints this month's pool and what happens when it runs out. Add `--json` for the seat list. To see every licence, run `iris licence list`, which also includes revoked ones. Filter it with `--status active`.
 
-## Step 4: End it early
+## Step 5: End it early
 
 A licence ends by itself on its expiry date. To end it sooner:
 
@@ -93,6 +125,8 @@ IRIS-7XKM-4QPT-9HRW was already revoked
 **`The selected lead id is invalid.`** That lead does not exist. Check the ID, or issue without `--lead` and link it later.
 
 **`not found — this is also what a non-operator sees`.** Either the key is wrong or your account is not an operator.
+
+**Spend went past the allowance.** That is how an allowance works. See Step 2.
 
 **A team member's claim says there are no seats left.** Every seat is taken. Issue another licence for the people still waiting.
 
