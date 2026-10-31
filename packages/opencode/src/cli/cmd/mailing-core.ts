@@ -304,8 +304,12 @@ export function draftHeadline(m: any): string {
   const ready = parts.length ? parts.join(", ") : `${totalReady(m)} people`
   const status = String(m?.status ?? "draft")
   const label = status === "draft" ? "Draft" : `Mailing (${status})`
-  return `${label} #${m?.id ?? "?"} — ${ready} ready.`
+  // Which service it goes through (#189596) — the same commands drive Mailjet and Resend.
+  const via = PROVIDER_NAMES[String(m?.provider ?? "")]
+  return `${label} #${m?.id ?? "?"} — ${ready} ready${via ? `, via ${via}` : ""}.`
 }
+
+const PROVIDER_NAMES: Record<string, string> = { mailjet: "Mailjet", resend: "Resend" }
 
 export type Progress = { status: string; sent: number; failed: number; pending: number; unknown: number; total: number }
 
@@ -359,9 +363,14 @@ export async function sendGate(opts: {
 
 export type Friendly = { message: string; fix?: string[]; code: string; details?: string[] }
 
+// Resend is always added under a name. Without --name, `connect resend` overwrites the existing
+// Resend connection — for an operator, that is the platform's own, which carries sign-in email.
+const CONNECT_RESEND = 'iris integrations connect resend --name="Newsletter" --field api_key=<re_… key>'
 const CONNECT_MAILJET = [
   "iris integrations connect mailjet --field api_key=<API_KEY> --field api_secret=<SECRET_KEY>",
   "(the keys are in Mailjet → Account Settings → API Key Management)",
+  "or, for Resend:",
+  CONNECT_RESEND,
 ]
 
 /**
@@ -388,16 +397,23 @@ export function friendlyError(status: number, body: any, ctx: { id?: string | nu
     return {
       code: "mailjet_not_connected",
       message: is("integration_not_found")
-        ? "That Mailjet connection does not exist on your account. Leave out --integration to use your own, or connect Mailjet:"
-        : "Connect your Mailjet first — IRIS sends through your own Mailjet account.",
+        ? "That email connection does not exist on your account. Leave out --integration to use your own, or connect one:"
+        : "Connect an email account first — IRIS sends through your own Mailjet or Resend account.",
       fix: CONNECT_MAILJET,
     }
   }
   if (is("integration_inactive")) {
-    return { code: code, message: "Your Mailjet connection is switched off or its keys stopped working. Connect it again:", fix: CONNECT_MAILJET }
+    return { code: code, message: "That email connection is switched off or its keys stopped working. Connect it again:", fix: CONNECT_MAILJET }
   }
   if (is("integration_forbidden")) {
-    return { code, message: "That Mailjet connection belongs to someone else. Leave out --integration to use your own." }
+    return { code, message: "That email connection belongs to someone else. Leave out --integration to use your own." }
+  }
+  if (is("platform_connection")) {
+    return {
+      code,
+      message: "That is the platform's own Resend account — it carries sign-in and account email, so mailings never use it. Add your own:",
+      fix: [CONNECT_RESEND],
+    }
   }
   if (is("from_required", "no_sender") || says(/no (saved )?sender|from_email/i)) {
     return {

@@ -20,6 +20,7 @@ import { revokedIds, readCouples, writeCouples, nodeKey, couplesPath, actLogPath
 import { generateIssuer, signCouple, verifyCoupleSig, issuerFingerprint } from "./kinetic-sign"
 import { unknownVerbs, knownVerbs, BODY_CLASSES } from "./kinetic-bodies"
 import { spendFor } from "./kinetic-budget"
+import { guardAct, REFUSED } from "./kinetic-guard"
 
 const UI = { empty: () => console.log("") }
 
@@ -279,6 +280,32 @@ const CheckCommand = cmd({
   },
 })
 
+/**
+ * AN ACT PATH FOR A BODY DRIVEN OUTSIDE THIS PROCESS. A drone is flown by a Python script, so no
+ * `iris` sub-command ever touches it and the middleware never sees the act. `check` cannot stand in:
+ * it records nothing, so `--max-day-acts` and `--max-day-cents` would never count a single flight
+ * and every ceiling on a drone would be unreachable — the same trap the command gate's "record the
+ * allow too" comment describes. This goes through guardAct, which decides, records, and exits 5.
+ */
+const ActCommand = cmd({
+  command: "act <body> <verb>",
+  describe: "record an act on a body driven by a script (a drone) — refused acts exit 5, nothing recorded as allowed",
+  builder: (y) =>
+    y
+      .positional("body", { describe: "class:instance", type: "string", demandOption: true })
+      .positional("verb", { describe: "the verb the act uses", type: "string", demandOption: true })
+      .option("cents", { describe: "estimated cost of the act, in cents", type: "number" })
+      .option("yes", { describe: "confirm a couple that asks for a human (you are the human)", type: "boolean", default: false }),
+  async handler(args) {
+    const body = normalizeBody(String(args.body))
+    if (!body) {
+      console.error(`Not a body name: ${args.body} — expected class:instance, e.g. drone:mambo-716814`)
+      process.exit(REFUSED)
+    }
+    await guardAct({ body, verb: String(args.verb).trim().toLowerCase(), estimatedCents: typeof args.cents === "number" ? Number(args.cents) : null, yes: args.yes === true })
+  },
+})
+
 const LockCommand = cmd({
   command: "lock",
   describe: "require a couple for EVERY act on this node, including an operator's",
@@ -528,6 +555,7 @@ export const PlatformKineticCommand = cmd({
       .command(BodiesCommand)
       .command(SpendCommand)
       .command(CheckCommand)
+      .command(ActCommand)
       .command(LockCommand)
       .command(LogCommand)
       .demandCommand(),

@@ -44,6 +44,16 @@ export const BODY_CLASSES: BodyClass[] = [
   // open_link, ...), collapsed to the sub-commands `iris phone` exposes. Read out of their source,
   // not invented — the `device` row above records what inventing verbs costs.
   { name: "android", describe: "an Android device over ADB — a real phone, with real sessions on it", verbs: ["run", "tap", "type", "swipe", "key", "app", "open"] },
+  // A drone is flown by a Hive SCRIPT (freelabel hardware/parrot-mambo/mambo.py), not by an `iris`
+  // sub-command, so there is no head word for `routeFor` and no route row below. The script asks
+  // `iris kinetic check` for every verb in its plan, then records the flight with `iris kinetic act`.
+  //
+  // Verbs are mambo.py's flight-plan grammar (parse_plan: up, down, turn, hover, flip) plus the
+  // takeoff every plan implies. Read out of the script, not invented — #189857's first draft
+  // proposed hop/spin/move, which are PRESET names and a direction the grammar has no word for.
+  // `land` is deliberately absent: every plan ends with a landing, including on error, and a couple
+  // that could refuse a landing could strand a drone in the air.
+  { name: "drone", describe: "a drone flown by a Hive script — every plan takes off and always lands", verbs: ["takeoff", "up", "down", "turn", "hover", "flip"] },
 ]
 
 export const bodyClass = (name: string): BodyClass | null =>

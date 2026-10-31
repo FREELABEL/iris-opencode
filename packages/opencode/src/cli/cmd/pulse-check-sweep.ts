@@ -28,9 +28,15 @@ import { join, basename, relative, dirname } from "path"
 import { homedir } from "os"
 import { firstArray } from "../../util/array"
 import { runScript, scriptFor } from "../../pulse/core"
+import { desktopAccounts, openDesktopDb, pickAccount, searchPassages } from "../lib/desktop-sessions"
 
-export const TOPIC_SOURCES = ["git", "diary", "files", "claude_code", "opencode", "imessage", "email", "gmail", "bloq"] as const
+export const TOPIC_SOURCES = ["git", "diary", "files", "claude_code", "opencode", "iris_desktop", "imessage", "email", "gmail", "calendar", "drive", "bloq"] as const
 export type TopicSource = typeof TOPIC_SOURCES[number]
+/**
+ * A built-in source, or the id of one defined in ~/.iris/pulse/sources (#190626). Built-in ids keep
+ * their autocompletion; any other string is a custom source's.
+ */
+export type SourceId = TopicSource | (string & {})
 
 /**
  * ASCII unit separator. Used as the field delimiter for git's --format and for
@@ -51,7 +57,7 @@ export interface Hit {
 }
 
 export interface SourceSweep {
-  source: TopicSource
+  source: SourceId
   /** False means the collector could not look. See rule 1 above. */
   searched: boolean
   /** Why it could not look, or a caveat about how it did. */
@@ -86,7 +92,7 @@ export interface SweepOptions {
   windowDays: number
   /** Max items kept per source for the brief. Counts are never capped. */
   limit: number
-  sources: TopicSource[]
+  sources: SourceId[]
   bridgeUrl?: string
   /** Bridge auth token (~/.iris/bridge-token). Without it the bridge 401s. */
   bridgeKey?: string
@@ -806,15 +812,25 @@ export function sweepClaudeCode(opts: SweepOptions, root = join(homedir(), ".cla
 }
 
 /**
- * opencode / iris CLI transcripts. Message parts are many small JSON files, so
- * matched parts are resolved back to their SESSION and counted once — twenty
- * matching parts in one conversation is one session that discussed the topic,
- * not twenty pieces of evidence.
+ * opencode / iris CLI transcripts, from both of the stores the engine has used.
+ *
+ * The live one is SQLite — opencode.db, plus opencode-<channel>.db per preview build — in the CLI's
+ * data home. This source used to read only the older store of many small JSON part files, which
+ * stopped being written when the engine moved, so it reported "searched" and found nothing recent
+ * (#190966). The two hold different sessions, so both are read and merged by session. A database
+ * IRIS Desktop's stop already reads is skipped here, or one chat would count under two sources.
+ *
+ * Matched parts are resolved back to their SESSION and counted once — twenty matching parts in one
+ * conversation is one session that discussed the topic, not twenty pieces of evidence. `home` is
+ * for tests.
  */
-export function sweepOpencode(opts: SweepOptions): SourceSweep {
-  const storage = join(homedir(), ".local", "share", "opencode", "storage")
+export function sweepOpencode(opts: SweepOptions, home?: string): SourceSweep {
+  // Resolved exactly as desktopAccounts resolves it, so the Desktop-database skip below compares like with like.
+  const dataHome = process.env.XDG_DATA_HOME || join(home ?? homedir(), ".local", "share")
+  const storage = join(dataHome, "opencode", "storage")
   const partDir = join(storage, "part")
-  if (!existsSync(partDir)) return unavailable("opencode", "no opencode storage on this machine")
+  const dbs = opencodeDbs(dataHome, home)
+  if (!existsSync(partDir) && dbs.length === 0) return unavailable("opencode", "no opencode history on this machine")
 
   const pattern = keywordPattern(opts.keyword)
   if (pattern === null) return unavailable("opencode", `"${opts.keyword}" has no searchable characters`)
@@ -824,7 +840,31 @@ export function sweepOpencode(opts: SweepOptions): SourceSweep {
   const priorCutoff = Date.now() - opts.windowDays * 2 * 864e5
 
   const sessions = new Map<string, number>()
-  const out = run("grep", ["-rEil", "--include=*.json", pattern, partDir], undefined, 60000)
+  const fromDb = new Map<string, { title?: string; directory?: string }>()
+  let capped = false
+  for (const path of dbs) {
+    let db: ReturnType<typeof openDesktopDb>
+    try {
+      db = openDesktopDb(path)
+    } catch {
+      continue // another user's file, or a format this CLI cannot read — the other stores still count
+    }
+    try {
+      const found = latestPassagePerSession(db, opts, priorCutoff)
+      if (found.capped) capped = true
+      for (const [sessionId, h] of found.latest) {
+        const existing = sessions.get(sessionId)
+        if (existing === undefined || h.time > existing) sessions.set(sessionId, h.time)
+        fromDb.set(sessionId, { title: h.sessionTitle, directory: h.directory })
+      }
+    } catch {
+      // unreadable mid-write; the next sweep sees it
+    } finally {
+      db.close()
+    }
+  }
+
+  const out = existsSync(partDir) ? run("grep", ["-rEil", "--include=*.json", pattern, partDir], undefined, 60000) : ""
   for (const file of out.split("\n").filter(Boolean)) {
     let sessionId: string | undefined
     let at: number
@@ -850,7 +890,7 @@ export function sweepOpencode(opts: SweepOptions): SourceSweep {
       prior++
       continue
     }
-    const meta = index.get(sessionId)
+    const meta = fromDb.get(sessionId) ?? index.get(sessionId)
     items.push({
       when: new Date(at).toISOString(),
       where: meta?.directory ? `${basename(meta.directory)} · ${sessionId.slice(0, 12)}` : sessionId.slice(0, 12),
@@ -859,7 +899,93 @@ export function sweepOpencode(opts: SweepOptions): SourceSweep {
   }
 
   items.sort((a, b) => (b.when ?? "").localeCompare(a.when ?? ""))
-  return limitToStore(finish("opencode", items, prior, matched, opts.limit), storeEarliest(join(storage, "session"), ".json", 2), opts)
+  const sweep = finish("opencode", items, prior, matched, opts.limit)
+  if (capped) sweep.capped = true
+  // The JSON store's earliest session bounds the prior window only when it is the whole history.
+  return dbs.length ? sweep : limitToStore(sweep, storeEarliest(join(storage, "session"), ".json", 2), opts)
+}
+
+/** Every engine database in a CLI data home, except the one IRIS Desktop's stop reads. */
+function opencodeDbs(dataHome: string, home?: string): string[] {
+  const dir = join(dataHome, "opencode")
+  if (!existsSync(dir)) return []
+  let desktop: string | null = null
+  try {
+    desktop = pickAccount(desktopAccounts(home)).db
+  } catch {}
+  return readdirSync(dir)
+    .filter((f) => /^opencode(-[a-zA-Z0-9._-]+)?\.db$/.test(f))
+    .map((f) => join(dir, f))
+    .filter((path) => path !== desktop)
+}
+
+/**
+ * The newest passage per session that mentions the subject, across its spelling variants, back to
+ * `since`. `capped` when a variant filled a page, so the count may be short.
+ */
+function latestPassagePerSession(db: ReturnType<typeof openDesktopDb>, opts: SweepOptions, since: number) {
+  const PAGE = 200
+  const exclude = opts.excludeSessions ?? []
+  let capped = false
+  const latest = new Map<string, ReturnType<typeof searchPassages>[number]>()
+  for (const variant of keywordVariants(opts.keyword)) {
+    const hits = searchPassages(db, variant, { archived: true, since, limit: PAGE })
+    if (hits.length === PAGE) capped = true
+    for (const h of hits) {
+      if (exclude.includes(h.sessionId) || h.time < since) continue
+      const prev = latest.get(h.sessionId)
+      if (!prev || h.time > prev.time) latest.set(h.sessionId, h)
+    }
+  }
+  return { latest, capped }
+}
+
+/**
+ * IRIS Desktop's chats (#190661). Desktop keeps them in SQLite under ~/.iris/accounts/<id> — the
+ * opencode source above reads only the older file store and has never seen them. Read-only, the
+ * same rules as `iris desktop sessions` (owner-only file, released opencode.db first, secrets
+ * redacted). Counts SESSIONS that mention the subject in the window, like the opencode source, each
+ * item carrying the passage and the command that opens it. `home` is for tests.
+ */
+export function sweepDesktop(opts: SweepOptions, home?: string): SourceSweep {
+  if (keywordPattern(opts.keyword) === null) return unavailable("iris_desktop", `"${opts.keyword}" has no searchable characters`)
+  let db: ReturnType<typeof openDesktopDb>
+  try {
+    const acct = pickAccount(desktopAccounts(home))
+    if (!acct.db) return unavailable("iris_desktop", "no IRIS Desktop history on this machine")
+    db = openDesktopDb(acct.db)
+  } catch (e) {
+    return unavailable("iris_desktop", String((e as Error)?.message ?? e))
+  }
+  try {
+    const now = Date.now()
+    const cutoff = now - opts.windowDays * 864e5
+    const priorCutoff = now - opts.windowDays * 2 * 864e5
+    const matched = new Set<string>([canonicalKeyword(opts.keyword)])
+    // Newest matching passage per session — the spelling variants converge on one session.
+    const { latest, capped } = latestPassagePerSession(db, opts, priorCutoff)
+    const items: Hit[] = []
+    let prior = 0
+    for (const h of latest.values()) {
+      if (h.time < cutoff) {
+        prior++
+        continue
+      }
+      items.push({
+        when: new Date(h.time).toISOString(),
+        where: `${basename(h.directory || "") || "desktop"} · ${h.sessionTitle || h.sessionId.slice(0, 12)}`,
+        text: `${h.excerpt}  (iris desktop sessions show ${h.sessionId} --around ${h.messageId})`,
+      })
+    }
+    items.sort((a, b) => (b.when ?? "").localeCompare(a.when ?? ""))
+    const sweep = finish("iris_desktop", items, prior, matched, opts.limit)
+    if (capped) sweep.capped = true
+    return sweep
+  } catch (e) {
+    return unavailable("iris_desktop", `could not read IRIS Desktop history: ${String((e as Error)?.message ?? e)}`)
+  } finally {
+    db.close()
+  }
 }
 
 function opencodeSessionIndex(sessionRoot: string): Map<string, { title?: string; directory?: string }> {
@@ -1538,6 +1664,136 @@ export async function sweepGmail(opts: SweepOptions): Promise<SourceSweep> {
   return finish("gmail", items, previous === null ? undefined : previous.length, matched, opts.limit)
 }
 
+/**
+ * Meetings that mention the topic (#190968) — every calendar `iris calendar search` reads: each
+ * connected Google account once, and this computer's calendar app. Counts MEETINGS that have
+ * happened, by start time: this window, and the window before it. A meeting still to come is not
+ * evidence the thread is warm — it is a plan — so it is left out of the count rather than read as
+ * recency from the future.
+ *
+ * One calendar failing does not shut the stop; every calendar failing does, with the reason. A
+ * partial search says which calendars it could not read, because "no meetings" from half your
+ * calendars is not "no meetings". `search` is for tests.
+ */
+export async function sweepCalendar(
+  opts: SweepOptions,
+  search?: (q: string, from: Date, to: Date) => Promise<{ result: import("./calendar-search").SearchResult }>,
+): Promise<SourceSweep> {
+  if (keywordPattern(opts.keyword) === null) return unavailable("calendar", `"${opts.keyword}" has no searchable characters`)
+  const now = Date.now()
+  const cutoff = now - opts.windowDays * 864e5
+  const priorCutoff = now - opts.windowDays * 2 * 864e5
+  let result: import("./calendar-search").SearchResult
+  try {
+    const run = search ?? (await import("./platform-calendar")).searchCalendars
+    result = (await run(opts.keyword.trim(), new Date(priorCutoff), new Date(now))).result
+  } catch (e: any) {
+    return unavailable("calendar", `calendar search failed: ${String(e?.message ?? e).slice(0, 120)}`)
+  }
+
+  const read = result.sources.filter((src) => src.status === "ok")
+  const failed = result.sources.filter((src) => src.status !== "ok")
+  if (read.length === 0) {
+    const why = failed.map((f) => `${f.name}: ${f.reason ?? f.status}`).join("; ")
+    return unavailable("calendar", why ? `no calendar could be read — ${why}`.slice(0, 200) : "no calendar connected")
+  }
+
+  const items: Hit[] = []
+  let prior = 0
+  for (const ev of result.events) {
+    const at = Date.parse(ev.start)
+    if (Number.isNaN(at) || at > now || at < priorCutoff) continue
+    if (at < cutoff) {
+      prior++
+      continue
+    }
+    items.push({ when: new Date(at).toISOString(), where: `${ev.seenIn[0] ?? "calendar"} · ${ev.title}`.slice(0, 110) })
+  }
+  items.sort((a, b) => (b.when ?? "").localeCompare(a.when ?? ""))
+  const sweep = finish("calendar", items, prior, new Set([canonicalKeyword(opts.keyword)]), opts.limit)
+  if (failed.length)
+    sweep.unavailableReason = `searched ${read.length} of ${result.sources.length} calendars — not read: ${failed.map((f) => f.name).join(", ")}`.slice(0, 200)
+  return sweep
+}
+
+/**
+ * Files in Google Drive that mention the topic (#190969), by when they were last changed — this
+ * window and the one before. Every connected Drive account is searched once (duplicate connection
+ * records reach the same files, which are counted once by id).
+ *
+ * FILE NAMES NEVER LEAVE THIS MACHINE. A Drive can hold client and patient documents, and their
+ * names alone are identifying — measured 2026-10-23: a search for "pulse" on a connected Drive
+ * returned patient records by name. So an item's `where` (uploaded as a locator) is only the file
+ * KIND; the name rides in `text`, which the brief shows locally and toObservations never uploads
+ * for this source, even with --include-context. `exec` is for tests.
+ */
+export async function sweepDrive(
+  opts: SweepOptions,
+  exec?: (params: Record<string, unknown>, sel: { integrationId?: number }) => Promise<any>,
+): Promise<SourceSweep> {
+  if (keywordPattern(opts.keyword) === null) return unavailable("drive", `"${opts.keyword}" has no searchable characters`)
+  const PAGE = 50
+  const call =
+    exec ??
+    (async (params: Record<string, unknown>, sel: { integrationId?: number }) =>
+      (await import("./platform-run")).executeIntegrationCall("google-drive", "search_files", params, sel))
+  const params = { query: opts.keyword.trim(), limit: PAGE }
+
+  let first: any
+  try {
+    first = await call(params, {})
+  } catch (e: any) {
+    return unavailable("drive", `Drive search failed: ${String(e?.message ?? e).slice(0, 120)}`)
+  }
+  const answers: any[] = []
+  const failures: string[] = []
+  if (first?.success === false && first?.code === "account_ambiguous") {
+    for (const a of firstArray<any>(first.accounts)) {
+      try {
+        const r = await call(params, { integrationId: Number(a.integration_id) })
+        if (r?.success === false) failures.push(`#${a.integration_id}: ${String(r.error ?? "failed").slice(0, 60)}`)
+        else answers.push(r)
+      } catch (e: any) {
+        failures.push(`#${a.integration_id}: ${String(e?.message ?? e).slice(0, 60)}`)
+      }
+    }
+    if (!answers.length) return unavailable("drive", `no Drive account could be searched — ${failures.join("; ")}`.slice(0, 200))
+  } else if (first?.success === false) {
+    return unavailable("drive", String(first.error ?? "no Google Drive connected").slice(0, 160))
+  } else {
+    answers.push(first)
+  }
+
+  const files = new Map<string, any>()
+  let capped = false
+  for (const r of answers) {
+    const list = firstArray<any>(r?.data?.files, r?.files, r?.data?.response_data?.files)
+    if (list.length >= PAGE) capped = true
+    for (const f of list) if (f?.id && !files.has(f.id)) files.set(f.id, f)
+  }
+
+  const now = Date.now()
+  const cutoff = now - opts.windowDays * 864e5
+  const priorCutoff = now - opts.windowDays * 2 * 864e5
+  const items: Hit[] = []
+  let prior = 0
+  for (const f of files.values()) {
+    const at = Date.parse(String(f.modifiedTime ?? ""))
+    if (Number.isNaN(at) || at < priorCutoff || at > now) continue
+    if (at < cutoff) {
+      prior++
+      continue
+    }
+    const kind = String(f.mimeType ?? "file").replace("application/vnd.google-apps.", "").replace(/^application\//, "")
+    items.push({ when: new Date(at).toISOString(), where: `Drive · ${kind}`, text: String(f.name ?? "") || undefined })
+  }
+  items.sort((a, b) => (b.when ?? "").localeCompare(a.when ?? ""))
+  const sweep = finish("drive", items, prior, new Set([canonicalKeyword(opts.keyword)]), opts.limit)
+  if (capped) sweep.capped = true
+  if (failures.length) sweep.unavailableReason = `some Drive accounts could not be searched — ${failures.join("; ")}`.slice(0, 200)
+  return sweep
+}
+
 // ── orchestration ───────────────────────────────────────────────────────────
 
 /**
@@ -1546,12 +1802,12 @@ export async function sweepGmail(opts: SweepOptions): Promise<SourceSweep> {
  * because it imports this module's sweeps. A source that throws is isolated by the runner and
  * reported as not searched, with why, instead of failing the whole check.
  */
-export async function sweepAll(opts: SweepOptions, onStart?: (s: TopicSource) => void): Promise<SourceSweep[]> {
+export async function sweepAll(opts: SweepOptions, onStart?: (s: SourceId) => void): Promise<SourceSweep[]> {
   await import("./pulse-topic-script")
   const wanted = new Set<string>(opts.sources)
   const outcomes = await runScript(scriptFor<SweepOptions, SourceSweep>("topic"), opts, {
     only: (stop) => wanted.has(stop.id),
-    onStart: (stop) => onStart?.(stop.id as TopicSource),
+    onStart: (stop) => onStart?.(stop.id),
   })
   return outcomes.map((o) => o.output)
 }
@@ -1594,7 +1850,8 @@ export function toObservations(
     }
 
     const repoBorn = s.source === "git" || s.source === "diary" || s.source === "files"
-    const share = opts.includeContext || repoBorn
+    // Drive file names identify the people in them (#190969): never uploaded, even when asked.
+    const share = s.source !== "drive" && (opts.includeContext || repoBorn)
 
     return {
       entity_type: "topic",

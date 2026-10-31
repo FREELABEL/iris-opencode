@@ -25,6 +25,51 @@ export function resolveThreadId(args: { thread?: string; fresh?: boolean }): str
   return undefined
 }
 
+/** Pull a conversation id out of whatever shape the server returns. */
+export function pickConversationId(body: unknown): string | null {
+  const b = body as Record<string, any> | null
+  if (!b || typeof b !== "object") return null
+  const src = b.data && typeof b.data === "object" ? b.data : b
+  for (const k of ["conversation_id", "thread_id", "id"]) {
+    const v = src?.[k]
+    if (typeof v === "string" && v.trim() !== "") return v
+    if (typeof v === "number" && Number.isFinite(v)) return String(v)
+  }
+  return null
+}
+
+/**
+ * The canonical per-(agent, user) conversation (#189968). One conversation per agent per
+ * person, shared by text chat, voice, and every other surface, so a voice call and a typed
+ * message continue the same thread. Returns null on ANY failure — an old server answers 404
+ * and the caller falls back to the server's default thread, which is today's behaviour.
+ */
+export async function fetchCanonicalConversation(agentId: number): Promise<string | null> {
+  try {
+    const res = await irisFetch(`/api/v6/chat/conversation?agent_id=${encodeURIComponent(String(agentId))}`, {}, IRIS_API)
+    if (!res.ok) return null
+    return pickConversationId(await res.json().catch(() => null))
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Which conversation a chat session joins: --thread/--conversation <id> > --fresh > the
+ * canonical conversation from the server > undefined (server default thread).
+ * Resolve ONCE per session — voice must not mint a new --fresh id per turn.
+ */
+export async function resolveConversationId(
+  args: { thread?: string; fresh?: boolean },
+  agentId: number | undefined,
+  lookup: (agentId: number) => Promise<string | null> = fetchCanonicalConversation,
+): Promise<string | undefined> {
+  const explicit = resolveThreadId(args)
+  if (explicit) return explicit
+  if (!agentId) return undefined
+  return (await lookup(agentId)) ?? undefined
+}
+
 
 // ============================================================================
 // Polling helper
@@ -180,6 +225,7 @@ export async function executeChat(args: {
   }
 
   const userId = await resolveUserId()
+  const threadId = await resolveConversationId(args, agentId)
 
   if (!isJson) {
     prompts.log.info(
@@ -222,7 +268,7 @@ export async function executeChat(args: {
     // run trace: `context: conversation_history` reporting 20 messages loaded.
     // --thread pins a specific conversation; --fresh isolates this one turn.
     const result = await streamAgentChat({
-      threadId: resolveThreadId(args),
+      threadId,
       agentId,
       message: args.message,
       userId,
@@ -270,7 +316,7 @@ export async function executeChat(args: {
     }
 
     // No server-side workflow id in the sync stream path → pass "" (suppresses --continue).
-    outputResult(run, "", agentId, isJson, result.toolsUsed, tracer.enabled ? tracer.steps : undefined)
+    outputResult(run, "", agentId, isJson, result.toolsUsed, tracer.enabled ? tracer.steps : undefined, result.runId)
   } catch (err) {
     if (heartbeat) clearInterval(heartbeat)
     process.stderr.write("\r" + " ".repeat(40) + "\r")
@@ -289,8 +335,8 @@ export async function executeChat(args: {
 // Voice chat — local, free, real-time conversation loop.
 //
 // mic (ffmpeg) → transcribeLocal (whisper.cpp) → streamAgentChat → speak (say).
-// Push-to-talk turn-taking; multi-turn via conversation_history (no server
-// session, so no cross-turn poisoning — same guarantee as text chat). All STT
+// Push-to-talk turn-taking; joins the same conversation as text chat (#189968) and
+// also sends the call's own turns as conversation_history. All STT
 // + TTS runs on-device; only the agent call leaves the machine. (#158044/#158045)
 // ============================================================================
 
@@ -304,6 +350,8 @@ export async function runVoiceChat(args: {
   mic?: string
   tts?: string
   "tts-voice"?: string
+  thread?: string
+  fresh?: boolean
 }): Promise<void> {
   UI.empty()
   prompts.intro("◈  IRIS Voice Chat")
@@ -327,6 +375,9 @@ export async function runVoiceChat(args: {
   }
 
   const userId = await resolveUserId()
+  // Same conversation as text chat (#189968). Before this, voice sent no thread id at all.
+  // Resolved once for the whole call so --fresh is one isolated conversation, not one per turn.
+  const threadId = await resolveConversationId({ thread: args.thread, fresh: args.fresh }, agentId)
   const mics = listMics()
   const micLabel = args.mic
     ? mics.find((m) => m.index === args.mic)?.name ?? `device :${args.mic}`
@@ -396,6 +447,7 @@ export async function runVoiceChat(args: {
       try {
         const result = await streamAgentChat({
           voice: true,
+          threadId,
           agentId,
           message: text + VOICE_HINT,
           userId,
@@ -438,7 +490,7 @@ export async function runVoiceChat(args: {
   prompts.outro("Call ended 👋")
 }
 
-function outputResult(run: WorkflowRun, workflowId: string, agentId: number | undefined, isJson: boolean, toolsUsed: string[] = [], trace?: TraceStep[]): void {
+function outputResult(run: WorkflowRun, workflowId: string, agentId: number | undefined, isJson: boolean, toolsUsed: string[] = [], trace?: TraceStep[], runId?: string): void {
   const response = run.summary ?? run.response ?? run.output ?? "(no response)"
 
   if (isJson) {
@@ -452,6 +504,7 @@ function outputResult(run: WorkflowRun, workflowId: string, agentId: number | un
       tools_used: toolsUsed,
       elapsed_ms: run.elapsed_ms,
       requires_approval: run.requires_approval ?? false,
+      run_id: runId,
       // Present only under -V. Absent (not empty) otherwise, so a consumer can tell
       // "not traced" from "traced and nothing happened".
       trace,
@@ -476,6 +529,7 @@ function outputResult(run: WorkflowRun, workflowId: string, agentId: number | un
   if (run.tokens_used) metrics.push(`tokens: ${run.tokens_used}`)
   if (run.iteration_count) metrics.push(`iterations: ${run.iteration_count}`)
   if (run.elapsed_ms) metrics.push(`time: ${(run.elapsed_ms / 1000).toFixed(1)}s`)
+  if (runId) metrics.push(`replay: iris agents replay ${runId.slice(0, 8)}`)
   if (metrics.length > 0) {
     console.log(`  ${dim(metrics.join("  ·  "))}`)
     console.log()
@@ -615,8 +669,9 @@ export const PlatformChatCommand = cmd({
         default: 300,
       })
       .option("thread", {
+        alias: "conversation",
         describe:
-          "conversation thread id — pin a specific conversation instead of the agent's default shared one",
+          "conversation id — pin a specific conversation. Default: your one canonical conversation with this agent, shared by text and voice",
         type: "string",
       })
       .option("fresh", {
@@ -703,6 +758,9 @@ export const PlatformChatCommand = cmd({
         mic: args.mic,
         tts: args.tts,
         "tts-voice": args["tts-voice"],
+        // Same mapping rule as executeChat below: an option not forwarded here is silently dropped.
+        thread: args.thread as string | undefined,
+        fresh: args.fresh as boolean | undefined,
       })
       return
     }

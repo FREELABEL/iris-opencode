@@ -15,13 +15,14 @@ import {
   resourcesFor,
   readPlaybookResource,
   callPlaybookTool,
-  PLAYBOOK_URI_PREFIX,
   TOOL_PREFIX,
 } from "./mcp-playbooks"
 import { homedir } from "os"
 import { join } from "path"
 import { readFileSync, existsSync } from "fs"
 import { spill } from "./mcp-overflow"
+import { buildAgentListArgs, renderAgentList } from "./mcp-agent-list"
+import { listResources, readResource, RECIPE_URI_PREFIX, type ResourceDeps } from "./mcp-resources"
 
 // A bare "{" string literal silently breaks `script/build-capabilities.ts`: its block
 // reader brace-MATCHES `cmd({ ... })` without skipping string literals, so one unmatched
@@ -601,9 +602,9 @@ export const McpServeCommand = cmd({
           "  iris_memory   read/write the Atlas — boards, lists, items",
           "                search | boards | get | items | add | update",
           "  hive_*        inspect and drive Hive tmux sessions (needs the local daemon)",
-          "  playbook_*    one typed tool per executable playbook (--no-playbooks to omit)",
+          "  playbook_*    one typed tool per playbook (≤ 8), else playbook_find + playbook_run (--no-playbooks to omit; IRIS_MCP_PLAYBOOK_TOOLS=all|search)",
           "",
-          "RESOURCES:  iris://guide  iris://commands  iris://recipes",
+          `RESOURCES:  iris://guide  iris://commands  iris://recipes  ${RECIPE_URI_PREFIX}<name>  iris://playbook/<name>`,
           "",
           "A schema is prompt-enforced, not API-enforced, and an agent given a required shape",
           "will INVENT values to fill it — measured: a required enum produced a confident answer",
@@ -656,33 +657,24 @@ export const McpServeCommand = cmd({
 
     // --- Resources ---
 
+    // List and read share one dispatcher so every advertised URI is one the read serves (#191844).
+    const resourceDeps: ResourceDeps = {
+      howtoDir: HOWTO_DIR,
+      playbooksEnabled,
+      guide: buildGuide,
+      commands: buildCommandCatalog,
+      recipes: loadRecipes,
+      listPlaybooks: async () => resourcesFor(await loadPlaybooks()),
+      readPlaybook: readPlaybookResource,
+    }
+
     server.setRequestHandler(ListResourcesRequestSchema, async () => ({
-      resources: [
-        { uri: "iris://guide", name: "IRIS CLI Guide", description: "Install, authenticate, and use the IRIS CLI", mimeType: "text/markdown" },
-        { uri: "iris://commands", name: "Command Catalog", description: "Full catalog of 120+ IRIS CLI commands grouped by category", mimeType: "text/markdown" },
-        { uri: "iris://recipes", name: "How-To Recipes", description: "User-created workflow recipes from ~/.iris/how-to/", mimeType: "text/markdown" },
-        // Every playbook is readable, whether or not it can be run. Most are
-        // written procedures with no steps at all — that IS the artefact.
-        ...(playbooksEnabled ? resourcesFor(await loadPlaybooks()) : []),
-      ],
+      resources: await listResources(resourceDeps),
     }))
 
     server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
       const { uri } = request.params
-      if (playbooksEnabled && uri.startsWith(PLAYBOOK_URI_PREFIX)) {
-        const name = uri.slice(PLAYBOOK_URI_PREFIX.length)
-        return { contents: [{ uri, mimeType: "text/markdown", text: await readPlaybookResource(name) }] }
-      }
-      switch (uri) {
-        case "iris://guide":
-          return { contents: [{ uri, mimeType: "text/markdown", text: buildGuide() }] }
-        case "iris://commands":
-          return { contents: [{ uri, mimeType: "text/markdown", text: buildCommandCatalog() }] }
-        case "iris://recipes":
-          return { contents: [{ uri, mimeType: "text/markdown", text: await loadRecipes() }] }
-        default:
-          throw new Error(`Unknown resource: ${uri}`)
-      }
+      return { contents: [{ uri, mimeType: "text/markdown", text: await readResource(uri, resourceDeps) }] }
     })
 
     // --- Tools ---
@@ -813,6 +805,11 @@ and been wrong about the user's single most important number.
 So:
 - action:"list" FIRST to see who exists and what each one owns. Pass \`query\` to filter
   by name/description (e.g. "finance", "pathways"). Agent IDs are stable — reuse them.
+  The list is PAGED: 50 per page by default (\`limit\` up to 200), \`page\` from 1. The result
+  says "Agents 1–50 of <total>" and carries meta {total, returned, per_page, current_page,
+  last_page, from, to, has_more, truncated, hint}. When has_more is true there are more agents
+  than you were shown — call again with page:<current_page + 1> (or narrow with query) before
+  concluding an agent does not exist.
 - action:"ask" to put a question to one agent. Returns the agent's answer plus the run
   envelope (iterations, tools the agent invoked, elapsed_ms).
 
@@ -894,6 +891,8 @@ you did not create — prefer update{} to re-scope or quiet one.`,
             properties: {
               action: { type: "string", enum: ["list", "ask", "get", "create", "update", "delete"], description: "list=discover · ask=consult · get=read config · create/update/delete=manage config" },
               query: { type: "string", description: "list: filter agents by name/description, e.g. 'finance'" },
+              limit: { type: "number", description: "list: agents per page, 1–200 (default 50)" },
+              page: { type: "number", description: "list: 1-based page number (default 1). Follow meta.has_more / meta.hint to page through every agent." },
               agent: { type: "number", description: "ask/get/update/delete: the agent ID from action:'list'" },
               message: { type: "string", description: "ask: the question. Be specific and self-contained — the agent does not see this conversation." },
               model: { type: "string", description: "ask: model override for this turn. create/update: the agent's stored model. Keep to nano/mini tiers." },
@@ -1033,37 +1032,22 @@ parts you did not mean to touch.`,
         const action = (args?.action as string) ?? ""
 
         if (action === "list") {
-          const query = (args?.query as string ?? "").trim()
-          const listArgs = ["agents", "list", "--json", "--limit", "50"]
-          if (query) {
-            if (/[;&|`$\\<>!\n\r]/.test(query)) {
-              return { content: [{ type: "text" as const, text: "Error: invalid characters in query" }], isError: true }
-            }
-            listArgs.push("-s", query)
-          }
+          // Paged, with the account total read from the CLI envelope (#191862). This used to
+          // fetch a fixed 50 and report "50 of 50" on an account holding 455.
+          const req = buildAgentListArgs(args as Record<string, unknown> | undefined)
+          if (!req.ok) return { content: [{ type: "text" as const, text: req.error }], isError: true }
           try {
-            const result = await execIris(listArgs)
+            const result = await execIris(req.argv)
             if (result.exitCode !== 0) {
               return { content: [{ type: "text" as const, text: result.stderr || result.stdout || "agents list failed" }], isError: true }
             }
-            let roster: Array<Record<string, unknown>> = []
+            let parsed: unknown
             try {
-              const parsed = JSON.parse(result.stdout)
-              roster = Array.isArray(parsed?.data) ? parsed.data : []
+              parsed = JSON.parse(result.stdout)
             } catch {
               return { content: [{ type: "text" as const, text: result.stdout }] }
             }
-            // Agents with no description cannot be chosen on purpose — a caller
-            // picking from names alone is guessing. Say so rather than padding
-            // the roster with rows that carry no signal about what they know.
-            const described = roster.filter((a) => typeof a.description === "string" && (a.description as string).trim())
-            const compact = described.map((a) => ({ id: a.id, name: a.name, description: a.description }))
-            const note = roster.length === 0
-              ? (query ? `No agents matched "${query}". Try a broader term, or action:"list" with no query.` : "No agents found.")
-              : `${compact.length} of ${roster.length} agent(s) carry a description and are listed. ` +
-                `${roster.length - compact.length} were omitted as unidentifiable — an agent with no description cannot be chosen deliberately. ` +
-                `Pick by what an agent OWNS, then action:"ask" with its id.`
-            return { content: [{ type: "text" as const, text: `${note}\n\n${JSON.stringify(compact, null, 2)}` }] }
+            return { content: [{ type: "text" as const, text: renderAgentList(parsed, req).text }] }
           } catch (e) {
             return { content: [{ type: "text" as const, text: `Execution error: ${e instanceof Error ? e.message : e}` }], isError: true }
           }

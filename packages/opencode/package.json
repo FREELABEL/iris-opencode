@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
-  "version": "1.3.348",
+  "version": "1.3.357",
   "name": "opencode",
   "displayName": "iris-agent-cli",
   "type": "module",
@@ -83,6 +83,7 @@
     "@octokit/graphql": "9.0.2",
     "@octokit/rest": "catalog:",
     "@openauthjs/openauth": "catalog:",
+    "@heyiris/pulse-core": "workspace:*",
     "@opencode-ai/plugin": "workspace:*",
     "@opencode-ai/script": "workspace:*",
     "@opencode-ai/sdk": "workspace:*",

@@ -1,3 +1,4 @@
+import { parsePhoneIdentity, samePhone } from "../lib/phone-identity"
 import { type ChannelRead, readOk, unavailable, nothingToRead, describeHttpFailure, channelOutcome, failedRunWarning, bridgeMailItems } from "./comms-channel-read"
 import { mailResponsive, readMailThread, withoutLedgerDuplicates } from "./comms-mail-applescript"
 import { cmd } from "./cmd"
@@ -99,50 +100,70 @@ function storeNotReadable(store: string, diagnosis: string): ChannelRead {
 
 // ── iMessage ingestion (via shared lib) ──
 
-function ingestImessage(lead: any): ChannelRead {
-  const { searchByHandle, normalizeHandle } = require("../lib/imessage")
+export function ingestImessage(lead: any): ChannelRead {
+  // Phone and email only. An instagram handle is never an iMessage chat identifier — it was only
+  // ever a substring search ("bob" matched "bob.smith@…"), which is attribution by coincidence.
   const identifiers: string[] = []
-  if (lead.phone) identifiers.push(normalizeHandle(lead.phone))
+  if (lead.phone) identifiers.push(String(lead.phone))
   for (const addr of leadEmails(lead)) identifiers.push(addr)
-  if (lead.instagram) identifiers.push(lead.instagram.replace("@", ""))
 
-  if (identifiers.length === 0) return nothingToRead("lead has no phone, email or instagram handle")
+  if (identifiers.length === 0) return nothingToRead("lead has no phone or email")
 
-  // searchByHandle() catches every query error and returns [] — so without this gate an unreadable
+  // The store helpers catch every query error and return [] — so without this gate an unreadable
   // Messages store (no Full Disk Access for whatever process is running this) reads as "no messages".
   const imessageLib = require("../lib/imessage")
   if (!imessageLib.isAvailable()) return storeNotReadable("Messages", imessageLib.diagnoseAccess())
 
   const items: any[] = []
   const failures: string[] = []
+  let storeErrors = 0
   for (const ident of identifiers) {
     try {
-      const messages = searchByHandle(ident, 90, 100)
-      for (const m of messages) {
+      // EXACT identity (#183513): a whole phone number or the whole address, never a substring.
+      const match = imessageLib.searchByHandleExact(ident, 90, 100)
+      if (match.status === "ambiguous") {
+        // Two different conversations are this handle as written. Write NOTHING for this lead on
+        // this channel — a guess here is how a stranger's messages reach a client's record.
+        failures.push(
+          `"${ident}" matches ${match.identifiers.length} different conversations (${match.identifiers.join(", ")}) — ` +
+            `ambiguous, nothing written. Add the country code to the lead's phone.`,
+        )
+        return { items: [], unavailable: failures, answered: true }
+      }
+      if (match.status === "invalid") {
+        failures.push(`skipped "${ident}" — ${match.reason}. Not matched against any conversation.`)
+        continue
+      }
+      if (match.status !== "matched") continue
+      for (const m of match.messages) {
         items.push({
           direction: m.from_me ? "outbound" : "inbound",
           from_identifier: m.from_me ? "me" : (m.chat_identifier || ident),
           body: m.text,
           sent_at: m.date,
           external_message_id: `imessage_${m.id}`,
-          metadata: { chat_identifier: m.chat_identifier || ident },
+          metadata: { chat_identifier: m.chat_identifier || ident, matched_identifier: ident },
         })
       }
     } catch (e: any) {
       // Was `skip silently`. An unreadable Messages store (no Full Disk Access) then read as
       // "no messages" for every lead in an --all sweep.
+      storeErrors++
       failures.push(`message store unreadable for ${ident}: ${String(e?.message ?? e).slice(0, 120)}`)
     }
   }
-  return { items, unavailable: failures }
+  return { items, unavailable: failures, answered: storeErrors < identifiers.length || undefined }
 }
 
 // ── Gmail ingestion (via Google API) ──
 
-async function ingestGmailApi(lead: any): Promise<ChannelRead> {
+async function ingestGmailApi(lead: any, mailbox?: string): Promise<ChannelRead> {
   if (!lead.email) return nothingToRead("lead has no email address")
   try {
-    const { getToken: getGmailToken, searchMessages: gmailSearch } = await import("../lib/gmail")
+    const { getToken: getGmailToken, searchMessages: gmailSearch, setGmailAccount } = await import("../lib/gmail")
+    // #191879: --mail-account picks WHICH connected Gmail mailbox (e.g. team@heyiris.io), the
+    // server-side path that works with every Mac off.
+    if (mailbox) setGmailAccount({ account: mailbox })
     const token = await getGmailToken()
     if (!token) return unavailable("Gmail API is not connected on this machine")
     const messages = await gmailSearch(token, `from:${lead.email} OR to:${lead.email}`, 50)
@@ -153,7 +174,14 @@ async function ingestGmailApi(lead: any): Promise<ChannelRead> {
       body: m.body_text || m.snippet,
       sent_at: m.date,
       external_message_id: `gmail_${m.id}`,
-      metadata: { gmail_thread_id: m.thread_id, gmail_message_id: m.id },
+      metadata: {
+        gmail_thread_id: m.thread_id,
+        gmail_message_id: m.id,
+        source: "gmail_composio",
+        ...(m.mailbox || mailbox ? { mailbox: m.mailbox || mailbox } : {}),
+        // The cross-channel key (#191879): the same message read in Apple Mail is one row.
+        ...(m.rfc822_message_id ? { rfc822_message_id: m.rfc822_message_id } : {}),
+      },
     })))
   } catch (e: any) {
     return unavailable(`Gmail API read failed: ${String(e?.message ?? e).slice(0, 160)}`)
@@ -215,8 +243,8 @@ async function ingestDiscord(lead: any): Promise<ChannelRead> {
 
 // ── WhatsApp ingestion (via local SQLite) ──
 
-function ingestWhatsapp(lead: any, opts: { allowNameMatch?: boolean } = {}): ChannelRead {
-  const { searchByPhone, searchByName, normalizePhone, extractPhone, readGroupsForLead, isAvailable, diagnoseAccess } = require("../lib/whatsapp")
+export function ingestWhatsapp(lead: any, opts: { allowNameMatch?: boolean } = {}): ChannelRead {
+  const { searchByPhoneDetailed, searchByName, extractPhone, readGroupsForLead, isAvailable, diagnoseAccess } = require("../lib/whatsapp")
   // Same trap as iMessage: the store helpers catch and return [], so check the store is readable first.
   if (!isAvailable()) return storeNotReadable("WhatsApp", diagnoseAccess())
   const failures: string[] = []
@@ -234,10 +262,31 @@ function ingestWhatsapp(lead: any, opts: { allowNameMatch?: boolean } = {}): Cha
   }
 
   try {
-    // Phone first. A phone number is an identifier; a name is not.
-    let messages = lead.phone ? searchByPhone(lead.phone, 90, 100) : []
+    // Phone first. A phone number is an identifier; a name is not. It is matched as a WHOLE number
+    // (#183513) — a partial number used to substring-match a stranger's chat and write it here.
+    let messages: any[] = []
+    let matchedJid: string | null = null
+    if (lead.phone) {
+      const { match, messages: byPhone } = searchByPhoneDetailed(String(lead.phone), 90, 100)
+      if (match.status === "ambiguous") {
+        // More than one chat is this number as written (no country code). Guessing between them is
+        // how a third party's messages land on a client. Write no 1:1 messages; say which.
+        failures.push(
+          `phone "${lead.phone}" matches ${match.jids.length} different WhatsApp chats (${match.jids.join(", ")}) — ` +
+            `ambiguous, nothing written. Add the country code to the lead's phone.`,
+        )
+        return { items: groupItems, unavailable: failures, answered: true }
+      }
+      if (match.status === "invalid") {
+        failures.push(`phone skipped — ${match.reason}. Not matched against any chat; fix the lead's phone.`)
+      }
+      if (match.status === "matched") {
+        messages = byPhone
+        matchedJid = match.jid
+      }
+    }
     let matchedByName: string | null = null
-    if (messages.length === 0 && lead.name) {
+    if (messages.length === 0 && !matchedJid && lead.name) {
       // NAME FALLBACK — deliberately narrow (#183513). This used to try the first name alone and
       // every dash fragment, with a SUBSTRING match, and take the most recent chat: "Kristen" matched
       // a different "kristen" and 22 of a stranger's private messages landed on a client's record.
@@ -265,7 +314,14 @@ function ingestWhatsapp(lead: any, opts: { allowNameMatch?: boolean } = {}): Cha
       body: m.text,
       sent_at: m.date,
       external_message_id: `whatsapp_${m.id}`,
-      metadata: { from_jid: m.from_jid, push_name: m.push_name },
+      // WHY this message is on this lead — so a wrong match is diagnosable, not mysterious (#183513).
+      metadata: {
+        from_jid: m.from_jid,
+        push_name: m.push_name,
+        matched_by: matchedByName ? "name" : "phone",
+        matched_identifier: matchedByName ?? String(lead.phone ?? ""),
+        ...(matchedJid ? { matched_chat: matchedJid } : {}),
+      },
     }))
     // A chat found by NAME is a guess about who someone is. It is not written unless the operator
     // has looked and said so — two people can share a name, and the cost of a wrong guess is a
@@ -279,8 +335,9 @@ function ingestWhatsapp(lead: any, opts: { allowNameMatch?: boolean } = {}): Cha
       )
       return { items: groupItems, unavailable: failures, answered: true }
     }
-    // Merge 1:1 + linked-group messages; server dedups on external_message_id.
-    return { items: [...oneToOne, ...groupItems], unavailable: failures }
+    // Merge 1:1 + linked-group messages; server dedups on external_message_id. The store answered
+    // (a skipped phone is reported, but it is not "could not read the store").
+    return { items: [...oneToOne, ...groupItems], unavailable: failures, answered: true }
   } catch (e: any) {
     failures.push(`WhatsApp store unreadable: ${String(e?.message ?? e).slice(0, 120)}`)
     return { items: groupItems, unavailable: failures }
@@ -381,31 +438,70 @@ async function ingestGmail(lead: any, requested: "gmail" | "apple_mail"): Promis
 }
 
 /**
- * Apple Mail read over AppleEvents from ONE named account (--mail-account). Needs no daemon, no
- * bridge and no Full Disk Access; reads both directions with RFC Message-IDs and bodies. See
+ * Apple Mail read over AppleEvents from ONE account (--mail-account). Needs no bridge and no Full
+ * Disk Access; reads both directions with RFC Message-IDs and bodies. See
  * comms-mail-applescript.ts for why it is opt-in and bounded to one account.
+ *
+ * #191879: the account is named by its email ADDRESS, resolved against every account's addresses —
+ * on this Mac if it has it, otherwise on the Hive node that reports it (comms-mail-route.ts).
  */
-async function ingestAppleMailViaScript(lead: any, account: string, days: number): Promise<ChannelRead> {
+export async function appleMailDeps(): Promise<import("./comms-mail-route").AppleMailReadDeps> {
+  const { listLocalMailAccounts } = await import("./comms-mail-route")
+  const { resolveUserId } = await import("./iris-api")
+  const userId = await resolveUserId().catch(() => null)
+  return {
+    platform: process.platform,
+    listLocal: () => listLocalMailAccounts(),
+    readLocal: async (address, days, selector, own) => {
+      if (!(await mailResponsive())) {
+        return { ok: false, reason: "Mail.app is not answering (not running, or still busy with an earlier request) — not queuing more work behind it; try again in a few minutes" }
+      }
+      return readMailThread(address, days, selector, true, 120000, own)
+    },
+    nodes: async () => {
+      if (!userId) throw new Error("not signed in — run `iris auth login`")
+      const { fetchNodes } = await import("./platform-hive-nodes")
+      return (await fetchNodes(Number(userId))) as any
+    },
+    selfNodeId: (() => {
+      try {
+        const { readFileSync } = require("node:fs")
+        const { join } = require("node:path")
+        const { homedir } = require("node:os")
+        return JSON.parse(readFileSync(join(homedir(), ".iris", "config.json"), "utf8"))?.node_id ?? null
+      } catch {
+        return null
+      }
+    })(),
+    runRemote: async (node, script) => {
+      if (!userId) throw new Error("not signed in")
+      const [{ dispatchTaskAndWait }, { buildHiveRunBody }, { fromHiveTask }] = await Promise.all([
+        import("./platform-hive-nodes"),
+        import("./hive-run-body"),
+        import("./hive-script-result"),
+      ])
+      const { final } = await dispatchTaskAndWait(
+        Number(userId),
+        buildHiveRunBody({ userId: Number(userId), nodeId: node.id, title: "iris comms ingest: read one Mail.app account (read-only)", script, timeoutSec: 180 }),
+      )
+      if (!final) throw new Error("still running after 210s — not waited for")
+      const r = fromHiveTask(final as any)
+      return { stdout: String(r.stdout ?? ""), stderr: String(r.stderr ?? ""), exit_code: r.exit_code ?? null, stdout_truncated: r.stdout_truncated === true }
+    },
+  }
+}
+
+export async function ingestAppleMailViaScript(
+  lead: any,
+  account: string,
+  days: number,
+  deps?: import("./comms-mail-route").AppleMailReadDeps,
+): Promise<ChannelRead> {
   const emails = leadEmails(lead)
   if (emails.length === 0) return nothingToRead("lead has no email address")
-  if (!(await mailResponsive())) {
-    return unavailable("Mail.app is not answering (not running, or still busy with an earlier request) — not queuing more work behind it; try again in a few minutes")
-  }
-  const items: any[] = []
-  const failures: string[] = []
-  let answered = false
-  for (const addr of emails) {
-    const r = await readMailThread(addr, days, account, true)
-    if (r.ok) {
-      answered = true
-      items.push(...r.items)
-    } else {
-      failures.push(r.reason)
-    }
-  }
-  const seen = new Set<string>()
-  const unique = items.filter((i) => (seen.has(i.external_message_id) ? false : (seen.add(i.external_message_id), true)))
-  return { items: unique, unavailable: failures, answered }
+  const { readAppleMailForLead } = await import("./comms-mail-route")
+  const r = await readAppleMailForLead(emails, account, days, deps ?? (await appleMailDeps()), lead?.id)
+  return r
 }
 
 /**
@@ -611,33 +707,77 @@ function activeImessageHandles(days: number, cap: number): { identifier: string;
   }
 }
 
-/** Find the lead that owns this handle, or null. Matches on the last 10 digits for phones. */
-async function findLeadForHandle(handle: string): Promise<any | null> {
-  const digits = handle.replace(/\D/g, "")
-  const isPhone = digits.length >= 10
-  // Search by the last 10 digits so stored formats like "(972) 469-5970", "+19724695970" and
-  // "9724695970" all match the same person.
-  const term = isPhone ? digits.slice(-10) : handle
+export type HandleLeadMatch =
+  | { status: "matched"; lead: any }
+  | { status: "ambiguous"; leadIds: number[] }
+  | { status: "none" }
+  | { status: "invalid"; reason: string }
 
-  try {
-    const res = await irisFetch(`/api/v1/leads?search=${encodeURIComponent(term)}&per_page=5`)
-    if (!res.ok) return null
-    const body = (await res.json()) as any
-    const leads = body?.data?.data ?? body?.data ?? []
-    if (!Array.isArray(leads) || leads.length === 0) return null
-
-    if (!isPhone) return leads[0]
-
-    const tail = digits.slice(-10)
-    return (
-      leads.find((l: any) => {
-        const ld = String(l?.phone ?? l?.contact_info?.phone ?? "").replace(/\D/g, "")
-        return ld.length >= 10 && ld.slice(-10) === tail
-      }) ?? leads[0]
-    )
-  } catch {
-    return null
+/**
+ * Which ONE lead owns this conversation handle — from the leads a search returned (#183513).
+ *
+ * The old version fell back to `leads[0]` — the first fuzzy search hit — whenever no lead's phone
+ * matched, and returned `leads[0]` outright for an email. So a conversation could be written to
+ * whoever the search ranked first. Now the handle must BE the lead's number (whole-number identity)
+ * or one of the lead's addresses, and two leads owning the same handle is ambiguous: nobody gets it.
+ */
+export function pickLeadForHandle(handle: string, leads: any[]): HandleLeadMatch {
+  const h = String(handle ?? "").trim()
+  const owners = new Map<number, any>()
+  if (h.includes("@")) {
+    const addr = h.toLowerCase()
+    for (const l of leads) if (l?.id != null && leadEmails(l).includes(addr)) owners.set(Number(l.id), l)
+  } else {
+    const p = parsePhoneIdentity(h)
+    if (!p.ok) return { status: "invalid", reason: p.reason }
+    for (const l of leads) {
+      if (l?.id == null) continue
+      const phones = [l?.phone, l?.contact_info?.phone].filter((v) => String(v ?? "").trim())
+      if (phones.some((ph) => samePhone(p, parsePhoneIdentity(ph)))) owners.set(Number(l.id), l)
+    }
   }
+  if (owners.size === 0) return { status: "none" }
+  if (owners.size > 1) return { status: "ambiguous", leadIds: [...owners.keys()] }
+  return { status: "matched", lead: [...owners.values()][0] }
+}
+
+async function findLeadForHandle(handle: string): Promise<HandleLeadMatch> {
+  const p = parsePhoneIdentity(handle)
+  if (!handle.includes("@") && !p.ok) return { status: "invalid", reason: p.reason }
+  // Search by the last 10 digits so stored formats like "(972) 469-5970", "+19724695970" and
+  // "9724695970" all come back — then pickLeadForHandle decides, in full, who actually owns it.
+  const digits = handle.replace(/\D/g, "")
+  const term = handle.includes("@") ? handle : digits.slice(-10)
+  const res = await irisFetch(`/api/v1/leads?search=${encodeURIComponent(term)}&per_page=10`)
+  if (!res.ok) throw new Error(`lead search HTTP ${res.status}`)
+  const body = (await res.json()) as any
+  const leads = body?.data?.data ?? body?.data ?? []
+  return pickLeadForHandle(handle, Array.isArray(leads) ? leads : [])
+}
+
+export type SweepCounts = {
+  conversations: number
+  matched: number
+  ambiguous: string[]
+  skipped: string[]
+  unmatched: number
+  totalNew: number
+  totalKnown: number
+  failed: number
+}
+
+/** The sweep's closing line: what was written, and what was deliberately NOT, and why. */
+export function sweepSummary(c: SweepCounts): string {
+  const parts = [
+    `${c.conversations} conversation(s)`,
+    `${c.matched} matched`,
+    `${c.ambiguous.length} ambiguous (nothing written)`,
+    `${c.skipped.length} skipped`,
+    `${c.unmatched} matched no lead`,
+    `${c.totalNew} new + ${c.totalKnown} already logged`,
+  ]
+  if (c.failed) parts.push(`${c.failed} failed`)
+  return parts.join(" · ")
 }
 
 /**
@@ -685,16 +825,34 @@ async function ingestAllLeads(channel: string, days: number, limit: number, dryR
   // conversations that have new messages are by definition the ones worth ingesting.
   const byLead = new Map<number, { lead: any; handles: string[] }>()
   const unmatched: string[] = []
+  // Deliberately NOT written, with the reason — printed in the dry run and the summary.
+  const ambiguous: string[] = []
+  const skipped: string[] = []
+  let lookupFailed = 0
   for (const h of handles) {
-    const lead = await findLeadForHandle(h.identifier)
-    if (!lead?.id) { unmatched.push(h.identifier); continue }
+    let m: HandleLeadMatch
+    try {
+      m = await findLeadForHandle(h.identifier)
+    } catch (e: any) {
+      lookupFailed++
+      skipped.push(`${h.identifier}: lead lookup failed (${String(e?.message ?? e).slice(0, 60)})`)
+      continue
+    }
+    if (m.status === "invalid") { skipped.push(`${h.identifier}: ${m.reason}`); continue }
+    if (m.status === "ambiguous") { ambiguous.push(`${h.identifier}: owned by leads ${m.leadIds.join(", ")}`); continue }
+    if (m.status === "none") { unmatched.push(h.identifier); continue }
+    const lead = m.lead
     const entry = byLead.get(lead.id) ?? { lead, handles: [] }
     entry.handles.push(h.identifier)
     byLead.set(lead.id, entry)
   }
 
   const targets = [...byLead.values()].slice(0, Math.max(1, limit))
-  sp.stop(`${targets.length} lead(s) matched · ${unmatched.length} unmatched handle(s)`)
+  sp.stop(`${targets.length} lead(s) matched · ${ambiguous.length} ambiguous · ${skipped.length} skipped · ${unmatched.length} unmatched handle(s)`)
+  const printHeld = () => {
+    for (const a of ambiguous.slice(0, 20)) console.log(`  ${dim(`ambiguous, nothing written — ${a}`)}`)
+    for (const k of skipped.slice(0, 20)) console.log(`  ${dim(`skipped — ${k}`)}`)
+  }
 
   if (dryRun) {
     printDivider()
@@ -705,7 +863,9 @@ async function ingestAllLeads(channel: string, days: number, limit: number, dryR
       console.log(`  ${dim(`unmatched (no lead): ${unmatched.slice(0, 8).join(", ")}${unmatched.length > 8 ? " …" : ""}`)}`)
       console.log(`  ${dim("these are real conversations with nobody in the CRM — worth capturing as leads.")}`)
     }
+    printHeld()
     printDivider()
+    console.log(`  ${sweepSummary({ conversations: handles.length, matched: targets.length, ambiguous, skipped, unmatched: unmatched.length, totalNew: 0, totalKnown: 0, failed: lookupFailed })}`)
     console.log(`  ${dim(`dry run — nothing ingested. Re-run without --dry-run to sweep ${targets.length} lead(s).`)}`)
     prompts.outro("Done")
     return
@@ -718,6 +878,13 @@ async function ingestAllLeads(channel: string, days: number, limit: number, dryR
     try {
       const read = ingestImessage(t.lead)
       const outcome = channelOutcome("imessage", read)
+      const heldAmbiguous = read.unavailable.find((r) => r.includes("ambiguous, nothing written"))
+      if (heldAmbiguous) {
+        // The lead's own phone, as written, is more than one conversation — the per-lead rule.
+        ambiguous.push(`lead ${t.lead.id}: ${heldAmbiguous}`)
+        console.log(`  ${dim(label)}  ${dim(heldAmbiguous)}`)
+        continue
+      }
       if (outcome.failed) failed++
       if (outcome.kind === "unavailable") { console.log(`  ${dim(label)}  ${outcome.line}`); continue }
       if (outcome.kind === "nothing" || outcome.kind === "empty") { console.log(`  ${dim(label)}  ${dim("no messages")}`); continue }
@@ -741,11 +908,11 @@ async function ingestAllLeads(channel: string, days: number, limit: number, dryR
       console.log(`  ${dim(label)}  ${dim(`error: ${String(e?.message ?? e).slice(0, 60)}`)}`)
     }
   }
+  printHeld()
   printDivider()
+  failed += lookupFailed
   console.log(
-    `  Swept ${targets.length} lead(s) from ${handles.length} conversation(s): ${success(`${totalNew} new`)} + ${dim(`${totalSkipped} already logged`)}` +
-      (failed ? dim(`  ·  ${failed} failed`) : "") +
-      (unmatched.length ? dim(`  ·  ${unmatched.length} handle(s) matched no lead`) : ""),
+    `  Swept: ${sweepSummary({ conversations: handles.length, matched: targets.length, ambiguous, skipped, unmatched: unmatched.length, totalNew, totalKnown: totalSkipped, failed })}`,
   )
   if (failed) {
     prompts.log.error(`${failed} lead(s) could not be fully read or stored. Their "0 new" is not a zero.`)
@@ -772,7 +939,18 @@ const CommsIngestCommand = cmd({
       .option("limit", { type: "number", default: 100, describe: "max leads to sweep with --all" })
       .option("dry-run", { type: "boolean", default: false, describe: "read and report what WOULD be ingested, write nothing (single lead or --all)" })
       .option("allow-name-match", { type: "boolean", default: false, describe: "write WhatsApp chats matched by the lead's name alone (checked it is the same person)" })
-      .option("mail-account", { type: "string", describe: "apple_mail: read ONE Mail.app account over AppleEvents (both directions, bodies, no Full Disk Access) — e.g. amayo@mypathwaysai.com" }),
+      .option("mail-account", {
+        type: "string",
+        describe:
+          "the mailbox's email ADDRESS (e.g. team@heyiris.io). apple_mail: read that ONE Mail.app account over AppleEvents — " +
+          "on this Mac if it has it, otherwise on the Hive node that reports it (only while that Mac is ONLINE). " +
+          "gmail_api: read that connected Gmail mailbox server-side — no Mac needed, the path for replies (#191878)",
+      })
+      .epilogue(
+        "Apple Mail reads run on the Mac that has the account and only while it is online — they are not a reply inbox.\n" +
+          "For a mailbox that must always be readable (team@heyiris.io), connect it as Gmail and use --channel gmail_api --mail-account <address>.\n" +
+          "Each message is stored once even when it arrives through both: the server matches email across channels by Message-ID.",
+      ),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Ingest Comms")
@@ -827,7 +1005,7 @@ const CommsIngestCommand = cmd({
       } else if (ch === "slack") {
         read = await ingestSlack(lead)
       } else if (ch === "gmail_api") {
-        read = await ingestGmailApi(lead)
+        read = await ingestGmailApi(lead, args["mail-account"] ? String(args["mail-account"]) : undefined)
       } else if (ch === "apple_mail" && args["mail-account"]) {
         read = await ingestAppleMailViaScript(lead, String(args["mail-account"]), Number(args.days))
       } else if (ch === "gmail" || ch === "apple_mail") {

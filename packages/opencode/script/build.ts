@@ -97,7 +97,8 @@ const targets = singleFlag
 /**
  * Refuse to start a build that cannot finish.
  *
- * Each target writes ~175 MB (a ~115 MB compiled binary plus ~36 MB of external source maps),
+ * Each target wrote ~175 MB (a ~115 MB compiled binary plus ~36 MB of external source maps,
+ * which are no longer emitted — #189593),
  * so the default all-targets build is ~1.9 GB — and `bun run build` is what a developer
  * naturally types when they only wanted to test one change locally.
  *
@@ -231,7 +232,13 @@ for (const item of targets) {
     conditions: ["browser"],
     tsconfig: "./tsconfig.json",
     plugins: [solidPlugin],
-    sourcemap: "external",
+    // No source maps and minified output (#189593). This used to be `sourcemap: "external"`,
+    // which wrote index.js.map next to the binary, and the release archive picked it up: every
+    // public release shipped the full TypeScript source, comments and system prompts as
+    // `sourcesContent`. Unminified, the binary itself carried the same comments in clear text.
+    // `keepNames` preserves function/class `.name`, which error formatting relies on.
+    sourcemap: "none",
+    minify: { whitespace: true, syntax: true, identifiers: true, keepNames: true },
     external: ["playwright", "electron"],
     compile: {
       autoloadBunfig: false,

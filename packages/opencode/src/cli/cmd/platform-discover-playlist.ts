@@ -269,7 +269,7 @@ const PlaylistCommand = cmd({
     }
 
     // 2. Ensure the download toolchain (yt-dlp + ffmpeg for mp3 conversion).
-    const ytdlp = ensureYtDlp()
+    const ytdlp = await ensureYtDlp()
     if (!ytdlp) {
       process.exitCode = 1
       prompts.outro("Aborted — yt-dlp unavailable")

@@ -33,6 +33,15 @@ describe("whereItRuns", () => {
     expect(s).toMatch(/apple_mail/)
   })
 
+  test("a command iris does not carry over Hive is never described as routed", () => {
+    for (const line of ["iris mail send a@b.c -s x -b y", "iris mail reply <id> -b y", "iris imessage search +15555550100"]) {
+      const s = whereItRuns(line, { platform: "linux", reach: ready })
+      expect(s).toMatch(/AlexMaysnow1063/)
+      expect(s).toMatch(/does not route/)
+    }
+    expect(whereItRuns("iris mail read x", { platform: "linux", reach: ready })).toMatch(/routes it there/)
+  })
+
   test("on a Mac that has it, says nothing — runs here", () => {
     expect(whereItRuns("iris mail inbox", { platform: "darwin", localAvailable: true, reach: ready })).toBeNull()
   })

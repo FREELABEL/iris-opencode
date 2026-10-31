@@ -39,18 +39,18 @@ describe("resolveAllEmails", () => {
 
   test("primary + nurture email", () => {
     const result = resolveAllEmails({
-      email: "jon@dentsociety.com",
-      contact_info: { nurture_email: "Arango5231@gmail.com" },
+      email: "user12@firm-i.example.com",
+      contact_info: { nurture_email: "Person3@Example.Com" },
     })
-    expect(result).toEqual(["jon@dentsociety.com", "arango5231@gmail.com"])
+    expect(result).toEqual(["user12@firm-i.example.com", "person3@example.com"])
   })
 
   test("primary + contact_info.emails array", () => {
     const result = resolveAllEmails({
-      email: "glrivera@creativegs.co",
-      contact_info: { emails: ["arevirlg@gmail.com", "gniice@music.com"] },
+      email: "user13@firm-b.example.com",
+      contact_info: { emails: ["person1@example.com", "artist@example.com"] },
     })
-    expect(result).toEqual(["glrivera@creativegs.co", "arevirlg@gmail.com", "gniice@music.com"])
+    expect(result).toEqual(["user13@firm-b.example.com", "person1@example.com", "artist@example.com"])
   })
 
   test("primary + nurture + extras — no duplicates", () => {
@@ -111,15 +111,15 @@ function filterGmailThreads(
 
 describe("filterGmailThreads (multi-email)", () => {
   const threads = [
-    { from: "glrivera@creativegs.co", subject: "Project update" },
-    { from: "arevirlg@gmail.com", subject: "Invoice attached" },
+    { from: "user13@firm-b.example.com", subject: "Project update" },
+    { from: "person1@example.com", subject: "Invoice attached" },
     { from: "random@spam.com", subject: "You won a prize" },
-    { from: "GlRivera@CreativeGs.CO", subject: "Follow up" }, // case mismatch
+    { from: "User13@Firm-B.Example.Com", subject: "Follow up" }, // case mismatch
     { from: undefined, subject: "No sender" }, // no from
   ]
 
   test("single email only matches primary", () => {
-    const result = filterGmailThreads(threads, ["glrivera@creativegs.co"])
+    const result = filterGmailThreads(threads, ["user13@firm-b.example.com"])
     expect(result.length).toBe(3) // 2 matches + 1 no-from
     expect(result.map((t) => t.subject)).toContain("Project update")
     expect(result.map((t) => t.subject)).toContain("Follow up")
@@ -128,7 +128,7 @@ describe("filterGmailThreads (multi-email)", () => {
   })
 
   test("multi-email matches both addresses", () => {
-    const result = filterGmailThreads(threads, ["glrivera@creativegs.co", "arevirlg@gmail.com"])
+    const result = filterGmailThreads(threads, ["user13@firm-b.example.com", "person1@example.com"])
     expect(result.length).toBe(4) // 2 primary + 1 alt + 1 no-from
     expect(result.map((t) => t.subject)).toContain("Invoice attached")
   })
@@ -139,8 +139,8 @@ describe("filterGmailThreads (multi-email)", () => {
   })
 
   test("case-insensitive matching", () => {
-    const result = filterGmailThreads(threads, ["glrivera@creativegs.co"])
-    expect(result.map((t) => t.subject)).toContain("Follow up") // was GlRivera@CreativeGs.CO
+    const result = filterGmailThreads(threads, ["user13@firm-b.example.com"])
+    expect(result.map((t) => t.subject)).toContain("Follow up") // was User13@Firm-B.Example.Com
   })
 })
 
@@ -205,14 +205,14 @@ function filterCalendarEvents(
 
 describe("filterCalendarEvents (multi-email)", () => {
   const events = [
-    { summary: "Call with GNiice", attendees: [{ email: "glrivera@creativegs.co" }] },
-    { summary: "Music review", attendees: [{ email: "arevirlg@gmail.com" }] },
+    { summary: "Call with GNiice", attendees: [{ email: "user13@firm-b.example.com" }] },
+    { summary: "Music review", attendees: [{ email: "person1@example.com" }] },
     { summary: "Team standup", attendees: [{ email: "internal@company.com" }] },
     { summary: "Lunch with GNiice", description: "Discuss album release" },
   ]
 
   test("single email misses alt-email events", () => {
-    const result = filterCalendarEvents(events, ["glrivera@creativegs.co"], "gniice")
+    const result = filterCalendarEvents(events, ["user13@firm-b.example.com"], "gniice")
     // Matches: "Call with GNiice" (email), "Music review" (NO - wrong email), "Lunch with GNiice" (name)
     expect(result.length).toBe(2)
     expect(result.map((e) => e.summary)).toContain("Call with GNiice")
@@ -223,7 +223,7 @@ describe("filterCalendarEvents (multi-email)", () => {
   test("multi-email catches all events", () => {
     const result = filterCalendarEvents(
       events,
-      ["glrivera@creativegs.co", "arevirlg@gmail.com"],
+      ["user13@firm-b.example.com", "person1@example.com"],
       "gniice",
     )
     expect(result.length).toBe(3) // both email matches + name match

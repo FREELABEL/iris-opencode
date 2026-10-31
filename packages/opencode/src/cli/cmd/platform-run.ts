@@ -6,6 +6,7 @@ import {
   IntegrationsUnshareCommand,
   IntegrationsDisconnectCommand,
   IntegrationsSetupNativeCommand,
+  IntegrationsRotateCommand,
 } from "./platform-integrations"
 import * as prompts from "./clack"
 import { UI } from "../ui"
@@ -38,6 +39,7 @@ import { isLocalOAuthProvider, runLocalOAuthConnect } from "./integration-oauth-
 import { readIntegrationStores, findStatusDisagreements, describeDisagreement, type StoreRef } from "./integration-stores"
 import { PathwaysCommand } from "./platform-integrations-pathways"
 import { firstArray } from "../../util/array"
+import { listEnvelope, listFooter } from "./pagination-args"
 import { knownFunction, dryRunResult, gatedExec, previewParams, recipientCount } from "./integration-write-gate"
 import { openBrowser } from "../../util/browser"
 
@@ -409,13 +411,28 @@ async function executeMacosLocal(
     if ([...qs].length > 0) url += `?${qs.toString()}`
   }
 
+  // The bridge requires X-Bridge-Key on these routes. This call was the one bridge client that
+  // never sent it, so every macOS action through `integrations exec` answered 401 — and the
+  // generic hint sent people to `iris auth login`, which has nothing to do with it (#189836).
+  const headers: Record<string, string> = {}
+  if (route.useBody) headers["Content-Type"] = "application/json"
+  const bridgeKey = getBridgeToken()
+  if (bridgeKey) headers["X-Bridge-Key"] = bridgeKey
+
   let res: Response
   try {
     res = await fetch(url, {
       method: route.method,
-      headers: route.useBody ? { "Content-Type": "application/json" } : undefined,
+      headers,
       body,
     })
+    // When the bridge hosts the daemon (embedded mode), the daemon's routes are mounted under
+    // /daemon — /api/calendar/list and /create-event exist only there, and the bare path is an
+    // Express "Cannot GET". Retry once under the prefix before calling it missing.
+    if (res.status === 404) {
+      const embedded = await fetch(url.replace(bridgeBase, `${bridgeBase}/daemon`), { method: route.method, headers, body })
+      if (embedded.status !== 404) res = embedded
+    }
   } catch (e) {
     throw new Error(
       `Cannot reach local bridge at ${bridgeBase}. ` +
@@ -430,6 +447,14 @@ async function executeMacosLocal(
       const parsed = JSON.parse(text)
       errMsg = parsed.error ?? text
     } catch { /* keep raw text */ }
+    if (res.status === 401) {
+      throw new Error(
+        `The local bridge refused ${route.method} ${route.path}: ` +
+          (bridgeKey
+            ? "the key in ~/.iris/bridge-token is not the one this daemon expects (stale after a reinstall?). Run: iris bridge status"
+            : "~/.iris/bridge-token is missing, so no key was sent. Run: iris bridge status"),
+      )
+    }
     throw new Error(`Bridge ${route.method} ${route.path} failed (HTTP ${res.status}): ${errMsg}`)
   }
 
@@ -716,6 +741,11 @@ export function isFailedResult(result: any): boolean {
   if (result === null || result === undefined) return true
   if (typeof result !== "object") return false
   if (result.success === false) return true
+  // A page can arrive AND the fetch after it can fail. Composio answers 413
+  // (Upstream_PayloadTooLarge) as `error_after_page` on an otherwise successful payload, so
+  // `success: true` was reported with exit 0 for a call that did not return what was asked
+  // (#190573). A partial result with an upstream failure is a failed result.
+  if (result.error_after_page) return true
   return result.success !== true && !!result.error
 }
 
@@ -749,6 +779,45 @@ export type ActionSignature = {
   writes: boolean
   effect?: string | null
   parameters: { name: string; type: string; required: boolean; description: string }[]
+}
+
+/**
+ * Refuse a parameter the action does not declare, and name a required one that is absent.
+ *
+ * A typo used to be DROPPED IN SILENCE — `exec gmail read_emails totally_bogus=1` completed
+ * and returned 10 messages, so a wrong parameter looked exactly like a right one (#190572).
+ * The catalogue is the signature; this is the client-side check that spends nothing upstream
+ * to prove the call is wrong.
+ *
+ * `synonyms` are the groups the executor already broadcasts (limit / max_results / maxResults).
+ * A name in the same group as a declared parameter is legitimate, not a typo — otherwise this
+ * guard would reject the very spellings the CLI adds itself (#182866).
+ */
+export function validateActionParams(
+  sig: ActionSignature,
+  params: Record<string, unknown>,
+  synonyms: string[][] = [],
+): { ok: boolean; unknown: string[]; missing: string[] } {
+  const declared = new Set(sig.parameters.map((p) => p.name))
+  // An action that declares no parameters is a passthrough; do not lecture the caller.
+  if (declared.size === 0) return { ok: true, unknown: [], missing: [] }
+  // No parameters at all is the caller asking "how do I call this?" — exec answers that with
+  // the full signature (exit 2, signature_only), which a "missing required" refusal would hide (#188781).
+  if (Object.keys(params).length === 0) return { ok: true, unknown: [], missing: [] }
+
+  const accepted = new Set(declared)
+  for (const group of synonyms) {
+    if (group.some((k) => declared.has(k))) for (const k of group) accepted.add(k)
+  }
+
+  const unknown = Object.keys(params)
+    .filter((k) => !accepted.has(k))
+    .sort()
+  const missing = sig.parameters
+    .filter((p) => p.required && (params[p.name] === undefined || params[p.name] === null))
+    .map((p) => p.name)
+
+  return { ok: unknown.length === 0 && missing.length === 0, unknown, missing }
 }
 
 export async function actionSignaturesLive(target: string): Promise<ActionSignature[] | undefined> {
@@ -1055,7 +1124,22 @@ const ListConnectedCommand = cmd({
     if (args.json) {
       // Machine consumers need the distinction most — an agent parsing `[]` will state it as
       // fact. Emit the error instead of an empty list it cannot tell apart from "none".
-      await writeJson(failure ? { error: failure, connections: null } : items)
+      // Success is the list contract (#191863): every store is read whole, so the total is
+      // exact and nothing is withheld. Failure stays an error object, never an empty list.
+      if (failure) {
+        process.exitCode = 1
+        await writeJson({ success: false, error: failure, connections: null })
+      } else {
+        const partial = read.unreachable.length > 0
+        const env = partial
+          ? listEnvelope({ rows: items ?? [], total: null, page: 1, perPage: Math.max((items ?? []).length, 1), lastPage: 1, hasMore: false }, { resource: "integrations" })
+          : listEnvelope(items ?? [], { resource: "integrations", complete: true })
+        // A store that did not answer: the total is unknown and rows may be missing, but no
+        // page would return them — so truncated, with no next page.
+        if (partial) env.meta.truncated = true
+        if (partial) env.meta.hint = `Only ${stores.length - read.unreachable.length} of ${stores.length} stores answered (could not reach ${read.unreachable.join(", ")}); this list may be incomplete.`
+        await writeJson(env)
+      }
       prompts.outro("Done")
       return
     }
@@ -1072,7 +1156,7 @@ const ListConnectedCommand = cmd({
     // `!items` is unreachable here (failure returned above) but narrows the type for the
     // probe loop below, and keeps this honest if the branches above are ever reordered.
     if (!items || items.length === 0) {
-      prompts.log.warn("No integrations connected.")
+      prompts.log.warn("No integrations connected (0 found across every store that answered).")
       prompts.outro(dim("iris integrations list-available"))
       return
     }
@@ -1253,6 +1337,7 @@ const ListConnectedCommand = cmd({
       console.log(`  ${highlight(i.type)}  ${idLabel}  ${statusLabel}${accountLabel}${provider}`)
     }
     printDivider()
+    console.log(`  ${dim(listFooter(listEnvelope(items, { resource: "integrations", complete: true }).meta, "integrations"))}`)
     prompts.outro(dim("Pick an account: iris integrations exec <type> <fn> --account=<email>  (or --integration-id=<id>)"))
   },
 })
@@ -2202,6 +2287,28 @@ const ExecCommand = cmd({
         // in the same response — the caller is usually an agent that will otherwise guess again.
         const known = await knownFunctionsLive(target)
 
+        // Refuse a parameter this action does not declare, before spending a call. The server
+        // told us this in a dry run; doing it on every run is what stops a typo from becoming
+        // a silent wrong answer (#190572/#190573).
+        const signature = (await actionSignaturesLive(target))?.find((a) => a.name === fn)
+        if (signature) {
+          const check = validateActionParams(signature, params, PARAM_SYNONYMS)
+          if (!check.ok) {
+            const problems: string[] = []
+            if (check.unknown.length) problems.push(`unknown parameter(s): ${check.unknown.join(", ")}`)
+            if (check.missing.length) problems.push(`missing required: ${check.missing.join(", ")}`)
+            const message = `${target}.${fn} — ${problems.join("; ")}. Parameters: ${signature.parameters.map((p) => p.name).join(", ") || "(none)"}.`
+            process.exitCode = 1
+            if (args.json) {
+              await writeJson({ success: false, error: message, unknown: check.unknown, missing: check.missing })
+              return
+            }
+            prompts.log.error(message)
+            prompts.outro("Nothing was run.")
+            return
+          }
+        }
+
         // A write called with NO parameters is asking "how do I call this?" — answer with the
         // signature instead of a failed dry run (#188781). Reads with no required params still run.
         if (Object.keys(params).length === 0 && !args.apply) {
@@ -2797,6 +2904,8 @@ export const PlatformRunCommand = cmd({
       .command(IntegrationsUnshareCommand)
       .command(IntegrationsDisconnectCommand)
       .command(IntegrationsSetupNativeCommand)
+      // #190525 — replace a stored key, test it, keep the old one if the test fails.
+      .command(IntegrationsRotateCommand)
       .command(PathwaysCommand)
       .demandCommand(),
   async handler() {},

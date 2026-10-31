@@ -1,7 +1,27 @@
 import { cmd } from "./cmd"
-import { dim, bold, success, highlight } from "./iris-api"
+import { dim, bold, success, highlight, requireAuth, requireUserId, writeJson } from "./iris-api"
 import { spawnSync } from "child_process"
+import { createInterface } from "readline"
 import { firstArray } from "../../util/array"
+import { resolveNode } from "./platform-hive-nodes"
+import { resolveSshTarget, ensureSshUser, sshRun } from "./hive-tailscale"
+import {
+  BUILTIN_READ_ONLY,
+  HOST_MODES,
+  audit,
+  decide,
+  hostAuditPath,
+  hostConfigPath,
+  loosens,
+  modeOf,
+  parseRunCommand,
+  readHostConfig,
+  splitExit,
+  wrapForExit,
+  writeHostConfig,
+  type HostEntry,
+  type HostMode,
+} from "./hive-host-policy"
 
 // ============================================================================
 // iris hive host  —  provision a secure Windows RDP host (the QB/PHI box)
@@ -339,17 +359,269 @@ const HostLockdownCommand = cmd({
   },
 })
 
+// ── host run  (#179098) — one command on a managed host, under the host's policy ──
+
+/** A person is there to answer a prompt. An agent's shell is not a terminal, so it is never "asked". */
+function interactive(): boolean {
+  return Boolean(process.stdin.isTTY && process.stderr.isTTY)
+}
+
+async function askYes(question: string): Promise<boolean> {
+  const rl = createInterface({ input: process.stdin, output: process.stderr })
+  const answer: string = await new Promise((resolve) => rl.question(question, resolve))
+  rl.close()
+  return /^y(es)?$/i.test(answer.trim())
+}
+
+function detectOs(rg: string, vm: string): "windows" | "linux" | null {
+  const r = az(["vm", "show", "-g", rg, "-n", vm, "--query", "storageProfile.osDisk.osType", "-o", "tsv"], 60)
+  const v = r.stdout.trim().toLowerCase()
+  return v === "windows" || v === "linux" ? v : null
+}
+
+const HostRunCommand = cmd({
+  command: "run <vm> [command..]",
+  describe: "run one command on a managed host (Azure VM or tailnet machine) — under that host's approval policy",
+  builder: (y) =>
+    y
+      .positional("vm", { describe: "Azure VM name, or a Hive node name for --via ssh", type: "string", demandOption: true })
+      .positional("command", { describe: "the command — quote it, or put it after --", type: "string" })
+      .option("resource-group", { alias: "g", describe: "Azure resource group (remembered after the first run)", type: "string" })
+      .option("via", { describe: "az (Azure VM agent, no open port) or ssh (tailnet)", choices: ["az", "ssh"] as const })
+      .option("os", { describe: "windows or linux — detected for Azure VMs when omitted", choices: ["windows", "linux"] as const })
+      .option("timeout", { describe: "seconds to wait for the command", type: "number", default: 300 })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .example('$0 hive host run qb-host-vanguard -g rg-qb "Get-Service QuickBooks*"', "check a service on an Azure VM")
+      .example('$0 hive host run build-box --via ssh "systemctl status nginx"', "a tailnet machine")
+      .epilog(
+        "Every command passes the host's approval policy first (iris hive host policy show). Read-only commands run; " +
+          "anything else asks a person at a terminal — and without one, it is refused. An agent never approves its own command. " +
+          "Every run is logged to ~/.iris/hive-host-audit.jsonl.",
+      ),
+  async handler(argv) {
+    const vm = String(argv.vm)
+    const command = [...((argv.command as string[] | undefined) ?? []), ...(((argv as any)["--"] as string[] | undefined) ?? [])]
+      .map(String)
+      .join(" ")
+      .trim()
+    if (!command) {
+      console.error(`Nothing to run. Usage: iris hive host run ${vm} "<command>"`)
+      process.exit(1)
+    }
+
+    const cfg = readHostConfig()
+    const entry: HostEntry = { ...(cfg.hosts[vm] ?? {}) }
+    const rg = (argv["resource-group"] as string | undefined) ?? entry.resource_group
+    const via: "az" | "ssh" = (argv.via as "az" | "ssh" | undefined) ?? entry.via ?? (rg ? "az" : "ssh")
+    const record = (decision: string, reason: string, exit?: number | null) =>
+      audit({ at: new Date().toISOString(), host: vm, via, command, decision, reason, exit })
+
+    // The policy is consulted BEFORE anything connects: a refused command costs nothing and
+    // reveals nothing about the host.
+    const d = decide(entry, command, interactive())
+    if (d.action === "refuse") {
+      record("refused", d.reason)
+      console.error(`${highlight("✗")} not run on ${bold(vm)}: ${d.reason}.`)
+      console.error(dim(`  A person can run it at a terminal, or allow it for this host (at a terminal):`))
+      console.error(dim(`    iris hive host policy allow ${vm} "${command.replace(/"/g, '\\"')}"`))
+      process.exit(2)
+    }
+    if (d.action === "ask") {
+      console.error(`${highlight("?")} ${bold(vm)} ${dim(`(${d.reason})`)}`)
+      console.error(`  ${command}`)
+      const yes = await askYes("  Run it? [y/N] ")
+      if (!yes) {
+        record("declined", d.reason)
+        console.error("Not run.")
+        process.exit(1)
+      }
+    }
+    const how = d.action === "ask" ? "approved by a person" : d.reason
+
+    let out: { stdout: string; stderr: string; exit: number | null }
+    if (via === "az") {
+      if (!rg) {
+        console.error(`${highlight("!")} --resource-group is required the first time for an Azure VM (or use --via ssh).`)
+        process.exit(1)
+      }
+      requireAzOrExit()
+      const os = (argv.os as "windows" | "linux" | undefined) ?? entry.os ?? detectOs(rg, vm)
+      if (!os) {
+        console.error(`${highlight("✗")} could not read ${bold(vm)} in ${bold(rg)} — check the name and resource group, or pass --os.`)
+        process.exit(1)
+      }
+      const r = az(
+        [
+          "vm", "run-command", "invoke", "--resource-group", rg, "--name", vm,
+          "--command-id", os === "windows" ? "RunPowerShellScript" : "RunShellScript",
+          "--scripts", wrapForExit(command, os),
+          "-o", "json",
+        ],
+        Number(argv.timeout) || 300,
+      )
+      if (!r.ok) {
+        record("failed", `az: ${r.stderr.trim().split("\n").slice(-1)[0]}`, null)
+        console.error(`${highlight("✗")} az could not run it on ${bold(vm)}: ${dim(r.stderr.trim().split("\n").slice(-2).join(" "))}`)
+        process.exit(1)
+      }
+      out = parseRunCommand(r.stdout)
+      Object.assign(entry, { via, resource_group: rg, os })
+    } else {
+      await requireAuth()
+      const userId = await requireUserId(argv["user-id"] as number | undefined)
+      if (!userId) process.exit(1)
+      const node = await resolveNode(userId, vm)
+      if (!node) {
+        console.error(`No Hive node matching "${vm}". For an Azure VM pass --resource-group. Nodes: iris hive nodes list`)
+        process.exit(1)
+      }
+      const resolved = await resolveSshTarget(node.id, node.name, { advertised: (node as any).tailscale_ip ?? null })
+      if ("error" in resolved) {
+        console.error(resolved.error)
+        process.exit(1)
+      }
+      const t = await ensureSshUser(node.id, resolved)
+      if ("error" in t) {
+        console.error(t.error)
+        process.exit(1)
+      }
+      const r = await sshRun(t, command, (Number(argv.timeout) || 300) * 1000)
+      out = { ...splitExit(r.stdout, r.stderr), exit: r.code }
+      Object.assign(entry, { via })
+    }
+
+    cfg.hosts[vm] = entry
+    writeHostConfig(cfg)
+    record(d.action === "ask" ? "approved" : "allowed", how, out.exit)
+
+    if (argv.json) {
+      await writeJson({ host: vm, via, command, approval: how, ...out })
+    } else {
+      if (out.stdout) console.log(out.stdout)
+      if (out.stderr) console.error(dim(out.stderr))
+      console.error(dim(`  ${vm} · ${via} · ${how} · exit ${out.exit ?? "unknown"}`))
+    }
+    if (out.exit !== 0) process.exit(out.exit && out.exit > 0 ? out.exit : 1)
+  },
+})
+
+// ── host policy — configure what runs without asking ─────────────────────────
+
+/** Loosening the policy is itself a command an agent must not approve. */
+async function guardLoosening(vm: string, before: HostEntry | undefined, after: HostEntry, summary: string) {
+  if (!loosens(before, after)) return
+  if (!interactive()) {
+    console.error(`${highlight("✗")} ${summary} loosens ${bold(vm)}'s policy, which needs a person at a terminal. Not changed.`)
+    process.exit(2)
+  }
+  const yes = await askYes(`${summary} on ${vm}. Commands will then run there without asking. Continue? [y/N] `)
+  if (!yes) {
+    console.error("Not changed.")
+    process.exit(1)
+  }
+}
+
+function showPolicy(vm: string, e: HostEntry | undefined) {
+  console.log(`${bold(vm)}  ${dim("mode")} ${modeOf(e)}${e?.via ? dim(` · via ${e.via}`) : ""}${e?.resource_group ? dim(` · rg ${e.resource_group}`) : ""}`)
+  if (modeOf(e) === "allowlist") {
+    for (const p of e?.allow ?? []) console.log(`  ${success("+")} ${p}`)
+    if (!e?.allow?.length) console.log(dim("  (no extra patterns — the built-in read-only commands only)"))
+  }
+}
+
+const PolicyShowCommand = cmd({
+  command: "show [vm]",
+  describe: "show what runs without asking — one host, or all",
+  builder: (y) => y.positional("vm", { type: "string" }).option("builtins", { describe: "also list the built-in read-only commands", type: "boolean", default: false }),
+  handler(argv) {
+    const cfg = readHostConfig()
+    const names = argv.vm ? [String(argv.vm)] : Object.keys(cfg.hosts)
+    if (!names.length) console.log(dim("No hosts configured yet — every host starts in allowlist mode with the built-in read-only commands."))
+    for (const n of names) showPolicy(n, cfg.hosts[n])
+    if (argv.builtins) console.log(`\n${bold("Built-in read-only")}\n  ${BUILTIN_READ_ONLY.join(" · ")}`)
+    console.log(dim(`\n  config ${hostConfigPath()} · log ${hostAuditPath()}`))
+  },
+})
+
+const PolicySetCommand = cmd({
+  command: "set <vm>",
+  describe: "set a host's mode: confirm (ask for everything) · allowlist (default) · open (ask for nothing)",
+  builder: (y) =>
+    y.positional("vm", { type: "string", demandOption: true }).option("mode", { choices: HOST_MODES, demandOption: true }),
+  async handler(argv) {
+    const vm = String(argv.vm)
+    const cfg = readHostConfig()
+    const before = cfg.hosts[vm]
+    const after: HostEntry = { ...(before ?? {}), mode: argv.mode as HostMode }
+    await guardLoosening(vm, before, after, `Setting mode ${after.mode}`)
+    cfg.hosts[vm] = after
+    writeHostConfig(cfg)
+    audit({ at: new Date().toISOString(), host: vm, via: "policy", command: `mode ${after.mode}`, decision: "policy", reason: "set" })
+    showPolicy(vm, after)
+  },
+})
+
+const PolicyAllowCommand = cmd({
+  command: "allow <vm> <pattern..>",
+  describe: "let commands matching a pattern run without asking (* = anything; compound commands always ask)",
+  builder: (y) => y.positional("vm", { type: "string", demandOption: true }).positional("pattern", { type: "string", demandOption: true }),
+  async handler(argv) {
+    const vm = String(argv.vm)
+    const pattern = ([] as string[]).concat(argv.pattern as any).map(String).join(" ").trim()
+    const cfg = readHostConfig()
+    const before = cfg.hosts[vm]
+    const after: HostEntry = { ...(before ?? {}), allow: [...new Set([...(before?.allow ?? []), pattern])] }
+    await guardLoosening(vm, before, after, `Allowing "${pattern}"`)
+    cfg.hosts[vm] = after
+    writeHostConfig(cfg)
+    audit({ at: new Date().toISOString(), host: vm, via: "policy", command: `allow ${pattern}`, decision: "policy", reason: "allow" })
+    showPolicy(vm, after)
+  },
+})
+
+const PolicyRemoveCommand = cmd({
+  command: "remove <vm> <pattern..>",
+  describe: "stop a pattern running without asking (tightening — allowed from anywhere)",
+  builder: (y) => y.positional("vm", { type: "string", demandOption: true }).positional("pattern", { type: "string", demandOption: true }),
+  handler(argv) {
+    const vm = String(argv.vm)
+    const pattern = ([] as string[]).concat(argv.pattern as any).map(String).join(" ").trim().toLowerCase()
+    const cfg = readHostConfig()
+    const e = cfg.hosts[vm] ?? {}
+    e.allow = (e.allow ?? []).filter((p) => p.toLowerCase() !== pattern)
+    cfg.hosts[vm] = e
+    writeHostConfig(cfg)
+    audit({ at: new Date().toISOString(), host: vm, via: "policy", command: `remove ${pattern}`, decision: "policy", reason: "remove" })
+    showPolicy(vm, e)
+  },
+})
+
+const HostPolicyCommand = cmd({
+  command: "policy <subcommand>",
+  describe: "configure, per host, which commands run without a person's yes",
+  builder: (y) =>
+    y
+      .command(PolicyShowCommand)
+      .command(PolicySetCommand)
+      .command(PolicyAllowCommand)
+      .command(PolicyRemoveCommand)
+      .demandCommand(1, "Run one of: show · set · allow · remove"),
+  handler() {},
+})
+
 // ── group command ─────────────────────────────────────────────────────────────
 
 export const HiveHostCommandExport = cmd({
   command: "host <subcommand>",
-  describe: "provision a secure remote RDP host (Azure VM): setup · add-user · grant · lockdown",
+  describe: "manage a remote host (Azure VM or tailnet machine): run · policy · setup · add-user · grant · lockdown",
   builder: (y) =>
     y
+      .command(HostRunCommand)
+      .command(HostPolicyCommand)
       .command(HostSetupCommand)
       .command(HostAddUserCommand)
       .command(HostGrantCommand)
       .command(HostLockdownCommand)
-      .demandCommand(1, "Run one of: setup · add-user · grant · lockdown"),
+      .demandCommand(1, "Run one of: run · policy · setup · add-user · grant · lockdown"),
   handler() {},
 })

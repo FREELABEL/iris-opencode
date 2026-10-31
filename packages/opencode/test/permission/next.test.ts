@@ -650,3 +650,37 @@ test("ask - allows all patterns when all match allow rules", async () => {
     },
   })
 })
+
+test("rejectSession - rejects only that session's pending requests and publishes reject (#191784)", async () => {
+  const { Bus } = await import("../../src/bus")
+  await using tmp = await tmpdir({ git: true })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const replied: any[] = []
+      const unsub = Bus.subscribe(PermissionNext.Event.Replied, (e) => {
+        replied.push(e.properties)
+      })
+      const base = { metadata: {}, always: [], ruleset: [] }
+      const a = PermissionNext.ask({ ...base, id: "permission_rs_a", sessionID: "session_abort", permission: "bash", patterns: ["ls"] }).catch((e) => e)
+      const b = PermissionNext.ask({ ...base, id: "permission_rs_b", sessionID: "session_abort", permission: "edit", patterns: ["x.ts"] }).catch((e) => e)
+      const c = PermissionNext.ask({ ...base, id: "permission_rs_c", sessionID: "session_other", permission: "bash", patterns: ["ls"] }).catch((e) => e)
+
+      await PermissionNext.rejectSession("session_abort")
+
+      expect(await a).toBeInstanceOf(PermissionNext.RejectedError)
+      expect(await b).toBeInstanceOf(PermissionNext.RejectedError)
+      expect((await PermissionNext.list()).map((p) => p.id)).toEqual(["permission_rs_c"])
+      expect(replied).toEqual([
+        { sessionID: "session_abort", requestID: "permission_rs_a", reply: "reject" },
+        { sessionID: "session_abort", requestID: "permission_rs_b", reply: "reject" },
+      ])
+      // A late reply finds nothing.
+      expect(await PermissionNext.reply({ requestID: "permission_rs_a", reply: "once" })).toBe(false)
+
+      await PermissionNext.reply({ requestID: "permission_rs_c", reply: "once" })
+      expect(await c).toBeUndefined()
+      unsub()
+    },
+  })
+})

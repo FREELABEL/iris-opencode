@@ -244,14 +244,22 @@ export namespace SessionPrompt {
     log.info("cancel", { sessionID })
     const s = state()
     const match = s[sessionID]
-    if (!match) return
-    match.abort.abort()
-    for (const item of match.callbacks) {
-      item.reject()
+    if (match) {
+      match.abort.abort()
+      for (const item of match.callbacks) {
+        item.reject()
+      }
+      delete s[sessionID]
+      SessionStatus.set(sessionID, { type: "idle" })
     }
-    delete s[sessionID]
-    SessionStatus.set(sessionID, { type: "idle" })
-    return
+    // #191784: aborting does not reach a permission ask parked inside a tool, so the request
+    // would stay pending (listed, still answerable) and the tool would never finish. Reject
+    // them explicitly — after the abort, so the tool ends as aborted rather than as a user
+    // reject. Subagent sessions are covered by the cascade: the task tool's abort listener
+    // calls cancel() for the child session.
+    PermissionNext.rejectSession(sessionID).catch((error) =>
+      log.error("reject pending permissions on cancel failed", { sessionID, error }),
+    )
   }
 
   export const loop = fn(Identifier.schema("session"), async (sessionID) => {

@@ -34,6 +34,8 @@ export interface GmailMessage {
   is_unread: boolean
   /** The mailbox this message lives in. Its id is only valid there (see setGmailAccount). */
   mailbox?: string
+  /** RFC 5322 Message-ID header, when the backend returned headers — the cross-channel key (#191879). */
+  rfc822_message_id?: string
   integration_id?: number
   attachments?: { filename: string; type: string; size: number; attachment_id: string | null }[]
 }
@@ -184,7 +186,12 @@ export function lastGmailAccount(): { account?: string; integration_id?: number;
   return lastAccount
 }
 
-async function gmailExec(action: string, params: Record<string, unknown>): Promise<any> {
+/**
+ * One Gmail action on the server (execute-direct). Exported for the mail send/reply route
+ * (#191605): reply_to_email and create_draft run Composio GMAIL_REPLY_TO_THREAD /
+ * GMAIL_CREATE_EMAIL_DRAFT server-side, so a reply does not need the Mac.
+ */
+export async function gmailExec(action: string, params: Record<string, unknown>): Promise<any> {
   const { irisFetch, IRIS_API, resolveUserId } = await import("../cmd/iris-api")
 
   const userId = await resolveUserId()
@@ -363,6 +370,7 @@ function extractMessages(data: any): GmailMessage[] {
       is_unread: (Array.isArray(labels) ? labels : []).includes("UNREAD"),
       ...(m.mailbox ? { mailbox: String(m.mailbox) } : {}),
       ...(m.integration_id ? { integration_id: Number(m.integration_id) } : {}),
+      ...(hdr("Message-ID") || m.message_id_header ? { rfc822_message_id: str(hdr("Message-ID") || m.message_id_header) } : {}),
     }
   })
 }

@@ -20,13 +20,29 @@ import { execFile } from "node:child_process"
 export const MAIL_THREAD_READER_JXA = String.raw`function run(argv) {
   const addr = String(argv[0] || "").trim().toLowerCase()
   const days = Number(argv[1] || 90)
-  const acctName = String(argv[2] || "")
+  const acctSel = String(argv[2] || "")
   const withBody = argv[3] === "body"
-  if (!addr.includes("@") || !acctName) throw new Error("usage: <address> <days> <account> [body]")
+  // The address this account sends as (#191879). Outbound rows used to say the account NAME
+  // ("Google"), which is not an identity — the same name is a different mailbox on another Mac.
+  const ownAddr = String(argv[4] || "").trim().toLowerCase()
+  if (!addr.includes("@") || !acctSel) throw new Error("usage: <address> <days> <id:ACCOUNT-ID|account name> [body] [own address]")
 
   const Mail = Application("Mail")
   const cutoff = new Date(Date.now() - days * 864e5)
-  const acct = Mail.accounts.byName(acctName)
+  // "id:<Mail account id>" — what the CLI passes after resolving an ADDRESS to an account
+  // (#191879). byName() on a name Mail does not have throws "Can't get object" (-1728), which is
+  // exactly what --mail-account team@heyiris.io did, and names are not unique across Macs anyway.
+  const pickAccount = (sel) => {
+    if (sel.indexOf("id:") === 0) {
+      const want = sel.slice(3)
+      const hit = Mail.accounts().find((a) => a.id() === want)
+      if (!hit) throw new Error("no Mail.app account with id " + want + " on this Mac")
+      return hit
+    }
+    return Mail.accounts.byName(sel)
+  }
+  const acct = pickAccount(acctSel)
+  const acctName = acct.name()
   const emailOf = (s) => {
     const m = String(s || "").match(/<([^>]+)>/)
     return (m ? m[1] : String(s || "")).trim().toLowerCase()
@@ -69,11 +85,20 @@ export const MAIL_THREAD_READER_JXA = String.raw`function run(argv) {
         // RFC Message-ID: the same id on every machine and every mailbox copy of this message.
         external_message_id: "rfc822_" + ids[i],
         direction,
-        from_identifier: direction === "inbound" ? emailOf(snd[i]) : acctName,
+        from_identifier: direction === "inbound" ? emailOf(snd[i]) : ownAddr || acctName,
         subject: subj[i],
         sent_at: (ds[i] || dr[i]).toISOString(),
         channel: "apple_mail",
-        metadata: { source: "apple_mail_applescript", account: acctName, mailbox: mbName, matched_address: addr },
+        metadata: {
+          source: "apple_mail_applescript",
+          account: acctName,
+          ...(ownAddr ? { account_address: ownAddr } : {}),
+          mailbox: mbName,
+          matched_address: addr,
+          // The cross-channel key (#191879): the server matches this against the same message
+          // read through Gmail, so one mailbox arriving two ways is one row.
+          rfc822_message_id: ids[i],
+        },
       }
       if (withBody) {
         try {
@@ -103,10 +128,14 @@ export function mailResponsive(timeoutMs = 15000): Promise<boolean> {
   })
 }
 
-export function readMailThread(address: string, days: number, account: string, withBody: boolean, timeoutMs = 120000): Promise<MailThreadRead> {
+/** argv for the thread reader — shared by the local run and the command sent to another Mac. */
+export function mailThreadReaderArgs(address: string, days: number, account: string, withBody: boolean, ownAddress?: string): string[] {
+  return ["-l", "JavaScript", "-e", MAIL_THREAD_READER_JXA, address, String(days), account, withBody ? "body" : "", ownAddress ?? ""]
+}
+
+export function readMailThread(address: string, days: number, account: string, withBody: boolean, timeoutMs = 120000, ownAddress?: string): Promise<MailThreadRead> {
   return new Promise((resolve) => {
-    const args = ["-l", "JavaScript", "-e", MAIL_THREAD_READER_JXA, address, String(days), account]
-    if (withBody) args.push("body")
+    const args = mailThreadReaderArgs(address, days, account, withBody, ownAddress)
     execFile("osascript", args, { timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) {
         const msg = String(stderr || err.message).replace(/\s+/g, " ").trim().slice(0, 240)
@@ -151,4 +180,107 @@ export function withoutLedgerDuplicates(items: any[], existing: any[], windowMs 
     })
   })
   return { keep, dropped: items.length - keep.length }
+}
+
+/**
+ * Every message in ONE account's Sent mailboxes for the last N days — what `iris mail audit --sent`
+ * holds against the ledger (#191605). The spool only knows about sends that went through `iris mail
+ * send`; a raw `osascript` send (2026-10-28, the Vanguard reply-all) never touched it, so the audit
+ * said "clean". Sent Mail is the one record every send leaves, however it was made.
+ *
+ * Same discipline as the thread reader: one named account, the mailbox objects from its own listing,
+ * date-bounded, count before any bulk fetch, inputs as argv. argv: [days, account, "body"?].
+ */
+export const MAIL_SENT_READER_JXA = String.raw`function run(argv) {
+  const days = Number(argv[0] || 2)
+  const acctName = String(argv[1] || "")
+  const withBody = argv[2] === "body"
+  if (!acctName) throw new Error("usage: <days> <account> [body]")
+  const Mail = Application("Mail")
+  const cutoff = new Date(Date.now() - days * 864e5)
+  const acct = Mail.accounts.byName(acctName)
+  const items = []
+  const seen = {}
+  for (const mb of acct.mailboxes()) {
+    const name = mb.name()
+    if (!/(^|\/)sent( mail| messages)?$/i.test(name)) continue
+    const msgs = mb.messages.whose({ dateReceived: { ">": cutoff } })
+    if (msgs.length === 0) continue
+    const ids = msgs.messageId()
+    const subj = msgs.subject()
+    const ds = msgs.dateSent()
+    const dr = msgs.dateReceived()
+    const to = msgs.toRecipients.address()
+    const cc = msgs.ccRecipients.address()
+    const bcc = msgs.bccRecipients.address()
+    for (let i = 0; i < ids.length; i++) {
+      if (!ids[i] || seen[ids[i]]) continue
+      seen[ids[i]] = 1
+      const item = {
+        external_message_id: "rfc822_" + ids[i],
+        direction: "outbound",
+        subject: subj[i],
+        sent_at: (ds[i] || dr[i]).toISOString(),
+        to: to[i] || [],
+        cc: cc[i] || [],
+        bcc: bcc[i] || [],
+        mailbox: name,
+      }
+      if (withBody) {
+        try { item.body = String(msgs[i].content()).slice(0, 20000) } catch (e) { item.body = "" }
+      }
+      items.push(item)
+    }
+  }
+  return JSON.stringify({ account: acctName, days, count: items.length, items })
+}
+`
+
+export function readSentMail(account: string, days: number, withBody: boolean, timeoutMs = 120000): Promise<MailThreadRead> {
+  return new Promise((resolve) => {
+    const args = ["-l", "JavaScript", "-e", MAIL_SENT_READER_JXA, String(days), account]
+    if (withBody) args.push("body")
+    execFile("osascript", args, { timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) {
+        const msg = String(stderr || err.message).replace(/\s+/g, " ").trim().slice(0, 240)
+        return resolve({ ok: false, reason: `Mail.app Sent read failed for "${account}": ${msg}` })
+      }
+      try {
+        const d = JSON.parse(String(stdout))
+        resolve({ ok: true, items: d.items ?? [], scanned: {} })
+      } catch {
+        resolve({ ok: false, reason: `Mail.app returned unreadable output: ${String(stdout).slice(0, 120)}` })
+      }
+    })
+  })
+}
+
+export interface SentItem {
+  external_message_id?: string
+  subject: string
+  sent_at: string
+  to: string[]
+  cc: string[]
+  bcc: string[]
+  body?: string
+}
+
+/**
+ * Which sent messages are missing from which leads' records. A message to nobody's lead is not the
+ * ledger's business and is skipped; a message to three leads that only two have is reported for the
+ * third. Pure: the lead lookup and each lead's ledger rows are given.
+ */
+export function unloggedSent(
+  sent: SentItem[],
+  leadOf: (address: string) => number | null | undefined,
+  ledgerOf: (leadId: number) => any[],
+): Array<{ item: SentItem; missing: number[]; logged: number[] }> {
+  const out: Array<{ item: SentItem; missing: number[]; logged: number[] }> = []
+  for (const item of sent) {
+    const leads = [...new Set([...item.to, ...item.cc, ...item.bcc].map((a) => leadOf(String(a).trim().toLowerCase())).filter((x): x is number => typeof x === "number"))]
+    const row = [{ direction: "outbound", subject: item.subject, sent_at: item.sent_at }]
+    const missing = leads.filter((id) => withoutLedgerDuplicates(row, ledgerOf(id)).keep.length > 0)
+    if (missing.length) out.push({ item, missing, logged: leads.filter((id) => !missing.includes(id)) })
+  }
+  return out
 }
