@@ -9791,7 +9791,7 @@
       "describe": "extend a licence's end date, keeping its seats and holders (operator only)",
       "aliases": [],
       "run": "iris licence renew <key>",
-      "haystack": "licence renew extend a licence's end date, keeping its seats and holders (operator only) days days to add (counted from today if it has already expired) json json output"
+      "haystack": "licence renew extend extend a licence's end date, keeping its seats and holders (operator only) days days to add (counted from today if it has already expired) json json output"
     },
     {
       "kind": "command",
@@ -12880,7 +12880,7 @@
       "describe": "extend a licence's end date, keeping its seats and holders (operator only)",
       "aliases": [],
       "run": "iris reachr licence renew <key>",
-      "haystack": "reachr licence renew extend a licence's end date, keeping its seats and holders (operator only) days days to add (counted from today if it has already expired) json json output"
+      "haystack": "reachr licence renew extend extend a licence's end date, keeping its seats and holders (operator only) days days to add (counted from today if it has already expired) json json output"
     },
     {
       "kind": "command",
