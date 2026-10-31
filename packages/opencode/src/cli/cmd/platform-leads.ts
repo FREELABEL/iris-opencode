@@ -14,7 +14,7 @@ import {
   walkCursorPages,
   type CursorPage,
 } from "./leads-scope"
-import { analyzeJson, inPeriod, messagesHeader, messagesInPeriod, type AnalyzePeriod, type SentMessage } from "./leads-analyze"
+import { analyzeJson, dmLedger, dmTrend, inPeriod, messagesHeader, messagesInPeriod, sentHeadline, type AnalyzePeriod, type SentMessage } from "./leads-analyze"
 import { cmd } from "./cmd"
 import { PulseCheckCommand, PulseSourcesCommand, pulseCheckOptions, runPulseCheck } from "./platform-pulse-check"
 import { readAtlasDiary } from "./pulse-check-sweep"
@@ -11467,11 +11467,15 @@ const LeadsAnalyzeCommand = cmd({
 
     // Gather first, render once: the table and --json are two views of ONE report (#191701).
     // 1. Performance metrics — also carries the period window every section is scoped to.
-    const metricsRes = await irisFetch(`/api/v1/outreach/metrics?bloq_id=${boardId}&period=${period}`)
+    const metricsRes = await irisFetch(
+      `/api/v1/outreach/metrics?bloq_id=${boardId}&period=${period}&messages_limit=${showMessages ? Math.min(Math.max(limit, 0), 100) : 0}`,
+    )
     if (!(await handleApiError(metricsRes, "Outreach metrics"))) return
     const metrics = ((await metricsRes.json()) as any).data || {}
     const s = metrics.summary || {}
     const window: AnalyzePeriod | undefined = metrics.period
+    // #191709 — count and list from the server's one DM query, when it has one.
+    const ledger = dmLedger(metrics, limit)
 
     // 2. Quota progress
     let quota: { quotas?: any; progress?: any; percent?: any } | null = null
@@ -11484,8 +11488,8 @@ const LeadsAnalyzeCommand = cmd({
     // 3. Messages sent IN THE PERIOD (#191706) — it used to be the last N ever, beside a
     // period-scoped "DMs Sent". Sample a wider set of recently-outreached leads, keep each
     // one's in-window DMs, then take the newest `limit`.
-    let messages: SentMessage[] | null = null
-    if (showMessages) {
+    let messages: SentMessage[] | null = ledger && showMessages ? ledger.messages : null
+    if (showMessages && !ledger) {
       const found: SentMessage[] = []
       const sample = Math.min(Math.max(limit * 3, 30), 100)
       const leadsRes = await irisFetch(
@@ -11541,7 +11545,7 @@ const LeadsAnalyzeCommand = cmd({
     }
 
     if (json) {
-      await writeJson(analyzeJson({ boardId, periodName: period, metrics, quota, messages }))
+      await writeJson(analyzeJson({ boardId, periodName: period, metrics, quota, messages, ledger }))
       return
     }
 
@@ -11551,11 +11555,13 @@ const LeadsAnalyzeCommand = cmd({
 
     console.log()
     console.log(bold("  Performance:"))
-    printKV("DMs Sent", String(s.total_completed ?? 0))
-    printKV("Avg/Day", String(s.avg_per_day ?? 0))
+    const headline = sentHeadline(s, ledger)
+    printKV(headline.label, String(headline.value))
+    printKV("Avg/Day", String(ledger?.avg_per_day ?? s.avg_per_day ?? 0))
     printKV("Completion Rate", `${s.completion_rate ?? 0}%`)
-    const arrow = s.trend === "up" ? "↑" : s.trend === "down" ? "↓" : "→"
-    printKV("Trend", `${arrow} ${s.percent_change ?? 0}% vs prior period`)
+    const t = dmTrend(ledger) ?? { trend: s.trend, percent: s.percent_change ?? 0 }
+    const arrow = t.trend === "up" ? "↑" : t.trend === "down" ? "↓" : "→"
+    printKV("Trend", `${arrow} ${t.percent}% vs prior period`)
     printKV("Pipeline", `$${Number(s.pipeline_value ?? 0).toLocaleString()}`)
     printKV("Outreached", `${s.outreached_lead_count ?? 0} leads`)
 

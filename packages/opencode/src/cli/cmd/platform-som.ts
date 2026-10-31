@@ -1,4 +1,5 @@
 import { registryDrift } from "./som-registries"
+import { campaignReport, eligiblePoolPath, type CampaignReport, type PoolLead } from "./som-preflight"
 import { cmd } from "./cmd"
 import { productCommand } from "./product-command"
 import * as prompts from "./clack"
@@ -1011,6 +1012,128 @@ const SomPullSessionsCommand = cmd({
   },
 })
 
+
+// ── Preflight (#191274 #191276) — read-only readiness per campaign ──
+
+const SomPreflightCommand = cmd({
+  command: "preflight [campaign]",
+  describe: "read-only: eligible leads, days of supply and lead-list/strategy fit for each SOM campaign",
+  builder: (yargs) =>
+    yargs
+      .positional("campaign", { describe: "one campaign name (default: all)", type: "string" })
+      .option("active", { describe: "only campaigns that are on", type: "boolean", default: false })
+      .option("board", { describe: "check a board that is not a SOM campaign (with --strategy)", type: "number" })
+      .option("strategy", { describe: "strategy name on --board", type: "string" })
+      .option("daily-cap", { describe: "DMs per day per campaign (default: $DAILY_DM_CAP or 40; LinkedIn 25)", type: "number" })
+      .option("min-days", { describe: "warn below this many days of supply", type: "number", default: 7 })
+      .option("scan", { describe: "max eligible leads to read per board for the source check", type: "number", default: 10000 })
+      .option("strict", { describe: "exit 1 when any campaign has a warning", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    let list: any[] = []
+    if (args.board) {
+      if (!args.strategy) {
+        prompts.log.error("--board needs --strategy <name>")
+        process.exitCode = 1
+        return
+      }
+      list = [{ name: `board-${args.board}`, bloq_id: args.board, strategy_name: args.strategy, ig_account: "adhoc", active: false }]
+    } else {
+      const resp = await irisFetch("/api/v1/som/campaigns", {}, RAICHU)
+      if (!(await handleApiError(resp, "fetch campaigns"))) return
+      const body = (await resp.json()) as any
+      const got = body?.data?.campaigns ?? body?.data ?? []
+      list = Array.isArray(got) ? got : []
+      if (args.campaign) {
+        list = list.filter((c) => c.name === args.campaign)
+        if (!list.length) {
+          prompts.log.error(`Unknown campaign: ${args.campaign}`)
+          process.exitCode = 1
+          return
+        }
+      }
+      if (args.active) list = list.filter((c) => !!c.active)
+    }
+
+    const envCap = Number(process.env.DAILY_DM_CAP)
+    const pools = new Map<string, { eligible: number; leads: PoolLead[] }>()
+    const readPool = async (board: number, social: boolean) => {
+      const key = `${board}:${social}`
+      const hit = pools.get(key)
+      if (hit) return hit
+      const perPage = 500
+      const leads: PoolLead[] = []
+      let eligible = 0
+      for (let page = 1; leads.length < args.scan; page++) {
+        const r = await irisFetch(eligiblePoolPath(board, { social, perPage, page }), {}, RAICHU)
+        if (!r.ok) break
+        const d = (await r.json()) as any
+        const rows: any[] = d?.data?.data ?? d?.data ?? []
+        if (page === 1) eligible = Number(d?.total ?? d?.data?.total ?? rows.length) || 0
+        leads.push(...rows.slice(0, args.scan - leads.length))
+        const last = Number(d?.last_page ?? d?.data?.last_page ?? page)
+        if (!rows.length || page >= last) break
+      }
+      const out = { eligible, leads }
+      pools.set(key, out)
+      return out
+    }
+
+    const reports: CampaignReport[] = []
+    for (const c of list) {
+      const board = Number(c.bloq_id)
+      const linkedin = !c.ig_account
+      const pool = await readPool(board, !linkedin)
+      const strategy = await fetchStrategyByName(board, c.strategy_name || "")
+      reports.push(
+        campaignReport({
+          campaign: c.name,
+          active: !!c.active,
+          board,
+          strategyName: c.strategy_name || "",
+          strategy: strategy as any,
+          audienceNote: c.metadata?.audience ?? null,
+          eligible: pool.eligible,
+          leads: pool.leads,
+          dailyCap: args["daily-cap"] ?? (linkedin ? 25 : envCap > 0 ? envCap : 40),
+          minDays: args["min-days"],
+        }),
+      )
+    }
+
+    const warned = reports.filter((r) => r.warnings.length).length
+    if (args.strict && warned) process.exitCode = 1
+    if (args.json) {
+      await writeJson({ campaigns: reports, warned })
+      return
+    }
+
+    console.log("")
+    console.log(bold("SOM — Preflight (read-only)"))
+    console.log(dim("  Eligible = never-contacted leads with a social handle, the pool a first-contact batch draws from."))
+    console.log("")
+    for (const r of reports) {
+      const mark = r.warnings.length ? `${UI.Style.TEXT_WARNING}!${UI.Style.TEXT_NORMAL}` : success("✓")
+      console.log(`${mark} ${bold(r.campaign)} ${dim(`board #${r.board} · ${r.active ? "on" : "off"} · ${r.strategy || "(no strategy)"}`)}`)
+      const days = r.days_of_supply === null ? "" : ` · ${r.days_of_supply} days at ${r.daily_cap}/day`
+      console.log(`    Eligible: ${r.eligible.toLocaleString()}${days}`)
+      if (r.matching_eligible !== null)
+        console.log(`    Matching the strategy: ${r.matching_complete ? "" : "≥"}${r.matching_eligible.toLocaleString()} · ${r.matching_days_of_supply} days at ${r.daily_cap}/day`)
+      console.log(`    Audience: ${r.audience} — ${r.audience_reason}`)
+      if (r.scanned) {
+        const posts = r.top_posts.slice(0, 3).map((p) => `/p/${p.post} ${p.count}`)
+        if (r.no_source_post) posts.push(`no post ${r.no_source_post}`)
+        console.log(dim(`    Sources (${r.scanned.toLocaleString()} scanned): ${posts.join(" · ")}`))
+        if (r.top_comments.length) console.log(dim(`    Comments: ${r.top_comments.slice(0, 3).map((k) => `"${k.comment}" ${k.count}`).join(" · ")}`))
+      }
+      for (const w of r.warnings) console.log(`    ${UI.Style.TEXT_WARNING}⚠ ${w}${UI.Style.TEXT_NORMAL}`)
+      console.log("")
+    }
+    console.log(dim(`  ${warned} of ${reports.length} campaign(s) with warnings. Nothing was changed.`))
+  },
+})
+
 // ── Parent command ──
 
 export const PlatformSomCommand = productCommand({
@@ -1026,6 +1149,7 @@ export const PlatformSomCommand = productCommand({
       .command(SomEditCommand)
       .command(SomToggleCommand)
       .command(SomStatusCommand)
+      .command(SomPreflightCommand)
       .command(SomHelpCommand)
       .command(SomLedgerCommand)
       .command(SomRetryCommand)
