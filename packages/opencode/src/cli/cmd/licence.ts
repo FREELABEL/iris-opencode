@@ -306,6 +306,8 @@ export const LinkCmd = cmd({
 // #191943 — one command to keep a licence going. Seats and the people on them are untouched.
 export const RenewCmd = cmd({
   command: "renew <key>",
+  // #191970: same operation, same audit event ("renewed"), same refusals. One route, two words.
+  aliases: ["extend"],
   describe: "extend a licence's end date, keeping its seats and holders (operator only)",
   builder: (y: any) =>
     y

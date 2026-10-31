@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { AllowCmd, ClaimCmd, IssueCmd, LinkCmd, ReleaseCmd, RevokeCmd } from "./licence"
+import yargs from "yargs"
+import { AllowCmd, ClaimCmd, IssueCmd, LicenceCommand, LinkCmd, ReleaseCmd, RenewCmd, RevokeCmd } from "./licence"
 
 /**
  * #191947: --days 0 was dropped as falsy, so the server applied its default and handed back a
@@ -124,5 +125,41 @@ describe("licence release and allow", () => {
     await run(AllowCmd, { key: "IRIS-AAAA-BBBB-CCCC", emails: ["a@x.test", "b@x.test"] })
     expect(requests[0].url).toEndWith("/api/v1/licences/IRIS-AAAA-BBBB-CCCC/allow")
     expect(requests[0].body).toEqual({ emails: ["a@x.test", "b@x.test"] })
+  })
+})
+
+describe("licence extend (#191970)", () => {
+  const parse = (argv: string[]) =>
+    yargs(argv)
+      .command({ ...(LicenceCommand as any) })
+      .demandCommand()
+      .exitProcess(false)
+      .fail((msg: string, err: Error) => {
+        throw err ?? new Error(msg)
+      })
+      .parseAsync()
+
+  test("reaches the renew route with the days, through the real command tree", async () => {
+    respondWith(200, { data: { key: "IRIS-AAAA-BBBB-CCCC", expires_at: "2027-01-01T00:00:00Z" } })
+    await parse(["licence", "extend", "IRIS-AAAA-BBBB-CCCC", "--days", "30"])
+    expect(requests).toHaveLength(1)
+    expect(requests[0].url).toEndWith("/IRIS-AAAA-BBBB-CCCC/renew")
+    expect(requests[0].body).toEqual({ days: 30 })
+  })
+
+  test("a server refusal is still a failure, as it is for renew", async () => {
+    respondWith(422, { error: "This licence follows its Stripe subscription, which sets when it ends." })
+    await parse(["licence", "extend", "IRIS-AAAA-BBBB-CCCC", "--days", "30"])
+    expect(process.exitCode).toBe(1)
+  })
+
+  test("--days is required", async () => {
+    respondWith(200, {})
+    await expect((async () => parse(["licence", "extend", "IRIS-AAAA-BBBB-CCCC"]))()).rejects.toThrow(/days/)
+    expect(requests).toHaveLength(0)
+  })
+
+  test("is declared on the shared command, so `iris reachr licence extend` gets it too", () => {
+    expect((RenewCmd as any).aliases).toContain("extend")
   })
 })
