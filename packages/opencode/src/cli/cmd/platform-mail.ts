@@ -560,6 +560,28 @@ function printPlan(plan: LeadPlan) {
 }
 
 /**
+ * Does this send need the composed path (bridge or Gmail, logged by `sendAndLog`) rather than the
+ * comms router? True for anything the router cannot carry. Either way the send is recorded: the
+ * router writes its own comm row, the composed path writes one per lead (#184795 — --from, --cc and
+ * --attachment once took a third, unlogged, "direct via the bridge" branch).
+ */
+export function needsComposedSend(a: ComposedArgs): boolean {
+  return Boolean(
+    a.to.length !== 1 ||
+      a.cc.length ||
+      a.bcc.length ||
+      a.replyTo ||
+      a.from ||
+      a.attachments.length ||
+      a.draft ||
+      a.via !== "apple_mail" ||
+      a.dryRun ||
+      a.json ||
+      a.leads.length > 1,
+  )
+}
+
+/**
  * The composed path: build the message, decide every lead, send, book. Used for anything the comms
  * router cannot carry — several To, CC/BCC, a reply, --from, attachments, a draft, the Gmail route.
  */
@@ -633,7 +655,7 @@ export async function runComposedSend(a: ComposedArgs): Promise<void> {
 
   let transport: Transport
   if (a.via === "gmail") {
-    transport = gmailTransport(gmailExec)
+    transport = gmailTransport(gmailExec, () => lastGmailAccount()?.account)
   } else {
     const bridge = await probeBridge()
     if (!bridge.ok) return fail(bridge.message)
@@ -727,9 +749,7 @@ const MailSendCommand = cmd({
     // Anything the comms router cannot carry takes the composed path, which sends through the
     // bridge (or Gmail) and books every lead itself. Silently dropping a field would be worse
     // than not routing: it would send a different email than the operator asked for.
-    const composed =
-      a.to.length !== 1 || a.cc.length || a.bcc.length || a.replyTo || a.from || a.attachments.length || a.draft || a.via !== "apple_mail" || a.dryRun || a.json || a.leads.length > 1
-    if (composed) return runComposedSend(a)
+    if (needsComposedSend(a)) return runComposedSend(a)
 
     // ── The one-To path: through the comms router (CR-8), exactly as before. ──
     const toAddr = a.to[0]
@@ -907,7 +927,7 @@ const MailAuditCommand = cmd({
         failed++
         continue
       }
-      const r = await logComm({ leadId: target, channel: e.channel, subject: e.subject, message: e.message, sentAt: e.at })
+      const r = await logComm({ leadId: target, channel: e.channel, subject: e.subject, message: e.message, sentAt: e.at, payload: e.payload })
       if (r.ok) {
         prompts.log.info(`  ✓ ${e.to} → lead #${target}${r.commId ? ` as comm #${r.commId}` : ""}`)
         done.push(e.at)
