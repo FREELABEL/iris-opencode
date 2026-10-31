@@ -231,6 +231,12 @@
       "purpose": "Connect a machine to the IRIS Hive and dispatch a distributed task."
     },
     {
+      "src": "how-to/hive-inventory.md",
+      "dest": "how-to/hive-inventory.md",
+      "managed": true,
+      "purpose": "See what your own machines can run before choosing where work goes."
+    },
+    {
       "src": "how-to/hive-tailscale.md",
       "dest": "how-to/hive-tailscale.md",
       "managed": true,
