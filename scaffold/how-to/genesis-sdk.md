@@ -78,12 +78,12 @@ visitor is the normal case, not an error.
 - **No authorization decisions.** It asks; the server answers. A permission check written
   in page JavaScript is decoration over a server rule, and if the rule is missing the
   decoration is a hole.
-- **No Atlas dataset reads — yet.** That needs a `bindings[]` block on the page resolved by
-  `PageDatasetController`, so the bespoke lane inherits the existing authz model
-  (owner from the page, scope from the gate, PHI default-deny). **Do not build a
-  `/atlas/datasets/{slug}` proxy** — the component lane deliberately addresses data by
-  *binding id*, never by dataset slug, so a visitor cannot pivot tenants by editing a URL.
-  A slug proxy throws that property away. Tracked as SDK-2 in bloq 503.
+- **No dataset reads by slug.** Atlas reads DO work (since 2026-09-15, SDK 1.0.4): the page
+  declares `json_content.bindings` and reads `iris.data.rows(name)`. See
+  `iris how-to view genesis-html-page-live-data`. **Do not build a `/atlas/datasets/{slug}`
+  proxy.** Data is addressed by *binding id*, never by dataset slug, so a visitor can't
+  switch to another tenant's data by editing a URL. (This bullet used to say reads were
+  "not built yet, SDK-2". That stopped being true when page-level bindings shipped.)
 
 ## Related
 

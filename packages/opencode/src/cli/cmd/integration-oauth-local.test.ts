@@ -5,11 +5,18 @@ import {
   awaitLoopbackCode,
   buildAuthorizeUrl,
   exchangeCode,
+  buildSavePayload,
   generateState,
   loopbackRedirectUri,
+  parsePastedCallback,
+  persistTokens,
+  providerRedirectUri,
+  resolveScopes,
+  type StoreTarget,
 } from "./integration-oauth-local"
 
 const clio = LOCAL_OAUTH_PROVIDERS.clio!
+const linkedin = LOCAL_OAUTH_PROVIDERS.linkedin!
 
 describe("generateState", () => {
   test("is long enough to be a real CSRF guard", () => {
@@ -198,5 +205,166 @@ describe("awaitLoopbackCode", () => {
     await expect(
       awaitLoopbackCode({ provider: clio, port: p, state: generateState(), timeoutMs: 50 }),
     ).rejects.toThrow(/Timed out/)
+  })
+})
+
+describe("linkedin (native, 2026-09-29)", () => {
+  test("is a CLI-native provider with LinkedIn's own OAuth endpoints", () => {
+    expect(linkedin).toBeDefined()
+    expect(linkedin.authorizeUrl).toBe("https://www.linkedin.com/oauth/v2/authorization")
+    expect(linkedin.tokenUrl).toBe("https://www.linkedin.com/oauth/v2/accessToken")
+    // LinkedIn has no out-of-band page; paste mode reuses the loopback redirect.
+    expect(linkedin.oobRedirectUri).toBeUndefined()
+  })
+
+  test("redirects to the FIXED localhost:8765 the user registers once", () => {
+    expect(providerRedirectUri(linkedin)).toBe("http://localhost:8765/callback")
+    expect(providerRedirectUri(linkedin, 9001)).toBe("http://localhost:9001/callback")
+    // Clio keeps its 127.0.0.1:8787 default.
+    expect(providerRedirectUri(clio)).toBe("http://127.0.0.1:8787/callback")
+  })
+
+  const authorize = (scopes?: string[]) =>
+    buildAuthorizeUrl(linkedin, {
+      clientId: "li-client",
+      redirectUri: providerRedirectUri(linkedin),
+      state: "s-li",
+      scopes,
+    })
+
+  test("carries the member scopes space-separated (%20) and the fixed-port redirect", () => {
+    const raw = authorize(resolveScopes(linkedin))
+    expect(raw).toContain("scope=openid%20profile%20email%20w_member_social")
+    const p = new URL(raw).searchParams
+    expect(p.get("scope")).toBe("openid profile email w_member_social")
+    expect(p.get("redirect_uri")).toBe("http://localhost:8765/callback")
+    expect(p.get("client_id")).toBe("li-client")
+    expect(p.get("response_type")).toBe("code")
+    expect(p.get("state")).toBe("s-li")
+  })
+
+  test("requests organization scopes ONLY when the org set is asked for", () => {
+    const member = new URL(authorize(resolveScopes(linkedin))).searchParams.get("scope")!
+    expect(member).not.toContain("organization")
+
+    const org = new URL(authorize(resolveScopes(linkedin, "org"))).searchParams.get("scope")!.split(" ")
+    expect(org).toEqual(expect.arrayContaining(["w_organization_social", "r_organization_social", "rw_organization_admin"]))
+    // The org set still signs the member in and lets them post as themselves.
+    expect(org).toEqual(expect.arrayContaining(["openid", "profile", "email", "w_member_social"]))
+  })
+
+  test("an unknown scope set is refused, naming the real ones", () => {
+    expect(() => resolveScopes(linkedin, "admin")).toThrow(/default, org/)
+    expect(resolveScopes(clio)).toBeUndefined()
+  })
+
+  test("Clio's authorize URL gains no scope param", () => {
+    const u = buildAuthorizeUrl(clio, { clientId: "c", redirectUri: "http://127.0.0.1:8787/callback", state: "s" })
+    expect(new URL(u).searchParams.has("scope")).toBe(false)
+  })
+
+  test("token exchange POSTs form-encoded client_id/secret to LinkedIn's token URL", async () => {
+    const originalFetch = globalThis.fetch
+    let sentUrl = ""
+    let sent: RequestInit = {}
+    globalThis.fetch = (async (url: string, init: RequestInit) => {
+      sentUrl = url
+      sent = init
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ access_token: "li-at", expires_in: 5183999, scope: "email,openid,profile,w_member_social" }),
+      } as unknown as Response
+    }) as unknown as typeof fetch
+    try {
+      const tokens = await exchangeCode(linkedin, {
+        clientId: "li-client",
+        clientSecret: "li-secret",
+        code: "li-code",
+        redirectUri: "http://localhost:8765/callback",
+      })
+      expect(tokens.access_token).toBe("li-at")
+      expect(sentUrl).toBe("https://www.linkedin.com/oauth/v2/accessToken")
+      expect(sent.method).toBe("POST")
+      expect((sent.headers as Record<string, string>)["Content-Type"]).toBe("application/x-www-form-urlencoded")
+      const body = new URLSearchParams(String(sent.body))
+      expect(body.get("grant_type")).toBe("authorization_code")
+      expect(body.get("code")).toBe("li-code")
+      expect(body.get("client_id")).toBe("li-client")
+      expect(body.get("client_secret")).toBe("li-secret")
+      expect(body.get("redirect_uri")).toBe("http://localhost:8765/callback")
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("stores the LinkedIn token set on fl-iris-api, where the native service reads it", async () => {
+    const calls: { path: string; init: RequestInit; target: StoreTarget }[] = []
+    const send = async (path: string, init: RequestInit, target: StoreTarget) => {
+      calls.push({ path, init, target })
+      return new Response(JSON.stringify({ success: true, data: { id: 1 } }), { status: 201 })
+    }
+    const now = Date.UTC(2026, 8, 29, 12, 0, 0)
+    const payload = buildSavePayload(
+      linkedin,
+      { access_token: "li-at", expires_in: 5184000, scope: "openid profile email w_member_social" },
+      { clientId: "li-client", clientSecret: "li-secret", now },
+    )
+
+    const res = await persistTokens(send, linkedin, 5269, payload)
+
+    expect(res.status).toBe(201)
+    expect(calls).toHaveLength(1)
+    expect(calls[0].target).toBe("iris")
+    expect(calls[0].path).toBe("/api/v1/users/5269/integrations")
+    expect(calls[0].init.method).toBe("POST")
+    const body = JSON.parse(String(calls[0].init.body))
+    expect(body.type).toBe("linkedin")
+    expect(body.status).toBe("active")
+    expect(body.credentials).toEqual({
+      access_token: "li-at",
+      refresh_token: null,
+      token_type: "Bearer",
+      expires_in: 5184000,
+      expires_at: new Date(now + 5184000 * 1000).toISOString(),
+      // Marks a native sign-in: the server skips Composio provisioning and clears
+      // is_composio_backed on a row Composio used to own.
+      provider: "native",
+      scope: "openid profile email w_member_social",
+    })
+    // No refresh token → no reason to hold the app secret anywhere.
+    expect(body.credentials.client_secret).toBeUndefined()
+  })
+
+  test("stores the app credentials with a refresh token, so the server can refresh", () => {
+    const body = buildSavePayload(
+      linkedin,
+      { access_token: "li-at", refresh_token: "li-rt", expires_in: 5184000, refresh_token_expires_in: 31536000 },
+      { clientId: "li-client", clientSecret: "li-secret" },
+    ) as { credentials: Record<string, unknown> }
+    expect(body.credentials.refresh_token).toBe("li-rt")
+    expect(body.credentials.client_id).toBe("li-client")
+    expect(body.credentials.client_secret).toBe("li-secret")
+    expect(body.credentials.refresh_token_expires_in).toBe(31536000)
+  })
+
+  test("Clio still stores on fl-api, unmarked, without app credentials", async () => {
+    let target: StoreTarget | undefined
+    const body = buildSavePayload(clio, { access_token: "c", refresh_token: "r" }, { clientId: "i", clientSecret: "s" }) as {
+      credentials: Record<string, unknown>
+    }
+    await persistTokens(async (_p, _i, t) => ((target = t), new Response("{}")), clio, 1, body)
+    expect(target).toBe("fl")
+    expect(body.credentials.provider).toBeUndefined()
+    expect(body.credentials.client_secret).toBeUndefined()
+  })
+
+  test("paste mode accepts the landed redirect URL, checks state, and extracts the code", () => {
+    expect(parsePastedCallback("http://localhost:8765/callback?code=abc123&state=s-li", "s-li")).toBe("abc123")
+    expect(parsePastedCallback("  bare-code-value  ", "s-li")).toBe("bare-code-value")
+    expect(() => parsePastedCallback("http://localhost:8765/callback?code=abc&state=other", "s-li")).toThrow(/State mismatch/)
+    expect(() =>
+      parsePastedCallback("http://localhost:8765/callback?error=user_cancelled_authorize&state=s-li", "s-li"),
+    ).toThrow(/user_cancelled_authorize/)
   })
 })

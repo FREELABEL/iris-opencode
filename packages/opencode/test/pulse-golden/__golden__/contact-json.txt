@@ -1,0 +1,143 @@
+== exit 0
+== stdout
+{
+  "lead": {
+    "id": 7001,
+    "name": "Dana Example",
+    "email": "dana@example.com",
+    "phone": "+15550100",
+    "status": "Active",
+    "company": "Example Co",
+    "contact_info": {
+      "emails": [
+        "dana.alt@example.com"
+      ]
+    }
+  },
+  "dealHealth": null,
+  "stripeData": null,
+  "tasks": [
+    {
+      "id": 1,
+      "title": "Send the revised quote",
+      "status": "pending",
+      "due_date": "2026-09-17T12:00:00.000Z"
+    }
+  ],
+  "score": {
+    "lead_id": 7001,
+    "score": null,
+    "is_hot_lead": false,
+    "score_updated_at": null,
+    "source": "stored"
+  },
+  "activities": [
+    {
+      "id": 1,
+      "type": "note",
+      "content": "Call went well",
+      "created_at": "2026-09-11T12:00:00.000Z"
+    }
+  ],
+  "outreachSteps": [],
+  "workflows": [],
+  "productUsage": null,
+  "channels": [
+    {
+      "name": "iMessage",
+      "messages": [
+        {
+          "text": "See you Thursday",
+          "ts": "2026-09-14T12:00:00.000Z",
+          "from_me": false
+        },
+        {
+          "text": "Sent the quote",
+          "ts": "2026-09-13T12:00:00.000Z",
+          "from_me": true
+        }
+      ]
+    },
+    {
+      "name": "Meetings",
+      "messages": [
+        {
+          "summary": "Kickoff with dana@example.com",
+          "date": "2026-09-20T12:00:00.000Z",
+          "status": "upcoming",
+          "location": ""
+        },
+        {
+          "summary": "Dana Example / quote review",
+          "date": "2026-09-11T12:00:00.000Z",
+          "status": "past",
+          "location": "Zoom"
+        }
+      ]
+    },
+    {
+      "name": "iMessage Group (Launch crew)",
+      "messages": [
+        {
+          "text": "Launch is Friday",
+          "ts": "2026-09-12T12:00:00.000Z",
+          "from_me": false
+        }
+      ]
+    },
+    {
+      "name": "Apple Mail",
+      "messages": [
+        {
+          "subject": "Invoice question",
+          "date": "2026-09-10T12:00:00.000Z",
+          "from": "dana@example.com"
+        },
+        {
+          "subject": "Photos",
+          "date": "2026-09-04T12:00:00.000Z",
+          "from": "dana.alt@example.com"
+        }
+      ]
+    },
+    {
+      "name": "Gmail",
+      "label": "Sent by IRIS",
+      "messages": [
+        {
+          "subject": "Quote v2",
+          "from": "dana@example.com",
+          "date": "2026-09-13T12:00:00.000Z",
+          "message_count": 3,
+          "sent_count": 1,
+          "thread_id": "t1"
+        },
+        {
+          "subject": "Kickoff notes",
+          "from": "me@example.org",
+          "date": "2026-09-06T12:00:00.000Z",
+          "message_count": 2,
+          "sent_count": 2,
+          "thread_id": "t2"
+        }
+      ]
+    }
+  ],
+  "saved": false,
+  "recap": {
+    "requested": false,
+    "state": "not_attempted",
+    "recipient": null,
+    "detail": null
+  }
+}
+
+== stderr
+[0m
+◈  Lead #7001 — Pulse Check
+Loading lead…
+[1mDana Example[0m
+Scanning channels…
+9 message(s) across 5 channel(s)
+Done
+

@@ -8,6 +8,7 @@ import { irisFetch, requireAuth, handleApiError, printDivider, dim, bold, succes
 //   POST   /api/v1/user/bloqs/{bloqId}/share              { user_id, permission }
 //   PUT    /api/v1/user/bloqs/{bloqId}/share/{userId}     { permission }
 //   DELETE /api/v1/user/bloqs/{bloqId}/share/{userId}
+//   POST   /api/v1/user/bloqs/{bloqId}/transfer           { user_id, keep_as } (#189715)
 //   POST   /api/v1/user/bloqs/{bloqId}/invite             { email, name?, permission, send_email }
 
 const ListMembersCommand = cmd({
@@ -188,6 +189,38 @@ const RemoveMemberCommand = cmd({
   },
 })
 
+// #189715 — make another user the OWNER of a board (not just a member with permission=owner).
+// Only the current owner can do this; by default they keep owner-level access as a member.
+const TransferOwnerCommand = cmd({
+  command: "transfer <bloqId> <userId>",
+  aliases: ["give", "chown"],
+  describe: "transfer ownership of a bloq to another user (you stay on it as --keep-as)",
+  builder: (yargs) =>
+    yargs
+      .positional("bloqId", { type: "number", demandOption: true })
+      .positional("userId", { type: "number", demandOption: true, describe: "user who becomes the owner" })
+      .option("keep-as", {
+        type: "string",
+        default: "owner",
+        choices: ["owner", "editor", "viewer", "none"],
+        describe: "your access after the transfer (none = leave the board)",
+      }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Transfer bloq #${args.bloqId} → user #${args.userId}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    const res = await irisFetch(`/api/v1/user/bloqs/${args.bloqId}/transfer`, {
+      method: "POST",
+      body: JSON.stringify({ user_id: args.userId, keep_as: args["keep-as"] }),
+    })
+    const ok = await handleApiError(res, "Transfer ownership")
+    if (!ok) { prompts.outro("Done"); return }
+    const data = ((await res.json().catch(() => ({}))) as any)?.data ?? {}
+    prompts.log.info(`Owner: user #${data.owner_id ?? args.userId} · you: ${data.previous_owner_kept_as ?? args["keep-as"]}`)
+    prompts.outro(`${success("✓")} Ownership transferred`)
+  },
+})
+
 export const PlatformBloqMembersCommand = cmd({
   command: "bloq-members",
   aliases: ["members", "team", "share", "invite"],
@@ -199,6 +232,7 @@ export const PlatformBloqMembersCommand = cmd({
       .command(InviteMemberCommand)
       .command(UpdateMemberCommand)
       .command(RemoveMemberCommand)
+      .command(TransferOwnerCommand)
       .demandCommand(),
   async handler() {},
 })

@@ -2,7 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { dim, bold, success, highlight, printDivider, irisFetch, requireAuth, handleApiError, writeJson } from "./iris-api"
-import { resolveWalkthrough, structureWalkthrough, slugify } from "../lib/walkthrough"
+import { resolveWalkthrough, structureWalkthrough, slugify, framesFor, writeFrames, seenOnlyCount, isVideo, frameBudget, keptFrames } from "../lib/walkthrough"
 import { existsSync, mkdirSync, writeFileSync } from "fs"
 import { join, resolve } from "path"
 
@@ -22,15 +22,21 @@ import { join, resolve } from "path"
 
 export const SopDraftCommand = cmd({
   command: "draft <input>",
-  describe: "draft a human-readable SOP from a recorded walkthrough (audio or transcript)",
+  describe: "draft a human-readable SOP from a recorded walkthrough (video, audio or transcript)",
   builder: (yargs) =>
     yargs
       .positional("input", {
         type: "string",
         demandOption: true,
-        describe: "Audio file to transcribe, or a .txt/.md transcript",
+        describe: "Video or audio recording to transcribe, or a .txt/.md transcript",
       })
       .option("name", { type: "string", describe: "Override the generated file name" })
+      // Screen frames, so steps done without being said still land in the draft. Only a video
+      // has a screen; audio and transcripts ignore this.
+      .option("frames", { type: "number", default: 10, describe: "Screen frames to read from a video (0 = narration only, max 12). Frames are sent to the model" })
+      // A screenshot of a PHI system is PHI. The server also withholds frames from anyone who read
+      // PHI in the last 30 minutes; this is for the recording it cannot recognise.
+      .option("phi", { type: "boolean", default: false, describe: "The recording may show patient data: no screen frames are read, sent or saved" })
       .option("request", { type: "number", describe: "Also file it against this service request id" })
       .option("brand", { type: "number", describe: "Brand whose vocabulary to bias transcription toward" })
       .option("model", { type: "string", default: "iris/gpt-4.1-nano", describe: "Model used to structure it (nano only)" })
@@ -66,13 +72,23 @@ export const SopDraftCommand = cmd({
       return
     }
 
+    // ---- 1b. Screen --------------------------------------------------------------
+    const spf = prompts.spinner()
+    const budget = frameBudget(args.frames, args.phi)
+    if (args.phi) prompts.log.info("--phi: no screen frames are read. The transcript is still sent to the drafting model.")
+    const wantsFrames = budget > 0 && isVideo(String(args.input))
+    if (wantsFrames) spf.start("Reading the screen…")
+    const kf = framesFor(String(args.input), budget)
+    if (wantsFrames) spf.stop(kf.frames.length ? `${kf.frames.length} screen frames` : "No screen frames — narration only")
+    if (kf.note) prompts.log.warn(kf.note)
+
     // ---- 2. Structure ---------------------------------------------------------
     // Server-side, so the CLI and the CardEditor produce the same document from the same words.
     const sp2 = prompts.spinner()
     sp2.start("Writing it up…")
     let doc
     try {
-      doc = await structureWalkthrough(walk.transcript, "sop", String(args.model))
+      doc = await structureWalkthrough(walk.transcript, "sop", String(args.model), kf.frames)
       sp2.stop("Written")
     } catch (e) {
       sp2.stop("Failed", 1)
@@ -96,8 +112,8 @@ export const SopDraftCommand = cmd({
       return
     }
 
-    const markdown = doc.markdown
     mkdirSync(join(target, ".."), { recursive: true })
+    const markdown = writeFrames(keptFrames(kf.frames, doc), target, doc.markdown, `${name}-frames`)
     writeFileSync(target, markdown)
 
     // ---- 4. Optionally file it against a service request ----------------------
@@ -117,7 +133,7 @@ export const SopDraftCommand = cmd({
     }
 
     if (args.json) {
-      await writeJson({ title: doc.title, path: target, steps: stepCount, gaps, sop_id: filedAs })
+      await writeJson({ title: doc.title, path: target, steps: stepCount, gaps, sop_id: filedAs, frames: doc.frames_used ?? 0, frames_withheld: doc.frames_withheld ?? null, seen_only: seenOnlyCount(doc) })
       prompts.outro("Done")
       return
     }
@@ -126,6 +142,13 @@ export const SopDraftCommand = cmd({
     console.log(`  ${bold("Drafted:")}  ${highlight(doc.title)}  ${dim(`${stepCount} steps`)}`)
     console.log(`  ${bold("Written:")}  ${highlight(target)}`)
     if (filedAs) console.log(`  ${bold("Filed:")}    ${highlight(`SOP #${filedAs}`)} ${dim(`on request ${args.request}`)}`)
+    if (kf.frames.length && doc.frames_withheld) {
+      console.log(`  ${bold("Screens:")}  withheld — ${doc.frames_withheld}`)
+    } else if (kf.frames.length) {
+      const seen = seenOnlyCount(doc)
+      if (doc.frames_used === undefined) console.log(`  ${dim("Screens:")}  server ignored the frames — it predates frame support; drafted from narration only`)
+      else console.log(`  ${bold("Screens:")}  ${doc.frames_used} frames read${seen ? ` · ${highlight(String(seen))} step(s) seen on screen but never said — check those first` : ""}`)
+    }
     printDivider()
     console.log()
 

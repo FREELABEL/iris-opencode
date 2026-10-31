@@ -2,10 +2,13 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { confirmWiden } from "./exposure-gate"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, dim, bold, FL_API, isNonInteractive, writeJson, failNoOp} from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, dim, bold, FL_API, IRIS_API, isNonInteractive, writeJson, failNoOp} from "./iris-api"
 import * as fs from "fs"
 import * as path from "path"
 import { firstArray } from "../../util/array"
+import { DatasetHooksGroup } from "./platform-atlas-dataset-hooks"
+import { DatasetPullCommand, DatasetPushCommand, DatasetSyncCommand, DatasetStatusCommand, DatasetResolveCommand } from "./platform-atlas-dataset-sync"
+import { DRAFT_SYSTEM_PROMPT, checkFields, fieldsForCreate, normalizeDraft, parseModelJson } from "./atlas-schema-draft"
 
 // ============================================================================
 // Atlas Datasets CLI — Schema-driven generic data platform
@@ -20,6 +23,67 @@ function fmtCents(c?: number | null): string {
 }
 
 function printDivider() { console.log(dim("  " + "─".repeat(72))) }
+
+/**
+ * Every dataset read builds its query here, so a board pin cannot be added to one verb and
+ * forgotten in the next. A slug is unique per (user, bloq) — not per account — so without
+ * bloq_id a read spans every board that happens to use the name. Measured 2026-10-22
+ * (#190579): `summary` reported 2 records across boards 766 and 754, and `export` wrote
+ * both rows. `list` could be pinned; `search`, `summary`, `export` and `delete` could not.
+ */
+export function buildDatasetQuery(opts: {
+  limit?: number
+  sort?: string
+  search?: string
+  bloq?: number
+  filters?: string[]
+}): URLSearchParams {
+  const p = new URLSearchParams()
+  if (opts.limit != null) p.set("per_page", String(opts.limit))
+  if (opts.sort) p.set("sort", opts.sort)
+  if (opts.search) p.set("search", opts.search)
+  if (opts.bloq != null) p.set("bloq_id", String(opts.bloq))
+  for (const f of opts.filters ?? []) {
+    const [key, ...rest] = f.split("=")
+    if (key && rest.length) p.set(`filter[${key}]`, rest.join("="))
+  }
+  return p
+}
+
+export function buildSummaryQuery(opts: { bloq?: number; groupBy?: string; sum?: string }): URLSearchParams {
+  const p = new URLSearchParams()
+  if (opts.groupBy) p.set("group_by", opts.groupBy)
+  if (opts.sum) p.set("sum", opts.sum)
+  if (opts.bloq != null) p.set("bloq_id", String(opts.bloq))
+  return p
+}
+
+/**
+ * A schema delete is the one call that cannot be undone, so the scope is explicit in the
+ * URL: `bloq_id` for one board, `all_boards=true` for every version. With neither, the
+ * server refuses a slug that spans boards (#190580).
+ */
+export function buildSchemaDeleteQuery(opts: { cascade?: boolean; bloq?: number; allBoards?: boolean }): string {
+  const p = new URLSearchParams()
+  if (opts.cascade) p.set("cascade", "true")
+  if (opts.bloq != null) p.set("bloq_id", String(opts.bloq))
+  if (opts.allBoards) p.set("all_boards", "true")
+  const s = p.toString()
+  return s ? `?${s}` : ""
+}
+
+/**
+ * Which schema answered, when the caller did not pin a board — and how to pin the next read.
+ *
+ * `GET /atlas/schemas` returns only the latest version of each slug, so the CLI cannot count
+ * the boards a slug lives on. It can still do what `list` already does: name the resolved
+ * schema and say how to scope it. Silence here is the dangerous part of #190579 — a summary
+ * that spans two boards looks exactly like a summary of one.
+ */
+export function resolutionHint(slug: string, schemaId: number | null | undefined, bloq: number | undefined): string | null {
+  if (bloq != null || schemaId == null) return null
+  return `Resolved '${slug}' -> schema #${schemaId}. If you have this slug on more than one bloq, pin it with --bloq=<id>.`
+}
 
 // A schema's `settings` blob is not decoration — an ONBOARDING FLOW lives entirely
 // in it (`flow_type: "onboarding"` plus steps/branding/completion). Both the create
@@ -122,18 +186,28 @@ const SchemaCreateCommand = cmd({
       .option("name", { type: "string", demandOption: true, describe: "schema name" })
       .option("slug", { type: "string", describe: "url-safe slug (auto from name if omitted)" })
       .option("bloq", { type: "number", describe: "bloq ID to scope to" })
-      .option("fields", { type: "string", describe: "JSON fields definition or path to .json file" })
-      .option("settings", { type: "string", describe: "JSON settings blob or path to .json file — an onboarding flow lives here" }),
+      // nargs: 1 so yargs takes a bare `-` as the value instead of an unknown positional.
+      .option("fields", { type: "string", nargs: 1, describe: "JSON fields definition, path to .json file, or - for stdin (e.g. a `schemas draft --json`)" })
+      .option("settings", { type: "string", describe: "JSON settings blob or path to .json file — an onboarding flow lives here" })
+      .option("dry-run", { type: "boolean", default: false, describe: "check and print what would be created; write nothing" }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Create Schema")
-    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    // A dry run writes nothing and reads nothing from the server, so it needs no token (#187903):
+    // reviewing a draft must not depend on being signed in.
+    const dryRun = Boolean(args["dry-run"])
+    if (!dryRun) {
+      const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    }
 
     let fields: any = null
     if (args.fields) {
       try {
-        // Try as file path first
-        if (args.fields.endsWith(".json") && fs.existsSync(args.fields)) {
+        // `-` reads the definition from stdin, so a draft pipes straight in (#187903).
+        if (args.fields === "-") {
+          fields = JSON.parse(fs.readFileSync(0, "utf8"))
+        } else if (args.fields.endsWith(".json") && fs.existsSync(args.fields)) {
+          // Try as file path first
           fields = JSON.parse(fs.readFileSync(args.fields, "utf8"))
         } else {
           fields = JSON.parse(args.fields)
@@ -157,8 +231,9 @@ const SchemaCreateCommand = cmd({
       }
     }
 
-    // Normalize: wrap bare arrays so API receives { fields: [...] }
-    const normalizedFields = Array.isArray(fields) ? { fields } : fields
+    // Normalize: wrap bare arrays so API receives { fields: [...] }; a `schemas draft` is
+    // unwrapped to its fields so its review notes are not stored in the schema (#187903).
+    const normalizedFields = fieldsForCreate(fields)
     const settingsArg = readJsonArg(args.settings as string | undefined, "settings")
     if (!settingsArg.ok) { prompts.outro("Done"); return }
 
@@ -166,6 +241,21 @@ const SchemaCreateCommand = cmd({
     if (args.slug) body.slug = args.slug
     if (args.bloq != null) body.bloq_id = args.bloq
     if (settingsArg.value !== undefined) body.settings = settingsArg.value
+
+    if (dryRun) {
+      // The refusals fl-api would give (#185139: every field declares visibility), WITHOUT the
+      // write. Non-zero on a problem, so `draft | create --dry-run` is a usable gate in a script.
+      const problems = checkFields(normalizedFields)
+      if (problems.length) {
+        for (const p of problems) prompts.log.error(p)
+        prompts.outro("Dry run — would be refused; nothing written")
+        process.exitCode = 1
+        return
+      }
+      prompts.log.info(JSON.stringify(body, null, 2))
+      prompts.outro(`Dry run — ${normalizedFields.fields.length} field(s) OK; nothing written. Drop --dry-run to create.`)
+      return
+    }
 
     const spinner = prompts.spinner()
     spinner.start("Creating…")
@@ -183,6 +273,82 @@ const SchemaCreateCommand = cmd({
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
+  },
+})
+
+// #187903 — a prompt DRAFTS a schema; it never creates one. See atlas-schema-draft.ts for why
+// the guarantees (visibility on every field, PHI hints only raise) live outside the model.
+const SchemaDraftCommand = cmd({
+  command: "draft <sentence..>",
+  describe: "draft a typed schema from a sentence — prints it for review, creates nothing",
+  builder: (y) =>
+    y
+      .positional("sentence", { type: "string", array: true, describe: 'e.g. "patient intake with insurance"' })
+      .option("json", { type: "boolean", default: false, describe: "print the draft as JSON (pipe to `schemas create --fields - --dry-run`)" })
+      .option("model", { type: "string", default: "iris/gpt-4o-mini", describe: "IRIS model id (served through the IRIS model route)" }),
+  async handler(args) {
+    const sentence = ((args.sentence as unknown as string[]) ?? []).join(" ").trim()
+    const json = Boolean(args.json)
+    if (!sentence) failNoOp("draft", 'describe the dataset, e.g. iris datasets schemas draft "patient intake with insurance"')
+    if (!json) { UI.empty(); prompts.intro("◈  Draft Schema") }
+    const token = await requireAuth(); if (!token) { if (!json) prompts.outro("Done"); return }
+
+    const spinner = json ? null : prompts.spinner()
+    spinner?.start("Drafting…")
+    let raw: unknown = null
+    try {
+      // THE IRIS MODEL ROUTE, never a provider: it is where the PHI egress guard and metering
+      // live. The sentence is a description, not data, but a CLI that skips the route for
+      // "harmless" prompts is how the guard stops covering the harmful ones.
+      const res = await irisFetch("/api/v6/openai/chat/completions", {
+        method: "POST",
+        body: JSON.stringify({
+          model: args.model,
+          temperature: 0.2,
+          max_tokens: 2000,
+          response_format: { type: "json_object" },
+          messages: [
+            { role: "system", content: DRAFT_SYSTEM_PROMPT },
+            { role: "user", content: sentence },
+          ],
+        }),
+      }, IRIS_API)
+      const ok = await handleApiError(res, "Draft schema")
+      if (!ok) { spinner?.stop("Failed", 1); process.exitCode = 1; return }
+      const content: string = ((await res.json()) as any)?.choices?.[0]?.message?.content ?? ""
+      raw = parseModelJson(content)
+    } catch (err) {
+      spinner?.stop("Error", 1)
+      const msg = err instanceof Error ? err.message : String(err)
+      if (json) await writeJson({ success: false, error: msg })
+      else prompts.log.error(msg)
+      process.exitCode = 1
+      return
+    }
+
+    const draft = normalizeDraft(raw, sentence)
+    if (!draft.fields.length) {
+      // An empty draft is a failure to draft, not a schema with no fields — say so, non-zero.
+      spinner?.stop("No usable fields", 1)
+      if (json) await writeJson({ success: false, error: "The model returned no usable fields", draft })
+      else prompts.log.error("The model returned no usable fields — try a more specific sentence.")
+      process.exitCode = 1
+      return
+    }
+
+    if (json) { await writeJson(draft); return }
+    spinner?.stop(`Drafted ${bold(draft.name)} — ${draft.fields.length} field(s), not created`)
+    printDivider()
+    for (const f of draft.fields) {
+      const why = draft.review.find((r) => r.key === f.key)?.why ?? ""
+      const vis = f.visibility === "phi" ? bold("phi") : f.visibility
+      console.log(`  ${f.key.padEnd(28)} ${f.type.padEnd(9)} ${String(vis).padEnd(8)} ${dim(why)}`)
+    }
+    printDivider()
+    prompts.outro(
+      `Review, then create explicitly:\n  iris datasets schemas draft ${JSON.stringify(sentence)} --json | ` +
+      `iris datasets schemas create --name ${JSON.stringify(draft.name)} --fields - --dry-run`,
+    )
   },
 })
 
@@ -283,10 +449,12 @@ const SchemaUpdateCommand = cmd({
 const SchemaDeleteCommand = cmd({
   command: "delete <slug>",
   aliases: ["rm", "destroy"],
-  describe: "delete a dataset schema (all versions)",
+  describe: "delete a dataset schema — one board, or every version with --all-boards",
   builder: (y) =>
     y
       .positional("slug", { type: "string", demandOption: true })
+      .option("bloq", { type: "number", describe: "delete only this board's version of the slug" })
+      .option("all-boards", { type: "boolean", default: false, describe: "delete every board's version of a shared slug" })
       .option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false })
       .option("cascade", { describe: "also delete the dataset's records", type: "boolean", default: false })
       .option("json", { type: "boolean", default: false }),
@@ -311,7 +479,7 @@ const SchemaDeleteCommand = cmd({
     }
     if (!confirmed || prompts.isCancel(confirmed)) { if (!isJson) prompts.outro("Cancelled"); return }
 
-    const query = args.cascade ? "?cascade=true" : ""
+    const query = buildSchemaDeleteQuery({ cascade: args.cascade, bloq: args.bloq, allBoards: args["all-boards"] })
     const res = await irisFetch(`/api/v1/atlas/schemas/${args.slug}${query}`, { method: "DELETE" })
     if (!(await handleApiError(res, "Delete schema"))) {
       process.exitCode = 1
@@ -328,7 +496,7 @@ const SchemasGroup = cmd({
   command: "schemas",
   aliases: ["schema"],
   describe: "manage dataset schemas",
-  builder: (y) => y.command(SchemaListCommand).command(SchemaShowCommand).command(SchemaCreateCommand).command(SchemaUpdateCommand).command(SchemaDeleteCommand).demandCommand(),
+  builder: (y) => y.command(SchemaListCommand).command(SchemaShowCommand).command(SchemaCreateCommand).command(SchemaDraftCommand).command(SchemaUpdateCommand).command(SchemaDeleteCommand).demandCommand(),
   async handler() {},
 })
 
@@ -366,14 +534,14 @@ const RecordsListCommand = cmd({
     const spinner = prompts.spinner()
     spinner.start("Loading…")
     try {
-      const p = new URLSearchParams({ per_page: String(args.limit), sort: args.sort })
-      if (args.search) p.set("search", args.search)
-      if (args.bloq != null) p.set("bloq_id", String(args.bloq))
       // Parse --filter stage_name=Negotiating into filter[stage_name]=Negotiating
-      for (const f of args.filter ?? []) {
-        const [key, ...rest] = f.split("=")
-        if (key && rest.length) p.set(`filter[${key}]`, rest.join("="))
-      }
+      const p = buildDatasetQuery({
+        limit: args.limit,
+        sort: args.sort,
+        search: args.search,
+        bloq: args.bloq,
+        filters: args.filter,
+      })
 
       const PER_PAGE_CAP = 200
       if (args.all) p.set("per_page", String(PER_PAGE_CAP))
@@ -454,21 +622,23 @@ const RecordsSearchCommand = cmd({
     y
       .positional("query", { type: "string", demandOption: true })
       .option("schema", { type: "string", demandOption: true, alias: "s", describe: "schema slug" })
+      .option("bloq", { type: "number", describe: "pin the read to one board when the slug is shared across bloqs" })
       .option("where", { type: "string", alias: "filter", describe: "field=value filter (repeatable)", array: true })
       .option("limit", { type: "number", default: 25 })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
-    prompts.intro(`◈  Search: ${args.schema} · "${args.query}"`)
+    prompts.intro(`◈  Search: ${args.schema} · "${args.query}"${args.bloq != null ? ` (bloq ${args.bloq})` : ""}`)
     const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
     const spinner = prompts.spinner()
     spinner.start("Searching…")
     try {
-      const p = new URLSearchParams({ per_page: String(args.limit), search: String(args.query) })
-      for (const f of (args.where as string[] | undefined) ?? []) {
-        const [key, ...rest] = f.split("=")
-        if (key && rest.length) p.set(`filter[${key}]`, rest.join("="))
-      }
+      const p = buildDatasetQuery({
+        limit: args.limit,
+        search: String(args.query),
+        bloq: args.bloq,
+        filters: args.where as string[] | undefined,
+      })
       const res = await irisFetch(`/api/v1/atlas/datasets/${args.schema}?${p}`)
       const ok = await handleApiError(res, "Search records"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       const body = (await res.json()) as any
@@ -547,17 +717,16 @@ const RecordsSummaryCommand = cmd({
   builder: (y) =>
     y
       .option("schema", { type: "string", demandOption: true, alias: "s" })
+      .option("bloq", { type: "number", describe: "pin the summary to one board when the slug is shared across bloqs" })
       .option("group-by", { type: "string", describe: "field to group by" })
       .option("sum", { type: "string", describe: "money field to sum" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
-    prompts.intro(`◈  Dataset Summary: ${args.schema}`)
+    prompts.intro(`◈  Dataset Summary: ${args.schema}${args.bloq != null ? ` (bloq ${args.bloq})` : ""}`)
     const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
 
-    const p = new URLSearchParams()
-    if (args["group-by"]) p.set("group_by", args["group-by"])
-    if (args.sum) p.set("sum", args.sum)
+    const p = buildSummaryQuery({ bloq: args.bloq, groupBy: args["group-by"], sum: args.sum })
 
     const res = await irisFetch(`/api/v1/atlas/datasets/${args.schema}/summary?${p}`)
     const ok = await handleApiError(res, "Summary"); if (!ok) { prompts.outro("Done"); return }
@@ -565,6 +734,9 @@ const RecordsSummaryCommand = cmd({
     const data = body?.data
 
     if (args.json) { await writeJson(data); prompts.outro("Done"); return }
+
+    const hint = resolutionHint(args.schema, data?.schema?.id, args.bloq)
+    if (hint) prompts.log.info(dim(hint))
 
     printDivider()
     console.log(`  ${bold("Total Records:")} ${data?.total_records ?? 0}`)
@@ -586,9 +758,9 @@ const RecordsSummaryCommand = cmd({
 // records plus the dataset's true total so callers can warn loudly when a capped fetch
 // is partial — audit and export used to silently process only the first 200 rows and
 // present the result as complete, dropping ~91% of a 2143-row dataset (#137273).
-async function fetchDatasetRecords(
+export async function fetchDatasetRecords(
   schema: string,
-  opts: { limit: number; all: boolean },
+  opts: { limit: number; all: boolean; bloq?: number },
 ): Promise<{ records: any[]; total: number; truncated: boolean }> {
   const perPage = opts.all ? 200 : opts.limit
   let page = 1
@@ -596,6 +768,9 @@ async function fetchDatasetRecords(
   let total = 0
   while (true) {
     const p = new URLSearchParams({ per_page: String(perPage), page: String(page) })
+    // Every page carries the pin. A board-scoped export that pins only its first request
+    // would still pull the other board's rows on page 2 (#190579).
+    if (opts.bloq != null) p.set("bloq_id", String(opts.bloq))
     const res = await irisFetch(`/api/v1/atlas/datasets/${schema}?${p}`)
     const ok = await handleApiError(res, "List records")
     if (!ok) throw new Error("Failed to list records")
@@ -619,6 +794,7 @@ const ExportCommand = cmd({
   builder: (y) =>
     y
       .option("schema", { type: "string", demandOption: true, alias: "s" })
+      .option("bloq", { type: "number", describe: "pin the export to one board when the slug is shared across bloqs" })
       .option("out", { type: "string", alias: "o", describe: "output file path" })
       .option("format", { type: "string", default: "csv", describe: "csv|json" })
       .option("fields", { type: "string", describe: "comma-separated fields to include" })
@@ -626,21 +802,24 @@ const ExportCommand = cmd({
       .option("limit", { type: "number", default: 200 }),
   async handler(args) {
     UI.empty()
-    prompts.intro(`◈  Export: ${args.schema}`)
+    prompts.intro(`◈  Export: ${args.schema}${args.bloq != null ? ` (bloq ${args.bloq})` : ""}`)
     const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
 
     const spinner = prompts.spinner()
     spinner.start("Fetching records…")
 
     try {
-      // Get schema for field labels
-      const schemaRes = await irisFetch(`/api/v1/atlas/schemas/${args.schema}`)
+      // Get schema for field labels — pinned too, or a shared slug would take its labels
+      // from whichever board the server resolved first.
+      const schemaRes = await irisFetch(`/api/v1/atlas/schemas/${args.schema}${args.bloq != null ? `?bloq_id=${args.bloq}` : ""}`)
       const schemaOk = await handleApiError(schemaRes, "Get schema"); if (!schemaOk) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       const schemaBody = (await schemaRes.json()) as any
       const schema = schemaBody?.data?.schema ?? schemaBody?.data
+      const hint = resolutionHint(args.schema, schema?.id, args.bloq)
+      if (hint) prompts.log.info(dim(hint))
 
       // Get records (paginate the full dataset with --all; otherwise capped by --limit)
-      const { records, total, truncated } = await fetchDatasetRecords(args.schema, { limit: args.limit, all: args.all })
+      const { records, total, truncated } = await fetchDatasetRecords(args.schema, { limit: args.limit, all: args.all, bloq: args.bloq })
       spinner.stop(truncated ? `${records.length} of ${total} record(s) — PARTIAL` : `${records.length} record(s)`)
       if (truncated) {
         prompts.log.warn(`Exporting only ${records.length} of ${total} records (--limit ${args.limit}). Pass --all to export the entire dataset, or raise --limit.`)
@@ -952,6 +1131,7 @@ const RecordsDeleteCommand = cmd({
     y
       .positional("id", { type: "number", demandOption: true })
       .option("schema", { type: "string", demandOption: true, alias: "s" })
+      .option("bloq", { type: "number", describe: "pin the delete to one board when the slug is shared across bloqs" })
       .option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
@@ -966,7 +1146,8 @@ const RecordsDeleteCommand = cmd({
     const spinner = prompts.spinner()
     spinner.start("Deleting…")
     try {
-      const res = await irisFetch(`/api/v1/atlas/datasets/${args.schema}/${args.id}`, { method: "DELETE" })
+      const q = args.bloq != null ? `?bloq_id=${args.bloq}` : ""
+      const res = await irisFetch(`/api/v1/atlas/datasets/${args.schema}/${args.id}${q}`, { method: "DELETE" })
       const ok = await handleApiError(res, "Delete record"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       spinner.stop("Deleted")
       prompts.outro("Done")
@@ -1038,10 +1219,27 @@ const ApiCommand = cmd({
   builder: (y) =>
     y
       .positional("slug", { type: "string", demandOption: true })
-      .option("json", { type: "boolean", default: false }),
+      .option("json", { type: "boolean", default: false })
+      // #187899. fl-api serves an OpenAPI 3.1 document per dataset (78c34406); the ticket's
+      // done-check was `iris datasets api <slug> --openapi > o.json`, and no such flag existed.
+      // Prints ONLY the document on stdout so redirecting it gives a file a linter or a
+      // no-code builder (FlutterFlow, WeWeb, Postman) can import as-is.
+      .option("openapi", { type: "boolean", default: false, describe: "print the dataset's OpenAPI 3.1 document (JSON) and nothing else" }),
   async handler(args) {
     const token = await requireAuth()
     if (!token) return
+
+    if (args.openapi) {
+      const res = await irisFetch(`/api/v1/atlas/datasets/${encodeURIComponent(String(args.slug))}/openapi.json`)
+      if (!res.ok) {
+        const detail = res.status === 404 ? `no dataset '${args.slug}' on this account` : `HTTP ${res.status}`
+        process.stderr.write(`Could not fetch the OpenAPI document: ${detail}\n`)
+        process.exitCode = 1
+        return
+      }
+      process.stdout.write(JSON.stringify(await res.json(), null, 2) + "\n")
+      return
+    }
 
     const url = `${FL_API}/api/v1/atlas/datasets/${args.slug}`
 
@@ -1747,6 +1945,8 @@ export const PlatformAtlasDatasetsCommand = cmd({
   describe: "Schema-driven datasets — define once, store anything, no migrations",
   builder: (y) =>
     y.command(SchemasGroup).command(RecordsGroup).command(ImportCommand).command(AggregateCommand).command(DeriveCommand)
-     .command(FeedsGroup).command(ExportCommand).command(AuditCommand).command(ApiCommand).command(EconomicsGroup).demandCommand(),
+     .command(FeedsGroup).command(DatasetHooksGroup).command(ExportCommand).command(AuditCommand).command(ApiCommand).command(EconomicsGroup)
+     // #189972 — a local copy kept in step: pull merges, push names its base revision
+     .command(DatasetPullCommand).command(DatasetPushCommand).command(DatasetSyncCommand).command(DatasetStatusCommand).command(DatasetResolveCommand).demandCommand(),
   async handler() {},
 })

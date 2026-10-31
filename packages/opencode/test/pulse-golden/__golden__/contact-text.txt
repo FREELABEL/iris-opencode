@@ -1,0 +1,77 @@
+== exit 0
+== stdout
+  [90m────────────────────────────────────────────────────────────[0m
+  [90mID:[0m  7001
+  [90mEmail:[0m  dana@example.com
+  [90mAlt Emails:[0m  [90mdana.alt@example.com[0m
+  [90mPhone:[0m  +15550100
+  [90mStatus:[0m  Active
+  [90mCompany:[0m  Example Co
+  [90mPulse:[0m  [93m64/100  at risk[0m
+  [90mTrend:[0m  [90m▅▅[0m  [90m(2 days, 2 runs)[0m
+  [90mSignals:[0m  req [90m—[0m[90m · [0mlive [90m—[0m[90m · [0mcomms [93m40/100[0m[90m · [0mdeal [93m70/100[0m[90m · [0mcfg [90m—[0m[90m · [0mKB [90m—[0m[90m · [0mmeet [90m—[0m[90m · [0mdeliv [90m—[0m
+
+  [1mFix It[0m  [90m(1 signals below 50)[0m
+    [91m⚠[0m comms [91m40/100[0m — no recent messages → [90miris leads note 7001 "called — discussed next steps"[0m
+  [90mEngagement:[0m  [91m0/100[0m
+
+  [1mDeal Health[0m
+  [90m  Payment Gate:[0m  [90mNone — create with: iris leads payment-gate 7001 -a 500[0m
+  [90m  Stripe:[0m  [90mNo Stripe customer[0m
+  [90m  Contracts:[0m  [90mNone[0m
+  [90m  Proposals:[0m  [90mNone[0m
+  [90m  Content Engine:[0m  [93mNot configured[0m  [90miris leads content-engine create 7001[0m
+
+  [1mTasks[0m  [90m(1)[0m
+  [90m  Pending:[0m  1
+  [90m  Completed:[0m  0
+    [90m○[0m Send the revised quote[90m due 2026-09-17[0m
+
+  [1mRecent Activity[0m  [90m(1)[0m
+    ~ [96mnote              [0mCall went well[90m 2026-09-11[0m
+
+  [1mIntegration Health[0m
+  [92m✓[0m [96mGmail             [0m[92mconnected + verified[0m
+  [92m✓[0m [96mGoogle Calendar   [0m[92mconnected + verified[0m
+  [92m✓[0m [96miMessage          [0m[92mconnected + verified[0m
+  [91m✗[0m [96mWhatsApp          [0m[91mWhatsApp local database is only available on macOS.[0m[90m — System Settings → Privacy → Full Disk Access → enable terminal[0m
+  [92m✓[0m [96mApple Mail        [0m[92mconnected + verified[0m
+  [92m✓[0m [96mIRIS Bridge       [0m[92mconnected + verified[0m
+
+
+  [1miMessage  [90m(2)[0m[0m
+    [90m2026-09-14T12:00:00.000Z[0m  ←  See you Thursday
+    [90m2026-09-13T12:00:00.000Z[0m  →  Sent the quote
+
+  [1mMeetings  [90m(2)[0m[0m
+    [90mSun, Sep 20 12:00 PM[0m  Kickoff with dana@example.com  [[92mupcoming[0m]
+    [90mFri, Sep 11 12:00 PM[0m  Dana Example / quote review  [[90mpast[0m]
+
+  [1miMessage Group (Launch crew)  [90m(1)[0m[0m
+
+  [1mApple Mail  [90m(2)[0m[0m
+    [90m2026-09-10T12:00:00.000Z[0m  Invoice question
+    [90m2026-09-04T12:00:00.000Z[0m  Photos
+
+  [1mSent by IRIS  [90m(2)[0m[0m
+    [90m2026-09-13T12:00:00.000Z[0m  [90mdana@example.com[0m
+      Quote v2
+    [90m2026-09-06T12:00:00.000Z[0m  [90mme@example.org[0m
+      Kickoff notes
+
+  [1mCommunication Intelligence[0m
+  [90m  Sentiment:[0m  [90mINSUFFICIENT DATA[0m  [90m— 9 messages sampled (mixed, 0 days old)[0m
+  [90m  Your Avg Response:[0m  2.5d[90m (15.5h biz hrs)[0m
+  [90m  Their Avg Response:[0m  [93m2.5d[0m[90m (20.0h biz hrs)[0m
+
+  [90m────────────────────────────────────────────────────────────[0m
+
+== stderr
+[0m
+◈  Lead #7001 — Pulse Check
+Loading lead…
+[1mDana Example[0m
+Scanning channels…
+9 message(s) across 5 channel(s)
+[90miris leads pulse 7001 --recap[0m  ·  [90miris leads meet 7001 --at …[0m  ·  [90miris leads note 7001 "…"[0m
+

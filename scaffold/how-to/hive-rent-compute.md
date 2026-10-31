@@ -1,139 +1,116 @@
 ---
 category: Infrastructure
 level: beginner
-tags: [hive, compute, hosting, rent, gpu, railway]
+tags: [hive, compute, hosting, rent, railway]
 duration_min: 10
 ---
 # How to: Rent a machine and run your code on it
 
 ## What this does
 
-Rents a **long-lived machine** — a server you keep, not a job that finishes. IRIS provisions it,
-installs the IRIS agent on it by default so it joins your Hive, and you run work on it like any
-other machine you own. You release it when you are done, and it stops costing money.
+Rents a **long-lived machine**: a server you keep, not a job that finishes. IRIS starts it,
+puts the IRIS agent on it so it joins your Hive, and you run work on it like any other machine you
+own. You release it when you're done, and that stops the bill.
 
-This is different from a Hive task, which borrows a machine you already have for a few seconds.
-A rental is yours until you release it.
+![iris hive rent starts a machine, which shows as starting up until it checks in. Once it checks in it shows as in your hive, and iris hive run sends it work. It is billed the whole time it is up, from rent until iris hive release, which is the only thing that stops the bill.](https://cdn.heyiris.io/cloud-files/1792224646_hive-rent-compute-lifecycle.png)
 
-There is a page that explains the product, and a wizard if you would rather click than type:
+**Just need to run one command somewhere safe?** That's a sandbox, not a rental: it costs nothing
+when idle and is gone afterwards. See `run-code-in-a-sandbox.md`.
 
-- **https://freelabel.net/p/hive-marketplace** — what you are renting and how you know it worked
-- **https://elon.freelabel.net/dashboard/hive** — the Rent tab: provider, name, enrolment, done
+## Before you start
 
-The rest of this covers the terminal.
-
-## Prerequisites
-
-- `iris auth login`
-- A configured provider. Check with `iris hive providers` — anything reading
-  *"not configured"* needs an API token set before you can rent from it.
-
-## Steps
-
-**1. See what you can rent from**
+- You're signed in: `iris auth login`
+- **Renting is switched on per account.** Check before anything else:
 
 ```bash
 iris hive providers
 ```
 
 ```
-  railway        ready (default)
-  digitalocean   ready · GPU
+  railway        not configured — needs an API token (default)
+  cloudflare     ready
 ```
 
-Railway hosts apps and keeps them running. DigitalOcean gives you a raw box, and is the one
-with GPUs. If a provider says *not configured*, it exists but has no API token yet.
+That's a real account where **renting isn't on yet**: `railway` is the provider rentals use, and it
+reads *not configured*. `cloudflare` is sandboxes, which work. If yours looks like this, email
+team@heyiris.io to have renting switched on. The token is set on our side, so there's nothing to
+install. Until then, a sandbox runs one-off commands.
 
-**2. Rent a machine**
+When `railway` reads `ready`, carry on.
+
+## Step 1: Rent a machine
 
 ```bash
 iris hive rent my-box
 ```
 
-It joins your Hive automatically, so everything you already know works on it.
+It joins your Hive automatically, so everything you already do with Hive works on it.
 
-**3. Run your code on it**
-
-```bash
-iris hive run my-box "python3 -c 'print(sum(i*i for i in range(1000)))'"
-iris hive run my-box "php -r 'echo PHP_VERSION;'"
-```
-
-Python, PHP, node, shell — the machine is the runtime. Nothing to deploy.
-
-**4. See what you are paying for**
+## Step 2: Wait for it to check in
 
 ```bash
 iris hive rentals
 ```
 
-```
-    id  name                   provider      status     hive
-     7  my-box                 railway       active     in your hive
-     8  render-box             railway       active     starting up
-     9  old-box                railway       active     not reporting
-```
+The last column is **what the machine has confirmed, not what you asked for**:
 
-**The last column is what the machine confirmed, not what you asked for.** Renting a machine and
-having a machine are different events, and the column distinguishes them:
-
-| | |
+| Status | Means |
 |---|---|
-| `in your hive` | it checked in within the last five minutes — the only state that means it works |
-| `starting up` | rented, never checked in. Still booting, or the install did not take |
-| `not reporting` | it was checking in and stopped. Different from never having started |
-| `no node linked` | something was lost between renting and registering; nothing can reach it |
-| `plain box` | you rented with `--no-hive`. An absence with a reason |
+| `in your hive` | it checked in within the last five minutes. This is the only state that means it works |
+| `starting up` | rented, never checked in yet. Still booting, or the agent didn't install |
+| `not reporting` | it was checking in and stopped |
+| `no node linked` | it rented but never registered, so nothing can reach it |
+| `plain box` | you rented it with `--no-hive`: on purpose, no agent |
 
-It used to print `hive node` for anything rented with enrolment requested, which meant a machine
-that never booted looked exactly like one taking work.
+With nothing rented, it says so:
 
-**5. Release it when you are done**
+```
+  No machines rented.  Rent one:  iris hive rent my-box
+```
+
+## Step 3: Run your code on it
 
 ```bash
-iris hive release 7
+iris hive run my-box "python3 -c 'print(sum(i*i for i in range(1000)))'"
 ```
 
-This is the one that stops the bill. Until you run it, the machine stays up — that is the
-point of a rental, and it is also why nothing releases it for you.
+Python, PHP, Node, shell: the machine is the runtime. There's nothing to deploy.
 
-## If you do not want IRIS on the machine
+## Step 4: Release it when you're done
+
+```bash
+iris hive release <id>
+```
+
+Use the id from `iris hive rentals`. **This is the only thing that stops the bill.** Until you run
+it, the machine stays up. That's the point of a rental, and it's why nothing releases it for you.
+
+## If you don't want IRIS on the machine
 
 ```bash
 iris hive rent my-box --no-hive
 ```
 
-The machine is still yours and still billed, but IRIS is not installed on it — so **you cannot
-dispatch work to it**, it will not appear in `iris hive nodes list`, and `iris hive run` will
-not reach it. You get ssh and nothing else.
-
-Worth being clear about what the default grants: installing the agent is what lets IRIS run
-work on that machine. That is the real choice, not whether a CLI gets installed.
+You still have the machine, and it's still billed, but the IRIS agent isn't on it. So **you can't
+send it work**: it won't appear in `iris hive nodes list`, and `iris hive run` won't reach it. You get
+ssh and nothing else.
 
 ## Common problems
 
-**`not configured — needs an API token`**
-The provider exists but has no credentials. That is a setup step, not a broken command.
+**`not configured — needs an API token`.** Renting isn't switched on for your account yet. Email
+team@heyiris.io. It's a one-time switch on our side.
 
-**`Release FAILED: … the machine may still be running and billing`**
-The teardown call did not succeed, so the machine may still exist. Run `iris hive rentals` to
-check, and retry. A release that fails is reported as a failure on purpose — it would be worse
-to say "released" and leave you paying.
+**`Release FAILED: … the machine may still be running and billing`.** The teardown didn't go
+through, so the machine may still exist. Run `iris hive rentals` to check, then retry the release.
 
-**The machine is not in `iris hive nodes list`**
-`iris hive rentals` says which of the four reasons it is. `starting up` means give it a minute;
-if it stays there, the machine booted without the agent — check you did not pass a custom
-`--image` that lacks it. `plain box` means you asked for that with `--no-hive`. `not reporting`
-means it worked and stopped, which is the one worth looking at.
+**It's stuck on `starting up`.** Give it a minute. If it stays there, it booted without the agent:
+check you didn't pass a custom `--image` that lacks it. Leave `--image` off to get the default.
 
-**I passed my own `--image` and the machine never appeared**
-An explicit image is always honoured, and we cannot tell from outside whether yours contains the
-IRIS agent. If it does not, the machine boots, bills, and never joins. Leave `--image` off to get
-the default agent image, or make sure your own is built from it.
+**It says `not reporting`.** It worked and then stopped checking in. Run `iris hive selftest <name>`
+to see whether it still takes work.
 
 ## Related
 
-- `iris hive run` — run a command on any machine in your Hive
-- `iris hive selftest <node>` — prove a machine's transport actually works
-- `iris hive nodes list` — every machine in your Hive, rented or your own
-- **https://freelabel.net/p/hive-marketplace** — the page to send someone who has not used it
+- `run-code-in-a-sandbox.md`: run one command in a throwaway box instead
+- `hive-dispatch.md`: run work on a machine you already own
+- `hive-tailscale.md`: reach a machine that isn't on your network

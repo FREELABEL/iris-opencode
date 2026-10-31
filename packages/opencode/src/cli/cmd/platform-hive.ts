@@ -17,7 +17,10 @@ import {
 } from "./platform-hive-nodes"
 import {
   buildTaskPayload,
+  checkContract,
+  parseDeadline,
   checkTaskRequest,
+  busyOverrideHint,
   describeApiError,
   describeTask,
   exitCodeForStatus,
@@ -25,12 +28,23 @@ import {
   pickResultPayload,
   TERMINAL_STATUSES,
 } from "./hive-task-create"
+import { currentDelegationOrigin } from "./hive-delegation-origin"
 import { HiveFilesCommandExport } from "./platform-hive-files"
 import { HiveBrowserCommand } from "./platform-hive-browser"
 import { runRemoteDoctor } from "./platform-hive-doctor"
 import { HiveSelftestCommandExport } from "./platform-hive-selftest"
-import { HiveSessionsCommand, HiveSendInputCommand } from "./platform-hive-sessions"
-import { HiveRentCommand, HiveRentalsCommand, HiveReleaseCommand, HiveProvidersCommand } from "./platform-hive-rent"
+import { HiveSessionsCommand, HiveSendInputCommand, HiveAskCommand } from "./platform-hive-sessions"
+import { HiveTunnelCommand } from "./platform-hive-tunnel"
+import { HiveSshGateCommand } from "./platform-hive-ssh-gate"
+import { HiveRolloutCommand } from "./platform-hive-rollout"
+import { HiveModelsCommand } from "./platform-hive-models"
+import { HiveDriveCommand } from "./platform-hive-drive"
+import { HiveAnswerCommand, HiveAnswerHookCommand, HiveAnswersCommand, HiveAwayCommand } from "./platform-hive-answer"
+import { HiveTriggerCommand } from "./platform-hive-trigger"
+import { HiveClaimCommand } from "./platform-hive-claim"
+import { HiveProofCommand } from "./platform-hive-proof"
+import { HiveRunnerCommand } from "./platform-hive-runner"
+import { HiveRentCommand, HiveRentalsCommand, HiveReleaseCommand, HiveProvidersCommand, HiveSandboxCommand } from "./platform-hive-rent"
 import { VaultCommandExport } from "./platform-vault"
 import {
   HiveDiscoverCommandExport,
@@ -53,6 +67,7 @@ import {
 // Agent-to-agent work (epic #184516): hand a work item to another agent's inbox, and decide
 // who may reach a machine at all.
 import { HiveHandoffCommand } from "./platform-hive-handoff"
+import { runNodeVault } from "./hive-node-vault"
 import { HiveAccessCommand } from "./platform-hive-access"
 import {
   HiveSearchCommand,
@@ -86,6 +101,30 @@ export function resolveTaskPrefix(prefix: string, ids: string[]): { id: string }
 }
 
 const IRIS_API = process.env.IRIS_API_URL ?? "https://freelabel.net"
+
+/**
+ * Turn what the user typed into ONE full task id: a full id passes through; a shortened one is
+ * resolved against the last 7 days of tasks, and an ambiguous one is an error that lists the
+ * candidates. Shared by `tasks get` and `cancel` — `cancel` used to send the prefix straight to
+ * the API, which looks ids up exactly ("No query results for model [App\Models\NodeTask]
+ * 01a109d7", #187990). UUIDv7 ids share their first 8 characters for seconds at a time, so the
+ * 8-character form is genuinely ambiguous, not just unrecognised.
+ */
+export async function resolveTaskIdArg(
+  raw: string,
+  userId: number,
+  list: (userId: number) => Promise<string[]> = listRecentTaskIds,
+): Promise<{ id: string } | { error: string }> {
+  const s = String(raw).trim()
+  if (isFullTaskId(s)) return { id: s }
+  return resolveTaskPrefix(s, await list(userId))
+}
+
+async function listRecentTaskIds(userId: number): Promise<string[]> {
+  const params = new URLSearchParams({ user_id: String(userId), since: "7d", limit: "500" })
+  const lr = await hiveFetch(`/api/v6/nodes/tasks?${params}`).catch(() => null)
+  return lr?.ok ? (((await lr.json()) as any).tasks ?? []).map((t: any) => String(t.id)) : []
+}
 
 async function hiveFetch(path: string, options: RequestInit = {}) {
   return irisFetch(path, options, IRIS_API)
@@ -933,6 +972,34 @@ function readNodeKey(): string | null {
   return null
 }
 
+/**
+ * Cancel one task as its OWNER (#190292). `hive cancel` used to post a "failed" result with THIS
+ * machine's node key, and the node-agent endpoint only finds tasks assigned to the node that
+ * calls it — so cancelling a task running on any other machine answered "No query results for
+ * model NodeTask". The user endpoint finds any of your tasks; the daemon running it sees the
+ * cancellation on its next heartbeat and kills the process.
+ */
+export async function cancelTaskWith(
+  fetcher: (path: string, init: RequestInit) => Promise<Response>,
+  taskId: string,
+): Promise<{ ok: boolean; message: string; nodeNotified?: boolean }> {
+  const res = await fetcher(`/api/v6/nodes/tasks/${encodeURIComponent(taskId)}/cancel`, { method: "POST" })
+  if (res.ok) {
+    // #184886 — whether a machine was told to stop it. Older servers do not say; claim nothing then.
+    const body = (await res.json().catch(() => ({}))) as Record<string, unknown>
+    return { ok: true, message: "cancelled", nodeNotified: body.node_notified === true }
+  }
+  const body = (await res.json().catch(() => ({}))) as Record<string, unknown>
+  if (res.status === 404) return { ok: false, message: `No task ${taskId} on your account` }
+  return { ok: false, message: String(body.message ?? body.error ?? `HTTP ${res.status}`) }
+}
+const cancelTask = (taskId: string) => cancelTaskWith(hiveFetch, taskId)
+
+/** #184886 — "cancelled" used to be bookkeeping only; say when its machine was told to stop it. */
+export function cancelledLine(nodeNotified?: boolean): string {
+  return nodeNotified ? "Task cancelled — its machine was told to stop it now" : "Task cancelled"
+}
+
 async function nodeFetch(path: string, options: RequestInit = {}) {
   const nodeKey = readNodeKey()
   if (!nodeKey) throw new Error("No node_api_key in ~/.iris/config.json. Run the IRIS installer first.")
@@ -1049,10 +1116,10 @@ function timeAgo(iso: string | null | undefined): string {
 
 const HiveTasksCommand = cmd({
   command: "tasks [subcommand] [task-id]",
-  describe: "list, inspect or CREATE tasks on your nodes (create dispatches any task type)",
+  describe: "list, inspect, rerun or CREATE tasks on your nodes (create dispatches any task type)",
   builder: (yargs) =>
     yargs
-      .positional("subcommand", { describe: "create, get or logs", type: "string" })
+      .positional("subcommand", { describe: "create, get, logs or rerun", type: "string" })
       .positional("task-id", { describe: "task ID (for get/logs)", type: "string" })
       .option("status", { describe: "filter by status", type: "string", choices: ["pending", "running", "completed", "failed", "all"], default: "all" })
       .option("type", { describe: "task type — filters the list, or names what to dispatch with `create` (mcp_call, remotion, browser_agent, discover…)", type: "string" })
@@ -1069,11 +1136,18 @@ const HiveTasksCommand = cmd({
       .option("priority", { describe: "(create) priority 1-10 (higher = sooner)", type: "number" })
       .option("queue", { alias: "fire-and-forget", describe: "(create) queue it and exit instead of waiting for the result", type: "boolean", default: false })
       .option("allow-fallback", { describe: "(create) let another node take it if the named one cannot", type: "boolean", default: false })
+      .option("force", { describe: "(create, rerun) send it to --node even though that node reports high CPU/memory — a full or offline node still refuses", type: "boolean", default: false })
       .option("requires", { describe: "(create) only run on a node advertising this capability (repeatable)", type: "string", array: true })
-      .option("json", { describe: "(create) JSON output (the full task object)", type: "boolean", default: false })
+      .option("not-after", { describe: "(create) never run it after this — a duration from now (30s, 5m) or an ISO time. Late tasks EXPIRE instead of running", type: "string" })
+      .option("key", { describe: "(create) idempotency key: the same key returns the same task, and a node never runs it twice", type: "string" })
+      .option("retries", { describe: "(create) retry a failure up to N more times — needs --key, never past --not-after", type: "number" })
+      .option("json", { describe: "(create) JSON output: the finished task object — it waits for the task like the default; add --queue to get {task_id} at once (#190308)", type: "boolean", default: false })
       .option("user-id", { describe: "user ID", type: "number" })
       .example("iris hive tasks create --type mcp_call --node studio --config '{\"server\":\"argent\"}'", "ask a node's MCP server what tools it has")
-      .example("iris hive tasks create --type mcp_call --node studio --config '{\"server\":\"argent\",\"tool\":\"list_devices\"}'", "call one tool and print the result"),
+      .example("iris hive tasks create --type mcp_call --node studio --config '{\"server\":\"argent\",\"tool\":\"list_devices\"}'", "call one tool and print the result")
+      .example("iris hive tasks create --type sandbox_execute --node drone-01 --prompt 'dronectl goto ring --at 8' --not-after 8s --key ring-8-01 --retries 2 --queue", "deliver by T or not at all; safe to retry, never runs twice")
+      .example("iris hive tasks rerun 01a0bab8 --node studio", "re-run a finished task on another machine; keeps the same task and idempotency key")
+      .example("iris hive tasks rerun 01a0bab8 --node macbook --force", "re-run it on a node the server calls busy from CPU/memory pressure"),
   async handler(args) {
     UI.empty()
     let sub = args.subcommand as string | undefined
@@ -1103,12 +1177,33 @@ const HiveTasksCommand = cmd({
         process.exit(1)
       }
       const config = parsedConfig.config
+      if (args.force && !args.node) {
+        prompts.log.error("--force needs --node: it overrides the CPU/memory busy check on the node you name.")
+        process.exit(1)
+      }
 
       const check = checkTaskRequest({ type, prompt: args.prompt as string | undefined, config })
       if (!check.ok) {
         prompts.log.error(check.error)
         if (check.hint) console.log(dim(`  ${check.hint}`))
         process.exit(1)
+      }
+
+      // The delivery contract (#187568) — checked before anything is sent.
+      const contract = checkContract({ retries: args.retries as number | undefined, key: args.key as string | undefined })
+      if (!contract.ok) {
+        prompts.log.error(contract.error)
+        console.log(dim(`  ${contract.hint}`))
+        process.exit(1)
+      }
+      let notAfter: string | undefined
+      if (args["not-after"] !== undefined) {
+        const d = parseDeadline(String(args["not-after"]))
+        if (!d.ok) {
+          prompts.log.error(d.error)
+          process.exit(1)
+        }
+        notAfter = d.iso
       }
 
       // Resolve the node BEFORE dispatching, and refuse an offline one when we are going to
@@ -1146,11 +1241,17 @@ const HiveTasksCommand = cmd({
         timeoutSec: args.timeout as number | undefined,
         priority: args.priority as number | undefined,
         allowFallback: Boolean(args["allow-fallback"]),
+        force: Boolean(args.force),
         requiredCapabilities: firstArray(args.requires as string[] | undefined),
+        notAfter,
+        idempotencyKey: args.key as string | undefined,
+        retries: args.retries as number | undefined,
+        origin: await currentDelegationOrigin(),
       })
 
       if (!args.json) {
         console.log(`${dim("→")} ${bold(describeTask(type, config))}${nodeName ? ` on ${bold(nodeName)}` : dim(" (any capable node)")}`)
+        if (payload.metadata) console.log(dim("  status and report will appear in this session"))
       }
 
       const createRes = await hiveFetch("/api/v6/nodes/tasks", {
@@ -1163,8 +1264,23 @@ const HiveTasksCommand = cmd({
         process.exit(1)
       }
 
-      const created = (await createRes.json()) as { task: { id: string; status: string }; dispatched?: boolean }
+      const created = (await createRes.json()) as { task: { id: string; status: string; error?: string | null }; dispatched?: boolean; duplicate?: boolean }
       const taskId = created.task.id
+
+      // A key that already existed returns the ORIGINAL task — say so, or a re-run of a script
+      // reads as fresh work being sent when nothing new was.
+      if (created.duplicate && !args.json) {
+        console.log(`${dim("→")} key ${bold(String(args.key))} already exists — this is the original task, not a new one (status=${created.task.status})`)
+      }
+      // Its deadline had already passed: the API expired it instead of sending it anywhere.
+      if (created.task.status === "expired") {
+        if (args.json) {
+          await writeJson({ task_id: taskId, status: "expired", dispatched: false, duplicate: created.duplicate ?? false })
+        } else {
+          prompts.log.warn(`Expired before it was sent — its deadline (${notAfter ?? "given"}) had already passed. Nothing ran.`)
+        }
+        process.exit(exitCodeForStatus("expired"))
+      }
 
       if (args.queue) {
         if (args.json) {
@@ -1172,6 +1288,8 @@ const HiveTasksCommand = cmd({
           return
         }
         console.log(`${success("✓")} queued ${bold(taskId)}  status=${created.task.status}`)
+        const hint = busyOverrideHint(created.task.error)
+        if (hint) console.log(dim(`  ${created.task.error}\n  ${hint}`))
         console.log(dim(`  Result later:  iris hive tasks get ${taskId}`))
         return
       }
@@ -1233,6 +1351,8 @@ const HiveTasksCommand = cmd({
       if (final.error) {
         console.log(bold("─── error ───"))
         console.log(`\x1b[31m${String(final.error).slice(0, 2000)}\x1b[0m`)
+        const hint = busyOverrideHint(final.error)
+        if (hint) console.log(dim(`  ${hint}`))
       }
       console.log()
       const st = String(final.status ?? "unknown")
@@ -1247,6 +1367,67 @@ const HiveTasksCommand = cmd({
       return
     }
 
+    // ── iris hive tasks rerun <id> [--node <other>] ──
+    //
+    // #190524 — a finished task can be re-run on another machine without minting a new
+    // idempotency key. The API keeps the SAME task row (and key) and re-dispatches it, so
+    // every audit row that pointed at the work still points at it.
+    if (sub === "rerun") {
+      if (!userId) process.exit(1)
+      let taskId = (args["task-id"] as string) || extraArgs[extraArgs.length - 1]
+      if (!taskId) {
+        prompts.log.error("Usage: iris hive tasks rerun <task-id> [--node <other>]")
+        process.exitCode = 1
+        return
+      }
+      if (!isFullTaskId(String(taskId))) {
+        const r = await resolveTaskIdArg(String(taskId), Number(userId))
+        if ("error" in r) {
+          prompts.log.error(r.error)
+          process.exitCode = 1
+          return
+        }
+        taskId = r.id
+      }
+
+      let nodeId: string | undefined
+      const target = args.node as string | undefined
+      if (args.force && !target) {
+        prompts.log.error("--force needs --node: it overrides the CPU/memory busy check on the node you name.")
+        process.exit(1)
+      }
+      if (target) {
+        const node = await resolveNode(userId, String(target))
+        if (!node) {
+          prompts.log.error(`No node matching "${target}". Run: iris hive nodes list`)
+          process.exit(1)
+        }
+        nodeId = node.id
+      }
+
+      const res = await hiveFetch(`/api/v6/nodes/tasks/${taskId}/rerun`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(nodeId ? { node_id: nodeId, ...(args.force ? { force: true } : {}) } : {}),
+      })
+      if (!res.ok) {
+        const bodyText = await res.text().catch(() => "")
+        prompts.log.error(describeApiError(res.status, bodyText))
+        const hint = busyOverrideHint(bodyText)
+        if (hint) console.log(dim(`  ${hint}`))
+        process.exit(1)
+      }
+      const data = (await res.json()) as { task?: Record<string, unknown> }
+      if (args.json) {
+        await writeJson(data)
+        return
+      }
+      const st = String(data.task?.status ?? "pending")
+      console.log(`${success("✓")} re-ran ${bold(taskId)}  status=${st}${nodeId ? `  node=${nodeId}` : ""}`)
+      console.log(dim(`  Same idempotency key. Read it: iris hive tasks get ${taskId}`))
+      return
+    }
+
     // ── iris hive tasks get <id> ──
     if (sub === "get" || sub === "logs") {
       let taskId = args["task-id"] as string || extraArgs[extraArgs.length - 1]
@@ -1257,10 +1438,7 @@ const HiveTasksCommand = cmd({
       }
       // The list prints shortened ids; resolve one against the last 7 days (#186129).
       if (!isFullTaskId(String(taskId))) {
-        const params = new URLSearchParams({ user_id: String(userId), since: "7d", limit: "500" })
-        const lr = await hiveFetch(`/api/v6/nodes/tasks?${params}`).catch(() => null)
-        const ids = lr?.ok ? (((await lr.json()) as any).tasks ?? []).map((t: any) => String(t.id)) : []
-        const r = resolveTaskPrefix(String(taskId), ids)
+        const r = await resolveTaskIdArg(String(taskId), Number(userId))
         if ("error" in r) {
           prompts.log.error(r.error)
           process.exitCode = 1
@@ -1684,10 +1862,8 @@ const HiveCancelCommand = cmd({
         let cancelled = 0
         for (const t of tasks) {
           try {
-            await nodeFetch(`/api/v6/node-agent/tasks/${t.id}/result`, {
-              method: "POST",
-              body: JSON.stringify({ status: "failed", output: "Cancelled via iris hive cancel", error: "Manually cancelled" }),
-            })
+            const r = await cancelTask(String(t.id))
+            if (!r.ok) throw new Error(r.message)
             cancelled++
             console.log(`  ${success("✓")} ${String(t.id).substring(0, 12)}… — ${t.title}`)
           } catch (err) {
@@ -1697,17 +1873,28 @@ const HiveCancelCommand = cmd({
         console.log()
         prompts.log.success(`${cancelled}/${tasks.length} tasks cancelled`)
       } else if (args["task-id"]) {
-        spinner.start("Cancelling…")
-        const res = await nodeFetch(`/api/v6/node-agent/tasks/${args["task-id"]}/result`, {
-          method: "POST",
-          body: JSON.stringify({ status: "failed", output: "Cancelled via iris hive cancel", error: "Manually cancelled" }),
-        })
-        if (res.ok) {
-          spinner.stop(success("Task cancelled"))
+        // Resolve a shortened id to exactly one task first (#187990) — the API matches ids
+        // exactly, and an 8-character UUIDv7 prefix can name several tasks.
+        let cancelId = String(args["task-id"])
+        if (!isFullTaskId(cancelId)) {
+          const userId = await requireUserId(undefined)
+          if (!userId) { process.exitCode = 1; return }
+          const r = await resolveTaskIdArg(cancelId, userId)
+          if ("error" in r) {
+            prompts.log.error(r.error)
+            process.exitCode = 1
+            return
+          }
+          cancelId = r.id
+        }
+        spinner.start(`Cancelling ${cancelId}…`)
+        const r = await cancelTask(cancelId)
+        if (r.ok) {
+          spinner.stop(success(cancelledLine(r.nodeNotified)))
         } else {
-          const err = await res.text()
           spinner.stop("Failed", 1)
-          prompts.log.error(err)
+          prompts.log.error(r.message)
+          process.exitCode = 1
         }
       } else {
         // Interactive: show pending and let user pick
@@ -1732,11 +1919,9 @@ const HiveCancelCommand = cmd({
         })
         if (prompts.isCancel(selected)) { prompts.outro("Cancelled"); return }
 
-        await nodeFetch(`/api/v6/node-agent/tasks/${selected}/result`, {
-          method: "POST",
-          body: JSON.stringify({ status: "failed", output: "Cancelled via iris hive cancel", error: "Manually cancelled" }),
-        })
-        prompts.log.success("Task cancelled")
+        const r = await cancelTask(String(selected))
+        if (r.ok) prompts.log.success(cancelledLine(r.nodeNotified))
+        else { prompts.log.error(r.message); process.exitCode = 1 }
       }
     } catch (err) {
       spinner.stop("Error", 1)
@@ -1907,7 +2092,7 @@ const HiveDoctorCommand = cmd({
       .option("all", { describe: "check every node you own", type: "boolean", default: false })
       .option("expect-sha", { describe: "commit the remote daemon SHOULD be running; a mismatch is a failure", type: "string" })
       .option("host", { describe: "override the address, skipping Tailscale resolution", type: "string" })
-      .option("user", { describe: "ssh user on the node (remembered after the first success)", type: "string" })
+      .option("user", { describe: "ssh user on the node — its own login name, usually not your IRIS account (remembered after the first success)", type: "string" })
       .option("user-id", { describe: "user ID", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(argv) {
@@ -2347,7 +2532,9 @@ const HiveScriptListCommand = cmd({
           const name = bold(String(entry.name))
           const size = dim(`${entry.size} bytes`)
           const modified = entry.modified ? dim(new Date(String(entry.modified)).toLocaleString()) : ""
-          console.log(`  ${success("■")} ${name}  ${size}  ${modified}`)
+          // `local`: a file on this node, not a registry script (`iris scripts list`) — the two
+          // share a word and nothing else, so the listing says which one you are looking at (#191674).
+          console.log(`  ${success("■")} ${name}  ${dim("local")}  ${size}  ${modified}`)
         }
         console.log()
         console.log(dim(`  ${entries.length} script(s) on node`))
@@ -2480,8 +2667,8 @@ echo "=== Report Complete ==="
 
       // Optionally schedule it
       if (args.schedule) {
-        const schedUrl = await bridgeUrl("/daemon/schedules")
-        const schedRes = await fetch(schedUrl, {
+        // bridgeFetch: the /daemon prefix AND the bridge key (#189156 — a bare fetch 404s/401s).
+        const schedRes = await bridgeFetch("/daemon/schedules", {
           method: "POST",
           headers: bridgeHeaders(),
           body: JSON.stringify({
@@ -2594,7 +2781,7 @@ const HiveScheduleAddCommand = cmd({
     spinner.start("Creating schedule...")
 
     try {
-      const res = await fetch(`${BRIDGE_URL}/schedules`, {
+      const res = await bridgeFetch(`/schedules`, {
         method: "POST",
         headers: bridgeHeaders(),
         body: JSON.stringify({
@@ -2638,7 +2825,7 @@ const HiveScheduleRmCommand = cmd({
     prompts.intro("◈  Remove Schedule")
 
     try {
-      const res = await fetch(`${BRIDGE_URL}/schedules/${encodeURIComponent(args.id as string)}`, {
+      const res = await bridgeFetch(`/schedules/${encodeURIComponent(args.id as string)}`, {
         method: "DELETE",
         headers: bridgeHeaders(),
       })
@@ -2666,7 +2853,7 @@ const HiveSchedulePauseCommand = cmd({
   async handler(args) {
     UI.empty()
     try {
-      const res = await fetch(`${BRIDGE_URL}/schedules/${encodeURIComponent(args.id as string)}/pause`, {
+      const res = await bridgeFetch(`/schedules/${encodeURIComponent(args.id as string)}/pause`, {
         method: "POST",
         headers: bridgeHeaders(),
       })
@@ -2690,7 +2877,7 @@ const HiveScheduleResumeCommand = cmd({
   async handler(args) {
     UI.empty()
     try {
-      const res = await fetch(`${BRIDGE_URL}/schedules/${encodeURIComponent(args.id as string)}/resume`, {
+      const res = await bridgeFetch(`/schedules/${encodeURIComponent(args.id as string)}/resume`, {
         method: "POST",
         headers: bridgeHeaders(),
       })
@@ -3312,11 +3499,22 @@ const HiveExecCommand = cmd({
 // ============================================================================
 
 const HiveCredentialsListCommand = cmd({
-  command: "list <bloq-id>",
-  describe: "list project credentials",
+  command: "list [bloq-id]",
+  describe: "list project credentials (--local: this machine's node vault)",
   builder: (yargs) =>
-    yargs.positional("bloq-id", { describe: "bloq/project ID", type: "number", demandOption: true }),
+    yargs
+      .positional("bloq-id", { describe: "bloq/project ID", type: "number" })
+      .option("local", { describe: "list names in THIS machine's node vault (never values)", type: "boolean", default: false })
+      .option("json", { describe: "JSON output (with --local)", type: "boolean", default: false })
+      .check((a) => {
+        if (!a.local && a["bloq-id"] === undefined) return "bloq-id is required (or pass --local)"
+        return true
+      }),
   async handler(args) {
+    if (args.local) {
+      process.exitCode = runNodeVault("list", undefined, { json: !!args.json })
+      return
+    }
     const token = await requireAuth()
     if (!token) return
 
@@ -3350,15 +3548,48 @@ const HiveCredentialsListCommand = cmd({
 })
 
 const HiveCredentialsAddCommand = cmd({
-  command: "add",
-  describe: "store a new project credential",
+  command: "add [name]",
+  describe: "store a new project credential (--local: in THIS machine's node vault, never uploaded)",
   builder: (yargs) =>
     yargs
-      .option("bloq-id", { describe: "bloq/project ID", type: "number", demandOption: true })
-      .option("platform", { describe: "platform (n8n, youtube, instagram, twitter, linkedin, email)", type: "string", demandOption: true })
-      .option("type", { describe: "credential type", type: "string", choices: ["api_key", "browser_session"], default: "api_key" })
-      .option("key", { describe: "key=value pairs for api_key type (repeatable)", type: "array" }),
+      .positional("name", { describe: "vault name for --local (what tasks reference as node_credential)", type: "string" })
+      .option("local", {
+        describe: "keep it on this machine: sealed by the OS keystore, only its name is ever sent. Required for portals with patient data",
+        type: "boolean",
+        default: false,
+      })
+      .option("bloq-id", { describe: "bloq/project ID", type: "number" })
+      .option("platform", { describe: "platform (n8n, youtube, instagram, twitter, linkedin, email)", type: "string" })
+      .option("type", { describe: "credential type (login with --local)", type: "string", choices: ["api_key", "browser_session", "login"] })
+      .option("key", { describe: "key=value pairs for api_key type (repeatable)", type: "array" })
+      .option("username", { describe: "--local: portal username", type: "string" })
+      .option("url", { describe: "--local: portal login URL", type: "string" })
+      .option("totp", { describe: "--local: also prompt for a TOTP seed (codes are generated on this machine)", type: "boolean", default: false })
+      .option("totp-secret", { describe: "--local: TOTP seed (lands in shell history — prefer --totp)", type: "string" })
+      .option("password-stdin", { describe: "--local: read password (line 1) and TOTP seed (line 2) from stdin", type: "boolean", default: false })
+      .check((a) => {
+        if (a.local) {
+          if (!a.name) return "--local needs a name:  iris hive creds add <name> --local --username U --url URL"
+          if (a.type && a.type !== "login") return "--local stores logins only (--type login)"
+          return true
+        }
+        if (a["bloq-id"] === undefined || !a.platform) return "--bloq-id and --platform are required (or pass --local)"
+        if (a.type === "login") return "--type login is node-vault only — add --local"
+        return true
+      }),
   async handler(args) {
+    if (args.local) {
+      process.exitCode = runNodeVault("add", args.name as string, {
+        type: "login",
+        username: args.username as string | undefined,
+        url: args.url as string | undefined,
+        totp: !!args.totp,
+        totpSecret: args["totp-secret"] as string | undefined,
+        passwordStdin: !!args["password-stdin"],
+      })
+      return
+    }
+    if (!args.type) args.type = "api_key"
     const token = await requireAuth()
     if (!token) return
 
@@ -3431,7 +3662,8 @@ const HiveCredentialsAddCommand = cmd({
     printKV("Bloq", args["bloq-id"])
     printKV("Keys", Object.keys(credentials).join(", "))
     printDivider()
-    console.log(success("Credential stored — available to all Hive nodes for this project"))
+    console.log(success("Credential stored on the server — available to all Hive nodes for this project"))
+    console.log(dim("  For a portal login that should never leave this machine:  iris hive creds add <name> --local"))
     console.log("")
   },
 })
@@ -3544,10 +3776,16 @@ const HiveCredentialsSaveSessionCommand = cmd({
 
 const HiveCredentialsRemoveCommand = cmd({
   command: "remove <id>",
-  describe: "revoke a project credential",
+  describe: "revoke a project credential (--local: delete from this machine's node vault by name)",
   builder: (yargs) =>
-    yargs.positional("id", { describe: "credential ID", type: "string", demandOption: true }),
+    yargs
+      .positional("id", { describe: "credential ID (or vault name with --local)", type: "string", demandOption: true })
+      .option("local", { describe: "remove from THIS machine's node vault", type: "boolean", default: false }),
   async handler(args) {
+    if (args.local) {
+      process.exitCode = runNodeVault("remove", String(args.id))
+      return
+    }
     const token = await requireAuth()
     if (!token) return
 
@@ -4946,20 +5184,38 @@ export const PlatformHiveCommand = productCommand({
       .command(HiveScanCommandExport)
       .command(HiveProbeCommandExport)
       .command(HiveSshCommandExport)
+      .command(HiveSshGateCommand)
       // Node management + remote exec
       .command(HiveNodesCommandExport)
+      // Update the daemon + CLI on every node (#191614)
+      .command(HiveRolloutCommand)
       .command(HiveRunCommandExport)
       .command(HiveFilesCommandExport)
       .command(HiveSelftestCommandExport)
       .command(HiveSessionsCommand)
       .command(HiveSendInputCommand)
+      .command(HiveAskCommand)
+      .command(HiveTunnelCommand)
+      .command(HiveModelsCommand)
+      .command(HiveDriveCommand)
+      .command(HiveAnswerCommand)
+      .command(HiveTriggerCommand)
+      .command(HiveClaimCommand)
+      .command(HiveProofCommand)
+      .command(HiveRunnerCommand)
+      .command(HiveAnswersCommand)
+      .command(HiveAwayCommand)
+      .command(HiveAnswerHookCommand)
       // Rentals — long-lived machines a customer pays for, distinct from the ephemeral task
       // workers behind `hive nodes`. Separate verbs because they are a separate product.
+      .command(HiveSandboxCommand)
       .command(HiveRentCommand)
       .command(HiveRentalsCommand)
       .command(HiveReleaseCommand)
       .command(HiveProvidersCommand)
       .command(VaultCommandExport)
+      // Encrypted per-bloq PHI vaults now live under the unified `vault` command above
+      // (`iris hive vault create --encrypted`, with `vaults` as an alias).
       // Envelope encryption keys (#177946 phase 3) — a node must register one before it can
       // RECEIVE an envelope transfer; the send path fails closed rather than falling back.
       .command(HiveKeysCommandExport)

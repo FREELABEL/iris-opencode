@@ -3,15 +3,26 @@ import { AgentsProveCommand } from "./agent-prove"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { buildListEnvelope, projectFields, LIST_FIELDS } from "./list-envelope"
-import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, IRIS_API, writeJson, failNoOp} from "./iris-api"
+import { rejectBadPagination } from "./pagination-args"
+import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, IRIS_API, PUBLIC_SITE, writeJson, failNoOp} from "./iris-api"
 import { matchesSearchQuery } from "./bloq-item-format"
 import { executeChat } from "./platform-chat"
 import { AgentsBenchCommand } from "./platform-agents-bench"
 import { AgentsExportCommand } from "./platform-agents-export"
+import { AgentsInstallCommand, AgentsPacksCommand } from "./platform-agents-packs"
 import { AgentsJoinCommand, AgentsLeaveCommand } from "./platform-agents-rooms"
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
+import { AgentsPauseCommand, AgentsResumeCommand, AgentsStopCommand } from "./platform-agents-governance"
+import { AgentsHandBackCommand, AgentsTakeOverCommand, AgentsWatchCommand } from "./platform-agents-watch"
+import { AgentsReplayCommand, AgentsRunsCommand } from "./platform-agents-runs"
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, unlinkSync } from "fs"
 import { join } from "path"
 import { firstArray } from "../../util/array"
+import { Global } from "../../global"
+import { DEFAULT_MAX_DESKTOP_AGENTS, planDesktopSync, selectRoster } from "../lib/desktop-agents"
+import { installHome } from "../../skill/install-location"
+import { bulkDeleteRefusal, fieldIsEvaluable, filterByOwnership, ownershipQueryParams, resolveOwnerBloq, serverIgnoredOwnership, unevaluableWarning } from "./agent-ownership"
+import { AUTONOMY_CHOICES, AUTONOMY_LEVELS, CLI_DEFAULT_AUTONOMY, describeAutonomy, parseAutonomy } from "./agent-autonomy"
+import { describeShape, parseShape, SHAPE_CHOICES, shapeOf, shapeUrl, withShapeUrl } from "./agent-shape"
 
 /**
  * Resolve a mission argument to its text.
@@ -89,7 +100,9 @@ function printAgent(a: Record<string, unknown>): void {
   const wsBadge = a.workspace_id
     ? `  ${dim("· ws#" + a.workspace_id)}${a.google_workspace_match_state === "matched" ? dim(" · google-synced") : ""}`
     : `  ${dim("· no workspace")}`
-  console.log(`  ${name}  ${id}${model}${wsBadge}`)
+  // Shape (#190378): which of its generated Shapes the agent shows. "shape 0*" = never chosen.
+  const shapeBadge = `  ${dim(`· shape ${shapeOf(a)}${a.shape === undefined || a.shape === null ? "*" : ""}`)}`
+  console.log(`  ${name}  ${id}${model}${wsBadge}${shapeBadge}`)
   if (a.description) {
     console.log(`    ${dim(String(a.description).slice(0, 100))}`)
   }
@@ -113,6 +126,9 @@ function printAgent(a: Record<string, unknown>): void {
 // Subcommands
 // ============================================================================
 
+/** Mirrors fl-api AgentController::listSpec max_per_page. */
+export const AGENTS_LIST_MAX_LIMIT = 500
+
 const AgentsListCommand = cmd({
   command: "list",
   aliases: ["ls"],
@@ -131,6 +147,9 @@ const AgentsListCommand = cmd({
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
+    // --limit 0 came back as 25 rows and --page 0 as page 1, each labelled as what was asked
+    // for. The server clamps per_page at 500 (AgentController::listSpec) (#191862).
+    if (rejectBadPagination(args, { maxLimit: AGENTS_LIST_MAX_LIMIT })) return
     if (!args.json) { UI.empty(); prompts.intro("◈  IRIS Agents") }
 
     const token = await requireAuth()
@@ -147,6 +166,9 @@ const AgentsListCommand = cmd({
       if (args.search) params.set("search", args.search)
       if (args.bloq) params.set("bloq_id", String(args.bloq))
       if (args.active) params.set("active", "1")
+      if (args.workspace) params.set("workspace_id", String(args.workspace))
+      const ownership = { orphaned: !!args.orphaned, workspaceOrphaned: !!args["workspace-orphaned"] }
+      for (const [k, v] of Object.entries(ownershipQueryParams(ownership))) params.set(k, v)
 
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents?${params}`)
       const ok = await handleApiError(res, "List agents")
@@ -154,17 +176,47 @@ const AgentsListCommand = cmd({
 
       const raw = (await res.json()) as Record<string, any>
       let agents: any[] = firstArray(raw?.data)
-      const total = raw?.total ?? raw?.meta?.total ?? agents.length
+      let total = raw?.total ?? raw?.meta?.total ?? agents.length
       const currentPage = args.page
-      const lastPage = Math.ceil(total / args.limit)
+      let lastPage = Math.ceil(total / args.limit)
 
-      // Client-side filters (for fields the API may not support)
-      if (args.orphaned) agents = agents.filter((a: any) => !a.bloq_id)
-      if (args.bloq && !params.has("bloq_id")) agents = agents.filter((a: any) => a.bloq_id === args.bloq)
-      if (args.workspace) agents = agents.filter((a: any) => a.workspace_id === args.workspace)
-      if (args["workspace-orphaned"]) agents = agents.filter((a: any) => !a.workspace_id)
+      // The server ignored ?orphaned / ?workspace_orphaned and returned an ordinary page:
+      // filtering just that page answered "0" while 147 agents had no project. Evaluate every
+      // page, then paginate the filtered result here (#189967).
+      if (serverIgnoredOwnership(agents, ownership)) {
+        const all: any[] = []
+        const per = 500
+        for (let page = 1; page <= Math.max(1, Math.ceil(total / per)) && page <= 50; page++) {
+          const p = new URLSearchParams(params)
+          p.set("per_page", String(per))
+          p.set("page", String(page))
+          const r = await irisFetch(`/api/v1/users/${userId}/bloqs/agents?${p}`)
+          if (!(await handleApiError(r, "List agents"))) { if (spinner) spinner.stop("Failed", 1); process.exitCode = 1; return }
+          const rows = firstArray(((await r.json()) as Record<string, any>)?.data)
+          all.push(...rows)
+          if (rows.length < per) break
+        }
+        const filtered = filterByOwnership(all, ownership)
+        total = filtered.agents.length
+        lastPage = Math.max(1, Math.ceil(total / args.limit))
+        agents = filtered.agents.slice((currentPage - 1) * args.limit, currentPage * args.limit)
+      }
+
+      // Ownership filters are sent server-side (?orphaned=1 / ?workspace_orphaned=1) and
+      // re-checked here. An old server ignores the params AND omits bloq_id/workspace_id, in
+      // which case the filter cannot be evaluated — say so instead of presenting a count (#189967).
+      const owned = filterByOwnership(agents, ownership)
+      agents = owned.agents
+      if (args.workspace) {
+        if (fieldIsEvaluable(agents, "workspace_id")) agents = agents.filter((a: any) => a.workspace_id === args.workspace)
+        else owned.unevaluable.push("workspace_id")
+      }
 
       if (spinner) spinner.stop(`${agents.length} agent(s)${total > agents.length ? ` (${total} total — page ${currentPage}/${lastPage})` : ""}`)
+      if (owned.unevaluable.length > 0) {
+        if (args.json) process.stderr.write(`warning: ${unevaluableWarning(owned.unevaluable)}\n`)
+        else prompts.log.warn(unevaluableWarning(owned.unevaluable))
+      }
 
       if (args.json) {
         // Identity, not everything. This listing was 30 records x 72 fields =
@@ -174,8 +226,12 @@ const AgentsListCommand = cmd({
         await writeJson(
           buildListEnvelope(projectFields(agents, LIST_FIELDS.agents), {
             total,
-            limit: agents.length,
+            // The page size asked for, not the rows on this page — on the last page those differ.
+            limit: args.limit,
+            // Without it page 2+ reports current_page 1 and from/to of page 1 (#191863).
+            page: args.page,
             resource: "agents",
+            command: "agents list",
           }),
         )
         return
@@ -183,7 +239,7 @@ const AgentsListCommand = cmd({
 
       if (agents.length === 0) {
         prompts.log.warn("No agents found")
-        prompts.outro(`Create one: ${dim("iris agents create")}`)
+        prompts.outro(`Create one: ${dim("iris agents create --bloq <id>")}`)
         return
       }
 
@@ -322,7 +378,7 @@ const AgentsGetCommand = cmd({
       if (!a || !a.id) { if (spinner) spinner.stop("Agent not found", 1); process.exitCode = 1; return }
 
       if (args.json) {
-        await writeJson(a)
+        await writeJson(withShapeUrl(a, PUBLIC_SITE))
         return
       }
 
@@ -335,6 +391,12 @@ const AgentsGetCommand = cmd({
       printKV("Description", a.description)
       printKV("Bloq ID", a.bloq_id)
       printKV("Heartbeat", a.heartbeat_mode)
+      // TRUST LEVEL (#187906). What this agent may do without a person saying yes — the server
+      // holds a call by the tool's declared effect at this level. "not set" is spelled out
+      // because it means "as before", not "full trust" and not "no trust".
+      printKV("Autonomy", describeAutonomy(a.config).label)
+      printKV("Shape", describeShape(a))
+      printKV("Shape URL", shapeUrl(a.id, shapeOf(a), PUBLIC_SITE))
       printKV("Active", a.active)
       printKV("Created", a.created_at)
 
@@ -389,10 +451,11 @@ const AgentsCreateCommand = cmd({
       .option("initial-prompt", { alias: "mission", describe: "the agent's recurring MISSION — injected into every heartbeat, not just the first (heartbeat truncates at 2000 chars). Accepts a string or @path/to/file", type: "string" })
       .option("model", { alias: "m", describe: "AI model (e.g. gpt-4o-mini)", type: "string" })
       .option("type", { describe: "agent type (content, chat, assistant, support)", type: "string", default: "content" })
-      .option("bloq-id", { alias: "b", describe: "knowledge base bloq ID", type: "number" })
+      .option("bloq-id", { alias: ["b", "bloq"], describe: "owner project (bloq) ID — REQUIRED: every agent belongs to a project (iris atlas list)", type: "number" })
       // Same enum as `agents update` (#146506 flagged the create/update mismatch).
       .option("heartbeat-mode", { describe: "heartbeat mode: off, passive, reactive, autonomous, briefing", type: "string", choices: ["off", "passive", "reactive", "autonomous", "briefing"] })
       .option("heartbeat-tools", { describe: "comma-separated tool names for heartbeat", type: "string" })
+      .option("autonomy", { describe: `trust level: ${AUTONOMY_LEVELS.join(", ")} (default ${CLI_DEFAULT_AUTONOMY}) — what it may do without approval`, type: "string", choices: [...AUTONOMY_LEVELS] })
       .option("json", { describe: "JSON output", type: "boolean" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
@@ -417,6 +480,16 @@ const AgentsCreateCommand = cmd({
       if (prompts.isCancel(name)) { prompts.outro("Cancelled"); return }
     }
     if (!name) { if (args.json) console.log(JSON.stringify({ error: "--name is required" })); else prompts.log.error("--name is required"); process.exitCode = 1; return }
+
+    // Every agent belongs to a project (#189966). Checked before any prompt or network write
+    // so an ownerless agent is never created.
+    const owner = resolveOwnerBloq(args["bloq-id"])
+    if ("error" in owner) {
+      if (args.json) console.log(JSON.stringify({ error: owner.error }))
+      else { prompts.log.error(owner.error); if (!nonInteractive) prompts.outro("Done") }
+      process.exitCode = 1
+      return
+    }
 
     let description = args.description
     if (!description && !nonInteractive) {
@@ -445,7 +518,7 @@ const AgentsCreateCommand = cmd({
 
     try {
       const payload: Record<string, unknown> = { name, description: description ?? "", initial_prompt: prompt, model, type: args.type ?? "content" }
-      if (args["bloq-id"]) payload.bloq_id = args["bloq-id"]
+      payload.bloq_id = owner.bloqId
       if (args["initial-prompt"]) payload.initial_prompt = readPromptArg(args["initial-prompt"])
       if (args["heartbeat-mode"]) payload.heartbeat_mode = args["heartbeat-mode"]
       // These three persist under settings.*, NOT top-level — top-level model /
@@ -467,6 +540,10 @@ const AgentsCreateCommand = cmd({
       // to the name+description persona and behaving like a generic assistant (#178763).
       const config: Record<string, unknown> = { model, modelName: model }
       if (settings.system_prompt) config.system_prompt = settings.system_prompt
+      // #187906: an agent made from the CLI starts as a SPECIALIST — it works in its own space
+      // unasked and asks before shared writes, sends and payments. (Agents that never set a level
+      // keep today's behaviour; that default is for the 668 that predate this, not for new ones.)
+      config.autonomy = (args.autonomy as string | undefined) ?? CLI_DEFAULT_AUTONOMY
       payload.config = config
 
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents`, {
@@ -492,6 +569,7 @@ const AgentsCreateCommand = cmd({
       printKV("Model", (a.config as any)?.model ?? (a.settings as Record<string, unknown>)?.model ?? a.model)
       if (a.bloq_id) printKV("Bloq", a.bloq_id)
       if (args["heartbeat-mode"]) printKV("Heartbeat", args["heartbeat-mode"])
+      printKV("Autonomy", describeAutonomy(a.config ?? config).label)
       printDivider()
 
       if (!nonInteractive) {
@@ -577,6 +655,8 @@ const AgentsUpdateCommand = cmd({
       .option("disable-integration", { describe: "disable an integration (removes it from settings.integrations)", type: "string" })
       .option("add-tools", { describe: "comma-separated tool names to ADD to the agent's allowlist (config.tools)", type: "string" })
       .option("remove-tools", { describe: "comma-separated tool names to REMOVE from the allowlist (config.tools)", type: "string" })
+      .option("autonomy", { describe: `trust level (config.autonomy): ${AUTONOMY_LEVELS.join(", ")}, or none to clear it (back to the pre-level behaviour)`, type: "string", choices: [...AUTONOMY_CHOICES] })
+      .option("shape", { describe: "which of the agent's generated Shapes it shows: 0-9, or none to clear (back to the default, 0)", type: "string", choices: [...SHAPE_CHOICES] })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
     UI.empty()
@@ -600,6 +680,11 @@ const AgentsUpdateCommand = cmd({
       payload.health_status = "healthy"
       payload.consecutive_failures = 0
     }
+    // The Shape choice (#190378): its own top-level column, bloq_agents.shape — never `icon`
+    // (the web UI's Font Awesome class) and never settings.* (the web UI round-trips settings
+    // whole). Validated here as well as by yargs `choices`; null clears it.
+    const wantsShape = args.shape !== undefined
+    if (wantsShape) payload.shape = parseShape(args.shape)
 
     // model / system_prompt / heartbeat_tools live under settings.* — a top-level
     // `model` is silently ignored (#146506). The API replaces the whole settings
@@ -609,10 +694,14 @@ const AgentsUpdateCommand = cmd({
     // both need the current value to safely modify (the API replaces config wholesale).
     const wantsIntegration = !!(args["enable-integration"] || args["disable-integration"])
     const wantsTools = !!(args["add-tools"] || args["remove-tools"])
-    const needsCurrent = wantsSettings || wantsIntegration || wantsTools
+    // config.autonomy (#187906). Validated here as well as by yargs `choices`, so a caller that
+    // builds args programmatically still cannot write a level the server would read as intern.
+    const wantsAutonomy = args.autonomy !== undefined
+    const autonomy = wantsAutonomy ? parseAutonomy(args.autonomy) : null
+    const needsCurrent = wantsSettings || wantsIntegration || wantsTools || wantsAutonomy
 
     if (Object.keys(payload).length === 0 && !needsCurrent) {
-      failNoOp("update", "Use --name, --description, --bloq, --model, --system-prompt, --initial-prompt/--mission, --heartbeat-tools, --heartbeat-mode, --enable-integration, --disable-integration, --add-tools, --remove-tools, or --reset-health")
+      failNoOp("update", "Use --name, --description, --bloq, --model, --system-prompt, --initial-prompt/--mission, --heartbeat-tools, --heartbeat-mode, --enable-integration, --disable-integration, --add-tools, --remove-tools, --autonomy, --shape, or --reset-health")
     }
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
@@ -660,10 +749,15 @@ const AgentsUpdateCommand = cmd({
           // ── config.* — the system prompt, the model and the tools allowlist all live
           // here. config can be a list OR a dict in the wild (#); coerce to a dict so
           // $agent->config['system_prompt'] / ['tools'] resolve server-side.
-          if (wantsTools || wantsSettings) {
+          if (wantsTools || wantsSettings || wantsAutonomy) {
             const curConfig: any = a?.config
             const baseConfig: Record<string, unknown> =
               curConfig && !Array.isArray(curConfig) && typeof curConfig === "object" ? { ...curConfig } : {}
+            // The API replaces config wholesale, so the level rides on the merged copy.
+            if (wantsAutonomy) {
+              if (autonomy === null) delete baseConfig.autonomy
+              else baseConfig.autonomy = autonomy
+            }
 
             // V6 reads the system prompt from config.system_prompt ONLY — writing it to
             // settings.system_prompt alone leaves the agent on the name+description
@@ -694,6 +788,14 @@ const AgentsUpdateCommand = cmd({
         } else {
           // Fall back to top-level if we can't read current settings
           if (args.model) payload.model = args.model
+          // Never write config blind: it would wipe the prompt, model and allowlist.
+          if (wantsAutonomy) {
+            spinner.stop("Failed", 1)
+            prompts.log.error(`Could not read agent #${args.id} to merge config.autonomy safely — nothing was changed.`)
+            process.exitCode = 1
+            prompts.outro("Done")
+            return
+          }
         }
       }
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents/${args.id}`, {
@@ -739,6 +841,44 @@ const AgentsUpdateCommand = cmd({
         }
       }
 
+      // Same rule as the model check above: the response echoes the payload, so only a re-read
+      // proves the level persisted.
+      if (wantsAutonomy) {
+        try {
+          const check = await irisFetch(`/api/v1/users/${userId}/bloqs/agents/${args.id}`)
+          const body = (await check.json()) as any
+          const fresh = body?.data ?? body
+          if (fresh?.id) a = fresh
+        } catch {}
+        const landed = describeAutonomy(a.config).level
+        if (landed !== autonomy) {
+          spinner.stop("Not applied", 1)
+          prompts.log.error(`The API accepted the request but the agent's autonomy is '${landed ?? "not set"}', not '${autonomy ?? "not set"}'. Check: iris agents get ${args.id}`)
+          process.exitCode = 1
+          prompts.outro("Done")
+          return
+        }
+      }
+
+      // Same rule again: an old fl-api ignores `shape` and still answers 200, so only a re-read
+      // proves the choice persisted.
+      if (wantsShape) {
+        try {
+          const check = await irisFetch(`/api/v1/users/${userId}/bloqs/agents/${args.id}`)
+          const body = (await check.json()) as any
+          const fresh = body?.data ?? body
+          if (fresh?.id) a = fresh
+        } catch {}
+        const landed = a.shape === undefined || a.shape === null ? null : Number(a.shape)
+        if (landed !== payload.shape) {
+          spinner.stop("Not applied", 1)
+          prompts.log.error(`The API accepted the request but the agent's shape is '${landed ?? "not set"}', not '${payload.shape ?? "not set"}'. Check: iris agents get ${args.id}`)
+          process.exitCode = 1
+          prompts.outro("Done")
+          return
+        }
+      }
+
       spinner.stop(`${success("✓")} Updated: ${bold(String(a.name ?? a.id))}`)
 
       printDivider()
@@ -754,6 +894,11 @@ const AgentsUpdateCommand = cmd({
         const cfg: any = a.config
         const tools = Array.isArray(cfg?.tools) ? cfg.tools : (Array.isArray(cfg) ? cfg : [])
         printKV("Allowlist", tools.length ? `${tools.length} tools` : "(none)")
+      }
+      if (wantsAutonomy) printKV("Autonomy", describeAutonomy(a.config).label)
+      if (wantsShape) {
+        printKV("Shape", describeShape(a))
+        printKV("Shape URL", shapeUrl(a.id, shapeOf(a), PUBLIC_SITE))
       }
       printDivider()
 
@@ -1128,6 +1273,8 @@ const AgentsBulkDeleteCommand = cmd({
         // Fetch agents and filter
         const params = new URLSearchParams({ per_page: "500" })
         if (args.search) params.set("search", args.search)
+        if (args.bloq) params.set("bloq_id", String(args.bloq))
+        if (args.orphaned) params.set("orphaned", "1")
         const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents?${params}`)
         const ok = await handleApiError(res, "List agents")
         if (!ok) { spinner.stop("Failed", 1); return }
@@ -1135,8 +1282,18 @@ const AgentsBulkDeleteCommand = cmd({
         const raw = (await res.json()) as Record<string, any>
         let agents: any[] = firstArray(raw?.data)
 
+        // Never bulk-delete on a predicate the payload cannot answer: with bloq_id absent,
+        // `!a.bloq_id` is true for EVERY agent, so --orphaned selected the whole account (#189967).
+        const refusal = bulkDeleteRefusal(agents, { orphaned: !!args.orphaned, bloq: args.bloq })
+        if (refusal) {
+          spinner.stop("Refused", 1)
+          prompts.log.error(refusal)
+          process.exitCode = 1
+          prompts.outro("Nothing deleted")
+          return
+        }
         if (args.bloq) agents = agents.filter((a: any) => a.bloq_id === args.bloq)
-        if (args.orphaned) agents = agents.filter((a: any) => !a.bloq_id)
+        if (args.orphaned) agents = filterByOwnership(agents, { orphaned: true }).agents
         if (args.inactive) agents = agents.filter((a: any) => !a.active)
 
         targetIds = agents.map((a: any) => a.id)
@@ -1822,9 +1979,96 @@ const AgentsInboxCommand = cmd({
   },
 })
 
+/**
+ * `iris agents desktop-sync` (#189425) — every IRIS agent on the account becomes an opencode
+ * agent in the Desktop app and TUI picker, with full local tools. See lib/desktop-agents.ts
+ * for why the generated permissions look the way they do.
+ */
+const AgentsDesktopSyncCommand = cmd({
+  command: "desktop-sync",
+  aliases: ["sync-desktop"],
+  describe: "put your IRIS agents in the IRIS Desktop agent picker, with full use of your machine",
+  builder: (yargs) =>
+    yargs
+      .option("agent", { alias: "a", describe: "only these agent IDs (comma-separated); deletes nothing", type: "string" })
+      .option("max", { describe: `how many agents the picker holds (0 = no limit); pinned agents always count`, type: "number", default: DEFAULT_MAX_DESKTOP_AGENTS })
+      .option("pin", { describe: "always include these agent IDs (comma-separated) — remembered for future syncs", type: "string" })
+      .option("unpin", { describe: "stop always including these agent IDs (comma-separated)", type: "string" })
+      .option("dir", { describe: "agents directory (default: the opencode config dir)", type: "string" })
+      .option("dry-run", { describe: "show what would change, write nothing", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro("◈  IRIS Agents → Desktop") }
+    const token = await requireAuth()
+    if (!token) { process.exitCode = 1; return }
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { process.exitCode = 1; return }
+
+    const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents?per_page=500`)
+    if (!(await handleApiError(res, "List agents"))) { process.exitCode = 1; return }
+    const agents = firstArray(((await res.json()) as any)?.data)
+
+    const only = args.agent
+      ? new Set(String(args.agent).split(",").map((x) => Number(x.trim())).filter(Number.isInteger))
+      : undefined
+    const dir = args.dir ?? join(Global.Path.config, "agents")
+    const existing = new Map<string, string>()
+    if (existsSync(dir)) {
+      for (const f of readdirSync(dir)) if (f.endsWith(".md")) existing.set(f, readFileSync(join(dir, f), "utf8"))
+    }
+    // Pins live with the user, not the account, so an automatic sync on Desktop launch keeps them.
+    const pinsFile = join(installHome(), ".iris", "desktop-agents.json")
+    const ids = (v: unknown) => String(v ?? "").split(",").map((x) => Number(x.trim())).filter((n) => Number.isInteger(n) && n > 0)
+    let pinned = new Set<number>()
+    try { pinned = new Set(ids((JSON.parse(readFileSync(pinsFile, "utf8")).pinned ?? []).join(","))) } catch {}
+    if (args.pin || args.unpin) {
+      for (const n of ids(args.pin)) pinned.add(n)
+      for (const n of ids(args.unpin)) pinned.delete(n)
+      if (!args["dry-run"]) {
+        mkdirSync(join(installHome(), ".iris"), { recursive: true })
+        writeFileSync(pinsFile, JSON.stringify({ pinned: [...pinned].sort((a, b) => a - b) }, null, 2) + "\n")
+      }
+    }
+    const roster = only ? undefined : selectRoster(agents, args.max ?? DEFAULT_MAX_DESKTOP_AGENTS, pinned)
+    const plan = planDesktopSync(agents, existing, only, roster)
+
+    if (!args["dry-run"]) {
+      mkdirSync(dir, { recursive: true })
+      for (const w of plan.write) writeFileSync(join(dir, w.file), w.content)
+      for (const f of plan.remove) unlinkSync(join(dir, f))
+    }
+
+    const changed = plan.write.length + plan.remove.length
+    if (args.json) {
+      await writeJson({
+        dir,
+        dry_run: args["dry-run"],
+        written: plan.write.map((w) => ({ file: w.file, id: w.id, name: w.name })),
+        removed: plan.remove,
+        hand_written_skipped: plan.handWritten,
+        picker_size: roster?.size ?? null,
+        pinned: [...pinned],
+        restart_required: changed > 0 && !args["dry-run"],
+      })
+      return
+    }
+    const verb = args["dry-run"] ? "would " : ""
+    for (const w of plan.write) prompts.log.success(`${verb}write ${w.file}  ${dim(`#${w.id} ${w.name}`)}`)
+    for (const f of plan.remove) prompts.log.info(`${verb}remove ${f}  ${dim("(agent no longer on your account)")}`)
+    for (const f of plan.handWritten) prompts.log.warn(`${f} is hand-written — left alone ${dim("(delete it to let sync manage it)")}`)
+    if (!changed) prompts.log.info(dim("Already in sync."))
+    prompts.outro(
+      changed && !args["dry-run"]
+        ? `${changed} change(s) in ${dir} — restart IRIS Desktop (or start a new TUI session) to see them`
+        : dir,
+    )
+  },
+})
+
 export const PlatformAgentsCommand = cmd({
   command: "agents",
-  describe: "manage IRIS platform agents — pull, push, diff, CRUD, assign",
+  describe: "manage IRIS platform agents — install packs, pull, push, diff, CRUD, assign, pause/resume/stop",
   builder: (yargs) =>
     yargs
       .command(AgentsListCommand)
@@ -1836,6 +2080,14 @@ export const PlatformAgentsCommand = cmd({
       .command(AgentsDiffCommand)
       .command(AgentsDeleteCommand)
       .command(AgentsBulkDeleteCommand)
+      .command(AgentsPauseCommand)
+      .command(AgentsResumeCommand)
+      .command(AgentsStopCommand)
+      .command(AgentsWatchCommand)
+      .command(AgentsTakeOverCommand)
+      .command(AgentsHandBackCommand)
+      .command(AgentsRunsCommand)
+      .command(AgentsReplayCommand)
       .command(AgentsChatCommand)
       .command(AgentsProveCommand)
       .command(AgentsAssignCommand)
@@ -1846,7 +2098,10 @@ export const PlatformAgentsCommand = cmd({
       .command(AgentsJoinCommand)
       .command(AgentsLeaveCommand)
       .command(AgentsExportCommand)
+      .command(AgentsPacksCommand)
+      .command(AgentsInstallCommand)
       .command(AgentsBenchCommand)
+      .command(AgentsDesktopSyncCommand)
       .demandCommand(),
   async handler() {},
 })

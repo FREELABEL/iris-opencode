@@ -336,6 +336,175 @@ const DaemonInstallCommand = cmd({
   },
 })
 
+const DaemonGrantAccessCommand = cmd({
+  command: "grant-access",
+  aliases: ["fix-access"],
+  describe: "give the daemon macOS Full Disk Access (Mail, Messages) — opens the pane, restarts, verifies",
+  builder: (y) =>
+    y
+      .option("json", { type: "boolean", default: false, describe: "print the permissions object; exit 0 if granted" })
+      .option("no-wait", { type: "boolean", default: false, describe: "print the instructions and exit" }),
+  async handler(args) {
+    const { daemonCtl, daemonSupportsGrantAccess, runGrantAccess, UPDATE_COMMAND } = await import("./daemon-permissions")
+    if (!daemonCtl()) {
+      prompts.log.error(`Daemon not installed. Run: ${getInstallHint()}`)
+      process.exitCode = 1
+      return
+    }
+    // A daemon from before the guided fix has no such verb; forwarding would fail with
+    // daemonctl's usage text. Say what to do instead.
+    if (!daemonSupportsGrantAccess()) {
+      prompts.log.error(`This daemon predates grant-access. Update it first: ${UPDATE_COMMAND}`)
+      process.exitCode = 1
+      return
+    }
+    const extra = [...(args.json ? ["--json"] : []), ...(args["no-wait"] ? ["--no-wait"] : [])]
+    process.exitCode = await runGrantAccess(extra)
+  },
+})
+
+// `iris daemon update` (#191614) — install an exact iris-daemon commit atomically, here or on a
+// Hive node. The engine is daemon-update.ts; the fleet side is daemon-update-fleet.ts.
+const DaemonUpdateCommand = cmd({
+  command: "update",
+  describe: "update the daemon to an exact iris-daemon commit (verify, pre-flight, swap, restart, health-check, roll back)",
+  builder: (y) =>
+    y
+      .option("ref", { type: "string", default: "main", describe: "commit SHA or branch of FREELABEL/iris-daemon" })
+      .option("dry-run", { type: "boolean", default: false, describe: "print the plan (commits, files, deps, local changes) and change nothing" })
+      .option("force", { type: "boolean", default: false, describe: "replace an install with local changes (they are kept in ~/.iris/bridge.prev)" })
+      .option("node", { type: "string", describe: "run the update on this Hive node (name or id) and wait for its heartbeat to report the new commit" })
+      .option("health-timeout", { type: "number", default: 180, describe: "seconds the restarted daemon has to report the new commit before rolling back" })
+      .option("wait", { type: "number", default: 420, describe: "with --node: seconds to wait for the node's heartbeat" })
+      .option("detach-restart", { type: "boolean", default: false, describe: "for Hive tasks: swap + restart in a detached process after --restart-delay (the task runs inside the daemon)" })
+      .option("restart-delay", { type: "number", default: 10, describe: "with --detach-restart: seconds before the swap + restart" })
+      .option("finish", { type: "string", hidden: true })
+      .option("finish-delay", { type: "number", default: 0, hidden: true })
+      .option("user-id", { type: "number", describe: "user ID (with --node)" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    const du = await import("./daemon-update")
+    const say = args.json ? () => {} : (s: string) => console.log(s)
+
+    if (args.finish) {
+      const r = await du.finishUpdate(String(args.finish), (s) => console.log(`[${new Date().toISOString()}] ${s}`), Number(args["finish-delay"]) || 0)
+      console.log(JSON.stringify(r))
+      process.exitCode = r.ok ? 0 : 1
+      return
+    }
+
+    if (args.node) {
+      process.exitCode = await updateRemoteNode(args as any)
+      return
+    }
+
+    let r
+    try {
+      say(bold("  iris daemon update") + dim(args["dry-run"] ? "  (dry run — nothing will change)" : ""))
+      r = await du.runUpdate({
+        ref: String(args.ref),
+        dryRun: Boolean(args["dry-run"]),
+        force: Boolean(args.force),
+        detachRestart: Boolean(args["detach-restart"]),
+        restartDelaySec: Number(args["restart-delay"]),
+        healthTimeoutSec: Number(args["health-timeout"]),
+        log: say,
+      })
+    } catch (e: any) {
+      r = { ok: false, status: "error", from: null, to: null, detail: e?.message ?? String(e) }
+    }
+    if (args.json) {
+      const { plan, ...rest } = r as any
+      // `features` lets `iris hive rollout` tell this CLI from one that predates a fix — a release
+      // number cannot, since a node may run a build the rollout has never heard of.
+      console.log(JSON.stringify({ ...rest, features: ["keeps-added-files"], plan: plan ? { ...plan, current: plan.current } : undefined }, null, 2))
+    } else {
+      const line = `${r.status}${r.from || r.to ? `  ${du.short(r.from)} → ${du.short(r.to)}` : ""}`
+      if (r.ok) prompts.log.info(`${success("✓")} ${line}${r.detail ? `\n  ${r.detail}` : ""}`)
+      else prompts.log.error(`${line}${r.detail ? `\n  ${r.detail}` : ""}`)
+    }
+    process.exitCode = r.ok ? 0 : 1
+  },
+})
+
+async function updateRemoteNode(args: Record<string, any>): Promise<number> {
+  const du = await import("./daemon-update")
+  const fleet = await import("./daemon-update-fleet")
+  const { requireAuth, requireUserId } = await import("./iris-api")
+  const { resolveNode, fetchNodes, dispatchTaskAndWait } = await import("./platform-hive-nodes")
+  const { buildHiveRunBody } = await import("./hive-run-body")
+  const { fromHiveTask } = await import("./hive-script-result")
+  await requireAuth()
+  const userId = await requireUserId(args["user-id"])
+  if (!userId) return 1
+  const node = await resolveNode(userId, String(args.node))
+  if (!node) {
+    prompts.log.error(`No node matching "${args.node}". Run: iris hive nodes list`)
+    return 1
+  }
+  if (node.connection_status !== "online") {
+    prompts.log.error(`Node "${node.name}" is ${node.connection_status} — cannot dispatch.`)
+    return 2
+  }
+  // Resolve HERE, so the node installs exactly the commit this command then waits for.
+  const sha = await du.resolveRef(String(args.ref))
+  const before = fleet.describeNodeCommit((node as any).daemon_version, sha)
+  console.log(`  ${bold(node.name)}: ${before.text}`)
+  console.log(`  target: ${du.short(sha)} (${sha})`)
+
+  const script = fleet.remoteUpdateScript(sha, {
+    force: Boolean(args.force),
+    dryRun: Boolean(args["dry-run"]),
+    delaySec: Number(args["restart-delay"]) || 10,
+    healthTimeoutSec: Number(args["health-timeout"]) || undefined,
+  })
+  const body = buildHiveRunBody({ userId, nodeId: node.id, title: `iris daemon update → ${du.short(sha)}`, script, timeoutSec: 900 })
+  const { taskId, final } = await dispatchTaskAndWait(userId, body, (st) => console.log(dim(`  task: ${st}`)))
+  const res = fromHiveTask(final as any)
+  if (res.stdout) console.log(res.stdout.trimEnd())
+  if (res.stderr) console.log(dim(res.stderr.trimEnd()))
+  if (!final) {
+    prompts.log.error(`task ${taskId} did not finish — check: iris hive tasks get ${taskId}`)
+    return 1
+  }
+  if (res.exit_code !== 0) {
+    prompts.log.error(`the update did not start on ${node.name} (exit ${res.exit_code ?? "?"}) — nothing was swapped. task ${taskId}`)
+    return 1
+  }
+  if (args["dry-run"]) return 0
+  if (!/restart-scheduled/.test(res.stdout ?? "")) {
+    // up-to-date, or a status that never scheduled a restart — the output above says which.
+    return /up-to-date/.test(res.stdout ?? "") ? 0 : 1
+  }
+
+  console.log(dim(`  waiting up to ${args.wait}s for ${node.name}'s heartbeat to report ${du.short(sha)}…`))
+  const waited = await fleet.waitForNodeCommit(
+    async () => ((await fetchNodes(userId)).find((n) => n.id === node.id) as any)?.daemon_version,
+    sha,
+    { timeoutMs: Number(args.wait) * 1000, onTick: (seen) => console.log(dim(`  heartbeat: ${seen ? du.short(seen) : "no commit yet"}`)) },
+  )
+  // Ask the node what its helper recorded — the only way to tell "rolled back" from "helper died".
+  const lastTask = await dispatchTaskAndWait(
+    userId,
+    buildHiveRunBody({ userId, nodeId: node.id, title: "iris daemon update: outcome", script: "#!/bin/bash\ncat \"$HOME/.iris/daemon-update/last.json\"", timeoutSec: 60 }),
+  ).catch(() => null)
+  let last: any = null
+  try {
+    last = JSON.parse(fromHiveTask(lastTask?.final as any).stdout || "")
+  } catch {}
+  const outcome = du.describeLast(last, Date.now())
+  console.log(`  helper on ${node.name}: ${outcome.text}`)
+  if (waited.ok) {
+    prompts.log.info(`${success("✓")} ${node.name} runs ${du.short(sha)}`)
+    return 0
+  }
+  prompts.log.error(
+    `${node.name} did not report ${du.short(sha)} within ${args.wait}s (last: ${waited.seen ? du.short(waited.seen) : "no commit"}). ` +
+      `It rolls itself back if the new code fails its health check. Outcome: iris hive run ${node.name} "cat ~/.iris/daemon-update/last.json ~/.iris/daemon-update/finish.log"`,
+  )
+  return 1
+}
+
 const DaemonPassthroughCommand = cmd({
   command: "* [args..]",
   describe: false as any,
@@ -373,17 +542,19 @@ const DaemonPassthroughCommand = cmd({
 export const PlatformDaemonCommand = cmd({
   command: "bridge",
   aliases: ["daemon"],
-  describe: "manage the IRIS bridge — start, stop, status, restart, logs, register",
+  describe: "manage the IRIS bridge — start, stop, status, restart, update, logs, register",
   builder: (yargs) =>
     yargs
       .command(DaemonStartCommand)
       .command(DaemonStopCommand)
       .command(DaemonStatusCommand)
       .command(DaemonRestartCommand)
+      .command(DaemonUpdateCommand)
       .command(DaemonLogsCommand)
       .command(DaemonRunsCommand)
       .command(DaemonInstallCommand)
       .command(DaemonRegisterCommand)
+      .command(DaemonGrantAccessCommand)
       .command(DaemonPassthroughCommand)
       .strict(false),
   async handler() {},

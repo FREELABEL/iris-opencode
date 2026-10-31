@@ -47,6 +47,22 @@ export namespace Agent {
       "*": "allow",
       doom_loop: "ask",
       external_directory: "ask",
+      // KILLING PROCESSES BY NAME ASKS FIRST (desktop #184406): an agent retrying its own Excel
+      // COM script ran `Get-Process excel | Stop-Process -Force` / `taskkill /F /IM excel.exe` in a
+      // loop and closed every workbook the operator had open. A name matches processes the agent
+      // never started. `kill <pid>` stays allowed. This matcher is case-SENSITIVE (the desktop's is
+      // not on Windows), so the spellings models actually write are listed.
+      bash: {
+        "*": "allow",
+        "*Stop-Process*": "ask",
+        "*stop-process*": "ask",
+        "*spps *": "ask",
+        "*taskkill*": "ask",
+        "*TASKKILL*": "ask",
+        "*Taskkill*": "ask",
+        "*pkill *": "ask",
+        "*killall *": "ask",
+      },
       // mirrors github.com/github/gitignore Node.gitignore pattern for .env files
       read: {
         "*": "allow",
@@ -218,7 +234,7 @@ export namespace Agent {
     const defaultModel = input.model ?? (await Provider.defaultModel())
     const model = await Provider.getModel(defaultModel.providerID, defaultModel.modelID)
     const language = await Provider.getLanguage(model)
-    const system = SystemPrompt.header(defaultModel.providerID)
+    const system = await SystemPrompt.header(defaultModel.providerID)
     system.push(PROMPT_GENERATE)
     const existing = await list()
     const result = await generateObject({

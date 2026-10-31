@@ -18,6 +18,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync
 import { join } from "path"
 import { spawnSync, execFileSync } from "child_process"
 import { ensureYtDlp } from "./download"
+import { fetchWithYtDlp } from "./media-fetch"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -242,7 +243,7 @@ const ProfilesCommand = cmd({
 // Subcommands: Upload
 // ---------------------------------------------------------------------------
 
-const UploadCommand = cmd({
+export const UploadCommand = cmd({
   command: "upload <url>",
   describe: "smart upload (auto-detect type + metadata from URL)",
   builder: (y: any) =>
@@ -1198,9 +1199,10 @@ function fetchChannelCatalogue(ytdlp: string, url: string, limit?: number): Chan
     ...(limit ? ["--playlist-end", String(limit)] : []),
     "--print",
     "%(id)s%(title)s%(upload_date)s%(duration)s%(view_count)s%(like_count)s%(comment_count)s",
-    url,
   ]
-  const r = spawnSync(ytdlp, args, { encoding: "utf8", timeout: 900_000, maxBuffer: 64 * 1024 * 1024 })
+  // Through the shared engine (#190460): one cookie-less pass, and a self-update + retry when
+  // YouTube's player has moved past this yt-dlp, instead of an empty catalogue.
+  const r = fetchWithYtDlp(ytdlp, url, { args, cookies: "none", timeoutMs: 900_000, verbose: false })
   return (r.stdout || "")
     .split("\n")
     .map((l) => l.trim())
@@ -1240,9 +1242,12 @@ function vttToText(vtt: string): string {
 /** Pull a video's auto-captions and return them as plain text (null when absent). */
 function fetchTranscript(ytdlp: string, videoId: string, workDir: string): string | null {
   const outTpl = join(workDir, "%(id)s.%(ext)s")
-  spawnSync(
-    ytdlp,
-    [
+  fetchWithYtDlp(ytdlp, `https://www.youtube.com/watch?v=${videoId}`, {
+    cookies: "none",
+    selfUpdate: false,
+    verbose: false,
+    timeoutMs: 300_000,
+    args: [
       "--skip-download",
       "--no-warnings",
       "--ignore-errors",
@@ -1254,10 +1259,8 @@ function fetchTranscript(ytdlp: string, videoId: string, workDir: string): strin
       "vtt",
       "-o",
       outTpl,
-      `https://www.youtube.com/watch?v=${videoId}`,
     ],
-    { encoding: "utf8", timeout: 300_000 },
-  )
+  })
   const hit = readdirSync(workDir).find((f) => f.startsWith(videoId) && f.endsWith(".vtt"))
   if (!hit) return null
   const text = vttToText(readFileSync(join(workDir, hit), "utf8"))
@@ -1284,7 +1287,7 @@ const IngestChannelCommand = cmd({
     const userId = await requireUserId(args["user-id"])
     if (!userId) { prompts.outro("Done"); return }
 
-    const ytdlp = ensureYtDlp()
+    const ytdlp = await ensureYtDlp()
     if (!ytdlp) { prompts.outro("Done"); return }
 
     const sp = prompts.spinner()

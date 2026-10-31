@@ -1,13 +1,16 @@
 import { describe, expect, test } from "bun:test"
 import {
   buildTaskPayload,
+  checkContract,
   checkTaskRequest,
   describeApiError,
   describeTask,
   exitCodeForStatus,
   parseConfigArg,
+  parseDeadline,
   pickResultPayload,
   PROMPT_IS_PAYLOAD,
+  TERMINAL_STATUSES,
 } from "./hive-task-create"
 
 const noFiles = (p: string): string => {
@@ -271,5 +274,81 @@ describe("pickResultPayload", () => {
   test("a node that returned NOTHING is reported as nothing, not as an empty success", () => {
     expect(pickResultPayload({ result: null }).kind).toBe("none")
     expect(pickResultPayload({}).kind).toBe("none")
+  })
+})
+
+// ─── the delivery contract (#187568): --not-after, --key, --retries ─────────
+
+describe("parseDeadline", () => {
+  const NOW = Date.parse("2026-10-02T18:00:00.000Z")
+
+  test("a relative deadline counts from now", () => {
+    expect(parseDeadline("30s", NOW)).toEqual({ ok: true, iso: "2026-10-02T18:00:30.000Z" })
+    expect(parseDeadline("+5m", NOW)).toEqual({ ok: true, iso: "2026-10-02T18:05:00.000Z" })
+    expect(parseDeadline("2h", NOW)).toEqual({ ok: true, iso: "2026-10-02T20:00:00.000Z" })
+    expect(parseDeadline("1500ms", NOW)).toEqual({ ok: true, iso: "2026-10-02T18:00:01.500Z" })
+  })
+
+  test("a bare number is seconds, because that is what a shell script computes", () => {
+    expect(parseDeadline("8", NOW)).toEqual({ ok: true, iso: "2026-10-02T18:00:08.000Z" })
+  })
+
+  test("an absolute time is passed through as UTC", () => {
+    expect(parseDeadline("2026-10-02T13:00:00-05:00", NOW)).toEqual({ ok: true, iso: "2026-10-02T18:00:00.000Z" })
+  })
+
+  test("nonsense is refused here, not sent for the API to guess at", () => {
+    const r = parseDeadline("soon", NOW)
+    expect(r.ok).toBe(false)
+  })
+})
+
+describe("checkContract", () => {
+  test("retries without a key are refused before anything is sent", () => {
+    const r = checkContract({ retries: 2 })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain("--key")
+  })
+
+  test("retries with a key, or a key alone, are fine", () => {
+    expect(checkContract({ retries: 2, key: "ring-8-01" })).toEqual({ ok: true })
+    expect(checkContract({ key: "ring-8-01" })).toEqual({ ok: true })
+    expect(checkContract({})).toEqual({ ok: true })
+  })
+})
+
+describe("buildTaskPayload — the delivery contract", () => {
+  test("deadline, key and retries become the fields the API validates", () => {
+    const p = buildTaskPayload({
+      userId: 1, type: "sandbox_execute", prompt: "dronectl goto ring", config: {},
+      notAfter: "2026-10-02T18:00:08.000Z", idempotencyKey: " ring-8-01 ", retries: 2,
+    })
+    expect(p.not_after).toBe("2026-10-02T18:00:08.000Z")
+    expect(p.idempotency_key).toBe("ring-8-01")
+    // --retries 2 means two MORE tries: three attempts in all.
+    expect(p.max_attempts).toBe(3)
+  })
+
+  test("nothing is sent when nothing was asked for", () => {
+    const p = buildTaskPayload({ userId: 1, type: "mcp_call", config: { server: "s" } })
+    expect("not_after" in p).toBe(false)
+    expect("idempotency_key" in p).toBe(false)
+    expect("max_attempts" in p).toBe(false)
+  })
+
+  test("attempts are clamped to the API's bound", () => {
+    const p = buildTaskPayload({ userId: 1, type: "mcp_call", config: { server: "s" }, idempotencyKey: "k", retries: 50 })
+    expect(p.max_attempts).toBe(10)
+  })
+})
+
+describe("expired", () => {
+  test("is a finished state, so a waiting create stops waiting", () => {
+    expect(TERMINAL_STATUSES.has("expired")).toBe(true)
+  })
+
+  test("has its own exit code: it never ran, and was not a failure", () => {
+    expect(exitCodeForStatus("expired")).toBe(4)
+    expect(exitCodeForStatus("failed")).toBe(1)
   })
 })

@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { locateYtDlp, fetchWithYtDlp, isStaleSignatureError } from "./media-fetch"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import {
@@ -13,8 +14,11 @@ import {
   highlight, writeJson } from "./iris-api"
 import { spawnSync } from "child_process"
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs"
-import { transcribeLocal, resolveFfmpeg } from "../lib/transcription"
-import { resolveSttPolicy } from "../lib/stt-policy"
+import { transcribeLocal, resolveFfmpeg, resolveWhisper, localWhisperInstallHint, installLocalWhisper, noAudioVerdict } from "../lib/transcription"
+import { resolveSttPolicy, auditTranscription, sha256File } from "../lib/stt-policy"
+import { transcribeOnNode } from "../lib/transcribe-on-node"
+import { resolveNode } from "./platform-hive-nodes"
+import { resolveSshTarget, ensureSshUser, sshRun, pushFile } from "./hive-tailscale"
 import { treatTranscript, listTreatments, structureWalkthrough } from "../lib/walkthrough"
 import {
   serverTranscriptVerdict,
@@ -23,6 +27,7 @@ import {
   isStructuredTreatment,
 } from "../lib/transcribe-outcome"
 import { homedir, tmpdir } from "os"
+import { fileToProject } from "../lib/file-to-project"
 import { join, basename, extname, resolve } from "path"
 
 const WHISPER_MODEL_URL =
@@ -79,10 +84,11 @@ async function fetchGlossary(brandId?: number): Promise<string | undefined> {
  * libraries. So the advice pointed at the one thing that was fine.
  */
 function localDepAdvice(): string | null {
-  const whisper = which("whisper-cli") || which("whisper-cpp")
+  const whisper = resolveWhisper()
   const ff = resolveFfmpeg()
-  if (!whisper && !ff.bin) return `Install local transcription:  brew install whisper-cpp ffmpeg`
-  if (!whisper) return `Install local transcription:  brew install whisper-cpp`
+  const ffHint = process.platform === "darwin" ? "brew install ffmpeg" : "sudo apt install ffmpeg"
+  if (!whisper && !ff.bin) return `Install local transcription:  ${localWhisperInstallHint()}\n  and ffmpeg:  ${ffHint}`
+  if (!whisper) return `Install local transcription:  ${localWhisperInstallHint()}`
   if (!ff.bin) return ff.diagnosis || "ffmpeg is unavailable"
   // Both present and working — whatever failed was not a missing dependency, and claiming
   // otherwise would send someone to reinstall tools that are fine.
@@ -110,10 +116,16 @@ async function transcribeViaServer(
     // diagnosis is already on screen, and repeating the same paragraph reads as a second,
     // different problem.
     const missing = localAlreadyExplained ? null : localDepAdvice()
+    // Under --private the caller asked for exactly this refusal; offering the env var that
+    // undoes it would be advice to break their own promise.
     prompts.log.error(
-      "Transcription policy is 'sovereign' — audio was NOT uploaded.\n" +
+      (privateRun
+        ? "--private — on-device transcription did not succeed and the audio was NOT uploaded.\n"
+        : "Transcription policy is 'sovereign' — audio was NOT uploaded.\n") +
         (missing ? `  ${missing}\n` : "") +
-        "  Or allow the server for this run:  IRIS_TRANSCRIPTION_POLICY=standard",
+        (privateRun
+          ? `  Fix the on-device engine (iris transcribe --install-local), or send it to a Hive node you own.`
+          : "  Or allow the server for this run:  IRIS_TRANSCRIPTION_POLICY=standard"),
     )
     return null
   }
@@ -130,7 +142,7 @@ async function transcribeViaServer(
       sp.stop("Too large for the server", 1)
       prompts.log.error(
         `${sizeMb.toFixed(1)}MB exceeds the ${SERVER_MAX_MB}MB server limit.\n` +
-          `For files this size install local transcription: brew install whisper-cpp`,
+          `For files this size install local transcription: ${localWhisperInstallHint()}`,
       )
       return null
     }
@@ -195,6 +207,16 @@ export async function runLocalWhisper(
   const abs = resolve(filePath)
   let provider = "whisper.cpp (local)"
 
+  // A silent video has nothing to transcribe; say so before any engine (or the fallback between
+  // them) turns it into a misleading error (#188550).
+  const silent = noAudioVerdict(abs)
+  if (silent) {
+    if (asJson) await writeJson({ success: false, error: "no_audio_track", message: silent })
+    else prompts.log.error(silent)
+    process.exitCode = 1
+    return false
+  }
+
   // --remote skips the device entirely. Handled here rather than in a parallel branch so the
   // save location, JSON shape, and knowledge-base sync stay in ONE place — a second copy of
   // the persistence logic is a second thing to forget to update.
@@ -209,7 +231,9 @@ export async function runLocalWhisper(
 
   // Fetched BEFORE the spinner starts so a slow lookup does not look like slow transcription.
   // Undefined here just means unhinted — see fetchGlossary.
-  const glossary = await fetchGlossary(brandId)
+  // Under --private nothing goes over the network, not even this GET of vocabulary: the claim
+  // is provable as "zero connections" only if there are zero.
+  const glossary = privateRun ? undefined : await fetchGlossary(brandId)
 
   const sp = prompts.spinner()
   sp.start(glossary ? "Transcribing locally (whisper.cpp, brand vocabulary)…" : "Transcribing locally (whisper.cpp)…")
@@ -251,6 +275,45 @@ export async function runLocalWhisper(
  * Persist, sync, and print a finished transcript. Shared by every route into the command so
  * "where did it save" has one answer regardless of which engine produced the text.
  */
+/** Set from --for (#188392). Module-level because every route funnels through finishTranscript. */
+let fileFor: string | undefined
+
+/**
+ * --private (#188318, epic #188696): the caller's promise that this audio must never reach a
+ * cloud speech-to-text provider. `--local` was never that promise — it picks the on-device
+ * path, and when the engine fails the run FALLS BACK to an upload. Since the 2026-10-04
+ * default flip to cloud-first (#187808) that fallback is reachable on every machine.
+ *
+ * So --private does not add a new gate: it raises THIS run to the existing `sovereign`
+ * ceiling, which every upload path already consults (the static guard in stt-policy.test.ts
+ * keeps it that way). A second gate would be a second thing to forget.
+ *
+ * What it also closes, because each sends content off the machine to a model or store the
+ * caller did not name: a --treatment (the transcript text goes to a cloud LLM), --remote, and
+ * the best-effort knowledge-base sync. --for stays allowed — it is an explicit instruction
+ * to file the text in the caller's own project, and no audio goes with it.
+ */
+let privateRun = false
+
+export function privateRunRefusal(opts: { remote?: boolean; treatment?: string }): string | null {
+  if (opts.remote) {
+    return "--private and --remote contradict each other: --remote uploads the audio. Nothing was sent."
+  }
+  if (opts.treatment && opts.treatment !== "raw") {
+    return (
+      `--private refuses --treatment ${opts.treatment}: a treatment sends the transcript text to a cloud model.\n` +
+      "  Run without --treatment for a raw transcript that stays on this machine. Nothing was sent."
+    )
+  }
+  return null
+}
+
+/** Exported for the test that proves the ceiling holds with the engine broken. */
+export function enterPrivateRun(): void {
+  privateRun = true
+  process.env.IRIS_TRANSCRIPTION_POLICY = "sovereign"
+}
+
 async function finishTranscript(
   abs: string,
   text: string,
@@ -327,7 +390,7 @@ async function finishTranscript(
   const estimatedDuration = Math.round((text.split(/\s+/).length / 150) * 60)
   const syncUrl = sourceUrl ?? (/^https?:\/\//i.test(filePath) ? filePath : undefined)
   try {
-    if (syncUrl && text) {
+    if (syncUrl && text && !privateRun) {
       await irisFetch("/api/v1/transcripts", {
         method: "POST",
         body: JSON.stringify({
@@ -345,13 +408,34 @@ async function finishTranscript(
     // Silent — server sync is best-effort
   }
 
+  // --for <project> (#188392): file the transcript where the person said it was for. A failure
+  // here is reported and sets a non-zero exit — the transcript itself is still saved above, so
+  // nothing is lost, but "filed" must never be implied when it was not.
+  let filed: Awaited<ReturnType<typeof fileToProject>> | undefined
+  if (fileFor && text) {
+    const src = syncUrl ?? basename(abs)
+    const title = `Transcript — ${src}`
+    const content = [`**Source:** ${src}`, `**Transcribed by:** ${provider}`, "", text].join("\n")
+    filed = await fileToProject(fileFor, title, content)
+    if (!filed.ok) process.exitCode = 1
+  }
+
   if (asJson) {
-    await writeJson({ provider, file: abs, transcript_path: txtPath, text })
+    await writeJson({
+      provider,
+      ...(privateRun ? { private: true } : {}),
+      file: abs,
+      transcript_path: txtPath,
+      text,
+      ...(filed ? { filed: filed.ok ? { id: filed.id, bloq_id: filed.bloq.id, list_id: filed.listId } : { error: filed.error } } : {}),
+    })
     return true
   }
 
   printDivider()
   if (txtPath) console.log(`  ${bold("Saved:")}  ${highlight(txtPath)}`)
+  if (filed?.ok) console.log(`  ${bold("Filed:")}  ${highlight(`#${filed.id}`)} in ${filed.bloq.name} (#${filed.bloq.id})`)
+  else if (filed) console.log(`  ${bold("Not filed:")}  ${filed.error}`)
   printDivider()
   console.log()
   console.log(text)
@@ -384,21 +468,13 @@ function ensureDep(name: string, installCmd: string): string | null {
 // Local video download via yt-dlp (runs on user's machine, uses their cookies)
 // ============================================================================
 
+// The locate + retry ladder that used to live here is the shared engine now (#190460), so
+// `iris download` and the rest get the same fixes. Re-exported for existing importers.
+export { findYtDlp, ytDlpAsset } from "./media-fetch"
+
 async function downloadVideoLocally(url: string): Promise<string | null> {
-  let ytdlp = which("yt-dlp")
-  if (!ytdlp) {
-    prompts.log.info("Installing yt-dlp…")
-    const install = spawnSync("brew", ["install", "yt-dlp"], { stdio: "pipe", timeout: 120_000 })
-    if (install.status !== 0) {
-      // Try pip fallback
-      spawnSync("pip3", ["install", "--user", "yt-dlp"], { stdio: "pipe", timeout: 60_000 })
-    }
-    ytdlp = which("yt-dlp")
-    if (!ytdlp) {
-      prompts.log.error("yt-dlp not found. Install: brew install yt-dlp")
-      return null
-    }
-  }
+  const ytdlp = await locateYtDlp()
+  if (!ytdlp) return null
 
   const outPath = join(tmpdir(), `iris-dl-${Date.now()}.mp4`)
 
@@ -406,56 +482,22 @@ async function downloadVideoLocally(url: string): Promise<string | null> {
   // looser selectors, ending with NO -f so yt-dlp picks its own default. A single
   // hardcoded selector was the cause of "Requested format is not available"
   // (#147267) when YouTube didn't offer that exact format. Each entry is tried
-  // both with browser cookies and without.
-  const formatLadder = [
-    "bestaudio[ext=m4a]/bestaudio/best",
-    "bestaudio/best",
-    "worstaudio/worst",
-    null, // let yt-dlp choose its default format
-  ]
-  // Keep --no-warnings OFF so nsig/SSAP/"Only images" diagnostics reach stderr (#152290).
-  const commonArgs = ["--no-playlist", "-o", outPath]
-
-  const tryLadder = (): { path?: string; err: string } => {
-    let lastErr = "Download failed"
-    for (const fmt of formatLadder) {
-      const fmtArgs = fmt ? ["-f", fmt] : []
-      // Cookies first (Instagram/age-gated need them), then a cookieless attempt.
-      for (const browser of ["chrome", "firefox", "safari", null]) {
-        const cookieArgs = browser ? ["--cookies-from-browser", browser] : []
-        const dl = spawnSync(ytdlp!, [...fmtArgs, ...commonArgs, ...cookieArgs, url], {
-          encoding: "utf8",
-          timeout: 60_000,
-        })
-        if (dl.status === 0 && existsSync(outPath)) return { path: outPath, err: "" }
-        const out = (dl.stderr || dl.stdout || "").trim()
-        if (out) lastErr = out // keep the FULL stderr, not just the last line (#152290)
-      }
-    }
-    return { err: lastErr }
-  }
-
-  const isStaleSignatureError = (err: string) =>
-    /format is not available|requested format|nsig|only images|player|signature|ssap/i.test(err)
-
-  let res = tryLadder()
-  if (res.path) return res.path
-
-  // #152290 — a format/nsig failure is almost always a STALE yt-dlp that can't solve
-  // YouTube's current player signature. Self-update once and retry, rather than misleading
-  // the user with a bare "Requested format is not available".
-  if (isStaleSignatureError(res.err)) {
-    prompts.log.info(`yt-dlp couldn't solve YouTube's player (likely stale) — updating (${highlight("yt-dlp -U")})…`)
-    spawnSync(ytdlp, ["-U"], { stdio: "pipe", timeout: 120_000 })
-    spawnSync("brew", ["upgrade", "yt-dlp"], { stdio: "pipe", timeout: 120_000 }) // -U no-ops on brew installs
-    res = tryLadder()
-    if (res.path) return res.path
-  }
+  // both with browser cookies and without; a stale player self-updates once (#152290).
+  const res = fetchWithYtDlp(ytdlp, url, {
+    formats: ["bestaudio[ext=m4a]/bestaudio/best", "bestaudio/best", "worstaudio/worst", null],
+    // Keep --no-warnings OFF so nsig/SSAP/"Only images" diagnostics reach stderr (#152290).
+    args: ["--no-playlist", "-o", outPath],
+    expect: outPath,
+    timeoutMs: 60_000,
+    verbose: false,
+  })
+  if (res.ok) return outPath
 
   // Everything failed — surface the REAL yt-dlp error (full stderr incl. nsig/SSAP/"Only
   // images"), not a swallowed generic line.
-  prompts.log.error(res.err)
-  if (isStaleSignatureError(res.err)) {
+  const err = res.stderr || res.error || "Download failed"
+  prompts.log.error(err)
+  if (isStaleSignatureError(err)) {
     prompts.log.info(`yt-dlp may still be stale — ${highlight("brew upgrade yt-dlp")} or ${highlight("pip3 install -U yt-dlp")}`)
   }
   return null
@@ -520,6 +562,15 @@ export const PlatformTranscribeCommand = cmd({
         default: false,
         describe: "Transcribe the AUDIO on-device via whisper.cpp. Note this does not make the whole run offline — a --treatment still sends the resulting text to the server",
       })
+      .option("private", {
+        type: "boolean",
+        default: false,
+        describe: "This audio must never reach a cloud speech-to-text provider. On-device only, and if that fails the run fails — no upload fallback. Refuses --remote and --treatment; URLs are downloaded and transcribed here",
+      })
+      .option("on", {
+        type: "string",
+        describe: "Transcribe on one of YOUR Hive nodes (name or id) instead of this machine. The audio goes over your own Tailscale mesh, never through IRIS or a provider; implies --private",
+      })
       .option("remote", {
         type: "boolean",
         default: false,
@@ -543,10 +594,39 @@ export const PlatformTranscribeCommand = cmd({
         alias: "o",
         describe: "Write the transcript here (file or dir). Default: ~/.iris/transcripts",
       })
+      .option("install-local", {
+        type: "boolean",
+        default: false,
+        describe: "Install the on-device engine (whisper.cpp) for this machine, then exit. Linux builds it into ~/.iris/bin with no sudo",
+      })
+      .option("for", {
+        type: "string",
+        describe: "Project to file the transcript into, by name or id (e.g. --for \"Iris Orbit\")",
+      })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Transcribe")
+    fileFor = typeof args.for === "string" && args.for.trim() ? args.for.trim() : undefined
+
+    // #188318: a sovereign machine with no local engine could neither upload nor transcribe,
+    // and the only advice was a package manager Linux does not have.
+    if (args["install-local"]) {
+      const have = resolveWhisper()
+      if (have) {
+        prompts.log.info(`Already installed: ${have}`)
+        prompts.outro("Done")
+        return
+      }
+      const r = installLocalWhisper((m) => prompts.log.step(m))
+      if (r.ok) prompts.log.success(`On-device transcription ready: ${r.path} (${r.detail})`)
+      else {
+        prompts.log.error(r.detail)
+        process.exitCode = 1
+      }
+      prompts.outro("Done")
+      return
+    }
 
     // Answer "what can I do with a recording" without needing one.
     if (args["list-treatments"]) {
@@ -577,9 +657,38 @@ export const PlatformTranscribeCommand = cmd({
       return
     }
 
+    if (args.on) args.private = true // --on is a private route by construction; its refusals apply
+
+    if (args.private) {
+      const refusal = privateRunRefusal({ remote: !!args.remote, treatment: args.treatment as string | undefined })
+      if (refusal) {
+        if (args.json) await writeJson({ success: false, error: "private_refused", message: refusal })
+        else prompts.log.error(refusal)
+        process.exitCode = 1
+        prompts.outro("Not transcribed")
+        return
+      }
+      enterPrivateRun()
+    }
+
     const url = String(args.url)
-    const looksLikeFile =
-      args.local || (!/^https?:\/\//i.test(url) && existsSync(resolve(url)))
+    // A link is never a file. `--local` with a URL used to land here and fail with "File not
+    // found: https:/…" instead of downloading it (#190460) — the URL branch below handles --local.
+    const isLink = /^https?:\/\//i.test(url)
+    const looksLikeFile = !isLink && (args.local || existsSync(resolve(url)))
+
+    // ── Your own Hive node (--on) ───────────────────────────────
+    if (args.on) {
+      if (!looksLikeFile || /^https?:\/\//i.test(url)) {
+        prompts.log.error("--on takes a local audio/video file. Download it first, then: iris transcribe <file> --on <node>")
+        process.exitCode = 1
+        prompts.outro("Not transcribed")
+        return
+      }
+      await runOnNode(String(args.on), url, args)
+      prompts.outro(process.exitCode ? "Not transcribed" : "Done")
+      return
+    }
 
     // ── Local file ──────────────────────────────────────────────
     if (looksLikeFile) {
@@ -605,7 +714,9 @@ export const PlatformTranscribeCommand = cmd({
     // ── Social media (Instagram, TikTok, X, Threads, Facebook) ─
     // Download locally with yt-dlp (uses browser cookies), then whisper locally.
     // No server auth needed. No round trips. Just works.
-    if (isSocialMediaUrl(url) || args.local) {
+    // --private sends a URL here too: the server-side URL route (Supadata / gpt-transcribe)
+    // transcribes in the cloud, which is exactly what the caller ruled out.
+    if (isSocialMediaUrl(url) || args.local || privateRun) {
       const dlSpinner = prompts.spinner()
       dlSpinner.start("Downloading video…")
 
@@ -756,3 +867,50 @@ export const PlatformTranscribeCommand = cmd({
     prompts.outro("Done")
   },
 })
+
+/** Test seam: the upload path, so a test can prove it is live (and so a refusal test is not vacuous). */
+export const transcribeViaServerForTest = (absPath: string) => transcribeViaServer(absPath)
+
+async function runOnNode(nodeArg: string, filePath: string, args: any): Promise<void> {
+  const abs = resolve(filePath)
+  const fail = async (msg: string) => {
+    if (args.json) await writeJson({ success: false, error: "on_node_failed", message: msg })
+    else prompts.log.error(msg)
+    process.exitCode = 1
+  }
+  const silent = noAudioVerdict(abs)
+  if (silent) return fail(silent)
+
+  // The node LIST comes from IRIS (metadata: names, tailnet addresses). The audio does not.
+  const userId = await requireUserId(undefined)
+  if (!userId) return fail("Sign in first (iris login) — the node list is how --on finds your machine.")
+  const node = await resolveNode(userId, nodeArg)
+  if (!node) return fail(`No node matching "${nodeArg}". Run: iris hive nodes list`)
+  const resolved = await resolveSshTarget(node.id, node.name, { advertised: (node as any).tailscale_ip ?? null })
+  if ("error" in resolved) return fail(resolved.error)
+  const t = await ensureSshUser(node.id, resolved)
+  if ("error" in t) return fail(t.error)
+
+  const sp = prompts.spinner()
+  sp.start(`Sending to ${node.name} over your mesh and transcribing there…`)
+  const started = Date.now()
+  const { bytes, sha256: digest } = await sha256File(abs)
+  const r = await transcribeOnNode(t, abs, { run: sshRun, push: pushFile }, { language: args.language as string | undefined })
+  // The record on THIS machine says where the audio went. Provider names the node, so an audit
+  // of the laptop shows "hive:<node>" — not a cloud name, and not a misleading "local".
+  auditTranscription({
+    provider: `hive:${node.name}`,
+    policy: "sovereign",
+    bytes,
+    sha256: digest,
+    ms: Date.now() - started,
+    ok: r.ok,
+    ...(r.ok ? {} : { error: `${r.stage}: ${r.error}`.slice(0, 200) }),
+  })
+  if (!r.ok) {
+    sp.stop("Failed", 1)
+    return fail(`${node.name}: ${r.error}. The audio was not sent anywhere else.`)
+  }
+  sp.stop(`${success("✓")} Transcribed on ${node.name} ${dim(`(${r.provider}, removed from the node)`)}`)
+  await finishTranscript(abs, r.text, `${r.provider} on hive:${node.name}`, !!args.json, undefined, args.output as string | undefined, filePath, undefined)
+}

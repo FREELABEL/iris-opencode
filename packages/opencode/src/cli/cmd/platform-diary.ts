@@ -8,6 +8,7 @@ import { join, basename, resolve, dirname } from "path"
 import { homedir } from "os"
 import { execFileSync } from "child_process"
 import matter from "gray-matter"
+import { McpClients } from "../../mcp/clients"
 import { firstArray } from "../../util/array"
 
 // Endpoints (DiaryResource):
@@ -429,11 +430,10 @@ const DiaryWatchCommand = cmd({
   },
 })
 
-// The installed iris binary path for the boot service. In a compiled release
-// process.execPath IS the iris binary; fall back to `iris` on PATH.
+// The installed iris binary path for the boot service. launchd has no ~/.iris/bin on its PATH,
+// so a bare `iris` in ProgramArguments never starts (#184675) — always an absolute path.
 function irisBinaryPath(): string {
-  const p = process.execPath
-  return p && /iris/i.test(basename(p)) ? p : "iris"
+  return McpClients.irisBinary()
 }
 
 const macPlist = (bin: string, watchArgs: string[], logFile: string) => `<?xml version="1.0" encoding="UTF-8"?>

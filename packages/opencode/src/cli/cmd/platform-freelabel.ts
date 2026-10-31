@@ -6,6 +6,14 @@ import { homedir } from "os"
 import { which, retagMp3, id3Key } from "./download"
 import { analyzeAudio } from "./audio-analysis"
 import { printDivider, bold, dim } from "./iris-api"
+import { FreelabelStudioCommands } from "./platform-freelabel-studio"
+import { PlatformProfileCommand, ProfileLinksCommand } from "./platform-profile"
+import { PlatformContentCommand } from "./platform-content"
+import { PlatformEventsCommand } from "./platform-events"
+import { PlatformProductsCommand } from "./platform-products"
+import { PlatformServicesCommand } from "./platform-services"
+import { PlatformVenuesCommand } from "./platform-venues"
+import { PlatformProgramsCommand } from "./platform-programs"
 
 /** Seconds of audio in a file, via ffprobe. null when it cannot be read. */
 function durationOf(ffprobe: string, path: string): number | null {
@@ -289,7 +297,22 @@ export const CrateCommand: CommandModule = {
  */
 export const FreelabelCommand: CommandModule = {
   command: "freelabel",
-  describe: "FREELABEL brand tooling — DJ crate preparation for downloaded playlists",
-  builder: (yargs) => yargs.command(CrateCommand).demandCommand(1, "Specify: crate"),
+  describe: "FREELABEL — creators and everything on their freelabel.net page: profile, links, tracks, videos, events, products, memberships, share",
+  // One home for the creator journey. Each existing group is MOUNTED, not copied: `iris freelabel
+  // events` is `iris events`, so a fix in one is a fix in both, and the agent (which runs the CLI)
+  // reaches all of it the same way a person does.
+  builder: (yargs) =>
+    yargs
+      .command(FreelabelStudioCommands as any)
+      .command(PlatformProfileCommand as any)
+      .command(ProfileLinksCommand as any)
+      .command(PlatformContentCommand as any)
+      .command(PlatformEventsCommand as any)
+      .command(PlatformProductsCommand as any)
+      .command(PlatformProgramsCommand as any)
+      .command(PlatformServicesCommand as any)
+      .command(PlatformVenuesCommand as any)
+      .command(CrateCommand)
+      .demandCommand(1, "Specify a command — try: iris freelabel page <handle>"),
   handler: () => {},
 }

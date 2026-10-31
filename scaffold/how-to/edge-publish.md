@@ -173,7 +173,7 @@ releases you can roll back.
 
 | You want | Use |
 |---|---|
-| Your own domain in the address bar | **IRIS Cloud with a custom domain** — ask your IRIS contact to connect it. |
+| Your own domain in the address bar | **IRIS Cloud with a custom domain** — `iris how-to view your-own-domain`. |
 | The page's files on your own server | **This recipe.** |
 | A dashboard behind a login, on your own server | **IRIS Cloud with a custom domain.** Sign-in and per-person data need IRIS Cloud; a static file cannot check who is reading it. |
 

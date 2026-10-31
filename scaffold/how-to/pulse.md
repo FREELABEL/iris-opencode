@@ -4,42 +4,48 @@ level: beginner
 tags: [crm, pulse, reporting]
 duration_min: 10
 ---
-# How to: use Pulse — the readiness engine that proves IRIS is delivering
+# How to: score every account with Pulse, and know which one needs you today
 
 ## What this does
-Pulse is the autonomous readiness scoring engine. Every 15 minutes, the platform computes a 0–100 score for each engaged customer based on whether their requirements pass, their agents are alive, their comms are flowing, and their setup is complete. A daily 8 AM Central email digest summarizes the score + 24h activity. Use Pulse to prove (to yourself, your customer, and your investors) that IRIS is actually working.
+Pulse gives each of your accounts a single number out of 100, recomputed automatically, built
+from things that are actually true: your automated checks are passing, your agents are alive,
+somebody replied to an email recently, the setup is finished. You get a daily email with the
+score and what moved, and one command that ranks your whole book worst-first.
 
-**One score. Three triggers (cron, CLI, daily email). Same number everywhere.**
+It answers the question you cannot answer from a CRM stage: **which client is quietly going
+wrong, and what do I do about it before they notice.**
 
 ## Prerequisites
-- IRIS CLI authenticated (`iris auth login`)
-- A lead in the CRM you want to monitor (`iris leads create` or already exists)
-- Bridge daemon running on the customer's machine if you want comms ingest (`iris-daemon status`)
+- The IRIS CLI, signed in — `iris auth login`
+- At least one account in your CRM — `iris leads create`, or one you already have
+- Optional, for the reply-freshness part of the score: your machine connected to IRIS, so your
+  email and messages can be counted — `iris hive connect`, then `iris-daemon status`
 
-## Steps
+## 1. Tell Pulse what "working" means for this client
 
-### 1. Add a Pulse requirement to a lead
-A "requirement" is a Playwright check you want to run against a customer's deliverables — a URL test, a form-submission probe, a heartbeat check, etc. Adding one enrolls the lead in Pulse.
+A **requirement** is an automated check against something you deliver — their booking page
+returns 200, a form actually submits, a nightly job ran. Adding the first one enrolls the
+account in Pulse.
 
 ```bash
 iris leads requirements create <lead_id> \
   --name "Booking page returns 200" \
   --severity high \
   --frequency-minutes 60 \
-  --script-content "$(cat scripts/check-booking-page.js)"
+  --script-content "$(cat ./check-booking-page.js)"
 ```
 
-Severity weights: `blocker=4, high=3, medium=2, low=1` — failing a blocker drags the score 4× more than failing a low.
+- **Severity** is how much a failure hurts the score: `blocker` counts 4×, `high` 3×,
+  `medium` 2×, `low` 1×.
+- **`--frequency-minutes`** runs it on a schedule. Leave it off to only run it by hand.
 
-`frequency_minutes` makes it auto-run on schedule. Omit to run manually only.
+Checks run on your own machine through Hive, so a check can reach things only you can reach.
 
-### 2. View the score for a lead
+## 2. Read the score
 
 ```bash
 iris leads pulse <lead_id>
 ```
-
-Output includes:
 
 ```
 Pulse:    72/100  attention
@@ -47,343 +53,125 @@ Trend:    ▁▃▄▆█  (8 snapshots)
 Signals:  req 80/100 · live 100/100 · comms 60/100 · cfg 75/100
 ```
 
-The signals are weighted **35% requirements / 20% liveness / 18% comms freshness / 13% config / 7% deal health / 7% meeting engagement**. Null signals (e.g. unconverted lead with no liveness data) drop their weight and the rest renormalize.
+The trend is the last 8 recorded scores, oldest on the left. It appears once there are two.
 
-### 3. Run requirements manually
+## What the number is made of
+
+<svg viewBox="0 0 720 200" width="100%" height="auto" role="img" aria-label="Weighting of the six Pulse signals: requirements 35 percent, liveness 20, replies 18, setup 13, deal health 7, meetings 7" style="max-width:720px;margin:1rem 0">
+  <g font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="12" fill="currentColor">
+    <text x="0" y="24">your checks passing</text><text x="700" y="24" text-anchor="end">35%</text>
+    <text x="0" y="54">agents alive</text><text x="700" y="54" text-anchor="end">20%</text>
+    <text x="0" y="84">someone replied recently</text><text x="700" y="84" text-anchor="end">18%</text>
+    <text x="0" y="114">setup finished</text><text x="700" y="114" text-anchor="end">13%</text>
+    <text x="0" y="144">deal in order</text><text x="700" y="144" text-anchor="end">7%</text>
+    <text x="0" y="174">meetings happening</text><text x="700" y="174" text-anchor="end">7%</text>
+  </g>
+  <g fill="currentColor">
+    <rect x="215" y="12" width="437" height="14" rx="3" opacity="0.85"/>
+    <rect x="215" y="42" width="250" height="14" rx="3" opacity="0.72"/>
+    <rect x="215" y="72" width="225" height="14" rx="3" opacity="0.6"/>
+    <rect x="215" y="102" width="162" height="14" rx="3" opacity="0.48"/>
+    <rect x="215" y="132" width="87" height="14" rx="3" opacity="0.36"/>
+    <rect x="215" y="162" width="87" height="14" rx="3" opacity="0.36"/>
+  </g>
+</svg>
+
+| Signal | What makes it go up |
+|---|---|
+| **Your checks passing** (35%) | requirements that pass, weighted by severity |
+| **Agents alive** (20%) | the agents working this account have reported in within 2 hours |
+| **Someone replied recently** (18%) | an inbound email or message: under 7 days is full marks, under 30 days is partial, outbound-only counts for little |
+| **Setup finished** (13%) | integrations connected, and a profile of the tools in use |
+| **Deal in order** (7%) | proposal, contract, payment set up and received |
+| **Meetings happening** (7%) | a meeting in the last or next 7 days scores full |
+
+A signal with nothing to measure yet (a new account with no agents) drops out, and the rest
+are re-weighted. It never counts as zero — a score you have not earned is not the same as a
+score you have failed.
+
+## 3. Run the checks now, instead of waiting
 
 ```bash
-iris leads requirements run <lead_id> <requirement_id>     # one
-iris leads requirements run-all <lead_id>                  # all for this lead
+iris leads requirements run <lead_id> <requirement_id>   # one check
+iris leads requirements run-all <lead_id>                # every check on this account
 ```
 
-Requirements dispatch as `custom_playwright` Hive tasks. Bridge daemon picks them up and reports pass/fail back into `hive_config.last_status`.
-
-### 4. Account-level rollup
-
-```bash
-curl -H "Authorization: Bearer $FL_API_TOKEN" \
-  https://raichu.heyiris.io/api/v1/users/<user_id>/readiness?include=history \
-  | jq .
-```
-
-Returns the user's score aggregated across all their leads, with up to 30 prior snapshots for trend rendering.
-
-### 5. Receive the daily digest
-Already wired. Every paying user with at least one Pulse requirement gets an email at 8 AM Central. Subject: `IRIS daily digest — X/100 (band)`. Body: score, signals breakdown, 24h diary excerpt, dashboard CTA.
-
-To test-send manually:
-
-```bash
-# In production (via Railway scheduler — fires automatically)
-# OR locally for dry testing:
-docker compose exec api php artisan digest:send-daily --user=<user_id> --dry-run
-```
-
-## How the autonomous loop works
-
-```
-Every 15 min on the fl-api scheduler container:
-  pulse:tick fires
-    → snapshots readiness for engaged users + leads (anti-spam dedup
-      skips inserts when score equals prior snapshot)
-    → for each user with stale comms (no row in last 30 min),
-      dispatches a comms_sync Hive task with their stale lead IDs
-    → comms_sync POSTs to iris-api, lands in iris_db.node_tasks
-
-Bridge daemon on the user's machine:
-  → polls and receives comms_sync tasks
-  → spawns: ~/.iris/bin/iris leads sync-comms <ids…> --days 30 --limit 50
-  → iris fetches Gmail (Composio) + iMessage (bridge SQLite) + Apple Mail
-  → POSTs each batch to /api/v1/atlas/comms/ingest
-  → freelabelnet.lead_comms accumulates the messages
-
-Next pulse:tick reads the fresh lead_comms:
-  → comms_freshness signal recomputes (inbound <7d=100, <30d=60, …)
-  → score recomputes
-  → if changed, new readiness_runs row inserted (fuels the sparkline)
-
-Daily at 8 AM Central:
-  digest:send-daily fires
-    → eligibility = users with at least one Pulse requirement
-    → for each, builds HTML from readiness payload + diary
-    → sends via TransactionalEmailService → Resend
-```
-
-## Billing scorecard (`pulse-all`)
-
-The bulk scorecard surfaces Stripe billing data alongside pulse scores — MRR, active subs, next payment dates, and who's NOT on Stripe yet.
-
-### Run the scorecard
+## 4. Rank your whole book, worst first
 
 ```bash
 iris leads pulse-all
 ```
 
-Output:
-
-```
-ID      Name                  Pulse  Billing     $/mo      Next Due     Days   Paid
-#10001  Example Client A      87     Active      $50       2026-06-01   25d    $50
-#10024  Example Client B      51     Active      $100      2026-05-18   11d    $40
-#10038  Example Client C      54     NO SUB      $250      --           --     $0
-#10061  Example Client D      17     No Gate     --        --           --     $0
-
-Billing
-MRR: $0.00  |  Total Collected: $0.00
-0 active subs  |  0 past due
-
-2 NOT ON STRIPE
-  !  #101  Example Client One   https://heyiris.io/proposal/<token>...
-  !  #102  Example Client Two   https://heyiris.io/proposal/<token>...
-```
-
-### Billing status meanings
-
-| Status | Color | Meaning |
-|--------|-------|---------|
-| Active | green | Has an active Stripe subscription |
-| PAST DUE | red | Subscription payment failed |
-| Pending | yellow | Has a payment gate, checkout session created, waiting for signup |
-| NO SUB | red bold | Has a payment gate but no subscription — recovery target |
-| No Gate | red | No payment gate created yet |
-
-### Key columns
-
-- **$/mo** — Stripe subscription amount (falls back to gate amount if no sub)
-- **Next Due** — `current_period_end` from Stripe subscription
-- **Days** — countdown to next payment (green >7d, yellow <=7d, red = overdue)
-- **Paid** — lifetime `total_paid` from Stripe
-
-### JSON output for automation
-
-```bash
-iris leads pulse-all --json | jq '.summary'
-# { "mrr": 1240.00, "totalCollected": 9600.00, "activeSubs": 4, "pastDue": 0, "notOnStripe": [...] }
-
-# Find leads with active subs
-iris leads pulse-all --json | jq '.rows[] | select(.billingStatus == "active") | {id, name, monthlyAmount, nextPaymentDate}'
-
-# Find recovery targets (paid before but no active sub)
-iris leads pulse-all --json | jq '.rows[] | select(.totalPaid > 0 and .billingStatus != "active") | {id, name, totalPaid}'
-```
-
-### Auto-hydrate leads with unpaid gates
-
-```bash
-iris leads pulse-all --hydrate              # send AI follow-up emails
-iris leads pulse-all --hydrate --dry-run    # preview without sending
-```
-
-### Send recap status updates to clients (`--recap`)
-
-AI-generated production status emails — what you've built, what's next, what you need from them. Works on any lead with email, not just unpaid gates. 72h (3-day) throttle.
-
-```bash
-# Single lead
-iris leads pulse <id> --recap --dry-run          # preview without sending
-iris leads pulse <id> --recap --to you@yourdomain.com  # send to yourself first
-iris leads pulse <id> --recap                    # send to the client
-iris leads pulse <id> --recap --force            # bypass 72h throttle
-
-# Bulk — all eligible leads
-iris leads pulse-all --recap --dry-run           # preview all
-iris leads pulse-all --recap --to you@yourdomain.com   # all to yourself
-iris leads pulse-all --recap --force             # bypass throttle for all
-```
-
-Recaps focus on **production progress only** — no pricing, payments, or billing mentioned. The AI prompt pulls onboarding completion, requirements health, KB docs, tasks, and recent notes. The backend's RAG system adds semantically relevant lead notes on top.
-
-The `--recap` and `--hydrate` flags can run together — they serve different purposes (status update vs payment follow-up) and have independent throttle windows (72h vs 48h), but both reset based on the same "last outreach" timestamp.
-
-### Prepare dashboard (`--prepare`)
-
-Operational view sorted worst-first, with per-lead task counts, requirements health, KB completeness, meeting scores, and top 3 prioritized CLI commands to improve each lead's pulse.
+Every account with its score, and — where you take payment through IRIS — what they pay, when
+the next payment is due, and who has no subscription yet.
 
 ```bash
 iris leads pulse-all --prepare
 ```
 
-Output per lead:
+The same list sorted worst-first, and for each account the three commands that would raise its
+score the most:
 
 ```
-#10061  Example Client D  51/100  Pending
-        Tasks: 32 overdue · 72 pending · 0 done  |  Reqs: 0/2 passing  |  0/8 KB  |  mtg 90
+#10061  Example Client D  51/100
+        Tasks: 32 overdue · 72 pending  |  Checks: 0/2 passing  |  0/8 knowledge base
         1. iris leads kb 10061 --generate
         2. iris leads requirements run 10061
         3. iris leads content-engine create 20119
 ```
 
-Actions adapt to what's missing — KB generation, payment gates, requirements, content engine, meetings, task review, hydration, or recap. Leads with everything covered show "On track".
-
-The footer shows aggregate stats: average pulse, failing count, total tasks pending/overdue across all leads.
-
-### Filter by status or bloq
+Narrow it when you want one slice:
 
 ```bash
-iris leads pulse-all --status "In Negotiation"   # check negotiation pipeline
-iris leads pulse-all --bloq 40                    # filter to specific bloq
+iris leads pulse-all --status "In Negotiation"
+iris leads pulse-all --bloq <bloq_id>
+iris leads pulse-all --json | jq '.summary'     # for your own reporting
 ```
 
-### Common gotcha: lead not showing up
+## 5. Get it by email every morning
 
-If a paying customer doesn't appear in the scorecard, check their lead status:
+Once an account has at least one check, you get a daily digest at 8 AM Central: the score, what
+each signal contributed, what happened in the last 24 hours, and a link to the dashboard. There
+is nothing to switch on.
+
+## 6. Send the client a status update
 
 ```bash
-iris leads search "Customer Name"
-# If status is "In Negotiation" or "Prospected", update to Won:
-iris leads update <id> --status Won
+iris leads pulse <lead_id> --recap --dry-run              # read it first
+iris leads pulse <lead_id> --recap --to you@company.com   # send it to yourself
+iris leads pulse <lead_id> --recap                        # send it to the client
 ```
 
-The scorecard only shows Won leads by default. Active Stripe subscriptions on non-Won leads are invisible until the status is updated.
-
-## Common operations
-
-### Check what's currently dispatching
-
-```bash
-# All recent comms_sync Hive tasks (server side):
-iris hive tasks list --type comms_sync --limit 5
-```
-
-### Force a tick now (don't wait 15 min)
-
-```bash
-docker compose exec api php artisan pulse:tick
-```
-
-Output: `Snapshots — users: N new, M unchanged | leads: N new, M unchanged`
-plus `Comms sync — users: N dispatched, M skipped`.
-
-### Backfill comms for a specific lead
-
-```bash
-iris leads sync-comms <lead_id> --days 30 --limit 50
-```
-
-Silent batch ingest — emits one JSON line per lead. Use this when:
-- A new lead is added and you want history immediately
-- The autonomous loop hasn't picked them up yet
-- You're testing the pipeline
-
-### See the trend visually in TUI
-
-```bash
-iris leads pulse <lead_id>
-```
-
-Looks for `Trend:` line. Eight unicode block characters (`▁▂▃▄▅▆▇█`) representing the last 8 readiness_runs snapshots — leftmost is oldest, rightmost is most recent. Empty until at least 2 snapshots exist.
-
-## What feeds each signal
-
-```
-  requirements (35%)      bloq_workflows execution_mode='requirement'
-                           with hive_config.last_status:
-                             'passed'/'completed' = passing
-                             'failed'             = failing
-                             null                  = untested
-                           weighted by hive_config.severity
-
-  liveness (20%)           bloq_agents.last_heartbeat_at < 2h ago
-                           AND health_status NOT IN (paused_budget, paused)
-
-  comms_freshness (18%)    lead_comms latest sent_at:
-                             inbound <7d  = 100
-                             inbound <30d = 60
-                             inbound <90d = 30
-                             outbound only = 30
-                             nothing       = 0
-
-  config (13%)             integrations.count + users.stack_profile present
-
-  deal_health (7%)         has_payment_gate + payment_received + proposal + contract
-
-  meeting_engagement (7%)  som_lead_notes activity_type='meeting' + lead_tasks:
-                             meeting in <=7d (upcoming or past)  = 100
-                             meeting in 7–14d                    = 90
-                             meeting in last 30d                 = 60
-                             meeting >30d out                    = 40
-                             no meetings                        = null (redistributed)
-```
-
-## Cross-scope traversal (paying users)
-
-When a lead has `som_leads.converted_user_id` set (pointing to the User row they became), the lead's score INHERITS the user's liveness + config signals. Same person, two database rows, one score.
-
-```bash
-# To convert a lead → user (sets converted_user_id):
-iris customer setup <lead_id>    # FUTURE — see bug #80910
-```
-
-⚠️ As of May 2026, `iris customer setup` does NOT yet populate `converted_user_id`. The migration shipped, the readiness service traverses it, but the conversion flow doesn't write to it. Bug #80910 tracks this.
-
-## Run `iris scan` to populate the config signal
-
-The customer's machine has installed apps, sync folders, browser profiles. `iris scan` profiles all that and POSTs a stack profile to the backend. Boosts the config signal +20 points.
-
-```bash
-iris scan                # macOS only (v1.3.28+); profiles + posts
-iris scan --dry-run      # show what would be sent, don't post
-```
-
-The profile lands at `users.stack_profile` (JSON column). ClientReadinessService reads `stack_profile_present` to award config points.
+Written from what actually happened on the account — what shipped, what is next, what you need
+from them. It never mentions pricing or payments, so it is safe to send to the person who is
+not paying the invoice. Once every 72 hours per account unless you pass `--force`. Add
+`--recap` to `pulse-all` to do the whole book at once, and always preview with `--dry-run`.
 
 ## Gotchas
 
-### Bridge daemon must run the new iris binary
-After upgrading iris (`iris upgrade`), the daemon process has the OLD binary cached. Restart it:
+**A won deal that shows nothing.** `pulse-all` lists won accounts by default. If a paying client
+is missing, their stage is probably still "In Negotiation":
 
 ```bash
-iris-daemon restart
+iris leads search "Client Name"
+iris leads update <id> --status Won
 ```
 
-Without this, comms_sync tasks complete in ~200ms with empty output (because bridge spawned `iris` which wasn't found at the daemon's PATH).
+**The reply-freshness signal sits at zero.** That signal counts real email and messages, which
+needs your machine connected: `iris hive connect`, then `iris-daemon status`. Without it the
+signal drops out and the other five are re-weighted — the score is still valid, it just cannot
+see conversations.
 
-### `withoutOverlapping()` + Redis = stuck cron (don't add it)
-The fl-api Redis cache is shared across containers. If a container dies mid-tick, the lock persists forever and Laravel skips the schedule silently. We removed it from `pulse:tick` and `digest:send-daily`. Don't add it back without a TTL. Bug #80911.
+**You upgraded the CLI and checks went quiet.** The background service still holds the old
+version: `iris-daemon restart`.
 
-### Anti-spam dedup of `readiness_runs`
-The cron only inserts a snapshot if the score CHANGED from the previous snapshot. So you'll see far fewer than 96 rows/day per user. That's intentional — keeps the table small and the sparkline meaningful.
+**The trend line is empty.** It needs two recorded scores. A score is only recorded when it
+CHANGES, so a healthy, stable account records rarely — that is the intent, not a fault.
 
-### Comms freshness staleness threshold = 30 min
-A lead is "stale" (eligible for re-dispatch) if its newest `lead_comms.ingested_at` is older than 30 minutes. Tune in `RunDueRequirements::dispatchCommsSyncTasks` if you find it too chatty or too quiet.
+## What to do with the number
 
-### Eligibility for the daily digest
-Currently: any user with at least one `bloq_workflows.execution_mode='requirement'`. Will be tightened to "paying customers only" once Stripe webhook → `users_subscriptions` is wired (bug #80909).
-
-## Tables involved
-
-| Table | Purpose | Owner |
-|---|---|---|
-| `bloq_workflows` (where `execution_mode='requirement'`) | Requirements + their schedule + last status | fl-api |
-| `lead_comms` | Ingested iMessage / Gmail / Apple Mail messages | fl-api |
-| `bloq_agents` | Heartbeat status, health_status | fl-api |
-| `integrations` | Connected OAuth services | fl-api |
-| `users.stack_profile` (JSON column) | Output of `iris scan` | fl-api |
-| `readiness_runs` | Append-only score history (per scope+id) | fl-api |
-| `iris_db.node_tasks` | Hive task queue (where comms_sync lives) | iris-api |
-| `iris_db.compute_nodes` | Bridge daemons registered to users | iris-api |
-| `som_leads.converted_user_id` | Cross-scope link (lead → user) | fl-api |
-
-## Verifying the loop is firing
-
-```bash
-# 1. Cron registered?
-docker compose exec api php artisan schedule:list | grep -E "pulse:tick|digest"
-
-# 2. Recent snapshots in the trend log?
-mysql -e "SELECT scope, scope_id, score, created_at FROM readiness_runs ORDER BY id DESC LIMIT 5"
-
-# 3. Recent comms_sync Hive tasks (server side)?
-mysql -e "SELECT id, status, created_at FROM iris_db.node_tasks WHERE type='comms_sync' ORDER BY created_at DESC LIMIT 5"
-
-# 4. Bridge picking them up?
-iris-daemon status   # should show "active" + recent heartbeat
-```
-
-If snapshots are appearing every 15 min and comms_sync tasks are completing in 5–10 seconds (not 200ms), the loop is healthy.
-
-## What this unlocks commercially
-
-Pulse is the proof-of-value layer. Stop being an agency that sells AI; start being a workforce platform that emails every customer a daily readiness score. The score moves on requirement passes, comms freshness, agent liveness, integration completeness. When a customer's score drops, you both see it and act before they churn. When it climbs to healthy, you have a screenshot for your investor deck.
-
-This is the single mechanism that turns "we built you AI agents" (intangible) into "your account scored 87/100 yesterday, here's what's failing" (tangible, measurable, monthly-recurring-revenue-defending).
+Pulse is only worth having if it changes what you do on a Monday. The useful habit is short:
+open `iris leads pulse-all --prepare`, take the worst two accounts, run the three commands it
+suggests for each, and send a recap to any client who has not heard from you in a fortnight.
+The score climbing is the evidence you can show them — and the drop is the warning you get
+before they go quiet.

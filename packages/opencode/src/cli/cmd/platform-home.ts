@@ -593,7 +593,10 @@ const DevicesCommand = cmd({
 
 export const HomeCommand = cmd({
   command: "home [words..]",
-  describe: "control smart-home lights — iris home living blue · iris home run party.py",
+  // Written for the router as much as for --help: `iris intent` finds this command by these words.
+  // "lights" alone also matched `home devices pair-hue`, the setup command, which took every request.
+  describe:
+    "turn a room's lights or lamp on/off, set a color (blue, purple, red, warm white) or brightness — iris home living blue · iris home bedroom off · iris home kitchen dim",
   builder: (y) =>
     // Room names are free text. Under the global strict() + recommendCommands(), "lights"
     // was answered "Did you mean list?" and "trey" "Did you mean play?" — nothing ran.

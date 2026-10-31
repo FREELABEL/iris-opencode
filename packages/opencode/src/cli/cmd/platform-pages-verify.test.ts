@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test"
-import { normalizeForMatch, detectLane, detectGated, parseHtmlDocument, buildBespokeJsonContent } from "./platform-pages"
+import {
+  normalizeForMatch,
+  detectLane,
+  detectGated,
+  parseHtmlDocument,
+  buildBespokeJsonContent,
+  carryForward,
+  resolveGate,
+} from "./platform-pages"
 
 /**
  * These guard the read-back surface against the exact false signals measured on
@@ -157,5 +165,54 @@ describe("detectGated", () => {
 
   test("a bespoke page with no data-page and no gate copy reads normally", () => {
     expect(detectGated("<!DOCTYPE html><html><body><h1>The harness</h1></body></html>")).toBe(false)
+  })
+})
+
+// #187241 / #187461 — every republish deleted the page's bindings and gate settings.
+describe("publish-html keeps what the file does not decide", () => {
+  const doc = parseHtmlDocument(`<style>.hx{color:red}</style><div class="hx">new</div>`)
+  const live = {
+    version: "2.0",
+    render_mode: "html",
+    html: "<div>old</div>",
+    css: "",
+    requireOtp: true,
+    bindings: { rows: "cottonwood-vendors" },
+    gate: { type: "open_workspace", allowedDomains: ["freelabel.net"] },
+  }
+
+  test("bindings and gate survive; html and css are replaced", () => {
+    const { json, kept } = carryForward(live, buildBespokeJsonContent(doc, "standalone"))
+    expect(json.bindings).toEqual({ rows: "cottonwood-vendors" })
+    expect(json.gate).toEqual({ type: "open_workspace", allowedDomains: ["freelabel.net"] })
+    expect(json.html).toBe(`<div class="hx">new</div>`)
+    expect(kept.sort()).toEqual(["bindings", "gate"])
+  })
+
+  test("switching lane does not carry the other lane's body", () => {
+    const custom = { version: "2.0", type: "landing", components: [{ type: "CustomHtml" }], theme: { mode: "dark" } }
+    const { json } = carryForward(custom, buildBespokeJsonContent(doc, "standalone"))
+    expect(json.components).toBeUndefined()
+    expect(json.theme).toBeUndefined()
+  })
+
+  test("a first publish has nothing to keep", () => {
+    expect(carryForward(undefined, { html: "x" })).toEqual({ json: { html: "x" }, kept: [] })
+  })
+
+  test("no flag on an update keeps the live gate — both flags, as they are", () => {
+    expect(resolveGate(undefined, { requires_auth: true, json_content: { requireOtp: true } })).toEqual({
+      requiresAuth: true,
+      requireOtp: true,
+      kept: true,
+    })
+    // requires_auth without requireOtp is the frictionless form: kept, not "upgraded"
+    expect(resolveGate(undefined, { requires_auth: true, json_content: {} }).requireOtp).toBe(false)
+  })
+
+  test("an explicit flag decides; a new page with no flag is public", () => {
+    expect(resolveGate(false, { requires_auth: true }).requiresAuth).toBe(false)
+    expect(resolveGate(true, null)).toEqual({ requiresAuth: true, requireOtp: true, kept: false })
+    expect(resolveGate(undefined, null).requiresAuth).toBe(false)
   })
 })

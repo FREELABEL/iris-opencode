@@ -21,6 +21,10 @@ function Get-InstallFunction {
 }
 
 $ps1 = Join-Path (Join-Path $PSScriptRoot "..") "install.ps1"
+# Its dependency, loaded FIRST. Extracting one function and running it means its callees have
+# to be extracted too — without this every download case fails with "command not found", which
+# reads as a broken fetch rather than a harness that did not load what the fetch calls.
+Invoke-Expression (Get-InstallFunction -Path $ps1 -Name "Invoke-IrisDownload")
 Invoke-Expression (Get-InstallFunction -Path $ps1 -Name "Install-IrisDaemonSource")
 
 $pass=0; $fail=0

@@ -18,8 +18,18 @@
  * fails CI when something is missing — new capabilities become discoverable by default
  * instead of when someone remembers.
  *
- *   bun run script/build-capabilities.ts            # writes capabilities.json
+ *   bun run script/build-capabilities.ts            # writes capabilities.json (commands + how-tos)
  *   bun run script/build-capabilities.ts --check    # exits 1 if stale (CI)
+ *   bun run script/build-capabilities.ts --workspace-out <path>
+ *       # ALSO writes {"entries":[…playbook+skill…]} to <path> — for the PRIVATE server repo
+ *       # (fl-iris-api resources/cli-capabilities/workspace.json). Needs IRIS_PROJECT_ROOT.
+ *   --out <path>   write the public index somewhere other than capabilities.json (tests)
+ *   --prune        let --workspace-out drop workspace entries absent from this machine
+ *
+ * IP-07 phase 2 (#189850): capabilities.json is committed to a PUBLIC repo and embedded in every
+ * public binary, so it carries ONLY repo-sourced kinds (commands, how-tos). Workspace playbooks
+ * and skills are private prose; they go to --workspace-out and are served to signed-in users by
+ * GET /api/v1/cli/capabilities. capabilities-ip-guard.test.ts fails if either leaks back.
  */
 
 import { readdirSync, readFileSync, writeFileSync, existsSync, statSync } from "fs"
@@ -29,7 +39,19 @@ import { redactSecrets } from "../src/util/redact-secrets"
 import { execSync } from "child_process"
 
 const ROOT = join(import.meta.dir, "..")
-const OUT = join(ROOT, "capabilities.json")
+function flag(name: string): string | undefined {
+  const i = process.argv.indexOf(name)
+  if (i === -1) return undefined
+  const v = process.argv[i + 1]
+  if (!v || v.startsWith("--")) {
+    console.error(`${name} needs a path`)
+    process.exit(2)
+  }
+  return v
+}
+const OUT = flag("--out") ?? join(ROOT, "capabilities.json")
+/** Where workspace (playbook + skill) entries go. Unset → they are not collected at all. */
+const WORKSPACE_OUT = flag("--workspace-out")
 const PROJECT = process.env.IRIS_PROJECT_ROOT || join(homedir(), "sites/freelabel")
 
 /**
@@ -58,6 +80,9 @@ type Entry = {
   run: string
   /** Free-text blob that search matches against. */
   haystack: string
+  /** Set on a playbook written for ONE client (frontmatter `client:`). `intent` offers it only
+   *  when the request names that client (#187829). */
+  client?: string
 }
 
 // ── commands ────────────────────────────────────────────────────────────────
@@ -115,7 +140,7 @@ function collectBlocks(dir: string): BlockIndex {
   // parent's own import statement is the only answer that is right by construction; a
   // child genuinely does live in another file (PlaybookDraftCommand does).
   const imports = new Map<string, Map<string, string>>()
-  const aliasPairs: Array<[string, string]> = []
+  const aliasPairs: Array<[string, string, string]> = []
 
   for (const file of readdirSync(dir)) {
     if (!file.endsWith(".ts") || file.endsWith(".test.ts")) continue
@@ -137,7 +162,9 @@ function collectBlocks(dir: string): BlockIndex {
     // only `cmd(` silently dropped the first product built on the new helper from the
     // index — the command resolved for a human typing `iris lexicon` and did not exist
     // for any agent reading capabilities.json, which is the worse of the two failures.
-    for (const m of src.matchAll(/(?:export\s+)?const ([A-Za-z0-9_]+(?:Command|Group|Cmd))\s*=\s*(?:cmd|productCommand)\(\s*\{/g)) {
+    // `(?:Export)?`: a group DEFINED as `export const HiveHostCommandExport = cmd({…})` was never
+    // collected, so `iris hive host` and every subcommand were missing from the index.
+    for (const m of src.matchAll(/(?:export\s+)?const ([A-Za-z0-9_]+(?:Command|Group|Cmd)(?:Export)?)\s*=\s*(?:cmd|productCommand)\(\s*\{/g)) {
       const openIdx = m.index! + m[0].length - 1
       const body = readBlock(src, openIdx)
       if (!body) continue
@@ -161,14 +188,19 @@ function collectBlocks(dir: string): BlockIndex {
     // original — so the walker looked up a name it had never collected and silently
     // skipped the command. `iris heartbeat` is a top-level product and was missing from
     // the index entirely because of this one line, with nothing anywhere reporting a gap.
-    aliasPairs.push(...[...src.matchAll(/export\s+const\s+([A-Za-z0-9_]+(?:Command|Group|Cmd))\s*=\s*([A-Za-z0-9_]+(?:Command|Group|Cmd))\s*$/gm)].map((m) => [m[1], m[2]] as [string, string]))
+    aliasPairs.push(...[...src.matchAll(/export\s+const\s+([A-Za-z0-9_]+(?:Command|Group|Cmd)(?:Export)?)\s*=\s*([A-Za-z0-9_]+(?:Command|Group|Cmd))\s*$/gm)].map((m) => [m[1], m[2], abs] as [string, string, string]))
   }
 
   // Resolve after every file is scanned — an alias may point at a block defined later.
-  for (const [alias, target] of aliasPairs) {
+  // An alias names the block in ITS OWN file. Two files can each define a `HiveFilesCommand`
+  // (the peer `hive files` and the own-node `hive fs`); handing the alias both let the parent's
+  // file win and indexed the wrong command.
+  for (const [alias, target, file] of aliasPairs) {
     if (byName.has(alias)) continue
     const blocks = byName.get(target)
-    if (blocks) byName.set(alias, blocks)
+    if (!blocks) continue
+    const own = blocks.filter((b) => b.file === file)
+    byName.set(alias, own.length ? own : blocks)
   }
 
   return { byName, imports }
@@ -212,7 +244,7 @@ function collectCommands(): Entry[] {
   // exist.
   const indexFile = join(ROOT, "src/index.ts")
   const indexSrc = readFileSync(indexFile, "utf-8")
-  const registered = [...indexSrc.matchAll(/\.command\((?:reg\()?([A-Za-z0-9_]+Command)/g)].map((m) => m[1])
+  const registered = [...indexSrc.matchAll(/\.command\((?:reg\(|withAccessFooter\()?([A-Za-z0-9_]+Command(?:Export)?)\b/g)].map((m) => m[1])
 
   // index.ts lives outside src/cli/cmd, so its imports are not in the map yet — and it is
   // the parent of every top-level verb, i.e. the one file whose resolution matters most.
@@ -315,7 +347,12 @@ function collectCommands(): Entry[] {
     const nextSeen = new Set(seen).add(`${b.file}::${constName}`)
 
     // Direct children only — those named in THIS block's builder.
-    const childNames = [...b.body.matchAll(/\.command\((?:reg\()?([A-Za-z0-9_]+(?:Command|Group|Cmd))/g)].map((m) => m[1])
+    // `withAccessFooter(X)` (#190012) only appends a help footer — read through it like `reg(X)`,
+    // or every command it wraps silently drops out of the capability index.
+    // `\b` + optional `Export`: without them `.command(HiveFilesCommandExport)` was read as
+    // `HiveFilesCommand`, which resolved to a DIFFERENT command of that name in the parent's own
+    // file — so `iris hive fs` and its subcommands were missing and `hive files` indexed twice.
+    const childNames = [...b.body.matchAll(/\.command\((?:reg\(|withAccessFooter\()?([A-Za-z0-9_]+(?:Command|Group|Cmd)(?:Export)?)\b/g)].map((m) => m[1])
     const childTokens: string[] = []
     for (const child of childNames) {
       childTokens.push(...walk(child, path, nextSeen, depth + 1, b.file))
@@ -483,6 +520,7 @@ function collectMarkdown(
       // matches — a search for "atlas" should not hit every curl example whose URL contains
       // the word.
       haystack: [name, describe, prose(src)].join(" ").toLowerCase(),
+      ...(fm.client ? { client: fm.client } : {}),
     })
   }
   return out
@@ -499,23 +537,69 @@ function collectMarkdown(
 const TERMS: Record<string, string[]> = {
   bespoke: ["custom html", "hand-designed page", "artifact", "branded page", "one-pager", "landing page", "report page", "custom css"],
   pages: ["genesis", "page builder", "composable page", "publish a page", "web page", "site", "website"],
-  bloqs: ["board", "kanban", "list", "project", "workspace", "notes"],
+  // "bloq" itself reaching the `atlas` commands is done in searchCapabilities, not here (#188493).
+  bloqs: ["bloq", "board", "kanban", "list", "project", "workspace", "notes"],
   // The plain-English sales ask found only page tools on 2026-09-19 ("find people who need my
   // product from my website then email them and book calls") — none of its words were here.
   leads: ["crm", "contacts", "prospects", "pipeline", "find people", "find customers", "customers", "outreach", "cold email", "email them", "book calls", "book a call", "sales", "lead generation"],
   agents: ["ai agent", "assistant", "bot"],
   hive: ["compute node", "distributed", "remote machine", "fleet", "daemon"],
+  // `hive host run` / `hive vpn connect` (#179098): plain asks reached neither.
+  "hive host run": ["run a command on", "remote command", "on a remote host", "on my server", "azure vm", "check a service"],
+  "hive vpn connect": ["remote desktop", "rdp"],
+  // How people ask for `hive fs` (#187956). Its name holds no word they type, so "move files" ranked
+  // the PEER `hive files` 2nd and `hive fs` 10th, and "copy file to another machine" missed it.
+  "hive fs": [
+    "move files", "move a file", "copy files", "copy a file", "copy file", "send a file", "send files", "send file",
+    "transfer files", "transfer a file", "file transfer", "upload a file", "another machine", "other machine",
+    "other computer", "my computers", "between machines", "stream a backup", "database backup", "dump to",
+  ],
+  // #191176 — your own machines' models, served to your gateway (hive/<model>).
+  "hive models": ["serve my models", "local models", "ollama", "my gpu", "my own gpu", "self-hosted model", "run models on my machine", "gpu marketplace"],
+  // #191163 — IRIS as the ACP client: run another coding agent from IRIS, and keep it steerable.
+  "acp run": ["run claude code", "use codex", "gemini cli", "switch agents", "other coding agents", "agent client protocol"],
+  "run-other-coding-agents": [
+    "run claude code",
+    "use codex",
+    "gemini cli",
+    "switch agents",
+    "other coding agents",
+    "agent client protocol",
+    "keep a session open",
+    "steer an agent",
+  ],
   "data-sources": ["obsidian", "imessage", "apple mail", "calendar", "local data", "bridge"],
   integrations: ["oauth", "connect", "composio", "third party", "api key"],
   // "sync team skills into claude code and cursor" found production-deploy (#186212).
   playbook: ["workflow", "recipe", "automation", "runbook", "skills", "team skills", "shared rules", "claude code", "cursor", "agents.md"],
   "how-to": ["guide", "tutorial", "documentation", "docs", "instructions"],
+  // "which command should I use" found atlas use / genesis / deliver:carousel — never `intent`,
+  // the command that answers exactly that (#186677).
+  intent: ["which command", "what command", "which tool", "what tool", "what should i run", "what do i run", "pick a command", "choose a command", "tool selection", "in plain english", "natural language"],
   memory: ["remember", "recall", "knowledge base", "rag"],
   bug: ["issue", "report a problem", "defect", "ticket"],
+  // "reply to … in my email" saw only iMessage and `sites reply` (#188613): nothing tied a person's
+  // email words to the `mail` / `gmail` commands. `email` itself is the NEWSLETTER command — a list,
+  // not a person — so the word "email" has to reach mail too, and the newsletter words stay with it.
+  // Split by verb: reading words alone dragged "reply to … in my email" onto gmail inbox/unread.
+  // No "gmail" here: Gmail commands already match that word by name, and as a synonym it sent
+  // "is my gmail integration actually working" to gmail inbox instead of integrations health.
+  mail: ["email", "emails", "e-mail", "my email", "outlook"],
+  // Reading: "check my email" lost its route when "gmail" stopped being a mail synonym.
+  "gmail inbox": ["check my email", "check email", "my inbox", "new emails", "any emails", "what's in my inbox", "whats in my inbox"],
+  "mail send": ["reply to", "write back", "respond to", "email him", "email her", "email them", "send an email", "send email", "email back"],
   // A published note reads at /n/<uuid> and `atlas use` is the ONLY verb that returns its
   // text — but its own words ("pull a shared Atlas item's context") share nothing with how
   // anyone asks for it. Every phrasing below returned zero hits for `atlas use` on 2026-08-27,
   // which is how a five-step curl + HTML-scrape gets reinvented for a one-command job.
+  // The money paths (#187829). Each request below never reached the picker: its words share
+  // nothing with the command that answers it, so Decide was choosing among wrong answers.
+  // "how much have I spent on AI" → atlas:ledger; "get paid by a client" → invoices mark-paid;
+  // "launch a paid ad on X" → copycat-ads at 99%; "create a database" → atlas:database ddl.
+  usage: ["spent on ai", "ai spend", "how much have i spent", "ai cost", "ai bill", "token spend"],
+  collect: ["get paid", "collect payment", "take payment", "payment link", "charge a client", "charge the client"],
+  "x-ads": ["paid ad on x", "ad on x", "ads on x", "x ads", "twitter ads", "ad campaign on x"],
+  datasets: ["database", "data table", "store records", "schema"],
   "atlas use": [
     "read a note",
     "note text",
@@ -530,14 +614,24 @@ const TERMS: Record<string, string[]> = {
   ],
 }
 
+/** Kinds whose source is the private WORKSPACE repo — never written to the public index. */
+const isWorkspaceKind = (k: string) => k === "playbook" || k === "skill"
+
+// PUBLIC: sourced from this repo, committed, embedded in the binary.
 const entries: Entry[] = [
   ...collectCommands(),
   ...collectMarkdown(HOWTO_DIR, "how-to", (n) => `iris how-to ${n}`),
-  // Project content lives in the workspace, not in this package. IRIS_PROJECT_ROOT lets CI
-  // and the generator agree on where that is; the default is the repo this CLI ships beside.
-  ...collectMarkdown(join(PROJECT, ".iris/playbooks"), "playbook", (n) => `iris playbook run ${n}`),
-  ...collectMarkdown(join(PROJECT, ".claude/skills"), "skill", (n) => `iris playbook run ${n}`),
 ]
+
+// PRIVATE: project content lives in the workspace, not in this package. IRIS_PROJECT_ROOT lets
+// the generator find it; the default is the repo this CLI ships beside. Only collected when it
+// has somewhere private to go.
+const workspaceEntries: Entry[] = WORKSPACE_OUT
+  ? [
+      ...collectMarkdown(join(PROJECT, ".iris/playbooks"), "playbook", (n) => `iris playbook run ${n}`),
+      ...collectMarkdown(join(PROJECT, ".claude/skills"), "skill", (n) => `iris playbook run ${n}`),
+    ]
+  : []
 
 /**
  * WORKSPACE-SOURCED ENTRIES ARE ADDITIVE. A missing playbook means "not on THIS machine".
@@ -558,16 +652,18 @@ const entries: Entry[] = [
  */
 const PRUNE = process.argv.includes("--prune")
 
-if (!PRUNE && !process.argv.includes("--check") && existsSync(OUT)) {
+const preserved = new Set<Entry>()
+// The previous WORKSPACE output (not the public index — it no longer holds these) is what an
+// additive regeneration preserves.
+if (WORKSPACE_OUT && !PRUNE && existsSync(WORKSPACE_OUT)) {
   try {
-    const prev = JSON.parse(readFileSync(OUT, "utf-8"))
+    const prev = JSON.parse(readFileSync(WORKSPACE_OUT, "utf-8"))
     const key = (e: any) => `${e.kind}:${e.name}`
-    const found = new Set(entries.map(key))
-    const kept = ((prev.entries ?? []) as any[]).filter(
-      (e) => (e.kind === "playbook" || e.kind === "skill") && !found.has(key(e)),
-    )
+    const found = new Set(workspaceEntries.map(key))
+    const kept = ((prev.entries ?? []) as any[]).filter((e) => isWorkspaceKind(e.kind) && !found.has(key(e)))
     if (kept.length) {
-      entries.push(...kept)
+      workspaceEntries.push(...kept)
+      for (const e of kept) preserved.add(e)
       console.warn(
         `note: kept ${kept.length} playbook/skill entr${kept.length === 1 ? "y" : "ies"} whose source is not in this ` +
           `workspace — they belong to a machine that has it.\n` +
@@ -581,22 +677,33 @@ if (!PRUNE && !process.argv.includes("--check") && existsSync(OUT)) {
 }
 
 // Fold the terminology into each entry's haystack so an intent search reaches it.
-for (const e of entries) {
+// (Entries preserved from a previous workspace output already carry their synonyms.)
+for (const e of [...entries, ...workspaceEntries]) {
+  if (preserved.has(e)) continue
   const syn = TERMS[e.name]
   if (syn) e.haystack += " " + syn.join(" ")
 }
 
+const byKindName = (a: Entry, b: Entry) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name)
+
+// Top-level fields: `terms` is the hand-written map above (it lives in this public script, not in
+// any playbook), `counts` covers ONLY the public kinds. The playbook/skill counts used to be here
+// too; they are workspace-derived, so they moved out — `iris find` recounts after its runtime merge.
 const index = {
   generated_note: "GENERATED by script/build-capabilities.ts — do not edit by hand. Run `bun run capabilities` to refresh.",
   counts: {
     command: entries.filter((e) => e.kind === "command").length,
     "how-to": entries.filter((e) => e.kind === "how-to").length,
-    playbook: entries.filter((e) => e.kind === "playbook").length,
-    skill: entries.filter((e) => e.kind === "skill").length,
     total: entries.length,
   },
   terms: TERMS,
-  entries: entries.sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name)),
+  entries: entries.sort(byKindName),
+}
+
+// Belt and braces: nothing workspace-sourced can reach the public file, whatever changes above.
+if (index.entries.some((e) => isWorkspaceKind(e.kind))) {
+  console.error("refusing to write: a playbook/skill entry reached the PUBLIC index (IP-07 #189850)")
+  process.exit(1)
 }
 
 const json = JSON.stringify(index, null, 2) + "\n"
@@ -612,53 +719,27 @@ if (process.argv.includes("--check")) {
   const prev = JSON.parse(readFileSync(OUT, "utf-8"))
   const key = (e: any) => `${e.kind}:${e.name}`
 
-  // ONLY COMPARE WHAT THIS CHECKOUT CAN SEE.
+  // PUBLIC KINDS ONLY (IP-07 #189850). The committed index no longer carries playbooks or skills,
+  // so the check compares commands and how-tos — both sourced from THIS checkout, so the result no
+  // longer depends on whether the private workspace happens to be on the machine (it used to skip
+  // 406 entries on CI and on any contributor's laptop).
   //
-  // Playbooks and skills live in the WORKSPACE repo, not in this package, and collectMarkdown
-  // returns [] for a directory that is not there. On a CI runner that checks out only
-  // iris-opencode, every one of them therefore reads as "indexed but gone" — 83 phantom
-  // deletions — and the check can never pass no matter what anyone commits.
-  //
-  // Nobody had noticed because the workflow was never actually executing (#180527); the first
-  // real run failed on this. The pre-push hook has always guarded it with a directory test.
-  // Now the generator does, so the answer does not depend on which harness invoked it.
-  const projectAvailable =
-    existsSync(join(PROJECT, ".iris/playbooks")) || existsSync(join(PROJECT, ".claude/skills"))
-  const comparable = (k: string) => projectAvailable || (k !== "playbook" && k !== "skill")
-
-  const before = new Set<string>(
-    ((prev.entries ?? []) as any[]).filter((e) => comparable(e.kind)).map(key),
-  )
-  const after = new Set<string>(entries.filter((e) => comparable(e.kind)).map(key))
-
-  if (!projectAvailable) {
-    // Say what was NOT checked. A narrowed check that does not announce its narrowing reads as
-    // full coverage, which is the failure this whole guard exists to avoid.
-    const skipped = ((prev.entries ?? []) as any[]).filter((e) => !comparable(e.kind)).length
-    console.warn(
-      `note: workspace content not present — ${skipped} playbook/skill entries were NOT checked.\n` +
-        `      Set IRIS_PROJECT_ROOT to include them. Commands and how-tos are checked in full.`,
+  // A workspace entry IN the committed file is not drift, it is a leak: fail on it outright.
+  const leaked = ((prev.entries ?? []) as any[]).filter((e) => isWorkspaceKind(e.kind)).map(key)
+  if (leaked.length) {
+    console.error(
+      `capabilities.json carries ${leaked.length} PRIVATE playbook/skill entr${leaked.length === 1 ? "y" : "ies"} — ` +
+        `they must not be committed to the public repo (IP-07 #189850).\n    ${leaked.slice(0, 10).join("\n    ")}\n` +
+        `  fix: bun run capabilities   (workspace entries go to --workspace-out, for the server)`,
     )
+    process.exit(1)
   }
+
+  const before = new Set<string>(((prev.entries ?? []) as any[]).map(key))
+  const after = new Set<string>(entries.map(key))
   const added = [...after].filter((k) => !before.has(k))
-  const allRemoved = [...before].filter((k) => !after.has(k))
-
-  // The SAME reasoning the generator applies, or the two disagree about the same file: a
-  // playbook/skill that is absent here is absent from THIS WORKSPACE, not deleted. Blocking on
-  // it makes the check unpassable on any machine holding a partial slice — which is every
-  // machine — and an unpassable check is one people route around.
-  //
-  // Repo-sourced kinds are different: commands and how-tos live in this checkout, so their
-  // absence IS a deletion and still blocks.
-  const removed = allRemoved.filter((k) => !k.startsWith("playbook:") && !k.startsWith("skill:"))
-  const workspaceMissing = allRemoved.filter((k) => k.startsWith("playbook:") || k.startsWith("skill:"))
-  if (workspaceMissing.length) {
-    console.warn(
-      `note: ${workspaceMissing.length} indexed playbook/skill entr${workspaceMissing.length === 1 ? "y is" : "ies are"} ` +
-        `not in this workspace — kept, because absence here is not deletion.\n` +
-        `      ${workspaceMissing.slice(0, 6).join(", ")}${workspaceMissing.length > 6 ? `, …${workspaceMissing.length - 6} more` : ""}`,
-    )
-  }
+  // Commands and how-tos live in this checkout, so their absence IS a deletion and blocks.
+  const removed = [...before].filter((k) => !after.has(k))
 
   // IS THE TREE DIRTY? It changes what the drift means (#180517).
   //
@@ -747,6 +828,20 @@ if (process.argv.includes("--check")) {
 
 writeFileSync(OUT, json)
 console.log(
-  `wrote ${OUT}\n  ${index.counts.command} commands · ${index.counts["how-to"]} how-tos · ` +
-  `${index.counts.playbook} playbooks · ${index.counts.skill} skills = ${index.counts.total} capabilities`,
+  `wrote ${OUT}\n  ${index.counts.command} commands · ${index.counts["how-to"]} how-tos = ${index.counts.total} capabilities`,
 )
+
+if (WORKSPACE_OUT) {
+  // Exactly the shape the server serves under `entries` (it adds `version` itself).
+  const workspace = { entries: workspaceEntries.sort(byKindName) }
+  writeFileSync(WORKSPACE_OUT, JSON.stringify(workspace, null, 2) + "\n")
+  const n = (k: string) => workspaceEntries.filter((e) => e.kind === k).length
+  console.log(
+    `wrote ${WORKSPACE_OUT}  (PRIVATE — do not commit to this repo)\n  ${n("playbook")} playbooks · ${n("skill")} skills`,
+  )
+} else {
+  console.log(
+    `  playbooks and skills are NOT in this file (private — IP-07 #189850). For the server copy:\n` +
+      `  IRIS_PROJECT_ROOT=<workspace> bun run capabilities --workspace-out <fl-iris-api>/resources/cli-capabilities/workspace.json`,
+  )
+}

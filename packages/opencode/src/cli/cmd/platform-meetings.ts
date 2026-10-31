@@ -1,4 +1,7 @@
 import { cmd } from "./cmd"
+import { parseActionItems, proposalAction, proposalBody, proposalPrompt, proposalTitle, PROPOSALS_LIST, AGENT_TASK_TYPE } from "./meeting-actions"
+import { hiveFetch, resolveNode } from "./platform-hive-nodes"
+import { buildTaskPayload, describeApiError } from "./hive-task-create"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import {
@@ -518,10 +521,20 @@ export const PlatformMeetingsCommand = cmd({
       .option("export", { type: "string", describe: "write the rendered transcript to this path and stop" })
       .option("limit", { type: "number", default: 15 })
       .option("json", { type: "boolean" })
-      .option("timeout", { alias: "t", type: "number", default: 300 }),
+      .option("timeout", { alias: "t", type: "number", default: 300 })
+      // #188354: a meeting's action items become PROPOSALS — nothing runs until a person approves.
+      .option("propose-tasks", { type: "boolean", describe: "with --file/--bloq: file each action item as a proposed task to approve (nothing runs)" })
+      .option("approve", { type: "number", describe: "run one proposed task (its item id) on a Hive node — needs --node" })
+      .option("node", { type: "string", describe: "with --approve: the Hive node whose IRIS agent runs it" }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Meetings")
+
+    // ── approve one proposed task → a Hive task on a node you own (#188354) ──
+    if (args.approve !== undefined) {
+      await approveProposal(Number(args.approve), args.node as string | undefined)
+      return
+    }
 
     // Listing everything is harmless. BULK FILING everything is not: Wispr records system
     // audio continuously, so its sessions include voicemail, personal calls and whatever was
@@ -670,6 +683,12 @@ export const PlatformMeetingsCommand = cmd({
       const made = (await res.json()) as any
       const itemId = made?.data?.id ?? made?.id
       printKV("Filed", `bloq ${bloqId} → "${args.list}" list${itemId ? ` (item #${itemId})` : ""}`)
+
+      if (args["propose-tasks"]) {
+        await fileProposals(userId, Number(bloqId), body, { itemId, title })
+      }
+    } else if (args["propose-tasks"]) {
+      prompts.log.warn("--propose-tasks needs a place to file them: pass --bloq <id> or --file.")
     }
 
     // ── optionally push through the lead-intel path too ──────────────────────
@@ -688,3 +707,92 @@ export const PlatformMeetingsCommand = cmd({
     prompts.outro(success("Done"))
   },
 })
+
+/** File each action item in `body` as a pending proposal on the bloq. Nothing is dispatched. */
+async function fileProposals(userId: number, bloqId: number, body: string, meeting: { itemId?: number | string; title: string }): Promise<void> {
+  const items = parseActionItems(body)
+  if (!items.length) {
+    prompts.log.info("No action items found in the summary — no tasks proposed.")
+    return
+  }
+  const listId = await resolveMeetingsList(userId, bloqId, PROPOSALS_LIST)
+  if (!listId) {
+    prompts.log.error(`Could not find or create the "${PROPOSALS_LIST}" list on bloq ${bloqId}`)
+    process.exitCode = 1
+    return
+  }
+  let filed = 0
+  for (const item of items) {
+    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}/lists/${listId}/items`, {
+      method: "POST",
+      body: JSON.stringify({ title: proposalTitle(item), content: proposalBody(item, meeting), status: "pending" }),
+    })
+    if (!res.ok) {
+      prompts.log.warn(`Could not file "${item.action.slice(0, 60)}": HTTP ${res.status}`)
+      process.exitCode = 1
+      continue
+    }
+    const made = (await res.json()) as any
+    const id = made?.data?.id ?? made?.id
+    filed++
+    console.log(`  ${dim("proposed")} #${id}  ${item.action}${item.owner !== "unassigned" ? dim(`  — ${item.owner}`) : ""}`)
+  }
+  printKV("Proposed", `${filed} of ${items.length} action item(s) → "${PROPOSALS_LIST}". Nothing has run.`)
+  console.log(dim(`  approve one: iris meetings --approve <item id> --node <node>`))
+}
+
+/** Dispatch one approved proposal to a Hive node, exactly once, and record it on the item. */
+async function approveProposal(itemId: number, nodeName: string | undefined): Promise<void> {
+  const fail = (msg: string, code = 1) => {
+    prompts.log.error(msg)
+    process.exitCode = code
+    prompts.outro("Done")
+  }
+  if (!nodeName) return fail("--approve needs --node <node>: the machine it should run on (iris hive nodes list)", 2)
+  if (!(await requireAuth())) return fail("not signed in")
+  const userId = await requireUserId(undefined)
+  if (!userId) return fail("no user id")
+
+  const res = await irisFetch(`/api/v1/user/bloqs/list/item/${itemId}`)
+  if (!res.ok) return fail(`Could not read item ${itemId} (HTTP ${res.status})`)
+  const item = ((await res.json()) as any)?.data ?? {}
+  const action = proposalAction(item.content)
+  if (!action) return fail(`Item ${itemId} is not a meeting proposal — only items filed by --propose-tasks can be approved here.`, 2)
+  const meetingTitle = String(item.content).match(/from the meeting\*\* "([^"]+)"/)?.[1]
+
+  const node = await resolveNode(userId, nodeName)
+  if (!node) return fail(`No node matching "${nodeName}". Run: iris hive nodes list`, 2)
+
+  const payload = buildTaskPayload({
+    userId,
+    type: AGENT_TASK_TYPE,
+    nodeId: node.id,
+    prompt: proposalPrompt(action, meetingTitle),
+    title: `Meeting action: ${action}`.slice(0, 200),
+    config: {},
+    // Approving twice returns the SAME task instead of running the action twice.
+    idempotencyKey: `meeting-proposal-${itemId}`,
+  })
+  const created = await hiveFetch("/api/v6/nodes/tasks", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  })
+  if (!created.ok) return fail(describeApiError(created.status, await created.text().catch(() => "")))
+  const out = (await created.json()) as { task: { id: string; status: string }; duplicate?: boolean }
+
+  const note = out.duplicate
+    ? null
+    : `\n\n## Approved ${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC\nRunning on **${node.name}** (its IRIS agent) as Hive task \`${out.task.id}\`. Watch it: \`iris hive tasks ${out.task.id}\``
+  if (note) {
+    await irisFetch(`/api/v1/user/bloqs/list/item/${itemId}`, {
+      method: "PUT",
+      body: JSON.stringify({ status: "approved", content: String(item.content ?? "").replace(/\s+$/, "") + note }),
+    })
+  }
+  printKV("Task", out.task.id)
+  printKV("Node", `${node.name} (${node.connection_status})`)
+  printKV("Status", out.duplicate ? `already approved — this is the original task (${out.task.status})` : out.task.status)
+  prompts.outro(success("Approved"))
+}
+

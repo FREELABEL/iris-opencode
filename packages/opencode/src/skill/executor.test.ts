@@ -3,6 +3,7 @@ import { unlinkSync, existsSync } from "fs"
 import { homedir } from "os"
 import { join } from "path"
 import {
+  isDangerousCommand,
   parseSteps,
   interpolate,
   interpolateInput,
@@ -13,6 +14,9 @@ import {
   resolveArgs,
   validatePlan,
   executeSkill,
+  stepEnv,
+  resolveBash,
+  NoPosixShellError,
   getRun,
   type StepDef,
   type StepResult,
@@ -2030,7 +2034,7 @@ echo ok
     expect(steps[0].mode).toBe("manual")
   })
 
-  test("step heading with no title is skipped (regex requires same-line title)", () => {
+  test("step heading with no title is a step titled by its id (#190875)", () => {
     const md = `
 ### step:nospace
 
@@ -2043,8 +2047,12 @@ echo ok
 \`\`\`
 `
     const steps = parseSteps(md)
-    // Fixed: regex uses ` +` (space only) instead of `\s+` (which ate newlines)
-    expect(steps).toHaveLength(0)
+    // It used to be dropped silently: `test` said valid, `run` said completed, nothing ran.
+    // Still horizontal-whitespace only, so the next line is never swallowed as the title.
+    expect(steps).toHaveLength(1)
+    expect(steps[0].id).toBe("nospace")
+    expect(steps[0].title).toBe("nospace")
+    expect(steps[0].code).toBe("echo ok")
   })
 
   test("YAML mode with leading/trailing spaces doesn't match switch cases", () => {
@@ -2512,5 +2520,173 @@ describe("#186184 — step blocks decide whether a playbook runs, not the versio
   test("the author is told what the field means", async () => {
     const plan = await planFor("version: 3\n")
     expect(validatePlan(plan).some((i) => i.level === "warning" && i.message.includes("FORMAT"))).toBe(true)
+  })
+})
+
+// ############################################################################
+//
+//  SHELL STEPS FIND `iris` (#184675)
+//
+//  A step is `bash -c`, which reads no rc file. Started from an MCP client, the
+//  desktop sidecar or launchd, PATH has no ~/.iris/bin, and every `iris ...` in
+//  a step died with `iris: command not found`. Reproduce that PATH exactly.
+//
+// ############################################################################
+
+describe("shell steps can call iris from a GUI-shaped PATH", () => {
+  const installDir = join(homedir(), ".iris", "bin")
+
+  test("stepEnv puts the iris install dir on a PATH that lacks it", () => {
+    const env = stepEnv({ PATH: "/usr/bin:/bin", HOME: homedir() })
+    const parts = env.PATH!.split(":")
+    expect(parts).toContain(installDir)
+    // Existing entries survive, in order, after what was added.
+    expect(parts.slice(-2)).toEqual(["/usr/bin", "/bin"])
+    expect(env.IRIS_BIN).toBeTruthy()
+  })
+
+  test("stepEnv does not duplicate or reorder a PATH that already has it", () => {
+    const path = `/opt/homebrew/bin:${installDir}:/usr/bin`
+    const env = stepEnv({ PATH: path, IRIS_BIN: "/custom/iris" })
+    expect(env.PATH!.split(":").filter((d) => d === installDir)).toHaveLength(1)
+    expect(env.PATH!.endsWith(path)).toBe(true)
+    expect(env.IRIS_BIN).toBe("/custom/iris")
+  })
+
+  test("a real shell step started with PATH=/usr/bin:/bin sees the install dir", async () => {
+    const saved = process.env.PATH
+    process.env.PATH = "/usr/bin:/bin"
+    const plan: SkillPlan = {
+      ...basePlan,
+      name: "path-test",
+      steps: [makeStep({ id: "p", mode: "shell", code: 'echo "PATH=$PATH"; echo "BIN=$IRIS_BIN"' })],
+    }
+    let result: Awaited<ReturnType<typeof executeSkill>> | undefined
+    try {
+      result = await executeSkill(plan, {})
+    } finally {
+      process.env.PATH = saved
+    }
+    try {
+      expect(result!.steps["p"].status).toBe("success")
+      expect(result!.steps["p"].output).toContain(installDir)
+      expect(result!.steps["p"].output).toMatch(/BIN=\S+/)
+    } finally {
+      cleanupRun(result!.run_id)
+    }
+  })
+})
+
+// ############################################################################
+//
+//  WINDOWS: PLAYBOOKS MUST NOT HALF-RUN (#184180 / desktop #184185)
+//
+//  Observed on a client's Windows machine: shell steps failed for want of bash while AI
+//  steps ran, so the model drafted a real epic and nothing was ever published.
+//
+// ############################################################################
+
+describe("resolveBash — which bash a shell step runs in", () => {
+  const win = {
+    PROGRAMFILES: "C:\\Program Files",
+    LOCALAPPDATA: "C:\\Users\\Kristen\\AppData\\Local",
+    USERPROFILE: "C:\\Users\\Kristen",
+  }
+  const has = (...paths: string[]) => (p: string) => paths.includes(p)
+
+  test("off Windows it is just bash", () => {
+    expect(resolveBash("darwin", {}, () => false, () => [])).toBe("bash")
+  })
+
+  test("finds Git for Windows' bash where the installer puts it", () => {
+    const git = "C:\\Program Files\\Git\\bin\\bash.exe"
+    expect(resolveBash("win32", win, has(git), () => [])).toBe(git)
+  })
+
+  test("a per-user Git install is found too", () => {
+    const git = "C:\\Users\\Kristen\\AppData\\Local\\Programs\\Git\\bin\\bash.exe"
+    expect(resolveBash("win32", win, has(git), () => [])).toBe(git)
+  })
+
+  test("NEVER the WSL launcher in System32 — it runs the step in a Linux VM without this machine's iris", () => {
+    const wsl = "C:\\Windows\\System32\\bash.exe"
+    expect(resolveBash("win32", win, has(wsl), () => [wsl])).toBeNull()
+  })
+
+  test("IRIS_BASH wins when it exists", () => {
+    const mine = "D:\\tools\\bash.exe"
+    expect(resolveBash("win32", { ...win, IRIS_BASH: mine }, has(mine), () => [])).toBe(mine)
+  })
+
+  test("Windows env keys are matched case-insensitively (ProgramFiles, not PROGRAMFILES)", () => {
+    const git = "C:\\Program Files\\Git\\bin\\bash.exe"
+    expect(resolveBash("win32", { ProgramFiles: "C:\\Program Files" }, has(git), () => [])).toBe(git)
+  })
+})
+
+test("stepEnv keeps Windows' own `Path` key instead of adding a second `PATH`", () => {
+  const env = stepEnv({ Path: "C:\\Windows;C:\\Windows\\System32" }, ";")
+  expect(Object.keys(env).filter((k) => k.toUpperCase() === "PATH")).toEqual(["Path"])
+  expect(env.Path!.endsWith("C:\\Windows;C:\\Windows\\System32")).toBe(true)
+})
+
+describe("a playbook with shell steps and no bash refuses WHOLE", () => {
+  const plan: SkillPlan = {
+    ...basePlan,
+    name: "half-run",
+    steps: [
+      makeStep({ id: "draft", mode: "ai", body: "Draft the epic." }),
+      makeStep({ id: "publish", mode: "shell", code: "echo PUBLISHED", depends: "draft" }),
+    ],
+  }
+
+  test("throws before ANY step runs — the AI step included", async () => {
+    let err: unknown
+    try {
+      await executeSkill(plan, {}, { bash: () => null })
+    } catch (e) {
+      err = e
+    }
+    expect(err).toBeInstanceOf(NoPosixShellError)
+    expect((err as Error).message).toContain("publish")
+    expect((err as Error).message).toContain("Nothing was run")
+    expect((err as Error).message).toContain("Git for Windows")
+  })
+
+  test("with a bash available, shell steps run as before", async () => {
+    const aiOnly: SkillPlan = { ...basePlan, name: "ai-only", steps: [makeStep({ id: "note", mode: "shell", code: "echo hi" })] }
+    const r = await executeSkill(aiOnly, {}, { bash: () => "bash" })
+    try {
+      expect(r.steps["note"].output).toContain("hi")
+    } finally {
+      cleanupRun(r.run_id)
+    }
+  })
+
+  test("a dry run is never refused — it runs nothing", async () => {
+    const r = await executeSkill(plan, {}, { bash: () => null, dryRun: true })
+    cleanupRun(r.run_id)
+    expect(Object.keys(r.steps).sort()).toEqual(["draft", "publish"])
+  })
+})
+
+describe("isDangerousCommand — 'format' means disk formatting, not the word", () => {
+  test.each([
+    "ffprobe -v error -show_entries format=duration x.mp4",
+    "iris brands dt export iris --format css",
+    "date +%Y --format=iso",
+    "prettier --check . # format later",
+  ])("not dangerous: %s", (cmd) => {
+    expect(isDangerousCommand(cmd)).toBe(false)
+  })
+
+  test.each([
+    "format c:",
+    "FORMAT D: /q",
+    "mkfs.ext4 /dev/sda1",
+    "diskutil eraseDisk APFS Blank disk2",
+    "rm -rf /tmp/x",
+  ])("dangerous: %s", (cmd) => {
+    expect(isDangerousCommand(cmd)).toBe(true)
   })
 })

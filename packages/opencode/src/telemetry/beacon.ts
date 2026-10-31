@@ -1,4 +1,6 @@
 import { Auth } from "../auth"
+import { Consent } from "./consent"
+import { Installation } from "../installation"
 
 /**
  * Client error beacon → fl-iris-api POST /api/v6/telemetry/errors.
@@ -21,6 +23,12 @@ export namespace Beacon {
   export type SpanType = "run_start" | "run_end" | "tool_call" | "llm_call" | "mcp_call"
 
   export type Outcome = "ok" | "error" | "aborted" | "timeout"
+
+  /**
+   * Usage events (#186171) — what gets used, for product analytics. Names only: at most the
+   * command word rides along. The server forwards these to Mixpanel; the app holds no token.
+   */
+  export type UsageType = "app_open" | "playbook_run" | "sign_in"
 
   export interface Event {
     message?: string
@@ -112,8 +120,8 @@ export namespace Beacon {
    * must always be able to turn telemetry off entirely.
    */
   function disabled(): boolean {
-    const v = process.env.IRIS_TELEMETRY
-    return v === "0" || v === "off" || v === "false"
+    // IRIS_TELEMETRY=0, DO_NOT_TRACK=1 or `iris telemetry off` (#186171) — see consent.ts.
+    return !Consent.status().enabled
   }
 
   // ── id generation ────────────────────────────────────────────────────────
@@ -249,6 +257,20 @@ export namespace Beacon {
     }
   }
 
+  /** Queue one usage event. Same buffer, same exit flush, same opt-outs as spans. */
+  export function usage(type: UsageType, event: { command?: string } = {}): void {
+    if (disabled()) return
+    try {
+      buffer.push({ source: source(), event_type: type, severity: "info", command: clip(event.command, 128) })
+      if (!flushTimer) {
+        flushTimer = setTimeout(() => void flush(), 2000)
+        ;(flushTimer as { unref?: () => void }).unref?.()
+      }
+    } catch {
+      // never throw
+    }
+  }
+
   /**
    * Send everything buffered. Await this on an exit path so a run's spans are
    * not lost when the process ends — an unflushed run_end is indistinguishable
@@ -281,7 +303,9 @@ export namespace Beacon {
           "Content-Type": "application/json",
           Accept: "application/json",
         },
-        body: JSON.stringify({ events }),
+        // Version + OS on the envelope: the ingest has always read them, the beacon never sent
+        // them, so every row said NULL and "which version broke" could not be asked (#186171).
+        body: JSON.stringify({ cli_version: Installation.VERSION, os: process.platform, events }),
         signal: AbortSignal.timeout(timeoutMs),
       }).catch(() => null)
 
@@ -312,6 +336,8 @@ export namespace Beacon {
           // Not hardcoded "cli" — an MCP-originated crash that reads as a CLI crash
           // sends you debugging the wrong surface.
           source: source(),
+          cli_version: Installation.VERSION,
+          os: process.platform,
           event_type: eventType,
           message: clip(event.message, 2000),
           command: clip(event.command, 128),

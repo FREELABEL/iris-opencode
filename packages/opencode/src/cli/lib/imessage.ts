@@ -8,6 +8,7 @@ import { execSync, execFileSync } from "child_process"
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "fs"
 import { homedir } from "os"
 import { join } from "path"
+import { matchPhoneCandidates, parsePhoneIdentity, phoneSuffix } from "./phone-identity"
 
 const MESSAGES_DB = `${homedir()}/Library/Messages/chat.db`
 const SELF_CONFIG_PATH = join(homedir(), ".iris", "imessage-self.json")
@@ -34,6 +35,7 @@ export interface Chat {
  * Check if iMessage SQLite is accessible (macOS only + Full Disk Access).
  */
 export function isAvailable(): boolean {
+  if (queryOverride) return true
   if (process.platform !== "darwin") return false
   if (!existsSync(MESSAGES_DB)) return false
   try {
@@ -72,7 +74,14 @@ export function diagnoseAccess(): string {
  * Run a raw SQL query against the Messages database.
  * Escapes double quotes in the SQL string.
  */
+/** Tests run real SQL against a fixture chat.db through this. Production never sets it. */
+let queryOverride: ((sql: string) => string) | null = null
+export function setQueryForTests(fn: ((sql: string) => string) | null): void {
+  queryOverride = fn
+}
+
 export function query(sql: string): string {
+  if (queryOverride) return queryOverride(sql).trim()
   const escaped = sql.replace(/"/g, '\\"')
   return execSync(`sqlite3 "${MESSAGES_DB}" "${escaped}"`, {
     encoding: "utf-8",
@@ -307,6 +316,72 @@ export function searchByHandle(handle: string, days = 30, limit = 50): Message[]
   } catch {
     return []
   }
+}
+
+export type HandleMatch =
+  | { status: "matched"; identifiers: string[]; messages: Message[] }
+  | { status: "ambiguous"; identifiers: string[] }
+  | { status: "none" }
+  | { status: "invalid"; reason: string }
+
+/**
+ * Messages for the conversation that IS this handle — for anything that WRITES what it finds to a
+ * person's record (#183513). searchByHandle() is a substring search (fine for a person browsing
+ * their own messages, wrong for attribution): a 7-digit number matched every chat ending in those
+ * digits, and an email matched any longer address containing it.
+ *   - email: the chat identifier must equal the address (case-insensitive).
+ *   - phone: whole-number identity (phone-identity.ts); SQL prefilters on an anchored suffix,
+ *     each candidate is then confirmed in full. Rows for the SAME number (SMS + iMessage threads)
+ *     are one person; two DIFFERENT numbers is ambiguous and returns no messages.
+ */
+export function searchByHandleExact(handle: string, days = 30, limit = 50): HandleMatch {
+  const h = String(handle ?? "").trim()
+  if (!h) return { status: "invalid", reason: "empty handle" }
+  const cutoffSeconds = days * 86400
+
+  let identifiers: string[]
+  if (h.includes("@")) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(h)) return { status: "invalid", reason: `"${h}" is not an email address` }
+    const esc = h.toLowerCase().replace(/'/g, "''")
+    const raw = query(`SELECT DISTINCT chat_identifier FROM chat WHERE lower(chat_identifier) = '${esc}';`)
+    identifiers = raw ? raw.split("\n").filter(Boolean) : []
+    if (identifiers.length === 0) return { status: "none" }
+  } else {
+    const p = parsePhoneIdentity(h)
+    if (!p.ok) return { status: "invalid", reason: p.reason }
+    const raw = query(`SELECT DISTINCT chat_identifier FROM chat WHERE chat_identifier LIKE '%${phoneSuffix(p)}';`)
+    const rows = raw ? raw.split("\n").filter(Boolean) : []
+    const m = matchPhoneCandidates(h, rows, (r) => r)
+    if (m.status === "invalid" || m.status === "none") return m
+    if (m.status === "ambiguous") return { status: "ambiguous", identifiers: m.keys }
+    identifiers = m.candidates
+  }
+
+  const inList = identifiers.map((i) => `'${i.replace(/'/g, "''")}'`).join(",")
+  const sql = `SELECT
+    m.rowid, m.text, m.is_from_me, m.date,
+    datetime(m.date/1000000000 + strftime('%s','2001-01-01'), 'unixepoch', 'localtime') as sent_dt,
+    c.chat_identifier,
+    hex(m.attributedBody) as body_hex
+  FROM message m
+  JOIN chat_message_join cmj ON m.rowid = cmj.message_id
+  JOIN chat c ON cmj.chat_id = c.rowid
+  WHERE c.chat_identifier IN (${inList})
+  AND (m.text IS NOT NULL OR m.attributedBody IS NOT NULL)
+  AND m.date > (strftime('%s','now') - ${cutoffSeconds} - strftime('%s','2001-01-01')) * 1000000000
+  ORDER BY m.date DESC LIMIT ${limit}`
+  const raw = query(sql)
+  const messages = (raw ? raw.split("\n") : [])
+    .map((line) => {
+      const parts = line.split("|")
+      if (parts.length < 5) return null
+      let text = parts[1]?.trim() || ""
+      if (!text && parts[6]) text = parseAttributedBody(parts[6])
+      if (!text) return null
+      return { id: parts[0], text, from_me: parts[2] === "1", date: parts[4], chat_identifier: parts[5] || identifiers[0] } satisfies Message
+    })
+    .filter(Boolean) as Message[]
+  return { status: "matched", identifiers, messages }
 }
 
 /**

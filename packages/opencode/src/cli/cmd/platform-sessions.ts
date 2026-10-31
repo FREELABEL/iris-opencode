@@ -1,7 +1,8 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { bridgeFetch, dim, bold, highlight, success, writeJson } from "./iris-api"
+import { bridgeFetch, dim, bold, highlight, success, writeJson, irisFetch, requireAuth, handleApiError, IRIS_API } from "./iris-api"
+import { transcriptPath, messageLine, advance, fromPage, readFailure, FOLLOW_PAGE, SESSION_ID, type FollowState, type TranscriptMessage } from "../lib/remote-transcript"
 import { probeBridge, assessBridge, printDegradations } from "./subsystem-health"
 import { firstArray } from "../../util/array"
 import { candidateServers, deliverLive, shouldFallBackToBridge, deliveryTimeoutMs, findSessionAcrossServers } from "./session-live-delivery"
@@ -398,6 +399,117 @@ const SendCommand = cmd({
   },
 })
 
+// `history` asks THIS machine's bridge. `read` asks the server to fetch the transcript from
+// whichever of your machines holds it (#191230) — the session `iris recall` found on another
+// machine. Nothing is stored on the server; the machine is asked each time.
+const ReadCommand = cmd({
+  command: "read <id>",
+  describe: "read a session's transcript from any of your machines (find one with iris recall)",
+  builder: (y: any) =>
+    y
+      .positional("id", { type: "string", describe: "full session id (iris recall prints it)" })
+      .option("machine", { type: "string", describe: "machine name or id — skips asking the others" })
+      .option("provider", { type: "string", describe: "opencode | claude_code | codex | …" })
+      .option("limit", { type: "number", default: 20, describe: "most recent N messages (max 100)" })
+      .option("follow", { type: "boolean", default: false, describe: "keep printing new messages (Ctrl-C to stop)" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args: any) {
+    const id = String(args.id)
+    if (!SESSION_ID.test(id)) {
+      console.error(`"${id}" is not a session id — copy the full id from iris recall.`)
+      process.exitCode = 1
+      return
+    }
+    if (!(await requireAuth())) return
+
+    const query = { machine: args.machine, provider: args.provider, limit: args.limit }
+    const fetchOnce = async (since: number | null) => {
+      const res = await irisFetch(transcriptPath(id, { ...query, since }), {}, IRIS_API)
+      if (!(await handleApiError(res, "Read session"))) return null
+      return (await res.json().catch(() => null)) as any
+    }
+
+    if (!args.json) {
+      UI.empty()
+      prompts.intro(`◈  Session ${bold(id)}`)
+    }
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start(args.machine ? `Asking ${args.machine}…` : "Asking your machines…")
+    const data = await fetchOnce(null)
+    spinner?.stop(data?.success ? `Read from ${data.ran_on}` : "Could not read it")
+
+    if (!data) { if (!args.json) prompts.outro("Done"); process.exitCode = 1; return }
+    if (args.json) { await writeJson(data); if (!data.success) process.exitCode = 1; return }
+    if (!data.success) {
+      // The server says WHICH failure it was — no such session vs. machine offline vs. no answer.
+      prompts.log.error(readFailure(data.error, args.machine))
+      if (args.verbose || process.argv.includes("--print-logs")) console.log(dim(`  ${data.error ?? ""}`))
+      if (Array.isArray(data.machines_tried) && data.machines_tried.length)
+        console.log(dim(`  asked: ${data.machines_tried.join(", ")}`))
+      prompts.outro("Done")
+      process.exitCode = 1
+      return
+    }
+
+    const print = (messages: TranscriptMessage[]) => {
+      for (const m of messages) {
+        const [label, text] = messageLine(m)
+        console.log(`  ${label === "user" ? highlight("user") : dim(label)}  ${text}`)
+      }
+    }
+    const where = [data.ran_on, data.project_path?.split(/[\\/]/).filter(Boolean).pop(), data.git_branch].filter(Boolean).join(" · ")
+    console.log(dim(`  ${where}`))
+    // Entries, not chat messages: tool calls are rows too, and summary.total_messages counts only
+    // user/assistant turns — mixing the two printed "6 of 13" for a session with 97 entries.
+    const shown = data.messages_returned ?? data.messages?.length ?? 0
+    if (data.messages_omitted != null) console.log(dim(`  latest ${shown} of ${shown + data.messages_omitted} entries`))
+    printDivider()
+    print(data.messages ?? [])
+
+    if (!args.follow) {
+      printDivider()
+      prompts.outro(dim(`more: --limit 100 · live: --follow · machine: --machine "${data.ran_on}"`))
+      return
+    }
+
+    // Follow by polling the byte cursor: the machine reads only what was appended (#189446).
+    // Pin to the machine that answered so a later poll cannot land on a different one, and poll at
+    // the server's cap: --limit sizes the first screen only. Polling at --limit lost entries — more
+    // than that between polls and the machine answers with an empty reset (#191302).
+    query.machine = data.node_id ?? data.ran_on
+    query.limit = FOLLOW_PAGE
+    const latest = async () => {
+      const r = await fetchOnce(null)
+      return r?.success ? r : null
+    }
+    // The overlap baseline is the latest full page, not the (possibly 1-row) first screen —
+    // otherwise the first poll would reprint everything the first screen left out.
+    const base = await latest()
+    let state: FollowState = { page: base?.messages ?? data.messages ?? [], offset: base?.offset ?? data.offset ?? null }
+    console.log(dim("  following — Ctrl-C to stop"))
+    while (true) {
+      await Bun.sleep(3000)
+      const next = await fetchOnce(state.offset)
+      if (!next?.success) {
+        console.log(dim(`  (${next?.error ?? "no answer"} — retrying)`))
+        continue
+      }
+      const step = advance(state, next)
+      if ("refetch" in step) {
+        const fresh = await latest()
+        if (!fresh) continue
+        const r = fromPage(state, fresh.messages ?? [], fresh.offset ?? null)
+        if (r.gap) { printDivider(); console.log(dim("  more arrived than one page holds — showing the latest")) }
+        print(r.print)
+        state = r.state
+        continue
+      }
+      print(step.print)
+      state = step.state
+    }
+  },
+})
+
 export const PlatformSessionsCommand = cmd({
   command: "sessions <subcommand>",
   describe: "see and steer the AI sessions running on this machine",
@@ -407,6 +519,7 @@ export const PlatformSessionsCommand = cmd({
       .command(ShowCommand)
       .command(HistoryCommand)
       .command(SendCommand)
+      .command(ReadCommand)
       .demandCommand(1),
   async handler() {},
 })

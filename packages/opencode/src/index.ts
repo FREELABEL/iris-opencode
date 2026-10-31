@@ -13,10 +13,12 @@ import { UI } from "./cli/ui"
 import { Installation } from "./installation"
 import { NamedError } from "@opencode-ai/util/error"
 import { FormatError } from "./cli/error"
+import { CliUsageError, wantsJson, writeErrorJson } from "./cli/json-error"
 import { ServeCommand } from "./cli/cmd/serve"
 import { DebugCommand } from "./cli/cmd/debug"
 import { StatsCommand } from "./cli/cmd/stats"
 import { McpCommand } from "./cli/cmd/mcp"
+import { A2aCommand } from "./cli/cmd/a2a"
 import { MarketplaceCommand } from "./cli/cmd/marketplace"
 import { GithubCommand } from "./cli/cmd/github"
 import { ExportCommand } from "./cli/cmd/export"
@@ -44,6 +46,7 @@ import { PlatformBrandsCommand } from "./cli/cmd/platform-brands"
 import { OkfCommand } from "./cli/cmd/platform-okf"
 import { PlatformLearnCommand } from "./cli/cmd/platform-learn"
 import { PlatformCopycatCommand } from "./cli/cmd/platform-copycat"
+import { PlatformReelCommand } from "./cli/cmd/platform-reel"
 import { PlatformContentCommand } from "./cli/cmd/platform-content"
 import { PlatformGoodDealsCommand } from "./cli/cmd/platform-good-deals"
 import { PlatformLinkedInCommand } from "./cli/cmd/platform-linkedin"
@@ -85,6 +88,7 @@ import { PlatformNodeCommand } from "./cli/cmd/platform-node"
 import { VaultCommandExport } from "./cli/cmd/platform-vault"
 import { PlatformClipsCommand } from "./cli/cmd/platform-clips"
 import { PlatformPostCommand } from "./cli/cmd/platform-post"
+import { SocialCommand } from "./cli/cmd/platform-social"
 import { XCommand } from "./cli/cmd/platform-x"
 import { PlatformOutreachCommand } from "./cli/cmd/platform-outreach"
 import { OffersCommand } from "./cli/cmd/offers"
@@ -94,6 +98,7 @@ import { PlatformOutreachSendCommand } from "./cli/cmd/platform-outreach-send"
 import { PlatformSomCommand } from "./cli/cmd/platform-som"
 import { PlatformEventCommand } from "./cli/cmd/platform-event"
 import { PlatformMonitorCommand } from "./cli/cmd/platform-monitor"
+import { PlatformStatusCommand } from "./cli/cmd/platform-status"
 import { PlatformCommonsCommand } from "./cli/cmd/platform-commons"
 import { PlatformLexiconCommand } from "./cli/cmd/platform-lexicon"
 import { PlatformInvoicesCommand } from "./cli/cmd/platform-invoices"
@@ -104,11 +109,13 @@ import { PlatformRunCommand, PlatformConnectCommand, PlatformListConnectedComman
 import { PlatformListenCommand } from "./cli/cmd/listen"
 import { PlatformTranscribeCommand } from "./cli/cmd/transcribe"
 import { PlatformOcrCommand } from "./cli/cmd/platform-ocr"
+import { PlatformLookCommand } from "./cli/cmd/platform-look"
 import { PlatformDownloadCommand } from "./cli/cmd/download"
 import { PlatformBugCommand } from "./cli/cmd/platform-bug"
 import { PlatformFeatureCommand } from "./cli/cmd/platform-feature"
 import { DeviceCommand } from "./cli/cmd/platform-device"
 import { HomeCommand } from "./cli/cmd/platform-home"
+import { BuzzCommand } from "./cli/cmd/platform-buzz"
 import { PlatformCameraCommand } from "./cli/cmd/platform-camera"
 import { PlatformAndroidCommand } from "./cli/cmd/platform-android"
 import { PlatformIntentCommand } from "./cli/cmd/platform-intent"
@@ -133,6 +140,8 @@ import { PlatformIdentityCommand } from "./cli/cmd/platform-identity"
 import { PlatformSystemAppsScanCommand } from "./cli/cmd/platform-system-apps-scan"
 import { PlatformIdeasCommand } from "./cli/cmd/platform-ideas"
 import { PlatformOnboardCommand } from "./cli/cmd/platform-onboard"
+import { PlatformNextCommand } from "./cli/cmd/platform-next"
+import { Iris2Command } from "./cli/cmd/iris2"
 import { PlatformInitCommand } from "./cli/cmd/platform-init"
 import { PlatformOnboardFlowsCommand } from "./cli/cmd/platform-onboard-flows"
 import { PlatformProposalsCommand } from "./cli/cmd/platform-proposals"
@@ -140,6 +149,8 @@ import { PlatformContractsCommand } from "./cli/cmd/platform-contracts"
 import { PlatformPagesCommand } from "./cli/cmd/platform-pages"
 import { PlatformExposureCommand } from "./cli/cmd/platform-exposure"
 import { PlatformFindCommand } from "./cli/cmd/platform-find"
+import { LocateCommand } from "./cli/cmd/platform-locate"
+import { PlatformWtCommand } from "./cli/cmd/platform-wt"
 import { PlatformDashboardCommand } from "./cli/cmd/platform-dashboard"
 import { PlatformContentEngineCommand } from "./cli/cmd/platform-content-engine"
 import { PlatformNewsroomCommand } from "./cli/cmd/platform-newsroom"
@@ -148,6 +159,7 @@ import { PlatformDomainsCommand } from "./cli/cmd/platform-domains"
 import { PlatformPagesBatchCommand } from "./cli/cmd/platform-pages-batch"
 import { PlatformPartialsCommand } from "./cli/cmd/platform-partials"
 import { PlatformScriptsCommand } from "./cli/cmd/platform-scripts"
+import { PlatformHeartbeatsCommand } from "./cli/cmd/platform-heartbeats"
 import { PlatformCloudUploadCommand } from "./cli/cmd/platform-cloud-upload"
 import { PlatformDriveCommand } from "./cli/cmd/platform-drive"
 import { PlatformObsidianCommand } from "./cli/cmd/platform-obsidian"
@@ -162,6 +174,7 @@ import { PlatformBloqIngestCommand } from "./cli/cmd/platform-bloq-ingest"
 import { PlatformDataSourcesCommand } from "./cli/cmd/platform-data-sources"
 import { PlatformBloqMembersCommand } from "./cli/cmd/platform-bloq-members"
 import { PlatformWisprCommand } from "./cli/cmd/platform-wispr"
+import { PlatformDesktopCommand } from "./cli/cmd/platform-desktop"
 import { PlatformEvalCommand } from "./cli/cmd/platform-eval"
 import { PlatformSdkCallCommand } from "./cli/cmd/platform-sdk-call"
 import { PlatformDiaryCommand } from "./cli/cmd/platform-diary"
@@ -178,6 +191,7 @@ import { PlatformVoiceCommand } from "./cli/cmd/platform-voice"
 import { PlatformRecallCommand } from "./cli/cmd/platform-recall"
 import { PlatformPersonalityCommand } from "./cli/cmd/platform-personality"
 import { PlatformMailCommand } from "./cli/cmd/platform-mail"
+import { PlatformMailingCommand } from "./cli/cmd/platform-mailing"
 import { PlatformSendersCommand } from "./cli/cmd/platform-senders"
 import { PlatformImessageCommand } from "./cli/cmd/platform-imessage"
 import { PlatformWhatsappCommand } from "./cli/cmd/platform-whatsapp"
@@ -188,6 +202,7 @@ import { PlatformTelegramCommand } from "./cli/cmd/platform-telegram"
 import { PlatformInstagramCommand } from "./cli/cmd/platform-instagram"
 import { PlatformInstagramFeedCommand } from "./cli/cmd/platform-instagram-feed"
 import { PlatformCalendarCommand } from "./cli/cmd/platform-calendar"
+import { PlatformEmailCommand } from "./cli/cmd/platform-email"
 import { PlatformHeartbeatCommand } from "./cli/cmd/platform-heartbeat"
 import { PlatformInboxCommand } from "./cli/cmd/platform-inbox"
 import { PlatformDocsCommand } from "./cli/cmd/platform-docs"
@@ -209,11 +224,55 @@ import { GuideCommand } from "./cli/cmd/guide"
 import { registerCommand, getRegistry } from "./cli/cmd/command-groups"
 import { renderGroupedHelp, renderNamespacedHelp } from "./cli/help-renderer"
 import { Beacon } from "./telemetry/beacon"
+import { Consent } from "./telemetry/consent"
+import { TelemetryCommand } from "./cli/cmd/telemetry"
+import { TunnelCommand } from "./cli/cmd/tunnel"
 
 // Register a command in the grouped help registry and return it unchanged
+// Top-level command modules by name and alias, so a subcommand can be checked against what the
+// command actually declares (usage analytics; see subcommandOf below).
+const commandModules = new Map<string, any>()
+
 function reg<T>(commandModule: T): T {
   registerCommand(commandModule)
+  const m = commandModule as any
+  const name = String(Array.isArray(m?.command) ? m.command[0] : (m?.command ?? "")).split(" ")[0]
+  if (name) commandModules.set(name, m)
+  for (const a of Array.isArray(m?.aliases) ? m.aliases : []) commandModules.set(String(a), m)
   return commandModule
+}
+
+/**
+ * The subcommand of `iris <top> <sub> …`, or undefined. `argv._[1]` alone is NOT safe: an
+ * undeclared positional (`iris leads view 123 Jane`) lands there too. So the word is only
+ * returned when the top-level command DECLARES it — read by running its builder against a stub
+ * that records `.command()` calls and ignores everything else.
+ */
+function subcommandOf(args: unknown[]): string | undefined {
+  const [top, sub] = args
+  if (typeof top !== "string" || typeof sub !== "string") return undefined
+  const mod = commandModules.get(top)
+  if (typeof mod?.builder !== "function") return undefined
+  const declared = new Set<string>()
+  const stub: any = new Proxy(function () {}, {
+    get(_t, prop) {
+      if (prop === "then") return undefined
+      if (prop === "command") {
+        return (c: any) => {
+          const spec = typeof c === "string" ? c : c?.command
+          const first = String(Array.isArray(spec) ? spec[0] : (spec ?? "")).split(" ")[0]
+          if (first && first !== "$0") declared.add(first)
+          for (const a of Array.isArray(c?.aliases) ? c.aliases : []) declared.add(String(a))
+          return stub
+        }
+      }
+      return () => stub
+    },
+  })
+  try {
+    mod.builder(stub)
+  } catch {}
+  return declared.has(sub) ? sub : undefined
 }
 
 process.on("unhandledRejection", (e) => {
@@ -251,6 +310,8 @@ try {
 }
 
 const rawArgs = hideBin(process.argv)
+
+let commandSubcommand: string | undefined
 
 const cli = yargs(rawArgs)
   // boolean-negation OFF: many commands register literal `--no-*` flags
@@ -303,15 +364,26 @@ const cli = yargs(rawArgs)
     // RAW argv, not `opts._`: yargs has already eaten the positionals by here, and `iris hive run
     // studio-mac` would arrive as ["hive","run"] — without the node it is about to drive.
     await guardCommand(process.argv.slice(2), opts._.map(String))
+
+    // The subcommand (`exec` in `iris integrations exec …`) for usage analytics — only a word
+    // the command declares, never a positional value. See subcommandOf.
+    try {
+      commandSubcommand = subcommandOf(opts._)
+    } catch {}
   })
   .usage("\n" + UI.logo())
   .completion("completion", "generate shell completion script")
   // Guide / discoverability (must be before TuiThreadCommand's $0 [project])
   .command(reg(GuideCommand))
+  .command(reg(TelemetryCommand))
   .command(reg(PlatformFindCommand))
+  .command(reg(LocateCommand))
+  .command(reg(PlatformWtCommand))
   // Core CLI commands
   .command(reg(AcpCommand))
+  .command(reg(BuzzCommand))
   .command(reg(McpCommand))
+  .command(reg(A2aCommand))
   .command(reg(MarketplaceCommand))
   .command(TuiThreadCommand)
   .command(TuiSpawnCommand)
@@ -325,6 +397,7 @@ const cli = yargs(rawArgs)
   .command(reg(UninstallCommand))
   .command(reg(InstallAppCommand))
   .command(reg(ServeCommand))
+  .command(reg(TunnelCommand))
   .command(reg(WebCommand))
   .command(reg(ModelsCommand))
   .command(reg(StatsCommand))
@@ -351,6 +424,7 @@ const cli = yargs(rawArgs)
   .command(reg(OkfCommand))
   .command(reg(PlatformLearnCommand))
   .command(reg(PlatformCopycatCommand))
+  .command(reg(PlatformReelCommand))
   .command(reg(PlatformContentCommand))
   .command(reg(PlatformGoodDealsCommand))
   .command(reg(PlatformLinkedInCommand))
@@ -398,6 +472,7 @@ const cli = yargs(rawArgs)
   .command(reg(VaultCommandExport))
   .command(reg(PlatformClipsCommand))
   .command(reg(PlatformPostCommand))
+  .command(reg(SocialCommand))
   .command(reg(XCommand))
   .command(reg(PlatformOutreachCommand))
   .command(reg(OffersCommand))
@@ -407,6 +482,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformSomCommand))
   .command(reg(PlatformEventCommand))
   .command(reg(PlatformMonitorCommand))
+  .command(reg(PlatformStatusCommand))
   .command(reg(PlatformCommonsCommand))
   .command(reg(PlatformLexiconCommand))
   .command(reg(PlatformInboxCommand))
@@ -422,6 +498,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformListIntegrationsCommand))
   .command(reg(PlatformTranscribeCommand))
   .command(reg(PlatformOcrCommand))
+  .command(reg(PlatformLookCommand))
   .command(reg(PlatformListenCommand))
   .command(reg(PlatformDownloadCommand))
   .command(reg(PlatformConnectCommand))
@@ -460,6 +537,8 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformAndroidCommand))
   .command(reg(PlatformIntentCommand))
   .command(reg(PlatformOnboardCommand))
+  .command(reg(PlatformNextCommand)) // #187930: one next move
+  .command(reg(Iris2Command)) // #188596: opt-in iris2 preview, installed beside iris
   .command(reg(PlatformInitCommand))
   .command(reg(PlatformOnboardFlowsCommand))
   .command(reg(PlatformProposalsCommand))
@@ -474,6 +553,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformPagesBatchCommand))
   .command(reg(PlatformPartialsCommand))
   .command(reg(PlatformScriptsCommand))
+  .command(reg(PlatformHeartbeatsCommand))
   .command(reg(PlatformCloudUploadCommand))
   .command(reg(PlatformDriveCommand))
   .command(reg(PlatformObsidianCommand))
@@ -488,6 +568,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformDataSourcesCommand))
   .command(reg(PlatformBloqMembersCommand))
   .command(reg(PlatformWisprCommand))
+  .command(reg(PlatformDesktopCommand))
   .command(reg(PlatformEvalCommand))
   .command(reg(PlatformSdkCallCommand))
   .command(reg(PlatformDiaryCommand))
@@ -502,10 +583,12 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformRecallCommand))
   .command(reg(PlatformPersonalityCommand))
   .command(reg(PlatformMailCommand))
+  .command(reg(PlatformMailingCommand))
   .command(reg(PlatformSendersCommand))
   .command(reg(PlatformImessageCommand))
   .command(reg(PlatformWhatsappCommand))
   .command(reg(PlatformCalendarCommand))
+  .command(reg(PlatformEmailCommand))
   .command(reg(PlatformHeartbeatCommand))
   .command(reg(PlatformDocsCommand))
   .command(reg(PlatformWalletCommand))
@@ -529,6 +612,9 @@ const cli = yargs(rawArgs)
   .fail((msg, err) => {
     // A thrown error from inside a command handler — let the outer catch format it.
     if (err) throw err
+    // --json callers get the failure as JSON, not a help dump (#190878). Thrown so the top-level
+    // catch renders it, which also drains stdout before the process exits.
+    if (wantsJson(rawArgs)) throw new CliUsageError(msg || "Invalid arguments")
     // Validation failures (missing required args, unknown flags, bad values, etc.):
     // always surface the message and the command usage so the user knows what went
     // wrong. Previously only three message prefixes triggered help, so failures like
@@ -668,6 +754,12 @@ Beacon.span("run_start", {
   command: commandName,
 })
 
+// USAGE (#186171). A bare `iris` opens the app (the TUI); that is the app_open event. The
+// first-run notice says what is recorded and how to stop it — once, on stderr, only at a
+// terminal, and never ahead of `iris telemetry off` itself.
+if (commandName !== "telemetry") Consent.noticeOnce()
+if (rawArgs.length === 0) Beacon.usage("app_open")
+
 try {
   await cli.parse()
 
@@ -676,7 +768,11 @@ try {
     span_id: Beacon.newSpanId(),
     parent_span_id: commandSpanId,
     command: commandName,
-    outcome: "ok",
+    context: commandSubcommand ? { subcommand: commandSubcommand } : undefined,
+    // A command that returns normally but sets a non-zero exit code FAILED. Hardcoding "ok"
+    // here is why `iris usage` showed 192/192 integration calls ok for a user whose error
+    // log held ten failures that day — only a throw was ever counted.
+    outcome: process.exitCode ? "error" : "ok",
     duration_ms: Date.now() - commandStartedAt,
   })
 
@@ -694,7 +790,13 @@ try {
   // cli_command_error would make a machine doing exactly what it was configured to do look
   // like the least healthy one in the fleet.
   if (e instanceof Error && e.name === "SealedError") {
-    UI.error(e.message + EOL)
+    if (wantsJson(rawArgs)) await writeErrorJson(e.message, e)
+    else UI.error(e.message + EOL)
+    process.exitCode = 1
+  } else if (e instanceof CliUsageError) {
+    // How the command was called, not a crash: no fatal log, no cli_command_error beacon (#190878).
+    if (wantsJson(rawArgs)) await writeErrorJson(e.message, e)
+    else UI.error(e.message + EOL)
     process.exitCode = 1
   } else {
   let data: Record<string, any> = {}
@@ -735,6 +837,7 @@ try {
     span_id: Beacon.newSpanId(),
     parent_span_id: commandSpanId,
     command: commandName,
+    context: commandSubcommand ? { subcommand: commandSubcommand } : undefined,
     outcome: "error",
     duration_ms: Date.now() - commandStartedAt,
   })
@@ -747,8 +850,12 @@ try {
     context: { name: e instanceof Error ? e.name : undefined },
   })
   const formatted = FormatError(e)
-  if (formatted) UI.error(formatted)
-  if (formatted === undefined) {
+  if (wantsJson(rawArgs)) {
+    // #190878: one JSON object on stdout, whatever went wrong. A playbook whose header does not
+    // parse carries its file as `path` (#190274).
+    await writeErrorJson(formatted || (e instanceof Error ? e.message : String(e)), e)
+  } else if (formatted) UI.error(formatted)
+  if (formatted === undefined && !wantsJson(rawArgs)) {
     UI.error("Unexpected error, check log file at " + Log.file() + " for more details" + EOL)
     console.error(e)
   }

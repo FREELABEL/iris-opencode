@@ -1,4 +1,5 @@
 import { Auth } from "../../auth"
+import { Beacon } from "../../telemetry/beacon"
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
@@ -169,6 +170,7 @@ export const AuthCommand = cmd({
       .command(AuthLogoutCommand)
       .command(AuthListCommand)
       .command(AuthWhoamiCommand)
+      .command(AuthTokenCommand)
       .demandCommand(),
   async handler() {},
 })
@@ -238,6 +240,76 @@ export const AuthWhoamiCommand = cmd({
   },
 })
 
+/**
+ * What `iris auth token` prints, as data. Only the bearer goes to stdout, so a script can
+ * capture it; every explanation goes to stderr, and no token is a non-zero exit — a script
+ * must never receive an empty string and send "Bearer " to the API (#191214).
+ */
+export function authTokenOutput(token: string | undefined): { code: number; stdout?: string; stderr?: string } {
+  const t = (token ?? "").trim()
+  if (!t) return { code: 1, stderr: "Not signed in to IRIS on this machine. Run: iris auth login" }
+  return { code: 0, stdout: t }
+}
+
+/**
+ * `iris auth token` — the bearer this machine's IRIS sign-in uses for the platform API.
+ *
+ * For scripts and playbooks that call the API directly, so they run as the account the
+ * machine is signed in as instead of reading a token pasted into a repo `.env`. That pasted
+ * token is how the Discover feed's playbook broke: it was revoked in a rotation and nothing
+ * else could authenticate it (#191214). Same contract as `gh auth token`.
+ */
+export const AuthTokenCommand = cmd({
+  command: "token",
+  describe: "print the API token this machine's IRIS sign-in uses (for scripts and playbooks)",
+  async handler() {
+    const { resolveToken } = await import("./iris-api")
+    let token: string | undefined
+    try {
+      token = await resolveToken()
+    } catch {}
+    const out = authTokenOutput(token)
+    if (out.stdout) process.stdout.write(out.stdout + "\n")
+    if (out.stderr) process.stderr.write(out.stderr + "\n")
+    process.exitCode = out.code
+  },
+})
+
+/**
+ * The age of a stored OAuth credential, said out loud.
+ *
+ * `auth list` used to print only the provider name and `oauth`, which reads as a working
+ * connection. Measured 2026-09-22: this machine's Anthropic row had been sitting there with an
+ * access token that expired 230 days earlier, and the listing looked identical to a live one.
+ * Same defect family as an advertised-but-dead model or a node that heartbeats while its
+ * transport carries nothing — a listing that answers "is it present" where the reader is asking
+ * "does it work".
+ *
+ * DELIBERATELY NOT CALLED "DEAD". In OAuth an expired ACCESS token is normal and the refresh
+ * token usually renews it on next use. Printing "dead" would replace one misleading signal with
+ * another, which is the whole failure being fixed. It states the fact and names the remedy only
+ * if calls actually fail.
+ */
+export function credentialAge(result: { type: string; expires?: number }): string {
+  if (result.type !== "oauth" || typeof result.expires !== "number") return ""
+
+  const ms = result.expires - Date.now()
+  const days = Math.round(Math.abs(ms) / 86_400_000)
+  const unit = days === 1 ? "day" : "days"
+
+  if (ms > 0) {
+    // Still valid. Only worth flagging when it is close enough to matter.
+    return days <= 7
+      ? `  ${UI.Style.TEXT_WARNING}expires in ${days} ${unit}${UI.Style.TEXT_NORMAL}`
+      : `  ${UI.Style.TEXT_DIM}expires in ${days} ${unit}${UI.Style.TEXT_NORMAL}`
+  }
+
+  return (
+    `  ${UI.Style.TEXT_WARNING}access expired ${days} ${unit} ago${UI.Style.TEXT_NORMAL}` +
+    `${UI.Style.TEXT_DIM} — normally refreshes on next use; re-login if calls fail${UI.Style.TEXT_NORMAL}`
+  )
+}
+
 export const AuthListCommand = cmd({
   command: "list",
   aliases: ["ls"],
@@ -253,7 +325,7 @@ export const AuthListCommand = cmd({
 
     for (const [providerID, result] of results) {
       const name = database[providerID]?.name || providerID
-      prompts.log.info(`${name} ${UI.Style.TEXT_DIM}${result.type}`)
+      prompts.log.info(`${name} ${UI.Style.TEXT_DIM}${result.type}${credentialAge(result)}`)
     }
 
     prompts.outro(`${results.length} credentials`)
@@ -469,6 +541,7 @@ async function irisLoginFlow(forceReauth: boolean): Promise<boolean> {
 
     // Also store in the opencode auth system so resolveToken() finds it first
     await Auth.set("iris", { type: "api", key: sdkToken })
+    Beacon.usage("sign_in")
 
     // Regenerate onboarding prompt with current user identity
     try {

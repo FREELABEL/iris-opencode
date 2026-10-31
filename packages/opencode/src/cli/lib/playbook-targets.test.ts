@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { GENERATED_MARKER, isGenerated, parseTargets, toCursorRule, upsertAgentsBlock } from "./playbook-targets"
+import { GENERATED_MARKER, detectTargets, isGenerated, parseTargets, resolveTargets, toCursorRule, upsertAgentsBlock, upsertPlaybookSection } from "./playbook-targets"
 
 const replica = `---\nname: "deploy"\ndescription: "Ship it: safely"\n---\n\n${GENERATED_MARKER}\n\n> Run this playbook: \`iris playbook run deploy\`\n# Deploy\n\nDo the thing.\n`
 
@@ -7,12 +7,41 @@ describe("parseTargets", () => {
   test("default is claude only — existing behaviour unchanged", () => {
     expect(parseTargets(undefined)).toEqual(["claude"])
   })
-  test("lists and all", () => {
+  test("lists and all — gemini is a first-class target (#190526)", () => {
     expect(parseTargets("cursor, agents")).toEqual(["cursor", "agents"])
-    expect(parseTargets("all")).toEqual(["claude", "cursor", "agents"])
+    expect(parseTargets("gemini")).toEqual(["gemini"])
+    expect(parseTargets("all")).toEqual(["claude", "cursor", "agents", "gemini"])
   })
   test("an unknown target is an error, not silently skipped", () => {
     expect(() => parseTargets("cursor,vscode")).toThrow(/vscode/)
+  })
+})
+
+describe("resolveTargets", () => {
+  const opts = { home: "/home/u", cwd: "/repo" }
+  test("an explicit target is unchanged and does not probe the disk", () => {
+    expect(resolveTargets("gemini", { ...opts, exists: () => false })).toEqual(["gemini"])
+  })
+  test("auto adds what is installed, and never returns an empty list", () => {
+    const exists = (p: string) => p === "/home/u/.codex" || p === "/repo/GEMINI.md"
+    expect(resolveTargets("auto", { ...opts, exists })).toEqual(["agents", "gemini"])
+    expect(resolveTargets("auto", { ...opts, exists: () => false })).toEqual(["claude"])
+  })
+  test("auto can be combined with an explicit target without duplicating it", () => {
+    const exists = (p: string) => p === "/home/u/.codex"
+    expect(resolveTargets("agents,auto", { ...opts, exists })).toEqual(["agents"])
+    expect(resolveTargets("claude,auto", { ...opts, exists })).toEqual(["claude", "agents"])
+  })
+})
+
+describe("detectTargets", () => {
+  test("finds home-level Codex and Gemini, project-level Cursor and AGENTS.md", () => {
+    const exists = (p: string) =>
+      ["/home/u/.codex", "/home/u/.gemini", "/repo/.cursor", "/repo/AGENTS.md"].includes(p)
+    expect(detectTargets({ home: "/home/u", cwd: "/repo", exists })).toEqual(["cursor", "agents", "gemini"])
+  })
+  test("nothing installed still means Claude, the historical default", () => {
+    expect(detectTargets({ home: "/home/u", cwd: "/repo", exists: () => false })).toEqual(["claude"])
   })
 })
 
@@ -56,5 +85,33 @@ describe("upsertAgentsBlock", () => {
     expect(twice).toContain("**only**")
     expect(twice).not.toContain("**zeta**")
     expect(upsertAgentsBlock(twice, [{ name: "only", description: "one" }])).toBe(twice)
+  })
+})
+
+describe("upsertPlaybookSection", () => {
+  const deploy = { name: "deploy", description: "Ship it: safely", readPath: "/home/u/.iris/playbooks/deploy/PLAYBOOK.md" }
+  test("creates a section that says how to run it and where the full text lives", () => {
+    const out = upsertPlaybookSection(null, deploy)
+    expect(out).toContain("## Playbook: deploy")
+    expect(out).toContain("Ship it: safely")
+    expect(out).toContain("iris playbook run deploy")
+    expect(out).toContain(deploy.readPath)
+  })
+  test("a second install is additive — the first playbook is not erased", () => {
+    const one = upsertPlaybookSection(null, deploy)
+    const two = upsertPlaybookSection(one, { name: "audit", description: "Check it" })
+    expect(two).toContain("## Playbook: deploy")
+    expect(two).toContain("## Playbook: audit")
+  })
+  test("re-installing rewrites only its own section, idempotently", () => {
+    const one = upsertPlaybookSection("# Mine\n", deploy)
+    const twice = upsertPlaybookSection(one, deploy)
+    expect(twice).toBe(one)
+    expect(twice.startsWith("# Mine")).toBe(true)
+  })
+  test("a hand-written file keeps everything outside the markers", () => {
+    const mine = "# Rules\n\nNever push to main.\n"
+    const out = upsertPlaybookSection(mine, deploy)
+    expect(out.startsWith(mine.trimEnd())).toBe(true)
   })
 })

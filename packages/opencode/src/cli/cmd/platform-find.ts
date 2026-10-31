@@ -3,6 +3,7 @@ import { UI } from "../ui"
 import { dim, bold, highlight, printDivider, writeJson } from "./iris-api"
 import { readFileSync, existsSync } from "fs"
 import { join } from "path"
+import { RemoteCapabilities } from "./remote-capabilities"
 
 // EMBEDDED at build time. This import is the only reason `iris find` works in a shipped
 // binary: `bun build --compile` bundles JS and static imports, but it does NOT carry along
@@ -10,7 +11,11 @@ import { join } from "path"
 // the index purely by path, which worked in dev (`bun run src/index.ts` reads the real file
 // off disk) and failed on EVERY installed binary with "capability index not found" — the
 // index shipped nowhere, and dev was the one surface that could never expose it.
-// ~870KB of JSON against a ~100MB binary, to make the discovery layer actually reachable.
+// ~1.2MB of JSON against a ~100MB binary, to make the discovery layer actually reachable.
+//
+// IP-07 phase 2 (#189850): the embedded index holds COMMANDS and HOW-TOS only. Workspace
+// playbooks and skills are private prose and come from the IRIS API at runtime — see
+// loadMergedIndex() and remote-capabilities.ts.
 import embeddedIndex from "../../../capabilities.json"
 
 /**
@@ -29,19 +34,22 @@ import embeddedIndex from "../../../capabilities.json"
  *
  * Reads capabilities.json, which is GENERATED from the live command tree and the content
  * directories. A curated catalog cannot survive this surface area — it had already drifted
- * to 15 of 120 before anyone noticed.
+ * to 15 of 120 before anyone noticed. Workspace playbooks and skills are merged in from the
+ * private API for a signed-in user (IP-07 #189850).
  */
 
-type Entry = {
+export type Entry = {
   kind: "command" | "how-to" | "playbook" | "skill"
   name: string
   describe: string
   aliases: string[]
   run: string
   haystack: string
+  /** A playbook written for one client — see build-capabilities.ts. */
+  client?: string
 }
 
-type Index = {
+export type Index = {
   counts: Record<string, number>
   terms: Record<string, string[]>
   entries: Entry[]
@@ -58,7 +66,7 @@ type Index = {
  * `process.cwd()` is deliberately NOT a candidate: any directory containing an unrelated
  * `capabilities.json` would silently take over the search results.
  */
-function loadIndex(): Index {
+export function loadIndex(): Index {
   for (const p of [
     join(import.meta.dir, "../../../capabilities.json"),
     join(import.meta.dir, "../../../../capabilities.json"),
@@ -71,6 +79,51 @@ function loadIndex(): Index {
     }
   }
   return embeddedIndex as Index
+}
+
+/** Recount after a merge — the committed index only counts the kinds it carries. */
+function countsOf(entries: Entry[]): Record<string, number> {
+  const counts: Record<string, number> = { command: 0, "how-to": 0, playbook: 0, skill: 0 }
+  for (const e of entries) counts[e.kind] = (counts[e.kind] ?? 0) + 1
+  counts.total = entries.length
+  return counts
+}
+
+/**
+ * The embedded index plus workspace entries. An embedded entry always wins a kind:name clash —
+ * the remote adds what the binary does not carry; it never rewrites what it does.
+ */
+export function mergeIndex(base: Index, workspace: Entry[]): Index {
+  const have = new Set(base.entries.map((e) => `${e.kind}:${e.name}`))
+  const extra = workspace.filter((e) => {
+    const k = `${e.kind}:${e.name}`
+    if (have.has(k)) return false
+    have.add(k)
+    return true
+  })
+  const entries = extra.length ? [...base.entries, ...extra] : base.entries
+  return { ...base, counts: countsOf(entries), entries }
+}
+
+/**
+ * Every reader that wants the WHOLE index (find, intent) goes through here: embedded entries
+ * plus the signed-in user's workspace playbooks and skills. One fetch per process, cached,
+ * never throws — signed out or offline with no cache, this is the embedded index alone.
+ */
+export async function loadMergedIndex(): Promise<{ index: Index; workspace: RemoteCapabilities.Source }> {
+  const base = loadIndex()
+  const remote = await RemoteCapabilities.load().catch(() => ({ entries: [] as Entry[], source: "unavailable" as const }))
+  return { index: mergeIndex(base, remote.entries), workspace: remote.source }
+}
+
+/**
+ * One line telling a person WHY there are no playbooks or skills, rather than silently returning
+ * fewer results. Undefined when the workspace entries are present.
+ */
+export function workspaceNotice(source: RemoteCapabilities.Source): string | undefined {
+  if (source === "signed-out") return "workspace playbooks and skills need sign-in — iris auth login"
+  if (source === "unavailable") return "workspace playbooks and skills unavailable right now — showing commands and how-tos"
+  return undefined
 }
 
 /**
@@ -139,6 +192,83 @@ function score(e: Entry, terms: string[], raw: string, rarity: Map<string, numbe
   return s
 }
 
+const LEADING_VERB: Record<string, string> = { email: "mail send", text: "imessage send", imessage: "imessage send" }
+
+/** "bugs" → "bug", "bloqs" → "bloq". Deliberately crude: only a trailing -s on words over 3 letters, never -ss. */
+export function singular(w: string): string {
+  return w.length > 3 && w.endsWith("s") && !w.endsWith("ss") ? w.slice(0, -1) : w
+}
+
+/**
+ * The ranking behind `iris find`, callable in-process — `iris intent` reranks its top commands.
+ * Keyword + terminology-map + rarity scoring; highest first.
+ */
+export function searchCapabilities(
+  index: Index,
+  raw: string,
+  kind: Entry["kind"] | undefined,
+  limit: number,
+): { e: Entry; s: number }[] {
+  const terms = raw.split(/\s+/).filter((t) => t.length > 1)
+
+  // Expand the query through the terminology map, so intent words reach internal nouns.
+  // This is the part that makes "artifact" find `bespoke`.
+  const expanded = new Set(terms)
+  // How many of each topic's phrases the query actually used. One incidental "website" must not
+  // tie with "find people … email them … book calls" — the topic the query keeps pointing at wins.
+  const topicHits = new Map<string, number>()
+  for (const [noun, synonyms] of Object.entries(index.terms)) {
+    // WHOLE WORDS, not substrings: "web-SITE" used to fire the pages synonym "site", so a sales
+    // question containing "website" returned page-building tools (2026-09-19).
+    // Plural-blind matching (#188492): "bugs" never met the key `bug`, so `bug report` was not
+    // retrieved at all for "log bugs". A word matches a key when it IS the key or the key's plural.
+    // Only that direction: singularising every query word (tried first) let "agents" match
+    // "agent" and "members" match "member" across the haystack and lost 6 of 86 stress cases.
+    if (synonyms.some((s) => phraseIn(raw, s)) || terms.some((t) => t === noun || singular(t) === noun)) {
+      expanded.add(noun)
+      topicHits.set(noun, synonyms.filter((s) => phraseIn(raw, s)).length)
+      for (const s of synonyms) for (const w of s.split(/\s+/)) expanded.add(w)
+    }
+  }
+
+  // A request that OPENS with a channel used as a verb is a send: "email david the proposal",
+  // "text mia I'm late". No phrase list can name every recipient, so the first word decides (#188613).
+  const lead = LEADING_VERB[terms[0] ?? ""]
+  if (lead) expanded.add(lead)
+
+  // People say "bloq"; every bloq command is indexed under its canonical name `atlas` (#188493).
+  // Added only when the word is TYPED — as a synonym it also fired on "project" and lifted all 60
+  // atlas commands over `hive deploy` for "deploy this project to the macbook node".
+  if (terms.some((t) => t === "bloq" || t === "bloqs")) expanded.add("atlas")
+
+  let pool = index.entries
+  if (kind) pool = pool.filter((e) => e.kind === kind)
+
+  // How rare is each query term across the whole index? Cheap to compute (1,300 entries
+  // x a handful of terms) and it is what lets a distinctive word beat a common one.
+  const rarity = new Map<string, number>()
+  for (const t of expanded) {
+    const df = index.entries.reduce((n, e) => n + (e.haystack.includes(t) ? 1 : 0), 0)
+    // 1 doc -> ~28pts, 10 -> ~18, 100 -> ~9, everywhere -> ~2. Floored so a common term
+    // still counts for something; a word the user typed is never worth zero.
+    const total = index.entries.length
+    rarity.set(t, df === 0 ? 0 : Math.max(2, Math.round(12 * Math.log10(total / df))))
+  }
+
+  return pool
+    .map((e) => {
+      let s = score(e, [...expanded], raw, rarity)
+      // Topic weight: an entry NAMED for a topic the query hit several times ranks up with each hit.
+      if (s > 0)
+        for (const [noun, n] of topicHits)
+          if (n > 1 && e.name.toLowerCase().includes(noun.replace(/s$/, ""))) s += 15 * n
+      return { e, s }
+    })
+    .filter((h) => h.s > 0)
+    .sort((a, b) => b.s - a.s)
+    .slice(0, Math.max(1, limit))
+}
+
 export const PlatformFindCommand = cmd({
   command: "find [query..]",
   aliases: ["search-commands", "capabilities", "what-can-i"],
@@ -155,8 +285,12 @@ export const PlatformFindCommand = cmd({
       .option("json", { describe: "JSON output (for agents)", type: "boolean", default: false }),
 
   async handler(args) {
-    // Always resolves — the index is embedded, so there is no "unavailable" path to handle.
-    const index = loadIndex()
+    // Always resolves — the embedded index is the floor; workspace entries are added on top
+    // when signed in (or cached). Never throws.
+    const { index, workspace } = await loadMergedIndex()
+    const notice = workspaceNotice(workspace)
+    const workspaceJson = { loaded: !notice, reason: workspace, ...(notice ? { notice } : {}) }
+    const printNotice = () => notice && console.log(`  ${dim(notice)}`)
 
     const raw = ((args.query as string[]) ?? []).join(" ").trim().toLowerCase()
 
@@ -164,7 +298,7 @@ export const PlatformFindCommand = cmd({
     // "what is there", and an empty prompt is a worse answer than an overview.
     if (!raw) {
       if (args.json) {
-        await writeJson({ counts: index.counts, terms: index.terms })
+        await writeJson({ counts: index.counts, terms: index.terms, workspace: workspaceJson })
         return
       }
       UI.empty()
@@ -176,6 +310,7 @@ export const PlatformFindCommand = cmd({
       }
       console.log(`  ${dim("─────")}`)
       console.log(`  ${String(index.counts.total).padStart(5)}  ${bold("total")}`)
+      printNotice()
       printDivider()
       console.log(`  ${dim("search by what you want to DO:")}`)
       console.log(`    ${highlight('iris find "branded html page"')}`)
@@ -185,54 +320,21 @@ export const PlatformFindCommand = cmd({
       return
     }
 
-    const terms = raw.split(/\s+/).filter((t) => t.length > 1)
-
-    // Expand the query through the terminology map, so intent words reach internal nouns.
-    // This is the part that makes "artifact" find `bespoke`.
-    const expanded = new Set(terms)
-    // How many of each topic's phrases the query actually used. One incidental "website" must not
-    // tie with "find people … email them … book calls" — the topic the query keeps pointing at wins.
-    const topicHits = new Map<string, number>()
-    for (const [noun, synonyms] of Object.entries(index.terms)) {
-      // WHOLE WORDS, not substrings: "web-SITE" used to fire the pages synonym "site", so a sales
-      // question containing "website" returned page-building tools (2026-09-19).
-      if (synonyms.some((s) => phraseIn(raw, s)) || terms.includes(noun)) {
-        expanded.add(noun)
-        topicHits.set(noun, synonyms.filter((s) => phraseIn(raw, s)).length)
-        for (const s of synonyms) for (const w of s.split(/\s+/)) expanded.add(w)
-      }
-    }
-
-    let pool = index.entries
-    if (args.kind) pool = pool.filter((e) => e.kind === args.kind)
-
-    // How rare is each query term across the whole index? Cheap to compute (1,300 entries
-    // x a handful of terms) and it is what lets a distinctive word beat a common one.
-    const rarity = new Map<string, number>()
-    for (const t of expanded) {
-      const df = index.entries.reduce((n, e) => n + (e.haystack.includes(t) ? 1 : 0), 0)
-      // 1 doc -> ~28pts, 10 -> ~18, 100 -> ~9, everywhere -> ~2. Floored so a common term
-      // still counts for something; a word the user typed is never worth zero.
-      const total = index.entries.length
-      rarity.set(t, df === 0 ? 0 : Math.max(2, Math.round(12 * Math.log10(total / df))))
-    }
-
-    const hits = pool
-      .map((e) => {
-        let s = score(e, [...expanded], raw, rarity)
-        // Topic weight: an entry NAMED for a topic the query hit several times ranks up with each hit.
-        if (s > 0) for (const [noun, n] of topicHits) if (n > 1 && e.name.toLowerCase().includes(noun.replace(/s$/, ""))) s += 15 * n
-        return { e, s }
-      })
-      .filter((h) => h.s > 0)
-      .sort((a, b) => b.s - a.s)
-      .slice(0, Math.max(1, Number(args.limit) || 12))
+    const hits = searchCapabilities(index, raw, args.kind as Entry["kind"] | undefined, Number(args.limit) || 12)
 
     if (args.json) {
-      console.log(JSON.stringify(
-        { query: raw, matched: hits.length, results: hits.map((h) => ({ ...h.e, haystack: undefined, score: h.s })) },
-        null, 2,
-      ))
+      console.log(
+        JSON.stringify(
+          {
+            query: raw,
+            matched: hits.length,
+            results: hits.map((h) => ({ ...h.e, haystack: undefined, score: h.s })),
+            workspace: workspaceJson,
+          },
+          null,
+          2,
+        ),
+      )
       return
     }
 
@@ -240,6 +342,7 @@ export const PlatformFindCommand = cmd({
     if (!hits.length) {
       console.log(`  ${dim(`nothing matched "${raw}"`)}`)
       console.log(`  ${dim("try a broader word, or browse:")} ${highlight("iris find")}`)
+      printNotice()
       UI.empty()
       process.exitCode = 1
       return
@@ -254,7 +357,10 @@ export const PlatformFindCommand = cmd({
       console.log(`  ${" ".repeat(9)} ${highlight(e.run)}`)
     }
     printDivider()
+    printNotice()
     console.log(`  ${dim("machine-readable:")} ${highlight(`iris find "${raw}" --json`)}`)
+    // find lists; intent picks. The one line that tells a person the second exists (#186677).
+    console.log(`  ${dim("pick one for me:  ")} ${highlight(`iris intent "${raw}"`)}`)
     UI.empty()
   },
 })

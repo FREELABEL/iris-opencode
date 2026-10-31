@@ -1,21 +1,21 @@
 import { describe, expect, test } from "bun:test"
-import { MAIL_THREAD_READER_JXA, withoutLedgerDuplicates } from "./comms-mail-applescript"
+import { MAIL_SENT_READER_JXA, MAIL_THREAD_READER_JXA, withoutLedgerDuplicates } from "./comms-mail-applescript"
 
 describe("withoutLedgerDuplicates — two writers, two keys, one row", () => {
-  // Measured on #28363: `iris mail send` logged "Test note is on CAS102812" at send time; the same
+  // Measured on #28363: `iris mail send` logged "Test note is on CAS000001" at send time; the same
   // message read back from Sent Mail carries its RFC Message-ID, a different key.
-  const logged = [{ direction: "outbound", subject: "Test note is on CAS102812", sent_at: "2026-09-17T07:44:05Z" }]
+  const logged = [{ direction: "outbound", subject: "Test note is on CAS000001", sent_at: "2026-09-17T07:44:05Z" }]
 
   test("drops the Sent Mail copy of a message already logged at send time", () => {
-    const read = [{ direction: "outbound", subject: "Test note is on CAS102812", sent_at: "2026-09-17T07:44:31Z", external_message_id: "rfc822_<x@y>" }]
+    const read = [{ direction: "outbound", subject: "Test note is on CAS000001", sent_at: "2026-09-17T07:44:31Z", external_message_id: "rfc822_<x@y>" }]
     expect(withoutLedgerDuplicates(read, logged)).toEqual({ keep: [], dropped: 1 })
   })
 
   test("keeps a genuinely different message: other subject, other direction, or far apart in time", () => {
     const read = [
       { direction: "outbound", subject: "Different subject", sent_at: "2026-09-17T07:44:31Z" },
-      { direction: "inbound", subject: "Test note is on CAS102812", sent_at: "2026-09-17T07:44:31Z" },
-      { direction: "outbound", subject: "Test note is on CAS102812", sent_at: "2026-09-17T09:00:00Z" },
+      { direction: "inbound", subject: "Test note is on CAS000001", sent_at: "2026-09-17T07:44:31Z" },
+      { direction: "outbound", subject: "Test note is on CAS000001", sent_at: "2026-09-17T09:00:00Z" },
     ]
     const r = withoutLedgerDuplicates(read, logged)
     expect(r.dropped).toBe(0)
@@ -35,7 +35,7 @@ describe("withoutLedgerDuplicates — two writers, two keys, one row", () => {
   })
 
   test("an unparseable date never counts as a duplicate — it is written, not silently dropped", () => {
-    const read = [{ direction: "outbound", subject: "Test note is on CAS102812", sent_at: "not a date" }]
+    const read = [{ direction: "outbound", subject: "Test note is on CAS000001", sent_at: "not a date" }]
     expect(withoutLedgerDuplicates(read, logged).dropped).toBe(0)
   })
 })
@@ -48,8 +48,19 @@ describe("the embedded Mail reader", () => {
 
   test("matches by exact address and reads one named account — never the unified inbox", () => {
     expect(MAIL_THREAD_READER_JXA).toContain("emailOf(snd[i]) === addr")
-    expect(MAIL_THREAD_READER_JXA).toContain("Mail.accounts.byName(acctName)")
+    expect(MAIL_THREAD_READER_JXA).toContain("Mail.accounts.byName(sel)")
     expect(MAIL_THREAD_READER_JXA).not.toContain("Mail.inbox")
     expect(MAIL_THREAD_READER_JXA).not.toContain("_contains")
+  })
+})
+
+describe("the embedded Sent Mail reader (iris mail audit --sent, #191605)", () => {
+  test("parses, reads ONE named account's Sent mailboxes, date-bounded, counting before bulk fetches", () => {
+    expect(() => new Function(MAIL_SENT_READER_JXA)).not.toThrow()
+    expect(MAIL_SENT_READER_JXA).toContain("Mail.accounts.byName(acctName)")
+    expect(MAIL_SENT_READER_JXA).toContain("/(^|\\/)sent( mail| messages)?$/i")
+    expect(MAIL_SENT_READER_JXA).toContain("if (msgs.length === 0) continue")
+    expect(MAIL_SENT_READER_JXA).toContain("msgs.bccRecipients.address()")
+    expect(MAIL_SENT_READER_JXA).not.toContain("Mail.inbox")
   })
 })

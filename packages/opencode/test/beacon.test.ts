@@ -222,3 +222,29 @@ describe("Beacon token resolution", () => {
   // in. That branch (`if (!key) return false`) is unchanged from before the
   // cascade existed; what regressed, and what is guarded above, is precedence.
 })
+
+describe("Beacon.usage (#186171)", () => {
+  afterEach(() => {
+    delete process.env.DO_NOT_TRACK
+  })
+
+  test("sends the event name only, with app version and OS on the envelope", async () => {
+    Beacon.usage("playbook_run")
+    await Beacon.flush()
+    const batch = posted.find((p) => p.body?.events)?.body
+    expect(batch.cli_version).toBeString()
+    expect(batch.os).toBe(process.platform)
+    expect(batch.events).toEqual([{ source: "cli", event_type: "playbook_run", severity: "info" }])
+  })
+
+  test("DO_NOT_TRACK=1 and IRIS_TELEMETRY=0 each send nothing", async () => {
+    process.env.DO_NOT_TRACK = "1"
+    Beacon.usage("app_open")
+    await Beacon.flush()
+    delete process.env.DO_NOT_TRACK
+    process.env.IRIS_TELEMETRY = "0"
+    Beacon.usage("sign_in")
+    await Beacon.flush()
+    expect(posted).toEqual([])
+  })
+})

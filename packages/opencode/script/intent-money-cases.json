@@ -1,0 +1,31 @@
+[
+  ["reconcile my books", ["playbook run bills-to-books", "mint verify"]],
+  ["turn this folder of receipts into ledger entries", ["playbook run bills-to-books"]],
+  ["prove the numbers in my report tie out", ["mint verify"]],
+  ["send an invoice", ["invoices send", "leads collect"]],
+  ["get paid by a client", ["leads collect", "invoices send", "invoices create"]],
+  ["sign a contract", ["playbook run iris-agreements", "agreements raise", "agreements issue", "contracts send"]],
+  [
+    "get an NDA signed by a new client",
+    ["playbook run iris-agreements", "agreements raise", "agreements issue", "contracts send"]
+  ],
+  ["follow up with my leads", ["playbook run lead-outreach", "outreach-send apply"]],
+  ["post to instagram", ["post"]],
+  ["launch a paid ad on X", ["playbook run x-ads"]],
+  ["send my newsletter to members", ["playbook run newsroom-newsletter-send", "newsroom send"]],
+  ["i want to build a website", ["playbook run genesis-bespoke", "genesis compose"]],
+  ["connect my client's domain to their site", ["playbook run connect-client-domain", "domains connect"]],
+  ["check my page's SEO", ["playbook run page-seo-audit"]],
+  ["create a database for my client data", ["atlas:datasets schemas create"]],
+  [
+    "put my spreadsheet data on a dashboard",
+    ["playbook run genesis-bind-dashboard", "atlas:datasets import", "dashboard create"]
+  ],
+  ["run AI on my own machines", ["playbook run iris-hive", "playbook run iris-hive-start"]],
+  ["check whether a brand name is taken", ["playbook run brand-name-clearance"]],
+  [
+    "reconcile pathways patient payables",
+    ["playbook run patient-payable-reconciliation", "playbook run pathways-accounting-reconcile"]
+  ],
+  ["how much have I spent on AI", ["usage"]]
+]

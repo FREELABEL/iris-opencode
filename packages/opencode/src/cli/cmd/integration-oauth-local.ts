@@ -29,6 +29,39 @@ export interface LocalOAuthProvider {
   oobRedirectUri?: string
   /** Region caveats worth printing before someone burns an afternoon. */
   note?: string
+  /**
+   * Host written into the loopback redirect URI. Providers that match the redirect
+   * byte-for-byte against what the app registered (LinkedIn) need the exact string the
+   * user registered — `localhost`, not `127.0.0.1`. The listener still binds 127.0.0.1.
+   */
+  loopbackHost?: string
+  /**
+   * A FIXED default port for providers that require the redirect (port included) to be
+   * registered on the app, so the user registers it once. Overridden by --port.
+   */
+  defaultPort?: number
+  /**
+   * Named scope sets, sent space-separated as `scope`. `default` is used unless another
+   * set is asked for. Each set is complete on its own (not additive), so what is sent is
+   * exactly what the set lists.
+   */
+  scopeSets?: Record<string, string[]>
+  /**
+   * Which API persists the token set: "fl" (fl-api — Clio's service lives there) or
+   * "iris" (fl-iris-api — where the native LinkedIn service reads its row).
+   */
+  storeBase?: "fl" | "iris"
+  /** Mark the stored credential as a native sign-in (`credentials.provider = "native"`). */
+  nativeCredential?: boolean
+  /**
+   * Store the app's client id/secret with the token set WHEN a refresh token came back, so
+   * the server can refresh without its own env. Encrypted server-side like every token.
+   */
+  storeAppCredentialsForRefresh?: boolean
+  /** A read-only command that proves the connection works. */
+  verifyCommand?: string
+  /** Lines printed before the browser opens: what the app must have registered. */
+  setup?: string[]
 }
 
 export const LOCAL_OAUTH_PROVIDERS: Record<string, LocalOAuthProvider> = {
@@ -39,6 +72,51 @@ export const LOCAL_OAUTH_PROVIDERS: Record<string, LocalOAuthProvider> = {
     tokenUrl: "https://app.clio.com/oauth/token",
     oobRedirectUri: "https://app.clio.com/oauth/approval",
     note: "US region (app.clio.com). Tokens minted here are NOT valid against the EU/CA/AU hosts.",
+    storeBase: "fl",
+    verifyCommand: "iris integrations exec clio list_matters",
+  },
+  /**
+   * LinkedIn, native (2026-09-29). Composio's LinkedIn toolkit sent a retired
+   * LinkedIn-Version and its fresh connections expired within seconds, so IRIS signs in
+   * itself and fl-iris-api's LinkedInIntegrationService spends the token.
+   *
+   * LinkedIn matches redirect_uri EXACTLY against the app's registered list, port
+   * included, and has no out-of-band redirect — hence the fixed localhost:8765.
+   * Org scopes are opt-in: asking for scopes the app has not been approved for makes
+   * LinkedIn reject the whole authorization, member scopes included.
+   */
+  linkedin: {
+    slug: "linkedin",
+    label: "LinkedIn",
+    authorizeUrl: "https://www.linkedin.com/oauth/v2/authorization",
+    tokenUrl: "https://www.linkedin.com/oauth/v2/accessToken",
+    loopbackHost: "localhost",
+    defaultPort: 8765,
+    scopeSets: {
+      // "Sign In with LinkedIn using OpenID Connect" + "Share on LinkedIn" (self-serve).
+      default: ["openid", "profile", "email", "w_member_social"],
+      // + "Community Management API" (LinkedIn must approve the app first).
+      org: [
+        "openid",
+        "profile",
+        "email",
+        "w_member_social",
+        "w_organization_social",
+        "r_organization_social",
+        "rw_organization_admin",
+      ],
+    },
+    storeBase: "iris",
+    nativeCredential: true,
+    storeAppCredentialsForRefresh: true,
+    verifyCommand: "iris integrations exec linkedin get_my_info",
+    note: "Access tokens last about 60 days. Refresh tokens are only issued to some LinkedIn partner apps; without one, run this command again when IRIS asks.",
+    setup: [
+      "LinkedIn app (developer.linkedin.com → your app):",
+      "  Auth → Authorized redirect URLs: add the Redirect URI above, exactly.",
+      "  Products: \"Sign In with LinkedIn using OpenID Connect\" + \"Share on LinkedIn\" (post as yourself).",
+      "  Company pages also need \"Community Management API\" (LinkedIn approves it) — then connect with --org.",
+    ],
   },
 }
 
@@ -47,6 +125,9 @@ export interface TokenSet {
   refresh_token?: string
   token_type?: string
   expires_in?: number
+  /** Space-separated scopes the provider actually granted (LinkedIn returns it). */
+  scope?: string
+  refresh_token_expires_in?: number
 }
 
 export class LocalOAuthError extends Error {}
@@ -58,13 +139,38 @@ export function generateState(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("")
 }
 
-export function loopbackRedirectUri(port: number, path = "/callback"): string {
-  return `http://127.0.0.1:${port}${path}`
+export function loopbackRedirectUri(port: number, path = "/callback", host = "127.0.0.1"): string {
+  return `http://${host}:${port}${path}`
+}
+
+/** The redirect URI a provider's loopback flow uses — the string the user must register. */
+export function providerRedirectUri(provider: LocalOAuthProvider, port?: number): string {
+  return loopbackRedirectUri(port ?? provider.defaultPort ?? 8787, "/callback", provider.loopbackHost ?? "127.0.0.1")
+}
+
+/**
+ * The scopes to request: the named set, or the provider's `default`. Undefined when the
+ * provider declares no scope sets (Clio — scopes live on its app, not the URL).
+ */
+export function resolveScopes(provider: LocalOAuthProvider, set?: string): string[] | undefined {
+  const sets = provider.scopeSets
+  if (!sets) {
+    if (set && set !== "default") {
+      throw new LocalOAuthError(`${provider.label} has no scope sets; drop --scope-set/--org.`)
+    }
+    return undefined
+  }
+  const name = set ?? "default"
+  const scopes = sets[name]
+  if (!scopes) {
+    throw new LocalOAuthError(`Unknown ${provider.label} scope set "${name}". Available: ${Object.keys(sets).join(", ")}.`)
+  }
+  return scopes
 }
 
 export function buildAuthorizeUrl(
   provider: LocalOAuthProvider,
-  opts: { clientId: string; redirectUri: string; state: string },
+  opts: { clientId: string; redirectUri: string; state: string; scopes?: string[] },
 ): string {
   const params = new URLSearchParams({
     response_type: "code",
@@ -73,7 +179,83 @@ export function buildAuthorizeUrl(
     state: opts.state,
     ...(provider.authorizeParams ?? {}),
   })
-  return `${provider.authorizeUrl}?${params.toString()}`
+  if (opts.scopes && opts.scopes.length > 0) params.set("scope", opts.scopes.join(" "))
+  // URLSearchParams writes a space as "+"; a literal "+" is already "%2B", so this only
+  // touches spaces. %20 is what LinkedIn documents for its space-separated scope list.
+  return `${provider.authorizeUrl}?${params.toString().replace(/\+/g, "%20")}`
+}
+
+/**
+ * For providers with no out-of-band page: in paste mode the browser lands on the
+ * (unanswered) loopback redirect and the user pastes that URL from the address bar.
+ * A bare code is accepted too. A pasted URL must carry OUR state — the same CSRF rule
+ * the listener enforces.
+ */
+export function parsePastedCallback(input: string, expectedState: string): string {
+  const text = input.trim()
+  if (!/^https?:\/\//i.test(text)) return text
+  const url = new URL(text)
+  const error = url.searchParams.get("error")
+  if (error) throw new LocalOAuthError(`Denied: ${url.searchParams.get("error_description") || error}`)
+  const state = url.searchParams.get("state")
+  if (!state || state !== expectedState) {
+    throw new LocalOAuthError("State mismatch — this callback did not come from this session.")
+  }
+  const code = url.searchParams.get("code")
+  if (!code) throw new LocalOAuthError("No authorization code in the pasted URL.")
+  return code
+}
+
+/**
+ * The body POSTed to /api/v1/users/{id}/integrations for a freshly minted token set.
+ * Pure, so the exact shape each provider stores is testable without a network.
+ */
+export function buildSavePayload(
+  provider: LocalOAuthProvider,
+  tokens: TokenSet,
+  opts: { clientId: string; clientSecret: string; name?: string; bloq?: number; now?: number },
+): Record<string, unknown> {
+  const now = opts.now ?? Date.now()
+  const expiresIn = Number(tokens.expires_in ?? 3600)
+  const credentials: Record<string, unknown> = {
+    access_token: tokens.access_token,
+    refresh_token: tokens.refresh_token ?? null,
+    token_type: tokens.token_type ?? "Bearer",
+    expires_in: expiresIn,
+    // ISO8601 on purpose: the server-side service Carbon::parse()s this and
+    // rewrites it in the same shape on refresh. A unix int throws there.
+    expires_at: new Date(now + expiresIn * 1000).toISOString(),
+  }
+  if (provider.nativeCredential) credentials.provider = "native"
+  if (tokens.scope) credentials.scope = tokens.scope
+  if (tokens.refresh_token_expires_in) credentials.refresh_token_expires_in = tokens.refresh_token_expires_in
+  // Only when there IS something to refresh — no reason to hold an app secret otherwise.
+  if (provider.storeAppCredentialsForRefresh && tokens.refresh_token) {
+    credentials.client_id = opts.clientId
+    credentials.client_secret = opts.clientSecret
+  }
+
+  const payload: Record<string, unknown> = { type: provider.slug, status: "active", credentials }
+  if (opts.name) payload.name = opts.name
+  if (opts.bloq) payload.bloq_id = opts.bloq
+  return payload
+}
+
+export type StoreTarget = "fl" | "iris"
+export type IntegrationSender = (path: string, init: RequestInit, target: StoreTarget) => Promise<Response>
+
+/** Persist the token set on the API the provider's service reads from. */
+export function persistTokens(
+  send: IntegrationSender,
+  provider: LocalOAuthProvider,
+  userId: number | string,
+  payload: Record<string, unknown>,
+): Promise<Response> {
+  return send(
+    `/api/v1/users/${userId}/integrations`,
+    { method: "POST", body: JSON.stringify(payload) },
+    provider.storeBase ?? "fl",
+  )
 }
 
 /**

@@ -338,3 +338,64 @@ describe("#183406 defect 6 — fenced blocks vanish from a human step", () => {
     expect(s.body).toBe("Some prose.")
   })
 })
+
+// #191216 (epic #190539 E6) — playbooks behind search.
+import { useSearchTools, playbookToolMode, findPlaybooks, describeMatch, FIND_TOOL, RUN_TOOL, TYPED_TOOL_LIMIT } from "./mcp-playbooks"
+
+const entry = (name: string, description: string, over: Partial<SkillPlan> = {}) => ({
+  plan: plan({ name, description, steps: [step()], ...over }),
+  callable: true,
+})
+const many = (n: number) => Array.from({ length: n }, (_, i) => entry(`pb-${i}`, `playbook number ${i}`))
+
+describe("playbooks behind search", () => {
+  test(`typed tools at ≤ ${TYPED_TOOL_LIMIT} playbooks, search + run above`, () => {
+    expect(toolsFor(many(TYPED_TOOL_LIMIT), "auto").map((t) => t.name)).toEqual(many(TYPED_TOOL_LIMIT).map((e) => toolNameFor(e.plan.name)))
+    expect(toolsFor(many(TYPED_TOOL_LIMIT + 1), "auto").map((t) => t.name)).toEqual([FIND_TOOL, RUN_TOOL])
+  })
+
+  test("the override wins both ways", () => {
+    expect(toolsFor(many(2), "search").map((t) => t.name)).toEqual([FIND_TOOL, RUN_TOOL])
+    expect(toolsFor(many(40), "all")).toHaveLength(40)
+    expect(playbookToolMode({ IRIS_MCP_PLAYBOOK_TOOLS: "ALL" })).toBe("all")
+    expect(playbookToolMode({ IRIS_MCP_PLAYBOOK_TOOLS: "nonsense" })).toBe("auto")
+    expect(playbookToolMode({})).toBe("auto")
+  })
+
+  test("non-runnable playbooks count toward nothing", () => {
+    const docs = Array.from({ length: 20 }, (_, i) => ({ plan: plan({ name: `doc-${i}` }), callable: false }))
+    expect(useSearchTools([...docs, ...many(3)], "auto")).toBe(false)
+  })
+
+  test("the search pair stays small however many playbooks there are, and still names them", () => {
+    const tools = toolsFor(many(200), "auto")
+    const size = JSON.stringify(tools).length / 4
+    expect(size).toBeLessThan(2500)
+    expect(tools[0].description).toContain("pb-199")
+  })
+
+  test("find ranks by what the request says, name over description", () => {
+    const set = [
+      entry("opportunity-posts", "Post this week's opportunities to the board and socials"),
+      entry("lead-outreach", "Draft personalised outreach for reachable leads"),
+      entry("news-carousel", "Turn the week's news into a carousel post"),
+    ]
+    expect(findPlaybooks(set, "post this week's opportunities").map((e) => e.plan.name)[0]).toBe("opportunity-posts")
+    expect(findPlaybooks(set, "outreach to my leads").map((e) => e.plan.name)[0]).toBe("lead-outreach")
+    expect(findPlaybooks(set, "zzqq")).toEqual([])
+    expect(findPlaybooks(set, "")).toHaveLength(3)
+  })
+
+  test("a match says how to call it: args, required, enum, default, and the gate", () => {
+    const e = entry("deploy", "Ship it\nlong body ignored", {
+      args: { env: { type: "string", required: true, enum: ["prod", "staging"] }, dry: { type: "boolean", required: false, default: true } },
+      confirm: ["*"],
+    })
+    const text = describeMatch(e as any)
+    expect(text).toContain("## deploy")
+    expect(text).toContain("env (required): string=prod|staging")
+    expect(text).toContain("dry: boolean (default true)")
+    expect(text).toContain("gated")
+    expect(text).not.toContain("long body ignored")
+  })
+})

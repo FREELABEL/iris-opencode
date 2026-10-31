@@ -110,6 +110,9 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   // here, and `find` was absent — so the one command that answers "what can this thing do"
   // appeared in no help output at all (#183479).
   find: "knowledge",
+  // `find` SEARCHES the command list; `intent` PICKS from it. Absent from this map, it appeared in
+  // no help output — the same gap `find` had (#183479), found again by the readiness gate (#186677).
+  intent: "knowledge",
   atlas: "knowledge",
   memory: "knowledge",
   boards: "knowledge",
@@ -127,6 +130,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   "pages:batch": "pages",
   partials: "pages",
   copycat: "pages",
+  reel: "pages",
   "editorial": "pages",
   remotion: "pages",
   release: "pages",
@@ -140,6 +144,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   workflows: "agents",
   schedules: "agents",
   monitor: "agents",
+  status: "agents",
   personality: "agents",
   recall: "knowledge",
   home: "integrations",
@@ -185,6 +190,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   download: "communication",
   transcribe: "communication",
   mail: "communication",
+  mailing: "communication",
   senders: "communication",
   imessage: "communication",
   whatsapp: "communication",
@@ -221,6 +227,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   completion: "core",
   acp: "core",
   mcp: "core",
+  a2a: "core",
   marketplace: "core",
   attach: "core",
   run: "core",

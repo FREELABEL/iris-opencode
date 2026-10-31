@@ -33,6 +33,18 @@
       "purpose": "How to: Use Atlas Datasets (schema-driven data)"
     },
     {
+      "src": "how-to/desktop-atlas-offline-copy.md",
+      "dest": "how-to/desktop-atlas-offline-copy.md",
+      "managed": true,
+      "purpose": "Open Atlas boards instantly and read them offline in IRIS Desktop: where the copy lives, the patient-data rule, and how to turn it off."
+    },
+    {
+      "src": "how-to/atlas-local-copy.md",
+      "dest": "how-to/atlas-local-copy.md",
+      "managed": true,
+      "purpose": "Keep a local copy of an Atlas dataset on your computer as plain files, in step with the cloud in both directions (offline edits, scripting)."
+    },
+    {
       "src": "how-to/bespoke.md",
       "dest": "how-to/bespoke.md",
       "managed": true,
@@ -183,6 +195,12 @@
       "purpose": "How to: give a bespoke render_mode:html page data and behaviour with the Genesis SDK"
     },
     {
+      "src": "how-to/genesis-html-page-live-data.md",
+      "dest": "how-to/genesis-html-page-live-data.md",
+      "managed": true,
+      "purpose": "How to: show live Atlas dataset rows on a standalone HTML page with page-level bindings, including what a sandboxed page gets"
+    },
+    {
       "src": "how-to/genesis-components.md",
       "dest": "how-to/genesis-components.md",
       "managed": true,
@@ -193,6 +211,18 @@
       "dest": "how-to/genesis-verify-pages.md",
       "managed": true,
       "purpose": "How to: verify a page actually renders — check-public, verify and read — rather than trusting a 200. Committed in ce2fdf8be without a manifest entry, so the installer never fetched it."
+    },
+    {
+      "src": "how-to/genesis-starter-templates.md",
+      "dest": "how-to/genesis-starter-templates.md",
+      "managed": true,
+      "purpose": "How to: start a page from a Genesis template — clone it in your brand, then make it yours. The gallery is at genesis-ui.com."
+    },
+    {
+      "src": "how-to/genesis-make-a-template.md",
+      "dest": "how-to/genesis-make-a-template.md",
+      "managed": true,
+      "purpose": "How to: turn one of your Genesis pages into a template any brand can wear — brand-tokens block, fallbacks, per-theme accent."
     },
     {
       "src": "how-to/hive-dispatch.md",
@@ -213,10 +243,64 @@
       "purpose": "Rent a long-lived machine (Railway/DigitalOcean), run Python/PHP on it, and release it to stop billing. Covers the --no-hive opt-out and why a failed release is reported as a failure."
     },
     {
+      "src": "how-to/hive-ci-runners.md",
+      "dest": "how-to/hive-ci-runners.md",
+      "managed": true,
+      "purpose": "Run GitHub Actions on your own Hive machines: iris hive runner add/list/remove registers a macOS or Linux node as a self-hosted runner for a repo, as a service, without your GitHub login leaving your machine."
+    },
+    {
       "src": "how-to/hive-sessions.md",
       "dest": "how-to/hive-sessions.md",
       "managed": true,
       "purpose": "See every AI session across your Hive — machine, model, branch, staleness — and send input into any of them without knowing which machine holds it."
+    },
+    {
+      "src": "how-to/answer-agents-from-anywhere.md",
+      "dest": "how-to/answer-agents-from-anywhere.md",
+      "managed": true,
+      "purpose": "See which agents are waiting on you — the question and its options — and answer them from any machine or your phone."
+    },
+    {
+      "src": "how-to/iris-model-gateway.md",
+      "dest": "how-to/iris-model-gateway.md",
+      "managed": true,
+      "purpose": "The IRIS model gateway: one endpoint, failover, spend and caps — and hive/<model> to use the models on your own machines for free."
+    },
+    {
+      "src": "how-to/run-other-coding-agents.md",
+      "dest": "how-to/run-other-coding-agents.md",
+      "managed": true,
+      "purpose": "Run Claude Code, Codex or Gemini from IRIS over ACP — diffs and permission prompts in one command — and keep the session open to steer from Hive or Desktop."
+    },
+    {
+      "src": "how-to/public-url-for-a-local-port.md",
+      "dest": "how-to/public-url-for-a-local-port.md",
+      "managed": true,
+      "purpose": "Give something running on your machine a public https URL (<name>.t.heyiris.io), encrypted to the machine, that closes when you stop."
+    },
+    {
+      "src": "how-to/your-own-domain.md",
+      "dest": "how-to/your-own-domain.md",
+      "managed": true,
+      "purpose": "Make your own domain serve a Genesis page (not redirect to it), check it is live, and swap the page later without DNS work."
+    },
+    {
+      "src": "how-to/run-code-in-a-sandbox.md",
+      "dest": "how-to/run-code-in-a-sandbox.md",
+      "managed": true,
+      "purpose": "Run a command in a throwaway Linux sandbox (Python, Node, git) — internet off by default, released afterwards; --keep to reuse one."
+    },
+    {
+      "src": "how-to/ask-about-your-screen.md",
+      "dest": "how-to/ask-about-your-screen.md",
+      "managed": true,
+      "purpose": "Drag over any part of your screen and get a short answer about it — errors, charts, messages."
+    },
+    {
+      "src": "how-to/shared-folder-across-machines.md",
+      "dest": "how-to/shared-folder-across-machines.md",
+      "managed": true,
+      "purpose": "One folder on every machine in your Hive — read on demand, saved files visible everywhere at once."
     },
     {
       "src": "how-to/iris-login.md",
@@ -315,6 +399,24 @@
       "purpose": "Pulse readiness engine — autonomous 4-signal scoring (requirements + liveness + comms freshness + config), 15-min cron, daily digest. How to enroll a lead, view the score, run requirements, debug the loop."
     },
     {
+      "src": "how-to/pulse-desktop.md",
+      "dest": "how-to/pulse-desktop.md",
+      "managed": true,
+      "purpose": "Pulse from inside IRIS Desktop chat — ask where a topic stands (commits, diary, files, sessions, tasks, mail) or how a contact is doing, without leaving the conversation."
+    },
+    {
+      "src": "how-to/desktop-atlas-offline-copy.md",
+      "dest": "how-to/desktop-atlas-offline-copy.md",
+      "managed": true,
+      "purpose": "Open Atlas boards instantly and read them offline in IRIS Desktop: where the copy lives, the patient-data rule, and how to turn it off."
+    },
+    {
+      "src": "how-to/desktop-agents.md",
+      "dest": "how-to/desktop-agents.md",
+      "managed": true,
+      "purpose": "Put your IRIS agents in the IRIS Desktop agent picker with iris agents desktop-sync — full local tools, facts still from IRIS; restart to see them."
+    },
+    {
       "src": "how-to/remote-support-a-family-pc.md",
       "dest": "how-to/remote-support-a-family-pc.md",
       "managed": true,
@@ -381,6 +483,12 @@
       "purpose": "Canonical reference loopable playbook (the 'fuel' for `iris loop run`). A v2 implement→verify loop — orchestrator → Builder/Scout/Growth → verify → synthesize → memory — whose verify step emits `VERDICT: SHIP|ITERATE` so the loop engine (platform-loop.ts) terminates correctly. Resolves `iris playbook show agentic-loop` and `iris loop run agentic-loop --until SHIP`, which the agentic-loops.md how-to points at."
     },
     {
+      "src": "playbooks/talking-head-reel/PLAYBOOK.md",
+      "dest": "playbooks/talking-head-reel/PLAYBOOK.md",
+      "managed": true,
+      "purpose": "Talking-head reel lane (#191299): raw takes → `iris reel cut` (best take, pauses removed) → `iris reel captions` (word-timed, burnt in) → `iris reel covers` → a person reviews → `iris remotion register` → confirm-gated delete of the raw takes. Each step leaves a file the next reads."
+    },
+    {
       "src": "playbooks/hive-secure-mesh/PLAYBOOK.md",
       "dest": "playbooks/hive-secure-mesh/PLAYBOOK.md",
       "managed": true,
@@ -441,6 +549,18 @@
       "purpose": "Recipe for taking a product from a spoken idea to a live URL inside IRIS alone — Atlas, Genesis and Hive, with agents on two machines passing work. Written from a session that did it, including where a step cost an hour."
     },
     {
+      "src": "how-to/hive-proof-video.md",
+      "dest": "how-to/hive-proof-video.md",
+      "managed": true,
+      "purpose": "Recipe for iris hive proof — check a machine is ready, record a page working, and post the video on a pull request."
+    },
+    {
+      "src": "how-to/locate-files-on-your-machines.md",
+      "dest": "how-to/locate-files-on-your-machines.md",
+      "managed": true,
+      "purpose": "Recipe for iris locate — find a file on any machine you own; which engine each platform uses and how to install the faster one."
+    },
+    {
       "src": "how-to/edge-publish.md",
       "dest": "how-to/edge-publish.md",
       "managed": true,
@@ -469,6 +589,78 @@
       "dest": "how-to/kinetics.md",
       "managed": true,
       "purpose": "Decide which agent may move which body — seal an agent into an identity hash, couple it to a camera/OBS/phone/node with an allowed verb list and a budget, then check or revoke it. Node-local, works offline."
+    },
+    {
+      "src": "how-to/iris-intent.md",
+      "dest": "how-to/iris-intent.md",
+      "managed": true,
+      "purpose": "Say what you want in plain English and get the IRIS command that does it — iris intent decides (Decide, powered by Jev), iris find only searches. Best pick first with arguments filled, then a ranked list."
+    },
+    {
+      "src": "how-to/buzz-with-iris.md",
+      "dest": "how-to/buzz-with-iris.md",
+      "managed": true,
+      "purpose": "Put IRIS in Buzz (Block's team workspace for people + agents) in one line: iris buzz setup --install --community <invite> installs the signature-verified Buzz app, registers IRIS as an agent, and joins the team's community. Troubleshooting and the privacy caveat (no end-to-end encryption)."
+    },
+    {
+      "src": "how-to/page-refused-trusted-owner.md",
+      "dest": "how-to/page-refused-trusted-owner.md",
+      "managed": true,
+      "purpose": "How to: a page push refused with \"restricted to trusted owners\" — publish a standalone page instead, what the sandbox allows, and how trust is granted."
+    },
+    {
+      "src": "how-to/mailjet.md",
+      "dest": "how-to/mailjet.md",
+      "managed": true,
+      "purpose": "How to: connect a client's own Mailjet account and build lists, send email and draft campaigns through iris integrations exec."
+    },
+    {
+      "src": "how-to/mailing.md",
+      "dest": "how-to/mailing.md",
+      "managed": true,
+      "purpose": "How to: send one personal email to everyone on a list through your own Mailjet — iris mailing new → test → send → status/log, resuming a stopped send, and the etiquette for cold lists."
+    },
+    {
+      "src": "how-to/agent-trust-and-approvals.md",
+      "dest": "how-to/agent-trust-and-approvals.md",
+      "managed": true,
+      "purpose": "Set an agent's trust level (intern/specialist/lead), how held actions reach you (Slack/email confirm links), approve/reject/edit, remembered refusals and volume caps."
+    },
+    {
+      "src": "how-to/agent-pause-watch-takeover.md",
+      "dest": "how-to/agent-pause-watch-takeover.md",
+      "managed": true,
+      "purpose": "Watch an agent's live step and tool calls (CLI and Desktop Agents > Live), take over and hand back with an instruction, pause/resume/stop in every lane."
+    },
+    {
+      "src": "how-to/dataset-webhooks.md",
+      "dest": "how-to/dataset-webhooks.md",
+      "managed": true,
+      "purpose": "Signed webhooks when a dataset record is created/updated/deleted: add, list, deliveries, retries, signature verification, PHI field omission."
+    },
+    {
+      "src": "how-to/dataset-schema-draft.md",
+      "dest": "how-to/dataset-schema-draft.md",
+      "managed": true,
+      "purpose": "Draft a typed schema (with public/private/phi visibility) from a sentence; review, dry-run and create it explicitly."
+    },
+    {
+      "src": "how-to/vaults.md",
+      "dest": "how-to/vaults.md",
+      "managed": true,
+      "purpose": "iris vault / iris vaults: replicated vaults and encrypted per-workspace PHI vaults on a node — create, list, lock, unlock, destroy, 30-day retention."
+    },
+    {
+      "src": "how-to/iris-next.md",
+      "dest": "how-to/iris-next.md",
+      "managed": true,
+      "purpose": "iris next: the one next step for your account, and --site to start from an existing website."
+    },
+    {
+      "src": "how-to/review-studio-timecodes.md",
+      "dest": "how-to/review-studio-timecodes.md",
+      "managed": true,
+      "purpose": "Time-coded Review Studio notes (seek-on-click) and replacing a video render behind the same URL."
     }
   ]
 }
