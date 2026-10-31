@@ -447,6 +447,11 @@ export function PromptInputV2Dictate(props: {
                     </Show>
                   }
                 >
+                  <Show when={voice().displaced}>
+                    <p data-slot="dictate-panel-hint" role="status">
+                      {i18n.t("ui.promptInput.dictate.displaced")}
+                    </p>
+                  </Show>
                   <p data-slot="dictate-panel-text">{voice().result}</p>
                 </Show>
               </div>
@@ -454,9 +459,9 @@ export function PromptInputV2Dictate(props: {
                 <Wave bars={panelWave()} box={PANEL_WAVE} class={phase() === "transcribing" ? "sweep" : undefined} />
               </Show>
               <div data-slot="dictate-panel-foot">
-                <span data-slot="dictate-panel-note">
-                  {voice().displaced ? i18n.t("ui.promptInput.dictate.displaced") : i18n.t("ui.promptInput.dictate.background.runs")}
-                </span>
+                <Show when={!voice().displaced}>
+                  <span data-slot="dictate-panel-note">{i18n.t("ui.promptInput.dictate.background.runs")}</span>
+                </Show>
                 <span data-slot="dictate-spacer" />
                 <button type="button" data-slot="dictate-btn" onClick={() => send({ type: "discard" })} disabled={phase() === "transcribing"}>
                   {i18n.t("ui.promptInput.dictate.background.discard")}

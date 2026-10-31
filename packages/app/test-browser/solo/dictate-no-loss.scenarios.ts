@@ -174,7 +174,7 @@ describe("dictating in the composer: nothing said is lost", () => {
     finish("something the engine heard quite differently")
     expect(ui.value()).toBe("my own words now")
     expect(panel()?.textContent).toContain("something the engine heard quite differently")
-    expect(panel()?.querySelector('[data-slot="dictate-panel-note"]')?.textContent).toContain("Nothing was lost")
+    expect(panel()?.querySelector('[data-slot="dictate-panel-hint"]')?.textContent).toContain("Nothing was lost")
     ;(panel()?.querySelector('[data-slot="dictate-btn"][data-primary]') as HTMLButtonElement).click()
     expect(ui.value()).toBe("my own words now something the engine heard quite differently")
     expect(panel()).toBeNull()
