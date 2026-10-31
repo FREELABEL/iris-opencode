@@ -128,6 +128,8 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.release": "Engedje fel a leállításhoz",
   "ui.promptInput.dictate.held": "Visszatartva",
   "ui.promptInput.dictate.displaced": "Ezt nem sikerült hozzáadni az üzenethez. Semmi sem veszett el.",
+  "ui.promptInput.dictate.fullTranscript": "Teljes átirat",
+  "ui.promptInput.dictate.copyRecording": "A felvétel helyének másolása",
   "ui.promptInput.dictate.keep": "Felvétel folytatása",
   "ui.promptInput.dictate.keepHint": "Felvétel folytatása a háttérben",
   "ui.promptInput.dictate.background.start": "Háttérfelvétel indítása",

@@ -4,31 +4,51 @@
  * The words are written as the prompt's REAL text — one plain text node at the end of the editor,
  * rewritten in place as they arrive, with the caller firing the editor's input event after each
  * write. So the placeholder goes away, the text is the editor's own colour, Send is enabled, and
- * what Send sends is what is on screen (#189543). Until then they were a grey preview span the
- * parser skipped: on screen, never in the prompt.
+ * what Send sends is what is on screen (#189543).
  *
- * The node belongs to the take until the person touches it. Once they edit the words, or the words
- * leave the editor (sent, cleared), those words are theirs and are never rewritten or re-added — but
- * the take is still running, so what is said AFTER them keeps arriving, in a new node at the end of
- * the editor. Nothing said is lost (specs/voice/standard.md rule 2).
+ * A take is segments (#191998). Any edit, delete or Send closes the open segment: everything said
+ * before that moment belongs to the person and the recording cannot bring it back. Only the open
+ * segment, the words since, can still change. Deliberate deletion is a decision, not loss
+ * (specs/voice/standard.md rule 2).
  */
 export type LiveRegion = {
-  /** The node this take is writing to. None between a takeover and the next new word. */
+  /** The open segment's node. None between a close and the next new word. */
   node?: Text
   /** Exactly what was last written into `node`, leading space included. */
   shown: string
   /** The whole take as of the last write: every word the person has been shown. */
   said: string
-  /** The take as of the person's last takeover. Only words after these are still the take's. */
-  handed?: string
+  /** Words of `said` in closed segments. The open segment is what comes after them. */
+  from: number
+  /** The person has touched the text during this take. */
+  touched: boolean
+}
+
+const words = (text: string) => text.trim().split(/\s+/).filter(Boolean)
+
+/** Close the open segment: its words stay where they are, and are the person's from now on. */
+export function closeLiveSegment(region: LiveRegion): LiveRegion {
+  return { node: undefined, shown: "", said: region.said, from: words(region.said).length, touched: true }
+}
+
+/** Has the person touched this take's text? Sent or deleted words count: their node is gone. */
+export function liveTouched(editor: HTMLElement, region: LiveRegion | undefined): boolean {
+  return !!region && (region.touched || !locate(editor, region))
+}
+
+/** The region as it stands: a node gone or changed with no input event (a Send) is the same as a close. */
+function current(editor: HTMLElement, region: LiveRegion): LiveRegion {
+  const node = locate(editor, region)
+  return region.node && !node ? closeLiveSegment(region) : { ...region, node }
 }
 
 /**
- * Show `text` (the whole take so far) as the take's words. Empty means nothing new to show. Undefined
- * takes the words still owned by the take back out (a take that moved to the background, or failed
- * with its audio saved for Retry); what the person took over stays. Returns the region to keep and
- * whether the editor changed — when it did, the caller fires the editor's input event so the prompt
- * reads the new text.
+ * Show `text` (the whole take so far). Empty means nothing new to show. Undefined takes the open
+ * segment back out (a take that moved to the background, or failed with its audio saved for Retry);
+ * closed segments stay. Returns the region to keep and whether the editor changed — when it did, the
+ * caller fires the editor's input event so the prompt reads the new text.
+ *
+ * New words always go at the end. The caret follows them if it was at the end, and otherwise stays.
  */
 export function writeLiveText(
   editor: HTMLElement,
@@ -36,96 +56,132 @@ export function writeLiveText(
   text: string | undefined,
 ): { region: LiveRegion | undefined; changed: boolean } {
   if (text === "") return { region, changed: false }
-  const node = region?.node ? locate(editor, region) : undefined
+  const open = region && current(editor, region)
+  const node = open?.node
   if (text === undefined) {
     if (!node) return { region: undefined, changed: false }
     node.remove()
     return { region: undefined, changed: true }
   }
-  // No node left to write to means the person took the last words over: gone or edited.
-  const handed = region && !node ? region.said : region?.handed
-  const words = handed === undefined ? text : wordsAfter(handed, text)
-  // Nothing past what they already have (or the engine is mid-revision): wait for the next update.
-  if (!words) return { region: region && { ...region, node, shown: node ? region.shown : "", handed }, changed: false }
+  const from = open?.from ?? 0
+  const fresh = from ? words(text).slice(from).join(" ") : text
+  // Nothing past the closed segments yet, or the engine is mid-revision: wait for the next update.
+  if (!fresh) return { region: open, changed: false }
+  const follow = caretAtEnd(editor)
   const target = node ?? appendNode(editor)
-  const shown = gapBefore(target) + words
+  const shown = gapBefore(target) + fresh
   const changed = target.data !== shown
-  target.data = shown
-  return { region: { node: target, shown, said: text, handed }, changed }
+  rewrite(target, shown)
+  if (follow && changed) caretToEnd(editor)
+  return { region: { node: target, shown, said: text, from, touched: open?.touched ?? false }, changed }
 }
 
-/** What became of a take's final transcript. `held` means it could not be placed: keep it visibly. */
-export type LiveSettled = { changed: boolean; held: boolean }
-
 /**
- * The take's final transcript. It replaces the live words only when the person never touched them.
- * After a takeover, only the words said after it are placed — replacing the live words since then,
- * or appended — and the person's own text is left alone. If the transcript cannot be lined up with
- * what they were shown, nothing in the editor changes and the result says `held`: the caller keeps
- * the whole transcript where the person can see and recover it.
+ * The take's final transcript; true when the editor changed. Never touched: it replaces the live
+ * words. Touched: it only refines the open segment, and only when it lines up confidently. Otherwise
+ * what is on screen stays — that is not a failure, and the caller keeps the transcript recoverable.
  */
-export function settleLiveText(editor: HTMLElement, region: LiveRegion | undefined, text: string): LiveSettled {
-  const node = region?.node ? locate(editor, region) : undefined
-  if (!region || (node && region.handed === undefined)) {
+export function settleLiveText(editor: HTMLElement, region: LiveRegion | undefined, text: string): boolean {
+  const open = region && current(editor, region)
+  const node = open?.node
+  if (!open || (node && !open.touched)) {
     const target = node ?? appendNode(editor)
-    target.data = gapBefore(target) + text
-    return { changed: true, held: false }
+    rewrite(target, gapBefore(target) + text)
+    return true
   }
-  const words = wordsAfter(node ? (region.handed ?? "") : region.said, text)
-  if (words === undefined) return { changed: false, held: true }
-  // Nothing new. Live words already on screen stay: they were heard, and are not the transcript's to remove.
-  if (!words) return { changed: false, held: false }
+  const refined = openSegmentOf(text, node ? node.data : "", words(open.said).slice(0, open.from))
+  if (!refined) return false
   const target = node ?? appendNode(editor)
-  target.data = gapBefore(target) + words
-  return { changed: true, held: false }
+  const shown = gapBefore(target) + refined
+  if (target.data === shown) return false
+  rewrite(target, shown)
+  return true
 }
 
-const LINE_UP_MIN = 0.6
-const LINE_UP_MAX_CELLS = 4_000_000
+/**
+ * What of `final` (the transcript of the whole recording) belongs to the open segment: from where
+ * its live words sit to the end. With no live words, what follows the closed segments' last words.
+ * Undefined when neither can be found; the caller then keeps what is on screen.
+ */
+function openSegmentOf(final: string, open: string, closed: string[]): string | undefined {
+  const tokens = words(final)
+  const keys = tokens.map(speechKey)
+  const live = speechKey(open).split(" ").filter(Boolean)
+  if (live.length) {
+    const span = findSpan(live, keys)
+    return span && tokens.slice(span.start).join(" ")
+  }
+  const span = findSpan(speechKey(closed.slice(-ANCHOR_WORDS).join(" ")).split(" ").filter(Boolean), keys)
+  return span && tokens.slice(span.end).join(" ")
+}
+
+const ANCHOR_WORDS = 4
+const MATCH_MIN = 0.6
+/** How far a word may drift, and how many leading words may be revised, before it counts as a miss. */
+const DRIFT = 2
+const REVISED_LEAD = 2
 
 /**
- * The part of `full` (a later version of the same take) that comes after `said`. Undefined when the
- * two cannot be lined up. Live words and the final transcript differ in punctuation, case and the
- * odd word, so this lines them up word by word (longest common subsequence) rather than by prefix,
- * and a word still being revised when the person took over counts as already had.
+ * The place `want` best fits in `keys`: the most of its words in order, and the latest on a tie,
+ * because the words being placed are the newest. A lone word matches only near the end, since a
+ * common word is found everywhere and what follows it would bring deleted text back.
  */
-export function wordsAfter(said: string, full: string): string | undefined {
-  const tokens = full.trim().split(/\s+/).filter(Boolean)
-  const keys = tokens.map(speechKey)
-  const had = speechKey(said).split(" ").filter(Boolean)
-  let shared = 0
-  while (shared < had.length && shared < keys.length && had[shared] === keys[shared]) shared++
-  if (shared === had.length) return tokens.slice(shared).join(" ")
-
-  const a = had.slice(shared)
-  const b = keys.slice(shared)
-  if (a.length * b.length > LINE_UP_MAX_CELLS) return undefined
-  const table = Array.from({ length: a.length + 1 }, () => new Uint32Array(b.length + 1))
-  for (let i = 1; i <= a.length; i++)
-    for (let j = 1; j <= b.length; j++)
-      table[i]![j] = a[i - 1] === b[j - 1] ? table[i - 1]![j - 1]! + 1 : Math.max(table[i - 1]![j]!, table[i]![j - 1]!)
-  if ((shared + table[a.length]![b.length]!) / had.length < LINE_UP_MIN) return undefined
-
-  // The last word of `said` that matched, at its earliest place in `full`, so a phrase repeated
-  // later in the take is not skipped over.
-  let i = a.length
-  let j = b.length
-  while (i > 0 && j > 0 && a[i - 1] !== b[j - 1]) {
-    if (table[i]![j - 1] === table[i]![j]) j--
-    else i--
-  }
-  if (i === 0 || j === 0) return tokens.slice(shared + a.length).join(" ")
-  for (let k = 1; k < j; k++) {
-    if (b[k - 1] === a[i - 1] && table[i]![k] === table[i]![j]) {
-      j = k
-      break
+function findSpan(want: string[], keys: string[]): { start: number; end: number } | undefined {
+  let best: { start: number; end: number; matched: number } | undefined
+  for (let at = 0; at < keys.length; at++) {
+    for (let lead = 0; lead <= REVISED_LEAD && lead < want.length; lead++) {
+      if (keys[at] !== want[lead]) continue
+      let matched = 1
+      let end = at + 1
+      for (const word of want.slice(lead + 1)) {
+        const found = keys.slice(end, end + DRIFT + 1).indexOf(word)
+        if (found < 0) continue
+        matched++
+        end += found + 1
+      }
+      if (best && matched < best.matched) continue
+      best = { start: Math.max(0, at - lead), end, matched }
     }
   }
-  // Words of `said` after that match were revised by the engine; each has a counterpart in `full`.
-  return tokens.slice(shared + j + (a.length - i)).join(" ")
+  if (!best || best.matched / want.length < MATCH_MIN) return undefined
+  if (best.matched < 2 && keys.length - best.end > DRIFT) return undefined
+  return { start: best.start, end: best.end }
+}
+
+/** Is the person's caret at the very end of the editor? False when it is elsewhere, or a selection. */
+export function caretAtEnd(editor: HTMLElement): boolean {
+  const selection = window.getSelection()
+  if (!selection?.rangeCount || !selection.isCollapsed || !editor.contains(selection.anchorNode)) return false
+  const rest = document.createRange()
+  rest.setStart(selection.anchorNode!, selection.anchorOffset)
+  rest.setEnd(editor, editor.childNodes.length)
+  return rest.toString() === ""
+}
+
+/** Is the person's caret or selection in the editor, somewhere other than the end? */
+export function caretMoved(editor: HTMLElement): boolean {
+  return editor.contains(window.getSelection()?.anchorNode ?? null) && !caretAtEnd(editor)
+}
+
+export function caretToEnd(editor: HTMLElement) {
+  const range = document.createRange()
+  range.selectNodeContents(editor)
+  range.collapse(false)
+  const selection = window.getSelection()
+  selection?.removeAllRanges()
+  selection?.addRange(range)
+}
+
+/** Change only what differs, because assigning `data` throws a caret inside the node back to its start. */
+function rewrite(node: Text, next: string) {
+  let same = 0
+  while (same < node.length && same < next.length && node.data[same] === next[same]) same++
+  node.replaceData(same, node.length - same, next.slice(same))
 }
 
 function appendNode(editor: HTMLElement): Text {
+  // A browser leaves a lone <br> in a box emptied by hand; words after it would start on line two.
+  if (!editor.textContent) editor.replaceChildren()
   const fresh = document.createTextNode("")
   editor.appendChild(fresh)
   return fresh

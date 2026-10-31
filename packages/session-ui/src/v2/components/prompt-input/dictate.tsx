@@ -2,7 +2,7 @@ import { createEffect, createMemo, createSignal, createUniqueId, For, Index, on,
 import { Portal } from "solid-js/web"
 import { useI18n } from "@opencode-ai/ui/context/i18n"
 import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
-import { createDictation, MAX_SECONDS, type DictationControls } from "./dictation"
+import { createDictation, MAX_SECONDS, type DictationControls, type TranscriptOrigin } from "./dictation"
 import { capProgress, formatClock, waveformBars } from "./dictate-visual"
 import { initialVoice, voiceReducer, type VoiceEvent } from "./voice-mode"
 import { appendFinal, composeLive } from "./live-text"
@@ -48,6 +48,8 @@ export function PromptInputV2Dictate(props: {
   live?: (text: string | undefined) => void
   /** The take failed with no audio saved: its live words are all that is left, so they stay. */
   keepLive?: () => void
+  /** The person has touched this take's text, so the recording can no longer overwrite it. */
+  touched?: () => boolean
   onError?: (message: string | undefined) => void
   controls?: (controls: DictationControls | undefined) => void
   shortcut?: string
@@ -67,25 +69,35 @@ export function PromptInputV2Dictate(props: {
   // is still what gets inserted; these words are a preview it replaces.
   const [finals, setFinals] = createSignal<string[]>([])
   const [partial, setPartial] = createSignal("")
+  // A touched take's whole transcript and recording: offered by a quiet action, never inserted by it.
+  const [full, setFull] = createSignal<{ text: string; recording?: TranscriptOrigin["recording"] }>()
+  const [looking, setLooking] = createSignal<NonNullable<ReturnType<typeof full>>>()
+  let lastOrigin: TranscriptOrigin | undefined
+  /** Read before the live words are taken out on unmount, for the recorder's teardown after it. */
+  let endedTouched: boolean | undefined
 
   const dictation = createDictation({
     url: props.url,
+    touched: () => endedTouched ?? (mode() === "quick" && !!props.touched?.()),
     onPartial: (text) => setPartial(text),
     onFinal: (text) => {
       setFinals((list) => appendFinal(list, text))
       setPartial("")
     },
     onError: (message) => {
-      if (mode() === "quick" && dictation.held().length <= heldAtStart) props.keepLive?.()
+      // Saved audio lets Retry bring words back, unless the person has touched them: those stay.
+      if (mode() === "quick" && (props.touched?.() || dictation.held().length <= heldAtStart)) props.keepLive?.()
       setError(message)
       props.onError?.(message)
       settled = true
       send({ type: "failed" })
     },
-    onTranscript: (text) => {
+    onTranscript: (text, origin) => {
       setError(undefined)
       props.onError?.(undefined)
       settled = true
+      if (origin?.review) return void setFull({ text, recording: origin.recording })
+      lastOrigin = origin
       send({ type: "transcript", text })
     },
   })
@@ -101,6 +113,8 @@ export function PromptInputV2Dictate(props: {
         heldAtStart = dictation.held().length
         setFinals([])
         setPartial("")
+        setFull(undefined)
+        setLooking(undefined)
       }
       if (now === "idle" && before && before !== "idle" && !settled && (mode() === "quick" || mode() === "background"))
         send({ type: "failed" })
@@ -110,7 +124,11 @@ export function PromptInputV2Dictate(props: {
   createEffect(() => {
     const effect = voice().effect
     if (!effect) return
-    if (effect.type === "insert" && !props.insert(effect.text)) return send({ type: "hold", text: effect.text })
+    if (effect.type === "insert") {
+      const touched = props.touched?.()
+      if (!props.insert(effect.text)) return send({ type: "hold", text: effect.text })
+      if (touched) setFull({ text: effect.text, recording: lastOrigin?.recording })
+    }
     if (effect.type === "copy") void navigator.clipboard?.writeText(effect.text).catch(() => {})
     if (effect.type === "cancel") dictation.cancel()
     send({ type: "noop" })
@@ -148,6 +166,13 @@ export function PromptInputV2Dictate(props: {
   function keep() {
     dictation.extend()
     send({ type: "keep" })
+  }
+  function openFull() {
+    const take = full()
+    if (!take) return
+    setFull(undefined)
+    setLooking(take)
+    send({ type: "full", text: take.text })
   }
   const dismiss = () => {
     setError(undefined)
@@ -199,7 +224,10 @@ export function PromptInputV2Dictate(props: {
     return composeLive(finals(), partial())
   }
   createEffect(on(liveText, (text) => props.live?.(text)))
-  onCleanup(() => props.live?.(undefined))
+  onCleanup(() => {
+    endedTouched = mode() === "quick" && !!props.touched?.()
+    props.live?.(undefined)
+  })
   const deviceName = () => props.devices?.current() || i18n.t("ui.promptInput.dictate.systemDefault")
   const label = () => {
     if (mode() === "background" || mode() === "review") return i18n.t("ui.promptInput.dictate.background.open")
@@ -347,6 +375,17 @@ export function PromptInputV2Dictate(props: {
         </InLayer>
       </Show>
 
+      {/* a touched take: its whole transcript and recording, for whoever goes looking */}
+      <Show when={full() && mode() === "idle" && !quickLive()}>
+        <InLayer mount={props.tagLayer}>
+          <div data-slot="dictate-tag">
+            <button type="button" data-slot="dictate-keep" data-action="prompt-dictate-full" onClick={openFull}>
+              {i18n.t("ui.promptInput.dictate.fullTranscript")}
+            </button>
+          </div>
+        </InLayer>
+      </Show>
+
       {/* errors and saved recordings */}
       <Show when={mode() === "idle" && !quickLive() && (error() || dictation.held().length > 0)}>
         <InLayer mount={props.layer}>
@@ -459,11 +498,32 @@ export function PromptInputV2Dictate(props: {
                 <Wave bars={panelWave()} box={PANEL_WAVE} class={phase() === "transcribing" ? "sweep" : undefined} />
               </Show>
               <div data-slot="dictate-panel-foot">
-                <Show when={!voice().displaced}>
+                <Show when={mode() === "background"}>
                   <span data-slot="dictate-panel-note">{i18n.t("ui.promptInput.dictate.background.runs")}</span>
                 </Show>
                 <span data-slot="dictate-spacer" />
-                <button type="button" data-slot="dictate-btn" onClick={() => send({ type: "discard" })} disabled={phase() === "transcribing"}>
+                <Show when={mode() === "review" && looking()?.recording}>
+                  {(recording) => (
+                    <button
+                      type="button"
+                      data-slot="dictate-btn"
+                      data-action="prompt-dictate-recording"
+                      onClick={() => void navigator.clipboard?.writeText(recording().path).catch(() => {})}
+                    >
+                      {i18n.t("ui.promptInput.dictate.copyRecording")}
+                    </button>
+                  )}
+                </Show>
+                <button
+                  type="button"
+                  data-slot="dictate-btn"
+                  onClick={() => {
+                    const recording = mode() === "review" ? looking()?.recording : undefined
+                    if (recording) dictation.discardKept(recording.id)
+                    send({ type: "discard" })
+                  }}
+                  disabled={phase() === "transcribing"}
+                >
                   {i18n.t("ui.promptInput.dictate.background.discard")}
                 </button>
                 <Show

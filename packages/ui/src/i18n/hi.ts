@@ -127,6 +127,8 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.release": "रोकने के लिए छोड़ें",
   "ui.promptInput.dictate.held": "रोका गया",
   "ui.promptInput.dictate.displaced": "इसे आपके संदेश में नहीं जोड़ा जा सका। कुछ भी खोया नहीं।",
+  "ui.promptInput.dictate.fullTranscript": "पूरा ट्रांसक्रिप्ट",
+  "ui.promptInput.dictate.copyRecording": "रिकॉर्डिंग का स्थान कॉपी करें",
   "ui.promptInput.dictate.keep": "रिकॉर्डिंग जारी रखें",
   "ui.promptInput.dictate.keepHint": "बैकग्राउंड में रिकॉर्डिंग जारी रखें",
   "ui.promptInput.dictate.background.start": "बैकग्राउंड रिकॉर्डिंग शुरू करें",

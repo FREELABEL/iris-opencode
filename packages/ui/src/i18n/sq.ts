@@ -126,6 +126,8 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.release": "Lësho për të ndalur",
   "ui.promptInput.dictate.held": "Mbajtur",
   "ui.promptInput.dictate.displaced": "Kjo nuk mund të shtohej në mesazhin tuaj. Asgjë nuk humbi.",
+  "ui.promptInput.dictate.fullTranscript": "Transkripti i plotë",
+  "ui.promptInput.dictate.copyRecording": "Kopjo vendndodhjen e regjistrimit",
   "ui.promptInput.dictate.keep": "Vazhdo regjistrimin",
   "ui.promptInput.dictate.keepHint": "Vazhdo regjistrimin në sfond",
   "ui.promptInput.dictate.background.start": "Nis regjistrimin në sfond",

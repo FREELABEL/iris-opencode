@@ -137,6 +137,8 @@ export const dict = {
   "ui.promptInput.dictate.release": "Relâchez pour arrêter",
   "ui.promptInput.dictate.held": "En attente",
   "ui.promptInput.dictate.displaced": "Impossible d'ajouter ceci à votre message. Rien n'est perdu.",
+  "ui.promptInput.dictate.fullTranscript": "Transcription complète",
+  "ui.promptInput.dictate.copyRecording": "Copier l’emplacement de l’enregistrement",
   "ui.promptInput.dictate.keep": "Continuer l'enregistrement",
   "ui.promptInput.dictate.keepHint": "Continuer l'enregistrement en arrière-plan",
   "ui.promptInput.dictate.background.start": "Démarrer l'enregistrement en arrière-plan",

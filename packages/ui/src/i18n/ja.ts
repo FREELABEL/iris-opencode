@@ -130,6 +130,8 @@ export const dict = {
   "ui.promptInput.dictate.release": "離すと停止",
   "ui.promptInput.dictate.held": "保留中",
   "ui.promptInput.dictate.displaced": "メッセージに追加できませんでした。内容は失われていません。",
+  "ui.promptInput.dictate.fullTranscript": "全文の文字起こし",
+  "ui.promptInput.dictate.copyRecording": "録音の場所をコピー",
   "ui.promptInput.dictate.keep": "録音を続ける",
   "ui.promptInput.dictate.keepHint": "バックグラウンドで録音を続ける",
   "ui.promptInput.dictate.background.start": "バックグラウンド録音を開始",

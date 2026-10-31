@@ -130,6 +130,8 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.release": "Deixa anar per aturar",
   "ui.promptInput.dictate.held": "Retingut",
   "ui.promptInput.dictate.displaced": "No s'ha pogut afegir al missatge. No s'ha perdut res.",
+  "ui.promptInput.dictate.fullTranscript": "Transcripció completa",
+  "ui.promptInput.dictate.copyRecording": "Copia la ubicació de la gravació",
   "ui.promptInput.dictate.keep": "Continua enregistrant",
   "ui.promptInput.dictate.keepHint": "Continua enregistrant en segon pla",
   "ui.promptInput.dictate.background.start": "Inicia l'enregistrament en segon pla",

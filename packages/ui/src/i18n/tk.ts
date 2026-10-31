@@ -126,6 +126,8 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.release": "Togtatmak üçin goýberiň",
   "ui.promptInput.dictate.held": "Saklanýar",
   "ui.promptInput.dictate.displaced": "Muny habaryňyza goşup bolmady. Hiç zat ýitmedi.",
+  "ui.promptInput.dictate.fullTranscript": "Doly ýazgy",
+  "ui.promptInput.dictate.copyRecording": "Ýazgynyň ýerini göçür",
   "ui.promptInput.dictate.keep": "Ýazgyny dowam et",
   "ui.promptInput.dictate.keepHint": "Ýazgyny fonda dowam et",
   "ui.promptInput.dictate.background.start": "Fon ýazgysyny başlat",

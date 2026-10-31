@@ -19,7 +19,7 @@ import {
   stopCapture,
 } from "@/transcribe/capture"
 import { ChainError, effectiveEngines, transcribeWithFallback } from "@/transcribe/chain"
-import { hold, listHeld, readHeld, readHeldMeta, release, type Held } from "@/transcribe/held"
+import { discard, hold, keepRecording, listHeld, readHeld, readHeldMeta, release, type Held, type HeldMeta } from "@/transcribe/held"
 import { splitWav } from "@/transcribe/segments"
 import { detectSpeech } from "@/transcribe/vad"
 import { openLiveSession, resolveLiveConfig } from "@/transcribe/live"
@@ -195,11 +195,14 @@ async function transcribeHeld(
       { status: 503, headers: wait !== undefined ? { "retry-after": String(Math.ceil(wait / 1000)) } : undefined },
     )
   }
-  if (held) release(held.id)
+  // A touched take (`?keep=1`): its text can no longer take the recording's place, so the recording stays.
+  const recording = held && held.review ? recordingKept(held.id) : undefined
+  if (held && !recording) release(held.id)
   return HttpServerResponse.jsonUnsafe({
     text: result.text,
     provider: result.provider,
     attempts: result.attempts,
+    ...(recording ? { recording } : {}),
     ...extra,
   })
 }
@@ -231,19 +234,30 @@ async function transcribeSegments(audio: Uint8Array, filename: string, language:
 
 /** Holding is the safety net, not a precondition: a full disk must not also block transcription. */
 /** Save a take for later without transcribing it: 202 with `held`, 500 when the disk refused it. */
-function heldOnly(audio: Uint8Array, bloqId?: string) {
-  const held = holdOrNull(audio, bloqId)
+function heldOnly(audio: Uint8Array, meta: HeldMeta = {}) {
+  const held = holdOrNull(audio, meta)
   if (!held) return HttpServerResponse.jsonUnsafe({ error: "The recording could not be saved." }, { status: 500 })
   return HttpServerResponse.jsonUnsafe({ held: { id: held.id, seconds: held.seconds } }, { status: 202 })
 }
 
-function holdOrNull(audio: Uint8Array, bloqId?: string) {
+function holdOrNull(audio: Uint8Array, meta: HeldMeta = {}) {
   try {
-    return hold(audio, undefined, { bloqId })
+    return hold(audio, undefined, meta)
   } catch {
     return null
   }
 }
+
+/** A disk that refuses is no reason to fail a take that has its transcript. */
+function recordingKept(id: string) {
+  try {
+    return keepRecording(id)
+  } catch {
+    return undefined
+  }
+}
+
+const reviewParam = (url: URL) => (url.searchParams.get("keep") === "1" ? { review: true } : {})
 
 /**
  * `?bloq_id=` — the board a take is transcribed under (#190041 ADR-01). An Atlas card records under
@@ -291,7 +305,8 @@ export const dictateRoute = HttpRouter.use((router) =>
     yield* add(router, "POST", "/dictate/stop", (request) =>
       Effect.tryPromise({
         try: async () => {
-          const board = boardParam(new URL(request.url, "http://localhost"))
+          const url = new URL(request.url, "http://localhost")
+          const board = boardParam(url)
           // Refused BEFORE stopping: the take keeps recording, and the caller can stop it properly.
           if (!board.ok) return badBoard()
           const { audio, ms, input } = await stopCapture()
@@ -312,7 +327,7 @@ export const dictateRoute = HttpRouter.use((router) =>
           // `capture` names which process recorded this. The two capture paths fail in completely
           // different ways and a transcript alone cannot tell you which one ran.
           return transcribeHeld(
-            holdOrNull(audio, board.bloqId),
+            holdOrNull(audio, { bloqId: board.bloqId, ...reviewParam(url) }),
             audio,
             "dictation.wav",
             undefined,
@@ -331,11 +346,12 @@ export const dictateRoute = HttpRouter.use((router) =>
     yield* add(router, "POST", "/dictate/hold", (request) =>
       Effect.tryPromise({
         try: async () => {
-          const board = boardParam(new URL(request.url, "http://localhost"))
+          const url = new URL(request.url, "http://localhost")
+          const board = boardParam(url)
           if (!board.ok) return badBoard()
           const { audio } = await stopCapture()
           if (peakAmplitude(audio) < 0.01) return HttpServerResponse.jsonUnsafe({ held: undefined })
-          return heldOnly(audio, board.bloqId)
+          return heldOnly(audio, { bloqId: board.bloqId, ...reviewParam(url) })
         },
         catch: (e) => (e instanceof TranscribeError ? e : new TranscribeError(String(e))),
       }).pipe(
@@ -537,11 +553,11 @@ export const transcribeRoute = HttpRouter.use((router) =>
         // ?hold=1: save it and transcribe nothing. The composer sends a take this way when it is
         // torn down mid-recording (a new session, another project), so the take waits in the
         // held list with Retry instead of being thrown away (#189520).
-        if (url.searchParams.get("hold") === "1") return heldOnly(audio, board.bloqId)
+        if (url.searchParams.get("hold") === "1") return heldOnly(audio, { bloqId: board.bloqId, ...reviewParam(url) })
 
         return yield* Effect.promise(() =>
           transcribeHeld(
-            holdOrNull(audio, board.bloqId),
+            holdOrNull(audio, { bloqId: board.bloqId, ...reviewParam(url) }),
             audio,
             url.searchParams.get("filename") ?? "dictation.wav",
             url.searchParams.get("language") ?? undefined,
@@ -573,7 +589,7 @@ export const transcribeRoute = HttpRouter.use((router) =>
 
     yield* add(router, "POST", "/transcribe/discard", (request) =>
       Effect.sync(() => {
-        release(new URL(request.url, "http://localhost").searchParams.get("id") ?? "")
+        discard(new URL(request.url, "http://localhost").searchParams.get("id") ?? "")
         return HttpServerResponse.jsonUnsafe({ discarded: true })
       }),
     )

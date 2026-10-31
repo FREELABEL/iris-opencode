@@ -211,6 +211,8 @@ export const dict = {
   "ui.promptInput.dictate.release": "Slip for at stoppe",
   "ui.promptInput.dictate.held": "Tilbageholdt",
   "ui.promptInput.dictate.displaced": "Dette kunne ikke føjes til din besked. Intet gik tabt.",
+  "ui.promptInput.dictate.fullTranscript": "Fuld transskription",
+  "ui.promptInput.dictate.copyRecording": "Kopiér optagelsens placering",
   "ui.promptInput.dictate.keep": "Fortsæt optagelse",
   "ui.promptInput.dictate.keepHint": "Fortsæt optagelsen i baggrunden",
   "ui.promptInput.dictate.background.start": "Start baggrundsoptagelse",

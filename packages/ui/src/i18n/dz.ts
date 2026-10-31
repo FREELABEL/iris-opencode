@@ -128,6 +128,8 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.release": "བཀག་ནིའི་དོན་ལུ་བཏང་།",
   "ui.promptInput.dictate.held": "བཞག་ཡོད།",
   "ui.promptInput.dictate.displaced": "འདི་ ཁྱོད་ཀྱི་འཕྲིན་ལུ་ བཙུགས་མ་ཚུགས། ག་ནི་ཡང་ མ་བརླག།",
+  "ui.promptInput.dictate.fullTranscript": "ཡིག་བསྒྱུར་ཆ་ཚང་།",
+  "ui.promptInput.dictate.copyRecording": "སྒྲ་འཇུག་གི་གནས་ས་འདྲ་བཤུས།",
   "ui.promptInput.dictate.keep": "སྐད་བསྡུ་ནི་འཕྲོ་མཐུད།",
   "ui.promptInput.dictate.keepHint": "རྒྱབ་ཐག་ནང་སྐད་བསྡུ་ནི་འཕྲོ་མཐུད།",
   "ui.promptInput.dictate.background.start": "རྒྱབ་ཐག་སྐད་བསྡུ་ནི་འགོ་བཙུགས།",

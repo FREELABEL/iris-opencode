@@ -131,6 +131,8 @@ export const dict = {
   "ui.promptInput.dictate.release": "Пустите да бисте зауставили",
   "ui.promptInput.dictate.held": "Задржано",
   "ui.promptInput.dictate.displaced": "Ово није могло да се дода у вашу поруку. Ништа није изгубљено.",
+  "ui.promptInput.dictate.fullTranscript": "Цео транскрипт",
+  "ui.promptInput.dictate.copyRecording": "Копирај локацију снимка",
   "ui.promptInput.dictate.keep": "Настави снимање",
   "ui.promptInput.dictate.keepHint": "Настави снимање у позадини",
   "ui.promptInput.dictate.background.start": "Покрени снимање у позадини",

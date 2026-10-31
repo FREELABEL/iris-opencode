@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 // Lives in session-ui's composer; tested here because this package has a DOM (happydom.ts preload).
-import { settleLiveText, wordsAfter, writeLiveText, type LiveRegion } from "@opencode-ai/session-ui/v2/prompt-input/live-text"
+import { caretAtEnd, caretToEnd, closeLiveSegment, settleLiveText, writeLiveText, type LiveRegion } from "@opencode-ai/session-ui/v2/prompt-input/live-text"
 
 const editorWith = (text = "") => {
   const editor = document.createElement("div")
@@ -53,13 +53,13 @@ describe("live dictation in the chat box", () => {
   test("the final transcript replaces the live words — the take appears once", () => {
     const editor = editorWith("Note:")
     const region = write(editor, undefined, "I need to build a shopping")
-    expect(settleLiveText(editor, region, "I need to build a shopping list.")).toEqual({ changed: true, held: false })
+    expect(settleLiveText(editor, region, "I need to build a shopping list.")).toBe(true)
     expect(editor.textContent).toBe("Note: I need to build a shopping list.")
   })
 
   test("with no live words, the final transcript is appended", () => {
     const editor = editorWith("Hello")
-    expect(settleLiveText(editor, undefined, "world").changed).toBe(true)
+    expect(settleLiveText(editor, undefined, "world")).toBe(true)
     expect(editor.textContent).toBe("Hello world")
   })
 
@@ -69,7 +69,7 @@ describe("live dictation in the chat box", () => {
     // What the composer does when the prompt changes from outside: same text, new nodes.
     editor.replaceChildren(document.createTextNode("first words"))
     const next = write(editor, region, "first words and more")
-    expect(next?.handed).toBeUndefined()
+    expect(next?.touched).toBe(false)
     expect(editor.textContent).toBe("first words and more")
   })
 
@@ -81,7 +81,7 @@ describe("live dictation in the chat box", () => {
   })
 })
 
-describe("nothing said is lost: editing mid-take (specs/voice/standard.md rule 2)", () => {
+describe("a take is segments: editing mid-take (#191998, specs/voice/standard.md rule 2)", () => {
   test("the edit is kept, and words said after it still arrive after it", () => {
     const editor = editorWith()
     let region = write(editor, undefined, "buy oat milk")!
@@ -97,7 +97,7 @@ describe("nothing said is lost: editing mid-take (specs/voice/standard.md rule 2
     let region = write(editor, undefined, "buy oat milk")!
     region.node!.data = "buy oatmilk"
     region = write(editor, region, "buy oat milk and call the plumber")!
-    expect(settleLiveText(editor, region, "Buy oat milk, and call the plumber at noon.")).toEqual({ changed: true, held: false })
+    expect(settleLiveText(editor, region, "Buy oat milk, and call the plumber at noon.")).toBe(true)
     expect(editor.textContent).toBe("buy oatmilk and call the plumber at noon.")
   })
 
@@ -105,7 +105,7 @@ describe("nothing said is lost: editing mid-take (specs/voice/standard.md rule 2
     const editor = editorWith()
     const region = write(editor, undefined, "buy oat milk")!
     region.node!.data = "buy oatmilk"
-    expect(settleLiveText(editor, region, "Buy oat milk and call the plumber at noon.").changed).toBe(true)
+    expect(settleLiveText(editor, region, "Buy oat milk and call the plumber at noon.")).toBe(true)
     expect(editor.textContent).toBe("buy oatmilk and call the plumber at noon.")
   })
 
@@ -113,7 +113,7 @@ describe("nothing said is lost: editing mid-take (specs/voice/standard.md rule 2
     const editor = editorWith()
     const region = write(editor, undefined, "buy oat milk")!
     region.node!.data = "buy OAT MILK!"
-    expect(settleLiveText(editor, region, "Buy oat milk.")).toEqual({ changed: false, held: false })
+    expect(settleLiveText(editor, region, "Buy oat milk.")).toBe(false)
     expect(editor.textContent).toBe("buy OAT MILK!")
   })
 
@@ -127,16 +127,16 @@ describe("nothing said is lost: editing mid-take (specs/voice/standard.md rule 2
     expect(editor.textContent).toBe("ONE two THREE four five")
   })
 
-  test("a final that does not line up with what was shown is held: the editor is left alone", () => {
+  test("a final that does not line up keeps what is on screen", () => {
     const editor = editorWith()
     const region = write(editor, undefined, "buy oat milk")!
     region.node!.data = "buy oatmilk"
-    expect(settleLiveText(editor, region, "completely different words were heard here")).toEqual({ changed: false, held: true })
+    expect(settleLiveText(editor, region, "completely different words were heard here")).toBe(false)
     expect(editor.textContent).toBe("buy oatmilk")
   })
 })
 
-describe("nothing said is lost: Send mid-take", () => {
+describe("a take is segments: Send mid-take", () => {
   // Send clears the composer; the take keeps recording.
   const send = (editor: HTMLElement) => editor.replaceChildren()
 
@@ -153,7 +153,7 @@ describe("nothing said is lost: Send mid-take", () => {
     let region = write(editor, undefined, "send this")!
     send(editor)
     region = write(editor, region, "send this and then the res")!
-    expect(settleLiveText(editor, region, "Send this. And then the rest.").changed).toBe(true)
+    expect(settleLiveText(editor, region, "Send this. And then the rest.")).toBe(true)
     expect(editor.textContent).toBe("And then the rest.")
   })
 
@@ -161,7 +161,7 @@ describe("nothing said is lost: Send mid-take", () => {
     const editor = editorWith()
     const region = write(editor, undefined, "send this")!
     send(editor)
-    expect(settleLiveText(editor, region, "Send this, and one more thing.").changed).toBe(true)
+    expect(settleLiveText(editor, region, "Send this, and one more thing.")).toBe(true)
     expect(editor.textContent).toBe("and one more thing.")
   })
 
@@ -169,7 +169,7 @@ describe("nothing said is lost: Send mid-take", () => {
     const editor = editorWith()
     const region = write(editor, undefined, "send this")!
     send(editor)
-    expect(settleLiveText(editor, region, "Send this.")).toEqual({ changed: false, held: false })
+    expect(settleLiveText(editor, region, "Send this.")).toBe(false)
     expect(editor.textContent).toBe("")
   })
 
@@ -184,12 +184,12 @@ describe("nothing said is lost: Send mid-take", () => {
     expect(editor.textContent).toBe("third")
   })
 
-  test("an unplaceable final after Send is held, and the live draft stays", () => {
+  test("a final that does not line up after Send keeps the live draft", () => {
     const editor = editorWith()
     let region = write(editor, undefined, "send this")!
     send(editor)
     region = write(editor, region, "send this and more")!
-    expect(settleLiveText(editor, region, "nothing like the live words at all").held).toBe(true)
+    expect(settleLiveText(editor, region, "nothing like the live words at all")).toBe(false)
     expect(editor.textContent).toBe("and more")
   })
 
@@ -203,20 +203,128 @@ describe("nothing said is lost: Send mid-take", () => {
   })
 })
 
-describe("lining a transcript up with the words already shown", () => {
-  test("punctuation and case do not matter", () => {
-    expect(wordsAfter("buy oat milk", "Buy, oat milk! And more.")).toBe("And more.")
+describe("the deleted text stays gone (#191998)", () => {
+  // Alex's report: start talking, delete the text, talk again; Stop brought it all back.
+  const del = (editor: HTMLElement, region: LiveRegion) => (editor.replaceChildren(), closeLiveSegment(region))
+
+  test("delete everything, talk, Stop: only the words after the delete", () => {
+    const editor = editorWith()
+    let region = write(editor, undefined, "my secret first thought")!
+    region = del(editor, region)
+    region = write(editor, region, "my secret first thought and the real message")!
+    expect(editor.textContent).toBe("and the real message")
+    settleLiveText(editor, region, "My secret first thought, and the real message.")
+    expect(editor.textContent).toBe("and the real message.")
   })
-  test("a word still being revised at the takeover counts as already had", () => {
-    expect(wordsAfter("buy oat mil", "buy oat milk and call")).toBe("and call")
+
+  test("delete everything, nothing said after: the box stays empty", () => {
+    const editor = editorWith()
+    const region = del(editor, write(editor, undefined, "my secret first thought")!)
+    expect(settleLiveText(editor, region, "My secret first thought.")).toBe(false)
+    expect(editor.textContent).toBe("")
   })
-  test("the engine rewording a word mid-take does not lose the tail", () => {
-    expect(wordsAfter("call the plumber at noon please", "call a plumber at noon please then rest")).toBe("then rest")
+
+  test("a repeated phrase refines the newest copy, never the deleted one", () => {
+    const editor = editorWith()
+    let region = write(editor, undefined, "call me")!
+    region = del(editor, region)
+    region = write(editor, region, "call me call me")!
+    settleLiveText(editor, region, "Call me. Call me!")
+    expect(editor.textContent).toBe("Call me!")
   })
-  test("a phrase repeated later in the take is kept", () => {
-    expect(wordsAfter("ok so call me", "okay so call me and then call me")).toBe("and then call me")
+
+  test("too few of the words line up: what is on screen stays", () => {
+    const editor = editorWith()
+    let region = write(editor, undefined, "first")!
+    region = del(editor, region)
+    region = write(editor, region, "first buy oat milk")!
+    expect(settleLiveText(editor, region, "First we talked about milk and more.")).toBe(false)
+    expect(editor.textContent).toBe("buy oat milk")
   })
-  test("no overlap: undefined, so the caller holds it rather than guessing", () => {
-    expect(wordsAfter("buy oat milk", "the weather is nice")).toBeUndefined()
+
+  test("a lone common word does not drag the rest of the recording back in", () => {
+    const editor = editorWith()
+    let region = write(editor, undefined, "the private plan for the merger is off")!
+    region = del(editor, region)
+    region = write(editor, region, "the private plan for the merger is off the")!
+    expect(settleLiveText(editor, region, "The private plan, for the merger, is off. The next thing I said went on for a while.")).toBe(false)
+    expect(editor.textContent).toBe("the")
+  })
+
+  test("a revised first word still refines", () => {
+    const editor = editorWith()
+    let region = write(editor, undefined, "gone")!
+    region = del(editor, region)
+    region = write(editor, region, "gone by oat milk")!
+    settleLiveText(editor, region, "Gone. Buy oat milk.")
+    expect(editor.textContent).toBe("Buy oat milk.")
+  })
+
+  test("an edit closes the segment even when the words are untouched: an edit anywhere counts", () => {
+    const editor = editorWith("draft")
+    let region = write(editor, undefined, "one two")!
+    region = closeLiveSegment(region)
+    region = write(editor, region, "one two three")!
+    expect(editor.textContent).toBe("draft one two three")
+    settleLiveText(editor, region, "One, two, three.")
+    expect(editor.textContent).toBe("draft one two three.")
+  })
+})
+
+describe("the caret during a take (#191998)", () => {
+  const mounted = (text = "") => {
+    const editor = editorWith(text)
+    editor.contentEditable = "true"
+    document.body.appendChild(editor)
+    return editor
+  }
+  const caretAt = (node: Node, offset: number) => {
+    const range = document.createRange()
+    range.setStart(node, offset)
+    range.collapse(true)
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+  }
+
+  test("at the end when words arrive: it follows them", () => {
+    const editor = mounted()
+    caretToEnd(editor)
+    let region = write(editor, undefined, "one")
+    expect(caretAtEnd(editor)).toBe(true)
+    region = write(editor, region, "one two three")
+    expect(caretAtEnd(editor)).toBe(true)
+    editor.remove()
+  })
+
+  test("moved earlier: it stays, and new words still go at the end", () => {
+    const editor = mounted("typed before")
+    const typed = editor.firstChild!
+    caretAt(typed, 3)
+    write(editor, undefined, "live words")
+    expect(editor.textContent).toBe("typed before live words")
+    const selection = window.getSelection()!
+    expect(selection.anchorNode === typed).toBe(true)
+    expect(selection.anchorOffset).toBe(3)
+    editor.remove()
+  })
+
+  test("moved inside the open words: a rewrite does not throw it to their start", () => {
+    const editor = mounted()
+    const region = write(editor, undefined, "one two")!
+    caretAt(region.node!, 4)
+    write(editor, region, "one two three")
+    expect(window.getSelection()!.anchorOffset).toBe(4)
+    editor.remove()
+  })
+
+  test("back at the end: it follows again", () => {
+    const editor = mounted("typed")
+    caretAt(editor.firstChild!, 2)
+    let region = write(editor, undefined, "one")
+    caretToEnd(editor)
+    region = write(editor, region, "one two")
+    expect(caretAtEnd(editor)).toBe(true)
+    editor.remove()
   })
 })

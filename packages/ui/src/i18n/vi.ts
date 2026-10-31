@@ -126,6 +126,8 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.release": "Thả ra để dừng",
   "ui.promptInput.dictate.held": "Đang giữ",
   "ui.promptInput.dictate.displaced": "Không thể thêm nội dung này vào tin nhắn của bạn. Không có gì bị mất.",
+  "ui.promptInput.dictate.fullTranscript": "Toàn bộ bản ghi",
+  "ui.promptInput.dictate.copyRecording": "Sao chép vị trí bản ghi âm",
   "ui.promptInput.dictate.keep": "Tiếp tục ghi âm",
   "ui.promptInput.dictate.keepHint": "Tiếp tục ghi âm ở chế độ nền",
   "ui.promptInput.dictate.background.start": "Bắt đầu ghi âm nền",

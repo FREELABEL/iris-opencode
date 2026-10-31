@@ -134,6 +134,8 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.release": "Uvoľnením zastavíte",
   "ui.promptInput.dictate.held": "Pozdržané",
   "ui.promptInput.dictate.displaced": "Tento text sa nepodarilo pridať do správy. Nič sa nestratilo.",
+  "ui.promptInput.dictate.fullTranscript": "Celý prepis",
+  "ui.promptInput.dictate.copyRecording": "Kopírovať umiestnenie nahrávky",
   "ui.promptInput.dictate.keep": "Pokračovať v nahrávaní",
   "ui.promptInput.dictate.keepHint": "Pokračovať v nahrávaní na pozadí",
   "ui.promptInput.dictate.background.start": "Spustiť nahrávanie na pozadí",

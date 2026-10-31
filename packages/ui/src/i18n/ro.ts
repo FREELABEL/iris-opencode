@@ -130,6 +130,8 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.release": "Eliberează pentru a opri",
   "ui.promptInput.dictate.held": "Reținută",
   "ui.promptInput.dictate.displaced": "Nu s-a putut adăuga la mesajul tău. Nu s-a pierdut nimic.",
+  "ui.promptInput.dictate.fullTranscript": "Transcriere completă",
+  "ui.promptInput.dictate.copyRecording": "Copiază locația înregistrării",
   "ui.promptInput.dictate.keep": "Continuă înregistrarea",
   "ui.promptInput.dictate.keepHint": "Continuă înregistrarea în fundal",
   "ui.promptInput.dictate.background.start": "Pornește înregistrarea în fundal",

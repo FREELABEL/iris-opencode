@@ -137,6 +137,8 @@ export const dict = {
   "ui.promptInput.dictate.release": "Durdurmak için bırakın",
   "ui.promptInput.dictate.held": "Bekletiliyor",
   "ui.promptInput.dictate.displaced": "Bu, mesajınıza eklenemedi. Hiçbir şey kaybolmadı.",
+  "ui.promptInput.dictate.fullTranscript": "Tam döküm",
+  "ui.promptInput.dictate.copyRecording": "Kaydın konumunu kopyala",
   "ui.promptInput.dictate.keep": "Kayda devam et",
   "ui.promptInput.dictate.keepHint": "Arka planda kayda devam et",
   "ui.promptInput.dictate.background.start": "Arka plan kaydını başlat",

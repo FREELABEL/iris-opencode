@@ -108,3 +108,13 @@ describe("voice modes — quick takes go inline, background takes go to the pane
     expect(voiceReducer(s, { type: "insert" }).displaced).toBeUndefined()
   })
 })
+
+describe("Full transcript (#191998)", () => {
+  test("opens for review only from idle, and puts nothing in the prompt", () => {
+    const open = voiceReducer(initialVoice, { type: "full", text: "all of it" })
+    expect(open).toEqual({ mode: "review", panel: "open", result: "all of it" })
+    expect(open.effect).toBeUndefined()
+    const quick = voiceReducer(initialVoice, { type: "mic" })
+    expect(voiceReducer(quick, { type: "full", text: "all of it" }).mode).toBe("quick")
+  })
+})

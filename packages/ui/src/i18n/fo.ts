@@ -126,6 +126,8 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.release": "Slepp fyri at steðga",
   "ui.promptInput.dictate.held": "Í bíð",
   "ui.promptInput.dictate.displaced": "Hetta kundi ikki leggjast afturat boðum tínum. Einki fór fyri skeytið.",
+  "ui.promptInput.dictate.fullTranscript": "Fult avrit",
+  "ui.promptInput.dictate.copyRecording": "Avrita staðsetan á upptøkuni",
   "ui.promptInput.dictate.keep": "Halt fram at taka upp",
   "ui.promptInput.dictate.keepHint": "Halt fram at taka upp í bakgrundini",
   "ui.promptInput.dictate.background.start": "Byrja upptøku í bakgrundini",

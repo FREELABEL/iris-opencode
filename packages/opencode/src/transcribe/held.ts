@@ -1,5 +1,5 @@
-import { chmodSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "fs"
-import { join } from "path"
+import { chmodSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "fs"
+import { basename, join } from "path"
 import { Global } from "@opencode-ai/core/global"
 
 /**
@@ -15,6 +15,7 @@ import { Global } from "@opencode-ai/core/global"
  */
 
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
+const KEPT = "kept"
 /** Ids are generated here and come back from the UI, so they are validated before touching a path. */
 const ID = /^[0-9]{13}-[a-z0-9]{6}$/
 
@@ -26,6 +27,8 @@ export interface Held {
   createdAt: number
   /** The board it was recorded under, when it was recorded for one (an Atlas card). */
   bloqId?: string
+  /** See HeldMeta.review. */
+  review?: boolean
 }
 
 /** What a held take must keep besides its audio. */
@@ -36,6 +39,11 @@ export interface HeldMeta {
    * drifted to another board would be judged by the wrong policy.
    */
   bloqId?: string
+  /**
+   * The person touched the take's text before it ended (#191998). Its transcript holds words they
+   * removed, so it is offered for review and its recording is kept, never put back in the message.
+   */
+  review?: boolean
 }
 
 export function hold(audio: Uint8Array, dir = defaultDir(), meta: HeldMeta = {}): Held {
@@ -43,8 +51,12 @@ export function hold(audio: Uint8Array, dir = defaultDir(), meta: HeldMeta = {})
   chmodSync(dir, 0o700)
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8).padEnd(6, "0")}`
   writeFileSync(join(dir, `${id}.wav`), audio, { mode: 0o600 })
-  if (meta.bloqId) writeFileSync(join(dir, `${id}.json`), JSON.stringify(meta), { mode: 0o600 })
-  return { ...describe(id, audio.byteLength, Date.now()), ...(meta.bloqId ? { bloqId: meta.bloqId } : {}) }
+  if (meta.bloqId || meta.review) writeFileSync(join(dir, `${id}.json`), JSON.stringify(meta), { mode: 0o600 })
+  return {
+    ...describe(id, audio.byteLength, Date.now()),
+    ...(meta.bloqId ? { bloqId: meta.bloqId } : {}),
+    ...(meta.review ? { review: true } : {}),
+  }
 }
 
 /** The board a held take was recorded under, or {} for one taken without a board. */
@@ -52,7 +64,10 @@ export function readHeldMeta(id: string, dir = defaultDir()): HeldMeta {
   if (!ID.test(id)) return {}
   try {
     const meta = JSON.parse(readFileSync(join(dir, `${id}.json`), "utf8")) as HeldMeta
-    return typeof meta.bloqId === "string" && /^[0-9]+$/.test(meta.bloqId) ? { bloqId: meta.bloqId } : {}
+    return {
+      ...(typeof meta.bloqId === "string" && /^[0-9]+$/.test(meta.bloqId) ? { bloqId: meta.bloqId } : {}),
+      ...(meta.review === true ? { review: true } : {}),
+    }
   } catch {
     return {}
   }
@@ -74,8 +89,31 @@ export function release(id: string, dir = defaultDir()) {
   rmSync(join(dir, `${id}.json`), { force: true })
 }
 
+/**
+ * Keep a transcribed take's recording: the person touched its text, and "Full transcript" still
+ * offers the audio (#191998). One file, the newest such take: the next replaces it, and it is pruned
+ * with the held recordings. Returns where it now is.
+ */
+export function keepRecording(id: string, dir = defaultDir()): { id: string; path: string } | undefined {
+  if (!ID.test(id)) return undefined
+  const kept = join(dir, KEPT)
+  rmSync(kept, { recursive: true, force: true })
+  mkdirSync(kept, { recursive: true, mode: 0o700 })
+  const path = join(kept, `${id}.wav`)
+  renameSync(join(dir, `${id}.wav`), path)
+  rmSync(join(dir, `${id}.json`), { force: true })
+  return { id, path }
+}
+
+/** Delete a kept recording, or a held one: the id is the same either way. */
+export function discard(id: string, dir = defaultDir()) {
+  release(id, dir)
+  release(id, join(dir, KEPT))
+}
+
 /** Every held recording, oldest first. Prunes anything past MAX_AGE_MS on the way. */
 export function listHeld(dir = defaultDir(), now = Date.now()): Held[] {
+  if (basename(dir) !== KEPT) listHeld(join(dir, KEPT), now)
   const names = (() => {
     try {
       return readdirSync(dir)
