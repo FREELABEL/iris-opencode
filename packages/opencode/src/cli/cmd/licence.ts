@@ -297,38 +297,6 @@ const ListCmd = cmd({
   },
 })
 
-export const RevokeCmd = cmd({
-  command: "revoke <key>",
-  describe: "revoke a licence (operator only)",
-  builder: (y: any) =>
-    y.positional("key", { type: "string" }).option("json", { describe: "JSON output", type: "boolean", default: false }),
-  async handler(args: any) {
-    const res = await irisFetch(`${BASE}/${encodeURIComponent(args.key)}/revoke`, { method: "POST" })
-    if (!res.ok) return reportError(res, "Revoke licence")
-    const body = (await res.json().catch(() => ({}))) as any
-    if (args.json) return writeJson(body)
-    if (body?.already_revoked) return prompts.log.info(`${args.key} was already revoked`)
-    prompts.log.success(`Revoked ${args.key}`)
-  },
-})
-
-// #189718 — join a key that was already issued (and maybe already sent) to its CRM lead,
-// instead of revoking it and sending the person a different key.
-export const LinkCmd = cmd({
-  command: "link <key>",
-  describe: "link an issued licence to its CRM lead (operator only)",
-  builder: (y: any) =>
-    y.positional("key", { type: "string" }).option("lead", { describe: "CRM lead id", type: "number", demandOption: true }),
-  async handler(args: any) {
-    const res = await irisFetch(`${BASE}/${encodeURIComponent(args.key)}/link`, {
-      method: "POST",
-      body: JSON.stringify({ lead_id: args.lead }),
-    })
-    if (!res.ok) return reportError(res, "Link licence")
-    prompts.log.success(`Linked ${args.key} → lead #${args.lead}`)
-  },
-})
-
 /** Agreed price as written. There is no period on it, so it is never called monthly or added up (#191973). */
 export function agreedLine(cents: unknown): string {
   return cents === null || cents === undefined ? "not agreed" : `${money(cents)} agreed (period not recorded)`
@@ -399,6 +367,38 @@ export const RevenueCmd = cmd({
     prompts.intro("◈  Licences by customer")
     for (const line of revenueLines(licences)) UI.println(line)
     prompts.outro(dim(`${licences.length} shown, ${data?.flagged ?? 0} flagged for review. Prices are as written, with no totals: they carry no period.`))
+  },
+})
+
+export const RevokeCmd = cmd({
+  command: "revoke <key>",
+  describe: "revoke a licence (operator only)",
+  builder: (y: any) =>
+    y.positional("key", { type: "string" }).option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args: any) {
+    const res = await irisFetch(`${BASE}/${encodeURIComponent(args.key)}/revoke`, { method: "POST" })
+    if (!res.ok) return reportError(res, "Revoke licence")
+    const body = (await res.json().catch(() => ({}))) as any
+    if (args.json) return writeJson(body)
+    if (body?.already_revoked) return prompts.log.info(`${args.key} was already revoked`)
+    prompts.log.success(`Revoked ${args.key}`)
+  },
+})
+
+// #189718 — join a key that was already issued (and maybe already sent) to its CRM lead,
+// instead of revoking it and sending the person a different key.
+export const LinkCmd = cmd({
+  command: "link <key>",
+  describe: "link an issued licence to its CRM lead (operator only)",
+  builder: (y: any) =>
+    y.positional("key", { type: "string" }).option("lead", { describe: "CRM lead id", type: "number", demandOption: true }),
+  async handler(args: any) {
+    const res = await irisFetch(`${BASE}/${encodeURIComponent(args.key)}/link`, {
+      method: "POST",
+      body: JSON.stringify({ lead_id: args.lead }),
+    })
+    if (!res.ok) return reportError(res, "Link licence")
+    prompts.log.success(`Linked ${args.key} → lead #${args.lead}`)
   },
 })
 
