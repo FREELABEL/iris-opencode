@@ -155,6 +155,8 @@ export const IssueCmd = cmd({
       .option("owner", { describe: "who owns it: an account's exact address", type: "string" })
       .option("domain", { describe: "let anyone confirmed at this domain claim", type: "string" })
       .option("lead", { describe: "CRM lead this licence belongs to (shows on the lead)", type: "number" })
+      .option("price-cents", { describe: "what was agreed, in CENTS, as agreed. Left out means not agreed yet; 0 means free", type: "number" })
+      .option("reference", { describe: "where the deal is recorded: a payment, invoice or contract reference", type: "string" })
       .option("allow", { describe: "only these people may claim it (comma-separated emails). Left out, anyone with the key can", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args: any) {
@@ -182,6 +184,8 @@ export const IssueCmd = cmd({
     if (args.domain) body.claim_domain = args.domain
     // #189718: the API has accepted lead_id since #183598; the CLI never sent it.
     if (args.lead) body.lead_id = args.lead
+    if (args.priceCents !== undefined) body.agreed_price_cents = args.priceCents
+    if (args.reference) body.payment_reference = args.reference
 
     const res = await irisFetch(BASE, { method: "POST", body: JSON.stringify(body) })
     if (!res.ok) return reportError(res, "Issue licence")
@@ -325,6 +329,79 @@ export const LinkCmd = cmd({
   },
 })
 
+/** Agreed price as written. There is no period on it, so it is never called monthly or added up (#191973). */
+export function agreedLine(cents: unknown): string {
+  return cents === null || cents === undefined ? "not agreed" : `${money(cents)} agreed (period not recorded)`
+}
+
+export function revenueLines(licences: any[]): string[] {
+  const lines: string[] = []
+  let customer: string | undefined
+  for (const l of licences) {
+    const name = l.organization ?? l.issued_to_email ?? "no customer named"
+    if (name !== customer) {
+      lines.push(`  ${name}`)
+      customer = name
+    }
+    const deal = [l.lead_id ? `lead #${l.lead_id}` : "", l.payment_reference ?? ""].filter(Boolean).join(", ")
+    const flags = firstArray(l.flags).length ? `  REVIEW: ${firstArray(l.flags).join(", ").replaceAll("_", " ")}` : ""
+    lines.push(`    ${String(l.key).padEnd(24)} ${String(l.source ?? "—").padEnd(7)} ${agreedLine(l.agreed_price_cents)}${deal ? `  ${deal}` : ""}${flags}`)
+  }
+  return lines
+}
+
+// #191973 — what was agreed and where it came from. Changes no access.
+export const DealCmd = cmd({
+  command: "deal <key>",
+  describe: "record what was agreed for a licence and where it came from. Changes no access (operator only)",
+  builder: (y: any) =>
+    y
+      .positional("key", { type: "string" })
+      .option("price-cents", { describe: "what was agreed, in CENTS, as agreed. 0 means free", type: "number" })
+      .option("clear-price", { describe: "clear the price: not agreed", type: "boolean", default: false })
+      .option("note", { describe: "what was agreed, in words", type: "string" })
+      .option("reference", { describe: "where the deal is recorded: a payment, invoice or contract reference", type: "string" })
+      .option("lead", { describe: "CRM lead the deal belongs to", type: "number" }),
+  async handler(args: any) {
+    const payload: Record<string, unknown> = {}
+    if (args.clearPrice) payload.agreed_price_cents = null
+    else if (args.priceCents !== undefined) payload.agreed_price_cents = args.priceCents
+    if (args.note) payload.commercial_note = args.note
+    if (args.reference) payload.payment_reference = args.reference
+    if (args.lead) payload.lead_id = args.lead
+    if (Object.keys(payload).length === 0 || Number.isNaN(payload.agreed_price_cents)) {
+      process.exitCode = 1
+      prompts.log.warn("Give a number for --price-cents, or pass --clear-price, --note, --reference or --lead.")
+      return
+    }
+    await operatorPost(args.key, "deal", payload, "Record deal", `Deal recorded on ${args.key}`)
+  },
+})
+
+export const RevenueCmd = cmd({
+  command: "revenue",
+  describe: "licences in force by customer: what was agreed, the deal, and what is missing. No totals (operator only)",
+  builder: (y: any) =>
+    y
+      .option("flagged", { describe: "only licences missing a price, end date or deal", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args: any) {
+    const res = await irisFetch(`${BASE}/revenue-report`)
+    if (!res.ok) {
+      process.exitCode = 1
+      return reportError(res, "Revenue report")
+    }
+    const data = ((await res.json()) as any)?.data
+    const all: any[] = firstArray(data?.licences)
+    const licences = args.flagged ? all.filter((l) => firstArray(l.flags).length > 0) : all
+    if (args.json) return writeJson({ licences, flagged: data?.flagged })
+    UI.empty()
+    prompts.intro("◈  Licences by customer")
+    for (const line of revenueLines(licences)) UI.println(line)
+    prompts.outro(dim(`${licences.length} shown, ${data?.flagged ?? 0} flagged for review. Prices are as written, with no totals: they carry no period.`))
+  },
+})
+
 // #191943 — one command to keep a licence going. Seats and the people on them are untouched.
 export const RenewCmd = cmd({
   command: "renew <key>",
@@ -425,6 +502,9 @@ export const ShowCmd = cmd({
     printKV("status", String(data?.end_state ?? data?.status ?? "—"))
     printKV("issued to", String(data?.issued_to_email ?? "—"))
     printKV("lead", data?.lead_id ? `#${data.lead_id}` : "— (iris licence link <key> --lead <id>)")
+    printKV("agreed", agreedLine(data?.agreed_price_cents))
+    if (data?.payment_reference) printKV("reference", String(data.payment_reference))
+    if (data?.commercial_note) printKV("deal note", String(data.commercial_note))
     printDivider()
     if (data?.end_state === "expired") {
       UI.println(`  Expired: nobody on it has access. Seats are kept. iris licence renew ${data.key} --days <n>`)
@@ -650,7 +730,7 @@ export const LicenceGroup = cmd({
   aliases: ["license", "licences", "licenses"],
   describe: "what a yes produces — issue, claim and check entitlement",
   builder: (y: any) =>
-    y.command(IssueCmd).command(ClaimCmd).command(MeCmd).command(ListCmd).command(ShowCmd).command(LinkCmd).command(RenewCmd).command(AllowCmd).command(InviteCmd).command(SeatsCmd).command(ReleaseCmd).command(OwnerCmd).command(DomainCmd).command(SeatLeadCmd).command(SendCmd).command(PayLinkCmd).command(PayStatusCmd).command(RevokeCmd).demandCommand(),
+    y.command(IssueCmd).command(ClaimCmd).command(MeCmd).command(ListCmd).command(ShowCmd).command(LinkCmd).command(DealCmd).command(RevenueCmd).command(RenewCmd).command(AllowCmd).command(InviteCmd).command(SeatsCmd).command(ReleaseCmd).command(OwnerCmd).command(DomainCmd).command(SeatLeadCmd).command(SendCmd).command(PayLinkCmd).command(PayStatusCmd).command(RevokeCmd).demandCommand(),
   async handler() {},
 })
 
@@ -670,6 +750,8 @@ export const LicenceCommand = productCommand({
       .command(ListCmd)
       .command(ShowCmd)
       .command(LinkCmd)
+      .command(DealCmd)
+      .command(RevenueCmd)
       .command(RenewCmd)
       .command(AllowCmd)
       .command(InviteCmd)
