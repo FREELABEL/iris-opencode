@@ -185,6 +185,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   // Communication
   msg: "communication",
   obs: "communication",
+  "app-config": "communication",
   phone: "communication",
   voice: "communication",
   download: "communication",
