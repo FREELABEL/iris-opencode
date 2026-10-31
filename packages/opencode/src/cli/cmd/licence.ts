@@ -38,12 +38,13 @@ async function reportError(res: Response, action: string): Promise<void> {
     prompts.log.warn(
       `${action}: not found — this is also what a non-operator sees. If you expected access, you are not on the operator list.`,
     )
+    process.exitCode = 1
     return
   }
   await handleApiError(res, action)
 }
 
-const IssueCmd = cmd({
+export const IssueCmd = cmd({
   command: "issue",
   describe: "mint a licence key (operator only)",
   builder: (y: any) =>
@@ -55,6 +56,7 @@ const IssueCmd = cmd({
       .option("days", { describe: "expire this many days from now", type: "number" })
       .option("note", { describe: "what was actually agreed, in words", type: "string" })
       .option("lead", { describe: "CRM lead this licence belongs to (shows on the lead)", type: "number" })
+      .option("allow", { describe: "only these people may claim it (comma-separated emails). Left out, anyone with the key can", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args: any) {
     const body: Record<string, unknown> = {
@@ -63,7 +65,9 @@ const IssueCmd = cmd({
       seats: args.seats,
       allowance_cents: args.allowance,
     }
-    if (args.days) body.days = args.days
+    // #191947: not a truthiness check. 0 dropped here came back as the server's default, a year.
+    if (args.days !== undefined) body.days = args.days
+    if (args.allow) body.allowed_emails = String(args.allow).split(",").map((e) => e.trim()).filter(Boolean)
     if (args.note) body.note = args.note
     // #189718: the API has accepted lead_id since #183598; the CLI never sent it.
     if (args.lead) body.lead_id = args.lead
@@ -87,7 +91,7 @@ const IssueCmd = cmd({
   },
 })
 
-const ClaimCmd = cmd({
+export const ClaimCmd = cmd({
   command: "claim <key>",
   describe: "claim a licence key for yourself",
   builder: (y: any) =>
@@ -96,6 +100,8 @@ const ClaimCmd = cmd({
     const res = await irisFetch(`${BASE}/claim`, { method: "POST", body: JSON.stringify({ key: args.key }) })
     const body = (await res.json().catch(() => ({}))) as any
 
+    // #191949: a refusal is an answer, but a script still has to be able to tell it was a no.
+    if (!res.ok) process.exitCode = 1
     if (args.json) return writeJson(body)
 
     // A refusal here is an ANSWER, not a fault — already claimed, expired, no seats left. It is
@@ -170,20 +176,22 @@ const ListCmd = cmd({
   },
 })
 
-const RevokeCmd = cmd({
+export const RevokeCmd = cmd({
   command: "revoke <key>",
   describe: "revoke a licence (operator only)",
   builder: (y: any) => y.positional("key", { type: "string" }),
   async handler(args: any) {
     const res = await irisFetch(`${BASE}/${encodeURIComponent(args.key)}/revoke`, { method: "POST" })
     if (!res.ok) return reportError(res, "Revoke licence")
+    const body = (await res.json().catch(() => ({}))) as any
+    if (body?.already_revoked) return prompts.log.info(`${args.key} was already revoked`)
     prompts.log.success(`Revoked ${args.key}`)
   },
 })
 
 // #189718 — join a key that was already issued (and maybe already sent) to its CRM lead,
 // instead of revoking it and sending the person a different key.
-const LinkCmd = cmd({
+export const LinkCmd = cmd({
   command: "link <key>",
   describe: "link an issued licence to its CRM lead (operator only)",
   builder: (y: any) =>
@@ -195,6 +203,52 @@ const LinkCmd = cmd({
     })
     if (!res.ok) return reportError(res, "Link licence")
     prompts.log.success(`Linked ${args.key} → lead #${args.lead}`)
+  },
+})
+
+// #191940 — name who a licence is for. The first call turns an open licence into a named one;
+// anyone already on a seat keeps it.
+export const AllowCmd = cmd({
+  command: "allow <key> <emails..>",
+  describe: "only these people, added to any already named, may claim it (operator only)",
+  builder: (y: any) =>
+    y.positional("key", { type: "string" }).positional("emails", { type: "string", array: true }),
+  async handler(args: any) {
+    const res = await irisFetch(`${BASE}/${encodeURIComponent(args.key)}/allow`, {
+      method: "POST",
+      body: JSON.stringify({ emails: args.emails }),
+    })
+    if (!res.ok) return reportError(res, "Allow on licence")
+    const body = (await res.json().catch(() => ({}))) as any
+    prompts.log.success(`May claim ${args.key}: ${firstArray(body?.data?.allowed_emails).join(", ")}`)
+  },
+})
+
+export const ReleaseCmd = cmd({
+  command: "release <key> <email>",
+  describe: "take one person's seat back, leaving everyone else alone (operator only)",
+  builder: (y: any) =>
+    y
+      .positional("key", { type: "string" })
+      .positional("email", { type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args: any) {
+    const res = await irisFetch(`${BASE}/${encodeURIComponent(args.key)}/seats/release`, {
+      method: "POST",
+      body: JSON.stringify({ email: args.email }),
+    })
+    if (res.status === 404) return reportError(res, "Release seat")
+    const body = (await res.json().catch(() => ({}))) as any
+    if (!res.ok) process.exitCode = 1
+    if (args.json) return writeJson(body)
+    if (!res.ok) {
+      prompts.log.warn(body?.error ?? body?.message ?? `Could not release (HTTP ${res.status})`)
+      return
+    }
+    prompts.log.success(`${args.email} released from ${args.key}`)
+    if (body?.key_still_open) {
+      prompts.log.warn(`The key still works for anyone who has it, ${args.email} included. To stop that: iris licence allow ${args.key} <emails..>`)
+    }
   },
 })
 
@@ -232,7 +286,7 @@ export const LicenceGroup = cmd({
   aliases: ["license", "licences", "licenses"],
   describe: "what a yes produces — issue, claim and check entitlement",
   builder: (y: any) =>
-    y.command(IssueCmd).command(ClaimCmd).command(MeCmd).command(ListCmd).command(ShowCmd).command(LinkCmd).command(RevokeCmd).demandCommand(),
+    y.command(IssueCmd).command(ClaimCmd).command(MeCmd).command(ListCmd).command(ShowCmd).command(LinkCmd).command(AllowCmd).command(ReleaseCmd).command(RevokeCmd).demandCommand(),
   async handler() {},
 })
 
@@ -252,6 +306,8 @@ export const LicenceCommand = productCommand({
       .command(ListCmd)
       .command(ShowCmd)
       .command(LinkCmd)
+      .command(AllowCmd)
+      .command(ReleaseCmd)
       .command(RevokeCmd)
       .demandCommand(),
 })
