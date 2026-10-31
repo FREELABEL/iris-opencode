@@ -41,6 +41,14 @@ async function post(path: string, body: unknown) {
   return data
 }
 
+const REFUSED_NOTICE_MS = 4000
+
+/** Why the licence or trial held at send time was refused at verification; "" when it was not. */
+export function refusedClaim(body: any): string {
+  const claim = [body?.data?.license_claim, body?.data?.trial_claim].find((c) => c?.granted === false)
+  return claim ? claim.error || "That code could not be applied." : ""
+}
+
 export function SignInPanel() {
   const invoke = tauriInvoke()
   const track = (event: string, label?: string) => {
@@ -64,10 +72,12 @@ export function SignInPanel() {
     void invoke?.("signin_in_app")?.catch?.(() => {})
   })
 
-  async function finish(token: string, method: string) {
+  async function finish(token: string, method: string, refused = "") {
     setStage("done")
-    setMsg({ text: "Signed in. Starting IRIS…", kind: "ok" })
+    // Refused licence or trial: say so where it can be read, then sign in anyway (#191962).
+    setMsg(refused ? { text: `${refused} You're still signed in.`, kind: "err" } : { text: "Signed in. Starting IRIS…", kind: "ok" })
     await invoke!("save_iris_token", { token })
+    if (refused) await new Promise((r) => setTimeout(r, REFUSED_NOTICE_MS))
     // After the save: Rust attaches the token now on disk, which joins this install to the person.
     track("onboarding.signed_in", method)
     // The engine reads the key once, at start — the restart is what makes it signed in.
@@ -147,7 +157,7 @@ export function SignInPanel() {
       const token = data?.data?.sdk_token?.key
       if (!token) throw new Error("Signed in, but no token was returned. Contact support.")
       if (!invoke) throw new Error("Sign-in needs the IRIS desktop app.")
-      await finish(token, "code")
+      await finish(token, "code", refusedClaim(data))
     } catch (err: any) {
       setMsg({ text: err.message, kind: "err" })
     } finally {
