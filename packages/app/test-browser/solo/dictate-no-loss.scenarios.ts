@@ -150,7 +150,7 @@ describe("dictating in the composer: nothing said is lost", () => {
     finish("Buy oat milk.")
     expect(ui.editor.textContent).toBe("Buy oat milk.")
     expect(ui.value()).toBe("Buy oat milk.")
-    expect(panel()).toBeNull()
+    expect(!!panel()).toBe(false)
   })
 
   test("edit mid-take: the edit stays, later words and the final's tail still arrive", () => {
@@ -161,7 +161,7 @@ describe("dictating in the composer: nothing said is lost", () => {
     expect(ui.value()).toBe("buy oatmilk and call")
     finish("Buy oat milk and call the plumber at noon.")
     expect(ui.value()).toBe("buy oatmilk and call the plumber at noon.")
-    expect(panel()).toBeNull()
+    expect(!!panel()).toBe(false)
   })
 
   test("Send mid-take: what is on screen is sent, the mic keeps going, later words are the next draft", () => {
@@ -184,13 +184,13 @@ describe("dictating in the composer: nothing said is lost", () => {
     ui.type((editor) => ((editor.lastChild as Text).data = "my own words now"))
     finish("something the engine heard quite differently")
     expect(ui.value()).toBe("my own words now")
-    expect(panel()).toBeNull()
+    expect(!!panel()).toBe(false)
     fullAction()!.click()
     expect(ui.value()).toBe("my own words now")
     expect(panel()?.textContent).toContain("something the engine heard quite differently")
     ;(panel()?.querySelector('[data-slot="dictate-btn"][data-primary]') as HTMLButtonElement).click()
     expect(ui.value()).toBe("my own words now something the engine heard quite differently")
-    expect(panel()).toBeNull()
+    expect(!!panel()).toBe(false)
   })
 
   // Alex's scenarios (#191998).
@@ -204,7 +204,7 @@ describe("dictating in the composer: nothing said is lost", () => {
     expect(ui.value()).toBe("and now the real")
     finish("The first thought I deleted. And now the real message.")
     expect(ui.value()).toBe("And now the real message.")
-    expect(panel()).toBeNull()
+    expect(!!panel()).toBe(false)
   })
 
   test("Send mid-take, talk, Stop: the first sentence does not return, and nothing is sent twice", () => {
@@ -215,7 +215,7 @@ describe("dictating in the composer: nothing said is lost", () => {
     finish("The first sentence. The second one.")
     expect(ui.value()).toBe("The second one.")
     expect(ui.sent).toEqual(["the first sentence"])
-    expect(panel()).toBeNull()
+    expect(!!panel()).toBe(false)
   })
 
   test("Full transcript holds the whole take, and never lands in the message by itself", () => {
@@ -228,14 +228,14 @@ describe("dictating in the composer: nothing said is lost", () => {
     fullAction()!.click()
     expect(panel()?.textContent).toContain("Gone. Kept words.")
     expect(ui.value()).toBe("Kept words.")
-    expect(fullAction()).toBeNull()
+    expect(!!fullAction()).toBe(false)
   })
 
   test("an untouched take offers no Full transcript", () => {
     const ui = begin()
     recorder.onFinal("all mine")
     finish("All mine.")
-    expect(fullAction()).toBeNull()
+    expect(!!fullAction()).toBe(false)
   })
 
   test("a live write is not an edit: the take stays untouched however many words arrive", () => {
@@ -257,7 +257,7 @@ describe("dictating in the composer: nothing said is lost", () => {
     recorder.onPartial("three")
     finish("Something else entirely was heard.")
     expect(ui.value()).toBe("Note: one two three")
-    expect(panel()).toBeNull()
+    expect(!!panel()).toBe(false)
   })
 
   test("the cursor at the end follows live words", () => {
@@ -312,7 +312,7 @@ describe("dictating in the composer: nothing said is lost", () => {
     expect(ui.value()).toBe("one 2 three four five")
     finish("One two three, four five.")
     expect(ui.value()).toBe("one 2 three four five.")
-    expect(panel()).toBeNull()
+    expect(!!panel()).toBe(false)
   })
 
   test("Send stays enabled mid-take, and a later draft can be sent too", () => {
@@ -338,7 +338,7 @@ describe("dictating in the composer: nothing said is lost", () => {
     expect(ui.value()).toBe("kept words")
     recorder.onTranscript("Gone. Kept words.", { review: true })
     expect(ui.value()).toBe("kept words")
-    expect(panel()).toBeNull()
+    expect(!!panel()).toBe(false)
     fullAction()!.click()
     expect(panel()?.textContent).toContain("Gone. Kept words.")
   })
