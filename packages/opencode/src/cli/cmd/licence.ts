@@ -93,6 +93,24 @@ export function seatCapLine(cents: unknown): string {
 }
 
 /**
+ * #191993: the pool is not a ceiling. An empty pool falls through to the seat's tier caps, so an
+ * operator who reads --allowance as a limit can quote a maximum cost that does not exist.
+ */
+export function poolRunsOutLine(allowanceCents: unknown, seatCapCents: unknown): string | undefined {
+  if (!(Number(allowanceCents ?? 0) > 0)) return undefined
+  if (seatCapCents === null || seatCapCents === undefined) {
+    return "seats keep working and spending, up to their plan tier's caps. Nothing on this licence stops them sooner"
+  }
+  return `seats keep working and spending, until a seat reaches its ${money(seatCapCents)} monthly seat cap or its plan tier's caps`
+}
+
+/** Set when an allowance could be read as a limit and no seat cap is there to be one. */
+export function allowanceWarning(allowanceCents: unknown, seatCapCents: unknown): string | undefined {
+  if (!(Number(allowanceCents ?? 0) > 0) || (seatCapCents !== null && seatCapCents !== undefined)) return undefined
+  return `The ${money(allowanceCents)} allowance is not a spending limit. Spend can go past it, up to each seat's plan tier caps. Only a seat cap (--seat-cap) stops a seat sooner.`
+}
+
+/**
  * Who claimed, who is active, what each seat spent (#191945). A pure function of the API's `usage`
  * block so it can be tested without a server. Empty when talking to a server without one.
  */
@@ -124,12 +142,12 @@ export const IssueCmd = cmd({
       .option("tier", { describe: "starter | pro | business", type: "string", default: "starter" })
       .option("seats", { describe: "how many people may hold it", type: "number", default: 1 })
       .option("allowance", {
-        describe: "spend allowance in CENTS PER MONTH, one pool shared by every seat (it refills each month, so 2 months is up to 2x; one seat can use all of it unless --seat-cap is set)",
+        describe: "NOT a spending limit: when this pool runs out, seats keep spending up to their plan tier's caps; only --seat-cap stops a seat sooner. CENTS PER MONTH, one pool shared by every seat (it refills each month; one seat can use all of it unless --seat-cap is set)",
         type: "number",
         default: 0,
       })
       .option("seat-cap", {
-        describe: "limit in CENTS PER MONTH for each seat; a seat at its limit is refused while the others carry on (default: no limit)",
+        describe: "limit in CENTS PER MONTH for each seat; a seat at its limit is refused while the others carry on, so total spend can reach this times the seats (a call already running finishes, and refusal can lag up to a minute). Default: no limit",
         type: "number",
       })
       .option("days", { describe: "expire this many days from now", type: "number" })
@@ -169,7 +187,8 @@ export const IssueCmd = cmd({
     if (!res.ok) return reportError(res, "Issue licence")
 
     const data = ((await res.json()) as any)?.data
-    if (args.json) return writeJson(data)
+    const warning = allowanceWarning(data?.allowance_cents, data?.seat_cap_cents)
+    if (args.json) return writeJson(warning ? { ...data, warning } : data)
 
     UI.empty()
     prompts.intro("◈  Licence issued")
@@ -179,8 +198,11 @@ export const IssueCmd = cmd({
     printKV("seats", String(data?.seats ?? "—"))
     printKV("allowance", monthlyAllowanceLine(data?.allowance_cents, data?.seats))
     printKV("seat cap", seatCapLine(data?.seat_cap_cents))
+    const poolOut = poolRunsOutLine(data?.allowance_cents, data?.seat_cap_cents)
+    if (poolOut) printKV("pool runs out", poolOut)
     printKV("expires", data?.expires_at ? String(data.expires_at) : "never")
     printDivider()
+    if (warning) prompts.log.warn(warning)
     // The key is the credential. Say where it goes rather than leaving someone to guess.
     prompts.outro(dim("Name the people: iris licence invite <key> <email...>   ·   then: iris licence send <key> <email...>"))
   },
@@ -383,7 +405,7 @@ export const ReleaseCmd = cmd({
   },
 })
 
-const ShowCmd = cmd({
+export const ShowCmd = cmd({
   command: "show <key>",
   describe: "one licence with its seats and audit trail (operator only)",
   builder: (y: any) =>
@@ -393,7 +415,8 @@ const ShowCmd = cmd({
     if (!res.ok) return reportError(res, "Show licence")
 
     const data = ((await res.json()) as any)?.data
-    if (args.json) return writeJson(data)
+    const poolOut = poolRunsOutLine(data?.usage?.allowance_cents_per_month, data?.usage?.seat_cap_cents)
+    if (args.json) return writeJson(poolOut ? { ...data, pool_runs_out: poolOut } : data)
 
     UI.empty()
     prompts.intro(`◈  ${data?.key ?? args.key}`)
@@ -415,6 +438,7 @@ const ShowCmd = cmd({
     const usage = usageLines(data?.usage)
     if (usage.length) {
       for (const line of usage) UI.println(`  ${line}`)
+      if (poolOut) UI.println(`  when the pool runs out: ${poolOut}`)
       printDivider()
     }
     for (const e of data?.events ?? []) {
