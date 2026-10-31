@@ -3435,15 +3435,15 @@
       "describe": "mark bug report(s) as completed — optionally record the fix/solution + commit hash",
       "aliases": [],
       "run": "iris bug close <id..>",
-      "haystack": "bug close done resolve complete mark bug report(s) as completed — optionally record the fix/solution + commit hash solution describe how it was fixed — recorded on the bug so other machines see it commit fix commit hash (auto-detected from git head when --solution is given) no-commit skip git commit auto-detection note (deprecated alias for --solution) json json output"
+      "haystack": "bug close done resolve complete mark bug report(s) as completed — optionally record the fix/solution + commit hash solution describe how it was fixed — recorded on the bug so other machines see it commit fix commit hash to record. optional: without it the bug still closes, with no commit recorded no-commit don note (deprecated alias for --solution) json json output"
     },
     {
       "kind": "command",
       "name": "bug comment",
-      "describe": "add a note to a bug — e.g. link the epic that picked it up (status and title untouched)",
+      "describe": "add a timestamped, attributed comment to a bug — the description, status and title are untouched",
       "aliases": [],
       "run": "iris bug comment <id> <text..>",
-      "haystack": "bug comment note add a note to a bug — e.g. link the epic that picked it up (status and title untouched) json json output"
+      "haystack": "bug comment note add a timestamped, attributed comment to a bug — the description, status and title are untouched json json output"
     },
     {
       "kind": "command",
