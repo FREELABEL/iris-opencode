@@ -13,6 +13,7 @@ import { createStore } from "solid-js/store"
 import { createMediaQuery } from "@solid-primitives/media"
 import { Portal } from "solid-js/web"
 import { useCommand } from "@/context/command"
+import { usePaneFocused, useSessionPane } from "@/context/session-pane"
 import { useLanguage } from "@/context/language"
 import { useLayout } from "@/context/layout"
 import { usePlatform } from "@/context/platform"
@@ -234,12 +235,15 @@ export function SessionHeader() {
   const tint = createMemo(() =>
     messageAgentColor(params.id ? sync().data.message[params.id] : undefined, sync().data.agent),
   )
+  const inPane = !!useSessionPane()
   const v2ActionsState = createMemo<SessionHeaderV2ActionsState>(() => ({
     statusVisible: status(),
     statusLabel: language.t("status.popover.trigger"),
     reviewLabel: language.t("command.review.toggle"),
     reviewKeybind: reviewTooltipKeybind(command),
-    reviewVisible: isDesktop(),
+    // In a split each column carries its own panel button (message-timeline); the titlebar's
+    // would only ever mean the focused one (#191484).
+    reviewVisible: isDesktop() && !inPane,
     reviewOpened: view().reviewPanel.opened(),
     onReviewToggle: () => view().reviewPanel.toggle(),
   }))
@@ -283,13 +287,15 @@ export function SessionHeader() {
 
   const [centerMount, setCenterMount] = createSignal<HTMLElement | null>(null)
   const rightMount = useTitlebarRightMount()
+  // One titlebar per window: in a split (#191484) only the focused column puts its controls there.
+  const paneFocused = usePaneFocused()
   onMount(() => {
     setCenterMount(document.getElementById("opencode-titlebar-center"))
   })
 
   return (
     <>
-      <Show when={search() && centerMount()} keyed>
+      <Show when={search() && paneFocused() && centerMount()} keyed>
         {(mount) => (
           <Portal mount={mount}>
             <Button
@@ -319,7 +325,7 @@ export function SessionHeader() {
           </Portal>
         )}
       </Show>
-      <Show when={rightMount()} keyed>
+      <Show when={paneFocused() && rightMount()} keyed>
         {(mount) => (
           <Portal mount={mount}>
             <Show

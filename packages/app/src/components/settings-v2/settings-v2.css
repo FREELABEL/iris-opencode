@@ -727,3 +727,154 @@
   line-height: 1;
   color: var(--v2-state-fg-danger);
 }
+
+/* Settings › Security (#189589). Semantic colour comes from the --v2-state tokens, so both themes
+   follow the app; the accent is never used for "on", because "on" is a state, not a brand. */
+.settings-v2-security-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-v2-security-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding-inline: 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 530;
+  white-space: nowrap;
+  color: var(--v2-text-text-muted);
+  background-color: var(--v2-background-bg-layer-02);
+  box-shadow: inset 0 0 0 0.5px var(--v2-border-border-base);
+}
+
+.settings-v2-security-pill[data-tone="on"] {
+  color: var(--v2-state-fg-success);
+  background-color: var(--v2-state-bg-success);
+  box-shadow: inset 0 0 0 0.5px var(--v2-state-border-success);
+}
+
+.settings-v2-security-pill[data-tone="warn"] {
+  color: var(--v2-state-fg-warning);
+  background-color: var(--v2-state-bg-warning);
+  box-shadow: inset 0 0 0 0.5px var(--v2-state-border-warning);
+}
+
+.settings-v2-security-pill[data-tone="unknown"] {
+  color: var(--v2-text-text-faint);
+  background-color: transparent;
+  box-shadow: inset 0 0 0 0.5px var(--v2-border-border-base);
+}
+
+.settings-v2-security-segmented {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 7px;
+  background-color: var(--v2-background-bg-layer-02);
+}
+
+.settings-v2-security-segmented > span {
+  padding: 4px 10px;
+  border-radius: 5px;
+  font-size: 12px;
+  text-transform: capitalize;
+  color: var(--v2-text-text-muted);
+}
+
+.settings-v2-security-segmented > span[data-selected] {
+  color: var(--v2-text-text-base);
+  background-color: var(--v2-background-bg-base);
+  box-shadow: var(--v2-elevation-raised);
+}
+
+.settings-v2-security-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 340px;
+}
+
+.settings-v2-security-chips > span {
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--v2-text-text-faint);
+  box-shadow: inset 0 0 0 0.5px var(--v2-border-border-base);
+}
+
+.settings-v2-security-chips > span[data-on] {
+  color: var(--v2-text-text-base);
+  background-color: var(--v2-background-bg-layer-02);
+}
+
+.settings-v2-security-chips em {
+  font-style: normal;
+  color: var(--v2-text-text-faint);
+}
+
+.settings-v2-security-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+@media (max-width: 720px) {
+  .settings-v2-security-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.settings-v2-security-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+  border-radius: 8px;
+  background-color: var(--v2-background-bg-layer-01);
+  box-shadow: inset 0 0 0 0.5px var(--v2-border-border-muted);
+}
+
+.settings-v2-security-stat [data-slot="label"] {
+  font-size: 12px;
+  color: var(--v2-text-text-muted);
+}
+
+.settings-v2-security-stat [data-slot="value"] {
+  font-family: var(--font-mono);
+  font-size: 20px;
+  font-weight: 560;
+  font-variant-numeric: tabular-nums;
+  color: var(--v2-text-text-base);
+}
+
+.settings-v2-security-stat [data-slot="hint"] {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--v2-text-text-faint);
+}
+
+.settings-v2-security-mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-v2-security-faint {
+  color: var(--v2-text-text-faint);
+  font-weight: 400;
+}
+
+.settings-v2-security-event-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-v2-security-error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--v2-state-fg-danger);
+}

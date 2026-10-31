@@ -1,5 +1,6 @@
 import { Component, createMemo } from "solid-js"
-import { useNavigate, useParams } from "@solidjs/router"
+import { useNavigate } from "@solidjs/router"
+import { useSessionParams } from "@/context/session-pane"
 import { useSync } from "@/context/sync"
 import { useSDK } from "@/context/sdk"
 import { usePrompt } from "@/context/prompt"
@@ -23,7 +24,7 @@ function formatTime(date: Date): string {
 }
 
 export const DialogFork: Component = () => {
-  const params = useParams()
+  const params = useSessionParams()
   const navigate = useNavigate()
   const sync = useSync()
   const sdk = useSDK()

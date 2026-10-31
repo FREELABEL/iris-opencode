@@ -37,6 +37,7 @@ import { dictationAuthFor } from "@/utils/dictation-auth"
 import { useSync } from "@/context/sync"
 import "./prompt-input-glow.css"
 import { BackgroundWorkMenu } from "./background-work-menu"
+import { allowanceDockShown } from "@/pages/session/composer/allowance-events"
 import { createSessionTabs } from "@/pages/session/helpers"
 import { showToast } from "@/utils/toast"
 import { PromptInputV2, type PromptInputV2Suggestion } from "@opencode-ai/session-ui/v2/prompt-input"
@@ -125,7 +126,7 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
         data-still={dictationSettings.glow.reduceMotion() ? "" : undefined}
         data-busy={busy() ? "" : undefined} data-bg={background() > 0 ? "" : undefined}>
       <span class="iris-glow__under" aria-hidden="true" />
-      <Show when={background() > 0}>
+      <Show when={background() > 0 && !allowanceDockShown()}>
         <BackgroundWorkMenu />
       </Show>
       <PromptInputV2

@@ -150,3 +150,16 @@ describe("save keeps tags; adding from the marketplace never overwrites", () => 
     })
   })
 })
+
+// #189589 — the hub's answer for a held run: not sent, with Gate's reasons for the person deciding.
+test("readTask marks an awaiting_approval run held and carries Gate's verdict", () => {
+  const t = readTask({
+    id: 7,
+    status: "awaiting_approval",
+    gate: { explanation: "It controls hardware (bluetooth). It will not run until you approve it.", reasons: ["hardware"], action: "clean", score: 0.03, hardware: ["bluetooth"] },
+  })
+  expect(t?.held).toBe(true)
+  expect(t?.terminal).toBe(false)
+  expect(t?.gate).toMatchObject({ reasons: ["hardware"], hardware: ["bluetooth"] })
+  expect(readTask({ id: 8, status: "running" })?.gate).toBeNull()
+})

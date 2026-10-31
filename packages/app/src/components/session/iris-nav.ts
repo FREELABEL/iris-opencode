@@ -15,6 +15,14 @@ export type IrisNavRequest = {
   artifactId?: string
   /** Switch the panel to this board first — an Atlas Epic card opening the board it saved to. */
   bloqId?: number
+  /** Atlas: open this card once the board is on screen — a notification about it, clicked (#189799). */
+  itemId?: number
+  /**
+   * The chat whose panel this is for (#191484). With chats side by side, every panel read this
+   * one signal and all of them followed an agent's "show Hive". Unset — a titlebar pill, a card —
+   * means the panel of the chat you are in.
+   */
+  session?: string
   nonce: number
 }
 
@@ -67,3 +75,54 @@ export const irisHiveNodeFocus = hiveNodeFocus
 export function focusHiveNode(id: string | null) {
   setHiveNodeFocus(id ? { id, nonce: Date.now() + Math.random() } : null)
 }
+
+/**
+ * OPEN THE SIDE PANEL from outside a session's layout (#189279) — the titlebar's Hive and Inbox
+ * pills. The titlebar has no session context, so it cannot call tabs().open("iris") itself; it
+ * leaves a request here and the session page (which owns the panel) acts on it. Same reason as
+ * requestIrisNav for being a signal: whoever reads it may mount after the click.
+ */
+const [panelOpen, setPanelOpen] = createSignal<{ nonce: number } | null>(null)
+
+export const irisPanelOpenRequest = panelOpen
+
+export function clearIrisPanelOpen() {
+  setPanelOpen(null)
+}
+
+/** Open the panel AND put it on this surface/sub-view. */
+export function openIrisPanel(r: Omit<IrisNavRequest, "nonce">) {
+  requestIrisNav(r)
+  setPanelOpen({ nonce: Date.now() + Math.random() })
+}
+
+/**
+ * The inbox changed here (a message was opened and marked read). The titlebar's unread badge
+ * re-reads on this instead of waiting up to 30s to agree with the list you are looking at.
+ */
+const [inboxVersion, setInboxVersion] = createSignal(0)
+export const irisInboxVersion = inboxVersion
+export function bumpIrisInbox() {
+  setInboxVersion((v) => v + 1)
+}
+
+/**
+ * WHAT THE PANEL IS SHOWING (#190093) — the other direction. The requests above steer the panel;
+ * these say where it ended up, so the agent can be told (use-panel-control.ts reports them to the
+ * engine). Written by the component that knows: SessionIrisTab for product, view and board,
+ * IrisArtifacts for the selected artifact. Module-level for the same reason as the requests — the
+ * reporter lives in the page, the knowledge lives in lazily mounted panes.
+ */
+export type IrisPanelView = { surface?: string; sub?: string; bloq?: { id: number; name?: string } }
+const [panelView, setPanelView] = createSignal<IrisPanelView>({})
+export const irisPanelView = panelView
+export const setIrisPanelView = setPanelView
+
+/** Atlas: the card open in the card editor, and its board (#191507). Written by SessionIrisTab's openCard. */
+const [openCard, setOpenCard] = createSignal<{ id: number; bloq?: number } | undefined>()
+export const irisOpenCard = openCard
+export const setIrisOpenCard = setOpenCard
+
+const [openArtifact, setOpenArtifact] = createSignal<string | undefined>()
+export const irisOpenArtifact = openArtifact
+export const setIrisOpenArtifact = setOpenArtifact

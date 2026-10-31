@@ -2,8 +2,9 @@ import type { Message, Session } from "@opencode-ai/sdk/v2/client"
 import { showToast } from "@/utils/toast"
 import { base64Encode } from "@opencode-ai/core/util/encode"
 import { Binary } from "@opencode-ai/core/util/binary"
-import { useNavigate, useParams, useSearchParams } from "@solidjs/router"
-import { batch, startTransition, type Accessor } from "solid-js"
+import { useNavigate, useSearchParams } from "@solidjs/router"
+import { useSessionParams } from "@/context/session-pane"
+import { batch, createEffect, on, startTransition, type Accessor } from "solid-js"
 import { useTabs } from "@/context/tabs"
 import { useServerSync, type ServerSync } from "@/context/server-sync"
 import { useLanguage } from "@/context/language"
@@ -12,6 +13,10 @@ import { useLocal, type ModelSelection } from "@/context/local"
 import { usePermission } from "@/context/permission"
 import { type ContextItem, type ImageAttachmentPart, type Prompt, type usePrompt } from "@/context/prompt"
 import { useSDK, type DirectorySDK } from "@/context/sdk"
+import { useServer } from "@/context/server"
+import { authTokenFromCredentials } from "@/utils/server"
+import { usePlatform } from "@/context/platform"
+import { TerminalMode, type TerminalRequest } from "./terminal-mode"
 import { useSync, type DirectorySync } from "@/context/sync"
 import { Identifier } from "@/utils/id"
 import { Worktree as WorktreeState } from "@/utils/worktree"
@@ -241,10 +246,69 @@ export function createPromptSubmit(input: PromptSubmitInput) {
   const prompt = input.prompt
   const layout = useLayout()
   const language = useLanguage()
-  const params = useParams()
+  const params = useSessionParams()
   const [search] = useSearchParams<{ draftId?: string }>()
   const tabs = useTabs()
   const pendingKey = (sessionID: string) => ScopedKey.from(sdk().scope, sessionID)
+  const server = useServer()
+  const platform = usePlatform()
+
+  // Terminal mode (#190530): the sidecar's terminal routes, with the same credentials and
+  // directory routing the SDK sends.
+  const terminalRequest =
+    (directory: string): TerminalRequest =>
+    (path, init) => {
+      const http = server.current?.http
+      const base = (http?.url ?? sdk().url).replace(/\/$/, "")
+      const headers: Record<string, string> = {
+        "content-type": "application/json",
+        "x-opencode-directory": encodeURIComponent(directory),
+      }
+      if (http?.password)
+        headers.Authorization = `Basic ${authTokenFromCredentials({ username: http.username, password: http.password })}`
+      return (platform.fetch ?? globalThis.fetch)(`${base}${path}`, { ...init, headers })
+    }
+
+  const sendTranscript = (sessionID: string) =>
+    TerminalMode.close(sessionID, (text) =>
+      sdk().client.session.promptAsync({ sessionID, noReply: true, parts: [{ type: "text", text }] }),
+    ).catch((err) =>
+      showToast({ title: language.t("prompt.toast.shellSendFailed.title"), description: errorMessage(err) }),
+    )
+
+  // Leaving shell mode by ANY route (Esc, the mode toggle, the close button) closes the terminal
+  // and leaves its transcript in the session. A command still running is never killed silently:
+  // shell mode is put back and the terminal asks Wait / Stop and close.
+  let terminalFor: string | undefined
+  createEffect(
+    on(
+      () =>
+        [
+          input.mode(),
+          input.info()?.id,
+          TerminalMode.closing(terminalFor),
+          TerminalMode.running(terminalFor),
+        ] as const,
+      ([mode, id, closing, running]) => {
+        if (mode === "shell") {
+          if (id && terminalFor && terminalFor !== id) void sendTranscript(terminalFor)
+          if (id) terminalFor = id
+          if (terminalFor && closing && !running) input.setMode("normal")
+          return
+        }
+        const sessionID = terminalFor
+        if (!sessionID) return
+        if (TerminalMode.running(sessionID)) {
+          TerminalMode.requestClose(sessionID)
+          input.setMode("shell")
+          return
+        }
+        terminalFor = undefined
+        void sendTranscript(sessionID)
+      },
+      { defer: true },
+    ),
+  )
 
   const errorMessage = (err: unknown) => {
     if (err && typeof err === "object" && "message" in err && typeof err.message === "string") return err.message
@@ -489,23 +553,14 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     input.onSubmit?.()
 
     if (mode === "shell") {
-      clearInput()
-      const eventID = Event.ID.create()
-      sdk()
-        .api.session.shell({
-          sessionID: session.id,
-          id: eventID,
-          command: text,
-          agent,
-          model,
-        })
-        .catch((err) => {
-          showToast({
-            title: language.t("prompt.toast.shellSendFailed.title"),
-            description: errorMessage(err),
-          })
-          restoreInput()
-        })
+      // Terminal mode (#190530): the command runs in the terminal above the composer, not as a
+      // chat turn, and shell mode stays open with the input ready for the next one.
+      submission.clear()
+      input.setPopover(null)
+      TerminalMode.attach(session.id, sessionDirectory, terminalRequest(sessionDirectory))
+      terminalFor = session.id
+      void TerminalMode.run(session.id, text)
+      requestAnimationFrame(() => input.editor()?.focus())
       return
     }
 

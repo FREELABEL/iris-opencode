@@ -4,6 +4,7 @@ import {
   flowSteps,
   handsTag,
   HANDS_FILTERS,
+  handsLevel,
   humanize,
   playbookSlugLine,
   matchesHands,
@@ -119,13 +120,16 @@ describe("matchesHands — the filter chips", () => {
     expect(pick("once")).toEqual(["b"])
     expect(pick("charge")).toEqual(["c"])
   })
-  test("the four chips are in the designed order", () => {
-    expect(HANDS_FILTERS.map((f) => f.label)).toEqual([
-      "Anything",
-      "Fully automatic",
-      "Asks me once",
-      "I stay in charge",
-    ])
+  test("the four filters are in the designed order, short enough for one segmented control", () => {
+    expect(HANDS_FILTERS.map((f) => f.label)).toEqual(["All", "Automatic", "Asks once", "You lead"])
+  })
+
+  test("the row's indicator: more dots filled means less of you; none when no steps are published", () => {
+    expect(handsLevel({ steps: steps("shell", "ai") })).toEqual({ filled: 3, tone: "auto", label: "Automatic" })
+    expect(handsLevel({ steps: steps("shell", "human") })).toEqual({ filled: 2, tone: "you", label: "Asks once" })
+    expect(handsLevel({ steps: steps("human", "ai", "manual", "human") })?.label).toMatch(/^Asks \d×$/)
+    expect(handsLevel({ steps: steps("human", "ai", "manual", "human") })?.filled).toBe(1)
+    expect(handsLevel({})).toBeNull()
   })
 })
 

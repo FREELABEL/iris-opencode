@@ -203,6 +203,21 @@ button.iris-glow__chip:focus-visible {
   outline-offset: 2px;
 }
 
+/* Inside the allowance tab's header row (#190391): in the row beside Upgrade, not floating over it. */
+button.iris-glow__chip[data-inline] {
+  position: static;
+  min-width: 0;
+  max-width: 100%;
+  white-space: nowrap;
+}
+.iris-glow__chip[data-inline] > i {
+  flex-shrink: 0;
+}
+.iris-glow__chip[data-inline] .iris-glow__chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* The list (#189437). Rows after upstream 2.0's running menu: dot, name, a muted line, ✕ on hover. */
 .iris-bg-menu {
   width: 280px;
@@ -277,4 +292,22 @@ button.iris-glow__chip:focus-visible {
   .iris-bg-menu__dot {
     animation: none;
   }
+}
+
+/* THIN — a 1px ring with a short halo, for small surfaces that sit beside the composer (the
+   allowance bar, #190087). The composer's 2px ring read as "too fat" on a 42px bar (Alex, 2026-10-20). */
+.iris-glow[data-thin]::before {
+  inset: -1px;
+  border-radius: 13px;
+}
+.iris-glow[data-thin]::after {
+  inset: -1px;
+  border-width: 2px;
+  filter: blur(2px);
+}
+/* A TAB tucked behind the composer: square bottom, so the ring traces only the visible tab. */
+.iris-glow[data-tab]::before,
+.iris-glow[data-tab]::after {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
 }

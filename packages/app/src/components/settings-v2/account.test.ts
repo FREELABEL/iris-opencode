@@ -3,8 +3,8 @@ import {
   accountStatus,
   meterView,
   otherAccounts,
-  planAction,
   planLabel,
+  planPitch,
   savedAccountLabel,
   signOutDescription,
   sourceNote,
@@ -157,23 +157,19 @@ describe("Settings > Account, more than one account (#189321)", () => {
   })
 })
 
-// #189544: the Plan row only ever offered Upgrade, and only to unpaid accounts — paid ones had no path.
-describe("planAction", () => {
-  const plan = (over: Partial<AccountState["plan"]> = {}): AccountState["plan"] => ({
-    measured: true,
-    plan: "iris_solo",
-    paid: true,
-    uncapped: false,
-    upgradeUrl: null,
-    ...over,
+describe("plan name from the server", () => {
+  const base = { measured: true, plan: "free", paid: true, uncapped: false, upgradeUrl: null }
+  test("the server's label wins over the tier, which calls every paid package free", () => {
+    expect(planLabel({ ...base, label: "IRIS Solo" })).toBe("IRIS Solo")
+    expect(planLabel({ ...base, label: "  " })).toBe("Free")
+    expect(planLabel({ ...base, label: null })).toBe("Free")
   })
-  test("paid accounts get See plans; unpaid keep Upgrade", () => {
-    expect(planAction(plan({ paid: true }))).toBe("see-plans")
-    expect(planAction(plan({ paid: false }))).toBe("upgrade")
+  test("unmeasured stays Unknown even with a label", () => {
+    expect(planLabel({ ...base, measured: false, label: "Free" })).toBe("Unknown")
   })
-  test("unknown or unmeasured offers nothing", () => {
-    expect(planAction(plan({ paid: null }))).toBeNull()
-    expect(planAction(plan({ measured: false, paid: true }))).toBeNull()
-    expect(planAction(undefined)).toBeNull()
+  test("the pitch never promises unlimited", () => {
+    for (const p of [undefined, base, { ...base, paid: false }, { ...base, paid: null }]) {
+      expect(planPitch(p).toLowerCase()).not.toContain("unlimited")
+    }
   })
 })

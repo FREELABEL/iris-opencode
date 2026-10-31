@@ -1,4 +1,5 @@
-import { For, Match, Show, Switch, createEffect, createMemo, onCleanup, type JSX } from "solid-js"
+import { For, Match, Show, Switch, createEffect, createMemo, on, onCleanup, type JSX } from "solid-js"
+import { useIrisPanelScope } from "@/context/iris-panel-scope"
 import { IrisPanelBoundary } from "@/components/iris-panel-boundary"
 import { createStore } from "solid-js/store"
 import { createMediaQuery } from "@solid-primitives/media"
@@ -37,14 +38,14 @@ import { SessionContextUsage } from "@/components/session-context-usage"
 import {
   SessionIrisTab,
   IRIS_SURFACE_CHOICES,
-  requestIrisSurface,
+  useRequestIrisSurface,
   irisStripTabs,
-  irisActiveSurface,
+  useIrisActiveSurface,
   irisPinned,
   toggleIrisPin,
   irisFilesPinned,
+  irisOpensOnAtlas,
   toggleIrisFilesPin,
-  irisScopeChip,
 } from "@/components/session/session-iris-tab"
 
 const reviewTabID = "session-side-panel-review-tab"
@@ -75,6 +76,7 @@ import {
 import { setSessionHandoff } from "@/pages/session/handoff"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { IrisProductIcon } from "@/components/session/iris-product-icon"
+import { needsAttention, surfaceSync, syncLabel } from "@/components/session/iris-surface-store"
 import { SessionFileBrowserTab, type SessionFileBrowserState } from "@/pages/session/v2/session-file-browser-tab"
 
 type ReviewDiff = FileDiffInfo | SnapshotFileDiff | VcsFileDiff
@@ -105,6 +107,11 @@ export function SessionSidePanel(props: {
   size: Sizing
   stacked?: boolean
 }) {
+  // This column's panel (#191484): its product, its project chip, its "show this product".
+  const panelScope = useIrisPanelScope()
+  const requestIrisSurface = useRequestIrisSurface()
+  const irisActiveSurface = useIrisActiveSurface()
+  const irisSurfaceChangedAt = panelScope.surfaceChangedAt
   const layout = useLayout()
   const settings = useSettings()
   const file = useFile()
@@ -130,9 +137,8 @@ export function SessionSidePanel(props: {
   const open = createMemo(() => reviewOpen() || fileOpen())
   const fileTreeWidth = createMemo(() => Math.max(FILE_TREE_WIDTH_MIN, layout.fileTree.width()))
   const reviewTab = createMemo(() => isDesktop())
-  /** The file tree is a pin like the products (#187129); unpinned, it is not in the strip. */
-  const isGitProject = () => props.reviewFirst?.() ?? true
-  const filesPinned = createMemo(() => irisFilesPinned(isGitProject()))
+  /** The file tree is an item in the panel's layout like the products (#187129, #191509). */
+  const filesPinned = createMemo(() => irisFilesPinned())
   const panelWidth = createMemo(() => {
     if (!open()) return "0px"
     if (reviewOpen()) return "auto"
@@ -207,6 +213,7 @@ export function SessionSidePanel(props: {
     hasReview: props.canReview,
     reviewFirst: props.reviewFirst,
     filesPinned,
+    preferIris: irisOpensOnAtlas,
     fileBrowser: () => !!props.fileBrowserState,
   })
   const contextOpen = tabState.contextOpen
@@ -240,7 +247,7 @@ export function SessionSidePanel(props: {
       {/* The file tree is pinned here like any product (#187129). Pinning it also opens it. */}
       <MenuV2.Item
         onSelect={() => {
-          if (!toggleIrisFilesPin(isGitProject())) return
+          if (!toggleIrisFilesPin()) return
           openReviewPanel()
           tabs().setActive("review")
         }}
@@ -275,7 +282,7 @@ export function SessionSidePanel(props: {
   // Keyed by PRODUCT ID (strings), not by fresh objects. Rebuilding the triggers on every product
   // switch made the Tabs component lose its selected trigger for a frame, fall back to the first
   // tab and report it as a choice — measured: Agents → Genesis landed on Review.
-  const productIds = createMemo(() => irisStripTabs().map((t) => t.id as string), undefined, {
+  const productIds = createMemo(() => irisStripTabs(irisActiveSurface()).map((t) => t.id as string), undefined, {
     equals: (a, b) => a.length === b.length && a.every((x, i) => x === b[i]),
   })
   /** The Browser tab (#187864) — only once a link has been opened in it; closable. */
@@ -318,7 +325,11 @@ export function SessionSidePanel(props: {
           {/* The heyiris.io nav's icon for the product, so it reads the same in both places. */}
           <div class="flex items-center gap-1.5">
             <IrisProductIcon id={id} />
-            <div>{irisStripTabs().find((t) => t.id === id)?.label ?? id}</div>
+            <div>{irisStripTabs(irisActiveSurface()).find((t) => t.id === id)?.label ?? id}</div>
+            {/* Showing something that is not current — offline, or the server refused (#190231 phase 2). */}
+            <Show when={needsAttention(surfaceSync(id))}>
+              <span class="iris-tabdot" title={syncLabel(surfaceSync(id), Date.now())?.text} />
+            </Show>
           </div>
         </Tabs.Trigger>
       )}
@@ -331,7 +342,7 @@ export function SessionSidePanel(props: {
    * pinned, and a chip inside it would scroll away exactly when the panel is busiest.
    */
   const ScopeChip = () => (
-    <Show when={activeTab() === "iris" && irisScopeChip()}>
+    <Show when={activeTab() === "iris" && panelScope.chip()}>
       {(chip) => (
         <div class="iris-scopechip" data-testid="iris-scope-chip" data-scope={chip().scope}>
           <Show
@@ -375,6 +386,7 @@ export function SessionSidePanel(props: {
 
   let fileFilter: HTMLInputElement | undefined
   let tabList: HTMLDivElement | undefined
+  let strip: HTMLDivElement | undefined
   const temporaryTab = tabs().preview
   const previewTab = (value: string) => {
     const next = normalizeTab(value)
@@ -388,7 +400,33 @@ export function SessionSidePanel(props: {
     previewTab(SESSION_OPEN_FILE_TAB)
     queueMicrotask(() => fileFilter?.focus())
   }
+  /**
+   * KOBALTE'S FALLBACK IS NOT A CHOICE (#190093). When the strip changes under the value we hold
+   * — a product added because it is shown but not pinned, the strip remounting as the panel
+   * reopens, a product switch committing from its transition — Kobalte can momentarily lose the
+   * selected trigger, select the FIRST trigger and report it through onChange. Taken as a click,
+   * it moved the panel: showing Integrations from a closed panel landed on Files & changes
+   * (traced: onSelectionChange → activateTab("review"), with the Integrations trigger present).
+   *
+   * Its signature, all three: the reported value is the FIRST trigger, it is not the value we hold,
+   * and the selection or the product changed moments ago. A person clicking the first tab within
+   * that moment is the only thing this can swallow. The product's timestamp is written with its
+   * signal (irisSurfaceChangedAt), not by an effect here — effects downstream of a transition wait
+   * for the commit, and the fallback arrives before it.
+   */
+  let heldSince = performance.now() // the strip mounting counts: it remounts as the panel reopens
+  createEffect(on(stripValue, () => (heldSince = performance.now()), { defer: true }))
+  const FALLBACK_WINDOW_MS = 400
+  const looksLikeFallback = (value: string) => {
+    if (value === stripValue()) return false
+    const since = Math.max(heldSince, irisSurfaceChangedAt())
+    if (performance.now() - since > FALLBACK_WINDOW_MS) return false
+    // This panel's own strip: in split view the document's first trigger is another column's (#191780).
+    const first = strip?.querySelector('[data-slot="tabs-trigger"]') ?? null
+    return first?.getAttribute("data-value") === value
+  }
   const activateTab = (value: string) => {
+    if (looksLikeFallback(value)) return
     // A product tab: the IRIS panel, on that product. "iris" itself is never shown as a tab.
     if (value.startsWith("iris:")) return openIrisSurface(value.slice(5))
     const next = normalizeTab(value)
@@ -538,6 +576,7 @@ export function SessionSidePanel(props: {
                             <Tabs.List
                               class="min-w-0 flex-1"
                               ref={(el: HTMLDivElement) => {
+                                strip = el
                                 const stop = createFileTabListSync({ el, contextOpen })
                                 onCleanup(stop)
                               }}
@@ -792,6 +831,7 @@ export function SessionSidePanel(props: {
                           <Tabs.List
                             ref={(el: HTMLDivElement) => {
                               tabList = el
+                              strip = el
                               const stop = createFileTabListSync({ el, contextOpen })
                               onCleanup(stop)
                             }}

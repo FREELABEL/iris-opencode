@@ -793,6 +793,307 @@
   accent-color: var(--text-base);
 }
 
+/* LIVE (#189767). The promise a live board makes has to be visible: a dot that breathes while
+   the board is being watched, and goes quiet when it is not. */
+.iris-atlas-presence {
+  margin-inline-start: auto;
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  font: inherit;
+  color: var(--text-weak);
+  background: var(--background-base);
+  border: 1px solid var(--border-weaker-base);
+  border-radius: 999px;
+  padding: 0 8px 0 7px;
+  cursor: pointer;
+}
+.iris-atlas-presence:hover {
+  color: var(--text-base);
+  background: var(--background-element);
+}
+/* Faces in the pill: solid, not translucent — overlapping translucent circles bleed into each
+   other — and ringed in the pill's own colour so each one reads as separate. */
+.iris-atlas-presence .iris-avatars {
+  margin-inline-start: 0;
+}
+.iris-atlas-presence .iris-avatar {
+  width: 16px;
+  height: 16px;
+  font-size: 7px;
+  letter-spacing: 0;
+  color: var(--text-base);
+  background: color-mix(in srgb, var(--text-base) 12%, var(--background-base));
+  border: 0;
+  box-shadow: 0 0 0 1.5px var(--background-base);
+  margin-inline-start: -2px;
+}
+.iris-atlas-presence .iris-avatar:first-child {
+  margin-inline-start: 0;
+}
+.iris-atlas-presence:hover .iris-avatar {
+  box-shadow: 0 0 0 1.5px var(--background-element);
+}
+.iris-atlas-presence__count {
+  font-variant-numeric: tabular-nums;
+}
+.iris-atlas-live__dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-weaker);
+}
+.iris-atlas-presence[data-state="polling"] .iris-atlas-live__dot,
+.iris-atlas-presence[data-state="instant"] .iris-atlas-live__dot {
+  background: var(--surface-success-strong);
+  animation: iris-live-breathe 2.4s ease-in-out infinite;
+}
+
+/* Atlas › Lists (#189764). A list folds by its header; an empty one starts folded, so it costs
+   one line instead of a section. */
+.iris-atlas-list {
+  margin-bottom: 16px;
+}
+.iris-atlas-list--folded {
+  margin-bottom: 4px;
+}
+.iris-atlas-list__head {
+  appearance: none;
+  border: 0;
+  background: none;
+  font: inherit;
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 8px;
+  text-align: start;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.iris-atlas-list__head:hover {
+  background: var(--background-element);
+}
+.iris-atlas-list__chev {
+  display: inline-block;
+  width: 8px;
+  color: var(--text-weak);
+  transform: rotate(90deg);
+  transition: transform 0.12s ease;
+}
+.iris-atlas-list--folded .iris-atlas-list__chev {
+  transform: none;
+}
+/* A list title is a HEADING, not another row (#189764): larger, heavier and brighter than any
+   card under it. A folded list stays a heading too — it used to dim below the cards, so a board
+   of folded lists read as a page of grey text with no structure. */
+.iris-atlas-list__title {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 20px;
+  font-weight: 700;
+  letter-spacing: -0.005em;
+  color: var(--text-strong);
+}
+.iris-atlas-list--folded .iris-atlas-list__title {
+  color: var(--text-base);
+  font-weight: 650;
+}
+.iris-atlas-list__count {
+  font-size: 10.5px;
+  line-height: 16px;
+  padding: 0 6px;
+  border-radius: 8px;
+  color: var(--text-weak);
+  background: var(--background-element);
+}
+/* The list's cards hang one step in from its title, on a guide line that starts under the
+   chevron — so which list a card belongs to is visible without reading the headings. */
+.iris-atlas-list__items {
+  margin: 2px 0 0 12px;
+  padding-inline-start: 6px;
+  border-inline-start: 1px solid var(--border-weaker-base);
+}
+
+.iris-atlas-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  outline: none;
+}
+.iris-atlas-row:hover,
+.iris-atlas-row:focus-visible {
+  background: var(--background-element);
+}
+.iris-atlas-row:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--border-weak-base);
+}
+.iris-atlas-row__mark {
+  flex-shrink: 0;
+  width: 10px;
+  font-size: 12px;
+  color: var(--text-weak);
+}
+.iris-atlas-row__text {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.iris-atlas-row__title {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-base);
+}
+.iris-atlas-row__preview {
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--text-weaker);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Quick add (#189768). */
+.iris-atlas-list__bar {
+  display: flex;
+  align-items: center;
+}
+.iris-atlas-list__add {
+  appearance: none;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border-radius: 4px;
+  color: var(--text-weaker);
+  cursor: pointer;
+  opacity: 0;
+}
+.iris-atlas-list__bar:hover .iris-atlas-list__add,
+.iris-atlas-list__add:focus-visible {
+  opacity: 1;
+}
+.iris-atlas-list__add:hover {
+  color: var(--text-base);
+  background: var(--background-element);
+}
+.iris-atlas-addcard {
+  appearance: none;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 11px;
+  color: var(--text-weaker);
+  padding: 3px 8px 3px 26px;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: start;
+}
+.iris-atlas-addcard:hover {
+  color: var(--text-base);
+  background: var(--background-element);
+}
+.iris-atlas-addlist {
+  padding-inline-start: 8px;
+  margin: 2px 0 8px;
+}
+.iris-atlas-composer {
+  padding: 3px 8px 6px 26px;
+}
+.iris-atlas-composer input {
+  width: 100%;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-base);
+  background: var(--background-element);
+  border: 1px solid var(--border-weak-base);
+  border-radius: 5px;
+  padding: 5px 8px;
+  outline: none;
+}
+.iris-atlas-composer input:focus {
+  border-color: var(--text-weak);
+}
+.iris-atlas-composer__error {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--text-weak);
+}
+.iris-atlas-row--pending {
+  cursor: default;
+  opacity: 0.55;
+}
+/* A done card reads as done before you find the tick. */
+.iris-atlas-row--done .iris-atlas-row__title {
+  color: var(--text-weaker);
+}
+.iris-atlas-row__meta {
+  flex-shrink: 0;
+}
+.iris-atlas-row__id {
+  appearance: none;
+  border: 0;
+  background: none;
+  padding: 0 2px;
+  flex-shrink: 0;
+  min-width: 7ch;
+  text-align: end;
+  color: var(--text-weaker);
+  cursor: copy;
+  border-radius: 3px;
+}
+.iris-atlas-row__id:hover {
+  color: var(--text-base);
+  background: var(--background-base);
+}
+/* Changed while you were away, or while you watched: a dot beside the time. */
+.iris-atlas-row__changed {
+  flex-shrink: 0;
+  align-self: center;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-interactive-base);
+}
+/* Changed while you watched: the row lights up once and settles — the Trello moment. */
+.iris-atlas-row--live {
+  animation: iris-live-arrive 2.2s ease-out 1;
+}
+@keyframes iris-live-arrive {
+  0% {
+    background: color-mix(in srgb, var(--text-interactive-base) 22%, transparent);
+  }
+  100% {
+    background: transparent;
+  }
+}
+@keyframes iris-live-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .iris-atlas-row--live,
+  .iris-atlas-live__dot {
+    animation: none !important;
+  }
+}
+
 /*
  * The force graph — FULL BLEED.
  *
@@ -1020,6 +1321,40 @@
   align-items: center;
   gap: 2px;
 }
+/* Record a meeting into the card (#190041). Recording must be obvious at a glance. */
+.iris-card__rec {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: 6px;
+  color: var(--text-base);
+}
+.iris-card__rec:hover:not(:disabled) {
+  background: var(--surface-raised-base-hover, var(--surface-base-hover));
+}
+.iris-card__rec[data-phase="recording"] {
+  color: var(--text-danger-base, #e07d7d);
+}
+.iris-card__rec[data-phase="recording"] svg {
+  animation: iris-card-rec-pulse 1.4s ease-in-out infinite;
+}
+.iris-card__rec:disabled {
+  color: var(--text-weak);
+}
+@keyframes iris-card-rec-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+.iris-card__recbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 4px 6px;
+}
 .iris-card__frame {
   display: flex;
   flex-direction: column;
@@ -1243,12 +1578,17 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
 }
 .iris-card__x:hover { color: var(--text-strong); background: var(--background-element); }
 .iris-card__x--armed { color: #f0836a; font-size: 10px; }
+/* The title gets its own line; due date, agent and Add share the next (#189794). */
 .iris-card__addtask {
   display: grid;
   grid-template-columns: 1fr auto auto;
   gap: 6px;
   align-items: center;
   padding-top: 10px;
+}
+.iris-card__addtask > input:not([type="date"]),
+.iris-card__addtask > .iris-card__under {
+  grid-column: 1 / -1;
 }
 .iris-card__addtask select.iris-field__input { max-width: 120px; }
 
@@ -1739,7 +2079,7 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
  * ink), and "Fully automatic" is neutral — only "Needs you" is allowed to shout.
  * Numbers are mono. The strip fills left-to-right once, on the panel's first render only.
  */
-.pbf-list, .pbf-filters, .pbf-detail, .pbf-row, .pbf-legend, .pbf-title {
+.pbf-list, .pbf-filters, .pbf-detail, .pbf-row, .pbf-legend, .pbf-title, .pbf-segctl {
   --pbf-surface: #131312;
   --pbf-surface: light-dark(#f6f5f1, #131312);
   --pbf-card: #1b1b19;
@@ -1772,7 +2112,16 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 .pbf-num { font-family: var(--pbf-mono); font-variant-numeric: tabular-nums; }
 
 /* filters + legend */
-.pbf-filters { display: flex; flex-direction: column; gap: 6px; padding: 6px 8px 4px; }
+.pbf-filters { display: flex; flex-direction: column; gap: 6px; padding: 6px 10px 6px; }
+/* one segmented control for how hands-off (#191697) */
+.pbf-segctl { display: inline-flex; align-self: flex-start; padding: 2px; gap: 2px; border-radius: 8px; background: var(--pbf-card); }
+.pbf-segctl button {
+  appearance: none; font: inherit; font-size: 12px; line-height: 1; cursor: pointer;
+  padding: 6px 10px; border-radius: 6px; border: 0; background: none; color: var(--pbf-ink2);
+}
+.pbf-segctl button:hover { color: var(--pbf-ink); }
+.pbf-segctl button[aria-pressed="true"] { background: var(--pbf-surface); color: var(--pbf-ink); box-shadow: 0 0 0 1px var(--pbf-rule); }
+.pbf-segctl button:focus-visible { outline: 2px solid var(--border-interactive-focus, var(--text-interactive-base)); outline-offset: 1px; }
 .pbf-chips { display: flex; flex-wrap: wrap; gap: 5px; }
 .pbf-chip {
   appearance: none; font: inherit; font-size: 12px; line-height: 1; cursor: pointer;
@@ -1818,26 +2167,30 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   font-size: 11px; font-weight: 500; color: var(--pbf-faint);
 }
 .pbf-row {
-  display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 12px; align-items: center;
-  width: 100%; text-align: start; padding: 10px 8px; cursor: pointer;
+  display: flex; align-items: center; gap: 16px;
+  width: 100%; text-align: start; padding: 11px 10px; cursor: pointer;
   border: 0; border-bottom: 1px solid var(--pbf-rule); background: none; color: inherit; font: inherit;
 }
 .pbf-row:last-child { border-bottom: 0; }
 .pbf-row:hover { background: var(--pbf-card); }
-.pbf-row__main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.pbf-row__title { font-size: 13px; font-weight: 600; line-height: 1.3; color: var(--pbf-ink); }
-.pbf-row--theirs .pbf-row__title { color: var(--pbf-ink); }
-.pbf-row__out {
-  font-size: 11.5px; line-height: 1.45; color: var(--pbf-ink2);
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
-}
-.pbf-row__flow { display: flex; flex-direction: column; align-items: stretch; gap: 6px; min-width: 0; }
-.pbf-row__flow .pbf-row__n { align-self: flex-end; }
-.pbf-row__flow .pbf-strip { flex: none; }
+.pbf-row__main { flex: 1 1 auto; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pbf-row__head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.pbf-row__title { font-size: 13px; font-weight: 500; line-height: 1.35; color: var(--pbf-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* scope and installed: an icon each, the words in the tooltip (#191697) */
+.pbf-row__icon { flex: none; display: inline-flex; align-items: center; color: var(--pbf-faint); cursor: help; }
+.pbf-row__icon:hover { color: var(--pbf-ink); }
+.pbf-row__icon[data-state="installed"] { color: var(--pbf-think); }
+.pbf-row__icon[data-state="update"] { color: var(--pbf-you); }
+.pbf-row__out { font-size: 12px; line-height: 1.4; color: var(--pbf-ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pbf-row__side { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 3px; min-width: 96px; }
 .pbf-row__n { flex: none; font-family: var(--pbf-mono); font-variant-numeric: tabular-nums; font-size: 11px; color: var(--pbf-faint); white-space: nowrap; }
-@container (max-width: 460px) {
-  .pbf-row { grid-template-columns: minmax(0, 1fr); gap: 7px; }
-}
+/* the hands-off indicator: three dots and the word, like a legend */
+.pbf-ind { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--pbf-ink2); white-space: nowrap; }
+.pbf-ind--none { color: var(--pbf-faint); font-size: 11px; }
+.pbf-dots { display: inline-flex; gap: 3px; }
+.pbf-dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--pbf-rule); }
+.pbf-ind[data-tone="auto"] .pbf-dots i.on { background: var(--pbf-think); }
+.pbf-ind[data-tone="you"] .pbf-dots i.on { background: var(--pbf-you); }
 .pbf-none { margin: 0; padding: 14px 8px; font-size: 12px; color: var(--pbf-ink2); }
 .pbf-link { appearance: none; border: 0; background: none; padding: 0; font: inherit; color: var(--text-interactive-base); cursor: pointer; }
 .pbf-link:hover { text-decoration: underline; }
@@ -1924,3 +2277,1879 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 }
 .pbf-actions .pbf-run[data-variant="primary"]:hover:not(:disabled) { background-color: color-mix(in srgb, var(--pbf-ink) 88%, var(--pbf-surface)); }
 .pbf-actions [data-component="button"] { display: inline-flex; align-items: center; gap: 6px; }
+
+/* Atlas › Schemas › Records — sort, filter, export (#189769). */
+.iris-records-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 8px;
+  font-size: 11px;
+  color: var(--text-weaker);
+}
+.iris-records-tools__filter {
+  flex: 1;
+  min-width: 0;
+  max-width: 280px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-base);
+  background: var(--background-element);
+  border: 1px solid var(--border-weaker-base);
+  border-radius: 5px;
+  padding: 3px 8px;
+  outline: none;
+}
+.iris-records-tools__filter:focus {
+  border-color: var(--border-weak-base);
+}
+.iris-records-tools__btn {
+  appearance: none;
+  margin-inline-start: auto;
+  font: inherit;
+  color: var(--text-weak);
+  background: none;
+  border: 1px solid var(--border-weaker-base);
+  border-radius: 5px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.iris-records-tools__btn:hover:not(:disabled) {
+  color: var(--text-base);
+  background: var(--background-element);
+}
+.iris-table__sort {
+  cursor: pointer;
+  user-select: none;
+}
+.iris-table__sort:hover {
+  color: var(--text-base);
+}
+
+/*
+ * Atlas › Board (#189723) — the same lists as columns, side by side, scrolling sideways like
+ * Trello. Columns are fixed-width so a long list and an empty one line up; a card shows where it
+ * will land with a line above the card it is dropped in front of.
+ */
+.iris-board {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 0 8px 12px;
+  scroll-snap-type: x proximity;
+}
+.iris-board__col {
+  flex: 0 0 248px;
+  max-width: 248px;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 220px);
+  background: var(--background-element);
+  border: 1px solid var(--border-weaker-base);
+  border-radius: 8px;
+  scroll-snap-align: start;
+}
+.iris-board__col--over {
+  border-color: var(--border-weak-base);
+}
+.iris-board__head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 8px 10px 6px;
+}
+.iris-board__cards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 40px;
+  padding: 0 6px 8px;
+  overflow-y: auto;
+}
+.iris-board__card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 7px 9px;
+  text-align: start;
+  background: var(--background-base);
+  border: 1px solid var(--border-weaker-base);
+  border-radius: 6px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.iris-board__card[draggable="true"] {
+  cursor: grab;
+}
+.iris-board__card:hover,
+.iris-board__card:focus-visible {
+  border-color: var(--border-weak-base);
+  outline: none;
+}
+.iris-board__card--dragging {
+  opacity: 0.4;
+}
+/* THE DRAG PREVIEW — Elon's ghost: where the card will land, its own height, dashed and
+   breathing; the card itself leaves its old slot so the list closes up behind it. */
+.iris-board__card--source {
+  display: none;
+}
+.iris-board__ghost {
+  --ghost: var(--border-interactive-base, #3b82f6);
+  flex: none;
+  border: 1.5px dashed color-mix(in srgb, var(--ghost) 70%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--ghost) 12%, transparent);
+  animation: iris-ghost-pulse 1.5s ease-in-out infinite;
+}
+@keyframes iris-ghost-pulse {
+  0%,
+  100% {
+    border-color: color-mix(in srgb, var(--ghost) 45%, transparent);
+    background: color-mix(in srgb, var(--ghost) 8%, transparent);
+  }
+  50% {
+    border-color: var(--ghost);
+    background: color-mix(in srgb, var(--ghost) 18%, transparent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .iris-board__ghost {
+    animation: none;
+  }
+}
+.iris-board__meta {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-weak);
+}
+.iris-board__empty {
+  margin: 0;
+  padding: 10px 4px;
+  font-size: 11px;
+  text-align: center;
+  color: var(--text-weak);
+  border: 1px dashed var(--border-weaker-base);
+  border-radius: 6px;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .iris-board__card {
+    transition:
+      border-color 0.12s,
+      opacity 0.12s;
+  }
+}
+
+/* Card faces (#189806) — the same badges in List and Board view. */
+.iris-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 3px;
+}
+.iris-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10.5px;
+  line-height: 16px;
+  padding: 0 6px;
+  border-radius: 4px;
+  color: var(--text-weak);
+  background: var(--background-element);
+  border: 1px solid var(--border-weaker-base);
+  white-space: nowrap;
+}
+.iris-badge--label {
+  color: var(--text-base);
+}
+.iris-badge--loud {
+  color: var(--text-strong);
+  border-color: var(--border-weak-base);
+  font-weight: 600;
+}
+.iris-badge--due[data-due="overdue"] {
+  color: var(--text-on-critical-weak);
+  background: var(--surface-critical-weak);
+  border-color: var(--border-critical-base);
+}
+.iris-badge--due[data-due="soon"] {
+  color: var(--text-on-warning-weak);
+  background: var(--surface-warning-weak);
+  border-color: var(--border-warning-base);
+}
+.iris-badge--complete {
+  color: var(--text-on-success-strong, #fff);
+  background: var(--surface-success-strong);
+  border-color: transparent;
+}
+.iris-avatars {
+  display: inline-flex;
+  margin-inline-start: 2px;
+}
+.iris-avatar {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-strong);
+  background: var(--background-element);
+  border: 1.5px solid var(--background-base);
+  margin-inline-start: -4px;
+}
+.iris-avatar:first-child {
+  margin-inline-start: 0;
+}
+.iris-avatar--agent {
+  border-radius: 5px;
+  color: var(--text-interactive-base);
+}
+.iris-avatar--more {
+  color: var(--text-weak);
+}
+
+/* Card editor: checklist progress (#189794) and assignees (#189796). */
+.iris-card__progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 8px;
+}
+.iris-card__progressbar {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--background-element);
+  overflow: hidden;
+}
+.iris-card__progressbar > span {
+  display: block;
+  height: 100%;
+  background: var(--surface-success-strong);
+  transition: width 0.2s ease;
+}
+.iris-card__under {
+  flex-basis: 100%;
+}
+.iris-card__due {
+  max-width: 140px;
+}
+.iris-card__assignees {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.iris-card__assignee {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.iris-card__assignpick {
+  width: auto;
+  min-width: 140px;
+}
+
+/* Board members (#189795). */
+.iris-members {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 420px;
+}
+.iris-members__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.iris-members__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.iris-members__row .iris-avatar {
+  width: 24px;
+  height: 24px;
+  font-size: 9.5px;
+  margin: 0;
+}
+.iris-members__who {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-base);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.iris-members__perm {
+  width: auto;
+}
+.iris-members__invite {
+  display: flex;
+  gap: 6px;
+}
+.iris-members__invite input {
+  flex: 1;
+}
+
+.iris-card__assignmail {
+  flex: 1 1 160px;
+  min-width: 140px;
+}
+.iris-card__assignmail input {
+  width: 100%;
+}
+
+/* Quick add on the board (#189768). */
+.iris-board__add {
+  padding: 4px 8px;
+  margin-top: 2px;
+  width: 100%;
+}
+.iris-board__composer input {
+  width: 100%;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-base);
+  background: var(--background-element);
+  border: 1px solid var(--border-weak-base);
+  border-radius: 5px;
+  padding: 6px 8px;
+  outline: none;
+}
+.iris-board__composer input:focus {
+  border-color: var(--text-weak);
+}
+.iris-board__card--pending {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* ── Change a card from its face (#189806) ─────────────────────────────── */
+.iris-quick {
+  position: fixed;
+  z-index: 60;
+  width: 280px;
+  max-height: min(420px, calc(100vh - 16px));
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  background: var(--background-base);
+  border: 1px solid var(--border-weak-base, var(--border-weaker-base));
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.22);
+}
+.iris-quick__title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+.iris-quick__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-weak);
+}
+.iris-quick__head kbd {
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  padding: 0 4px;
+  border: 1px solid var(--border-weaker-base);
+  border-radius: 3px;
+  text-transform: none;
+  color: var(--text-weaker, var(--text-weak));
+}
+.iris-quick__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.iris-quick__chip {
+  font-size: 11px;
+  line-height: 20px;
+  padding: 0 8px;
+  border-radius: 4px;
+  color: var(--text-base);
+  background: var(--background-element);
+  border: 1px solid var(--border-weaker-base);
+  cursor: pointer;
+}
+.iris-quick__chip:hover,
+.iris-quick__chip:focus-visible {
+  border-color: var(--text-weak);
+  outline: none;
+}
+.iris-quick__chip[aria-pressed="true"] {
+  color: var(--text-strong);
+  border-color: var(--text-strong);
+  font-weight: 600;
+}
+.iris-quick__chip--quiet {
+  background: transparent;
+  color: var(--text-weak);
+}
+.iris-quick__date {
+  height: 22px;
+  font-size: 11px;
+  max-width: 130px;
+}
+.iris-quick__note {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-critical-base, #d33);
+}
+
+/* ── A card's trail (#189799) ──────────────────────────────────────────── */
+.iris-trail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.iris-trail__row {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-base);
+}
+.iris-trail__meta {
+  display: block;
+  font-size: 10.5px;
+  color: var(--text-weak);
+}
+
+/* ── Files onto a card, and its cover (#189797) ────────────────────────── */
+.iris-board__cover {
+  display: block;
+  width: calc(100% + 18px);
+  margin: -7px -9px 2px;
+  max-height: 120px;
+  object-fit: cover;
+  border-radius: 6px 6px 0 0;
+  background: var(--background-element);
+}
+.iris-card--fileover {
+  outline: 2px dashed var(--text-weak);
+  outline-offset: -2px;
+}
+.iris-card__uploading {
+  font-size: 11px;
+  color: var(--text-weak);
+}
+
+/* ── Notifications (#189799) ───────────────────────────────────────────── */
+.iris-atlas-bell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  color: var(--text-weak);
+  cursor: pointer;
+}
+.iris-atlas-bell:hover,
+.iris-atlas-bell:focus-visible {
+  color: var(--text-strong);
+  background: var(--background-element);
+  outline: none;
+}
+/* The board drew from this machine's copy (#190231 phase 1): "Updating…", or offline. */
+/* The sync chip (#190231 phase 2): what the view on screen is, against the server. Quiet when
+   synced; it only asks for attention when what you see is not current. */
+.iris-sync {
+  height: 22px;
+  padding: 0 8px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--text-weak);
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.iris-sync:hover { background: var(--background-weak); color: var(--text-strong); }
+.iris-sync__dot { width: 6px; height: 6px; border-radius: 50%; background: var(--icon-success-base, var(--text-weak)); }
+.iris-sync[data-state="checking"] .iris-sync__dot { background: var(--text-weak); animation: iris-sync-pulse 1.2s ease-in-out infinite; }
+.iris-sync[data-state="offline"],
+.iris-sync[data-state="error"] {
+  color: var(--text-strong);
+  background: var(--background-weak);
+  box-shadow: inset 0 0 0 1px var(--border-warning-base, var(--border-base));
+}
+.iris-sync[data-state="offline"] .iris-sync__dot,
+.iris-sync[data-state="error"] .iris-sync__dot { background: var(--icon-warning-base, var(--text-strong)); }
+/* An offline edit held for a person (#190537 W3): the chip asks for attention whatever the state. */
+.iris-sync[data-attention] {
+  color: var(--text-strong);
+  background: var(--background-weak);
+  box-shadow: inset 0 0 0 1px var(--border-warning-base, var(--border-base));
+}
+.iris-sync[data-attention] .iris-sync__dot { background: var(--icon-warning-base, var(--text-strong)); animation: none; }
+@keyframes iris-sync-pulse { 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .iris-sync[data-state="checking"] .iris-sync__dot { animation: none; } }
+/* A product tab showing something that is not current (offline, or the server refused). */
+.iris-tabdot { width: 6px; height: 6px; border-radius: 50%; background: var(--icon-warning-base, var(--text-strong)); flex-shrink: 0; }
+.iris-notify {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px 0;
+}
+.iris-notify__row {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 8px;
+  align-items: start;
+  cursor: pointer;
+}
+.iris-notify__row input {
+  margin-top: 2px;
+  cursor: pointer;
+}
+.iris-notify__label {
+  display: block;
+  font-size: 13px;
+  color: var(--text-strong);
+}
+.iris-notify__hint {
+  display: block;
+  font-size: 11.5px;
+  color: var(--text-weak);
+}
+
+/* ── Comments and @mentions (#189799) ──────────────────────────────────── */
+.iris-comment {
+  position: relative;
+  margin-bottom: 10px;
+}
+.iris-comment__mentions {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  z-index: 5;
+  margin: 2px 0 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--background-base);
+  border: 1px solid var(--border-weaker-base);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.18);
+}
+.iris-comment__mentions button {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  text-align: start;
+  color: var(--text-base);
+  cursor: pointer;
+}
+.iris-comment__mentions button:hover,
+.iris-comment__mentions button:focus-visible {
+  background: var(--background-element);
+  outline: none;
+}
+.iris-trail__row--comment > span:last-child {
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--background-element);
+  white-space: pre-wrap;
+}
+
+/* ── The card's facts, at the top (#190269) ─────────────────────────────── */
+/* The IRIS hairline: the brand's gradient, once, across the top of the card. */
+.iris-card__head {
+  position: relative;
+  gap: 10px;
+  padding: 4px 18px 14px;
+}
+.iris-card__head::before {
+  content: "";
+  position: absolute;
+  inset: -2px 18px auto;
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #d946ef, #3b82f6, #22d3ee);
+  opacity: 0.85;
+}
+.iris-card__title {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  padding: 6px 0 2px;
+}
+
+.iris-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.iris-fact {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-weaker-base);
+  background: var(--background-element);
+  color: var(--text-base);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+}
+.iris-fact:hover,
+.iris-fact:focus-within,
+.iris-fact:focus-visible {
+  border-color: var(--text-weak);
+  outline: none;
+}
+.iris-fact__label {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-weak);
+}
+.iris-fact__value {
+  font-weight: 560;
+  color: var(--text-strong);
+  text-transform: capitalize;
+  white-space: nowrap;
+}
+.iris-fact[data-empty] .iris-fact__value {
+  font-weight: 400;
+  color: var(--text-weak);
+  text-transform: none;
+}
+.iris-fact__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 0%, transparent);
+}
+.iris-fact[data-tone="danger"] {
+  border-color: color-mix(in srgb, #ef4444 55%, transparent);
+  background: color-mix(in srgb, #ef4444 12%, var(--background-element));
+}
+.iris-fact[data-tone="warn"] {
+  border-color: color-mix(in srgb, #f59e0b 55%, transparent);
+  background: color-mix(in srgb, #f59e0b 12%, var(--background-element));
+}
+.iris-fact--select {
+  padding-right: 4px;
+}
+.iris-fact__select {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-strong);
+  font: inherit;
+  font-weight: 560;
+  padding: 0 14px 0 0;
+  cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 7px) 55%, calc(100% - 3px) 55%;
+  background-size: 4px 4px;
+  background-repeat: no-repeat;
+}
+.iris-fact__select:focus {
+  outline: none;
+}
+.iris-facts__labels {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-left: 4px;
+}
+.iris-label {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(90deg, #9333ea, #2563eb);
+}
+.iris-label--add {
+  color: var(--text-weak);
+  background: transparent;
+  border: 1px dashed var(--border-weak-base, var(--border-weaker-base));
+  cursor: pointer;
+}
+.iris-label--add:hover:not(:disabled) {
+  color: var(--text-strong);
+  border-color: var(--text-weak);
+}
+.iris-label--add:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Members: faces, not a select. */
+.iris-members2 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+}
+.iris-members2__faces {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.iris-members2__face {
+  position: relative;
+  display: inline-flex;
+}
+.iris-members2__x {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--text-strong);
+  background: var(--background-base);
+  border: 1px solid var(--border-weaker-base);
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 0.12s;
+}
+.iris-members2__face:hover .iris-members2__x,
+.iris-members2__x:focus-visible {
+  opacity: 1;
+}
+.iris-members2__add {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--text-weak);
+  border: 1px dashed var(--border-weak-base, var(--border-weaker-base));
+  background: transparent;
+  cursor: pointer;
+}
+.iris-members2__add:hover:not(:disabled) {
+  color: var(--text-strong);
+  border-color: var(--text-weak);
+}
+.iris-members2__empty {
+  font-size: 12px;
+  color: var(--text-weak);
+  margin-left: 4px;
+}
+.iris-members2__note {
+  font-size: 11.5px;
+  color: var(--text-critical-base, #ef4444);
+}
+.iris-members2__note[data-ok] {
+  color: var(--text-weak);
+}
+.iris-avatar2 {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: 999px;
+  color: #fff;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  box-shadow: 0 0 0 2px var(--background-base);
+  user-select: none;
+}
+.iris-avatar2[data-kind="agent"] {
+  border-radius: 8px;
+}
+
+/* The picker: tick as many as you like. */
+.iris-pick {
+  position: fixed;
+  z-index: 70;
+  width: 320px;
+  max-height: min(420px, calc(100vh - 24px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border-weaker-base);
+  background: var(--background-base);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.28);
+}
+.iris-pick__search {
+  width: 100%;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-weaker-base);
+  background: var(--background-element);
+  color: var(--text-strong);
+  font-size: 12.5px;
+}
+.iris-pick__search:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+.iris-pick__list {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.iris-pick__head {
+  padding: 8px 6px 4px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-weak);
+}
+.iris-pick__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text-base);
+  cursor: pointer;
+}
+.iris-pick__row:hover {
+  background: var(--background-element);
+}
+.iris-pick__row[data-on] .iris-pick__name {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+.iris-pick__row input {
+  accent-color: #3b82f6;
+  cursor: pointer;
+}
+.iris-pick__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.iris-pick__hint {
+  font-size: 11px;
+  color: var(--text-weak);
+}
+.iris-pick__none {
+  padding: 8px 6px;
+}
+.iris-pick__invite {
+  padding-top: 8px;
+  border-top: 1px solid var(--border-weaker-base);
+}
+
+/* ── Card layout, consolidated (#190280 #190281 #190282) ───────────────── */
+.iris-card__crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+/* Members in the top bar: overlapping faces, people round, agents square. */
+.iris-members2[data-compact] {
+  margin-left: 10px;
+  padding-left: 12px;
+  border-left: 1px solid var(--border-weaker-base);
+  gap: 6px;
+}
+.iris-members2[data-compact] .iris-members2__face + .iris-members2__face {
+  margin-left: -3px;
+}
+.iris-members2[data-compact] .iris-members2__faces {
+  gap: 0;
+}
+.iris-members2[data-compact] .iris-members2__add {
+  margin-left: 6px;
+  width: 26px;
+  height: 26px;
+}
+.iris-members2__more {
+  margin-left: -6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-strong);
+  background: var(--background-element);
+  box-shadow: 0 0 0 2px var(--background-base);
+}
+.iris-avatar2 {
+  position: relative;
+}
+.iris-avatar2[data-kind="agent"] {
+  border-radius: 7px;
+}
+.iris-avatar2__spark {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 12px;
+  height: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  font-size: 8px;
+  line-height: 1;
+  color: #fff;
+  background: #22d3ee;
+  box-shadow: 0 0 0 2px var(--background-base);
+}
+
+/* Share, in the window bar. */
+.iris-card__share {
+  height: 26px;
+  padding: 0 10px;
+  margin-right: 4px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-strong);
+  border: 1px solid var(--border-weaker-base);
+  background: var(--background-element);
+  cursor: pointer;
+}
+.iris-card__share:hover,
+.iris-card__share[aria-pressed="true"] {
+  border-color: #3b82f6;
+}
+
+/* Left column: description, checklist, files — one scroll. */
+.iris-card__body {
+  overflow-y: auto;
+  gap: 4px;
+}
+/* A block in the left column (checklist, files): laid out like the sidebar it came from. */
+.iris-card__block {
+  display: block;
+  margin-top: 8px;
+}
+.iris-card__body .iris-card__read {
+  flex: none;
+  overflow: visible;
+  min-height: 2.5em;
+}
+.iris-card__read {
+  border-radius: 6px;
+  padding: 4px 6px;
+  margin: 0 -6px;
+  cursor: text;
+}
+.iris-card__read:hover {
+  background: var(--background-element);
+}
+.iris-card__read:focus-visible {
+  outline: 1px solid #3b82f6;
+}
+.iris-card__editbtn {
+  opacity: 0.6;
+}
+.iris-card__body:hover .iris-card__editbtn {
+  opacity: 1;
+}
+
+/* Right column: one conversation, two faces. */
+.iris-seg {
+  display: inline-flex;
+  margin: 10px 12px 4px;
+  padding: 3px;
+  gap: 2px;
+  border-radius: 999px;
+  border: 1px solid var(--border-weaker-base);
+  background: var(--background-element);
+  align-self: flex-start;
+}
+.iris-seg__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 560;
+  color: var(--text-weak);
+  cursor: pointer;
+}
+.iris-seg__item[aria-selected="true"] {
+  color: #fff;
+  background: linear-gradient(90deg, #9333ea, #2563eb);
+}
+.iris-seg__item[aria-selected="true"] .iris-card__count {
+  color: rgb(255 255 255 / 0.8);
+}
+.iris-card__sidebar-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 12px 4px;
+}
+/* Editing in the left column: room to write, growing with the text. */
+.iris-card__body .iris-card__textarea {
+  flex: none;
+  min-height: 180px;
+  height: auto;
+  field-sizing: content;
+  max-height: 60vh;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.55;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #3b82f6;
+  background: var(--background-element);
+}
+
+/* ── Card editor, Elon's layout (CardEditor.vue) ─────────────────────────────────────────
+   Title in the header row beside who is on the card and an icon cluster; the description fills
+   the left; Details | Tasks | Chat on a ~440px right sidebar. Theme tokens throughout, so light
+   and dark both hold; the one fixed colour is Elon's red accent on the active tab. */
+.iris-card--elon {
+  --iris-elon-accent: #ef4444;
+}
+[data-slot="dialog-container"]:has(> .iris-card--elon) {
+  height: min(85vh, 1100px);
+  width: min(calc(100vw - 32px), 1280px);
+}
+[data-slot="dialog-container"]:has(> .iris-card--elon.iris-card--full) {
+  height: calc(100vh - 12px);
+  width: calc(100vw - 12px);
+}
+.iris-card--elon [data-slot="dialog-header"] {
+  padding: 10px 12px 10px 20px;
+  gap: 12px;
+  border-bottom: 1px solid var(--border-weaker-base);
+}
+.iris-card--elon [data-slot="dialog-title"] {
+  flex: 1;
+  min-width: 0;
+}
+.iris-card__hdr {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+.iris-card__htitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+  color: var(--text-strong);
+  cursor: text;
+  border-bottom: 1px solid transparent;
+}
+.iris-card__htitle:hover { border-bottom-color: var(--border-weaker-base); }
+.iris-card__htitle:focus-visible { outline: none; border-bottom-color: var(--iris-elon-accent); }
+.iris-card--elon .iris-card__title {
+  flex: 1;
+  min-width: 120px;
+  font-size: 20px;
+  font-weight: 500;
+  padding: 0;
+  border-bottom: 1px solid var(--iris-elon-accent);
+}
+.iris-card--elon .iris-members2__add { width: 24px; height: 24px; font-size: 14px; }
+.iris-card--elon .iris-members2[data-compact] .iris-members2__empty { display: none; }
+
+/* The icon cluster: 32px squares, muted, highlighted on hover (Elon L151-410). */
+.iris-card--elon .iris-card__winbtns { gap: 2px; flex-shrink: 0; }
+.iris-ib {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 6px;
+  border-radius: 6px;
+  color: var(--text-weak);
+  background: transparent;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.iris-ib:hover:not(:disabled) { color: var(--text-interactive-base); background: var(--surface-raised-base-hover); }
+.iris-ib[aria-pressed="true"] { color: var(--text-strong); background: var(--surface-raised-base-active); }
+.iris-ib--close:hover:not(:disabled) { color: var(--iris-elon-accent); }
+.iris-card__saved {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  color: #22c55e;
+}
+.iris-card__saved[data-state="unsaved"] { color: var(--text-interactive-base); }
+.iris-card__saved[data-state="saving"] { color: var(--text-interactive-base); animation: iris-card-rec-pulse 1s ease-in-out infinite; }
+.iris-card__saved[data-state="error"] { color: var(--iris-elon-accent); }
+
+/* Body: the document pane. 16px, relaxed, p-6 — Elon's reading size, not a 12px log. */
+.iris-card--elon .iris-card__frame { position: relative; }
+.iris-card--elon .iris-card__cols { border-top: 0; }
+.iris-card--elon .iris-card__body { padding: 0; }
+.iris-card__doc {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.iris-card--elon .iris-card__read {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 24px 28px;
+  font-size: 16px;
+  line-height: 1.65;
+  color: var(--text-base);
+  outline: none;
+}
+.iris-card--elon .iris-card__read p { margin: 0 0 0.85em; }
+.iris-card__fab {
+  position: absolute;
+  top: 14px;
+  right: 18px;
+  z-index: 2;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-strong);
+  background: var(--surface-raised-stronger, var(--background-strong));
+  border: 1px solid var(--border-weak-base);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  opacity: 0;
+  transform: translateY(-2px);
+  transition: opacity 0.15s, transform 0.15s;
+  cursor: pointer;
+}
+.iris-card__doc:hover .iris-card__fab,
+.iris-card__fab:focus-visible { opacity: 1; transform: none; }
+.iris-card__fab:hover { color: var(--text-interactive-base); }
+.iris-card__empty {
+  margin: 24px 28px;
+  text-align: left;
+  font-size: 16px;
+  color: var(--text-weaker);
+  cursor: text;
+}
+.iris-card__bodynote { padding: 8px 28px 0; }
+.iris-card__editwrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.iris-card--elon .iris-card__textarea {
+  flex: 1;
+  min-height: 0;
+  resize: none;
+  border: 0;
+  outline: none;
+  background: transparent;
+  padding: 24px 28px;
+  font-family: var(--font-family-sans);
+  font-size: 16px;
+  line-height: 1.65;
+  color: var(--text-strong);
+}
+.iris-card__editbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px 16px;
+  border-top: 1px solid var(--border-weaker-base);
+}
+.iris-card__editbar > span { margin-inline-end: auto; }
+
+/* Sidebar: 440 / 400 / 360, like Elon's 460 / 400 / 360. */
+.iris-card--elon .iris-card__side {
+  width: 440px;
+  padding-top: 0;
+  background: var(--surface-raised-base, transparent);
+}
+@media (max-width: 1200px) { .iris-card--elon .iris-card__side { width: 400px; } }
+@media (max-width: 1024px) { .iris-card--elon .iris-card__side { width: 360px; } }
+.iris-card--elon .iris-card__sidebody { padding: 4px 16px 16px; }
+
+.iris-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border-weaker-base);
+  flex-shrink: 0;
+}
+.iris-tabs--back { align-items: center; gap: 10px; min-height: 48px; }
+.iris-tabs__title { font-size: 13px; font-weight: 500; color: var(--text-strong); }
+.iris-tabs__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 14px 10px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-weak);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  background: transparent;
+  cursor: pointer;
+}
+.iris-tabs__tab:hover { color: var(--text-strong); }
+.iris-tabs__tab[aria-selected="true"] { color: var(--text-strong); border-bottom-color: var(--iris-elon-accent); }
+.iris-tabs__count {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  padding: 0 6px;
+  border-radius: 999px;
+  color: #93c5fd;
+  background: color-mix(in srgb, #3b82f6 25%, transparent);
+}
+
+/* Sections: icon + sentence-case grey head + tinted count + "+ Add" on the right. */
+.iris-sec { padding: 14px 0 4px; }
+.iris-sec + .iris-sec { border-top: 1px solid var(--border-weaker-base); }
+.iris-sh {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-weak);
+}
+.iris-sh > [data-component="icon"] { color: var(--text-weaker); }
+.iris-sh__count {
+  --tint: #3b82f6;
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  padding: 1px 7px;
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--tint) 75%, var(--text-strong));
+  background: color-mix(in srgb, var(--tint) 22%, transparent);
+}
+.iris-sh__right { margin-inline-start: auto; display: inline-flex; }
+.iris-sh__add {
+  font-size: 12px;
+  font-weight: 500;
+  padding: 3px 9px;
+  border-radius: 6px;
+  color: var(--text-base);
+  background: var(--surface-raised-base-hover);
+  cursor: pointer;
+}
+.iris-sh__add:hover:not(:disabled) { color: var(--text-strong); background: var(--surface-raised-base-active); }
+.iris-sh__add:disabled { cursor: default; color: var(--text-weaker); }
+.iris-sec__none { font-size: 12.5px; color: var(--text-weaker); margin: 0 0 6px; }
+.iris-sec__when { font-size: 11.5px; color: var(--text-weaker); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.iris-sec__more { font-size: 12px; color: var(--text-interactive-base); padding: 4px 0; cursor: pointer; }
+
+/* Assigned list. */
+.iris-members2__list { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.iris-members2__row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--surface-raised-base-hover);
+}
+.iris-members2__name { flex: 1; min-width: 0; font-size: 13px; color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iris-members2__kind { font-size: 11px; color: var(--text-weaker); }
+.iris-members2__rowx { width: 20px; height: 20px; border-radius: 6px; color: var(--text-weaker); cursor: pointer; }
+.iris-members2__rowx:hover:not(:disabled) { color: var(--iris-elon-accent, #ef4444); background: var(--surface-raised-base-active); }
+.iris-members2__faces[data-list] .iris-members2__add {
+  width: auto;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  border-style: dashed;
+}
+.iris-card--elon .iris-sec .iris-members2 { display: block; }
+
+/* Status, Priority, Type, Due, List: Elon's UtilityDropdown buttons, two per row. */
+.iris-dds { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.iris-dd {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-weaker-base);
+  background: var(--surface-raised-base-hover);
+  color: var(--text-weak);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+}
+.iris-dd:hover, .iris-dd:focus-within { border-color: var(--border-weak-base); background: var(--surface-raised-base-active); }
+.iris-dd--wide { grid-column: 1 / -1; }
+.iris-dd__label { font-size: 12px; color: var(--text-weaker); flex-shrink: 0; }
+.iris-dd__value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  color: var(--text-strong);
+  text-transform: capitalize;
+}
+.iris-dd[data-empty] .iris-dd__value { font-weight: 400; color: var(--text-weaker); text-transform: none; }
+.iris-dd__select {
+  flex: 1;
+  min-width: 0;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-weight: 500;
+  color: var(--text-strong);
+  cursor: pointer;
+  outline: none;
+}
+.iris-dd[data-empty] .iris-dd__select { color: var(--text-weaker); font-weight: 400; }
+.iris-dd__select option { color: var(--text-strong); background: var(--background-base); }
+.iris-dd > [data-component="icon"]:last-child { color: var(--text-weaker); flex-shrink: 0; }
+
+/* Labels and attachments: tinted pills (Elon: color+20 background, matching border and text). */
+.iris-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+.iris-pill {
+  --tint: #94a3b8;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 4px 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  color: color-mix(in srgb, var(--tint) 80%, var(--text-strong));
+  background: color-mix(in srgb, var(--tint) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tint) 45%, transparent);
+}
+.iris-pill__x {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  font-size: 13px;
+  line-height: 1;
+  color: inherit;
+  opacity: 0.7;
+  cursor: pointer;
+}
+.iris-pill__x:hover:not(:disabled) { opacity: 1; background: color-mix(in srgb, currentColor 18%, transparent); }
+.iris-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 3px 4px 3px 4px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--text-base);
+  background: var(--surface-raised-base-hover);
+  border: 1px solid var(--border-weaker-base);
+}
+.iris-file__type {
+  font-size: 9.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: #86efac;
+  background: color-mix(in srgb, #22c55e 22%, transparent);
+}
+.iris-file__name { min-width: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: inherit; }
+a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: underline; }
+.iris-file--missing { border-color: color-mix(in srgb, #ef4444 50%, transparent); color: #f0836a; }
+.iris-drop {
+  margin: 8px 0 4px;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px dashed var(--border-weak-base);
+  font-size: 12px;
+  text-align: center;
+  color: var(--text-weaker);
+}
+
+/* Tasks summary (Elon L1427-1494): square checkbox rows, done = struck and dim. */
+.iris-minitasks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.iris-minitask {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: var(--surface-raised-base-hover);
+  font-size: 13px;
+  color: var(--text-base);
+}
+.iris-minitask .iris-card__check { margin: 0; }
+.iris-minitask__text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iris-minitask--done { opacity: 0.55; }
+.iris-minitask--done .iris-minitask__text { text-decoration: line-through; }
+.iris-card--elon .iris-card__row { padding: 6px 0; font-size: 13px; }
+
+/* "More": sharing, list and id, updated — Elon's collapsible at the foot of Details. */
+.iris-more { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500; color: var(--text-weak); cursor: pointer; }
+.iris-more:hover { color: var(--text-strong); }
+.iris-more__facts {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 8px 10px;
+  margin: 12px 0 4px;
+  font-size: 12.5px;
+}
+.iris-more__facts dt { color: var(--text-weaker); }
+.iris-more__facts dd { margin: 0; min-width: 0; color: var(--text-base); }
+
+/* Tasks tab. */
+.iris-card--elon .iris-card__progress { margin: 6px 0 10px; }
+.iris-card--elon .iris-card__task { padding-top: 6px; padding-bottom: 6px; border-radius: 6px; }
+.iris-card--elon .iris-card__task:hover { background: var(--surface-raised-base-hover); }
+.iris-card--elon .iris-card__tasktext { font-size: 13px; }
+
+/* ── One field shell for the whole card: the Details dropdowns' faint fill (#191793) ────────────
+   Alex, 2026-10-29: "I like the faint background on these inputs — that's what I want on the share
+   tab and on the others." Two reasons the Sharing fields read as loose text: .iris-field__input
+   paints var(--background-element), which no theme defines (so: transparent), and its hairline
+   (--border-weaker-base, #202020 in dark) all but vanishes on the card. Inside the card both now
+   come from the same tokens as .iris-dd. */
+.iris-card--elon { --background-element: var(--surface-raised-base-hover); }
+.iris-card--elon .iris-field__input {
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-weaker-base);
+  background-color: var(--surface-raised-base-hover);
+  font-size: 13px;
+  color: var(--text-strong);
+}
+.iris-card--elon .iris-field__input::placeholder { color: var(--text-weaker); }
+.iris-card--elon .iris-field__input:hover { border-color: var(--border-weak-base); }
+.iris-card--elon .iris-field__input:focus { border-color: var(--text-interactive-base); background-color: var(--surface-raised-base-active); }
+.iris-card--elon select.iris-field__input { padding-inline-end: 24px; }
+.iris-card--elon input[type="number"].iris-field__input { appearance: textfield; }
+.iris-card--elon input[type="number"].iris-field__input::-webkit-inner-spin-button,
+.iris-card--elon input[type="number"].iris-field__input::-webkit-outer-spin-button { appearance: none; margin: 0; }
+
+/* A FORM ROW is that shell holding a field and its action: the action sits inside the right end,
+   where a dropdown's chevron sits, so it is never a caption floating at the panel's edge. */
+.iris-card__shell {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  height: 36px;
+  padding-inline-end: 4px;
+  border-radius: 8px;
+  border: 1px solid var(--border-weaker-base);
+  background: var(--surface-raised-base-hover);
+  transition: border-color 0.12s, background 0.12s;
+}
+.iris-card__shell:hover { border-color: var(--border-weak-base); }
+.iris-card__shell:focus-within { border-color: var(--text-interactive-base); background: var(--surface-raised-base-active); }
+.iris-card--elon .iris-card__shell > .iris-field__input {
+  flex: 1;
+  height: 34px;
+  border: 0;
+  border-radius: 8px 0 0 8px;
+  background-color: transparent;
+}
+.iris-card--elon .iris-card__shell > select.iris-field__input {
+  flex: 0 0 auto;
+  width: auto;
+  max-width: 96px;
+  height: 20px;
+  border-radius: 0;
+  border-inline-start: 1px solid var(--border-weak-base);
+  color: var(--text-base);
+}
+.iris-card__act {
+  flex-shrink: 0;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-strong);
+  background: var(--surface-raised-base-active);
+  cursor: pointer;
+}
+.iris-card__act:hover:not(:disabled) { background: var(--border-weak-base); }
+.iris-card__act:disabled { cursor: default; color: var(--text-weaker); background: transparent; }
+.iris-card__act:focus-visible,
+.iris-task__icon:focus-visible,
+.iris-task__state:focus-visible { outline: 2px solid var(--text-interactive-base); outline-offset: 1px; }
+
+/* Sharing. Visibility is the kit's segmented control (kit 1.4.0 entry 06): a 2px inset track,
+   the chosen option on the ground with a hairline. */
+.iris-card--elon .iris-card__seg {
+  padding: 2px;
+  gap: 2px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--surface-raised-base-hover);
+}
+.iris-card--elon .iris-card__segitem { padding: 6px 12px; border-radius: 6px; font-size: 12.5px; }
+.iris-card--elon .iris-card__segitem + .iris-card__segitem { border-inline-start: 0; }
+.iris-card--elon .iris-card__segitem:hover:not(:disabled) { color: var(--text-strong); }
+.iris-card--elon .iris-card__segitem--on { color: var(--text-strong); background: var(--surface-raised-stronger); box-shadow: 0 0 0 1px var(--border-weak-base); }
+.iris-card--elon .iris-card__url {
+  height: 36px;
+  margin-top: 10px;
+  padding: 0 4px 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-weaker-base);
+  background: var(--surface-raised-base-hover);
+  font-size: 12px;
+}
+.iris-card--elon .iris-card__url > :first-child { flex: 1; min-width: 0; color: var(--text-base); }
+.iris-card--elon .iris-card__cmd { margin-top: 0; }
+.iris-card--elon .iris-card__cmd > code { color: var(--text-strong); }
+.iris-card__help { margin: 8px 0 0; font-size: 12px; line-height: 1.5; color: var(--text-weak); }
+.iris-card--elon .iris-card__warn { padding: 6px 10px; border-radius: 8px; }
+.iris-card--elon .iris-card__chips { padding-bottom: 8px; }
+.iris-card--elon .iris-card__rows { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.iris-card--elon .iris-card__row {
+  gap: 9px;
+  padding: 6px 6px 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--surface-raised-base-hover);
+}
+.iris-card--elon .iris-card__row > select.iris-field__input { height: 28px; width: auto; max-width: 96px; }
+
+/* Who can open this card (#191841): one choice in the Details dropdown shell, and on a private
+   card the one action that matters — a link you can hand out. */
+.iris-share__mode { margin-bottom: 0; }
+.iris-share__get {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  height: 36px;
+  margin-top: 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-strong);
+  background: var(--surface-raised-stronger);
+  box-shadow: 0 0 0 1px var(--border-weak-base);
+  cursor: pointer;
+  transition: background 0.12s, box-shadow 0.12s;
+}
+.iris-share__get:hover:not(:disabled) { box-shadow: 0 0 0 1px var(--text-interactive-base); }
+.iris-share__get:disabled { cursor: default; color: var(--text-weaker); }
+.iris-share__get:focus-visible { outline: 2px solid var(--text-interactive-base); outline-offset: 1px; }
+.iris-share__chips { margin-top: 10px; }
+.iris-share__allow { margin-top: 10px; }
+.iris-share__confirm { display: flex; flex-direction: column; gap: 8px; margin: 10px 0 0; font-size: 12px; }
+.iris-share__confirmacts { display: flex; justify-content: flex-end; gap: 6px; }
+.iris-card__act--danger:not(:disabled) { color: #fff; background: #dc2626; }
+.iris-card__act--danger:hover:not(:disabled) { background: #b91c1c; }
+
+/* ── Task rows (#191794) ─────────────────────────────────────────────────────────────────────────
+   A row card per task: a 3px bar for state, always with its word on the second line, so colour is
+   never the only signal (kit 03, rule 01); a Done button where the checkbox was. */
+.iris-tasks__bar { display: block; width: 100%; height: 4px; margin: 0 0 12px; background: var(--surface-raised-base-hover); }
+.iris-card--elon .iris-card__progressbar > span { background: #22c55e; }
+.iris-card--elon .iris-card__addtask {
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 0 0 12px;
+}
+.iris-card--elon .iris-card__addtask > .iris-card__shell,
+.iris-card--elon .iris-card__addtask > .iris-card__under { grid-column: 1 / -1; }
+.iris-card--elon .iris-card__addtask > .iris-field__input { max-width: none; }
+.iris-tasks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.iris-task {
+  --bar: transparent;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px 8px 9px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border-weaker-base);
+  background: var(--surface-raised-base-hover);
+  overflow: hidden;
+}
+.iris-task::before {
+  content: "";
+  position: absolute;
+  inset: 8px auto 8px 0;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--bar);
+}
+.iris-task[data-sub] { padding-block: 7px; }
+.iris-task[data-state="agent"] { --bar: var(--text-interactive-base); }
+.iris-task[data-state="soon"] { --bar: #f59e0b; }
+.iris-task[data-state="overdue"] { --bar: #ef4444; }
+.iris-task[data-state="done"] { --bar: #22c55e; }
+.iris-task__main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.iris-task__title { font-size: 13px; line-height: 1.4; color: var(--text-strong); word-break: break-word; }
+.iris-task[data-state="done"] .iris-task__title { color: var(--text-weak); text-decoration: line-through; }
+.iris-task__sub { display: flex; align-items: center; gap: 8px; min-height: 22px; }
+.iris-task__meta { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 11.5px; color: var(--text-weak); }
+.iris-task__word { font-weight: 500; }
+.iris-task[data-state="agent"] .iris-task__word { color: var(--text-interactive-base); }
+.iris-task[data-state="soon"] .iris-task__word { color: #f59e0b; }
+.iris-task[data-state="overdue"] .iris-task__word { color: #ef4444; }
+.iris-task[data-state="done"] .iris-task__word { color: #22c55e; }
+.iris-task__due { font-family: var(--font-mono, ui-monospace, monospace); font-variant-numeric: tabular-nums; }
+.iris-task__who { display: inline-flex; align-items: center; gap: 5px; }
+.iris-task__acts { display: flex; flex-shrink: 0; gap: 2px; opacity: 0; transition: opacity 0.12s; }
+.iris-task:hover .iris-task__acts,
+.iris-task:focus-within .iris-task__acts,
+.iris-task__acts:has(.iris-task__icon--armed) { opacity: 1; }
+@media (hover: none) { .iris-task__acts { opacity: 1; } }
+.iris-task__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 3px;
+  border-radius: 6px;
+  color: var(--text-weak);
+  cursor: pointer;
+}
+.iris-task__icon:hover:not(:disabled) { color: var(--text-strong); background: var(--surface-raised-base-active); }
+.iris-task__icon--armed,
+.iris-task__icon--armed:hover:not(:disabled) { padding: 0 8px; font-size: 11.5px; font-weight: 500; color: #ef4444; background: color-mix(in srgb, #ef4444 14%, transparent); }
+.iris-task__state {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 28px;
+  padding: 0 10px 0 6px;
+  border-radius: 8px;
+  border: 1px solid var(--border-base);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-base);
+  cursor: pointer;
+}
+.iris-task__state:hover:not(:disabled) { color: var(--text-strong); border-color: var(--text-weak); }
+.iris-task__state[aria-pressed="true"] { border-color: transparent; color: #22c55e; background: color-mix(in srgb, #22c55e 14%, transparent); }
+.iris-task__state:disabled { cursor: default; opacity: 0.6; }
+
+/* Chat: Team | AI, with Elon's colours (green team, blue AI). */
+.iris-card--elon .iris-card__chat { gap: 8px; }
+.iris-subtabs { display: flex; gap: 14px; border-bottom: 1px solid var(--border-weaker-base); flex-shrink: 0; }
+.iris-subtabs__tab {
+  padding: 6px 2px 8px;
+  margin-bottom: -1px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-weak);
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+.iris-subtabs__tab:hover { color: var(--text-strong); }
+.iris-subtabs__tab[aria-selected="true"][data-tone="team"] { color: #4ade80; border-bottom-color: #4ade80; }
+.iris-subtabs__tab[aria-selected="true"][data-tone="ai"] { color: #60a5fa; border-bottom-color: #60a5fa; }
+.iris-thread,
+.iris-card--elon .iris-card__msgs {
+  flex: 1;
+  min-height: 160px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 2px 8px;
+}
+.iris-bubble { display: flex; align-items: flex-start; gap: 8px; max-width: 94%; }
+.iris-bubble--me { align-self: flex-end; flex-direction: row-reverse; }
+.iris-bubble__col { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.iris-bubble--me .iris-bubble__col { align-items: flex-end; }
+.iris-bubble__meta { display: flex; gap: 6px; font-size: 11px; color: var(--text-weaker); }
+.iris-bubble__who { font-weight: 500; color: var(--text-weak); }
+.iris-bubble__text {
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-strong);
+  background: var(--surface-raised-strong, var(--background-strong));
+}
+.iris-bubble__text.iris-markdown { white-space: normal; }
+.iris-bubble--me .iris-bubble__text { color: #fff; background: #2563eb; }
+.iris-event {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  align-self: stretch;
+  font-size: 12px;
+  color: var(--text-weaker);
+  padding: 0 4px;
+}
+.iris-event--group { display: block; }
+.iris-event--group > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  list-style: none;
+  cursor: pointer;
+}
+.iris-event--group > summary::-webkit-details-marker { display: none; }
+.iris-event--group > summary:hover .iris-event__text { color: var(--text-weak); }
+.iris-event__text { flex: 1; min-width: 0; }
+.iris-event__text b { font-weight: 500; color: var(--text-weak); }
+.iris-event__at { flex-shrink: 0; font-size: 11px; color: var(--text-weaker); font-variant-numeric: tabular-nums; }
+.iris-event--group ul { list-style: none; margin: 6px 0 2px 18px; padding: 0 0 0 10px; border-left: 1px solid var(--border-weaker-base); }
+.iris-event--group li { display: flex; gap: 8px; justify-content: space-between; padding: 2px 0; }
+.iris-card--elon .iris-card__compose { border-top: 1px solid var(--border-weaker-base); padding-top: 8px; align-items: end; }
+.iris-card--elon .iris-card__composetext { min-height: 40px; font-size: 13px; }
+.iris-send {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  background: #2563eb;
+  cursor: pointer;
+}
+.iris-send:disabled { cursor: default; opacity: 0.4; }
+.iris-send:hover:not(:disabled) { background: #1d4ed8; }
+.iris-quick[data-only] section[data-quick]:not([data-active]) { display: none; }
+.iris-quick[data-only] { min-width: 240px; }
+
+/* The old left-column rules sized the body for a column it shared with the checklist; in Elon's
+   layout the description owns the pane, so they are undone here. */
+.iris-card--elon .iris-card__body { overflow: hidden; }
+.iris-card--elon .iris-card__body .iris-card__read {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  min-height: 0;
+  margin: 0;
+  border-radius: 0;
+  padding: 24px 28px;
+}
+.iris-card--elon .iris-card__body .iris-card__read:hover { background: transparent; }
+.iris-card--elon .iris-card__body .iris-card__read:focus-visible { outline: none; }
+.iris-card--elon .iris-card__body .iris-card__textarea {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+  max-height: none;
+  field-sizing: fixed;
+  border: 0;
+  border-radius: 0;
+  padding: 24px 28px;
+  font-size: 16px;
+  line-height: 1.65;
+  background: transparent;
+}
+/* Edits made offline (#190537 W3): a card waiting to be sent, and one held for a person. */
+.iris-badge--pending[data-pending="waiting"] {
+  color: var(--text-base);
+  border-style: dashed;
+}
+.iris-badge--pending[data-pending="held"] {
+  color: var(--text-on-warning-weak);
+  background: var(--surface-warning-weak);
+  border-color: var(--border-warning-base);
+  font-weight: 600;
+}
+.iris-held {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 8px 10px;
+}
+.iris-held__item {
+  border: 1px solid var(--border-warning-base, var(--border-base));
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--background-weak);
+}
+.iris-held__card { font-size: 12px; font-weight: 600; color: var(--text-strong); margin: 0 0 2px; }
+.iris-held__msg { font-size: 12px; color: var(--text-base); margin: 0 0 8px; }
+.iris-held__table { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
+.iris-held__table th,
+.iris-held__table td { text-align: left; padding: 4px 6px; border-top: 1px solid var(--border-weaker-base); vertical-align: top; overflow-wrap: anywhere; }
+.iris-held__table thead th { border-top: 0; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--text-weak); }
+.iris-held__table tbody th { width: 22%; color: var(--text-weak); font-weight: 500; }
+.iris-held__actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.iris-held__btn {
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-strong);
+  background: var(--background-element);
+  border: 1px solid var(--border-weak-base);
+  cursor: pointer;
+}
+.iris-held__btn--primary { background: var(--surface-strong, var(--background-element)); font-weight: 600; }
+.iris-held__btn:disabled { opacity: .5; cursor: default; }
+.iris-held__error { font-size: 12px; color: var(--text-on-critical-weak); margin: 0; }

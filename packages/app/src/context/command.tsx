@@ -4,6 +4,7 @@ import { type Accessor, createEffect, createMemo, onCleanup, onMount } from "sol
 import { createStore } from "solid-js/store"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import { useLanguage } from "@/context/language"
+import { useSessionPane } from "@/context/session-pane"
 import { useSettings } from "@/context/settings"
 import { dict as en } from "@/i18n/en"
 import { Persist, persisted } from "@/utils/persist"
@@ -63,8 +64,40 @@ function signature(key: string, ctrl: boolean, meta: boolean, shift: boolean, al
   return `${key}:${mask}`
 }
 
+// Physical keys for the characters a keybind can name. Only consulted while Option/Alt is held.
+const CODE_KEYS: Record<string, string> = {
+  Backslash: "\\",
+  BracketLeft: "[",
+  BracketRight: "]",
+  Semicolon: ";",
+  Quote: "'",
+  Comma: "comma",
+  Period: ".",
+  Slash: "/",
+  Minus: "-",
+  Equal: "=",
+  Backquote: "`",
+  Space: "space",
+}
+
+/**
+ * The key a keybind means, from a keyboard event. On macOS, Option turns a key into another
+ * character — ⌥\ types «, ⌥W types ∑ — so matching on event.key meant no ⌥ shortcut naming a
+ * letter or symbol could ever fire there (⌘⌥\ split right did nothing, #191484). While Alt is
+ * held, the physical key decides. Arrows, Enter, Tab and the like are unaffected.
+ */
+export function eventKey(event: Pick<KeyboardEvent, "key" | "code" | "altKey">) {
+  if (event.altKey && event.code) {
+    if (/^Key[A-Z]$/.test(event.code)) return event.code.slice(3).toLowerCase()
+    if (/^Digit[0-9]$/.test(event.code)) return event.code.slice(5)
+    const mapped = CODE_KEYS[event.code]
+    if (mapped) return mapped
+  }
+  return normalizeKey(event.key)
+}
+
 function signatureFromEvent(event: KeyboardEvent) {
-  return signature(normalizeKey(event.key), event.ctrlKey, event.metaKey, event.shiftKey, event.altKey)
+  return signature(eventKey(event), event.ctrlKey, event.metaKey, event.shiftKey, event.altKey)
 }
 
 const MODIFIER_KEYS = new Set(["control", "meta", "shift", "alt"])
@@ -200,10 +233,10 @@ export function parseKeybind(config: string): Keybind[] {
 }
 
 export function matchKeybind(keybinds: Keybind[], event: KeyboardEvent): boolean {
-  const eventKey = normalizeKey(event.key)
+  const key = eventKey(event)
 
   for (const kb of keybinds) {
-    const keyMatch = kb.key === eventKey
+    const keyMatch = kb.key === key
     const ctrlMatch = kb.ctrl === (event.ctrlKey || false)
     const metaMatch = kb.meta === (event.metaKey || false)
     const shiftMatch = kb.shift === (event.shiftKey || false)
@@ -500,14 +533,24 @@ export const { use: useCommand, provider: CommandProvider } = createSimpleContex
       const id = typeof key === "string" ? key : undefined
       const next = typeof key === "function" ? key : cb
       if (!next) return
-      const options = createMemo(next)
-      const entry: CommandRegistration = {
-        key: id,
-        options,
+      const add = () => {
+        const options = createMemo(next)
+        const entry: CommandRegistration = {
+          key: id,
+          options,
+        }
+        setStore("registrations", (arr) => addCommandRegistration(arr, entry))
+        onCleanup(() => {
+          setStore("registrations", (arr) => arr.filter((x) => x !== entry))
+        })
       }
-      setStore("registrations", (arr) => addCommandRegistration(arr, entry))
-      onCleanup(() => {
-        setStore("registrations", (arr) => arr.filter((x) => x !== entry))
+      // In a split (#191484) every column registers the same screen commands, and the newest
+      // keyed registration wins — so a column that mounted last would own the shortcuts. A
+      // column's commands exist only while it is focused; registering on focus puts it in front.
+      const pane = useSessionPane()
+      if (!pane) return add()
+      createEffect(() => {
+        if (pane.focused()) add()
       })
     }
 

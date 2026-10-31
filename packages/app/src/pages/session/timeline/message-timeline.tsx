@@ -22,6 +22,7 @@ import { Card } from "@opencode-ai/ui/card"
 import {
   ContextToolGroup,
   failedCall,
+  gateSummary,
   Message,
   MessageDivider,
   Part as MessagePart,
@@ -70,6 +71,11 @@ import { shouldMarkBoundaryGesture, normalizeWheelDelta } from "@/pages/session/
 import { SessionContextUsage } from "@/components/session-context-usage"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useLanguage } from "@/context/language"
+import { useSplitActions } from "@/context/split-actions"
+import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
+import { useSessionPane } from "@/context/session-pane"
+import { useSessionLayout } from "@/pages/session/session-layout"
+import { useCommand } from "@/context/command"
 import { useSessionKey } from "@/pages/session/session-layout"
 import { useSessionArchive } from "@/pages/session/session-archive"
 import { useServerSDK } from "@/context/server-sdk"
@@ -274,6 +280,10 @@ export function MessageTimeline(props: {
   const dialog = useDialog()
   const sessionArchive = useSessionArchive()
   const language = useLanguage()
+  const command = useCommand()
+  const splitActions = useSplitActions()
+  const pane = useSessionPane()
+  const paneLayout = useSessionLayout()
   const { params, sessionKey } = useSessionKey()
   const ownerSessionKey = sessionKey()
   const cached = timelineCache.get(ownerSessionKey)
@@ -992,17 +1002,25 @@ export function MessageTimeline(props: {
           .filter((part): part is ToolPart => part?.type === "tool")
       })
       const contextOpenKey = () => `context:${row().group.key}`
+      // Gate's verdict on this turn (#189589): the step-finish parts of the messages in this group.
+      const gate = createMemo(() => {
+        const group = row().group
+        if (group.type !== "context") return undefined
+        const ids = [...new Set(group.refs.map((ref) => ref.messageID))]
+        return gateSummary(ids.flatMap((id) => getMsgParts(id)))
+      })
       // A group holding a failed call opens on its own (#189316) — folding a failure out of sight
       // is how it gets missed. Once the person opens or closes it, their choice wins.
       const open = createMemo(() => {
         const chosen = toolOpen[contextOpenKey()]
         if (chosen !== undefined) return chosen === true
-        return parts().some(failedCall)
+        return parts().some(failedCall) || (gate()?.held ?? 0) > 0
       })
 
       return (
         <ContextToolGroup
           parts={parts()}
+          gate={gate()}
           open={open()}
           onOpenChange={(value) => setToolOpen(contextOpenKey(), value)}
           busy={
@@ -1491,6 +1509,23 @@ export function MessageTimeline(props: {
                       placement="bottom"
                       buttonAppearance={settings.general.newLayoutDesigns() ? "v2" : "default"}
                     />
+                    {/* Each column's own side panel (#191484): the titlebar's one button could only
+                        ever mean the focused column, so in a split every chat carries its own. */}
+                    <Show when={pane && settings.general.newLayoutDesigns()}>
+                      <TooltipV2 class="shrink-0" placement="bottom" value={language.t("command.review.toggle")}>
+                        <IconButtonV2
+                          type="button"
+                          variant="ghost-muted"
+                          size="large"
+                          state={paneLayout.view().reviewPanel.opened() ? "pressed" : undefined}
+                          onClick={() => paneLayout.view().reviewPanel.toggle()}
+                          aria-label={language.t("command.review.toggle")}
+                          aria-expanded={paneLayout.view().reviewPanel.opened()}
+                          data-action="pane-panel-toggle"
+                          icon={<IconV2 name="sidebar-right" />}
+                        />
+                      </TooltipV2>
+                    </Show>
                     <Show when={!parentID()}>
                       <Show
                         when={settings.general.newLayoutDesigns()}
@@ -1613,6 +1648,20 @@ export function MessageTimeline(props: {
                                 }
                               }}
                             >
+                              <Show when={splitActions}>
+                                {(actions) => (
+                                  <>
+                                    <MenuV2.Item
+                                      disabled={!actions().canSplit()}
+                                      shortcut={command.keybind("split.right")}
+                                      onSelect={() => actions().splitRight(id)}
+                                    >
+                                      {language.t("split.right")}
+                                    </MenuV2.Item>
+                                    <MenuV2.Separator />
+                                  </>
+                                )}
+                              </Show>
                               <MenuV2.Item
                                 onSelect={() => {
                                   setTitle("pendingRename", true)

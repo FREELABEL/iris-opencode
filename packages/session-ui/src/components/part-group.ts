@@ -230,3 +230,40 @@ export function commandReportOf(part: ToolPart): { tool: string; command: string
   const command = isShellTool(part) ? trigger.subtitle : [trigger.title, trigger.subtitle].filter(Boolean).join(" ")
   return { tool: part.tool, command: command || part.tool, error, output: outputOf(part) }
 }
+
+/** Constellation Gate's verdict on a turn (#189589), summed over its steps' step-finish parts. */
+export interface GateSummary {
+  scanned: number
+  held: number
+  flagged: number
+  errors: number
+  mode: string
+}
+
+/**
+ * Undefined when no step was screened — a turn Gate never saw shows nothing, not "0 clean".
+ * Takes any part: only step-finish parts carrying `gate` count.
+ */
+export function gateSummary(parts: ReadonlyArray<PartType>): GateSummary | undefined {
+  let out: GateSummary | undefined
+  for (const part of parts) {
+    if (part.type !== "step-finish") continue
+    const g = (part as { gate?: Partial<GateSummary> }).gate
+    if (!g) continue
+    out ??= { scanned: 0, held: 0, flagged: 0, errors: 0, mode: g.mode ?? "shadow" }
+    out.scanned += g.scanned ?? 0
+    out.held += g.held ?? 0
+    out.flagged += g.flagged ?? 0
+    out.errors += g.errors ?? 0
+    if (g.mode === "enforce") out.mode = "enforce"
+  }
+  return out
+}
+
+/** The mark on the fold: one quiet line when clean, the count that matters when not. */
+export function gateMarkText(g: GateSummary): { text: string; tone: "clean" | "held" | "flagged" | "unscanned" } {
+  if (g.held > 0) return { text: `Gate held ${g.held}`, tone: "held" }
+  if (g.flagged > 0) return { text: `Gate flagged ${g.flagged}`, tone: "flagged" }
+  if (g.scanned > 0 && g.errors >= g.scanned) return { text: "Gate unavailable", tone: "unscanned" }
+  return { text: `Gate · ${g.scanned - g.errors} clean`, tone: "clean" }
+}

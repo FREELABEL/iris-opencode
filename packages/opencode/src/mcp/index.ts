@@ -16,6 +16,7 @@ import {
   ToolListChangedNotificationSchema,
 } from "@modelcontextprotocol/sdk/types.js"
 import { Config } from "@/config/config"
+import { Flag } from "@opencode-ai/core/flag/flag"
 import { ConfigMCPV1 } from "@opencode-ai/core/v1/config/mcp"
 import { NamedError } from "@opencode-ai/core/util/error"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
@@ -371,7 +372,9 @@ const layer = Layer.effect(
 
     const create = Effect.fn("MCP.create")(
       function* (key: string, mcp: ConfigMCPV1.Info) {
-        if (mcp.enabled === false) {
+        // Safe mode (#190980) starts no MCP server: a broken one is the likeliest reason the
+        // desktop app had to restart the engine five times.
+        if (mcp.enabled === false || Flag.OPENCODE_SAFE_MODE) {
           return DISABLED_RESULT
         }
 

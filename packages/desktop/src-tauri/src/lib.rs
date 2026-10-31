@@ -1,5 +1,8 @@
 mod accounts;
 mod cli;
+mod deep_link;
+mod engine_auth;
+mod engine_supervisor;
 mod google_signin;
 mod history_home;
 mod login;
@@ -37,6 +40,16 @@ const MAX_LOG_ENTRIES: usize = 200;
 
 #[tauri::command]
 fn kill_sidecar(app: AppHandle) {
+    // Every caller is deliberate — quitting, restarting, or the updater stopping the engine before
+    // it swaps the bundle — so the supervisor must not read the exit as a crash (#190516). The
+    // pause expires: an update that fails to install should not leave the app with no engine.
+    engine_supervisor::pause(Duration::from_secs(120));
+    stop_engine_child(&app);
+}
+
+/// Kill the engine this app started, if any, without touching supervision. The supervisor uses
+/// this before a respawn; `kill_sidecar` uses it after pausing.
+fn stop_engine_child(app: &AppHandle) {
     let Some(server_state) = app.try_state::<ServerState>() else {
         println!("Server not running");
         return;
@@ -52,9 +65,48 @@ fn kill_sidecar(app: AppHandle) {
         return;
     };
 
+    let pid = server_state.pid();
     let _ = server_state.kill();
+    // Withdraw its record now rather than on the exit event: a respawn writes the new one next,
+    // and the old engine's late exit must not be what local clients last saw (#190647).
+    engine_auth::note_stopped(dirs_next_home().as_deref(), pid);
 
     println!("Killed server");
+}
+
+/// The window's credential for the engine this app runs (#190647). An IPC command rather than a
+/// value in the window's initialization script, so only the app's own pages can read it. None
+/// when the app attached to an engine it did not start, which is the old, unauthenticated case.
+#[derive(serde::Serialize)]
+struct EngineCredentials {
+    username: &'static str,
+    password: String,
+}
+
+#[tauri::command]
+fn engine_credentials() -> Option<EngineCredentials> {
+    let password = engine_auth::current_password();
+    // Remembered so a respawn can tell whether the window still holds the right one (#191482).
+    engine_supervisor::note_window_credential(password.clone());
+    password.map(|password| EngineCredentials {
+        username: engine_auth::USERNAME,
+        password,
+    })
+}
+
+/// A line from the window — an uncaught error, an unhandled rejection, or a document load — for
+/// engine.log, which outlives a reload (#191508).
+#[tauri::command]
+fn log_renderer(app: AppHandle, kind: String, message: String) {
+    engine_supervisor::log_line(&app, &engine_supervisor::renderer_line(&kind, &message));
+}
+
+fn set_engine_child(app: &AppHandle, child: CommandChild) {
+    if let Some(state) = app.try_state::<ServerState>() {
+        if let Ok(mut slot) = state.0.lock() {
+            *slot = Some(child);
+        }
+    }
 }
 
 #[tauri::command]
@@ -87,18 +139,21 @@ async fn get_logs(app: AppHandle) -> Result<String, String> {
     Ok(logs.iter().cloned().collect::<Vec<_>>().join(""))
 }
 
-fn get_sidecar_port() -> u32 {
+/// The port from OPENCODE_PORT, when one was given. Only then is an engine already answering on
+/// it one to attach to (#191482).
+fn configured_sidecar_port() -> Option<u32> {
     option_env!("OPENCODE_PORT")
         .map(|s| s.to_string())
         .or_else(|| std::env::var("OPENCODE_PORT").ok())
         .and_then(|port_str| port_str.parse().ok())
-        .unwrap_or_else(|| {
-            TcpListener::bind("127.0.0.1:0")
-                .expect("Failed to bind to find free port")
-                .local_addr()
-                .expect("Failed to get local address")
-                .port()
-        }) as u32
+}
+
+fn free_sidecar_port() -> u32 {
+    TcpListener::bind("127.0.0.1:0")
+        .expect("Failed to bind to find free port")
+        .local_addr()
+        .expect("Failed to get local address")
+        .port() as u32
 }
 
 /// The baseline instruction that tells the agent it is IRIS.
@@ -635,6 +690,10 @@ fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
     #[cfg(not(target_os = "windows"))]
     let cmd = app.shell().sidecar("iris-cli").expect("Failed to resolve iris-cli sidecar");
 
+    // #190647: the engine answered any local process with no credentials. A per-launch password
+    // (engine_auth.rs) and a Host allowlist close it; the window gets the password over IPC.
+    let password = engine_auth::password();
+
     let mut cmd = cmd
         .env("OPENCODE_EXPERIMENTAL_ICON_DISCOVERY", "true")
         .env("OPENCODE_CLIENT", "desktop")
@@ -642,6 +701,22 @@ fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
         .env("IRIS_API_KEY", &iris_api_key)
         .current_dir(&engine_cwd)
         .args(["serve", &format!("--port={port}")]);
+    if let Some(password) = password {
+        cmd = cmd
+            .env("OPENCODE_SERVER_PASSWORD", password)
+            // Explicit: a username inherited from the parent's environment would not match the
+            // one the window and the published record use.
+            .env("OPENCODE_SERVER_USERNAME", engine_auth::USERNAME)
+            .env("OPENCODE_SERVER_ALLOWED_HOSTS", engine_auth::allowed_hosts(port));
+    }
+    // #190980: after a crash loop the supervisor starts the engine once without MCP servers,
+    // external plugins or project config — the things on this machine most likely to crash it.
+    if engine_supervisor::safe_mode() {
+        println!("Starting the engine in safe mode");
+        for (key, value) in engine_supervisor::SAFE_MODE_ENV {
+            cmd = cmd.env(key, value);
+        }
+    }
 
     // #189321: an account other than the first keeps its chat history, provider sign-ins and
     // MCP auth in its own data dir — sessions carry no account id, so a shared dir shows one
@@ -681,6 +756,14 @@ fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
             }
         }
     });
+    // The XDG_DATA_HOME this engine runs with, for the published record: the one set below, else
+    // the inherited one, else the default the engine falls back to (xdg-basedir).
+    let engine_data_home = data_home.clone().or_else(|| {
+        std::env::var_os("XDG_DATA_HOME")
+            .filter(|v| !v.is_empty())
+            .map(std::path::PathBuf::from)
+            .or_else(|| home.as_deref().map(|h| h.join(".local").join("share")))
+    });
     if let Some(data_home) = data_home {
         let _ = std::fs::create_dir_all(&data_home);
         println!("Engine data for this account: {}", data_home.display());
@@ -689,6 +772,20 @@ fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
     }
 
     let (mut rx, child) = cmd.spawn().expect("Failed to spawn opencode");
+    let generation = engine_supervisor::note_spawn(port);
+    let app_for_events = app.clone();
+    let pid = child.pid();
+    if let Some(password) = password {
+        engine_auth::note_started(
+            home.as_deref(),
+            engine_auth::Engine {
+                port: port as u16,
+                pid,
+                password: password.to_string(),
+                data_home: engine_data_home.unwrap_or_default(),
+            },
+        );
+    }
 
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.recv().await {
@@ -696,6 +793,7 @@ fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
                 CommandEvent::Stdout(line_bytes) => {
                     let line = String::from_utf8_lossy(&line_bytes);
                     print!("{line}");
+                    engine_supervisor::log_line(&app_for_events, &format!("[STDOUT] {line}"));
 
                     // Store log in shared state
                     if let Ok(mut logs) = log_state_clone.0.lock() {
@@ -709,6 +807,7 @@ fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
                 CommandEvent::Stderr(line_bytes) => {
                     let line = String::from_utf8_lossy(&line_bytes);
                     eprint!("{line}");
+                    engine_supervisor::log_line(&app_for_events, &format!("[STDERR] {line}"));
 
                     // Store log in shared state
                     if let Ok(mut logs) = log_state_clone.0.lock() {
@@ -718,6 +817,16 @@ fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
                             logs.pop_front();
                         }
                     }
+                }
+                // This arm used to be `_ => {}` — an engine that died after launch was never
+                // noticed, and the window retried a dead process forever (#190516).
+                CommandEvent::Terminated(payload) => {
+                    // Before the supervisor respawns: a record naming a dead engine is withdrawn.
+                    engine_auth::note_stopped(dirs_next_home().as_deref(), pid);
+                    engine_supervisor::on_exit(&app_for_events, generation, payload.code, payload.signal);
+                }
+                CommandEvent::Error(err) => {
+                    engine_supervisor::log_line(&app_for_events, &format!("[ERROR] {err}"));
                 }
                 _ => {}
             }
@@ -842,6 +951,14 @@ pub fn run() {
     let updater_enabled = option_env!("TAURI_SIGNING_PRIVATE_KEY").is_some();
 
     let mut builder = tauri::Builder::default()
+        // FIRST, per the plugin: a second launch (opening an iris:// link while IRIS is running,
+        // on Windows and Linux) must focus this instance, not start another. With the
+        // `deep-link` feature it also forwards that launch's URL to on_open_url below (#190233).
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            deep_link::focus_main(app);
+        }))
+        .plugin(tauri_plugin_deep_link::init())
+        .manage(deep_link::PendingDeepLinks::default())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_window_state::Builder::new().build())
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -854,8 +971,18 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(PinchZoomDisablePlugin)
         .plugin(LinuxMicrophonePlugin)
+        // Every document load of the main window, written to engine.log with the engine's port
+        // and the last missed health probe (#191508). The first is the launch; any later one is a
+        // reload, whatever asked for it (the supervisor, the menu, the page itself, WebKit).
+        .on_page_load(|webview, payload| {
+            if webview.label() == "main" && matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
+                engine_supervisor::note_page_load(webview.app_handle(), payload.url().as_str());
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             kill_sidecar,
+            engine_credentials,
+            log_renderer,
             copy_logs_to_clipboard,
             get_logs,
             install_cli,
@@ -866,10 +993,32 @@ pub fn run() {
             login::open_login_window,
             onboarding::track_onboarding,
             google_signin::google_sign_in,
-            signin_in_app
+            signin_in_app,
+            deep_link::take_deep_links
         ])
         .setup(move |app| {
             let app = app.handle().clone();
+
+            // iris:// links (#190233). Registered before anything can return early, so a link
+            // that launched the app is never lost to a startup branch.
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                // An installer registers the scheme (macOS Info.plist, the NSIS registry entry,
+                // the .deb desktop file). An AppImage or a dev run has no installer, so register
+                // at runtime too; an already-registered scheme makes this a no-op.
+                #[cfg(any(windows, target_os = "linux"))]
+                if let Err(e) = app.deep_link().register_all() {
+                    eprintln!("deep link: could not register iris:// ({e})");
+                }
+                let handle = app.clone();
+                app.deep_link().on_open_url(move |event| {
+                    deep_link::queue(&handle, event.urls().into_iter().map(|u| u.to_string()));
+                });
+                // The link that launched the app, where the platform reports it this way.
+                if let Ok(Some(urls)) = app.deep_link().get_current() {
+                    deep_link::queue(&app, urls.into_iter().map(|u| u.to_string()));
+                }
+            }
 
             // FIRST, before anything tries to start: a translocated app cannot spawn its
             // sidecar, so every later step would fail in a way that looks like a bug in IRIS.
@@ -907,50 +1056,73 @@ pub fn run() {
                   // And that the iris provider exists. Never overwrites an existing one.
                   seed_iris_provider();
 
-                  let port = get_sidecar_port();
+                  let configured_port = configured_sidecar_port();
+                  let mut port = configured_port.unwrap_or_else(free_sidecar_port);
 
-                  let should_spawn_sidecar = !is_server_running(port).await;
+                  // Managed before the first spawn so the supervisor can swap the child later.
+                  app.manage(ServerState(Arc::new(Mutex::new(None))));
 
-                  let child = if should_spawn_sidecar {
-                      let child = spawn_sidecar(&app, port);
+                  // #191482: attach only to a port we were told to use. Something answering on a
+                  // port we just picked as free is not our engine — attaching to it handed the
+                  // window no password, and the window could never reach the engine the
+                  // supervisor later started there. Pick another port instead.
+                  let mut answering = is_server_running(port).await;
+                  for _ in 0..5 {
+                      if configured_port.is_some() || !answering {
+                          break;
+                      }
+                      engine_supervisor::log(&app, &format!("port {port} was free a moment ago but something answers on it now — picking another"));
+                      port = free_sidecar_port();
+                      answering = is_server_running(port).await;
+                  }
+                  let should_spawn_sidecar = !engine_supervisor::should_attach(configured_port.is_some(), answering);
 
+                  if should_spawn_sidecar {
+                      // Ready means /global/health answers, not that the port accepts a
+                      // connection — a hung engine does that too. 30s, then one fresh spawn,
+                      // then the dialog. The old seven-second hard exit tripped on slow
+                      // machines and first launches that copy history (#190516).
                       let timestamp = Instant::now();
-                      loop {
-                          if timestamp.elapsed() > Duration::from_secs(7) {
-                              let res = app.dialog()
-                                .message("Failed to spawn IRIS Server. Copy logs using the button below and send them to the team for assistance.")
-                                .title("Startup Failed")
-                                .buttons(MessageDialogButtons::OkCancelCustom("Copy Logs And Exit".to_string(), "Exit".to_string()))
-                                .blocking_show_with_result();
+                      engine_supervisor::log(&app, &format!("starting the engine on port {port}"));
+                      set_engine_child(&app, spawn_sidecar(&app, port));
+                      let mut ready = engine_supervisor::wait_until_healthy(port, engine_supervisor::READY_BUDGET).await;
+                      if !ready {
+                          eprintln!("Engine did not answer health in {:?} — starting it once more", engine_supervisor::READY_BUDGET);
+                          stop_engine_child(&app);
+                          set_engine_child(&app, spawn_sidecar(&app, port));
+                          ready = engine_supervisor::wait_until_healthy(port, engine_supervisor::READY_BUDGET).await;
+                      }
 
-                              if matches!(&res, MessageDialogResult::Custom(name) if name == "Copy Logs And Exit") {
-                                  match copy_logs_to_clipboard(app.clone()).await {
-                                      Ok(()) => println!("Logs copied to clipboard successfully"),
-                                      Err(e) => println!("Failed to copy logs to clipboard: {}", e),
-                                  }
+                      if !ready {
+                          crate::onboarding::track(&app, "engine.start_failed", None);
+                          let res = app.dialog()
+                            .message("Failed to spawn IRIS Server. Copy logs using the button below and send them to the team for assistance.")
+                            .title("Startup Failed")
+                            .buttons(MessageDialogButtons::OkCancelCustom("Copy Logs And Exit".to_string(), "Exit".to_string()))
+                            .blocking_show_with_result();
+
+                          if matches!(&res, MessageDialogResult::Custom(name) if name == "Copy Logs And Exit") {
+                              match copy_logs_to_clipboard(app.clone()).await {
+                                  Ok(()) => println!("Logs copied to clipboard successfully"),
+                                  Err(e) => println!("Failed to copy logs to clipboard: {}", e),
                               }
-
-                              app.exit(1);
-
-                              return;
                           }
 
-                          tokio::time::sleep(Duration::from_millis(10)).await;
+                          app.exit(1);
 
-                          if is_server_running(port).await {
-                              // give the server a little bit more time to warm up
-                              tokio::time::sleep(Duration::from_millis(10)).await;
-
-                              break;
-                          }
+                          return;
                       }
 
                       println!("Server ready after {:?}", timestamp.elapsed());
-
-                      Some(child)
                   } else {
-                      None
-                  };
+                      engine_supervisor::log(&app, &format!("attached to the engine already on port {port} (OPENCODE_PORT)"));
+                      engine_supervisor::note_attached(port);
+                  }
+
+                  // From here on an exit or a hung engine is respawned, not left for the
+                  // person to discover.
+                  engine_supervisor::arm();
+                  engine_supervisor::start_watchdog(app.clone());
 
                   let primary_monitor = app.primary_monitor().ok().flatten();
                   let size = primary_monitor
@@ -976,12 +1148,14 @@ pub fn run() {
                   {
                       window_builder = window_builder
                           .title_bar_style(tauri::TitleBarStyle::Overlay)
-                          .hidden_title(true);
+                          .hidden_title(true)
+                          // Centre the lights in the app's 36px title bar, which now sits
+                          // flush at the top of the window (#190245). tao keeps each button
+                          // centred `y` points below the top edge.
+                          .traffic_light_position(tauri::LogicalPosition::new(14.0, 18.0));
                   }
 
                   window_builder.build().expect("Failed to create window");
-
-                  app.manage(ServerState(Arc::new(Mutex::new(child))));
               });
             }
 
@@ -1008,6 +1182,7 @@ pub fn run() {
         .run(|app, event| {
             if let RunEvent::Exit = event {
                 println!("Received Exit");
+                engine_supervisor::app_exiting();
 
                 kill_sidecar(app.clone());
             }

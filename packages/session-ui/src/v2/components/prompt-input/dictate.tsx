@@ -5,6 +5,7 @@ import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 import { createDictation, MAX_SECONDS, type DictationControls } from "./dictation"
 import { capProgress, formatClock, waveformBars } from "./dictate-visual"
 import { initialVoice, voiceReducer, type VoiceEvent } from "./voice-mode"
+import { appendFinal, composeLive } from "./live-text"
 import "./dictate.css"
 
 const LANE = { width: 600, height: 10, gap: 1.6 }
@@ -65,7 +66,7 @@ export function PromptInputV2Dictate(props: {
     url: props.url,
     onPartial: (text) => setPartial(text),
     onFinal: (text) => {
-      setFinals((list) => [...list, text])
+      setFinals((list) => appendFinal(list, text))
       setPartial("")
     },
     onError: (message) => {
@@ -187,8 +188,7 @@ export function PromptInputV2Dictate(props: {
   // not vanish while the final transcript is fetched; the insert that follows replaces them.
   const liveText = () => {
     if (!quickLive()) return undefined
-    const text = [...finals(), partial()].join(" ").replace(/\s+/g, " ").trim()
-    return text || undefined
+    return composeLive(finals(), partial()) || undefined
   }
   createEffect(on(liveText, (text) => props.live?.(text)))
   onCleanup(() => props.live?.(undefined))

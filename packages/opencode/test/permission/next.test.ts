@@ -1172,3 +1172,48 @@ it.instance(
     }),
   { git: true },
 )
+
+it.instance(
+  "rejectSession - rejects only that session's pending requests and publishes reject (#191779)",
+  () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2Bridge.Service
+      const permission = yield* Permission.Service
+      const seen: unknown[] = []
+      const off = yield* events.listen((event) => {
+        if (event.type === Permission.Event.Replied.type) seen.push(event.data)
+        return Effect.void
+      })
+      yield* Effect.addFinalizer(() => off)
+
+      const base = { permission: "bash", patterns: ["ls"], metadata: {}, always: [], ruleset: [] }
+      const a = yield* ask({
+        ...base,
+        id: PermissionV1.ID.make("per_abort_a"),
+        sessionID: SessionID.make("ses_a"),
+      }).pipe(Effect.forkScoped)
+      const b = yield* ask({
+        ...base,
+        id: PermissionV1.ID.make("per_abort_b"),
+        sessionID: SessionID.make("ses_b"),
+      }).pipe(Effect.forkScoped)
+      yield* waitForPending(2)
+
+      yield* permission.rejectSession(SessionID.make("ses_a"))
+      const exit = yield* Fiber.await(a)
+      expect(Exit.isFailure(exit) && Cause.squash(exit.cause) instanceof PermissionV1.RejectedError).toBe(true)
+      expect((yield* list()).map((item) => item.id)).toEqual([PermissionV1.ID.make("per_abort_b")])
+      expect(seen).toEqual([
+        { sessionID: SessionID.make("ses_a"), requestID: PermissionV1.ID.make("per_abort_a"), reply: "reject" },
+      ])
+      expect(
+        Exit.isFailure(
+          yield* reply({ requestID: PermissionV1.ID.make("per_abort_a"), reply: "once" }).pipe(Effect.exit),
+        ),
+      ).toBe(true)
+
+      yield* rejectAll()
+      yield* Fiber.await(b)
+    }),
+  { git: true },
+)

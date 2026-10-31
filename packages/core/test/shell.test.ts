@@ -60,8 +60,20 @@ describe("shell", () => {
     const zsh = Shell.args("/bin/zsh", "echo hi", "/tmp")
     expect(zsh[0]).toBe("-l")
     expect(zsh[1]).toBe("-c")
-    expect(zsh.at(-1)).toBe("/tmp")
+    expect(zsh.at(-2)).toBe("/tmp")
+    expect(zsh.at(-1)).toBe("echo hi")
   })
+
+  if (process.platform !== "win32") {
+    test("bash and zsh run the command verbatim: variables expand when it runs, not before (#190530)", async () => {
+      const command = `X=set; for i in 1 2; do printf '%s ' "$X$i"; done; echo "it's $'q'" \`echo ok\``
+      for (const file of ["/bin/bash", "/bin/zsh"]) {
+        if (!(await Bun.file(file).exists())) continue
+        const proc = Bun.spawn([file, ...Shell.args(file, command, "/tmp")], { stdout: "pipe", env: { ...process.env, HOME: "/nonexistent-home" } })
+        expect((await new Response(proc.stdout).text()).trim()).toBe("set1 set2 it's $'q' ok")
+      }
+    })
+  }
 
   if (process.platform === "win32") {
     test("rejects blacklisted shells case-insensitively", async () => {

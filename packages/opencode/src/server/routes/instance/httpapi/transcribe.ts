@@ -5,6 +5,7 @@ import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstab
 import {
   cancelCapture,
   currentLevel,
+  extendCapture,
   ffmpegPath,
   isRecording,
   listInputDevices,
@@ -14,10 +15,11 @@ import {
   resolveCaptureDevice,
   soundSettingsHint,
   startCapture,
+  waitForAudio,
   stopCapture,
 } from "@/transcribe/capture"
 import { ChainError, effectiveEngines, transcribeWithFallback } from "@/transcribe/chain"
-import { hold, listHeld, readHeld, release, type Held } from "@/transcribe/held"
+import { hold, listHeld, readHeld, readHeldMeta, release, type Held } from "@/transcribe/held"
 import { splitWav } from "@/transcribe/segments"
 import { detectSpeech } from "@/transcribe/vad"
 import { openLiveSession, resolveLiveConfig } from "@/transcribe/live"
@@ -158,6 +160,7 @@ async function transcribeHeld(
   filename: string,
   language: string | undefined,
   extra: Record<string, unknown> = {},
+  bloqId?: string,
 ) {
   // No speech, no upload: a take of room noise is answered here, before any paid engine sees it.
   // Nothing worth retrying either, so it is not kept. Fail-open lives inside detectSpeech.
@@ -166,7 +169,7 @@ async function transcribeHeld(
     if (held) release(held.id)
     return HttpServerResponse.jsonUnsafe({ text: "", noSpeech: true, attempts: [], ...extra })
   }
-  const result = await transcribeSegments(audio, filename, language).catch((e: unknown) =>
+  const result = await transcribeSegments(audio, filename, language, bloqId).catch((e: unknown) =>
     e instanceof Error ? e : new TranscribeError(String(e)),
   )
   // Over the platform's size limit: no engine and no retry will take it, so it is not kept.
@@ -206,8 +209,10 @@ async function transcribeHeld(
  * consecutive segments, text joined in order. Any segment failing fails the whole take, so the held
  * recording is kept until every part has a transcript.
  */
-async function transcribeSegments(audio: Uint8Array, filename: string, language: string | undefined) {
-  const remote = readRemoteConfig()
+async function transcribeSegments(audio: Uint8Array, filename: string, language: string | undefined, bloqId?: string) {
+  const configured = readRemoteConfig()
+  // A board named by the caller (an Atlas card's) replaces the person's default for this take only.
+  const remote = configured && bloqId ? { ...configured, bloqId } : configured
   const parts = splitWav(audio)
   if (parts.length === 1) return transcribeWithFallback(audio, { filename, language, remote })
   const results = []
@@ -225,18 +230,38 @@ async function transcribeSegments(audio: Uint8Array, filename: string, language:
 }
 
 /** Holding is the safety net, not a precondition: a full disk must not also block transcription. */
-function holdOrNull(audio: Uint8Array) {
+/** Save a take for later without transcribing it: 202 with `held`, 500 when the disk refused it. */
+function heldOnly(audio: Uint8Array, bloqId?: string) {
+  const held = holdOrNull(audio, bloqId)
+  if (!held) return HttpServerResponse.jsonUnsafe({ error: "The recording could not be saved." }, { status: 500 })
+  return HttpServerResponse.jsonUnsafe({ held: { id: held.id, seconds: held.seconds } }, { status: 202 })
+}
+
+function holdOrNull(audio: Uint8Array, bloqId?: string) {
   try {
-    return hold(audio)
+    return hold(audio, undefined, { bloqId })
   } catch {
     return null
   }
 }
 
+/**
+ * `?bloq_id=` — the board a take is transcribed under (#190041 ADR-01). An Atlas card records under
+ * its own board; the chat composer sends none and keeps the person's default. Malformed is refused,
+ * never replaced by the default: a caller that meant a PHI board must not be quietly judged by another.
+ */
+export function boardParam(url: URL): { ok: true; bloqId?: string } | { ok: false } {
+  const raw = url.searchParams.get("bloq_id")
+  if (raw === null || raw === "") return { ok: true }
+  return /^[0-9]{1,12}$/.test(raw) ? { ok: true, bloqId: raw } : { ok: false }
+}
+
+const badBoard = () => HttpServerResponse.jsonUnsafe({ error: "bloq_id must be a board id (digits)." }, { status: 400 })
+
 export const dictateRoute = HttpRouter.use((router) =>
   Effect.gen(function* () {
     yield* add(router, "POST", "/dictate/start", (request) =>
-      Effect.sync(() => {
+      Effect.promise(async () => {
         try {
           // ?device=<name> is the Settings choice. A mic that is not plugged in records from the
           // default instead of failing the take, and the response says so.
@@ -246,9 +271,15 @@ export const dictateRoute = HttpRouter.use((router) =>
           // ?max_seconds= lifts the 5-minute cap for background recordings; capture.ts bounds it.
           const maxSeconds = Number(params.get("max_seconds")) || undefined
           const { startedAt } = startCapture(device, maxSeconds)
+          // Answer when the microphone is live, not when the recorder was spawned: the composer
+          // shows the ring on this response, and a person talks as soon as they see it (#189875).
+          // A recorder that is slow past the timeout still records; `live` says it was not yet.
+          const live = await waitForAudio(1500)
           return HttpServerResponse.jsonUnsafe({
             recording: true,
             startedAt,
+            live,
+            waitedMs: Date.now() - startedAt,
             device: requested ? { requested, found: device !== undefined } : undefined,
           })
         } catch (e) {
@@ -257,9 +288,12 @@ export const dictateRoute = HttpRouter.use((router) =>
       }),
     )
 
-    yield* add(router, "POST", "/dictate/stop", () =>
+    yield* add(router, "POST", "/dictate/stop", (request) =>
       Effect.tryPromise({
         try: async () => {
+          const board = boardParam(new URL(request.url, "http://localhost"))
+          // Refused BEFORE stopping: the take keeps recording, and the caller can stop it properly.
+          if (!board.ok) return badBoard()
           const { audio, ms, input } = await stopCapture()
 
           // Speech models answer silence with a confident "You". Refusing here means a dead input
@@ -277,12 +311,49 @@ export const dictateRoute = HttpRouter.use((router) =>
 
           // `capture` names which process recorded this. The two capture paths fail in completely
           // different ways and a transcript alone cannot tell you which one ran.
-          return transcribeHeld(holdOrNull(audio), audio, "dictation.wav", undefined, { ms, peak, capture: "sidecar", input })
+          return transcribeHeld(
+            holdOrNull(audio, board.bloqId),
+            audio,
+            "dictation.wav",
+            undefined,
+            { ms, peak, capture: "sidecar", input },
+            board.bloqId,
+          )
         },
         catch: (e) => (e instanceof TranscribeError ? e : new TranscribeError(String(e))),
       }).pipe(
         Effect.catch((e) => Effect.succeed(HttpServerResponse.jsonUnsafe({ error: e.message }, { status: 500 }))),
       ),
+    )
+
+    // Stop the sidecar take and SAVE it, transcribing nothing: what the composer does when it is
+    // torn down mid-take, instead of cancelling (#189520). Silence is not kept.
+    yield* add(router, "POST", "/dictate/hold", (request) =>
+      Effect.tryPromise({
+        try: async () => {
+          const board = boardParam(new URL(request.url, "http://localhost"))
+          if (!board.ok) return badBoard()
+          const { audio } = await stopCapture()
+          if (peakAmplitude(audio) < 0.01) return HttpServerResponse.jsonUnsafe({ held: undefined })
+          return heldOnly(audio, board.bloqId)
+        },
+        catch: (e) => (e instanceof TranscribeError ? e : new TranscribeError(String(e))),
+      }).pipe(
+        Effect.catch((e) => Effect.succeed(HttpServerResponse.jsonUnsafe({ error: e.message }, { status: 409 }))),
+      ),
+    )
+
+    // "Keep recording": lift the running sidecar take to ?max_seconds= (capture.ts bounds it).
+    // 409 when nothing is recording, or the take already reached its cap.
+    yield* add(router, "POST", "/dictate/extend", (request) =>
+      Effect.sync(() => {
+        const maxSeconds = Number(new URL(request.url, "http://localhost").searchParams.get("max_seconds"))
+        if (!Number.isFinite(maxSeconds) || maxSeconds <= 0)
+          return HttpServerResponse.jsonUnsafe({ error: "max_seconds is required" }, { status: 400 })
+        return extendCapture(maxSeconds)
+          ? HttpServerResponse.jsonUnsafe({ recording: true, maxSeconds })
+          : HttpServerResponse.jsonUnsafe({ error: "Not recording." }, { status: 409 })
+      }),
     )
 
     yield* add(router, "POST", "/dictate/cancel", () =>
@@ -430,6 +501,8 @@ export const transcribeRoute = HttpRouter.use((router) =>
     yield* add(router, "POST", "/transcribe", (request) =>
       Effect.gen(function* () {
         const url = new URL(request.url, "http://localhost")
+        const board = boardParam(url)
+        if (!board.ok) return badBoard()
 
         // Collect the raw body. Effect gives the request as a byte stream; there is no
         // Content-Length to trust on a chunked upload from MediaRecorder.
@@ -461,12 +534,19 @@ export const transcribeRoute = HttpRouter.use((router) =>
           offset += c.byteLength
         }
 
+        // ?hold=1: save it and transcribe nothing. The composer sends a take this way when it is
+        // torn down mid-recording (a new session, another project), so the take waits in the
+        // held list with Retry instead of being thrown away (#189520).
+        if (url.searchParams.get("hold") === "1") return heldOnly(audio, board.bloqId)
+
         return yield* Effect.promise(() =>
           transcribeHeld(
-            holdOrNull(audio),
+            holdOrNull(audio, board.bloqId),
             audio,
             url.searchParams.get("filename") ?? "dictation.wav",
             url.searchParams.get("language") ?? undefined,
+            {},
+            board.bloqId,
           ),
         )
       }),
@@ -485,7 +565,9 @@ export const transcribeRoute = HttpRouter.use((router) =>
         if (!audio)
           return HttpServerResponse.jsonUnsafe({ error: "That recording is no longer saved." }, { status: 404 })
         const held = listHeld().find((h) => h.id === id) ?? { id, bytes: audio.byteLength, seconds: 0, createdAt: 0 }
-        return yield* Effect.promise(() => transcribeHeld(held, audio, "dictation.wav", undefined, { id }))
+        // The board it was RECORDED under, not one the retry names: a retry cannot move a take.
+        const { bloqId } = readHeldMeta(id)
+        return yield* Effect.promise(() => transcribeHeld(held, audio, "dictation.wav", undefined, { id }, bloqId))
       }),
     )
 

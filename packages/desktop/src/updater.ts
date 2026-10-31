@@ -8,6 +8,15 @@ import { type as ostype } from "@tauri-apps/plugin-os"
 import { opencodeGlobal } from "./opencode-global"
 import { Store } from "@tauri-apps/plugin-store"
 import { decideUpdate, type UpdateMode } from "./update-policy"
+import { newestToInstall } from "./update-pick"
+
+/**
+ * #190091 — no system dialog for an update. When the app is mounted, a downloaded update is handed
+ * to its updater state and the app shows its own corner toast ("Update available · Install and
+ * restart / Not yet"). Registered by createUpdaterPlatform(); until then (the first seconds of a
+ * launch) runUpdater falls back to the old dialog rather than losing the update.
+ */
+let announceReady: ((update: Update) => void) | undefined
 
 export const UPDATER_ENABLED = opencodeGlobal().updaterEnabled ?? false
 
@@ -184,6 +193,11 @@ export async function runUpdater({
     return
   }
 
+  if (announceReady) {
+    announceReady(update)
+    return
+  }
+
   const shouldUpdate = await ask(
     `Version ${update.version} of IRIS has been downloaded, would you like to install it and relaunch?`,
     { title: "Update Downloaded" },
@@ -257,8 +271,26 @@ export function createUpdaterPlatform(): UpdaterPlatform {
     return setState({ status: "ready", version: update.version })
   }
 
+  // The shell's startup / 6-hourly / menu checks hand their download here instead of a dialog.
+  announceReady = (update) => {
+    pending = update
+    setState({ status: "ready", version: update.version })
+  }
+
   const doInstall = async (): Promise<void> => {
     if (!pending) return
+    // Straight to the newest (#190091): if the feed names a newer version than the one we
+    // downloaded, fetch that one instead of installing a version that is already behind.
+    try {
+      const latest = await check()
+      if (latest && newestToInstall(pending.version, latest.version) === "latest") {
+        setState({ status: "downloading", version: latest.version })
+        await latest.download()
+        pending = latest
+      }
+    } catch {
+      // The feed is unreachable: install what we already have — never block on a second check.
+    }
     setState({ status: "installing", version: pending.version })
     try {
       // Windows holds a lock on the running sidecar; the installer fails if it is alive.
@@ -275,6 +307,12 @@ export function createUpdaterPlatform(): UpdaterPlatform {
     state,
     check: doCheck,
     install: doInstall,
+    // "Not yet" on the toast: remember the version, so the background checks stop offering it.
+    decline: async () => {
+      const s = state()
+      if (s.status === "ready") await setDeclined(s.version)
+      setState({ status: "idle" })
+    },
     mode,
     setMode: async (next: UpdateMode) => {
       setModeSignal(next)

@@ -29,12 +29,14 @@ import {
   skillsOf,
   stageStates,
   taskStatusWord,
+  highlightLine,
+  runArgs,
+  missingRequired,
   topFix,
   type Doctor,
   type HiveNodeRow,
   type ScriptRow,
-  type TaskView,
-} from "./iris-hive-scripts-model"
+  type TaskView, plugged } from "./iris-hive-scripts-model"
 
 // #188817 — every rule the Scripts tab draws from, over a REAL snapshot of account #193 on
 // 2026-10-09 (27 scripts, 17 doctor verdicts, 6 node records, one real run of console-demo).
@@ -303,4 +305,63 @@ describe("find · sort · page", () => {
     expect(readSort("name")).toBe("name")
     expect(readSort("junk")).toBe("recent")
   })
+})
+
+// #189589 — a run Constellation Gate held has not been sent; "Queued" would read as on its way.
+test("a held run reads as waiting for approval, not queued", () => {
+  const held = { id: "t1", status: "awaiting_approval", terminal: false, stdout: "", stderr: "", exitCode: null, exitCodeSource: null, error: null, nodeName: null, durationMs: null, held: true } as any
+  expect(taskStatusWord(held)).toBe("Waiting for your approval")
+})
+
+describe("highlightLine (script view colour)", () => {
+  const kinds = (line: string, lang: "python" | "bash" | "js") =>
+    highlightLine(line, lang).filter((t) => t.k).map((t) => `${t.k}:${t.t}`)
+
+  test("the iris header is its own colour — it decides where the script runs", () => {
+    expect(highlightLine("# iris: requires=bluetooth,python3", "python")).toEqual([{ t: "# iris: requires=bluetooth,python3", k: "dir" }])
+  })
+
+  test("python: keywords, calls, strings, numbers, trailing comment", () => {
+    expect(kinds('def hop(n=2): print("up", 1)  # go', "python")).toEqual(["kw:def", "fn:hop", "num:2", "fn:print", 'str:"up"', "num:1", "com:# go"])
+  })
+
+  test("a # inside a string is not a comment", () => {
+    expect(kinds('x = "a # b"', "python")).toEqual(['str:"a # b"'])
+  })
+
+  test("bash: variables and keywords; $# is a variable, not a comment", () => {
+    expect(kinds('if [ $# -gt 0 ]; then echo "$HOME"; fi', "bash")).toEqual(["kw:if", "var:$#", "num:0", "kw:then", "kw:echo", 'str:"$HOME"', "kw:fi"])
+  })
+
+  test("the text is never changed, only wrapped", () => {
+    const line = 'VENV = os.path.expanduser("~/.iris/venvs/mambo")'
+    expect(highlightLine(line, "python").map((t) => t.t).join("")).toBe(line)
+  })
+})
+
+describe("script settings (#189589)", () => {
+  const h = parseHeader("#!/bin/sh\n# iris: arg=mode default=status choices=status|hop|spin\n# iris: arg=note\n# iris: arg=fixture required\necho\n")
+
+  test("choices= makes a pick-list", () => {
+    expect(h.args[0]).toMatchObject({ name: "mode", default: "status", choices: ["status", "hop", "spin"] })
+    expect(h.args[1].choices).toBeUndefined()
+  })
+
+  test("a run sends picked values, else defaults; empty optional settings are left out", () => {
+    expect(runArgs(h.args, { mode: "hop", fixture: "case-1" })).toEqual({ mode: "hop", fixture: "case-1" })
+    expect(runArgs(h.args, { fixture: "x" })).toEqual({ mode: "status", fixture: "x" })
+  })
+
+  test("Run names the required settings that are still empty", () => {
+    expect(missingRequired(h.args, {})).toEqual(["fixture"])
+    expect(missingRequired(h.args, { fixture: "a" })).toEqual([])
+  })
+})
+
+// #189589 — the card names a plugged-in webcam; the laptop's own camera is not news.
+test("plugged names external cameras only", () => {
+  const base = { id: "1", name: "mac", online: true, lastHeartbeat: null }
+  expect(plugged({ ...base, cameras: ["FaceTime HD Camera", "OBSBOT Tiny Camera"] })).toEqual(["OBSBOT Tiny Camera"])
+  expect(plugged({ ...base, cameras: ["FaceTime HD Camera"] })).toEqual([])
+  expect(plugged({ ...base })).toEqual([])
 })
