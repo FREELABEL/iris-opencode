@@ -11,8 +11,8 @@
 export const UPGRADE_EVENTS = ["upgrade.prompted", "upgrade.opened", "upgrade.checkout_started"] as const
 export type UpgradeEvent = (typeof UPGRADE_EVENTS)[number]
 
-/** Where the ask came from. `prompted` uses out / almost / refused; `opened` uses pill / dock / settings. */
-export type UpgradeSource = "out" | "almost" | "refused" | "pill" | "dock" | "settings"
+/** Where the ask came from. `prompted` uses out / almost / refused; `opened` uses pill / dock / settings / menu. */
+export type UpgradeSource = "out" | "almost" | "refused" | "pill" | "dock" | "settings" | "menu"
 
 type Post = (path: string, init?: RequestInit) => Promise<unknown>
 

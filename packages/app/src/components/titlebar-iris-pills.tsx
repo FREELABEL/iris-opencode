@@ -17,7 +17,8 @@ import { useServer } from "@/context/server"
 import { usePlatform } from "@/context/platform"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useTitlebarRightMount } from "./titlebar"
-import { DialogUpgrade } from "./dialog-upgrade"
+import { useCommand } from "@/context/command"
+import { DialogUpgrade, plansDialogCopy } from "./dialog-upgrade"
 import { parseIrisLink } from "@/utils/iris-deep-link"
 import { showToast } from "@/utils/toast"
 import { trackPromptedOnce } from "@/utils/upgrade-funnel"
@@ -266,6 +267,28 @@ export function TitlebarIrisPills() {
   })
   const [plan] = createResource<PlanState | undefined, Key>(planKey, poll<PlanState>("/iris/plan"))
   const badge = createMemo(() => planBadge(plan()))
+  const showPlans = (source: "pill" | "menu") => {
+    const state = plan()
+    const copy = plansDialogCopy(state?.measured ? state.paid : undefined)
+    dialog.show(() => (
+      <DialogUpgrade
+        source={source}
+        title={copy.title}
+        description={copy.description}
+        fetchJson={async <T,>(path: string, init?: RequestInit) => (await (await doFetch(path, init)).json()) as T}
+      />
+    ))
+  }
+  // Also from IRIS > "IRIS Plans…" in the app menu (desktop menu.ts) and the command palette (#189544).
+  const command = useCommand()
+  command.register("iris-plans", () => [
+    {
+      id: "plans.open",
+      title: "IRIS Plans",
+      category: "IRIS",
+      onSelect: () => showPlans("menu"),
+    },
+  ])
   // The pill turning amber or red IS the ask (#190373): record it, once per kind per app run.
   createEffect(() => {
     const tone = badge().tone
@@ -390,16 +413,7 @@ export function TitlebarIrisPills() {
                   data-slot="iris-plan-pill"
                   data-tone={b().tone}
                   class={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium leading-4 transition-colors ${BADGE_CLASS[b().tone]}`}
-                  onClick={() =>
-                    dialog.show(() => (
-                      <DialogUpgrade
-                        source="pill"
-                        fetchJson={async <T,>(path: string, init?: RequestInit) =>
-                          (await (await doFetch(path, init)).json()) as T
-                        }
-                      />
-                    ))
-                  }
+                  onClick={() => showPlans("pill")}
                 >
                   {b().text}
                 </button>

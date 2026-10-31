@@ -91,6 +91,12 @@ export async function createMenu() {
             action: () => irisAction("auth-whoami", "IRIS Account"),
             text: "Who Am I Logged In As",
           }),
+          // The plans, for paid accounts too — they had no way to see them (#189544). The app owns
+          // the dialog, so the shell asks for it by event, like Settings above.
+          await MenuItem.new({
+            text: "IRIS Plans…",
+            action: () => window.dispatchEvent(new CustomEvent("iris:native-command", { detail: "plans.open" })),
+          }),
           await PredefinedMenuItem.new({
             item: "Separator",
           }),
