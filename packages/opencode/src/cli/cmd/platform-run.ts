@@ -309,13 +309,25 @@ async function buildComposioConnectionState(
 // Param parsing — key=value pairs into typed object
 // ============================================================================
 
-function parseParams(raw: string[]): Record<string, unknown> {
+/**
+ * Take off quotes that wrap the WHOLE value, and only those. This stripped a leading and a trailing
+ * quote separately, so query='from:a OR "b c"' reached Gmail as `from:a OR "b c` and
+ * query='"a b" OR "c d"' as `a b" OR "c d`: not the search that was typed (#191935).
+ */
+export function stripWrappingQuotes(val: string): string {
+  const q = val[0]
+  if (val.length < 2 || (q !== '"' && q !== "'") || val[val.length - 1] !== q) return val
+  const inner = val.slice(1, -1)
+  return inner.includes(q) ? val : inner
+}
+
+export function parseParams(raw: string[]): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const p of raw) {
     if (!p.includes("=")) continue
     const eq = p.indexOf("=")
     const key = p.slice(0, eq)
-    let val: unknown = p.slice(eq + 1).replace(/^["']|["']$/g, "")
+    let val: unknown = stripWrappingQuotes(p.slice(eq + 1))
     if (typeof val === "string") {
       if (/^-?\d+$/.test(val)) val = parseInt(val, 10)
       else if (/^-?\d*\.\d+$/.test(val)) val = parseFloat(val)
@@ -712,6 +724,16 @@ export function accountLine(result: any): string | null {
   return `↳ ${who}${a.integration_id ? ` (#${a.integration_id})` : ""} · from ${os.hostname()}`
 }
 
+/** One line per attendee: name, email, response. Both the server's and Google's field names. */
+export function attendeeLines(attendees: unknown): string[] {
+  if (!Array.isArray(attendees)) return []
+  return attendees.map((a: any) => {
+    const name = a?.name ?? a?.displayName ?? a?.display_name
+    const response = a?.response_status ?? a?.responseStatus ?? a?.response
+    return [name, a?.email].filter(Boolean).join(" · ") + (response ? ` (${response})` : "") + (a?.organizer ? " organizer" : "")
+  })
+}
+
 function displayArrayItems(items: any[], indent = "    "): void {
   for (const item of items.slice(0, 25)) {
     if (typeof item === "object" && item !== null) {
@@ -724,6 +746,7 @@ function displayArrayItems(items: any[], indent = "    "): void {
       const startTime = typeof rawStart === "string" ? rawStart : (rawStart?.dateTime ?? rawStart?.date ?? item.start_time ?? "")
       const timeLabel = startTime ? dim(` ${startTime}`) : ""
       console.log(`${indent}${bold(String(label))}${id}${timeLabel}${type ? `  ${dim(type)}` : ""}`)
+      for (const line of attendeeLines(item.attendees)) console.log(`${indent}  ${dim(line)}`)
     } else {
       console.log(`${indent}${item}`)
     }
@@ -914,6 +937,8 @@ function displayResult(result: any, name: string): void {
   console.log(`  ${success("✓")} ${bold(name)} completed`)
   for (const [k, v] of Object.entries(result ?? {})) {
     if (k === "success" || k === "status") continue
+    // Calendar answers both `events` and the provider's raw data.items; print the list once.
+    if (k === "data" && Array.isArray(result?.events)) continue
     if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") {
       console.log(`  ${dim(k + ":")} ${v}`)
     } else if (Array.isArray(v)) {
@@ -2450,6 +2475,7 @@ const ExecCommand = cmd({
         if (who) console.log(dim(`  ${who}`))
         if (result?._account?.notice) console.log(dim(`  ${result._account.notice}`))
         if (result?.hint) prompts.log.warn(String(result.hint))
+        for (const w of Array.isArray(result?._warnings) ? result._warnings : []) prompts.log.warn(String(w))
         if (isFailedResult(result)) {
           process.exitCode = 1
           if (result?.available_functions) {

@@ -4,7 +4,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { printDivider, dim, bold, success, writeJson } from "./iris-api"
 import { mailComposeOptions, collectArgs, runComposedSend } from "./platform-mail"
-import { getToken, getLabels, listMessages, searchMessages, getThread, lastError, setGmailAccount, lastGmailAccount, nextPageToken } from "../lib/gmail"
+import { getToken, getLabels, listMessages, searchMessages, getThread, lastError, setGmailAccount, lastGmailAccount, nextPageToken, searchFailure } from "../lib/gmail"
 
 async function requireToken(): Promise<string | null> {
   const token = await getToken()
@@ -60,6 +60,7 @@ const GmailInboxCommand = cmd({
       const messages = await listMessages(token, args.query as string, args.limit as number, { pageToken: (args as any)["page-token"], all: Boolean((args as any).all) })
 
       if (sp) sp.stop(`${messages.length} message(s)`)
+      reportStoppedEarly()
 
       // --json with nothing found is an empty array, not prose (#189395).
       if (!messages.length && args.json) { await writeJson([]); return }
@@ -192,6 +193,8 @@ const GmailSearchCommand = cmd({
 
       if (sp) sp.stop(`${messages.length} result(s)`)
 
+      reportStoppedEarly()
+
       // --json with nothing found is an empty array, not prose (#189395).
       if (!messages.length && args.json) { await writeJson([]); return }
       if (!messages.length) {
@@ -309,7 +312,15 @@ function moreHint(json: boolean): void {
   if (!json) console.log(dim(`  ${line}`))
 }
 
-export function printMailboxLine(): void {
+export /** Some results and then a failure: they still print, and the command fails so it can't pass as complete. */
+function reportStoppedEarly(): void {
+  const stopped = searchFailure()
+  if (!stopped) return
+  process.exitCode = 1
+  process.stderr.write(`Gmail stopped early, so these results are incomplete: ${stopped}\n`)
+}
+
+function printMailboxLine(): void {
   const a = lastGmailAccount()
   if (!a) return
   const who = a.account ?? `connection #${a.integration_id}`
