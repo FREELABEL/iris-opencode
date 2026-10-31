@@ -7,7 +7,8 @@ mock.module("../cmd/iris-api", () => ({
   irisFetch: async () => new Response(JSON.stringify(reply.body), { status: reply.status }),
 }))
 
-const { getMessageById } = await import("./gmail")
+const gmail = await import("./gmail")
+const { getMessageById } = gmail
 
 // #189385 — every failure used to come back as null, which the command prints as "not found".
 describe("getMessageById", () => {
@@ -37,5 +38,33 @@ describe("getMessageById with the backend's empty id (#189389)", () => {
   test("an empty object is still not found", async () => {
     reply = { status: 200, body: { success: true, data: { success: true, email: {} } } }
     expect(await getMessageById("", "abc")).toBeNull()
+  })
+})
+
+// #191935: a search that failed partway must not read as "no replies".
+describe("searchMessages when a page fails", () => {
+  const { searchMessages, searchFailure } = gmail
+
+  test("nothing found yet and then a failure throws instead of answering empty", async () => {
+    reply = { status: 200, body: { success: true, partial: true, error_after_page: "Upstream_PayloadTooLarge", data: { messages: [] } } }
+    await expect(searchMessages("", "(a OR b)", 5)).rejects.toThrow(/Upstream_PayloadTooLarge/)
+  })
+
+  test("some results and then a failure keeps the results and records why it stopped", async () => {
+    reply = { status: 200, body: { success: true, partial: true, error_after_page: "boom", data: { messages: [{ messageId: "1", subject: "s" }] } } }
+    const found = await searchMessages("", "(a OR b)", 1)
+    expect(found.length).toBe(1)
+    expect(searchFailure()).toBe("boom")
+  })
+
+  test("a clean search clears the record, and a real empty result stays empty", async () => {
+    reply = { status: 200, body: { success: true, data: { messages: [] } } }
+    expect(await searchMessages("", "(a OR b)", 5)).toEqual([])
+    expect(searchFailure()).toBeNull()
+  })
+
+  test("a failed search fails", async () => {
+    reply = { status: 200, body: { success: false, error: "denied" } }
+    await expect(searchMessages("", "(a OR b)", 5)).rejects.toThrow(/denied/)
   })
 })

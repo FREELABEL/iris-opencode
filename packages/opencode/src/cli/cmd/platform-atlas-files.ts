@@ -65,7 +65,7 @@ function sha256(buf: Buffer | Uint8Array): string {
   return createHash("sha256").update(buf).digest("hex")
 }
 
-async function listFiles(userId: number, bloqId: number): Promise<{ ok: true; files: AtlasFile[] } | { ok: false; error: string }> {
+export async function listBloqFiles(userId: number, bloqId: number): Promise<{ ok: true; files: AtlasFile[] } | { ok: false; error: string }> {
   const res = await irisFetch(`/api/v1/user/${userId}/bloqs/files?bloq_id=${bloqId}`)
   if (!res.ok) {
     // Say WHICH failure this was. An empty body on a 404 (#182023) is otherwise
@@ -74,6 +74,35 @@ async function listFiles(userId: number, bloqId: number): Promise<{ ok: true; fi
     return { ok: false, error: `listing failed: HTTP ${res.status}${body && body !== '{ "message": "" }' ? ` — ${body.slice(0, 200)}` : " with an empty body"}` }
   }
   return { ok: true, files: normalizeFileList(await res.json()) }
+}
+
+/** Upload one file and confirm it by reading the stored bytes back. No read-back, no success. */
+export async function uploadFileVerified(
+  userId: number,
+  bloqId: number,
+  path: string,
+): Promise<{ ok: true; id: number; url: string } | { ok: false; error: string }> {
+  const buf = await readFile(path)
+  const form = new FormData()
+  form.append("file", new Blob([new Uint8Array(buf)], { type: path.endsWith(".json") ? "application/json" : undefined }), basename(path))
+  form.append("user_id", String(userId))
+  form.append("bloq_id", String(bloqId))
+  const res = await irisFetch(`/api/v1/bloqs/files/upload`, { method: "POST", body: form })
+  const text = await res.text()
+  if (!res.ok) return { ok: false, error: `HTTP ${res.status}: ${text.trim().slice(0, 200) || "(empty body)"}` }
+  let json: any = null
+  try {
+    json = JSON.parse(text)
+  } catch {
+    return { ok: false, error: "the upload response was not JSON" }
+  }
+  const file = json?.data ?? json?.file ?? json
+  const url = file?.url ?? file?.cdn_url ?? file?.public_url
+  if (!url) return { ok: false, error: "the server returned no URL, so the upload cannot be verified" }
+  const dl = await fetch(String(url))
+  if (!dl.ok) return { ok: false, error: `read-back failed: HTTP ${dl.status}` }
+  if (sha256(Buffer.from(await dl.arrayBuffer())) !== sha256(buf)) return { ok: false, error: "stored bytes differ from the local file" }
+  return { ok: true, id: Number(file?.id), url: String(url) }
 }
 
 const ListCommand = cmd({
@@ -90,7 +119,7 @@ const ListCommand = cmd({
     if (!userId) process.exit(1)
     const bloqId = Number(argv["bloq-id"])
 
-    const r = await listFiles(userId, bloqId)
+    const r = await listBloqFiles(userId, bloqId)
     if (!r.ok) {
       if (argv.json) await writeJson({ ok: false, error: r.error })
       else console.error(`\n  ${bold("COULD NOT LIST")}  ${r.error}\n`)
@@ -247,7 +276,7 @@ const DownloadCommand = cmd({
     if (!userId) process.exit(1)
     const bloqId = Number(argv["bloq-id"])
 
-    const r = await listFiles(userId, bloqId)
+    const r = await listBloqFiles(userId, bloqId)
     if (!r.ok) {
       if (argv.json) await writeJson({ ok: false, error: r.error })
       else console.error(`\n  ${bold("COULD NOT LIST")}  ${r.error}\n`)

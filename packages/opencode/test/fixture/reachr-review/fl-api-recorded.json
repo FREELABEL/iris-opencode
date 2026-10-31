@@ -1,0 +1,73 @@
+{
+  "_recorded": "Real fl-api responses, captured from tests/Feature/Reachr/ReachrReviewContractTest on branch wt/191987-approve-not-send with fake mail. Re-record if the shape changes.",
+  "pending": {
+    "success": true,
+    "data": [
+      {
+        "id": 787,
+        "subject": "Monday note",
+        "status": "pending_approval",
+        "to_email": "recipient@example.com",
+        "to_name": "Recipient",
+        "lead": {
+          "id": 924,
+          "nickname": "lead_6ae63f95cf22b"
+        },
+        "requester": {
+          "id": 959,
+          "name": null
+        },
+        "created_at": "2026-10-31T19:20:53.000000Z",
+        "expires_at": "2026-11-01T19:20:53.000000Z",
+        "is_expired": false,
+        "preview": "Hello there"
+      }
+    ],
+    "count": 1
+  },
+  "approve": {
+    "success": true,
+    "message": "Email approved. It has not been sent.",
+    "data": {
+      "id": 787,
+      "status": "approved"
+    }
+  },
+  "approved": {
+    "success": true,
+    "data": [
+      {
+        "id": 787,
+        "subject": "Monday note",
+        "status": "approved",
+        "to_email": "recipient@example.com",
+        "to_name": "Recipient",
+        "lead": {
+          "id": 924,
+          "nickname": "lead_6ae63f95cf22b"
+        },
+        "requester": {
+          "id": 959,
+          "name": null
+        },
+        "created_at": "2026-10-31T19:20:53.000000Z",
+        "expires_at": "2026-11-01T19:20:53.000000Z",
+        "is_expired": false,
+        "preview": "Hello there"
+      }
+    ],
+    "count": 1
+  },
+  "send": {
+    "success": true,
+    "message": "Email sent",
+    "data": {
+      "id": 787,
+      "status": "sent"
+    }
+  },
+  "send_again": {
+    "success": false,
+    "error": "Message #787 can't be sent (status: sent)"
+  }
+}
