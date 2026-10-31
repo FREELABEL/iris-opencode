@@ -9974,7 +9974,7 @@
       "describe": "Apple Mail — search/read, and send via the comms router so it lands in the log",
       "aliases": [],
       "run": "iris mail",
-      "haystack": "mail apple mail — search/read, and send via the comms router so it lands in the log search read send reply accounts audit email emails e-mail my email outlook"
+      "haystack": "mail apple mail — search/read, and send via the comms router so it lands in the log search inbox read send reply accounts audit email emails e-mail my email outlook"
     },
     {
       "kind": "command",
@@ -9994,11 +9994,19 @@
     },
     {
       "kind": "command",
+      "name": "mail inbox",
+      "describe": "list recent mail from everyone, people separated from automated alerts",
+      "aliases": [],
+      "run": "iris mail inbox",
+      "haystack": "mail inbox list ls list recent mail from everyone, people separated from automated alerts days last n days limit max messages to fetch (the bridge caps at 200) subject only subjects containing this people only mail written by a person alerts only automated alerts and feeds json"
+    },
+    {
+      "kind": "command",
       "name": "mail read",
-      "describe": "read the latest email from a sender (full body)",
+      "describe": "read one email in full — by its id (from `iris mail inbox`), or the latest from a sender",
       "aliases": [],
       "run": "iris mail read <query>",
-      "haystack": "mail read read the latest email from a sender (full body) subject filter by subject days search last n days max-body max body chars save-attachments download attachments to temp dir json"
+      "haystack": "mail read read one email in full — by its id (from `iris mail inbox`), or the latest from a sender subject filter by subject days search last n days max-body max body chars save-attachments download attachments to temp dir json"
     },
     {
       "kind": "command",
@@ -10011,10 +10019,10 @@
     {
       "kind": "command",
       "name": "mail search",
-      "describe": "search Apple Mail by sender name or email",
+      "describe": "search Apple Mail by sender name or email (omit it to search everyone — see also: iris mail inbox)",
       "aliases": [],
-      "run": "iris mail search <query>",
-      "haystack": "mail search find search apple mail by sender name or email subject filter by subject days search last n days limit max results full include full email body (up to 10000 chars) max-body max body chars (use with --full) attachments list attachments on each email json"
+      "run": "iris mail search [query]",
+      "haystack": "mail search find search apple mail by sender name or email (omit it to search everyone — see also: iris mail inbox) subject filter by subject days search last n days limit max results full include full email body (up to 10000 chars) max-body max body chars (use with --full) attachments list attachments on each email json"
     },
     {
       "kind": "command",
