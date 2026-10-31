@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { allowanceLine, seatCapLine, usageLines } from "../../src/cli/cmd/licence"
+import { monthlyAllowanceLine, seatCapLine, usageLines } from "../../src/cli/cmd/licence"
 
 describe("licence usage view (#191945)", () => {
   const usage = {
@@ -39,7 +39,7 @@ describe("licence usage view (#191945)", () => {
 
 describe("licence allowance wording (#191941)", () => {
   test("says the allowance is monthly and shared", () => {
-    expect(allowanceLine(5000, 4)).toBe("$50.00 per month, shared by 4 seat(s)")
+    expect(monthlyAllowanceLine(5000, 4)).toBe("$50.00 per month, shared by 4 seat(s)")
   })
 
   test("no cap reads as none, not as zero", () => {

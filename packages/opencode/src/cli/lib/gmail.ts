@@ -218,7 +218,22 @@ export async function gmailExec(action: string, params: Record<string, unknown>)
     throw new Error(String(data?.error ?? data?.message ?? "Gmail request failed."))
   }
 
+  // Composio answered one page and then failed on the next (#190573): success:true with a hole in
+  // it. Unwrapping `data` below drops the flag, so a search stopped early read as a finished one,
+  // and "stopped before anything was found" read as "no replies" (#191935).
+  if (data?.error_after_page) {
+    const reason = String(data.error_after_page)
+    if (extractMessages(data?.data ?? data).length === 0) throw new Error(`Gmail search failed: ${reason}`)
+    lastSearchFailure = reason
+  }
+
   return data?.data ?? data?.result ?? data
+}
+
+let lastSearchFailure: string | null = null
+/** Why the last listing stopped early, with results in hand. null = it finished. */
+export function searchFailure(): string | null {
+  return lastSearchFailure
 }
 
 // ── Labels ──
@@ -267,6 +282,7 @@ export async function listMessages(
   const want = opts.all ? ALL_CAP : Math.max(1, Math.min(limit, opts.all ? ALL_CAP : PAGE_MAX))
   const out: GmailMessage[] = []
   let token: string | null = opts.pageToken ?? null
+  lastSearchFailure = null
   do {
     const params: Record<string, unknown> = { query: query || "in:inbox", max_results: Math.min(PAGE_MAX, want - out.length) }
     if (token) params.page_token = String(token)
