@@ -192,6 +192,7 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.options": "Mikrofoni- ja tallennusasetukset",
   "ui.promptInput.dictate.release": "Lopeta päästämällä irti",
   "ui.promptInput.dictate.held": "Pidätetty",
+  "ui.promptInput.dictate.displaced": "Tätä ei voitu lisätä viestiisi. Mitään ei kadonnut.",
   "ui.promptInput.dictate.keep": "Jatka tallennusta",
   "ui.promptInput.dictate.keepHint": "Jatka tallennusta taustalla",
   "ui.promptInput.dictate.background.start": "Aloita taustatallennus",

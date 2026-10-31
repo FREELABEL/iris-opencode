@@ -138,6 +138,7 @@ export const dict = {
   "ui.promptInput.dictate.options": "Opcje mikrofonu i nagrywania",
   "ui.promptInput.dictate.release": "Puść, aby zatrzymać",
   "ui.promptInput.dictate.held": "Wstrzymane",
+  "ui.promptInput.dictate.displaced": "Nie udało się dodać tego do wiadomości. Nic nie zostało utracone.",
   "ui.promptInput.dictate.keep": "Nagrywaj dalej",
   "ui.promptInput.dictate.keepHint": "Nagrywaj dalej w tle",
   "ui.promptInput.dictate.background.start": "Rozpocznij nagrywanie w tle",

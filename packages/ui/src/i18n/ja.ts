@@ -129,6 +129,7 @@ export const dict = {
   "ui.promptInput.dictate.options": "マイクと録音のオプション",
   "ui.promptInput.dictate.release": "離すと停止",
   "ui.promptInput.dictate.held": "保留中",
+  "ui.promptInput.dictate.displaced": "メッセージに追加できませんでした。内容は失われていません。",
   "ui.promptInput.dictate.keep": "録音を続ける",
   "ui.promptInput.dictate.keepHint": "バックグラウンドで録音を続ける",
   "ui.promptInput.dictate.background.start": "バックグラウンド録音を開始",

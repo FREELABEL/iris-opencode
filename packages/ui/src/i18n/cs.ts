@@ -133,6 +133,7 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.options": "Možnosti mikrofonu a nahrávání",
   "ui.promptInput.dictate.release": "Uvolněním zastavíte",
   "ui.promptInput.dictate.held": "Pozdrženo",
+  "ui.promptInput.dictate.displaced": "Tento text se nepodařilo přidat do zprávy. Nic se neztratilo.",
   "ui.promptInput.dictate.keep": "Pokračovat v nahrávání",
   "ui.promptInput.dictate.keepHint": "Pokračovat v nahrávání na pozadí",
   "ui.promptInput.dictate.background.start": "Spustit nahrávání na pozadí",

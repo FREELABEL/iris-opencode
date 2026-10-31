@@ -125,6 +125,7 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.options": "Valkostir hljóðnema og upptöku",
   "ui.promptInput.dictate.release": "Slepptu til að stöðva",
   "ui.promptInput.dictate.held": "Í bið",
+  "ui.promptInput.dictate.displaced": "Ekki tókst að bæta þessu við skilaboðin þín. Ekkert glataðist.",
   "ui.promptInput.dictate.keep": "Halda upptöku áfram",
   "ui.promptInput.dictate.keepHint": "Halda upptöku áfram í bakgrunni",
   "ui.promptInput.dictate.background.start": "Hefja upptöku í bakgrunni",

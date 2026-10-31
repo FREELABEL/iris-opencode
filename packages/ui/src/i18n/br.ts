@@ -134,6 +134,7 @@ export const dict = {
   "ui.promptInput.dictate.options": "Opções de microfone e gravação",
   "ui.promptInput.dictate.release": "Solte para parar",
   "ui.promptInput.dictate.held": "Retida",
+  "ui.promptInput.dictate.displaced": "N'eus ket bet gallet ouzhpennañ an dra-se d'ho kemennadenn. Netra n'eo bet kollet.",
   "ui.promptInput.dictate.keep": "Continuar gravando",
   "ui.promptInput.dictate.keepHint": "Continuar gravando em segundo plano",
   "ui.promptInput.dictate.background.start": "Iniciar gravação em segundo plano",

@@ -126,6 +126,7 @@ export const dict = {
   "ui.promptInput.dictate.options": "ជម្រើសមីក្រូហ្វូន និងការថត",
   "ui.promptInput.dictate.release": "លែងដើម្បីបញ្ឈប់",
   "ui.promptInput.dictate.held": "បានរក្សាទុកមួយឡែក",
+  "ui.promptInput.dictate.displaced": "មិនអាចបន្ថែមវាទៅក្នុងសាររបស់អ្នកបានទេ។ គ្មានអ្វីបាត់បង់ទេ។",
   "ui.promptInput.dictate.keep": "បន្តថត",
   "ui.promptInput.dictate.keepHint": "បន្តថតនៅផ្ទៃខាងក្រោយ",
   "ui.promptInput.dictate.background.start": "ចាប់ផ្ដើមថតនៅផ្ទៃខាងក្រោយ",

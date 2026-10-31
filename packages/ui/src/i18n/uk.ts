@@ -145,6 +145,7 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.options": "Параметри мікрофона та запису",
   "ui.promptInput.dictate.release": "Відпустіть, щоб зупинити",
   "ui.promptInput.dictate.held": "Відкладено",
+  "ui.promptInput.dictate.displaced": "Не вдалося додати це до повідомлення. Нічого не втрачено.",
   "ui.promptInput.dictate.keep": "Продовжити запис",
   "ui.promptInput.dictate.keepHint": "Продовжити запис у фоновому режимі",
   "ui.promptInput.dictate.background.start": "Почати фоновий запис",

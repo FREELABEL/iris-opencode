@@ -146,6 +146,7 @@ export const dict = {
   "ui.promptInput.dictate.options": "خيارات الميكروفون والتسجيل",
   "ui.promptInput.dictate.release": "اترك للإيقاف",
   "ui.promptInput.dictate.held": "محتجز",
+  "ui.promptInput.dictate.displaced": "تعذّرت إضافة هذا إلى رسالتك. لم يضع شيء.",
   "ui.promptInput.dictate.keep": "متابعة التسجيل",
   "ui.promptInput.dictate.keepHint": "متابعة التسجيل في الخلفية",
   "ui.promptInput.dictate.background.start": "بدء التسجيل في الخلفية",

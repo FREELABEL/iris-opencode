@@ -125,6 +125,7 @@ export const dict = {
   "ui.promptInput.dictate.options": "Опции за микрофона и записа",
   "ui.promptInput.dictate.release": "Пуснете, за да спрете",
   "ui.promptInput.dictate.held": "Задържано",
+  "ui.promptInput.dictate.displaced": "Това не можа да се добави към съобщението ви. Нищо не е загубено.",
   "ui.promptInput.dictate.keep": "Продължи записа",
   "ui.promptInput.dictate.keepHint": "Продължи записа във фонов режим",
   "ui.promptInput.dictate.background.start": "Започни фонов запис",

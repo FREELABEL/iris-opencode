@@ -136,6 +136,7 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.options": "Opsi mikrofon dan perekaman",
   "ui.promptInput.dictate.release": "Lepaskan untuk berhenti",
   "ui.promptInput.dictate.held": "Ditahan",
+  "ui.promptInput.dictate.displaced": "Ini tidak dapat ditambahkan ke pesan Anda. Tidak ada yang hilang.",
   "ui.promptInput.dictate.keep": "Lanjutkan merekam",
   "ui.promptInput.dictate.keepHint": "Lanjutkan merekam di latar belakang",
   "ui.promptInput.dictate.background.start": "Mulai perekaman latar belakang",

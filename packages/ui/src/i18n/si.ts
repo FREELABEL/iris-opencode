@@ -125,6 +125,7 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.options": "මයික්‍රෆෝන සහ පටිගත කිරීමේ විකල්ප",
   "ui.promptInput.dictate.release": "නැවැත්වීමට අතහරින්න",
   "ui.promptInput.dictate.held": "රඳවා ඇත",
+  "ui.promptInput.dictate.displaced": "මෙය ඔබගේ පණිවිඩයට එක් කළ නොහැකි විය. කිසිවක් නැති වී නැත.",
   "ui.promptInput.dictate.keep": "දිගටම පටිගත කරන්න",
   "ui.promptInput.dictate.keepHint": "පසුබිමේ දිගටම පටිගත කරන්න",
   "ui.promptInput.dictate.background.start": "පසුබිම් පටිගත කිරීම අරඹන්න",

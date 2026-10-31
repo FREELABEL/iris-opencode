@@ -125,6 +125,7 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.options": "Խոսափողի և ձայնագրման ընտրանքներ",
   "ui.promptInput.dictate.release": "Բաց թողեք՝ դադարեցնելու համար",
   "ui.promptInput.dictate.held": "Պահված",
+  "ui.promptInput.dictate.displaced": "Չհաջողվեց սա ավելացնել ձեր հաղորդագրությանը։ Ոչինչ չի կորել։",
   "ui.promptInput.dictate.keep": "Շարունակել ձայնագրումը",
   "ui.promptInput.dictate.keepHint": "Շարունակել ձայնագրումը ֆոնային ռեժիմում",
   "ui.promptInput.dictate.background.start": "Սկսել ֆոնային ձայնագրումը",

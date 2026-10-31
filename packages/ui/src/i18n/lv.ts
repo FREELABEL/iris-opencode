@@ -129,6 +129,7 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.options": "Mikrofona un ierakstīšanas opcijas",
   "ui.promptInput.dictate.release": "Atlaidiet, lai apturētu",
   "ui.promptInput.dictate.held": "Aizturēts",
+  "ui.promptInput.dictate.displaced": "To neizdevās pievienot jūsu ziņojumam. Nekas nav zaudēts.",
   "ui.promptInput.dictate.keep": "Turpināt ierakstīšanu",
   "ui.promptInput.dictate.keepHint": "Turpināt ierakstīšanu fonā",
   "ui.promptInput.dictate.background.start": "Sākt ierakstīšanu fonā",
