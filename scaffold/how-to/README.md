@@ -26,6 +26,8 @@ This directory contains step-by-step recipes for common IRIS workflows. Each fil
 | "pathways", "CFO", "cases", "servis ai", "quickbooks", "billing audit", "service AI sync" | `pathways-cfo-workflow.md` |
 | "track finances", "ledger", "transactions", "revenue", "expenses", "accounts" | `track-finances-atlas-ledger.md` |
 | "diary", "daily diary", "log my day", "publish my notes", "sync daily-diary", "journal", "what did I do" | `diary.md` |
+| "licence key", "claim my key", "activate", "am I licensed", "my seat", "my licence expired" | `claim-a-licence.md` |
+| "team licence", "issue a licence", "grant seats", "who claimed the key", "revoke a licence" | `team-licences.md` |
 | "meeting", "call notes", "transcript", "wispr", "what did we agree", "action items from the call", "file this meeting" | `meetings.md` |
 | "share a bloq", "invite someone to a board", "give the client access", "scoped invite", "who can see this board", "revoke access", "what did I share", "keep this internal", "permissions" | `bloq-access-control.md` |
 | "staff", "contractors", "team", "contracts", "signing" | `manage-staff-and-contracts.md` |

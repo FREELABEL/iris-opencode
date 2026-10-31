@@ -2,7 +2,7 @@ import { firstArray } from "../../util/array"
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, handleApiError, printDivider, printKV, dim, writeJson } from "./iris-api"
+import { irisFetch, handleApiError, printDivider, printKV, dim, writeJson, isJsonMode, emitJsonError } from "./iris-api"
 import { productCommand } from "./product-command"
 
 /**
@@ -35,9 +35,9 @@ const BASE = "/api/v1/licences"
 /** Operator refusal reads as absence by design; say so instead of blaming the input. */
 async function reportError(res: Response, action: string): Promise<void> {
   if (res.status === 404) {
-    prompts.log.warn(
-      `${action}: not found — this is also what a non-operator sees. If you expected access, you are not on the operator list.`,
-    )
+    const message = `${action}: not found — this is also what a non-operator sees. If you expected access, you are not on the operator list.`
+    if (isJsonMode()) emitJsonError(message, { status: 404, action })
+    else prompts.log.warn(message)
     process.exitCode = 1
     return
   }
@@ -59,6 +59,15 @@ export const IssueCmd = cmd({
       .option("allow", { describe: "only these people may claim it (comma-separated emails). Left out, anyone with the key can", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args: any) {
+    // JSON has no NaN: `--days abc` would reach the server as null and get the default term.
+    if (Number.isNaN(args.days)) {
+      const message = "--days must be a number"
+      if (isJsonMode()) emitJsonError(message)
+      else prompts.log.error(message)
+      process.exitCode = 1
+      return
+    }
+
     const body: Record<string, unknown> = {
       email: args.email,
       tier: args.tier,
@@ -179,11 +188,13 @@ const ListCmd = cmd({
 export const RevokeCmd = cmd({
   command: "revoke <key>",
   describe: "revoke a licence (operator only)",
-  builder: (y: any) => y.positional("key", { type: "string" }),
+  builder: (y: any) =>
+    y.positional("key", { type: "string" }).option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args: any) {
     const res = await irisFetch(`${BASE}/${encodeURIComponent(args.key)}/revoke`, { method: "POST" })
     if (!res.ok) return reportError(res, "Revoke licence")
     const body = (await res.json().catch(() => ({}))) as any
+    if (args.json) return writeJson(body)
     if (body?.already_revoked) return prompts.log.info(`${args.key} was already revoked`)
     prompts.log.success(`Revoked ${args.key}`)
   },
@@ -296,7 +307,7 @@ export const LicenceCommand = productCommand({
   aliases: ["license", "licences", "licenses", "licensing"],
   purpose: "Licences — issue a key, claim one, check what you are entitled to",
   keywords: ["licence", "license", "licensing", "key", "seat", "seats", "entitlement", "claim", "activate", "trial"],
-  howtos: [],
+  howtos: ["claim-a-licence", "team-licences"],
   playbooks: [],
   builder: (yargs: any) =>
     yargs
