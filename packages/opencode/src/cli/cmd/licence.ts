@@ -32,6 +32,9 @@ import { productCommand } from "./product-command"
 
 const BASE = "/api/v1/licences"
 
+/** Released seats stay as rows for the audit; they are not held. */
+export const heldSeats = (rows: any): number => firstArray(rows).filter((r: any) => !r?.released_at).length
+
 /** Operator refusal reads as absence by design; say so instead of blaming the input. */
 async function reportError(res: Response, action: string): Promise<void> {
   if (res.status === 404) {
@@ -215,7 +218,7 @@ const ShowCmd = cmd({
     printDivider()
     printKV("tier", String(data?.tier ?? "—"))
     printKV("status", String(data?.status ?? "—"))
-    printKV("seats", `${(data?.seat_rows?.length ?? 0)} of ${data?.seats ?? "—"} held`)
+    printKV("seats", `${heldSeats(data?.seat_rows)} of ${data?.seats ?? "—"} held`)
     printKV("issued to", String(data?.issued_to_email ?? "—"))
     printKV("lead", data?.lead_id ? `#${data.lead_id}` : "— (iris licence link <key> --lead <id>)")
     printDivider()
@@ -226,13 +229,93 @@ const ShowCmd = cmd({
   },
 })
 
+/** #191935 — name who holds the seats. Operator only: this grants entitlement to someone else. */
+const InviteCmd = cmd({
+  command: "invite <key> <emails..>",
+  describe: "put named people on a licence's seats (operator only). Sends nothing; tell them yourself",
+  builder: (y: any) =>
+    y
+      .positional("key", { type: "string" })
+      .positional("emails", { type: "string", array: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args: any) {
+    const res = await irisFetch(`${BASE}/${encodeURIComponent(args.key)}/seats`, {
+      method: "POST",
+      body: JSON.stringify({ emails: args.emails }),
+    })
+    if (res.status === 404) return reportError(res, "Invite to licence")
+    const body = (await res.json().catch(() => ({}))) as any
+    if (args.json) return writeJson(body)
+    if (!res.ok) {
+      process.exitCode = 1
+      prompts.log.warn(body?.reason ?? body?.message ?? `Could not invite (HTTP ${res.status})`)
+      return
+    }
+    for (const r of body?.data?.results ?? []) {
+      if (r.status === "assigned") prompts.log.success(`${r.email}: seat assigned`)
+      else if (r.status === "already_held") prompts.log.info(`${r.email}: already holds a seat`)
+      else prompts.log.warn(`${r.email}: no account with this exact address, so no seat. They need to sign up first`)
+    }
+    printKV("seats", `${body?.data?.occupied ?? "—"} of ${body?.data?.seats ?? "—"} held`)
+  },
+})
+
+const SeatsCmd = cmd({
+  command: "seats <key>",
+  describe: "who holds which seat, and who used to (operator only)",
+  builder: (y: any) =>
+    y.positional("key", { type: "string" }).option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args: any) {
+    const res = await irisFetch(`${BASE}/${encodeURIComponent(args.key)}/seats`)
+    if (!res.ok) return reportError(res, "List seats")
+    const data = ((await res.json()) as any)?.data
+    if (args.json) return writeJson(data)
+    UI.empty()
+    prompts.intro(`◈  ${args.key}`)
+    printKV("seats", `${data?.occupied ?? "—"} of ${data?.seats ?? "—"} held`)
+    printDivider()
+    for (const s of data?.holders ?? []) {
+      UI.println(`  seat ${String(s.seat_id).padEnd(8)} ${String(s.email ?? `user #${s.user_id}`).padEnd(36)} ${dim(String(s.activated_at ?? "").slice(0, 10))}`)
+    }
+    for (const s of data?.released ?? []) {
+      UI.println(dim(`  seat ${String(s.seat_id).padEnd(8)} ${String(s.email ?? `user #${s.user_id}`).padEnd(36)} released ${String(s.released_at ?? "").slice(0, 10)}`))
+    }
+    prompts.outro(dim("iris licence release <key> <email>"))
+  },
+})
+
+const ReleaseCmd = cmd({
+  command: "release <key> <email>",
+  describe: "take one person's seat back, leaving the licence and everyone else alone (operator only)",
+  builder: (y: any) =>
+    y
+      .positional("key", { type: "string" })
+      .positional("email", { type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args: any) {
+    const res = await irisFetch(`${BASE}/${encodeURIComponent(args.key)}/seats/release`, {
+      method: "POST",
+      body: JSON.stringify({ email: args.email }),
+    })
+    if (res.status === 404) return reportError(res, "Release seat")
+    const body = (await res.json().catch(() => ({}))) as any
+    if (args.json) return writeJson(body)
+    if (!res.ok) {
+      process.exitCode = 1
+      prompts.log.warn(body?.reason ?? body?.message ?? `Could not release (HTTP ${res.status})`)
+      return
+    }
+    prompts.log.success(`${args.email} released from ${args.key}`)
+  },
+})
+
 /** The subcommand group, so `iris reachr licence …` and `iris licence …` are one thing. */
 export const LicenceGroup = cmd({
   command: "licence",
   aliases: ["license", "licences", "licenses"],
   describe: "what a yes produces — issue, claim and check entitlement",
   builder: (y: any) =>
-    y.command(IssueCmd).command(ClaimCmd).command(MeCmd).command(ListCmd).command(ShowCmd).command(LinkCmd).command(RevokeCmd).demandCommand(),
+    y.command(IssueCmd).command(ClaimCmd).command(MeCmd).command(ListCmd).command(ShowCmd).command(LinkCmd).command(InviteCmd).command(SeatsCmd).command(ReleaseCmd).command(RevokeCmd).demandCommand(),
   async handler() {},
 })
 
@@ -252,6 +335,9 @@ export const LicenceCommand = productCommand({
       .command(ListCmd)
       .command(ShowCmd)
       .command(LinkCmd)
+      .command(InviteCmd)
+      .command(SeatsCmd)
+      .command(ReleaseCmd)
       .command(RevokeCmd)
       .demandCommand(),
 })
