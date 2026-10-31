@@ -23,6 +23,14 @@ set -euo pipefail
 # Releases are cut from `main`, which is also the GitHub default branch as of
 # 2026-09-13. Before that the default was `dev` — an unrelated history — so a plain
 # clone got code that never shipped.
+#
+# SINCE v1.5.0 (the iris2 switch-over, #188596) THE STABLE CLI IS NOT TAGGED ON main.
+# It is a vX.Y.Z tag on `iris2/channel`; release-iris2.yml builds it and copies the v1
+# platform layer (packages/opencode/src) from main's head at build time. So a change merged
+# to main ships by tagging iris2/channel — no package.json bump, nothing pushed to main.
+# This script picks that path whenever the highest stable release is 1.5.0 or above (#190106).
+# Tagging 1.3.x on main after the switch-over is refused by release.yml ("below the newest
+# CLI release") and leaves a tag with no release behind — v1.3.356 and v1.3.357 are two.
 
 PKG="packages/opencode/package.json"
 REPO="FREELABEL/iris-opencode"
@@ -79,7 +87,22 @@ set -- "${ARGS[@]+"${ARGS[@]}"}"
 #
 # The latest GitHub Release is the number `iris update` resolves and the number
 # `iris --version` prints on an installed binary, so it is the one the world means.
-LIVE=$(gh release view --repo "$REPO" --json tagName --jq '.tagName' 2>/dev/null | sed 's/^v//')
+#
+# BUT NOT GitHub's "latest" since v1.5.0: those releases are make_latest=false (the Electron
+# desktop download resolves through "latest"), so "latest" still answers 1.3.x while every user
+# updates to 1.5.x. The live version is the highest non-draft, non-prerelease vX.Y.Z RELEASE —
+# the same rule release.yml's and release-iris2.yml's guards use. Releases, not tags: the
+# upstream tag lineages have no IRIS releases, and desktop releases are desktop-v*.
+LIVE=$(gh api "repos/$REPO/releases?per_page=100" --paginate \
+  -q '.[] | select((.draft | not) and (.prerelease | not)) | .tag_name' 2>/dev/null \
+  | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' | sort -V | tail -1 || true)
+
+# Which pipeline ships it (see the header): iris2/channel from 1.5.0, main before that.
+PIPELINE=main
+STABLE_BRANCH=iris2/channel
+if [ -n "$LIVE" ] && [ "$(printf '%s\n%s\n' "1.5.0" "$LIVE" | sort -V | head -1)" = "1.5.0" ]; then
+  PIPELINE=iris2
+fi
 
 if [ -z "$LIVE" ]; then
   # Refusing is the only safe answer. Guessing from package.json is the bug this
@@ -92,8 +115,19 @@ fi
 PKG_VERSION=$(grep '"version"' "$PKG" | head -1 | sed 's/.*"\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)".*/\1/')
 IFS='.' read -r MAJOR MINOR PATCH <<< "$LIVE"
 
-echo "Live version (latest published release): $LIVE"
-if [ "$PKG_VERSION" != "$LIVE" ]; then
+echo "Live version (highest stable release): $LIVE"
+if [ "$PIPELINE" = iris2 ]; then
+  # From the remote itself, never origin/* — a narrow fetch refspec left origin/iris2/channel a
+  # release behind in a worktree, and tagging that would have shipped the previous build.
+  STABLE_SHA=$(git ls-remote "https://github.com/$REPO.git" "refs/heads/$STABLE_BRANCH" | cut -f1)
+  MAIN_SHA=$(git ls-remote "https://github.com/$REPO.git" refs/heads/main | cut -f1)
+  [ -n "$STABLE_SHA" ] && [ -n "$MAIN_SHA" ] || { echo "Error: could not read $STABLE_BRANCH / main from GitHub — refusing to guess."; exit 2; }
+  git fetch origin "$STABLE_SHA" "$MAIN_SHA" --quiet 2>/dev/null || true
+  echo "Pipeline: a v* tag on $STABLE_BRANCH @ ${STABLE_SHA:0:10} — release-iris2.yml"
+  echo "  v1 platform layer (iris agents, iris chat, …) is taken from main @ ${MAIN_SHA:0:10} at build time."
+  echo "  package.json is not touched; nothing is pushed to main."
+fi
+if [ "$PIPELINE" = main ] && [ "$PKG_VERSION" != "$LIVE" ]; then
   if [ "${LIVE%.*}" = "${PKG_VERSION%.*}" ]; then
     echo "  package.json says $PKG_VERSION — DRIFTED by $(( 10#${LIVE##*.} - 10#${PKG_VERSION##*.} )) release(s); it will be corrected."
   else
@@ -102,7 +136,9 @@ if [ "$PKG_VERSION" != "$LIVE" ]; then
 fi
 
 if [ "$CHECK_ONLY" = true ]; then
-  if [ "$PKG_VERSION" = "$LIVE" ]; then
+  if [ "$PIPELINE" = iris2 ]; then
+    echo "Next --patch would be $MAJOR.$MINOR.$((PATCH + 1))."
+  elif [ "$PKG_VERSION" = "$LIVE" ]; then
     echo "In sync. Next --patch would be $MAJOR.$MINOR.$((PATCH + 1))."
   else
     echo "Drifted. Next --patch would still be $MAJOR.$MINOR.$((PATCH + 1)) — computed from the TAG, not package.json."
@@ -133,6 +169,37 @@ if [ "$(printf '%s\n%s\n' "$LIVE" "$TARGET" | sort -t. -k1,1n -k2,2n -k3,3n | ta
   echo "Error: $TARGET is not ahead of the live version $LIVE"
   exit 1
 fi
+
+WORKFLOW=release.yml
+
+if [ "$PIPELINE" = iris2 ]; then
+  # Tag the REMOTE head of the stable branch, never a local checkout: what ships is
+  # origin/iris2/channel plus main's head at build time, and neither depends on this tree.
+  SHA=$STABLE_SHA
+  if git ls-remote --tags "https://github.com/$REPO.git" "refs/tags/v$TARGET" 2>/dev/null | grep -q .; then
+    echo "Error: Tag v$TARGET already exists on the remote"
+    exit 1
+  fi
+  echo ""
+  echo "Will release: v$LIVE → v$TARGET"
+  echo "  1. Tag v$TARGET on $STABLE_BRANCH @ ${SHA:0:10} ($(git log -1 --format=%s "$SHA" 2>/dev/null | cut -c1-60))"
+  echo "  2. release-iris2.yml builds it with the v1 layer from main @ ${MAIN_SHA:0:10} ($(git log -1 --format=%s "$MAIN_SHA" 2>/dev/null | cut -c1-60))"
+  echo "  3. Every 'iris update' then takes it (it is the highest v* release)"
+  echo ""
+  if [ "$ASSUME_YES" != true ]; then
+    if [ -t 0 ]; then
+      read -r -p "Proceed? [y/N] " CONFIRM
+      if [ "$CONFIRM" != "y" ] && [ "$CONFIRM" != "Y" ]; then echo "Aborted"; exit 0; fi
+    else
+      echo "Error: no terminal to confirm on. Re-run with --yes if that is what you intend."
+      exit 1
+    fi
+  fi
+  # Push the tag straight from the SHA: no local tag is left behind if the push is refused.
+  git push origin "$SHA:refs/tags/v$TARGET"
+  echo "Pushed tag v$TARGET → $STABLE_BRANCH @ ${SHA:0:10}"
+  WORKFLOW=release-iris2.yml
+else
 
 # THE COMMIT YOU ARE TAGGING MUST BE WHAT IS ON main.
 #
@@ -272,6 +339,8 @@ git push origin main
 git push origin "refs/tags/v$TARGET"
 echo "Pushed to origin main with tag v$TARGET"
 
+fi   # PIPELINE
+
 # 4. Wait for CI
 # Match the run to THIS tag — never just grab the latest run. The new tag's
 # workflow may not have registered yet, so --limit 1 can return a PREVIOUS
@@ -281,7 +350,7 @@ echo "Waiting for release workflow for v$TARGET..."
 
 RUN_ID=""
 for _ in $(seq 1 30); do
-  RUN_ID=$(gh run list --workflow=release.yml --limit 15 \
+  RUN_ID=$(gh run list --workflow="$WORKFLOW" --limit 15 \
     --json databaseId,headBranch \
     --jq "[.[] | select(.headBranch==\"v$TARGET\")] | .[0].databaseId // empty" 2>/dev/null || echo "")
   [ -n "$RUN_ID" ] && break
@@ -290,7 +359,7 @@ done
 
 if [ -z "$RUN_ID" ]; then
   echo "Error: no release workflow for v$TARGET appeared after ~90s."
-  echo "Check manually: gh run list --workflow=release.yml"
+  echo "Check manually: gh run list --workflow=$WORKFLOW"
   exit 1
 fi
 

@@ -253,6 +253,9 @@ const AwayCommand = cmd({
 
 const TERMINAL = new Set(["succeeded", "completed", "failed", "cancelled", "timeout", "errored"])
 
+/** Providers whose waiting question `iris hive answer` can reach (#190649; acp = `iris acp run --keep`, #191170). */
+export const ANSWERABLE_PROVIDERS = ["claude_code", "opencode", "acp"]
+
 const AnswerCommand = cmd({
   command: "answer <session-id> <choice..>",
   describe: "answer the question a session is waiting on — by option number or label, one per question",
@@ -279,8 +282,12 @@ const AnswerCommand = cmd({
       process.exit(1)
     }
     const { node, s } = hits[0]
-    if (s.provider !== "claude_code") {
-      console.error(`Answering is supported for Claude Code sessions; this one is ${s.provider}.`)
+    // Claude Code (answer hook / tmux) and opencode / IRIS Desktop (the engine's own permission and
+    // question replies — iris-daemon #38, #190649). A permission takes 1 Allow once · 2 Always allow · 3 Reject.
+    if (!ANSWERABLE_PROVIDERS.includes(s.provider)) {
+      console.error(
+        `Answering is supported for Claude Code, IRIS Desktop / opencode and kept ACP sessions (iris acp run --keep); this one is ${s.provider}.`,
+      )
       process.exit(1)
     }
     const choices = (argv.choice as string[]).map(String)
@@ -318,7 +325,7 @@ const AnswerCommand = cmd({
     if (argv.json) return void (await writeJson({ task_id: taskId, status: final?.status ?? "pending", result: body, stderr: out?.stderr }))
     console.log()
     if (body?.delivered) {
-      console.log(success(`  ✓ answered`) + dim(` via ${body.delivered === "hook" ? "the waiting hook" : "a keystroke in its tmux pane"} · ${node.name}`))
+      console.log(success(`  ✓ answered`) + dim(` via ${body.delivered === "hook" ? "the waiting hook" : body.delivered === "acp" ? "the ACP session" : "a keystroke in its tmux pane"} · ${node.name}`))
       for (const [q, a] of Object.entries(body.answers || {})) console.log(dim(`    ${q} → `) + bold(String(a)))
     } else if (final) {
       console.log(warn(`  ✗ not answered`) + dim(` · ${node.name}`))

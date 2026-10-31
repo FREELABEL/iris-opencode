@@ -2034,7 +2034,7 @@ echo ok
     expect(steps[0].mode).toBe("manual")
   })
 
-  test("step heading with no title is skipped (regex requires same-line title)", () => {
+  test("step heading with no title is a step titled by its id (#190875)", () => {
     const md = `
 ### step:nospace
 
@@ -2047,8 +2047,12 @@ echo ok
 \`\`\`
 `
     const steps = parseSteps(md)
-    // Fixed: regex uses ` +` (space only) instead of `\s+` (which ate newlines)
-    expect(steps).toHaveLength(0)
+    // It used to be dropped silently: `test` said valid, `run` said completed, nothing ran.
+    // Still horizontal-whitespace only, so the next line is never swallowed as the title.
+    expect(steps).toHaveLength(1)
+    expect(steps[0].id).toBe("nospace")
+    expect(steps[0].title).toBe("nospace")
+    expect(steps[0].code).toBe("echo ok")
   })
 
   test("YAML mode with leading/trailing spaces doesn't match switch cases", () => {

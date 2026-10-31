@@ -20,6 +20,12 @@ export type RawAgent = {
   active?: boolean
   description?: string | null
   last_active_at?: string | null
+  /** The agent's mission — what it does every heartbeat. */
+  initial_prompt?: string | null
+  /** settings.system_prompt is the agent's identity — who it is. */
+  settings?: { system_prompt?: string | null } | null
+  /** config.tools is its IRIS tool allowlist; empty means every tool. */
+  config?: { tools?: unknown } | null
 }
 export type AgentCandidate = { id: number; name: string; describe: string; run: string; score: number }
 

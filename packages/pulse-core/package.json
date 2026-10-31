@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@heyiris/pulse-core",
+  "version": "0.2.0",
+  "description": "The IRIS Pulse / Heartbeats state model — one versioned copy for Desktop, CLI and Genesis pages.",
+  "license": "MIT",
+  "type": "module",
+  "repository": { "type": "git", "url": "https://github.com/FREELABEL/iris-opencode", "directory": "packages/pulse-core" },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "bun": "./src/index.ts",
+      "import": "./dist/index.js"
+    },
+    "./heartbeats": {
+      "types": "./dist/heartbeats.d.ts",
+      "bun": "./src/heartbeats.ts",
+      "import": "./dist/heartbeats.js"
+    },
+    "./pulse": {
+      "types": "./dist/pulse.d.ts",
+      "bun": "./src/pulse.ts",
+      "import": "./dist/pulse.js"
+    },
+    "./query": {
+      "types": "./dist/query.d.ts",
+      "bun": "./src/query.ts",
+      "import": "./dist/query.js"
+    },
+    "./iife": "./dist/pulse-core.iife.js",
+    "./cjs": "./dist/pulse-core.cjs"
+  },
+  "files": ["dist", "src", "README.md"],
+  "sideEffects": false,
+  "scripts": {
+    "build": "bun run script/build.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "golden": "bun run script/golden.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "catalog:",
+    "typescript": "catalog:"
+  }
+}

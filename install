@@ -536,10 +536,14 @@ else
         # "Failed to fetch version information". The desktop app's release cadence must not be
         # able to break the CLI installer.
         #
-        # Ask for the newest release in THIS series instead. The `"v[0-9]` anchor is what
+        # Ask for the highest release in THIS series instead. The `"v[0-9]` anchor is what
         # excludes desktop-v*: after `"tag_name": "` that tag begins with `d`, not `v`.
-        specific_version=$(curl -s "https://api.github.com/repos/FREELABEL/iris-opencode/releases?per_page=30" \
-            | sed -n 's/.*"tag_name": *"v\([0-9][^"]*\)".*/\1/p' | head -1) || true
+        # HIGHEST, not first-listed (#188596): GitHub lists a release by its tag's commit date, so
+        # v1.5.0 (the v2 engine, tagged on an older commit) sat below v1.3.355 and fresh installs
+        # got v1. A field-wise numeric sort, because macOS's sort has no -V on older releases.
+        specific_version=$(curl -s "https://api.github.com/repos/FREELABEL/iris-opencode/releases?per_page=100" \
+            | sed -n 's/.*"tag_name": *"v\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)".*/\1/p' \
+            | sort -t. -k1,1n -k2,2n -k3,3n | tail -1) || true
 
         if [[ -z "$specific_version" ]]; then
             # Last resort: the redirect target of /releases/latest/download still resolves by
@@ -1490,6 +1494,12 @@ fetch_repo_archive() {
         rm -rf "$tmp"; return 1
     fi
 
+    # The exact commit this archive is: GitHub writes it into the tar header (comment=<sha>).
+    # Without it a tarball install reports "commit unknown", and an old .git kept from a clone
+    # install reports a STALE commit (#191480). `|| true`: set -euo pipefail, and head closes early.
+    local commit; commit="$( (gzip -dc "$tmp/daemon.tar.gz" 2>/dev/null | head -c 4096 | LC_ALL=C grep -aoE 'comment=[0-9a-f]{40}' | head -1 | cut -d= -f2) || true)"
+    [ -n "$commit" ] && printf '%s\n' "$commit" > "$root/.iris-commit"
+
     mkdir -p "$dest"
     # Remove only what the repo owns. node_modules, logs, .git from older clone-based
     # installs, and .env belong to the machine.
@@ -1642,16 +1652,30 @@ BCTL
                     launchctl bootout "gui/$(id -u)/$plist_label" 2>/dev/null \
                       || launchctl unload "$plist_dest" 2>/dev/null || true
 
+                    # bootout RETURNS BEFORE launchd has finished tearing the job down. A bootstrap
+                    # straight after it fails ("Bootstrap failed: 5: Input/output error") while the
+                    # dying job is still listed — so the check below passed, this printed "enabled",
+                    # and the daemon was gone a second later. Reproduced on a re-install 2026-10-27.
+                    for _w in 1 2 3 4 5 6 7 8 9 10; do
+                        launchctl print "gui/$(id -u)/$plist_label" >/dev/null 2>&1 || break
+                        sleep 1
+                    done
+
                     # Keep stderr. "Load failed: 5: Input/output error" is the whole diagnosis,
                     # and 2>/dev/null is what made this bug invisible for as long as it was.
                     # -w on the legacy fallback so a previously-disabled job is re-enabled.
-                    lc_err=$(launchctl bootstrap "gui/$(id -u)" "$plist_dest" 2>&1) \
-                      || lc_err=$(launchctl load -w "$plist_dest" 2>&1) \
-                      || true
+                    for _b in 1 2 3; do
+                        if lc_err=$(launchctl bootstrap "gui/$(id -u)" "$plist_dest" 2>&1); then lc_err=""; break; fi
+                        sleep 1
+                    done
+                    if [ -n "$lc_err" ]; then lc_err=$(launchctl load -w "$plist_dest" 2>&1) || true; fi
 
                     # Ask launchd what it has, rather than trusting the exit code: legacy
-                    # `launchctl load` returns 0 for jobs it never actually registered.
-                    if launchctl list 2>/dev/null | grep -q "$plist_label"; then
+                    # `launchctl load` returns 0 for jobs it never actually registered. A label in
+                    # the list is not enough either (see above) — it must have a PID.
+                    sleep 2
+                    local lc_pid; lc_pid="$(launchctl list 2>/dev/null | awk -v l="$plist_label" '$3 == l { print $1 }')"
+                    if [ -n "$lc_pid" ] && [ "$lc_pid" != "-" ]; then
                         autostart_ok="true"
                     else
                         autostart_reason="launchd did not register $plist_label"

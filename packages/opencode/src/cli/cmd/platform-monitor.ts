@@ -1,6 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
+import { wholeNumberError, rejectFieldErrors, type FieldErrors } from "./pagination-args"
 import { irisFetch, IRIS_API, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
 
 // ============================================================================
@@ -10,6 +11,18 @@ import { irisFetch, IRIS_API, requireAuth, requireUserId, handleApiError, printD
 // ============================================================================
 
 async function getJson(res: Response): Promise<any> { try { return await res.json() } catch { return {} } }
+
+/**
+ * fl-iris-api PlatformMonitorController::MAX_WINDOW_HOURS — 30 days (#191850). `--hours 0|-1`
+ * used to return an empty window that looked like a normal answer, and 999999 pulled every
+ * hourly row since January (3,839 rows, ~475 KB). Refused here before the request.
+ */
+export const MONITOR_MAX_WINDOW_HOURS = 720
+
+export function windowHoursError(hours: unknown): FieldErrors | null {
+  const err = wholeNumberError("hours", hours, { min: 1, max: MONITOR_MAX_WINDOW_HOURS, note: "(30 days)" })
+  return err ? { hours: [err] } : null
+}
 
 function formatStatus(s: string): string {
   const map: Record<string, string> = {
@@ -31,9 +44,10 @@ const OverviewCmd = cmd({
   describe: "platform-wide health dashboard",
   builder: (yargs) =>
     yargs
-      .option("hours", { describe: "time window in hours", type: "number", default: 24 })
+      .option("hours", { describe: `time window in hours (1-${MONITOR_MAX_WINDOW_HOURS})`, type: "number", default: 24 })
       .option("json", { describe: "JSON output", type: "boolean" }),
   async handler(args) {
+    if (rejectFieldErrors(windowHoursError(args.hours), args.json)) return
     if (!(await requireAuth())) return
     const res = await irisFetch(`/api/v6/agents/heartbeat-status?hours=${args.hours}`, {}, IRIS_API)
     if (!(await handleApiError(res, "Monitor overview"))) return
@@ -296,9 +310,10 @@ const LoopsCmd = cmd({
   describe: "loop detection — duplicates, rapid-fire, stuck jobs",
   builder: (yargs) =>
     yargs
-      .option("hours", { describe: "time window in hours", type: "number", default: 24 })
+      .option("hours", { describe: `time window in hours (1-${MONITOR_MAX_WINDOW_HOURS})`, type: "number", default: 24 })
       .option("json", { describe: "JSON output", type: "boolean" }),
   async handler(args) {
+    if (rejectFieldErrors(windowHoursError(args.hours), args.json)) return
     if (!(await requireAuth())) return
     const res = await irisFetch(`/api/v6/agents/heartbeat-loops?hours=${args.hours}`, {}, IRIS_API)
     if (!(await handleApiError(res, "Loops"))) return
@@ -427,7 +442,6 @@ const BriefingCmd = cmd({
 
 export const PlatformMonitorCommand = cmd({
   command: "monitor",
-  aliases: ["health"],
   describe: "platform health monitoring and heartbeat diagnostics",
   builder: (yargs) =>
     yargs

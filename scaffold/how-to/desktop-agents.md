@@ -1,5 +1,5 @@
 ---
-category: Agents
+category: Agents & Automation
 level: beginner
 tags: [agents, desktop, picker, sync, local, permissions]
 duration_min: 3

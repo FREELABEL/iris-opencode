@@ -71,7 +71,10 @@ describe("collectListFiltered", () => {
 
     expect(result.items.length).toBe(10)
     expect(result.items.every((i: any) => i.bloq_list_id === 1449)).toBe(true)
-    expect(result.total).toBe(558)
+    // The count is the list's, not the board's: 58 items in list 1449 out of 558 on the
+    // bloq. Reporting 558 made `items --list` claim items that were not in the list (#190628).
+    expect(result.total).toBe(58)
+    expect(result.complete).toBe(true)
   })
 
   test("stops as soon as the limit is satisfied — does not walk the whole bloq", async () => {
@@ -81,6 +84,9 @@ describe("collectListFiltered", () => {
     expect(result.items.length).toBe(5)
     expect(server.pagesFetched).toBe(1)
     expect(result.exhausted).toBe(true)
+    // Filled the caller's page before the end of the bloq: the count is a lower bound.
+    expect(result.total).toBe(100)
+    expect(result.complete).toBe(false)
   })
 
   test("returns everything it found when the list has fewer items than the limit", async () => {
@@ -88,7 +94,9 @@ describe("collectListFiltered", () => {
     const result = await collectListFiltered(server.fetch, 1449, 50)
 
     expect(result.items.length).toBe(3)
+    expect(result.total).toBe(3)
     expect(result.exhausted).toBe(true)
+    expect(result.complete).toBe(true)
   })
 
   test("reports honestly when it gave up before the end", async () => {
@@ -108,8 +116,29 @@ describe("collectListFiltered", () => {
     const result = await collectListFiltered(late.fetch, 1449, 10, 3)
 
     expect(result.items.length).toBe(0)
+    expect(result.total).toBe(0)
     expect(result.exhausted).toBe(false) // <- the honesty bit
+    expect(result.complete).toBe(false)
     expect(result.pagesScanned).toBe(3)
+  })
+
+  test("reports 0 for an empty list instead of the board's total (#190628)", async () => {
+    const emptyList = {
+      fetch: async () => ({
+        items: [
+          { id: 1, bloq_list_id: 9999 },
+          { id: 2, bloq_list_id: 9999 },
+          { id: 3, bloq_list_id: 9999 },
+        ],
+        pagination: { total: 3, current_page: 1, last_page: 1, per_page: 200 },
+      }),
+    }
+
+    const result = await collectListFiltered(emptyList.fetch, 1449, 50)
+    expect(result.items.length).toBe(0)
+    // The bug said "3": pagination.total from the board leaked into a filtered read.
+    expect(result.total).toBe(0)
+    expect(result.complete).toBe(true)
   })
 
   test("matches on either list-id field the API has used", async () => {
@@ -126,5 +155,7 @@ describe("collectListFiltered", () => {
 
     const result = await collectListFiltered(mixed.fetch, 1449, 50)
     expect(result.items.map((i: any) => i.id)).toEqual([1, 2])
+    expect(result.total).toBe(2)
+    expect(result.complete).toBe(true)
   })
 })
