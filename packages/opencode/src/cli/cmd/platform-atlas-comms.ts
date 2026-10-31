@@ -445,7 +445,7 @@ async function ingestGmail(lead: any, requested: "gmail" | "apple_mail"): Promis
  * #191879: the account is named by its email ADDRESS, resolved against every account's addresses —
  * on this Mac if it has it, otherwise on the Hive node that reports it (comms-mail-route.ts).
  */
-export async function appleMailDeps(): Promise<import("./comms-mail-route").AppleMailReadDeps> {
+export async function appleMailDeps(taskTitle = "iris comms ingest: read one Mail.app account (read-only)"): Promise<import("./comms-mail-route").AppleMailReadDeps> {
   const { listLocalMailAccounts } = await import("./comms-mail-route")
   const { resolveUserId } = await import("./iris-api")
   const userId = await resolveUserId().catch(() => null)
@@ -482,7 +482,7 @@ export async function appleMailDeps(): Promise<import("./comms-mail-route").Appl
       ])
       const { final } = await dispatchTaskAndWait(
         Number(userId),
-        buildHiveRunBody({ userId: Number(userId), nodeId: node.id, title: "iris comms ingest: read one Mail.app account (read-only)", script, timeoutSec: 180 }),
+        buildHiveRunBody({ userId: Number(userId), nodeId: node.id, title: taskTitle, script, timeoutSec: 180 }),
       )
       if (!final) throw new Error("still running after 210s — not waited for")
       const r = fromHiveTask(final as any)

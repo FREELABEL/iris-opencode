@@ -36,7 +36,7 @@ export function whereItRuns(line: string, a: { platform: string; localAvailable?
   if (a.reach === null) return `needs ${source} on some machine — could not check which Hive node has it (iris hive nodes list)`
   if (a.reach.state === "ready" && a.reach.node_name) {
     if (ROUTED.test(String(line).trim())) {
-      return `runs on Hive node ${a.reach.node_name} (${source}) — this machine has none; iris routes it there automatically`
+      return `runs on Hive node ${a.reach.node_name} (${source}) — this machine has none; iris routes it there automatically, unless several Macs have Mail: then pass --mail-account <address>`
     }
     return `needs ${source}, which this machine does not have — run it on Hive node ${a.reach.node_name}; iris does not route this command over Hive`
   }

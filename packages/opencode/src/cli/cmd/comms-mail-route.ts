@@ -116,7 +116,7 @@ export function nodeMailAccounts(node: RoutableNode): { accounts: MailAccount[] 
   return { accounts: am.accounts.map((a: any) => ({ name: String(a.name), id: a.id ?? null, addresses: (a.addresses ?? []).map((x: string) => String(x).toLowerCase()), enabled: a.enabled })) }
 }
 
-const online = (n: RoutableNode, now: number) => {
+export const online = (n: RoutableNode, now: number) => {
   if (n.connection_status === "online") return true
   const t = Date.parse(n.last_heartbeat_at ?? "")
   return n.connection_status !== "offline" && Number.isFinite(t) && now - t < 10 * 60_000
@@ -182,7 +182,11 @@ export const shq = (s: string) => `'${String(s).replace(/'/g, `'\\''`)}'`
  * month of mail fits the task's 50 KB output limit. Exit 3 = Mail not running.
  */
 export function remoteReaderScript(address: string, days: number, accountId: string, ownAddress: string): string {
-  const argv = mailThreadReaderArgs(address, days, `id:${accountId}`, true, ownAddress)
+  return remoteOsascript(mailThreadReaderArgs(address, days, `id:${accountId}`, true, ownAddress))
+}
+
+/** Wrap an osascript argv for a remote Mac: never launch Mail, gzip + base64 the answer. */
+export function remoteOsascript(argv: string[]): string {
   return [
     "#!/bin/bash",
     "set -o pipefail",
@@ -214,7 +218,7 @@ export interface AppleMailReadDeps {
 }
 
 export type AppleMailRead =
-  | { ok: true; where: string; account: MailAccount; address: string | null; read: (leadAddress: string) => Promise<MailThreadRead> }
+  | { ok: true; where: string; node: RoutableNode | null; selector: string; account: MailAccount; address: string | null; read: (leadAddress: string) => Promise<MailThreadRead> }
   | { ok: false; reason: string }
 
 /**
@@ -230,7 +234,7 @@ export async function locateMailAccount(spec: string, days: number, deps: AppleM
       const r = resolveMailAccount(local.accounts, s)
       if (r.ok) {
         const sel = r.account.id ? `id:${r.account.id}` : r.account.name
-        return { ok: true, where: "this Mac", account: r.account, address: r.address, read: (a) => deps.readLocal(a, days, sel, r.address ?? "") }
+        return { ok: true, where: "this Mac", node: null, selector: sel, account: r.account, address: r.address, read: (a) => deps.readLocal(a, days, sel, r.address ?? "") }
       }
       // Ambiguous here is a real answer — do not go looking for the same ambiguity elsewhere.
       if (!isAddress(s) || / is on \d+ Mail\.app accounts/.test(r.reason)) return { ok: false, reason: r.reason }
@@ -260,6 +264,8 @@ export async function locateMailAccount(spec: string, days: number, deps: AppleM
   return {
     ok: true,
     where: node.name,
+    node,
+    selector: `id:${account.id}`,
     account,
     address,
     read: async (leadAddress) => {
