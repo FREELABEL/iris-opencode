@@ -155,6 +155,7 @@ export const IssueCmd = cmd({
       .option("owner", { describe: "who owns it: an account's exact address", type: "string" })
       .option("domain", { describe: "let anyone confirmed at this domain claim", type: "string" })
       .option("lead", { describe: "CRM lead this licence belongs to (shows on the lead)", type: "number" })
+      .option("organization", { describe: "the company this licence belongs to", type: "string" })
       .option("allow", { describe: "only these people may claim it (comma-separated emails). Left out, anyone with the key can", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args: any) {
@@ -182,6 +183,7 @@ export const IssueCmd = cmd({
     if (args.domain) body.claim_domain = args.domain
     // #189718: the API has accepted lead_id since #183598; the CLI never sent it.
     if (args.lead) body.lead_id = args.lead
+    if (args.organization) body.organization = args.organization
 
     const res = await irisFetch(BASE, { method: "POST", body: JSON.stringify(body) })
     if (!res.ok) return reportError(res, "Issue licence")
@@ -269,9 +271,13 @@ const ListCmd = cmd({
   builder: (y: any) =>
     y
       .option("status", { describe: "filter by status", type: "string" })
+      .option("organization", { describe: "only this company's licences (its exact name)", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args: any) {
-    const qs = args.status ? `?status=${encodeURIComponent(args.status)}` : ""
+    const params = new URLSearchParams()
+    if (args.status) params.set("status", args.status)
+    if (args.organization) params.set("organization", args.organization)
+    const qs = params.size ? `?${params}` : ""
     const res = await irisFetch(`${BASE}${qs}`)
     if (!res.ok) return reportError(res, "List licences")
 
@@ -286,7 +292,7 @@ const ListCmd = cmd({
       UI.println("  None issued yet.")
     }
     for (const r of rows) {
-      UI.println(`  ${String(r.key).padEnd(24)} ${String(r.tier).padEnd(9)} ${String(r.status).padEnd(10)} ${r.issued_to_email ?? dim("—")}`)
+      UI.println(`  ${String(r.key).padEnd(24)} ${String(r.tier).padEnd(9)} ${String(r.status).padEnd(10)} ${r.issued_to_email ?? dim("—")}${r.organization ? `  ${r.organization}` : ""}`)
     }
     printDivider()
     prompts.outro(dim(`${rows.length} shown`))
@@ -322,6 +328,23 @@ export const LinkCmd = cmd({
     })
     if (!res.ok) return reportError(res, "Link licence")
     prompts.log.success(`Linked ${args.key} → lead #${args.lead}`)
+  },
+})
+
+// #191972 — say which company a licence belongs to, instead of guessing from email domains.
+export const OrganizationCmd = cmd({
+  command: "organization <key> [name]",
+  aliases: ["org"],
+  describe: "set which company a licence belongs to; --clear removes it. Changes no access (operator only)",
+  builder: (y: any) =>
+    y.positional("key", { type: "string" }).positional("name", { type: "string" }).option("clear", { type: "boolean", default: false }),
+  async handler(args: any) {
+    if (!args.clear && !args.name) {
+      process.exitCode = 1
+      prompts.log.warn("Name the company, or pass --clear.")
+      return
+    }
+    await operatorPost(args.key, "organization", { organization: args.clear ? null : args.name }, "Set company", args.clear ? `Company cleared on ${args.key}` : `${args.key} belongs to ${args.name}`)
   },
 })
 
@@ -424,6 +447,7 @@ export const ShowCmd = cmd({
     printKV("tier", String(data?.tier ?? "—"))
     printKV("status", String(data?.end_state ?? data?.status ?? "—"))
     printKV("issued to", String(data?.issued_to_email ?? "—"))
+    printKV("company", data?.organization ? String(data.organization) : `— (iris licence organization ${data?.key ?? args.key} <name>)`)
     printKV("lead", data?.lead_id ? `#${data.lead_id}` : "— (iris licence link <key> --lead <id>)")
     printDivider()
     if (data?.end_state === "expired") {
@@ -488,6 +512,7 @@ const SeatsCmd = cmd({
     if (args.json) return writeJson(data)
     UI.empty()
     prompts.intro(`◈  ${args.key}`)
+    if (data?.organization) UI.println(`  company    ${data.organization}`)
     for (const l of seatLines(data)) UI.println(l)
     prompts.outro(dim("iris licence release <key> <email>"))
   },
@@ -650,7 +675,7 @@ export const LicenceGroup = cmd({
   aliases: ["license", "licences", "licenses"],
   describe: "what a yes produces — issue, claim and check entitlement",
   builder: (y: any) =>
-    y.command(IssueCmd).command(ClaimCmd).command(MeCmd).command(ListCmd).command(ShowCmd).command(LinkCmd).command(RenewCmd).command(AllowCmd).command(InviteCmd).command(SeatsCmd).command(ReleaseCmd).command(OwnerCmd).command(DomainCmd).command(SeatLeadCmd).command(SendCmd).command(PayLinkCmd).command(PayStatusCmd).command(RevokeCmd).demandCommand(),
+    y.command(IssueCmd).command(ClaimCmd).command(MeCmd).command(ListCmd).command(ShowCmd).command(LinkCmd).command(OrganizationCmd).command(RenewCmd).command(AllowCmd).command(InviteCmd).command(SeatsCmd).command(ReleaseCmd).command(OwnerCmd).command(DomainCmd).command(SeatLeadCmd).command(SendCmd).command(PayLinkCmd).command(PayStatusCmd).command(RevokeCmd).demandCommand(),
   async handler() {},
 })
 
@@ -670,6 +695,7 @@ export const LicenceCommand = productCommand({
       .command(ListCmd)
       .command(ShowCmd)
       .command(LinkCmd)
+      .command(OrganizationCmd)
       .command(RenewCmd)
       .command(AllowCmd)
       .command(InviteCmd)
