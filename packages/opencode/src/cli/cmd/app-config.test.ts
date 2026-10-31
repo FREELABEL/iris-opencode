@@ -9,6 +9,7 @@ import { tmpdir } from "os"
 import { dirname, join } from "path"
 import { applyBundle, EXIT_PROBLEMS, EXIT_REFUSED, exportBundle, mapPath, parseBundle, parseMapMedia, writeBundle, type Bundle, type Host } from "./app-config-engine"
 import { obsAdapter, scrubUrl } from "./app-config-obs"
+import { uploadFileVerified } from "./platform-atlas-files"
 
 const STREAM_KEY = "live_FIXTURE_STREAM_KEY_abc123"
 const WS_PASSWORD = "FIXTURE-WS-PASSWORD-xyz"
@@ -557,5 +558,43 @@ describe("default config locations and bundle file", () => {
     expect(() => parseBundle(obsAdapter, JSON.stringify({ ...bundle, manifest: { ...bundle.manifest, app: "other" } }))).toThrow("for \"other\"")
     expect(() => parseBundle(obsAdapter, JSON.stringify({ ...bundle, manifest: { ...bundle.manifest, schema: 2 } }))).toThrow("schema")
     expect(() => parseBundle(obsAdapter, "nope")).toThrow("not valid JSON")
+  })
+})
+
+describe("bloq transport", () => {
+  const realFetch = globalThis.fetch
+  afterEach(() => {
+    globalThis.fetch = realFetch
+  })
+
+  function stubServer(stored: string, uploadStatus = 200) {
+    globalThis.fetch = (async (input: any) => {
+      const url = String(input?.url ?? input)
+      if (url.includes("/bloqs/files/upload")) {
+        return new Response(JSON.stringify({ data: { id: 42, url: "https://cdn.example.test/f.json" } }), { status: uploadStatus })
+      }
+      return new Response(stored)
+    }) as any
+  }
+
+  test("success only when the stored bytes read back the same", async () => {
+    const path = join(root, "b.json")
+    put(root, "b.json", "bundle-bytes")
+    stubServer("bundle-bytes")
+    expect(await uploadFileVerified(1, 2, path)).toEqual({ ok: true, id: 42, url: "https://cdn.example.test/f.json" })
+  })
+
+  test("a 200 with different stored bytes is a failure", async () => {
+    const path = join(root, "b.json")
+    put(root, "b.json", "bundle-bytes")
+    stubServer("something-else")
+    expect((await uploadFileVerified(1, 2, path)).ok).toBe(false)
+  })
+
+  test("a rejected upload is a failure", async () => {
+    const path = join(root, "b.json")
+    put(root, "b.json", "bundle-bytes")
+    stubServer("bundle-bytes", 422)
+    expect((await uploadFileVerified(1, 2, path)).ok).toBe(false)
   })
 })

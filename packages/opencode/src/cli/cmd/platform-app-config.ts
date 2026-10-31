@@ -68,7 +68,7 @@ function printDropped(dropped: Dropped[]): void {
   const machine = dropped.filter((d) => d.reason === "machine-bound" || d.reason === "unmapped-path")
   const other = dropped.filter((d) => d.reason === "not-portable")
   if (secrets.length) {
-    console.log(`  ${bold("Credentials dropped")} ${dim("(set them again on this machine)")}`)
+    console.log(`  ${bold("Credentials dropped")} ${dim("(set them again on the machine you restore to)")}`)
     for (const d of secrets) console.log(`    ${d.file}: ${d.path}`)
   }
   if (machine.length) {
