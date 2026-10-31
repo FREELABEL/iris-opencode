@@ -94,6 +94,25 @@ const GENERAL = ["web-search", "atlas search"]
  * `iris genesis` for "build a website" at 31% (measured). A candidate is dropped when another
  * command extends its name — unless nothing else matched.
  */
+/**
+ * Commands only IRIS staff can use: they act on OUR production (`prod` shells out to the Railway
+ * CLI against freelabel-eco), the bounty ledger, or licence minting. Intent never offers them —
+ * a client question ("check google business profile and analytics … cut costs") picked
+ * `prod check` at 93% because its description says "integrations" (#189469). They stay runnable
+ * by name; an operator who wants one types it. `prod integrations` is NOT here: it reads the
+ * caller's own integrations over the API, and is a fair answer to that same question.
+ */
+const OPERATOR_COMMANDS = new Set(["prod", "prod check", "prod errors", "prod logs", "prod status"])
+const OPERATOR_GROUPS = ["bounty admin"]
+/** Playbooks that run OUR production (Railway deploys, logs, env). */
+const OPERATOR_PLAYBOOKS = new Set(["production-deploy"])
+
+export function isOperatorCommand(name: string, describe = ""): boolean {
+  if (/\(operator only\)/i.test(describe)) return true
+  if (OPERATOR_COMMANDS.has(name)) return true
+  return OPERATOR_GROUPS.some((g) => name === g || name.startsWith(g + " "))
+}
+
 export function leafOnly(cands: Candidate[], allNames: string[]): Candidate[] {
   const leaves = cands.filter(
     (c) => c.name.includes("playbook run ") || actsItself(c.run) || !allNames.some((n) => n.startsWith(c.name + " ")),
@@ -157,10 +176,11 @@ export function candidatePools(
 ): { pick: Candidate[]; pool: Candidate[] } {
   const q = text.toLowerCase()
   // Never offered: `find` (intent IS find — it recommended itself under "reconcile my books"), and a
-  // command whose own description says it is a stub (`atlas:ledger ledger reconcile`, #187829).
+  // command whose own description says it is a stub (`atlas:ledger ledger reconcile`, #187829),
+  // and an operator-only command (`prod check` answering a client question, #189469).
   const leaves = leafOnly(
     searchCapabilities(index(), q, "command", Math.max(pickLimit, poolLimit) + 6)
-      .filter(({ e }) => e.name !== "find" && !/\bstub\b/i.test(e.describe))
+      .filter(({ e }) => e.name !== "find" && !/\bstub\b/i.test(e.describe) && !isOperatorCommand(e.name, e.describe))
       .map(({ e, s }) => ({
         name: e.name,
         describe: e.describe,
@@ -178,7 +198,7 @@ export function candidatePools(
   // A playbook written for one client answers that client's requests only: "reconcile my books"
   // picked the Pathways case reconcile at 33% over bills-to-books (#187829).
   const playbooks = searchCapabilities(index(), q, "playbook", 8)
-    .filter(({ e }) => !/\bstub\b/i.test(e.describe) && namesClient(q, e.client))
+    .filter(({ e }) => !/\bstub\b/i.test(e.describe) && namesClient(q, e.client) && !OPERATOR_PLAYBOOKS.has(e.name))
     .slice(0, 5)
     .map(({ e, s }) => ({
       name: `playbook run ${e.name}`,

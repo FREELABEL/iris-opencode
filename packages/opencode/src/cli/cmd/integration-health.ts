@@ -26,7 +26,7 @@ import { irisFetch, requireAuth, resolveUserId, IRIS_API, dim, bold, success, hi
 
 type HealthState = "working" | "failing" | "never_checked" | "not_applicable"
 
-interface HealthRow {
+export interface HealthRow {
   id: number
   type: string
   name?: string | null
@@ -40,6 +40,22 @@ interface HealthRow {
   probe_error?: string | null
   /** Which integration store holds the row. Absent means fl-api, the health API's own. */
   store?: "iris-api"
+}
+
+/**
+ * Exit code for a probe. A type with no connection cannot be working, and a probe that could
+ * not complete is not a pass — both used to exit 0, so a CI loop over a list of integrations
+ * reported success for every typo (#190576). `never_checked` stays 0: nothing has answered,
+ * which is an honest zero rather than a failure.
+ */
+export function probeExitCode(o: {
+  notConnected: boolean
+  failure: string | null
+  rows: HealthRow[] | null
+}): 0 | 1 {
+  if (o.notConnected || o.failure) return 1
+  if ((o.rows ?? []).some((r) => r.state === "failing")) return 1
+  return 0
 }
 
 /** "4m ago" / "3d ago" — or the honest word when nothing has ever checked. */
@@ -320,6 +336,7 @@ export const IntegrationsTestCommand = cmd({
             ? { error: failure, connections: null }
             : rows,
       )
+      process.exitCode = probeExitCode({ notConnected, failure, rows })
       prompts.outro("Done")
       return
     }
@@ -329,6 +346,10 @@ export const IntegrationsTestCommand = cmd({
     if (notConnected) {
       prompts.log.warn(`No ${type} connection on this account.`)
       console.log(`  ${dim("Connect it:")} ${highlight(`iris connect ${type}`)}`)
+      // A missing integration is a failure of the probe, not a pass. It used to exit 0,
+      // so `for t in …; do iris integrations test $t; done` reported success for a typo
+      // (#190576).
+      process.exitCode = 1
       prompts.outro("Done")
       return
     }
@@ -336,6 +357,7 @@ export const IntegrationsTestCommand = cmd({
     if (failure) {
       prompts.log.error(`Could not probe ${type} — ${failure}`)
       prompts.log.info(dim("The probe did not complete. That says nothing about the integration."))
+      process.exitCode = 1
       prompts.outro("Done")
       return
     }
@@ -343,10 +365,10 @@ export const IntegrationsTestCommand = cmd({
     const now = Date.now()
     for (const row of rows ?? []) console.log(formatRow(row, now))
 
-    if ((rows ?? []).some((r) => r.state === "failing")) {
+    process.exitCode = probeExitCode({ notConnected, failure, rows })
+    if (process.exitCode === 1) {
       console.log("")
       console.log(`  ${dim("Reconnect:")} ${highlight(`iris connect ${type}`)}`)
-      process.exitCode = 1
     }
 
     prompts.outro("Done")
