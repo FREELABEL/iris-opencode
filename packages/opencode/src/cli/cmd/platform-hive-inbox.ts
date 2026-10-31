@@ -62,18 +62,41 @@ function ensureInboxDir() {
   mkdirSync(INBOX_DIR, { recursive: true })
 }
 
+/**
+ * #191574: one row without a `file` (a partial write, a test fixture) crashed the whole inbox with
+ * `path.join(undefined)`. A row is usable only if it is an object with a string id and file.
+ * Unusable rows are skipped, counted, and written back UNCHANGED, so reading the inbox never
+ * destroys data it doesn't understand.
+ */
+export function parseManifest(raw: string): { items: InboxItem[]; skipped: string[] } {
+  const items: InboxItem[] = []
+  const skipped: string[] = []
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue
+    let row: any = null
+    try { row = JSON.parse(line) } catch { /* not JSON */ }
+    if (row && typeof row === "object" && typeof row.id === "string" && typeof row.file === "string" && row.file) {
+      items.push(row as InboxItem)
+    } else {
+      skipped.push(line)
+    }
+  }
+  return { items, skipped }
+}
+
+let skippedRows: string[] = []
+
 function readManifest(): InboxItem[] {
   if (!existsSync(MANIFEST_PATH)) return []
-  const raw = readFileSync(MANIFEST_PATH, "utf-8").trim()
-  if (!raw) return []
-  return raw.split("\n").map((line) => {
-    try { return JSON.parse(line) as InboxItem } catch { return null }
-  }).filter(Boolean) as InboxItem[]
+  const parsed = parseManifest(readFileSync(MANIFEST_PATH, "utf-8"))
+  skippedRows = parsed.skipped
+  return parsed.items
 }
 
 function writeManifest(items: InboxItem[]) {
   ensureInboxDir()
-  writeFileSync(MANIFEST_PATH, items.map((i) => JSON.stringify(i)).join("\n") + (items.length ? "\n" : ""))
+  const lines = [...items.map((i) => JSON.stringify(i)), ...skippedRows]
+  writeFileSync(MANIFEST_PATH, lines.join("\n") + (lines.length ? "\n" : ""))
 }
 
 function formatBytes(bytes: number | undefined): string {
@@ -200,6 +223,10 @@ const HiveInboxListCommand = cmd({
     console.log()
     console.log(bold("  #   Status  Name                           From                   Age        Size"))
     console.log(dim("  " + "─".repeat(85)))
+
+    if (skippedRows.length > 0) {
+      console.log(dim(`  skipped ${skippedRows.length} unreadable row(s) in ${MANIFEST_PATH} (no file field)`))
+    }
 
     for (let i = 0; i < items.length; i++) {
       const item = items[i]
@@ -539,6 +566,10 @@ export const HiveInboxCommand = cmd({
     console.log()
     console.log(bold("  #   Status  Name                           From                   Age        Size"))
     console.log(dim("  " + "─".repeat(85)))
+
+    if (skippedRows.length > 0) {
+      console.log(dim(`  skipped ${skippedRows.length} unreadable row(s) in ${MANIFEST_PATH} (no file field)`))
+    }
 
     for (let i = 0; i < items.length; i++) {
       const item = items[i]

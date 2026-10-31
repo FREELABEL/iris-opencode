@@ -14,6 +14,7 @@ import {
   parseRunnerLine,
   findRunner,
   findNode,
+  RELAY_MIN_NODE,
   runningPid,
   explainTunnelApiError,
 } from "./platform-hive-relay"
@@ -210,6 +211,74 @@ export const HiveTunnelCommand = cmd({
 
 // ─── provider: hive ─────────────────────────────────────────────────────────────────────────────
 
+/** Start the relay runner detached and record its pid — `--bg`, and `iris hive models serve on`. */
+function spawnRelayBg(o: { home: string; node: string; runner: string; args: string[]; env: NodeJS.ProcessEnv; dir: string; name: string }) {
+  mkdirSync(o.dir, { recursive: true, mode: 0o700 })
+  const log = openSync(join(o.dir, "tunnel.log"), "a", 0o600)
+  const child = spawn(o.node, o.args, { env: o.env, detached: true, stdio: ["ignore", log, log] })
+  child.unref()
+  writeFileSync(join(o.home, ".iris", "tunnels", o.name, "tunnel.pid"), String(child.pid), { mode: 0o600 })
+  return child.pid
+}
+
+/**
+ * Open a relay tunnel in the background for a port on this machine, with no prompt — the caller
+ * has already asked (#191176: `iris hive models serve on` publishes an endpoint that refuses
+ * every request IRIS did not sign, which is a different promise from "anyone can reach it").
+ * Claims the name for this account first. Returns the URL, or why not.
+ */
+export async function startRelayTunnelBg(name: string, port: number): Promise<{ ok: true; url: string; already: boolean } | { ok: false; error: string }> {
+  const home = homedir()
+  const refused = refusedPort(port)
+  if (refused) return { ok: false, error: refused }
+  const prep = await prepareRelayRunner(name, port)
+  if (!prep.ok) return prep
+  if (runningPid(home, name)) return { ok: true, url: prep.url, already: true }
+  spawnRelayBg({ home, node: prep.node, runner: prep.runner, args: prep.args, env: prep.env, dir: join(home, ".iris", "tunnels", name), name })
+  return { ok: true, url: prep.url, already: false }
+}
+
+/**
+ * Claim `name` for this account and work out how to run the relay runner for a local port —
+ * everything short of starting it. Shared by `startRelayTunnelBg` and the ssh gate
+ * (hive-relay-ssh.ts), which runs the runner as its own child so the two live and die together.
+ */
+export async function prepareRelayRunner(
+  name: string,
+  port: number,
+): Promise<{ ok: true; url: string; node: string; runner: string; args: string[]; env: NodeJS.ProcessEnv } | { ok: false; error: string }> {
+  const home = homedir()
+  if (!validTunnelName(name)) return { ok: false, error: `"${name}" is not a valid tunnel name` }
+  const res = await hiveFetch(`/api/v6/nodes/tunnels`, { method: "POST", body: JSON.stringify({ name }) })
+  const json: any = await res.json().catch(() => ({}))
+  if (!res.ok) return { ok: false, error: explainTunnelApiError(res.status, json) }
+  const url = String(json?.data?.url || `https://${name}.${RELAY_ZONE}`).replace(/\/+$/, "")
+  const runner = findRunner(home)
+  if (!runner) return { ok: false, error: "This machine's Hive bridge predates Hive tunnels. Update it: iris bridge install" }
+  const node = findNode(home)
+  if (!node) return { ok: false, error: `Hive tunnels need Node.js ${RELAY_MIN_NODE} or newer on this machine (Node 18 crashes the tunnel): https://nodejs.org — or point IRIS_NODE at one` }
+  const zones: string[] = Array.isArray(json?.data?.zones) ? json.data.zones.filter((z: unknown) => typeof z === "string") : []
+  const env = {
+    ...process.env,
+    IRIS_API_BASE: process.env.IRIS_API_URL ?? "https://freelabel.net",
+    IRIS_API_KEY: await resolveToken(),
+    ...(zones.length && !process.env.HIVE_RELAY_ZONES ? { HIVE_RELAY_ZONES: zones.join(",") } : {}),
+  }
+  return { ok: true, url, node, runner, args: [runner, "--name", name, "--port", String(port)], env }
+}
+
+/** Close a background relay tunnel by name. True when one was running. */
+export function stopRelayTunnelBg(name: string): boolean {
+  const home = homedir()
+  const pid = runningPid(home, name)
+  if (!pid) return false
+  try {
+    process.kill(pid, "SIGTERM")
+  } catch {}
+  rmSync(join(home, ".iris", "tunnels", name, "tunnel.pid"), { force: true })
+  return true
+}
+
 async function runHive(argv: any) {
   const home = homedir()
   const fail = (m: string) => {
@@ -276,7 +345,7 @@ async function runHive(argv: any) {
   const runner = findRunner(home)
   if (!runner) return fail("This machine's Hive bridge predates Hive tunnels. Update it: iris bridge install")
   const node = findNode(home)
-  if (!node) return fail("Hive tunnels need Node.js 18 or newer on this machine (the Hive bridge uses it too): https://nodejs.org")
+  if (!node) return fail(`Hive tunnels need Node.js ${RELAY_MIN_NODE} or newer on this machine (Node 18 crashes the tunnel): https://nodejs.org — or point IRIS_NODE at one`)
 
   // Reserve the name BEFORE asking for a yes, so "taken" or "reserved" is said now, not after.
   const claim = await api("POST", "", { name })
@@ -304,11 +373,7 @@ async function runHive(argv: any) {
   const dir = join(home, ".iris", "tunnels", name + (argv.staging ? ".staging" : ""))
 
   if (argv.bg) {
-    mkdirSync(dir, { recursive: true, mode: 0o700 })
-    const log = openSync(join(dir, "tunnel.log"), "a", 0o600)
-    const child = spawn(node, args, { env, detached: true, stdio: ["ignore", log, log] })
-    child.unref()
-    writeFileSync(join(home, ".iris", "tunnels", name, "tunnel.pid"), String(child.pid), { mode: 0o600 })
+    spawnRelayBg({ home, node, runner, args, env, dir, name })
     console.log(`\n${success("●")} ${bold(url)} → localhost:${port}`)
     console.log(dim(`  OPEN until you close it:  iris hive tunnel --off --name ${name}`))
     console.log(dim(`  first time for this name? its certificate takes ~30 s — log: ${join(dir, "tunnel.log")}`))

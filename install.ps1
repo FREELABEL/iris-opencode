@@ -521,6 +521,17 @@ function Install-IrisDaemonSource {
             throw "the downloaded archive has no daemon.js  -  refusing to overwrite the install"
         }
 
+        # The exact commit: GitHub stores it as the zip's archive comment, the last bytes of the
+        # file. Recorded so `iris hive doctor` can say what this node runs (#191480).
+        try {
+            $bytes = [System.IO.File]::ReadAllBytes($zip)
+            $n = [Math]::Min(256, $bytes.Length)
+            $tail = [System.Text.Encoding]::ASCII.GetString($bytes, $bytes.Length - $n, $n)
+            if ($tail -match '([0-9a-f]{40})\s*$') {
+                Set-Content -Path (Join-Path $root.FullName ".iris-commit") -Value $Matches[1] -Encoding ascii
+            }
+        } catch { }
+
         $result.Updated = Test-Path (Join-Path $BridgeDir "daemon.js")
         New-Item -ItemType Directory -Path $BridgeDir -Force -ErrorAction Stop | Out-Null
 

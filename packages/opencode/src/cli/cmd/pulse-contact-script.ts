@@ -11,6 +11,7 @@ import { registerDefault, type PulseScript, type Source, type SourceResult, type
 import { irisFetch, BRIDGE_URL, getBridgeToken } from "./iris-api"
 import { executeIntegrationCall } from "./platform-run"
 import { emailChannelLabel, readCalendarEvents, threadInWindow } from "./platform-leads-honesty"
+import { desktopAccounts, openDesktopDb, pickAccount, searchPassages } from "../lib/desktop-sessions"
 
 /** One channel the pulse lists — the shape the handler has always rendered and emitted as JSON. */
 export interface Channel {
@@ -365,6 +366,61 @@ function contactStop(source: Source<ContactQuery, ContactReading>, shutOutput: (
   }
 }
 
+/**
+ * What you said about this person in IRIS Desktop (#190661) — passages in your own chats that name
+ * them, read-only from Desktop's SQLite. This is context, NOT contact: it is a separate channel the
+ * handler never files into the comms ledger (no channelMap entry) and never counts as outreach.
+ * `home` exists for tests.
+ */
+export const DESKTOP_CHANNEL = "IRIS Desktop (your chats about them)"
+export function desktopSourceFor(home?: string): Source<ContactQuery, ContactReading> {
+  return {
+    id: "iris_desktop",
+    label: "IRIS Desktop",
+    async read(q) {
+      // The name and every address the lead record knows; a phone number is too short to be safe in LIKE.
+      const terms = [...new Set([q.name, ...q.allEmails].map((t) => (t || "").trim()).filter((t) => t.length >= 3))]
+      if (!terms.length) return reading([{ name: DESKTOP_CHANNEL, messages: [], error: "No name or email on this lead to look for" }], [])
+      let db: ReturnType<typeof openDesktopDb>
+      try {
+        const acct = pickAccount(desktopAccounts(home))
+        if (!acct.db) throw new Error("no IRIS Desktop history on this machine")
+        db = openDesktopDb(acct.db)
+      } catch (e) {
+        return reading([{ name: DESKTOP_CHANNEL, messages: [], error: String((e as Error)?.message ?? e) }], [])
+      }
+      try {
+        const since = Date.now() - q.days * 864e5
+        const seen = new Set<string>()
+        const messages: any[] = []
+        for (const term of terms) {
+          for (const h of searchPassages(db, term, { archived: true, since, limit: q.msgLimit })) {
+            if (h.time < since || seen.has(h.messageId)) continue
+            seen.add(h.messageId)
+            messages.push({
+              date: new Date(h.time).toISOString(),
+              ts: new Date(h.time).toISOString(),
+              from: h.role === "user" ? "you (IRIS Desktop)" : "IRIS (Desktop)",
+              subject: h.sessionTitle,
+              text: h.excerpt,
+              session_id: h.sessionId,
+              message_id: h.messageId,
+              open: `iris desktop sessions show ${h.sessionId} --around ${h.messageId}`,
+            })
+          }
+        }
+        messages.sort((a, b) => String(b.date).localeCompare(String(a.date)))
+        return reading([{ name: DESKTOP_CHANNEL, messages: messages.slice(0, q.msgLimit) }], ["IRIS Desktop history (read-only)"])
+      } catch (e) {
+        return reading([{ name: DESKTOP_CHANNEL, messages: [], error: `could not read IRIS Desktop history: ${String((e as Error)?.message ?? e)}` }], [])
+      } finally {
+        db.close()
+      }
+    },
+  }
+}
+const desktopSource = desktopSourceFor()
+
 export const contactSources = {
   gmail: gmailSource,
   imessage: imessageSource,
@@ -372,6 +428,7 @@ export const contactSources = {
   whatsapp_groups: whatsappGroupsSource,
   apple_mail: appleMailSource,
   calendar: calendarSource,
+  iris_desktop: desktopSource,
 }
 
 /**
@@ -389,6 +446,7 @@ export const defaultContactScript: PulseScript<ContactQuery, Channel[]> = {
     contactStop(whatsappGroupsSource, () => []),
     contactStop(appleMailSource, () => []),
     contactStop(calendarSource, (reason) => [{ name: "Meetings", messages: [], error: reason }]),
+    contactStop(desktopSource, (reason) => [{ name: DESKTOP_CHANNEL, messages: [], error: reason }]),
   ],
 }
 

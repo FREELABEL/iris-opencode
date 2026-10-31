@@ -1384,87 +1384,9 @@ const CalendarSearchCommand = cmd({
     const spinner = json ? null : prompts.spinner()
     spinner?.start("Searching every calendar…")
 
-    const sources: SearchSource[] = []
-    const found: FoundEvent[] = []
-    const selfEmails: string[] = []
-
-    // 1. Connected accounts
-    const uid = await resolveUserId()
-    let conns: any[] = []
-    try {
-      const res = await irisFetch(`/api/v1/users/${uid}/integrations`, {}, IRIS_API)
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const data = (await res.json()) as any
-      conns = firstArray(data?.connections, data?.data, data).filter((c: any) =>
-        ["google-calendar", "outlook-calendar"].includes(String(c.type ?? "").toLowerCase()),
-      )
-    } catch (err: any) {
-      sources.push({ name: "connected accounts", kind: "google", status: "failed", count: 0, reason: `could not list connections (${err?.message ?? err}) — accounts were NOT searched` })
-    }
-    for (const c of conns) if (c.account_email) selfEmails.push(String(c.account_email))
-
-    for (const c of conns.filter((c: any) => String(c.type).toLowerCase() === "outlook-calendar")) {
-      // No calendar verb reads Outlook connections yet; say so instead of pretending it was searched.
-      sources.push({ name: String(c.account_email || c.name || `outlook-calendar #${c.id}`), kind: "outlook", status: "unsupported", count: 0, reason: "Outlook calendar search not wired yet (epic #187374 step 4)", integrationId: Number(c.id) })
-    }
-    const googleJob = (async () => {
-      const resolved = await pool(conns.filter((c: any) => String(c.type).toLowerCase() === "google-calendar"), 4, resolveGoogleAccount)
-      // One search per real account; failed records stay separate, each with its own reason.
-      const byIdentity = new Map<string, GoogleAccount>()
-      const accounts: GoogleAccount[] = []
-      for (const a of resolved) {
-        if (a.error) { accounts.push(a); continue }
-        const seen = byIdentity.get(a.identity)
-        if (seen) { seen.duplicates.push(Number(a.conn.id)); continue }
-        byIdentity.set(a.identity, a)
-        accounts.push(a)
-        if (a.identity.includes("@")) selfEmails.push(a.identity)
-      }
-      const results = await pool(accounts, 3, (a) => searchGoogleAccount(a, query, from, to))
-      for (const r of results) { sources.push(r.source); found.push(...r.events) }
-    })()
-    const jobs = [googleJob]
-
-    // 2. This computer's calendar app
-    const local = localSource()
-    const localJob = (async () => {
-      if (args["no-local"] || args.noLocal) return
-      if (local.kind === null) {
-        sources.push({ name: "local calendar", kind: "apple", status: "unsupported", count: 0, reason: local.reason })
-        return
-      }
-      const read = local.kind === "apple" ? await readAppleCalendar(from, to) : await readWindowsOutlook(from, to)
-      if (!read.ok) {
-        sources.push({ name: local.name, kind: local.kind, status: "failed", count: 0, reason: read.reason })
-        return
-      }
-      try {
-        const parsed = parseAppleCalendar(read.stdout, query, local.kind === "apple" ? "Apple Calendar" : "Outlook")
-        sources.push({
-          name: local.name,
-          kind: local.kind,
-          status: parsed.errors.length > 0 && parsed.calendars === parsed.errors.length ? "failed" : "ok",
-          count: parsed.events.length,
-          calendars: parsed.calendars,
-          ...(parsed.errors.length ? { reason: `${parsed.errors.length} calendar(s) unreadable — ${parsed.errors[0]}` } : {}),
-        })
-        found.push(...parsed.events)
-      } catch {
-        sources.push({ name: local.name, kind: local.kind, status: "failed", count: 0, reason: `unreadable output: ${read.stdout.slice(0, 120)}` })
-      }
-    })()
-
-    await Promise.all([...jobs, localJob])
+    const { result, selfEmails } = await searchCalendars(query, from, to, { local: !(args["no-local"] || args.noLocal) })
     spinner?.stop("Searched")
-
-    const events = mergeEvents(found)
-    const result: SearchResult = {
-      query,
-      window: { from: from.toISOString(), to: to.toISOString() },
-      events,
-      sources: sources.sort((a, b) => a.name.localeCompare(b.name)),
-      complete: isComplete(sources),
-    }
+    const events = result.events
     if (!result.complete) process.exitCode = 1
 
     // 3. Attendees → CRM
@@ -1563,6 +1485,102 @@ const CalendarSearchCommand = cmd({
 })
 
 // ── ROOT COMMAND ──────────────────────────────────────────────
+/**
+ * Every calendar the user has — each connected Google account once (duplicate connection records
+ * collapse onto the account they reach), Outlook named as unsupported, and this computer's calendar
+ * app — searched for `query` between `from` and `to`. Every source reports an outcome; a failed one
+ * is named, never folded into "no events". Shared by `iris calendar search` and Pulse's calendar
+ * stop (#190968), so the two cannot disagree about what was searched.
+ */
+export async function searchCalendars(
+  query: string,
+  from: Date,
+  to: Date,
+  o: { local?: boolean } = {},
+): Promise<{ result: SearchResult; selfEmails: string[] }> {
+  const sources: SearchSource[] = []
+  const found: FoundEvent[] = []
+  const selfEmails: string[] = []
+
+  // 1. Connected accounts
+  const uid = await resolveUserId()
+  let conns: any[] = []
+  try {
+    const res = await irisFetch(`/api/v1/users/${uid}/integrations`, {}, IRIS_API)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const data = (await res.json()) as any
+    conns = firstArray(data?.connections, data?.data, data).filter((c: any) =>
+      ["google-calendar", "outlook-calendar"].includes(String(c.type ?? "").toLowerCase()),
+    )
+  } catch (err: any) {
+    sources.push({ name: "connected accounts", kind: "google", status: "failed", count: 0, reason: `could not list connections (${err?.message ?? err}) — accounts were NOT searched` })
+  }
+  for (const c of conns) if (c.account_email) selfEmails.push(String(c.account_email))
+
+  for (const c of conns.filter((c: any) => String(c.type).toLowerCase() === "outlook-calendar")) {
+    // No calendar verb reads Outlook connections yet; say so instead of pretending it was searched.
+    sources.push({ name: String(c.account_email || c.name || `outlook-calendar #${c.id}`), kind: "outlook", status: "unsupported", count: 0, reason: "Outlook calendar search not wired yet (epic #187374 step 4)", integrationId: Number(c.id) })
+  }
+  const googleJob = (async () => {
+    const resolved = await pool(conns.filter((c: any) => String(c.type).toLowerCase() === "google-calendar"), 4, resolveGoogleAccount)
+    // One search per real account; failed records stay separate, each with its own reason.
+    const byIdentity = new Map<string, GoogleAccount>()
+    const accounts: GoogleAccount[] = []
+    for (const a of resolved) {
+      if (a.error) { accounts.push(a); continue }
+      const seen = byIdentity.get(a.identity)
+      if (seen) { seen.duplicates.push(Number(a.conn.id)); continue }
+      byIdentity.set(a.identity, a)
+      accounts.push(a)
+      if (a.identity.includes("@")) selfEmails.push(a.identity)
+    }
+    const results = await pool(accounts, 3, (a) => searchGoogleAccount(a, query, from, to))
+    for (const r of results) { sources.push(r.source); found.push(...r.events) }
+  })()
+  const jobs = [googleJob]
+
+  // 2. This computer's calendar app
+  const local = localSource()
+  const localJob = (async () => {
+    if (o.local === false) return
+    if (local.kind === null) {
+      sources.push({ name: "local calendar", kind: "apple", status: "unsupported", count: 0, reason: local.reason })
+      return
+    }
+    const read = local.kind === "apple" ? await readAppleCalendar(from, to) : await readWindowsOutlook(from, to)
+    if (!read.ok) {
+      sources.push({ name: local.name, kind: local.kind, status: "failed", count: 0, reason: read.reason })
+      return
+    }
+    try {
+      const parsed = parseAppleCalendar(read.stdout, query, local.kind === "apple" ? "Apple Calendar" : "Outlook")
+      sources.push({
+        name: local.name,
+        kind: local.kind,
+        status: parsed.errors.length > 0 && parsed.calendars === parsed.errors.length ? "failed" : "ok",
+        count: parsed.events.length,
+        calendars: parsed.calendars,
+        ...(parsed.errors.length ? { reason: `${parsed.errors.length} calendar(s) unreadable — ${parsed.errors[0]}` } : {}),
+      })
+      found.push(...parsed.events)
+    } catch {
+      sources.push({ name: local.name, kind: local.kind, status: "failed", count: 0, reason: `unreadable output: ${read.stdout.slice(0, 120)}` })
+    }
+  })()
+
+  await Promise.all([...jobs, localJob])
+
+  const events = mergeEvents(found)
+  const result: SearchResult = {
+    query,
+    window: { from: from.toISOString(), to: to.toISOString() },
+    events,
+    sources: sources.sort((a, b) => a.name.localeCompare(b.name)),
+    complete: isComplete(sources),
+  }
+  return { result, selfEmails }
+}
+
 export const PlatformCalendarCommand = cmd({
   command: "calendar",
   aliases: ["cal"],

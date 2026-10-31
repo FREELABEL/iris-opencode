@@ -166,6 +166,8 @@ export interface BuildPayloadInput {
   timeoutSec?: number
   priority?: number
   allowFallback?: boolean
+  /** Send it to the named node even though it reports CPU/memory pressure (#191603). Needs nodeId. */
+  force?: boolean
   requiredCapabilities?: string[]
   /** ISO time after which the task must never run (#187568). From parseDeadline. */
   notAfter?: string
@@ -199,6 +201,9 @@ export function buildTaskPayload(input: BuildPayloadInput): Record<string, unkno
   // Only send the opt-in when it was asked for — sending `false` would be identical, but an
   // absent key keeps the request readable in logs.
   if (input.allowFallback) payload.allow_node_fallback = true
+  // #191603 — force overrides ONLY the node's CPU/memory pressure reading; a full or offline node
+  // still refuses. It means "this machine anyway", so it is only sent with a node.
+  if (input.force && input.nodeId) payload.force = true
 
   if (typeof input.timeoutSec === "number" && Number.isFinite(input.timeoutSec)) {
     payload.timeout_seconds = Math.max(30, Math.min(3600, Math.round(input.timeoutSec)))
@@ -296,6 +301,20 @@ export function describeApiError(status: number, bodyText: string): string {
 
   const head = status === 422 ? "The API rejected the task" : `Task creation failed (HTTP ${status})`
   return lines.length ? `${head}:\n  ${lines.join("\n  ")}` : head
+}
+
+/**
+ * #191603 — when the server refused a node for CPU/memory PRESSURE, say how to override it.
+ *
+ * Matches the server's own words: "is busy (CPU at 486%)", "cannot take the re-run: memory at
+ * 93%". Returns null for anything else — in particular "at capacity (3/3 tasks)", which --force
+ * does not override (a full node has no slot to give; the server names capacity before pressure,
+ * so the two never share a message), and an offline node.
+ */
+export function busyOverrideHint(error: unknown, flag = "--force"): string | null {
+  const text = typeof error === "string" ? error : ""
+  if (!/\b(CPU|memory) at \d+(\.\d+)?%/i.test(text)) return null
+  return `The node is busy from CPU/memory pressure, not out of slots. Wait for it, or rerun with ${flag} to send it to that node anyway.`
 }
 
 export const TERMINAL_STATUSES = new Set(["succeeded", "completed", "failed", "cancelled", "timeout", "errored", "expired"])

@@ -154,7 +154,9 @@ export namespace PermissionNext {
     async (input) => {
       const s = await state()
       const existing = s.pending[input.requestID]
-      if (!existing) return
+      // Not pending (already answered, or cleared by an abort): tell the caller so a late
+      // reply can be refused instead of silently "succeeding".
+      if (!existing) return false
       delete s.pending[input.requestID]
       Bus.publish(Event.Replied, {
         sessionID: existing.info.sessionID,
@@ -176,11 +178,11 @@ export namespace PermissionNext {
             pending.reject(new RejectedError())
           }
         }
-        return
+        return true
       }
       if (input.reply === "once") {
         existing.resolve()
-        return
+        return true
       }
       if (input.reply === "always") {
         for (const pattern of existing.info.always) {
@@ -212,10 +214,33 @@ export namespace PermissionNext {
         // TODO: we don't save the permission ruleset to disk yet until there's
         // UI to manage it
         // await Storage.write(["permission", Instance.project.id], s.approved)
-        return
+        return true
       }
+      return true
     },
   )
+
+  /**
+   * Reject every pending request of one session, publishing the same `permission.replied`
+   * (reply: "reject") a user reject publishes, so every client drops the prompt. Used when the
+   * session is aborted (#191784): aborting the run does not reach the promise a tool's ask is
+   * parked on, so without this the request stays listed, still accepts a reply, and the tool
+   * never finishes. Reusable by any path that ends a session (e.g. delete).
+   */
+  export async function rejectSession(sessionID: string) {
+    const s = await state()
+    for (const [id, pending] of Object.entries(s.pending)) {
+      if (pending.info.sessionID !== sessionID) continue
+      delete s.pending[id]
+      log.info("rejected on abort", { requestID: id, sessionID })
+      Bus.publish(Event.Replied, {
+        sessionID: pending.info.sessionID,
+        requestID: pending.info.id,
+        reply: "reject",
+      })
+      pending.reject(new RejectedError())
+    }
+  }
 
   export function evaluate(permission: string, pattern: string, ...rulesets: Ruleset[]): Rule {
     const merged = merge(...rulesets)

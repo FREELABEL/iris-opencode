@@ -5,58 +5,14 @@ import { printDivider, bold, highlight, dim } from "./iris-api"
 import { spawnSync } from "child_process"
 import { existsSync, writeFileSync, statSync, renameSync, unlinkSync, mkdirSync } from "fs"
 import { join } from "path"
+import { which, locateYtDlp, fetchWithYtDlp } from "./media-fetch"
 
-export function which(bin: string): string | null {
-  const r = spawnSync("which", [bin], { encoding: "utf8" })
-  const p = r.stdout.trim()
-  return p && r.status === 0 ? p : null
-}
+// The engine lives in media-fetch.ts (#190460); these names stay importable from here.
+export { which, warnIfYtDlpStale } from "./media-fetch"
 
-/** Days after which a yt-dlp build is considered stale enough to break YouTube. */
-const YTDLP_STALE_DAYS = 90
-
-/**
- * Warn when yt-dlp is old enough that YouTube extraction silently degrades.
- *
- * yt-dlp versions are date-stamped (YYYY.MM.DD[.HHMMSS]). Once a build is a few months
- * behind, YouTube's player/n-challenge has rotated past it: unauthenticated it falls back
- * to the legacy muxed 360p format 18, and WITH cookies the JS challenge solver fails
- * outright and returns no video formats at all — while the download still exits 0. That
- * silently caps every clip this platform publishes at 360p (#178722, recurrence of
- * #152290). Warn loudly instead of shipping a degraded artifact.
- */
-export function warnIfYtDlpStale(ytdlp: string): void {
-  try {
-    const out = spawnSync(ytdlp, ["--version"], { encoding: "utf8", timeout: 15_000 })
-    const raw = (out.stdout || "").trim()
-    const m = raw.match(/^(\d{4})\.(\d{2})\.(\d{2})/)
-    if (!m) return
-    const built = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
-    const ageDays = Math.floor((Date.now() - built) / 86_400_000)
-    if (ageDays < YTDLP_STALE_DAYS) return
-    prompts.log.warn(
-      `yt-dlp ${raw} is ${ageDays} days old — YouTube downloads may silently drop to 360p ` +
-        `or return no formats at all.\n  Upgrade:  pip3 install --upgrade yt-dlp   (or: brew upgrade yt-dlp)`,
-    )
-  } catch {
-    // Never let a version probe block a download.
-  }
-}
-
-export function ensureYtDlp(): string | null {
-  let ytdlp = which("yt-dlp")
-  if (ytdlp) {
-    warnIfYtDlpStale(ytdlp)
-    return ytdlp
-  }
-  prompts.log.info("Installing yt-dlp...")
-  spawnSync("brew", ["install", "yt-dlp"], { stdio: "pipe", timeout: 120_000 })
-  ytdlp = which("yt-dlp")
-  if (ytdlp) return ytdlp
-  spawnSync("pip3", ["install", "--user", "yt-dlp"], { stdio: "pipe", timeout: 60_000 })
-  ytdlp = which("yt-dlp")
-  if (!ytdlp) prompts.log.error("yt-dlp not found. Install: brew install yt-dlp")
-  return ytdlp
+/** Find (or install) yt-dlp — the shared locate, so this command gets transcribe's fixes too. */
+export function ensureYtDlp(): Promise<string | null> {
+  return locateYtDlp()
 }
 
 function slugFromUrl(url: string): string {
@@ -88,61 +44,26 @@ async function downloadFile(
   const spec = opts?.quality
     ? `bestvideo[height<=${opts.quality}]+bestaudio/best[height<=${opts.quality}]/best`
     : formatSpec
-  const baseArgs = [
-    "-f", spec,
-    "--no-playlist",
-    "-o", outPath,
-    "--no-warnings",
-    // Only pull the requested minutes instead of the whole multi-hour file.
-    ...(opts?.section ? ["--download-sections", opts.section] : []),
-    ...(mergeFormat ? ["--merge-output-format", mergeFormat] : []),
-    // Strip the video stream for audio artifacts. Without -x, a source that offers no
-    // audio-only format (e.g. YouTube serving only the muxed format 18) falls through
-    // the selector to the muxed file, and we write a byte-identical copy of the mp4
-    // under a .m4a name — an "audio" file containing an h264 stream (#178765).
-    ...(opts?.extractAudio ? ["-x", "--audio-format", opts.extractAudio] : []),
-  ]
-
-  // Stream yt-dlp's own progress/errors when the user asked for logs — otherwise a
-  // multi-GB / multi-hour pull looks identical to a hang, and the real error is lost
-  // behind a guess (#137384). yt-dlp emits full %/ETA + clear errors; surface them.
-  const argv = process.argv
-  const verbose =
-    argv.includes("--print-logs") ||
-    argv.includes("--log-level=DEBUG") ||
-    (argv.includes("--log-level") && (argv[argv.indexOf("--log-level") + 1] || "").toUpperCase() === "DEBUG")
-  const stdio: any = verbose ? ["ignore", "inherit", "inherit"] : "pipe"
-
-  const attempts = [
-    ...["chrome", "firefox", "safari"].map((b) => [...baseArgs, "--cookies-from-browser", b, url]),
-    [...baseArgs, url],
-  ]
-
-  let last: ReturnType<typeof spawnSync> | null = null
-  for (const a of attempts) {
-    const dl = spawnSync(ytdlp, a, { stdio, timeout: 300_000, encoding: "utf8" })
-    last = dl
-    if (dl.status === 0 && existsSync(outPath)) return { ok: true }
-  }
-
-  // Failed — report the REAL cause. On timeout spawnSync sets .error(ETIMEDOUT)/SIGTERM;
-  // otherwise yt-dlp's stderr holds the true error (e.g. "No video could be found in
-  // this tweet"). A partial .part/.ytdl may remain — flag it so a downstream step never
-  // mistakes a partial for a finished file.
-  const timedOut = (last?.error as any)?.code === "ETIMEDOUT" || last?.signal === "SIGTERM"
-  const stderr = typeof last?.stderr === "string" ? last.stderr.trim() : ""
-  const partial = existsSync(outPath + ".part") ? outPath + ".part" : null
-  let error: string
-  if (timedOut) {
-    error = `yt-dlp timed out after 300s${partial ? ` (incomplete ${partial} left in place)` : ""}`
-  } else if (stderr) {
-    error = stderr.split("\n").filter(Boolean).pop() || stderr
-  } else if (verbose) {
-    error = "yt-dlp failed (see output above)"
-  } else {
-    error = last?.error?.message || "yt-dlp failed — re-run with --print-logs to see why"
-  }
-  return { ok: false, error, timedOut }
+  const r = fetchWithYtDlp(ytdlp, url, {
+    // The requested selector first; if YouTube does not offer it, let yt-dlp choose (#147267).
+    formats: [spec, null],
+    expect: outPath,
+    timeoutMs: 300_000,
+    args: [
+      "--no-playlist",
+      "-o", outPath,
+      "--no-warnings",
+      // Only pull the requested minutes instead of the whole multi-hour file.
+      ...(opts?.section ? ["--download-sections", opts.section] : []),
+      ...(mergeFormat ? ["--merge-output-format", mergeFormat] : []),
+      // Strip the video stream for audio artifacts. Without -x, a source that offers no
+      // audio-only format (e.g. YouTube serving only the muxed format 18) falls through
+      // the selector to the muxed file, and we write a byte-identical copy of the mp4
+      // under a .m4a name — an "audio" file containing an h264 stream (#178765).
+      ...(opts?.extractAudio ? ["-x", "--audio-format", opts.extractAudio] : []),
+    ],
+  })
+  return { ok: r.ok, error: r.error, timedOut: r.timedOut }
 }
 
 export interface AudioTags {
@@ -236,57 +157,31 @@ export async function downloadAudioMp3(
   tags?: AudioTags,
 ): Promise<{ ok: boolean; error?: string; path?: string }> {
   const finalPath = `${outBase}.mp3`
-  const baseArgs = [
-    "-x",
-    "--audio-format", "mp3",
-    "--audio-quality", "0", // 0 = best (~320kbps)
-    "--embed-thumbnail",
-    "--embed-metadata",
-    "--no-playlist",
-    "-o", `${outBase}.%(ext)s`,
-    "--no-warnings",
-  ]
-
-  const argv = process.argv
-  const verbose =
-    argv.includes("--print-logs") ||
-    argv.includes("--log-level=DEBUG") ||
-    (argv.includes("--log-level") && (argv[argv.indexOf("--log-level") + 1] || "").toUpperCase() === "DEBUG")
-  const stdio: any = verbose ? ["ignore", "inherit", "inherit"] : "pipe"
-
-  // Cookies help when a match is age-gated; fall through to no-cookies last.
-  const attempts = [
-    ...["chrome", "firefox", "safari"].map((b) => [...baseArgs, "--cookies-from-browser", b, target]),
-    [...baseArgs, target],
-  ]
-
-  let last: ReturnType<typeof spawnSync> | null = null
-  for (const a of attempts) {
-    const dl = spawnSync(ytdlp, a, { stdio, timeout: 300_000, encoding: "utf8" })
-    last = dl
-    if (dl.status === 0 && existsSync(finalPath)) {
-      // Replace YouTube-derived tags with clean Spotify metadata when provided.
-      if (tags) {
-        const ffmpeg = which("ffmpeg")
-        if (ffmpeg) retagMp3(ffmpeg, finalPath, tags)
-      }
-      return { ok: true, path: finalPath }
-    }
+  const r = fetchWithYtDlp(ytdlp, target, {
+    expect: finalPath,
+    timeoutMs: 300_000,
+    args: [
+      "-x",
+      "--audio-format", "mp3",
+      "--audio-quality", "0", // 0 = best (~320kbps)
+      "--embed-thumbnail",
+      "--embed-metadata",
+      "--no-playlist",
+      "-o", `${outBase}.%(ext)s`,
+      "--no-warnings",
+    ],
+  })
+  if (!r.ok) {
+    // A search term that matched nothing exits 0 with no file — say that, not "yt-dlp failed".
+    const nothing = !r.stderr && !r.timedOut && target.startsWith("ytsearch")
+    return { ok: false, error: nothing ? "no YouTube match found (re-run with --print-logs for details)" : r.error }
   }
-
-  const timedOut = (last?.error as any)?.code === "ETIMEDOUT" || last?.signal === "SIGTERM"
-  const stderr = typeof last?.stderr === "string" ? last.stderr.trim() : ""
-  let error: string
-  if (timedOut) {
-    error = "yt-dlp timed out after 300s"
-  } else if (stderr) {
-    error = stderr.split("\n").filter(Boolean).pop() || stderr
-  } else if (verbose) {
-    error = "yt-dlp failed (see output above)"
-  } else {
-    error = last?.error?.message || "no YouTube match found (re-run with --print-logs for details)"
+  // Replace YouTube-derived tags with clean Spotify metadata when provided.
+  if (tags) {
+    const ffmpeg = which("ffmpeg")
+    if (ffmpeg) retagMp3(ffmpeg, finalPath, tags)
   }
-  return { ok: false, error }
+  return { ok: true, path: finalPath }
 }
 
 /**
@@ -294,23 +189,14 @@ export async function downloadAudioMp3(
  * Works for tweets, YouTube, Instagram, TikTok, etc.
  */
 function extractMetadata(ytdlp: string, url: string): any | null {
-  // Try with browser cookies
-  for (const browser of ["chrome", "firefox", "safari"]) {
-    const res = spawnSync(ytdlp, [
-      "--dump-json", "--no-playlist", "--no-warnings",
-      "--cookies-from-browser", browser, url,
-    ], { encoding: "utf8", timeout: 60_000 })
-    if (res.status === 0 && res.stdout.trim()) {
-      try { return JSON.parse(res.stdout.trim()) } catch {}
-    }
-  }
-
-  // Fallback: no cookies
-  const res = spawnSync(ytdlp, [
-    "--dump-json", "--no-playlist", "--no-warnings", url,
-  ], { encoding: "utf8", timeout: 60_000 })
-  if (res.status === 0 && res.stdout.trim()) {
-    try { return JSON.parse(res.stdout.trim()) } catch {}
+  const r = fetchWithYtDlp(ytdlp, url, {
+    args: ["--dump-json", "--no-playlist", "--no-warnings"],
+    timeoutMs: 60_000,
+    selfUpdate: false,
+    verbose: false,
+  })
+  if (r.ok && r.stdout) {
+    try { return JSON.parse(r.stdout.trim()) } catch {}
   }
 
   // yt-dlp can't handle text-only posts — try oEmbed / HTML fallback
@@ -499,7 +385,7 @@ export const PlatformDownloadCommand = cmd({
     const wantAudio = !textOnly && args.audio
     const wantText = args.text || textOnly
 
-    const ytdlp = ensureYtDlp()
+    const ytdlp = await ensureYtDlp()
     if (!ytdlp) {
       prompts.outro("Aborted")
       return

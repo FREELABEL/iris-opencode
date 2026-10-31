@@ -39,6 +39,7 @@ import { isLocalOAuthProvider, runLocalOAuthConnect } from "./integration-oauth-
 import { readIntegrationStores, findStatusDisagreements, describeDisagreement, type StoreRef } from "./integration-stores"
 import { PathwaysCommand } from "./platform-integrations-pathways"
 import { firstArray } from "../../util/array"
+import { listEnvelope, listFooter } from "./pagination-args"
 import { knownFunction, dryRunResult, gatedExec, previewParams, recipientCount } from "./integration-write-gate"
 import { openBrowser } from "../../util/browser"
 
@@ -1145,7 +1146,22 @@ const ListConnectedCommand = cmd({
     if (args.json) {
       // Machine consumers need the distinction most — an agent parsing `[]` will state it as
       // fact. Emit the error instead of an empty list it cannot tell apart from "none".
-      await writeJson(failure ? { error: failure, connections: null } : items)
+      // Success is the list contract (#191863): every store is read whole, so the total is
+      // exact and nothing is withheld. Failure stays an error object, never an empty list.
+      if (failure) {
+        process.exitCode = 1
+        await writeJson({ success: false, error: failure, connections: null })
+      } else {
+        const partial = read.unreachable.length > 0
+        const env = partial
+          ? listEnvelope({ rows: items ?? [], total: null, page: 1, perPage: Math.max((items ?? []).length, 1), lastPage: 1, hasMore: false }, { resource: "integrations" })
+          : listEnvelope(items ?? [], { resource: "integrations", complete: true })
+        // A store that did not answer: the total is unknown and rows may be missing, but no
+        // page would return them — so truncated, with no next page.
+        if (partial) env.meta.truncated = true
+        if (partial) env.meta.hint = `Only ${stores.length - read.unreachable.length} of ${stores.length} stores answered (could not reach ${read.unreachable.join(", ")}); this list may be incomplete.`
+        await writeJson(env)
+      }
       prompts.outro("Done")
       return
     }
@@ -1162,7 +1178,7 @@ const ListConnectedCommand = cmd({
     // `!items` is unreachable here (failure returned above) but narrows the type for the
     // probe loop below, and keeps this honest if the branches above are ever reordered.
     if (!items || items.length === 0) {
-      prompts.log.warn("No integrations connected.")
+      prompts.log.warn("No integrations connected (0 found across every store that answered).")
       prompts.outro(dim("iris integrations list-available"))
       return
     }
@@ -1343,6 +1359,7 @@ const ListConnectedCommand = cmd({
       console.log(`  ${highlight(i.type)}  ${idLabel}  ${statusLabel}${accountLabel}${provider}`)
     }
     printDivider()
+    console.log(`  ${dim(listFooter(listEnvelope(items, { resource: "integrations", complete: true }).meta, "integrations"))}`)
     prompts.outro(dim("Pick an account: iris integrations exec <type> <fn> --account=<email>  (or --integration-id=<id>)"))
   },
 })

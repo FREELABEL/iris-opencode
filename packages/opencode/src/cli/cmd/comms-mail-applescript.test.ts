@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { MAIL_THREAD_READER_JXA, withoutLedgerDuplicates } from "./comms-mail-applescript"
+import { MAIL_SENT_READER_JXA, MAIL_THREAD_READER_JXA, withoutLedgerDuplicates } from "./comms-mail-applescript"
 
 describe("withoutLedgerDuplicates — two writers, two keys, one row", () => {
   // Measured on #28363: `iris mail send` logged "Test note is on CAS000001" at send time; the same
@@ -48,8 +48,19 @@ describe("the embedded Mail reader", () => {
 
   test("matches by exact address and reads one named account — never the unified inbox", () => {
     expect(MAIL_THREAD_READER_JXA).toContain("emailOf(snd[i]) === addr")
-    expect(MAIL_THREAD_READER_JXA).toContain("Mail.accounts.byName(acctName)")
+    expect(MAIL_THREAD_READER_JXA).toContain("Mail.accounts.byName(sel)")
     expect(MAIL_THREAD_READER_JXA).not.toContain("Mail.inbox")
     expect(MAIL_THREAD_READER_JXA).not.toContain("_contains")
+  })
+})
+
+describe("the embedded Sent Mail reader (iris mail audit --sent, #191605)", () => {
+  test("parses, reads ONE named account's Sent mailboxes, date-bounded, counting before bulk fetches", () => {
+    expect(() => new Function(MAIL_SENT_READER_JXA)).not.toThrow()
+    expect(MAIL_SENT_READER_JXA).toContain("Mail.accounts.byName(acctName)")
+    expect(MAIL_SENT_READER_JXA).toContain("/(^|\\/)sent( mail| messages)?$/i")
+    expect(MAIL_SENT_READER_JXA).toContain("if (msgs.length === 0) continue")
+    expect(MAIL_SENT_READER_JXA).toContain("msgs.bccRecipients.address()")
+    expect(MAIL_SENT_READER_JXA).not.toContain("Mail.inbox")
   })
 })

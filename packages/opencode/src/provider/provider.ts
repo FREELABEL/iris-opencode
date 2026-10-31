@@ -762,7 +762,13 @@ export namespace Provider {
       type IrisRow = { id?: string; name?: string; available?: boolean; tool_calling?: boolean }
       const irisRows = await (async (): Promise<IrisRow[] | null> => {
         try {
-          const res = await fetch(`${irisApiUrl}/models`, { signal: AbortSignal.timeout(3000) })
+          // Signed in, the list also carries the models YOUR machines serve (`hive/<model>`,
+          // #191176) — those name your machines, so the gateway only lists them for you.
+          const token = process.env.IRIS_API_KEY
+          const res = await fetch(`${irisApiUrl}/models`, {
+            signal: AbortSignal.timeout(3000),
+            headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+          })
           if (!res.ok) return null
           const body = (await res.json()) as { data?: IrisRow[] }
           const rows = Array.isArray(body?.data) ? body.data : []

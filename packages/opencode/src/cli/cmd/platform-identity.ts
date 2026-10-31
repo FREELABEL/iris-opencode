@@ -230,7 +230,7 @@ const IdentityShowCommand = cmd({
 
 export const PlatformIdentityCommand = cmd({
   command: "identity",
-  aliases: ["identities", "who"],
+  aliases: ["who"],
   describe: "link the handles, cards and accounts that belong to one person",
   builder: (yargs) =>
     yargs

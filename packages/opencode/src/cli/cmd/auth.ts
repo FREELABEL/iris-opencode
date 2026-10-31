@@ -170,6 +170,7 @@ export const AuthCommand = cmd({
       .command(AuthLogoutCommand)
       .command(AuthListCommand)
       .command(AuthWhoamiCommand)
+      .command(AuthTokenCommand)
       .demandCommand(),
   async handler() {},
 })
@@ -236,6 +237,41 @@ export const AuthWhoamiCommand = cmd({
     prompts.log.info(dim(`fl-api: ${FL_API}`))
     prompts.log.info(dim(`iris-api: ${IRIS_API}`))
     prompts.outro("Done")
+  },
+})
+
+/**
+ * What `iris auth token` prints, as data. Only the bearer goes to stdout, so a script can
+ * capture it; every explanation goes to stderr, and no token is a non-zero exit — a script
+ * must never receive an empty string and send "Bearer " to the API (#191214).
+ */
+export function authTokenOutput(token: string | undefined): { code: number; stdout?: string; stderr?: string } {
+  const t = (token ?? "").trim()
+  if (!t) return { code: 1, stderr: "Not signed in to IRIS on this machine. Run: iris auth login" }
+  return { code: 0, stdout: t }
+}
+
+/**
+ * `iris auth token` — the bearer this machine's IRIS sign-in uses for the platform API.
+ *
+ * For scripts and playbooks that call the API directly, so they run as the account the
+ * machine is signed in as instead of reading a token pasted into a repo `.env`. That pasted
+ * token is how the Discover feed's playbook broke: it was revoked in a rotation and nothing
+ * else could authenticate it (#191214). Same contract as `gh auth token`.
+ */
+export const AuthTokenCommand = cmd({
+  command: "token",
+  describe: "print the API token this machine's IRIS sign-in uses (for scripts and playbooks)",
+  async handler() {
+    const { resolveToken } = await import("./iris-api")
+    let token: string | undefined
+    try {
+      token = await resolveToken()
+    } catch {}
+    const out = authTokenOutput(token)
+    if (out.stdout) process.stdout.write(out.stdout + "\n")
+    if (out.stderr) process.stderr.write(out.stderr + "\n")
+    process.exitCode = out.code
   },
 })
 

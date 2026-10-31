@@ -140,7 +140,7 @@ function collectBlocks(dir: string): BlockIndex {
   // parent's own import statement is the only answer that is right by construction; a
   // child genuinely does live in another file (PlaybookDraftCommand does).
   const imports = new Map<string, Map<string, string>>()
-  const aliasPairs: Array<[string, string]> = []
+  const aliasPairs: Array<[string, string, string]> = []
 
   for (const file of readdirSync(dir)) {
     if (!file.endsWith(".ts") || file.endsWith(".test.ts")) continue
@@ -162,7 +162,9 @@ function collectBlocks(dir: string): BlockIndex {
     // only `cmd(` silently dropped the first product built on the new helper from the
     // index — the command resolved for a human typing `iris lexicon` and did not exist
     // for any agent reading capabilities.json, which is the worse of the two failures.
-    for (const m of src.matchAll(/(?:export\s+)?const ([A-Za-z0-9_]+(?:Command|Group|Cmd))\s*=\s*(?:cmd|productCommand)\(\s*\{/g)) {
+    // `(?:Export)?`: a group DEFINED as `export const HiveHostCommandExport = cmd({…})` was never
+    // collected, so `iris hive host` and every subcommand were missing from the index.
+    for (const m of src.matchAll(/(?:export\s+)?const ([A-Za-z0-9_]+(?:Command|Group|Cmd)(?:Export)?)\s*=\s*(?:cmd|productCommand)\(\s*\{/g)) {
       const openIdx = m.index! + m[0].length - 1
       const body = readBlock(src, openIdx)
       if (!body) continue
@@ -186,14 +188,19 @@ function collectBlocks(dir: string): BlockIndex {
     // original — so the walker looked up a name it had never collected and silently
     // skipped the command. `iris heartbeat` is a top-level product and was missing from
     // the index entirely because of this one line, with nothing anywhere reporting a gap.
-    aliasPairs.push(...[...src.matchAll(/export\s+const\s+([A-Za-z0-9_]+(?:Command|Group|Cmd))\s*=\s*([A-Za-z0-9_]+(?:Command|Group|Cmd))\s*$/gm)].map((m) => [m[1], m[2]] as [string, string]))
+    aliasPairs.push(...[...src.matchAll(/export\s+const\s+([A-Za-z0-9_]+(?:Command|Group|Cmd)(?:Export)?)\s*=\s*([A-Za-z0-9_]+(?:Command|Group|Cmd))\s*$/gm)].map((m) => [m[1], m[2], abs] as [string, string, string]))
   }
 
   // Resolve after every file is scanned — an alias may point at a block defined later.
-  for (const [alias, target] of aliasPairs) {
+  // An alias names the block in ITS OWN file. Two files can each define a `HiveFilesCommand`
+  // (the peer `hive files` and the own-node `hive fs`); handing the alias both let the parent's
+  // file win and indexed the wrong command.
+  for (const [alias, target, file] of aliasPairs) {
     if (byName.has(alias)) continue
     const blocks = byName.get(target)
-    if (blocks) byName.set(alias, blocks)
+    if (!blocks) continue
+    const own = blocks.filter((b) => b.file === file)
+    byName.set(alias, own.length ? own : blocks)
   }
 
   return { byName, imports }
@@ -237,7 +244,7 @@ function collectCommands(): Entry[] {
   // exist.
   const indexFile = join(ROOT, "src/index.ts")
   const indexSrc = readFileSync(indexFile, "utf-8")
-  const registered = [...indexSrc.matchAll(/\.command\((?:reg\(|withAccessFooter\()?([A-Za-z0-9_]+Command)/g)].map((m) => m[1])
+  const registered = [...indexSrc.matchAll(/\.command\((?:reg\(|withAccessFooter\()?([A-Za-z0-9_]+Command(?:Export)?)\b/g)].map((m) => m[1])
 
   // index.ts lives outside src/cli/cmd, so its imports are not in the map yet — and it is
   // the parent of every top-level verb, i.e. the one file whose resolution matters most.
@@ -342,7 +349,10 @@ function collectCommands(): Entry[] {
     // Direct children only — those named in THIS block's builder.
     // `withAccessFooter(X)` (#190012) only appends a help footer — read through it like `reg(X)`,
     // or every command it wraps silently drops out of the capability index.
-    const childNames = [...b.body.matchAll(/\.command\((?:reg\(|withAccessFooter\()?([A-Za-z0-9_]+(?:Command|Group|Cmd))/g)].map((m) => m[1])
+    // `\b` + optional `Export`: without them `.command(HiveFilesCommandExport)` was read as
+    // `HiveFilesCommand`, which resolved to a DIFFERENT command of that name in the parent's own
+    // file — so `iris hive fs` and its subcommands were missing and `hive files` indexed twice.
+    const childNames = [...b.body.matchAll(/\.command\((?:reg\(|withAccessFooter\()?([A-Za-z0-9_]+(?:Command|Group|Cmd)(?:Export)?)\b/g)].map((m) => m[1])
     const childTokens: string[] = []
     for (const child of childNames) {
       childTokens.push(...walk(child, path, nextSeen, depth + 1, b.file))
@@ -534,6 +544,30 @@ const TERMS: Record<string, string[]> = {
   leads: ["crm", "contacts", "prospects", "pipeline", "find people", "find customers", "customers", "outreach", "cold email", "email them", "book calls", "book a call", "sales", "lead generation"],
   agents: ["ai agent", "assistant", "bot"],
   hive: ["compute node", "distributed", "remote machine", "fleet", "daemon"],
+  // `hive host run` / `hive vpn connect` (#179098): plain asks reached neither.
+  "hive host run": ["run a command on", "remote command", "on a remote host", "on my server", "azure vm", "check a service"],
+  "hive vpn connect": ["remote desktop", "rdp"],
+  // How people ask for `hive fs` (#187956). Its name holds no word they type, so "move files" ranked
+  // the PEER `hive files` 2nd and `hive fs` 10th, and "copy file to another machine" missed it.
+  "hive fs": [
+    "move files", "move a file", "copy files", "copy a file", "copy file", "send a file", "send files", "send file",
+    "transfer files", "transfer a file", "file transfer", "upload a file", "another machine", "other machine",
+    "other computer", "my computers", "between machines", "stream a backup", "database backup", "dump to",
+  ],
+  // #191176 — your own machines' models, served to your gateway (hive/<model>).
+  "hive models": ["serve my models", "local models", "ollama", "my gpu", "my own gpu", "self-hosted model", "run models on my machine", "gpu marketplace"],
+  // #191163 — IRIS as the ACP client: run another coding agent from IRIS, and keep it steerable.
+  "acp run": ["run claude code", "use codex", "gemini cli", "switch agents", "other coding agents", "agent client protocol"],
+  "run-other-coding-agents": [
+    "run claude code",
+    "use codex",
+    "gemini cli",
+    "switch agents",
+    "other coding agents",
+    "agent client protocol",
+    "keep a session open",
+    "steer an agent",
+  ],
   "data-sources": ["obsidian", "imessage", "apple mail", "calendar", "local data", "bridge"],
   integrations: ["oauth", "connect", "composio", "third party", "api key"],
   // "sync team skills into claude code and cursor" found production-deploy (#186212).
