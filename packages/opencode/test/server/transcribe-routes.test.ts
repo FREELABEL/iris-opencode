@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test"
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "fs"
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "fs"
 import { request as httpRequest } from "node:http"
 import { networkInterfaces, tmpdir } from "os"
 import { join } from "path"
@@ -495,6 +495,41 @@ describe("a recording made for an Atlas card is transcribed under the CARD's boa
       const id = (await res.json()).held.id
       const listed = (await (await fetch(`${base}/transcribe/held`)).json()).held
       expect(listed.find((h: { id: string }) => h.id === id)?.bloqId).toBe("777")
+      await fetch(`${base}/transcribe/discard?id=${id}`, { method: "POST" })
+    })
+  })
+
+  test("a touched take keeps its recording and is not listed as waiting (#191998)", async () => {
+    configured()
+    await withServer(async (base) => {
+      const body = await (await fetch(`${base}/transcribe?filename=d.wav&keep=1`, { method: "POST", body: wav() })).json()
+      expect(body.text).toBe("hello")
+      expect(existsSync(body.recording.path)).toBe(true)
+      const listed = (await (await fetch(`${base}/transcribe/held`)).json()).held
+      expect(listed.map((h: { id: string }) => h.id)).not.toContain(body.recording.id)
+      await fetch(`${base}/transcribe/discard?id=${body.recording.id}`, { method: "POST" })
+      expect(existsSync(body.recording.path)).toBe(false)
+    })
+  })
+
+  test("an untouched take keeps no recording", async () => {
+    configured()
+    await withServer(async (base) => {
+      const body = await (await fetch(`${base}/transcribe?filename=d.wav`, { method: "POST", body: wav() })).json()
+      expect(body.recording).toBeUndefined()
+    })
+  })
+
+  test("a touched take that failed: the retry's flag and recording survive", async () => {
+    configured()
+    platformReply = () => Response.json({ success: false, message: "bad key" }, { status: 401 })
+    await withServer(async (base) => {
+      const id = (await (await fetch(`${base}/transcribe?filename=d.wav&keep=1`, { method: "POST", body: wav() })).json()).held.id
+      const listed = (await (await fetch(`${base}/transcribe/held`)).json()).held
+      expect(listed.find((h: { id: string }) => h.id === id)?.review).toBe(true)
+      platformReply = () => Response.json({ success: true, data: { text: "hello", provider: "xai" } })
+      const retry = await (await fetch(`${base}/transcribe/retry?id=${id}`, { method: "POST" })).json()
+      expect(retry.recording.id).toBe(id)
       await fetch(`${base}/transcribe/discard?id=${id}`, { method: "POST" })
     })
   })

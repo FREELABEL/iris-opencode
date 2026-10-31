@@ -126,6 +126,8 @@ export const dict = {
   "ui.promptInput.dictate.release": "ປ່ອຍເພື່ອຢຸດ",
   "ui.promptInput.dictate.held": "ພັກໄວ້",
   "ui.promptInput.dictate.displaced": "ບໍ່ສາມາດເພີ່ມສິ່ງນີ້ໃສ່ຂໍ້ຄວາມຂອງທ່ານໄດ້. ບໍ່ມີຫຍັງເສຍໄປ.",
+  "ui.promptInput.dictate.fullTranscript": "ບົດຖອດຄວາມເຕັມ",
+  "ui.promptInput.dictate.copyRecording": "ສຳເນົາທີ່ຕັ້ງຂອງການບັນທຶກ",
   "ui.promptInput.dictate.keep": "ບັນທຶກຕໍ່",
   "ui.promptInput.dictate.keepHint": "ບັນທຶກຕໍ່ໃນພື້ນຫຼັງ",
   "ui.promptInput.dictate.background.start": "ເລີ່ມບັນທຶກໃນພື້ນຫຼັງ",

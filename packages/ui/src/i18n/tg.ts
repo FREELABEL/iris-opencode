@@ -126,6 +126,8 @@ export const dict = {
   "ui.promptInput.dictate.release": "Барои қатъ кардан раҳо кунед",
   "ui.promptInput.dictate.held": "Нигоҳ дошташуда",
   "ui.promptInput.dictate.displaced": "Инро ба паёми шумо илова кардан нашуд. Ҳеҷ чиз гум нашуд.",
+  "ui.promptInput.dictate.fullTranscript": "Матни пурра",
+  "ui.promptInput.dictate.copyRecording": "Нусхабардории ҷойи сабт",
   "ui.promptInput.dictate.keep": "Идомаи сабт",
   "ui.promptInput.dictate.keepHint": "Идомаи сабт дар замина",
   "ui.promptInput.dictate.background.start": "Оғози сабти заминавӣ",

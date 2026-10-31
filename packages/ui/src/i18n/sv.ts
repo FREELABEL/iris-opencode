@@ -126,6 +126,8 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.release": "Släpp för att stoppa",
   "ui.promptInput.dictate.held": "Kvarhållen",
   "ui.promptInput.dictate.displaced": "Det gick inte att lägga till i ditt meddelande. Inget gick förlorat.",
+  "ui.promptInput.dictate.fullTranscript": "Fullständig transkription",
+  "ui.promptInput.dictate.copyRecording": "Kopiera inspelningens plats",
   "ui.promptInput.dictate.keep": "Fortsätt spela in",
   "ui.promptInput.dictate.keepHint": "Fortsätt spela in i bakgrunden",
   "ui.promptInput.dictate.background.start": "Starta bakgrundsinspelning",

@@ -1,5 +1,14 @@
 import { createEffect, createMemo, createSignal, For, Show, type Accessor, type JSX } from "solid-js"
-import { growFollowing, settleLiveText, writeLiveText, type LiveRegion } from "./live-text"
+import {
+  caretMoved,
+  caretToEnd,
+  closeLiveSegment,
+  growFollowing,
+  liveTouched,
+  settleLiveText,
+  writeLiveText,
+  type LiveRegion,
+} from "./live-text"
 import { FileIcon } from "@opencode-ai/ui/file-icon"
 import { Icon } from "@opencode-ai/ui/icon"
 import { IconButton } from "@opencode-ai/ui/icon-button"
@@ -71,6 +80,13 @@ export function PromptInputV2(props: PromptInputV2Props) {
   let editor: HTMLDivElement | undefined
   /** Live dictation words, while a quick take is being spoken (see the Dictate `live` prop). */
   let liveRegion: LiveRegion | undefined
+  /** The input event firing now is the take's own write, not the person touching the text. */
+  let liveWriting = false
+  const liveInput = (target: HTMLElement) => {
+    liveWriting = true
+    target.dispatchEvent(new InputEvent("input", { bubbles: true }))
+    liveWriting = false
+  }
   let localInput = false
   // Where dictation draws while a take runs. Signals, so its portals mount once the nodes exist.
   const [dictateLayer, setDictateLayer] = createSignal<HTMLElement>()
@@ -196,6 +212,7 @@ export function PromptInputV2(props: PromptInputV2Props) {
               "pb-[30px]": !!props.transcribeUrl,
             }}
             onInput={(event) => {
+              if (liveRegion && !liveWriting) liveRegion = closeLiveSegment(liveRegion)
               const cursor = promptInputV2Cursor(event.currentTarget)
               const prompt = parsePromptInputV2Editor(event.currentTarget)
               const images = props.controller.parts().filter((part) => part.type === "image")
@@ -271,29 +288,25 @@ export function PromptInputV2(props: PromptInputV2Props) {
                     // A long take keeps its newest words in view (#189977).
                     const write = growFollowing(target, () => writeLiveText(target, liveRegion, text))
                     liveRegion = write.region
-                    if (write.changed) target.dispatchEvent(new InputEvent("input", { bubbles: true }))
+                    if (write.changed) liveInput(target)
                   }}
                   keepLive={() => {
                     liveRegion = undefined
                   }}
+                  touched={() => !!editor && liveTouched(editor, liveRegion)}
                   insert={(text) => {
-                    // The final transcript takes the live words' place, or only what was said since
-                    // the person took them over (live-text.ts), and the component's own onInput
-                    // re-parses the editor. Going through the real input path keeps attachments and
-                    // mentions intact — writing prompt state directly would have to reconstruct them.
+                    // The final transcript settles the take (live-text.ts), and the component's own
+                    // onInput re-parses the editor. Going through the real input path keeps attachments
+                    // and mentions intact — writing prompt state directly would have to reconstruct them.
                     const region = liveRegion
                     liveRegion = undefined
                     if (!editor) return false
-                    const settled = settleLiveText(editor, region, text)
-                    if (!settled.changed) return !settled.held
-                    editor.dispatchEvent(new InputEvent("input", { bubbles: true }))
+                    // Someone mid-edit keeps their caret. Otherwise the take ends with it at the end.
+                    const midEdit = liveTouched(editor, region) && caretMoved(editor)
+                    if (settleLiveText(editor, region, text)) liveInput(editor)
+                    if (midEdit) return true
                     editor.focus()
-                    const range = document.createRange()
-                    range.selectNodeContents(editor)
-                    range.collapse(false)
-                    const sel = window.getSelection()
-                    sel?.removeAllRanges()
-                    sel?.addRange(range)
+                    caretToEnd(editor)
                     // The caret is at the end of the transcript; so is the view (#189977).
                     editor.scrollTop = editor.scrollHeight
                     return true

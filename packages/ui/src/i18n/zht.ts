@@ -133,6 +133,8 @@ export const dict = {
   "ui.promptInput.dictate.release": "放開即停止",
   "ui.promptInput.dictate.held": "已暫存",
   "ui.promptInput.dictate.displaced": "無法將其加入你的訊息。內容沒有遺失。",
+  "ui.promptInput.dictate.fullTranscript": "完整逐字稿",
+  "ui.promptInput.dictate.copyRecording": "複製錄音位置",
   "ui.promptInput.dictate.keep": "繼續錄音",
   "ui.promptInput.dictate.keepHint": "在背景繼續錄音",
   "ui.promptInput.dictate.background.start": "開始背景錄音",

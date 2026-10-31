@@ -20,6 +20,11 @@ held recordings, and spoken replies. Code: `packages/opencode/src/transcribe/`, 
 2. **Nothing a person says is ever lost.** Audio is on disk before any network call. Navigation,
    a closed window, a crash, being offline, a cap — every path ends with the take transcribed or
    **held with Retry**, never discarded unless the person discards it. *Broken by: #189519, #189520.*
+   **Deliberate deletion is a decision, not loss (#191998).** A take is segments: any edit, delete or
+   Send closes the open one, and what was said before that moment is the person's. The recording
+   cannot bring it back into the message. The final transcript refines only the open segment, and
+   when it cannot be matched confidently what is on screen stays. The full transcript and recording
+   stay recoverable through "Full transcript" and never land in the message by themselves.
 
 3. **Fast enough to feel instant.** Budgets, p50 on a normal connection:
    | Moment | Budget |

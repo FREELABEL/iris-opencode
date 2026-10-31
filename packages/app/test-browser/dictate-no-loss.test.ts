@@ -11,6 +11,6 @@ test("dictating in the composer: nothing said is lost (solo/dictate-no-loss.scen
   )
   const [out, err, code] = await Promise.all([new Response(run.stdout).text(), new Response(run.stderr).text(), run.exited])
   const report = out + err
-  expect(report).toContain("6 pass")
+  expect(report).toContain("18 pass")
   expect({ code, report: code === 0 ? "" : report }).toEqual({ code: 0, report: "" })
 }, 60_000)

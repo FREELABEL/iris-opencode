@@ -125,6 +125,8 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.release": "ለማቆም ይልቀቁ",
   "ui.promptInput.dictate.held": "ተይዟል",
   "ui.promptInput.dictate.displaced": "ይህን ወደ መልዕክትዎ ማከል አልተቻለም። ምንም አልጠፋም።",
+  "ui.promptInput.dictate.fullTranscript": "ሙሉ ግልባጭ",
+  "ui.promptInput.dictate.copyRecording": "የቀረጻውን ቦታ ቅዳ",
   "ui.promptInput.dictate.keep": "መቅረጽ ቀጥል",
   "ui.promptInput.dictate.keepHint": "ከበስተጀርባ መቅረጽ ቀጥል",
   "ui.promptInput.dictate.background.start": "የበስተጀርባ ቀረጻ ጀምር",

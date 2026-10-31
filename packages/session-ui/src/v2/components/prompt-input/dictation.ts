@@ -57,7 +57,13 @@ const RETRY_BACKOFF_MS = [5_000, 20_000, 60_000, 180_000]
 
 export type DictationPhase = "idle" | "recording" | "transcribing"
 /** A recording the server saved because every engine failed — retryable without re-recording. */
-export type HeldRecording = { id: string; seconds: number; bloqId?: string }
+export type HeldRecording = { id: string; seconds: number; bloqId?: string; review?: boolean }
+/**
+ * Where a transcript came from. `recording` is the kept audio of a touched take. `review` means the
+ * take was touched and then failed: its transcript holds words the person removed, so it must not
+ * land in the prompt on its own (#191998).
+ */
+export type TranscriptOrigin = { recording?: { id: string; path: string }; review?: boolean }
 type CaptureMode = "webview" | "sidecar"
 
 /** Remembered across dictations; null until the first probe has run. */
@@ -178,8 +184,10 @@ function micOpenError(err: unknown): string {
 export interface DictationOptions {
   /** Base URL of the local server, read as a GETTER at request time — not a snapshot. */
   url: () => string
-  onTranscript: (text: string) => void
+  onTranscript: (text: string, origin?: TranscriptOrigin) => void
   onError?: (message: string) => void
+  /** The person has touched this take's text: keep its recording, and treat its transcript as reviewable. */
+  touched?: () => boolean
   /**
    * Live preview while recording (GET /dictate/live -> IRIS STT relay -> xAI streaming STT).
    * onPartial REPLACES the in-progress utterance; onFinal appends a locked one. The batch
@@ -254,7 +262,7 @@ function encodeWav(samples: Float32Array, rate: number): Blob {
 
 export function createDictation(opts: DictationOptions) {
   /** Retried transcripts that came back while a take was running (#189523). */
-  const afterTake: string[] = []
+  const afterTake: [string, TranscriptOrigin | undefined][] = []
   const [phase, setPhaseSignal] = createSignal<DictationPhase>("idle")
   const setPhase = (next: DictationPhase) => {
     setPhaseSignal(next)
@@ -300,6 +308,10 @@ export function createDictation(opts: DictationOptions) {
     const id = board()
     return id ? `${path}${path.includes("?") ? "&" : "?"}bloq_id=${encodeURIComponent(id)}` : path
   }
+
+  /** `path`, also keeping the recording when the person has touched the take. */
+  const forTake = (path: string) =>
+    withBoard(opts.touched?.() ? `${path}${path.includes("?") ? "&" : "?"}keep=1` : path)
 
   // Live preview for the current take. See DictationOptions.onPartial.
   const [live, setLive] = createSignal<DictationLive>("off")
@@ -724,7 +736,7 @@ export function createDictation(opts: DictationOptions) {
 
   async function stopSidecar() {
     try {
-      const res = await call(withBoard("/dictate/stop"), { method: "POST" })
+      const res = await call(forTake("/dictate/stop"), { method: "POST" })
       const body = await res.json().catch(() => null)
       deliver(res.ok, body, retryAfterMs(res))
     } catch (e) {
@@ -754,7 +766,7 @@ export function createDictation(opts: DictationOptions) {
     const blob = capturedWav(frames, rate)
 
     try {
-      const res = await call(withBoard("/transcribe?filename=dictation.wav"), {
+      const res = await call(forTake("/transcribe?filename=dictation.wav"), {
         method: "POST",
         headers: { "Content-Type": "audio/wav" },
         body: blob,
@@ -767,12 +779,12 @@ export function createDictation(opts: DictationOptions) {
   }
 
   /** Retried transcripts that came back while a take was running, in order. */
-  function deliverWhenIdle(text: string) {
-    if (phase() === "idle") return opts.onTranscript(text)
-    afterTake.push(text)
+  function deliverWhenIdle(text: string, origin?: TranscriptOrigin) {
+    if (phase() === "idle") return opts.onTranscript(text, origin)
+    afterTake.push([text, origin])
   }
   function flushAfterTake() {
-    for (const text of afterTake.splice(0)) opts.onTranscript(text)
+    for (const [text, origin] of afterTake.splice(0)) opts.onTranscript(text, origin)
   }
 
   /** The window recorder's frames as the 16 kHz WAV the server expects. */
@@ -791,7 +803,10 @@ export function createDictation(opts: DictationOptions) {
     // A 413 (over the platform's size limit) carries no `held`: nothing is kept, nothing retried,
     // and the server's message — which names the limit — is shown as is, below.
     if (!ok && typeof body?.held?.id === "string") {
-      setHeld((list) => [...list, { id: body.held.id, seconds: Number(body.held.seconds) || 0, bloqId: board() }])
+      setHeld((list) => [
+        ...list,
+        { id: body.held.id, seconds: Number(body.held.seconds) || 0, bloqId: board(), review: opts.touched?.() },
+      ])
       scheduleRetry(wait)
       return opts.onError?.(`${body.error || "Transcription failed."} Your recording is saved.`)
     }
@@ -811,7 +826,7 @@ export function createDictation(opts: DictationOptions) {
     // The sidecar heard no speech and sent nothing to an engine — not a failed transcription.
     if (!text && body.noSpeech) return opts.onError?.("No speech heard — nothing was sent.")
     if (!text) return opts.onError?.("That transcribed to nothing — try speaking a little louder.")
-    opts.onTranscript(text)
+    opts.onTranscript(text, body.recording ? { recording: body.recording } : undefined)
   }
 
   function reachError(e: unknown) {
@@ -879,7 +894,8 @@ export function createDictation(opts: DictationOptions) {
         setHeld((list) => list.filter((h) => h.id !== item.id))
         // The server has released the file, so this text exists only here now: a take started
         // while this was in flight gets it AFTER its own transcript, never instead of it.
-        if (body.text.trim()) deliverWhenIdle(body.text.trim())
+        if (body.text.trim())
+          deliverWhenIdle(body.text.trim(), item.review ? { review: true, recording: body.recording } : undefined)
       }
       retryStep = 0
     } catch (e) {
@@ -902,6 +918,11 @@ export function createDictation(opts: DictationOptions) {
     )
   }
 
+  /** Delete the recording kept for a touched take, when the person discards its transcript. */
+  function discardKept(id: string) {
+    void call(`/transcribe/discard?id=${encodeURIComponent(id)}`, { method: "POST" }).catch(() => {})
+  }
+
   // Recover recordings a previous run could not transcribe. An older server answers this route
   // with the SPA's HTML, so anything but a list is ignored.
   void call("/transcribe/held")
@@ -910,10 +931,11 @@ export function createDictation(opts: DictationOptions) {
       if (disposed || !Array.isArray(body?.held)) return
       const recovered = body.held
         .filter((h: { id?: unknown; bloqId?: unknown }) => typeof h?.id === "string" && (h.bloqId || undefined) === board())
-        .map((h: { id: string; seconds?: number; bloqId?: string }) => ({
+        .map((h: { id: string; seconds?: number; bloqId?: string; review?: boolean }) => ({
           id: h.id,
           seconds: Number(h.seconds) || 0,
           bloqId: h.bloqId,
+          review: h.review,
         }))
       if (recovered.length)
         setHeld((list) => [...recovered.filter((r: HeldRecording) => !list.some((h) => h.id === r.id)), ...list])
@@ -1000,9 +1022,9 @@ export function createDictation(opts: DictationOptions) {
     // Leaving the sidecar recording after the prompt unmounts is a hot microphone nobody can
     // see or stop: it is always ended here. Fire-and-forget: unmount must not wait on the network.
     if (recording && mode === "sidecar")
-      void call(keep ? withBoard("/dictate/hold") : "/dictate/cancel", { method: "POST" }).catch(() => {})
+      void call(keep ? forTake("/dictate/hold") : "/dictate/cancel", { method: "POST" }).catch(() => {})
     if (wav)
-      void call(withBoard("/transcribe?hold=1&filename=dictation.wav"), {
+      void call(forTake("/transcribe?hold=1&filename=dictation.wav"), {
         method: "POST",
         headers: { "Content-Type": "audio/wav" },
         body: wav,
@@ -1024,6 +1046,7 @@ export function createDictation(opts: DictationOptions) {
     nextRetryIn,
     retryHeld: () => retryHeld(false),
     discardHeld,
+    discardKept,
     readiness,
     live,
     /** Start a long recording that runs past the inline cap (the background panel calls this). */

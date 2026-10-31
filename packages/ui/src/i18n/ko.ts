@@ -107,6 +107,8 @@ export const dict = {
   "ui.promptInput.dictate.release": "손을 떼면 중지",
   "ui.promptInput.dictate.held": "보류됨",
   "ui.promptInput.dictate.displaced": "메시지에 추가할 수 없었습니다. 잃어버린 내용은 없습니다.",
+  "ui.promptInput.dictate.fullTranscript": "전체 받아쓰기",
+  "ui.promptInput.dictate.copyRecording": "녹음 위치 복사",
   "ui.promptInput.dictate.keep": "계속 녹음",
   "ui.promptInput.dictate.keepHint": "백그라운드에서 계속 녹음",
   "ui.promptInput.dictate.background.start": "백그라운드 녹음 시작",

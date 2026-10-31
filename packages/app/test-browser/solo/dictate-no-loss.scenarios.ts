@@ -32,7 +32,7 @@ plugin({
 type Callbacks = {
   onPartial: (text: string) => void
   onFinal: (text: string) => void
-  onTranscript: (text: string) => void
+  onTranscript: (text: string, origin?: { review?: boolean }) => void
   onError: (message: string) => void
 }
 let recorder: Callbacks
@@ -56,6 +56,7 @@ const fake = (opts: Callbacks) => {
     retryHeld: async () => {},
     discardHeld: async () => {},
     readiness: () => undefined,
+    discardKept: () => {},
     live: () => "streaming",
   }
 }
@@ -65,6 +66,7 @@ mock.module(resolve(import.meta.dir, "../../../session-ui/src/v2/components/prom
 }))
 
 const { PromptInputV2 } = await import("../../../session-ui/src/v2/components/prompt-input/index")
+const { caretAtEnd, caretToEnd } = await import("../../../session-ui/src/v2/components/prompt-input/live-text")
 
 function mount() {
   const [parts, setParts] = createSignal<any[]>([{ type: "text", content: "", start: 0, end: 0 }])
@@ -108,6 +110,15 @@ function mount() {
 }
 
 const panel = () => document.body.querySelector('[data-slot="dictate-panel"]')
+const fullAction = () => document.body.querySelector('[data-action="prompt-dictate-full"]') as HTMLButtonElement | null
+const caretTo = (node: Node, offset: number) => {
+  const range = document.createRange()
+  range.setStart(node, offset)
+  range.collapse(true)
+  const selection = window.getSelection()!
+  selection.removeAllRanges()
+  selection.addRange(range)
+}
 
 let cleanup = () => {}
 afterEach(() => {
@@ -139,7 +150,7 @@ describe("dictating in the composer: nothing said is lost", () => {
     finish("Buy oat milk.")
     expect(ui.editor.textContent).toBe("Buy oat milk.")
     expect(ui.value()).toBe("Buy oat milk.")
-    expect(panel()).toBeNull()
+    expect(!!panel()).toBe(false)
   })
 
   test("edit mid-take: the edit stays, later words and the final's tail still arrive", () => {
@@ -150,7 +161,7 @@ describe("dictating in the composer: nothing said is lost", () => {
     expect(ui.value()).toBe("buy oatmilk and call")
     finish("Buy oat milk and call the plumber at noon.")
     expect(ui.value()).toBe("buy oatmilk and call the plumber at noon.")
-    expect(panel()).toBeNull()
+    expect(!!panel()).toBe(false)
   })
 
   test("Send mid-take: what is on screen is sent, the mic keeps going, later words are the next draft", () => {
@@ -167,17 +178,169 @@ describe("dictating in the composer: nothing said is lost", () => {
     expect(ui.sent).toEqual(["send this"])
   })
 
-  test("a final that cannot be lined up is held in the panel with a notice, and Insert recovers it", () => {
+  test("a final that cannot be lined up keeps what is on screen, with no panel; Full transcript recovers it", () => {
     const ui = begin()
     recorder.onFinal("buy oat milk")
     ui.type((editor) => ((editor.lastChild as Text).data = "my own words now"))
     finish("something the engine heard quite differently")
     expect(ui.value()).toBe("my own words now")
+    expect(!!panel()).toBe(false)
+    fullAction()!.click()
+    expect(ui.value()).toBe("my own words now")
     expect(panel()?.textContent).toContain("something the engine heard quite differently")
-    expect(panel()?.querySelector('[data-slot="dictate-panel-hint"]')?.textContent).toContain("Nothing was lost")
     ;(panel()?.querySelector('[data-slot="dictate-btn"][data-primary]') as HTMLButtonElement).click()
     expect(ui.value()).toBe("my own words now something the engine heard quite differently")
-    expect(panel()).toBeNull()
+    expect(!!panel()).toBe(false)
+  })
+
+  // Alex's scenarios (#191998).
+  test("delete everything mid-take, talk, Stop: the deleted text stays gone, later words are there", () => {
+    const ui = begin()
+    recorder.onFinal("the first thought I deleted")
+    // What a browser leaves in a box emptied with select-all and delete.
+    ui.type((editor) => editor.replaceChildren(document.createElement("br")))
+    expect(ui.value().trim()).toBe("")
+    recorder.onPartial("and now the real")
+    expect(ui.value()).toBe("and now the real")
+    finish("The first thought I deleted. And now the real message.")
+    expect(ui.value()).toBe("And now the real message.")
+    expect(!!panel()).toBe(false)
+  })
+
+  test("Send mid-take, talk, Stop: the first sentence does not return, and nothing is sent twice", () => {
+    const ui = begin()
+    recorder.onFinal("the first sentence")
+    ui.controller.submit()
+    recorder.onFinal("the second one")
+    finish("The first sentence. The second one.")
+    expect(ui.value()).toBe("The second one.")
+    expect(ui.sent).toEqual(["the first sentence"])
+    expect(!!panel()).toBe(false)
+  })
+
+  test("Full transcript holds the whole take, and never lands in the message by itself", () => {
+    const ui = begin()
+    recorder.onFinal("gone")
+    ui.type((editor) => editor.replaceChildren())
+    recorder.onFinal("kept words")
+    finish("Gone. Kept words.")
+    expect(ui.value()).toBe("Kept words.")
+    fullAction()!.click()
+    expect(panel()?.textContent).toContain("Gone. Kept words.")
+    expect(ui.value()).toBe("Kept words.")
+    expect(!!fullAction()).toBe(false)
+  })
+
+  test("an untouched take offers no Full transcript", () => {
+    const ui = begin()
+    recorder.onFinal("all mine")
+    finish("All mine.")
+    expect(!!fullAction()).toBe(false)
+  })
+
+  test("a live write is not an edit: the take stays untouched however many words arrive", () => {
+    const ui = begin()
+    recorder.onPartial("one")
+    recorder.onPartial("one two")
+    recorder.onFinal("one two three")
+    finish("Entirely. Reworded by the final.")
+    expect(ui.value()).toBe("Entirely. Reworded by the final.")
+  })
+
+  test("an edit anywhere closes the segment, even if the live node is untouched", () => {
+    const ui = mount()
+    cleanup = ui.dispose
+    ui.type((editor) => editor.replaceChildren(document.createTextNode("Draft:")))
+    ui.start()
+    recorder.onFinal("one two")
+    ui.type((editor) => ((editor.firstChild as Text).data = "Note:"))
+    recorder.onPartial("three")
+    finish("Something else entirely was heard.")
+    expect(ui.value()).toBe("Note: one two three")
+    expect(!!panel()).toBe(false)
+  })
+
+  test("the cursor at the end follows live words", () => {
+    const ui = begin()
+    ui.editor.focus()
+    caretToEnd(ui.editor)
+    recorder.onPartial("one")
+    expect(caretAtEnd(ui.editor)).toBe(true)
+    recorder.onPartial("one two three")
+    expect(caretAtEnd(ui.editor)).toBe(true)
+  })
+
+  test("a moved cursor stays, words go at the end, and it follows again from the end", () => {
+    const ui = begin()
+    recorder.onFinal("one two")
+    caretTo(ui.editor.lastChild as Text, 2)
+    recorder.onFinal("three")
+    expect(ui.editor.textContent).toBe("one two three")
+    expect(window.getSelection()!.anchorOffset).toBe(2)
+    caretToEnd(ui.editor)
+    recorder.onFinal("four")
+    expect(caretAtEnd(ui.editor)).toBe(true)
+  })
+
+  test("Stop moves the cursor to the end, unless the person is mid-edit", () => {
+    const moved = begin()
+    recorder.onFinal("never touched")
+    caretTo(moved.editor.lastChild as Text, 2)
+    finish("Never touched.")
+    expect(caretAtEnd(moved.editor)).toBe(true)
+    moved.dispose()
+    cleanup = () => {}
+    setPhase("idle")
+
+    const ui = begin()
+    recorder.onFinal("one two three")
+    ui.type((editor) => ((editor.lastChild as Text).data = "one TWO three"))
+    const edited = ui.editor.lastChild as Text
+    caretTo(edited, 5)
+    recorder.onFinal("four")
+    finish("One two three four.")
+    expect(ui.value()).toBe("one TWO three four.")
+    expect(window.getSelection()!.anchorNode === edited).toBe(true)
+    expect(window.getSelection()!.anchorOffset).toBe(5)
+  })
+
+  test("edit the middle, keep talking: the edit stays and later words follow it", () => {
+    const ui = begin()
+    recorder.onFinal("one two three")
+    ui.type((editor) => ((editor.lastChild as Text).data = "one 2 three"))
+    recorder.onFinal("four five")
+    expect(ui.value()).toBe("one 2 three four five")
+    finish("One two three, four five.")
+    expect(ui.value()).toBe("one 2 three four five.")
+    expect(!!panel()).toBe(false)
+  })
+
+  test("Send stays enabled mid-take, and a later draft can be sent too", () => {
+    const ui = begin()
+    recorder.onFinal("first")
+    expect(ui.controller.canSubmit()).toBe(true)
+    ui.controller.submit()
+    recorder.onFinal("second")
+    expect(ui.controller.canSubmit()).toBe(true)
+    ui.controller.submit()
+    expect(ui.sent).toEqual(["first", "second"])
+  })
+
+  test("a touched take that fails keeps its words; the saved take's Retry offers review, not the message", () => {
+    const ui = begin()
+    recorder.onFinal("gone")
+    ui.type((editor) => editor.replaceChildren())
+    recorder.onFinal("kept words")
+    setPhase("transcribing")
+    setHeldList([{ id: "a", seconds: 3 }])
+    recorder.onError("Transcription failed. Your recording is saved.")
+    setPhase("idle")
+    expect(ui.value()).toBe("kept words")
+    recorder.onTranscript("Gone. Kept words.", { review: true })
+    expect(ui.value()).toBe("kept words")
+    expect(!!panel()).toBe(false)
+    fullAction()!.click()
+    expect(panel()?.textContent).toContain("Gone. Kept words.")
   })
 
   test("a take that fails with no audio saved leaves its live words in the composer", () => {

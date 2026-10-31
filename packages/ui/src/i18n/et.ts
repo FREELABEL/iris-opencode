@@ -126,6 +126,8 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.release": "Vabasta peatamiseks",
   "ui.promptInput.dictate.held": "Ootel",
   "ui.promptInput.dictate.displaced": "Seda ei saanud sõnumisse lisada. Midagi ei läinud kaduma.",
+  "ui.promptInput.dictate.fullTranscript": "Täielik transkriptsioon",
+  "ui.promptInput.dictate.copyRecording": "Kopeeri salvestise asukoht",
   "ui.promptInput.dictate.keep": "Jätka salvestamist",
   "ui.promptInput.dictate.keepHint": "Jätka salvestamist taustal",
   "ui.promptInput.dictate.background.start": "Alusta taustasalvestust",

@@ -126,6 +126,8 @@ export const dict = {
   "ui.promptInput.dictate.release": "Пуснете, за да спрете",
   "ui.promptInput.dictate.held": "Задържано",
   "ui.promptInput.dictate.displaced": "Това не можа да се добави към съобщението ви. Нищо не е загубено.",
+  "ui.promptInput.dictate.fullTranscript": "Пълен препис",
+  "ui.promptInput.dictate.copyRecording": "Копирай местоположението на записа",
   "ui.promptInput.dictate.keep": "Продължи записа",
   "ui.promptInput.dictate.keepHint": "Продължи записа във фонов режим",
   "ui.promptInput.dictate.background.start": "Започни фонов запис",

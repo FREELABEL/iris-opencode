@@ -33,6 +33,8 @@ export type VoiceEvent =
   | { type: "transcript"; text: string }
   /** The prompt could not take a quick take's transcript: keep it for review, with a notice. */
   | { type: "hold"; text: string }
+  /** The quiet "Full transcript" action: look at a touched take's whole transcript. */
+  | { type: "full"; text: string }
   | { type: "failed" }
   | { type: "insert" }
   | { type: "copy" }
@@ -61,6 +63,8 @@ export function voiceReducer(state: VoiceState, event: VoiceEvent): VoiceState {
       return { mode: "idle", panel: "hidden", effect: { type: "insert", text: event.text } }
     case "hold":
       return { mode: "review", panel: "open", result: event.text, displaced: true }
+    case "full":
+      return s.mode === "idle" ? { mode: "review", panel: "open", result: event.text } : s
     case "failed":
       return s.mode === "review" ? s : { mode: "idle", panel: "hidden" }
     case "insert":

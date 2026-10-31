@@ -138,6 +138,8 @@ export const dict = {
   "ui.promptInput.dictate.release": "Отпустите, чтобы остановить",
   "ui.promptInput.dictate.held": "Отложено",
   "ui.promptInput.dictate.displaced": "Не удалось добавить это в сообщение. Ничего не потеряно.",
+  "ui.promptInput.dictate.fullTranscript": "Полная расшифровка",
+  "ui.promptInput.dictate.copyRecording": "Скопировать расположение записи",
   "ui.promptInput.dictate.keep": "Продолжить запись",
   "ui.promptInput.dictate.keepHint": "Продолжить запись в фоновом режиме",
   "ui.promptInput.dictate.background.start": "Начать фоновую запись",

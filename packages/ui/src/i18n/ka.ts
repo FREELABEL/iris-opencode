@@ -126,6 +126,8 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.release": "გაუშვით შესაჩერებლად",
   "ui.promptInput.dictate.held": "შეჩერებული",
   "ui.promptInput.dictate.displaced": "ამის თქვენს შეტყობინებაში დამატება ვერ მოხერხდა. არაფერი დაკარგულა.",
+  "ui.promptInput.dictate.fullTranscript": "სრული ტრანსკრიპტი",
+  "ui.promptInput.dictate.copyRecording": "ჩანაწერის მდებარეობის კოპირება",
   "ui.promptInput.dictate.keep": "ჩაწერის გაგრძელება",
   "ui.promptInput.dictate.keepHint": "ჩაწერის გაგრძელება ფონურ რეჟიმში",
   "ui.promptInput.dictate.background.start": "ფონური ჩაწერის დაწყება",

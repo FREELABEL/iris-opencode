@@ -126,6 +126,8 @@ export const dict = {
   "ui.promptInput.dictate.release": "Зогсоохын тулд суллана уу",
   "ui.promptInput.dictate.held": "Хадгалагдсан",
   "ui.promptInput.dictate.displaced": "Үүнийг таны зурваст нэмж чадсангүй. Юу ч алдагдаагүй.",
+  "ui.promptInput.dictate.fullTranscript": "Бүтэн бичвэр",
+  "ui.promptInput.dictate.copyRecording": "Бичлэгийн байршлыг хуулах",
   "ui.promptInput.dictate.keep": "Бичлэгийг үргэлжлүүлэх",
   "ui.promptInput.dictate.keepHint": "Арын горимд бичлэгийг үргэлжлүүлэх",
   "ui.promptInput.dictate.background.start": "Арын горимын бичлэг эхлүүлэх",
