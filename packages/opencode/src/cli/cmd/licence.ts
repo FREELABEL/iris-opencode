@@ -551,13 +551,80 @@ const SendCmd = cmd({
   },
 })
 
+// #191969 — one link for a chosen plan. The server reads the price and seats from the catalogue.
+export const PayLinkCmd = cmd({
+  command: "pay-link",
+  describe: "one payment or invoice link; once paid, the named people move to the paid licence (operator only)",
+  builder: (y: any) =>
+    y
+      .option("plan", { describe: "plan key: solo, team or scale", type: "string", demandOption: true })
+      .option("people", { describe: "emails of who moves", type: "string", array: true, demandOption: true })
+      .option("from", { describe: "trial licence keys they move from", type: "string", array: true, demandOption: true })
+      .option("billing-email", { describe: "who pays", type: "string", demandOption: true })
+      .option("organization", { describe: "company on the paid licence", type: "string" })
+      .option("invoice", { describe: "an invoice link instead of a card checkout", type: "boolean", default: false })
+      .option("days-until-due", { describe: "invoice terms in days (default 30)", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args: any) {
+    const res = await irisFetch(`${BASE}/conversions`, {
+      method: "POST",
+      body: JSON.stringify({
+        plan: args.plan,
+        method: args.invoice ? "invoice" : "checkout",
+        people: args.people,
+        from: args.from,
+        billing_email: args.billingEmail,
+        organization: args.organization,
+        days_until_due: args.daysUntilDue,
+      }),
+    })
+    if (res.status === 404) {
+      process.exitCode = 1
+      return reportError(res, "Create payment link")
+    }
+    const body = (await res.json().catch(() => ({}))) as any
+    if (!res.ok) {
+      process.exitCode = 1
+      if (args.json) return writeJson(body)
+      prompts.log.warn(body?.error ?? body?.message ?? `Could not create the link (HTTP ${res.status})`)
+      return
+    }
+    if (args.json) return writeJson(body?.data)
+    const d = body?.data
+    prompts.log.success(`${money(d?.amount_cents)} per month, ${d?.seats} seats, ${firstArray(d?.people).length} moving on payment`)
+    UI.println(`  ${d?.link_url}`)
+    if (d?.link_expires_at) UI.println(dim(`  link good until ${String(d.link_expires_at).slice(0, 10)}. Check it: iris licence pay-status ${d?.id}`))
+  },
+})
+
+export const PayStatusCmd = cmd({
+  command: "pay-status <id>",
+  describe: "whether a payment link was paid, and why if it was refused (operator only)",
+  builder: (y: any) =>
+    y.positional("id", { type: "number" }).option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args: any) {
+    const res = await irisFetch(`${BASE}/conversions/${encodeURIComponent(args.id)}`)
+    if (!res.ok) {
+      process.exitCode = 1
+      return reportError(res, "Read payment link")
+    }
+    const d = ((await res.json()) as any)?.data
+    if (args.json) return writeJson(d)
+    UI.println(`  ${d?.status}  ${d?.plan_key}  ${money(d?.amount_cents)}${d?.paid_license_key ? `  ${d.paid_license_key}` : ""}`)
+    if (d?.refusal) {
+      process.exitCode = 1
+      prompts.log.warn(`Refused: ${d.refusal}. Nobody moved. Money may have been taken: check Stripe.`)
+    }
+  },
+})
+
 /** The subcommand group, so `iris reachr licence …` and `iris licence …` are one thing. */
 export const LicenceGroup = cmd({
   command: "licence",
   aliases: ["license", "licences", "licenses"],
   describe: "what a yes produces — issue, claim and check entitlement",
   builder: (y: any) =>
-    y.command(IssueCmd).command(ClaimCmd).command(MeCmd).command(ListCmd).command(ShowCmd).command(LinkCmd).command(RenewCmd).command(AllowCmd).command(InviteCmd).command(SeatsCmd).command(ReleaseCmd).command(OwnerCmd).command(DomainCmd).command(SeatLeadCmd).command(SendCmd).command(RevokeCmd).demandCommand(),
+    y.command(IssueCmd).command(ClaimCmd).command(MeCmd).command(ListCmd).command(ShowCmd).command(LinkCmd).command(RenewCmd).command(AllowCmd).command(InviteCmd).command(SeatsCmd).command(ReleaseCmd).command(OwnerCmd).command(DomainCmd).command(SeatLeadCmd).command(SendCmd).command(PayLinkCmd).command(PayStatusCmd).command(RevokeCmd).demandCommand(),
   async handler() {},
 })
 
@@ -586,6 +653,8 @@ export const LicenceCommand = productCommand({
       .command(DomainCmd)
       .command(SeatLeadCmd)
       .command(SendCmd)
+      .command(PayLinkCmd)
+      .command(PayStatusCmd)
       .command(RevokeCmd)
       .demandCommand(),
 })
