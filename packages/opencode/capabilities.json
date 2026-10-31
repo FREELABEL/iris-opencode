@@ -3613,7 +3613,7 @@
       "describe": "list calendar events — future by default, past via --since or a negative --days",
       "aliases": [],
       "run": "iris calendar list",
-      "haystack": "calendar list ls list calendar events — future by default, past via --since or a negative --days days look ahead n days (negative looks back) since start of window, yyyy-mm-dd (past allowed) until end of window, yyyy-mm-dd search filter by event title (case-insensitive) limit max events calendar calendar id (default: primary) json"
+      "haystack": "calendar list ls list calendar events — future by default, past via --since or a negative --days days look ahead n days (negative looks back) since start of window, yyyy-mm-dd (past allowed) until end of window, yyyy-mm-dd search text search: title, description, location or attendees attendees print each event limit max events calendar calendar id (default: primary) json"
     },
     {
       "kind": "command",
