@@ -6,6 +6,7 @@ import { describeRoute, generateSpecs, validator, resolver, openAPIRouteHandler 
 import { Hono } from "hono"
 import { join } from "path"
 import { transcribeLocal } from "../cli/lib/transcription"
+import { readServerToken, requestIsAuthorized } from "../cli/network"
 import { discardDir, secureTempDir } from "../cli/lib/stt-policy"
 import { cors } from "hono/cors"
 import { stream, streamSSE } from "hono/streaming"
@@ -102,6 +103,8 @@ export namespace Server {
   // microphone reachable from the LAN. Recorded at listen() rather than checked per-request
   // because Bun's per-connection IP is not threaded through Hono's fetch here.
   let _boundHostname = "127.0.0.1"
+  // Read once at listen(); a routable bind refuses to start without it (assertBindIsSafe).
+  let _serverToken: string | undefined
 
   export function url(): URL {
     return _url ?? new URL("http://localhost:4096")
@@ -280,6 +283,19 @@ iris traces          what your agents did</pre>
           origin: (input) => corsOrigin(input, _corsWhitelist),
         }),
       )
+      .use(async (c, next) => {
+        // #182762: a routable bind requires the shared secret on every non-loopback request.
+        const env = c.env as { requestIP?: (req: Request) => { address: string } | null } | undefined
+        const ok = requestIsAuthorized({
+          boundHostname: _boundHostname,
+          peer: env?.requestIP?.(c.req.raw)?.address,
+          method: c.req.method,
+          authorization: c.req.header("authorization"),
+          token: _serverToken,
+        })
+        if (!ok) return c.json({ error: "Unauthorized: this server requires Authorization: Bearer <token>." }, 401)
+        return next()
+      })
       .get(
         "/global/health",
         describeRoute({
@@ -3046,6 +3062,7 @@ iris traces          what your agents did</pre>
   export function listen(opts: { port: number; hostname: string; mdns?: boolean; cors?: string[] }) {
     _corsWhitelist = opts.cors ?? []
     _boundHostname = opts.hostname
+    _serverToken = readServerToken()
 
     const args = {
       hostname: opts.hostname,
