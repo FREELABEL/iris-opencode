@@ -288,6 +288,13 @@ export interface UnloggedSend {
   leadId?: number
   reason: string
   origin?: string
+  /** The address it went out from, when known. */
+  from?: string
+  /**
+   * The exact /atlas/comms/log body that should have been written (lead_id absent when no lead was
+   * known). Backfill posts this instead of rebuilding a thinner row from the fields above.
+   */
+  payload?: Record<string, unknown>
 }
 
 export function unloggedSpoolPath(): string {
@@ -347,18 +354,24 @@ export async function logComm(input: {
   subject?: string
   message: string
   sentAt?: string
+  /** A spooled row (UnloggedSend.payload): written as-is, on this lead. */
+  payload?: Record<string, unknown>
 }): Promise<{ ok: boolean; commId?: number | null; error?: string }> {
   try {
     const res = await irisFetch("/api/v1/atlas/comms/log", {
       method: "POST",
-      body: JSON.stringify({
-        lead_id: input.leadId,
-        channel: input.channel,
-        direction: "outbound",
-        body: input.message,
-        subject: input.subject ?? null,
-        sent_at: input.sentAt ?? new Date().toISOString(),
-      }),
+      body: JSON.stringify(
+        input.payload
+          ? { ...input.payload, lead_id: input.leadId }
+          : {
+              lead_id: input.leadId,
+              channel: input.channel,
+              direction: "outbound",
+              body: input.message,
+              subject: input.subject ?? null,
+              sent_at: input.sentAt ?? new Date().toISOString(),
+            },
+      ),
     })
     if (!res.ok) return { ok: false, error: `comms/log returned ${res.status}` }
     const payload = (await res.json().catch(() => null)) as any
