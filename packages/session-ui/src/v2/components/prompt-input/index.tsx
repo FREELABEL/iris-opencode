@@ -273,15 +273,19 @@ export function PromptInputV2(props: PromptInputV2Props) {
                     liveRegion = write.region
                     if (write.changed) target.dispatchEvent(new InputEvent("input", { bubbles: true }))
                   }}
+                  keepLive={() => {
+                    liveRegion = undefined
+                  }}
                   insert={(text) => {
-                    // The final transcript takes the live words' place (or is appended when there
-                    // were none), and the component's own onInput re-parses the editor. Going
-                    // through the real input path keeps attachments and mentions intact — writing
-                    // prompt state directly would have to reconstruct them.
+                    // The final transcript takes the live words' place, or only what was said since
+                    // the person took them over (live-text.ts), and the component's own onInput
+                    // re-parses the editor. Going through the real input path keeps attachments and
+                    // mentions intact — writing prompt state directly would have to reconstruct them.
                     const region = liveRegion
                     liveRegion = undefined
-                    if (!editor) return
-                    if (!settleLiveText(editor, region, text)) return
+                    if (!editor) return false
+                    const settled = settleLiveText(editor, region, text)
+                    if (!settled.changed) return !settled.held
                     editor.dispatchEvent(new InputEvent("input", { bubbles: true }))
                     editor.focus()
                     const range = document.createRange()
@@ -292,6 +296,7 @@ export function PromptInputV2(props: PromptInputV2Props) {
                     sel?.addRange(range)
                     // The caret is at the end of the transcript; so is the view (#189977).
                     editor.scrollTop = editor.scrollHeight
+                    return true
                   }}
                 />
               )}

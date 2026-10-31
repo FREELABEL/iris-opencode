@@ -7,68 +7,128 @@
  * what Send sends is what is on screen (#189543). Until then they were a grey preview span the
  * parser skipped: on screen, never in the prompt.
  *
- * The region belongs to the take until the person edits it. Once they type into the dictated words,
- * or the words leave the editor (sent, cleared), it is theirs: no later live update or final
- * transcript overwrites or re-adds them.
+ * The node belongs to the take until the person touches it. Once they edit the words, or the words
+ * leave the editor (sent, cleared), those words are theirs and are never rewritten or re-added — but
+ * the take is still running, so what is said AFTER them keeps arriving, in a new node at the end of
+ * the editor. Nothing said is lost (specs/voice/standard.md rule 2).
  */
 export type LiveRegion = {
-  node: Text
+  /** The node this take is writing to. None between a takeover and the next new word. */
+  node?: Text
   /** Exactly what was last written into `node`, leading space included. */
   shown: string
-  /** The person took the words over; nothing more is written for this take. */
-  released?: boolean
+  /** The whole take as of the last write: every word the person has been shown. */
+  said: string
+  /** The take as of the person's last takeover. Only words after these are still the take's. */
+  handed?: string
 }
 
 /**
- * Show `text` as the take's words. Undefined takes them back out (a take that ended without a
- * transcript, or moved to the background). Returns the region to keep and whether the editor changed
- * — when it did, the caller fires the editor's input event so the prompt reads the new text.
+ * Show `text` (the whole take so far) as the take's words. Empty means nothing new to show. Undefined
+ * takes the words still owned by the take back out (a take that moved to the background, or failed
+ * with its audio saved for Retry); what the person took over stays. Returns the region to keep and
+ * whether the editor changed — when it did, the caller fires the editor's input event so the prompt
+ * reads the new text.
  */
 export function writeLiveText(
   editor: HTMLElement,
   region: LiveRegion | undefined,
   text: string | undefined,
 ): { region: LiveRegion | undefined; changed: boolean } {
-  if (region?.released) return { region: text === undefined ? undefined : region, changed: false }
-  const node = region ? locate(editor, region) : undefined
-  if (region && !node) {
-    // Gone from the editor or edited: theirs now.
-    return { region: text === undefined ? undefined : { ...region, released: true }, changed: false }
-  }
+  if (text === "") return { region, changed: false }
+  const node = region?.node ? locate(editor, region) : undefined
   if (text === undefined) {
     if (!node) return { region: undefined, changed: false }
     node.remove()
     return { region: undefined, changed: true }
   }
-  if (node) {
-    const shown = gapBefore(node) + text
-    if (node.data === shown) return { region: { node, shown }, changed: false }
-    node.data = shown
-    return { region: { node, shown }, changed: true }
-  }
-  const fresh = document.createTextNode("")
-  editor.appendChild(fresh)
-  fresh.data = gapBefore(fresh) + text
-  return { region: { node: fresh, shown: fresh.data }, changed: true }
+  // No node left to write to means the person took the last words over: gone or edited.
+  const handed = region && !node ? region.said : region?.handed
+  const words = handed === undefined ? text : wordsAfter(handed, text)
+  // Nothing past what they already have (or the engine is mid-revision): wait for the next update.
+  if (!words) return { region: region && { ...region, node, shown: node ? region.shown : "", handed }, changed: false }
+  const target = node ?? appendNode(editor)
+  const shown = gapBefore(target) + words
+  const changed = target.data !== shown
+  target.data = shown
+  return { region: { node: target, shown, said: text, handed }, changed }
 }
 
+/** What became of a take's final transcript. `held` means it could not be placed: keep it visibly. */
+export type LiveSettled = { changed: boolean; held: boolean }
+
 /**
- * The take's final transcript. It replaces the live words where they still are; with no live words
- * (the live preview never ran) it is appended. When the person took the words over, nothing is
- * written. Returns true when the editor changed.
+ * The take's final transcript. It replaces the live words only when the person never touched them.
+ * After a takeover, only the words said after it are placed — replacing the live words since then,
+ * or appended — and the person's own text is left alone. If the transcript cannot be lined up with
+ * what they were shown, nothing in the editor changes and the result says `held`: the caller keeps
+ * the whole transcript where the person can see and recover it.
  */
-export function settleLiveText(editor: HTMLElement, region: LiveRegion | undefined, text: string): boolean {
-  if (region?.released) return false
-  const node = region ? locate(editor, region) : undefined
-  if (region && !node) return false
-  if (node) {
-    node.data = gapBefore(node) + text
-    return true
+export function settleLiveText(editor: HTMLElement, region: LiveRegion | undefined, text: string): LiveSettled {
+  const node = region?.node ? locate(editor, region) : undefined
+  if (!region || (node && region.handed === undefined)) {
+    const target = node ?? appendNode(editor)
+    target.data = gapBefore(target) + text
+    return { changed: true, held: false }
   }
+  const words = wordsAfter(node ? (region.handed ?? "") : region.said, text)
+  if (words === undefined) return { changed: false, held: true }
+  // Nothing new. Live words already on screen stay: they were heard, and are not the transcript's to remove.
+  if (!words) return { changed: false, held: false }
+  const target = node ?? appendNode(editor)
+  target.data = gapBefore(target) + words
+  return { changed: true, held: false }
+}
+
+const LINE_UP_MIN = 0.6
+const LINE_UP_MAX_CELLS = 4_000_000
+
+/**
+ * The part of `full` (a later version of the same take) that comes after `said`. Undefined when the
+ * two cannot be lined up. Live words and the final transcript differ in punctuation, case and the
+ * odd word, so this lines them up word by word (longest common subsequence) rather than by prefix,
+ * and a word still being revised when the person took over counts as already had.
+ */
+export function wordsAfter(said: string, full: string): string | undefined {
+  const tokens = full.trim().split(/\s+/).filter(Boolean)
+  const keys = tokens.map(speechKey)
+  const had = speechKey(said).split(" ").filter(Boolean)
+  let shared = 0
+  while (shared < had.length && shared < keys.length && had[shared] === keys[shared]) shared++
+  if (shared === had.length) return tokens.slice(shared).join(" ")
+
+  const a = had.slice(shared)
+  const b = keys.slice(shared)
+  if (a.length * b.length > LINE_UP_MAX_CELLS) return undefined
+  const table = Array.from({ length: a.length + 1 }, () => new Uint32Array(b.length + 1))
+  for (let i = 1; i <= a.length; i++)
+    for (let j = 1; j <= b.length; j++)
+      table[i]![j] = a[i - 1] === b[j - 1] ? table[i - 1]![j - 1]! + 1 : Math.max(table[i - 1]![j]!, table[i]![j - 1]!)
+  if ((shared + table[a.length]![b.length]!) / had.length < LINE_UP_MIN) return undefined
+
+  // The last word of `said` that matched, at its earliest place in `full`, so a phrase repeated
+  // later in the take is not skipped over.
+  let i = a.length
+  let j = b.length
+  while (i > 0 && j > 0 && a[i - 1] !== b[j - 1]) {
+    if (table[i]![j - 1] === table[i]![j]) j--
+    else i--
+  }
+  if (i === 0 || j === 0) return tokens.slice(shared + a.length).join(" ")
+  for (let k = 1; k < j; k++) {
+    if (b[k - 1] === a[i - 1] && table[i]![k] === table[i]![j]) {
+      j = k
+      break
+    }
+  }
+  // Words of `said` after that match were revised by the engine; each has a counterpart in `full`.
+  return tokens.slice(shared + j + (a.length - i)).join(" ")
+}
+
+function appendNode(editor: HTMLElement): Text {
   const fresh = document.createTextNode("")
   editor.appendChild(fresh)
-  fresh.data = gapBefore(fresh) + text
-  return true
+  return fresh
 }
 
 /**
@@ -78,6 +138,7 @@ export function settleLiveText(editor: HTMLElement, region: LiveRegion | undefin
  */
 function locate(editor: HTMLElement, region: LiveRegion): Text | undefined {
   const { node, shown } = region
+  if (!node) return undefined
   if (editor.contains(node)) return node.data === shown ? node : undefined
   const last = lastText(editor)
   if (!last || !shown || !last.data.endsWith(shown)) return undefined

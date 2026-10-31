@@ -145,6 +145,7 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.options": "Microphone and recording options",
   "ui.promptInput.dictate.release": "Release to stop",
   "ui.promptInput.dictate.held": "Held",
+  "ui.promptInput.dictate.displaced": "Couldn't fit this into your message. Nothing was lost.",
   "ui.promptInput.dictate.keep": "Keep recording",
   "ui.promptInput.dictate.keepHint": "Keep recording in the background",
   "ui.promptInput.dictate.background.start": "Start background recording",

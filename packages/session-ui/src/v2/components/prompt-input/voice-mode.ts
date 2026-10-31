@@ -17,6 +17,8 @@ export type VoiceState = {
   panel: PanelState
   /** A finished background transcript awaiting the person's decision. */
   result?: string
+  /** `result` is a quick take that could not be placed in the prompt; the panel says so. */
+  displaced?: boolean
   /** One-shot instruction for the component; cleared by the next event. */
   effect?: VoiceEffect
 }
@@ -29,6 +31,8 @@ export type VoiceEvent =
   /** "Keep recording": hand a running quick take to the background. */
   | { type: "keep" }
   | { type: "transcript"; text: string }
+  /** The prompt could not take a quick take's transcript: keep it for review, with a notice. */
+  | { type: "hold"; text: string }
   | { type: "failed" }
   | { type: "insert" }
   | { type: "copy" }
@@ -38,7 +42,7 @@ export type VoiceEvent =
 export const initialVoice: VoiceState = { mode: "idle", panel: "hidden" }
 
 export function voiceReducer(state: VoiceState, event: VoiceEvent): VoiceState {
-  const s: VoiceState = { mode: state.mode, panel: state.panel, result: state.result }
+  const s: VoiceState = { mode: state.mode, panel: state.panel, result: state.result, displaced: state.displaced }
   switch (event.type) {
     case "mic":
       if (s.mode === "idle") return { ...s, mode: "quick" }
@@ -55,6 +59,8 @@ export function voiceReducer(state: VoiceState, event: VoiceEvent): VoiceState {
       if (s.mode === "background") return { ...s, mode: "review", panel: "open", result: event.text }
       if (s.mode === "review") return s
       return { mode: "idle", panel: "hidden", effect: { type: "insert", text: event.text } }
+    case "hold":
+      return { mode: "review", panel: "open", result: event.text, displaced: true }
     case "failed":
       return s.mode === "review" ? s : { mode: "idle", panel: "hidden" }
     case "insert":
