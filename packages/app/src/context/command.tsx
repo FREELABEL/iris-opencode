@@ -20,7 +20,7 @@ export const DEFAULT_PALETTE_KEYBIND = "mod+k,mod+shift+p"
  * only intended sender, and nothing else gets a way to run arbitrary commands by name.
  */
 export const NATIVE_COMMAND_EVENT = "iris:native-command"
-export const NATIVE_COMMANDS = new Set(["settings.open"])
+export const NATIVE_COMMANDS = new Set(["settings.open", "plans.open"])
 /** How long a menu command waits for its screen to register it (#188510). */
 export const NATIVE_PENDING_MS = 5000
 const SUGGESTED_PREFIX = "suggested."

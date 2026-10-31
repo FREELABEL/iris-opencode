@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { formatPrice, planButtonLabel, requestCheckout, type FetchJson } from "./dialog-upgrade"
+import { formatPrice, planButtonLabel, plansDialogCopy, requestCheckout, type FetchJson } from "./dialog-upgrade"
 
 describe("formatPrice", () => {
   test("whole dollars with a period suffix", () => {
@@ -53,5 +53,20 @@ describe("planButtonLabel", () => {
   test("only the chosen plan says it is opening", () => {
     expect(planButtonLabel({ slug: "a", title: "Solo" }, "a")).toBe("Opening checkout…")
     expect(planButtonLabel({ slug: "b", title: "Pro" }, "a")).toBe("Choose Pro")
+  })
+})
+
+// #189544: paid accounts had no way to see the plans; when they do, they are not told to upgrade.
+describe("plansDialogCopy", () => {
+  test("someone who pays sees 'Your plan' and is never told to upgrade", () => {
+    const copy = plansDialogCopy(true)
+    expect(copy.title).toBe("Your plan")
+    expect(`${copy.title} ${copy.description}`).not.toMatch(/upgrade/i)
+  })
+
+  test("only someone we know has not paid is asked to upgrade", () => {
+    expect(plansDialogCopy(false).title).toBe("Upgrade IRIS")
+    expect(plansDialogCopy(null).title).toBe("IRIS plans")
+    expect(plansDialogCopy(undefined).title).toBe("IRIS plans")
   })
 })

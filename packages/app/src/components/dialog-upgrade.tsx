@@ -65,6 +65,18 @@ export function planButtonLabel(plan: Pick<PlanOffer, "slug" | "title">, opening
 }
 
 /**
+ * The dialog's heading, by what we know about the account. Someone who already pays is shown
+ * "Your plan": the same cards, as a place to compare and change, never told to upgrade (#189544).
+ * Only someone we KNOW has not paid is asked to upgrade; unknown reads neutrally. The cards above
+ * the plans already say which plan you are on and what is left (#189988).
+ */
+export function plansDialogCopy(paid: boolean | null | undefined): { title: string; description: string } {
+  if (paid === true) return { title: "Your plan", description: "Compare plans. Changing yours finishes securely with Stripe." }
+  const description = "Pick a plan to pay securely with Stripe."
+  return { title: paid === false ? "Upgrade IRIS" : "IRIS plans", description }
+}
+
+/**
  * The plans on sale, as cards — shared by the Upgrade dialog and Settings > Account. Prices come
  * from the sidecar (/iris/plans), which reads the same package list the web pricing page does, so
  * the two never quote different numbers. Choosing a plan asks the sidecar for a Stripe Checkout
@@ -85,7 +97,7 @@ export function PlanCards(props: {
   /** "rows" for a narrow panel (Settings): one full-width row per plan instead of squeezed columns. */
   layout?: "columns" | "rows"
   /** Where the plans were opened from, for the funnel (#190373). */
-  source: "pill" | "dock" | "settings"
+  source: "pill" | "dock" | "settings" | "menu"
 }) {
   const rows = () => props.layout === "rows"
   const platform = usePlatform()
@@ -294,10 +306,17 @@ export function PlanCards(props: {
 }
 
 /** The plans, inside the app — not a bounce to a browser tab for someone who only wanted to look. */
-export function DialogUpgrade(props: { fetchJson: FetchJson; source: "pill" | "dock" }) {
+export function DialogUpgrade(props: {
+  fetchJson: FetchJson
+  source: "pill" | "dock" | "menu"
+  /** Defaults to the upgrade copy; pass plansDialogCopy(...) when the account is known. */
+  title?: string
+  description?: string
+}) {
   const dialog = useDialog()
+  const copy = plansDialogCopy(false)
   return (
-    <Dialog title="Upgrade IRIS" description="Pick a plan to pay securely with Stripe." size="x-large">
+    <Dialog title={props.title ?? copy.title} description={props.description ?? copy.description} size="x-large">
       <div class="px-6 pb-5">
         <PlanCards fetchJson={props.fetchJson} source={props.source} onChosen={() => dialog.close()} />
       </div>
