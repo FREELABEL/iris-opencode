@@ -2,7 +2,7 @@ import { firstArray } from "../../util/array"
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, handleApiError, printDivider, printKV, dim, writeJson } from "./iris-api"
+import { irisFetch, handleApiError, printDivider, printKV, dim, writeJson, isJsonMode, emitJsonError } from "./iris-api"
 import { productCommand } from "./product-command"
 
 /**
@@ -35,15 +35,16 @@ const BASE = "/api/v1/licences"
 /** Operator refusal reads as absence by design; say so instead of blaming the input. */
 async function reportError(res: Response, action: string): Promise<void> {
   if (res.status === 404) {
-    prompts.log.warn(
-      `${action}: not found — this is also what a non-operator sees. If you expected access, you are not on the operator list.`,
-    )
+    const message = `${action}: not found — this is also what a non-operator sees. If you expected access, you are not on the operator list.`
+    if (isJsonMode()) emitJsonError(message, { status: 404, action })
+    else prompts.log.warn(message)
+    process.exitCode = 1
     return
   }
   await handleApiError(res, action)
 }
 
-const IssueCmd = cmd({
+export const IssueCmd = cmd({
   command: "issue",
   describe: "mint a licence key (operator only)",
   builder: (y: any) =>
@@ -57,16 +58,26 @@ const IssueCmd = cmd({
       .option("lead", { describe: "CRM lead this licence belongs to (shows on the lead)", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args: any) {
+    // JSON has no NaN: `--days abc` would reach the server as null and get the default term.
+    if (Number.isNaN(args.days)) {
+      const message = "--days must be a number"
+      if (isJsonMode()) emitJsonError(message)
+      else prompts.log.error(message)
+      process.exitCode = 1
+      return
+    }
+
     const body: Record<string, unknown> = {
       email: args.email,
       tier: args.tier,
       seats: args.seats,
       allowance_cents: args.allowance,
     }
-    if (args.days) body.days = args.days
+    // Not truthiness: 0 has to reach the server and be refused, not become the default term (#191947).
+    if (args.days !== undefined) body.days = args.days
     if (args.note) body.note = args.note
     // #189718: the API has accepted lead_id since #183598; the CLI never sent it.
-    if (args.lead) body.lead_id = args.lead
+    if (args.lead !== undefined) body.lead_id = args.lead
 
     const res = await irisFetch(BASE, { method: "POST", body: JSON.stringify(body) })
     if (!res.ok) return reportError(res, "Issue licence")
@@ -87,7 +98,7 @@ const IssueCmd = cmd({
   },
 })
 
-const ClaimCmd = cmd({
+export const ClaimCmd = cmd({
   command: "claim <key>",
   describe: "claim a licence key for yourself",
   builder: (y: any) =>
@@ -96,7 +107,10 @@ const ClaimCmd = cmd({
     const res = await irisFetch(`${BASE}/claim`, { method: "POST", body: JSON.stringify({ key: args.key }) })
     const body = (await res.json().catch(() => ({}))) as any
 
-    if (args.json) return writeJson(body)
+    // #191949: a refused claim is still a failed command, so a script can tell.
+    if (!res.ok) process.exitCode = 1
+
+    if (args.json) return writeJson(res.ok ? body : { success: false, status: res.status, ...body })
 
     // A refusal here is an ANSWER, not a fault — already claimed, expired, no seats left. It is
     // rendered as the reason it is, because "claim failed" would send someone to check the key.
@@ -170,14 +184,20 @@ const ListCmd = cmd({
   },
 })
 
-const RevokeCmd = cmd({
+export const RevokeCmd = cmd({
   command: "revoke <key>",
   describe: "revoke a licence (operator only)",
-  builder: (y: any) => y.positional("key", { type: "string" }),
+  builder: (y: any) =>
+    y.positional("key", { type: "string" }).option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args: any) {
     const res = await irisFetch(`${BASE}/${encodeURIComponent(args.key)}/revoke`, { method: "POST" })
     if (!res.ok) return reportError(res, "Revoke licence")
-    prompts.log.success(`Revoked ${args.key}`)
+
+    const body = (await res.json().catch(() => ({}))) as any
+    if (args.json) return writeJson(body)
+
+    if (body?.already_revoked) prompts.log.info(`${args.key} is already revoked — nothing changed`)
+    else prompts.log.success(`Revoked ${args.key}`)
   },
 })
 
@@ -242,7 +262,7 @@ export const LicenceCommand = productCommand({
   aliases: ["license", "licences", "licenses", "licensing"],
   purpose: "Licences — issue a key, claim one, check what you are entitled to",
   keywords: ["licence", "license", "licensing", "key", "seat", "seats", "entitlement", "claim", "activate", "trial"],
-  howtos: [],
+  howtos: ["claim-a-licence", "team-licences"],
   playbooks: [],
   builder: (yargs: any) =>
     yargs
