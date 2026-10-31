@@ -753,6 +753,15 @@ Examples: 'leads list --search acme --json', 'bug close 12345', 'pages get my-pa
           },
         },
         {
+          name: "hive_inventory",
+          description:
+            "The machines this user owns, as one planning answer: online state, CPU, memory, GPU, free disk, free task slots and the models serving now. Call this BEFORE designing a system or choosing where it runs, so the plan can use hardware they already own instead of defaulting to cloud. Values that were never measured are null, not 0.",
+          inputSchema: {
+            type: "object" as const,
+            properties: {},
+          },
+        },
+        {
           name: "hive_sessions",
           description: "List all active tmux sessions managed by IRIS Hive. Shows session names, pane counts, and task metadata.",
           inputSchema: {
@@ -988,6 +997,19 @@ parts you did not mean to touch.`,
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e)
           return { content: [{ type: "text" as const, text: `Playbook error: ${msg}` }], isError: true }
+        }
+      }
+
+      if (name === "hive_inventory") {
+        try {
+          const result = await execIris(["hive", "inventory", "--json"])
+          const text = stripVTControlCharacters(result.exitCode === 0 ? result.stdout : result.stderr || result.stdout).trim()
+          return {
+            content: [{ type: "text" as const, text: text || "Command failed with no output" }],
+            isError: result.exitCode !== 0,
+          }
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: e instanceof Error ? e.message : String(e) }], isError: true }
         }
       }
 

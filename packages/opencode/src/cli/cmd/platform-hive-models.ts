@@ -94,7 +94,7 @@ export function rowsFromNodes(nodes: any[], now = Date.now()): ModelRow[] {
   return out.sort((a, b) => a.model.localeCompare(b.model) || a.node.localeCompare(b.node))
 }
 
-async function fleet(userId: number): Promise<any[]> {
+export async function fleet(userId: number): Promise<any[]> {
   const res = await hiveFetch(`/api/v6/nodes/?user_id=${userId}&detailed=1`)
   const body: any = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(body?.error || `HTTP ${res.status}`)
