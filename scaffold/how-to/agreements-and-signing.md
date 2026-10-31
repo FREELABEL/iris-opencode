@@ -4,7 +4,7 @@ level: intermediate
 tags: [contracts, legal, security, client-work]
 duration_min: 12
 ---
-# How to: Raise, send and sign an NDA or BAA — and gate access on it
+# How to: Raise, send and sign an agreement — and gate access on it
 
 ## What this does
 
@@ -18,6 +18,24 @@ work, a proposal page, an invoice and a Stripe checkout. This one gates: nobody 
 billed, and the signature is a precondition for access rather than a step toward payment. If
 the question is "how do I get paid", read that one. If it is "may this person see this",
 read this one.
+
+**Other types.** `engagement`, `fee`, `services`, `sow`, `co_counsel`, `tolling`, `settlement`,
+`release`, `letter_of_protection`, `medical_authorization` and `other` use the same signing, seal
+and audit trail. Three differences: they have no default wording, so pass `--body-file` or
+`--template`; they run until revoked unless given a term; and none of them satisfies an access
+gate. `medical_authorization` always requires the emailed code.
+
+**On a Lexicon matter**, file it against the matter:
+
+```bash
+iris lexicon agreements raise 123 --firm="Harlan PI" --name="Jane Roe" --email=jane@example.com \
+  --type=engagement --body-file=letter.txt --issue
+iris lexicon agreements list 123   # one matter; omit the id for every matter
+```
+
+An engagement letter on a recorded matter is refused (409 `conflicts_not_cleared`) until an
+attorney has recorded the clearance. The wording is sealed as supplied, so resolve every
+`[to confirm: ...]` first.
 
 **Applicants get theirs automatically.** When somebody is accepted to an opportunity,
 `ApplicantAgreementIssuer` raises exactly what the access gate is about to ask for — the NDA,

@@ -4,6 +4,7 @@ import { Skill } from "../../skill/skill"
 import { Instance } from "../../project/instance"
 import { parsePlan, executeSkill } from "../../skill/executor"
 import { dim, bold } from "./iris-api"
+import { printLedger, raiseAgreement } from "./platform-agreements"
 
 // ============================================================================
 // platform-lexicon — the legal product's front door (#181888 PROD-3)
@@ -136,12 +137,91 @@ const IntakeCmd = cmd({
   },
 })
 
+const AgreementsListCmd = cmd({
+  command: "list [lead]",
+  aliases: ["ls"],
+  describe: "what is out for signature and what is signed — on one matter, or across every matter",
+  builder: (yargs) =>
+    yargs
+      .positional("lead", { describe: "lead / matter id; omit for every matter", type: "number" })
+      .option("status", { type: "string", describe: "draft | sent | opened | partially_signed | executed | declined | expired | revoked" })
+      .option("type", { type: "string", describe: "engagement, fee, tolling, settlement, release, …" })
+      .option("json", { type: "boolean" }),
+  async handler(args) {
+    await printLedger(
+      args.lead ? `◈  Agreements — matter ${args.lead}` : "◈  Agreements — all matters",
+      {
+        status: args.status as string | undefined,
+        type: args.type as string | undefined,
+        ...(args.lead ? { subject: `matter:${args.lead}` } : { subject_prefix: "matter:" }),
+      },
+      Boolean(args.json),
+    )
+  },
+})
+
+const AgreementsRaiseCmd = cmd({
+  command: "raise <lead>",
+  aliases: ["new"],
+  describe: "file an agreement against a matter and optionally send it for signature",
+  builder: (yargs) =>
+    yargs
+      .positional("lead", { describe: "lead / matter id", type: "number", demandOption: true })
+      .option("name", { type: "string", describe: "who signs, as named in the document", demandOption: true })
+      .option("firm", { type: "string", describe: "the firm issuing it, as named in the document", demandOption: true })
+      .option("email", { type: "string", describe: "signer's email — required with --issue" })
+      .option("org", { type: "string" })
+      .option("type", { type: "string", default: "engagement", describe: "engagement, fee, co_counsel, tolling, settlement, release, letter_of_protection, medical_authorization, nda, baa, other" })
+      .option("body-file", { type: "string", describe: "the wording, from a text file — e.g. the attorney-approved output of `iris lexicon engagement`" })
+      .option("template", { type: "string", describe: "contract template slug, instead of --body-file" })
+      .option("term", { type: "string", describe: 'e.g. "two years"; omit for one that runs until revoked' })
+      .option("expires", { type: "string", describe: "YYYY-MM-DD" })
+      .option("issue", { type: "boolean", describe: "email the signing link now. Without it the agreement stays a draft" })
+      .option("json", { type: "boolean" })
+      .epilogue(
+        [
+          "--issue SENDS. A person should have approved the wording first: what goes out is sealed",
+          "exactly as supplied, including any [to confirm: ...] still in it.",
+          "",
+          "An engagement letter on a recorded matter is refused until an attorney has recorded the",
+          "conflicts clearance. A matter that was never recorded has nothing to check.",
+          "",
+          "After this:  iris agreements show <id>  ·  link <id>  ·  issue <id>  ·  revoke <id>",
+        ].join("\n"),
+      ),
+  async handler(args) {
+    await raiseAgreement({
+      type: args.type as string,
+      name: args.name as string,
+      email: args.email as string | undefined,
+      org: args.org as string | undefined,
+      disclosing: args.firm as string,
+      subject: `matter:${args.lead}`,
+      tier: "standard",
+      term: args.term as string | undefined,
+      expires: args.expires as string | undefined,
+      bodyFile: args.bodyFile as string | undefined,
+      template: args.template as string | undefined,
+      issue: Boolean(args.issue),
+      json: Boolean(args.json),
+    })
+  },
+})
+
+const AgreementsCmd = cmd({
+  command: "agreements",
+  aliases: ["agreement"],
+  describe: "agreements filed against matters — engagement letters, fee agreements, releases and more",
+  builder: (yargs) => yargs.command(AgreementsListCmd).command(AgreementsRaiseCmd).demandCommand(),
+  async handler() {},
+})
+
 export const PlatformLexiconCommand = productCommand({
   name: "lexicon",
   aliases: ["legal", "lex"],
-  purpose: "Lexicon — legal matters end to end: intake, conflicts, engagement, chronology, demand",
-  keywords: ["legal", "demand", "chronology", "engagement", "conflicts", "intake", "matter", "firm", "litigation"],
-  howtos: [],
+  purpose: "Lexicon — legal matters end to end: intake, conflicts, engagement, chronology, demand, agreements",
+  keywords: ["legal", "demand", "chronology", "engagement", "conflicts", "intake", "matter", "firm", "litigation", "agreements", "signature"],
+  howtos: ["agreements-and-signing"],
   playbooks: [
     "legal-matter-intake",
     "legal-conflict-check",
@@ -149,5 +229,5 @@ export const PlatformLexiconCommand = productCommand({
     "legal-matter-chronology",
     "legal-demand-letter",
   ],
-  subcommands: [IntakeCmd, ConflictsCmd, EngagementCmd, ChronologyCmd, DemandCmd],
+  subcommands: [IntakeCmd, ConflictsCmd, EngagementCmd, ChronologyCmd, DemandCmd, AgreementsCmd],
 })
