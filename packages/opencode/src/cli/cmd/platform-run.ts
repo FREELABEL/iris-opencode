@@ -27,7 +27,7 @@ import {
 import { exec } from "child_process"
 import { randomBytes } from "node:crypto"
 import { detectNewConnection, extractConnections, shouldPrintUrlOnly, type ConnectionRow } from "./integration-connect-state"
-import { verifyProbeFor, isProbeSuccess, isProbeInconclusive } from "./integration-verify-probe"
+import { verifyProbeFor, isProbeSuccess, isProbeInconclusive, checkConnection, statusLabelFor, connectionKey, type ConnectionVerdict } from "./integration-verify-probe"
 import { IntegrationsHealthCommand, IntegrationsTestCommand } from "./integration-health"
 import {
   normalizeCatalog, normalizeEntry, findEntry, isOAuthEntry, requiredFields,
@@ -1212,172 +1212,44 @@ const ListConnectedCommand = cmd({
     const verifySpinner = prompts.spinner()
     verifySpinner.start("Verifying tokens…")
 
-    // A probe reports WHY, not just that it failed. "unverified — could not probe"
-    // is unactionable: it collapses "the local bridge isn't running", "the API
-    // returned a 500" and "the network is down" into one useless string. Each
-    // probe now returns the cause and, where one exists, the command that fixes it.
-    // "unknown" is a real answer and a separate one from "broken". If the probe
-    // ENDPOINT is missing (404) we cannot tell whether the integration works, and
-    // saying either "verified" or "unverified" would be a claim we cannot support.
-    // The previous code returned "verified" for any non-401/403 response, so a 404
-    // on the probe path rendered as a green [verified] — a false positive that hid
-    // the fact that these probe endpoints do not currently resolve.
-    type ProbeState = "verified" | "expired" | "error" | "unknown"
-    type Probe = { state: ProbeState; reason?: string; fix?: string }
-
-    // fetch() rejects for DNS/connection-refused/timeout. Turn that into a cause
-    // the reader can act on rather than a generic failure.
-    const netReason = (e: unknown, target: string): string => {
-      const msg = String((e as any)?.message ?? e ?? "")
-      if (/abort|timeout|timed out/i.test(msg)) return `${target} timed out`
-      if (/ECONNREFUSED|refused/i.test(msg)) return `nothing is listening on ${target}`
-      if (/ENOTFOUND|EAI_AGAIN|dns/i.test(msg)) return `${target} did not resolve`
-      return msg ? `${target} unreachable — ${msg}` : `${target} unreachable`
-    }
-
-    // A FAILING PROBE IS NOT A FAILING INTEGRATION (#182861, #182867).
-    //
-    // The state model above already says the right thing — "unknown" renders dim, as "we could
-    // not determine this", and is deliberately not coloured like a failure. The classification
-    // did not match it: only a 404 reached that branch, so a 500/502/503 from the probe endpoint,
-    // or iris-api being unreachable, fell through to `error` and rendered [unverified]. That is a
-    // claim about the INTEGRATION made on the strength of a failure in OUR probe path — and it
-    // was measurably wrong: connections reporting [unverified] executed their functions fine.
-    //
-    // The distinction that matters is WHO failed:
-    //   - the probe transport failed (4xx-not-auth, 5xx, network) -> we could not ask -> unknown
-    //   - the probe ran and was REFUSED (401/403)                 -> we asked, denied  -> expired
-    // Only the second is evidence about the integration.
-    //
-    // Deliberately NOT applied to the calendar/bridge probe: there the bridge IS the execution
-    // path, so a dead bridge means calendar reads genuinely do not work. That one stays `error`.
-    const probeUnavailable = (status: number, endpoint: string): Probe | null => {
-      if (status === 401 || status === 403) return null // auth answers are real answers
-      if (status === 404)
-        return { state: "unknown", reason: `probe endpoint ${endpoint} returned 404` }
-      if (status === 408 || status === 429 || status >= 500)
-        return {
-          state: "unknown",
-          reason: `probe endpoint ${endpoint} returned HTTP ${status} — the probe is unavailable, which says nothing about the integration`,
-        }
-      return null
-    }
-
-    const verifyFns: Record<string, (row: any) => Promise<Probe>> = {
-      gmail: async () => {
-        let r: Response | null = null
-        try {
-          r = await irisFetch(`/api/v1/leads/0/gmail-threads`)
-        } catch (e) {
-          // Could not reach our own API. That is a fact about us, not about Gmail.
-          return { state: "unknown", reason: netReason(e, "iris-api") }
-        }
-        if (!r) return { state: "unknown", reason: "iris-api unreachable" }
-        if (r.status === 401 || r.status === 403)
-          return { state: "expired", reason: "Google OAuth token rejected" }
-        const gUnavail = probeUnavailable(r.status, "/leads/0/gmail-threads")
-        if (gUnavail) return gUnavail
-        if (!r.ok) return { state: "error", reason: `iris-api returned HTTP ${r.status}` }
-        return { state: "verified", reason: "Gmail API reachable" }
-      },
-      "google-calendar": async () => {
-        // Calendar reads go through the LOCAL bridge, not iris-api. The usual
-        // cause of failure is that the bridge daemon isn't running at all, which
-        // the old "could not probe" text never said.
-        const _bh: Record<string, string> = { Accept: "application/json" }
-        const _bt = getBridgeToken()
-        if (_bt) _bh["X-Bridge-Key"] = _bt
-        let r: Response | null = null
-        try {
-          r = await fetch(`http://localhost:3200/api/calendar/events?days=1&limit=1`, {
-            signal: AbortSignal.timeout(3000),
-            headers: _bh,
-          })
-        } catch (e) {
-          return {
-            state: "error",
-            reason: netReason(e, "local bridge on :3200"),
-            fix: "iris hive doctor",
-          }
-        }
-        if (!r.ok) {
-          if (r.status === 401 || r.status === 403)
-            return {
-              state: "error",
-              reason: _bt ? "bridge rejected the bridge key" : "no bridge key configured",
-              fix: "iris hive doctor",
-            }
-          return { state: "error", reason: `local bridge returned HTTP ${r.status}`, fix: "iris hive doctor" }
-        }
-        return { state: "verified", reason: "via local bridge" }
-      },
-      "google-drive": async (row: any) => {
-        // Probe THIS row's account. Without integration_id every Drive account
-        // gets whichever connection the API picks by default, so three accounts
-        // all report one shared result.
-        const body: Record<string, unknown> = {
-          type: "google-drive",
-          function: "list_files",
-          params: { maxResults: 1 },
-        }
-        if (row?.id) body.integration_id = row.id
-        let r: Response | null = null
-        try {
-          r = await irisFetch("/api/v1/integrations/exec", { method: "POST", body: JSON.stringify(body) })
-        } catch (e) {
-          return { state: "unknown", reason: netReason(e, "iris-api") }
-        }
-        if (!r) return { state: "unknown", reason: "iris-api unreachable" }
-        if (r.status === 401 || r.status === 403)
-          return { state: "expired", reason: "Google OAuth token rejected" }
-        const dUnavail = probeUnavailable(r.status, "/integrations/exec")
-        if (dUnavail) return dUnavail
-        if (!r.ok) return { state: "error", reason: `iris-api returned HTTP ${r.status}` }
-        return { state: "verified", reason: "Drive API reachable" }
-      },
-    }
-
-    // Key by integration id, not type. Keying by type made every account of the
-    // same provider share one result — the opposite of the multi-account
-    // visibility this command exists to give.
-    const probeKey = (i: any) => String(i?.id ?? `type:${i?.type}`)
-    const verified = new Map<string, Probe>()
+    // Each connection is checked with one read-only call through ITS OWN account, on the rail
+    // `integrations exec` really uses (#191975). See integration-verify-probe.ts.
+    const verified = new Map<string, ConnectionVerdict | null>()
     await Promise.allSettled(
       items.map(async (i) => {
-        const fn = verifyFns[i.type]
-        if (!fn) return
-        const result = await fn(i).catch((e) => ({
-          state: "error" as const,
-          reason: netReason(e, "probe"),
-        }))
-        verified.set(probeKey(i), result)
+        verified.set(
+          connectionKey(i),
+          await checkConnection(i, async (body) => {
+            const r = await irisFetch(
+              `/api/v1/users/${userId}/integrations/execute-direct`,
+              {
+                method: "POST",
+                body: JSON.stringify(body),
+                headers: { "X-Iris-Node": os.hostname() },
+                signal: AbortSignal.timeout(20_000),
+              },
+              IRIS_API,
+            )
+            return { status: r.status, body: await r.json().catch(() => null) }
+          }),
+        )
       }),
     )
     verifySpinner.stop("Done")
 
     printDivider()
     for (const i of items) {
-      const v = verified.get(probeKey(i))
+      const v = verified.get(connectionKey(i)) ?? null
+      const label = statusLabelFor(i, v)
       let statusLabel: string
-      if (v?.state === "verified") {
-        statusLabel = `${success("[verified]")}${v.reason ? ` ${dim(`— ${v.reason}`)}` : ""}`
-      } else if (v?.state === "expired") {
-        const why = v.reason ? `${v.reason} — ` : ""
-        statusLabel = `${UI.Style.TEXT_DANGER}[expired]${UI.Style.TEXT_NORMAL} ${dim(`— ${why}reconnect: iris connect ${i.type}`)}`
-      } else if (v?.state === "unknown") {
-        // Do not colour this like a failure. The integration may be fine; it is
-        // the probe that cannot answer, and the fix is ours, not the user's.
-        statusLabel = `${dim("[unknown]")} ${dim(`— ${v.reason ?? "probe unavailable"}; integration status not determined`)}`
-      } else if (v?.state === "error") {
-        // Always say what failed. Append the fix only when one exists.
-        const why = v.reason ?? "probe failed for an unknown reason"
-        const fix = v.fix ? ` ${dim(`→ ${v.fix}`)}` : ""
-        statusLabel = `${UI.Style.TEXT_WARNING}[unverified]${UI.Style.TEXT_NORMAL} ${dim(`— ${why}`)}${fix}`
-      } else {
-        statusLabel = i.status === "active" ? dim("[active]") : dim(`[${i.status}]`)
-      }
+      if (label.tone === "good") statusLabel = success(label.text)
+      else if (label.tone === "bad") statusLabel = `${UI.Style.TEXT_DANGER}${label.text}${UI.Style.TEXT_NORMAL}`
+      else if (label.tone === "warn") statusLabel = `${UI.Style.TEXT_WARNING}${label.text}${UI.Style.TEXT_NORMAL}`
+      else statusLabel = dim(label.text)
+      if (label.detail) statusLabel += ` ${dim(`— ${label.detail}`)}`
       // Show ID + per-account info so multi-account is discoverable.
-      const idLabel = i.id ? dim(`#${i.id}`) : dim("(no local id)")
+      // An fl-api id is not an --integration-id: exec resolves ids in iris-api's store only.
+      const idLabel = i.id ? dim(i.inExecStore === false ? `#${i.id} (fl-api)` : `#${i.id}`) : dim("(no local id)")
       const account = i.account_email ?? i.name ?? null
       const accountLabel = account ? `  ${dim("→")} ${bold(String(account))}` : ""
       const provider = i.provider && i.provider !== "native" ? dim(` via ${i.provider}`) : ""
@@ -1712,10 +1584,15 @@ export const ConnectCommand = cmd({
           const vs = prompts.spinner()
           vs.start(`Verifying by ${probe.label}…`)
           try {
-            const r = await irisFetch(`/api/v1/users/${userId}/integrations/execute-direct`, {
-              method: "POST",
-              body: JSON.stringify({ integration: entry.type, action: probe.action, params: probe.params }),
-            })
+            // execute-direct lives on iris-api; on fl-api this was a 404, so every key read "could not verify".
+            const r = await irisFetch(
+              `/api/v1/users/${userId}/integrations/execute-direct`,
+              {
+                method: "POST",
+                body: JSON.stringify({ integration: entry.type, action: probe.action, params: probe.params }),
+              },
+              IRIS_API,
+            )
             const body = await r.json().catch(() => null)
             if (isProbeSuccess(body)) {
               vs.stop(`${success("✓")} ${bold(entry.type)} connected — verified by ${probe.label}`)
