@@ -1,14 +1,12 @@
-import { afterEach, beforeEach, expect, test } from "bun:test"
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test"
 import yargs from "yargs"
 import { LicenceCommand } from "./licence"
 
 /** #191969: the client half of the trial-to-paid link. Tests drive the real yargs tree. */
 const realFetch = globalThis.fetch
 const realWrite = process.stdout.write
-const realErr = process.stderr.write
 let requests: { url: string; body: any }[] = []
 let stdout = ""
-let stderr = ""
 
 function respondWith(status: number, body: unknown) {
   globalThis.fetch = (async (url: string, init?: RequestInit) => {
@@ -32,13 +30,7 @@ const base = ["licence", "pay-link", "--plan", "team", "--people", "a@x.test", "
 beforeEach(() => {
   requests = []
   stdout = ""
-  stderr = ""
   process.exitCode = 0
-  process.stderr.write = ((chunk: any, ...rest: any[]) => {
-    stderr += String(chunk)
-    rest.find((r) => typeof r === "function")?.()
-    return true
-  }) as any
   process.stdout.write = ((chunk: any, ...rest: any[]) => {
     stdout += String(chunk)
     rest.find((r) => typeof r === "function")?.()
@@ -49,17 +41,19 @@ beforeEach(() => {
 afterEach(() => {
   globalThis.fetch = realFetch
   process.stdout.write = realWrite
-  process.stderr.write = realErr
   process.exitCode = 0
 })
 
 test("sends the choice and prints the link", async () => {
   respondWith(201, { data: { id: 7, amount_cents: 79900, seats: 5, people: ["a@x.test", "b@x.test"], link_url: "https://checkout.stripe.test/x" } })
+  const ui = spyOn(Bun.stderr, "write")
   await parse(base)
+  const printed = ui.mock.calls.map((c) => String(c[0])).join("")
+  ui.mockRestore()
   expect(requests[0].url).toEndWith("/licences/conversions")
   expect(requests[0].body).toMatchObject({ plan: "team", method: "checkout", people: ["a@x.test", "b@x.test"], from: ["IRIS-AAAA-BBBB-CCCC"], billing_email: "pay@x.test" })
   expect(requests[0].body).not.toHaveProperty("amount_cents")
-  expect(stdout + stderr).toContain("https://checkout.stripe.test/x")
+  expect(printed).toContain("https://checkout.stripe.test/x")
   expect(process.exitCode).toBe(0)
 })
 
