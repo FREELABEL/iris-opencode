@@ -24,6 +24,18 @@ import {
   renderRabbitTranscript,
   type RabbitMeeting,
 } from "./meetings-rabbit"
+import { getToken, lastError, lastGmailAccount, getMessageById, searchMessages, setGmailAccount } from "../lib/gmail"
+import { resolveLeadForHandle } from "./comms-send"
+import { searchCalendars } from "./platform-calendar"
+import {
+  ingestRecap,
+  isReadAiSender,
+  meetingFromRow,
+  RECAP_CHANNEL,
+  RECAP_QUERY,
+  type RecapDeps,
+  type RecapOutcome,
+} from "./meetings-recap"
 
 /**
  * Wispr Flow keeps one directory per meeting, each holding a `refined.ndjson` of
@@ -495,11 +507,158 @@ async function runIngest(args: any) {
   prompts.outro(failures.length ? "Done with errors" : success("Done"))
 }
 
+/** The real doors behind ingestRecap. Each failure throws, so it is reported rather than read as "nothing". */
+const recapDeps = (): RecapDeps => ({
+  async findEvents(title, from, to) {
+    const { result } = await searchCalendars(title, from, to, { local: false })
+    return { events: result.events, complete: result.complete }
+  },
+  resolveLead: resolveLeadForHandle,
+  async writeMeeting(payload) {
+    const res = await irisFetch("/api/v1/atlas/comms/ingest", { method: "POST", body: JSON.stringify(payload) })
+    if (!res.ok) throw new Error(`could not store the meeting (HTTP ${res.status})`)
+    const body = (await res.json()) as any
+    return { id: body?.data?.record?.id, created: body?.data?.created === true }
+  },
+  async leadNotes(leadId) {
+    const res = await irisFetch(`/api/v1/leads/${leadId}`)
+    if (!res.ok) throw new Error(`could not read lead #${leadId} (HTTP ${res.status})`)
+    const body = (await res.json()) as any
+    const notes = body?.data?.notes ?? body?.notes ?? []
+    return (Array.isArray(notes) ? notes : []).map((n: any) => String(n?.content ?? n?.message ?? ""))
+  },
+  async writeLeadNote(leadId, payload) {
+    const res = await irisFetch(`/api/v1/leads/${leadId}/notes`, { method: "POST", body: JSON.stringify(payload) })
+    if (!res.ok) throw new Error(`could not write the note on lead #${leadId} (HTTP ${res.status})`)
+  },
+})
+
+/** #191935 — file Read AI recap emails: the meeting, who was on it, and a note on each exact lead. */
+const RecapsCommand = cmd({
+  command: "recaps",
+  describe: "file Read AI recap emails in Atlas, with a note on each lead an attendee's exact address matches",
+  builder: (y) =>
+    y
+      .option("days", { type: "number", default: 7, describe: "how far back to look" })
+      .option("limit", { type: "number", default: 25, describe: "most recaps to read" })
+      .option("mailbox", { type: "string", describe: "the connected Gmail address to read" })
+      .option("bloq", { type: "number", describe: "board to link the meeting to" })
+      .option("dry-run", { type: "boolean", default: false, describe: "show what would be filed, write nothing" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Meeting recaps")
+    if (!(await requireAuth())) {
+      prompts.outro("Done")
+      return
+    }
+    if (args.mailbox) setGmailAccount({ account: String(args.mailbox) })
+    const token = await getToken()
+    if (!token) {
+      prompts.log.error(lastError() || "Gmail is not connected.")
+      process.exitCode = 1
+      prompts.outro("Done")
+      return
+    }
+
+    const after = new Date(Date.now() - Number(args.days) * 86400_000)
+    const ymd = `${after.getFullYear()}/${String(after.getMonth() + 1).padStart(2, "0")}/${String(after.getDate()).padStart(2, "0")}`
+    const outcomes: RecapOutcome[] = []
+    const errors: string[] = []
+    const dryRun = args["dry-run"] === true
+    try {
+      const rows = await searchMessages(token, `${RECAP_QUERY} after:${ymd}`, Number(args.limit))
+      for (const row of rows.filter((r) => isReadAiSender(r.from))) {
+        try {
+          const full = (await getMessageById(token, row.id)) ?? row
+          const mailbox = full.mailbox ?? row.mailbox ?? lastGmailAccount()?.account ?? (args.mailbox as string | undefined)
+          // The single-message read has no headers; the Message-ID, when there is one, is on the list row.
+          const out = await ingestRecap(
+            { ...full, mailbox, rfc822_message_id: full.rfc822_message_id ?? row.rfc822_message_id },
+            recapDeps(),
+            { dryRun, bloqId: args.bloq as number | undefined },
+          )
+          if (out) outcomes.push(out)
+          else errors.push(`message with no id: skipped`)
+        } catch (err: any) {
+          errors.push(`${row.id}: ${err?.message ?? err}`)
+        }
+      }
+    } catch (err: any) {
+      errors.push(`Gmail search failed: ${err?.message ?? err}`)
+    }
+    if (errors.length) process.exitCode = 1
+
+    if (args.json) {
+      await writeJson({ recaps: outcomes, errors, dry_run: dryRun })
+      return
+    }
+    for (const o of outcomes) {
+      printDivider()
+      console.log(`  ${bold(o.title)}  ${dim(o.when)}${o.created ? "" : dim(dryRun ? "  (dry run)" : "  (already filed)")}`)
+      printKV("Attendees", String(o.attendees.length))
+      printKV("Calendar", o.calendar)
+      for (const a of o.attached) console.log(`  ${success("→")} lead #${a.lead_id}  ${a.email}${a.already ? dim("  (already on it)") : ""}`)
+      if (o.unmatched.length) printKV("No lead", o.unmatched.join(", "))
+      for (const a of o.ambiguous) printKV("Several leads, none attached", `${a.email} (#${a.lead_ids.join(", #")})`)
+      if (o.names_without_email.length) printKV("Named, no address", o.names_without_email.join(", "))
+      for (const f of o.failed) prompts.log.warn(`${f.email}: ${f.reason} — re-run to retry`)
+    }
+    for (const e of errors) prompts.log.error(e)
+    if (!outcomes.length && !errors.length) prompts.log.warn(`No Read AI recaps in the last ${args.days} days of this mailbox.`)
+    prompts.outro(dim("iris meetings find <text>"))
+  },
+})
+
+/** #191935 — "who was on that call", from recaps already filed. */
+const FindCommand = cmd({
+  command: "find <text>",
+  describe: "find a filed meeting recap by title, words or a person, and show who attended",
+  builder: (y) =>
+    y
+      .positional("text", { type: "string", demandOption: true })
+      .option("limit", { type: "number", default: 20 })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    const qs = new URLSearchParams({ channel: RECAP_CHANNEL, search: String(args.text), per_page: String(args.limit) })
+    const res = await irisFetch(`/api/v1/atlas/comms?${qs}`)
+    if (!res.ok) {
+      prompts.log.error(`Could not search meetings (HTTP ${res.status})`)
+      process.exitCode = 1
+      return
+    }
+    const page = ((await res.json()) as any)?.data
+    const meetings = (Array.isArray(page?.data) ? page.data : []).map(meetingFromRow)
+    if (args.json) {
+      await writeJson({ meetings, total: page?.total ?? meetings.length })
+      return
+    }
+    if (!meetings.length) {
+      // Only recaps filed by `iris meetings recaps` are searched, so say that rather than "no meeting".
+      prompts.log.warn(`No filed recap matches "${args.text}". Only recaps filed by iris meetings recaps are searched.`)
+      return
+    }
+    for (const m of meetings) {
+      console.log(`  ${bold(m.title)}  ${dim(m.when)}  ${dim(`#${m.id}`)}`)
+      for (const a of m.attendees) {
+        const how = a.sources?.includes("recap") ? "on the recap" : "invited"
+        console.log(`    ${a.name ? `${a.name} ` : ""}<${a.email}>  ${dim(how)}`)
+      }
+      for (const n of m.names_without_email) console.log(`    ${n}  ${dim("named, no address")}`)
+      if (!m.attendees.length && !m.names_without_email.length) console.log(dim("    no attendees known"))
+    }
+    if ((page?.total ?? 0) > meetings.length) console.log(dim(`  ${meetings.length} of ${page.total} shown — raise --limit`))
+  },
+})
+
 export const PlatformMeetingsCommand = cmd({
   command: "meetings [session]",
   describe: "list recorded meetings (Wispr Flow + rabbit R1) and file a summary on a bloq",
   builder: (y) =>
     y
+      .command(RecapsCommand)
+      .command(FindCommand)
       .positional("session", { type: "string", describe: "session id (or its first 8 chars). Omit to list." })
       .option("source", {
         type: "string",
