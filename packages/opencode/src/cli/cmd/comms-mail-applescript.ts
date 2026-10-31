@@ -20,13 +20,29 @@ import { execFile } from "node:child_process"
 export const MAIL_THREAD_READER_JXA = String.raw`function run(argv) {
   const addr = String(argv[0] || "").trim().toLowerCase()
   const days = Number(argv[1] || 90)
-  const acctName = String(argv[2] || "")
+  const acctSel = String(argv[2] || "")
   const withBody = argv[3] === "body"
-  if (!addr.includes("@") || !acctName) throw new Error("usage: <address> <days> <account> [body]")
+  // The address this account sends as (#191879). Outbound rows used to say the account NAME
+  // ("Google"), which is not an identity — the same name is a different mailbox on another Mac.
+  const ownAddr = String(argv[4] || "").trim().toLowerCase()
+  if (!addr.includes("@") || !acctSel) throw new Error("usage: <address> <days> <id:ACCOUNT-ID|account name> [body] [own address]")
 
   const Mail = Application("Mail")
   const cutoff = new Date(Date.now() - days * 864e5)
-  const acct = Mail.accounts.byName(acctName)
+  // "id:<Mail account id>" — what the CLI passes after resolving an ADDRESS to an account
+  // (#191879). byName() on a name Mail does not have throws "Can't get object" (-1728), which is
+  // exactly what --mail-account team@heyiris.io did, and names are not unique across Macs anyway.
+  const pickAccount = (sel) => {
+    if (sel.indexOf("id:") === 0) {
+      const want = sel.slice(3)
+      const hit = Mail.accounts().find((a) => a.id() === want)
+      if (!hit) throw new Error("no Mail.app account with id " + want + " on this Mac")
+      return hit
+    }
+    return Mail.accounts.byName(sel)
+  }
+  const acct = pickAccount(acctSel)
+  const acctName = acct.name()
   const emailOf = (s) => {
     const m = String(s || "").match(/<([^>]+)>/)
     return (m ? m[1] : String(s || "")).trim().toLowerCase()
@@ -69,11 +85,20 @@ export const MAIL_THREAD_READER_JXA = String.raw`function run(argv) {
         // RFC Message-ID: the same id on every machine and every mailbox copy of this message.
         external_message_id: "rfc822_" + ids[i],
         direction,
-        from_identifier: direction === "inbound" ? emailOf(snd[i]) : acctName,
+        from_identifier: direction === "inbound" ? emailOf(snd[i]) : ownAddr || acctName,
         subject: subj[i],
         sent_at: (ds[i] || dr[i]).toISOString(),
         channel: "apple_mail",
-        metadata: { source: "apple_mail_applescript", account: acctName, mailbox: mbName, matched_address: addr },
+        metadata: {
+          source: "apple_mail_applescript",
+          account: acctName,
+          ...(ownAddr ? { account_address: ownAddr } : {}),
+          mailbox: mbName,
+          matched_address: addr,
+          // The cross-channel key (#191879): the server matches this against the same message
+          // read through Gmail, so one mailbox arriving two ways is one row.
+          rfc822_message_id: ids[i],
+        },
       }
       if (withBody) {
         try {
@@ -103,10 +128,14 @@ export function mailResponsive(timeoutMs = 15000): Promise<boolean> {
   })
 }
 
-export function readMailThread(address: string, days: number, account: string, withBody: boolean, timeoutMs = 120000): Promise<MailThreadRead> {
+/** argv for the thread reader — shared by the local run and the command sent to another Mac. */
+export function mailThreadReaderArgs(address: string, days: number, account: string, withBody: boolean, ownAddress?: string): string[] {
+  return ["-l", "JavaScript", "-e", MAIL_THREAD_READER_JXA, address, String(days), account, withBody ? "body" : "", ownAddress ?? ""]
+}
+
+export function readMailThread(address: string, days: number, account: string, withBody: boolean, timeoutMs = 120000, ownAddress?: string): Promise<MailThreadRead> {
   return new Promise((resolve) => {
-    const args = ["-l", "JavaScript", "-e", MAIL_THREAD_READER_JXA, address, String(days), account]
-    if (withBody) args.push("body")
+    const args = mailThreadReaderArgs(address, days, account, withBody, ownAddress)
     execFile("osascript", args, { timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) {
         const msg = String(stderr || err.message).replace(/\s+/g, " ").trim().slice(0, 240)
