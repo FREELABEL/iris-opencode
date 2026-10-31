@@ -33,6 +33,18 @@
       "purpose": "How to: Use Atlas Datasets (schema-driven data)"
     },
     {
+      "src": "how-to/desktop-atlas-offline-copy.md",
+      "dest": "how-to/desktop-atlas-offline-copy.md",
+      "managed": true,
+      "purpose": "Open Atlas boards instantly and read them offline in IRIS Desktop: where the copy lives, the patient-data rule, and how to turn it off."
+    },
+    {
+      "src": "how-to/atlas-local-copy.md",
+      "dest": "how-to/atlas-local-copy.md",
+      "managed": true,
+      "purpose": "Keep a local copy of an Atlas dataset on your computer as plain files, in step with the cloud in both directions (offline edits, scripting)."
+    },
+    {
       "src": "how-to/bespoke.md",
       "dest": "how-to/bespoke.md",
       "managed": true,
@@ -201,6 +213,18 @@
       "purpose": "How to: verify a page actually renders — check-public, verify and read — rather than trusting a 200. Committed in ce2fdf8be without a manifest entry, so the installer never fetched it."
     },
     {
+      "src": "how-to/genesis-starter-templates.md",
+      "dest": "how-to/genesis-starter-templates.md",
+      "managed": true,
+      "purpose": "How to: start a page from a Genesis template — clone it in your brand, then make it yours. The gallery is at genesis-ui.com."
+    },
+    {
+      "src": "how-to/genesis-make-a-template.md",
+      "dest": "how-to/genesis-make-a-template.md",
+      "managed": true,
+      "purpose": "How to: turn one of your Genesis pages into a template any brand can wear — brand-tokens block, fallbacks, per-theme accent."
+    },
+    {
       "src": "how-to/hive-dispatch.md",
       "dest": "how-to/hive-dispatch.md",
       "managed": true,
@@ -235,6 +259,18 @@
       "dest": "how-to/answer-agents-from-anywhere.md",
       "managed": true,
       "purpose": "See which agents are waiting on you — the question and its options — and answer them from any machine or your phone."
+    },
+    {
+      "src": "how-to/iris-model-gateway.md",
+      "dest": "how-to/iris-model-gateway.md",
+      "managed": true,
+      "purpose": "The IRIS model gateway: one endpoint, failover, spend and caps — and hive/<model> to use the models on your own machines for free."
+    },
+    {
+      "src": "how-to/run-other-coding-agents.md",
+      "dest": "how-to/run-other-coding-agents.md",
+      "managed": true,
+      "purpose": "Run Claude Code, Codex or Gemini from IRIS over ACP — diffs and permission prompts in one command — and keep the session open to steer from Hive or Desktop."
     },
     {
       "src": "how-to/public-url-for-a-local-port.md",
@@ -363,6 +399,24 @@
       "purpose": "Pulse readiness engine — autonomous 4-signal scoring (requirements + liveness + comms freshness + config), 15-min cron, daily digest. How to enroll a lead, view the score, run requirements, debug the loop."
     },
     {
+      "src": "how-to/pulse-desktop.md",
+      "dest": "how-to/pulse-desktop.md",
+      "managed": true,
+      "purpose": "Pulse from inside IRIS Desktop chat — ask where a topic stands (commits, diary, files, sessions, tasks, mail) or how a contact is doing, without leaving the conversation."
+    },
+    {
+      "src": "how-to/desktop-atlas-offline-copy.md",
+      "dest": "how-to/desktop-atlas-offline-copy.md",
+      "managed": true,
+      "purpose": "Open Atlas boards instantly and read them offline in IRIS Desktop: where the copy lives, the patient-data rule, and how to turn it off."
+    },
+    {
+      "src": "how-to/desktop-agents.md",
+      "dest": "how-to/desktop-agents.md",
+      "managed": true,
+      "purpose": "Put your IRIS agents in the IRIS Desktop agent picker with iris agents desktop-sync — full local tools, facts still from IRIS; restart to see them."
+    },
+    {
       "src": "how-to/remote-support-a-family-pc.md",
       "dest": "how-to/remote-support-a-family-pc.md",
       "managed": true,
@@ -427,6 +481,12 @@
       "dest": "playbooks/agentic-loop/PLAYBOOK.md",
       "managed": true,
       "purpose": "Canonical reference loopable playbook (the 'fuel' for `iris loop run`). A v2 implement→verify loop — orchestrator → Builder/Scout/Growth → verify → synthesize → memory — whose verify step emits `VERDICT: SHIP|ITERATE` so the loop engine (platform-loop.ts) terminates correctly. Resolves `iris playbook show agentic-loop` and `iris loop run agentic-loop --until SHIP`, which the agentic-loops.md how-to points at."
+    },
+    {
+      "src": "playbooks/talking-head-reel/PLAYBOOK.md",
+      "dest": "playbooks/talking-head-reel/PLAYBOOK.md",
+      "managed": true,
+      "purpose": "Talking-head reel lane (#191299): raw takes → `iris reel cut` (best take, pauses removed) → `iris reel captions` (word-timed, burnt in) → `iris reel covers` → a person reviews → `iris remotion register` → confirm-gated delete of the raw takes. Each step leaves a file the next reads."
     },
     {
       "src": "playbooks/hive-secure-mesh/PLAYBOOK.md",
@@ -553,6 +613,12 @@
       "dest": "how-to/mailjet.md",
       "managed": true,
       "purpose": "How to: connect a client's own Mailjet account and build lists, send email and draft campaigns through iris integrations exec."
+    },
+    {
+      "src": "how-to/mailing.md",
+      "dest": "how-to/mailing.md",
+      "managed": true,
+      "purpose": "How to: send one personal email to everyone on a list through your own Mailjet — iris mailing new → test → send → status/log, resuming a stopped send, and the etiquette for cold lists."
     },
     {
       "src": "how-to/agent-trust-and-approvals.md",

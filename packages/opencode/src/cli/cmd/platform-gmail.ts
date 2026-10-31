@@ -3,6 +3,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { printDivider, dim, bold, success, writeJson } from "./iris-api"
+import { mailComposeOptions, collectArgs, runComposedSend } from "./platform-mail"
 import { getToken, getLabels, listMessages, searchMessages, getThread, lastError, setGmailAccount, lastGmailAccount, nextPageToken } from "../lib/gmail"
 
 async function requireToken(): Promise<string | null> {
@@ -298,7 +299,7 @@ function fail(args: { json?: unknown }, message: string): void {
   prompts.outro("Done")
 }
 
-/** Say when there is more — the token to continue, or --all. JSON keeps stdout an array; the hint goes to stderr. */
+/** Say when there is more — the token to continue, or --all. Under --json it says nothing: see below. */
 function moreHint(json: boolean): void {
   const t = nextPageToken()
   if (!t) return
@@ -316,9 +317,44 @@ export function printMailboxLine(): void {
   if (a.notice) console.log(dim(`    ${a.notice}`))
 }
 
+/**
+ * Reply / draft through Gmail itself (#191605) — no Mac needed. The server runs Composio
+ * GMAIL_REPLY_TO_THREAD / GMAIL_CREATE_EMAIL_DRAFT; recipients, the lead check and the comms log are
+ * the same code as `iris mail reply --via gmail`. Uses the mailbox chosen with --account.
+ */
+const GmailReplyCommand = cmd({
+  command: "reply <id>",
+  describe: "reply in a Gmail thread (--all: everyone on it, minus you) — logged to every lead on it",
+  builder: (yargs) =>
+    mailComposeOptions(yargs.positional("id", { type: "string", demandOption: true, describe: "Gmail message id (or an RFC Message-ID)" }))
+      .option("all", { type: "boolean", default: false, describe: "reply to all, minus yourself" }),
+  async handler(args) {
+    const a = collectArgs(args, { replyTo: String(args.id), all: Boolean((args as any).all) })
+    a.via = "gmail"
+    if (!a.json) { UI.empty(); prompts.intro(`◈  Gmail reply${a.all ? " all" : ""} — ${a.replyTo}`) }
+    return runComposedSend(a)
+  },
+})
+
+const GmailDraftCommand = cmd({
+  command: "draft [recipients..]",
+  describe: "save a Gmail draft (a reply draft with --reply-to) — nothing is sent, nothing is logged",
+  builder: (yargs) =>
+    mailComposeOptions(yargs.positional("recipients", { type: "string", array: true, describe: "recipient email(s) — same as --to" }))
+      .option("reply-to", { type: "string", describe: "make it a reply draft in this message's thread" })
+      .option("all", { type: "boolean", default: false, describe: "with --reply-to: everyone on the original, minus you" }),
+  async handler(args) {
+    const a = collectArgs(args, { positional: args.recipients, replyTo: (args as any)["reply-to"], all: Boolean((args as any).all) })
+    a.via = "gmail"
+    a.draft = true
+    if (!a.json) { UI.empty(); prompts.intro("◈  Gmail draft") }
+    return runComposedSend(a)
+  },
+})
+
 export const PlatformGmailCommand = cmd({
   command: "gmail",
-  describe: "read Gmail messages via Google API (requires Gmail OAuth connection)",
+  describe: "Gmail via the Google API — read, reply in-thread and draft (requires a Gmail connection)",
   builder: (yargs) =>
     yargs
       .option("account", { type: "string", describe: "mailbox to use, by address (e.g. --account=me@company.com)" })
@@ -329,6 +365,8 @@ export const PlatformGmailCommand = cmd({
       .command(GmailSearchCommand)
       .command(GmailLabelsCommand)
       .command(GmailUnreadCommand)
+      .command(GmailReplyCommand)
+      .command(GmailDraftCommand)
       .strict(false),
   async handler() {
     return GmailInboxCommand.handler({} as any)

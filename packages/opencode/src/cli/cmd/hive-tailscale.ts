@@ -19,12 +19,14 @@
  * report a TCC refusal as a permission problem, never as "file not found" (#182007).
  */
 
-import { execFile } from "child_process"
+import { execFile, spawn, spawnSync } from "child_process"
 import { promisify } from "util"
 import { createHash } from "crypto"
 import { randomUUID } from "crypto"
-import { readFile, writeFile, mkdir } from "fs/promises"
-import { existsSync } from "fs"
+import { readFile, writeFile, mkdir, rename, rm } from "fs/promises"
+import { createReadStream, existsSync, statSync } from "fs"
+import { Transform, type Readable } from "stream"
+import { pipeline } from "stream/promises"
 import { homedir, userInfo } from "os"
 import { join, basename, dirname } from "path"
 
@@ -232,6 +234,16 @@ export async function rememberSshHost(nodeId: string, host: string, user?: strin
 }
 
 /**
+ * Hive without Tailscale (epic #191642): IRIS_HIVE_NO_TAILSCALE=1 makes every Hive transport
+ * behave as if Tailscale were not installed. It exists so the exit check
+ * (scripts/hive-without-tailscale-check.sh) can run between two machines whose Tailscale must
+ * stay up, and so a person can force the relay path.
+ */
+export function tailscaleDisabled(env: Record<string, string | undefined> = process.env): boolean {
+  return /^(1|true|yes)$/i.test(String(env.IRIS_HIVE_NO_TAILSCALE ?? "").trim())
+}
+
+/**
  * Resolve a Hive node to something ssh can address.
  *
  * Order: an explicit --host, then the cache, then Tailscale. Never guesses an IP.
@@ -248,6 +260,12 @@ export async function resolveSshTarget(
     // Remember it, so this is the LAST time --host has to be typed for this node.
     await rememberSshHost(nodeId, opts.host, opts.user ?? cached.user ?? null)
     return { host: opts.host, user: opts.user ?? cached.user ?? null, via: "explicit" }
+  }
+  // Hive without Tailscale (epic #191642): with the tailnet switched off, no tailnet address is
+  // used — not a cached one, not the one the node advertised, not a peer lookup. An explicit
+  // --host above is still honoured: a person named the address.
+  if (tailscaleDisabled()) {
+    return { error: "Tailscale is switched off for this command (IRIS_HIVE_NO_TAILSCALE=1), and no --host was given." }
   }
   if (cached.host) return { host: cached.host, user: opts.user ?? cached.user ?? null, via: "cached" }
 
@@ -343,21 +361,25 @@ export async function ensureSshUser(
   t: SshTarget,
   opts: { askNode?: () => Promise<string | null> } = {},
 ): Promise<SshTarget | { error: string }> {
+  const config = sshConfigFor(t.host)
   const candidates: (string | null)[] = []
   if (t.user) candidates.push(t.user)
   candidates.push(null) // let ssh_config decide — a Host entry may already name the user
   try {
-    candidates.push(userInfo().username)
+    // Only when ssh's own default is someone else: trying the same account twice doubles the
+    // wait and listed it twice in the error ("siralexmayo (ssh default), siralexmayo").
+    const local = userInfo().username
+    if (local !== config.user && local !== t.user) candidates.push(local)
   } catch {
     /* ignore */
   }
 
-  const tried: string[] = []
+  const attempts: SshAttempt[] = []
   const probeOne = async (user: string | null): Promise<SshTarget | null> => {
     const probe: SshTarget = { ...t, user }
     const r = await sshRun(probe, "true", 15_000)
     if (!r.ok) {
-      tried.push(user ?? "(ssh_config default)")
+      attempts.push({ user, stderr: r.stderr })
       return null
     }
     const cache = await readSshCache()
@@ -365,32 +387,126 @@ export async function ensureSshUser(
     await writeSshCache(cache)
     return probe
   }
+  const unreachable = () => attempts.some((a) => isSshUnreachable(a.stderr))
   for (const user of candidates) {
     const hit = await probeOne(user)
     if (hit) return hit
+    // Every other username would time out the same way — the problem is the route, not the account.
+    if (unreachable()) break
   }
   // Last: ask the node who its daemon runs as. A Linux box set up by hand rarely shares a
   // username with the Mac dialling it (iris-hive-001: siralexmayo vs mayoalexander), and
   // every guess above then fails with an error that reads like a network problem. The
   // node's answer is still only a CANDIDATE — it is used once the ssh login with it works.
-  if (opts.askNode) {
+  if (opts.askNode && !unreachable()) {
     const asked = await opts.askNode().catch(() => null)
-    if (asked && !candidates.includes(asked)) {
+    if (asked && !candidates.includes(asked) && asked !== config.user) {
       const hit = await probeOne(asked)
       if (hit) return hit
     }
   }
-  return {
-    error:
-      `Could not open an ssh session to ${t.host}. Tried: ${tried.join(", ")}. ` +
-      `Pass --user <name> once and it will be remembered in ~/.iris/hive-ssh.json.`,
-  }
+  return { error: describeSshFailure(t.host, attempts, { defaultUser: config.user, keyFound: sshKeyFound(config) }) }
 }
 
-/** sha256 of a local file. */
+export interface SshAttempt {
+  /** null = no user given; ssh used its own default (ssh_config User, else the local login). */
+  user: string | null
+  stderr: string
+}
+
+export function isSshAuthRefused(stderr: string): boolean {
+  return /permission denied|no supported authentication|too many authentication failures/i.test(stderr)
+}
+
+export function isSshUnreachable(stderr: string): boolean {
+  return /connection refused|connection timed out|operation timed out|no route to host|network is unreachable|host is down|could not resolve hostname/i.test(
+    stderr,
+  )
+}
+
+/** What ssh itself would use for a host: its default user, and the identity files it would offer. */
+export function sshConfigFor(host: string): { user: string | null; identityFiles: string[] } {
+  const r = spawnSync("ssh", ["-G", host], { encoding: "utf8", timeout: 5000, env: process.env })
+  if (r.status !== 0 || !r.stdout) return { user: null, identityFiles: [] }
+  let user: string | null = null
+  const identityFiles: string[] = []
+  for (const line of r.stdout.split("\n")) {
+    const [k, ...rest] = line.trim().split(/\s+/)
+    const v = rest.join(" ")
+    if (k === "user" && v) user = v
+    if (k === "identityfile" && v) identityFiles.push(v.replace(/^~(?=\/)/, homedir()))
+  }
+  return { user, identityFiles }
+}
+
+/**
+ * Whether this machine has ANY key ssh could offer: one loaded in the agent, or an identity file
+ * that exists. "No key at all" is the one failure where no username can ever work (#187786).
+ */
+export function sshKeyFound(config: { identityFiles: string[] }): boolean {
+  const agent = spawnSync("ssh-add", ["-l"], { encoding: "utf8", timeout: 5000, env: process.env })
+  if (agent.status === 0) return true
+  const files = config.identityFiles.length
+    ? config.identityFiles
+    : ["id_ed25519", "id_ecdsa", "id_rsa", "id_ed25519_sk", "id_ecdsa_sk"].map((n) => join(homedir(), ".ssh", n))
+  return files.some((f) => existsSync(f))
+}
+
+/**
+ * Explain why every SSH attempt failed, naming the users tried and the cause that was actually
+ * established — a route problem, no key on this machine, or a refusal — instead of asserting one.
+ */
+export function describeSshFailure(
+  host: string,
+  attempts: SshAttempt[],
+  ctx: { defaultUser: string | null; keyFound: boolean },
+): string {
+  const label = (u: string | null) => u ?? (ctx.defaultUser ? `${ctx.defaultUser} (ssh default)` : "(ssh default)")
+  const tried = attempts.map((a) => label(a.user)).join(", ") || "(none)"
+  const last = attempts.at(-1)?.stderr.trim().split("\n").at(-1)?.slice(0, 200) ?? ""
+  const someUser = attempts.find((a) => a.user)?.user ?? "<remote-user>"
+
+  if (attempts.some((a) => isSshUnreachable(a.stderr))) {
+    return (
+      `Could not reach ${host} over SSH (${last}). This is a network problem, not a username or key problem: ` +
+      `check that Tailscale is up on both machines and that SSH is enabled on the node (macOS: Remote Login).`
+    )
+  }
+  if (!ctx.keyFound) {
+    return (
+      `No SSH key was found on this machine (none in ssh-agent, and none of ssh's identity files exist), ` +
+      `so no username can work. Create one with: ssh-keygen -t ed25519 — then authorize it on the node: ` +
+      `iris hive ssh-setup ${someUser}@${host}. Tried user(s): ${tried}.`
+    )
+  }
+  if (attempts.length && attempts.every((a) => isSshAuthRefused(a.stderr))) {
+    return (
+      `${host} refused SSH for every user tried: ${tried}. This machine has a key, so either the remote ` +
+      `username is wrong or this key is not authorized for it. The node's username is its own login name, ` +
+      `usually not your IRIS account name — pass it with --user <name> (remembered after the first success). ` +
+      `If the username is right, authorize this key: iris hive ssh-setup ${someUser}@${host}.`
+    )
+  }
+  return `Could not open an SSH session to ${host}. Tried user(s): ${tried}. ssh said: ${last || "(nothing)"}`
+}
+
+/** A user remembered for this address in ~/.iris/hive-ssh.json by an earlier successful fs/doctor run. */
+export async function rememberedUserForHost(host: string): Promise<string | null> {
+  const cache = await readSshCache()
+  const users = new Set(
+    Object.values(cache)
+      .filter((e) => e.host === host && e.user)
+      .map((e) => e.user as string),
+  )
+  // Two nodes remembering different users for one address is a contradiction — don't pick one.
+  return users.size === 1 ? [...users][0] : null
+}
+
+/** sha256 of a local file, streamed: a multi-GB backup is not read into memory to be hashed (#187956). */
 export async function sha256Local(path: string): Promise<string> {
-  const buf = await readFile(path)
-  return createHash("sha256").update(buf).digest("hex")
+  const hash = createHash("sha256")
+  for await (const chunk of createReadStream(path)) hash.update(chunk as Buffer)
+  return hash.digest("hex")
 }
 
 /**
@@ -439,6 +555,118 @@ export interface TransferOutcome {
 }
 
 /**
+ * Parse the available 1K blocks from POSIX `df -Pk` output.
+ *
+ * Read as the column just before Capacity ("NN%"), not as field 4: a filesystem name can contain
+ * spaces (macOS `map auto_home`, SMB shares), which shifts every column after it.
+ */
+export function parseAvailableBytes(output: string): number | null {
+  const lines = output.trim().split(/\r?\n/)
+  const fields = lines.at(-1)?.trim().split(/\s+/) ?? []
+  const capacity = fields.findIndex((f, i) => i >= 4 && /^\d+%$/.test(f))
+  if (capacity < 0 || !/^\d+$/.test(fields[capacity - 1])) return null
+  const blocks = Number(fields[capacity - 1])
+  return Number.isSafeInteger(blocks * 1024) ? blocks * 1024 : null
+}
+
+/** Free space a push must leave behind. Filling a disk to zero breaks the node, not just the copy. */
+export const PUSH_FREE_SPACE_RESERVE_BYTES = 100 * 1024 * 1024
+
+export function destinationSpaceError(
+  bytes: number,
+  dfOutput: string | null,
+  where = "on destination",
+  verb = "push",
+): string | null {
+  const availableBytes = dfOutput === null ? null : parseAvailableBytes(dfOutput)
+  if (availableBytes === null) return `could not verify free space ${where}; refusing to ${verb}`
+  if (availableBytes < bytes + PUSH_FREE_SPACE_RESERVE_BYTES) {
+    return (
+      `not enough free space ${where}: ${availableBytes} bytes available, ${bytes} bytes required ` +
+      `plus ${PUSH_FREE_SPACE_RESERVE_BYTES} bytes kept free`
+    )
+  }
+  return null
+}
+
+export async function checkRemoteFreeSpace(
+  t: SshTarget,
+  remoteDir: string,
+  bytes: number,
+  where = "on destination",
+  verb = "push",
+): Promise<string | null> {
+  const space = await sshRun(t, `df -Pk ${shqPath(remoteDir)}`)
+  const error = destinationSpaceError(bytes, space.ok ? space.stdout : null, where, verb)
+  return error ? `${error} (${remoteDir})` : null
+}
+
+/** The same check for a directory on THIS machine — a pull must fit here too. */
+export function checkLocalFreeSpace(localDir: string, bytes: number): string | null {
+  const r = spawnSync("df", ["-Pk", localDir], { encoding: "utf8", timeout: 10_000, env: process.env })
+  const error = destinationSpaceError(bytes, r.status === 0 ? r.stdout : null, "on this machine", "pull")
+  return error ? `${error} (${localDir})` : null
+}
+
+/**
+ * Options for a transfer that may run for a long time. A fixed timeout killed any copy that
+ * took longer than 5 minutes — a 725 MB dump over a relay can — and left a truncated file. A
+ * transfer instead fails when the CONNECTION dies: ssh gives up after ~60s without a reply.
+ */
+const TRANSFER_OPTS = ["-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4"]
+
+/** A hidden sibling the bytes land in first, renamed into place only once the checksums match. */
+export function partialName(name: string): string {
+  return `.${name}.iris-partial-${randomUUID().slice(0, 8)}`
+}
+
+/** A name for a streamed file: one path component, nothing that escapes the target directory. */
+export function streamNameError(name: string | undefined): string | null {
+  if (!name) return "a streamed push needs --name <file> — stdin has no file name"
+  if (name.includes("/") || name.includes("\\") || name === "." || name === ".." || name.includes("\0")) {
+    return `--name must be a plain file name, not a path: ${name}`
+  }
+  return null
+}
+
+function verdict(localSha: string, remoteSha: string | null, direction: "push" | "pull"): string | undefined {
+  if (remoteSha !== null && remoteSha === localSha) return undefined
+  if (remoteSha === null) return "could not compute a checksum on the node, so this transfer is UNVERIFIED — nothing was kept"
+  return direction === "push"
+    ? `CHECKSUM MISMATCH — local ${localSha.slice(0, 12)}… vs node ${remoteSha.slice(0, 12)}…. What landed is not what was sent, so it was deleted.`
+    : `CHECKSUM MISMATCH — node ${remoteSha.slice(0, 12)}… vs local ${localSha.slice(0, 12)}…. The file that arrived is not the file that was sent, so it was deleted.`
+}
+
+/**
+ * Verify a file that landed under its partial name on the node, then move it into place — or
+ * delete it. Either the verified file exists under its real name, or nothing does.
+ */
+async function settleRemote(t: SshTarget, partial: string, finalPath: string, localSha: string) {
+  const remoteSha = await sha256Remote(t, partial)
+  const error = verdict(localSha, remoteSha, "push")
+  if (error) {
+    await sshRun(t, `rm -f ${shqPath(partial)}`)
+    return { remoteSha, error }
+  }
+  const mv = await sshRun(t, `mv -f ${shqPath(partial)} ${shqPath(finalPath)}`)
+  if (!mv.ok) {
+    await sshRun(t, `rm -f ${shqPath(partial)}`)
+    return { remoteSha, error: `verified, but could not move it into place: ${classifyRemoteError(mv.stderr).hint}` }
+  }
+  return { remoteSha, error: undefined }
+}
+
+export function localRegularFileSize(localPath: string): { size: number } | { error: string } {
+  try {
+    const stat = statSync(localPath)
+    if (!stat.isFile()) return { error: `not a regular file: ${localPath} (directory pushes are not supported)` }
+    return { size: stat.size }
+  } catch (e: any) {
+    return { error: `cannot inspect local path: ${String(e?.message ?? e)}` }
+  }
+}
+
+/**
  * Copy one file OFF a node, staging through /tmp, and verify sha256 at BOTH ends.
  *
  * The verification is not decoration. A transfer through the Hive transport returned
@@ -450,58 +678,78 @@ export async function pullFile(t: SshTarget, remotePath: string, outDir: string)
   const stage = `/tmp/iris-hive-${randomUUID()}`
   const name = basename(remotePath)
   const localPath = join(outDir, name)
+  const fail = (error: string, extra: Partial<TransferOutcome> = {}): TransferOutcome => ({
+    ok: false, localPath, remotePath, bytes: 0, sha256: null, remoteSha256: null, verified: false, error, ...extra,
+  })
+
+  // Size first: the pull stages a copy in the node's /tmp and then lands a copy here, so it has to
+  // fit in BOTH places. Without this a nearly-full node failed half way through staging (#187787).
+  const sized = await sshRun(t, `wc -c < ${shqPath(remotePath)}`)
+  if (!sized.ok) {
+    const c = classifyRemoteError(sized.stderr)
+    if (/is a directory/i.test(sized.stderr)) return fail(`${remotePath} is a directory — pull one file at a time`)
+    return fail(`${c.kind === "tcc" ? "REFUSED BY macOS PRIVACY (TCC)" : "could not read the file"}: ${c.hint}`)
+  }
+  const size = Number(sized.stdout.trim())
+  if (!Number.isSafeInteger(size)) return fail(`could not read the size of ${remotePath}`)
+
+  const stageRoom = await checkRemoteFreeSpace(t, "/tmp", size, "in the node's /tmp (a pull stages a copy there first)", "pull")
+  if (stageRoom) return fail(stageRoom)
+  try {
+    await mkdir(outDir, { recursive: true })
+  } catch (e: any) {
+    return fail(`cannot create ${outDir}: ${String(e?.message ?? e)}`)
+  }
+  const localRoom = checkLocalFreeSpace(outDir, size)
+  if (localRoom) return fail(localRoom)
 
   const staged = await sshRun(t, `mkdir -p ${shq(stage)} && cp ${shqPath(remotePath)} ${shq(stage + "/" + name)}`)
   if (!staged.ok) {
+    await sshRun(t, `rm -rf ${shq(stage)}`)
     const c = classifyRemoteError(staged.stderr)
-    return {
-      ok: false, localPath, remotePath, bytes: 0, sha256: null, remoteSha256: null, verified: false,
-      error: `${c.kind === "tcc" ? "REFUSED BY macOS PRIVACY (TCC)" : "could not stage the file"}: ${c.hint}`,
-    }
+    return fail(`${c.kind === "tcc" ? "REFUSED BY macOS PRIVACY (TCC)" : "could not stage the file"}: ${c.hint}`)
   }
 
   const remoteSha = await sha256Remote(t, stage + "/" + name)
+  const partial = join(outDir, partialName(name))
 
   try {
-    await mkdir(outDir, { recursive: true })
-    await pexec("scp", [...SSH_BASE, `${dest(t)}:${stage}/${name}`, localPath], { timeout: 300_000 })
+    await pexec("scp", [...SSH_BASE, ...TRANSFER_OPTS, `${dest(t)}:${stage}/${name}`, partial], { timeout: 0 })
   } catch (e: any) {
     await sshRun(t, `rm -rf ${shq(stage)}`)
-    return {
-      ok: false, localPath, remotePath, bytes: 0, sha256: null, remoteSha256: remoteSha, verified: false,
-      error: `scp failed: ${String(e?.stderr ?? e?.message ?? e).trim().slice(0, 300)}`,
-    }
+    await rm(partial, { force: true })
+    return fail(`scp failed: ${String(e?.stderr ?? e?.message ?? e).trim().slice(0, 300)}`, { remoteSha256: remoteSha })
   }
-
   await sshRun(t, `rm -rf ${shq(stage)}`)
 
-  const localSha = await sha256Local(localPath)
-  const bytes = (await readFile(localPath)).length
-  const verified = remoteSha !== null && remoteSha === localSha
-
-  return {
-    ok: verified,
-    localPath, remotePath, bytes,
-    sha256: localSha, remoteSha256: remoteSha, verified,
-    error: verified
-      ? undefined
-      : remoteSha === null
-        ? "could not compute a checksum on the node, so this transfer is UNVERIFIED"
-        : `CHECKSUM MISMATCH — node ${remoteSha.slice(0, 12)}… vs local ${localSha.slice(0, 12)}…. The file that arrived is not the file that was sent.`,
+  const localSha = await sha256Local(partial)
+  const bytes = statSync(partial).size
+  const error = verdict(localSha, remoteSha, "pull")
+  if (error) {
+    await rm(partial, { force: true })
+    return fail(error, { bytes, sha256: localSha, remoteSha256: remoteSha })
   }
+  await rename(partial, localPath)
+  return { ok: true, localPath, remotePath, bytes, sha256: localSha, remoteSha256: remoteSha, verified: true }
 }
 
 /** Copy one file ON to a node, then verify sha256 at both ends. */
 export async function pushFile(t: SshTarget, localPath: string, remoteDir: string): Promise<TransferOutcome> {
   const name = basename(localPath)
-  const remotePath = `${remoteDir.replace(/\/$/, "")}/${name}`
+  const dir = remoteDir.replace(/\/$/, "")
+  const remotePath = `${dir}/${name}`
 
   if (!existsSync(localPath)) {
     return { ok: false, localPath, remotePath, bytes: 0, sha256: null, remoteSha256: null, verified: false, error: `no such local file: ${localPath}` }
   }
 
+  const localFile = localRegularFileSize(localPath)
+  if ("error" in localFile) {
+    return { ok: false, localPath, remotePath, bytes: 0, sha256: null, remoteSha256: null, verified: false, error: localFile.error }
+  }
+
+  const bytes = localFile.size
   const localSha = await sha256Local(localPath)
-  const bytes = (await readFile(localPath)).length
 
   const mk = await sshRun(t, `mkdir -p ${shqPath(remoteDir)}`)
   if (!mk.ok) {
@@ -509,23 +757,89 @@ export async function pushFile(t: SshTarget, localPath: string, remoteDir: strin
     return { ok: false, localPath, remotePath, bytes, sha256: localSha, remoteSha256: null, verified: false, error: `could not create ${remoteDir}: ${c.hint}` }
   }
 
+  const spaceError = await checkRemoteFreeSpace(t, remoteDir, bytes)
+  if (spaceError) {
+    return { ok: false, localPath, remotePath, bytes, sha256: localSha, remoteSha256: null, verified: false, error: spaceError }
+  }
+
+  const partial = `${dir}/${partialName(name)}`
   try {
-    await pexec("scp", [...SSH_BASE, localPath, `${dest(t)}:${remotePath}`], { timeout: 300_000 })
+    await pexec("scp", [...SSH_BASE, ...TRANSFER_OPTS, localPath, `${dest(t)}:${partial}`], { timeout: 0 })
   } catch (e: any) {
+    await sshRun(t, `rm -f ${shqPath(partial)}`)
     return { ok: false, localPath, remotePath, bytes, sha256: localSha, remoteSha256: null, verified: false, error: `scp failed: ${String(e?.stderr ?? e?.message ?? e).trim().slice(0, 300)}` }
   }
 
-  const remoteSha = await sha256Remote(t, remotePath)
-  const verified = remoteSha !== null && remoteSha === localSha
+  const { remoteSha, error } = await settleRemote(t, partial, remotePath, localSha)
+  return { ok: !error, localPath, remotePath, bytes, sha256: localSha, remoteSha256: remoteSha, verified: !error, error }
+}
 
-  return {
-    ok: verified,
-    localPath, remotePath, bytes,
-    sha256: localSha, remoteSha256: remoteSha, verified,
-    error: verified
-      ? undefined
-      : remoteSha === null
-        ? "could not compute a checksum on the node, so this transfer is UNVERIFIED"
-        : `CHECKSUM MISMATCH — local ${localSha.slice(0, 12)}… vs node ${remoteSha.slice(0, 12)}…. What landed is not what was sent.`,
+/**
+ * Stream bytes ON to a node from any source — `mysqldump … | iris hive fs push <node> - --name x`
+ * — without staging them on this machine first (#187956). The stream is hashed as it passes, so
+ * the result is verified exactly like a file push: what lands is checked against what was sent,
+ * and only a match is moved into place.
+ *
+ * The size is unknown up front, so the free-space preflight can only hold the reserve — unless
+ * the caller passes expectBytes. A node that fills up mid-stream fails the write, and the partial
+ * file is removed.
+ */
+export async function pushStream(
+  t: SshTarget,
+  input: Readable,
+  remoteDir: string,
+  name: string,
+  opts: { expectBytes?: number } = {},
+): Promise<TransferOutcome> {
+  const dir = remoteDir.replace(/\/$/, "")
+  const remotePath = `${dir}/${name}`
+  const localPath = "(stdin)"
+  const fail = (error: string, extra: Partial<TransferOutcome> = {}): TransferOutcome => ({
+    ok: false, localPath, remotePath, bytes: 0, sha256: null, remoteSha256: null, verified: false, error, ...extra,
+  })
+
+  const bad = streamNameError(name)
+  if (bad) return fail(bad)
+
+  const mk = await sshRun(t, `mkdir -p ${shqPath(remoteDir)}`)
+  if (!mk.ok) return fail(`could not create ${remoteDir}: ${classifyRemoteError(mk.stderr).hint}`)
+  const spaceError = await checkRemoteFreeSpace(t, remoteDir, opts.expectBytes ?? 0)
+  if (spaceError) return fail(spaceError)
+
+  const partial = `${dir}/${partialName(name)}`
+  const hash = createHash("sha256")
+  let bytes = 0
+  const tap = new Transform({
+    transform(chunk: Buffer, _enc, cb) {
+      hash.update(chunk)
+      bytes += chunk.length
+      cb(null, chunk)
+    },
+  })
+
+  const child = spawn("ssh", [...SSH_BASE, ...TRANSFER_OPTS, dest(t), `cat > ${shqPath(partial)}`], {
+    stdio: ["pipe", "ignore", "pipe"],
+  })
+  let stderr = ""
+  child.stderr.on("data", (d) => (stderr += String(d)))
+  const exited = new Promise<number>((resolve) => {
+    child.on("close", (code) => resolve(code ?? 1))
+    child.on("error", () => resolve(1))
+  })
+
+  let pipeError: unknown = null
+  await pipeline(input, tap, child.stdin).catch((e) => (pipeError = e))
+  const code = await exited
+
+  if (code !== 0 || pipeError) {
+    await sshRun(t, `rm -f ${shqPath(partial)}`)
+    const why = /no space left/i.test(stderr)
+      ? "the node ran out of disk space mid-stream"
+      : stderr.trim().slice(0, 300) || String((pipeError as any)?.message ?? `ssh exited ${code}`)
+    return fail(`stream failed after ${bytes} bytes: ${why}. Nothing was kept on the node.`, { bytes })
   }
+
+  const localSha = hash.digest("hex")
+  const { remoteSha, error } = await settleRemote(t, partial, remotePath, localSha)
+  return { ok: !error, localPath, remotePath, bytes, sha256: localSha, remoteSha256: remoteSha, verified: !error, error }
 }

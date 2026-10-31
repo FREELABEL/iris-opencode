@@ -10,6 +10,8 @@ import { basename, join } from "path"
 import { homedir } from "os"
 import { createCipheriv, createHash, randomBytes, randomUUID } from "crypto"
 import { ENVELOPE_VERSION, generateDek, sealContent, wrapDek } from "../lib/envelope"
+import { tmpdir } from "os"
+import { NoNodeKeyError, decideSeal, e2eMode, nodeKeyFetch, sealedConfigFields, type TargetsOutcome } from "./hive-e2e"
 
 // ============================================================================
 // iris hive send — send files, text, or links to another Hive node
@@ -35,66 +37,70 @@ function deriveEncryptionKey(): Buffer {
   }
 }
 
-// ── Phase 3: envelope encryption (ihw.v1) ───────────────────────────────────
+// ── Phase 3: envelope encryption (ihw.v1) — ON BY DEFAULT ───────────────────
 //
-// OFF BY DEFAULT. Enable with --envelope or IRIS_HIVE_ENVELOPE=1.
+// The legacy path below encrypts with SHA-256(the SENDER's own node_api_key), a key the platform
+// can derive. The envelope path seals under a fresh per-transfer DEK and wraps that DEK to the
+// RECIPIENT's registered public key (plus any escrow holders policy requires), so only the
+// recipient can read it. Our servers store ciphertext they cannot open.
 //
-// The legacy path below encrypts with SHA-256(the SENDER's own node_api_key), which only works
-// because both ends share one credential — "encrypted to myself". The envelope path seals under a
-// fresh per-transfer DEK and wraps that DEK to the RECIPIENT's registered public key (plus any
-// escrow holders policy requires), so a transfer can be addressed to someone the platform itself
-// cannot read.
-//
-// WHY IT IS FLAGGED RATHER THAN SWAPPED: envelope sends fail closed when the recipient has no
-// registered key, and a node only gets one by running `iris hive keys register`. Flipping this on
-// before the fleet has registered would break `iris hive send` for everyone, so the flag exists to
-// let the two roll out in the right order. The daemon reads BOTH formats meanwhile.
-function envelopeEnabled(argv: Record<string, unknown>): boolean {
-  return argv.envelope === true || process.env.IRIS_HIVE_ENVELOPE === "1"
-}
+// Default (hive-e2e.ts → e2eMode): seal whenever the recipient has published a key; if it hasn't,
+// fall back to legacy WITH A WARNING naming the command to run there. `--envelope` refuses instead
+// of falling back; `--no-envelope` turns sealing off. The daemon reads both formats.
 
-interface EnvelopeResult {
-  encryptedPath: string
-  fields: Record<string, unknown>
-}
+interface EnvelopeTarget { type: string; id: string; public_key: string }
 
-/**
- * Seal a file for ONE recipient node and record the wraps server-side.
- *
- * Order is deliberate: the wraps are recorded BEFORE the task is created. Reversed, a failure
- * between the two would hand the recipient a task pointing at a blob whose DEK was never granted
- * to anyone — an unopenable delivery that looks successful. Orphan wrap rows from the other
- * ordering are harmless by comparison.
- *
- * The envelope id is generated here rather than reusing the task id, because the AAD must be
- * fixed at seal time and the task does not exist yet. It travels in the task config so the daemon
- * can find the matching wrap.
- */
-async function sealForRecipient(
-  inputPath: string,
+/** Ask which public keys a transfer to this node must be wrapped to. Never throws. */
+async function lookupTargets(
   recipientNodeId: string,
   opts: { tenant?: string; class?: string },
-): Promise<EnvelopeResult> {
-  const envelopeId = randomUUID()
-
+): Promise<{ outcome: TargetsOutcome; targets: EnvelopeTarget[] }> {
   const params = new URLSearchParams({ recipient_type: "node", recipient_id: recipientNodeId })
   if (opts.tenant) params.set("tenant", opts.tenant)
   if (opts.class) params.set("class", opts.class)
-
-  const targetsRes = await hiveFetch(`/api/v6/hive/transfers/targets?${params.toString()}`)
-  const targetsBody: any = await targetsRes.json().catch(() => ({}))
-
-  if (!targetsRes.ok) {
-    // Surfaced verbatim: "no_recipient_key" is the common case and the message tells the operator
-    // exactly what to run. Collapsing it into "send failed" would waste the diagnosis.
-    throw new Error(targetsBody?.message ?? `could not resolve envelope targets (HTTP ${targetsRes.status})`)
+  let res: Response
+  try {
+    res = await nodeKeyFetch(`/api/v6/hive/transfers/targets?${params.toString()}`)
+  } catch (e: any) {
+    if (e instanceof NoNodeKeyError) return { outcome: { ok: false, code: "no_node_key", message: e.message }, targets: [] }
+    return { outcome: { ok: false, code: "other", message: e?.message ?? String(e) }, targets: [] }
   }
+  const body: any = await res.json().catch(() => ({}))
+  if (res.ok && Array.isArray(body?.targets) && body.targets.length > 0) {
+    return { outcome: { ok: true }, targets: body.targets }
+  }
+  // Surfaced verbatim: "no_recipient_key" is the common case and its message says what to run.
+  const message = body?.message ?? `could not resolve envelope targets (HTTP ${res.status})`
+  if (body?.error === "no_recipient_key") return { outcome: { ok: false, code: "no_recipient_key", message }, targets: [] }
+  if (res.status === 401) return { outcome: { ok: false, code: "no_node_key", message }, targets: [] }
+  if (res.status === 409 && typeof body?.error === "string" && body.error.startsWith("escrow_")) {
+    return { outcome: { ok: false, code: "server_policy", message }, targets: [] }
+  }
+  return { outcome: { ok: false, code: "other", message }, targets: [] }
+}
 
+/**
+ * Seal bytes for ONE recipient node and record the wraps server-side. Returns the ciphertext and
+ * the task-config fields the daemon needs to open it.
+ *
+ * Order is deliberate: the wraps are recorded BEFORE the task is created. Reversed, a failure
+ * between the two would hand the recipient a task pointing at a blob whose DEK was never granted
+ * to anyone — an unopenable delivery that looks successful.
+ *
+ * The envelope id is generated here rather than reusing the task id, because the AAD must be
+ * fixed at seal time and the task does not exist yet.
+ */
+async function sealForRecipient(
+  plaintext: Buffer,
+  recipientNodeId: string,
+  targets: EnvelopeTarget[],
+  opts: { tenant?: string; class?: string },
+): Promise<{ ciphertext: Buffer; fields: Record<string, unknown> }> {
+  const envelopeId = randomUUID()
   const dek = generateDek()
-  const plaintext = readFileSync(inputPath)
   const sealed = sealContent(plaintext, dek, envelopeId)
 
-  const wraps = (targetsBody.targets as Array<{ type: string; id: string; public_key: string }>).map((t) => {
+  const wraps = targets.map((t) => {
     const w = wrapDek(dek, Buffer.from(t.public_key, "base64"), envelopeId, t.id)
     return {
       target_id: t.id,
@@ -104,31 +110,19 @@ async function sealForRecipient(
       tag: w.tag.toString("base64"),
     }
   })
-
   dek.fill(0)
 
-  const recordRes = await hiveFetch(`/api/v6/hive/transfers/${envelopeId}/wraps`, {
+  const recordRes = await nodeKeyFetch(`/api/v6/hive/transfers/${envelopeId}/wraps`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      recipient_type: "node",
-      recipient_id: recipientNodeId,
-      tenant: opts.tenant,
-      class: opts.class,
-      wraps,
-    }),
+    body: JSON.stringify({ recipient_type: "node", recipient_id: recipientNodeId, tenant: opts.tenant, class: opts.class, wraps }),
   })
-
   if (!recordRes.ok) {
     const body: any = await recordRes.json().catch(() => ({}))
     throw new Error(body?.message ?? `could not record envelope wraps (HTTP ${recordRes.status})`)
   }
 
-  const encryptedPath = `${inputPath}.env`
-  writeFileSync(encryptedPath, sealed.ciphertext)
-
   return {
-    encryptedPath,
+    ciphertext: sealed.ciphertext,
     fields: {
       encrypted: true,
       envelope_version: ENVELOPE_VERSION,
@@ -136,10 +130,19 @@ async function sealForRecipient(
       envelope_nonce: sealed.nonce.toString("base64"),
       envelope_tag: sealed.tag.toString("base64"),
       envelope_target: `node:${recipientNodeId}`,
-      // encryption_iv is deliberately ABSENT. The daemon keys its format decision on
-      // envelope_version, and leaving a stale iv field would invite the legacy branch to run
-      // against an ihw.v1 blob.
+      // encryption_iv is deliberately ABSENT: the daemon picks the format by envelope_version.
     },
+  }
+}
+
+/** Upload bytes through a temp file and remove it whatever happens. */
+async function uploadBytes(bytes: Buffer, filename: string): Promise<{ cdn_url: string; file_size: number }> {
+  const tmp = join(tmpdir(), `iris_hive_send_${randomUUID()}`)
+  writeFileSync(tmp, bytes, { mode: 0o600 })
+  try {
+    return await uploadToCloud(tmp, filename)
+  } finally {
+    try { require("fs").unlinkSync(tmp) } catch {}
   }
 }
 
@@ -229,7 +232,7 @@ function appendOutboxHistory(entry: Record<string, unknown>) {
   appendFileSync(historyPath, JSON.stringify(entry) + "\n")
 }
 
-interface DispatchResult { task_id: string; node_name: string; ok: boolean; error?: string }
+interface DispatchResult { task_id: string; node_name: string; ok: boolean; error?: string; sealed?: boolean }
 
 async function dispatchToNode(
   userId: number,
@@ -255,7 +258,7 @@ async function dispatchToNode(
           ...(payload.file_name ? { file_name: payload.file_name } : {}),
           ...(payload.file_size ? { file_size: payload.file_size } : {}),
           ...(payload.url ? { url: payload.url } : {}),
-          ...(payload.encrypted ? { encrypted: true, encryption_iv: payload.encryption_iv } : {}),
+          ...sealedConfigFields(payload),
           expires_at: payload.expires_at,
         },
       }),
@@ -314,9 +317,9 @@ export const HiveSendCommand = cmd({
       .option("message", { alias: "m", describe: "optional message (for file/link sends)", type: "string" })
       .option("user-id", { describe: "user ID", type: "number" })
       .option("envelope", {
-        describe: "seal with ihw.v1 envelope encryption (recipient must have run `iris hive keys register`)",
+        describe:
+          "end-to-end encryption (on by default when the recipient has a key). --envelope: refuse to send without it. --no-envelope: turn it off",
         type: "boolean",
-        default: false,
       })
       .option("tenant", { describe: "tenant slug, for escrow policy resolution", type: "string" })
       .option("class", { describe: "transfer class for escrow policy: phi, financial, general", type: "string" })
@@ -389,93 +392,95 @@ export const HiveSendCommand = cmd({
 
     const sp = argv.json ? null : prompts.spinner()
 
-    // Build payload based on type
-    const payload: Record<string, unknown> = {
-      sender_name: senderName,
-      inbox_type: type,
-      expires_at: defaultExpiresAt(type),
-    }
-
+    // ── What is being sent, independent of who to ──────────────────────────────
+    let fileName = ""
+    let fileSize = 0
     if (type === "file") {
-      const filePath = content
-      const fileName = basename(filePath)
-      const fileSize = statSync(filePath).size
-
+      fileName = basename(content)
+      fileSize = statSync(content).size
       if (fileSize > 95 * 1024 * 1024) {
         if (!argv.json) prompts.log.error("File exceeds 95MB limit. Use cloud:upload for large files.")
         process.exit(1)
       }
+    }
 
-      // Encrypt before upload — cloud only ever sees an encrypted blob.
-      sp?.start(`Encrypting + uploading ${fileName} (${formatBytes(fileSize)})…`)
-      let encryptedPath: string | null = null
-      try {
-        if (envelopeEnabled(argv)) {
-          // ENVELOPE (ihw.v1). One recipient per envelope: each node has its own key, so `--to
-          // all` seals once per target rather than sharing a blob. That costs an upload per
-          // recipient and is the honest tradeoff — the alternative is one DEK shared across
-          // recipients, which is fine cryptographically but makes "who can open this" a set
-          // rather than a pair and complicates revocation.
-          if (targetNodes.length > 1) {
-            throw new Error(
-              "--envelope currently sends to one node at a time (each recipient needs its own sealed copy). Send individually, or omit --envelope.",
-            )
-          }
+    const mode = e2eMode(argv.envelope)
+    const envOpts = { tenant: argv.tenant as string | undefined, class: argv.class as string | undefined }
+    const notes: string[] = []
 
-          const env = await sealForRecipient(filePath, targetNodes[0].id, {
-            tenant: argv.tenant as string | undefined,
-            class: argv.class as string | undefined,
-          })
-          encryptedPath = env.encryptedPath
-          const uploaded = await uploadToCloud(encryptedPath, `${fileName}.env`)
-          sp?.stop(success(`Sealed (${ENVELOPE_VERSION}) + uploaded ${formatBytes(fileSize)}`))
-
-          payload.file_url = uploaded.cdn_url
-          payload.file_name = fileName
-          payload.file_size = fileSize // original size, not sealed size
-          payload.prompt = message || `File: ${fileName}`
-          Object.assign(payload, env.fields)
-        } else {
-          const enc = encryptFile(filePath)
-          encryptedPath = enc.encryptedPath
-          const uploaded = await uploadToCloud(encryptedPath, `${fileName}.enc`)
-          sp?.stop(success(`Encrypted + uploaded ${formatBytes(fileSize)}`))
-
-          payload.file_url = uploaded.cdn_url
-          payload.file_name = fileName
-          payload.file_size = fileSize // original size, not encrypted size
-          payload.prompt = message || `File: ${fileName}`
-          payload.encryption_iv = enc.iv
-          payload.encrypted = true
-        }
-      } catch (e: any) {
-        // FAIL CLOSED. No falling back to the legacy sender-key path when the envelope path
-        // cannot complete — that fallback would silently reinstate every defect the envelope
-        // exists to remove, on the transfer the operator explicitly asked to protect.
-        sp?.stop()
-        if (!argv.json) prompts.log.error(e?.message ?? String(e))
-        else console.log(JSON.stringify({ success: false, error: "envelope_failed", message: e?.message ?? String(e) }))
-        process.exit(1)
-      } finally {
-        // Clean up temp encrypted file
-        if (encryptedPath) try { require("fs").unlinkSync(encryptedPath) } catch {}
+    /**
+     * Build the delivery for ONE recipient. Each recipient has its own key, so a sealed send to
+     * `--to all` seals and uploads once per node.
+     */
+    const buildPayload = async (node: { id: string; name: string }): Promise<Record<string, unknown> | { error: string }> => {
+      const payload: Record<string, unknown> = {
+        sender_name: senderName,
+        inbox_type: type,
+        expires_at: defaultExpiresAt(type),
       }
-    } else if (type === "link") {
-      payload.url = content
-      payload.prompt = message || content
-    } else {
-      // Text — check inline size cap
-      if (Buffer.byteLength(content, "utf-8") > INLINE_TEXT_LIMIT) {
+
+      const lookup = mode === "off" ? null : await lookupTargets(node.id, envOpts)
+      const decision = decideSeal(mode, lookup?.outcome ?? null, node.name, {
+        explicitPolicy: Boolean(envOpts.tenant || envOpts.class),
+      })
+      if ("error" in decision) return { error: decision.error }
+      if ("warning" in decision) notes.push(decision.warning)
+
+      if (decision.seal) {
+        // END TO END. Text and links are sealed as a small file, because the inbox stores a
+        // message's text in the task itself, which our servers can read. The recipient reads it
+        // with `iris hive inbox read <n>` exactly as before.
+        let plaintext: Buffer
+        let name: string
+        if (type === "file") {
+          plaintext = readFileSync(content)
+          name = fileName
+        } else if (type === "link") {
+          plaintext = Buffer.from(message ? `${content}\n\n${message}\n` : `${content}\n`, "utf-8")
+          name = "link.txt"
+        } else {
+          plaintext = Buffer.from(content, "utf-8")
+          name = "message.txt"
+        }
+        const env = await sealForRecipient(plaintext, node.id, lookup!.targets, envOpts)
+        const uploaded = await uploadBytes(env.ciphertext, `${name}.env`)
+        payload.inbox_type = "file"
+        payload.file_url = uploaded.cdn_url
+        payload.file_name = name
+        payload.file_size = plaintext.length // original size, not sealed size
+        payload.expires_at = defaultExpiresAt("file")
+        // The prompt travels in the clear. Only the file name goes in it, never the content.
+        payload.prompt = type === "file" ? (message || `File: ${fileName}`) : "End-to-end encrypted message"
+        Object.assign(payload, env.fields)
+        return payload
+      }
+
+      // LEGACY (no recipient key, or --no-envelope).
+      if (type === "file") {
+        const enc = encryptFile(content)
+        try {
+          const uploaded = await uploadToCloud(enc.encryptedPath, `${fileName}.enc`)
+          payload.file_url = uploaded.cdn_url
+        } finally {
+          try { require("fs").unlinkSync(enc.encryptedPath) } catch {}
+        }
+        payload.file_name = fileName
+        payload.file_size = fileSize
+        payload.prompt = message || `File: ${fileName}`
+        payload.encryption_iv = enc.iv
+        payload.encrypted = true
+      } else if (type === "link") {
+        payload.url = content
+        payload.prompt = message || content
+      } else if (Buffer.byteLength(content, "utf-8") > INLINE_TEXT_LIMIT) {
         // Auto-escalate to file upload (also encrypted)
-        sp?.start("Text exceeds 100KB — encrypting + uploading as file…")
-        const tmpPath = `/tmp/iris_hive_send_${Date.now()}.txt`
-        let encryptedPath: string | null = null
+        const tmpPath = join(tmpdir(), `iris_hive_send_${Date.now()}.txt`)
         writeFileSync(tmpPath, content, "utf-8")
+        let encryptedPath: string | null = null
         try {
           const enc = encryptFile(tmpPath)
           encryptedPath = enc.encryptedPath
           const uploaded = await uploadToCloud(encryptedPath, "message.txt.enc")
-          sp?.stop(success("Encrypted + uploaded as file"))
           payload.inbox_type = "file"
           payload.file_url = uploaded.cdn_url
           payload.file_name = "message.txt"
@@ -491,24 +496,27 @@ export const HiveSendCommand = cmd({
       } else {
         payload.prompt = content
       }
+      return payload
     }
 
-    // Dispatch to target node(s)
     const nodeLabel = targetNodes.length === 1
       ? bold(targetNodes[0].name)
       : `${targetNodes.length} nodes`
-    sp?.start(`Sending to ${nodeLabel}…`)
+    sp?.start(`Encrypting + sending to ${nodeLabel}…`)
 
-    let results: DispatchResult[]
-    if (targetNodes.length === 1) {
-      const r = await dispatchToNode(userId, targetNodes[0].id, targetNodes[0].name, payload)
-      results = [r]
-    } else {
-      // Broadcast — allSettled for safety
-      results = await Promise.all(
-        targetNodes.map((n) => dispatchToNode(userId, n.id, n.name, payload)),
-      )
-    }
+    const results: DispatchResult[] = await Promise.all(
+      targetNodes.map(async (n): Promise<DispatchResult> => {
+        try {
+          const built = await buildPayload(n)
+          if ("error" in built) return { task_id: "", node_name: n.name, ok: false, error: String(built.error) }
+          const r = await dispatchToNode(userId, n.id, n.name, built)
+          return { ...r, sealed: built.envelope_version ? true : false }
+        } catch (e: any) {
+          // FAIL CLOSED: a seal that started and broke is never retried in a weaker scheme.
+          return { task_id: "", node_name: n.name, ok: false, error: e?.message ?? String(e) }
+        }
+      }),
+    )
 
     const ok = results.filter((r) => r.ok)
     const failed = results.filter((r) => !r.ok)
@@ -523,25 +531,31 @@ export const HiveSendCommand = cmd({
       appendOutboxHistory({
         id: r.task_id,
         to_node: r.node_name,
-        type: payload.inbox_type,
+        type,
+        e2e: r.sealed === true,
         content: type === "file" ? basename(content) : content.substring(0, 200),
         sent_at: new Date().toISOString(),
       })
     }
 
+    const warnings = [...new Set(notes)]
     if (argv.json) {
-      await writeJson({ sent: ok.length, failed: failed.length, results })
+      await writeJson({ sent: ok.length, failed: failed.length, results, ...(warnings.length ? { warnings } : {}) })
+      if (ok.length === 0) process.exit(1)
       return
     }
 
+    for (const w of warnings) prompts.log.warn(w)
     for (const r of ok) {
-      console.log(`  ${success("✓")} ${r.node_name}  task=${r.task_id.slice(0, 8)}`)
+      const how = r.sealed ? dim("end-to-end encrypted") : highlight("NOT end-to-end encrypted")
+      console.log(`  ${success("✓")} ${r.node_name}  task=${r.task_id.slice(0, 8)}  ${how}`)
     }
     for (const r of failed) {
       console.log(`  ${dim("✗")} ${r.node_name}  ${r.error}`)
     }
 
     prompts.outro("Done")
+    if (ok.length === 0) process.exit(1)
   },
 })
 

@@ -1,11 +1,14 @@
 import { cmd } from "./cmd"
+import { withAccessFooter } from "./access-guide"
 import { brandContract, brandContractCss, applyBrandBlock } from "./brand-contract"
 import { TEMPLATE_GALLERY_SLUG, briefQuestions, findTemplate, parseTemplateCatalogue, type TemplateRow } from "./genesis-templates"
 import { productCommand } from "./product-command"
-import { buildListEnvelope, projectFields, LIST_FIELDS } from "./list-envelope"
+import { projectFields, LIST_FIELDS } from "./list-envelope"
+import { rejectBadPagination, listEnvelope, listFooter, normalizeListResponse, commandWith } from "./pagination-args"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, resolveUserId, handleApiError, isNonInteractive, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API, writeJson } from "./iris-api"
+import { buildPageComponentsJson, componentPreview } from "./page-components-json"
+import { irisFetch, requireAuth, requireUserId, resolveUserId, handleApiError, isNonInteractive, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API, writeJson, emitJsonError } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, resolve, dirname } from "path"
 import { profileFromBrand, rebrandJsonContent, type BrandProfile } from "./rebrand"
@@ -177,6 +180,29 @@ export function isWritableTopKey(path: string, jsonContent: unknown): boolean {
   if (path.includes(".")) return true
   if (JSON_TOP_KEYS.has(path)) return true
   return !!jsonContent && typeof jsonContent === "object" && Object.prototype.hasOwnProperty.call(jsonContent, path)
+}
+
+/**
+ * Why `pages set` must refuse this path, or null when it may write it (#190870).
+ *
+ * `set <slug> totally.nonexistent.path x` printed "Updated totally.nonexistent.path" and stored
+ * nothing: a dotted path skipped the top-key check entirely, so a typo in the FIRST segment
+ * invented a whole new branch that the server then dropped. The first segment is where a typo
+ * becomes a dead key, so it must be a key the page has or one the renderer reads. Prototype
+ * names are refused by name: nothing is stored today, but a write that reports success on
+ * `__proto__` reads as if it reached the object model.
+ */
+export const FORBIDDEN_PATH_SEGMENTS = new Set(["__proto__", "constructor", "prototype"])
+export function setPathProblem(path: string, jsonContent: unknown): string | null {
+  const segments = String(path).replace(/\[(\d+)\]/g, ".$1").split(".")
+  const bad = segments.find((seg) => FORBIDDEN_PATH_SEGMENTS.has(seg))
+  if (bad) return `'${bad}' is not allowed in a path.`
+  if (segments.some((seg) => seg === "")) return `'${path}' has an empty segment.`
+  if (segments.length < 2) return null
+  const top = segments[0]
+  const has = !!jsonContent && typeof jsonContent === "object" && Object.prototype.hasOwnProperty.call(jsonContent, top)
+  if (!has && !JSON_TOP_KEYS.has(top)) return `Path not found: '${top}' is not a key on this page.`
+  return null
 }
 
 export function normaliseSetPath(path: string): { path: string; stripped: boolean } {
@@ -407,6 +433,9 @@ export async function createPageFromJson(opts: {
 // Subcommands
 // ============================================================================
 
+/** /api/v1/pages clamps per_page at 100 (measured: per_page=500 returns 100 rows, per_page "100"). */
+export const PAGES_LIST_MAX_LIMIT = 100
+
 // Shared list/search renderer. The /api/v1/pages endpoint supports server-side
 // per_page, page and search — previously hardcoded per_page=50 with no way to
 // page or search, so any page past the first 50 was undiscoverable (#147317).
@@ -416,7 +445,10 @@ async function fetchAndRenderPages(args: {
   limit?: number
   page?: number
   json?: boolean
+  /** "pages list" / "pages search <q>" — for links and hints. */
+  command?: string
 }) {
+  if (rejectBadPagination(args, { maxLimit: PAGES_LIST_MAX_LIMIT })) return
   UI.empty()
   prompts.intro(args.search ? `◈  Pages — search "${args.search}"` : "◈  Pages")
   if (!(await requireAuth())) { prompts.outro("Done"); return }
@@ -455,22 +487,29 @@ async function fetchAndRenderPages(args: {
     const lastPage = meta?.last_page ?? 1
     sp.stop(`${pages.length} of ${total} page(s)${lastPage > 1 ? ` — page ${currentPage}/${lastPage}` : ""}`)
 
+    // The list contract (#191863). --page-type filters this page client-side, so the
+    // server's total no longer describes the result: report it as unknown, not as a guess.
+    const env = listEnvelope<any>(
+      { ...normalizeListResponse<any>(json), rows: pages, ...(args["page-type"] ? { total: null, lastPage: null } : {}) },
+      {
+        resource: "pages",
+        command: args.command ?? commandWith("pages list", { search: args.search, "page-type": args["page-type"] }),
+        page: args.page,
+        limit: args.limit,
+        search: "iris pages search <term>",
+      },
+    )
     if (args.json) {
       // Was a back-compat flat array. That back-compat is what hid truncation: a
       // page of results that looks like the whole set produces confident wrong
       // answers. The envelope names what is withheld and how to get the rest.
-      await writeJson(
-        buildListEnvelope(projectFields(pages, LIST_FIELDS.pages), {
-          total,
-          limit: pages.length,
-          resource: "pages",
-        }),
-      )
+      // meta.limit: deprecated v1.5.25 alias of per_page.
+      await writeJson({ ...env, data: projectFields(pages, LIST_FIELDS.pages), meta: { ...env.meta, limit: env.meta.per_page } })
       prompts.outro("Done")
       return
     }
     if (pages.length === 0) {
-      prompts.log.warn(args.search ? `No pages match "${args.search}"` : "No pages found")
+      prompts.log.warn(args.search && env.meta.current_page === 1 ? `No pages match "${args.search}".` : listFooter(env.meta, "pages"))
       prompts.outro("Done")
       return
     }
@@ -485,8 +524,8 @@ async function fetchAndRenderPages(args: {
       console.log()
     }
     printDivider()
+    console.log(`  ${dim(listFooter(env.meta, "pages"))}`)
     const hints: string[] = ["iris pages view <slug>"]
-    if (currentPage < lastPage) hints.push(`iris pages list --page ${currentPage + 1}`)
     if (!args.search) hints.push("iris pages search <query>")
     prompts.outro(dim(hints.join("  ·  ")))
   } catch (err) {
@@ -504,8 +543,8 @@ const ListCmd = cmd({
     y
       .option("page-type", { describe: "filter by template type", type: "string" })
       .option("search", { describe: "filter by title or slug", type: "string" })
-      .option("limit", { describe: "results per page", type: "number", default: 50 })
-      .option("page", { describe: "page number", type: "number", default: 1 })
+      .option("limit", { describe: `results per page (1-${PAGES_LIST_MAX_LIMIT})`, type: "number", default: 50 })
+      .option("page", { describe: "page number (1-based)", type: "number", default: 1 })
       .option("json", { describe: "output as JSON", type: "boolean", default: false }),
   async handler(args) {
     await fetchAndRenderPages(args as any)
@@ -519,11 +558,11 @@ const SearchCmd = cmd({
   builder: (y) =>
     y
       .positional("query", { describe: "search text (title or slug)", type: "string", demandOption: true })
-      .option("limit", { describe: "results per page", type: "number", default: 50 })
-      .option("page", { describe: "page number", type: "number", default: 1 })
+      .option("limit", { describe: `results per page (1-${PAGES_LIST_MAX_LIMIT})`, type: "number", default: 50 })
+      .option("page", { describe: "page number (1-based)", type: "number", default: 1 })
       .option("json", { describe: "output as JSON", type: "boolean", default: false }),
   async handler(args) {
-    await fetchAndRenderPages({ ...(args as any), search: String(args.query) })
+    await fetchAndRenderPages({ ...(args as any), search: String(args.query), command: commandWith(`pages search ${JSON.stringify(String(args.query))}`, {}) })
   },
 })
 
@@ -600,7 +639,7 @@ const GetCmd = cmd({
   },
 })
 
-const SetCmd = cmd({
+export const SetCmd = cmd({
   command: "set <slug> <path> <value>",
   describe: "set value at dot-notation path (auto-detects JSON values)",
   builder: (y) =>
@@ -732,6 +771,14 @@ const SetCmd = cmd({
       }
 
       const json = page.json_content ?? {}
+      const problem = setPathProblem(String(args.path), json)
+      if (problem) {
+        sp.stop("Refused", 1)
+        prompts.log.error(`${problem}\nSee what is there: iris pages get ${args.slug}`)
+        process.exitCode = 1
+        prompts.outro("Nothing changed")
+        return
+      }
       const parsed = parseValue(args.value)
       setNestedValue(json, args.path, parsed)
 
@@ -793,13 +840,18 @@ const SetCmd = cmd({
   },
 })
 
-const PullCmd = cmd({
+export const PullCmd = cmd({
   command: "pull <slug>",
   describe: "download page JSON to ./pages/<slug>.json (overwrites local edits — run `pages diff` first)",
   builder: (y) =>
     y
       .positional("slug", { describe: "page slug — e.g. `my-page`, not `pages/my-page.json`", type: "string", demandOption: true })
-      .option("dir", { describe: "output directory", type: "string", default: "./pages" }),
+      .option("dir", { describe: "output directory", type: "string", default: "./pages" })
+      // #190838. Pull always overwrites, so this changes nothing — but push and duplicate take
+      // --force, and without it here yargs rejected the flag and exited 1 BEFORE writing. A
+      // file left by an earlier pull made that look like success, so `pull --force && edit`
+      // skipped the edit and the next push republished the old page.
+      .option("force", { describe: "overwrite the local file (pull always does; accepted for scripts)", type: "boolean", default: false }),
   async handler(args) {
     const { slug, corrected } = normalizeSlugArg(args.slug)
     UI.empty()
@@ -810,7 +862,9 @@ const PullCmd = cmd({
     sp.start("Fetching…")
     try {
       const page = await getBySlug(slug, true)
-      if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+      // Exit non-zero on every failure: `pull && edit && push` must stop here, not edit a
+      // stale file and push it (#190838).
+      if (!page) { sp.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
       const dir = pagesDir(args.dir)
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
       const filePath = join(dir, `${slug}.json`)
@@ -850,7 +904,7 @@ const PullCmd = cmd({
       writeFileSync(filePath, JSON.stringify(exp, null, 2) + "\n")
       const cnt = exp.json_content?.components?.length ?? 0
       sp.stop(success(`Pulled → ${filePath} (${cnt} components)`))
-      if (base) prompts.log.info(dim(`based on v${base.version} — push will refuse if the live page moves past it`))
+      if (base) prompts.log.info(dim(`based on v${base.version} — if the live page moves past it, push merges the two and refuses only edits that collide`))
       else prompts.log.warn(`This page reports no version, so push cannot detect a concurrent edit. Run ${highlight(`iris pages diff ${slug}`)} before pushing.`)
       // Say it now, not after the edits: a push from this account will be refused.
       const access = editAccess(page)
@@ -859,12 +913,13 @@ const PullCmd = cmd({
     } catch (err) {
       sp.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
+      process.exitCode = 1
       prompts.outro("Done")
     }
   },
 })
 
-const PushCmd = cmd({
+export const PushCmd = cmd({
   command: "push <slug>",
   // A push on an already-live page DEMOTES it to draft unless --publish is passed,
   // and a drafted page 404s at its public url. Say that here — it is the single
@@ -887,7 +942,7 @@ const PushCmd = cmd({
     UI.empty()
     prompts.intro(`◈  Push ${slug}`)
     if (corrected) noteSlugCorrection(args.slug, slug)
-    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    if (!(await requireAuth())) { process.exitCode = 1; prompts.outro("Done"); return }
     const sp = prompts.spinner()
     try {
       const dirUsed = pagesDir(args.dir)
@@ -895,6 +950,7 @@ const PushCmd = cmd({
       if (!existsSync(filePath)) {
         prompts.log.error(`Local file not found: ${filePath}`)
         prompts.log.info(dim(`Pull first: iris pages pull ${slug}`))
+        process.exitCode = 1
         prompts.outro("Done")
         return
       }
@@ -969,6 +1025,7 @@ const PushCmd = cmd({
       else {
         sp.stop("Failed", 1)
         prompts.log.error("No 'json_content' or 'components' in file")
+        process.exitCode = 1
         prompts.outro("Done")
         return
       }
@@ -985,6 +1042,7 @@ const PushCmd = cmd({
           if (err === "") console.log()
           else prompts.log.error(err)
         }
+        process.exitCode = 1
         prompts.outro("Done")
         return
       }
@@ -1080,7 +1138,7 @@ const PushCmd = cmd({
         return
       }
 
-      if (!(await handleApiError(res, "Push page"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!(await handleApiError(res, "Push page"))) { sp.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
       const cnt = jsonContent?.components?.length ?? 0
 
       // Re-stamp the file's provenance from what the server now holds, so the NEXT push
@@ -1089,6 +1147,17 @@ const PushCmd = cmd({
       let putBody: any = null
       try { putBody = await res.json() } catch {}
       nextBase = baseFromPage(putBody?.data ?? putBody)
+      // The live page moved since the pull and the server MERGED the two (fl-api #187528) rather
+      // than refusing. Say so: "Pushed" alone read as "my file is now the page", and a stale
+      // file whose fields were superseded by newer live edits looked like a lost edit (#190867).
+      const merge = (putBody?.data ?? putBody)?.merge
+      if (merge?.merged) {
+        prompts.log.warn(
+          `The live page had moved to v${merge.merged_with_version} since your pull (v${merge.base_version}). ` +
+            `Your changes were MERGED with it — fields you did not change keep the newer live values.\n` +
+            `  Check the result: ${highlight(`iris pages pull ${slug}`)}`,
+        )
+      }
       // The PUT response may not echo the page. Ask for it rather than guessing — and do it
       // only when it can matter, i.e. this file is (or is about to become) guarded.
       if (!nextBase && (localBase || baseFromPage(page))) nextBase = baseFromPage(await getBySlug(slug, false))
@@ -1116,7 +1185,7 @@ const PushCmd = cmd({
       // --publish: push + publish in one step
       if (args.publish) {
         const pubRes = await pagesFetch(`/api/v1/pages/${page.id}/publish`, { method: "POST" })
-        if (!(await handleApiError(pubRes, "Publish"))) { sp.stop("Pushed but publish failed", 1); prompts.outro("Done"); return }
+        if (!(await handleApiError(pubRes, "Publish"))) { sp.stop("Pushed but publish failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
         // Explicitly purge iris-api cache
         await pagesFetch("/api/internal/cache/purge-page", {
           method: "POST",
@@ -1148,6 +1217,7 @@ const PushCmd = cmd({
     } catch (err) {
       sp.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
+      process.exitCode = 1
       prompts.outro("Done")
     }
   },
@@ -1536,12 +1606,15 @@ const MergeCmd = cmd({
   },
 })
 
-const PublishCmd = cmd({
+export const PublishCmd = cmd({
   command: "publish <slug>",
   describe:
     "publish a page — WORLD-READABLE and indexable. For a private read use `genesis get`, " +
     "for a private share use `genesis preview` or `genesis share`",
-  builder: (y) => y.positional("slug", { describe: "page slug", type: "string", demandOption: true }),
+  builder: (y) =>
+    y
+      .positional("slug", { describe: "page slug", type: "string", demandOption: true })
+      .option("include-others", { describe: "publish drafts written by other users too", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Publish ${args.slug}`)
@@ -1551,6 +1624,41 @@ const PublishCmd = cmd({
     try {
       const page = await getBySlug(args.slug, false)
       if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+      const versionsRes = await pagesFetch(`/api/v1/pages/${page.id}/versions`)
+      if (!(await handleApiError(versionsRes, "Versions"))) { sp.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
+      const versionsBody = (await versionsRes.json()) as { data?: any }
+      const versions = extractVersions(versionsBody?.data)
+      const currentVersion = Number(page.current_version)
+      const publishedAt = page.status === "published" && page.published_at ? Date.parse(page.published_at) : 0
+      const pending = versions
+        .filter((version) => {
+          const createdAt = Date.parse(version.created_at ?? "")
+          return !Number.isFinite(createdAt) || !Number.isFinite(publishedAt) || createdAt > publishedAt
+        })
+        .sort((a, b) => Number(a.version_number ?? a.version) - Number(b.version_number ?? b.version))
+      if (pending.length && !args.includeOthers) {
+        sp.stop("Publish refused — unpublished versions need explicit review", 1)
+        for (const version of pending) {
+          const number = version.version_number ?? version.version
+          console.log(`  v${number} by user ${version.changed_by ?? version.created_by ?? "unknown"} — not yet published`)
+        }
+        prompts.log.info(`Review those changes, then publish explicitly: iris pages publish ${args.slug} --include-others`)
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
+      if (pending.length && args.includeOthers && !isNonInteractive()) {
+        const summary = pending.map((version) => `v${version.version_number ?? version.version} (user ${version.changed_by ?? version.created_by ?? "unknown"})`).join(", ")
+        const ok = await prompts.confirm({ message: `Publish ${args.slug} through v${currentVersion}? This includes unpublished versions: ${summary}` })
+        if (!ok || prompts.isCancel(ok)) {
+          sp.stop("Cancelled")
+          prompts.outro("Done")
+          return
+        }
+      }
+      if (pending.length && args.includeOthers && isNonInteractive()) {
+        prompts.log.info(`Publishing with unpublished versions included: ${pending.map((version) => `v${version.version_number ?? version.version}`).join(", ")}`)
+      }
       const res = await pagesFetch(`/api/v1/pages/${page.id}/publish`, { method: "POST" })
       if (!(await handleApiError(res, "Publish"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
       // Explicitly purge iris-api cache — fl-api's fire-and-forget purge may silently fail
@@ -2294,10 +2402,13 @@ const TemplateCmd = cmd({
   async handler() {},
 })
 
-const ComponentsCmd = cmd({
+export const ComponentsCmd = cmd({
   command: "components <slug>",
   describe: "list components on a page",
-  builder: (y) => y.positional("slug", { describe: "page slug", type: "string", demandOption: true }),
+  builder: (y) =>
+    y
+      .positional("slug", { describe: "page slug", type: "string", demandOption: true })
+      .option("json", { describe: "output as JSON", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Components: ${args.slug}`)
@@ -2306,21 +2417,31 @@ const ComponentsCmd = cmd({
     sp.start("Loading…")
     try {
       const page = await getBySlug(args.slug, true)
-      if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+      // getBySlug -> handleApiError has already said why, as JSON under --json, and set exit 1.
+      if (!page) { sp.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
       const components: any[] = firstArray(page?.json_content?.components)
       sp.stop(`${components.length} component(s)`)
+      if (args.json) {
+        // #191847 — same { data, meta } envelope as `pages list --json`, plus the page.
+        await writeJson(buildPageComponentsJson(page, args.slug))
+        prompts.outro("Done")
+        return
+      }
       if (components.length === 0) { prompts.outro("None"); return }
       printDivider()
       components.forEach((c, i) => {
-        const preview = c?.props?.title ?? c?.props?.text ?? c?.props?.content ?? ""
+        const preview = componentPreview(c) ?? ""
         console.log(`  ${dim(`[${i}]`)} ${bold(c.type ?? "?")}  ${dim(c.id ?? "")}`)
-        if (preview) console.log(`      ${dim(String(preview).slice(0, 80))}`)
+        if (preview) console.log(`      ${dim(preview.slice(0, 80))}`)
       })
       printDivider()
       prompts.outro(dim(`iris pages set ${args.slug} "components.0.props.title" "..."`))
     } catch (err) {
       sp.stop("Error", 1)
-      prompts.log.error(err instanceof Error ? err.message : String(err))
+      const message = err instanceof Error ? err.message : String(err)
+      if (args.json) emitJsonError(message, { action: `Components ${args.slug}` })
+      else prompts.log.error(message)
+      process.exitCode = 1
       prompts.outro("Done")
     }
   },
@@ -2532,9 +2653,48 @@ export function assignComponentIds(jsonContent: any): number {
 }
 
 async function validateComponents(jsonContent: any): Promise<{ valid: boolean; errors: string[] }> {
-  const validTypes = await getValidComponentTypes()
+  return componentErrors(jsonContent, await getValidComponentTypes())
+}
+
+/** Edit distance, for "did you mean" (#190872). */
+function editDistance(a: string, b: string): number {
+  const x = a.toLowerCase(), y = b.toLowerCase()
+  let prev = Array.from({ length: y.length + 1 }, (_, j) => j)
+  for (let i = 1; i <= x.length; i++) {
+    const cur = [i]
+    for (let j = 1; j <= y.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (x[i - 1] === y[j - 1] ? 0 : 1))
+    }
+    prev = cur
+  }
+  return prev[y.length]
+}
+
+/** Up to `n` known types closest to `name` — a substring match first, then by edit distance. */
+export function closestComponentTypes(name: string, validTypes: Iterable<string>, n = 5): string[] {
+  const lower = name.toLowerCase()
+  return [...validTypes]
+    .map((t) => ({ t, score: t.toLowerCase().includes(lower) || lower.includes(t.toLowerCase()) ? -1 : editDistance(name, t) }))
+    .sort((a, b) => a.score - b.score || a.t.localeCompare(b.t))
+    .slice(0, n)
+    .map((r) => r.t)
+}
+
+/**
+ * Every reason a page's components cannot be pushed. Pure, so it is testable without the API.
+ *
+ * Two additions:
+ * - #190869: two components with the same `id` were stored. The id is the address `pages set`
+ *   and the renderer use, so a duplicate makes every later edit ambiguous — refused like an
+ *   unknown type.
+ * - #190872: an unknown type printed all ~247 valid names on one line, and the line that
+ *   mattered scrolled away. Now: the closest matches, and the registry command for the rest.
+ */
+export function componentErrors(jsonContent: any, validTypes: Set<string>): { valid: boolean; errors: string[] } {
   const components = jsonContent?.components ?? []
   const errors: string[] = []
+  const seen = new Map<string, number>()
+  let unknownType = false
 
   for (let i = 0; i < components.length; i++) {
     const c = components[i]
@@ -2543,17 +2703,22 @@ async function validateComponents(jsonContent: any): Promise<{ valid: boolean; e
       continue
     }
     if (!validTypes.has(c.type)) {
-      errors.push(`components[${i}]: "${c.type}" is not a valid component type`)
+      unknownType = true
+      const near = closestComponentTypes(String(c.type), validTypes)
+      errors.push(`components[${i}]: "${c.type}" is not a valid component type` + (near.length ? ` — did you mean ${near.join(", ")}?` : ""))
     }
     if (!c.id) {
       errors.push(`components[${i}] (${c.type}): missing "id" field`)
+    } else if (seen.has(String(c.id))) {
+      errors.push(`components[${i}] (${c.type}): id "${c.id}" is already used by components[${seen.get(String(c.id))}] — every component id must be unique`)
+    } else {
+      seen.set(String(c.id), i)
     }
   }
 
-  if (errors.length > 0) {
+  if (unknownType) {
     errors.push("")
-    errors.push(`Valid types: ${[...validTypes].join(", ")}`)
-    errors.push(`Run: iris pages component-registry`)
+    errors.push(`All ${validTypes.size} types: iris pages component-registry`)
   }
 
   return { valid: errors.length === 0, errors }
@@ -3047,7 +3212,7 @@ const ComponentRegistryCmd = cmd({
 // QR Code — generate short URL + QR for any page
 // ============================================================================
 
-const QrCmd = cmd({
+export const QrCmd = cmd({
   command: "qr <slug>",
   describe: "get short URL + QR code for a page",
   builder: (y) =>
@@ -3058,11 +3223,21 @@ const QrCmd = cmd({
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  QR Code: ${args.slug}`)
-    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    if (!(await requireAuth())) { process.exitCode = 1; prompts.outro("Done"); return }
 
     const sp = prompts.spinner()
     sp.start("Generating short URL + QR…")
     try {
+      // A QR for a page that does not exist is a printed link to nothing, and the short-url
+      // endpoint would mint a record for it. Check first (#190871).
+      const page = await getBySlug(String(args.slug), false, { quiet404: true })
+      if (!page) {
+        sp.stop("Not found", 1)
+        prompts.log.error(`No page "${args.slug}" — no QR made. Find it: iris pages search ${args.slug}`)
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
       const { FL_API } = await import("./iris-api")
       const res = await irisFetch(`/api/v1/pages/${encodeURIComponent(String(args.slug))}/short-url`, {
         method: "POST",
@@ -3073,6 +3248,7 @@ const QrCmd = cmd({
         const err = await res.text().catch(() => "")
         sp.stop("Failed")
         prompts.log.error(`Failed: ${err || `HTTP ${res.status}`}`)
+        process.exitCode = 1
         prompts.outro("Done")
         return
       }
@@ -3099,6 +3275,7 @@ const QrCmd = cmd({
     } catch (e: any) {
       sp.stop("Error")
       prompts.log.error(e.message ?? String(e))
+      process.exitCode = 1
       prompts.outro("Done")
     }
   },
@@ -5192,6 +5369,8 @@ const VerifyCmd = cmd({
 export interface ParsedHtmlDoc {
   title: string | null
   description: string | null
+  /** The file's share image (og:image, else twitter:image). Raw — see shareImageProblem(). */
+  ogImage: string | null
   css: string
   body: string
   isFullDocument: boolean
@@ -5205,6 +5384,38 @@ export interface ParsedHtmlDoc {
  * literal is out of contract — and `pages verify` is the backstop that catches it, which
  * is the point of shipping the two together.
  */
+/**
+ * Every <meta> in the file as name/property → content. Attribute ORDER varies by author
+ * (`content` before `property` is common), so each tag's attributes are read as a set rather
+ * than with one positional regex. First declaration of a key wins.
+ */
+export function parseMetaTags(src: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const tag of src.match(/<meta\b[^>]*>/gi) ?? []) {
+    const attrs: Record<string, string> = {}
+    // The value closes on the SAME quote that opened it (#188610: an apostrophe inside "…" is content).
+    const attrRe = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(["'])([\s\S]*?)\2/g
+    let a: RegExpExecArray | null
+    while ((a = attrRe.exec(tag)) !== null) attrs[a[1].toLowerCase()] = a[3]
+    const key = (attrs.property ?? attrs.name ?? "").toLowerCase()
+    if (key && attrs.content !== undefined && !(key in out)) out[key] = attrs.content.trim()
+  }
+  return out
+}
+
+const SHARE_IMAGE_KEYS = ["og:image", "og:image:secure_url", "og:image:url", "twitter:image", "twitter:image:src"]
+
+/**
+ * Why a share image cannot be used, or null. Link-preview crawlers (iMessage, Slack, X,
+ * Facebook, LinkedIn) fetch og:image with no page context, so a relative path or a data: URI
+ * resolves to nothing and the share shows a blank or generic card — silently.
+ */
+export function shareImageProblem(url: string): string | null {
+  if (/^data:/i.test(url)) return "it is a data: URI — crawlers cannot fetch it"
+  if (!/^https?:\/\//i.test(url)) return "it is not an absolute http(s) URL — crawlers fetch it without the page, so a relative path resolves to nothing"
+  return null
+}
+
 export function parseHtmlDocument(src: string): ParsedHtmlDoc {
   const titleMatch = src.match(/<title[^>]*>([\s\S]*?)<\/title>/i)
   // The value closes on the SAME quote that opened it. Accepting either quote ended
@@ -5232,9 +5443,13 @@ export function parseHtmlDocument(src: string): ParsedHtmlDoc {
   }
   body = body.replace(styleRe, "").trim()
 
+  const metas = parseMetaTags(src)
+  const ogKey = SHARE_IMAGE_KEYS.find((k) => metas[k])
+
   return {
     title: titleMatch ? titleMatch[1].replace(/\s+/g, " ").trim() : null,
     description: descMatch ? descMatch[1].replace(/\s+/g, " ").trim() : null,
+    ogImage: ogKey ? metas[ogKey] : null,
     css: styles.join("\n\n"),
     body,
     isFullDocument,
@@ -5261,9 +5476,14 @@ export function buildBespokeJsonContent(
   opts?: { themeMode?: string; backgroundColor?: string; brandName?: string; requiresAuth?: boolean },
 ): Record<string, any> {
   const requireOtp = !!opts?.requiresAuth
+  // The share image. json_content.og_image is FIRST in the server's og:image chain, so the
+  // file's own <meta property="og:image"> decides the link preview. Before this the head was
+  // discarded and every hand-written page unfurled as the generic IRIS card. Absent (or
+  // unusable) → the key is omitted, and an update carries the live page's value forward.
+  const share = doc.ogImage && !shareImageProblem(doc.ogImage) ? { og_image: doc.ogImage } : {}
   if (lane === "standalone") {
     // render_mode:html -> public-html.blade.php serves the document with a minimal reset.
-    return { version: "2.0", type: "article", render_mode: "html", html: doc.body, css: doc.css, requireOtp }
+    return { version: "2.0", type: "article", render_mode: "html", html: doc.body, css: doc.css, requireOtp, ...share }
   }
   // CustomHtml lane: one v-html block inside the normal composable shell. The CSS has to
   // ride along inside the fragment because props.html is a single field.
@@ -5278,6 +5498,7 @@ export function buildBespokeJsonContent(
     },
     requireOtp,
     components: [{ type: "CustomHtml", id: "doc", props: { html: fragment } }],
+    ...share,
   }
 }
 
@@ -5433,6 +5654,12 @@ const PublishHtmlCmd = cmd({
     printKV("HTML", `${doc.body.length} chars`)
     printKV("CSS", `${doc.css.length} chars`)
     if (description) printKV("Description", description)
+    // The link preview. Silent until someone shares the page and sees the generic card — so say
+    // it here, before anything is sent.
+    const shareProblem = doc.ogImage ? shareImageProblem(doc.ogImage) : null
+    if (doc.ogImage && !shareProblem) printKV("Share image", doc.ogImage)
+    else if (doc.ogImage && shareProblem) prompts.log.warn(`og:image ignored — ${shareProblem}: ${doc.ogImage}`)
+    else prompts.log.warn('No og:image in the file — on a NEW page, links will unfurl as the generic IRIS card (an update keeps the current one). Add <meta property="og:image" content="https://…1200x630.png">.')
 
     if (args["dry-run"]) {
       console.log()
@@ -5453,7 +5680,9 @@ const PublishHtmlCmd = cmd({
     let requiresAuth = !!authFlag
     try {
       // WITH json: the update below keeps what the file does not decide (carryForward).
-      let page = await getBySlug(slug, true)
+      // quiet404: a missing page here means CREATE, not failure — without it every first
+      // publish of a new page printed "Published" and then "Failed (exit 1)" (#189281, #183670).
+      let page = await getBySlug(slug, true, { quiet404: true })
 
       if (!page) {
         sp.message("No page for that slug yet — creating…")
@@ -5613,12 +5842,12 @@ export const PlatformPagesCommand = productCommand({
       .command(DevCmd)
       .command(DiffCmd)
       .command(MergeCmd)
-      .command(PublishCmd)
+      .command(withAccessFooter(PublishCmd))
       .command(UnpublishCmd)
-      .command(PreviewCmd)
-      .command(VisibilityCmd)
+      .command(withAccessFooter(PreviewCmd))
+      .command(withAccessFooter(VisibilityCmd))
       .command(RedirectCmd)
-      .command(ShareCmd)
+      .command(withAccessFooter(ShareCmd))
       .command(ShareListCmd)
       .command(ShareRevokeCmd)
       .command(CreateCmd)
@@ -5636,7 +5865,7 @@ export const PlatformPagesCommand = productCommand({
       .command(ScreenshotCmd)
       .command(ReadCmd)
       .command(VerifyCmd)
-      .command(PublishHtmlCmd)
+      .command(withAccessFooter(PublishHtmlCmd))
       .command(ReassignCmd)
       .command(UngateCmd)
       .command(PagesGateCommand)

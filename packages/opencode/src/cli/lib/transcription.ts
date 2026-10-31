@@ -282,6 +282,109 @@ export function resolveFfmpeg(): FfmpegResolution {
  */
 export type TranscriptSegment = { t0: number; t1: number; text: string }
 
+/** Where the on-device model lives. One path, so every caller looks in the same place. */
+export const WHISPER_MODEL_PATH = join(homedir(), ".whisper", "ggml-base.en.bin")
+
+/** The model path, downloading it (148 MB, once) when it is missing. Throws if that fails. */
+export function ensureWhisperModel(): string {
+  if (!existsSync(WHISPER_MODEL_PATH)) {
+    mkdirSync(dirname(WHISPER_MODEL_PATH), { recursive: true })
+    const dl = spawnSync("curl", ["-L", "-o", WHISPER_MODEL_PATH, WHISPER_MODEL_URL], { stdio: "ignore" })
+    if (dl.status !== 0) throw new Error("Whisper model download failed")
+  }
+  return WHISPER_MODEL_PATH
+}
+
+/** One spoken word and when it was said, in seconds. */
+export type TranscriptWord = { t0: number; t1: number; word: string }
+
+/**
+ * Words out of whisper.cpp's `-oj` JSON when it was run with `-ml 1 -sow` (one word per
+ * segment). Offsets are milliseconds. Empty rows are dropped, and a row that is only
+ * punctuation is glued onto the word before it — a caption that shows "," on its own is noise.
+ */
+export function parseWhisperWords(raw: any): TranscriptWord[] {
+  const rows: any[] = firstArray(raw?.transcription)
+  const out: TranscriptWord[] = []
+  for (const r of rows) {
+    const text = String(r?.text ?? "").trim()
+    if (!text) continue
+    // Special tokens whisper sometimes leaves in: [BLANK_AUDIO], [Music], (laughs).
+    if (/^[\[(].*[\])]$/.test(text)) continue
+    const t0 = (Number(r?.offsets?.from) || 0) / 1000
+    const t1 = (Number(r?.offsets?.to) || 0) / 1000
+    if (/^[^\p{L}\p{N}]+$/u.test(text) && out.length) {
+      const prev = out[out.length - 1]
+      prev.word += text
+      prev.t1 = Math.max(prev.t1, t1)
+      continue
+    }
+    out.push({ t0, t1: Math.max(t0, t1), word: text })
+  }
+  return out
+}
+
+/**
+ * Word-level timestamps, on-device. The same engine and model as transcribeLocal(), asked for
+ * one word per segment (`-ml 1 -sow`) instead of sentences. Local only — there is no server
+ * leg, so nothing about the footage leaves the machine.
+ */
+export async function transcribeWords(mediaPath: string, opts: { language?: string } = {}): Promise<TranscriptWord[]> {
+  const abs = resolve(mediaPath)
+  if (!existsSync(abs)) throw new Error(`File not found: ${abs}`)
+  const ff = resolveFfmpeg()
+  const whisper = resolveWhisper()
+  if (!ff.bin) throw new Error(ff.diagnosis || "ffmpeg unavailable")
+  if (!whisper) throw new Error(`Local transcription requires whisper.cpp. Install: ${localWhisperInstallHint()}`)
+  const modelPath = ensureWhisperModel()
+  const started = Date.now()
+  const { sha256: digest, bytes } = await sha256File(abs)
+  const work = secureTempDir("iris-stt-words-")
+  try {
+    const wavPath = join(work, "audio.wav")
+    const conv = spawnSync(ff.bin, ["-y", "-i", abs, "-vn", "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wavPath], {
+      encoding: "utf8",
+      timeout: LOCAL_TIMEOUT_MS,
+      env: ff.env ? { ...process.env, ...ff.env } : process.env,
+    })
+    if (conv.status !== 0 || !existsSync(wavPath)) {
+      const detail = (conv.stderr || "").trim()
+      throw new Error(
+        explainLoadFailure(detail) ||
+          explainNoAudio(detail) ||
+          `ffmpeg could not convert this audio${detail ? `: ${detail.slice(-400)}` : ""}`,
+      )
+    }
+    const outBase = join(work, "words")
+    const args = ["-m", modelPath, "-ml", "1", "-sow", "-oj", "-np", "-of", outBase]
+    if (opts.language) args.push("-l", opts.language)
+    args.push(wavPath)
+    const res = spawnSync(whisper, args, { encoding: "utf8", timeout: LOCAL_TIMEOUT_MS })
+    if (res.error && (res.error as NodeJS.ErrnoException).code === "ETIMEDOUT") {
+      throw new Error(`whisper-cli exceeded ${Math.round(LOCAL_TIMEOUT_MS / 1000)}s and was killed`)
+    }
+    if (res.status !== 0) throw new Error(res.stderr?.slice(-500) || "whisper-cli failed")
+    const jsonPath = `${outBase}.json`
+    if (!existsSync(jsonPath)) throw new Error("whisper-cli wrote no JSON")
+    const words = parseWhisperWords(JSON.parse(readFileSync(jsonPath, "utf8")))
+    auditTranscription({ provider: "whisper-local", policy: resolveSttPolicy(), bytes, sha256: digest, ms: Date.now() - started, ok: true })
+    return words
+  } catch (err) {
+    auditTranscription({
+      provider: "whisper-local",
+      policy: resolveSttPolicy(),
+      bytes,
+      sha256: digest,
+      ms: Date.now() - started,
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    throw err
+  } finally {
+    discardDir(work)
+  }
+}
+
 export async function transcribeLocal(
   audioPath: string,
   opts: {
@@ -306,14 +409,7 @@ export async function transcribeLocal(
   if (!whisper) throw new Error(`Local transcription requires whisper.cpp. Install: ${localWhisperInstallHint()}`)
   const ffmpeg = ff.bin
 
-  // Ensure model
-  const modelDir = join(homedir(), ".whisper")
-  const modelPath = join(modelDir, "ggml-base.en.bin")
-  if (!existsSync(modelPath)) {
-    mkdirSync(modelDir, { recursive: true })
-    const dl = spawnSync("curl", ["-L", "-o", modelPath, WHISPER_MODEL_URL], { stdio: "ignore" })
-    if (dl.status !== 0) throw new Error("Whisper model download failed")
-  }
+  const modelPath = ensureWhisperModel()
 
   const started = Date.now()
   const { sha256: digest, bytes } = await sha256File(abs)

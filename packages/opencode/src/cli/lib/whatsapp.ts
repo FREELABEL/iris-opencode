@@ -11,6 +11,7 @@
 import { execSync } from "child_process"
 import { existsSync } from "fs"
 import { homedir } from "os"
+import { matchPhoneCandidates, parsePhoneIdentity, phoneSuffix, samePhone } from "./phone-identity"
 
 const WA_DB = `${homedir()}/Library/Group Containers/group.net.whatsapp.WhatsApp.shared/ChatStorage.sqlite`
 
@@ -53,7 +54,17 @@ export interface WAGroupMember {
 
 // ── Core ──
 
+/**
+ * Tests run the real SQL against a fixture database through this (no sqlite3 binary, no real
+ * WhatsApp store). Production never sets it.
+ */
+let queryOverride: ((sql: string) => string) | null = null
+export function setQueryForTests(fn: ((sql: string) => string) | null): void {
+  queryOverride = fn
+}
+
 export function isAvailable(): boolean {
+  if (queryOverride) return true
   if (process.platform !== "darwin") return false
   if (!existsSync(WA_DB)) return false
   try {
@@ -86,6 +97,7 @@ export function diagnoseAccess(): string {
 }
 
 export function query(sql: string): string {
+  if (queryOverride) return queryOverride(sql).trim()
   const escaped = sql.replace(/"/g, '\\"')
   return execSync(`sqlite3 "${WA_DB}" "${escaped}"`, {
     encoding: "utf-8",
@@ -265,20 +277,60 @@ export function readMessages(chatSessionPk: number, days = 30, limit = 50): WAMe
   }
 }
 
+export type PhoneChatMatch =
+  | { status: "matched"; jid: string; pks: number[] }
+  | { status: "ambiguous"; jids: string[] }
+  | { status: "none" }
+  | { status: "invalid"; reason: string }
+
+/**
+ * Which 1:1 chat IS this phone number (#183513). Whole-number identity, never a substring.
+ *
+ * This used to be `WHERE ZCONTACTJID LIKE '%digits%' LIMIT 1` with no minimum length, so a short
+ * or partial number on a lead matched whichever stranger's chat happened to contain those digits,
+ * and that chat was written to the lead's record. Now:
+ *   - the lead's number must parse as a whole number (phone-identity.ts) or nothing is matched;
+ *   - SQL only prefilters on a suffix ANCHORED to "@s.whatsapp.net"; every candidate is then
+ *     confirmed as the same number in full;
+ *   - two different numbers matching (a national number without country code) is AMBIGUOUS and
+ *     returns no chat at all. No LIMIT 1 deciding for us.
+ */
+export function resolvePhoneChat(phone: string): PhoneChatMatch {
+  const lead = parsePhoneIdentity(phone)
+  if (!lead.ok) return { status: "invalid", reason: lead.reason }
+  const suffix = phoneSuffix(lead)!
+  const chatSql = `SELECT Z_PK, ZCONTACTJID FROM ZWACHATSESSION
+    WHERE ZCONTACTJID LIKE '%${suffix}@s.whatsapp.net'
+    AND ZREMOVED = 0;`.replace(/\n/g, " ").trim()
+  const raw = query(chatSql)
+  const rows = (raw ? raw.split("\n") : [])
+    .map((line) => {
+      const [pk, jid] = line.split("|")
+      return { pk: parseInt(pk, 10), jid: jid ?? "" }
+    })
+    .filter((r) => Number.isFinite(r.pk) && r.jid.endsWith("@s.whatsapp.net"))
+  const m = matchPhoneCandidates(phone, rows, (r) => `+${r.jid.split("@")[0]}`)
+  if (m.status === "invalid") return m
+  if (m.status === "none") return m
+  if (m.status === "ambiguous") return { status: "ambiguous", jids: m.keys }
+  return { status: "matched", jid: m.candidates[0].jid, pks: m.candidates.map((c) => c.pk) }
+}
+
+/** Messages for the chat that IS this number, plus how it was (or was not) matched. */
+export function searchByPhoneDetailed(phone: string, days = 90, limit = 50): { match: PhoneChatMatch; messages: WAMessage[] } {
+  const match = resolvePhoneChat(phone)
+  if (match.status !== "matched") return { match, messages: [] }
+  const messages = match.pks
+    .flatMap((pk) => readMessages(pk, days, limit))
+    .sort((a, b) => String(b.date).localeCompare(String(a.date)))
+    .slice(0, limit)
+  return { match, messages }
+}
+
+/** Exact-number lookup. Ambiguous, malformed and unmatched numbers all return [] — see resolvePhoneChat. */
 export function searchByPhone(phone: string, days = 90, limit = 50): WAMessage[] {
-  const digits = normalizePhone(phone)
-  const cutoff = days * 86400
-
-  // Find chat session PK by phone digits in JID
-  const chatSql = `SELECT Z_PK FROM ZWACHATSESSION
-    WHERE ZCONTACTJID LIKE '%${digits}%'
-    AND ZREMOVED = 0
-    LIMIT 1;`.replace(/\n/g, " ").trim()
-
   try {
-    const chatPk = query(chatSql)
-    if (!chatPk) return []
-    return readMessages(parseInt(chatPk, 10), days, limit)
+    return searchByPhoneDetailed(phone, days, limit).messages
   } catch {
     return []
   }
@@ -482,8 +534,8 @@ export function readGroupsForLead(lead: LeadLike, days = 90, limit = 100): WAGro
 export function discoverGroupCandidatesForLead(lead: LeadLike, days = 90): WAGroupChat[] {
   if (!isAvailable()) return []
   if (!lead?.phone) return []
-  const leadDigits = normalizePhone(lead.phone)
-  if (leadDigits.length < 7) return []
+  const leadPhone = parsePhoneIdentity(lead.phone)
+  if (!leadPhone.ok) return []
 
   const linked = new Set(
     (Array.isArray(lead?.contact_info?.whatsapp_groups) ? lead!.contact_info!.whatsapp_groups! : [])
@@ -494,7 +546,9 @@ export function discoverGroupCandidatesForLead(lead: LeadLike, days = 90): WAGro
   const candidates: WAGroupChat[] = []
   for (const g of listGroups(days, 40)) {
     if (linked.has(g.name.toLowerCase().trim())) continue
-    const isMember = getGroupMembers(g.pk).some((m) => extractPhone(m.jid).replace("+", "").includes(leadDigits))
+    const isMember = getGroupMembers(g.pk).some(
+      (m) => m.jid.endsWith("@s.whatsapp.net") && samePhone(leadPhone, parsePhoneIdentity(extractPhone(m.jid))),
+    )
     if (isMember) candidates.push(g)
   }
   return candidates

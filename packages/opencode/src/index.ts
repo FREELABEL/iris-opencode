@@ -13,6 +13,7 @@ import { UI } from "./cli/ui"
 import { Installation } from "./installation"
 import { NamedError } from "@opencode-ai/util/error"
 import { FormatError } from "./cli/error"
+import { CliUsageError, wantsJson, writeErrorJson } from "./cli/json-error"
 import { ServeCommand } from "./cli/cmd/serve"
 import { DebugCommand } from "./cli/cmd/debug"
 import { StatsCommand } from "./cli/cmd/stats"
@@ -45,6 +46,7 @@ import { PlatformBrandsCommand } from "./cli/cmd/platform-brands"
 import { OkfCommand } from "./cli/cmd/platform-okf"
 import { PlatformLearnCommand } from "./cli/cmd/platform-learn"
 import { PlatformCopycatCommand } from "./cli/cmd/platform-copycat"
+import { PlatformReelCommand } from "./cli/cmd/platform-reel"
 import { PlatformContentCommand } from "./cli/cmd/platform-content"
 import { PlatformGoodDealsCommand } from "./cli/cmd/platform-good-deals"
 import { PlatformLinkedInCommand } from "./cli/cmd/platform-linkedin"
@@ -96,6 +98,7 @@ import { PlatformOutreachSendCommand } from "./cli/cmd/platform-outreach-send"
 import { PlatformSomCommand } from "./cli/cmd/platform-som"
 import { PlatformEventCommand } from "./cli/cmd/platform-event"
 import { PlatformMonitorCommand } from "./cli/cmd/platform-monitor"
+import { PlatformStatusCommand } from "./cli/cmd/platform-status"
 import { PlatformCommonsCommand } from "./cli/cmd/platform-commons"
 import { PlatformLexiconCommand } from "./cli/cmd/platform-lexicon"
 import { PlatformInvoicesCommand } from "./cli/cmd/platform-invoices"
@@ -147,6 +150,7 @@ import { PlatformPagesCommand } from "./cli/cmd/platform-pages"
 import { PlatformExposureCommand } from "./cli/cmd/platform-exposure"
 import { PlatformFindCommand } from "./cli/cmd/platform-find"
 import { LocateCommand } from "./cli/cmd/platform-locate"
+import { PlatformWtCommand } from "./cli/cmd/platform-wt"
 import { PlatformDashboardCommand } from "./cli/cmd/platform-dashboard"
 import { PlatformContentEngineCommand } from "./cli/cmd/platform-content-engine"
 import { PlatformNewsroomCommand } from "./cli/cmd/platform-newsroom"
@@ -155,6 +159,7 @@ import { PlatformDomainsCommand } from "./cli/cmd/platform-domains"
 import { PlatformPagesBatchCommand } from "./cli/cmd/platform-pages-batch"
 import { PlatformPartialsCommand } from "./cli/cmd/platform-partials"
 import { PlatformScriptsCommand } from "./cli/cmd/platform-scripts"
+import { PlatformHeartbeatsCommand } from "./cli/cmd/platform-heartbeats"
 import { PlatformCloudUploadCommand } from "./cli/cmd/platform-cloud-upload"
 import { PlatformDriveCommand } from "./cli/cmd/platform-drive"
 import { PlatformObsidianCommand } from "./cli/cmd/platform-obsidian"
@@ -169,6 +174,7 @@ import { PlatformBloqIngestCommand } from "./cli/cmd/platform-bloq-ingest"
 import { PlatformDataSourcesCommand } from "./cli/cmd/platform-data-sources"
 import { PlatformBloqMembersCommand } from "./cli/cmd/platform-bloq-members"
 import { PlatformWisprCommand } from "./cli/cmd/platform-wispr"
+import { PlatformDesktopCommand } from "./cli/cmd/platform-desktop"
 import { PlatformEvalCommand } from "./cli/cmd/platform-eval"
 import { PlatformSdkCallCommand } from "./cli/cmd/platform-sdk-call"
 import { PlatformDiaryCommand } from "./cli/cmd/platform-diary"
@@ -185,6 +191,7 @@ import { PlatformVoiceCommand } from "./cli/cmd/platform-voice"
 import { PlatformRecallCommand } from "./cli/cmd/platform-recall"
 import { PlatformPersonalityCommand } from "./cli/cmd/platform-personality"
 import { PlatformMailCommand } from "./cli/cmd/platform-mail"
+import { PlatformMailingCommand } from "./cli/cmd/platform-mailing"
 import { PlatformSendersCommand } from "./cli/cmd/platform-senders"
 import { PlatformImessageCommand } from "./cli/cmd/platform-imessage"
 import { PlatformWhatsappCommand } from "./cli/cmd/platform-whatsapp"
@@ -371,6 +378,7 @@ const cli = yargs(rawArgs)
   .command(reg(TelemetryCommand))
   .command(reg(PlatformFindCommand))
   .command(reg(LocateCommand))
+  .command(reg(PlatformWtCommand))
   // Core CLI commands
   .command(reg(AcpCommand))
   .command(reg(BuzzCommand))
@@ -416,6 +424,7 @@ const cli = yargs(rawArgs)
   .command(reg(OkfCommand))
   .command(reg(PlatformLearnCommand))
   .command(reg(PlatformCopycatCommand))
+  .command(reg(PlatformReelCommand))
   .command(reg(PlatformContentCommand))
   .command(reg(PlatformGoodDealsCommand))
   .command(reg(PlatformLinkedInCommand))
@@ -473,6 +482,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformSomCommand))
   .command(reg(PlatformEventCommand))
   .command(reg(PlatformMonitorCommand))
+  .command(reg(PlatformStatusCommand))
   .command(reg(PlatformCommonsCommand))
   .command(reg(PlatformLexiconCommand))
   .command(reg(PlatformInboxCommand))
@@ -543,6 +553,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformPagesBatchCommand))
   .command(reg(PlatformPartialsCommand))
   .command(reg(PlatformScriptsCommand))
+  .command(reg(PlatformHeartbeatsCommand))
   .command(reg(PlatformCloudUploadCommand))
   .command(reg(PlatformDriveCommand))
   .command(reg(PlatformObsidianCommand))
@@ -557,6 +568,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformDataSourcesCommand))
   .command(reg(PlatformBloqMembersCommand))
   .command(reg(PlatformWisprCommand))
+  .command(reg(PlatformDesktopCommand))
   .command(reg(PlatformEvalCommand))
   .command(reg(PlatformSdkCallCommand))
   .command(reg(PlatformDiaryCommand))
@@ -571,6 +583,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformRecallCommand))
   .command(reg(PlatformPersonalityCommand))
   .command(reg(PlatformMailCommand))
+  .command(reg(PlatformMailingCommand))
   .command(reg(PlatformSendersCommand))
   .command(reg(PlatformImessageCommand))
   .command(reg(PlatformWhatsappCommand))
@@ -599,6 +612,9 @@ const cli = yargs(rawArgs)
   .fail((msg, err) => {
     // A thrown error from inside a command handler — let the outer catch format it.
     if (err) throw err
+    // --json callers get the failure as JSON, not a help dump (#190878). Thrown so the top-level
+    // catch renders it, which also drains stdout before the process exits.
+    if (wantsJson(rawArgs)) throw new CliUsageError(msg || "Invalid arguments")
     // Validation failures (missing required args, unknown flags, bad values, etc.):
     // always surface the message and the command usage so the user knows what went
     // wrong. Previously only three message prefixes triggered help, so failures like
@@ -774,7 +790,13 @@ try {
   // cli_command_error would make a machine doing exactly what it was configured to do look
   // like the least healthy one in the fleet.
   if (e instanceof Error && e.name === "SealedError") {
-    UI.error(e.message + EOL)
+    if (wantsJson(rawArgs)) await writeErrorJson(e.message, e)
+    else UI.error(e.message + EOL)
+    process.exitCode = 1
+  } else if (e instanceof CliUsageError) {
+    // How the command was called, not a crash: no fatal log, no cli_command_error beacon (#190878).
+    if (wantsJson(rawArgs)) await writeErrorJson(e.message, e)
+    else UI.error(e.message + EOL)
     process.exitCode = 1
   } else {
   let data: Record<string, any> = {}
@@ -828,8 +850,12 @@ try {
     context: { name: e instanceof Error ? e.name : undefined },
   })
   const formatted = FormatError(e)
-  if (formatted) UI.error(formatted)
-  if (formatted === undefined) {
+  if (wantsJson(rawArgs)) {
+    // #190878: one JSON object on stdout, whatever went wrong. A playbook whose header does not
+    // parse carries its file as `path` (#190274).
+    await writeErrorJson(formatted || (e instanceof Error ? e.message : String(e)), e)
+  } else if (formatted) UI.error(formatted)
+  if (formatted === undefined && !wantsJson(rawArgs)) {
     UI.error("Unexpected error, check log file at " + Log.file() + " for more details" + EOL)
     console.error(e)
   }

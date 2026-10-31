@@ -364,14 +364,14 @@ fi
       // NOT /releases/latest — IRIS Desktop ships from this same repo and far more often, so
       // that endpoint resolves to a `desktop-*` tag with no CLI binaries in it (#182693).
       // Ask for the recent page and take the newest CLI-shaped tag.
-      return fetch("https://api.github.com/repos/FREELABEL/iris-opencode/releases?per_page=30")
+      return fetch("https://api.github.com/repos/FREELABEL/iris-opencode/releases?per_page=100")
         .then((res) => {
           if (!res.ok) throw new Error(res.statusText)
           return res.json()
         })
         .then((rows: any) => {
           const tag = pickLatestCliTag(rows)
-          if (!tag) throw new Error("No CLI release found in the 30 most recent releases")
+          if (!tag) throw new Error("No CLI release found in the 100 most recent releases")
           return tag.replace(/^v/, "")
         })
     }

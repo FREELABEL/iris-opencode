@@ -308,6 +308,12 @@ export namespace Session {
     const project = Instance.project
     try {
       const session = await get(sessionID)
+      // #191785: a deleted session must not leave its run going or its permission requests
+      // pending (still listed, still answerable, tool parked forever). Same cleanup as a stop:
+      // cancel the run, then reject what is pending — awaited here so it has happened by the
+      // time Deleted is published. Children get the same through the recursion below.
+      SessionPrompt.cancel(sessionID)
+      await PermissionNext.rejectSession(sessionID)
       for (const child of await children(sessionID)) {
         await remove(child.id)
       }

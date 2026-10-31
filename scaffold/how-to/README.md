@@ -9,14 +9,19 @@ This directory contains step-by-step recipes for common IRIS workflows. Each fil
 | "I just installed iris", "how do I sign in", "auth not working", "where's my .env" | `iris-login.md` |
 | "send a campaign", "outreach", "find leads on linkedin/twitter/instagram", "DM people", "discover prospects" | `outreach-campaign.md` |
 | "connect my machine", "hive", "distributed", "run on multiple machines", "node not registering" | `hive-dispatch.md` |
+| "model gateway", "openrouter alternative", "ai gateway", "failover", "my ai spend", "ollama", "my own gpu", "local models", "serve my models", "hive/<model>" | `iris-model-gateway.md` |
+| "run claude code from iris", "codex", "gemini cli", "switch agents", "ACP", "agent client protocol", "keep a session open", "steer an agent from my phone", "message a running agent" | `run-other-coding-agents.md` |
 | "send a proposal", "create a deal", "invoice a client", "contract", "payment gate" | `lead-to-proposal.md` |
 | "NDA", "BAA", "agreement", "sign this", "e-signature", "counter-sign", "who hasn't signed", "revoke access", "gate on an agreement", "audit trail for a signature" | `agreements-and-signing.md` |
 | "manage deals", "deal pipeline", "deal status", "payment reminder", "stale deals", "win-back", "recover deal" | `deals.md` |
 | "build a page", "create a landing page", "genesis", "add components", "page builder" | `pages.md` |
+| "template", "starter template", "start from a template", "clone a page in my brand", "genesis-ui.com", "use this template", "make it my brand" | `genesis-starter-templates.md` |
+| "make my page a template", "brand tokens", "any brand can use it", "submit a template", "template gallery" | `genesis-make-a-template.md` |
 | "make it private", "don't publish it", "not visible", "share privately", "auth gate", "who can see this page", "unpublish", "lock it down" | `page-privacy.md` |
 | "rss", "feed", "syndicate", "subscribe to the newsroom", "json feed", "google news", "news sitemap", "aggregator", "feed.xml", "newsroom feed" | `newsroom-syndication.md` |
 | "their own database", "bring your own storage", "client's postgres", "client's S3 bucket", "move a workspace's data", "migrate storage", "bind a storage backend", "data residency", "provider proxy", "get off our servers" | `storage-backends.md` |
 | "dataset", "schema", "custom data", "store records", "atlas datasets", "create a tracker" | `atlas-datasets.md` |
+| "desktop offline", "atlas offline", "boards load slow", "Offline · copy from", "Updating… pill", "sync chip", "Checking…", "Synced · ago", "Couldn't update", "warning dot on tab", "local copy of boards", "turn off the cache", "patient data on disk", "includePhi" | `desktop-atlas-offline-copy.md` |
 | "expose data", "REST API", "public endpoint", "serve data", "embed dataset", "dashboard API" | `expose-dataset-api.md` |
 | "pathways", "CFO", "cases", "servis ai", "quickbooks", "billing audit", "service AI sync" | `pathways-cfo-workflow.md` |
 | "track finances", "ledger", "transactions", "revenue", "expenses", "accounts" | `track-finances-atlas-ledger.md` |

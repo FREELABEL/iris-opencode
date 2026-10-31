@@ -30,6 +30,7 @@ import {
 import {
   TOPIC_SOURCES,
   type TopicSource,
+  type SourceId,
   type SourceSweep,
   sweepAll,
   currentSessionIds,
@@ -39,6 +40,12 @@ import {
   topicQuality,
 } from "./pulse-check-sweep"
 import { TOPIC_LABEL } from "./pulse-topic-script"
+import { CUSTOM_SOURCES_DIR, registerCustomSources, type CustomSourceLoad } from "./pulse-custom-sources"
+import { firstArray } from "../../util/array"
+import { FLEET_SOURCES, countsDocument, sweepFleet, type FleetDeps } from "./pulse-fleet"
+import { readFileSync } from "fs"
+import { homedir } from "os"
+import { join } from "path"
 import {
   type DaemonPermissions,
   fetchDaemonPermissions,
@@ -53,7 +60,10 @@ import {
   UPDATE_COMMAND,
 } from "./daemon-permissions"
 
-const SOURCE_LABEL: Record<TopicSource, string> = TOPIC_LABEL
+/** A source's name in the brief. A custom source's own label wins, also over a built-in it replaces. */
+function sourceLabel(id: SourceId, custom: CustomSourceLoad | null): string {
+  return custom?.sources.find((c) => c.id === id)?.label ?? TOPIC_LABEL[id as TopicSource] ?? id
+}
 
 function ago(iso?: string): string {
   if (!iso) return "—"
@@ -85,7 +95,7 @@ export function pulseCheckOptions(yargs: any): any {
       })
       .option("repo", { describe: "repository root to sweep", type: "string", default: process.cwd() })
       .option("sources", {
-        describe: `comma-separated subset of: ${TOPIC_SOURCES.join(", ")}`,
+        describe: `comma-separated subset of: ${TOPIC_SOURCES.join(", ")}, plus your own from ~/.iris/pulse/sources (iris pulse sources)`,
         type: "string",
       })
       .option("limit", { describe: "items shown per source", type: "number", default: 6 })
@@ -98,6 +108,16 @@ export function pulseCheckOptions(yargs: any): any {
       // has to be a literal flag rather than the negation of `--push`.
       .option("no-push", {
         describe: "sweep and print, but do not file the result in the Signal Corpus",
+        type: "boolean",
+        default: false,
+      })
+      .option("fleet", {
+        describe: "also sweep agent sessions on every other online Hive node (counts only leave each machine)",
+        type: "boolean",
+        default: false,
+      })
+      .option("counts-only", {
+        describe: "print per-source counts as JSON and nothing else — no excerpts, never pushed (what --fleet asks each node for)",
         type: "boolean",
         default: false,
       })
@@ -124,7 +144,7 @@ export const PulseCheckCommand = cmd({
       })
       .option("repo", { describe: "repository root to sweep", type: "string", default: process.cwd() })
       .option("sources", {
-        describe: `comma-separated subset of: ${TOPIC_SOURCES.join(", ")}`,
+        describe: `comma-separated subset of: ${TOPIC_SOURCES.join(", ")}, plus your own from ~/.iris/pulse/sources (iris pulse sources)`,
         type: "string",
       })
       .option("limit", { describe: "items shown per source", type: "number", default: 6 })
@@ -140,10 +160,67 @@ export const PulseCheckCommand = cmd({
         type: "boolean",
         default: false,
       })
+      .option("fleet", {
+        describe: "also sweep agent sessions on every other online Hive node (counts only leave each machine)",
+        type: "boolean",
+        default: false,
+      })
+      .option("counts-only", {
+        describe: "print per-source counts as JSON and nothing else — no excerpts, never pushed (what --fleet asks each node for)",
+        type: "boolean",
+        default: false,
+      })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
 
   async handler(args) {
     await runPulseCheck(args as any, true)
+  },
+})
+
+/** The file `iris pulse sources` shows as a starting point — the whole contract in one example. */
+export const CUSTOM_SOURCE_EXAMPLE = {
+  id: "whatsapp",
+  label: "WhatsApp",
+  command: ["python3", "~/bin/wa-search.py"],
+  timeout_ms: 20000,
+}
+
+export const PulseSourcesCommand = cmd({
+  command: "sources",
+  describe: "list the sources a pulse check reads — the built-in ones and your own from ~/.iris/pulse/sources",
+  builder: (yargs) => yargs.option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const custom = registerCustomSources()
+    const replaced = new Set(custom.sources.filter((c) => c.replaces).map((c) => c.id))
+    const builtIn = TOPIC_SOURCES.map((id) => ({ id, label: TOPIC_LABEL[id], replaced_by: replaced.has(id) ? custom.sources.find((c) => c.id === id)!.file : null }))
+    if (args.json) {
+      await writeJson({
+        directory: CUSTOM_SOURCES_DIR,
+        built_in: builtIn,
+        custom: custom.sources.map((c) => ({ id: c.id, label: c.label, command: c.command, timeout_ms: c.timeoutMs, file: c.file, replaces: c.replaces })),
+        errors: custom.errors,
+        example: CUSTOM_SOURCE_EXAMPLE,
+      })
+      return
+    }
+    console.log()
+    console.log(`  ${bold("Built in")}`)
+    for (const b of builtIn) console.log(`    ${b.id.padEnd(12)} ${b.label}${b.replaced_by ? dim(`  — replaced by ${b.replaced_by}`) : ""}`)
+    console.log()
+    console.log(`  ${bold("Yours")}  ${dim(CUSTOM_SOURCES_DIR)}`)
+    if (!custom.sources.length) console.log(dim("    none yet"))
+    for (const c of custom.sources) {
+      console.log(`    ${c.id.padEnd(12)} ${c.label}${c.replaces ? highlight("  (replaces the built-in)") : ""}`)
+      console.log(dim(`                 ${c.command.join(" ")}  ·  ${c.file}`))
+    }
+    for (const e of custom.errors) console.log(highlight(`    ⚠ not loaded: ${e.file} — ${e.error}`))
+    console.log()
+    console.log(dim("  Add one: a JSON file in that folder naming a command (run without a shell). It gets"))
+    console.log(dim("  PULSE_KEYWORD, PULSE_VARIANTS, PULSE_WINDOW_DAYS, PULSE_SINCE, PULSE_PRIOR_SINCE and"))
+    console.log(dim("  PULSE_LIMIT, and prints {\"items\":[{\"when\",\"where\",\"text\"}]} or {\"unavailable\":\"why\"}."))
+    console.log(dim("  Give a file a built-in's id (e.g. imessage.json) to replace that source."))
+    console.log(dim(`  ${JSON.stringify(CUSTOM_SOURCE_EXAMPLE)}`))
+    console.log()
   },
 })
 
@@ -235,13 +312,20 @@ export async function runPulseCheck(args: any, allowFix: boolean): Promise<void>
       return refuse(args, quality.refuse, { keyword })
     }
 
+    // Your own sources (#190626): added to the route, or replacing a built-in of the same id.
+    const custom = registerCustomSources()
+    const known: SourceId[] = [...TOPIC_SOURCES, ...custom.sources.filter((c) => !c.replaces).map((c) => c.id)]
     const requested = args.sources
       ? String(args.sources).split(",").map((s) => s.trim()).filter(Boolean)
-      : [...TOPIC_SOURCES]
+      : [...known]
 
-    const unknown = requested.filter((s) => !TOPIC_SOURCES.includes(s as TopicSource))
+    const unknown = requested.filter((s) => !known.includes(s))
     if (unknown.length) {
-      return refuse(args, `Unknown source(s): ${unknown.join(", ")}. Known: ${TOPIC_SOURCES.join(", ")}`)
+      return refuse(
+        args,
+        `Unknown source(s): ${unknown.join(", ")}. Known: ${known.join(", ")}. Add your own in ${CUSTOM_SOURCES_DIR} — see iris pulse sources.`,
+        { custom_source_errors: custom.errors },
+      )
     }
     // #182192: a window below 1 day isn't "narrower", it's meaningless — every
     // cutoff collapses to "now", so every source reports 0 hits and the run
@@ -251,7 +335,7 @@ export async function runPulseCheck(args: any, allowFix: boolean): Promise<void>
     if (!Number.isFinite(days) || days < 1) {
       return refuse(args, `--days must be at least 1 (got ${args.days})`)
     }
-    const sources = requested as TopicSource[]
+    const sources = requested as SourceId[]
 
     const json = Boolean(args.json)
     if (!json) {
@@ -282,10 +366,28 @@ export async function runPulseCheck(args: any, allowFix: boolean): Promise<void>
         // The session running this check is not evidence about the topic (#189155).
         excludeSessions: currentSessionIds(),
       },
-      (s) => spinner?.message(`sweeping ${SOURCE_LABEL[s]}`),
+      (s) => spinner?.message(`sweeping ${sourceLabel(s, custom)}`),
     )
 
     spinner?.stop(dim("swept"))
+
+    // A node answering --fleet: numbers only, never pushed — the machine that asked files them.
+    if (args["counts-only"] || args.countsOnly) {
+      await writeJson(countsDocument(keyword, days, sweeps))
+      return
+    }
+
+    // #190970: the same sweep on every other machine in the Hive, filed per machine.
+    let fleet: Awaited<ReturnType<typeof sweepFleet>> | null = null
+    if (args.fleet) {
+      const asked = sources.filter((s) => (FLEET_SOURCES as readonly string[]).includes(s))
+      if (asked.length) {
+        spinner?.start("asking your Hive nodes")
+        fleet = await sweepFleet(keyword, days, asked, fleetDeps(userId))
+        spinner?.stop(dim(`Hive: ${fleet.nodes.filter((n) => n.state === "ok").length} of ${fleet.nodes.length} nodes answered`))
+        sweeps.push(...fleet.sweeps)
+      }
+    }
 
     // A refused Mail search names its fix. Only asked when it matters, and bounded to 1.5s.
     const tcc = tccBlindSpots(sweeps)
@@ -326,6 +428,13 @@ export async function runPulseCheck(args: any, allowFix: boolean): Promise<void>
             if (entity?.score_error) {
               pushError = `filed, but scoring failed: ${String(entity.score_error).slice(0, 160)}`
             }
+            // A 207 files what it accepted and drops the rest. Read as success, gmail and every custom
+            // source went missing from the score without a word (#190967) — so name what was refused.
+            const refused = firstArray(body?.errors)
+            if (refused.length) {
+              const which = refused.map((e: any) => observations[e?.index]?.source ?? `#${e?.index}`).join(", ")
+              pushError = `filed, but the corpus refused ${refused.length} source(s): ${which} — ${String(refused[0]?.error ?? "").slice(0, 120)}`
+            }
             scored = entity
           }
         } catch (e: any) {
@@ -347,6 +456,9 @@ export async function runPulseCheck(args: any, allowFix: boolean): Promise<void>
         score: scored,
         blind_spots: blindSpotsJson(sweeps, perms),
         warnings: quality.warn ? [quality.warn] : [],
+        custom_sources: custom.sources.map((c) => ({ id: c.id, label: c.label, file: c.file, replaces: c.replaces })),
+        custom_source_errors: custom.errors,
+        fleet: fleet?.nodes ?? null,
       })
       return
     }
@@ -375,10 +487,15 @@ export async function runPulseCheck(args: any, allowFix: boolean): Promise<void>
     }
     console.log(dim(`  ${keywordVariants(keyword).join(" · ")}   ·   ${args.days}d window`))
     if (quality.warn) console.log(highlight(`  ⚠ ${quality.warn}`))
+    for (const e of custom.errors) console.log(highlight(`  ⚠ custom source not loaded: ${e.file} — ${e.error}`))
+    for (const n of fleet?.nodes ?? []) {
+      if (n.state === "ok") console.log(dim(`  Hive  ${n.node} answered (${n.sources} sources)`))
+      else console.log(highlight(`  Hive  ${n.node} ${n.state} — ${n.reason ?? ""}`) + dim("  · not measured, not zero"))
+    }
     console.log()
 
     for (const s of sweeps) {
-      const label = SOURCE_LABEL[s.source].padEnd(12)
+      const label = sourceLabel(s.source, custom).padEnd(12)
 
       if (!s.searched) {
         // Rule 1, made visible. A reader must never mistake this line for a zero.
@@ -420,7 +537,7 @@ export async function runPulseCheck(args: any, allowFix: boolean): Promise<void>
       const dir = now > was ? "heating up" : now < was ? "cooling" : "flat"
       console.log(
         dim(`  Momentum: ${now} this ${args.days}d vs ${was} the ${args.days}d before — ${dir}`) +
-          dim(`  (from ${withPrior.map((s) => SOURCE_LABEL[s.source]).join(", ")})`),
+          dim(`  (from ${withPrior.map((s) => sourceLabel(s.source, custom)).join(", ")})`),
       )
       // `now` is deliberately smaller than the headline total whenever a source
       // cannot see the prior window. Two totals side by side with no explanation
@@ -429,7 +546,7 @@ export async function runPulseCheck(args: any, allowFix: boolean): Promise<void>
       if (noPrior.length) {
         const excluded = noPrior.reduce((n, s) => n + s.hits, 0)
         console.log(
-          dim(`            ${excluded} of the ${totalHits} hits are from ${noPrior.map((s) => SOURCE_LABEL[s.source]).join(", ")}, `) +
+          dim(`            ${excluded} of the ${totalHits} hits are from ${noPrior.map((s) => sourceLabel(s.source, custom)).join(", ")}, `) +
             dim("which cannot see the prior window — counted in the total, not in the trend."),
         )
       }
@@ -457,7 +574,7 @@ export async function runPulseCheck(args: any, allowFix: boolean): Promise<void>
 
     const blind = sweeps.filter((s) => !s.searched)
     if (blind.length) {
-      console.log(dim(`  Blind spots: ${blind.map((s) => SOURCE_LABEL[s.source]).join(", ")} — excluded from breadth, not counted as misses.`))
+      console.log(dim(`  Blind spots: ${blind.map((s) => sourceLabel(s.source, custom)).join(", ")} — excluded from breadth, not counted as misses.`))
     }
 
     if (pushError) {
@@ -516,5 +633,39 @@ export async function runPulseCheck(args: any, allowFix: boolean): Promise<void>
     const again = await prompts.confirm({ message: `Run the pulse check for "${keyword}" again?` })
     if (prompts.isCancel(again) || !again) return
     await runPulseCheck(args, false)
+  }
+}
+
+/** The Hive wiring for --fleet: list nodes, skip this machine, run the counts-only sweep on each. */
+function fleetDeps(userId: number | null): FleetDeps {
+  return {
+    nodes: async () => {
+      if (!userId) throw new Error("not signed in — run `iris auth login`")
+      const { fetchNodes } = await import("./platform-hive-nodes")
+      return fetchNodes(userId)
+    },
+    selfNodeId: (() => {
+      try {
+        return JSON.parse(readFileSync(join(homedir(), ".iris", "config.json"), "utf8"))?.node_id ?? null
+      } catch {
+        return null
+      }
+    })(),
+    run: async (node, script) => {
+      if (!userId) throw new Error("not signed in")
+      const [{ dispatchTaskAndWait }, { buildHiveRunBody }, { fromHiveTask }] = await Promise.all([
+        import("./platform-hive-nodes"),
+        import("./hive-run-body"),
+        import("./hive-script-result"),
+      ])
+      const { final } = await dispatchTaskAndWait(
+        userId,
+        buildHiveRunBody({ userId, nodeId: node.id, title: "iris pulse check --fleet (counts only)", script, timeoutSec: 240 }),
+      )
+      if (!final) throw new Error("still running after 270s — not waited for")
+      const r = fromHiveTask(final as any)
+      if (r.exit_code && r.exit_code !== 0) throw new Error(`exited ${r.exit_code}: ${String(r.stderr ?? r.stdout ?? "").trim().slice(-140)}`)
+      return String(r.stdout ?? "")
+    },
   }
 }
