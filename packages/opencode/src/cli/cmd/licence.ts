@@ -110,6 +110,12 @@ export function allowanceWarning(allowanceCents: unknown, seatCapCents: unknown)
   return `The ${money(allowanceCents)} allowance is not a spending limit. Spend can go past it, up to each seat's plan tier caps. Only a seat cap (--seat-cap) stops a seat sooner.`
 }
 
+/** One word from the server, and for a licence nobody has started, what that word means (#191996). */
+export function licenceStatusWords(d: any): string {
+  const state = String(d?.end_state ?? d?.status ?? "—")
+  return d?.status === "issued" ? `${state} (not claimed yet)` : state
+}
+
 /**
  * Who claimed, who is active, what each seat spent (#191945). A pure function of the API's `usage`
  * block so it can be tested without a server. Empty when talking to a server without one.
@@ -422,7 +428,7 @@ export const ShowCmd = cmd({
     prompts.intro(`◈  ${data?.key ?? args.key}`)
     printDivider()
     printKV("tier", String(data?.tier ?? "—"))
-    printKV("status", String(data?.end_state ?? data?.status ?? "—"))
+    printKV("status", licenceStatusWords(data))
     printKV("issued to", String(data?.issued_to_email ?? "—"))
     printKV("lead", data?.lead_id ? `#${data.lead_id}` : "— (iris licence link <key> --lead <id>)")
     printDivider()
