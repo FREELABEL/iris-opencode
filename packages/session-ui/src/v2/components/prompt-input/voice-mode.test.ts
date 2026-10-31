@@ -96,4 +96,15 @@ describe("voice modes — quick takes go inline, background takes go to the pane
     const s = run({ type: "mic" }, { type: "transcript", text: "a" }, { type: "noop" })
     expect(s.effect).toBeUndefined()
   })
+
+  test("a quick take the prompt could not place is held for review with a notice, never dropped", () => {
+    const s = run({ type: "mic" }, { type: "transcript", text: "hello" }, { type: "hold", text: "hello" })
+    expect(s.mode).toBe("review")
+    expect(s.panel).toBe("open")
+    expect(s.result).toBe("hello")
+    expect(s.displaced).toBe(true)
+    expect(voiceReducer(s, { type: "noop" }).displaced).toBe(true)
+    expect(voiceReducer(s, { type: "insert" }).effect).toEqual({ type: "insert", text: "hello" })
+    expect(voiceReducer(s, { type: "insert" }).displaced).toBeUndefined()
+  })
 })

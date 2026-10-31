@@ -216,6 +216,7 @@ export const dict = {
   "ui.promptInput.dictate.options": "Mikrofon- und Aufnahmeoptionen",
   "ui.promptInput.dictate.release": "Zum Beenden loslassen",
   "ui.promptInput.dictate.held": "Zurückgehalten",
+  "ui.promptInput.dictate.displaced": "Das konnte nicht in deine Nachricht eingefügt werden. Nichts ist verloren.",
   "ui.promptInput.dictate.keep": "Weiter aufnehmen",
   "ui.promptInput.dictate.keepHint": "Im Hintergrund weiter aufnehmen",
   "ui.promptInput.dictate.background.start": "Hintergrundaufnahme starten",

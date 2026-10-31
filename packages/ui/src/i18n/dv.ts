@@ -126,6 +126,7 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.options": "މައިކްރޯފޯނާއި ރެކޯޑިންގގެ އިޚްތިޔާރުތައް",
   "ui.promptInput.dictate.release": "ހުއްޓުމަށް ދޫކޮށްލާ",
   "ui.promptInput.dictate.held": "ހިފަހައްޓާފައި",
+  "ui.promptInput.dictate.displaced": "މިއީ ތިޔަ މެސެޖަށް އިތުރެއް ނުކުރެވުނު. އެއްވެސް ގެއްލިފައެއް ނެތް.",
   "ui.promptInput.dictate.keep": "ރެކޯޑް ކުރުން ކުރިއަށް ގެންދާ",
   "ui.promptInput.dictate.keepHint": "ބެކްގްރައުންޑްގައި ރެކޯޑް ކުރުން ކުރިއަށް ގެންދާ",
   "ui.promptInput.dictate.background.start": "ބެކްގްރައުންޑް ރެކޯޑިންގ ފައްޓާ",

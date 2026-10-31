@@ -127,6 +127,7 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.options": "माइक्रोफोन र रेकर्डिङ विकल्पहरू",
   "ui.promptInput.dictate.release": "रोक्न छोड्नुहोस्",
   "ui.promptInput.dictate.held": "रोकिएको",
+  "ui.promptInput.dictate.displaced": "यसलाई तपाईंको सन्देशमा थप्न सकिएन। केही पनि हराएको छैन।",
   "ui.promptInput.dictate.keep": "रेकर्डिङ जारी राख्नुहोस्",
   "ui.promptInput.dictate.keepHint": "पृष्ठभूमिमा रेकर्डिङ जारी राख्नुहोस्",
   "ui.promptInput.dictate.background.start": "पृष्ठभूमि रेकर्डिङ सुरु गर्नुहोस्",

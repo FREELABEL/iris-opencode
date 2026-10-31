@@ -125,6 +125,7 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.options": "Microfoon- en opnameopties",
   "ui.promptInput.dictate.release": "Loslaten om te stoppen",
   "ui.promptInput.dictate.held": "Vastgehouden",
+  "ui.promptInput.dictate.displaced": "Dit kon niet aan je bericht worden toegevoegd. Er is niets verloren gegaan.",
   "ui.promptInput.dictate.keep": "Blijven opnemen",
   "ui.promptInput.dictate.keepHint": "Op de achtergrond blijven opnemen",
   "ui.promptInput.dictate.background.start": "Achtergrondopname starten",

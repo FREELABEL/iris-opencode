@@ -128,6 +128,7 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.options": "Mikrofon va yozib olish sozlamalari",
   "ui.promptInput.dictate.release": "To'xtatish uchun qo'yib yuboring",
   "ui.promptInput.dictate.held": "Ushlab turilgan",
+  "ui.promptInput.dictate.displaced": "Buni xabaringizga qo'shib bo'lmadi. Hech narsa yo'qolmadi.",
   "ui.promptInput.dictate.keep": "Yozishni davom ettirish",
   "ui.promptInput.dictate.keepHint": "Fonda yozishni davom ettirish",
   "ui.promptInput.dictate.background.start": "Fonda yozishni boshlash",

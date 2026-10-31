@@ -126,6 +126,7 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.options": "مائیکروفون اور ریکارڈنگ کے اختیارات",
   "ui.promptInput.dictate.release": "روکنے کے لیے چھوڑ دیں",
   "ui.promptInput.dictate.held": "روکی گئی",
+  "ui.promptInput.dictate.displaced": "اسے آپ کے پیغام میں شامل نہیں کیا جا سکا۔ کچھ ضائع نہیں ہوا۔",
   "ui.promptInput.dictate.keep": "ریکارڈنگ جاری رکھیں",
   "ui.promptInput.dictate.keepHint": "پس منظر میں ریکارڈنگ جاری رکھیں",
   "ui.promptInput.dictate.background.start": "پس منظر میں ریکارڈنگ شروع کریں",

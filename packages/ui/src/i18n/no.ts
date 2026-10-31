@@ -109,6 +109,7 @@ export const dict: Record<Keys, string> = {
   "ui.promptInput.dictate.options": "Mikrofon- og opptaksvalg",
   "ui.promptInput.dictate.release": "Slipp for å stoppe",
   "ui.promptInput.dictate.held": "Holdt tilbake",
+  "ui.promptInput.dictate.displaced": "Dette kunne ikke legges til i meldingen din. Ingenting gikk tapt.",
   "ui.promptInput.dictate.keep": "Fortsett opptaket",
   "ui.promptInput.dictate.keepHint": "Fortsett opptaket i bakgrunnen",
   "ui.promptInput.dictate.background.start": "Start bakgrunnsopptak",

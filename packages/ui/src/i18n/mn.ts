@@ -125,6 +125,7 @@ export const dict = {
   "ui.promptInput.dictate.options": "Микрофон болон бичлэгийн тохиргоо",
   "ui.promptInput.dictate.release": "Зогсоохын тулд суллана уу",
   "ui.promptInput.dictate.held": "Хадгалагдсан",
+  "ui.promptInput.dictate.displaced": "Үүнийг таны зурваст нэмж чадсангүй. Юу ч алдагдаагүй.",
   "ui.promptInput.dictate.keep": "Бичлэгийг үргэлжлүүлэх",
   "ui.promptInput.dictate.keepHint": "Арын горимд бичлэгийг үргэлжлүүлэх",
   "ui.promptInput.dictate.background.start": "Арын горимын бичлэг эхлүүлэх",

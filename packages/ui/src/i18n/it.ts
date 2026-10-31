@@ -130,6 +130,7 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.options": "Opzioni del microfono e della registrazione",
   "ui.promptInput.dictate.release": "Rilascia per interrompere",
   "ui.promptInput.dictate.held": "In sospeso",
+  "ui.promptInput.dictate.displaced": "Impossibile aggiungerlo al messaggio. Non è andato perso nulla.",
   "ui.promptInput.dictate.keep": "Continua a registrare",
   "ui.promptInput.dictate.keepHint": "Continua a registrare in background",
   "ui.promptInput.dictate.background.start": "Avvia registrazione in background",

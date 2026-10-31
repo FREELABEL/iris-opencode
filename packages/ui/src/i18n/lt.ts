@@ -133,6 +133,7 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.options": "Mikrofono ir įrašymo parinktys",
   "ui.promptInput.dictate.release": "Atleiskite, kad sustabdytumėte",
   "ui.promptInput.dictate.held": "Sulaikyta",
+  "ui.promptInput.dictate.displaced": "Nepavyko to pridėti prie jūsų žinutės. Niekas neprarasta.",
   "ui.promptInput.dictate.keep": "Tęsti įrašymą",
   "ui.promptInput.dictate.keepHint": "Tęsti įrašymą fone",
   "ui.promptInput.dictate.background.start": "Pradėti įrašymą fone",

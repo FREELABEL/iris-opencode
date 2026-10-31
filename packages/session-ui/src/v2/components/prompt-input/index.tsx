@@ -1,5 +1,5 @@
 import { createEffect, createMemo, createSignal, For, Show, type Accessor, type JSX } from "solid-js"
-import { isLiveDictation, showLiveTextFollowing } from "./live-text"
+import { growFollowing, settleLiveText, writeLiveText, type LiveRegion } from "./live-text"
 import { FileIcon } from "@opencode-ai/ui/file-icon"
 import { Icon } from "@opencode-ai/ui/icon"
 import { IconButton } from "@opencode-ai/ui/icon-button"
@@ -70,8 +70,7 @@ export function PromptInputV2(props: PromptInputV2Props) {
   const view = props.controller.view
   let editor: HTMLDivElement | undefined
   /** Live dictation words, while a quick take is being spoken (see the Dictate `live` prop). */
-  let liveSpan: HTMLElement | undefined
-  const [liveShown, setLiveShown] = createSignal(false)
+  let liveRegion: LiveRegion | undefined
   let localInput = false
   // Where dictation draws while a take runs. Signals, so its portals mount once the nodes exist.
   const [dictateLayer, setDictateLayer] = createSignal<HTMLElement>()
@@ -216,8 +215,8 @@ export function PromptInputV2(props: PromptInputV2Props) {
             onPaste={props.controller.onPaste}
             onFocus={() => props.controller.dispatch({ type: "focus.editor" })}
           />
-          {/* Hidden while live words are typed in: they are on screen but not in the value (#189546). */}
-          <Show when={!props.controller.value() && !liveShown()}>
+          {/* Live words are the prompt's value, so they hide this like typed text does (#189543, #189546). */}
+          <Show when={!props.controller.value()}>
             <div
               class="pointer-events-none absolute inset-x-0 top-0 px-4 pt-4 text-[13px] font-[440] leading-5 text-v2-text-text-faint"
               classList={{ "font-mono!": state.mode === "shell" }}
@@ -265,21 +264,28 @@ export function PromptInputV2(props: PromptInputV2Props) {
                   tagLayer={dictateTagLayer}
                   devices={props.dictateDevices}
                   live={(text) => {
-                    // The take, typed into the chat box while it is spoken (live-text.ts). Kept out
-                    // of prompt state — no input event — so the final transcript is what is sent.
-                    if (editor) liveSpan = showLiveTextFollowing(editor, liveSpan, text)
-                    setLiveShown(!!text)
+                    // The take, typed into the chat box while it is spoken (live-text.ts) — as the
+                    // prompt's real text, through the real input path, so it is what Send sends.
+                    const target = editor
+                    if (!target) return
+                    // A long take keeps its newest words in view (#189977).
+                    const write = growFollowing(target, () => writeLiveText(target, liveRegion, text))
+                    liveRegion = write.region
+                    if (write.changed) target.dispatchEvent(new InputEvent("input", { bubbles: true }))
+                  }}
+                  keepLive={() => {
+                    liveRegion = undefined
                   }}
                   insert={(text) => {
-                    // Append into the editor and let the component's own onInput re-parse it.
-                    // Going through the real input path keeps attachments and mentions intact —
-                    // writing prompt state directly would have to reconstruct them.
-                    liveSpan?.remove() // the final transcript takes the live words' place
-                    liveSpan = undefined
-                    if (!editor) return
-                    const existing = editor.textContent ?? ""
-                    const gap = existing.length > 0 && !/\s$/.test(existing) ? " " : ""
-                    editor.appendChild(document.createTextNode(gap + text))
+                    // The final transcript takes the live words' place, or only what was said since
+                    // the person took them over (live-text.ts), and the component's own onInput
+                    // re-parses the editor. Going through the real input path keeps attachments and
+                    // mentions intact — writing prompt state directly would have to reconstruct them.
+                    const region = liveRegion
+                    liveRegion = undefined
+                    if (!editor) return false
+                    const settled = settleLiveText(editor, region, text)
+                    if (!settled.changed) return !settled.held
                     editor.dispatchEvent(new InputEvent("input", { bubbles: true }))
                     editor.focus()
                     const range = document.createRange()
@@ -290,6 +296,7 @@ export function PromptInputV2(props: PromptInputV2Props) {
                     sel?.addRange(range)
                     // The caret is at the end of the transcript; so is the view (#189977).
                     editor.scrollTop = editor.scrollHeight
+                    return true
                   }}
                 />
               )}
@@ -418,9 +425,6 @@ function parsePromptInputV2Editor(editor: HTMLDivElement) {
       return
     }
     if (!(node instanceof HTMLElement)) return
-    // Live dictation words are on screen, not in the prompt: the final transcript replaces them.
-    // Reading them here would put them in the prompt twice once it lands.
-    if (isLiveDictation(node)) return
     if (node.dataset.mention) {
       mention(node)
       return

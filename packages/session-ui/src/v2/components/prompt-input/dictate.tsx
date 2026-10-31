@@ -35,14 +35,19 @@ export type DictateDevices = {
 export function PromptInputV2Dictate(props: {
   url: () => string
   disabled?: boolean
-  insert: (text: string) => void
+  /** Put a transcript in the prompt. False means it could not be placed: it is held in the panel. */
+  insert: (text: string) => boolean
   /**
-   * The words of a quick take while it is still being spoken, typed into the chat box as they
-   * arrive; undefined clears them. The composer shows them as in-progress text, and insert()
-   * replaces them with the final transcript. Background takes never call this — their words are
-   * held for review and must not reach the prompt on their own.
+   * The words of a quick take while it is still being spoken, written into the chat box as they
+   * arrive — as the prompt's real text, so what is on screen is what Send sends. insert() settles
+   * them with the final transcript; undefined (the take's audio was saved for Retry, or it moved to
+   * the background) takes back out what the person has not taken over. "" means nothing to show
+   * yet. Background takes never call this — their words are held for review and must not reach the
+   * prompt on their own.
    */
   live?: (text: string | undefined) => void
+  /** The take failed with no audio saved: its live words are all that is left, so they stay. */
+  keepLive?: () => void
   onError?: (message: string | undefined) => void
   controls?: (controls: DictationControls | undefined) => void
   shortcut?: string
@@ -57,6 +62,7 @@ export function PromptInputV2Dictate(props: {
   const [voice, setVoice] = createSignal(initialVoice)
   const send = (event: VoiceEvent) => setVoice((s) => voiceReducer(s, event))
   let settled = false
+  let heldAtStart = 0
   // Live preview from the streaming engine, for this take only. The batch transcript at the end
   // is still what gets inserted; these words are a preview it replaces.
   const [finals, setFinals] = createSignal<string[]>([])
@@ -70,6 +76,7 @@ export function PromptInputV2Dictate(props: {
       setPartial("")
     },
     onError: (message) => {
+      if (mode() === "quick" && dictation.held().length <= heldAtStart) props.keepLive?.()
       setError(message)
       props.onError?.(message)
       settled = true
@@ -91,6 +98,7 @@ export function PromptInputV2Dictate(props: {
     on(phase, (now, before) => {
       if (now === "recording" && before !== "recording") {
         settled = false
+        heldAtStart = dictation.held().length
         setFinals([])
         setPartial("")
       }
@@ -102,7 +110,7 @@ export function PromptInputV2Dictate(props: {
   createEffect(() => {
     const effect = voice().effect
     if (!effect) return
-    if (effect.type === "insert") props.insert(effect.text)
+    if (effect.type === "insert" && !props.insert(effect.text)) return send({ type: "hold", text: effect.text })
     if (effect.type === "copy") void navigator.clipboard?.writeText(effect.text).catch(() => {})
     if (effect.type === "cancel") dictation.cancel()
     send({ type: "noop" })
@@ -188,7 +196,7 @@ export function PromptInputV2Dictate(props: {
   // not vanish while the final transcript is fetched; the insert that follows replaces them.
   const liveText = () => {
     if (!quickLive()) return undefined
-    return composeLive(finals(), partial()) || undefined
+    return composeLive(finals(), partial())
   }
   createEffect(on(liveText, (text) => props.live?.(text)))
   onCleanup(() => props.live?.(undefined))
@@ -439,6 +447,11 @@ export function PromptInputV2Dictate(props: {
                     </Show>
                   }
                 >
+                  <Show when={voice().displaced}>
+                    <p data-slot="dictate-panel-hint" role="status">
+                      {i18n.t("ui.promptInput.dictate.displaced")}
+                    </p>
+                  </Show>
                   <p data-slot="dictate-panel-text">{voice().result}</p>
                 </Show>
               </div>
@@ -446,7 +459,9 @@ export function PromptInputV2Dictate(props: {
                 <Wave bars={panelWave()} box={PANEL_WAVE} class={phase() === "transcribing" ? "sweep" : undefined} />
               </Show>
               <div data-slot="dictate-panel-foot">
-                <span data-slot="dictate-panel-note">{i18n.t("ui.promptInput.dictate.background.runs")}</span>
+                <Show when={!voice().displaced}>
+                  <span data-slot="dictate-panel-note">{i18n.t("ui.promptInput.dictate.background.runs")}</span>
+                </Show>
                 <span data-slot="dictate-spacer" />
                 <button type="button" data-slot="dictate-btn" onClick={() => send({ type: "discard" })} disabled={phase() === "transcribing"}>
                   {i18n.t("ui.promptInput.dictate.background.discard")}

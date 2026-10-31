@@ -125,6 +125,7 @@ export const dict: Record<string, string> = {
   "ui.promptInput.dictate.options": "Επιλογές μικροφώνου και ηχογράφησης",
   "ui.promptInput.dictate.release": "Αφήστε για διακοπή",
   "ui.promptInput.dictate.held": "Σε αναμονή",
+  "ui.promptInput.dictate.displaced": "Δεν ήταν δυνατή η προσθήκη στο μήνυμά σας. Δεν χάθηκε τίποτα.",
   "ui.promptInput.dictate.keep": "Συνέχεια ηχογράφησης",
   "ui.promptInput.dictate.keepHint": "Συνέχεια ηχογράφησης στο παρασκήνιο",
   "ui.promptInput.dictate.background.start": "Έναρξη ηχογράφησης στο παρασκήνιο",

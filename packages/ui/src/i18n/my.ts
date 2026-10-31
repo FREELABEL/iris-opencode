@@ -126,6 +126,7 @@ export const dict = {
   "ui.promptInput.dictate.options": "မိုက်ခရိုဖုန်းနှင့် အသံဖမ်းခြင်း ရွေးချယ်စရာများ",
   "ui.promptInput.dictate.release": "ရပ်ရန် လွှတ်ပါ",
   "ui.promptInput.dictate.held": "ဆိုင်းငံ့ထားသည်",
+  "ui.promptInput.dictate.displaced": "၎င်းကို သင့်မက်ဆေ့ချ်ထဲ ထည့်၍မရပါ။ ဘာမှ မပျောက်ပါ။",
   "ui.promptInput.dictate.keep": "ဆက်လက်အသံဖမ်းရန်",
   "ui.promptInput.dictate.keepHint": "နောက်ခံတွင် ဆက်လက်အသံဖမ်းရန်",
   "ui.promptInput.dictate.background.start": "နောက်ခံအသံဖမ်းခြင်း စတင်ရန်",
