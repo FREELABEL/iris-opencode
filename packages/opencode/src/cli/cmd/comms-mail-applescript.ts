@@ -117,6 +117,60 @@ export const MAIL_THREAD_READER_JXA = String.raw`function run(argv) {
 }
 `
 
+/**
+ * List ONE account's INBOX: what `iris mail inbox|search|read --mail-account` run (#189480). Same
+ * discipline as the thread reader: one account, date-bounded, count before any bulk fetch, inputs as
+ * argv, bodies only for the rows returned. A sender match here IS a substring, because this answers
+ * "show me mail from Sam", not "which lead does this belong to".
+ * argv: [days, id:ACCOUNT-ID|name, sender substring ("@" = everyone), subject substring, limit, max body ("" = no bodies)]
+ */
+export const MAIL_INBOX_READER_JXA = String.raw`function run(argv) {
+  const days = Number(argv[0] || 7)
+  const acctSel = String(argv[1] || "")
+  const from = String(argv[2] || "@").toLowerCase()
+  const subject = String(argv[3] || "").toLowerCase()
+  const limit = Number(argv[4] || 50)
+  const maxBody = Number(argv[5] || 0)
+  if (!acctSel) throw new Error("usage: <days> <id:ACCOUNT-ID|account name> <from> <subject> <limit> <max body>")
+  const Mail = Application("Mail")
+  const cutoff = new Date(Date.now() - days * 864e5)
+  let acct
+  if (acctSel.indexOf("id:") === 0) {
+    const want = acctSel.slice(3)
+    acct = Mail.accounts().find((a) => a.id() === want)
+    if (!acct) throw new Error("no Mail.app account with id " + want + " on this Mac")
+  } else {
+    acct = Mail.accounts.byName(acctSel)
+  }
+  const box = acct.mailboxes().find((mb) => mb.name().toUpperCase() === "INBOX")
+  if (!box) return JSON.stringify({ emails: [], scanned: 0, no_inbox: true })
+  const msgs = box.messages.whose({ dateReceived: { ">": cutoff } })
+  const n = msgs.length
+  if (n === 0) return JSON.stringify({ emails: [], scanned: 0 })
+  const snd = msgs.sender()
+  const subj = msgs.subject()
+  const dr = msgs.dateReceived()
+  const hits = []
+  for (let i = 0; i < snd.length; i++) {
+    if (String(snd[i] || "").toLowerCase().indexOf(from) < 0) continue
+    if (subject && String(subj[i] || "").toLowerCase().indexOf(subject) < 0) continue
+    hits.push(i)
+  }
+  hits.sort((a, b) => dr[b] - dr[a])
+  const emails = hits.slice(0, limit).map((i) => {
+    const raw = String(snd[i] || "")
+    const m = raw.match(/^\s*"?([^"<]*?)"?\s*<([^>]+)>/)
+    const row = { sender: (m ? m[2] : raw).trim().toLowerCase(), subject: subj[i], date: dr[i].toISOString(), mailbox: "INBOX" }
+    if (m && m[1]) row.sender_name = m[1]
+    if (maxBody > 0) {
+      try { row.body = String(msgs[i].content()).slice(0, maxBody) } catch (e) { row.body_error = String(e) }
+    }
+    return row
+  })
+  return JSON.stringify({ emails, scanned: n })
+}
+`
+
 export type MailThreadRead = { ok: true; items: any[]; scanned: Record<string, number> } | { ok: false; reason: string }
 
 /** Is Mail answering at all? A busy Mail must not be handed more work — it would only queue. */
